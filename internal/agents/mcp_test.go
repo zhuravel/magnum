@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -215,5 +216,72 @@ func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow, k.MCPOff = nil, false })
 	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high --base") {
 		t.Fatalf("mcp_off false: line = %q, %v", got, err)
+	}
+}
+
+// The playwright plugin of the operator's Codex (claude-plugins-official)
+// brought a browser into a codex-review session, which Codex then refused
+// under approval_policy never: plugins are no [mcp_servers] table. A judge
+// launched, and a codex-review line, pass -c plugins.<name>.enabled=false
+// for each plugin installed in the Codex home's plugins/cache or declared
+// enabled by a [plugins."<name>"] table, except those a table turns off,
+// those in plugin_allow and names that are no bare keys (logged, as are
+// servers); a home without a config.toml still lists its cache.
+func TestJudgeStartsWithoutTheOperatorsCodexPlugins(t *testing.T) {
+	e := newEnv(t)
+	home := filepath.Dir(e.codexConfig)
+	for _, d := range []string{"claude-plugins-official/playwright", "openai-bundled/browser", ".marketplace-plugin-source-staging/x", "acme/my.plugin"} {
+		if err := os.MkdirAll(filepath.Join(home, "plugins", "cache", d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(home, "plugins", "cache", "acme", "README"), "not a plugin\n", 0o600)
+	writeFile(t, e.codexConfig, "model = \"gpt-test\"\n\n[plugins.\"browser@openai-bundled\"]\nenabled = false\n\n[plugins.\"docs@acme\"]\nenabled = true\n\n[plugins.\"odd name@acme\"]\nenabled = true\n", 0o600)
+	ws := e.workspace()
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+		t.Fatal(err)
+	}
+	pluginsOff := []string{"-c", "plugins.docs@acme.enabled=false", "-c", "plugins.playwright@claude-plugins-official.enabled=false"}
+	want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}, pluginsOff)
+	if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+		t.Fatalf("args = %q\nwant %q", got, want)
+	}
+	var logs []string
+	for _, l := range e.logs.all() {
+		if strings.Contains(l, "Codex plugin") {
+			logs = append(logs, l)
+		}
+	}
+	if len(logs) != 2 || !strings.Contains(logs[0], `"my.plugin@acme"`) || !strings.Contains(logs[1], `"odd name@acme"`) || strings.Contains(strings.Join(logs, ""), home) {
+		t.Fatalf("logs = %q, want the two skipped names and no path", logs)
+	}
+	d := ShellData{BaseRef: "origin/master", ReportPath: "/r/codex.md", Marker: DoneMarker("r-1")}
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, e.spec(RoleCodexReview), d); err != nil || !strings.Contains(got, "-c skills.include_instructions=false "+strings.Join(pluginsOff, " ")+" --base origin/master") {
+		t.Fatalf("codex review line = %q, %v", got, err)
+	}
+	e.setKind(KindCodex, func(k *config.Kind) { k.PluginAllow = []string{"playwright@claude-plugins-official"} })
+	if got := e.m.codexPlugins(e.spec(RoleJudge)); !slices.Equal(got, []string{"docs@acme", "playwright@claude-plugins-official"}) {
+		t.Fatalf("plugins = %q", got)
+	}
+	k, _ := e.m.kindSpec(KindCodex)
+	if got := k.PluginOffArgs(e.m.codexPlugins(e.spec(RoleJudge))); !slices.Equal(got, pluginsOff[:2]) {
+		t.Fatalf("plugin_allow playwright: args = %q", got)
+	}
+	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = false })
+	if got := e.m.codexPlugins(e.spec(RoleJudge)); got != nil {
+		t.Fatalf("mcp_off false: plugins = %q", got)
+	}
+	bare := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bare, "plugins", "cache", "openai-bundled", "chrome"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff, k.Env = true, map[string]string{"CODEX_HOME": bare} })
+	if got := e.m.codexPlugins(e.spec(RoleJudge)); !slices.Equal(got, []string{"chrome@openai-bundled"}) {
+		t.Fatalf("pane env CODEX_HOME without a config: plugins = %q", got)
+	}
+	e.setKind(KindCodex, func(k *config.Kind) { k.Env = nil })
+	writeFile(t, e.codexConfig, "[plugins\n", 0o600)
+	if got := e.m.codexPlugins(e.spec(RoleJudge)); got != nil {
+		t.Fatalf("unreadable config: plugins = %q, want none", got)
 	}
 }

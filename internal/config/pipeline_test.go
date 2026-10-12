@@ -232,9 +232,14 @@ func TestValidatePipeline(t *testing.T) {
 		"kind resume ph":     {func(c *Config) { k := c.Kinds["codex"]; k.Resume = []string{"resume"}; c.Kinds["codex"] = k }, "must contain {session}"},
 		"kind model ph":      {func(c *Config) { k := c.Kinds["omp"]; k.Model = []string{"--model"}; c.Kinds["omp"] = k }, "must contain {model}"},
 		"kind rename ph":     {func(c *Config) { k := c.Kinds["codex"]; k.Rename = "/rename"; c.Kinds["codex"] = k }, "must contain {title}"},
-		"kind login_ok":      {func(c *Config) { k := c.Kinds["codex"]; k.LoginOK = "exit:0"; c.Kinds["codex"] = k }, "login_ok"},
-		"kind login regex":   {func(c *Config) { k := c.Kinds["codex"]; k.LoginOK = "regex:("; c.Kinds["codex"] = k }, "login_ok"},
-		"login_ok no check":  {func(c *Config) { k := c.Kinds["droid"]; k.LoginOK = "text:ok"; c.Kinds["droid"] = k }, "needs login_check"},
+		"kind plugin ph": {func(c *Config) {
+			k := c.Kinds["codex"]
+			k.PluginDisable = []string{"-c", "plugins.enabled=false"}
+			c.Kinds["codex"] = k
+		}, "must contain {plugin}"},
+		"kind login_ok":     {func(c *Config) { k := c.Kinds["codex"]; k.LoginOK = "exit:0"; c.Kinds["codex"] = k }, "login_ok"},
+		"kind login regex":  {func(c *Config) { k := c.Kinds["codex"]; k.LoginOK = "regex:("; c.Kinds["codex"] = k }, "login_ok"},
+		"login_ok no check": {func(c *Config) { k := c.Kinds["droid"]; k.LoginOK = "text:ok"; c.Kinds["droid"] = k }, "needs login_check"},
 		"kind health regex": {func(c *Config) {
 			k := c.Kinds["codex"]
 			k.HealthPatterns.UsageLimit = []string{"("}

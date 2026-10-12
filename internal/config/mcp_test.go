@@ -84,3 +84,38 @@ func TestMCPDisableNeedsItsServerPlaceholder(t *testing.T) {
 		t.Fatalf("err = %v, want one naming mcp_disable", err)
 	}
 }
+
+// A Codex plugin's MCP servers (the playwright plugin's browser, a docs or
+// GitHub server) are no [mcp_servers] table, so mcp_disable never reached
+// them and a codex-review session called a browser through one: the codex
+// kind's plugin_disable passes -c plugins.<name@marketplace>.enabled=false
+// once per plugin the session would load, after the servers, except those
+// in plugin_allow; nothing under mcp_off = false, and nothing for a kind
+// without plugin_disable (claude).
+func TestCodexTurnsOffItsPluginsButTheAllowedOnes(t *testing.T) {
+	codex, _ := Defaults().KindSpec(KindCodex)
+	plugins := []string{"github@claude-plugins-official", "playwright@claude-plugins-official"}
+	got := codex.Argv(LaunchArgs{MCPServers: []string{"docs"}, Plugins: plugins, Wrapper: true})
+	want := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false",
+		"-c", "plugins.github@claude-plugins-official.enabled=false", "-c", "plugins.playwright@claude-plugins-official.enabled=false"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("codex argv = %q\nwant %q", got, want)
+	}
+	if got := codex.PluginOffArgs(nil); got != nil {
+		t.Fatalf("no plugins: %q, want none", got)
+	}
+	allowed := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nplugin_allow = [\"github@claude-plugins-official\"]\n" + minimalConfig})
+	k, _ := allowed.KindSpec(KindCodex)
+	if got := k.PluginOffArgs(plugins); !slices.Equal(got, []string{"-c", "plugins.playwright@claude-plugins-official.enabled=false"}) {
+		t.Fatalf("plugin_allow github: %q", got)
+	}
+	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nmcp_off = false\n" + minimalConfig})
+	k, _ = off.KindSpec(KindCodex)
+	if got := k.Argv(LaunchArgs{Plugins: plugins, Wrapper: true}); len(got) != 0 {
+		t.Fatalf("mcp_off = false: %q, want none", got)
+	}
+	claude, _ := Defaults().KindSpec(KindClaude)
+	if got := claude.PluginOffArgs(plugins); got != nil || len(claude.PluginDisable) != 0 {
+		t.Fatalf("claude: %q (plugin_disable %q), want none", got, claude.PluginDisable)
+	}
+}

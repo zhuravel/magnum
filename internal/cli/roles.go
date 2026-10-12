@@ -371,6 +371,9 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 		if k.MCPOff && len(k.MCPDisable) > 0 {
 			mcpOff = append(mcpOff, args(k.MCPDisable)+" per MCP server of the Codex config (allowed: "+inspOrDash(strings.Join(k.MCPAllow, ", "))+")")
 		}
+		if k.MCPOff && len(k.PluginDisable) > 0 {
+			mcpOff = append(mcpOff, args(k.PluginDisable)+" per installed Codex plugin (allowed: "+inspOrDash(strings.Join(k.PluginAllow, ", "))+")")
+		}
 		mcp := "- (the MCP servers of the CLI's config load)"
 		if len(mcpOff) > 0 {
 			mcp = strings.Join(mcpOff, "; ")

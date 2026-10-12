@@ -59,13 +59,13 @@ func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T) {
 	user, project := []string{"browser", "docs"}, []string{"docs", "sentry", "tracker"}
 	codex, _ := Defaults().KindSpec(KindCodex)
-	if got := codex.ConfigOffArgs(user, project, nil, false); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
+	if got := codex.ConfigOffArgs(user, nil, project, nil, false); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
 		t.Fatalf("project_mcp allow: %q, want the user's servers only", got)
 	}
 	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"OFF\"\nmcp_allow = [\"tracker\"]\n" + minimalConfig})
 	k, _ := off.KindSpec(KindCodex)
 	want := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.sentry.enabled=false"}
-	if got := k.ConfigOffArgs(user, project, nil, false); !slices.Equal(got, want) {
+	if got := k.ConfigOffArgs(user, nil, project, nil, false); !slices.Equal(got, want) {
 		t.Fatalf("project_mcp off: %q\nwant %q", got, want)
 	}
 	if got := k.Argv(LaunchArgs{MCPServers: user, ProjectServers: project, Wrapper: true}); !slices.Equal(got, want) {
@@ -74,7 +74,7 @@ func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T)
 	userOn := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"off\"\nmcp_off = false\n" + minimalConfig})
 	k, _ = userOn.KindSpec(KindCodex)
 	want = []string{"-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.sentry.enabled=false", "-c", "mcp_servers.tracker.enabled=false"}
-	if got := k.ConfigOffArgs(user, project, nil, false); !slices.Equal(got, want) {
+	if got := k.ConfigOffArgs(user, nil, project, nil, false); !slices.Equal(got, want) {
 		t.Fatalf("mcp_off false, project_mcp off: %q\nwant %q", got, want)
 	}
 }
@@ -96,7 +96,7 @@ func TestCodexKeepsOnlyTheInstructionFilesOutWithProjectDocsOff(t *testing.T) {
 	}
 	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"off\"\n" + minimalConfig})
 	k, _ := off.KindSpec(KindCodex)
-	if got, want := k.ConfigOffArgs(nil, []string{"sentry"}, nil, true), []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.sentry.enabled=false", "-c", "project_doc_max_bytes=0"}; !slices.Equal(got, want) {
+	if got, want := k.ConfigOffArgs(nil, nil, []string{"sentry"}, nil, true), []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.sentry.enabled=false", "-c", "project_doc_max_bytes=0"}; !slices.Equal(got, want) {
 		t.Fatalf("project_mcp off: %q\nwant %q", got, want)
 	}
 	if claude, _ := Defaults().KindSpec(KindClaude); claude.ProjectDocsOff != nil {
@@ -104,7 +104,7 @@ func TestCodexKeepsOnlyTheInstructionFilesOutWithProjectDocsOff(t *testing.T) {
 	}
 	none := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_docs_off = []\n" + minimalConfig})
 	k, _ = none.KindSpec(KindCodex)
-	if got := k.ConfigOffArgs(nil, nil, nil, true); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"}) {
+	if got := k.ConfigOffArgs(nil, nil, nil, nil, true); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"}) {
 		t.Fatalf("project_docs_off = []: %q", got)
 	}
 }

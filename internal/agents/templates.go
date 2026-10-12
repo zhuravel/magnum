@@ -916,7 +916,7 @@ func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d
 	if d.MCPOff == nil {
 		if k, ok := m.kindSpec(role.AgentKind()); ok {
 			project = m.checkoutProject(ctx, role, d.Checkout, cmp.Or(d.BaseSHA, d.BaseRef), d.HeadSHA)
-			d.MCPOff = k.ConfigOffArgs(m.mcpServers(role), project.servers, project.paths, project.docsOff)
+			d.MCPOff = k.ConfigOffArgs(m.mcpServers(role), m.codexPlugins(role), project.servers, project.paths, project.docsOff)
 		}
 	}
 	if d.Template == nil && role.IsShell() && role.Command == "" && d.Command == "" && role.Prompt != "" {

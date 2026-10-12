@@ -1040,7 +1040,13 @@ keeps your skills list (about 5,900 tokens) out of every turn: the judge reads t
 (`[kinds.codex] mcp_strict`; `[]` keeps both on).
 `mcp_allow = ["docs"]` keeps the servers it names, `mcp_off = false` keeps them all, the connector and the
 skills list; a
-name that is no TOML bare key (letters, digits, `_`, `-`) stays on, with a log line. A custom
+name that is no TOML bare key (letters, digits, `_`, `-`) stays on, with a log line. Your Codex
+plugins go the same way: a plugin's MCP servers (the playwright plugin's browser, a docs or GitHub server)
+are no `[mcp_servers]` table, so the same launches pass `-c plugins.<name@marketplace>.enabled=false` once
+per plugin installed in the Codex home's `plugins/cache` or declared enabled by a `[plugins."…"]` table
+(`plugin_disable`; `plugin_allow` keeps the ones it names). Codex sessions get no web search unless
+`[kinds.codex] start = ["--search"]`, Codex's live search, read-only and with no local browser, which is
+what Claude's sessions have through their web tools. A custom
 codex-review `command` needs `{{range .MCPOff}} {{.}}{{end}}` for the same. Magnum never
 gives its sessions a `CODEX_HOME` of their own (the login, the session files, the folder trust and the
 hooks live there), so your global `AGENTS.md` still loads; the judge skill tells the judge that your

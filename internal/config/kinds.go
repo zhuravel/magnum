@@ -63,6 +63,13 @@ type Kind struct {
 	// only one by one, by name. A kind with neither ignores it.
 	MCPOff   bool     `toml:"mcp_off"`
 	MCPAllow []string `toml:"mcp_allow"`
+	// PluginDisable: args that turn off plugin {plugin} (name@marketplace),
+	// passed once per plugin under MCPOff, e.g. codex's ["-c",
+	// "plugins.{plugin}.enabled=false"]: a Codex plugin's MCP servers (a
+	// browser, a docs or GitHub server) are no [mcp_servers] table, so
+	// MCPDisable does not reach them. PluginAllow are the plugins left on.
+	PluginDisable []string `toml:"plugin_disable"`
+	PluginAllow   []string `toml:"plugin_allow"`
 	// MCPStrict: args passed once under MCPOff that keep MCP servers out of
 	// a session whatever their names: claude's ["--strict-mcp-config"]
 	// (Claude Code 2.1.292 then loads only the servers of --mcp-config:
@@ -415,6 +422,12 @@ func DefaultKinds() map[string]Kind {
 			// tokens in every judge request, out of the session.
 			MCPOff: true, MCPStrict: []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"},
 			MCPDisable: []string{"-c", "mcp_servers." + PlaceholderServer + ".enabled=false"},
+			// Codex 0.162 reads a plugin's enabled flag from its
+			// [plugins."name@marketplace"] table, which a dotted -c path
+			// reaches (a quoted key in the path does not); a plugin's MCP
+			// servers (the playwright plugin's browser, for one) load with
+			// the plugin, outside every [mcp_servers] table.
+			PluginDisable: []string{"-c", "plugins." + PlaceholderPlugin + ".enabled=false"},
 			// Codex 0.160 merges a -c table into the user's config
 			// (config/src/overrides.rs, merge.rs) and decides a folder's
 			// trust from those session flags before the project layers load
@@ -474,8 +487,10 @@ type LaunchArgs struct {
 	// 0 takes NoSubagents, more takes Subagents.
 	Subagents *int
 	// MCPServers are the MCP servers the session would load (the Codex
-	// config's); MCPOffArgs turns them off.
-	MCPServers []string
+	// config's); MCPOffArgs turns them off. Plugins are the Codex plugins
+	// the session would load (name@marketplace); PluginOffArgs turns them
+	// off.
+	MCPServers, Plugins []string
 	// ProjectServers are the MCP servers the checkout's unchanged
 	// .codex/config.toml declares, turned off under project_mcp "off";
 	// Untrusted are the checkout's paths whose project config the session
@@ -512,7 +527,7 @@ func (k Kind) Argv(a LaunchArgs) []string {
 	default:
 		add(k.Subagents, PlaceholderSubagents, strconv.Itoa(*a.Subagents))
 	}
-	out = append(out, k.ConfigOffArgs(a.MCPServers, a.ProjectServers, a.Untrusted, a.DocsOff)...)
+	out = append(out, k.ConfigOffArgs(a.MCPServers, a.Plugins, a.ProjectServers, a.Untrusted, a.DocsOff)...)
 	out = append(out, k.Start...)
 	if !a.Wrapper {
 		out = append(out, k.Args...)
@@ -543,13 +558,35 @@ func (k Kind) MCPOffArgs(servers []string) []string {
 	return out
 }
 
+// PluginOffArgs are the args that keep the user's plugins out of a
+// session: PluginDisable with {plugin} replaced, once per given plugin not
+// in PluginAllow, in order; nil when MCPOff is false or the kind has no
+// PluginDisable.
+func (k Kind) PluginOffArgs(plugins []string) []string {
+	if !k.MCPOff || len(k.PluginDisable) == 0 {
+		return nil
+	}
+	var out []string
+	for _, p := range plugins {
+		if slices.Contains(k.PluginAllow, p) {
+			continue
+		}
+		for _, a := range k.PluginDisable {
+			out = append(out, strings.ReplaceAll(a, PlaceholderPlugin, p))
+		}
+	}
+	return out
+}
+
 // ConfigOffArgs are the args that keep configuration out of a session:
 // MCPStrict under MCPOff, MCPDisable once per server to turn off (servers
 // under MCPOff, then under ProjectMCP "off" each project server not among
-// them; none in MCPAllow, nothing without MCPDisable), then ProjectDocsOff
-// when docsOff and UntrustArgs(untrusted).
-func (k Kind) ConfigOffArgs(servers, project, untrusted []string, docsOff bool) []string {
+// them; none in MCPAllow, nothing without MCPDisable), PluginDisable once
+// per plugin (PluginOffArgs), then ProjectDocsOff when docsOff and
+// UntrustArgs(untrusted).
+func (k Kind) ConfigOffArgs(servers, plugins, project, untrusted []string, docsOff bool) []string {
 	out := k.MCPOffArgs(servers)
+	out = append(out, k.PluginOffArgs(plugins)...)
 	if k.ProjectMCP == ProjectMCPOff && len(k.MCPDisable) > 0 {
 		for _, s := range project {
 			if slices.Contains(k.MCPAllow, s) || k.MCPOff && slices.Contains(servers, s) {
@@ -716,6 +753,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.MCPAllow, k.MCPDisable, k.ProjectUntrust = cloneOrNil(k.MCPAllow), cloneOrNil(k.MCPDisable), cloneOrNil(k.ProjectUntrust)
 		k.ProjectDocsOff = cloneOrNil(k.ProjectDocsOff)
 		k.MCPStrict = cloneOrNil(k.MCPStrict)
+		k.PluginDisable, k.PluginAllow = cloneOrNil(k.PluginDisable), cloneOrNil(k.PluginAllow)
 		k.SwitchModel, k.DefaultModel = strings.TrimSpace(k.SwitchModel), strings.TrimSpace(k.DefaultModel)
 		k.ResetModel = strings.TrimSpace(k.ResetModel)
 		h := &k.HealthPatterns

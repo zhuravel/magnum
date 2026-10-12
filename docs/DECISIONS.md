@@ -1067,6 +1067,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a run whose review did not name it, refused to edit the body for it (a finding of this run names what
   may change) and put it under "needs you", which ended the loop after the re-review with two new fixable
   findings left for the operator.
+- 2026-10-12: The codex kind turns off the operator's Codex plugins too (`plugin_disable`, default
+  `["-c", "plugins.{plugin}.enabled=false"]`, once per plugin; `plugin_allow` keeps some): a codex-review
+  session called the browser of the `playwright@claude-plugins-official` plugin for a web search, which
+  Codex refused ("MCP tool call requires approval, but approval policy is never"), and the plugin's server
+  reached the session because a plugin's MCP servers are no `[mcp_servers]` table, so `mcp_disable` never
+  named them; the machine had 21 plugins on, three with servers (a browser, a docs server, the GitHub MCP
+  with the operator's token header). The plugins a session would load are those installed in the Codex
+  home's `plugins/cache` (`<marketplace>/<plugin>`) and those a `[plugins."…"]` table declares, less those
+  set `enabled = false`; Codex 0.162 takes the dotted `-c plugins.name@marketplace.enabled=false` (verified
+  on three plugins at once) but not a quoted key in the path, so a name outside bare keys stays on with a
+  log line, as a server's does. Rejected: giving the sessions the browser (Codex refuses every tool that is
+  not read-only under the never policy, so the call only costs a turn; an MCP server runs outside the
+  sandbox and a browser is a network path PR content could steer; the skill forbids web fetches and attack
+  tooling). The parity for a documentation lookup is Codex's own `--search` (the native web_search tool,
+  server side), which `[kinds.codex] start = ["--search"]` gives launches and resumes, not `codex review`,
+  which has no such flag; the defaults leave it off.
 
 ## Screens and commands
 

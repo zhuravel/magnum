@@ -284,6 +284,9 @@ const (
 	PlaceholderSubagents = "{subagents}"
 	// PlaceholderServer is an MCP server's name in Kind.MCPDisable.
 	PlaceholderServer = "{server}"
+	// PlaceholderPlugin is a plugin's name (name@marketplace) in
+	// Kind.PluginDisable.
+	PlaceholderPlugin = "{plugin}"
 	// PlaceholderProjects is the TOML table of untrusted paths in
 	// Kind.ProjectUntrust (Kind.UntrustArgs), optional there.
 	PlaceholderProjects = "{projects}"
