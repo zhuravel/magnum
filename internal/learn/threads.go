@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/postreview"
@@ -152,18 +153,121 @@ func (in Input) ownReply(who string, c github.ThreadComment) bool {
 	return marked || github.IsBot(c.AuthorType, who)
 }
 
+// simplificationRe is a simplification comment's heading once its bold is
+// gone: the word and the optional tag, "(optional, no reply needed)" in the
+// judge prompts, "(optional)" in the earlier ones.
+var simplificationRe = regexp.MustCompile(`(?i)^simplification(?:\s*\(.*\))?$`)
+
 // findingTitle is a posted finding's title and priority from its comment:
-// the first line that is not blank, without the bold around it and the
-// "[P2]" tag in front, clipped to OwnTitleMax runes, and the first P0 to
-// P3 on that line.
+// the first line that is not blank, without its bold and italic markers
+// and the "[P2]" tag in front, clipped to OwnTitleMax runes, and the first
+// P0 to P3 on that line. A simplification comment's first line is the
+// heading alone (prompts/judge-*.md), so its title is "Simplification: "
+// and the first sentence of the paragraph below it, the one on what the
+// proposal removes ("Simplification" when there is none), and it has no
+// priority.
 func findingTitle(body string) (string, string) {
-	line := textx.FirstLine(body)
-	priority := priorityRe.FindString(line)
-	title := strings.Trim(line, "*_ ")
-	if rest, ok := strings.CutPrefix(title, "["+priority+"]"); ok && priority != "" {
-		title = strings.Trim(rest, "*_ ")
+	head, rest := splitHead(body)
+	priority := priorityRe.FindString(head)
+	title := plainText(head)
+	if after, ok := strings.CutPrefix(title, "["+priority+"]"); ok && priority != "" {
+		title = strings.TrimSpace(after)
+	}
+	if simplificationRe.MatchString(title) {
+		title = "Simplification"
+		if s := plainText(firstSentence(rest)); s != "" {
+			title += ": " + s
+		}
 	}
 	return textx.Clip(title, OwnTitleMax), priority
+}
+
+// splitHead is the first line of s that is not blank, trimmed, and what
+// follows it.
+func splitHead(s string) (head, rest string) {
+	off := 0
+	for line := range strings.Lines(s) {
+		off += len(line)
+		if t := strings.TrimSpace(line); t != "" {
+			return t, s[off:]
+		}
+	}
+	return "", ""
+}
+
+// plainText is s without its bold and italic markers: every run of '*' and
+// '_' except one between two letters or digits (snake_case) and any inside
+// a code span, trimmed.
+func plainText(s string) string {
+	rs := []rune(s)
+	var b strings.Builder
+	for i := 0; i < len(rs); {
+		r := rs[i]
+		if r == '`' {
+			if end := slices.Index(rs[i+1:], '`'); end >= 0 { // a code span, kept as it is
+				b.WriteString(string(rs[i : i+end+2]))
+				i += end + 2
+				continue
+			}
+		}
+		if r == '*' || r == '_' {
+			j := i
+			for j < len(rs) && (rs[j] == '*' || rs[j] == '_') {
+				j++
+			}
+			if i > 0 && j < len(rs) && isWordRune(rs[i-1]) && isWordRune(rs[j]) {
+				b.WriteString(string(rs[i:j]))
+			}
+			i = j
+			continue
+		}
+		b.WriteRune(r)
+		i++
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// firstSentence is the first sentence of the first paragraph of s (its
+// lines up to the first blank one, joined by spaces): up to the first '.',
+// '!' or '?' outside a code span that is followed by a space or the end,
+// with the emphasis or quote it ends inside. It is "" when s has no
+// paragraph or the paragraph is a code fence, a suggestion with nothing
+// said above it.
+func firstSentence(s string) string {
+	var para []string
+	for line := range strings.Lines(s) {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			if len(para) > 0 {
+				break
+			}
+			continue
+		}
+		if len(para) == 0 && strings.HasPrefix(t, "```") {
+			return ""
+		}
+		para = append(para, t)
+	}
+	rs := []rune(strings.Join(para, " "))
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
+		case '`':
+			if end := slices.Index(rs[i+1:], '`'); end >= 0 {
+				i += end + 1
+			}
+		case '.', '!', '?':
+			j := i + 1
+			for j < len(rs) && strings.ContainsRune("*_)\"'", rs[j]) {
+				j++
+			}
+			if j == len(rs) || unicode.IsSpace(rs[j]) {
+				return string(rs[:j])
+			}
+		}
+	}
+	return string(rs)
 }
 
 // ThreadItem is the classifier's answer for one own thread: what the

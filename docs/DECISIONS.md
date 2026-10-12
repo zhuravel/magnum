@@ -6311,6 +6311,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   check (a prompt costs tokens and a turn); watching the login file alone (a refresh rewrites it too, so
   the check still has to pass).
 
+- **A simplification thread's title is what it removes** (2026-10-12; amends "The retro classifies the replies
+  to magnum's own findings", whose title was the root's first line with the bold trimmed from its ends). A
+  simplification comment's first line is the heading alone (`**Simplification** (optional, no reply needed)`,
+  earlier `**Simplification (optional)**`), so the ends-only trim left "Simplification** (optional, no reply
+  needed)" as the title of misses row 163 and declines rows 74 and 87, and the retro, the notes curation and
+  the learned corpus's `why` lines showed that for the finding. `learn.findingTitle` now strips every bold and
+  italic marker from the first line (runs of `*` and `_` except one between two letters or digits and any inside
+  a code span), and a line that is the simplification heading gets the title "Simplification: " and the first
+  sentence of the paragraph below it, the one on what the proposal removes (clipped to `OwnTitleMax` as before;
+  just "Simplification" when a code fence follows the heading or nothing does), with no priority. The classifier
+  never wrote the title, `OwnThreads` did, and stored rows are not rewritten. The improvement loop's evidence
+  has the other half: a declined or argued finding judged `missing_context` at repo scope is also stored as a
+  `miss` (same `source_url` as its `declines` row, so the notes curation takes it), and the Misses section of
+  `evidence.sh` counted those as what other reviewers found; its tables now carry a `from` column ("declined
+  finding" or "comment") and group by it. Rejected: marking the rows in `magnum misses` (the listing would
+  need the join in the store and a field in its JSON for a column the operator reads only through the loop's
+  evidence), and cutting the heading's tag by hand instead of matching the heading (a title that merely starts
+  with the word, "Simplification of the retry loop", stays as written).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

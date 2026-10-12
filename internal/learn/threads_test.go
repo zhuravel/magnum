@@ -4,8 +4,10 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
@@ -216,6 +218,59 @@ func TestAFixedReplyNeedsNoLesson(t *testing.T) {
 		}
 		if len(items) != 0 || !reflect.DeepEqual(got, map[string]ThreadItem{"o9": {ID: "o9", Outcome: store.DeclineFixed}}) {
 			t.Fatalf("%s: items %+v, threads %+v", out, items, got)
+		}
+	}
+}
+
+// TestFindingTitleReadsASimplificationThread: a simplification comment's
+// first line is the heading alone ("**Simplification** (optional, no reply
+// needed)", or the older "**Simplification (optional)**"), and what the
+// proposal removes is the sentence below it, so the title is that sentence
+// and not the heading with half its bold left on; a simplification has no
+// priority, and a heading with no sentence under it stays "Simplification".
+func TestFindingTitleReadsASimplificationThread(t *testing.T) {
+	const suggestion = "```suggestion\nreturn Foo(x)\n```"
+	for name, c := range map[string]struct{ body, title string }{
+		"the current heading": {"**Simplification** (optional, no reply needed)\n\nThe helper duplicates `Foo`; call it instead.\n\n" + suggestion,
+			"Simplification: The helper duplicates `Foo`; call it instead."},
+		"the older heading": {"**Simplification (optional)**\n\nThe flag is read once and never changes.\n" + suggestion,
+			"Simplification: The flag is read once and never changes."},
+		"the first sentence of a paragraph": {"**Simplification** (optional, no reply needed)\n\nDrops the `a. b` copy. The rest is the same\nacross two lines.\n\n" + suggestion,
+			"Simplification: Drops the `a. b` copy."},
+		"a paragraph over two lines": {"**Simplification** (optional, no reply needed)\n\nRemoves the second pass\nover the rows.\n\n" + suggestion,
+			"Simplification: Removes the second pass over the rows."},
+		"emphasis inside the sentence": {"**Simplification** (optional, no reply needed)\n\nThe **second** loop is _redundant_.\n\n" + suggestion,
+			"Simplification: The second loop is redundant."},
+		"no sentence below the heading":          {"**Simplification** (optional, no reply needed)\n\n" + suggestion, "Simplification"},
+		"nothing below the heading":              {"**Simplification** (optional, no reply needed)", "Simplification"},
+		"a title that only starts with the word": {"**Simplification of the retry loop**\n\nSomething.", "Simplification of the retry loop"},
+		"a title that is already a sentence":     {"**Simplification: drop the copy**\n\nSomething.", "Simplification: drop the copy"},
+	} {
+		if title, priority := findingTitle(c.body); title != c.title || priority != "" {
+			t.Errorf("%s: title %q priority %q; want %q and none", name, title, priority, c.title)
+		}
+	}
+	long := "**Simplification** (optional, no reply needed)\n\n" + strings.Repeat("word ", OwnTitleMax)
+	if title, _ := findingTitle(long); utf8.RuneCountInString(title) != OwnTitleMax || !strings.HasPrefix(title, "Simplification: word ") || !strings.HasSuffix(title, "…") {
+		t.Errorf("a sentence of %d runes gives %q", len(long), title)
+	}
+}
+
+// TestFindingTitleStripsInnerMarkup: the bold and italic markers go from
+// the whole first line, not only its ends, with the "[P2]" tag in front;
+// what is no emphasis stays: an underscore inside a word, and anything in
+// a code span.
+func TestFindingTitleStripsInnerMarkup(t *testing.T) {
+	for body, want := range map[string][2]string{
+		"**[P2] A **bold** word**":                                    {"A bold word", "P2"},
+		"__[P1] An _italic_ and *starred* word__":                     {"An italic and starred word", "P1"},
+		"**[P3]** Trailing emphasis*":                                 {"Trailing emphasis", "P3"},
+		"**[P2] `snake_case` stays, so does snake_case, and `*Foo`**": {"`snake_case` stays, so does snake_case, and `*Foo`", "P2"},
+		"  \n**[P0] Second line is not read**\nmore":                  {"Second line is not read", "P0"},
+		"****": {"", ""},
+	} {
+		if title, priority := findingTitle(body); title != want[0] || priority != want[1] {
+			t.Errorf("%q: title %q priority %q; want %q and %q", body, title, priority, want[0], want[1])
 		}
 	}
 }

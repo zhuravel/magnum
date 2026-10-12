@@ -23,6 +23,13 @@ out=$dir/evidence.md
 
 q() { sqlite3 -readonly -header -markdown "$db" "$1"; }
 
+# miss_from says where a miss row came from: a declined or argued finding of magnum's own that the
+# retro judged missing_context at repo scope is also stored as a miss (so the notes curation takes it)
+# with the declines row's source_url. Those are magnum's own threads, not what a human reviewer
+# raised, and the Misses section counts them apart.
+miss_from="case when exists (select 1 from declines d where d.source_url = misses.source_url)
+	then 'declined finding' else 'comment' end"
+
 {
 	echo "# magnum since $since"
 	echo
@@ -53,9 +60,10 @@ q() { sqlite3 -readonly -header -markdown "$db" "$1"; }
 	   group by 1, 2 order by 1, 2"
 	echo
 	echo "## Misses (retro)"
-	q "select class, coalesce(scope, '-') as scope, coalesce(severity, '-') as pri, raised, state, count(*) as n
-	   from misses where created_at >= '$since' group by 1, 2, 3, 4, 5 order by 6 desc"
-	q "select substr(created_at, 1, 10) as at, severity as pri, scope, title, lesson
+	q "select class, coalesce(scope, '-') as scope, coalesce(severity, '-') as pri, raised, state, $miss_from as \"from\",
+	          count(*) as n
+	   from misses where created_at >= '$since' group by 1, 2, 3, 4, 5, 6 order by 7 desc"
+	q "select substr(created_at, 1, 10) as at, severity as pri, scope, $miss_from as \"from\", title, lesson
 	   from misses where class = 'miss' and created_at >= '$since' order by created_at"
 	echo
 	echo "## Warn and error events by kind"
