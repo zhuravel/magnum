@@ -46,7 +46,7 @@ type Role string
 const (
 	RoleJudge       Role = config.RoleCodexJudge     // codex-judge: persistent Codex session that posts the review
 	RoleClaude      Role = config.RoleClaudeReview   // claude-review: persistent Claude session running /code-review
-	RoleCodexReview Role = config.RoleCodexReview    // codex-review: shell pane running `command codex review`
+	RoleCodexReview Role = config.RoleCodexReview    // codex-review: shell pane running `codex review` under db-lock
 	RoleSimplify    Role = config.RoleClaudeSimplify // claude-simplify: on-demand Claude session running /simplify
 )
 

@@ -6448,6 +6448,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the new one names a later reset, the backoff is untouched, and only a pause that is not a fold doubles
   it.
 
+- **codex-review takes its turn on the checkout's databases** (2026-10-12; amends "A role's limits by design are
+  no machine failure", which called it a static review with no network services, and "The roles of a round take
+  turns on the slot's databases", which gave `magnum db-lock` to every session role but not to the shell one).
+  Codex's workspace-write sandbox keeps `codex review` from Redis and the network, but it still reaches MySQL and
+  Postgres on localhost, and Rails inside it boots and truncates the test databases on its own: the Codex rollouts
+  of magnum's review sessions (source subagent `review`) show 19 of 82 sessions in one repository and 19 of 39 in
+  another running specs that reached examples (89 and 57 runs), none through db-lock, and every one of the 12
+  `round.environment` events of the first repository about lost fixture rows, duplicate keys, Trilogy 1412 or a
+  "contaminated batch" came minutes after codex-review ran specs on the same slot (two PRs, six times each);
+  `magnum status` showed them as machine lines, and the judge reran its checks or left them inconclusive. Now
+  `ShellData` has `DBLockCommand`, the same ready line as `RoleData`'s, derived by `filled` from `Magnum` (the
+  daemon's executable, which `Manager.ShellLine` takes from the layout when empty), `Checkout` (the round's slot,
+  which the pipeline already passed for the project config) and the role's name, and the default `command` of
+  codex-review and `prompts/codex-review.sh` run `{{.DBLockCommand}} codex review ...` in place of `command codex
+  review ...`: db-lock execs `codex` from `PATH` itself, so the operator's shell function stays out as `command`
+  kept it out. The ending is unchanged: `pipefail` makes the group's status db-lock's, which is the command's own
+  (75 when the lock stayed held for the default `--timeout 20m`, which `ok_status = [0]` fails as a role that
+  produced no review), and the report gets the command's stdout only, because db-lock writes its wait notice to
+  stderr (a real-shell test runs the line with a stand-in for `magnum db-lock` for a passing, a failing and a
+  timed-out run). The lock is held for the whole review (2.5 to 6.4 minutes on average, 17.2 at most in the
+  window), so the other roles' spec runs wait for codex-review's and the reverse, and the role's own 40m timeout
+  counts the wait; 20m covers it. A `command` of the operator's own that leaves `{{.DBLockCommand}}` out runs
+  unlocked (a role's keys override the built-in ones one by one). The review skill's sentence on by-design limits
+  stays: what the sandbox does not reach (Redis, the network) is still no machine failure. Rejected: a read-only
+  sandbox for `codex review` (Rails still boots and truncates the test databases on its own), and locking each
+  spec run (they are tool calls inside Codex's own session, which magnum cannot wrap).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

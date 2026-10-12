@@ -157,7 +157,7 @@ func TestCodexReviewOfAPRChangingCodexRunsWithTheCheckoutUntrusted(t *testing.T)
 		t.Fatal(err)
 	}
 	untrust := untrustArgs(dir)
-	want := "command codex review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false -c " + shellQuote(untrust[1]) + " --base " + projectMergeBase
+	want := "-- codex review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false -c " + shellQuote(untrust[1]) + " --base " + projectMergeBase
 	if !strings.Contains(got, want) {
 		t.Fatalf("line = %q\nwant it to contain %q", got, want)
 	}

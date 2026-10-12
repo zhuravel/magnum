@@ -775,7 +775,7 @@ name = "codex-review"
 kind = "shell"
 tool = "codex"                     # codex's login check, pauses and health patterns apply
 effort = "high"                    # -c model_reasoning_effort=high, never your global Codex effort
-command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # no MCP servers; the merge base
+command = "{{.DBLockCommand}} codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # takes its turn on the slot's databases; no MCP servers; the merge base
 capture = "stdout"
 
 [[role]]
@@ -1291,8 +1291,15 @@ waiting role prints once `db-lock: waiting for <role> (<command>) since <time>`.
 did not run`, which the skill treats as a check that did not run, never a finding. Exit 125 is db-lock's
 own failure (no command, a checkout it cannot find), 126 and 127 a command it cannot start, 128+n one a
 signal ended. Without `--checkout` it locks the git work tree it runs in. Like `post-review` it reads no
-config and no registry. codex-review needs none of this: it is a static review, sandboxed without Redis
-or databases, and the skill does not count the checks it could not run as machine failures.
+config and no registry. codex-review takes its turn on the databases like the others: it is sandboxed
+without Redis and the network, but its workspace-write sandbox still reaches MySQL and Postgres on
+localhost, and its sessions ran specs on the slot's test databases (Rails boots and truncates them) while
+the other roles did, which lost their fixture rows. Its shell line therefore runs `codex review` through
+the same line (`{{.DBLockCommand}}` in the role's `command`, so a `command` of your own that leaves it out
+runs unlocked), holding the lock for the whole review (about 2.5 to 6 minutes, 17 at most), and `codex`
+itself comes from `PATH`, not from your shell function. A wait of more than the default 20m ends in exit 75
+and fails the role. The skill does not count the checks it could not run in its sandbox (Redis, the
+network) as machine failures.
 
 What an author gets, every review alike:
 

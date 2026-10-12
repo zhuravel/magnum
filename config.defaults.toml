@@ -453,7 +453,11 @@ tool = "codex"                        # codex's login check, pauses and health p
 # args = ["-c", "model=gpt-6.1-sol"]  # `codex review` takes the model as a config override
 effort = "high"                       # passed by the command as -c model_reasoning_effort=high, so `codex review`
                                       # never runs at your global Codex effort; args come after it and win
-command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+command = "{{.DBLockCommand}} codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+                                      # .DBLockCommand is `magnum db-lock --checkout <slot> --role codex-review --`:
+                                      # codex review is sandboxed but reaches the slot's databases on localhost
+                                      # (Rails boots and truncates them), so it takes its turn on them like the
+                                      # other roles, and db-lock runs codex from PATH, not your shell function.
                                       # .MCPOff turns off your Codex MCP servers ([kinds.codex] mcp_off) and
                                       # keeps a PR's .codex/ and AGENTS.md changes out (project_untrust,
                                       # project_docs_off); then

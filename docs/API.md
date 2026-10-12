@@ -535,15 +535,15 @@ func ShellLine(role config.Role, d ShellData) (string, error)
         [printf '\033]0;%s\007' <Title>; DISABLE_AUTO_TITLE=true; ]set -o pipefail; [{ printf '<ReportMarker(RunID)>\n'; ]<command> <args...>[; } | tee <ReportPath>]; printf '\n<Marker> %d\n' "$?"
 
     where <command> is the command template executed with d (every value
-    shell-quoted, e.g. `command codex review --base {{.BaseSHA}}`), the args
-    (role.Args, or d.Args) are shell-quoted and appended, and the braces and
-    the tee are there only for capture "stdout" (ReportPath is then required):
-    the report starts with the run's ReportMarker, then the command's output.
-    The optional prefix sets the pane's terminal title (OSC 0), which herdr's
-    sidebar shows, and stops oh-my-zsh from resetting it after the command
-    (its title hooks honour DISABLE_AUTO_TITLE at run time). pipefail makes
-    the status the command's, not tee's; the final printf puts the marker on
-    a line of its own (also after output without a trailing newline) followed
+    shell-quoted, e.g. `{{.DBLockCommand}} codex review --base {{.BaseSHA}}`),
+    the args (role.Args, or d.Args) are shell-quoted and appended, and the
+    braces and the tee are there only for capture "stdout" (ReportPath is then
+    required): the report starts with the run's ReportMarker, then the command's
+    output. The optional prefix sets the pane's terminal title (OSC 0),
+    which herdr's sidebar shows, and stops oh-my-zsh from resetting it after the
+    command (its title hooks honour DISABLE_AUTO_TITLE at run time). pipefail
+    makes the status the command's, not tee's; the final printf puts the marker
+    on a line of its own (also after output without a trailing newline) followed
     by that status, which RunShell returns (config.Role.StatusOK judges it).
     With role.Prompt set instead, that full-line .sh template (d.Template,
     else the embedded default of that name) is rendered with d and must contain
@@ -1266,11 +1266,13 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error)
     ShellLine is ShellLine with the role's full-line template (role.Prompt)
     resolved through the configuration (pipeline.prompts_dir, then the embedded
-    defaults) unless d.Template is set, and d.MCPOff, when nil, keeping out what
-    a session of the role's tool kind must not load: the MCP servers and plugins
-    of the Codex home (codexOff) and the PR's project config in d.Checkout
-    (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered line records
-    the decision for PR prID, recordProject).
+    defaults) unless d.Template is set, and d.MCPOff, when nil, keeping out
+    what a session of the role's tool kind must not load: the MCP servers
+    and plugins of the Codex home (codexOff) and the PR's project config in
+    d.Checkout (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered
+    line records the decision for PR prID, recordProject). d.Magnum, when empty,
+    is the daemon's own executable (the layout's), which d.DBLockCommand runs
+    for the checkout and the role.
 
 func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error
     StartAgent launches (or adopts) the agent of an agent role in paneID and
@@ -1622,7 +1624,7 @@ type Role string
 const (
 	RoleJudge       Role = config.RoleCodexJudge     // codex-judge: persistent Codex session that posts the review
 	RoleClaude      Role = config.RoleClaudeReview   // claude-review: persistent Claude session running /code-review
-	RoleCodexReview Role = config.RoleCodexReview    // codex-review: shell pane running `command codex review`
+	RoleCodexReview Role = config.RoleCodexReview    // codex-review: shell pane running `codex review` under db-lock
 	RoleSimplify    Role = config.RoleClaudeSimplify // claude-simplify: on-demand Claude session running /simplify
 )
     The built-in roles (config.DefaultRoles), for defaults and tests.
@@ -1741,9 +1743,21 @@ type ShellData struct {
 	// from the configuration. Not a template variable.
 	Template *config.Prompt
 	// Checkout is the PR's checkout the line runs in, whose project config
-	// Manager.ShellLine compares with BaseSHA (else BaseRef); "" = unknown,
-	// nothing kept out. Not a template variable.
+	// Manager.ShellLine compares with BaseSHA (else BaseRef), and whose
+	// databases DBLockCommand locks; "" = unknown, nothing kept out and
+	// db-lock takes the git work tree it runs in. Not a template variable.
 	Checkout string
+	// Magnum is the magnum executable DBLockCommand runs (the daemon's own,
+	// absolute; "" = magnum on PATH; Manager.ShellLine fills it from the
+	// layout when empty). Not a template variable.
+	Magnum string
+	// DBLockCommand is the line a command that touches the checkout's
+	// databases runs through, as RoleData's (DBLockLine from Magnum,
+	// Checkout and the role's name when empty): codex-review's command runs
+	// `{{.DBLockCommand}} codex review ...`, so its sandboxed specs take
+	// turns with the other roles'. It is a ready shell line: nothing quotes
+	// it again.
+	DBLockCommand string
 }
     ShellData feeds a shell role's line (ShellLine): the role's command
     template, or a full-line .sh prompt template. Every value is shell-quoted
@@ -4150,9 +4164,10 @@ func DefaultRoles() []Role
         claude-rereview.md, restart claude-restart.md, effort high,
         rereview_effort medium; aliases claude.
       - codex-review: shell, tool codex, effort high, command
-        defaultCodexReviewCommand (its effort and the MCP servers to turn off
-        as config overrides, then the merge base, else the base ref), ok_status
-        [0], capture stdout; aliases codex, codex_review.
+        defaultCodexReviewCommand (run through the checkout's db-lock,
+        its effort and the MCP servers to turn off as config overrides,
+        then the merge base, else the base ref), ok_status [0], capture stdout;
+        aliases codex, codex_review.
       - claude-simplify: claude, runs first, rerun_min_lines
         DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only:
         it writes its proposals to claude-simplify.md), no after, so it runs in

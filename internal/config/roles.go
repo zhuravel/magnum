@@ -276,8 +276,9 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     claude-rereview.md, restart claude-restart.md, effort high,
 //     rereview_effort medium; aliases claude.
 //   - codex-review: shell, tool codex, effort high, command
-//     defaultCodexReviewCommand (its effort and the MCP servers to turn off
-//     as config overrides, then the merge base, else the base ref),
+//     defaultCodexReviewCommand (run through the checkout's db-lock, its
+//     effort and the MCP servers to turn off as config overrides, then the
+//     merge base, else the base ref),
 //     ok_status [0], capture stdout; aliases
 //     codex, codex_review.
 //   - claude-simplify: claude, runs first, rerun_min_lines
@@ -327,8 +328,11 @@ func DefaultRoles() []Role {
 // kind's mcp_off), against the PR's merge base, or its base ref when the
 // merge base is unknown. The merge base does not move: with --base
 // origin/master a review of a PR whose base branch gained commits flagged
-// files the PR does not touch.
-const defaultCodexReviewCommand = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+// files the PR does not touch. It runs through the checkout's db-lock
+// (.DBLockCommand) like the other roles' database commands: its sandbox
+// still reaches the slot's databases on localhost, which they use at the
+// same time.
+const defaultCodexReviewCommand = "{{.DBLockCommand}} codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
 
 // DefaultJudgeSubagents is the judge's max_subagents: on its own it started
 // 53 subagent threads in 36 sessions, 27% of the Codex spend.

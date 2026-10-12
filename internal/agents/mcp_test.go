@@ -202,7 +202,7 @@ func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 	role := e.spec(RoleCodexReview)
 	sh := role
 	sh.Command, sh.Prompt = "", "codex-review.sh"
-	want := "command codex review -c model_reasoning_effort=high " + strings.Join(mcpOffArgs, " ") + " --base origin/master; } |"
+	want := "-- codex review -c model_reasoning_effort=high " + strings.Join(mcpOffArgs, " ") + " --base origin/master; } |"
 	for name, r := range map[string]config.Role{"command": role, "codex-review.sh": sh} {
 		got, err := e.m.ShellLine(e.ctx, e.pr.ID, r, d)
 		if err != nil || !strings.Contains(got, want) {

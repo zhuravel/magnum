@@ -663,9 +663,21 @@ type ShellData struct {
 	// from the configuration. Not a template variable.
 	Template *config.Prompt
 	// Checkout is the PR's checkout the line runs in, whose project config
-	// Manager.ShellLine compares with BaseSHA (else BaseRef); "" = unknown,
-	// nothing kept out. Not a template variable.
+	// Manager.ShellLine compares with BaseSHA (else BaseRef), and whose
+	// databases DBLockCommand locks; "" = unknown, nothing kept out and
+	// db-lock takes the git work tree it runs in. Not a template variable.
 	Checkout string
+	// Magnum is the magnum executable DBLockCommand runs (the daemon's own,
+	// absolute; "" = magnum on PATH; Manager.ShellLine fills it from the
+	// layout when empty). Not a template variable.
+	Magnum string
+	// DBLockCommand is the line a command that touches the checkout's
+	// databases runs through, as RoleData's (DBLockLine from Magnum,
+	// Checkout and the role's name when empty): codex-review's command runs
+	// `{{.DBLockCommand}} codex review ...`, so its sandboxed specs take
+	// turns with the other roles'. It is a ready shell line: nothing quotes
+	// it again.
+	DBLockCommand string
 }
 
 const donePrefix = "MAGNUM_DONE_"
@@ -711,8 +723,10 @@ func CommandAnchor(marker string) string { return doneFormat(marker) }
 var markerSafe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // filled completes d from the role: Command, Args and Capture when unset,
-// and Marker/RunID/ExtraArgs from each other.
+// Marker/RunID/ExtraArgs from each other and DBLockCommand from Magnum,
+// Checkout and the role's name.
 func (d ShellData) filled(role config.Role) ShellData {
+	d.DBLockCommand = cmp.Or(d.DBLockCommand, DBLockLine(d.Magnum, d.Checkout, role.Name))
 	if d.Command == "" {
 		d.Command = role.Command
 	}
@@ -767,6 +781,7 @@ func (d ShellData) shellSafe() (ShellData, error) {
 		ReportPath: quoteNonEmpty(d.ReportPath), BaseRef: quoteNonEmpty(d.BaseRef), BaseSHA: quoteNonEmpty(d.BaseSHA),
 		HeadSHA: quoteNonEmpty(d.HeadSHA), URL: quoteNonEmpty(d.URL), Title: quoteNonEmpty(d.Title),
 		Model: quoteNonEmpty(d.Model), Effort: quoteNonEmpty(d.Effort), MCPOff: quoteAll(d.MCPOff),
+		DBLockCommand: d.DBLockCommand, // a quoted shell line already (DBLockLine)
 	}
 	return out, nil
 }
@@ -814,7 +829,7 @@ func quoteNonEmpty(s string) string {
 //	[printf '\033]0;%s\007' <Title>; DISABLE_AUTO_TITLE=true; ]set -o pipefail; [{ printf '<ReportMarker(RunID)>\n'; ]<command> <args...>[; } | tee <ReportPath>]; printf '\n<Marker> %d\n' "$?"
 //
 // where <command> is the command template executed with d (every value
-// shell-quoted, e.g. `command codex review --base {{.BaseSHA}}`), the args
+// shell-quoted, e.g. `{{.DBLockCommand}} codex review --base {{.BaseSHA}}`), the args
 // (role.Args, or d.Args) are shell-quoted and appended, and the braces and
 // the tee are there only for capture "stdout" (ReportPath is then
 // required): the report starts with the run's ReportMarker, then the
@@ -910,8 +925,11 @@ func promptLine(role config.Role, d ShellData) (string, error) {
 // keeping out what a session of the role's tool kind must not load: the MCP
 // servers and plugins of the Codex home (codexOff) and the PR's project config in
 // d.Checkout (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered
-// line records the decision for PR prID, recordProject).
+// line records the decision for PR prID, recordProject). d.Magnum, when
+// empty, is the daemon's own executable (the layout's), which d.DBLockCommand
+// runs for the checkout and the role.
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error) {
+	d.Magnum = cmp.Or(d.Magnum, m.d.Layout.Binary())
 	var project projectScope
 	if d.MCPOff == nil {
 		if k, ok := m.kindSpec(role.AgentKind()); ok {

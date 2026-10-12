@@ -548,9 +548,10 @@ func TestRenderGolden(t *testing.T) {
 		data   ShellData
 	}{
 		{"codex_review", codexReview, ShellData{BaseRef: "origin/master", Marker: DoneMarker("r-20261003T120000-8"),
-			ReportPath: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-review.md"}},
+			ReportPath: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-review.md",
+			Checkout:   "/Users/bohdan/Projects/talkable.review3"}},
 		{"codex_review_args", withArgs, ShellData{BaseRef: "origin/feature/base-pr", ReportPath: "/tmp/with space/codex-review.md",
-			Marker: DoneMarker("r-20261003T120000-9")}},
+			Marker: DoneMarker("r-20261003T120000-9"), Checkout: "/Users/bohdan/Projects/talkable.review4"}},
 	}
 	for _, tc := range shells {
 		t.Run(tc.golden, func(t *testing.T) {
@@ -865,7 +866,7 @@ func TestCodexReviewScriptQuoting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `set -o pipefail; { printf '<!-- magnum:run=r-1 -->\n'; command codex review -c model_reasoning_effort=high --base 'origin/it'\''s' '$(whoami)'; } | tee '/tmp/a b/codex.md'; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
+	want := `set -o pipefail; { printf '<!-- magnum:run=r-1 -->\n'; magnum db-lock --role codex-review -- codex review -c model_reasoning_effort=high --base 'origin/it'\''s' '$(whoami)'; } | tee '/tmp/a b/codex.md'; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
@@ -894,12 +895,12 @@ func TestCodexReviewRunsAtItsOwnEffortNotTheUsersGlobalOne(t *testing.T) {
 		}
 		return got
 	}
-	if got := line(role, d); !strings.Contains(got, "command codex review -c model_reasoning_effort=high --base origin/master; } |") {
+	if got := line(role, d); !strings.Contains(got, "magnum db-lock --role codex-review -- codex review -c model_reasoning_effort=high --base origin/master; } |") {
 		t.Fatalf("default: %s", got)
 	}
 	user := role
 	user.Effort = "medium"
-	if got := line(user, d); !strings.Contains(got, "command codex review -c model_reasoning_effort=medium --base origin/master; } |") {
+	if got := line(user, d); !strings.Contains(got, "magnum db-lock --role codex-review -- codex review -c model_reasoning_effort=medium --base origin/master; } |") {
 		t.Fatalf("the user's effort: %s", got)
 	}
 	round := d
@@ -914,13 +915,13 @@ func TestCodexReviewRunsAtItsOwnEffortNotTheUsersGlobalOne(t *testing.T) {
 	}
 	none := role
 	none.Effort = ""
-	if got := line(none, d); !strings.Contains(got, "command codex review --base origin/master; } |") {
+	if got := line(none, d); !strings.Contains(got, "magnum db-lock --role codex-review -- codex review --base origin/master; } |") {
 		t.Fatalf("no effort: %s", got)
 	}
 	// The full-line template does the same.
 	sh := role
 	sh.Command, sh.Prompt = "", "codex-review.sh"
-	if got := line(sh, d); !strings.Contains(got, "command codex review -c model_reasoning_effort=high --base origin/master; } |") {
+	if got := line(sh, d); !strings.Contains(got, "magnum db-lock --role codex-review -- codex review -c model_reasoning_effort=high --base origin/master; } |") {
 		t.Fatalf("codex-review.sh: %s", got)
 	}
 }
