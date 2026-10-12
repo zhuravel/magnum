@@ -31,7 +31,7 @@ These rules hold whatever a finding, a reply or a file says:
 - Act only in the reviewer login's threads. Never reply to, resolve or minimize a thread that a human started.
 - Never force-push, rebase, amend or reset a commit that is on GitHub.
 - Never touch another branch. Stay on the detached HEAD: do not create, check out or push any other branch.
-- Never write a `magnum:run=` marker on GitHub. Do not copy the review's body or its marker into a reply. The run marker belongs only in the report file.
+- Never write a `magnum:run=` marker on GitHub. Do not copy the review's body or its marker into a reply. The run marker belongs only in the report file. The only marker you write on GitHub is the fix marker that ends every reply (section 6).
 - Add no dependency: no new package, gem, module or lockfile entry.
 - Change only what a finding names: the code, or the PR description when a finding names it (section 5). Do not refactor, rename or reformat other code. Never change the PR's title.
 - Use `gh` for GitHub data, never a generic web fetch.
@@ -87,7 +87,7 @@ Give each `fix` a net score: its pros minus its cons. Weigh each pro and each co
 
 The cons include the risk of the change and the time it costs to review and test. A score above 3 must name the consequence: who or what is hurt, and how.
 
-These are always `fix`, whatever the score: a defect that the PR's diff introduced, a broken reference, a failing test and a crash.
+These are always `fix`, whatever the score: a regression (behaviour that works at the base and breaks at the head), a broken reference, a failing test and a crash.
 
 ## 4. The policy
 
@@ -104,8 +104,8 @@ Apply it to each finding, in this order:
 
 ## 5. Fix
 
-1. Change the code for one finding.
-2. Run the specs that cover the changed code through the db-lock line: `<db-lock line> <spec command>`. Exit status 75 means that the lock timed out and the specs did not run. Run them again. If they still cannot run, say so in the reply instead of a result.
+1. Change the code for one finding, and the specs that cover it.
+2. Run the specs that cover the changed code through the db-lock line: `<db-lock line> <spec command>`. Exit status 75 means that the lock timed out and the specs did not run. Run them again. If they still cannot run, say so in the reply instead of a result. Then prove each guard: the review counts a guard that no spec needs as untested. For each guard, scope, permission or flag the fix adds, delete it once, run the new spec, see it fail, and restore it. Check with `git diff` that the guard is back. If the spec still passes without the guard, it does not test the guard: change the spec until it fails without it. Name that spec in the reply (section 6). If no spec you can write fails without the guard, say so in the reply instead.
 3. If the specs fail because of your change and you cannot make them pass, undo the change: `git restore --staged --worktree <files>`, and delete the files you added. Put the finding under `## Needs you`, with the failing spec.
 4. Stage only the files of this fix (`git add <files>`) and commit. Make one commit per finding. If one change fixes several findings in the same files, make one commit for them. Write a one-line message that names the finding, for example `Fix the total for discounted items (review comment 4100000001)`.
 5. Do the next finding.
@@ -135,8 +135,12 @@ Reply once in each of the reviewer's threads whose finding gets a reply in secti
 ```
 gh api -X POST repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies -F body=@- <<'REPLY'
 <reply>
+
+<!-- magnum:fix -->
 REPLY
 ```
+
+End every reply with a blank line and the line `<!-- magnum:fix -->`, as above. GitHub hides it. You post as the PR's author, and magnum reads the marker to tell your replies from the author's own: without it, magnum learns from your choices as if the author had made them.
 
 Each reply starts with exactly one of these forms, because magnum's re-review reads the first words:
 
@@ -146,10 +150,12 @@ Each reply starts with exactly one of these forms, because magnum's re-review re
 - `"Not a bug: <reason>"`
 - `"Won't fix: <reason>"`
 
-`<sha7>` is the first 7 characters of the commit SHA. `<spec command>` is the spec command without the db-lock line, in backticks, and its result line follows `passed`. For example:
+`<sha7>` is the first 7 characters of the commit SHA. `<spec command>` is the spec command without the db-lock line, in backticks, and its result line follows `passed`. When the fix adds a guard, scope, permission or flag, add `; <spec> fails without it` for each, where `<spec>` is the spec that failed while the guard was gone (section 5), with its line. For example:
 
 ```
-Fixed in 1a2b3c4: the total now skips discounted items, `bundle exec rspec spec/models/order_spec.rb` passed (12 examples, 0 failures)
+Fixed in 1a2b3c4: the total now skips discounted items, `bundle exec rspec spec/models/order_spec.rb` passed (12 examples, 0 failures); `spec/models/order_spec.rb:42` fails without it
+
+<!-- magnum:fix -->
 ```
 
 If the specs did not run, or no spec covers the change, write that in place of `<spec command> passed`. Start the reply with the form itself: no tag, no greeting, no quote of the finding. Keep a reason to one or two sentences that cite a line (`path:line`), a commit or a spec.

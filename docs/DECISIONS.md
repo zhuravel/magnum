@@ -1177,6 +1177,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   "pinned: the fix unpins it", and `magnum fix` prints that it unpins it. Autofix and a loop's next cycle
   keep refusing (`fixPinRefuses`): nobody asked for them just now, and a pin holds every automatic round.
   Rejected: recording the PR's gate after a live hold, as the review does (no round waits for it).
+- **The fixer proves each guard its fix adds with a spec that fails without it** (2026-10-12, amends "The fix
+  loop: magnum fixes its own findings on your PRs"). In the window, 69 of the 216 threads that magnum opened
+  were fix fallout (a finding "in the fix for …"). 22 of those were test gaps, and 21 of them were P2. That
+  is 61% of the 36 test-gap threads of the window. The review skill tells the reviewer to report a guard
+  that a mutation leaves green. One judge wrote "Removing the test-mode or activity guard still leaves all
+  239 committed snapshot examples green". The fix skill did not ask the fixer for this proof. The fixer
+  added specs (5 of 5 sampled fix commits change a spec), but not one spec for each guard. Now section 5,
+  step 2, of `skills/magnum-fix/SKILL.md` gives the fixer these steps for each guard, scope, permission or
+  flag that the fix adds. It deletes the guard once, runs the new spec through the db-lock line, sees the
+  spec fail, and restores the guard. `git diff` shows that the guard is back. A spec that still passes
+  without the guard does not test it, so the fixer changes the spec until it fails. The "Fixed in" reply
+  names the spec ("`<spec>` fails without it") for each guard. When no spec fails without the guard, the
+  reply says so. Rejected: leaving the proof to the re-review. That costs a round and a thread for each
+  guard, and one spec run of the fixer gives the same proof.
+- **The fixer always fixes a regression, not each finding of the diff** (2026-10-12, amends "The fix loop:
+  magnum fixes its own findings on your PRs"). The fix skill made "a defect that the PR's diff introduced"
+  a `fix` at any score. The same was true of a broken reference, a failing test and a crash. The review
+  skill reports only what the PR introduces or exposes. Thus the clause covered each finding, and it
+  overrode the declines by net score that the skill allows. The operator's own replies read the clause as a
+  regression. Now the clause is "a regression (behaviour that works at the base and breaks at the head)".
+  The rest of the sentence stays. Each other finding must have a net score of 3 or more. Rejected: removing
+  the clause. A regression is the one defect of the diff that is never worth leaving, at any cost.
 
 ## Screens and commands
 
@@ -6570,6 +6592,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   holds. Rejected: k and l in the skill (it was 10 bytes under its cap, and the rounds that post rebuttals
   carry their reply wording in those prompts), and rewording the migration sentence (its pin is the 2026-10-08
   rule, which keeps the priority).
+
+- **The fixer signs its replies, and the retro learns only from people** (2026-10-12, amends "The retro
+  classifies the replies to magnum's own findings" and "A missing-context decline is a repo miss for the
+  notes"). The fixer posts as the PR's author. With a gh identity, the watch posts as the same login. Thus
+  the replies of the fixer had no mark of their own, and `learn.OwnThreads` counted them as answers of the
+  author. The fixer answered 85 of the 88 threads that got an answer under the current skill. The notes of
+  one repository recorded ten choices of the fixer as what "the authors accept". After the merges, about 19
+  of its declines were about to become learned "absent" cases. Now each reply of the fix skill ends with
+  `<!-- magnum:fix -->` (`postreview.FixReplyMarker`, next to the reply marker of the judge, read by
+  `IsFixReply`). A reply with this marker, by the PR's author or by one of magnum's logins, is the fixer's.
+  `OwnThreads` shows its author as `(magnum fix)` (`learn.FixerAuthor`). The reply still answers the
+  finding. When nobody else answered, the thread is `fixer` in `candidates.json`. The classifier gives such
+  a thread its outcome, and a verdict for a declined or argued finding, but no lesson (`prompts/retro.md`).
+  `checkThread` accepts the item without a lesson, and it removes any lesson, scope or patterns. Thus the
+  `declines` row keeps the outcome and the verdict. It makes no learned eval case and no input for the
+  skill editor, because both need scope general. A missing-context decline of the fixer is no repository
+  miss, and it withdraws a miss that an earlier retro routed. A person's reply next to the fixer's makes
+  the thread a person's. `routeDecline` then names that person as the reviewer of the miss, never magnum or
+  its fixer (`learn.IsMagnum`). The marker in the reply of any other person makes no fixer of them. The
+  replies table of `evidence.sh` in the improvement loop gets a `by` column: fixer, own, person, or
+  `person?`. The last one is a reply that the threads file cut at 600 characters, before the marker. The
+  table also counts the threads by who replied last. Limits: the threads file of the re-review and the
+  judge still read the replies of the fixer as the author's (`ownThreads` in the pipeline). A reply from
+  before this change has no marker. Rejected: a `declines` column for who answered. That needs a
+  migration, and `scope` already keeps these rows out of each learner. Also rejected: removing the threads
+  of the fixer from the retro. Their outcomes still show which findings got a fix.
 
 ## Learned rules
 

@@ -43,6 +43,15 @@ func ReplyMarker(runID, kind string) string {
 	return fmt.Sprintf("<!-- magnum:reply run=%s kind=%s -->", runID, kind)
 }
 
+// FixReplyMarker ends every reply the fixer posts (skills/magnum-fix/SKILL.md,
+// section 6). The fixer posts as the PR's author, the operator, whose login
+// a gh identity shares, so the retro (learn.OwnThreads) tells its answers
+// from the author's by this marker alone.
+const FixReplyMarker = "<!-- magnum:fix -->"
+
+// IsFixReply reports whether body carries FixReplyMarker.
+func IsFixReply(body string) bool { return strings.Contains(body, FixReplyMarker) }
+
 // ParseReplyMarker reads the reply marker in body: its run id and kind; ok
 // is false when body has none.
 func ParseReplyMarker(body string) (runID, kind string, ok bool) {

@@ -26,6 +26,15 @@ import (
 // parentheses, so it never names a person.
 const OwnAuthor = "(magnum)"
 
+// FixerAuthor is a reply's Author when magnum's fixer wrote it
+// (postreview.FixReplyMarker): the fixer answers for the PR's author, as
+// that author's login, but what it chose is no person's answer.
+const FixerAuthor = "(magnum fix)"
+
+// IsMagnum reports whether a reply's Author is one of magnum's (OwnAuthor,
+// FixerAuthor) and so names no person.
+func IsMagnum(author string) bool { return author == OwnAuthor || author == FixerAuthor }
+
 // OwnTitleMax bounds an own thread's Title, in runes.
 const OwnTitleMax = 200
 
@@ -58,10 +67,15 @@ type OwnThread struct {
 	File        string        `json:"file,omitempty"`
 	FileSkipped string        `json:"file_skipped,omitempty"`
 	Replies     []ThreadReply `json:"replies"`
+	// Fixer is set when magnum's fixer gave the thread's only answers
+	// (FixerAuthor): its outcome is stored, but no lesson is drawn from it
+	// (parseThreads), since no person answered the finding.
+	Fixer bool `json:"fixer,omitempty"`
 }
 
 // ThreadReply is one reply in an own thread: who wrote it (Account form,
-// OwnAuthor for magnum) and what it says, data for the classifier only.
+// OwnAuthor for magnum, FixerAuthor for its fixer) and what it says, data
+// for the classifier only.
 type ThreadReply struct {
 	Author string `json:"author"`
 	Body   string `json:"body"`
@@ -75,10 +89,13 @@ var priorityRe = regexp.MustCompile(`\bP[0-3]\b`)
 // operator's own login, and what he writes by hand is no finding of
 // magnum's) with at least one reply by someone else (the author or another
 // reviewer; not a ghost, not a bot unless in.IncludeBots), in the order
-// GitHub listed them. A reply is magnum's (OwnAuthor) when it carries
-// magnum's reply marker or comes from one of in.Own's Apps; the operator
-// replying by hand is someone else. The finding binds to a posted one of
-// the root's review's run by path and line, as Build's nearness does.
+// GitHub listed them. A reply is the fixer's (FixerAuthor) when it carries
+// the fixer's marker and comes from the PR's author or one of in.Own
+// (fixerReply): it answers the finding, and the thread is Fixer when no
+// one else did. A reply is magnum's (OwnAuthor) when it carries magnum's
+// reply marker or comes from one of in.Own's Apps; the operator replying by
+// hand is someone else. The finding binds to a posted one of the root's
+// review's run by path and line, as Build's nearness does.
 func OwnThreads(in Input) []OwnThread {
 	reviewed := map[string]bool{}
 	for _, r := range in.Reviewed {
@@ -95,25 +112,27 @@ func OwnThreads(in Input) []OwnThread {
 			continue
 		}
 		var replies []ThreadReply
-		answered := false
+		byPerson, byFixer := false, false
 		for _, c := range t.Comments[1:] {
 			who := github.Account(c.AuthorLogin, c.AuthorType)
 			switch {
 			case who == "":
 				continue
+			case in.fixerReply(who, c):
+				who, byFixer = FixerAuthor, true
 			case in.ownReply(who, c):
 				who = OwnAuthor
 			case in.IncludeBots || !github.IsBot(c.AuthorType, who):
-				answered = true
+				byPerson = true
 			}
 			replies = append(replies, ThreadReply{Author: who, Body: c.Body})
 		}
-		if !answered {
+		if !byPerson && !byFixer {
 			continue
 		}
 		title, priority := findingTitle(root.Body)
 		o := OwnThread{ID: fmt.Sprintf("o%d", root.ID), URL: root.URL, CommentID: root.ID, ReviewID: root.ReviewID,
-			Path: t.Path, Line: t.OriginalLine, Title: title, Priority: priority, Replies: replies}
+			Path: t.Path, Line: t.OriginalLine, Title: title, Priority: priority, Replies: replies, Fixer: !byPerson}
 		if t.DiffSide == "LEFT" { // deleted lines: numbered in the old file
 			o.Line = 0
 		}
@@ -151,6 +170,15 @@ func (in Input) ownReply(who string, c github.ThreadComment) bool {
 	}
 	_, _, marked := postreview.ParseReplyMarker(c.Body)
 	return marked || github.IsBot(c.AuthorType, who)
+}
+
+// fixerReply reports whether reply c by who (Account form) is magnum's
+// fixer's: it carries the marker the fix skill ends every reply with
+// (postreview.FixReplyMarker), and it comes from the PR's author, whom the
+// fixer acts as, or from one of magnum's logins (a gh identity's is the
+// operator's own). The marker in anyone else's reply makes no fixer of them.
+func (in Input) fixerReply(who string, c github.ThreadComment) bool {
+	return postreview.IsFixReply(c.Body) && (github.SameAccount(in.Author, who) || in.own(who))
 }
 
 // simplificationRe is a simplification comment's heading once its bold is
@@ -286,8 +314,11 @@ type ThreadItem struct {
 
 // checkThread validates one thread item and returns what is kept of it:
 // the outcome alone, with the verdict for a declined or argued finding,
-// with the lesson, scope and patterns when the verdict teaches.
-func checkThread(it ThreadItem) (ThreadItem, error) {
+// with the lesson, scope and patterns when the verdict teaches. A thread
+// only the fixer answered (fixer, OwnThread.Fixer) teaches nothing: its
+// verdict needs no lesson, and any lesson, scope or patterns are dropped,
+// so its decline makes no learned case and no repository miss.
+func checkThread(it ThreadItem, fixer bool) (ThreadItem, error) {
 	switch it.Outcome {
 	case store.DeclineFixed, store.DeclineDeferred, store.DeclineQuestion, store.DeclineUnrelated:
 		return ThreadItem{ID: it.ID, Outcome: it.Outcome}, nil
@@ -296,11 +327,12 @@ func checkThread(it ThreadItem) (ThreadItem, error) {
 		return ThreadItem{}, fmt.Errorf("outcome must be fixed, declined, deferred, argued, question or unrelated")
 	}
 	switch it.Verdict {
-	case store.VerdictRight:
-		return ThreadItem{ID: it.ID, Outcome: it.Outcome, Verdict: it.Verdict}, nil
-	case store.VerdictWrong, store.VerdictOverRanked, store.VerdictMissingContext:
+	case store.VerdictRight, store.VerdictWrong, store.VerdictOverRanked, store.VerdictMissingContext:
 	default:
 		return ThreadItem{}, fmt.Errorf("a declined or argued finding needs a verdict: wrong, over_ranked, missing_context or right")
+	}
+	if it.Verdict == store.VerdictRight || fixer {
+		return ThreadItem{ID: it.ID, Outcome: it.Outcome, Verdict: it.Verdict}, nil
 	}
 	var errs []error
 	it.Lesson = strings.TrimSpace(it.Lesson)

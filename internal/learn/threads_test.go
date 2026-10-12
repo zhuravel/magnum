@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -148,6 +149,93 @@ func TestOnlyAMarkedOrAppReplyIsMagnums(t *testing.T) {
 	}
 	if want := []ThreadReply{{Author: OwnAuthor, Body: marked}, {Author: "alice", Body: "Won't fix."}}; !reflect.DeepEqual(got[1].Replies, want) {
 		t.Fatalf("o3's replies = %+v", got[1].Replies)
+	}
+}
+
+// fixerSays is a reply the fixer posts: its text and the fixer's marker.
+func fixerSays(text string) string { return text + "\n\n" + postreview.FixReplyMarker }
+
+// TestAFixerReplyIsNotTheAuthors: the fixer posts as the PR's author (the
+// operator, whose login a gh identity shares), so a reply by the author or
+// one of magnum's logins that carries the fixer's marker is the fixer's
+// (FixerAuthor), not the author's. It still answers the finding, so the
+// thread goes to the classifier, marked Fixer when no person answered
+// beside it; a person's reply next to it makes it a person's thread, and
+// the marker in a stranger's reply makes no fixer of them.
+func TestAFixerReplyIsNotTheAuthors(t *testing.T) {
+	declined := fixerSays("Won't fix: the caller checks the site at `app/a.rb:12`.")
+	threads := []github.Thread{
+		ownThread(1, "app/a.rb", 10, shaA, 501, [2]string{"alice", declined}),
+		ownThread(2, "app/a.rb", 20, shaA, 501, [2]string{"zhuravel", declined}),
+		ownThread(3, "app/a.rb", 30, shaA, 501, [2]string{"alice", declined}, [2]string{"rev-ann", "The caller does not run on import."}),
+		ownThread(4, "app/a.rb", 40, shaA, 501, [2]string{"rev-ann", declined}),
+		ownThread(5, "app/a.rb", 50, shaA, 501, [2]string{"alice", "Won't fix: the caller checks the site."}),
+	}
+	got := OwnThreads(ownInput(threads))
+	if ids := threadIDs(got); !slices.Equal(ids, []string{"o1", "o2", "o3", "o4", "o5"}) {
+		t.Fatalf("own threads = %v, want all five: the fixer answers a finding too", ids)
+	}
+	for i, want := range []struct {
+		fixer   bool
+		authors []string
+	}{
+		{true, []string{FixerAuthor}},
+		{true, []string{FixerAuthor}},
+		{false, []string{FixerAuthor, "rev-ann"}},
+		{false, []string{"rev-ann"}},
+		{false, []string{"alice"}},
+	} {
+		var authors []string
+		for _, r := range got[i].Replies {
+			authors = append(authors, r.Author)
+		}
+		if got[i].Fixer != want.fixer || !slices.Equal(authors, want.authors) {
+			t.Errorf("%s: fixer %v, authors %v; want %v, %v", got[i].ID, got[i].Fixer, authors, want.fixer, want.authors)
+		}
+	}
+	if got[0].Replies[0].Body != declined {
+		t.Errorf("o1's reply = %q, want the fixer's text as posted", got[0].Replies[0].Body)
+	}
+}
+
+// TestAFixersAnswerTeachesNothing: the classifier gives a thread only the
+// fixer answered its outcome and verdict, as for any thread, but the
+// fixer's choice is no author's verdict on magnum, so no lesson, scope or
+// match is kept (no learned case, no repository miss can come of it) and
+// none is needed; a person's thread still needs its lesson.
+func TestAFixersAnswerTeachesNothing(t *testing.T) {
+	threads := OwnThreads(ownInput([]github.Thread{
+		ownThread(1, "app/a.rb", 10, shaA, 501, [2]string{"alice", fixerSays("Won't fix: net 1, the caller checks the site.")}),
+		ownThread(2, "app/a.rb", 20, shaA, 501, [2]string{"alice", fixerSays("Not a bug: the caller checks the site.")}),
+		ownThread(3, "app/a.rb", 30, shaA, 501, [2]string{"alice", "Not a bug: the caller checks the site."}),
+	}))
+	lesson := `"lesson":"When the caller checks the site, do not report the finder.","scope":"repo","match":["site"]`
+	out := `{"items":[],"threads":[` +
+		`{"id":"o1","outcome":"declined","verdict":"missing_context",` + lesson + `},` +
+		`{"id":"o2","outcome":"declined","verdict":"wrong"},` +
+		`{"id":"o3","outcome":"declined","verdict":"wrong",` + lesson + `}]}`
+	_, got, err := ParseOutput([]byte(out), nil, nil, threads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]ThreadItem{
+		"o1": {ID: "o1", Outcome: store.DeclineDeclined, Verdict: store.VerdictMissingContext},
+		"o2": {ID: "o2", Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong},
+		"o3": {ID: "o3", Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong,
+			Lesson: "When the caller checks the site, do not report the finder.", Scope: store.MissScopeRepo, Match: []string{"site"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thread items = %+v\nwant %+v", got, want)
+	}
+	if _, _, err := ParseOutput([]byte(`{"items":[],"threads":[{"id":"o1","outcome":"declined"},`+
+		`{"id":"o2","outcome":"fixed"},{"id":"o3","outcome":"fixed"}]}`), nil, nil, threads); err == nil ||
+		!strings.Contains(err.Error(), "o1") || !strings.Contains(err.Error(), "needs a verdict") {
+		t.Fatalf("a fixer's decline without a verdict: err = %v, want o1 refused", err)
+	}
+	if _, _, err := ParseOutput([]byte(`{"items":[],"threads":[{"id":"o1","outcome":"fixed"},`+
+		`{"id":"o2","outcome":"fixed"},{"id":"o3","outcome":"declined","verdict":"wrong"}]}`), nil, nil, threads); err == nil ||
+		!strings.Contains(err.Error(), "o3") || !strings.Contains(err.Error(), "needs a lesson") {
+		t.Fatalf("a person's wrong verdict without a lesson: err = %v, want o3 refused", err)
 	}
 }
 

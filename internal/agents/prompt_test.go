@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -363,6 +364,30 @@ func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
 	}
 	if strings.Contains(skill, "{{.") {
 		t.Error("the fix skill carries a template action, but nothing renders it")
+	}
+}
+
+// The fixer proves each guard its fix adds with a spec that fails without
+// it, always fixes a regression (not every finding of the PR's diff, which
+// is every finding the review reports), and ends every reply with the
+// fixer's marker, by which the retro tells its replies from the author's
+// (learn.OwnThreads): the reply command carries it after the text.
+func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"For each guard, scope, permission or flag the fix adds, delete it once, run the new spec, see it fail, and restore it",
+		"add `; <spec> fails without it` for each",
+		"These are always `fix`, whatever the score: a regression (behaviour that works at the base and breaks at the head), " +
+			"a broken reference, a failing test and a crash.",
+		"<<'REPLY'\n<reply>\n\n" + postreview.FixReplyMarker + "\nREPLY\n",
+		"End every reply with a blank line and the line `" + postreview.FixReplyMarker + "`",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+	if strings.Contains(skill, "a defect that the PR's diff introduced") {
+		t.Error("the fix skill still makes every finding of the PR's diff a fix whatever its score")
 	}
 }
 

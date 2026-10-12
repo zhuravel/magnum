@@ -7,8 +7,12 @@ package engine
 // that posted the review, its findings row and the skill copy the round ran
 // with. A finding the author declined because the repository does it
 // otherwise (verdict missing_context, scope repo) is also a miss for the
-// repository's notes, so the notes curation takes it unchanged. Reply text
-// stays in the retro's files: no row, event or log line carries it.
+// repository's notes, so the notes curation takes it unchanged. A thread
+// only magnum's fixer answered (learn.OwnThread.Fixer) is stored with its
+// outcome and verdict alone: the classifier's answer for it carries no
+// lesson (learn's checkThread), so it makes no learned case and no miss.
+// Reply text stays in the retro's files: no row, event or log line
+// carries it.
 
 import (
 	"context"
@@ -134,7 +138,7 @@ func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, in learn.Input,
 		}
 		people := []string{deref(pr.AuthorLogin)}
 		for _, r := range t.Replies {
-			if r.Author != learn.OwnAuthor {
+			if !learn.IsMagnum(r.Author) {
 				people = append(people, r.Author)
 			}
 		}
@@ -194,11 +198,12 @@ func (e *Engine) unrouteDecline(ctx context.Context, pr store.PR, t learn.OwnThr
 // repo, as a miss for the repository's notes: class miss, scope repo, the
 // finding's priority, title (clipped to learn.TitleMax), path and line,
 // the item's lesson and patterns, and as its reviewer the first person who
-// answered (a bot only with [learn] include_bots).
+// answered (a bot only with [learn] include_bots; never magnum or its
+// fixer, learn.IsMagnum).
 func (e *Engine) routeDecline(ctx context.Context, pr store.PR, t learn.OwnThread, it learn.ThreadItem) error {
 	reviewer := deref(pr.AuthorLogin)
 	for _, r := range t.Replies {
-		if r.Author != learn.OwnAuthor && (e.cfg.Learn.IncludeBots || !github.IsBot("", r.Author)) {
+		if !learn.IsMagnum(r.Author) && (e.cfg.Learn.IncludeBots || !github.IsBot("", r.Author)) {
 			reviewer = r.Author
 			break
 		}

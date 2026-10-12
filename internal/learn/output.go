@@ -83,8 +83,9 @@ type Output struct {
 // rejected finding. Likewise one thread item per own thread, no other id
 // and a known outcome; a declined or argued one also has a verdict, and a
 // wrong, over_ranked or missing_context verdict a lesson, a scope and
-// patterns as a miss has (checkThread). The error names ids and fields,
-// never the classifier's text, so it can go back into a prompt.
+// patterns as a miss has (checkThread), except on a thread only magnum's
+// fixer answered (OwnThread.Fixer), which keeps none. The error names ids
+// and fields, never the classifier's text, so it can go back into a prompt.
 func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []OwnThread) (map[string]Item, map[string]ThreadItem, error) {
 	var out Output
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -136,11 +137,13 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
 }
 
 // parseThreads checks an answer's thread items against the own threads:
-// one each and no other id, each valid (checkThread).
+// one each and no other id, each valid (checkThread; a thread only the
+// fixer answered keeps no lesson).
 func parseThreads(got []ThreadItem, threads []OwnThread) (map[string]ThreadItem, []error) {
 	want := map[string]bool{}
+	fixer := map[string]bool{}
 	for _, t := range threads {
-		want[t.ID] = true
+		want[t.ID], fixer[t.ID] = true, t.Fixer
 	}
 	out := map[string]ThreadItem{}
 	seen := map[string]bool{}
@@ -157,7 +160,7 @@ func parseThreads(got []ThreadItem, threads []OwnThread) (map[string]ThreadItem,
 		}
 		seen[id] = true
 		it.ID = id
-		v, err := checkThread(it)
+		v, err := checkThread(it, fixer[id])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("thread %s: %w", id, err))
 			continue

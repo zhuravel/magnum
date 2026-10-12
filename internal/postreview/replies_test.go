@@ -62,6 +62,31 @@ func TestReplyMarkerRoundTrip(t *testing.T) {
 	}
 }
 
+// The fixer's replies end with a marker of their own: it tells them from
+// the author's (the fixer posts as the author), it is no judge's reply
+// marker and a judge's reply is no fixer's, and it starts as every magnum
+// marker does, so a judge's reply that carries it is refused.
+func TestAFixReplyCarriesAMarkerOfItsOwn(t *testing.T) {
+	if FixReplyMarker != "<!-- magnum:fix -->" {
+		t.Fatalf("marker = %q", FixReplyMarker)
+	}
+	fix := "Won't fix: the caller checks it at `app/a.rb:12`.\n\n" + FixReplyMarker
+	if !IsFixReply(fix) {
+		t.Errorf("IsFixReply(%q) = false", fix)
+	}
+	if run, kind, ok := ParseReplyMarker(fix); ok {
+		t.Errorf("a fixer's reply reads as the judge's: %q %q", run, kind)
+	}
+	for _, body := range []string{"", "Fixed in abc1234.", marked("Thanks.", runID, ReplyAck), RunMarker(runID, head)} {
+		if IsFixReply(body) {
+			t.Errorf("IsFixReply(%q) = true", body)
+		}
+	}
+	if !strings.HasPrefix(FixReplyMarker, anyMarker) {
+		t.Errorf("%q does not start with %q", FixReplyMarker, anyMarker)
+	}
+}
+
 // A replies file with a fault stops before GitHub is read: every problem
 // names its reply, nothing is posted, and the judge is told to fix its file
 // (exit 2).

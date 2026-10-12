@@ -10033,6 +10033,11 @@ const (
 const DecisionWidth = 104
     DecisionWidth is the design log's line width.
 
+const FixerAuthor = "(magnum fix)"
+    FixerAuthor is a reply's Author when magnum's fixer wrote it
+    (postreview.FixReplyMarker): the fixer answers for the PR's author, as that
+    author's login, but what it chose is no person's answer.
+
 const LearnedHeading = "## Learned rules"
     LearnedHeading heads the design log's last section, which holds the entries
     of the self-improving loop (the editor's decisions and the reverts of skill
@@ -10134,6 +10139,10 @@ func Headline(decision string) (headline, rest string)
     Headline splits a decision into its first sentence (up to the first ".",
     "!" or "?" that ends the text or is followed by a space) and the rest.
 
+func IsMagnum(author string) bool
+    IsMagnum reports whether a reply's Author is one of magnum's (OwnAuthor,
+    FixerAuthor) and so names no person.
+
 func MissInputID(id int64) string
     MissInputID is a miss's id in inputs.json.
 
@@ -10159,9 +10168,10 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
     the other classes keep their id, class and rejected finding. Likewise one
     thread item per own thread, no other id and a known outcome; a declined or
     argued one also has a verdict, and a wrong, over_ranked or missing_context
-    verdict a lesson, a scope and patterns as a miss has (checkThread).
-    The error names ids and fields, never the classifier's text, so it can go
-    back into a prompt.
+    verdict a lesson, a scope and patterns as a miss has (checkThread),
+    except on a thread only magnum's fixer answered (OwnThread.Fixer), which
+    keeps none. The error names ids and fields, never the classifier's text,
+    so it can go back into a prompt.
 
 func ParsePins(b []byte) ([]string, int, error)
     ParsePins reads a pins file: the pins and the skill's cap. A file without a
@@ -10527,6 +10537,10 @@ type OwnThread struct {
 	File        string        `json:"file,omitempty"`
 	FileSkipped string        `json:"file_skipped,omitempty"`
 	Replies     []ThreadReply `json:"replies"`
+	// Fixer is set when magnum's fixer gave the thread's only answers
+	// (FixerAuthor): its outcome is stored, but no lesson is drawn from it
+	// (parseThreads), since no person answered the finding.
+	Fixer bool `json:"fixer,omitempty"`
 }
     OwnThread is a review thread magnum started that someone else answered, for
     the classifier ("o<comment id>"): the finding as magnum posted it (where,
@@ -10537,11 +10551,14 @@ func OwnThreads(in Input) []OwnThread
     in a review magnum posted (in.ReviewRuns: a gh identity is the operator's
     own login, and what he writes by hand is no finding of magnum's) with at
     least one reply by someone else (the author or another reviewer; not a
-    ghost, not a bot unless in.IncludeBots), in the order GitHub listed them. A
-    reply is magnum's (OwnAuthor) when it carries magnum's reply marker or comes
-    from one of in.Own's Apps; the operator replying by hand is someone else.
-    The finding binds to a posted one of the root's review's run by path and
-    line, as Build's nearness does.
+    ghost, not a bot unless in.IncludeBots), in the order GitHub listed them.
+    A reply is the fixer's (FixerAuthor) when it carries the fixer's marker
+    and comes from the PR's author or one of in.Own (fixerReply): it answers
+    the finding, and the thread is Fixer when no one else did. A reply is
+    magnum's (OwnAuthor) when it carries magnum's reply marker or comes from
+    one of in.Own's Apps; the operator replying by hand is someone else. The
+    finding binds to a posted one of the root's review's run by path and line,
+    as Build's nearness does.
 
 type Rejected struct {
 	ID       string `json:"id"` // "<run id>/<finding id>", the miss's FindingRef
@@ -10619,7 +10636,8 @@ type ThreadReply struct {
 	Body   string `json:"body"`
 }
     ThreadReply is one reply in an own thread: who wrote it (Account form,
-    OwnAuthor for magnum) and what it says, data for the classifier only.
+    OwnAuthor for magnum, FixerAuthor for its fixer) and what it says, data for
+    the classifier only.
 
 type Verdict struct {
 	State string    `json:"state"`
@@ -12669,6 +12687,12 @@ const (
 )
     Sides of an inline comment.
 
+const FixReplyMarker = "<!-- magnum:fix -->"
+    FixReplyMarker ends every reply the fixer posts (skills/magnum-fix/SKILL.md,
+    section 6). The fixer posts as the PR's author, the operator, whose login a
+    gh identity shares, so the retro (learn.OwnThreads) tells its answers from
+    the author's by this marker alone.
+
 const FooterMarker = "<!-- magnum:footer -->"
     FooterMarker starts the footer magnum appends to a verified review
     (pipeline's footerMarker); a judge never writes it.
@@ -12682,6 +12706,9 @@ const StatusReplied = "replied"
 
 
 FUNCTIONS
+
+func IsFixReply(body string) bool
+    IsFixReply reports whether body carries FixReplyMarker.
 
 func ParseReplyMarker(body string) (runID, kind string, ok bool)
     ParseReplyMarker reads the reply marker in body: its run id and kind;

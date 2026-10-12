@@ -1472,10 +1472,15 @@ edits it. The fixer is skeptical. A finding is wrong until the code proves it ri
 verdict (`fix`, `already fixed`, `not a bug` or `won't fix`) and each `fix` a net score, the pros minus the
 cons, on an open scale with four anchors: 1 (nobody notices), 3 (the next person to touch the code feels
 it), 10 (real money or a day of work) and 30 (not safe to ship). It fixes a finding that nets 3 or more. It always fixes a
-defect the diff introduced, a broken reference, a failing test and a crash. It commits each fix,
+regression (behaviour that works at the base and breaks at the head), a broken reference, a failing test and
+a crash; every other finding, whatever part of the diff it is on, has to earn its score. It commits each fix,
 runs the specs the fix touches, pushes to the PR's branch, and replies in Magnum's thread with "Fixed in
 <sha>", "Already fixed", "Not a bug: <reason>" or "Won't fix: <reason>", the words the re-review already
-reads. It resolves the threads it fixed. It answers an optional finding (a P3 or a simplification) that it
+reads. It proves each guard, scope, permission or flag a fix adds, because the review counts a guard that no
+spec needs as untested: it deletes the guard once, runs the new spec, sees it fail, restores the guard, and
+its "Fixed in" reply names that spec ("`<spec>` fails without it"). Every reply ends with a hidden line,
+`<!-- magnum:fix -->`: the fixer replies as you, and the marker is how the retro tells its choices from yours
+(Learning from other reviewers, below). It resolves the threads it fixed. It answers an optional finding (a P3 or a simplification) that it
 declines. It does not answer a blocking finding (P0 to P2) that it declines, nor any finding it cannot decide
 from the code. Those go under `Needs you` in its report, so the call stays yours. It never touches a thread
 a human started, never force-pushes or rebases, never touches another branch, and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
@@ -1898,7 +1903,12 @@ takes it.
 listed under `threads` in `candidates.json` with the finding's first line, priority, file and line, a copy
 of that file at the commit Magnum reviewed and every reply, Magnum's own marked `(magnum)`. Only a review
 Magnum posted holds its findings: with a `gh` identity the login is yours, so what you comment by hand is
-not one of them, and your own replies by hand count as answers (Magnum's carry its reply marker). The agent
+not one of them, and your own replies by hand count as answers (Magnum's carry its reply marker). A reply of
+the fixer's (Fixing your own PRs, above) is posted as you but ends with `<!-- magnum:fix -->`, so it is marked
+`(magnum fix)`, not yours: the retro listens to people. A thread only the fixer answered (`fixer` in
+`candidates.json`) still gets its outcome and verdict, but no lesson, scope or patterns, so its decline
+becomes no learned eval case, no skill editor input and no repository miss; a person's reply beside the
+fixer's makes it a person's thread again. The agent
 says what the author did with the finding: `fixed`, `declined`, `deferred`, `argued`, `question` or
 `unrelated`; for a declined or argued one whether Magnum was `wrong`, ranked it too high (`over_ranked`),
 lacked the repository's context (`missing_context`) or was `right`; and for the first three a lesson, its

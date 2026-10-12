@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/notes"
+	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -414,6 +415,73 @@ func TestTheOperatorsOwnCommentIsNoDecline(t *testing.T) {
 	if n, err := h.st.CountDeclines(h.ctx, store.DeclineFilter{Outcomes: []string{store.DeclineDeclined}}); err != nil || n != 1 {
 		t.Fatalf("declined = %d, %v; want o301's only", n, err)
 	}
+}
+
+// TestAFixerDeclineMakesNoLearnedCase: magnum's fixer replies in magnum's
+// threads as the PR's author, each reply ending with its marker
+// (postreview.FixReplyMarker). A thread only the fixer answered goes to
+// the classifier marked fixer, its reply under learn.FixerAuthor, and its
+// answer is stored with the outcome and verdict but without a lesson,
+// scope or patterns, even when the classifier wrote them: it makes no
+// learned case, and a missing-context one no repository miss. The author's
+// own decline beside it still teaches, and so does a thread a person
+// answered beside the fixer, whose miss names that person, never the fixer.
+func TestAFixerDeclineMakesNoLearnedCase(t *testing.T) {
+	missingContext := learn.ThreadItem{Outcome: store.DeclineDeclined, Verdict: store.VerdictMissingContext,
+		Lesson: "Gift card charges run inside the ledger transaction, so a balance read after the charge is safe.",
+		Scope:  store.MissScopeRepo, Match: []string{"balance"}}
+	fc := threadsClassifier(map[string]learn.ThreadItem{"o301": wrongDecline, "o307": wrongDecline, "o308": missingContext, "o309": missingContext})
+	h := newHarness(t, withClassifier(fc))
+	pr := retroPR(h, 7, 24*time.Hour)
+	seedRetroGitHub(h, 7)
+	fixer := "Won't fix: net 1, the caller holds the row lock at `app/models/gift.rb:40`.\n\n" + postreview.FixReplyMarker
+	seedOwnThreads(h, 7, ownRetroThread(7, 307, 50, 9007, [2]string{"alice", fixer}),
+		ownRetroThread(7, 308, 70, 9007, [2]string{"alice", fixer}),
+		ownRetroThread(7, 309, 90, 9007, [2]string{"alice", fixer}, [2]string{"rev-ann", "The ledger wraps every charge in its transaction."}))
+	h.requestRetro(RetroPayload{})
+
+	if len(fc.jobs) != 1 {
+		t.Fatalf("classifier jobs = %d", len(fc.jobs))
+	}
+	cands, err := readCandidates(fc.jobs[0].CandidatesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixerOnly := map[string]bool{}
+	for _, th := range cands.Threads {
+		fixerOnly[th.ID] = th.Fixer
+		if th.ID == "o307" && (len(th.Replies) != 1 || th.Replies[0].Author != learn.FixerAuthor) {
+			t.Fatalf("o307's replies = %+v, want the fixer's", th.Replies)
+		}
+	}
+	if want := map[string]bool{"o301": false, "o302": false, "o307": true, "o308": true, "o309": false}; !maps.Equal(fixerOnly, want) {
+		t.Fatalf("threads answered by the fixer alone = %v, want %v", fixerOnly, want)
+	}
+
+	ds := h.declinesOf(pr.ID)
+	for id, verdict := range map[int64]string{307: store.VerdictWrong, 308: store.VerdictMissingContext} {
+		d, ok := ds[id]
+		if !ok || d.Outcome != store.DeclineDeclined || d.Verdict != verdict || d.Lesson != "" || d.Scope != "" || len(d.Match) != 0 {
+			t.Fatalf("o%d's decline = %+v (stored %v), want the fixer's outcome and verdict without a lesson", id, d, ok)
+		}
+		if c, ok := learn.CaseFromDecline(d); ok {
+			t.Fatalf("o%d's decline makes the learned case %s", id, c.Name)
+		}
+	}
+	if d := ds[301]; d.Lesson != wrongDecline.Lesson || d.Scope != store.MissScopeGeneral {
+		t.Fatalf("the author's decline o301 = %+v, want its lesson kept", d)
+	}
+	cases := learnedCases(h)
+	if !slices.Contains(cases, "decline-"+strconv.FormatInt(ds[301].ID, 10)) || slices.Contains(cases, "decline-"+strconv.FormatInt(ds[307].ID, 10)) {
+		t.Fatalf("learned cases = %v, want the author's decline o301 and not the fixer's o307", cases)
+	}
+	if m, ok := h.misses(pr.ID)["308"]; ok {
+		t.Fatalf("the fixer's missing-context decline became the repository miss %+v", m)
+	}
+	if m := h.misses(pr.ID)["309"]; m.Class != store.MissMiss || m.Scope != store.MissScopeRepo || m.Reviewer != "rev-ann" || m.Lesson != missingContext.Lesson {
+		t.Fatalf("o309, which a person answered beside the fixer, = %+v, want a repository miss of rev-ann's", m)
+	}
+	h.noCommentText("pr:talkable/talkable#7")
 }
 
 // TestTheRetroOKEventCountsDeclines: the PR's retro.ok event counts the

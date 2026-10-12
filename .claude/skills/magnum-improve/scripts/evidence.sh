@@ -104,7 +104,13 @@ rm -f "$stamp"
 # name the daemon gave its copy, and the summary says so. "net" is the score
 # the author's last reply gives the fix ("Net +3", "Net: -2", "net 0", "Low
 # priority (Net 0)"; a minus may be U+2212), as "+3", "-2", "0" or "+0.5",
-# empty when the reply names none.
+# empty when the reply names none. "by" says who replied, in order: "fixer"
+# for magnum's fixer, which posts as the PR's author and ends every reply
+# with <!-- magnum:fix --> (skills/magnum-fix/SKILL.md), "own" for magnum's
+# reviewer, "person" for anyone else, and "person?" for a reply the file cut
+# at 600 characters without the marker in what it kept, which may still be
+# the fixer's. A marked reply counts as an answer even when the file calls
+# it own (a watch that posts as the fixer's login).
 python3 - "$dir/reports.txt" "$db" "$repo" >>"$out" <<'PY'
 import hashlib, json, os, re, subprocess, sys, collections
 latest = {}
@@ -151,19 +157,34 @@ if not cur and changed and changed[0]["n"] == 0:
     except OSError:
         pass
 
-guess, rows, unanswered, under_current = collections.Counter(), [], 0, 0
+FIX = "<!-- magnum:fix -->"
+
+def who(r):
+    body = r.get("body") or ""
+    if FIX in body:
+        return "fixer"
+    if r.get("own"):
+        return "own"
+    return "person?" if r.get("truncated") else "person"
+
+guess, by, rows, unanswered, under_current = collections.Counter(), collections.Counter(), [], 0, 0
 for pr, f in sorted(latest.items()):
     try:
         threads = json.load(open(f))
     except Exception:
         continue
     for t in threads if isinstance(threads, list) else threads.get("threads", []):
-        theirs = [r for r in t.get("replies") or [] if not r.get("own")]
-        own = len(t.get("replies") or []) - len(theirs)
+        replies = t.get("replies") or []
+        theirs = [r for r in replies if who(r) != "own"]
+        own = len(replies) - len(theirs)
         if not theirs:
             unanswered += 1
             continue
         last = theirs[-1]
+        repliers = []
+        for r in replies:
+            if not repliers or repliers[-1] != who(r):
+                repliers.append(who(r))
         guess[last.get("class") or "-"] += 1
         at = (t.get("created_at") or "-").replace("T", " ")[:16]
         run = posted.get(t.get("review_id"))
@@ -172,7 +193,8 @@ for pr, f in sorted(latest.items()):
             at += ", current skill"
             under_current += 1
         text = " ".join((last.get("body") or "").split())[:400].replace("|", "/")
-        rows.append(f"| {last.get('class') or '-'} | {net(last.get('body'))} | {len(theirs)}/{own} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
+        by[who(last)] += 1
+        rows.append(f"| {last.get('class') or '-'} | {net(last.get('body'))} | {len(theirs)}/{own} | {', '.join(repliers)} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
 print("\n## Replies to magnum's threads (latest round per PR)\n")
 skill_note = f", {under_current} of them posted under the current skill" if current else ""
 if from_file:
@@ -182,10 +204,13 @@ print("read every reply below and decide what it says.\n")
 print("| class at round time | threads |\n|---|---|")
 for k, v in guess.most_common():
     print(f"| {k} | {v} |")
+print("\n| last reply by | threads |\n|---|---|")
+for k, v in by.most_common():
+    print(f"| {k} | {v} |")
 print("\n### Every answered thread\n")
-print("| class at round time | net | replies theirs/own | posted (UTC) | round | finding | where | thread | last reply (first 400 chars) |")
-print("|---|---|---|---|---|---|---|---|---|")
-print("\n".join(rows) or "| - | - | - | - | - | - | - | - | - |")
+print("| class at round time | net | replies theirs/own | by | posted (UTC) | round | finding | where | thread | last reply (first 400 chars) |")
+print("|---|---|---|---|---|---|---|---|---|---|")
+print("\n".join(rows) or "| - | - | - | - | - | - | - | - | - | - |")
 PY
 
 git -C "$repo" log --since="$since" --format='%h %ad %<(150,trunc)%s' --date=short >"$dir/gitlog.txt"
