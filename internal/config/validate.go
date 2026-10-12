@@ -741,9 +741,9 @@ func validateKind(name string, k Kind) []error {
 		bad("name must match %s and not be %q", kindNameRe, KindShell)
 	}
 	switch k.Wrapper {
-	case "", WrapperAuto, WrapperTrue, WrapperFalse:
+	case "", WrapperAuto, WrapperTrue, WrapperFalse, WrapperBypass:
 	default:
-		bad("wrapper must be auto, true or false, got %q", k.Wrapper)
+		bad("wrapper must be auto, true, false or bypass, got %q", k.Wrapper)
 	}
 	switch k.SessionSource {
 	case "", SessionHerdr, SessionNone:

@@ -2,6 +2,7 @@ package agents
 
 import (
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -447,5 +448,89 @@ func TestAFreshStartThatCannotReadTheSessionsAdoptsNothing(t *testing.T) {
 	}
 	if s, serr := e.st.LiveSessionByPRRole(e.ctx, e.pr.ID, string(RoleJudge)); serr == nil && store.Deref(s.HerdrPaneID) == "w1:p9" && s.State == store.SessionLive {
 		t.Fatalf("session = %+v: the agent was adopted", s)
+	}
+}
+
+// A kind with wrapper = "bypass" gets the shell function or alias of its
+// name removed from the pane's shell before the launch, so the binary runs
+// with magnum's args alone, the kind's args included, and no probe runs;
+// a kind in auto mode keeps its pane's shell as it is.
+func TestBypassRemovesTheShellFunctionBeforeTheLaunch(t *testing.T) {
+	e := newEnv(t)
+	e.setKind(KindCodex, func(k *config.Kind) {
+		k.Wrapper, k.Args = config.WrapperBypass, []string{"--dangerously-bypass-approvals-and-sandbox"}
+	})
+	ws := e.started()
+	pane := ws.Panes[RoleJudge]
+	const unset = `unset -f codex 2>/dev/null; unalias codex 2>/dev/null; echo bypass:""magnum-bypass-codex-`
+	var lines []string
+	for _, r := range e.h.runs {
+		if r.Pane == pane && strings.HasPrefix(r.Command, "unset") {
+			lines = append(lines, r.Command)
+		}
+	}
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], unset) {
+		t.Fatalf("judge pane removals = %q, want one starting %q", lines, unset)
+	}
+	// The line is cleared first, and the removal counts once the shell
+	// echoed the marker (the typed line, with its split marker, never
+	// matches).
+	if !slices.ContainsFunc(e.h.keys, func(k keysCall) bool { return k.Target == pane && slices.Equal(k.Keys, []string{"ctrl+u"}) }) {
+		t.Fatalf("keys = %+v, want ctrl+u on %s", e.h.keys, pane)
+	}
+	marker := strings.TrimPrefix(lines[0], `unset -f codex 2>/dev/null; unalias codex 2>/dev/null; echo bypass:""`)
+	waits := slices.DeleteFunc(slices.Clone(e.h.waits), func(w herdr.WaitOutputOptions) bool { return !strings.Contains(w.Match, "bypass") })
+	if len(waits) != 1 || !waits[0].Regex || waits[0].Timeout != bypassWait || waits[0].Source != herdr.SourceRecentUnwrapped ||
+		waits[0].Match != `(?m)^bypass:`+regexp.QuoteMeta(marker)+`[ \t]*$` {
+		t.Fatalf("waits = %+v", waits)
+	}
+	if re := regexp.MustCompile(waits[0].Match); re.MatchString("$ "+lines[0]) || !re.MatchString("bypass:"+marker+"\n") {
+		t.Fatalf("the pattern %q must match the echo alone", waits[0].Match)
+	}
+	calls := e.h.callsWith("")
+	run := slices.Index(calls, "PaneRun "+pane)
+	start := slices.IndexFunc(calls, func(c string) bool { return strings.HasPrefix(c, "AgentStart") })
+	if run < 0 || start < 0 || run > start {
+		t.Fatalf("the removal must precede the launch: calls = %q", calls)
+	}
+	j := e.h.starts[0]
+	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2",
+		"-c", "features.apps=false", "-c", "skills.include_instructions=false", "--dangerously-bypass-approvals-and-sandbox"}
+	if j.Kind != "codex" || !slices.Equal(j.Args, want) {
+		t.Fatalf("judge start = %+v, want args %q", j, want)
+	}
+	if n := len(e.run.CallsWithPrefix("zsh", "-ic", "whence -w codex")); n != 0 {
+		t.Fatalf("codex wrapper probes = %d, want none", n)
+	}
+	for _, r := range e.h.runs {
+		if r.Pane == ws.Panes[RoleClaude] && strings.HasPrefix(r.Command, "unset -f") {
+			t.Fatalf("claude (wrapper auto) pane run = %q", r.Command)
+		}
+	}
+}
+
+// A shell that never echoes the removal back (the line typed during its
+// startup is lost) gets it typed again, and after the last attempt the
+// start fails without a launch.
+func TestBypassFailsTheStartWhenTheShellNeverEchoes(t *testing.T) {
+	e := newEnv(t)
+	e.setKind(KindCodex, func(k *config.Kind) { k.Wrapper = config.WrapperBypass })
+	e.h.errs["PaneWaitOutput"] = &herdr.Error{Method: "pane.wait_output", Code: herdr.CodeTimeout, Message: "timeout"}
+	ws, err := e.m.EnsureWorkspace(e.ctx, e.pr, slot1, nil, "talkable#11920", []config.Role{e.spec(RoleJudge)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], "")
+	if err == nil || !strings.Contains(err.Error(), "bypass the codex wrapper in pane "+ws.Panes[RoleJudge]) || !strings.Contains(err.Error(), "attempt 3/3") {
+		t.Fatalf("err = %v", err)
+	}
+	n := 0
+	for _, r := range e.h.runs {
+		if r.Pane == ws.Panes[RoleJudge] && strings.HasPrefix(r.Command, "unset -f codex") {
+			n++
+		}
+	}
+	if n != bypassAttempts || len(e.h.starts) != 0 {
+		t.Fatalf("removal lines = %d, starts = %d", n, len(e.h.starts))
 	}
 }

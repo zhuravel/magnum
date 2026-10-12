@@ -138,7 +138,8 @@ type Kind struct {
 	// because a check that reads the saved tokens says logged in while a
 	// revoked refresh token fails every call (agents.Manager.LoginStamp).
 	LoginFile string `toml:"login_file"`
-	// Wrapper: "auto" (default), "true" or "false" (see WrapperAuto).
+	// Wrapper: "auto" (default), "true", "false" or "bypass" (see
+	// WrapperAuto, WrapperBypass).
 	Wrapper string `toml:"wrapper"`
 	// Env: extra environment for the kind's panes (a role's env wins).
 	Env map[string]string `toml:"env"`

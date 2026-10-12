@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -163,6 +164,9 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	wrapper, err := m.Wrapper(ctx, kindName)
 	if err != nil {
 		return err
+	}
+	if err := m.bypassWrapper(ctx, kindName, paneID); err != nil {
+		return fmt.Errorf("agents: start %s: %w", name, err)
 	}
 	dir := store.Deref(sess.Cwd)
 	if dir == "" {
@@ -325,7 +329,8 @@ func (m *Manager) markStarted(ctx context.Context, sess store.Session, a herdr.A
 
 // Wrapper reports whether the kind's command is a zsh wrapper function (or
 // alias) that supplies its own flags, per [kinds.<kind>] wrapper: "true" and
-// "false" are taken as is; "auto" (or empty) probes
+// "false" are taken as is, "bypass" is false (bypassWrapper removes the
+// function from the pane before the launch); "auto" (or empty) probes
 // `zsh -ic 'whence -w <kind>'` once per kind and caches the answer. A probe
 // that cannot tell assumes a wrapper (the M0 finding) and is retried next
 // time. An undeclared kind is an error.
@@ -337,7 +342,7 @@ func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error) {
 	switch mode := strings.ToLower(strings.TrimSpace(k.Wrapper)); mode {
 	case config.WrapperTrue:
 		return true, nil
-	case config.WrapperFalse:
+	case config.WrapperFalse, config.WrapperBypass:
 		return false, nil
 	case "", config.WrapperAuto:
 	default:
@@ -360,6 +365,69 @@ func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error) {
 	m.mu.Unlock()
 	return v, nil
 }
+
+// bypassWait is how long bypassWrapper waits for the shell to echo its
+// marker back before it types the line again; bypassAttempts is how often.
+const (
+	bypassWait     = 15 * time.Second
+	bypassAttempts = 3
+)
+
+// bypassWrapper removes the shell function or alias named like the kind
+// from the pane's shell before a launch, for a kind whose wrapper mode is
+// "bypass": herdr types the kind's command into that shell, where the
+// operator's `codex()` function would add its own flags (a `--search` the
+// launch repeats makes Codex exit at once with "cannot be used multiple
+// times"). The line ends in an echo of a marker, and the removal counts
+// only once the shell printed it: a line typed into a shell still starting
+// (rc files, mise hooks) is lost, so it is typed again, bypassAttempts
+// times, before the start fails. The shell keeps the removal for the
+// pane's life, so running it before every launch and resume is idempotent.
+// Any other mode is a no-op.
+func (m *Manager) bypassWrapper(ctx context.Context, kind, paneID string) error {
+	k, ok := m.kindSpec(kind)
+	if !ok || strings.ToLower(strings.TrimSpace(k.Wrapper)) != config.WrapperBypass {
+		return nil
+	}
+	fail := func(err error) error { return fmt.Errorf("bypass the %s wrapper in pane %s: %w", kind, paneID, err) }
+	if !kindShellNameRe.MatchString(kind) {
+		return fail(fmt.Errorf("%q is no shell command name", kind))
+	}
+	marker := fmt.Sprintf("magnum-bypass-%s-%d", kind, m.now().UnixNano())
+	// The typed line splits the marker (bypass:""…), so only the shell's
+	// output matches the anchored pattern, never the terminal's echo of the
+	// line itself.
+	line := "unset -f " + kind + " 2>/dev/null; unalias " + kind + ` 2>/dev/null; echo bypass:""` + marker
+	wait := herdr.WaitOutputOptions{Match: `(?m)^bypass:` + regexp.QuoteMeta(marker) + `[ \t]*$`, Regex: true,
+		Source: herdr.SourceRecentUnwrapped, Timeout: bypassWait}
+	for attempt := 1; ; attempt++ {
+		if err := m.d.Herdr.PaneSendKeys(ctx, paneID, "ctrl+u"); err != nil {
+			return fail(fmt.Errorf("clear the line: %w", err))
+		}
+		if err := m.d.Herdr.PaneRun(ctx, paneID, line); err != nil {
+			return fail(err)
+		}
+		_, err := m.d.Herdr.PaneWaitOutput(ctx, paneID, wait)
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil || !herdr.IsTimeout(err) || attempt >= bypassAttempts {
+			return fail(fmt.Errorf("the shell did not echo the removal (attempt %d/%d): %w", attempt, bypassAttempts, mapHerdr(err)))
+		}
+		m.logf("bypass the %s wrapper in pane %s: no echo within %s (attempt %d/%d), typing it again", kind, paneID, bypassWait, attempt, bypassAttempts)
+	}
+	if _, err := m.d.Herdr.WaitIdleShell(ctx, paneID, IdleShellTimeout); err != nil {
+		if herdr.IsTimeout(err) {
+			return fail(fmt.Errorf("%w: %w", ErrBusy, err))
+		}
+		return fail(err)
+	}
+	m.logf("bypass: the %s wrapper is out of pane %s", kind, paneID)
+	return nil
+}
+
+// kindShellNameRe is a kind name bypassWrapper may put on a shell line.
+var kindShellNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
 // parseWhence reads `whence -w <kind>` output ("codex: function"); ok is
 // false when no line names kind (zsh failed, noisy rc output only).

@@ -350,8 +350,11 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 			login = k.LoginCheck + " (logged in: " + ok + "; fix: " + rolesLoginCommand(name) + ")"
 		}
 		wrapper := k.Wrapper
-		if wrapper == config.WrapperAuto {
+		switch wrapper {
+		case config.WrapperAuto:
 			wrapper += " (zsh -ic 'whence -w " + name + "': a function or alias is a wrapper and gets no args)"
+		case config.WrapperBypass:
+			wrapper += " (unset -f " + name + "; unalias " + name + " in the pane before every launch and resume: the binary runs with magnum's args alone)"
 		}
 		tw := inspTable(w)
 		fmt.Fprintf(tw, "  wrapper:\t%s\n", wrapper)

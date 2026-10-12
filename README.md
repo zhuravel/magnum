@@ -1063,6 +1063,8 @@ hooks live there), so your global `AGENTS.md` still loads; the judge skill tells
 instructions for interactive work (status lines, usage checks, delegation skills) do not apply in a
 review.
 
+A kind with `wrapper = "bypass"` runs its binary with Magnum's arguments alone: before every launch and resume Magnum removes the shell function or alias of the kind's name from the pane's shell (`unset -f codex; unalias codex`, kept for the pane's life, typed again until the shell echoes it back, as a line typed into a shell still starting is lost) and appends the kind's `args`, so a flag your function adds goes into `start` instead, once. The default, `auto`, runs through your function and skips `args`; a flag both pass makes the CLI exit at once, which a refused prompt now reports from the pane.
+
 The checkout's own `.codex/` is project config Codex loads for a trusted folder (Magnum trusts its
 checkouts): MCP servers it starts or sends tokens from the environment to, hooks, rules, settings. A PR
 controls it, so when the files under the checkout's `.codex/` differ from the PR's merge base (the PR's

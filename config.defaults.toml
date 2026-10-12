@@ -282,7 +282,10 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
 #
 # [kinds.codex]
 # wrapper = "auto"                    # auto: probe `zsh -ic 'whence -w codex'` (your zsh function adds the
-#                                     # flags, so magnum passes extras only); true | false (false appends args)
+#                                     # flags, so magnum passes extras only); true | false (false appends args);
+#                                     # bypass: `unset -f codex; unalias codex` in the pane before every launch
+#                                     # and resume, so the binary runs with magnum's args alone (args appended;
+#                                     # a flag your function adds, --search say, goes into start instead)
 # start = []                          # always appended (launches and resumes; `codex review` has its own line):
 #                                     # ["--search"] gives the sessions Codex's live web search, read-only and
 #                                     # with no local browser, as Claude's sessions have their web tools

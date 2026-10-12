@@ -365,3 +365,44 @@ func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
 		t.Error("the fix skill carries a template action, but nothing renders it")
 	}
 }
+
+// A prompt herdr refuses because the agent is gone carries the error the
+// CLI printed in the pane when it died at its launch (a flag the launch
+// repeated), so the round's error and the attention reason say why and not
+// only herdr's code; a pane without an error line adds nothing.
+func TestARefusedPromptToAnAgentGoneCarriesThePanesError(t *testing.T) {
+	const want = "the pane shows: error: the argument '--search' cannot be used multiple times"
+	cases := map[string]struct {
+		pane     string
+		wantLine bool
+	}{
+		"codex died at its launch": {"$ codex --model gpt-6.1-sol --search\n" +
+			"Found existing alias for \"codex\". You should use: \"cdx\"\n" +
+			"error: the argument '--search' cannot be used multiple times\n\n" +
+			"Usage: codex [OPTIONS] [PROMPT]\n$ ", true},
+		"only the prompt": {"$ codex --model gpt-6.1-sol\n$ ", false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			ws := e.started()
+			pane := ws.Panes[RoleJudge]
+			e.h.errs["AgentPrompt"] = &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotFound, Message: "agent target mg-11920-codex-judge-5d01cf not found"}
+			e.h.reads[pane] = tc.pane
+			id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "go")
+			if err == nil || !herdr.IsCode(err, herdr.CodeAgentNotFound) {
+				t.Fatalf("err = %v, want agent_not_found", err)
+			}
+			if strings.Contains(err.Error(), want) != tc.wantLine {
+				t.Fatalf("err = %v, want the pane line: %v", err, tc.wantLine)
+			}
+			r := e.run1(id)
+			if r.State != store.RunFailed || strings.Contains(store.Deref(r.Error), want) != tc.wantLine {
+				t.Fatalf("run = %+v", r)
+			}
+			if got := e.h.callsWith("PaneRead " + pane); len(got) != 1 {
+				t.Fatalf("pane reads = %v, want one", got)
+			}
+		})
+	}
+}

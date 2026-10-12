@@ -235,6 +235,10 @@ const (
 	WrapperAuto  = "auto"  // probe `zsh -ic 'whence -w <kind>'` once: a function or alias is a wrapper
 	WrapperTrue  = "true"  // the command is a wrapper that supplies its own flags
 	WrapperFalse = "false" // a plain binary: Kind.Args are appended too
+	// WrapperBypass: the pane's shell function or alias named like the kind
+	// is removed before every launch and resume (`unset -f`, `unalias`), so
+	// the binary runs with magnum's args alone; Kind.Args are appended.
+	WrapperBypass = "bypass"
 
 	SessionHerdr = "herdr" // herdr reports the CLI's session id (pane agent_session); resume uses it
 	SessionNone  = "none"  // no session id: the role always starts fresh

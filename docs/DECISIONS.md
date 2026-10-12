@@ -1084,6 +1084,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   server side), which `[kinds.codex] start = ["--search"]` gives launches and resumes, not `codex review`,
   which has no such flag; the defaults leave it off.
 
+- **A kind's `wrapper = "bypass"` runs the binary with Magnum's arguments alone, and a prompt refused for
+  an agent that is gone carries the pane's error line (2026-10-12).** Every fresh Codex launch of an
+  afternoon died at once with "error: the argument '--search' cannot be used multiple times": herdr types
+  the kind's command into the pane's interactive shell, where the operator's `codex()` function adds its
+  own flags (`--search` among them), and a `start = ["--search"]` in the user's config repeated it. Five PRs
+  went to needs attention after three failed rounds each, one was merged unreviewed, and Magnum's events
+  said only `agent_not_found` (herdr had registered the agent before the process exited; the own pass and
+  the judge prompt found it gone), while the pane held the cause. Now `bypass` removes the function or
+  alias of the kind's name from the pane's shell before every launch and resume (`unset -f codex;
+  unalias codex`, idempotent, the shell keeps it; the line ends in an echo of a marker and is typed again,
+  three times at most, until the shell prints it, because the first live launch lost the line to the pane
+  shell's startup, the race the start's own busy retry covers) and appends the kind's `args`, so the launch line is
+  the whole story and a change to the operator's shell cannot alter review sessions; `auto` stays the
+  default (a wrapper's own flags are skipped as before, and a flag both pass still kills the launch,
+  which the second half reports). A prompt herdr refuses with `agent_not_ready` (after the registration
+  wait) or `agent_not_found` reads the pane's recent output and appends its last line that starts with
+  error, fatal or panic (redacted, 200 characters) to the error, so the round's error and the attention
+  reason name the cause. Rejected: `command codex` on the launch line (herdr's `agent start` types the
+  kind's canonical executable itself and takes only the arguments after it) and a second launch path
+  through `pane run` with herdr's detection and a rename (more failure modes for the same effect).
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

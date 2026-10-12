@@ -1421,10 +1421,11 @@ func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool
 func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error)
     Wrapper reports whether the kind's command is a zsh wrapper function (or
     alias) that supplies its own flags, per [kinds.<kind>] wrapper: "true"
-    and "false" are taken as is; "auto" (or empty) probes `zsh -ic 'whence -w
-    <kind>'` once per kind and caches the answer. A probe that cannot tell
-    assumes a wrapper (the M0 finding) and is retried next time. An undeclared
-    kind is an error.
+    and "false" are taken as is, "bypass" is false (bypassWrapper removes the
+    function from the pane before the launch); "auto" (or empty) probes `zsh
+    -ic 'whence -w <kind>'` once per kind and caches the answer. A probe that
+    cannot tell assumes a wrapper (the M0 finding) and is retried next time.
+    An undeclared kind is an error.
 
 type ModelLimit struct {
 	Kind  string
@@ -2486,6 +2487,10 @@ const (
 	WrapperAuto  = "auto"  // probe `zsh -ic 'whence -w <kind>'` once: a function or alias is a wrapper
 	WrapperTrue  = "true"  // the command is a wrapper that supplies its own flags
 	WrapperFalse = "false" // a plain binary: Kind.Args are appended too
+	// WrapperBypass: the pane's shell function or alias named like the kind
+	// is removed before every launch and resume (`unset -f`, `unalias`), so
+	// the binary runs with magnum's args alone; Kind.Args are appended.
+	WrapperBypass = "bypass"
 
 	SessionHerdr = "herdr" // herdr reports the CLI's session id (pane agent_session); resume uses it
 	SessionNone  = "none"  // no session id: the role always starts fresh
@@ -3473,7 +3478,8 @@ type Kind struct {
 	// because a check that reads the saved tokens says logged in while a
 	// revoked refresh token fails every call (agents.Manager.LoginStamp).
 	LoginFile string `toml:"login_file"`
-	// Wrapper: "auto" (default), "true" or "false" (see WrapperAuto).
+	// Wrapper: "auto" (default), "true", "false" or "bypass" (see
+	// WrapperAuto, WrapperBypass).
 	Wrapper string `toml:"wrapper"`
 	// Env: extra environment for the kind's panes (a role's env wins).
 	Env map[string]string `toml:"env"`

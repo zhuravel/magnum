@@ -234,6 +234,13 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 		// resumed Claude Code takes a moment to show up as a named agent).
 		info, perr = m.d.Herdr.AgentPrompt(ctx, target(sess), text, wait)
 	}
+	if perr != nil && ctx.Err() == nil && (herdr.IsCode(perr, codeAgentNotReady) || herdr.IsCode(perr, herdr.CodeAgentNotFound)) {
+		// The agent is gone: a CLI that died at its launch said why in the
+		// pane, which herdr's code does not carry.
+		if line := m.paneError(ctx, store.Deref(sess.HerdrPaneID)); line != "" {
+			perr = fmt.Errorf("%w; the pane shows: %s", perr, line)
+		}
+	}
 	// The prompt may have been delivered: record it whatever ctx does now.
 	cut := ctx.Err() != nil // ctx ended while the prompt was in flight
 	bctx := context.WithoutCancel(ctx)

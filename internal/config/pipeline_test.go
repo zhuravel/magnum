@@ -264,6 +264,22 @@ func TestValidatePipeline(t *testing.T) {
 	}
 }
 
+// wrapper = "bypass" is a mode of its own: Validate accepts it (the agents
+// remove the shell function before every launch and append the kind's args).
+func TestKindWrapperBypassValidates(t *testing.T) {
+	cfg := validPipelineConfig()
+	k := cfg.Kinds["codex"]
+	k.Wrapper = " Bypass"
+	cfg.Kinds["codex"] = k
+	cfg.Normalize()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if k, ok := cfg.KindSpec("codex"); !ok || k.Wrapper != WrapperBypass {
+		t.Fatalf("codex wrapper = %q, want %q", k.Wrapper, WrapperBypass)
+	}
+}
+
 func TestKindMerging(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
 		"config.toml": minimalConfig + `
