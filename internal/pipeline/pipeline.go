@@ -441,6 +441,10 @@ type RoundResult struct {
 	ReviewCommit string
 	Event        string         // APPROVED | COMMENTED | CHANGES_REQUESTED (dry run: the planned event)
 	Findings     map[string]int // P0..P3 from the judge's result file
+	// PreviousOpen is the earlier findings the review keeps open, P0..P3
+	// (the result file's previous_findings.open); nil when the result gives
+	// only their number, or none.
+	PreviousOpen map[string]int
 	// HarnessUsed are the repository notes' harness files the judge said it
 	// ran or read (its result's harness_used), as written: names relative to
 	// notes_dir or paths under it.

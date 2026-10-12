@@ -174,7 +174,8 @@ func TestPostedRoundRecordsFindings(t *testing.T) {
 // the earlier ones still open by priority: the round records the new
 // finding alone, and the PR's review summary (what auto-approval and the
 // board read) carries the open counts, so a reader knows the PR is still
-// blocked without the review's verdict line.
+// blocked without the review's verdict line; the round's result carries
+// them too (PreviousOpen), for the fix loop.
 func TestReReviewKeepsTheOpenFindingsByPriority(t *testing.T) {
 	e := newEnv(t)
 	p := e.judgePosts(602, "CHANGES_REQUESTED", "REQUEST_CHANGES")
@@ -189,8 +190,12 @@ func TestReReviewKeepsTheOpenFindingsByPriority(t *testing.T) {
 	e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t)}
 	in := e.input(KindRereview)
 	in.Previous = &PreviousReview{ID: 901, Event: "CHANGES_REQUESTED", SHA: prevSHA, SubmittedAt: t0.Add(-time.Hour)}
-	if res, err := e.r.RunRound(e.ctx, in); err != nil || res.Outcome != OutcomePosted {
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted {
 		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	if want := map[string]int{"P0": 0, "P1": 2, "P2": 0, "P3": 0}; !reflect.DeepEqual(res.PreviousOpen, want) {
+		t.Errorf("PreviousOpen = %v, want %v", res.PreviousOpen, want)
 	}
 	fs, err := e.st.FindingsByPR(e.ctx, e.pr.ID)
 	if err != nil || len(fs) != 1 || fs[0].Severity != "P2" || !reflect.DeepEqual(fs[0].Sources, []string{"codex-review"}) {

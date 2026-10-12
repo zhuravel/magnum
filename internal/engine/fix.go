@@ -108,14 +108,24 @@ func (j *fixJob) asRound() *roundJob {
 	return &roundJob{pr: j.pr, repo: j.repo, watch: j.watch, pool: j.pool, slot: j.slot, hasSlot: j.slot.ID != 0}
 }
 
-// findings is the review's findings in words, "2 findings", or "open
-// earlier findings" for a next cycle's review that requests changes with no
-// new one (fixRemains).
-func (j *fixJob) findings() string {
-	if n := j.review.Findings(); n > 0 {
-		return textx.Count(n, "finding", "findings")
+// fixes is what the job fixes where, in words: "the 2 findings of the
+// review on b2b2b2b in review1", counting the new ones and the earlier P0
+// to P2 it keeps open (ReviewSummary.OpenProblems), with ", 1 of them open
+// from earlier reviews," when it keeps some; "the open earlier findings of
+// the review on b2b2b2b in review1" for a next cycle's review that requests
+// changes with neither (fixRemains).
+func (j *fixJob) fixes() string {
+	sha := textx.ShortSHA(j.review.SHA)
+	open := j.review.OpenProblems()
+	n := j.review.Findings() + open
+	switch {
+	case n == 0:
+		return fmt.Sprintf("the open earlier findings of the review on %s in %s", sha, j.slot.Name)
+	case open == 0:
+		return fmt.Sprintf("the %s of the review on %s in %s", textx.Count(n, "finding", "findings"), sha, j.slot.Name)
 	}
-	return "open earlier findings"
+	return fmt.Sprintf("the %s of the review on %s, %d of them open from earlier reviews, in %s",
+		textx.Count(n, "finding", "findings"), sha, open, j.slot.Name)
 }
 
 // fixPin is what prepareFix does about a pinned PR or slot.
@@ -184,8 +194,7 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	what := fmt.Sprintf("%s fixes the %s of the review on %s in %s, cycle %d of %d", job.role.Name, job.findings(),
-		textx.ShortSHA(job.review.SHA), job.slot.Name, max(job.state.Cycle, 1), job.state.Cap)
+	what := fmt.Sprintf("%s fixes %s, cycle %d of %d", job.role.Name, job.fixes(), max(job.state.Cycle, 1), job.state.Cap)
 	res := fmt.Sprintf("fixing %s: %s; `magnum abort %s` stops it", job.label(), what, job.label())
 	if p.DryRun || e.d.DryRun {
 		e.rec.Record(ctx, subject, "fix", what)
@@ -265,8 +274,8 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	switch {
 	case !ok || sum.SHA != pr.HeadSHA || deref(pr.ReviewedSHA) != pr.HeadSHA:
 		return nil, fmt.Errorf("nothing to fix: no review on %s", head)
-	case sum.Findings() == 0 && prev.Cycle == 0: // a next cycle's review may keep earlier findings open with no new one (fixRemains)
-		return nil, fmt.Errorf("nothing to fix: the review on %s found nothing", head)
+	case sum.Findings()+sum.OpenProblems() == 0 && prev.Cycle == 0: // a next cycle's changes request may keep earlier findings open with neither (fixRemains)
+		return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and left nothing open", head)
 	case sum.URL == "":
 		return nil, fmt.Errorf("%s: the review on %s has no URL to fix from", label, head)
 	case deref(pr.HeadRef) == "":
@@ -616,8 +625,8 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		// in the agent, so the run is observed, never sent again.
 		e.log.Warn("fix: prompt not acknowledged as working; waiting for the run", "subject", job.subject(), "run", run.ID, "err", serr)
 	}
-	e.event(ctx, "info", job.subject(), "fix.start", fmt.Sprintf("%s fixes the %s of the review on %s in %s (run %s, cycle %d of %d)",
-		job.role.Name, job.findings(), textx.ShortSHA(job.review.SHA), job.slot.Name, run.ID, job.state.Cycle, job.state.Cap),
+	e.event(ctx, "info", job.subject(), "fix.start", fmt.Sprintf("%s fixes %s (run %s, cycle %d of %d)",
+		job.role.Name, job.fixes(), run.ID, job.state.Cycle, job.state.Cap),
 		map[string]any{"run": run.ID, "role": job.role.Name, "slot": job.slot.Name, "report": job.state.Report,
 			"cycle": job.state.Cycle, "cap": job.state.Cap, "by": job.state.By})
 	return nil

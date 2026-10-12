@@ -295,7 +295,7 @@ func actionRefusal(a rowAct, r actRow) string {
 			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to fix"
 		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA):
 			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
-		case f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3] == 0:
+		case f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3]+f.OpenProblems == 0: // an earlier finding the review keeps open is one to fix
 			return l + ": magnum's review of " + textx.ShortSHA(f.SHA) + " found nothing to fix"
 		case r.running():
 			return l + ": round in progress (" + stateLabel(r.state) + ")" + r.orKey(actAbort, "; %k kills it")

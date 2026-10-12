@@ -16,7 +16,11 @@ type FindingsInfo struct {
 	Counts          [4]int // P0..P3 findings posted
 	Simplifications int    // optional simplification suggestions posted
 	Fixed, Open     int    // earlier findings fixed / still open (a re-review)
-	Answered        int    // earlier findings answered with a reason
+	// OpenProblems is how many of Open are problems to fix before merging
+	// (store.ReviewSummary.OpenProblems: P0 to P2, or all of Open when their
+	// priorities are unknown): f fixes them too.
+	OpenProblems int
+	Answered     int // earlier findings answered with a reason
 	// Verdict is the review's decision whatever its repository lets it
 	// post: blocking (request changes), non_blocking (comment) or clean
 	// (approve).

@@ -31,6 +31,13 @@ const fixPushed2 = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
 // file, the review's id and URL), so the fix job finds that review on the
 // head it reviewed.
 func reviewWith(h *harness, next func(in pipeline.RoundInput) (map[string]int, string)) {
+	reviewWithOpen(h, next, nil)
+}
+
+// reviewWithOpen is reviewWith whose reviews also keep the earlier findings
+// open (previous_findings.open by priority, in the result file and the
+// round's PreviousOpen; nil = none given).
+func reviewWithOpen(h *harness, next func(in pipeline.RoundInput) (map[string]int, string), open map[string]int) {
 	var mu sync.Mutex
 	n := 0
 	h.rd.mu.Lock()
@@ -51,7 +58,11 @@ func reviewWith(h *harness, next func(in pipeline.RoundInput) (map[string]int, s
 		}
 		id := int64(300 + k)
 		url := fmt.Sprintf("https://github.com/talkable/talkable/pull/%d#pullrequestreview-%d", in.PR.Number, id)
-		result, err := json.Marshal(map[string]any{"event": event, "findings": findings})
+		body := map[string]any{"event": event, "findings": findings}
+		if open != nil {
+			body["previous_findings"] = map[string]any{"fixed": 1, "open": open, "answered": 0}
+		}
+		result, err := json.Marshal(body)
 		if err != nil {
 			return failRound(h.t, err)
 		}
@@ -63,7 +74,7 @@ func reviewWith(h *harness, next func(in pipeline.RoundInput) (map[string]int, s
 			return failRound(h.t, err)
 		}
 		return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Round: round, ReviewID: id, ReviewURL: url, Event: event,
-			ReviewCommit: in.TargetSHA, TargetSHA: in.TargetSHA, Findings: findings}, nil
+			ReviewCommit: in.TargetSHA, TargetSHA: in.TargetSHA, Findings: findings, PreviousOpen: open}, nil
 	}
 }
 
@@ -180,6 +191,64 @@ func TestAChangesRequestedReReviewWithNoNewFindingsIsNotClean(t *testing.T) {
 			}
 			cur := h.wantState(2, store.PRNeedsAttention)
 			if want := "1 fix cycle, earlier findings still open: " + deref(runs[0].ReportPath); deref(cur.LastError) != want {
+				t.Errorf("last_error = %q, want %q", deref(cur.LastError), want)
+			}
+		})
+	}
+}
+
+// A re-review that posts nothing new but keeps an earlier P2 open (it
+// comments "Fix 1 problem before merging") is not clean either: below the
+// cap the next cycle fixes that finding, its fix.start naming it as open
+// from earlier reviews; at the cap the loop ends as needs attention with
+// the count of the earlier findings still open. An earlier P3 left open is
+// optional: the loop ends clean.
+func TestAReReviewThatKeepsAnEarlierFindingOpenKeepsTheLoop(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cycles int
+		open   map[string]int
+	}{
+		{name: "below the cap", cycles: 3, open: map[string]int{"P0": 0, "P1": 0, "P2": 1, "P3": 0}},
+		{name: "at the cap", cycles: 1, open: map[string]int{"P0": 0, "P1": 0, "P2": 1, "P3": 0}},
+		{name: "only a P3", cycles: 3, open: map[string]int{"P3": 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t, func(h *harness) { h.cfg.Pipeline.FixCycles = tc.cycles })
+			pr := loopToReReview(t, h, git, nil)
+			reviewWithOpen(h, findings(map[string]int{"P0": 0, "P1": 0, "P2": 0, "P3": 0}, "COMMENTED"), tc.open)
+			fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the loop goes on")
+			}
+			runs := h.fixRuns(pr.ID)
+			done, clean := h.fixEvent("fix.done")
+			switch {
+			case tc.open["P2"] == 0:
+				if !clean || len(runs) != 1 {
+					t.Errorf("fix.done %v, fix runs %d: want the loop clean after 1 cycle", clean, len(runs))
+				}
+				return
+			case clean:
+				t.Errorf("the loop ended as clean: %q", done.Message)
+			}
+			if tc.cycles > 1 {
+				if len(runs) != 2 {
+					t.Fatalf("fix runs = %d, want the second cycle", len(runs))
+				}
+				want := "fixes the 1 finding of the review on b2b2b2b, 1 of them open from earlier reviews, in review1"
+				if ev, _ := h.fixEvent("fix.start"); !strings.Contains(ev.Message, want) {
+					t.Errorf("fix.start = %q, want it to say %q", ev.Message, want)
+				}
+				return
+			}
+			if len(runs) != 1 {
+				t.Fatalf("fix runs = %d, want 1 at the cap", len(runs))
+			}
+			cur := h.wantState(2, store.PRNeedsAttention)
+			if want := "1 fix cycle, 1 earlier finding still open: " + deref(runs[0].ReportPath); deref(cur.LastError) != want {
 				t.Errorf("last_error = %q, want %q", deref(cur.LastError), want)
 			}
 		})

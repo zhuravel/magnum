@@ -135,6 +135,7 @@ type prsJSONFindings struct {
 	Simplifications int    `json:"simplifications"`
 	Fixed           int    `json:"fixed"`
 	Open            int    `json:"open"`
+	OpenProblems    int    `json:"open_problems"` // of open: P0 to P2, or all when their priorities are unknown
 	Answered        int    `json:"answered"`
 	Verdict         string `json:"verdict"` // blocking, non_blocking, clean
 	Posted          string `json:"posted"`  // APPROVE, REQUEST_CHANGES, COMMENT
@@ -333,7 +334,7 @@ func prsJSONReviewOf(r tui.ReviewInfo) prsJSONReview {
 
 func prsJSONFindingsOf(f tui.FindingsInfo) prsJSONFindings {
 	return prsJSONFindings{Counts: f.Counts, Simplifications: f.Simplifications, Fixed: f.Fixed, Open: f.Open,
-		Answered: f.Answered, Verdict: f.Verdict, Posted: f.Posted, SHA: f.SHA}
+		OpenProblems: f.OpenProblems, Answered: f.Answered, Verdict: f.Verdict, Posted: f.Posted, SHA: f.SHA}
 }
 
 func prsJSONCIOf(c tui.CIInfo) prsJSONCI {

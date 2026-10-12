@@ -12532,6 +12532,10 @@ type RoundResult struct {
 	ReviewCommit string
 	Event        string         // APPROVED | COMMENTED | CHANGES_REQUESTED (dry run: the planned event)
 	Findings     map[string]int // P0..P3 from the judge's result file
+	// PreviousOpen is the earlier findings the review keeps open, P0..P3
+	// (the result file's previous_findings.open); nil when the result gives
+	// only their number, or none.
+	PreviousOpen map[string]int
 	// HarnessUsed are the repository notes' harness files the judge said it
 	// ran or read (its result's harness_used), as written: names relative to
 	// notes_dir or paths under it.
@@ -15394,6 +15398,12 @@ type ReviewSummary struct {
 func (s ReviewSummary) Findings() int
     Findings is the number of findings posted this round.
 
+func (s ReviewSummary) OpenProblems() int
+    OpenProblems is how many earlier findings the review keeps open that its
+    verdict counts as problems to fix before merging: the P0, P1 and P2 of
+    OpenCounts (an open P3 stays optional), or all of Open when the result gave
+    only their number.
+
 type RoundRun struct {
 	Run
 	Repo   string `json:"repo"`
@@ -16826,7 +16836,11 @@ type FindingsInfo struct {
 	Counts          [4]int // P0..P3 findings posted
 	Simplifications int    // optional simplification suggestions posted
 	Fixed, Open     int    // earlier findings fixed / still open (a re-review)
-	Answered        int    // earlier findings answered with a reason
+	// OpenProblems is how many of Open are problems to fix before merging
+	// (store.ReviewSummary.OpenProblems: P0 to P2, or all of Open when their
+	// priorities are unknown): f fixes them too.
+	OpenProblems int
+	Answered     int // earlier findings answered with a reason
 	// Verdict is the review's decision whatever its repository lets it
 	// post: blocking (request changes), non_blocking (comment) or clean
 	// (approve).

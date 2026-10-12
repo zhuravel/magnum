@@ -385,7 +385,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			for i := range out {
 				if s, ok := sums[ids[i]]; ok {
 					out[i].Findings = &tui.FindingsInfo{Counts: s.Counts, Simplifications: s.Simplifications,
-						Fixed: s.Fixed, Open: s.Open, Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA}
+						Fixed: s.Fixed, Open: s.Open, OpenProblems: s.OpenProblems(), Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA}
 				}
 			}
 		}

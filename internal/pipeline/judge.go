@@ -618,7 +618,7 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 	}
 	rd.res.Replies = v.replies
 	if v.result != nil && v.outcome != OutcomeReplied { // a replied round's verdict stays its last review's
-		rd.res.Findings = v.result.Findings
+		rd.res.Findings, rd.res.PreviousOpen = v.result.Findings, v.result.PreviousOpen
 		rd.res.HarnessUsed = v.result.HarnessUsed
 		if rd.res.Event == "" {
 			rd.res.Event = normalizeEvent(v.result.Event)

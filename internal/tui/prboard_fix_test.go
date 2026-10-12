@@ -96,6 +96,10 @@ func TestFRefusesBeforeAsking(t *testing.T) {
 			r.Findings = &FindingsInfo{Verdict: "clean", Posted: "APPROVE", SHA: "abcdef1234"}
 		},
 			"talkable#5: magnum's review of abcdef1 found nothing to fix"},
+		{"only an earlier P3 still open", func(r *PRBoardRow) {
+			r.Findings = &FindingsInfo{Verdict: "non_blocking", Posted: "COMMENT", SHA: "abcdef1234", Open: 1}
+		},
+			"talkable#5: magnum's review of abcdef1 found nothing to fix"},
 	} {
 		m, act := fixBoard(t, c.edit)
 		m, _ = send(t, m, keyMsg("f"))
@@ -103,6 +107,20 @@ func TestFRefusesBeforeAsking(t *testing.T) {
 			t.Errorf("%s: f asked %+v, ran %v", c.name, m.confirm, act.calls)
 		}
 		mustContain(t, viewOf(m), c.want)
+	}
+}
+
+// A review that posted nothing new but keeps an earlier P2 open ("Fix 1
+// problem before merging") has something to fix: f asks, and its row says
+// "1 open" where a clean review says "clean".
+func TestFFixesAnEarlierFindingTheReviewKeepsOpen(t *testing.T) {
+	m, act := fixBoard(t, func(r *PRBoardRow) {
+		r.Findings = &FindingsInfo{Verdict: "non_blocking", Posted: "COMMENT", SHA: "abcdef1234", Fixed: 97, Open: 1, OpenProblems: 1, Answered: 14}
+	})
+	mustContain(t, viewOf(m), "1 open")
+	m, _ = send(t, m, keyMsg("f"))
+	if m.confirm == nil || m.confirm.question != "Fix the findings of talkable#5 as you?" || len(act.calls) != 0 {
+		t.Fatalf("f asked %+v, ran %v; want the question", m.confirm, act.calls)
 	}
 }
 

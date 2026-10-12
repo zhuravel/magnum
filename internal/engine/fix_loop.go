@@ -95,7 +95,8 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 // never comes back ends the loop as any waiting loop ends (an abort or an
 // ignore, stopPR; the next start's recovery, recoverReviewingLoop, once the
 // PR moved on). A review that requests changes with no new findings found
-// something: the earlier findings it keeps open (fixRemains). raw is the
+// something: the earlier findings it keeps open (fixRemains), as did one
+// whose result keeps an earlier P0 to P2 open. raw is the
 // loop's row as read: every end acts only while the row is still that
 // (endFixRowIf), and the next cycle replaces only that row (claimFixRow), so
 // a stop that ended the loop meanwhile wins quietly (errFixLoopGone). A
@@ -106,7 +107,11 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	st := job.state
 	found := roundFindings(res)
 	left := textx.Count(found, "finding", "findings") + " left"
-	if found == 0 {
+	switch open := roundOpenProblems(res); {
+	case found > 0:
+	case open > 0:
+		left = textx.Count(open, "earlier finding", "earlier findings") + " still open"
+	default:
 		left = "earlier findings still open"
 	}
 	switch {
@@ -364,8 +369,9 @@ func (e *Engine) recoverReviewingLoop(ctx context.Context, job *fixJob, raw, whi
 }
 
 // postedReReview is the result of the review magnum posted on the PR at head,
-// as the round that posted it reported it: its findings and event, read back
-// from its stored result (ok false when there is none at head).
+// as the round that posted it reported it: its findings, the earlier ones it
+// keeps open by priority and its event, read back from its stored result
+// (ok false when there is none at head).
 func (e *Engine) postedReReview(ctx context.Context, pr store.PR, head string) (pipeline.RoundResult, bool) {
 	sums, err := e.st.LastReviewSummaries(ctx, []int64{pr.ID})
 	sum, ok := sums[pr.ID]
@@ -383,6 +389,9 @@ func (e *Engine) postedReReview(ctx context.Context, pr store.PR, head string) (
 	}
 	res := pipeline.RoundResult{Outcome: pipeline.OutcomePosted, TargetSHA: head, ReviewURL: sum.URL, ReviewID: sum.ReviewID, Event: event,
 		Findings: map[string]int{"P0": sum.Counts[0], "P1": sum.Counts[1], "P2": sum.Counts[2], "P3": sum.Counts[3]}}
+	if o := sum.OpenCounts; o != nil {
+		res.PreviousOpen = map[string]int{"P0": o[0], "P1": o[1], "P2": o[2], "P3": o[3]}
+	}
 	if run, err := e.st.RunByID(ctx, sum.RunID); err == nil {
 		res.Round = run.Round // the cap finds the round's finding titles by it
 	}
@@ -469,10 +478,18 @@ func (j *fixJob) loopData() map[string]any {
 }
 
 // fixRemains reports whether a posted re-review leaves something to fix:
-// new findings, or a changes request with none, which keeps earlier
-// findings open.
+// new findings, a changes request with none, which keeps earlier findings
+// open, or earlier P0 to P2 findings it keeps open (roundOpenProblems: a
+// comment that says "Fix 1 problem before merging" with nothing new).
 func fixRemains(res pipeline.RoundResult) bool {
-	return roundFindings(res) > 0 || res.Event == "CHANGES_REQUESTED"
+	return roundFindings(res) > 0 || res.Event == "CHANGES_REQUESTED" || roundOpenProblems(res) > 0
+}
+
+// roundOpenProblems is how many earlier P0 to P2 findings a round's review
+// keeps open (an open P3 stays optional); 0 when its result gave no
+// priorities.
+func roundOpenProblems(res pipeline.RoundResult) int {
+	return res.PreviousOpen["P0"] + res.PreviousOpen["P1"] + res.PreviousOpen["P2"]
 }
 
 // roundFindings is how many findings (P0 to P3) a round's review posted.

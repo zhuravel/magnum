@@ -16,6 +16,7 @@ import (
 // judgeResult is the judge's result (codex-judge.json, or the MAGNUM_RESULT line):
 // {status, run_id, review_id, review_url, event, findings{P0..P3},
 // provenance[{id, title, severity, path, line, sources, verdict, reason_code, nearby}],
+// previous_findings{fixed, open{P0..P3}, answered},
 // environment_failures[{cmd, error}], blocker, …}.
 type judgeResult struct {
 	Status    string
@@ -24,7 +25,11 @@ type judgeResult struct {
 	ReviewURL string
 	Event     string
 	Findings  map[string]int
-	Blocker   string
+	// PreviousOpen is previous_findings.open: the earlier findings a
+	// re-review keeps open, P0..P3; nil when the result gives only their
+	// number (written before the skill split them) or none.
+	PreviousOpen map[string]int
+	Blocker      string
 	// EnvironmentFailures are checks the review machine itself broke (a
 	// missing table, a deadlock, the wrong Ruby): kept out of the posted
 	// review by the skill, reported to the operator by the round.
@@ -308,8 +313,30 @@ func parseResult(b []byte) (judgeResult, bool) {
 			}
 		}
 	}
+	if f, ok := raw["previous_findings"]; ok {
+		r.PreviousOpen = parsePreviousOpen(f)
+	}
 	r.Status = strings.ToLower(strings.TrimSpace(r.Status))
 	return r, r.Status != ""
+}
+
+// parsePreviousOpen reads previous_findings.open as counts by priority,
+// P0..P3 (a missing priority, a negative count or one that is not a number
+// is 0); nil when open is not an object: a plain number (a result written
+// before the skill split them), or missing.
+func parsePreviousOpen(m json.RawMessage) map[string]int {
+	var prev struct {
+		Open json.RawMessage `json:"open"`
+	}
+	var byPriority map[string]json.RawMessage
+	if json.Unmarshal(m, &prev) != nil || json.Unmarshal(prev.Open, &byPriority) != nil || byPriority == nil {
+		return nil
+	}
+	out := make(map[string]int, 4)
+	for _, k := range []string{"P0", "P1", "P2", "P3"} {
+		out[k] = int(max(jsonInt(byPriority[k]), 0))
+	}
+	return out
 }
 
 // readResultFile reads the judge's result file.

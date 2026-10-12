@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,6 +247,27 @@ func TestParseResultLenient(t *testing.T) {
 	}
 	if _, ok := parseResult([]byte(`not json`)); ok {
 		t.Errorf("garbage accepted")
+	}
+}
+
+// A re-review's result counts its new findings in findings and the earlier
+// ones it keeps open in previous_findings.open, by priority: the round's
+// result carries them, so the fix loop goes on while an earlier P2 stays
+// open with nothing new posted. A result that gives only their number has
+// no priorities, and no PreviousOpen.
+func TestParseResultReadsTheEarlierFindingsStillOpen(t *testing.T) {
+	r, ok := parseResult([]byte(`{"status":"posted","event":"COMMENT","findings":{"P0":0,"P1":0,"P2":0,"P3":0},
+		"previous_findings":{"fixed":97,"open":{"P0":0,"P1":0,"P2":"1"},"answered":14}}`))
+	if want := map[string]int{"P0": 0, "P1": 0, "P2": 1, "P3": 0}; !ok || !maps.Equal(r.PreviousOpen, want) {
+		t.Fatalf("PreviousOpen = %v, %v; want %v", r.PreviousOpen, ok, want)
+	}
+	for _, payload := range []string{
+		`{"status":"posted","findings":{},"previous_findings":{"fixed":0,"open":3,"answered":1}}`,
+		`{"status":"posted","findings":{}}`,
+	} {
+		if r, ok := parseResult([]byte(payload)); !ok || r.PreviousOpen != nil {
+			t.Errorf("%s: PreviousOpen = %v, %v; want nil", payload, r.PreviousOpen, ok)
+		}
 	}
 }
 

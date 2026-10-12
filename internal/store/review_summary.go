@@ -44,6 +44,17 @@ type ReviewSummary struct {
 // Findings is the number of findings posted this round.
 func (s ReviewSummary) Findings() int { return s.Counts[0] + s.Counts[1] + s.Counts[2] + s.Counts[3] }
 
+// OpenProblems is how many earlier findings the review keeps open that its
+// verdict counts as problems to fix before merging: the P0, P1 and P2 of
+// OpenCounts (an open P3 stays optional), or all of Open when the result
+// gave only their number.
+func (s ReviewSummary) OpenProblems() int {
+	if s.OpenCounts == nil {
+		return s.Open
+	}
+	return s.OpenCounts[0] + s.OpenCounts[1] + s.OpenCounts[2]
+}
+
 // LastReviewSummaries returns the ReviewSummary of each PR's latest posted
 // round, for the PRs that have one. A result file that does not parse is
 // skipped (the round still counts as posted elsewhere).

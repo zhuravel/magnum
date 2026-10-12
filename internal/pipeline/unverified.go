@@ -136,7 +136,7 @@ func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error
 	if rd.res.Event == "" {
 		rd.res.Event = normalizeEvent(u.result.Event)
 	}
-	rd.res.Findings = u.result.Findings
+	rd.res.Findings, rd.res.PreviousOpen = u.result.Findings, u.result.PreviousOpen
 	res := rd.res
 	rd.mu.Unlock()
 

@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+// The problems a review leaves to fix count the earlier findings it keeps
+// open as well as its new ones: a re-review that posts nothing new but keeps
+// an earlier P2 open still says "Fix 1 problem before merging". Open P3s
+// are optional, as new ones are; a result that gives only the number of
+// open findings counts them all, their priorities being unknown.
+func TestOpenProblemsCountsTheEarlierFindingsStillOpenUpToP2(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sum  ReviewSummary
+		want int
+	}{
+		{name: "an open P2", sum: ReviewSummary{Open: 1, OpenCounts: &[4]int{0, 0, 1, 0}}, want: 1},
+		{name: "P0 to P2, not P3", sum: ReviewSummary{Open: 7, OpenCounts: &[4]int{1, 2, 3, 1}}, want: 6},
+		{name: "only a P3", sum: ReviewSummary{Open: 1, OpenCounts: &[4]int{0, 0, 0, 1}}, want: 0},
+		{name: "an older result's number", sum: ReviewSummary{Open: 2}, want: 2},
+		{name: "nothing open", sum: ReviewSummary{}, want: 0},
+	} {
+		if got := tc.sum.OpenProblems(); got != tc.want {
+			t.Errorf("%s: OpenProblems = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
 // A re-review's result counts only the findings it posts as new; the
 // earlier findings still open come by priority in previous_findings.open,
 // so a reader knows the PR is still blocked without the verdict line (a

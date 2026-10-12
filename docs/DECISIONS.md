@@ -1220,6 +1220,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   step names it in full). The loop still ends at the cap. Rejected: a per-PR counter in the registry's kv
   (the runs are the record and are never deleted) and raising `fix_cycles` or counting the cap across loops
   (the cap is the operator's guard on one unattended loop; this entry only reports).
+- **A review that keeps an earlier finding open counts for `magnum fix` and the loop (2026-10-13).** A
+  re-review posted nothing new, kept one earlier P2 open (`previous_findings.open` {"P2":1}) and commented
+  "Fix 1 problem before merging", as the skill's verdict counts the earlier findings still open; the loop
+  ended "clean after 1 fix cycle: the re-review found nothing" (`fixRemains` counted only new findings and
+  a changes request) and the operator's `f` was refused "nothing to fix", although the fix skill fixes the
+  threads the body names as still open. Now `store.ReviewSummary.OpenProblems` counts the earlier P0 to P2
+  still open (all of `Open` for an older result that gives only their number), `prepareFix` refuses a new
+  loop only when the review found nothing and left nothing open, and the answer and the fix.start event
+  say "fixes the 1 finding of the review on <sha7>, 1 of them open from earlier reviews"; the round's
+  result carries `PreviousOpen` (the result file's `previous_findings.open` by priority, nil for the
+  number form), `fixRemains` keeps the loop going on an open P0 to P2 and the cap's line says "1 earlier
+  finding still open"; a recovered loop reads them from the stored summary. The board's `f` asks on such a
+  row (`FindingsInfo.OpenProblems`), whose FINDINGS cell already read "1 open". An earlier P3 left open
+  is optional and counts for neither (a new P3 still counts, as before). Autofix still starts only after
+  a review that posts findings.
 
 ## Screens and commands
 

@@ -118,6 +118,14 @@ func realSleep(h *harness) {
 // those findings: the state `magnum fix` starts from.
 func fixablePR(h *harness, author string, findings map[string]int) store.PR {
 	h.t.Helper()
+	return fixablePROpen(h, author, findings, nil)
+}
+
+// fixablePROpen is fixablePR whose review, with findings, also keeps the
+// earlier findings open (previous_findings.open by priority; nil = no
+// previous_findings in its result).
+func fixablePROpen(h *harness, author string, findings, open map[string]int) store.PR {
+	h.t.Helper()
 	h.open(prSpec{n: 1, head: "base1"})
 	h.startup()
 	h.tick() // first sync: #1 baseline
@@ -129,7 +137,11 @@ func fixablePR(h *harness, author string, findings map[string]int) store.PR {
 	if findings == nil {
 		return pr
 	}
-	result, err := json.Marshal(map[string]any{"event": "COMMENTED", "findings": findings})
+	body := map[string]any{"event": "COMMENTED", "findings": findings}
+	if open != nil {
+		body["previous_findings"] = map[string]any{"fixed": 1, "open": open, "answered": 0}
+	}
+	result, err := json.Marshal(body)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -367,7 +379,7 @@ func TestFixRefusals(t *testing.T) {
 		want     string
 	}{
 		{name: "no review", author: "zhuravel", want: "nothing to fix: no review on a1a1a1a"},
-		{name: "found nothing", author: "zhuravel", findings: map[string]int{}, want: "nothing to fix: the review on a1a1a1a found nothing"},
+		{name: "found nothing", author: "zhuravel", findings: map[string]int{}, want: "nothing to fix: the review on a1a1a1a found nothing and left nothing open"},
 		{name: "another author", author: "alice", findings: map[string]int{"P1": 1},
 			want: "PR #2 is alice's, not yours; the fixer pushes and replies as you"},
 		{name: "fork", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, pr store.PR) {
@@ -406,6 +418,44 @@ func TestFixRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A re-review that posts nothing new but keeps an earlier P2 open says "Fix
+// 1 problem before merging", and the fix skill fixes the threads its body
+// names as still open: `magnum fix` (the board's f) starts on it, and the
+// answer and the fix.start event say how many of the findings are open from
+// earlier reviews. An earlier P3 left open is optional: alone it leaves
+// nothing to fix.
+func TestAFixStartsOnAReviewThatKeepsAnEarlierFindingOpen(t *testing.T) {
+	const what = "fixes the 1 finding of the review on a1a1a1a, 1 of them open from earlier reviews, in review1"
+	t.Run("an open P2", func(t *testing.T) {
+		h, git := fixHarness(t)
+		fixablePROpen(h, "zhuravel", map[string]int{"P0": 0, "P1": 0, "P2": 0, "P3": 0}, map[string]int{"P0": 0, "P1": 0, "P2": 1, "P3": 0})
+		fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+		id := h.fix(FixPayload{})
+		h.handle()
+		if res := h.wantDone(id); !strings.Contains(res, "claude-fix "+what+", cycle 1 of 3") {
+			t.Errorf("answer = %q, want it to say %q", res, what)
+		}
+		if ev, ok := h.fixEvent("fix.start"); !ok || !strings.Contains(ev.Message, what+" (run ") {
+			t.Errorf("fix.start = %q, %v; want it to say %q", ev.Message, ok, what)
+		}
+		if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+			t.Errorf("fix runs = %d, want the fixer's", n)
+		}
+	})
+	t.Run("only an open P3", func(t *testing.T) {
+		h, _ := fixHarness(t)
+		fixablePROpen(h, "zhuravel", map[string]int{}, map[string]int{"P3": 1})
+		id := h.fix(FixPayload{})
+		h.handle()
+		if r, want := h.request(id), "nothing to fix: the review on a1a1a1a found nothing and left nothing open"; r.State != store.RequestFailed || deref(r.Result) != want {
+			t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+		}
+		if h.ag.count("submit:") != 0 {
+			t.Error("a refused request started the fixer")
+		}
+	})
 }
 
 // pinnedFixablePR is fixablePR with findings, then `magnum pin` on PR #2,
