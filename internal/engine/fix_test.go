@@ -408,6 +408,107 @@ func TestFixRefusals(t *testing.T) {
 	}
 }
 
+// pinnedFixablePR is fixablePR with findings, then `magnum pin` on PR #2,
+// which pins the PR and its slot review1; it returns when the pin was, an
+// hour before the clock.
+func pinnedFixablePR(h *harness) time.Time {
+	h.t.Helper()
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	id := h.enqueue(ReqPin, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestDone {
+		h.t.Fatalf("pin: %s %q", r.State, deref(r.Result))
+	}
+	if pr, sl := h.pr(2), h.slot("review1"); !pr.Pinned || !sl.Pinned {
+		h.t.Fatalf("not pinned: PR %v slot %v", pr.Pinned, sl.Pinned)
+	}
+	at := h.clock.Now()
+	h.advance(time.Hour)
+	return at
+}
+
+// `magnum fix` (the board's f) on a pinned PR unpins it, as `magnum review`
+// does: the pin `magnum open` or `magnum pin` left would otherwise refuse the
+// fix the operator asked for. The answer and the pr.unpinned event name
+// magnum fix and who pinned it, and the fixer runs; a dry run only says it
+// would unpin. A hold a slot guard persisted still refuses, with the hold's
+// reason, before anything is unpinned, and a person's agent the guard finds
+// once the pin went refuses with the guard's own words.
+func TestAFixOnAPinnedSlotUnpinsIt(t *testing.T) {
+	t.Run("pinned", func(t *testing.T) {
+		h, git := fixHarness(t)
+		pinnedAt := pinnedFixablePR(h)
+		fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+		id := h.fix(FixPayload{})
+		h.handle()
+
+		note := "unpinned review1 (pinned by magnum pin at " + clockText(pinnedAt) + ") to fix it"
+		if res := h.wantDone(id); !strings.Contains(res, "fixing talkable/talkable#2") || !strings.Contains(res, "; "+note) {
+			t.Errorf("answer = %q, want the fix and %q", res, note)
+		}
+		if pr, sl := h.pr(2), h.slot("review1"); pr.Pinned || sl.Pinned {
+			t.Errorf("still pinned: PR %v slot %v", pr.Pinned, sl.Pinned)
+		}
+		if !hasEvent(h, "pr.unpinned", "magnum fix: "+note) {
+			t.Error("no pr.unpinned event naming magnum fix")
+		}
+		if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+			t.Errorf("fix runs = %d, want the fixer's", n)
+		}
+	})
+	t.Run("dry run", func(t *testing.T) {
+		h, _ := fixHarness(t)
+		pinnedAt := pinnedFixablePR(h)
+		id := h.fix(FixPayload{DryRun: true})
+		h.handle()
+		want := "would unpin review1 (pinned by magnum pin at " + clockText(pinnedAt) + ") to fix it"
+		if res := h.wantDone(id); !strings.HasPrefix(res, "dry run: would start fixing") || !strings.Contains(res, want) {
+			t.Errorf("answer = %q, want %q", res, want)
+		}
+		if pr, sl := h.pr(2), h.slot("review1"); !pr.Pinned || !sl.Pinned {
+			t.Errorf("a dry run unpinned: PR %v slot %v", pr.Pinned, sl.Pinned)
+		}
+	})
+	t.Run("persisted hold", func(t *testing.T) {
+		h, _ := fixHarness(t)
+		pinnedFixablePR(h)
+		if err := h.st.UpdateSlotFields(h.ctx, h.slot("review1").ID, func(u *store.SlotUpdate) {
+			u.Set("hold_reason", slots.HoldDirtyWorktree)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		id := h.fix(FixPayload{})
+		h.handle()
+		want := "talkable/talkable#2: slot review1 is held: dirty_worktree (magnum unpin)"
+		if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+			t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+		}
+		if pr, sl := h.pr(2), h.slot("review1"); !pr.Pinned || !sl.Pinned {
+			t.Errorf("a refused fix unpinned: PR %v slot %v", pr.Pinned, sl.Pinned)
+		}
+		if h.ag.count("submit:") != 0 {
+			t.Error("the fixer started in a held slot")
+		}
+	})
+	t.Run("a person's agent in the slot", func(t *testing.T) {
+		h, _ := fixHarness(t)
+		pinnedFixablePR(h)
+		h.sl.mu.Lock()
+		h.sl.guardErr = slots.ErrHold{Reason: slots.HoldForeignAgent, Detail: `pane p9: claude agent "alice" is idle in /tmp/review1`}
+		h.sl.mu.Unlock()
+		id := h.fix(FixPayload{})
+		h.handle()
+		r := h.request(id)
+		if res := deref(r.Result); r.State != store.RequestFailed || !strings.Contains(res, "unpinned review1") ||
+			!strings.Contains(res, `but slot review1 is held: foreign_agent: pane p9: claude agent "alice"`) {
+			t.Errorf("%s %q, want failed naming the unpin and the guard", r.State, res)
+		}
+		if _, ok := h.fixStateOf(2); ok || h.ag.count("submit:") != 0 {
+			t.Error("the fixer started beside a person's agent")
+		}
+	})
+}
+
 // A fixer that pushed with nobody needed counts the cycle: the slot is put
 // back in order at the pushed head, the push is recorded on the PR row as
 // the poller records one (so the poller's own sight of it changes nothing),

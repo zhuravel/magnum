@@ -20,6 +20,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -154,22 +155,56 @@ func (e *Engine) noteReady(ctx context.Context, repo store.Repo, pr store.PR, no
 }
 
 // recordRequest stores req as the PR's newest handled request and records
-// pr.review_requested.
+// pr.review_requested, which says what answers it. A pending request on a
+// repository of the watch's manual_repos starts no round (eligibility
+// rejects the PR, and whether a request should override that is the
+// operator's call), so its event says so and names the command that runs
+// one, and a person's request (not a draft marked ready) is toasted once
+// (toastManualRequest).
 func (e *Engine) recordRequest(ctx context.Context, repo store.Repo, pr store.PR, req Request, what string) {
 	e.setKV(ctx, KVPRRequestAt(pr.ID), store.FormatTime(req.At))
 	e.setKV(ctx, KVPRRequestBy(pr.ID), req.By)
 	msg := what
 	_, pending := e.pendingRequest(ctx, pr)
+	w := e.cfg.WatchFor(repo.FullName())
+	manual := pending && w != nil && w.ManualRepo(repo.Name)
 	switch d := e.cfg.Daemon.RequestDebounce.Duration; {
 	case !pending:
 		msg += "; a round that started after it, or a review of the head posted after it, answers it"
+	case manual:
+		msg += fmt.Sprintf("; manual repository: no round starts by itself; `magnum review %s#%d` runs one", repo.FullName(), pr.Number)
 	case d > 0:
 		msg += fmt.Sprintf("; the next round skips the timing rules and the daily cap and waits %s after it and the last push", humanDuration(d))
 	default:
 		msg += "; the next round skips the timing rules and the daily cap"
 	}
 	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.review_requested", msg,
-		map[string]any{"at": req.At, "by": req.By, "state": pr.State, "pending": pending})
+		map[string]any{"at": req.At, "by": req.By, "state": pr.State, "pending": pending, "manual": manual})
+	if manual && req.By != RequestReadyForReview {
+		e.toastManualRequest(repo, pr, req)
+	}
+}
+
+// manualRequestWindow dedupes the toast of a review request on a manual
+// repository (its key names the PR and the request's time).
+const manualRequestWindow = 30 * 24 * time.Hour
+
+// kindManualRequest counts those toasts in a batch summary.
+var kindManualRequest = notify.Kind{One: "review request on a manual repository", Many: "review requests on manual repositories"}
+
+// toastManualRequest tells the operator about a review request no round
+// will answer by itself (a manual repository): who asked, and the command
+// that runs the review. One toast per PR and request.
+func (e *Engine) toastManualRequest(repo store.Repo, pr store.PR, req Request) {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	asked := req.Phrase()
+	if !strings.HasPrefix(asked, "review ") {
+		asked = "review " + asked
+	}
+	title := "magnum: " + label + ": " + asked + " (manual repository)"
+	e.info(notify.Item{Key: fmt.Sprintf("request-manual:%d:%d", pr.ID, req.At.Unix()), Title: title,
+		Body: pr.URL + "\nno round starts by itself on a manual repository; `magnum review " + label + "` runs one",
+		Line: strings.TrimPrefix(title, "magnum: ") + " " + pr.URL, Kind: kindManualRequest, Window: manualRequestWindow})
 }
 
 // pendingRequest is the PR's request no round has served yet: one newer

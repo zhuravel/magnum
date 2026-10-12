@@ -3,10 +3,12 @@ package engine
 // A review the operator asks for (`magnum review`, the board's r) of a PR
 // that is pinned unpins it: `magnum open` pins the PR it restores, and a
 // later review would otherwise wait behind that pin without a word
-// (slotGate). Only the pin goes. A hold a slot guard persisted (a person's
-// changes, unpushed commits, a moved HEAD) stays, and so does every live
-// check of the next checkout (a person's agent or process in the slot): the
-// reply and the PR's wait name the guard that keeps the slot.
+// (slotGate). A fix the operator asks for (`magnum fix`, the board's f)
+// unpins it the same way (unpinFor; fix.go prepareFix). Only the pin goes. A
+// hold a slot guard persisted (a person's changes, unpushed commits, a moved
+// HEAD) stays, and so does every live check of the next checkout (a
+// person's agent or process in the slot): the reply and the PR's wait name
+// the guard that keeps the slot.
 
 import (
 	"context"
@@ -21,7 +23,7 @@ import (
 
 // Event kinds of a pin: magnum open pins the PR it restores (pr.opened),
 // magnum pin and magnum slots pin pin it (pr.pinned), magnum unpin and a
-// review request unpin it (pr.unpinned).
+// review or fix request unpin it (pr.unpinned).
 const (
 	evPROpened   = "pr.opened"
 	evPRPinned   = "pr.pinned"
@@ -29,48 +31,27 @@ const (
 )
 
 // unpinForReview unpins pr (and its slot) for a review the operator asked
-// for. note is what the reply says about it ("unpinned review1 (pinned by
-// magnum open at 12:35) to review it", "" when nothing was pinned); held is
-// why the slot still cannot take the round ("slot review1 is held:
-// dirty_worktree (magnum unpin)", "" when nothing holds it), which is also
-// recorded as the PR's gate, so its wait names the guard until the next
-// dispatch looks again.
+// for (unpinFor). note is what the reply says about it ("unpinned review1
+// (pinned by magnum open at 12:35) to review it", "" when nothing was
+// pinned); held is why the slot still cannot take the round ("slot review1
+// is held: dirty_worktree (magnum unpin)", "" when nothing holds it), which
+// is also recorded as the PR's gate, so its wait names the guard until the
+// next dispatch looks again.
 func (e *Engine) unpinForReview(ctx context.Context, repo store.Repo, pr store.PR) (note, held string) {
 	slot, has, err := e.slotOf(ctx, pr.ID)
 	if err != nil {
 		e.log.Warn("review request: the PR's slot", "pr", pr.ID, "err", err)
 		return "", ""
 	}
-	if !pr.Pinned && !(has && slot.Pinned) {
+	if !isPinned(pr, slot, has) {
 		if has && deref(slot.HoldReason) != "" {
 			return "", slotHeldReason(slot)
 		}
 		return "", ""
 	}
-	subject := prSubject(repo, pr.Number)
-	by, at := e.pinOrigin(ctx, subject)
-	what := "the PR"
-	if has {
-		what = slot.Name
-	}
-	if by != "" {
-		note = fmt.Sprintf("unpinned %s (pinned by %s at %s) to review it", what, by, pastClock(at, e.now()))
-	} else {
-		note = fmt.Sprintf("unpinned %s to review it", what)
-	}
-	if pr.Pinned {
-		if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", false) }); err != nil {
-			return fmt.Sprintf("could not unpin %s: %v (`magnum unpin %s#%d`)", what, err, repo.FullName(), pr.Number), ""
-		}
-	}
-	if has && slot.Pinned && e.d.Slots != nil {
-		if err := e.d.Slots.ClearPin(ctx, slot); err != nil {
-			return fmt.Sprintf("could not unpin %s: %v (`magnum unpin %s#%d`)", what, err, repo.FullName(), pr.Number), ""
-		}
-	}
-	e.event(ctx, "info", subject, evPRUnpinned, "magnum review: "+note, map[string]any{"by": "magnum review", "slot": slot.Name})
-	if has {
-		held = e.reviewSlotHold(ctx, slot)
+	note, held, err = e.unpinFor(ctx, repo, pr, slot, has, "magnum review", "review")
+	if err != nil {
+		return err.Error(), ""
 	}
 	if held != "" {
 		e.noteGate(ctx, pr.ID, gate{reason: WaitSlot, text: held})
@@ -78,12 +59,61 @@ func (e *Engine) unpinForReview(ctx context.Context, repo store.Repo, pr store.P
 	return note, held
 }
 
-// reviewSlotHold runs the slot's guard after the pin went: "" when it lets a
-// round in, else why it does not, in the words dispatch uses for a held slot
-// (slotGate) or, for a live hold (a person's agent or process in the slot),
-// the guard's own. A guard that could not look (herdr unreachable) is left
-// to the round's checkout.
-func (e *Engine) reviewSlotHold(ctx context.Context, slot store.Slot) string {
+// isPinned reports whether pr or its slot (has: it has one) is pinned.
+func isPinned(pr store.PR, slot store.Slot, has bool) bool { return pr.Pinned || (has && slot.Pinned) }
+
+// unpinFor takes the pin off pr and off its slot (has: it has one) for what
+// the operator asked for: by is the command ("magnum review", "magnum fix"),
+// which the pr.unpinned event names, and verb what it does ("review",
+// "fix"). Then it runs the slot's guard (unpinnedSlotHold). note is what the
+// reply says ("unpinned review1 (pinned by magnum open at 12:35) to fix
+// it"), held why the slot still cannot take the work ("" when nothing holds
+// it), and err an unpin that failed, in a sentence that names `magnum
+// unpin`.
+func (e *Engine) unpinFor(ctx context.Context, repo store.Repo, pr store.PR, slot store.Slot, has bool, by, verb string) (note, held string, err error) {
+	what, origin := e.pinnedWhat(ctx, repo, pr, slot, has)
+	failed := func(err error) error {
+		return fmt.Errorf("could not unpin %s: %w (`magnum unpin %s#%d`)", what, err, repo.FullName(), pr.Number)
+	}
+	if pr.Pinned {
+		if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", false) }); err != nil {
+			return "", "", failed(err)
+		}
+	}
+	if has && slot.Pinned && e.d.Slots != nil {
+		if err := e.d.Slots.ClearPin(ctx, slot); err != nil {
+			return "", "", failed(err)
+		}
+	}
+	note = "unpinned " + what + origin + " to " + verb + " it"
+	e.event(ctx, "info", prSubject(repo, pr.Number), evPRUnpinned, by+": "+note, map[string]any{"by": by, "slot": slot.Name})
+	if has {
+		held = e.unpinnedSlotHold(ctx, slot)
+	}
+	return note, held, nil
+}
+
+// pinnedWhat is what an unpin of pr takes the pin off, its slot (has: it
+// has one) or else "the PR", and origin who pinned it when, as a reply says
+// it (" (pinned by magnum open at 12:35)"; "" when the pin events do not
+// say: pinOrigin).
+func (e *Engine) pinnedWhat(ctx context.Context, repo store.Repo, pr store.PR, slot store.Slot, has bool) (what, origin string) {
+	what = "the PR"
+	if has {
+		what = slot.Name
+	}
+	if by, at := e.pinOrigin(ctx, prSubject(repo, pr.Number)); by != "" {
+		origin = fmt.Sprintf(" (pinned by %s at %s)", by, pastClock(at, e.now()))
+	}
+	return what, origin
+}
+
+// unpinnedSlotHold runs the slot's guard after the pin went: "" when it lets
+// a round or a fixer in, else why it does not, in the words dispatch uses for
+// a held slot (slotGate) or, for a live hold (a person's agent or process in
+// the slot), the guard's own. A guard that could not look (herdr
+// unreachable) is left to the round's checkout or the fix job's guard.
+func (e *Engine) unpinnedSlotHold(ctx context.Context, slot store.Slot) string {
 	var live error
 	if e.d.Slots != nil && !e.d.DryRun {
 		live = e.d.Slots.Guard(ctx, slot)

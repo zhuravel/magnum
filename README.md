@@ -645,7 +645,10 @@ directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files al
 `magnum review` still runs it. A watch's `manual_repos` (names of repositories it covers, without owner
 or pattern, such as `["example"]`) keeps them on the board, in `magnum prs`, the status and the retro,
 but starts no round there on its own: not for a new PR, a push or a review request on GitHub. Their PRs
-read "skipped · manual"; `magnum review`, the board's `r`/`R` and the picker review one. A PR whose base
+read "skipped · manual"; `magnum review`, the board's `r`/`R` and the picker review one. A review request
+on such a repository is still recorded: its `pr.review_requested` event says "manual repository: no round
+starts by itself; `magnum review <owner/repo#N>` runs one", and one toast per request names who asked
+("magnum: talkable/example#12: review requested by alice (manual repository)"). A PR whose base
 branch name has anything but letters, digits, `.`, `_`, `/` and `-` (or `..`, or a leading `-`) is never
 reviewed: the judge prompts put `origin/<base>` into a git command when the merge base is unknown, and git
 allows `$`, `|`, `&` and parentheses in a branch name that anyone who can push may create. The poll makes
@@ -1379,8 +1382,12 @@ design-level ones, a red CI the fixer could not clear, and the merge.
 Start a loop by hand with `magnum fix <pr>`, or press `f` on the PR board. Both ask y/N first. Only your own
 PRs qualify, because the fixer pushes and replies as you. The daemon answers with a refusal, in one sentence,
 for a PR Magnum has not reviewed at its current head, a review that found nothing, a PR someone else wrote, a
-PR whose branch lives in a fork, a PR with a round in flight, a pinned slot or a snooze, a PR whose loop
-already runs, and a watch without a fix role. The command refuses inside a review agent's pane too.
+PR whose branch lives in a fork, a PR with a round in flight or a snooze, a PR whose loop already runs,
+and a watch without a fix role. The command refuses inside a review agent's pane too. A pinned PR (`magnum
+open` pins the PR it restores, `magnum pin` too) is unpinned by the fix, as by a review: the answer and a
+`pr.unpinned` event say who pinned it, the board's y/N says "pinned: the fix unpins it", and a hold the
+slot's guards keep (a person's changes, their agent in the slot) still refuses, naming the guard. Autofix
+and a loop's next cycle never unpin: a pin holds them as it holds every automatic round.
 
 One cycle of a loop has four steps.
 
@@ -1463,6 +1470,12 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
 - **Ended.** GitHub closed the PR, or you pushed a newer head, before the next cycle started. The loop ends
   quietly with a `fix.ended` event, and your push gets its own review.
 
+A re-review whose judge turn a usage limit or a lost login cuts short after the judge was prompted is not
+over: Magnum continues that turn once the pause lifts, as for any round. The loop waits for it in phase
+reviewing (a `fix.waiting` event, no toast), and the continued turn's review decides the loop as above. A
+pause before the judge was prompted continues no turn: the loop ends with a `fix.failed` event ("the
+re-review did not post (usage_limit)"), and the round starts over once the pause lifts.
+
 **Configuration.** Three `[pipeline]` keys set the job, and a `[[watch]]` may set its own of each.
 
 ```toml
@@ -1493,8 +1506,8 @@ out, as the board's does.
   flags and on its card. The dashboard shows the fixer's pane like any agent's.
 - `magnum status <pr>` prints a `fix:` line with the cycle, the cap, who started the loop and the report's
   path, or `off since 12:30 (magnum fix --off)`. `magnum prs --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
-- `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.needs_you`, `fix.capped`,
-  `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
+- `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.needs_you`,
+  `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.
   `magnum doctor` checks that the fix skill and prompt resolve and that the identity the fix role acts as is
   a `gh` identity whose login works, one line per identity when watches poll as different ones.
@@ -1528,7 +1541,7 @@ out, as the board's does.
 | `magnum learn [--review [--reason …] \| --propose \| --revert <version> [--reason …]] [--json]` | The self-improving loop (see Self-improving loop): the landed skill versions with what their reviews did (and how many `origin/master` does not hold yet), the proposals that wait for the gate, the landing or you, the last failed and invalid ones and when the editor runs next. `--propose` asks the daemon for a skill edit now (refused while one runs or a proposal waits, naming it); `--review` shows the oldest held proposal (its inputs, the diff of each file, its design-log entry, the gate's table) and lands (y) or rejects (n, `--reason` says why) it; `--revert` proposes restoring the files a landed version changed as they were before it, held for `--review`. |
 | `magnum debt [<repo>] [--json]` | Bugs found next door: the P1 and P2 problems the judge proved at a PR's head in or near its changes but did not post because the PR did not bring them, across PRs, newest first and once per path and title, with the PR and day it was found (security ones appear only here). Rows recorded before findings had titles show the path and reason only. |
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--replies] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--replies` has the judge alone re-decide the replies on Magnum's review now, answering in the threads unless its verdict changes (a head Magnum reviewed; see the replies under Re-reviews). `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a head Magnum already reviewed (no new commits) only the judge runs, to re-decide its earlier findings from the replies; `--role`, `--simplify` and `--fresh` keep the full round. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. |
-| `magnum fix <url\|owner/repo#N\|repo#N\|N> [--off \| --on] [--wait] [--timeout 2h] [--dry-run] [--json] [--yes]` | Fix Magnum's findings on your own PR now (see Fixing your own PRs). The fixer, the fix role (`claude-fix` by default), works in the PR's slot as you. It fixes the findings of Magnum's review on the current head, answers the review's threads, pushes and writes a report. Magnum then reviews the push and goes on while findings remain, up to `[pipeline] fix_cycles` cycles. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a PR Magnum has not reviewed at its current head, a review without findings, a PR that is not yours or lives in a fork, a round in flight, a pinned slot, a snooze, a loop that already runs and a watch without a fix role. A review agent's pane is refused. `--wait` follows the loop and says how it ended: exit 0 for "clean after N fix cycles" and "pushed nothing", exit 1 for "needs you", "aborted" and "ended". `--timeout` (default `2h`, `0` = no limit) stops following after that long while the loop goes on. `--off` takes the PR out of autofix and `--on` puts it back (both ask y/N, start no loop and exclude `--wait`). `--dry-run` only asks what would happen. `magnum abort` ends a loop. Board keys `f` and `F`. |
+| `magnum fix <url\|owner/repo#N\|repo#N\|N> [--off \| --on] [--wait] [--timeout 2h] [--dry-run] [--json] [--yes]` | Fix Magnum's findings on your own PR now (see Fixing your own PRs). The fixer, the fix role (`claude-fix` by default), works in the PR's slot as you. It fixes the findings of Magnum's review on the current head, answers the review's threads, pushes and writes a report. Magnum then reviews the push and goes on while findings remain, up to `[pipeline] fix_cycles` cycles. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a PR Magnum has not reviewed at its current head, a review without findings, a PR that is not yours or lives in a fork, a round in flight, a snooze, a loop that already runs and a watch without a fix role. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it, as for `magnum review`; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. A review agent's pane is refused. `--wait` follows the loop and says how it ended: exit 0 for "clean after N fix cycles" and "pushed nothing", exit 1 for "needs you", "aborted" and "ended". `--timeout` (default `2h`, `0` = no limit) stops following after that long while the loop goes on. `--off` takes the PR out of autofix and `--on` puts it back (both ask y/N, start no loop and exclude `--wait`). `--dry-run` only asks what would happen. `magnum abort` ends a loop. Board keys `f` and `F`. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr (its judge's; the fixer's while a fix loop's fixer works; any role's with `--role`) and reveal the herdr client of `[terminal] session` (default `default`) in `[terminal] app` (Terminal, iTerm2, Ghostty, WezTerm, or `custom` with a `launcher` template): focus the tab that runs it, or open a new one. When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. With `[terminal] reveal_on_attention = true` the daemon does the same by itself for a PR that needs you (an agent waiting on a dialog, a round that needs attention), at most once in 30 minutes for the same agent or cause. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. `--ansi` keeps the pane's colors and text styles only: links, clipboard writes, cursor moves and screen erases are dropped, and both modes show a control character as a space. |
 | `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, the rounds one session serves (`max_session_rounds`), capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |

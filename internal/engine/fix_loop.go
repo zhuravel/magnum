@@ -7,9 +7,11 @@ package engine
 // review finds something and cycles are left (fix_cycles), and ends
 // otherwise: done when the review found nothing, as needs attention at the
 // cap, after findings the fixer left to the author, or when the re-review
-// did not post. A PR without a loop gets one by itself after a review with
-// findings when its watch says autofix = "own", the PR is the operator's
-// and it was not switched out of autofix (`magnum fix --off`).
+// did not post (a re-review whose judge turn a usage or login pause cut
+// short is continued later, and the loop waits for that continue). A PR
+// without a loop gets one by itself after a review with findings when its
+// watch says autofix = "own", the PR is the operator's and it was not
+// switched out of autofix (`magnum fix --off`).
 
 import (
 	"cmp"
@@ -85,14 +87,21 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 // cycles are left, and end it as needs attention at the cap; a next cycle
 // that cannot start ends it as needs attention with why, unless the PR moved
 // on since the re-review (closed, or a newer head the operator pushed:
-// loopMovedOn), which ends it quietly with fix.ended. A review that
-// requests changes with no new findings found something: the earlier
-// findings it keeps open (fixRemains). raw is the loop's row as read: every
-// end acts only while the row is still that (endFixRowIf), and the next
-// cycle replaces only that row (claimFixRow), so a stop that ended the loop
-// meanwhile wins quietly (errFixLoopGone). A daemon that drains for a
-// restart holds the next cycle: the row stays in phase reviewing, and the
-// restart's recovery goes on with it (recoverReviewingLoop).
+// loopMovedOn), which ends it quietly with fix.ended. A re-review whose
+// judge turn a usage or login pause cut short after its judge was prompted
+// did not end: dispatch continues that turn once the pause lifts
+// (pauseContinues), so the loop stays in phase reviewing with a fix.waiting
+// event and the continued round's end decides it; a continued turn that
+// never comes back ends the loop as any waiting loop ends (an abort or an
+// ignore, stopPR; the next start's recovery, recoverReviewingLoop, once the
+// PR moved on). A review that requests changes with no new findings found
+// something: the earlier findings it keeps open (fixRemains). raw is the
+// loop's row as read: every end acts only while the row is still that
+// (endFixRowIf), and the next cycle replaces only that row (claimFixRow), so
+// a stop that ended the loop meanwhile wins quietly (errFixLoopGone). A
+// daemon that drains for a restart holds the next cycle: the row stays in
+// phase reviewing, and the restart's recovery goes on with it
+// (recoverReviewingLoop).
 func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, res pipeline.RoundResult) {
 	st := job.state
 	found := roundFindings(res)
@@ -101,6 +110,11 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 		left = "earlier findings still open"
 	}
 	switch {
+	case e.pauseContinues(ctx, job.pr, res.Outcome):
+		e.log.Info(fmt.Sprintf("fix: the re-review's turn continues after a %s pause; the loop waits for it", res.Outcome),
+			"subject", job.subject(), "cycle", st.Cycle)
+		e.event(ctx, "info", job.subject(), "fix.waiting",
+			fmt.Sprintf("the fix loop waits: the re-review's judge turn paused (%s) and continues after the pause", res.Outcome), job.loopData())
 	case res.Outcome != pipeline.OutcomePosted:
 		msg := fmt.Sprintf("fix loop ended: the re-review did not post (%s)", cmp.Or(res.Outcome, pipeline.OutcomeError))
 		if len(st.NeedsYou) > 0 {

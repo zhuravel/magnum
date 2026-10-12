@@ -51,7 +51,9 @@ func newFixCmd(c *Context) *cobra.Command {
 			"to [pipeline] fix_cycles. A loop ends clean, or needing you when the fixer leaves findings to you, the cap is "+
 			"reached or a run fails. The daemon refuses, with the reason as its answer, a PR magnum has not reviewed at its "+
 			"current head, a review without findings, a PR that is not yours or lives in a fork, a round in flight, a loop "+
-			"already running and a watch without a fix role. A terminal asks y/N first (--yes does not; there --json needs "+
+			"already running and a watch without a fix role. A pinned PR (magnum open, magnum pin) is unpinned by the fix, as "+
+			"by a review; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. "+
+			"A terminal asks y/N first (--yes does not; there --json needs "+
 			"--yes), and a review agent's pane is refused. --wait follows the loop until its end and says how it ended "+
 			"(clean after N fix cycles, needs you, pushed nothing, aborted or ended); --timeout (default 2h, 0 = no limit) "+
 			"stops following it after that long, and the loop goes on; `magnum abort` stops a loop. --off takes the PR out "+
@@ -151,6 +153,9 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		out.Payload = &payload
 		b, _ := json.Marshal(payload)
 		fmt.Fprintf(fixProgress(c, o), "dry run: the daemon is asked what would happen (request %s %s); nothing is changed\n", engine.ReqFix, b)
+	}
+	if t.PR.Pinned && !o.off && !o.on {
+		fmt.Fprintf(fixProgress(c, o), "%s is pinned: this fix unpins it (a person's changes in its slot still hold the fix)\n", label)
 	}
 	if code, ok := fixConfirm(ctx, c, d, label, o); !ok {
 		return code

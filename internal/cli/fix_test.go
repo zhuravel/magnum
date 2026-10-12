@@ -312,6 +312,24 @@ func TestFixDryRunPrintsTheRequest(t *testing.T) {
 	}
 }
 
+// A pinned PR (magnum open, magnum pin) is unpinned by the fix, as by a
+// review: the command says so before it asks or sends anything.
+func TestFixSaysItUnpinsAPinnedPR(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", true) }); err != nil {
+		t.Fatal(err)
+	}
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "dry run: would start fixing talkable/talkable#5")
+	}
+	if code := h.cmd("fix", "5", "--dry-run"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "talkable#5 is pinned: this fix unpins it")
+}
+
 // --off and --on ask their own y/N, send the payload's Off or On, and exclude
 // --wait (they start no loop to follow) and each other.
 func TestFixOffAndOnQueueTheirRequests(t *testing.T) {

@@ -63,20 +63,24 @@ func (e *Engine) refundReason(ctx context.Context, job *roundJob, res pipeline.R
 // turnContinues reports whether the round's judge turn goes on after this
 // ending, so the round is not over and refundReason does not apply: a round
 // a shutdown stopped (not `magnum abort` or `ignore`) and a usage or login
-// pause continue the turn once its judge was prompted (judgePrompted:
-// recovery and dispatch pause and continue such a PR). The continue is the
-// same round, counted once at its start (roundJob.continued).
+// pause (pauseContinues) continue the turn once its judge was prompted
+// (judgePrompted: recovery and dispatch pause and continue such a PR). The
+// continue is the same round, counted once at its start
+// (roundJob.continued).
 func (e *Engine) turnContinues(ctx context.Context, job *roundJob, pr store.PR, outcome string, cancelled bool) bool {
-	switch outcome {
-	case pipeline.OutcomeStopped:
-		if !cancelled || e.stopOrdered(job.pr.ID) {
-			return false
-		}
-	case pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired:
-	default:
-		return false
+	if outcome == pipeline.OutcomeStopped {
+		return cancelled && !e.stopOrdered(job.pr.ID) && e.judgePrompted(ctx, pr)
 	}
-	return e.judgePrompted(ctx, pr)
+	return e.pauseContinues(ctx, pr, outcome)
+}
+
+// pauseContinues reports whether a round that ended with outcome is a judge
+// turn a pause cut short that dispatch continues once the pause lifts: a
+// usage or login pause after the judge of pr (as the round left it) was
+// prompted. The continued round ends like any round, through the hook after
+// it (fixAfterRound), so a fix loop waits for it (continueFixLoop).
+func (e *Engine) pauseContinues(ctx context.Context, pr store.PR, outcome string) bool {
+	return (outcome == pipeline.OutcomeUsageLimit || outcome == pipeline.OutcomeLoginRequired) && e.judgePrompted(ctx, pr)
 }
 
 // stopOrdered reports whether `magnum abort` or `ignore` stopped the PR's

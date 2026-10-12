@@ -220,6 +220,7 @@ func TestActionQuestionsSayWhatYWillDo(t *testing.T) {
 		{"approve the reviewed head", actApprove, nil, "Approve talkable#5 at abcdef1? magnum found 1 P1"},
 		{"review a pinned PR", actReview, func(r *PRBoardRow) { r.Pinned = true },
 			"Review talkable#5 now (no new commits since head abcdef1 was reviewed 1h ago by zhuravel, pinned: the review unpins it)?"},
+		{"fix a pinned PR", actFix, func(r *PRBoardRow) { r.Pinned = true }, "Fix the findings of talkable#5 as you (pinned: the fix unpins it)?"},
 		{"release", actRelease, nil, "Release talkable#5: hand back its slot now, sessions parked and worktree reset?"},
 	} {
 		r := boardActRow(actPR(c.edit), "talkable#5", boardNow)

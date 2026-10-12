@@ -425,6 +425,9 @@ func actionQuestion(a rowAct, r actRow) string {
 		}
 		return muteQuestion(l, false)
 	case actFix:
+		if r.pinKnown && r.pinned { // the daemon unpins it, as for a review (its slot's guards still hold a person's changes)
+			return "Fix the findings of " + l + " as you (pinned: the fix unpins it)?"
+		}
 		return "Fix the findings of " + l + " as you?"
 	case actFixOff:
 		if r.fixOff {

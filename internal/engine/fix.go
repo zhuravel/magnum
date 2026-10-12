@@ -118,6 +118,21 @@ func (j *fixJob) findings() string {
 	return "open earlier findings"
 }
 
+// fixPin is what prepareFix does about a pinned PR or slot.
+type fixPin int
+
+const (
+	// fixPinRefuses: autofix and a loop's next cycle, which nobody asked for
+	// just now, refuse a pinned slot, as a pin holds every automatic round.
+	fixPinRefuses fixPin = iota
+	// fixPinUnpins: `magnum fix` takes the pin off as `magnum review` does
+	// (unpinFor); a hold a guard persisted, or one its guard finds once the
+	// pin went, still refuses.
+	fixPinUnpins
+	// fixPinWouldUnpin: a dry run of `magnum fix` says it would.
+	fixPinWouldUnpin
+)
+
 // fixRunningSentence is the refusal while a loop runs on the PR.
 func fixRunningSentence(st FixState) string {
 	return fmt.Sprintf("fixing, cycle %d of %d; `magnum abort` stops it", st.Cycle, st.Cap)
@@ -162,7 +177,7 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	}
 	var job *fixJob
 	if p.DryRun || e.d.DryRun {
-		job, err = e.prepareFix(ctx, pr, FixState{})
+		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin)
 	} else {
 		job, err = e.startFix(ctx, pr, fixBy, FixState{})
 	}
@@ -189,8 +204,10 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 // prepareFix decides whether a fix cycle may start on pr and gathers what it
 // needs; the error is the refusal, a sentence for the request's answer. prev
 // is the loop a next cycle continues (zero for a new loop, which a loop
-// already running refuses).
-func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*fixJob, error) {
+// already running refuses). pin says what a pinned PR or slot does: it
+// refuses, or, for `magnum fix`, once every other refusal passed, its pin
+// goes as for `magnum review` (the job's notes say so for the answer).
+func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
 		return nil, err
@@ -271,7 +288,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*f
 		return nil, fmt.Errorf("%s has no checkout of its reviewed head: its slot was handed back", label)
 	case slot.State != store.SlotClaimed && slot.State != store.SlotHeld:
 		return nil, fmt.Errorf("%s: slot %s is %s", label, slot.Name, slot.State)
-	case slot.Pinned:
+	case slot.Pinned && pin == fixPinRefuses:
 		return nil, fmt.Errorf("%s: slot %s is pinned (magnum unpin)", label, slot.Name)
 	case slot.HoldReason != nil:
 		return nil, fmt.Errorf("%s: %s", label, slotHeldReason(slot))
@@ -286,8 +303,25 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*f
 	if why := e.kindPauseReason(ctx, []string{role.AgentKind()}); why != "" {
 		return nil, fmt.Errorf("%s: %s", label, why)
 	}
+	var notes []string
+	switch {
+	case pin == fixPinRefuses || !isPinned(pr, slot, true):
+	case pin == fixPinWouldUnpin:
+		what, origin := e.pinnedWhat(ctx, repo, pr, slot, true)
+		notes = append(notes, "would unpin "+what+origin+" to fix it")
+	default:
+		note, held, err := e.unpinFor(ctx, repo, pr, slot, true, fixBy, "fix") // review_unpin.go
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("%s: %w", label, err)
+		case held != "":
+			return nil, fmt.Errorf("%s: %s, but %s", label, note, held)
+		}
+		pr.Pinned, slot.Pinned = false, false
+		notes = append(notes, note)
+	}
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum,
-		round: reviewRun.Round, login: src.Login(), state: prev}
+		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev}
 	if job.state.Cap == 0 {
 		job.state.Cap = e.cfg.FixCyclesFor(w)
 	}
@@ -299,14 +333,20 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*f
 
 // startFix starts a fix cycle on pr under prepareFix's refusals: a new loop
 // (prev zero, started by by: "magnum fix", "autofix") at cycle 1 of the
-// watch's fix_cycles, or the next cycle of the loop prev waits in. The job
-// reserves the PR (roundHandle.fix), writes the loop's row in phase fixing
-// and runs on a goroutine of its own under the reservation (runFix), whose
-// context derives from ctx: pass the daemon's, never a round's (its
-// reservation's end cancels it). It returns a copy of the job as it
-// started, for the caller's answer (the job's own goes on changing).
+// watch's fix_cycles, or the next cycle of the loop prev waits in. A new
+// loop `magnum fix` asks for unpins a pinned PR (fixPinUnpins); autofix and
+// a next cycle refuse the pin (fixPinRefuses). The job reserves the PR
+// (roundHandle.fix), writes the loop's row in phase fixing and runs on a
+// goroutine of its own under the reservation (runFix), whose context
+// derives from ctx: pass the daemon's, never a round's (its reservation's
+// end cancels it). It returns a copy of the job as it started, for the
+// caller's answer (the job's own goes on changing).
 func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixState) (*fixJob, error) {
-	job, err := e.prepareFix(ctx, pr, prev)
+	pin := fixPinRefuses
+	if by == fixBy && prev.Cycle == 0 {
+		pin = fixPinUnpins
+	}
+	job, err := e.prepareFix(ctx, pr, prev, pin)
 	if err != nil {
 		return nil, err
 	}

@@ -460,6 +460,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   7-9 ms under load). Rejected: an index on gh_state (a migration, and the repository's rows are already
   found through (repo_id, number)).
 
+- **A review request on a manual repository says that no round starts** (2026-10-12). `recordRequest`
+  wrote "the next round skips the timing rules and the daily cap" for every pending request, but a
+  repository in its watch's `manual_repos` starts no round on a request by design (eligibility rejects the
+  PR); an author asked for a review after a push and the event promised a round that never came, with
+  nobody told (1 of 19 requests in a day). Now a pending request there says "manual repository: no round
+  starts by itself; `magnum review <owner/repo#N>` runs one" (the event's data carries `manual`), and a
+  person's request (a draft marked ready is no one's ask) raises one info toast, "magnum: <owner/repo>#<N>:
+  review requested by <login> (manual repository)", keyed by the PR and the request's time. Dispatch is
+  unchanged: whether a request should override `manual_repos` is the operator's call.
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and
@@ -1138,6 +1148,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   plugins; a config that cannot be decoded is one WARN line for both (it was one each) and leaves both on.
   The stamp stays per kind, as the pause is: a `CODEX_HOME` only a role's own `env` sets is read by that
   role's launches and not by the stamp. The args and their order are unchanged.
+
+- **A fix loop waits for a re-review whose judge turn a pause cut short** (2026-10-12). The loop's hook
+  after a round (`fixAfterRound`, `continueFixLoop`) ended the loop for every outcome but posted, while a
+  usage limit or a lost login after the judge was prompted is a turn the engine continues
+  (`turnContinues`: the PR pauses and dispatch continues the same round once the pause lifts), and a
+  judge's stall now ends as `login_required` too. So the loop's row went, a "needs attention" end was
+  recorded, and the continued turn then posted the re-review with no loop to act on it. Now such an end
+  (`pauseContinues`, the pause half of `turnContinues`, both on `judgePrompted`) keeps the row in phase
+  reviewing with a `fix.waiting` info event and the loop's data, and the continued round's end comes
+  back through the same hook (dispatch launches it like any round), which decides the loop. A continued
+  turn that never comes back ends the loop as any waiting loop ends: `magnum abort` or `ignore` of the
+  paused PR (`stopPR`), or the next start's recovery once the PR moved on (`recoverReviewingLoop`). A
+  pause before the judge was prompted still ends the loop: that round starts over, it is no continued
+  turn. Rejected: keeping the loop through every pause (a round that starts over is a new review the loop
+  did not ask for) and a new end path for a continued turn that never returns.
+- **`magnum fix` unpins a pinned PR, as `magnum review` does** (2026-10-12). `prepareFix` refused a pinned
+  slot ("slot X is pinned (magnum unpin)"), while a review the operator asks for takes the pin off
+  (`unpinForReview`), so the board's `f` failed twice on a PR `magnum open` had pinned 30 hours earlier and
+  worked only after a manual `magnum unpin`, two hours after the first try. Now a new loop `magnum fix`
+  asks for (`fixPinUnpins`; startFix derives it from `fixBy` and a zero previous state) takes the pin off
+  the PR and its slot once every other refusal passed, through the helper the review now shares
+  (`unpinFor`: the `pr.unpinned` event names the command, "magnum fix: unpinned review1 (pinned by magnum
+  open at 12:35) to fix it", and the answer carries the note), then runs the slot's guard: a hold a guard
+  persisted still refuses before anything is unpinned, and a live hold the guard finds once the pin went
+  refuses with the guard's words ("unpinned review1 ... to fix it, but slot review1 is held:
+  foreign_agent: ..."). A dry run says it would unpin. The board's y/N for `f` on a pinned PR says
+  "pinned: the fix unpins it", and `magnum fix` prints that it unpins it. Autofix and a loop's next cycle
+  keep refusing (`fixPinRefuses`): nobody asked for them just now, and a pin holds every automatic round.
+  Rejected: recording the PR's gate after a live hold, as the review does (no round waits for it).
 
 ## Screens and commands
 

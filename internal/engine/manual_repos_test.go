@@ -69,6 +69,44 @@ func TestManualRepositoryReviewsOnlyOnRequest(t *testing.T) {
 	reqWantRounds(t, h, 1)
 }
 
+// A review request on a manual repository starts no round, so its event
+// says so and names the command that runs one instead of promising the next
+// round, and one toast tells the operator who asked; the same request seen
+// again toasts nothing more. Dispatch is unchanged: the PR stays ineligible.
+func TestAReviewRequestOnAManualRepositorySaysNoRoundStarts(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.Watches[0].ManualRepos = []string{"talkable"}
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick() // first sync: #1 baseline
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"})
+	h.tick()
+	wantManual(t, h, 2)
+	h.flush()
+
+	h.advance(time.Minute)
+	ask := reqAsk(h, "alice", askedPoll)
+	reqPoll(h, prSpec{n: 2, head: "b1", requests: []github.ReviewRequestEvent{ask}})
+	wantManual(t, h, 2)
+	evs := reqEvents(t, h)
+	want := "review requested from zhuravel by alice; manual repository: no round starts by itself; " +
+		"`magnum review talkable/talkable#2` runs one"
+	if len(evs) != 1 || evs[0].Message != want {
+		t.Fatalf("pr.review_requested events = %+v, want one saying %q", evs, want)
+	}
+	h.flush()
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b1", requests: []github.ReviewRequestEvent{ask}}) // the same request again
+	h.flush()
+	if got := toastsWith(h, "magnum: talkable/talkable#2: review requested by alice (manual repository)"); len(got) != 1 {
+		t.Fatalf("toasts = %v, want one for the request", h.nh.shown())
+	}
+	h.advance(10 * time.Minute)
+	h.tick()
+	reqWantRounds(t, h, 0)
+	wantManual(t, h, 2)
+}
+
 // A new PR of a manual repository goes in ineligible on the poll that first
 // sees it: the classification of a new PR knows its repository, so it is
 // neither inserted queued nor logged as a PR of no repository.

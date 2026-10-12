@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -389,6 +390,116 @@ func TestAReReviewThatDidNotPostEndsTheLoop(t *testing.T) {
 			h.wantToasts("needs attention", 1)
 		})
 	}
+}
+
+// pausedReReview makes h's next round end with outcome (a usage limit or a
+// lost login) as the pipeline ends a judge turn the pause cut short: with
+// prompted, its judge run of the round was sent and failed with outcome (a
+// turn the engine continues once the pause lifts), else no judge was
+// prompted. A continue of that turn runs then (the loop's own reviews).
+func pausedReReview(h *harness, outcome string, prompted bool) {
+	h.rd.mu.Lock()
+	defer h.rd.mu.Unlock()
+	then := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if in.Kind == pipeline.KindContinue {
+			return then(in)
+		}
+		round, err := nextRound(h, in.PR.ID)
+		if err != nil {
+			return failRound(h.t, err)
+		}
+		res := pipeline.RoundResult{Outcome: outcome, Round: round, Error: "judge pane: " + outcome,
+			Pause: &pipeline.Pause{Kind: outcome, Tool: agents.KindCodex, Until: h.clock.Now().Add(time.Hour)}}
+		if !prompted {
+			return res, nil
+		}
+		run, err := h.st.CreateRun(h.ctx, store.Run{PRID: in.PR.ID, Round: round, Role: "codex-judge", Kind: in.Kind,
+			TargetSHA: in.TargetSHA, Identity: in.PR.Identity, ReviewerLogin: "talkable[bot]", State: store.RunPending, PromptText: "judge"})
+		if err == nil {
+			sent := h.clock.Now()
+			err = h.st.TransitionRun(h.ctx, run.ID, nil, store.RunFailed, func(u *store.RunUpdate) {
+				u.Set("submitted_at", sent)
+				u.Set("outcome", outcome)
+				u.Set("error", res.Error) // as the pipeline finishes a paused run
+			})
+		}
+		if err != nil {
+			return failRound(h.t, err)
+		}
+		res.JudgeRunID = run.ID
+		return res, nil
+	}
+}
+
+// A re-review whose judge turn pauses on a usage limit or a lost login after
+// the judge was prompted is not over: the engine continues that turn once the
+// pause lifts, and the continued round's end decides the loop. Meanwhile the
+// loop waits in phase reviewing with a fix.waiting event, no fix.failed and
+// nobody asked; here the continued turn posts a finding and the loop takes
+// its next cycle. A pause before the judge was prompted continues no turn,
+// so it still ends the loop as a re-review that did not post.
+func TestAReReviewThatPausesKeepsTheFixLoop(t *testing.T) {
+	for _, outcome := range []string{pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired} {
+		t.Run(outcome, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
+			pausedReReview(h, outcome, true)
+			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+
+			h.wantState(2, store.PRPaused)
+			if st, ok := h.fixStateOf(2); !ok || st.Phase != FixPhaseReviewing || st.Cycle != 1 || st.Head != fixPushed {
+				t.Fatalf("fix state = %+v, %v; want the loop waiting for its re-review", st, ok)
+			}
+			if ev, ok := h.fixEvent("fix.failed"); ok {
+				t.Fatalf("the pause failed the loop: %q", ev.Message)
+			}
+			ev, ok := h.fixEvent("fix.waiting")
+			if want := "the fix loop waits: the re-review's judge turn paused (" + outcome + ") and continues after the pause"; !ok || ev.Message != want {
+				t.Errorf("fix.waiting = %q, %v; want %q", ev.Message, ok, want)
+			}
+			var data map[string]any
+			if err := json.Unmarshal(ev.Data, &data); err != nil || data["by"] != "magnum fix" || data["cycle"] != float64(1) {
+				t.Errorf("fix.waiting data = %s, want the loop's", ev.Data)
+			}
+			h.wantToasts("needs attention", 0)
+
+			// The pause lifts: the turn continues and posts, and the loop goes on.
+			h.advance(2 * time.Hour)
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+			h.tick()
+			if ins := h.rd.all(); ins[len(ins)-1].Kind != pipeline.KindContinue {
+				t.Fatalf("the round after the pause is a %s round, want the continue", ins[len(ins)-1].Kind)
+			}
+			if n := len(h.fixRuns(pr.ID)); n != 2 {
+				t.Fatalf("fix runs = %d, want the next cycle's", n)
+			}
+			if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 || st.Phase != FixPhaseReviewing || st.Head != fixPushed2 {
+				t.Errorf("fix state = %+v, %v; want cycle 2 waiting for the re-review of %s", st, ok, fixPushed2)
+			}
+			if _, ok := h.fixEvent("fix.failed"); ok {
+				t.Error("the loop failed after its continued re-review")
+			}
+			h.wantToasts("needs attention", 0)
+		})
+	}
+	t.Run("no judge prompted", func(t *testing.T) {
+		h, git := fixHarness(t)
+		loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"))
+		pausedReReview(h, pipeline.OutcomeUsageLimit, false)
+		reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+
+		if _, ok := h.fixStateOf(2); ok {
+			t.Error("the loop waits for a turn that does not continue")
+		}
+		ev, ok := h.fixEvent("fix.failed")
+		if want := "fix loop ended: the re-review did not post (usage_limit)"; !ok || ev.Message != want {
+			t.Errorf("fix.failed = %q, %v; want %q", ev.Message, ok, want)
+		}
+		if _, ok := h.fixEvent("fix.waiting"); ok {
+			t.Error("fix.waiting for a turn that does not continue")
+		}
+	})
 }
 
 // A daemon that stops while the loop's re-review runs leaves the loop for
