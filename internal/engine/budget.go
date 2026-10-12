@@ -60,6 +60,8 @@ func (e *Engine) readBudget(ctx context.Context) (usage.Snapshot, bool) {
 			e.usageSnap = &snap
 		case errors.Is(err, usage.ErrNoData):
 			e.log.Debug("codex usage: no snapshot", "err", err)
+		case isStop(ctx, err): // the daemon is stopping: not an error to remember
+			e.log.Debug("codex usage", "err", err)
 		default:
 			if e.changed("usage.codex", err.Error()) {
 				e.log.Warn("codex usage", "err", err)
@@ -90,6 +92,8 @@ func (e *Engine) readPast(ctx context.Context, now time.Time) {
 		e.usagePast = &past
 	case errors.Is(err, usage.ErrNoData):
 		e.log.Debug("codex usage a day ago: no snapshot", "err", err)
+	case isStop(ctx, err):
+		e.log.Debug("codex usage a day ago", "err", err)
 	default:
 		if e.changed("usage.codex_past", err.Error()) {
 			e.log.Warn("codex usage a day ago", "err", err)
@@ -294,7 +298,7 @@ func (e *Engine) notePace(ctx context.Context, snap usage.Snapshot, now time.Tim
 		Body: detail, Window: span})
 	switch first, err := e.st.ShouldSend(ctx, "usage:codex-pace-event:"+window, span); {
 	case err != nil:
-		e.log.Warn("codex pace event", "err", err)
+		e.warnUnlessStopped(ctx, err, "codex pace event")
 	case first:
 		e.event(ctx, "info", subject, "usage.pace", fmt.Sprintf("Codex budget %.0f%% used: %s", snap.Used(), detail), nil)
 	}

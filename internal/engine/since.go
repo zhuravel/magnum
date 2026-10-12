@@ -104,7 +104,7 @@ func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.R
 		}
 	}
 	if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("since_review_json", next) }); err != nil {
-		e.log.Warn("store since review", "pr", pr.ID, "err", err)
+		e.warnUnlessStopped(ctx, err, "store since review", "pr", pr.ID)
 	}
 }
 

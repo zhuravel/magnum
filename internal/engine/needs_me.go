@@ -48,7 +48,7 @@ func reviewGate(g *github.ReviewGate) *store.ReviewGate {
 func (e *Engine) noteNeedsMe(ctx context.Context) {
 	list, err := e.st.NeedsMePRs(ctx, e.cfg.CommentsWhenClean, e.cfg.SelfMatch())
 	if err != nil {
-		e.log.Warn("prs that need you", "err", err)
+		e.warnUnlessStopped(ctx, err, "prs that need you")
 		return
 	}
 	if e.needsMe == nil {

@@ -142,7 +142,7 @@ func (e *Engine) missingReports(ctx context.Context, prID int64, sum store.Revie
 	const unknown = "magnum cannot tell whether its review heard every reviewer: "
 	run, err := e.st.RunByID(ctx, sum.RunID)
 	if err != nil {
-		e.log.Warn("auto approval: the review's run", "pr", prID, "run", sum.RunID, "err", err)
+		e.warnUnlessStopped(ctx, err, "auto approval: the review's run", "pr", prID, "run", sum.RunID)
 		return unknown + "it cannot read the review's run"
 	}
 	rec, ok := pipeline.ReadRoundMissingReports(ctx, e.st, prID, run.Round)
@@ -168,7 +168,7 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
 	const what = "the review agents' instructions or hooks"
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
-		e.log.Warn("auto approval: the PR's files", "pr", pr.ID, "err", err)
+		e.warnUnlessStopped(ctx, err, "auto approval: the PR's files", "pr", pr.ID)
 		return "magnum cannot read the files it changes"
 	}
 	kinds := e.projectKinds()

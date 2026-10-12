@@ -1852,7 +1852,7 @@ func (p *prbPainter) summaryLine(width int) string {
 		return " " + p.st.Dim.Render("no pull requests yet")
 	}
 	counts := map[string]int{}
-	var stale, failing, pinned int
+	var stale, failing, pinned, pinnedClosed int
 	for _, r := range p.all {
 		counts[normState(r.State)]++
 		if r.LastReview != nil && r.LastReview.Stale {
@@ -1863,6 +1863,9 @@ func (p *prbPainter) summaryLine(width int) string {
 		}
 		if r.Pinned {
 			pinned++
+			if rowClosed(r) {
+				pinnedClosed++
+			}
 		}
 	}
 	var chips []string
@@ -1905,7 +1908,11 @@ func (p *prbPainter) summaryLine(width int) string {
 		right = append(right, p.st.Err.Render(p.g.errMark)+" "+p.pal.bold.Render(strconv.Itoa(failing))+" "+p.st.Dim.Render("failing"))
 	}
 	if pinned > 0 {
-		right = append(right, p.pinStyle().Render(p.g.pin)+" "+p.pal.bold.Render(strconv.Itoa(pinned))+" "+p.st.Dim.Render("pinned"))
+		pill := p.pinStyle().Render(p.g.pin) + " " + p.pal.bold.Render(strconv.Itoa(pinned)) + " " + p.st.Dim.Render("pinned")
+		if pinnedClosed > 0 { // a pin never lapses: it holds the slot of a PR that is gone
+			pill += p.st.Dim.Render(p.g.sep) + p.pal.bold.Render(strconv.Itoa(pinnedClosed)) + " " + p.st.Dim.Render("on closed PRs")
+		}
+		right = append(right, pill)
 	}
 	for _, b := range badgeCounts(p.all) {
 		right = append(right, p.pal.named[b.color].Render(b.text)+" "+p.pal.bold.Render(strconv.Itoa(b.n)))
@@ -1933,6 +1940,15 @@ func (p *prbPainter) summaryLine(width int) string {
 		left = next
 	}
 	return spread(left, r, width)
+}
+
+// rowClosed reports whether GitHub merged or closed the row's PR.
+func rowClosed(r PRBoardRow) bool {
+	switch strings.ToUpper(strings.TrimSpace(r.GHState)) {
+	case "MERGED", "CLOSED":
+		return true
+	}
+	return false
 }
 
 // badgeCount is how many rows carry a badge text, drawn in the color its

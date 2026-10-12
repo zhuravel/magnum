@@ -342,7 +342,7 @@ func (e *Engine) syncNotes(ctx context.Context, startup bool) {
 	}
 	repos, err := e.st.ListRepos(ctx)
 	if err != nil {
-		e.log.Warn("repository notes: list repositories", "err", err)
+		e.warnUnlessStopped(ctx, err, "repository notes: list repositories")
 		return
 	}
 	for _, repo := range repos {

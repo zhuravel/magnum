@@ -54,7 +54,7 @@ func (e *Engine) urgent(key, title, body string, window time.Duration) {
 		defer e.toastWG.Done()
 		e.safely(e.toastCtx, "urgent toast "+key, "", func() {
 			if _, err := e.d.Notifier.ToastUrgent(e.toastCtx, key, title, body, window); err != nil {
-				e.log.Warn("urgent toast failed", "key", key, "err", err)
+				e.warnUnlessStopped(e.toastCtx, err, "urgent toast failed", "key", key)
 			}
 		}, nil)
 	}()
@@ -104,7 +104,7 @@ func (e *Engine) surface(ctx context.Context) {
 	}
 	if e.batch != nil {
 		if _, err := e.batch.FlushDue(ctx); err != nil {
-			e.log.Warn("flush toasts", "err", err)
+			e.warnUnlessStopped(ctx, err, "flush toasts")
 		}
 	}
 	e.lastTabBar = e.tabBar(ctx)

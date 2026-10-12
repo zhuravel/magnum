@@ -6474,6 +6474,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   stays: what the sandbox does not reach (Redis, the network) is still no machine failure. Rejected: a read-only
   sandbox for `codex review` (Rails still boots and truncates the test databases on its own), and locking each
   spec run (they are tool calls inside Codex's own session, which magnum cannot wrap).
+- **A stop mid-tick logs no WARN for the calls it cut, and a restart's merge-base check is a probe**
+  (2026-10-12; extends "A daemon stop logs no warnings for the tick it cuts short"). The daemon restarted 29
+  times in four days (a drain for each landing), and each stop still left 14 or so WARN lines, because the
+  helper had reached the registry reads, writes and event appends only: the Codex usage read ("codex usage"
+  19 lines in the log, which also recorded "context canceled" as a changed error), "auto approvals" 15,
+  "prs that need you" 19, "review machine failures" 10 (which spent its once-an-hour slot on the stop), the
+  radar `poll.error` events (63) and the CI `poll.ci_error` events, "read schema version", the startup's
+  recovery and reclassification reads ("recovery: PRs", "baseline PRs", "waiting PRs", "ineligible PRs"),
+  "repository notes: list repositories", "notes proposals", "flush toasts", "urgent toast failed", the
+  dispatch and pool reads, and the two lines of an approval whose post the stop cut ("auto approval failed and
+  not recorded" and the `review.auto_approve_failed` event "could not approve … context canceled; tried again
+  in 5m"). They all go through `warnUnlessStopped` now (Debug when the context ended or the error is
+  `context.Canceled`, Warn otherwise; a once-an-hour gate asks `isStop` first, so a stop neither logs nor
+  uses it up). A radar or CI read the stop cut writes no poll event at all: it is no poll failure, and the
+  next live tick reports a real one as before. An approval whose post the stop cut stays `posting`, as a crash
+  would leave it, with no failed row and no event: `resumeAutoPost` of the next daemon looks for the review by
+  its marker and settles the row (the failed transition could not be written under the cancelled context
+  anyway, and the event said a retry the registry never saw). The pipeline's restart check asks `MergeBase` for
+  a head the checkout has not fetched yet and git answered exit 128 (14 WARN lines in a day): gitx now runs
+  `MergeBase` as a probe (a non-zero exit is an answer, logged at Debug, like `rev-parse` and `ls-remote`),
+  since every caller reads any error as "no base known" and the agents' project-config comparison, the one
+  place a failure matters, warns with its own line. Left as they were: `identity.unhealthy` events written
+  by a health check the stop cut (`health.go`), the pipeline's own round lines, and the fix loop's reads,
+  whose files other changes were editing.
+- **A pin that outlives its PR says so** (2026-10-12; amends "A pin never lapses", which stands). The
+  `pr.closed` event said "slot released after 10m0s" for a PR whose slot cleanup then skipped in silence
+  (`SkipPinned`, "unpin first"): talkable#11999 closed on 10-12 and review16 stayed pinned since 10-07,
+  another repository's #1 merged on 10-10 and its worktree is still held, and four slots were pinned, two on closed
+  PRs, which the operator could learn only by reading the slot table. Now, when the PR or its slot is pinned
+  (and the PR holds a slot), the close event says "slot kept: pinned (magnum unpin)" and one toast per PR
+  says "magnum: talkable#11999 closed | its slot review16 stays pinned (magnum unpin)" (the key
+  `closed-pinned:<pr id>` for 24 hours; the close is one compare-and-set transition, so it fires once, and
+  the key keeps a restart from repeating it); a PR without a pin keeps the old wording and no toast.
+  `magnum status` gets a `pinned:` line per pin ("review16 (talkable#11999, closed 5h ago, pinned 5d)"; the
+  PR's state from the registry, the age from the newest `pr.opened`/`pr.pinned` or `slot.pinned` event
+  that no unpin follows, `engine.PinnedSince`; none when the events were pruned; `pins` in the JSON), and
+  the PR board's summary pill appends "· 2 on closed PRs" to "📌 4 pinned" when a pinned row's PR is merged or
+  closed (words in the pill, no new line; it counts the rows the board lists, so a pin on a PR closed longer
+  ago than `[board] recent_closed` is in `magnum status` only). The pin itself does not change: nothing
+  releases it, and a closed PR's pinned slot is kept as before. Rejected: listing pinned closed PRs on the
+  board past the recent window (a change of what the board shows, for a pill that already says the number),
+  and a pin that lapses after a time (decided against on 10-07).
 
 ## Learned rules
 

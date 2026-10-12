@@ -200,7 +200,7 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 
 	cands, err := e.continueCandidates(ctx, now)
 	if err != nil {
-		e.log.Warn("paused PRs", "err", err)
+		e.warnUnlessStopped(ctx, err, "paused PRs")
 	}
 	params := store.CandidateParams{
 		Now:              now,
@@ -212,7 +212,7 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 	}
 	queued, err := e.st.Candidates(ctx, params)
 	if err != nil {
-		e.log.Warn("candidates", "err", err)
+		e.warnUnlessStopped(ctx, err, "candidates")
 	}
 	cands = append(cands, queued...)
 	cands = append(cands, e.relaxedCandidates(ctx, params, queued, now)...)
@@ -239,7 +239,7 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 		}
 		repo, err := e.st.RepoByID(ctx, pr.RepoID)
 		if err != nil {
-			e.log.Warn("dispatch: repo", "pr", pr.ID, "err", err)
+			e.warnUnlessStopped(ctx, err, "dispatch: repo", "pr", pr.ID)
 			continue
 		}
 		w := e.cfg.WatchFor(repo.FullName())
@@ -279,7 +279,7 @@ func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams,
 	p.QuietPeriod, p.MinInterval, p.DraftMinInterval, p.MaxRoundsPerDay = 0, 0, 0, 0
 	all, err := e.st.Candidates(ctx, p)
 	if err != nil {
-		e.log.Warn("candidates without the backstop", "err", err)
+		e.warnUnlessStopped(ctx, err, "candidates without the backstop")
 		return nil
 	}
 	var out []store.PR
@@ -489,7 +489,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 
 	slot, has, err := e.slotOf(ctx, pr.ID)
 	if err != nil {
-		e.log.Warn("dispatch: slots", "err", err)
+		e.warnUnlessStopped(ctx, err, "dispatch: slots")
 		return false, 0, gate{}
 	}
 	if has {
@@ -508,7 +508,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	// (the judge alone of a delta check or a re-review of the same head).
 	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.rolesForPR(ctx, w, pr.ID), e.requestedRoles(ctx, pr.ID), job.kind)
 	if err != nil {
-		e.log.Warn("dispatch: roles", "subject", subject, "err", err)
+		e.warnUnlessStopped(ctx, err, "dispatch: roles", "subject", subject)
 		return false, 0, gate{}
 	}
 	if job.deltaCheck || job.sameHead {
@@ -694,7 +694,7 @@ func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) b
 func (e *Engine) prepareContinue(ctx context.Context, job *roundJob) bool {
 	runs, err := e.st.RunsByPR(ctx, job.pr.ID)
 	if err != nil {
-		e.log.Warn("continue: runs", "err", err)
+		e.warnUnlessStopped(ctx, err, "continue: runs")
 		return false
 	}
 	j := e.latestJudge(runs)

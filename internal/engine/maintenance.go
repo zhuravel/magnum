@@ -231,7 +231,7 @@ func (e *Engine) applyInventory(ctx context.Context, inv inventory.Inventory) {
 	}
 	if inv.DatabasesListed && !e.d.DryRun {
 		if res, err := e.d.Inventory.UpsertSlotDatabases(ctx, inv); err != nil {
-			e.log.Warn("record databases", "err", err)
+			e.warnUnlessStopped(ctx, err, "record databases")
 		} else if len(res.Dropped) > 0 {
 			e.event(ctx, "info", "", "reconcile.databases_gone", fmt.Sprintf("%d databases no longer in MySQL: %s", len(res.Dropped), strings.Join(res.Dropped, ", ")), nil)
 		}
@@ -259,7 +259,7 @@ func (e *Engine) applyInventory(ctx context.Context, inv inventory.Inventory) {
 				u.Set("last_error", f.Message)
 			})
 			if err != nil {
-				e.log.Warn("mark slot lost", "slot", name, "err", err)
+				e.warnUnlessStopped(ctx, err, "mark slot lost", "slot", name)
 				continue
 			}
 			e.event(ctx, "warn", f.Subject, "reconcile.slot_lost", f.Message, nil)
@@ -349,7 +349,7 @@ func (e *Engine) reclassifyIneligible(ctx context.Context) {
 	e.reclassifyWaiting(ctx)
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRIneligible}})
 	if err != nil {
-		e.log.Warn("ineligible PRs", "err", err)
+		e.warnUnlessStopped(ctx, err, "ineligible PRs")
 		return
 	}
 	for _, pr := range prs {
@@ -368,7 +368,7 @@ func (e *Engine) reclassifyIneligible(ctx context.Context) {
 			continue
 		}
 		if err := e.onSeenPR(ctx, repo, *w, pr, store.PRUpsert{PR: pr, Changed: true}, e.now()); err != nil {
-			e.log.Warn("reclassify ineligible PR", "subject", prSubject(repo, pr.Number), "err", err)
+			e.warnUnlessStopped(ctx, err, "reclassify ineligible PR", "subject", prSubject(repo, pr.Number))
 		}
 	}
 }
@@ -379,7 +379,7 @@ func (e *Engine) reclassifyIneligible(ctx context.Context) {
 func (e *Engine) reclassifyWaiting(ctx context.Context) {
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRQueued, store.PRRereviewPending}})
 	if err != nil {
-		e.log.Warn("waiting PRs", "err", err)
+		e.warnUnlessStopped(ctx, err, "waiting PRs")
 		return
 	}
 	now := e.now()
@@ -407,7 +407,7 @@ func KVPRSkippedBaseline(prID int64) string { return fmt.Sprintf("pr.%d.skipped_
 func (e *Engine) skipBaseline(ctx context.Context) {
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRBaseline}})
 	if err != nil {
-		e.log.Warn("baseline PRs", "err", err)
+		e.warnUnlessStopped(ctx, err, "baseline PRs")
 		return
 	}
 	now := e.now()
@@ -492,7 +492,7 @@ func (e *Engine) recoverRows(ctx context.Context) {
 	}
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: store.InFlightStates})
 	if err != nil {
-		e.log.Warn("recovery: PRs", "err", err)
+		e.warnUnlessStopped(ctx, err, "recovery: PRs")
 		return
 	}
 	if e.d.Agents != nil {
@@ -512,7 +512,7 @@ func (e *Engine) recoverRows(ctx context.Context) {
 			}
 			rec, err := e.d.Agents.Recover(ctx, pr)
 			if err != nil {
-				e.log.Warn("recovery: sessions", "pr", id, "err", err)
+				e.warnUnlessStopped(ctx, err, "recovery: sessions", "pr", id)
 				continue
 			}
 			for _, r := range rec {
@@ -536,7 +536,7 @@ func (e *Engine) recoverRows(ctx context.Context) {
 			u.Set("next_attempt_at", nil)
 		})
 		if err != nil {
-			e.log.Warn("recovery: PR", "subject", subject, "err", err)
+			e.warnUnlessStopped(ctx, err, "recovery: PR", "subject", subject)
 			continue
 		}
 		e.event(ctx, "info", subject, "engine.recovered", fmt.Sprintf("%s → %s: %s", pr.State, to, why), nil)
@@ -544,12 +544,12 @@ func (e *Engine) recoverRows(ctx context.Context) {
 	settle := []string{store.SlotBusy, store.SlotClaimed}
 	stuck, err := e.st.ListSlots(ctx, store.SlotFilter{States: settle})
 	if err != nil {
-		e.log.Warn("recovery: slots", "err", err)
+		e.warnUnlessStopped(ctx, err, "recovery: slots")
 		return
 	}
 	for _, sl := range stuck {
 		if err := e.st.TransitionSlot(ctx, sl.ID, settle, store.SlotHeld, nil); err != nil {
-			e.log.Warn("recovery: slot", "slot", sl.Name, "err", err)
+			e.warnUnlessStopped(ctx, err, "recovery: slot", "slot", sl.Name)
 		}
 	}
 }

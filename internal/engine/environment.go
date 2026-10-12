@@ -207,8 +207,8 @@ func (e *Engine) noteMachine(ctx context.Context) {
 	now := e.now()
 	evs, err := e.st.EventsOfKindsSince(ctx, now.Add(-MachineWindow), MachineEventKind)
 	if err != nil {
-		if e.logOnce("machine", err.Error(), now) {
-			e.log.Warn("review machine failures", "err", err)
+		if isStop(ctx, err) || e.logOnce("machine", err.Error(), now) {
+			e.warnUnlessStopped(ctx, err, "review machine failures")
 		}
 		return
 	}

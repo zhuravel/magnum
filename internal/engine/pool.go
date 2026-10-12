@@ -52,7 +52,7 @@ func (e *Engine) census(sls []store.Slot) poolCensus {
 func (e *Engine) needSlot(ctx context.Context, pool config.Pool, subject string) {
 	sls, err := e.st.ListSlots(ctx, store.SlotFilter{RepoFullName: pool.Repo, Kind: store.SlotKindPool})
 	if err != nil {
-		e.log.Warn("slots", "err", err)
+		e.warnUnlessStopped(ctx, err, "slots")
 		return
 	}
 	c := e.census(sls)
@@ -68,7 +68,7 @@ func (e *Engine) needSlot(ctx context.Context, pool config.Pool, subject string)
 	}
 	ev, err := e.st.EvictableSlots(ctx, pool.Repo, e.now(), e.cfg.Daemon.MinWarm.Duration)
 	if err != nil {
-		e.log.Warn("evictable slots", "err", err)
+		e.warnUnlessStopped(ctx, err, "evictable slots")
 		return
 	}
 	if len(ev) == 0 {

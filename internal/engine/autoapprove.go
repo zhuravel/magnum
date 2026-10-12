@@ -325,13 +325,13 @@ func (e *Engine) autoApproveFor(ctx context.Context, only int64) {
 	defer e.autoMu.Unlock()
 	live, err := e.st.LiveAutoApprovals(ctx)
 	if err != nil {
-		e.log.Warn("auto approvals", "err", err)
+		e.warnUnlessStopped(ctx, err, "auto approvals")
 		return
 	}
 	var cands []store.RepoPR
 	if e.cfg.AutoApproves() {
 		if cands, err = e.st.AutoApproveCandidates(ctx); err != nil {
-			e.log.Warn("auto approve candidates", "err", err)
+			e.warnUnlessStopped(ctx, err, "auto approve candidates")
 			return
 		}
 	}
@@ -351,12 +351,12 @@ func (e *Engine) autoApproveFor(ctx context.Context, only int64) {
 	}
 	sums, err := e.st.LastReviewSummaries(ctx, ids)
 	if err != nil {
-		e.log.Warn("auto approvals: review summaries", "err", err)
+		e.warnUnlessStopped(ctx, err, "auto approvals: review summaries")
 		return
 	}
 	holds, err := e.st.AutoApproveHolds(ctx, ids)
 	if err != nil {
-		e.log.Warn("auto approvals: holds", "err", err)
+		e.warnUnlessStopped(ctx, err, "auto approvals: holds")
 		return
 	}
 	if e.autoSeen == nil {
@@ -432,7 +432,7 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	}
 	prior, hasPrior, err := e.st.AutoApprovalOfRun(ctx, pr.ID, sum.RunID)
 	if err != nil {
-		e.log.Warn("auto approval of the round", "pr", pr.ID, "err", err)
+		e.warnUnlessStopped(ctx, err, "auto approval of the round", "pr", pr.ID)
 		return
 	}
 	if hasPrior && (prior.State != store.AutoFailed || prior.Attempts >= autoApproveAttempts || e.now().Before(prior.UpdatedAt.Add(autoApproveRetry))) {
@@ -527,6 +527,14 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 	e.event(ctx, "info", subject, "review.auto_approve_begin", fmt.Sprintf("approving %s as %s: magnum's review %d found nothing to fix (attempt %d)",
 		textx.ShortSHA(pr.HeadSHA), id.Login, sum.ReviewID, a.Attempts), data)
 	rev, err := gh.CreateReview(ctx, repo.Owner, repo.Name, pr.Number, pr.HeadSHA, "APPROVE", body)
+	if err != nil && ctx.Err() != nil {
+		// The daemon is stopping, and the post may or may not have reached
+		// GitHub: the row stays posting, as a crash would leave it, and the
+		// next daemon settles it (resumeAutoPost). Neither a failed row nor a
+		// "could not approve" event: nothing failed.
+		e.log.Debug("auto approval cut short by the stop", "pr", pr.ID, "err", err)
+		return
+	}
 	if err != nil {
 		var apiErr *github.APIError
 		final := errors.Is(err, github.ErrForbidden) || (errors.As(err, &apiErr) && apiErr.Status == 422)
@@ -536,7 +544,7 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 				u.Set("attempts", autoApproveAttempts)
 			}
 		}); uerr != nil {
-			e.log.Warn("auto approval failed and not recorded", "pr", pr.ID, "err", uerr)
+			e.warnUnlessStopped(ctx, uerr, "auto approval failed and not recorded", "pr", pr.ID)
 		}
 		again := fmt.Sprintf("tried again in %s", humanDuration(autoApproveRetry))
 		if final || a.Attempts >= autoApproveAttempts {
@@ -608,7 +616,7 @@ func (e *Engine) stopAutoApproval(ctx context.Context, repo store.Repo, pr store
 		return
 	}
 	if err := e.st.SetAutoApproveHold(ctx, store.AutoApproveHold{PRID: pr.ID, Held: true, Reason: why, At: e.now()}); err != nil {
-		e.log.Warn("auto approval hold", "pr", pr.ID, "err", err)
+		e.warnUnlessStopped(ctx, err, "auto approval hold", "pr", pr.ID)
 		return
 	}
 	delete(e.autoSeen, pr.ID)

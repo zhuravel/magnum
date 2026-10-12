@@ -29,7 +29,7 @@ func (e *Engine) refreshRequiredChecks(ctx context.Context, gh GitHub, repo stor
 	full := repo.FullName()
 	cur, ok, err := e.st.GitHubRequiredChecks(ctx, full)
 	if err != nil {
-		e.log.Warn("read required checks", "repo", full, "err", err)
+		e.warnUnlessStopped(ctx, err, "read required checks", "repo", full)
 	}
 	age := now.Sub(cur.CheckedAt)
 	if ok && cur.Branch == branch && age < requiredChecksTTL && (age < requiredChecksRetry || cur.Error == "" && !firstSync) {
@@ -57,6 +57,6 @@ func (e *Engine) refreshRequiredChecks(ctx context.Context, gh GitHub, repo stor
 		}
 	}
 	if err := e.st.SetGitHubRequiredChecks(ctx, full, next); err != nil {
-		e.log.Warn("record required checks", "repo", full, "err", err)
+		e.warnUnlessStopped(ctx, err, "record required checks", "repo", full)
 	}
 }

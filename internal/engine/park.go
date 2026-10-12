@@ -33,7 +33,7 @@ func (e *Engine) parkIdle(ctx context.Context, ts tickState) {
 	}
 	live, err := e.st.LiveSessions(ctx)
 	if err != nil {
-		e.log.Warn("park idle agents: sessions", "err", err)
+		e.warnUnlessStopped(ctx, err, "park idle agents: sessions")
 		return
 	}
 	byPR := map[int64][]store.Session{}

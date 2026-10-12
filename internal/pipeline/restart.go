@@ -74,6 +74,8 @@ func (rd *round) movedHead(ctx context.Context) string {
 		return ""
 	}
 	if rd.r.Git != nil {
+		// A head the checkout has not fetched yet fails here (exit 128); gitx
+		// runs MergeBase as a probe, so that answer is a Debug line, not a warning.
 		if mb, err := rd.r.Git.MergeBase(ctx, rd.in.SlotPath, head, target); err == nil && mb == head {
 			rd.logf("pipeline: %s: head %s is an ancestor of %s: no push", rd.subject, textx.ShortSHA(head), textx.ShortSHA(target))
 			rd.mu.Lock()

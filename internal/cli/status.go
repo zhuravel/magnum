@@ -185,6 +185,7 @@ type statusReport struct {
 	Rounds       statusRounds             `json:"rounds"`
 	Agents       *statusAgents            `json:"agents,omitempty"`
 	Pauses       []statusPause            `json:"pauses"`
+	Pins         []statusPin              `json:"pins,omitempty"`
 	Disk         statusDisk               `json:"disk"`
 	Slots        []inventory.SlotView     `json:"slots"`
 	External     []inventory.ExternalView `json:"external,omitempty"`
@@ -201,6 +202,11 @@ type statusReport struct {
 	// phase and the PRs switched out of autofix, for the dashboard's K and F
 	// (not printed); nil when the registry cannot say.
 	fixLoops, fixOffs map[int64]bool
+
+	// pinnedPRs are the registry's pinned PRs and repoNames the repositories'
+	// full names by id, for the pins line (statusGatherPins; not printed).
+	pinnedPRs []store.PR
+	repoNames map[int64]string
 }
 
 // statusMachine is one command failing on the review machine in the rounds
@@ -377,6 +383,20 @@ type statusPause struct {
 	// (Reason "<model> limited").
 	Using string `json:"using,omitempty"`
 	Fix   string `json:"fix,omitempty"`
+}
+
+// statusPin is one pin: a slot, or a PR, that magnum keeps whatever happens
+// to the PR (a pin never lapses, `magnum unpin` lets go). Repo and Number
+// name the PR (empty for a slot without one), GHState is GitHub's state of
+// it and ClosedAt when GitHub merged or closed it, PinnedAt when the pin was
+// set by the registry's pin events (nil: they no longer remember).
+type statusPin struct {
+	Slot     string     `json:"slot,omitempty"`
+	Repo     string     `json:"repo,omitempty"`
+	Number   int        `json:"number,omitempty"`
+	GHState  string     `json:"gh_state,omitempty"`
+	ClosedAt *time.Time `json:"closed_at,omitempty"`
+	PinnedAt *time.Time `json:"pinned_at,omitempty"`
 }
 
 type statusDisk struct {

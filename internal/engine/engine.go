@@ -770,7 +770,7 @@ func (e *Engine) observeUntilIdle(ctx context.Context) {
 // (ErrRestartForBuild, restart_on_new_build).
 func (e *Engine) Tick(ctx context.Context) error {
 	if changed, err := e.st.SchemaChanged(ctx); err != nil {
-		e.log.Warn("read schema version", "err", err)
+		e.warnUnlessStopped(ctx, err, "read schema version")
 	} else if changed {
 		e.log.Error(ErrSchemaChanged.Error())
 		return ErrSchemaChanged

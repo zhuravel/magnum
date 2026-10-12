@@ -21,7 +21,7 @@ const expireMessage = "expired: queued while no daemon ran"
 func (e *Engine) expireRequests(ctx context.Context, lastTick time.Time) {
 	reqs, err := e.st.PendingRequests(ctx, 0)
 	if err != nil {
-		e.log.Warn("requests", "err", err)
+		e.warnUnlessStopped(ctx, err, "requests")
 		return
 	}
 	cutoff := e.now().Add(-requestExpiry)

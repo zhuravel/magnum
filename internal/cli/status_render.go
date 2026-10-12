@@ -106,6 +106,13 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	}
 	fmt.Fprintf(w, "rounds:   %s\n", statusRoundsText(r))
 	fmt.Fprintf(w, "disk:     %s\n", statusDiskText(r.Disk))
+	for i, pin := range r.Pins {
+		label := "          "
+		if i == 0 {
+			label = "pinned:   "
+		}
+		fmt.Fprintf(w, "%s%s\n", label, statusPinText(pin, now))
+	}
 	if len(r.Pauses) == 0 {
 		fmt.Fprintf(w, "pauses:   none\n")
 		return
@@ -117,6 +124,40 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 			fmt.Fprintf(w, "    fix: %s\n", statusSafe(p.Fix, 0))
 		}
 	}
+}
+
+// statusPinText is a pinned line's value: the slot and, in parentheses, the
+// PR, what GitHub says of it and for how long the pin has held: "review16
+// (talkable#11999, closed 5h ago, pinned 5d)". A pin the events no longer
+// remember has no age; a slot without a PR says so.
+func statusPinText(p statusPin, now time.Time) string {
+	name := p.Slot
+	if name == "" {
+		name = "no slot"
+	}
+	var parts []string
+	if p.Repo == "" {
+		parts = append(parts, "no PR")
+	} else {
+		parts = append(parts, inspPRLabel(p.Repo, p.Number), statusPinState(p, now))
+	}
+	if p.PinnedAt != nil {
+		parts = append(parts, "pinned "+tui.HumanDuration(now.Sub(*p.PinnedAt)))
+	}
+	return statusSafe(name+" ("+strings.Join(parts, ", ")+")", 0)
+}
+
+// statusPinState is GitHub's state of a pinned PR: "open", or "closed 5h
+// ago" / "merged 5h ago" (the time left out when unknown).
+func statusPinState(p statusPin, now time.Time) string {
+	state := strings.ToLower(p.GHState)
+	switch {
+	case state == "":
+		return "state unknown"
+	case p.ClosedAt != nil && state != "open":
+		return state + " " + inspAgo(now, p.ClosedAt)
+	}
+	return state
 }
 
 // statusMachineText is a machine line's value: "6 rounds of talkable:

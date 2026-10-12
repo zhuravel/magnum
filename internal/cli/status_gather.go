@@ -4,6 +4,7 @@ package cli
 // inventory and herdr into a statusReport, one focused function per section.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -59,6 +60,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	if err := statusGatherInventory(ctx, d, o, &r); err != nil {
 		return r, err
 	}
+	statusGatherPins(ctx, d, &r)
 	if o.Ref != "" {
 		det, err := statusGatherDetail(ctx, d, r, o.Ref, now)
 		if err != nil {
@@ -459,8 +461,10 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 		return err
 	}
 	repoByID := map[int64]store.Repo{}
+	r.repoNames = map[int64]string{}
 	for _, rp := range repos {
 		repoByID[rp.ID] = rp
+		r.repoNames[rp.ID] = rp.FullName()
 	}
 	prs, err := st.ListPRs(ctx, store.PRFilter{})
 	if err != nil {
@@ -470,6 +474,9 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 		r.Rounds.Max = d.Config.Daemon.MaxConcurrentReviews
 	}
 	for _, pr := range prs {
+		if pr.Pinned {
+			r.pinnedPRs = append(r.pinnedPRs, pr)
+		}
 		repo := repoByID[pr.RepoID].FullName()
 		line := statusPRLine{Repo: repo, Number: pr.Number, Title: store.Deref(pr.Title), State: pr.State, Next: statusNextShort(ctx, st, pr, now),
 			Forced: pr.Forced, ReviewRequested: pr.ReviewRequested, UpdatedAt: pr.GHUpdatedAt, ActivityAt: pr.Activity(),
@@ -635,6 +642,49 @@ func statusGatherInventory(ctx context.Context, d statusDeps, o statusOptions, r
 		r.Attention = append(r.Attention, statusAttention{Subject: f.Subject, Message: f.Kind + ": " + f.Message})
 	}
 	return nil
+}
+
+// statusGatherPins lists the pins: the slots pinned or holding a pinned PR,
+// then the pinned PRs without a slot, each with its PR's GitHub state and
+// when the pin was set (engine.PinnedSince; the age is left out when the
+// events no longer remember it).
+func statusGatherPins(ctx context.Context, d statusDeps, r *statusReport) {
+	since, err := engine.PinnedSince(ctx, d.Store)
+	if err != nil {
+		since = nil
+	}
+	pin := func(slot string, pr *store.PR) statusPin {
+		p := statusPin{Slot: slot}
+		subject := "slot:" + slot
+		if pr != nil {
+			p.Repo, p.Number, p.GHState = r.repoNames[pr.RepoID], pr.Number, pr.GHState
+			if p.GHState == store.GHClosed || p.GHState == store.GHMerged {
+				if at := cmp.Or(store.Deref(pr.MergedAt), store.Deref(pr.ClosedAt)); !at.IsZero() {
+					p.ClosedAt = &at
+				}
+			}
+			subject = fmt.Sprintf("pr:%s#%d", p.Repo, pr.Number)
+		}
+		if at, ok := since[subject]; ok {
+			p.PinnedAt = &at
+		}
+		return p
+	}
+	listed := map[int64]bool{}
+	for _, sv := range r.Slots {
+		if !sv.Slot.Pinned && (sv.PR == nil || !sv.PR.Pinned) {
+			continue
+		}
+		if sv.PR != nil {
+			listed[sv.PR.ID] = true
+		}
+		r.Pins = append(r.Pins, pin(sv.Slot.Name, sv.PR))
+	}
+	for _, pr := range r.pinnedPRs {
+		if !listed[pr.ID] {
+			r.Pins = append(r.Pins, pin("", &pr))
+		}
+	}
 }
 
 // statusSortQueue orders the queue like the dispatcher: forced first, then

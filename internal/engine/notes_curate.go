@@ -326,7 +326,7 @@ type curateDue struct {
 func (e *Engine) dueCurations(ctx context.Context, now time.Time) []curateDue {
 	repos, err := e.st.ListRepos(ctx)
 	if err != nil {
-		e.log.Warn("notes curation: list repositories", "err", err)
+		e.warnUnlessStopped(ctx, err, "notes curation: list repositories")
 		return nil
 	}
 	queued := ReadCurateQueue(ctx, e.st)
@@ -914,7 +914,7 @@ func (e *Engine) curateCheck(ctx context.Context, repo store.Repo, base notes.St
 func (e *Engine) expireProposals(ctx context.Context) {
 	pending, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{States: []string{store.ProposalPending}})
 	if err != nil {
-		e.log.Warn("notes proposals", "err", err)
+		e.warnUnlessStopped(ctx, err, "notes proposals")
 		return
 	}
 	now := e.now()
@@ -926,7 +926,7 @@ func (e *Engine) expireProposals(ctx context.Context) {
 			"not reviewed within "+ProposalTTL.String(), now, nil)
 		if err != nil {
 			if !errors.Is(err, store.ErrConflict) {
-				e.log.Warn("expire a notes proposal", "proposal", p.ID, "err", err)
+				e.warnUnlessStopped(ctx, err, "expire a notes proposal", "proposal", p.ID)
 			}
 			continue
 		}

@@ -70,7 +70,7 @@ var resumableOutcomes = []string{pipeline.OutcomeUsageLimit, pipeline.OutcomeLog
 func (e *Engine) judgePrompted(ctx context.Context, pr store.PR) bool {
 	runs, err := e.st.RunsByPR(ctx, pr.ID)
 	if err != nil {
-		e.log.Warn("recovery: runs", "pr", pr.ID, "err", err)
+		e.warnUnlessStopped(ctx, err, "recovery: runs", "pr", pr.ID)
 		return false
 	}
 	r := e.latestJudge(runs).prompted

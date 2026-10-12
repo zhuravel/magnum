@@ -70,8 +70,12 @@ func (e *Engine) poll(ctx context.Context) error {
 		e.recordRateLimit(ctx, rl, now)
 		radar.add(w.Owner, err)
 		if err != nil {
-			// A failure right after a sleep is the Mac's network (sleptBefore).
-			if !e.afterSleep && e.logOnce("poll:"+w.Owner, err.Error(), now) {
+			// A failure right after a sleep is the Mac's network (sleptBefore);
+			// one the daemon's stop caused is no poll failure at all.
+			switch {
+			case isStop(ctx, err):
+				e.log.Debug("radar read cut short", "owner", w.Owner, "err", err)
+			case !e.afterSleep && e.logOnce("poll:"+w.Owner, err.Error(), now):
 				e.event(ctx, "warn", "watch:"+w.Owner, "poll.error", fmt.Sprintf("radar %s: %v", w.Owner, err), nil)
 			}
 			errs = append(errs, fmt.Errorf("poll %s: %w", w.Owner, err))
@@ -181,7 +185,10 @@ func (e *Engine) readCI(ctx context.Context, w config.Watch, gh GitHub, repos []
 	}
 	states, rl, err := gh.CIStates(ctx, prs)
 	e.recordRateLimit(ctx, rl, now)
-	if err != nil && !e.afterSleep && e.logOnce("ci:"+w.Owner, err.Error(), now) {
+	switch {
+	case err != nil && isStop(ctx, err): // the daemon is stopping: no poll failure
+		e.log.Debug("CI read cut short", "owner", w.Owner, "err", err)
+	case err != nil && !e.afterSleep && e.logOnce("ci:"+w.Owner, err.Error(), now):
 		e.event(ctx, "warn", "watch:"+w.Owner, "poll.ci_error", fmt.Sprintf("CI of %d PRs (%d read): %v", len(prs), len(states), err), nil)
 	}
 	for i := range repos {
@@ -222,7 +229,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	}
 	if staleClone && repoRow.ClonePath == nil {
 		if err := e.st.SetRepoClonePath(ctx, repo.ID, ""); err != nil {
-			e.log.Warn("clear stale clone path", "repo", full, "err", err)
+			e.warnUnlessStopped(ctx, err, "clear stale clone path", "repo", full)
 		} else {
 			repo.ClonePath = nil
 		}
@@ -469,8 +476,8 @@ func (e *Engine) clonePath(ctx context.Context, w config.Watch, existing store.R
 	}
 	found, err := e.d.Git.FindClone(ctx, slots.CloneRoot(w), owner, name)
 	if err != nil {
-		if !errors.Is(err, gitx.ErrNoClone) && e.changed("clone:"+owner+"/"+name, err.Error()) {
-			e.log.Warn("find clone", "repo", owner+"/"+name, "err", err)
+		if !errors.Is(err, gitx.ErrNoClone) && (isStop(ctx, err) || e.changed("clone:"+owner+"/"+name, err.Error())) {
+			e.warnUnlessStopped(ctx, err, "find clone", "repo", owner+"/"+name)
 		}
 		return nil, stale
 	}
@@ -618,7 +625,7 @@ func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now 
 	if len(w.ManualRepos) > 0 {
 		r, err := e.st.RepoByID(ctx, pr.RepoID)
 		if err != nil {
-			e.log.Warn("eligibility: repository", "pr", pr.ID, "err", err)
+			e.warnUnlessStopped(ctx, err, "eligibility: repository", "pr", pr.ID)
 		}
 		repo = r.Name
 	}
@@ -977,8 +984,20 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 					errs = append(errs, err)
 					continue
 				}
-				e.event(ctx, "info", subject, "pr.closed", fmt.Sprintf("%s on GitHub (confirmed %d×); slot released after %s", strings.ToLower(st.State), count, e.cfg.Daemon.CloseGrace.Duration), nil)
-				if cur, err := e.st.PRByID(ctx, pr.ID); err == nil {
+				cur, curErr := e.st.PRByID(ctx, pr.ID)
+				if curErr != nil {
+					cur = pr
+				}
+				kept, pinned := e.closedPinnedSlot(ctx, cur)
+				slotNote := fmt.Sprintf("slot released after %s", e.cfg.Daemon.CloseGrace.Duration)
+				if pinned {
+					slotNote = "slot kept: pinned (magnum unpin)"
+				}
+				e.event(ctx, "info", subject, "pr.closed", fmt.Sprintf("%s on GitHub (confirmed %d×); %s", strings.ToLower(st.State), count, slotNote), nil)
+				if pinned {
+					e.noteClosedPinned(repo, cur, kept)
+				}
+				if curErr == nil {
 					e.mergedUnreviewed(ctx, repo, cur)
 				}
 				continue

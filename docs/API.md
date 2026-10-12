@@ -5337,6 +5337,13 @@ func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string
     the operator decides by hand, the board shows those. sum is magnum's latest
     posted round of pr (nil: none).
 
+func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, error)
+    PinnedSince is when each subject that is pinned now was pinned, by the
+    registry's pin events: "pr:owner/name#N" for a PR pinned by `magnum open`,
+    `magnum pin` or `magnum slots pin` (pr.opened, pr.pinned), "slot:<name>" for
+    a slot pinned without a PR (slot.pinned); an unpin forgets the subject. A
+    pin older than the events kept (store.Prune), or set by hand, has no entry.
+
 func ProcessCommand(ctx context.Context, run execx.Runner, pid int) (comm, args string, err error)
     ProcessCommand reads what ps knows about pid: comm (`ps -o comm=`, the
     executable as started, its full path when it was started by path) and args
@@ -8533,6 +8540,10 @@ func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, 
 
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
+    It is a question: a non-zero exit (1: no common ancestor; 128: a revision
+    the checkout has not fetched yet, as a restart check asks about a head the
+    poller saw before the checkout did) is an answer the caller reads from the
+    error, so the command runs as a probe and a failure logs at Debug.
 
 func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) error
     MergeFFOnly fast-forwards base, the branch checked out in repo, to branch:

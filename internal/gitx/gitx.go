@@ -488,6 +488,10 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
 }
 
 // MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
+// It is a question: a non-zero exit (1: no common ancestor; 128: a revision
+// the checkout has not fetched yet, as a restart check asks about a head
+// the poller saw before the checkout did) is an answer the caller reads from
+// the error, so the command runs as a probe and a failure logs at Debug.
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error) {
 	if err := checkRev("revision", a); err != nil {
 		return "", err
@@ -495,7 +499,7 @@ func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error
 	if err := checkRev("revision", b); err != nil {
 		return "", err
 	}
-	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("merge-base %s %s", a, b)}, "merge-base", a, b)
+	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("merge-base %s %s", a, b), probe: true}, "merge-base", a, b)
 	if err != nil {
 		if code, ok := exitCode(err); ok && code == 1 {
 			return "", fmt.Errorf("gitx: merge-base %s %s: %w", a, b, ErrNoMergeBase)
