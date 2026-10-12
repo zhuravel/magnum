@@ -1203,7 +1203,26 @@ candidate the judge searches the base branch's log and docs, never the checkout'
 do the same). It runs the affected specs on the merged tree when a base commit after the merge base changes
 what the PR calls, and gives each of the head's failing checks (`failing_checks`) a Checks line. A
 finding its earlier reviews missed on code the PR did not change since is posted as new, its title
-ending with `(missed earlier)`. In re-review mode magnum hands it the threads its login started with
+ending with `(missed earlier)`. The rules approved on 2026-10-12 add that a merged finding's Fix names
+every other site of the same defect; a missing guard in a list, registry, validator or call-site set
+gets the whole set swept with one probe and a `swept N <things>: M gaps` Checks line (in the own pass,
+and again before a re-review calls the finding fixed); a documentation change's statements about data
+(who can read it, how long it is kept, when it is deleted) are claims checked against the code, the
+infrastructure files and the PR's other pages; records thought free that another path writes in that
+state, and a remote change that cannot be undone before a local save that validations can refuse, are
+structures to check; an example that passes only values no production caller sends pins nothing; a
+trigger names its in-app producer, one that needs an operator-typed setting, a non-default local
+environment, a console or stored rows no code path writes is P3 (P2 at most) with one command that
+checks it, a P1 needs a trigger reached with the defaults, and any harm that needs stored rows of a
+shape carries the query that counts them; a re-review checks what a fix costs at real sizes (remote
+calls, pages, loops against throttling and timeouts) before it calls it fixed, and posts one finding
+that a mechanism cannot be completed when fixes of two earlier findings patched it and a new case still
+gets through; and database specs on a merged tree whose base added migrations are skipped as a machine
+limit (the slot's schema is the head's). The claude reviewers list each request entry point that
+reached an access hole the PR closes, with its access check (a `Description: ✗` line when the
+description names fewer), and check a documentation change's statements about data; the entry-point
+rule is in their prompts only, since text that enumerates the reach of such a fix drew Codex
+cybersecurity flags on judge turns. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
 risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it"
@@ -1212,7 +1231,11 @@ judge decides a reply by what it does, not by that hint, accepts a fix
 only when the code shows it, honours an answered finding unless it proves the reason wrong (then it
 says why in one sentence in that thread), and lists only what changed since its last review: findings
 now fixed or answered, findings still open despite a reply or a commit, and new ones; the unchanged open
-findings are one count with a link to the previous review.
+findings are one count with a link to the previous review. Its re-review and recovery prompts add the
+reply wording: a second rebuttal in a thread names, in the same sentence, what both counterexamples
+share and the change that closes the class, never a third instance, and a new P3 whose consequence the
+reason of an answered thread already covers, with no larger harm, is not posted (`duplicate`): that
+answer's line in the body says `(also covers <title>)`.
 The result records every finding the judge weighed with a short title, its sources (`judge` only when
 its own pass found it, not when it confirmed a report) and, for a rejection, a reason code
 (`outside_diff` only for a problem neither in nor caused by the lines the PR changes), marking

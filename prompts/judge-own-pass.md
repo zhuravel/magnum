@@ -1,4 +1,5 @@
 [$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. Start your own pass on {{.URL}} now, while magnum's reviewer roles work: `phase: own_pass` in the skill. Write it to {{.OwnFindings}}, post nothing, then end your turn; their reports follow in the next prompt.
+For a missing guard in a set (a list, registry, validator or call sites), sweep the whole set in this pass as the skill's section 2 says: each gap with the same probe, and the `swept N <things>: M gaps` line among your checks.
 {{- if .RestartedFrom}}
 New commits arrived while you worked: magnum moved this checkout from `{{.RestartedFrom}}` to `{{.HeadSHA}}` and restarted the round. Do the pass for `{{.HeadSHA}}`, reusing what still applies (`git diff {{.RestartedFrom}}..{{.HeadSHA}}` shows what changed).
 {{- end}}

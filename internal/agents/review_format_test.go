@@ -265,11 +265,15 @@ func TestSkillRunsTheDatabaseLockAsGiven(t *testing.T) {
 
 // codex-review is a static review by design (sandboxed, no network
 // services); its unrun checks were reported as machine failures in 6 of 43
-// environment events.
+// environment events. Its sandbox does reach the slot's databases on
+// localhost, so since 2026-10-12 its command runs under the checkout's
+// db-lock: the skill names the network and Redis as its limits, not the
+// databases.
 func TestSkillKeepsByDesignLimitsOutOfMachineFailures(t *testing.T) {
 	skillSays(t, []string{
-		"A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without Redis or databases, so its unrun checks are no `environment_failures`; run what you need yourself.",
-	}, nil)
+		"A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without the network or Redis (its database runs take their turn under the lock), " +
+			"so its unrun checks are no `environment_failures`; run what you need yourself.",
+	}, []string{"without Redis or databases"})
 }
 
 // A reply that confirmed a finding and left the decision open landed in a
@@ -452,9 +456,19 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // the red-head verdict line (2026-10-09): a failed check in `failing_checks`
 // takes LGTM off the clean line. Then 254 for neutral probe names and the
 // one-rule mutant (2026-10-09): a Codex judge was refused on a fifteen-round
-// session after it labelled its overlays a security fix. Every rule added must
-// replace or shorten text.
-const skillMaxBytes = 30_436
+// session after it labelled its overlays a security fix. Then 2,022 for the
+// ten review rules the operator approved on 2026-10-12 (2,158 bytes: a
+// mechanism two fixes patched, every site of a merged finding, a swept set,
+// triggers outside the app's paths, any stored rows' count query, rows
+// thought free and a remote change before a local save, a documentation
+// change's statements about data, values no caller sends, what a fix costs
+// and merged-tree database specs), less 126 from the readiness field's shell
+// and Ruby notes, the local paths post-review refuses and `delta_check`'s
+// "only when true", and the 10 the cap had left. Then 53 for codex-review's
+// database runs, which take their turn under the lock: its limits by design
+// are the network and Redis (2026-10-12). Every rule added must replace or
+// shorten text.
+const skillMaxBytes = 32_511
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -1339,4 +1353,201 @@ func TestNotesCuratorPointsCoveredLinesToTheDocsTheNotesName(t *testing.T) {
 			t.Errorf("notes-curate.md lacks %q:\n%s", want, got)
 		}
 	}
+}
+
+// The review rules the operator approved on 2026-10-12 follow, one test per
+// rule, from 109 posted reviews, 283 answered threads and 15 real misses
+// since 10-08.
+
+// One PR got a new hole in the same word lists in three rounds (P1, P3, P1)
+// until a person asked for the structural change: when fixes of two or more
+// findings patched one mechanism and a new case still gets through, the
+// re-review posts that the mechanism cannot be completed.
+func TestSkillCallsAMechanismTwoFixesPatchedIncomplete(t *testing.T) {
+	skillSays(t, []string{
+		"When fixes of two or more of your findings patched one mechanism (a word list, a pattern set, a list of cases) and a new case still gets through, " +
+			"post it as one finding that the mechanism cannot be completed: name the structural fix and cite the rounds, even against a standing decision whose reason this answers.",
+	}, nil)
+}
+
+// A candidate named two sites of one defect, the posted P2 named one, and
+// the second came back "(missed earlier)" a round later, a third variant the
+// round after: a merged finding's Fix names every other site.
+func TestSkillMergedFindingNamesEverySiteOfTheDefect(t *testing.T) {
+	skillSays(t, []string{
+		"Merge duplicates, keeping the strongest wording and the most precise location; the merged finding's **Fix** names every other `path:line` of the same defect.",
+	}, nil)
+}
+
+// 26 of 32 "(missed earlier)" findings since 10-01 sat in a directory an
+// earlier finding of the same PR already hit, and one PR got one grid per
+// round over three rounds: a missing guard in a set gets the whole set swept
+// with one probe, in the own pass too, and a re-review sweeps it again
+// before it calls the finding fixed.
+func TestAMissingGuardInASetGetsTheWholeSetSwept(t *testing.T) {
+	skillSays(t, []string{
+		"A missing guard in a set (a list, registry, validator or call sites): list the set once (`git grep`), prove each gap with the same probe, " +
+			"post them all and add the Checks line `swept N <things>: M gaps`; a member you cannot prove goes to Checks as `unproven: <what is missing>`.",
+		"and, for a gap in a set, sweep the set again (section 2).",
+	}, nil)
+	const sweep = "For a missing guard in a set (a list, registry, validator or call sites), sweep the whole set in this pass as the skill's section 2 says: " +
+		"each gap with the same probe, and the `swept N <things>: M gaps` line among your checks."
+	for _, mode := range []string{ModeInitial, ModeRereview, "recovery"} {
+		d := judgeFixture()
+		d.Mode, d.Phase, d.OwnFindings, d.Reports = mode, PhaseOwnPass, "/r/judge-own.md", nil
+		got, err := RenderPrompt(prompt(t, "judge-own-pass.md"), d)
+		if err != nil || !strings.Contains(got, "\n"+sweep+"\n") {
+			t.Errorf("judge-own-pass.md (%s) lacks %q: %v\n%s", mode, sweep, err, got)
+		}
+	}
+}
+
+// All 3 P1 declines of the window were over-ranked (an operator-typed
+// wildcard address, a leftover local file, a window an earlier decision
+// accepted), and 17 of 74 P3 threads were declined as console-, staging- or
+// preview-only: a trigger names its producer in the app, one that only an
+// operator's setting, a non-default local environment, a console or rows no
+// code writes reach is P3 (P2 at most) with a command that checks it, and a
+// P1 needs the defaults.
+func TestSkillRanksTriggersOutsideTheAppsPathsLow(t *testing.T) {
+	skillSays(t, []string{
+		"name who produces the trigger (a user in normal use, an API caller, an attacker) and its in-app producer (a route, a UI action, a job),",
+		"A trigger that needs an operator-typed setting, a non-default local environment, a console or stored rows no code path writes is P3 (P2 at most), " +
+			"and its comment carries one command that checks the precondition; P1 needs a trigger reached with the defaults.",
+		"An input no caller in the repository or its documented API produces, and no user can send, is P3 at most.",
+		// A change that breaks every developer's local runs stays P1.
+		"Harm includes developers' time: local runs that diverge from CI, generated files that change, a new flaky test; `P1` when it breaks their normal work.",
+	}, nil)
+}
+
+// A P2 was declined "after checking production" with no query to offer: the
+// count query of a cleanup migration's finding now comes with any harm that
+// needs stored rows of a shape.
+func TestSkillCountsTheStoredRowsAnyHarmNeeds(t *testing.T) {
+	skillSays(t, []string{
+		"A finding in a cleanup or backfill migration shows in its reproduction the read-only query that counts the rows it affects; its priority stays. " +
+			"Any other harm that needs stored rows of a shape (a stricter parser or validation on existing data) carries the query that counts them too.",
+	}, nil)
+}
+
+// Two P2 misses on one head: coupon rows another path writes at checkout
+// were adopted as free, and a token refresher's validations refused the
+// local save after the remote had rotated the pair, disconnecting the store.
+func TestSkillChecksRowsThoughtFreeAndARemoteChangeBeforeALocalSave(t *testing.T) {
+	skillSays(t, []string{
+		"(trace every path that saves them), a delete or reuse of records thought unsaved or free (unowned rows) that another path creates in that state (trace every writer), " +
+			"a remote change that cannot be undone (a rotated token, a charge) followed by a local save that validations can refuse.",
+	}, nil)
+}
+
+// A documentation PR's decision record said logs go after 30 days while
+// another page of the same PR said their copy in object storage never
+// expires, a P2 miss: the judge and the claude reviewers check a
+// documentation change's statements about data against the code, the
+// infrastructure files and the PR's other pages. codex-review runs the stock
+// `codex review` and takes no prompt.
+func TestReviewersCheckADocumentationChangesStatementsAboutData(t *testing.T) {
+	skillSays(t, []string{
+		"a stated scope or behaviour. In a documentation change, each statement about data (who can read it, how long it is kept, when it is deleted) is such a claim: " +
+			"check it against the code, the infrastructure files and the PR's other pages.",
+	}, nil)
+	promptsSay(t, claudeReviewers(t),
+		"In a documentation change, check each statement about data (who can read it, how long it is kept, when it is deleted) "+
+			"against the code, the infrastructure files and the PR's other pages.")
+}
+
+// Specs passed Integer ids while requests send Strings; the reviewer raised
+// it, the judge rejected it as style_only, and a person raised it after the
+// approval: an example that passes only values no production caller sends
+// pins no rule.
+func TestSkillCountsAnExampleWithValuesNoCallerSendsAsNoPin(t *testing.T) {
+	skillSays(t, []string{
+		"An example that passes only values no production caller sends (Integer ids where requests send Strings) pins nothing: " +
+			"run the mutation of the PR's code that breaks only the production values.",
+	}, nil)
+}
+
+// A fix to magnum's own P2 paged through every code of every discount on
+// every launch, and a throttled page then refused the launch: before a
+// re-review calls a finding fixed, it checks what the fix costs at real
+// sizes.
+func TestSkillChecksWhatAFixCostsBeforeCallingItFixed(t *testing.T) {
+	skillSays(t, []string{
+		"- **fixed**: the code at `head_sha` fixes it, whatever a reply says; a commit after `head_sha` does not count (section 7). " +
+			"Before you call it fixed, check what the fix costs at real sizes (its new remote calls, pages and loops, against the remote's limits: throttling, timeouts)",
+	}, nil)
+}
+
+// One PR's merged-tree specs failed 12 times on a table the base had added
+// (the slot's databases carry the head's schema), and the review reported
+// them as failures: such specs are a machine limit, not run.
+func TestSkillSkipsDatabaseSpecsOnAMergedTreeWhoseBaseAddedMigrations(t *testing.T) {
+	skillSays(t, []string{
+		"Database specs on a merged tree whose base added migrations are such a limit too (the slot's schema is the head's): do not run them; their Checks line reads `skipped (machine)`.",
+	}, nil)
+}
+
+// judgeReplyPrompts renders the re-review and recovery prompts of an
+// ordinary round and of a reply round on the same head, by name and round,
+// and the first review's prompt.
+func judgeReplyPrompts(t *testing.T) (rounds map[string]string, first string) {
+	t.Helper()
+	reply := judgeFixture()
+	reply.SameHead, reply.PreviousHeadSHA, reply.Replies = true, reply.HeadSHA, 2
+	reply.ThreadsFile, reply.ThreadSummary = "/r/review-threads.json", "2 threads; replies: 1 not a bug, 1 other"
+	rounds = map[string]string{}
+	for _, name := range []string{"judge-rereview.md", "judge-recovery.md"} {
+		for label, d := range map[string]JudgeData{"": judgeFixture(), " (reply round)": reply} {
+			got, err := RenderPrompt(prompt(t, name), d)
+			if err != nil {
+				t.Fatalf("%s%s: %v", name, label, err)
+			}
+			rounds[name+label] = got
+		}
+	}
+	first, err := RenderPrompt(prompt(t, "judge-initial.md"), judgeFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rounds, first
+}
+
+// 4 of 10 rebutted threads needed three fixes, and a fixer wrote "you keep
+// finding what slips past it" before it moved to stored state: a second
+// rebuttal names the class both counterexamples belong to and what closes
+// it. The rule is the reply wording of the prompts that post rebuttals.
+func TestASecondRebuttalNamesTheClassNotAThirdInstance(t *testing.T) {
+	const rule = "A second rebuttal in a thread that holds one of yours names, in the same sentence, what both counterexamples share and the change that closes the class, never a third instance."
+	rounds, first := judgeReplyPrompts(t)
+	promptsSay(t, rounds, rule)
+	if strings.Contains(first, "second rebuttal") {
+		t.Errorf("judge-initial.md names rebuttals:\n%s", first)
+	}
+}
+
+// 5 of 9 P3 declines under the current skill repeated an earlier answer on
+// the same PR (previews of old versions, rare restores that roll back with a
+// message): a new P3 an answered thread's reason already covers is not
+// posted, and the answer's body line names it.
+func TestAP3AnAnsweredThreadCoversIsNotPosted(t *testing.T) {
+	const rule = "Post no new P3 whose consequence the reason of an answered thread already covers, with no larger harm: reject it as `duplicate` " +
+		"and add `(also covers <title>)` to that answered finding's line in the body (write the line if the body has none)."
+	rounds, first := judgeReplyPrompts(t)
+	promptsSay(t, rounds, rule)
+	if strings.Contains(first, "also covers") {
+		t.Errorf("judge-initial.md names answered threads:\n%s", first)
+	}
+}
+
+// A person found that an access hole a PR closed had reached more pages,
+// exports and workers than its description said; magnum had traced the
+// scope's callers, not the request entry points. The claude reviewers list
+// them; the skill, which the Codex judge reads, does not, as text that
+// enumerates the reach of such a fix drew Codex cybersecurity flags on judge
+// turns.
+func TestClaudeReviewersListTheEntryPointsOfAClosedAccessHole(t *testing.T) {
+	promptsSay(t, claudeReviewers(t),
+		"When the PR closes an access hole, list in your report each request entry point that reached it (a route, an action, an export, a job) with its access check, "+
+			"and add a `Description: ✗ <claim>: <why>` line when the description names fewer.")
+	skillSays(t, nil, []string{"entry point"})
 }

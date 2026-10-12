@@ -6516,6 +6516,60 @@ skill versions); people add theirs to the sections before it, at the end of the 
   releases it, and a closed PR's pinned slot is kept as before. Rejected: listing pinned closed PRs on the
   board past the recent window (a change of what the board shows, for a pill that already says the number),
   and a pin that lapses after a time (decided against on 10-07).
+- **Thirteen review rules from the 2026-10-12 run** (2026-10-12, amends "A cleanup migration's finding shows
+  its row count query", "Security findings are written in plain words" and "Two review rules borrowed from a
+  public code-review skill"). The operator approved them on 2026-10-12, after the run's analysts read 109
+  posted reviews, 283 answered threads and 15 real misses since 10-08. Each rule has a test of its own in
+  `internal/agents/review_format_test.go`. Ten are in `skills/magnum-review/SKILL.md`. (a) Section 6: when
+  fixes of two or more of the judge's findings patched one mechanism (a word list, a pattern set, a list of
+  cases) and a new case still gets through, it posts one finding that the mechanism cannot be completed, with
+  the structural fix and the rounds, even against a standing decision whose reason this answers; one PR got a
+  new hole in the same word lists in three rounds (P1, P3, P1) until a person asked for the structural change.
+  (b) Section 3: a merged finding's **Fix** names every other `path:line` of the same defect; a candidate named
+  two sites, the posted P2 one, and the second came back "(missed earlier)" a round later. (c) Sections 2 and
+  6 and `judge-own-pass.md`: a missing guard in a list, registry, validator or call-site set gets the set
+  listed once, every gap proved with the same probe and posted, a Checks line `swept N <things>: M gaps` and
+  `unproven: <what is missing>` for a member it cannot prove, and a re-review sweeps the set again before it
+  calls such a finding fixed; 26 of 32 "(missed earlier)" findings since 10-01 sat in a directory an earlier
+  finding of the same PR already hit. (d) Section 4: the trigger names its in-app producer (a route, a UI
+  action, a job); one that needs an operator-typed setting, a non-default local environment, a console or
+  stored rows no code path writes is P3 (P2 at most) with one command that checks it, and a P1 needs a trigger
+  reached with the defaults ("non-default" keeps a change that breaks developers' normal local work P1); all 3
+  P1 declines of the window were over-ranked, and 17 of 74 P3 threads were declined as console-, staging- or
+  preview-only. (e) Section 2's structure sentence: a delete or reuse of records thought unsaved or free that
+  another path creates in that state, and a remote change that cannot be undone (a rotated token, a charge)
+  before a local save that validations can refuse; two P2 misses on one head. (f) Section 2's claims sentence
+  and the three claude-review prompts: a documentation change's statements about data (who can read it, how
+  long it is kept, when it is deleted) are claims checked against the code, the infrastructure files and the
+  PR's other pages; a decision record said logs go after 30 days while another page of the PR said their copy
+  in object storage never expires, a P2 miss (codex-review runs the stock `codex review` and takes no prompt).
+  (g) Section 3: an example that passes only values no production caller sends pins nothing; specs passed
+  Integer ids while requests send Strings, and the judge had rejected that gap as `style_only`. (h) Section 6:
+  before the judge calls a finding fixed, it checks what the fix costs at real sizes; a fix to magnum's own P2
+  paged through every code of every discount on every launch, and a throttled page refused the launch. (i)
+  Section 4: any harm that needs stored rows of a shape (a stricter parser or validation on existing data)
+  carries the query that counts them, as a cleanup migration's finding does (whose priority rule stays); a P2
+  declined "after checking production" had no query to offer. (j) Section 7's machine paragraph: database
+  specs on a merged tree whose base added migrations are a limit (the slot's schema is the head's), not run,
+  and read `skipped (machine)`; one PR's merged-tree specs failed 12 times on a table the base had added. The
+  same paragraph now names the network and Redis as codex-review's limits by design: from this run on its
+  command runs under the checkout's `db_lock`, so its database runs take their turn. Two are reply wording in
+  `judge-rereview.md` and `judge-recovery.md` (`judge-continue.md` resumes a turn and holds none). (k) A second
+  rebuttal in a thread that holds one of the judge's names, in the same sentence, what both counterexamples
+  share and the change that closes the class, never a third instance; 4 of 10 rebutted threads needed three
+  fixes. (l) A new P3 whose consequence the reason of an answered thread already covers, with no larger harm,
+  is not posted (`duplicate`), and that answer's body line says `(also covers <title>)`; 5 of 9 P3 declines
+  under the current skill repeated an earlier answer on the same PR. One is in the claude-review prompts only.
+  (m) When the PR closes an access hole, the report lists each request entry point that reached it with its
+  access check, and a `Description: ✗` line when the description names fewer; a person found that a closed
+  hole had reached more pages, exports and workers than the description said. A test keeps "entry point" out
+  of the skill: the Codex judge reads it, and text that enumerates the reach of an injection fix drew Codex
+  cybersecurity flags on judge turns. The skill grew by 2,211 bytes (the ten rules 2,158, codex-review's
+  limits 53) and won 126 back (the readiness field's shell and Ruby notes, the local paths `post_review`
+  refuses, `delta_check`'s "only when true"), so `skillMaxBytes` rose from 30,436 to 32,511; every earlier pin
+  holds. Rejected: k and l in the skill (it was 10 bytes under its cap, and the rounds that post rebuttals
+  carry their reply wording in those prompts), and rewording the migration sentence (its pin is the 2026-10-08
+  rule, which keeps the priority).
 
 ## Learned rules
 
