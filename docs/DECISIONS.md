@@ -6647,6 +6647,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
   was being retried. Rejected: retrying on every restart (a restart on the same build only fails again),
   and forcing the retried PRs (a forced round skips the timing rules and goes first, while the cause may be
   the PR's own).
+- **A confirmed close stops a round nobody asked for** (2026-10-12, amends "`magnum abort` takes back a
+  review that waits in line", whose stop machinery this uses). Before, the poll confirmed a close (`pr.closed`
+  after two CLOSED/MERGED answers a minute apart) but left the PR's round running. The round ran until the
+  judge found the PR closed and posted nothing. In the window three rounds ran on PRs already merged. One
+  started 71 s after the merge and ran 16.7 minutes. One ran 9 minutes after `pr.closed`. One posted a review
+  11 minutes after the merge. That is 34 role-minutes of three or four roles each, and a review nobody reads.
+  Such a round also held the close grace of every closed PR, because `closeGrace` waits while a round of a
+  closed PR runs. Now `confirmMissing` calls `stopClosedRound` after it moves a PR with a round in flight to
+  closed. That call gives the round a close stop (`roundStop.closed`: GitHub's state and the count of
+  confirmations). After it records `pr.closed`, it cancels the round. The `pr.closed` event of a PR with a
+  pool slot says `merged on GitHub (confirmed 3×); stopping its round; slot handed back when it stops`. Then
+  `afterRound` serves the stop as an abort without a request, through `stopPR`. It interrupts the working
+  agents and parks the sessions. It abandons the active runs with `stopped: the PR merged on GitHub`, not
+  `aborted by user`. It ends a fix loop "by the PR's merge on GitHub". It hands the slot back. A pool slot is
+  released as `merged` or `closed` (the reasons cleanup gives). A per-PR worktree and a pinned slot stay for
+  cleanup, as before. The PR stays closed and is released after the close grace. One `round.stopped` event
+  says `round 1 stopped: the PR merged on GitHub (confirmed 3×)`, then what the stop did (`1 agent
+  interrupted, 1 run abandoned, sessions parked, slot review1 released`). Its data holds `outcome: closed`, the
+  round, `gh_state` and `confirmed`. A round that did not reach the pipeline yet has no active run, so its
+  event gives no number. The event is not `pr.aborted`, so `magnum fix --wait` does not read it as an abort.
+  Three kinds of round run on as before. The first is a forced round (`magnum review`, the board's `r`, the
+  fix loop's re-review). The second is a round that a review request started (`roundJob.requested`). The
+  third is a post-merge review (the poll never confirms its merged PR again). The dispatcher records this on
+  the reservation (`roundHandle.asked`). An open's restore, a fix job and an abort that already stops the PR
+  are not rounds to stop. If an abort also comes, it is served as an abort. The refund rule does not change.
+  The round's result is the pipeline's `stopped`. If its judge was not prompted yet, the round is refunded, as
+  for a round that a shutdown stopped. Otherwise it counts. Recovery needs nothing new. The stop runs in the
+  daemon on a context of its own, as an abort's does. If the daemon dies during the stop, a closed PR stays,
+  and cleanup owns it, as after a shutdown during such a round before. A forced round keeps its slot until it
+  ends, as before (`TestCloseGraceWaitsForARoundInItsCheckout` now forces its round). Rejected: stopping a
+  round someone asked for (the operator asked for a review of this PR, merged or not). Also rejected: leaving
+  the slot to the close grace (an abort hands it back at once, also for an aborted post-merge round on a
+  merged PR).
 
 ## Learned rules
 

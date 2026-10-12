@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -55,10 +56,71 @@ var _ keySender = (*herdr.Client)(nil)
 type roundStop struct {
 	ended bool        // the round goroutine is past its round: too late to stop it
 	reqs  []stopOrder // abort and ignore requests the round serves when it ends
+	// closed: the poll confirmed the PR merged or closed on GitHub while the
+	// round ran (stopClosedRound); the round stops as for an abort, with no
+	// request to answer.
+	closed *closeStop
 	// stopping: the reservation is requestAbort's own, a stop (or the take
 	// back of a queued review) without a round goroutine, which serves no
 	// later request: those are answered at once.
 	stopping bool
+}
+
+// closeStop is why a close stops a round: GitHub's state (MERGED or CLOSED)
+// and the confirmations it took (confirmMissing).
+type closeStop struct {
+	state string
+	count int
+}
+
+// verb is "merged" or "closed".
+func (c closeStop) verb() string {
+	if c.state == store.GHMerged {
+		return "merged"
+	}
+	return "closed"
+}
+
+// runError is what the runs the stop abandons carry.
+func (c closeStop) runError() string { return "stopped: the PR " + c.verb() + " on GitHub" }
+
+// by names the close where an abort names its command (the fix loop's end).
+func (c closeStop) by() string {
+	if c.state == store.GHMerged {
+		return "the PR's merge on GitHub"
+	}
+	return "the PR's close on GitHub"
+}
+
+// stopped heads the round.stopped event: round is the stopped round's
+// number (0: none of its runs was active).
+func (c closeStop) stopped(round int) string {
+	what := "round stopped"
+	if round > 0 {
+		what = fmt.Sprintf("round %d stopped", round)
+	}
+	return fmt.Sprintf("%s: the PR %s on GitHub (confirmed %d×)", what, c.verb(), c.count)
+}
+
+// stopClosedRound marks the PR's round, which the poll just found merged or
+// closed on GitHub (confirmMissing), to stop as `magnum abort` stops one
+// (afterRound serves it) and returns the cancel that stops it, or nil when
+// there is nothing to stop: no round (an open's restore, a fix job and an
+// abort's own stop are none), a round past its end, and a round someone
+// asked for (roundHandle.asked: forced, a review request's, a post-merge
+// review), which runs on as before. The caller cancels once it recorded the
+// close, so the events read in order.
+func (e *Engine) stopClosedRound(prID int64, c closeStop) context.CancelFunc {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h, held := e.rounds[prID]
+	if !held || h.open || h.fix || h.asked || h.stop.ended || h.stop.stopping {
+		return nil
+	}
+	if h.stop.closed == nil {
+		h.stop.closed = &c
+	}
+	return h.cancel
 }
 
 // stopOrder is one abort (ignore=false) or ignore request.
@@ -234,27 +296,34 @@ func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (
 
 // afterRound runs at the end of a round goroutine, before it drops the PR's
 // reservation: when abort or ignore requests arrived meanwhile, the PR is
-// stopped (stopPR) and the requests are completed.
+// stopped (stopPR) and the requests are completed; a round the PR's close
+// on GitHub stopped (stopClosedRound), and no request did, is stopped the
+// same way, with its own event.
 func (e *Engine) afterRound(ctx context.Context, prID int64) {
 	e.mu.Lock()
 	var orders []stopOrder
+	var closed *closeStop
 	if h := e.rounds[prID]; h != nil {
 		h.stop.ended = true
-		orders = h.stop.reqs
+		orders, closed = h.stop.reqs, h.stop.closed
 	}
 	e.mu.Unlock()
-	if len(orders) == 0 {
+	if len(orders) == 0 && closed == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abortTimeout)
 	defer cancel()
+	if len(orders) == 0 {
+		_, _ = e.stopPR(ctx, prID, false, true, closed) // its round.stopped event says what happened
+		return
+	}
 	e.serveStop(ctx, prID, orders, true)
 }
 
 // serveStop stops the PR for orders and completes them with the outcome.
 func (e *Engine) serveStop(ctx context.Context, prID int64, orders []stopOrder, roundRan bool) {
 	ignore := slices.ContainsFunc(orders, func(o stopOrder) bool { return o.ignore })
-	res, err := e.stopPR(ctx, prID, ignore, roundRan)
+	res, err := e.stopPR(ctx, prID, ignore, roundRan, nil)
 	if ctx.Err() != nil && !roundRan {
 		// Daemon shutdown: the requests stay pending for the next start.
 		e.mu.Lock()
@@ -279,10 +348,14 @@ func (e *Engine) serveStop(ctx context.Context, prID int64, orders []stopOrder, 
 // parked (conversations stay resumable), the slot goes back to held and a
 // pool slot is released (a per-PR worktree is kept; a pinned slot stays),
 // and the PR moves to reviewed or baseline (ignore: ineligible, muted, with
-// skip_reason "ignored"). The caller holds the PR's reservation. The result
-// says what happened; the error is set when a step left something behind
-// (the steps after it still ran).
-func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) (string, error) {
+// skip_reason "ignored"). closed is set when the PR's close on GitHub
+// stopped its round (stopClosedRound): the PR stays closed, the runs carry
+// the close, a pool slot is released as merged or closed (cleanup's
+// reasons) and the event is round.stopped with the outcome closed, not
+// pr.aborted. The caller holds the PR's reservation. The result says what
+// happened; the error is set when a step left something behind (the steps
+// after it still ran).
+func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, closed *closeStop) (string, error) {
 	pr, err := e.st.PRByID(ctx, prID)
 	if err != nil {
 		return "", err
@@ -307,7 +380,13 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 
 	var done []string
 	var problems []error
-	if roundRan {
+	runErr, releaseAs, by := abortedBy, "aborted", "magnum "+map[bool]string{false: "abort", true: "ignore"}[ignore]
+	round := 0
+	switch {
+	case closed != nil:
+		runErr, releaseAs, by = closed.runError(), closed.verb(), closed.by()
+		round = e.activeRound(ctx, pr.ID) // read before the runs are abandoned
+	case roundRan:
 		done = append(done, "round stopped")
 	}
 	if n := e.interruptPR(ctx, pr, w); n > 0 {
@@ -316,7 +395,7 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 			e.log.Info("agents still working after the interrupt", "subject", subject)
 		}
 	}
-	if n := e.abandonRuns(ctx, pr.ID); n > 0 {
+	if n := e.abandonRuns(ctx, pr.ID, runErr); n > 0 {
 		done = append(done, fmt.Sprintf("%d %s abandoned", n, textx.Plural(n, "run", "runs")))
 	}
 	parked := true
@@ -336,11 +415,11 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 	}
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
-	if note := e.endFixLoop(ctx, repo, pr, "magnum "+map[bool]string{false: "abort", true: "ignore"}[ignore]); note != "" {
+	if note := e.endFixLoop(ctx, repo, pr, by); note != "" {
 		done = append(done, note) // the loop whose re-review this was
 	}
 
-	if note, err := e.handBack(ctx, repo, pr, parked, label); err != nil {
+	if note, err := e.handBack(ctx, repo, pr, parked, label, releaseAs); err != nil {
 		problems = append(problems, err)
 	} else if note != "" {
 		done = append(done, note)
@@ -351,8 +430,16 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 		what, kind = "ignored", "pr.ignored"
 	}
 	res := what + " " + label
+	data := map[string]any{"round_ran": roundRan, "parked": parked, "state": to}
 	if len(done) > 0 {
 		res += ": " + strings.Join(done, ", ")
+	}
+	if closed != nil {
+		kind, res = "round.stopped", closed.stopped(round)
+		if len(done) > 0 {
+			res += "; " + strings.Join(done, ", ")
+		}
+		data["outcome"], data["round"], data["gh_state"], data["confirmed"] = pipeline.OutcomeClosed, round, closed.state, closed.count
 	}
 	if ignore {
 		res += "; muted until `magnum unmute " + label + "`"
@@ -363,7 +450,7 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 		level = "warn"
 		res += "; " + perr.Error()
 	}
-	e.event(ctx, level, subject, kind, res, map[string]any{"round_ran": roundRan, "parked": parked, "state": to})
+	e.event(ctx, level, subject, kind, res, data)
 	if perr != nil {
 		return "", errors.New(res)
 	}
@@ -497,23 +584,42 @@ func (e *Engine) agentsQuiet(ctx context.Context, prID int64) bool {
 	return true
 }
 
+// activeRuns are the run states a stop abandons.
+var activeRuns = []string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}
+
+// activeRound is the number of the round the PR's active runs belong to
+// (the highest; 0 when none is active or they cannot be read).
+func (e *Engine) activeRound(ctx context.Context, prID int64) int {
+	runs, err := e.st.RunsByPR(ctx, prID)
+	if err != nil {
+		return 0
+	}
+	round := 0
+	for _, r := range runs {
+		if slices.Contains(activeRuns, r.State) {
+			round = max(round, r.Round)
+		}
+	}
+	return round
+}
+
 // abandonRuns marks the PR's active runs (pending, submitted, working,
-// ended) abandoned with "aborted by user" and returns how many it marked.
-func (e *Engine) abandonRuns(ctx context.Context, prID int64) int {
+// ended) abandoned with why ("aborted by user" for an abort) and returns
+// how many it marked.
+func (e *Engine) abandonRuns(ctx context.Context, prID int64, why string) int {
 	runs, err := e.st.RunsByPR(ctx, prID)
 	if err != nil {
 		e.log.Warn("stop: runs", "pr", prID, "err", err)
 		return 0
 	}
-	active := []string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}
 	now := e.now()
 	n := 0
 	for _, r := range runs {
-		if !slices.Contains(active, r.State) {
+		if !slices.Contains(activeRuns, r.State) {
 			continue
 		}
-		err := e.st.TransitionRun(ctx, r.ID, active, store.RunAbandoned, func(u *store.RunUpdate) {
-			u.Set("error", abortedBy)
+		err := e.st.TransitionRun(ctx, r.ID, activeRuns, store.RunAbandoned, func(u *store.RunUpdate) {
+			u.Set("error", why)
 			u.Set("ended_at", now)
 		})
 		switch {
@@ -608,9 +714,9 @@ func (e *Engine) settleStopped(ctx context.Context, pr store.PR, ignore bool) (s
 }
 
 // handBack returns a stopped PR's slot: claimed or busy back to held, then a
-// pool slot is released (sessions parked, nothing pinned) while a per-PR
-// worktree is kept. It returns what it did for the result.
-func (e *Engine) handBack(ctx context.Context, repo store.Repo, pr store.PR, parked bool, label string) (string, error) {
+// pool slot is released with reason (sessions parked, nothing pinned) while
+// a per-PR worktree is kept. It returns what it did for the result.
+func (e *Engine) handBack(ctx context.Context, repo store.Repo, pr store.PR, parked bool, label, reason string) (string, error) {
 	slot, has, err := e.slotOf(ctx, pr.ID)
 	if err != nil {
 		return "", err
@@ -640,7 +746,7 @@ func (e *Engine) handBack(ctx context.Context, repo store.Repo, pr store.PR, par
 	case pool == nil || e.d.Slots == nil:
 		return "slot " + slot.Name + " kept: no pool for " + repo.FullName(), nil
 	}
-	if err := e.d.Slots.Release(ctx, slot, *pool, "aborted"); err != nil {
+	if err := e.d.Slots.Release(ctx, slot, *pool, reason); err != nil {
 		e.event(ctx, "warn", "slot:"+slot.Name, "slot.release_failed", err.Error(), nil)
 		return "", fmt.Errorf("release %s: %w", slot.Name, err)
 	}

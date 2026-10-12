@@ -128,7 +128,10 @@ flowchart LR
    judge's own pass) still run restarts them in place on the new head (at most twice per round); a push
    while the judge weighs the reports is noted on the posted review and re-reviewed right after the
    quiet period. A closed or merged PR
-   releases its folder after a grace period, with teardown hooks for its databases.
+   releases its folder after a grace period, with teardown hooks for its databases. If the poll confirms the
+   close or the merge while a round runs, the round stops as `magnum abort` stops it (a `round.stopped`
+   event). A round that someone asked for (`magnum review`, the board's `r`, a review request) and a
+   post-merge review run on.
 
 ## Quick start
 
@@ -460,9 +463,9 @@ reviews, so the request alone does not count twice).
 
 The daily cap (`max_rounds_per_pr_per_day`, default 12) counts automatic rounds when they start:
 requested rounds and `magnum review` never count. A round Magnum itself cut short is refunded
-(`round.refunded`): one a shutdown, restart, drain or abort stopped, one that failed before any agent
-was prompted or on a prompt this build could not render, and one whose judge ran out of fallback
-models. Posted, blocked, timed-out and needs-attention rounds count.
+(`round.refunded`): one a shutdown, restart, drain, abort or the PR's close on GitHub stopped, one that
+failed before any agent was prompted or on a prompt this build could not render, and one whose judge ran
+out of fallback models. Posted, blocked, timed-out and needs-attention rounds count.
 
 Every PR waiting for a round says why and until when: the dashboard's queue and the PR board show a
 compact form (`re-review · quiet → 14:09`, `re-review · cap 6/6 → 00:00`, `re-review · small delta

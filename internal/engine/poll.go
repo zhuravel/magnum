@@ -909,9 +909,11 @@ func (e *Engine) reopen(ctx context.Context, repo store.Repo, w config.Watch, pr
 
 // confirmMissing handles open PRs that left the radar: confirmed
 // CLOSED/MERGED twice at least confirmGap apart → closed with a release
-// grace; NOT_FOUND → UNKNOWN (never cleaned); OPEN again → cleared. The gap
-// is measured from the first successful CLOSED/MERGED answer
-// (missing_since), so a confirmation outage never shortens it.
+// grace, and a round in flight that nobody asked for stopped as `magnum
+// abort` stops one (stopClosedRound); NOT_FOUND → UNKNOWN (never cleaned);
+// OPEN again → cleared. The gap is measured from the first successful
+// CLOSED/MERGED answer (missing_since), so a confirmation outage never
+// shortens it.
 func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo, missing []store.PR, now time.Time) error {
 	if len(missing) == 0 {
 		return nil
@@ -989,11 +991,23 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 					cur = pr
 				}
 				kept, pinned := e.closedPinnedSlot(ctx, cur)
+				// A round nobody asked for stops: its review would come
+				// after the merge, for nobody (abort.go).
+				stop := e.stopClosedRound(pr.ID, closeStop{state: st.State, count: count})
 				slotNote := fmt.Sprintf("slot released after %s", e.cfg.Daemon.CloseGrace.Duration)
-				if pinned {
+				switch {
+				case pinned:
 					slotNote = "slot kept: pinned (magnum unpin)"
+				case stop != nil && kept.Kind == store.SlotKindPool:
+					slotNote = "slot handed back when it stops"
+				}
+				if stop != nil {
+					slotNote = "stopping its round; " + slotNote
 				}
 				e.event(ctx, "info", subject, "pr.closed", fmt.Sprintf("%s on GitHub (confirmed %d×); %s", strings.ToLower(st.State), count, slotNote), nil)
+				if stop != nil {
+					stop()
+				}
 				if pinned {
 					e.noteClosedPinned(repo, cur, kept)
 				}

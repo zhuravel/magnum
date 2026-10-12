@@ -89,6 +89,10 @@ type roundHandle struct {
 	open   bool      // a magnum open restore, not a review round
 	fix    bool      // a fix job (fix.go), not a review round
 	stop   roundStop // magnum abort / ignore requests (abort.go)
+	// asked: a round someone asked for (forced by `magnum review` or the
+	// board's r, or started by a review request) or a post-merge review,
+	// which a close on GitHub never stops (stopClosedRound).
+	asked bool
 }
 
 // activeRounds counts the round and open goroutines.
@@ -476,7 +480,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	}
 
 	rctx, cancel := context.WithCancel(ctx)
-	if !e.reserve(pr.ID, &roundHandle{cancel: cancel}) {
+	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, asked: pr.Forced || job.requested || job.postMerge}) {
 		cancel()
 		return false, 0, otherGate(e.heldReason(pr.ID))
 	}

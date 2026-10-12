@@ -410,7 +410,9 @@ func TestWorkingCodexLimitCountsTheRoundsCodexRoles(t *testing.T) {
 }
 
 // A closed PR whose round is still in its checkout keeps its slot: the
-// cleanup waits for the round to end, then releases it.
+// cleanup waits for the round to end, then releases it. The round is forced
+// (`magnum review`): a close stops a round nobody asked for at once
+// (TestAConfirmedCloseStopsARoundInItsCheckout).
 func TestCloseGraceWaitsForARoundInItsCheckout(t *testing.T) {
 	h := newHarness(t)
 	h.open(prSpec{n: 1, head: "base1"})
@@ -419,6 +421,7 @@ func TestCloseGraceWaitsForARoundInItsCheckout(t *testing.T) {
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"})
 	h.tick() // #2 queued
 	h.wantState(2, store.PRQueued)
+	h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}}) // served by the tick that starts the round
 
 	h.sl.mu.Lock()
 	h.sl.checkoutGate = make(chan struct{})
@@ -436,6 +439,9 @@ func TestCloseGraceWaitsForARoundInItsCheckout(t *testing.T) {
 		t.Fatal("the round never reached its checkout")
 	}
 	pr := h.pr(2)
+	if !pr.Forced {
+		t.Fatal("the round is not forced")
+	}
 
 	// #2 leaves the radar and GitHub confirms it merged, twice 60s apart.
 	h.open(prSpec{n: 1, head: "base1"})
