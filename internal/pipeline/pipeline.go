@@ -216,6 +216,12 @@ type Runner struct {
 	Config *config.Config
 	Layout paths.Layout
 
+	// OnPause pauses an agent kind at once when a run proved it logged out
+	// or over its usage limit (a reviewer's run failed with the error, see
+	// finishReviewerRun), before the round ends: the engine's PauseTool.
+	// nil = the round's settle pauses it from the reports.
+	OnPause func(ctx context.Context, p Pause)
+
 	Clock        func() time.Time                                 // nil = time.Now
 	Sleep        func(ctx context.Context, d time.Duration) error // nil = a timer honouring ctx
 	PollInterval time.Duration                                    // 0 = DefaultPollInterval
@@ -396,6 +402,10 @@ type Pause struct {
 	Tool   string    // the agent kind to pause (config.Role.AgentKind): codex, claude, droid, ...
 	Until  time.Time // usage_limit reset when the text names one; zero = apply the fallback backoff
 	Detail string    // the matching pane line (redacted)
+	// Proven: a run showed the failure (a reviewer's run, the judge's
+	// pane), not a login check: a login pause then holds until the kind's
+	// login file changes (engine, store.KVToolPausedLogin).
+	Proven bool
 }
 
 // RoleReport is what one non-judge role produced.

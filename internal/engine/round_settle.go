@@ -179,7 +179,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 			continue
 		}
 		paused[tool] = true
-		p := pipeline.Pause{Kind: rep.Status, Tool: tool, Detail: rep.Detail}
+		p := pipeline.Pause{Kind: rep.Status, Tool: tool, Detail: rep.Detail, Proven: rep.RunID != ""} // a reviewer the preflight skipped has no run
 		if rep.Health != nil && rep.Health.ResetAt != nil {
 			p.Until = *rep.Health.ResetAt
 		}

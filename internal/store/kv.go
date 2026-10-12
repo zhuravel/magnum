@@ -43,6 +43,11 @@ func KVToolPausedReason(tool string) string { return tool + ".paused_reason" }
 // KVToolPausedDetail holds the pane line that caused a tool pause.
 func KVToolPausedDetail(tool string) string { return tool + ".paused_detail" }
 
+// KVToolPausedLogin holds the stamp of a tool's login file when a run
+// proved it logged out (agents.Manager.LoginStamp); the pause holds until
+// the stamp changes.
+func KVToolPausedLogin(tool string) string { return tool + ".paused_login" }
+
 // KVToolBackoff holds the last fallback pause of a tool (a Go duration).
 func KVToolBackoff(tool string) string { return tool + ".backoff" }
 

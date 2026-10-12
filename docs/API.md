@@ -1062,6 +1062,16 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 func (m *Manager) LatestRound(ctx context.Context, prID int64) (int, error)
     LatestRound is the highest run round of a PR (0 when it has no runs).
 
+func (m *Manager) LoginStamp(kind string) string
+    LoginStamp fingerprints an agent kind's login file (config.Kind.LoginFile:
+    its mtime and size, "absent" for a missing file). The engine records it when
+    a run proved the kind logged out and lifts that pause only once the stamp
+    changes, because a login check that reads the saved tokens (`codex login
+    status`) still says logged in while a revoked refresh token fails every
+    call. "" for a kind without a login file, or one whose home magnum cannot
+    tell: a relative path is under the kind's home, which only codex has (the
+    CODEX_HOME of the kind's env, else codexConfigPath's directory).
+
 func (m *Manager) NewRun(ctx context.Context, pr store.PR, role Role, kind string, round int) (store.Run, error)
     NewRun inserts a pending run for pr's role (a configured role name or
     alias; the run gets the name): id = NewRunID, target_sha = pr.HeadSHA,
@@ -3456,6 +3466,13 @@ type Kind struct {
 	// "text:<substring>", "regex:<expr>", "json:<dotted.path>" (a boolean in
 	// the first JSON object of stdout) or "" (exit status 0).
 	LoginOK string `toml:"login_ok"`
+	// LoginFile: the CLI's login file, a relative path under the kind's
+	// home (codex: CODEX_HOME, else ~/.codex); "" = none. A login pause
+	// that a run proved (a reviewer's run or the judge's pane showed the
+	// login error) holds until LoginCheck passes and this file changes,
+	// because a check that reads the saved tokens says logged in while a
+	// revoked refresh token fails every call (agents.Manager.LoginStamp).
+	LoginFile string `toml:"login_file"`
 	// Wrapper: "auto" (default), "true" or "false" (see WrapperAuto).
 	Wrapper string `toml:"wrapper"`
 	// Env: extra environment for the kind's panes (a role's env wins).
@@ -5362,6 +5379,9 @@ type Agents interface {
 	StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error
 	ResumeID(ctx context.Context, prID int64, role agents.Role) (string, error)
 	Preflight(ctx context.Context, kind string) error
+	// LoginStamp fingerprints the kind's login file ("" = none): a login
+	// pause a run proved holds until it changes (health).
+	LoginStamp(kind string) string
 	Park(ctx context.Context, pr store.PR) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
@@ -5787,6 +5807,11 @@ func New(d Deps) *Engine
 
 func (e *Engine) Kick()
     Kick asks the running loop for a tick now (what SIGUSR1 does).
+
+func (e *Engine) PauseTool(ctx context.Context, p pipeline.Pause)
+    PauseTool is pauseTool for the pipeline (Runner.OnPause): a reviewer's run
+    that proved its kind logged out or over its limit pauses the kind while the
+    round goes on.
 
 func (e *Engine) Planned() []PlannedOp
     Planned returns what a dry run would have done (empty otherwise).
@@ -12146,6 +12171,10 @@ type Pause struct {
 	Tool   string    // the agent kind to pause (config.Role.AgentKind): codex, claude, droid, ...
 	Until  time.Time // usage_limit reset when the text names one; zero = apply the fallback backoff
 	Detail string    // the matching pane line (redacted)
+	// Proven: a run showed the failure (a reviewer's run, the judge's
+	// pane), not a login check: a login pause then holds until the kind's
+	// login file changes (engine, store.KVToolPausedLogin).
+	Proven bool
 }
     Pause asks the engine to pause an agent kind.
 
@@ -12490,6 +12519,12 @@ type Runner struct {
 
 	Config *config.Config
 	Layout paths.Layout
+
+	// OnPause pauses an agent kind at once when a run proved it logged out
+	// or over its usage limit (a reviewer's run failed with the error, see
+	// finishReviewerRun), before the round ends: the engine's PauseTool.
+	// nil = the round's settle pauses it from the reports.
+	OnPause func(ctx context.Context, p Pause)
 
 	Clock        func() time.Time                                 // nil = time.Now
 	Sleep        func(ctx context.Context, d time.Duration) error // nil = a timer honouring ctx
@@ -14210,6 +14245,11 @@ func KVToolBackoff(tool string) string
 
 func KVToolPausedDetail(tool string) string
     KVToolPausedDetail holds the pane line that caused a tool pause.
+
+func KVToolPausedLogin(tool string) string
+    KVToolPausedLogin holds the stamp of a tool's login file when a run proved
+    it logged out (agents.Manager.LoginStamp); the pause holds until the stamp
+    changes.
 
 func KVToolPausedReason(tool string) string
     KVToolPausedReason holds why a tool is paused (usage_limit |

@@ -87,6 +87,9 @@ type Agents interface {
 	StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error
 	ResumeID(ctx context.Context, prID int64, role agents.Role) (string, error)
 	Preflight(ctx context.Context, kind string) error
+	// LoginStamp fingerprints the kind's login file ("" = none): a login
+	// pause a run proved holds until it changes (health).
+	LoginStamp(kind string) string
 	Park(ctx context.Context, pr store.PR) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
@@ -548,7 +551,13 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	for _, m := range mods {
 		m(&d)
 	}
-	return New(d)
+	e := New(d)
+	for _, r := range a.Pipeline {
+		if r != nil {
+			r.OnPause = e.PauseTool // a run that proves a kind logged out pauses it before the round ends
+		}
+	}
+	return e
 }
 
 // Planned returns what a dry run would have done (empty otherwise).

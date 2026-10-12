@@ -313,7 +313,7 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	}
 	switch h.Kind {
 	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthOverloaded:
-		p := &Pause{Kind: string(h.Kind), Tool: rd.judge.AgentKind(), Detail: h.Detail}
+		p := &Pause{Kind: string(h.Kind), Tool: rd.judge.AgentKind(), Detail: h.Detail, Proven: true}
 		if h.ResetAt != nil {
 			p.Until = *h.ResetAt
 		}
@@ -331,7 +331,31 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	case waitFailed:
 		return verdict{final: true, outcome: OutcomeError, err: fmt.Errorf("pipeline: judge run failed: %w", t.err)}
 	}
+	if rep, ok := rd.loggedOutReport(rd.judge.AgentKind()); ok {
+		// A judge of a kind a reviewer's run proved logged out stalls on
+		// the same revoked token: a nudge would only stall again.
+		p := &Pause{Kind: string(agents.HealthLoginRequired), Tool: rd.judge.AgentKind(), Detail: rep.Role + ": " + rep.Detail, Proven: true}
+		return verdict{final: true, outcome: OutcomeLoginRequired, pause: p,
+			err: fmt.Errorf("the judge stopped without a result while %s is logged out (%s: %s)", rd.judge.AgentKind(), rep.Role, rep.Detail)}
+	}
 	return verdict{} // ended quietly: nudge
+}
+
+// loggedOutReport is a reviewer report of this round whose run proved the
+// agent kind logged out (its status is login_required and it has a run: a
+// reviewer the preflight skipped has none), if any.
+func (rd *round) loggedOutReport(kind string) (RoleReport, bool) {
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	for _, role := range rd.running() {
+		if role.AgentKind() != kind {
+			continue
+		}
+		if rep, ok := rd.res.Reports[agents.Role(role.Name)]; ok && rep.Status == string(agents.HealthLoginRequired) && rep.RunID != "" {
+			return rep, true
+		}
+	}
+	return RoleReport{}, false
 }
 
 // stopJudge interrupts a judge whose turn or own pass timed out with ctrl+c

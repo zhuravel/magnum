@@ -651,6 +651,7 @@ type fakeAgents struct {
 	calls        []string
 	obs          []agents.Observation
 	loggedOut    map[string]bool
+	loginStamp   map[string]string // LoginStamp per kind ("" = no login file)
 	resumeIDs    map[agents.Role]string
 	failResume   bool
 	parkErr      error
@@ -831,6 +832,12 @@ func (f *fakeAgents) ResumeID(_ context.Context, _ int64, role agents.Role) (str
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.resumeIDs[role], nil
+}
+
+func (f *fakeAgents) LoginStamp(kind string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.loginStamp[kind]
 }
 
 func (f *fakeAgents) Preflight(_ context.Context, kind string) error {

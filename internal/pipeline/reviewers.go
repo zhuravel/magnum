@@ -464,6 +464,29 @@ func (rd *round) finishReviewerRun(ctx context.Context, role config.Role, run st
 		msg += "; " + stopped
 	}
 	rd.event(ctx, "warn", "round.reviewer", fmt.Sprintf("%s report %s: %s", role.Name, rep.Status, msg), map[string]any{"run": run.ID, "role": run.Role, "status": rep.Status})
+	rd.pauseAtOnce(ctx, role, rep)
+}
+
+// pauseAtOnce pauses the role's tool through Runner.OnPause when its run
+// proved the tool logged out or over its usage limit, so other rounds stop
+// starting that kind's roles while this one goes on without the role; the
+// round's settle pauses it again from the report, which the engine folds
+// into the pause already made. A reviewer's login failure paused its tool
+// only when the round settled, half an hour later on 2026-10-12, after the
+// operator had logged in again.
+func (rd *round) pauseAtOnce(ctx context.Context, role config.Role, rep RoleReport) {
+	if rd.r.OnPause == nil || rep.Health == nil || rep.Kind == "" {
+		return
+	}
+	if rep.Health.Kind != agents.HealthLoginRequired && rep.Health.Kind != agents.HealthUsageLimit {
+		return
+	}
+	p := Pause{Kind: string(rep.Health.Kind), Tool: rep.Kind, Detail: rep.Detail, Proven: true}
+	if rep.Health.ResetAt != nil {
+		p.Until = *rep.Health.ResetAt
+	}
+	rd.r.OnPause(ctx, p)
+	rd.logf("pipeline: %s: %s paused at once (%s)", role.Name, rep.Kind, rep.Health.Kind)
 }
 
 // reportFile reports a present, non-empty report of this round's run as ok

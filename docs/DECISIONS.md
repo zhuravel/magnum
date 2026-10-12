@@ -6270,6 +6270,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   points (the simplifier's), and replacing `claude-review`'s `/code-review` with it (the comparison's own
   data has Claude Code's built-in review first on Claude Code; a change there is decided by `magnum
   eval` on the learned corpus, not by a chart).
+- 2026-10-12: A run that proves an agent kind logged out pauses the kind at once, and the pause holds
+  until the login really changed. Codex's refresh token was revoked during two rounds: codex-review failed
+  with the login error a minute in, the judge (Codex too) stalled and was nudged, both rounds posted half
+  an hour later without codex-review, and only their settle paused Codex, after the operator had logged in
+  again, so the pause ended on its first check. Now the pipeline's `Runner.OnPause` (the engine's
+  `PauseTool`, wired in `FromApp`) pauses the kind when a reviewer's run fails with its login error or usage
+  limit (`pauseAtOnce`), the settle's pause of the same report folds into it (`pauseTool` keeps a pause of
+  the same reason still running, without a second event), a judge that stops without a result while a
+  reviewer's run proved its kind logged out ends the turn as `login_required` with the pause
+  (`loggedOutReport`; the engine continues the turn after it, as after a usage limit) instead of a nudge,
+  and a login pause a run proved (`Pause.Proven`; a reviewer the preflight skipped has no run) records the
+  kind's login file stamp (`Kind.LoginFile`, codex `auth.json`; `agents.Manager.LoginStamp`,
+  `store.KVToolPausedLogin`) and lifts only when the login check passes and the stamp changed, because
+  `codex login status` reads the saved tokens and said logged in while the revoked token failed every
+  call (round 28 on another PR started Codex roles three minutes into the outage). Rejected: holding the
+  round for the logged-out reviewer (the judge's own pass and the other reviewer are already running, and
+  the review names the missing reviewer, which the next round carries); a live probe in place of the login
+  check (a prompt costs tokens and a turn); watching the login file alone (a refresh rewrites it too, so
+  the check still has to pass).
 
 ## Learned rules
 

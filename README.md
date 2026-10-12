@@ -481,6 +481,16 @@ minutes) pauses dispatch for everything once, with one toast, and is never charg
 probes `git ls-remote` of a watched clone (over HTTPS through gh, like its fetches) after 2 minutes, then after twice as long each time it still
 fails (up to 30), and resumes by itself when it answers; `magnum resume` lifts the pause at once.
 
+A logged-out agent CLI pauses its kind: the login check before a round (`[kinds.*] login_check`) skips a
+logged-out reviewer and ends a round whose judge is logged out, and a run that fails with the login error
+(a reviewer's command, the judge's pane) pauses the kind the moment it fails, not when the round ends, so
+other rounds stop starting its roles while this one goes on without the reviewer. A judge that stops
+without a result while a reviewer's run proved its kind logged out ends its turn as `login_required`,
+which Magnum continues once the login is back, instead of a nudge. The pause lifts when the login check
+passes, and, for a pause a run proved, once the kind's login file changed too (`login_file`, codex:
+`auth.json` under its home): `codex login status` reads the saved tokens and says logged in while a
+revoked refresh token fails every call.
+
 The `[usage]` section watches the Codex budget, which Magnum reads from Codex's own session files
 (`codex_home`, default `$CODEX_HOME` or `~/.codex`) at most once a minute. At `codex_soft` percent
 (default 80) automatic full re-reviews wait (`re-review · Codex soft cap` on the board), since a full

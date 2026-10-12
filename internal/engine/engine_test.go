@@ -1211,3 +1211,48 @@ func TestPauseHoldsAutomaticReviewsNotRequestedOnes(t *testing.T) {
 		t.Fatalf("a forced PR ran during a drain: %s", pr.State)
 	}
 }
+
+// A run that proved Codex logged out (a reviewer's command failed with the
+// login error) pauses it at once through the pipeline's OnPause
+// (Engine.PauseTool); the round's settle pausing the same report again adds
+// no second pause or event. The pause holds while the login check passes
+// but the kind's login file is unchanged, since `codex login status` reads
+// the saved tokens and said logged in while a revoked refresh token failed
+// every call (2026-10-12: the pause ended on its first check and the next
+// round failed the same way), and lifts once the file changed.
+func TestAProvenLoginPauseHoldsUntilTheLoginFileChanges(t *testing.T) {
+	h := newHarness(t)
+	h.ag.loginStamp = map[string]string{"codex": "100:7"}
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	p := pipeline.Pause{Kind: string(agents.HealthLoginRequired), Tool: "codex", Detail: "Failed to refresh token", Proven: true}
+	h.e.PauseTool(h.ctx, p)
+	h.e.PauseTool(h.ctx, p)
+	if n := len(h.events("tool.paused")); n != 1 {
+		t.Fatalf("tool.paused events = %d, want one for the two pauses", n)
+	}
+	for range 3 {
+		h.advance(2 * time.Minute)
+		h.tick()
+	}
+	if p, ok := h.e.toolPause(h.ctx, "codex"); !ok || !p.Until.After(h.clock.Now()) {
+		t.Fatalf("the pause lifted while the login file is unchanged: %+v %v", p, ok)
+	}
+	h.ag.mu.Lock()
+	h.ag.loginStamp["codex"] = "200:7"
+	h.ag.mu.Unlock()
+	h.advance(2 * time.Minute)
+	h.tick()
+	if p, ok := h.e.toolPause(h.ctx, "codex"); ok {
+		t.Fatalf("the pause did not lift after the login file changed: %+v", p)
+	}
+	// A pause the login check made (nothing proved the login gone) lifts on
+	// the check alone, whatever the file: TestLoginRequiredPreflightPausesAndRechecks.
+	h.e.PauseTool(h.ctx, pipeline.Pause{Kind: string(agents.HealthLoginRequired), Tool: "codex", Detail: "codex login status: logged out"})
+	h.advance(2 * time.Minute)
+	h.tick()
+	if p, ok := h.e.toolPause(h.ctx, "codex"); ok {
+		t.Fatalf("an unproven pause held on the login file: %+v", p)
+	}
+}

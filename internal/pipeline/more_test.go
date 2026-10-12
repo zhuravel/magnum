@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -300,5 +301,83 @@ func TestClassifyAfterIgnoresEarlierRounds(t *testing.T) {
 	}
 	if got := tailLines("a\nb\nc\n", 2); got != "b\nc" {
 		t.Errorf("tailLines = %q", got)
+	}
+}
+
+// loginFailingCodexReview makes codex-review's command fail (exit status 1)
+// with its pane showing Codex's login error after this run's command line.
+func loginFailingCodexReview(e *env) {
+	e.ag.exitStatus[agents.RoleCodexReview] = 1
+	e.ag.codex = func(f *fakeAgents, c codexCall) error {
+		f.mu.Lock()
+		f.reads[agents.RoleCodexReview] = "$ " + c.Script + "\nError: unexpected status 401 Unauthorized\n" + c.Marker + " 1\n"
+		f.mu.Unlock()
+		return nil
+	}
+}
+
+// A reviewer's run that fails with its tool's login error pauses the tool
+// at once (Runner.OnPause, the engine's PauseTool), before the judge is
+// prompted, so other rounds stop starting that kind's roles during the
+// outage; the round goes on without the reviewer as before. The pause names
+// the run as its proof (Proven). On 2026-10-12 the pause came only when the
+// round settled, half an hour later.
+func TestAReviewersLoginFailurePausesItsToolAtOnce(t *testing.T) {
+	e := newEnv(t)
+	loginFailingCodexReview(e)
+	var pauses []Pause
+	var judgePrompts []int
+	e.r.OnPause = func(_ context.Context, p Pause) {
+		pauses = append(pauses, p)
+		judgePrompts = append(judgePrompts, len(e.ag.submitsFor(agents.RoleJudge)))
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(604, "COMMENTED", "COMMENT").behavior(t)}
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	if rep := res.Reports[agents.RoleCodexReview]; rep.Status != string(agents.HealthLoginRequired) {
+		t.Fatalf("codex-review report = %+v", rep)
+	}
+	if len(pauses) != 1 || pauses[0].Kind != string(agents.HealthLoginRequired) || pauses[0].Tool != agents.KindCodex || !pauses[0].Proven || pauses[0].Detail == "" {
+		t.Fatalf("pauses = %+v", pauses)
+	}
+	if judgePrompts[0] != 0 {
+		t.Errorf("the pause came after the judge prompt")
+	}
+}
+
+// The judge is a session of the same kind: during the outage it stalled and
+// magnum nudged it, as it does a judge that ends quietly. A judge that stops
+// without a result while a reviewer's run proved its kind logged out ends
+// the turn as login_required with the pause (the engine continues the turn
+// once the login is back) instead of a nudge, which would stall the same way.
+func TestAJudgeThatStopsWhileItsKindIsLoggedOutPausesInsteadOfANudge(t *testing.T) {
+	e := newEnv(t)
+	loginFailingCodexReview(e)
+	e.ag.behaviors[agents.RoleJudge] = []behavior{endSilently()}
+	e.ag.reads[agents.RoleJudge] = "Done reading the diff.\n"
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if res.Outcome != OutcomeLoginRequired || res.Pause == nil || res.Pause.Kind != string(agents.HealthLoginRequired) ||
+		res.Pause.Tool != agents.KindCodex || !res.Pause.Proven || !strings.Contains(res.Pause.Detail, "codex-review") {
+		t.Fatalf("result = %+v, pause %+v", res, res.Pause)
+	}
+	if res.Nudged || len(e.ag.submitsFor(agents.RoleJudge)) != 1 {
+		t.Errorf("nudged = %v, judge submits = %d; want no nudge", res.Nudged, len(e.ag.submitsFor(agents.RoleJudge)))
+	}
+	run := e.runOf(agents.RoleJudge, store.RunInitial)
+	if run.State != store.RunFailed || store.Deref(run.Outcome) != OutcomeLoginRequired {
+		t.Errorf("judge run = %s / %v", run.State, store.Deref(run.Outcome))
+	}
+	// A judge that ends quietly while nothing proved its kind logged out is
+	// nudged as before.
+	e2 := newEnv(t)
+	e2.ag.behaviors[agents.RoleJudge] = []behavior{endSilently(), e2.judgePosts(605, "COMMENTED", "COMMENT").behavior(t)}
+	e2.ag.reads[agents.RoleJudge] = "Done reading the diff.\n"
+	if res, err := e2.r.RunRound(e2.ctx, e2.input(KindInitial)); err != nil || res.Outcome != OutcomePosted || !res.Nudged {
+		t.Fatalf("without a logged-out reviewer: result = %+v, %v", res, err)
 	}
 }

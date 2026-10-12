@@ -145,10 +145,18 @@ func (e *Engine) toolPause(ctx context.Context, tool string) (toolPause, bool) {
 	return toolPause{Until: until, Reason: reason, Detail: detail}, true
 }
 
+// PauseTool is pauseTool for the pipeline (Runner.OnPause): a reviewer's
+// run that proved its kind logged out or over its limit pauses the kind
+// while the round goes on.
+func (e *Engine) PauseTool(ctx context.Context, p pipeline.Pause) { e.pauseTool(ctx, p) }
+
 // pauseTool pauses an agent kind (pipeline.Pause.Tool) after a health
 // failure: usage limits until the parsed reset (else 1h, doubling), logins
-// for loginRecheck (re-checked with a preflight), overload for the fallback
-// backoff.
+// for loginRecheck (re-checked with a preflight; a login pause a run proved
+// also waits for the kind's login file to change, stampLogin), overload for
+// the fallback backoff. A pause of the same reason still running is kept
+// (extended when the new one ends later), without a second event or toast:
+// the round's settle pauses again what a reviewer's failure paused at once.
 func (e *Engine) pauseTool(ctx context.Context, p pipeline.Pause) {
 	tool := p.Tool
 	if tool == "" {
@@ -171,11 +179,20 @@ func (e *Engine) pauseTool(ctx context.Context, p pipeline.Pause) {
 			until = now.Add(d)
 		}
 	}
-	prev, had := e.toolPause(ctx, tool)
-	if had && prev.Until.After(until) && prev.Reason == p.Kind {
-		until = prev.Until
+	proven := p.Proven && p.Kind == string(agents.HealthLoginRequired)
+	if prev, had := e.toolPause(ctx, tool); had && prev.Reason == p.Kind && prev.Until.After(now) {
+		if until.After(prev.Until) {
+			e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(until))
+		}
+		if proven {
+			e.stampLogin(ctx, tool)
+		}
+		return
 	}
 	e.setToolPause(ctx, tool, p.Kind, p.Detail, until)
+	if proven {
+		e.stampLogin(ctx, tool)
+	}
 	e.event(ctx, "warn", "tool:"+tool, "tool.paused", fmt.Sprintf("%s paused (%s) until %s: %s", tool, p.Kind, until.Local().Format("15:04"), p.Detail), nil)
 	title, body := toolToast(tool, p.Kind, until)
 	e.urgent("pause:"+tool+":"+p.Kind, title, body, time.Hour)
@@ -208,7 +225,25 @@ func (e *Engine) clearToolPause(ctx context.Context, tool string) {
 	if reason, ok := e.getKV(ctx, store.KVToolPausedReason(tool)); ok && reason != "" {
 		e.forgetSend(ctx, "pause:"+tool+":"+reason) // the next pause toasts at once
 	}
-	e.delKV(ctx, store.KVToolPausedUntil(tool), store.KVToolPausedReason(tool), store.KVToolPausedDetail(tool))
+	e.delKV(ctx, store.KVToolPausedUntil(tool), store.KVToolPausedReason(tool), store.KVToolPausedDetail(tool), store.KVToolPausedLogin(tool))
+}
+
+// stampLogin records the tool's login file stamp (Agents.LoginStamp) for a
+// login pause a run proved, once per pause: health lifts the pause only
+// after the stamp changes (the operator logged in again, or a refresh got
+// through), since the login check alone says logged in while a revoked
+// refresh token fails every call (2026-10-12: two rounds posted without
+// codex-review, and the pause that followed ended on the next check).
+func (e *Engine) stampLogin(ctx context.Context, tool string) {
+	if e.d.Agents == nil {
+		return
+	}
+	if _, ok := e.getKV(ctx, store.KVToolPausedLogin(tool)); ok {
+		return
+	}
+	if s := e.d.Agents.LoginStamp(tool); s != "" {
+		e.setKV(ctx, store.KVToolPausedLogin(tool), s)
+	}
 }
 
 // forgetSend drops a toast's dedup record once its condition cleared.
@@ -299,6 +334,11 @@ func (e *Engine) health(ctx context.Context) {
 			if err := e.d.Agents.Preflight(ctx, tool); err != nil {
 				e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(now.Add(loginRecheck)))
 				e.log.Info("still paused", "tool", tool, "reason", p.Reason, "err", err)
+				continue
+			}
+			if stamp, ok := e.getKV(ctx, store.KVToolPausedLogin(tool)); ok && stamp != "" && e.d.Agents.LoginStamp(tool) == stamp {
+				e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(now.Add(loginRecheck)))
+				e.log.Info("still paused", "tool", tool, "reason", p.Reason, "err", "the login file has not changed since a run proved the login gone")
 				continue
 			}
 		}

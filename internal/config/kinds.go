@@ -131,6 +131,13 @@ type Kind struct {
 	// "text:<substring>", "regex:<expr>", "json:<dotted.path>" (a boolean in
 	// the first JSON object of stdout) or "" (exit status 0).
 	LoginOK string `toml:"login_ok"`
+	// LoginFile: the CLI's login file, a relative path under the kind's
+	// home (codex: CODEX_HOME, else ~/.codex); "" = none. A login pause
+	// that a run proved (a reviewer's run or the judge's pane showed the
+	// login error) holds until LoginCheck passes and this file changes,
+	// because a check that reads the saved tokens says logged in while a
+	// revoked refresh token fails every call (agents.Manager.LoginStamp).
+	LoginFile string `toml:"login_file"`
 	// Wrapper: "auto" (default), "true" or "false" (see WrapperAuto).
 	Wrapper string `toml:"wrapper"`
 	// Env: extra environment for the kind's panes (a role's env wins).
@@ -408,7 +415,7 @@ func DefaultKinds() map[string]Kind {
 			Model:      []string{"--model", PlaceholderModel},
 			Effort:     []string{"-c", "model_reasoning_effort=" + PlaceholderEffort},
 			Rename:     "/rename " + PlaceholderTitle,
-			LoginCheck: "codex login status", LoginOK: "text:Logged in",
+			LoginCheck: "codex login status", LoginOK: "text:Logged in", LoginFile: "auth.json",
 			// The spawned-agent threads open at once, the primary excluded
 			// (at least 1); agents.enabled = false removes the tools.
 			Subagents: []string{"-c", "agents.max_concurrent_threads_per_session=" + PlaceholderSubagents}, NoSubagents: []string{"-c", "agents.enabled=false"},
