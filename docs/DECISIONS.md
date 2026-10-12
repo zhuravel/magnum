@@ -1105,6 +1105,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
   kind's canonical executable itself and takes only the arguments after it) and a second launch path
   through `pane run` with herdr's detection and a rename (more failure modes for the same effect).
 
+- **The pane's error line is the CLI's own: it starts the line, and it is cut by runes (2026-10-12).** The
+  line the entry above appends to a refused prompt's error matched `error`, `fatal` or `panic` after any
+  indentation, but a session that died mid-turn leaves its scrollback, where a TUI renders a tool's output
+  indented or boxed ("    Error: expected 2 got 3"): text a PR's code can steer, which would have reached
+  the round's error, the attention reason and the toasts (errors never carry PR text). Now only a line that
+  starts at column 0 counts, which a CLI's own error line does (`error: the argument '--search' cannot be
+  used multiple times`), and the cut is `textx.Clip` at 200 runes, an ellipsis included, where the 200-byte
+  cut could split a rune. Not done: limiting the read to a session that died at its launch (the agent
+  being gone says nothing about when it died; the column rule keeps the tool's text out either way).
+
+- **A session with nothing to compare leaves the project config out without a warning (2026-10-12).** The
+  retro and the notes curation run an agent in Magnum's own directories under `learn/`, which are no git
+  repository; `checkoutProject` still asked git for a merge base against `origin/<default branch>` (the
+  scratch PR has none of its own, so the repository's default stood in), git failed with code 128, and every
+  retro and every curation logged two WARN lines (the failed `git merge-base` and "cannot compare … so the
+  session leaves them out"), about twelve a day, for an outcome that was right. Now the launch decides before
+  it runs git: a launch with no base, or a directory without a `.git` (a directory, or a file in a
+  worktree) in it or any parent of its real path (a stat walk, as git finds a repository, no call), runs
+  no git, logs one debug line, and the session leaves the project config out as before (Claude with
+  `--setting-sources user`, Codex with the checkout untrusted: what Magnum cannot compare it does not
+  trust); a PR checkout where git fails for another reason keeps the warning. An error other than a
+  missing `.git` counts as a checkout, so that git decides. Rejected: matching git's "not a git
+  repository" text (a message of git's, not ours to parse) and dropping the compare for the scratch
+  sessions by their tag (an eval's replay runs in a real worktree and wants it).
+
+- **One Codex home lookup and one read of its config per launch (2026-10-12).** The MCP servers and the
+  plugins a launch turns off, and the login stamp of a kind's pause, each found the Codex home their own way
+  (the role's pane env, the kind's env, the config file's directory), and a launch decoded `config.toml`
+  twice. Now `codexHomeFor(env)` answers for all of them (the `CODEX_HOME` of the pane env, `~` expanded,
+  else the directory of the Codex config) and `codexOff` reads the file once for the servers and the
+  plugins; a config that cannot be decoded is one WARN line for both (it was one each) and leaves both on.
+  The stamp stays per kind, as the pause is: a `CODEX_HOME` only a role's own `env` sets is read by that
+  role's launches and not by the stamp. The args and their order are unchanged.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

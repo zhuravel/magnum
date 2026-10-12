@@ -109,11 +109,11 @@ func TestJudgeReadsTheMCPServersOfItsPaneEnvsCodexHome(t *testing.T) {
 	home := t.TempDir()
 	writeFile(t, filepath.Join(home, "config.toml"), "[mcp_servers.tracker]\ncommand = \"tracker-mcp\"\n", 0o600)
 	e.setKind(KindCodex, func(k *config.Kind) { k.Env = map[string]string{"CODEX_HOME": home} })
-	if got := e.m.mcpServers(e.spec(RoleJudge)); !slices.Equal(got, []string{"tracker"}) {
+	if got := judgeServers(e); !slices.Equal(got, []string{"tracker"}) {
 		t.Fatalf("pane env CODEX_HOME: servers = %q, want tracker", got)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.Env = map[string]string{"CODEX_HOME": filepath.Join(home, "missing")} })
-	if got := e.m.mcpServers(e.spec(RoleJudge)); got != nil {
+	if got := judgeServers(e); got != nil {
 		t.Fatalf("missing config: servers = %q, want none", got)
 	}
 	if logs := e.logs.all(); len(logs) != 0 {
@@ -121,7 +121,7 @@ func TestJudgeReadsTheMCPServersOfItsPaneEnvsCodexHome(t *testing.T) {
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.Env = nil })
 	writeFile(t, e.codexConfig, "[mcp_servers.docs\n", 0o600)
-	if got := e.m.mcpServers(e.spec(RoleJudge)); got != nil {
+	if got := judgeServers(e); got != nil {
 		t.Fatalf("unreadable config: servers = %q, want none", got)
 	}
 	if logs := mcpLogs(e); len(logs) != 1 || strings.Contains(logs[0], e.codexConfig) {
@@ -260,15 +260,15 @@ func TestJudgeStartsWithoutTheOperatorsCodexPlugins(t *testing.T) {
 		t.Fatalf("codex review line = %q, %v", got, err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.PluginAllow = []string{"playwright@claude-plugins-official"} })
-	if got := e.m.codexPlugins(e.spec(RoleJudge)); !slices.Equal(got, []string{"docs@acme", "playwright@claude-plugins-official"}) {
+	if got := judgePlugins(e); !slices.Equal(got, []string{"docs@acme", "playwright@claude-plugins-official"}) {
 		t.Fatalf("plugins = %q", got)
 	}
 	k, _ := e.m.kindSpec(KindCodex)
-	if got := k.PluginOffArgs(e.m.codexPlugins(e.spec(RoleJudge))); !slices.Equal(got, pluginsOff[:2]) {
+	if got := k.PluginOffArgs(judgePlugins(e)); !slices.Equal(got, pluginsOff[:2]) {
 		t.Fatalf("plugin_allow playwright: args = %q", got)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = false })
-	if got := e.m.codexPlugins(e.spec(RoleJudge)); got != nil {
+	if got := judgePlugins(e); got != nil {
 		t.Fatalf("mcp_off false: plugins = %q", got)
 	}
 	bare := t.TempDir()
@@ -276,12 +276,12 @@ func TestJudgeStartsWithoutTheOperatorsCodexPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff, k.Env = true, map[string]string{"CODEX_HOME": bare} })
-	if got := e.m.codexPlugins(e.spec(RoleJudge)); !slices.Equal(got, []string{"chrome@openai-bundled"}) {
+	if got := judgePlugins(e); !slices.Equal(got, []string{"chrome@openai-bundled"}) {
 		t.Fatalf("pane env CODEX_HOME without a config: plugins = %q", got)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.Env = nil })
 	writeFile(t, e.codexConfig, "[plugins\n", 0o600)
-	if got := e.m.codexPlugins(e.spec(RoleJudge)); got != nil {
+	if got := judgePlugins(e); got != nil {
 		t.Fatalf("unreadable config: plugins = %q, want none", got)
 	}
 }

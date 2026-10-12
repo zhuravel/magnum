@@ -17,7 +17,9 @@ import (
 // login status`) still says logged in while a revoked refresh token fails
 // every call. "" for a kind without a login file, or one whose home magnum
 // cannot tell: a relative path is under the kind's home, which only codex
-// has (the CODEX_HOME of the kind's env, else codexConfigPath's directory).
+// has (codexHomeFor of the kind's env). The stamp is per kind, as the pause is:
+// a CODEX_HOME that only a role's own env sets (config.Role.Env) is not
+// seen, while the launches of that role read it (codexOff).
 func (m *Manager) LoginStamp(kind string) string {
 	k, ok := m.kindSpec(kind)
 	if !ok || k.LoginFile == "" {
@@ -28,12 +30,7 @@ func (m *Manager) LoginStamp(kind string) string {
 		if kind != KindCodex {
 			return ""
 		}
-		home := ""
-		if h := k.Env["CODEX_HOME"]; h != "" {
-			home = paths.Expand(h)
-		} else if p := m.codexConfigPath(); p != "" {
-			home = filepath.Dir(p)
-		}
+		home, _ := m.codexHomeFor(k.Env)
 		if home == "" {
 			return ""
 		}

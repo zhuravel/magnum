@@ -38,12 +38,28 @@ const restrictedFolderScreen = `
 
 // projectEnv is a PR whose checkout is made of files, with git answering
 // for it: the merge base with origin/master, and changed as what differs
-// under .codex/ (diff) and untracked there (ls-files).
+// under .codex/ (diff) and untracked there (ls-files). The directory has the
+// .git of a work tree; projectEnvOutsideGit leaves it out.
 func projectEnv(t *testing.T, files map[string]string, changed, untracked []string) (*env, string, Workspace) {
+	t.Helper()
+	return projectEnvIn(t, files, changed, untracked, true)
+}
+
+// projectEnvOutsideGit is projectEnv for a directory that is no git
+// repository (the retro's and the curation's).
+func projectEnvOutsideGit(t *testing.T, files map[string]string) (*env, string, Workspace) {
+	t.Helper()
+	return projectEnvIn(t, files, nil, nil, false)
+}
+
+func projectEnvIn(t *testing.T, files map[string]string, changed, untracked []string, checkout bool) (*env, string, Workspace) {
 	t.Helper()
 	e := newEnv(t)
 	dir := t.TempDir()
 	writeFiles(t, dir, files)
+	if checkout {
+		markCheckout(t, dir)
+	}
 	git := func(args ...string) []string { return append([]string{"git", "-C", dir}, args...) }
 	nul := func(paths []string) []byte {
 		if len(paths) == 0 {

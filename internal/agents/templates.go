@@ -908,7 +908,7 @@ func promptLine(role config.Role, d ShellData) (string, error) {
 // resolved through the configuration (pipeline.prompts_dir, then the
 // embedded defaults) unless d.Template is set, and d.MCPOff, when nil,
 // keeping out what a session of the role's tool kind must not load: the MCP
-// servers of the Codex config (mcpServers) and the PR's project config in
+// servers and plugins of the Codex home (codexOff) and the PR's project config in
 // d.Checkout (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered
 // line records the decision for PR prID, recordProject).
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error) {
@@ -916,7 +916,8 @@ func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d
 	if d.MCPOff == nil {
 		if k, ok := m.kindSpec(role.AgentKind()); ok {
 			project = m.checkoutProject(ctx, role, d.Checkout, cmp.Or(d.BaseSHA, d.BaseRef), d.HeadSHA)
-			d.MCPOff = k.ConfigOffArgs(m.mcpServers(role), m.codexPlugins(role), project.servers, project.paths, project.docsOff)
+			servers, plugins := m.codexOff(role)
+			d.MCPOff = k.ConfigOffArgs(servers, plugins, project.servers, project.paths, project.docsOff)
 		}
 	}
 	if d.Template == nil && role.IsShell() && role.Command == "" && d.Command == "" && role.Prompt != "" {

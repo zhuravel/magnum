@@ -44,7 +44,7 @@ import (
 //     kinds without name args but with a rename command are named later, by
 //     ObserveSnapshot), the role's model, effort and subagent-cap args, the
 //     args that turn off the MCP servers of the Codex config (the kind's
-//     mcp_off, read at every launch: mcpServers), the args that keep the
+//     mcp_off, read at every launch: codexOff), the args that keep the
 //     checkout's project config (Codex's .codex/, Claude's .claude/ and
 //     .mcp.json) out when the PR changes it, or Codex's servers under
 //     project_mcp "off" (checkoutProject against origin/<the PR's base>,
@@ -181,8 +181,9 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	model, onFallback := m.startModel(ctx, role, kind)
 	base := cmp.Or(store.Deref(pr.BaseRef), repo.DefaultBranch)
 	project := m.checkoutProject(ctx, role, dir, "origin/"+strings.TrimPrefix(base, "origin/"), "")
+	servers, plugins := m.codexOff(role)
 	args := kind.Argv(config.LaunchArgs{Session: resume, Title: title, Model: model, Effort: role.Effort,
-		Subagents: role.MaxSubagents, MCPServers: m.mcpServers(role), Plugins: m.codexPlugins(role), ProjectServers: project.servers, Untrusted: project.paths, DocsOff: project.docsOff,
+		Subagents: role.MaxSubagents, MCPServers: servers, Plugins: plugins, ProjectServers: project.servers, Untrusted: project.paths, DocsOff: project.docsOff,
 		Wrapper: wrapper, Extra: role.Args})
 	m.recordProject(ctx, pr.ID, role, dir, project)
 	m.noteSessionProject(ctx, sess.ID, kindName, project)

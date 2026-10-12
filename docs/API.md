@@ -1064,13 +1064,15 @@ func (m *Manager) LatestRound(ctx context.Context, prID int64) (int, error)
 
 func (m *Manager) LoginStamp(kind string) string
     LoginStamp fingerprints an agent kind's login file (config.Kind.LoginFile:
-    its mtime and size, "absent" for a missing file). The engine records it when
-    a run proved the kind logged out and lifts that pause only once the stamp
-    changes, because a login check that reads the saved tokens (`codex login
-    status`) still says logged in while a revoked refresh token fails every
-    call. "" for a kind without a login file, or one whose home magnum cannot
-    tell: a relative path is under the kind's home, which only codex has (the
-    CODEX_HOME of the kind's env, else codexConfigPath's directory).
+    its mtime and size, "absent" for a missing file). The engine records it
+    when a run proved the kind logged out and lifts that pause only once the
+    stamp changes, because a login check that reads the saved tokens (`codex
+    login status`) still says logged in while a revoked refresh token fails
+    every call. "" for a kind without a login file, or one whose home magnum
+    cannot tell: a relative path is under the kind's home, which only codex has
+    (codexHomeFor of the kind's env). The stamp is per kind, as the pause is:
+    a CODEX_HOME that only a role's own env sets (config.Role.Env) is not seen,
+    while the launches of that role read it (codexOff).
 
 func (m *Manager) NewRun(ctx context.Context, pr store.PR, role Role, kind string, round int) (store.Run, error)
     NewRun inserts a pending run for pr's role (a configured role name or
@@ -1264,9 +1266,9 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error)
     ShellLine is ShellLine with the role's full-line template (role.Prompt)
     resolved through the configuration (pipeline.prompts_dir, then the embedded
-    defaults) unless d.Template is set, and d.MCPOff, when nil, keeping out
-    what a session of the role's tool kind must not load: the MCP servers of
-    the Codex config (mcpServers) and the PR's project config in d.Checkout
+    defaults) unless d.Template is set, and d.MCPOff, when nil, keeping out what
+    a session of the role's tool kind must not load: the MCP servers and plugins
+    of the Codex home (codexOff) and the PR's project config in d.Checkout
     (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered line records
     the decision for PR prID, recordProject).
 
@@ -1299,7 +1301,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
         kinds without name args but with a rename command are named later,
         by ObserveSnapshot), the role's model, effort and subagent-cap args,
         the args that turn off the MCP servers of the Codex config (the
-        kind's mcp_off, read at every launch: mcpServers), the args that keep
+        kind's mcp_off, read at every launch: codexOff), the args that keep
         the checkout's project config (Codex's .codex/, Claude's .claude/
         and .mcp.json) out when the PR changes it, or Codex's servers under
         project_mcp "off" (checkoutProject against origin/<the PR's base>,

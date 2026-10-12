@@ -226,7 +226,10 @@ type projectScope struct {
 // from the merge base of HEAD and base (gitx.WorkTreeChanges: the PR's
 // commits, and files a round left there, untracked logs aside: logFile;
 // the paths in any case, onDisk, and what an instruction file at the root
-// links to), or git cannot tell, the session gets the kind's
+// links to), or git cannot tell (a git that fails is a warning; a launch
+// without a base and a dir that is no git checkout, as the retro's and the
+// curation's are, never reach git and log at debug: errNoBase,
+// errNoCheckout), the session gets the kind's
 // project_untrust args for dir and its symlink-resolved form and loads none
 // of it, or, when the files are all instruction files and the kind has
 // project_docs_off, those args, and loads the rest. Otherwise it is the
@@ -261,7 +264,13 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		files, err := m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
 		changed := pc.changed(files, disk.links)
 		if err != nil || len(changed) > 0 {
-			if err != nil {
+			switch {
+			case errors.Is(err, errNoBase), errors.Is(err, errNoCheckout):
+				// Decided without asking git: the retro and the notes
+				// curation run in magnum's own directories, and nothing
+				// is wrong. The config stays out all the same.
+				m.logAt(slog.LevelDebug, "agents: %s: %v: the project config (%s) is left out", role.Name, err, pc.labels(nil))
+			case err != nil:
 				m.logErr(ctx, err, "agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.labels(nil), err)
 			}
 			s.declined, s.compared, s.files = true, err == nil, len(changed)
@@ -273,7 +282,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 				}
 				s.docsOff = len(k.ProjectDocsOff) > 0 && !slices.ContainsFunc(changed, func(p projectPath) bool { return !p.docs })
 			}
-			if s.head = head; s.head == "" && m.d.Runner != nil {
+			if s.head = head; s.head == "" && m.d.Runner != nil && !errors.Is(err, errNoCheckout) {
 				s.head, _ = g.RevParse(ctx, dir, "HEAD")
 			}
 			if !s.docsOff {
@@ -520,14 +529,50 @@ func (m *Manager) ReloadsProject(ctx context.Context, s store.Session) bool {
 	return err != nil || !ok || v != "1"
 }
 
+// errNoBase and errNoCheckout are what projectChanges answers, without
+// running git, for a launch that has nothing to compare: no base ref (a
+// stage without a PR base), or a directory that is no git checkout (the
+// retro and the notes curation run an agent in magnum's own directories).
+// checkoutProject leaves the project config out for them all the same, and
+// logs it at debug: nothing is wrong, unlike a git that fails in a checkout.
+var (
+	errNoBase     = errors.New("no base to compare with")
+	errNoCheckout = errors.New("no git checkout")
+)
+
+// inGitCheckout reports whether dir is in a git work tree the way git finds
+// one, without running git: a .git (a directory, or a file in a worktree)
+// in dir or in any parent of its real path. What cannot be told (an error
+// other than a missing .git) counts as a checkout, so that git decides.
+func inGitCheckout(dir string) bool {
+	d := filepath.Clean(dir)
+	if resolved, err := filepath.EvalSymlinks(d); err == nil {
+		d = resolved
+	}
+	for {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
+}
+
 // projectChanges lists the files paths name in dir that differ from the
-// merge base of HEAD and base, but the untracked ones skip reports.
+// merge base of HEAD and base, but the untracked ones skip reports. It
+// answers errNoBase or errNoCheckout, without running git, for a launch
+// that has no base ref or a dir that is no git checkout.
 func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base string, skip func(string) bool, paths []string) ([]string, error) {
 	switch {
 	case m.d.Runner == nil:
 		return nil, errors.New("no command runner")
 	case base == "":
-		return nil, errors.New("no base to compare with")
+		return nil, errNoBase
+	case !inGitCheckout(dir):
+		return nil, errNoCheckout
 	}
 	mb, err := g.MergeBase(ctx, dir, "HEAD", base)
 	if err != nil {

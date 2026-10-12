@@ -17,65 +17,107 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
+// codexHomeFor is where the Codex CLI of a pane environment env reads its
+// config.toml, its plugins/cache and its auth.json: the CODEX_HOME of env
+// (~ expanded; a role's pane env, config.Config.RoleEnv, or a kind's,
+// config.Kind.Env), else the directory of codexConfigPath ($CODEX_HOME of
+// the daemon's own environment, else ~/.codex; none in a test binary
+// without Deps.CodexConfig). It returns the home and the config.toml file
+// to read ("" and "" when neither is known). Every reader of a Codex home
+// (codexOff, LoginStamp) goes through it, so that they agree.
+func (m *Manager) codexHomeFor(env map[string]string) (home, configFile string) {
+	if h := env["CODEX_HOME"]; h != "" {
+		home = paths.Expand(h)
+		return home, filepath.Join(home, "config.toml")
+	}
+	if p := m.codexConfigPath(); p != "" {
+		return filepath.Dir(p), p
+	}
+	return "", ""
+}
+
 // mcpServerName is a TOML bare key, which Codex's -c key path carries as
 // written; any other name (a quoted key with a dot, a space or a non-ASCII
 // letter) would change the path or the shell word, so it is skipped.
 var mcpServerName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// mcpServers lists the MCP servers a Codex session of role would load, for
-// its kind's mcp_off (config.Kind.MCPOffArgs; the kind of a shell role is
-// its tool): the servers the Codex config the session reads declares
-// (declaredMCPServers). The file is the config.toml in the CODEX_HOME the
-// role's pane env sets (config.Config.RoleEnv, ~ expanded), else
-// codexConfigPath's ($CODEX_HOME/config.toml, else ~/.codex/config.toml;
-// none in a test binary without Deps.CodexConfig). nil without mcp_off or
-// mcp_disable, and for a missing file; an unreadable one and each name that
-// is no bare key are logged without the path (pane env values stay out of
-// logs). Read at every launch, so a server added later is turned off too.
-func (m *Manager) mcpServers(role config.Role) []string {
+// pluginName is a Codex plugin's name@marketplace in TOML bare keys, which
+// a dotted -c key path carries as written (plugins.<name>.enabled); any
+// other name stays on, with a log line.
+var pluginName = regexp.MustCompile(`^[A-Za-z0-9_-]+@[A-Za-z0-9_-]+$`)
+
+// codexConfig is what a launch reads of a Codex config.toml: the tables of
+// its mcp_servers and of its plugins.
+type codexConfig struct {
+	MCPServers map[string]any `toml:"mcp_servers"`
+	Plugins    map[string]any `toml:"plugins"`
+}
+
+// codexOff lists what a Codex session of role would load of the operator's
+// Codex home and its kind's mcp_off turns off (config.Kind.ConfigOffArgs;
+// the kind of a shell role is its tool): servers, the MCP servers the
+// home's config.toml declares (MCPOffArgs), and plugins, those installed
+// in its plugins/cache (one directory per marketplace, one per plugin in
+// it: <plugin>@<marketplace>) and declared in a [plugins."<name>"] table,
+// except those a table sets enabled = false (PluginOffArgs). The home is
+// that of the role's pane env (codexHomeFor). It reads config.toml once, and
+// only for what the kind asks: servers are nil without mcp_off or
+// mcp_disable and for a missing file; plugins are nil without mcp_off or
+// plugin_disable, and a home without a config still lists its cache. A
+// config that cannot be read or decoded is logged once, without the path
+// (pane env values stay out of logs), and leaves everything on, as does
+// each name that is no bare key (logged too). Read at every launch, so a
+// server or plugin added later is turned off too.
+func (m *Manager) codexOff(role config.Role) (servers, plugins []string) {
 	k, ok := m.kindSpec(role.AgentKind())
-	if !ok || !k.MCPOff || len(k.MCPDisable) == 0 {
-		return nil
+	if !ok || !k.MCPOff {
+		return nil, nil
 	}
-	path := m.codexConfigPath()
-	if h := m.d.Config.RoleEnv(role)["CODEX_HOME"]; h != "" {
-		path = filepath.Join(paths.Expand(h), "config.toml")
+	wantServers, wantPlugins := len(k.MCPDisable) > 0, len(k.PluginDisable) > 0
+	if !wantServers && !wantPlugins {
+		return nil, nil
 	}
+	home, path := m.codexHomeFor(m.d.Config.RoleEnv(role))
 	if path == "" {
-		return nil
+		return nil, nil
 	}
+	var doc codexConfig
 	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	var names, skipped []string
+	missing := errors.Is(err, fs.ErrNotExist)
 	if err == nil {
-		names, skipped, err = declaredMCPServers(string(data))
+		_, err = toml.Decode(string(data), &doc)
 	}
-	if err != nil {
+	if err != nil && !missing {
 		if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
 			err = pe.Err
 		}
-		m.logAt(slog.LevelWarn, "agents: %s: cannot read the Codex config, so its MCP servers stay on: %v", role.Name, err)
-		return nil
+		what := "MCP servers and plugins"
+		if !wantPlugins {
+			what = "MCP servers"
+		} else if !wantServers {
+			what = "plugins"
+		}
+		m.logAt(slog.LevelWarn, "agents: %s: cannot read the Codex config, so its %s stay on: %v", role.Name, what, err)
+		return nil, nil
 	}
-	for _, n := range skipped {
-		m.logf("agents: %s: MCP server %q of the Codex config is no TOML bare key, so it stays on", role.Name, n)
+	if wantServers {
+		var skipped []string
+		servers, skipped = mcpServerNames(doc.MCPServers)
+		for _, n := range skipped {
+			m.logf("agents: %s: MCP server %q of the Codex config is no TOML bare key, so it stays on", role.Name, n)
+		}
 	}
-	return names
+	if wantPlugins {
+		plugins = m.enabledPlugins(role, home, doc.Plugins)
+	}
+	return servers, plugins
 }
 
-// declaredMCPServers reads a Codex config: the names of its mcp_servers
-// tables that do not set enabled = false, sorted, and those of them that
+// mcpServerNames reads the mcp_servers tables of a Codex config: the names
+// of those that do not set enabled = false, sorted, and those of them that
 // are no TOML bare key (mcpServerName), apart and sorted.
-func declaredMCPServers(data string) (names, skipped []string, err error) {
-	var doc struct {
-		MCPServers map[string]any `toml:"mcp_servers"`
-	}
-	if _, err := toml.Decode(data, &doc); err != nil {
-		return nil, nil, err
-	}
-	for name, v := range doc.MCPServers {
+func mcpServerNames(tables map[string]any) (names, skipped []string) {
+	for name, v := range tables {
 		if t, ok := v.(map[string]any); ok && t["enabled"] == false {
 			continue
 		}
@@ -87,69 +129,49 @@ func declaredMCPServers(data string) (names, skipped []string, err error) {
 	}
 	slices.Sort(names)
 	slices.Sort(skipped)
+	return names, skipped
+}
+
+// declaredMCPServers reads a Codex config (the operator's or a checkout's):
+// the names of its mcp_servers tables that do not set enabled = false,
+// sorted, and those of them that are no TOML bare key (mcpServerName),
+// apart and sorted. Only the mcp_servers table is decoded.
+func declaredMCPServers(data string) (names, skipped []string, err error) {
+	var doc struct {
+		MCPServers map[string]any `toml:"mcp_servers"`
+	}
+	if _, err := toml.Decode(data, &doc); err != nil {
+		return nil, nil, err
+	}
+	names, skipped = mcpServerNames(doc.MCPServers)
 	return names, skipped, nil
 }
 
-// pluginName is a Codex plugin's name@marketplace in TOML bare keys, which
-// a dotted -c key path carries as written (plugins.<name>.enabled); any
-// other name stays on, with a log line.
-var pluginName = regexp.MustCompile(`^[A-Za-z0-9_-]+@[A-Za-z0-9_-]+$`)
-
-// codexPlugins lists the Codex plugins a session of role would load, for
-// its kind's mcp_off (config.Kind.PluginOffArgs): the plugins installed in
-// the Codex home's plugins/cache (one directory per marketplace, one per
-// plugin in it: <plugin>@<marketplace>) and those the config.toml declares
-// in a [plugins."<name>"] table, except those a table sets enabled = false.
-// The home is the CODEX_HOME the role's pane env sets, else the directory
-// of codexConfigPath's file (as mcpServers reads it). nil without mcp_off
-// or plugin_disable; a config that cannot be read is logged without the
-// path and leaves every plugin on. Read at every launch, so a plugin
-// installed later is turned off too.
-func (m *Manager) codexPlugins(role config.Role) []string {
-	k, ok := m.kindSpec(role.AgentKind())
-	if !ok || !k.MCPOff || len(k.PluginDisable) == 0 {
-		return nil
-	}
-	path := m.codexConfigPath()
-	if h := m.d.Config.RoleEnv(role)["CODEX_HOME"]; h != "" {
-		path = filepath.Join(paths.Expand(h), "config.toml")
-	}
-	if path == "" {
-		return nil
-	}
+// enabledPlugins lists the Codex plugins a session of role would load, for
+// codexOff: the plugins installed in home's plugins/cache and those the
+// config's [plugins] tables declare, except those a table sets
+// enabled = false; names that are no name@marketplace in bare keys stay
+// on, with a log line.
+func (m *Manager) enabledPlugins(role config.Role, home string, tables map[string]any) []string {
 	on := map[string]bool{}
 	var skipped []string
-	for _, p := range installedCodexPlugins(filepath.Dir(path)) {
+	for _, p := range installedCodexPlugins(home) {
 		if pluginName.MatchString(p) {
 			on[p] = true
 		} else {
 			skipped = append(skipped, p)
 		}
 	}
-	data, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
-			err = pe.Err
+	declared, off := pluginTables(tables)
+	for _, p := range declared {
+		if pluginName.MatchString(p) {
+			on[p] = true
+		} else {
+			skipped = append(skipped, p)
 		}
-		m.logAt(slog.LevelWarn, "agents: %s: cannot read the Codex config, so its plugins stay on: %v", role.Name, err)
-		return nil
 	}
-	if err == nil {
-		declared, off, derr := declaredCodexPlugins(string(data))
-		if derr != nil {
-			m.logAt(slog.LevelWarn, "agents: %s: cannot read the Codex config, so its plugins stay on: %v", role.Name, derr)
-			return nil
-		}
-		for _, p := range declared {
-			if pluginName.MatchString(p) {
-				on[p] = true
-			} else {
-				skipped = append(skipped, p)
-			}
-		}
-		for _, p := range off {
-			delete(on, p)
-		}
+	for _, p := range off {
+		delete(on, p)
 	}
 	slices.Sort(skipped)
 	for _, p := range slices.Compact(skipped) {
@@ -186,17 +208,11 @@ func installedCodexPlugins(home string) []string {
 	return out
 }
 
-// declaredCodexPlugins reads a Codex config: the names of its [plugins]
-// tables (name@marketplace) that do not set enabled = false, and those that
-// do, both sorted.
-func declaredCodexPlugins(data string) (on, off []string, err error) {
-	var doc struct {
-		Plugins map[string]any `toml:"plugins"`
-	}
-	if _, err := toml.Decode(data, &doc); err != nil {
-		return nil, nil, err
-	}
-	for name, v := range doc.Plugins {
+// pluginTables reads the [plugins] tables of a Codex config
+// (name@marketplace): the names of those that do not set enabled = false,
+// and those that do, both sorted.
+func pluginTables(tables map[string]any) (on, off []string) {
+	for name, v := range tables {
 		if t, ok := v.(map[string]any); ok && t["enabled"] == false {
 			off = append(off, name)
 		} else {
@@ -205,5 +221,5 @@ func declaredCodexPlugins(data string) (on, off []string, err error) {
 	}
 	slices.Sort(on)
 	slices.Sort(off)
-	return on, off, nil
+	return on, off
 }
