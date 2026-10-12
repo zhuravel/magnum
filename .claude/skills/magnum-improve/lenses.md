@@ -18,7 +18,10 @@ For each real miss (a problem a person raised that magnum's review on that head 
 
 - **nobody raised it**: no reviewer report and not the judge's own pass (`judge-own.md`) mention it;
 - **raised and rejected**: a reviewer or the own pass raised it and the judge dropped it (`findings` with that path
-  and its reason code, the ledger in `codex-judge.json`): was the reason wrong?
+  and its reason code, the ledger in `codex-judge.json`): was the reason wrong? A row whose only source is
+  claude-review and that the evidence's `self` column counts is a candidate the reviewer rejected itself in its
+  report's Rejected list: it did not raise it, so it is not this kind (the origin list is
+  `<run-dir>/claude-review-origin.txt`, and its classes are a title match, not a fact).
 - **raised and under-ranked**: posted, but at a priority the person disagreed with;
 - **out of reach**: outside the diff, pre-existing, or it needed something magnum cannot see (production data, a
   ticket, another repository): say which input would have shown it;
@@ -102,7 +105,11 @@ and fix.
 
 Agent minutes per role and round kind, rounds per PR, re-review share, Codex and Claude spend signals, waits
 (quiet periods, throttles, slots). Which role earns its cost on which kind of round (`magnum stats` value tables),
-and what could be skipped, shortened or reused without losing findings.
+and what could be skipped, shortened or reused without losing findings. A re-review's `engine.round_start` event
+(registry `events`, `data` JSON) carries `delta_lines` and `delta_files`, the size of the commits since the review
+(`delta_partial`: a file with no patch, so a lower bound; `delta_check` marks the judge-only checks), so a round's
+minutes can be set against the change it reviewed: join it to the judge run that started with it. Rounds before the
+change have none.
 
 ## 8. Security and trust
 

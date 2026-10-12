@@ -111,6 +111,42 @@ func (e *Engine) confirmDeltaCheck(ctx context.Context, job *roundJob, target st
 	return dc
 }
 
+// roundDeltaSize is the size of the commits a re-review or a recovery round
+// reviewed since the PR's reviewed commit (roundDelta), as the round's start
+// event records it.
+type roundDeltaSize struct {
+	Lines   int  // changed code lines, as a delta check counts them (DeltaSize.Lines)
+	Files   int  // the files of the range, or of the PR's own diff change after a base merge
+	Partial bool // a file had no patch GitHub sends in full: Lines is a lower bound
+}
+
+// roundDelta measures, for the start event of a re-review or a recovery
+// round that is no delta check, the commits it reviews: the reviewed commit
+// to the commit the checkout found, measured as a delta check measures them
+// (measureRange as the watch's poll identity, so a push that merged the base
+// branch in counts the PR's own change, and the comparison is usually this
+// tick's, which baseMerged made first). Without a reviewed commit to measure
+// from (a first review, an eval's replay, a round on the reviewed commit
+// itself), a client or a comparison, it reports false and the event records
+// no delta size.
+func (e *Engine) roundDelta(ctx context.Context, job *roundJob, rs *roundSetup) (roundDeltaSize, bool) {
+	reviewed := deref(job.pr.ReviewedSHA)
+	if !sinceReview(rs.kind) || job.evalHead != "" || reviewed == "" || reviewed == rs.target {
+		return roundDeltaSize{}, false
+	}
+	gh := e.gh(job.watch.PollIdentity)
+	if gh == nil {
+		return roundDeltaSize{}, false
+	}
+	m, err := e.measureRange(ctx, gh, job.repo, job.diffBase(), reviewed, rs.target)
+	if err != nil {
+		e.log.Info("round delta: compare failed; the round's start records no delta size", "pr", job.pr.ID, "err", err)
+		return roundDeltaSize{}, false
+	}
+	size := m.size()
+	return roundDeltaSize{Lines: size.Lines, Files: len(m.files()), Partial: !size.Readable()}, true
+}
+
 // hasOwnReview reports whether a review of pr by login, the identity
 // posting now, or by one of its former identities is on record
 // (previousReview): what a judge in a fresh session builds on.

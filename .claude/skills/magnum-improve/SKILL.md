@@ -21,7 +21,9 @@ PR" and "never a second CODEX_HOME".
 2. **Evidence.** First run `magnum retro --lookback <days since>` and wait for `magnum logs` to show it done, so
    other reviewers' comments on recently closed PRs are classified. PRs closed less than 24 hours ago wait for the
    next run, so that late reviews can arrive. Then `scripts/evidence.sh <since> <run-dir>` writes `evidence.md`, a list of review report
-   directories, and the git log since. Read the summary yourself; it is the shared input of every analyst.
+   directories, the git log since, and `claude-review-origin.txt` (which rejected findings of claude-review alone
+   are bullets of its own Rejected list, a title match behind the `self` columns). Read the summary yourself; it is
+   the shared input of every analyst.
 3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, each with the evidence path and its
    lens; every analyst prompt names [analyst-rules.md](analyst-rules.md) (read-only work and the return format) by
    absolute path. Lenses 0 and 1 run every time: what other reviewers found and magnum did not, and what magnum

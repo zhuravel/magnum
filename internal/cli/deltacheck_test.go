@@ -24,6 +24,20 @@ func TestBoardRoundFactsNameADeltaCheck(t *testing.T) {
 	}
 }
 
+// A full re-review's start event records the size of its delta too
+// (delta_lines, delta_files), but the board names a delta check only: the
+// round's facts carry the lines of a check and none for another round.
+func TestBoardRoundFactsKeepTheDeltaLinesOfAFullReReviewOut(t *testing.T) {
+	f := newRoundsFixture(t)
+	f.roundStart("rereview", []string{"codex-judge", "claude-review"}, nil, false)
+	f.event("engine.round_start", map[string]any{"slot": "review1", "kind": "rereview", "target_sha": "abc1234",
+		"roles": []string{"codex-judge", "claude-review"}, "requested": nil, "post_merge": false, "delta_lines": 120, "delta_files": 7})
+	want := &tui.RoundWhy{Kind: "rereview", Roles: []string{"codex-judge", "claude-review"}}
+	if got := f.why(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RoundWhy = %+v, want %+v", got, want)
+	}
+}
+
 // `magnum status` names a delta check: one in flight in the rounds line and
 // the PR's next step, one waiting in its queue row (the daemon's wait).
 func TestStatusNamesADeltaCheck(t *testing.T) {

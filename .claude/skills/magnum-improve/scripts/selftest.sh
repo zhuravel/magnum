@@ -16,7 +16,10 @@
 #   - eval-at.sh: its arguments, run directory, worktree, build and log, the
 #     cleanup on a failure, the reuse of a stored replay with the same inputs
 #     and Go files (and none with other Go files, an unknown commit or
-#     --fresh), and the report with the points it prints.
+#     --fresh), and the report with the points it prints;
+#   - evidence.sh: against a registry with only the columns it reads, the rejected findings of claude-review
+#     alone split into those matching a finding of its report and those matching a bullet of its Rejected
+#     list (the self column and table), and a nudge run whose twin is listed left out of the posted reviews.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
 set -euo pipefail
@@ -389,5 +392,71 @@ printf '%s\n' eval run --case case-a --label fresh >"$tmp/want"
 [[ $rc == 0 ]] && cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "--fresh replays without asking for a baseline"
 ok "--fresh replays every case"
 unset FAKE_BASELINE
+
+# 9. evidence.sh counts the rejected bullets of a claude-review report apart from the findings the judge
+#    rejected, and leaves a nudge out of the posted reviews when the run it nudged is listed: a registry with
+#    only the columns it reads, and one report.
+ev=$tmp/ev
+mkdir -p "$ev/reviews/example/app/1/abc123def456"
+cat >"$ev/reviews/example/app/1/abc123def456/claude-review.md" <<'MD'
+# Review of example/app#1
+
+## 1. The cache key ignores the locale
+
+- **Severity:** P2
+- **Location:** `app/cache.rb:10`
+
+A locale switch serves the page cached for the other language.
+
+## Rejected
+
+- The retry loop sleeps too long: no impact, the sleep is capped at one second.
+- The token appears in the log: rejected, the log line holds only the id.
+MD
+sqlite3 "$ev/magnum.db" <<SQL
+create table repos (id integer primary key, owner text, name text);
+create table prs (id integer primary key, repo_id integer, number integer, gh_state text, state text, attempts integer, last_error text);
+create table runs (id text primary key, pr_id integer, round integer, role text, kind text, state text, outcome text,
+  report_path text, review_id integer, review_event text, review_url text, result_json text, prompt_text text default '',
+  created_at text, submitted_at text, ended_at text);
+create table findings (id integer primary key, run_id text, pr_id integer, round integer, finding_id text, severity text,
+  path text, line integer, sources_json text, verdict text, reason_code text, created_at text, title text);
+create table misses (class text, scope text, severity text, raised text, state text, created_at text, source_url text,
+  title text, lesson text);
+create table declines (source_url text);
+create table events (level text, kind text, at text);
+create table requests (kind text, state text, created_at text);
+create table kv (key text primary key, value text);
+insert into repos values (1, 'example', 'app');
+insert into prs values (1, 1, 1, 'OPEN', 'reviewed', 0, null);
+insert into runs (id, pr_id, round, role, kind, state, outcome, report_path, review_id, review_event, created_at) values
+  ('r1', 1, 1, 'codex-judge', 'initial', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 77, 'COMMENT', '2026-10-10T10:00:00Z'),
+  ('r2', 1, 1, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 77, 'COMMENT', '2026-10-10T10:05:00Z'),
+  ('r3', 1, 2, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 88, 'COMMENT', '2026-10-10T11:00:00Z');
+insert into findings (run_id, pr_id, round, finding_id, severity, path, line, sources_json, verdict, reason_code, created_at, title) values
+  ('r1', 1, 1, 'F1', 'P2', 'app/cache.rb', 10, '["claude-review"]', 'posted', null, '2026-10-10T10:00:00Z', 'Cache key ignores the locale'),
+  ('r1', 1, 1, 'F2', 'P3', 'app/retry.rb', 4, '["claude-review"]', 'rejected', 'speculative', '2026-10-10T10:00:00Z', 'Retry loop sleeps too long'),
+  ('r1', 1, 1, 'F3', 'P1', 'app/log.rb', 9, '["claude-review"]', 'rejected', 'not_reproducible', '2026-10-10T10:00:00Z', 'Token appears in the log'),
+  ('r1', 1, 1, 'F4', 'P2', 'app/cache.rb', 10, '["claude-review"]', 'rejected', 'duplicate', '2026-10-10T10:00:00Z', 'Cache key ignores the locale setting'),
+  ('r1', 1, 1, 'F5', 'P3', 'app/other.rb', 3, '["codex-review"]', 'rejected', 'speculative', '2026-10-10T10:00:00Z', 'Retry loop sleeps too long');
+SQL
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/out"
+[[ $rc == 0 ]] || fail "evidence.sh runs against a registry with only the columns it reads (rc $rc)"
+origin=$ev/out/claude-review-origin.txt
+class_of() { awk -F'\t' -v t="$1" '$9 == t { print $2 }' "$origin"; }
+[[ $(class_of "Retry loop sleeps too long") == self && $(class_of "Token appears in the log") == self ]] ||
+    fail "a title that matches a bullet of the Rejected list is self"
+[[ $(class_of "Cache key ignores the locale setting") == reported ]] || fail "a title that matches a finding of the report is reported"
+[[ $(grep -c . "$origin") == 4 ]] || fail "only the rejected rows of claude-review alone are listed (not the posted one, not codex-review's)"
+ev_md=$ev/out/evidence.md
+grep -Eq '^\| rejected +\| speculative +\| P3 +\| +2 \| +1 \|$' "$ev_md" &&
+    grep -Eq '^\| rejected +\| not_reproducible +\| P1 +\| +1 \| +1 \|$' "$ev_md" &&
+    grep -Eq '^\| rejected +\| duplicate +\| P2 +\| +1 \| +0 \|$' "$ev_md" || fail "the findings table counts the self rows apart in its self column"
+grep -Eq '^\| P2 +\| +1 \| +1 \| +0 \| +0 \| +0 \|$' "$ev_md" &&
+    grep -Eq '^\| P3 +\| +0 \| +0 \| +1 \| +0 \| +0 \|$' "$ev_md" || fail "the claude-review table splits posted, reported, self and unmatched"
+sed -n '/^## Posted reviews/,/^## Findings/p' "$ev_md" >"$tmp/out"
+[[ $(grep -c '^| 2026' "$tmp/out") == 2 && $(grep -c '| nudge ' "$tmp/out") == 1 ]] ||
+    fail "the nudge whose twin is listed has no row; the one whose review id is its own stays"
+ok "evidence.sh counts a claude-review report's own Rejected bullets apart and leaves out a nudge whose twin is listed"
 
 echo "selftest: $checks checks passed"

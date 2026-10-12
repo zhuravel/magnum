@@ -614,3 +614,122 @@ func parkSessions(h *harness, n int) {
 		}
 	}
 }
+
+// A round's start event is where the registry keeps how big the commits a
+// re-review looked at were: a full re-review and a recovery record
+// delta_lines and delta_files as a delta check does (and set delta_check
+// only for a check), so the operator can tell a 17-line fixer push from a
+// 2,000-line rewrite after the fact. A first review reviews the whole PR and
+// has no delta.
+func TestEveryReReviewRecordsItsDeltaSize(t *testing.T) {
+	type roundStart struct {
+		DeltaCheck   bool `json:"delta_check"`
+		DeltaLines   *int `json:"delta_lines"`
+		DeltaFiles   *int `json:"delta_files"`
+		DeltaPartial bool `json:"delta_partial"`
+	}
+	starts := func(t *testing.T, h *harness) []roundStart {
+		t.Helper()
+		var out []roundStart
+		for _, ev := range approvalEvents(t, h, 2, "engine.round_start") {
+			var s roundStart
+			if err := json.Unmarshal(ev.Data, &s); err != nil {
+				t.Fatalf("round start data %s: %v", ev.Data, err)
+			}
+			out = append(out, s)
+		}
+		if len(out) != 2 {
+			t.Fatalf("round starts = %d, want the first review and the second round", len(out))
+		}
+		return out
+	}
+	size := func(t *testing.T, label string, s roundStart, lines, files int) {
+		t.Helper()
+		if s.DeltaLines == nil || s.DeltaFiles == nil || *s.DeltaLines != lines || *s.DeltaFiles != files {
+			t.Errorf("%s: delta_lines %v, delta_files %v, want %d and %d", label, s.DeltaLines, s.DeltaFiles, lines, files)
+		}
+	}
+	none := func(t *testing.T, label string, s roundStart) {
+		t.Helper()
+		if s.DeltaLines != nil || s.DeltaFiles != nil || s.DeltaCheck || s.DeltaPartial {
+			t.Errorf("%s: delta_check %v, delta_lines %v, delta_files %v, want none", label, s.DeltaCheck, s.DeltaLines, s.DeltaFiles)
+		}
+	}
+
+	t.Run("a full re-review", func(t *testing.T) {
+		h, _, _ := deltaCheckHarness(t)
+		verdictRounds(h, "APPROVED")
+		approvedPR(h, 2, "b1")
+		reqSetFiles(h, "b1...b2", codeDelta(30))
+		pollPR(h, time.Minute, 2, "b2")
+		pollPR(h, 30*time.Minute, 2, "b2")
+		if ins := h.rd.all(); len(ins) != 2 || ins[1].DeltaCheck != nil {
+			t.Fatalf("rounds = %d: want a full re-review", len(ins))
+		}
+		got := starts(t, h)
+		none(t, "the first review", got[0])
+		size(t, "the full re-review", got[1], 30, 1)
+		if got[1].DeltaCheck || got[1].DeltaPartial {
+			t.Errorf("the full re-review: delta_check %v, delta_partial %v, want neither", got[1].DeltaCheck, got[1].DeltaPartial)
+		}
+	})
+
+	t.Run("a delta check", func(t *testing.T) {
+		h, _, _ := deltaCheckHarness(t)
+		verdictRounds(h, "APPROVED")
+		keptForCheck(t, h, liveDelta)
+		quietEnd := h.pr(2).HeadChangedAt.Add(5 * time.Minute)
+		pollPR(h, quietEnd.Sub(h.clock.Now()), 2, "b2")
+		got := starts(t, h)
+		none(t, "the first review", got[0])
+		size(t, "the delta check", got[1], 4, 4)
+		if !got[1].DeltaCheck {
+			t.Error("the delta check: delta_check is not true")
+		}
+	})
+
+	t.Run("a recovery whose delta check was dropped", func(t *testing.T) {
+		h, _, _ := deltaCheckHarness(t)
+		verdictRounds(h, "APPROVED")
+		keptForCheck(t, h, codePatch(1))
+		migRun(h, h.pr(2), "run-z", 1, "zhuravel", "zhuravel", 701, "APPROVED") // posted as another login: no review to build on
+		parkSessions(h, 2)
+		pollPR(h, 5*time.Minute, 2, "b2")
+		if ins := h.rd.all(); len(ins) != 2 || ins[1].Kind != pipeline.KindRecovery || ins[1].DeltaCheck != nil {
+			t.Fatalf("rounds = %d: want a full recovery", len(ins))
+		}
+		got := starts(t, h)
+		none(t, "the first review", got[0])
+		size(t, "the full recovery", got[1], 1, 1)
+		if got[1].DeltaCheck {
+			t.Error("the full recovery: delta_check is true for a round that is no check")
+		}
+	})
+
+	t.Run("a delta with a file GitHub sent no patch for", func(t *testing.T) {
+		h, _, _ := deltaCheckHarness(t)
+		verdictRounds(h, "APPROVED")
+		approvedPR(h, 2, "b1")
+		reqSetFiles(h, "b1...b2", append(codeDelta(30), github.FileDelta{Path: "db/structure.sql", Status: "modified", Truncated: true}))
+		pollPR(h, time.Minute, 2, "b2")
+		pollPR(h, 30*time.Minute, 2, "b2")
+		got := starts(t, h)
+		size(t, "the re-review", got[1], 30, 2)
+		if !got[1].DeltaPartial {
+			t.Error("the re-review: delta_partial is not true, so 30 reads as the whole delta")
+		}
+	})
+
+	t.Run("a delta GitHub could not compare", func(t *testing.T) {
+		h, _, _ := deltaCheckHarness(t)
+		verdictRounds(h, "APPROVED")
+		approvedPR(h, 2, "b1")
+		h.gh.mu.Lock()
+		h.gh.filesErr = fmt.Errorf("HTTP 502")
+		h.gh.mu.Unlock()
+		pollPR(h, time.Minute, 2, "b2")
+		pollPR(h, 30*time.Minute, 2, "b2")
+		got := starts(t, h)
+		none(t, "the re-review whose commits could not be measured", got[1])
+	})
+}

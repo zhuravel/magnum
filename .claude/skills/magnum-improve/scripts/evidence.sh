@@ -6,6 +6,9 @@
 #   evidence.md   the registry's numbers and lists, read-only
 #   reports.txt   the review report directories written since then
 #   gitlog.txt    magnum's own commits since then
+#   claude-review-origin.txt   each rejected finding claude-review alone raised, with whether it matches a
+#                 finding of the reviewer's report, a bullet of its Rejected list, or neither, and the text it
+#                 matched
 # It reads the registry with sqlite3 -readonly and never writes to it.
 set -euo pipefail
 
@@ -30,6 +33,173 @@ q() { sqlite3 -readonly -header -markdown "$db" "$1"; }
 miss_from="case when exists (select 1 from declines d where d.source_url = misses.source_url)
 	then 'declined finding' else 'comment' end"
 
+# origin says where each rejected finding that claude-review alone raised came from. A claude-review.md report
+# ends with a "Rejected" list: candidates the reviewer dropped itself, with its reason, and the judge re-judges them like
+# any claim (skills/magnum-review/SKILL.md), so the ledger holds each one as a rejected finding with the
+# reviewer as its only source. In one window about two thirds of the rejected rows of claude-review alone were
+# such bullets, and the findings tables then read as a reviewer far less precise than it is. Neither the ledger
+# (codex-judge.json) nor the registry marks them, so the row's title is matched against the reviewer's report:
+# the cosine of their word stems, a title against a bullet's claim (its words before the first colon) or
+# against a finding's heading ("Finding 2", "3.", "P2:"); the judge words its titles freely:
+#   self       the best match is a bullet of the Rejected list, at 0.2 or more (a tie goes to the bullet);
+#   reported   the best match is a finding of the report, at 0.3 or more;
+#   unmatched  neither (a bullet the judge reworded past recognition, or something of the judge's own);
+#   no report  the claude-review.md of the row's report directory is gone.
+# It is a heuristic, not a fact: claude-review-origin.txt lists each row with the text it matched, to check by
+# eye. A posted finding is not classified (its title matches a bullet about the same code as often as not). The
+# first column is findings.id; the classes go to the SQL below as a VALUES list.
+origin=$(mktemp "$dir/.origin.XXXXXX")
+python3 - "$db" "$since" "$dir/claude-review-origin.txt" >"$origin" <<'PY' || {
+import json, os, re, subprocess, sys
+
+db, since, audit = sys.argv[1:4]
+SELF_MIN, REPORTED_MIN = 0.2, 0.3
+STOP = set("""the and for with without that this these those from into than then but not does did can could would
+should may might will has have had are was were been being its their there here when while which what who whom also
+only still new now more most other any all each such via per use used uses using make makes made get gets got one
+two rather instead already even just""".split())
+ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+")
+FINDING = re.compile(r"^(?:findings?\b|\d+[.):]\s|[A-Z]?\d+[.)]\s|P[0-3]\b|issue\s+\d)", re.I)
+
+
+def sql(q):
+    r = subprocess.run(["sqlite3", "-readonly", "-json", db, q], capture_output=True, text=True, check=True)
+    return json.loads(r.stdout or "[]")
+
+
+def stem(w):
+    for suf in ("ing", "ed", "es", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            return w[: -len(suf)]
+    return w
+
+
+def toks(s):
+    words = re.sub(r"[^a-z0-9]+", " ", s.lower()).split()
+    return {stem(w) for w in words if len(w) > 2 and not w.isdigit() and w not in STOP}
+
+
+def cos(a, b):
+    return len(a & b) / ((len(a) * len(b)) ** 0.5) if a and b else 0.0
+
+
+def lead(text):
+    m = re.search(r":\s", text[:260])
+    return text[: m.start()] if m else text[:260]
+
+
+def parse(text):
+    """The bullets of the report's Rejected section, and its findings: a section whose heading names one
+    (Finding 2, 3., P2:), with its paragraphs, down to a heading of its own level or higher."""
+    bullets, chunks = [], []
+    in_rej, rej_level, root, root_level, para, cur = False, 0, "", 0, [], None
+
+    def flush_para():
+        nonlocal para
+        if para and root:
+            chunks.append((root + " " + " ".join(para))[:900])
+        para = []
+
+    def flush_bullet():
+        nonlocal cur
+        if cur is not None:
+            bullets.append(cur)
+        cur = None
+
+    for line in text.splitlines():
+        h = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if h:
+            flush_para()
+            flush_bullet()
+            level, title = len(h.group(1)), h.group(2)
+            if re.match(r"rejected\b", title, re.I):
+                in_rej, rej_level, root = True, level, ""
+                continue
+            if in_rej and level <= rej_level:
+                in_rej = False
+            if in_rej:
+                continue
+            if FINDING.match(title):
+                root, root_level = title, level
+                chunks.append(title)
+            elif root and level > root_level:
+                pass  # a subsection of the finding
+            elif level >= 2 and re.match(r"findings?\b", title, re.I):
+                root, root_level = title, level
+            else:
+                root, root_level = "", 0
+        elif in_rej:
+            if ITEM.match(line):
+                flush_bullet()
+                cur = ITEM.sub("", line).strip()
+            elif cur is not None and line.strip():
+                cur += " " + line.strip()
+        elif not line.strip():
+            flush_para()
+        else:
+            para.append(line.strip())
+    flush_para()
+    flush_bullet()
+    return bullets, chunks
+
+
+def best(t, base, items, view):
+    top, text = 0.0, ""
+    for x in items:
+        score = view(t, x) + (0.1 if base and base in x else 0.0)
+        if score > top:
+            top, text = score, x
+    return top, text
+
+
+def clip(s, n):
+    return " ".join((s or "").split())[:n]
+
+
+rows = sql(f"""select f.id, f.run_id, f.finding_id, f.verdict, coalesce(f.severity, '-') as pri, f.path, f.title,
+                      r.report_path
+               from findings f join runs r on r.id = f.run_id
+               where f.sources_json = '["claude-review"]' and f.verdict = 'rejected' and f.created_at >= '{since}'
+               order by f.id""")
+reports, values, lines = {}, [], []
+for r in rows:
+    path = os.path.join(os.path.dirname(r["report_path"] or ""), "claude-review.md")
+    if path not in reports:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                reports[path] = parse(f.read())
+        except OSError:
+            reports[path] = None
+    cls, score, text = "no report", 0.0, ""
+    if reports[path] is not None:
+        bullets, chunks = reports[path]
+        t, base = toks(r["title"] or ""), os.path.basename(r["path"] or "")
+        sb, tb = best(t, base, bullets, lambda t, x: max(cos(t, toks(lead(x))), 0.8 * cos(t, toks(x))))
+        sr, tr = best(t, base, chunks, lambda t, x: cos(t, toks(lead(x))) if len(x) < 200 else 0.8 * cos(t, toks(x[:400])))
+        if sb >= SELF_MIN and sb >= sr:
+            cls, score, text = "self", sb, tb
+        elif sr >= REPORTED_MIN:
+            cls, score, text = "reported", sr, tr
+        else:
+            cls, score, text = "unmatched", max(sb, sr), tb if sb >= sr else tr
+    values.append("(%d,'%s')" % (r["id"], cls))
+    lines.append("\t".join([str(r["id"]), cls, "%.2f" % score, r["run_id"], r["finding_id"], r["verdict"], r["pri"],
+                            clip(r["path"], 80), clip(r["title"], 100), clip(text, 160)]))
+with open(audit, "w") as f:
+    f.write("id\tclass\tscore\trun\tfinding\tverdict\tpri\tpath\ttitle\tmatched\n")
+    f.write("\n".join(lines) + ("\n" if lines else ""))
+print(",".join(values))
+PY
+	echo "evidence.sh: could not tell where claude-review's findings came from; the self columns stay empty" >&2
+	: >"$origin"
+}
+cls=$(<"$origin")
+rm -f "$origin"
+cls=${cls:-"(0,'')"}
+# with_cls prefixes a query with the class (cls.c) of each rejected finding claude-review alone raised (cls.id =
+# findings.id).
+with_cls="with cls(id, c) as (values $cls)"
+
 {
 	echo "# magnum since $since"
 	echo
@@ -38,19 +208,50 @@ miss_from="case when exists (select 1 from declines d where d.source_url = misse
 	   from runs where role like '%judge%' and created_at >= '$since' group by 1, 2 order by 3 desc"
 	echo
 	echo "## Posted reviews"
+	echo
+	echo "A nudge run whose review id another run here carries has no row of its own."
+	echo
 	q "select substr(r.created_at, 1, 16) as at, rp.owner || '/' || rp.name || '#' || p.number as pr, r.round, r.kind,
 	          r.review_event as event, json_extract(r.result_json, '\$.verdict') as verdict,
 	          json_extract(r.result_json, '\$.findings') as findings, r.review_url as url
 	   from runs r join prs p on p.id = r.pr_id join repos rp on rp.id = p.repo_id
-	   where r.role like '%judge%' and r.outcome = 'posted' and r.created_at >= '$since' order by r.created_at"
+	   where r.role like '%judge%' and r.outcome = 'posted' and r.created_at >= '$since'
+	     and not (r.kind = 'nudge' and exists (select 1 from runs o
+	           where o.review_id = r.review_id and o.id <> r.id and o.role like '%judge%' and o.outcome = 'posted'
+	             and o.created_at >= '$since'))
+	   order by r.created_at"
 	echo
 	echo "## Findings: verdict, reason and priority"
-	q "select verdict, coalesce(reason_code, '-') as reason, coalesce(severity, '-') as pri, count(*) as n
-	   from findings where created_at >= '$since' group by 1, 2, 3 order by 1, 4 desc"
+	echo
+	echo "\`self\`: of those rejected rows, the ones claude-review alone raised that its report's own Rejected list"
+	echo "holds (claude-review-origin.txt; a heuristic match, see evidence.sh). The reviewer dropped those itself and"
+	echo "the judge only re-checked them: leave them out when you judge a reviewer's precision."
+	echo
+	q "$with_cls select f.verdict, coalesce(f.reason_code, '-') as reason, coalesce(f.severity, '-') as pri,
+	          count(*) as n, coalesce(sum(f.verdict = 'rejected' and cls.c = 'self'), 0) as self
+	   from findings f left join cls on cls.id = f.id
+	   where f.created_at >= '$since' group by 1, 2, 3 order by 1, 4 desc"
 	echo
 	echo "## Posted findings by source"
 	q "select sources_json as sources, coalesce(severity, '-') as pri, count(*) as n
 	   from findings where verdict = 'posted' and created_at >= '$since' group by 1, 2 order by 3 desc"
+	echo
+	echo "## claude-review alone: what its rejected findings are (priority)"
+	echo
+	echo "The findings whose only source is claude-review. A rejected one is \`reported\` when it matches a finding"
+	echo "of the reviewer's report (the judge's rejection of something the reviewer reported), \`self\` when it"
+	echo "matches a bullet of the report's Rejected list, \`unmatched\` when neither (a bullet reworded past"
+	echo "recognition, or the judge's own), \`no report\` when the report is gone. The reviewer's precision lies"
+	echo "between posted / (posted + reported + unmatched) and posted / (posted + reported)."
+	echo
+	q "$with_cls select coalesce(f.severity, '-') as pri,
+	          sum(f.verdict = 'posted') as posted,
+	          sum(f.verdict = 'rejected' and cls.c = 'reported') as \"rejected (reported)\",
+	          sum(f.verdict = 'rejected' and cls.c = 'self') as \"rejected (self)\",
+	          sum(f.verdict = 'rejected' and cls.c = 'unmatched') as \"rejected (unmatched)\",
+	          sum(f.verdict = 'rejected' and cls.c = 'no report') as \"rejected (no report)\"
+	   from findings f left join cls on cls.id = f.id
+	   where f.sources_json = json_array('claude-review') and f.created_at >= '$since' group by 1 order by 1"
 	echo
 	echo "## Role minutes (submitted to ended)"
 	q "select role, kind, count(*) as runs,

@@ -246,6 +246,14 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if rs.delta != nil {
 		what = deltaCheckLabel(rs.delta.Lines)
 		data["delta_check"], data["delta_lines"], data["delta_files"] = true, rs.delta.Lines, len(rs.delta.Files)
+	} else if d, ok := e.roundDelta(ctx, job, &rs); ok {
+		// A re-review in full or a recovery: the size of the commits since
+		// the review, kept in the registry for whoever asks later how big
+		// the pushes magnum re-reviews are. delta_check stays a check's.
+		data["delta_lines"], data["delta_files"] = d.Lines, d.Files
+		if d.Partial {
+			data["delta_partial"] = true
+		}
 	}
 	if rs.sameHead {
 		data["same_head"] = true

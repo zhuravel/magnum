@@ -6702,6 +6702,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the slot to the close grace (an abort hands it back at once, also for an aborted post-merge round on a
   merged PR).
 
+- **Every re-review's start event records the size of its delta, and the loop's evidence counts a reviewer's own rejections apart** (2026-10-12).
+  `engine.round_start` recorded `delta_lines` and `delta_files` for delta checks only, so nothing in the
+  registry told a full re-review of a 17-line fixer push from one of a 2,000-line rewrite, and the cost
+  lens could not set a round's minutes against the change it reviewed. Now every re-review and recovery
+  round that has a reviewed commit to measure from (not a first review, an eval's replay, a continue or a
+  round on the reviewed commit itself) records the size of the commits since it: `delta_lines` and
+  `delta_files`, measured as a delta check measures them (`roundDelta` asks `measureRange` as the watch's
+  poll identity, so a push that merged the base branch counts the PR's own change, not the base branch's
+  lines), and `delta_partial: true` when a file had no patch GitHub sends in full, which makes the lines a
+  lower bound. `delta_check` stays true for checks only, so the screens that read it
+  (`magnum prs --json`, the PR board) show what they showed. The comparison is the one `baseMerged` made a
+  moment earlier in `roundInput`, so it costs a GitHub call only for a range that merged or diverged (the
+  PR's own diff before and after it); a failed comparison or a watch without a client records no size
+  and the round starts as before. Rejected: `git diff --numstat` in the slot (gitx has no diff stat, and
+  after a merge of the base branch it counts the base branch's lines). The improvement loop's `evidence.sh`
+  changed with it. A `claude-review.md` report ends with a "Rejected" list of candidates the reviewer
+  dropped itself, and the judge ledgers each as a rejected finding with the reviewer as the only source
+  (46e6383): of the 1,079 rejected rows of claude-review alone since 10-08 15:13, 843 match a bullet of
+  that list, so the findings tables read as 119 P1 rejected against 6 posted for claude-review alone, when
+  the judge rejected 4 of the P1 findings it reported. Neither the ledger nor the registry marks them, so the script matches each
+  row's title against the report (the cosine of word stems, a bullet's claim before its first colon or a
+  finding's heading; 0.2 for a bullet that no finding beats, 0.3 for a finding), writes every row with its
+  class (self, reported, unmatched or no report) and the text it matched to `claude-review-origin.txt`,
+  gives the findings table a `self` column and adds a table of the claude-review-alone findings by
+  priority, with the reviewer's precision between posted / (posted + reported + unmatched) and posted /
+  (posted + reported). A posted finding is not classified (its title matches a bullet about the same code as
+  often as not). The posted-reviews table drops a nudge run whose review id another listed run carries
+  (3 nudges, 112 rows for 109 reviews). `selftest.sh` covers the matching and the nudge on a small registry.
+  Rejected: counting the Rejected list's bullets from the reports alone (the judge splits and merges them,
+  so the count is not the ledger's) and a mark in the ledger (the judge's output format is pinned).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

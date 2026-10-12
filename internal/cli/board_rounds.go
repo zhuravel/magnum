@@ -22,7 +22,9 @@ const boardRoundsWindow = 7 * 24 * time.Hour
 
 // The events a round leaves, as the engine writes them: engine.round_start
 // (round.go, prepare) with {"kind", "roles", "requested", "post_merge"} and,
-// for a delta check, {"delta_check", "delta_lines"};
+// for a delta check, {"delta_check"}; every re-review and recovery round with
+// a delta to measure also has {"delta_lines", "delta_files"} (and
+// "delta_partial"), which the card names for a delta check only;
 // round.triage (triage.go), before it, with {"runs", "skips", "reason"} for a
 // decision or {"why"} when every role runs; round.rerun_role (rerun.go),
 // before triage, with {"role", "lines"}; agent.session_rotated
@@ -113,10 +115,12 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 		Kind:       dataString(start, "kind"),
 		PostMerge:  dataBool(start, "post_merge"),
 		DeltaCheck: dataBool(start, "delta_check"),
-		DeltaLines: dataInt(start, "delta_lines"),
 		Roles:      dataStrings(start, "roles"),
 		Requested:  dataStrings(start, "requested"),
 		At:         evs[last].At,
+	}
+	if w.DeltaCheck {
+		w.DeltaLines = dataInt(start, "delta_lines")
 	}
 	setup := evs[prev+1 : last]
 
