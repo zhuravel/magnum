@@ -340,7 +340,8 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
 # login_ok = "text:Logged in"         # text:<substring> | regex:<expr> | json:<path> | "" (exit status 0)
 # login_file = "auth.json"            # the CLI's login file, under the Codex home when relative: a login pause
 #                                     # that a run proved (a reviewer's run or the judge's pane showed the login
-#                                     # error) holds until login_check passes and this file changes, because
+#                                     # error) holds until login_check passes and this file changes (2h at most;
+#                                     # a file written after the failed run leaves it to login_check), because
 #                                     # `codex login status` reads the saved tokens and says logged in while a
 #                                     # revoked refresh token fails every call; "" = the login check alone
 # session_source = "herdr"            # herdr reports the session id; none = always start fresh

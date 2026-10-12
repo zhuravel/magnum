@@ -180,6 +180,9 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		}
 		paused[tool] = true
 		p := pipeline.Pause{Kind: rep.Status, Tool: tool, Detail: rep.Detail, Proven: rep.RunID != ""} // a reviewer the preflight skipped has no run
+		if p.Proven {
+			p.ProvenAt = e.runEnded(ctx, rep.RunID)
+		}
 		if rep.Health != nil && rep.Health.ResetAt != nil {
 			p.Until = *rep.Health.ResetAt
 		}
@@ -603,6 +606,20 @@ func (e *Engine) reportKind(w *config.Watch, rep pipeline.RoleReport) string {
 		return r.AgentKind()
 	}
 	return ""
+}
+
+// runEnded is when the run id names ended (its ended_at), the time a
+// report's pause was proven; zero (now, to pauseTool) when it cannot tell.
+func (e *Engine) runEnded(ctx context.Context, id string) time.Time {
+	run, err := e.st.RunByID(ctx, id)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "read the run a pause names", "run", id)
+		return time.Time{}
+	}
+	if run.EndedAt == nil {
+		return time.Time{}
+	}
+	return *run.EndedAt
 }
 
 // onDryRun ends a dry-run round (review request with dry_run): nothing was

@@ -481,7 +481,7 @@ func (rd *round) pauseAtOnce(ctx context.Context, role config.Role, rep RoleRepo
 	if rep.Health.Kind != agents.HealthLoginRequired && rep.Health.Kind != agents.HealthUsageLimit {
 		return
 	}
-	p := Pause{Kind: string(rep.Health.Kind), Tool: rep.Kind, Detail: rep.Detail, Proven: true}
+	p := Pause{Kind: string(rep.Health.Kind), Tool: rep.Kind, Detail: rep.Detail, Proven: true, ProvenAt: rd.r.now()} // the run just ended
 	if rep.Health.ResetAt != nil {
 		p.Until = *rep.Health.ResetAt
 	}

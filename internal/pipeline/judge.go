@@ -313,7 +313,7 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	}
 	switch h.Kind {
 	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthOverloaded:
-		p := &Pause{Kind: string(h.Kind), Tool: rd.judge.AgentKind(), Detail: h.Detail, Proven: true}
+		p := &Pause{Kind: string(h.Kind), Tool: rd.judge.AgentKind(), Detail: h.Detail, Proven: true, ProvenAt: rd.stoppedAt(t)}
 		if h.ResetAt != nil {
 			p.Until = *h.ResetAt
 		}
@@ -334,11 +334,21 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	if rep, ok := rd.loggedOutReport(rd.judge.AgentKind()); ok {
 		// A judge of a kind a reviewer's run proved logged out stalls on
 		// the same revoked token: a nudge would only stall again.
-		p := &Pause{Kind: string(agents.HealthLoginRequired), Tool: rd.judge.AgentKind(), Detail: rep.Role + ": " + rep.Detail, Proven: true}
+		p := &Pause{Kind: string(agents.HealthLoginRequired), Tool: rd.judge.AgentKind(), Detail: rep.Role + ": " + rep.Detail,
+			Proven: true, ProvenAt: rd.stoppedAt(t)}
 		return verdict{final: true, outcome: OutcomeLoginRequired, pause: p,
 			err: fmt.Errorf("the judge stopped without a result while %s is logged out (%s: %s)", rd.judge.AgentKind(), rep.Role, rep.Detail)}
 	}
 	return verdict{} // ended quietly: nudge
+}
+
+// stoppedAt is when the judge's turn t stopped, the time its pause was
+// proven: its run's end as the agents observed it, else now.
+func (rd *round) stoppedAt(t turn) time.Time {
+	if t.run.EndedAt != nil {
+		return *t.run.EndedAt
+	}
+	return rd.r.now()
 }
 
 // loggedOutReport is a reviewer report of this round whose run proved the

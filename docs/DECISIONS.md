@@ -6424,6 +6424,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   would change the contract of the judge and the threads file for a hint the judge already reads past by
   what the reply does), and a commit with a letter and a digit for the new forms (an all-digit abbreviated
   commit such as "2397323958" is a real one, and it is the form the analyst's example takes).
+- 2026-10-12: A proven login pause lifts after a re-login, and holds on an unchanged login file for 2h at
+  most. The login file stamp was recorded when the pause was made, once per pause: a reviewer failed at T
+  and paused Codex at once, the operator logged in at T+5m, health lifted the pause on the changed stamp,
+  and the round's settle at T+30m paused Codex again from the same report and stamped the new, valid
+  login, so health held the pause for good ("the login file has not changed since a run proved the login
+  gone"), toasting "Codex needs `codex login`" while the continued judge turn waited too. Now
+  `pipeline.Pause.ProvenAt` says when the evidence was seen (`pauseAtOnce`: the run's end; the settle:
+  the reported run's `ended_at`, `Engine.runEnded`; the judge's own pauses: the time its turn stopped,
+  `round.stoppedAt`; zero means now), and `stampLogin` records no stamp when the login file's mtime (the
+  stamp is `<mtime unix nanos>:<size>`) is after it, so the login check alone decides, as for an unproven
+  pause. A stamp is recorded with its time (`<kind>.paused_login_at`), and a proven pause whose stamp held
+  unchanged for `loginStampHold` (2h) while the login check passes lifts with a warn `tool.resumed` event,
+  so a login pattern that matched a failed run's own output (a 401 in codex-review's stdout tail on a PR
+  about authentication) costs one wasted run every 2h instead of the kind until someone touches
+  `auth.json`. A pause that is not a fold starts without the stamp an earlier pause left (`magnum resume`
+  keeps it), so each pause holds on its own proof.
+- 2026-10-12: A usage pause the round's settle folds into keeps its backoff. `pauseTool` doubled
+  `<kind>.backoff` and computed the end before it looked for a pause of the same reason still running:
+  a usage limit without a parsed reset paused at once for 1h, the settle's fold of the same report stored
+  2h and extended the pause to the settle plus 2h, so one failure paused about 2.5h and the next fallback
+  started at 4h. Now the fold runs first: a pause of the same reason still running is extended only when
+  the new one names a later reset, the backoff is untouched, and only a pause that is not a fold doubles
+  it.
 
 ## Learned rules
 

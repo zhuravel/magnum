@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"slices"
@@ -1254,5 +1255,157 @@ func TestAProvenLoginPauseHoldsUntilTheLoginFileChanges(t *testing.T) {
 	h.tick()
 	if p, ok := h.e.toolPause(h.ctx, "codex"); ok {
 		t.Fatalf("an unproven pause held on the login file: %+v", p)
+	}
+}
+
+// loginStampAt is a login file stamp (agents.Manager.LoginStamp) of a file
+// last written at at.
+func loginStampAt(at time.Time) string { return fmt.Sprintf("%d:7", at.UnixNano()) }
+
+// A reviewer's run proves Codex logged out at T and pauses it at once with
+// the login file's stamp; the operator logs in five minutes later (the file
+// is written after the run that failed) and health lifts the pause on the
+// login check and the changed stamp. The round's settle half an hour later
+// pauses Codex again from the same report, whose proof (the run ended at T)
+// is older than the login file now: it records no stamp, and the next check
+// lifts the pause on the login check alone. On 2026-10-12 the settle's pause
+// stamped the valid login and held Codex until someone touched auth.json.
+func TestALoginPauseTheSettleRepeatsAfterTheReloginLiftsAtOnce(t *testing.T) {
+	h := newHarness(t)
+	h.ag.loginStamp = map[string]string{"codex": loginStampAt(h.clock.Now().Add(-24 * time.Hour))}
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	pr := h.pr(2)
+	failedAt := h.clock.Now()
+	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: pr.ID, Round: 1, Role: string(agents.RoleCodexReview), Kind: pipeline.KindInitial,
+		TargetSHA: "b1", Identity: pr.Identity, ReviewerLogin: "talkable[bot]", State: store.RunPending, PromptText: "codex review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.TransitionRun(h.ctx, run.ID, nil, store.RunFailed, func(u *store.RunUpdate) {
+		u.Set("outcome", string(agents.HealthLoginRequired))
+		u.Set("ended_at", failedAt)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Round: 1, ReviewID: 7, Event: "COMMENTED",
+			Reports: map[agents.Role]pipeline.RoleReport{agents.RoleCodexReview: {Role: string(agents.RoleCodexReview), Kind: agents.KindCodex,
+				RunID: run.ID, Status: string(agents.HealthLoginRequired), Detail: "Failed to refresh token"}}}, nil
+	}
+	h.rd.gate = make(chan struct{})
+	before := len(h.rd.all())
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitRound(before)
+	// The reviewer's failure, as Runner.OnPause reports it.
+	h.e.PauseTool(h.ctx, pipeline.Pause{Kind: string(agents.HealthLoginRequired), Tool: agents.KindCodex,
+		Detail: "Failed to refresh token", Proven: true, ProvenAt: failedAt})
+	if v, ok := h.e.getKV(h.ctx, store.KVToolPausedLogin("codex")); !ok || v == "" {
+		t.Fatalf("the at-once pause recorded no login stamp: %q %v", v, ok)
+	}
+	h.advance(5 * time.Minute)
+	h.ag.mu.Lock()
+	h.ag.loginStamp["codex"] = loginStampAt(h.clock.Now()) // codex login
+	h.ag.mu.Unlock()
+	h.advance(time.Minute)
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := h.e.toolPause(h.ctx, "codex"); ok {
+		t.Fatalf("the pause held after the login file changed: %+v", p)
+	}
+	h.advance(24 * time.Minute)
+	close(h.rd.gate)
+	h.settle()
+	h.wantState(2, store.PRReviewed)
+	if p, ok := h.e.toolPause(h.ctx, "codex"); !ok || p.Reason != string(agents.HealthLoginRequired) {
+		t.Fatalf("the settle did not pause codex from the report: %+v %v", p, ok)
+	}
+	if v, ok := h.e.getKV(h.ctx, store.KVToolPausedLogin("codex")); ok {
+		t.Fatalf("the settle stamped a login file written after the run that failed: %q", v)
+	}
+	h.advance(2 * time.Minute)
+	h.tick()
+	if p, ok := h.e.toolPause(h.ctx, "codex"); ok {
+		t.Fatalf("the settle's pause held although the login check passes: %+v", p)
+	}
+}
+
+// A proven login pause holds while the login check passes and the login
+// file is unchanged, for loginStampHold at most: a login pattern that
+// matched a failed run's own output (a 401 in a reviewer's stdout on a PR
+// about authentication) would otherwise hold the kind until someone touched
+// the file. The lift is a warn-level tool.resumed event saying why.
+func TestAProvenLoginPauseLiftsAfterItsHoldCap(t *testing.T) {
+	h := newHarness(t)
+	h.ag.loginStamp = map[string]string{"codex": loginStampAt(h.clock.Now().Add(-24 * time.Hour))}
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.e.PauseTool(h.ctx, pipeline.Pause{Kind: string(agents.HealthLoginRequired), Tool: agents.KindCodex,
+		Detail: "401 Unauthorized", Proven: true, ProvenAt: h.clock.Now()})
+	for range 3 {
+		h.advance(39 * time.Minute)
+		h.tick()
+		if p, ok := h.e.toolPause(h.ctx, "codex"); !ok || !p.Until.After(h.clock.Now()) {
+			t.Fatalf("the pause lifted before its hold cap: %+v %v", p, ok)
+		}
+	}
+	if n := len(h.events("tool.resumed")); n != 0 {
+		t.Fatalf("tool.resumed before the hold cap: %d", n)
+	}
+	h.advance(3 * time.Minute) // 2h since the stamp
+	h.tick()
+	if p, ok := h.e.toolPause(h.ctx, "codex"); ok {
+		t.Fatalf("the pause held past its hold cap: %+v", p)
+	}
+	evs := h.events("tool.resumed")
+	if len(evs) != 1 || evs[0].Level != "warn" || !strings.Contains(evs[0].Message, "lifted after 2h with the login file unchanged") {
+		t.Fatalf("tool.resumed events = %+v", evs)
+	}
+}
+
+// A usage limit without a parsed reset pauses for the fallback (1h, doubling
+// from the last one). The round's settle pausing the same report again folds
+// into the pause the reviewer's failure made at once: the pause still ends
+// at its first until and the backoff stays 1h, where the fold doubled it to
+// 2h and extended the pause to the settle plus 2h. A later pause that is not
+// a fold doubles it.
+func TestAFoldedUsagePauseKeepsItsBackoff(t *testing.T) {
+	h := newHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	p := pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: agents.KindCodex, Detail: "You've hit your usage limit", Proven: true}
+	first := h.clock.Now().Add(time.Hour)
+	h.e.PauseTool(h.ctx, p)
+	h.advance(30 * time.Minute)
+	h.e.PauseTool(h.ctx, p) // the settle
+	if got, ok := h.e.toolPause(h.ctx, "codex"); !ok || !got.Until.Equal(first) {
+		t.Fatalf("the fold moved the pause: %+v, want until %v", got, first)
+	}
+	if v, _ := h.e.getKV(h.ctx, store.KVToolBackoff("codex")); v != time.Hour.String() {
+		t.Fatalf("backoff after the fold = %q, want 1h", v)
+	}
+	if n := len(h.events("tool.paused")); n != 1 {
+		t.Fatalf("tool.paused events = %d, want 1", n)
+	}
+	h.advance(31 * time.Minute)
+	h.tick() // the fallback ran out: lifted optimistically
+	if got, ok := h.e.toolPause(h.ctx, "codex"); ok {
+		t.Fatalf("the usage pause held past its fallback: %+v", got)
+	}
+	h.e.PauseTool(h.ctx, p)
+	if v, _ := h.e.getKV(h.ctx, store.KVToolBackoff("codex")); v != (2 * time.Hour).String() {
+		t.Fatalf("backoff of the next pause = %q, want 2h", v)
+	}
+	if got, _ := h.e.toolPause(h.ctx, "codex"); !got.Until.Equal(h.clock.Now().Add(2 * time.Hour)) {
+		t.Fatalf("the next pause ends %v, want in 2h", got.Until)
 	}
 }

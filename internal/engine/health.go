@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,8 +20,14 @@ import (
 
 // Pause timing.
 const (
-	loginRecheck      = 60 * time.Second // logged-out CLI: preflight again after this
-	usageFallback     = time.Hour        // usage limit without a parsed reset: 1h, doubling
+	loginRecheck = 60 * time.Second // logged-out CLI: preflight again after this
+	// loginStampHold caps how long a proven login pause holds on an
+	// unchanged login file while the login check passes: a login pattern
+	// that matched a failed run's own output (a 401 in a reviewer's stdout
+	// on a PR about authentication) costs one wasted run every 2h, not the
+	// kind for good.
+	loginStampHold    = 2 * time.Hour
+	usageFallback     = time.Hour // usage limit without a parsed reset: 1h, doubling
 	usageFallbackMax  = 8 * time.Hour
 	attentionWindow   = 30 * time.Minute // dedupe window of attention toasts
 	identityToastSpan = 6 * time.Hour
@@ -154,15 +161,27 @@ func (e *Engine) PauseTool(ctx context.Context, p pipeline.Pause) { e.pauseTool(
 // failure: usage limits until the parsed reset (else 1h, doubling), logins
 // for loginRecheck (re-checked with a preflight; a login pause a run proved
 // also waits for the kind's login file to change, stampLogin), overload for
-// the fallback backoff. A pause of the same reason still running is kept
-// (extended when the new one ends later), without a second event or toast:
-// the round's settle pauses again what a reviewer's failure paused at once.
+// the fallback backoff. A pause of the same reason still running is kept,
+// without a second event or toast and without touching the backoff, and
+// extended only to a later reset the new pause names: the round's settle
+// pauses again what a reviewer's failure paused at once, and doubling the
+// fallback for it paused one failure for 2.5h instead of 1h (2026-10-12).
 func (e *Engine) pauseTool(ctx context.Context, p pipeline.Pause) {
 	tool := p.Tool
 	if tool == "" {
 		tool = agents.KindCodex
 	}
 	now := e.now()
+	proven := p.Proven && p.Kind == string(agents.HealthLoginRequired)
+	if prev, had := e.toolPause(ctx, tool); had && prev.Reason == p.Kind && prev.Until.After(now) {
+		if p.Until.After(prev.Until) {
+			e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(p.Until))
+		}
+		if proven {
+			e.stampLogin(ctx, tool, p.ProvenAt)
+		}
+		return
+	}
 	until := p.Until
 	switch p.Kind {
 	case string(agents.HealthLoginRequired):
@@ -179,19 +198,12 @@ func (e *Engine) pauseTool(ctx context.Context, p pipeline.Pause) {
 			until = now.Add(d)
 		}
 	}
-	proven := p.Proven && p.Kind == string(agents.HealthLoginRequired)
-	if prev, had := e.toolPause(ctx, tool); had && prev.Reason == p.Kind && prev.Until.After(now) {
-		if until.After(prev.Until) {
-			e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(until))
-		}
-		if proven {
-			e.stampLogin(ctx, tool)
-		}
-		return
-	}
+	// A new pause holds on its own proof: a stamp an earlier pause left
+	// (`magnum resume` keeps it) is not this one's.
+	e.delKV(ctx, store.KVToolPausedLogin(tool), kvToolPausedLoginAt(tool))
 	e.setToolPause(ctx, tool, p.Kind, p.Detail, until)
 	if proven {
-		e.stampLogin(ctx, tool)
+		e.stampLogin(ctx, tool, p.ProvenAt)
 	}
 	e.event(ctx, "warn", "tool:"+tool, "tool.paused", fmt.Sprintf("%s paused (%s) until %s: %s", tool, p.Kind, until.Local().Format("15:04"), p.Detail), nil)
 	title, body := toolToast(tool, p.Kind, until)
@@ -225,25 +237,62 @@ func (e *Engine) clearToolPause(ctx context.Context, tool string) {
 	if reason, ok := e.getKV(ctx, store.KVToolPausedReason(tool)); ok && reason != "" {
 		e.forgetSend(ctx, "pause:"+tool+":"+reason) // the next pause toasts at once
 	}
-	e.delKV(ctx, store.KVToolPausedUntil(tool), store.KVToolPausedReason(tool), store.KVToolPausedDetail(tool), store.KVToolPausedLogin(tool))
+	e.delKV(ctx, store.KVToolPausedUntil(tool), store.KVToolPausedReason(tool), store.KVToolPausedDetail(tool),
+		store.KVToolPausedLogin(tool), kvToolPausedLoginAt(tool))
 }
 
+// kvToolPausedLoginAt holds when the login stamp (store.KVToolPausedLogin)
+// was recorded (store.FormatTime): where the hold loginStampHold caps began.
+func kvToolPausedLoginAt(tool string) string { return tool + ".paused_login_at" }
+
 // stampLogin records the tool's login file stamp (Agents.LoginStamp) for a
-// login pause a run proved, once per pause: health lifts the pause only
+// login pause a run proved at provenAt (zero: now), once per pause, with the
+// time it was recorded (kvToolPausedLoginAt): health lifts the pause only
 // after the stamp changes (the operator logged in again, or a refresh got
-// through), since the login check alone says logged in while a revoked
-// refresh token fails every call (2026-10-12: two rounds posted without
-// codex-review, and the pause that followed ended on the next check).
-func (e *Engine) stampLogin(ctx context.Context, tool string) {
+// through) or loginStampHold passed, since the login check alone says logged
+// in while a revoked refresh token fails every call (2026-10-12: two rounds
+// posted without codex-review, and the pause that followed ended on the next
+// check). A login file written after provenAt makes the proof stale, and
+// nothing is recorded, so the login check decides: the round's settle
+// paused Codex again half an hour after the failure, after the operator had
+// logged in and health had lifted the first pause, stamped the new login,
+// and held Codex until someone touched auth.json (2026-10-12).
+func (e *Engine) stampLogin(ctx context.Context, tool string, provenAt time.Time) {
 	if e.d.Agents == nil {
 		return
 	}
 	if _, ok := e.getKV(ctx, store.KVToolPausedLogin(tool)); ok {
 		return
 	}
-	if s := e.d.Agents.LoginStamp(tool); s != "" {
-		e.setKV(ctx, store.KVToolPausedLogin(tool), s)
+	s := e.d.Agents.LoginStamp(tool)
+	if s == "" {
+		return
 	}
+	now := e.now()
+	if provenAt.IsZero() {
+		provenAt = now
+	}
+	if changed, ok := loginStampTime(s); ok && changed.After(provenAt) {
+		e.log.Info("login file changed after the run that proved the login gone; the preflight decides", "tool", tool,
+			"proven_at", provenAt, "changed_at", changed)
+		return
+	}
+	e.setKV(ctx, store.KVToolPausedLogin(tool), s)
+	e.setKV(ctx, kvToolPausedLoginAt(tool), store.FormatTime(now))
+}
+
+// loginStampTime is the login file's mtime a LoginStamp names ("<mtime unix
+// nanos>:<size>"); false for "absent" and anything else.
+func loginStampTime(stamp string) (time.Time, bool) {
+	ns, _, ok := strings.Cut(stamp, ":")
+	if !ok {
+		return time.Time{}, false
+	}
+	n, err := strconv.ParseInt(ns, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(0, n), true
 }
 
 // forgetSend drops a toast's dedup record once its condition cleared.
@@ -314,8 +363,10 @@ func (e *Engine) attentionRole(ctx context.Context, prID int64, kind string) str
 }
 
 // health ends expired pauses: a logged-out CLI must pass its preflight
-// first; usage limits are lifted optimistically (the next round pauses
-// again, with a doubled fallback, if the limit still holds).
+// first, and a login pause a run proved also needs its login file changed
+// (stampLogin), or loginStampHold passed on an unchanged one; usage limits
+// are lifted optimistically (the next round pauses again, with a doubled
+// fallback, if the limit still holds).
 func (e *Engine) health(ctx context.Context) {
 	now := e.now()
 	for _, tool := range e.kinds() {
@@ -337,8 +388,19 @@ func (e *Engine) health(ctx context.Context) {
 				continue
 			}
 			if stamp, ok := e.getKV(ctx, store.KVToolPausedLogin(tool)); ok && stamp != "" && e.d.Agents.LoginStamp(tool) == stamp {
-				e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(now.Add(loginRecheck)))
-				e.log.Info("still paused", "tool", tool, "reason", p.Reason, "err", "the login file has not changed since a run proved the login gone")
+				since, known := e.kvTime(ctx, kvToolPausedLoginAt(tool))
+				if !known { // a stamp recorded without its time: the hold counts from now
+					since = now
+					e.setKV(ctx, kvToolPausedLoginAt(tool), store.FormatTime(now))
+				}
+				if now.Sub(since) < loginStampHold {
+					e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(now.Add(loginRecheck)))
+					e.log.Info("still paused", "tool", tool, "reason", p.Reason, "err", "the login file has not changed since a run proved the login gone")
+					continue
+				}
+				e.clearToolPause(ctx, tool)
+				e.event(ctx, "warn", "tool:"+tool, "tool.resumed", fmt.Sprintf("%s pause (%s) lifted after %s with the login file unchanged: the preflight passes; a run that fails again pauses it again",
+					tool, p.Reason, humanDuration(loginStampHold)), nil)
 				continue
 			}
 		}

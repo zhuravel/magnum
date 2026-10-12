@@ -404,8 +404,12 @@ type Pause struct {
 	Detail string    // the matching pane line (redacted)
 	// Proven: a run showed the failure (a reviewer's run, the judge's
 	// pane), not a login check: a login pause then holds until the kind's
-	// login file changes (engine, store.KVToolPausedLogin).
+	// login file changes (engine, store.KVToolPausedLogin), unless the file
+	// changed after ProvenAt.
 	Proven bool
+	// ProvenAt is when the run showed it: a reviewer's run's end, the time
+	// the judge stopped. Zero on a proven pause means now.
+	ProvenAt time.Time
 }
 
 // RoleReport is what one non-judge role produced.

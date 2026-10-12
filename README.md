@@ -489,7 +489,10 @@ without a result while a reviewer's run proved its kind logged out ends its turn
 which Magnum continues once the login is back, instead of a nudge. The pause lifts when the login check
 passes, and, for a pause a run proved, once the kind's login file changed too (`login_file`, codex:
 `auth.json` under its home): `codex login status` reads the saved tokens and says logged in while a
-revoked refresh token fails every call.
+revoked refresh token fails every call. A login file written after the run that failed (you logged in
+since) leaves the decision to the login check alone, so a pause the round's end repeats lifts on its next
+check. A pause whose login file stays unchanged lifts after 2 hours at most once the login check passes,
+with a warning event; a run that fails again pauses the kind again.
 
 The `[usage]` section watches the Codex budget, which Magnum reads from Codex's own session files
 (`codex_home`, default `$CODEX_HOME` or `~/.codex`) at most once a minute. At `codex_soft` percent

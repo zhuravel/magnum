@@ -342,6 +342,11 @@ func TestAReviewersLoginFailurePausesItsToolAtOnce(t *testing.T) {
 	if len(pauses) != 1 || pauses[0].Kind != string(agents.HealthLoginRequired) || pauses[0].Tool != agents.KindCodex || !pauses[0].Proven || pauses[0].Detail == "" {
 		t.Fatalf("pauses = %+v", pauses)
 	}
+	// The proof's time is the run's end: a login file written after it
+	// (the operator logged in) makes the proof stale for the engine.
+	if run := e.runOf(agents.RoleCodexReview, KindInitial); run.EndedAt == nil || pauses[0].ProvenAt.IsZero() || pauses[0].ProvenAt.Before(*run.EndedAt) {
+		t.Errorf("the pause was proven at %v, the run ended %v", pauses[0].ProvenAt, run.EndedAt)
+	}
 	if judgePrompts[0] != 0 {
 		t.Errorf("the pause came after the judge prompt")
 	}
@@ -371,6 +376,9 @@ func TestAJudgeThatStopsWhileItsKindIsLoggedOutPausesInsteadOfANudge(t *testing.
 	run := e.runOf(agents.RoleJudge, store.RunInitial)
 	if run.State != store.RunFailed || store.Deref(run.Outcome) != OutcomeLoginRequired {
 		t.Errorf("judge run = %s / %v", run.State, store.Deref(run.Outcome))
+	}
+	if run.EndedAt == nil || !res.Pause.ProvenAt.Equal(*run.EndedAt) {
+		t.Errorf("the judge's pause was proven at %v, its turn stopped %v", res.Pause.ProvenAt, run.EndedAt)
 	}
 	// A judge that ends quietly while nothing proved its kind logged out is
 	// nudged as before.
