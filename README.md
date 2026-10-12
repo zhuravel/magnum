@@ -1197,8 +1197,9 @@ finding its earlier reviews missed on code the PR did not change since is posted
 ending with `(missed earlier)`. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
-risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open" and "No guard for
-now"); the judge decides a reply by what it does, not by that hint, accepts a fix
+risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it"
+and "No guard for now"; "added in", "removed in" and "closed by … in" with a commit are `fixed`); the
+judge decides a reply by what it does, not by that hint, accepts a fix
 only when the code shows it, honours an answered finding unless it proves the reason wrong (then it
 says why in one sentence in that thread), and lists only what changed since its last review: findings
 now fixed or answered, findings still open despite a reply or a commit, and new ones; the unchanged open

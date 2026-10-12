@@ -236,6 +236,70 @@ func TestClassifyReplyReadsResolvedByCommitAndFixOnThisBranch(t *testing.T) {
 	}
 }
 
+// Three more fixes and one decline the classifier read as other: the authors'
+// agents named the commit with "added in <sha>", "removed in <sha>" and "closed
+// by <what> in <sha>" after "Good catch", "Agreed" or "Valid" (nine replies of
+// a window), and answered an optional finding with "Noted, not adding it" (a
+// decline). A commit is needed: "added in the next PR" fixes nothing, and
+// "closed as won't fix" names no commit.
+func TestClassifyReplyReadsAddedRemovedClosedByCommitAndNotAdding(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		// Added or removed in a commit.
+		{"(Claude) Good catch, added in 3eda937271: `order_spec.rb` 'renders a saved preview whose variants still exist'. " +
+			"With the guard cut down the example fails with 404.", ReplyFixed},
+		{"Good catch, added in 8e48fe1b5b.", ReplyFixed},
+		{"(Claude) Agreed, removed in d803e5f4. `tcp_keepalive_timer` only checks the probe count when the user timeout is 0.", ReplyFixed},
+		{"Added in 3f9e2a1.", ReplyFixed},
+		{"Removed in `3f9e2a1`: the helper had no other caller.", ReplyFixed},
+		{"Valid, now added in 3f9e2a1.", ReplyFixed},
+		{"The guard was added in 3f9e2a1.", ReplyFixed},
+		{"It was removed in 3f9e2a1.", ReplyFixed},
+		{"Good catch — the test is already added in 3f9e2a1.", ReplyFixed},
+		// Closed or resolved by something, in a commit.
+		{"(Claude) Valid — closed by the Approve & apply route in 2397323958: the launch tool is now approval-gated.", ReplyFixed},
+		{"(Claude) Valid — closed by the approval route in 2397323958 (see the line-16 thread): a deferred request " +
+			"can only produce a held proposal.", ReplyFixed},
+		{"Agreed, resolved by the redesign in 64b00a2.", ReplyFixed},
+		{"This is closed by the retry rewrite in 64b00a2.", ReplyFixed},
+		{"Resolved in 64b00a2.", ReplyFixed},
+		// No commit, not done, or not this thread's.
+		{"Added in the next PR.", ReplyOther},
+		{"Good catch, added in a follow-up.", ReplyOther},
+		{"Not added yet.", ReplyOther},
+		{"Added in 12 places.", ReplyOther},
+		{"Removed in a later PR.", ReplyOther},
+		{"Not removed in 3f9e2a1.", ReplyOther},
+		{"That is not added in 3f9e2a1 yet.", ReplyOther},
+		{"Closed by the redesign in the next PR.", ReplyOther},
+		{"Not closed by the redesign in 2397323958.", ReplyOther},
+		{"Closed as won't fix.", ReplyOther},
+		{"Resolved by the next PR.", ReplyOther},
+		// Not adding it, won't add: a decline.
+		{"(Claude) Noted, not adding it. The example would repeat four config values; the existing spec covers the naming logic.", ReplyWontFix},
+		{"Not adding it: the spec covers the naming logic.", ReplyWontFix},
+		{"Not adding.", ReplyWontFix},
+		{"Good catch, but not adding it for a nightly import.", ReplyWontFix},
+		{"Valid. Not adding a guard here: the caller checks.", ReplyWontFix},
+		{"I'm not adding the helper; it would hide the retry.", ReplyWontFix},
+		{"Won't add it, the feature is going away.", ReplyWontFix},
+		{"(Claude) Valid, but won't add: the helper would hide the retry.", ReplyWontFix},
+		{"I won't add a test for this; the integration spec covers it.", ReplyWontFix},
+		{"We will not add the guard.", ReplyWontFix},
+		{"Not adding up: the totals differ.", ReplyOther},
+		{"That won't add up.", ReplyOther},
+		{"I'll add a test.", ReplyOther},
+		{"Good catch, I will add it.", ReplyOther},
+		// Controls: a fix still wins over a later "not adding", and the older forms hold.
+		{"Fixed in 1a2b3c4; not adding the larger rewrite.", ReplyFixed},
+		{"Good catch, added in 3f9e2a1. Not adding the second test.", ReplyFixed},
+		{"Won't fix: the feature is going away.", ReplyWontFix},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestExcerpt(t *testing.T) {
 	if s, cut := excerpt("  short  ", 600); s != "short" || cut {
 		t.Fatalf("short = %q, %v", s, cut)

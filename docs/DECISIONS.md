@@ -6403,6 +6403,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   evidence), and cutting the heading's tag by hand instead of matching the heading (a title that merely starts
   with the word, "Simplification of the retry loop", stays as written).
 
+- **The reply classifier reads "added in", "removed in", "closed by … in" and "not adding it"** (2026-10-12;
+  amends "Replies are read past "Low priority", a deferral and the commit named another way"). The
+  declined-findings analyst read all 283 answered threads of the window against their class: 13 misreads. Nine
+  fixes were `other` because the author's agent named the commit another way: "Good catch, added in <sha>"
+  (six), "Agreed, removed in <sha>" (one) and "Valid — closed by <a redesign> in <sha>" (two). "Noted, not
+  adding it" was `other` and is a decline. A clause that starts with "added in <sha>", "removed in <sha>", or
+  "closed by …" or "resolved by …" followed by "in <sha>" is `fixed`, after the subject `replyClauseLead` drops
+  or a "<it> is/was" like the older "covered in <sha>" (the commit is 7 to 40 hex characters; the "…" stays
+  inside the clause, so a comma or a dash ends it); a clause "not adding" (alone, or before "it", "this",
+  "that", "them", "a", "an", "the", "any" or "more", with "I'm", "I" or "we" before it), or "won't add" or "will
+  not add" in the same places, is `won't fix`.
+  The precedence is unchanged (an acknowledgement passes the verdict on, a fixed clause before "not adding"
+  wins), and a form without a commit stays `other` ("added in the next PR", "not added yet", "closed as won't
+  fix", "not adding up"). Run on the 283 replies, the change moves ten from `other` (nine to `fixed`, one to
+  `won't fix`) and none of another class. The two replies the analyst read as accepted but not fixed ("left
+  open — … tracking as a follow-up", "Left open, not changed. Net +2 …") stay `won't fix`, as "left open" and
+  "deferred" already are: the class is a hint, and the judge's reply contract (`skills/magnum-review/SKILL.md`
+  section 6, `prompts/README.md`) knows four classes. Rejected: a fifth class for accepted-and-deferred (it
+  would change the contract of the judge and the threads file for a hint the judge already reads past by
+  what the reply does), and a commit with a letter and a digit for the new forms (an all-digit abbreviated
+  commit such as "2397323958" is a real one, and it is the form the analyst's example takes).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

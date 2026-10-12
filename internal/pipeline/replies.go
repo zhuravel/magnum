@@ -83,12 +83,13 @@ var (
 		re    *regexp.Regexp
 	}{
 		{ReplyFixed, regexp.MustCompile("(?i)^(?:(?:already\\s+)?(?:fixed|done|addressed|applied)\\b|" +
-			"(?:|.*\\b(?:is|are|was|were|been)\\s+)(?:already\\s+|now\\s+)?(?:covered\\s+in|resolved\\s+(?:by|in))\\s+`?[0-9a-f]{7,40}\\b|" +
+			"(?:|.*\\b(?:is|are|was|were|been)\\s+)(?:already\\s+|now\\s+)?(?:covered\\s+in|resolved\\s+(?:by|in)|(?:added|removed)\\s+in|(?:closed|resolved)\\s+by\\s+.+?\\s+in)\\s+`?[0-9a-f]{7,40}\\b|" +
 			"(?:|.*\\b(?:is|are|was|were|been|now|also|landed)\\s+)on\\s+this\\s+branch\\s+as\\s+`?[0-9a-f]{7,40}\\b)")},
 		{ReplyNotABug, regexp.MustCompile(`(?i)^(?:(?:not\s+a\s+bug|by\s+design|(?:as\s+)?intended|intentional(?:ly)?)\b|` +
 			`(?:incorrect|moot(?:\s+point)?|not\s+applicable)$|(?:(?:this|the)\s+(?:concern|finding|comment|issue)\s+)?does(?:\s+not|n't)\s+apply\b)`)},
 		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:(?:won't\s+fix|wont\s+fix|will\s+not\s+fix|wontfix|out\s+of\s+scope|follow[- ]?up|declined|deprioriti[sz]ed|` +
 			`left\s+open|deferred|not\s+(?:fixed|changed)\s+in\s+this\s+(?:pr|push|round))\b|` +
+			`(?:(?:i|we)(?:'m)?\s+)?(?:not\s+adding|(?:won't|wont|will\s+not)\s+add)(?:$|\s+(?:it|this|that|them|a|an|the|any|more)\b)|` +
 			`(?:kept|keeping|left|leaving)(?:\s+(?:it|this|that))?\s+as[- ]is\b|kept$|` +
 			`.*\bstay(?:s|ing)?\s+as(?:\s+it\s+|[- ])is\b|(?:no|not|nothing|none|kept|keeping|left|leaving)\b.*\bfor\s+now$)`)},
 	}
@@ -111,11 +112,13 @@ var (
 // classifyReply says what a reply claims from its first clause: "fixed",
 // "done", "addressed", "applied", "already addressed", "<it> is covered in
 // <sha>", "(already) resolved by <sha>" (or "in"), "<it> is now on this branch
-// as <sha>" or a commit and a verb ("84c0b1e adds …") (ReplyFixed); "not a
-// bug", "incorrect", "moot", "by design", "intended", "intentional"
+// as <sha>", "added in <sha>", "removed in <sha>", "closed (or resolved) by
+// <what> in <sha>" or a commit and a verb ("84c0b1e adds …") (ReplyFixed);
+// "not a bug", "incorrect", "moot", "by design", "intended", "intentional"
 // (ReplyNotABug); "won't fix", "declined", "out of scope", "follow-up", "kept
 // as is", "<it> stays as is", "left open", "deferred", "not fixed in this
-// PR" (or push, round; or "not changed"), "No guard for now" (ReplyWontFix).
+// PR" (or push, round; or "not changed"), "No guard for now", "not adding
+// it", "won't add" (ReplyWontFix).
 // An acknowledgement ("Good catch", "Valid", "Analyzed", "Noted", "Low
 // priority", "Low priority (Net 0)", "Correction", "You're right") passes the
 // verdict on to a later clause of the first paragraph ("Good catch, fixed in
@@ -123,7 +126,8 @@ var (
 // you're right. <where it landed>. The same fix is now on this branch as
 // <sha>"); a low priority acknowledgement no verdict follows is ReplyWontFix
 // ("Low priority (Net +1): not worth a change on its own"; "Low priority —
-// fixed in <sha>" stays ReplyFixed). "Resolved" without a commit is no verdict.
+// fixed in <sha>" stays ReplyFixed). "Resolved", "added" or "closed" without a
+// commit is no verdict.
 // Anything else is ReplyOther, as is another acknowledgement no verdict
 // follows, unless the paragraph declines the fix before any clause says fixed
 // or not a bug (replyDeclined: "Confirmed. Still open … so I score that fix at
