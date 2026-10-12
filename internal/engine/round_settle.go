@@ -90,13 +90,22 @@ func (e *Engine) retryOrAttention(ctx context.Context, job *roundJob, pr store.P
 // needsAttention parks the PR for a human and toasts. A post-merge round
 // puts its PR back in closed instead (postMergeFailed).
 func (e *Engine) needsAttention(ctx context.Context, job *roundJob, pr store.PR, from []string, why, msg string, extra func(*store.PRUpdate)) {
-	e.needsAttentionKeyed(ctx, job, pr, from, why, msg, extra, fmt.Sprintf("attention:%d:%s", pr.ID, why))
+	e.needsAttentionKeyed(ctx, job, pr, from, why, msg, extra, e.attentionKey(pr.ID, why))
+}
+
+// attentionKey is the dedupe key of needsAttention's toast and reveal: the
+// PR, the kind and the daemon's run (runFingerprint.sum), so a PR the
+// restart retried (retryParked) that fails again is news again.
+func (e *Engine) attentionKey(prID int64, why string) string {
+	return fmt.Sprintf("attention:%d:%s:%s", prID, why, e.runFingerprint().sum())
 }
 
 // needsAttentionKeyed is needsAttention with the urgent toast's dedupe key
 // (one toast per key within attentionWindow): the fix job gives each loop
 // its own, so a second loop's failure on a PR the first left in
-// needs_attention is toasted too.
+// needs_attention is toasted too. The attention's kind goes with the
+// daemon's run (kvPRAttentionRun), which the next start compares with its
+// own (retryParked).
 func (e *Engine) needsAttentionKeyed(ctx context.Context, job *roundJob, pr store.PR, from []string, why, msg string, extra func(*store.PRUpdate), key string) {
 	if job.postMerge {
 		e.postMergeFailed(ctx, job, pr, from, why, msg, extra)
@@ -116,6 +125,7 @@ func (e *Engine) needsAttentionKeyed(ctx context.Context, job *roundJob, pr stor
 	}
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	e.setKV(ctx, KVPRAttention(pr.ID), why)
+	e.recordAttentionRun(ctx, pr.ID, e.runFingerprint())
 	if job.hasSlot {
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
 	}

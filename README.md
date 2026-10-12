@@ -481,6 +481,18 @@ stays pinned (magnum unpin)", `magnum status` lists every pin with the PR's stat
 age; `pins` in the JSON), and the board's summary pill adds how many of its pins hold a closed PR
 ("📌 4 pinned · 2 on closed PRs", only when there is one).
 
+A round that fails three times on one head (a timeout, an error, a setup failure charged to the PR) parks
+its PR in needs attention. When the cause was Magnum's own (an unknown role, a launch line that broke), the
+fix is a new build, config or prompts, so the attention records what the daemon ran (the build's commit
+and the binary's mtime, a hash of the config and one of the prompts and skills it loaded), and the next
+start, after its recovery and before the first dispatch, puts back in line every open PR a failed round
+parked under another one: queued, or re-review pending for a reviewed PR, with its attempts reset and not
+forced, so it waits its turn like any PR. Each gets a `pr.retried_after_restart` event ("retried after the
+restart on e7ad419: the failure's build differs") and one toast names them all ("magnum: retrying 2 PRs
+parked by failed rounds before this build"). A PR that fails again on the same build, config and prompts
+stays parked (and its attention toasts again), as does every other cause: a fix loop that needs your call,
+a blocked judge, an identity failure, an API that stayed overloaded, a Codex flag.
+
 A fetch, clone, checkout or dependency step that fails for a reason outside the PR (an SSH key the
 agent lost, DNS, a network timeout or refusal, TLS, or the same dependency error on two PRs within ten
 minutes) pauses dispatch for everything once, with one toast, and is never charged to the PR. Magnum

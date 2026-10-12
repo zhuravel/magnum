@@ -6619,6 +6619,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   migration, and `scope` already keeps these rows out of each learner. Also rejected: removing the threads
   of the fixer from the retro. Their outcomes still show which findings got a fix.
 
+- **A restart on a new build, config or prompts retries the PRs a failed round parked** (2026-10-12). A round
+  that fails `maxAttempts` (3) times on one head parks its PR in needs_attention as `failed`, and nothing
+  took it out but a push or the operator: of the operator's 24 forced reviews in four days, 7 took a PR out
+  of needs_attention after a restart had fixed the failure's cause and two more belong to the same incidents
+  (on 10-10 an unknown-role bug parked PRs at 13:27:02, the daemon restarted on the fix at 13:27:39 and the
+  forces came at 13:32; on 10-12 a launch-line bug parked 6 PRs over 19 failed rounds, the restart on the fix
+  came at 13:39:33 and five forces at 13:42:40-49), and meanwhile two PRs merged unreviewed. Now
+  `needsAttentionKeyed` records with the attention's kind what the daemon runs (`pr.<id>.attention_run`, a
+  `runFingerprint`: the build as its revision, or its version without one, and the binary's mtime, so a
+  rebuild of one commit from a changed tree is another build; the SHA-256 of the loaded config as JSON,
+  defaults included; and `config.PromptSnapshot.Sum`, over every prompt's text and every skill's content the
+  start loaded), taken once per daemon. `retryParked` runs at the start after `recoverRows` and
+  `recoverFixes` and before the first tick: an open PR in needs_attention whose kind is `failed` and whose
+  record differs (or is missing: a build before the record parked it) moves back to its claimable state
+  (queued, or rereview_pending with a reviewed SHA) with attempts 0, no next attempt, the throttle's
+  next_eligible_at and no last error, not forced, so it waits its quiet period, interval and cap like any
+  PR; one `pr.retried_after_restart` event per PR names the part that differs ("retried after the restart
+  on e7ad419: the failure's build differs", or config, or prompts), and one batched toast lists them
+  ("magnum: retrying 2 PRs parked by failed rounds before this build"). A PR that fails again under the same
+  run is parked with that run and stays, as the operator approved; the other kinds stay too (a fix loop's
+  cap or call, a blocked judge, a judge that posted nothing, an identity check or leak, an API that stayed
+  overloaded), and so do a PR with a Codex flag (with or without a fallback judge) and one its watch no
+  longer accepts. A dry run retries nothing, as it recovers nothing. The attention toast's and reveal's
+  dedupe key (`attentionKey`) now names the run as well, so a retried PR that fails again within the
+  30-minute window of its first toast is toasted again instead of going quiet after the retry toast said it
+  was being retried. Rejected: retrying on every restart (a restart on the same build only fails again),
+  and forcing the retried PRs (a forced round skips the timing rules and goes first, while the cause may be
+  the PR's own).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

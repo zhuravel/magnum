@@ -401,6 +401,10 @@ type Engine struct {
 	checkBuild func(ctx context.Context, path string) (string, error)
 	supervised bool
 	builds     buildWatch
+	// run is what this daemon runs (its build, config and prompts), taken
+	// once, at its first use: the start (retry_parked.go).
+	runOnce sync.Once
+	run     runFingerprint
 
 	once         bool       // Run with Options.Once: no daily retro (retro.go)
 	retroMu      sync.Mutex // the running retro (retro.go)
@@ -818,8 +822,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 }
 
 // startup runs once before the first tick: identity warm-up, crash recovery,
-// a re-classification of ineligible PRs under the config just loaded and an
-// inventory reconcile (queued on the heavy worker).
+// a retry of the PRs failed rounds parked under another build, config or
+// prompts, a re-classification of ineligible PRs under the config just
+// loaded and an inventory reconcile (queued on the heavy worker).
 func (e *Engine) startup(ctx context.Context) {
 	// The previous daemon's last tick, before this one writes its own:
 	// requests queued after it were never seen by a daemon (expireRequests).
@@ -842,6 +847,7 @@ func (e *Engine) startup(ctx context.Context) {
 	e.warmIdentities(ctx, true)
 	e.recoverRows(ctx)
 	e.recoverFixes(ctx) // fix.go: a fixer at work never survives a restart
+	e.retryParked(ctx)  // retry_parked.go: what failed rounds parked under another build, config or prompts
 	e.reclassifyIneligible(ctx)
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
 	// No curation, retro, skill edit or gate runs yet: a mark left behind

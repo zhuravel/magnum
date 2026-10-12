@@ -3912,6 +3912,14 @@ func (s *PromptSnapshot) Files() int
     Files counts the files the snapshot holds: prompts (embedded defaults
     included) and skill copies.
 
+func (s *PromptSnapshot) Sum() string
+    Sum identifies what the snapshot holds: the SHA-256 of every prompt's
+    name and text and every skill's path and content, in name order, as 12 hex
+    digits; "" for a nil snapshot. Two starts that loaded the same prompts and
+    skills have the same Sum (a daemon records it with a PR a failed round
+    parks, DECISIONS "A restart on a new build, config or prompts retries the
+    PRs a failed round parked").
+
 type QuietWindow struct{ Start, End int }
     QuietWindow is a daemon.quiet_hours window in minutes since midnight.
     It includes Start and excludes End, and wraps past midnight when End is not

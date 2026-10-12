@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -307,6 +308,27 @@ func (s *PromptSnapshot) Files() int {
 		return 0
 	}
 	return len(s.prompts) + len(s.skills)
+}
+
+// Sum identifies what the snapshot holds: the SHA-256 of every prompt's name
+// and text and every skill's path and content, in name order, as 12 hex
+// digits; "" for a nil snapshot. Two starts that loaded the same prompts and
+// skills have the same Sum (a daemon records it with a PR a failed round
+// parks, DECISIONS "A restart on a new build, config or prompts retries the
+// PRs a failed round parked").
+func (s *PromptSnapshot) Sum() string {
+	if s == nil {
+		return ""
+	}
+	h := sha256.New()
+	for _, name := range slices.Sorted(maps.Keys(s.prompts)) {
+		text := s.prompts[name].p.Text
+		fmt.Fprintf(h, "prompt %d:%s %d:%s\n", len(name), name, len(text), text)
+	}
+	for _, src := range slices.Sorted(maps.Keys(s.skills)) {
+		fmt.Fprintf(h, "skill %d:%s %x\n", len(src), src, s.skills[src].stamp.sum)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // Changed lists what differs on disk from the snapshot, sorted: the names

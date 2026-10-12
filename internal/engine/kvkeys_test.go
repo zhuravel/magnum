@@ -112,6 +112,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"kvPRPushes", kvPRPushes(id), "pr.7.pushes"},
 		{"KVPRManualVerdict", KVPRManualVerdict(id), "pr.7.manual_verdict"},
 		{"KVPRAttention", KVPRAttention(id), "pr.7.attention"},
+		{"kvPRAttentionRun", kvPRAttentionRun(id), "pr.7.attention_run"},
 		{"KVPRWait", KVPRWait(id), "pr.7.wait"},
 		{"KVPRFix", KVPRFix(id), "pr.7.fix"},
 		{"KVPRFixOff", KVPRFixOff(id), "pr.7.fix_off"},

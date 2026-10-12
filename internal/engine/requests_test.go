@@ -366,7 +366,7 @@ func TestRevealOnAttention(t *testing.T) {
 		t.Fatalf("focused %v, reveals %d; want the judge once", got, n)
 	}
 	// The same attention again inside the window does not steal focus.
-	h.e.revealAttention(h.ctx, pr.ID, nil, pipeline.OutcomeBlocked, "attention:"+itoa(pr.ID)+":"+pipeline.OutcomeBlocked)
+	h.e.revealAttention(h.ctx, pr.ID, nil, pipeline.OutcomeBlocked, h.e.attentionKey(pr.ID, pipeline.OutcomeBlocked))
 	mu.Lock()
 	defer mu.Unlock()
 	if len(focused) != 1 {

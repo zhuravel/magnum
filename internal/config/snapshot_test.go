@@ -764,3 +764,42 @@ func TestTheFixSkillIsEmbeddedAndCopiedAtStartup(t *testing.T) {
 		t.Fatalf("the copy = %q, want the checkout's file", got)
 	}
 }
+
+// A snapshot's Sum says what it loaded: another start on the same prompts
+// and skill has the same one (whatever their mtimes), an edited prompt or
+// skill another, and a nil snapshot none.
+func TestSnapshotSumNamesThePromptsAndSkillsLoaded(t *testing.T) {
+	cfg, home := snapLoad(t, map[string]string{"prompts/judge-initial.md": "custom judge {{.URL}}", "mine/SKILL.md": "skill v1"})
+	src := filepath.Join(home, "mine", "SKILL.md")
+	snapSetSkill(cfg, src)
+	skillDir := filepath.Join(t.TempDir(), "copies")
+	sum := func(step string) string {
+		t.Helper()
+		snap, err := cfg.SnapshotPrompts(skillDir, snapNow)
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		s := snap.Sum()
+		if len(s) != 12 {
+			t.Fatalf("%s: Sum() = %q, want 12 hex digits", step, s)
+		}
+		return s
+	}
+	first := sum("first start")
+	snapSetMod(t, filepath.Join(home, "prompts", "judge-initial.md"), snapNow.Add(time.Hour))
+	if got := sum("same files, new mtime"); got != first {
+		t.Errorf("the same prompts and skill: Sum %q, want %q", got, first)
+	}
+	snapWrite(t, filepath.Join(home, "prompts", "judge-initial.md"), "edited judge {{.URL}}")
+	edited := sum("edited prompt")
+	if edited == first {
+		t.Errorf("an edited prompt kept the Sum %q", first)
+	}
+	snapWrite(t, src, "skill v2")
+	if got := sum("edited skill"); got == edited {
+		t.Errorf("an edited skill kept the Sum %q", edited)
+	}
+	if got := (*PromptSnapshot)(nil).Sum(); got != "" {
+		t.Errorf("nil snapshot: Sum() = %q, want none", got)
+	}
+}
