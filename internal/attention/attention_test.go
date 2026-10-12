@@ -141,3 +141,25 @@ func TestExplainNamesTheFixerItsReportAndTheRemedies(t *testing.T) {
 		})
 	}
 }
+
+// A fix reason too long for the toast's one line keeps the counts, which come
+// first, and drops the report's path, which the next step names in full,
+// instead of cutting the path in the middle.
+func TestAFixReasonTooLongForTheSummaryDropsTheReportPathNotTheCounts(t *testing.T) {
+	const report = "/Users/alice/.local/share/magnum/reviews/talkable/talkable/11483/75f3675c950b/claude-fix.md"
+	msg := "5 fix cycles (14 on this PR), 3 findings left: 1 new, 0 missed earlier, 2 fallout of the fixes: " + report
+	r := Explain(KindFix, msg, "talkable#11483")
+	if want := "fix: 5 fix cycles (14 on this PR), 3 findings left: 1 new, 0 missed earlier, 2 fallout of the fixes"; r.Summary != want {
+		t.Errorf("summary = %q, want %q", r.Summary, want)
+	}
+	if r.Cause != strings.TrimPrefix(r.Summary, "fix: ") {
+		t.Errorf("cause = %q, want the summary's sentence", r.Cause)
+	}
+	if !strings.Contains(r.Fix, report) {
+		t.Errorf("fix = %q, want it to name the report %s", r.Fix, report)
+	}
+	short := "2 fix cycles, 2 findings left: " + report
+	if r := Explain(KindFix, short, "talkable#2"); r.Summary != "fix: "+short {
+		t.Errorf("summary of a line that fits = %q, want it whole", r.Summary)
+	}
+}

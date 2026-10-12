@@ -205,7 +205,7 @@ func cause(r Reason, chain, output string, lines []string, ref string) (string, 
 	case KindIdentityLeak:
 		return textx.FirstLine(chain), "check that review on GitHub and the identity's token; automation for the watch is paused until `magnum resume`"
 	case KindFix:
-		return textx.FirstLine(chain), fixRemedy(chain, ref)
+		return fixCause(textx.FirstLine(chain)), fixRemedy(chain, ref)
 	}
 
 	all := chain + "\n" + output
@@ -300,6 +300,22 @@ func summary(r Reason) string {
 		s += fmt.Sprintf(" %d× on %s", r.Attempts, r.Head)
 	}
 	return s + ": " + r.Cause
+}
+
+// fixCause is a fix job's message line as the cause: a line that would not
+// fit Summary ("fix: " in front of it) with the fixer's report path at its
+// end (the cap's "5 fix cycles (14 on this PR), 3 findings left: 1 new, ...:
+// <path>") loses the path, which fixRemedy names in full, instead of
+// having it cut in the middle by clip; a line that fits stays whole.
+func fixCause(line string) string {
+	if len([]rune(line))+len("fix: ") <= SummaryMax {
+		return line
+	}
+	loc := fixReportRe.FindAllStringIndex(line, -1)
+	if len(loc) == 0 || loc[len(loc)-1][1] != len(line) {
+		return line
+	}
+	return strings.TrimRight(line[:loc[len(loc)-1][0]], ": ")
 }
 
 // fixRemedy is the next step of a fix job's attention: the fixer's report

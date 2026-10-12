@@ -84,8 +84,8 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 // step: a re-review that did not post, or findings the fixer left to the
 // author when it pushed, end it as needs attention; a review that found
 // nothing ends it as done; findings start the next cycle (startFix) while
-// cycles are left, and end it as needs attention at the cap; a next cycle
-// that cannot start ends it as needs attention with why, unless the PR moved
+// cycles are left, and end it as needs attention at the cap, which says what
+// is left (capMessage); a next cycle that cannot start ends it as needs attention with why, unless the PR moved
 // on since the re-review (closed, or a newer head the operator pushed:
 // loopMovedOn), which ends it quietly with fix.ended. A re-review whose
 // judge turn a usage or login pause cut short after its judge was prompted
@@ -126,7 +126,7 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	case !fixRemains(res):
 		e.fixLoopDone(ctx, job, raw, cmp.Or(res.TargetSHA, st.Head))
 	case st.Cycle >= st.Cap:
-		e.endLoopForAttention(ctx, job, raw, "fix.capped", fmt.Sprintf("%s, %s: %s", textx.Count(st.Cycle, "fix cycle", "fix cycles"), left, st.Report))
+		e.endLoopForAttention(ctx, job, raw, "fix.capped", e.capMessage(ctx, job, res, found, left))
 	default:
 		_, err := e.startFix(ctx, job.pr, st.By, st)
 		switch {
@@ -148,6 +148,101 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 			e.endLoopForAttention(ctx, job, raw, "fix.failed", fmt.Sprintf("fix loop ended: cycle %d did not start: %v", st.Cycle+1, err))
 		}
 	}
+}
+
+// The judge ends the title of a finding in code written to fix an earlier
+// one with "(in the fix for <earlier title>)" and that of a finding its
+// earlier reviews missed with "(missed earlier)" (skills/magnum-review/
+// SKILL.md, section 6). The registry cuts a title at 120 runes, so the
+// first may lose its closing parenthesis; a P3's "(optional, no reply
+// needed)" follows the second.
+const (
+	titleFalloutMark = "(in the fix for"
+	titleMissedMark  = "(missed earlier)"
+)
+
+// capMessage is what a loop that reached its cap tells the operator: the
+// loop's fix cycles and, once earlier loops of the PR ran some too, all the
+// PR's ("5 fix cycles (14 on this PR)": a loop started by hand counts from
+// cycle 1 again), and the findings the last re-review left, split by where
+// they come from so that a loop converging reads differently from one
+// chasing its own fixes: "3 findings left: 1 new, 0 missed earlier, 2
+// fallout of the fixes", then the fixer's last report. found is the
+// review's finding count and left its words (findingsSplit adds the split).
+func (e *Engine) capMessage(ctx context.Context, job *fixJob, res pipeline.RoundResult, found int, left string) string {
+	st := job.state
+	cycles := textx.Count(st.Cycle, "fix cycle", "fix cycles")
+	if total := e.fixRunsOf(ctx, job.pr.ID); total > st.Cycle {
+		cycles += fmt.Sprintf(" (%d on this PR)", total)
+	}
+	if split := e.findingsSplit(ctx, job.pr.ID, res.Round, found); split != "" {
+		left += ": " + split
+	}
+	return fmt.Sprintf("%s, %s: %s", cycles, left, st.Report)
+}
+
+// fixRunsOf is how many fix runs the PR has had, across all its loops: 0
+// when they cannot be read.
+func (e *Engine) fixRunsOf(ctx context.Context, prID int64) int {
+	runs, err := e.st.RunsByPR(ctx, prID)
+	if err != nil {
+		e.log.Warn("fix: the PR's runs, for the cap's count of its fix cycles", "pr", prID, "err", err)
+		return 0
+	}
+	return len(slices.DeleteFunc(runs, func(r store.Run) bool { return r.Kind != store.RunFix }))
+}
+
+// findingsSplit says how the findings the review of the PR's round posted
+// divide, read from the titles the registry holds for that round
+// (store.Finding, the result's provenance): "1 new, 0 missed earlier, 2
+// fallout of the fixes". It is "" when the registry holds no posted titles
+// for the round or not as many as the review counted (a result written
+// without a ledger, or with an incomplete one): no split is better than a
+// guessed one.
+func (e *Engine) findingsSplit(ctx context.Context, prID int64, round, found int) string {
+	if round <= 0 || found <= 0 {
+		return ""
+	}
+	all, err := e.st.FindingsByPR(ctx, prID)
+	if err != nil {
+		e.log.Warn("fix: the PR's findings, for the cap's account of what is left", "pr", prID, "err", err)
+		return ""
+	}
+	var titles []string
+	var runID string
+	for _, f := range all { // oldest first: a round recorded again counts once, by its last run
+		if f.Round != round {
+			continue
+		}
+		if f.RunID != runID {
+			runID, titles = f.RunID, nil
+		}
+		if f.Verdict == store.FindingPosted {
+			titles = append(titles, f.Title)
+		}
+	}
+	if len(titles) != found {
+		return ""
+	}
+	fresh, missed, fallout := splitFindingTitles(titles)
+	return fmt.Sprintf("%d new, %d missed earlier, %d fallout of the fixes", fresh, missed, fallout)
+}
+
+// splitFindingTitles counts titles by the judge's suffixes: findings in the
+// fixes of earlier ones, findings the earlier reviews missed, and the new
+// rest.
+func splitFindingTitles(titles []string) (fresh, missed, fallout int) {
+	for _, title := range titles {
+		switch {
+		case strings.Contains(title, titleFalloutMark):
+			fallout++
+		case strings.Contains(title, titleMissedMark):
+			missed++
+		default:
+			fresh++
+		}
+	}
+	return fresh, missed, fallout
 }
 
 // loopMovedOn says why a loop's PR moved on after the re-review of head,
@@ -286,8 +381,12 @@ func (e *Engine) postedReReview(ctx context.Context, pr store.PR, head string) (
 	case "COMMENT":
 		event = "COMMENTED"
 	}
-	return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, TargetSHA: head, ReviewURL: sum.URL, ReviewID: sum.ReviewID, Event: event,
-		Findings: map[string]int{"P0": sum.Counts[0], "P1": sum.Counts[1], "P2": sum.Counts[2], "P3": sum.Counts[3]}}, true
+	res := pipeline.RoundResult{Outcome: pipeline.OutcomePosted, TargetSHA: head, ReviewURL: sum.URL, ReviewID: sum.ReviewID, Event: event,
+		Findings: map[string]int{"P0": sum.Counts[0], "P1": sum.Counts[1], "P2": sum.Counts[2], "P3": sum.Counts[3]}}
+	if run, err := e.st.RunByID(ctx, sum.RunID); err == nil {
+		res.Round = run.Round // the cap finds the round's finding titles by it
+	}
+	return res, true
 }
 
 // autofix starts a fix loop by itself after a round that posted a review

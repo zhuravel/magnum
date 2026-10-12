@@ -1546,7 +1546,14 @@ autofix = "never"          # never | own: start a loop by itself after a review 
 ```
 
 `fix_cycles` bounds the loop, because two agents can disagree forever. A cycle is one fix run and the forced
-re-review of its push. With `autofix = "own"` a loop also starts by itself after Magnum posts a review with
+re-review of its push. The cap bounds one loop, and a loop you start by hand counts from cycle 1 again, so
+the line that ends it at the cap (the event, the card and the toast) says what is left and how long the PR
+has been at it: "5 fix cycles (14 on this PR), 3 findings left: 1 new, 0 missed earlier, 2 fallout of the
+fixes: <report>". The parenthesis counts all the PR's fix runs and appears once an earlier loop ran some. The
+split is the last review's findings by the judge's title suffixes: `(in the fix for ...)` is fallout of the
+fixes, `(missed earlier)` a finding the earlier reviews missed, anything else is new. A loop that converges
+leaves new findings, or none; one that chases its own fixes leaves fallout. The split is left out when the
+registry holds no titles for the review. With `autofix = "own"` a loop also starts by itself after Magnum posts a review with
 findings, other than an approval, on a PR one of your logins wrote, unless you took the PR out of autofix.
 The same refusals apply, and they are logged, never toasted. The default is `"never"` on purpose. For the
 first week, start loops with `f` and read what the fixer committed and replied. Then set `autofix = "own"`,

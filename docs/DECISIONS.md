@@ -1199,6 +1199,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   regression. Now the clause is "a regression (behaviour that works at the base and breaks at the head)".
   The rest of the sentence stays. Each other finding must have a net score of 3 or more. Rejected: removing
   the clause. A regression is the one defect of the diff that is never worth leaving, at any cost.
+- **The fix loop's cap says what is left and how long the PR has been at it** (2026-10-12). The cap's event,
+  card and toast said "5 fix cycles, 3 findings left: <report>", which tells a loop that converges from one
+  that chases its own fixes only to someone who reads the review. One PR took 15 fix runs and 48 commits in
+  a week with 2 to 7 findings every cycle, hit the cap 3 times, and its 86 answered threads were 45 fallout
+  of earlier fixes, 35 findings the earlier reviews missed and 6 plain ones; every loop started by hand
+  counts from cycle 1 again, so `fix_cycles` bounded a loop and never the PR. Now `capMessage` adds the
+  PR's fix runs across all its loops when earlier loops ran some ("5 fix cycles (14 on this PR)", from the
+  runs of kind fix; a loop that is the PR's only one says no more than before) and splits the last review's
+  findings by the suffix the judge puts on a title (SKILL.md section 6): "(in the fix for ..." is fallout
+  of the fixes, "(missed earlier)" a miss of the earlier reviews, any other title is new, so the line reads
+  "5 fix cycles (14 on this PR), 3 findings left: 1 new, 0 missed earlier, 2 fallout of the fixes: <report>".
+  The titles are those the registry holds for the review's round (`store.Finding`, the result's ledger,
+  whose posted entries add up to the counts); the split is left out when the registry holds no posted
+  titles for the round or fewer than the review counted, because no split is better than a guessed one, and
+  a recovered loop (`postedReReview`) now carries the round of the review it read so that it finds them.
+  The titles are matched by the suffix's opening because the registry cuts a title at 120 runes and a P3's
+  "(optional, no reply needed)" follows "(missed earlier)". The long line would have cut the report's path
+  in the toast's 160 runes, so `attention` leaves the path out of a fix reason that does not fit (the next
+  step names it in full). The loop still ends at the cap. Rejected: a per-PR counter in the registry's kv
+  (the runs are the record and are never deleted) and raising `fix_cycles` or counting the cap across loops
+  (the cap is the operator's guard on one unattended loop; this entry only reports).
 
 ## Screens and commands
 
