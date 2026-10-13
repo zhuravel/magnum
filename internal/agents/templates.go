@@ -355,6 +355,14 @@ type JudgeData struct {
 	// comments since, running no check that review already ran. Rendered as
 	// one instruction, only then.
 	SameHead bool
+	// CIRed (rereview, recovery; with SameHead): a CI follow-up: a check of
+	// the head failed after the judge's last review of it was prompted, so
+	// that review did not see it. The prompt asks the judge to decide each
+	// check `failing_checks` lists (a P1 broken build the PR causes, with
+	// the failing example or step quoted, else an unrelated Checks line) and
+	// to post exactly one review. Rendered as one instruction, only then; no
+	// <magnum> field.
+	CIRed bool
 	// Replies (rereview, recovery; with SameHead): a reply round: Replies
 	// replies came on the judge's review since it last read the threads,
 	// with no new commits. When its verdict and event stay those of its

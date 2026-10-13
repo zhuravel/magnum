@@ -409,6 +409,11 @@ func TestRenderGolden(t *testing.T) {
 		d.FailingChecks = ownDir + "failing-checks.json"
 		return d
 	}
+	// A CI follow-up: CI finished red on the head after the judge's review
+	// of it, so the judge alone decides each failed check and posts one
+	// review, in its session or a fresh one.
+	ciRed := withFailingChecks(sameHead)
+	ciRed.CIRed = true
 	roleHistory := func(d RoleData) RoleData {
 		d.HistoryFile, d.DocsFile = ownDir+"history.json", ownDir+"docs.json"
 		return d
@@ -468,6 +473,8 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_delta_check", "judge-recovery.md", deltaCheck},
 		{"judge_rereview_same_head", "judge-rereview.md", sameHead},
 		{"judge_recovery_same_head", "judge-recovery.md", sameHead},
+		{"judge_rereview_ci_red", "judge-rereview.md", ciRed},
+		{"judge_recovery_ci_red", "judge-recovery.md", ciRed},
 		{"judge_rereview_replies", "judge-rereview.md", replies},
 		{"judge_recovery_replies", "judge-recovery.md", replies},
 		{"judge_continue_replies", "judge-continue.md", replies},

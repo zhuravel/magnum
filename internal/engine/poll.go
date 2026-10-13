@@ -417,6 +417,12 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		if err == nil && hasD && !firstSync && !res.New {
 			err = e.considerReplies(ctx, repo, w, res.PR.ID, now) // replies.go
 		}
+		// Every poll, not only one that read the Details: a check that
+		// failed during the review's round queues its judge check once the
+		// round posted, though CI did not change since.
+		if err == nil && !firstSync && !res.New && ciPollWorth(res.PR) {
+			err = e.considerCIRed(ctx, repo, w, res.PR.ID, now) // ci_red.go
+		}
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -817,6 +823,7 @@ func (e *Engine) onHeadChange(ctx context.Context, repo store.Repo, w config.Wat
 	subject := prSubject(repo, pr.Number)
 	e.recordPush(ctx, pr.ID, now)
 	e.event(ctx, "info", subject, "pr.head_changed", "new head "+textx.ShortSHA(pr.HeadSHA), map[string]any{"head_sha": pr.HeadSHA, "state": pr.State})
+	e.supersedeCIRed(ctx, repo, pr) // ci_red.go
 	switch pr.State {
 	case store.PRBaseline, store.PRIneligible, store.PRNeedsAttention, store.PRReviewed,
 		store.PRQueued, store.PRRereviewPending:

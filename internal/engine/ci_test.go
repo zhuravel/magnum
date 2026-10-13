@@ -34,14 +34,22 @@ func (h *harness) prEvents() int {
 	return n
 }
 
-// TestCIChangeFetchesDetailsOnceAndQueuesNothing: CI going PENDING →
-// FAILURE on a reviewed PR is fetched once per change and stored, but it is
-// not a push: the PR stays reviewed with its timers, nothing is queued.
-func TestCIChangeFetchesDetailsOnceAndQueuesNothing(t *testing.T) {
+// TestCIThatFailedBeforeTheJudgePromptIsFetchedOnceAndQueuesNothing: CI
+// going PENDING → FAILURE on a reviewed PR is fetched once per change and
+// stored, but it is not a push, and a check that failed before the judge of
+// the review was prompted was in its failing-checks.json, so the review's
+// Checks answer it: the PR stays reviewed with its timers, nothing is
+// queued (a failure after that prompt gets a judge check,
+// TestCIThatTurnsRedAfterTheReviewStartsAJudgeCheck).
+func TestCIThatFailedBeforeTheJudgePromptIsFetchedOnceAndQueuesNothing(t *testing.T) {
 	h := newHarness(t)
 	before := h.reviewedPR(2, "b1")
 	if before.CI == nil || before.CI.SHA != "b1" || deref(before.CIState) != "" || len(before.CI.Checks) != 0 {
 		t.Fatalf("CI without checks = %v %+v", before.CIState, before.CI)
+	}
+	prompted := *before.ReviewedAt
+	if err := postedJudgeRun(h, before.ID, 1, "b1", prompted, deref(before.LastReviewID)); err != nil {
+		t.Fatal(err)
 	}
 	own, all, events := h.gh.count("details:talkable/talkable:[2]"), h.gh.count("details:"), h.prEvents()
 	step := func(want int) {
@@ -64,7 +72,7 @@ func TestCIChangeFetchesDetailsOnceAndQueuesNothing(t *testing.T) {
 		t.Fatalf("pending CI = %v %+v", pr.CIState, pr.CI)
 	}
 
-	failedAt := h.clock.Now().UTC()
+	failedAt := prompted.Add(-time.Minute).UTC()
 	h.setCI(2, "FAILURE", github.Check{Name: "rspec (1)", State: github.CheckPassed},
 		github.Check{Name: "jest", State: github.CheckFailed, Workflow: "CI", At: failedAt}, github.Check{Name: "completion", State: github.CheckSkipped})
 	step(2)

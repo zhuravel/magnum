@@ -6789,6 +6789,50 @@ skill versions); people add theirs to the sections before it, at the end of the 
   still missed the sentence), and a generic web fetch for the judge (section 1 keeps `gh` for GitHub
   data; Codex's `--search` is the parity for a documentation lookup, as the plugin entry of 2026-10-12
   says).
+- **A head whose CI turns red after the review gets a judge check** (2026-10-13, extends "The judge sees
+  the head's failing checks"). On talkable#11483 the head e2777d0 was pushed at 07:41:54Z; magnum's round
+  38 (a recovery round) prompted its judge at about 07:44Z and posted at 08:11:53Z "No new problems since
+  9e80a11; CI is red: Dependency Audit failed, unrelated". The head's RSpec run started at 08:12:39Z and
+  finished red at 08:26-08:31Z with two failing examples the PR causes (the eval lock spec, `Expected 216000
+  to be > 222315`, the PR's six new eval cases pushing a full run past the 60-hour lock, and a controller
+  spec that expects one `mark_pending` call where the PR now makes two). Round 39 at 08:15Z only answered
+  threads, and nothing looked at the reviewed head's CI again: the poll stored the checks and compared
+  nothing. A colleague's review at 09:47Z reported both failures as blocking, an hour after CI finished,
+  while magnum's last word on the head called it unrelated. The skill already knows what a failed check
+  means (`failing_checks`, section 7: a P1 broken build the PR causes, a red head never reads LGTM); the
+  judge is only told when its prompt goes out. Now a check of the head magnum reviewed (no push since, the
+  stored checks that head's, the PR open, not merged, not muted) that failed, with a known time, after the
+  judge prompt behind the latest review posted on that head queues a judge check of the same head: the
+  prompt time is `runs.submitted_at` of that round's first posted run (`store.PostedPromptAt`; in a
+  two-prompt round the candidates prompt, the one `failing-checks.json` was written for), not
+  `reviewed_at`, since a check that completed between the prompt and the post was not seen either, and a
+  check that failed before the prompt was in the file and is answered. The PR goes to `rereview_pending`
+  as for replies (`pr.ci_red`: "CI finished red on <sha> after the review (1 failed check, at 08:31); a
+  judge check follows"), and `pr.<id>.ci_followup` records the head and each failed check it covers by
+  workflow, name and failure time. `eligibility.PRFacts.CIRedAt` makes the throttle hold it only for a
+  snooze (no quiet period, interval, cap or reply debounce; a request still wins), quiet hours let it run
+  as the judge alone, it counts against no cap, and dispatch starts it as a same-head round of the judge
+  alone (`ci_red: true` and "(CI red after the review)" in `engine.round_start`), which is no reply round
+  (its judge reads the replies all the same). Its prompt (`judge-rereview.md`, `judge-recovery.md`, only
+  under `.CIRed`) says CI finished red after the review: decide each failed check from its log, a P1
+  with the failing example quoted when the PR causes it, else an unrelated Checks line, and post exactly
+  one review with the section 7 verdict. The board and `magnum prs --json` show the wait as a CI check
+  (`CI check · CI red`, "CI turned red after the review; judge check pending"). One judge check per
+  failing check and head: a rerun of the same workflow and check that fails again after the check posted
+  is covered by the review that stands, while another check failing later gets its own. While it waits, CI
+  that no longer shows its checks failed (a rerun runs, or passed) takes the PR back to `reviewed` and
+  the checks out of the record (`pr.ci_red_dropped`), so a rerun that fails again queues it again; a push
+  supersedes it (the record goes, `pr.ci_red_dropped`, and the push's round reads the new head's CI). A
+  round in flight, a fix loop, a forced or requested round take precedence (their judge reads the
+  failing checks too). The event names no check: the PR's workflows name them, so they stay in the
+  registry. Known limit: the poll reads a PR's checks again when the head's rollup changes or the PR's
+  activity moves, and GitHub's rollup stays FAILURE while a check that failed before is still red, so a
+  further check failing on such a head (talkable#11483's case: Dependency Audit had failed already) is
+  seen only with the PR's next activity; reading the checks more often there is a decision of its own
+  (the GitHub budget). Rejected: a notification instead of a round (the author gets no finding, and the
+  LGTM or "unrelated" stands), a new run kind (`runs.kind` has a SQL CHECK, `0025_fix_runs.sql`, so a
+  flag on rereview and recovery rounds is the cheap path), and a skill change (the skill is at its byte
+  cap and already says what a failed check means; no new `<magnum>` field either).
 
 ## Learned rules
 

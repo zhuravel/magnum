@@ -63,6 +63,12 @@ type PRFacts struct {
 	// started on that head (zero = none).
 	RepliedAt    time.Time
 	ReplyRoundAt time.Time
+	// CIRedAt is when a check of the head magnum reviewed (no push since)
+	// last failed after the judge of that review was prompted, while the
+	// judge check of that red CI is due (a CI follow-up); zero = none.
+	// Throttle then holds the PR only for its snooze: CI has finished, and
+	// no code changed.
+	CIRedAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
 	// (config.SelfLogins, the board's "mine"): include_own = false skips it

@@ -61,6 +61,11 @@ func (rd *round) sameHead() bool {
 	return rd.in.SameHead && (rd.in.Kind == KindRereview || rd.in.Kind == KindRecovery)
 }
 
+// ciRed reports whether the round is a CI follow-up (RoundInput.CIRed):
+// a same-head round on a head whose CI finished red after the judge's last
+// review of it.
+func (rd *round) ciRed() bool { return rd.in.CIRed && rd.sameHead() }
+
 // addDeltaCheck fills jd's delta check fields for a round that is one,
 // with DeltaCheckFile written to the report directory (a failure leaves the
 // prompt without the file: the judge reads the commits itself).

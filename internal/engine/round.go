@@ -187,6 +187,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if job.sameHead && job.kind == pipeline.KindRereview {
 		rs.sameHead = e.confirmSameHead(ctx, job, rs.target) // false: the round runs in full
 	}
+	job.ciRed = job.ciRed && rs.sameHead // a newer head: its round reads its CI, and counts
 	if job.kind != kindContinue && job.evalHead == "" && !rs.judgeOnly() {
 		rs.requested = append(rs.requested, e.rerunRoles(ctx, job, rs.roles, rs.target)...)
 	}
@@ -235,6 +236,9 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	case rs.sameHead && job.replies > 0:
 		rs.replies = job.replies
 		e.noteReplyRound(ctx, pr.ID, rs.target, rs.replies, job.startedAt)
+	case rs.sameHead && job.ciRed:
+		rs.ciRed = true
+		e.noteCIRound(ctx, pr.ID, rs.target, job.startedAt) // ci_red.go
 	}
 
 	in := e.roundInput(ctx, job, rs, ws, dryRun)
@@ -262,6 +266,9 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	}
 	if rs.replies > 0 && rs.kind != kindContinue {
 		what, data["replies"] = replyLabel(rs.replies), rs.replies
+	}
+	if rs.ciRed {
+		what, data["ci_red"] = what+" (CI red after the review)", true
 	}
 	if job.postMerge {
 		what = "post-merge " + what
@@ -297,6 +304,9 @@ type roundSetup struct {
 	// replies: the round is a reply round (pipeline.RoundInput.Replies), or
 	// continues one.
 	replies int
+	// ciRed: the round is a judge check of the head's red CI
+	// (pipeline.RoundInput.CIRed; ci_red.go).
+	ciRed bool
 }
 
 // judgeOnly reports whether the round runs its judge alone: a delta check
@@ -468,9 +478,10 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 // reviewing; a round other than a continue records its start for the
 // throttle (last_round_started_at; a reply round that ends replied gives
 // it back, onReplied), and an automatic one (neither forced
-// nor requested nor a reply round, which reply_min_interval spaces) counts
-// against the daily cap (rounds_today), unless it continues a round that
-// counted already (roundJob.continued).
+// nor requested nor a reply round, which reply_min_interval spaces, nor a
+// judge check of red CI, one per failed check and head) counts against the
+// daily cap (rounds_today), unless it continues a round that counted
+// already (roundJob.continued).
 func (e *Engine) enterReviewing(ctx context.Context, job *roundJob, kind string) *setupError {
 	pr := job.pr
 	if err := e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotHeld, store.SlotBusy}, store.SlotBusy, nil); err != nil {
@@ -478,7 +489,7 @@ func (e *Engine) enterReviewing(ctx context.Context, job *roundJob, kind string)
 	}
 	now := e.now()
 	day := store.DayKey(now)
-	counted := kind != kindContinue && !job.continued && !pr.Forced && !job.requested && job.replies == 0
+	counted := kind != kindContinue && !job.continued && !pr.Forced && !job.requested && job.replies == 0 && !job.ciRed
 	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRClaiming}, store.PRReviewing, func(u *store.PRUpdate) {
 		u.Set("last_error", nil)
 		if kind != kindContinue {
@@ -517,6 +528,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		TargetSHA: rs.target, BaseRef: base, Roles: rs.roles, Requested: rs.requested, MovedFrom: ws.MovedFrom,
 		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
 		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta, SameHead: rs.sameHead, Replies: rs.replies,
+		CIRed:   rs.ciRed,
 		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel, Related: e.cfg.RelatedFor(&job.watch),
 		ColdJudge: rs.freshJudge && rs.kind == pipeline.KindRecovery,
 	}

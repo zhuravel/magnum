@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -92,6 +94,32 @@ ORDER BY pr_id, created_at DESC`, int64Args(prIDs)...)
 		}
 	}
 	return out, rows.Err()
+}
+
+// PostedPromptAt is when the judge prompt behind the PR's latest review
+// posted on target went out (runs.submitted_at): that of the first run of
+// its round posted with the review, the judge's run of the round (in a
+// two-prompt round its candidates prompt), whose prompt carried the head's
+// failing checks; a nudge or a model fallback continues that turn later.
+// ok is false when no review posted on target has a prompt time.
+func (s *Store) PostedPromptAt(ctx context.Context, prID int64, target string) (time.Time, bool, error) {
+	var at string
+	err := s.db.QueryRowContext(ctx, `SELECT r.submitted_at FROM runs r
+JOIN (SELECT round, review_id FROM runs WHERE pr_id = ? AND target_sha = ? AND outcome = 'posted' AND review_id IS NOT NULL
+      ORDER BY created_at DESC, rowid DESC LIMIT 1) p ON r.round = p.round AND r.review_id = p.review_id
+WHERE r.pr_id = ? AND r.outcome = 'posted' AND r.submitted_at IS NOT NULL
+ORDER BY r.created_at, r.rowid LIMIT 1`, prID, target, prID).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("posted prompt of pr %d: %w", prID, err)
+	}
+	t, err := ParseTime(at)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("posted prompt of pr %d: %w", prID, err)
+	}
+	return t, true, nil
 }
 
 // ParseReviewResult fills sum from a judge result file (the skill's section

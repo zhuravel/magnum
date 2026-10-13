@@ -66,3 +66,35 @@ func TestThrottleARequestWinsOverReplies(t *testing.T) {
 	f.RequestedAt = ago(2 * time.Minute)
 	wantDecision(t, Throttle(d, f, now), true, now, "")
 }
+
+// The live case (talkable#11483, 2026-10-13): CI finished red on the head
+// magnum had just reviewed, and nothing looked at it again. A judge check of
+// that red CI (CIRedAt) is no push and has nothing to wait for: the quiet
+// period, the re-review interval, the daily cap and the reply debounce and
+// interval do not hold it; a snooze does, and a review request still wins
+// with its own debounce.
+func TestThrottleACIFollowUpWaitsOnlyForASnooze(t *testing.T) {
+	d := replyDaemon()
+	d.MaxRoundsPerPRPerDay = 2
+	f := PRFacts{ReviewedSHA: reviewed, HeadChangedAt: ago(time.Minute), PendingSince: ago(time.Minute),
+		LastRoundStartedAt: ago(5 * time.Minute), RoundsToday: 2,
+		RepliedAt: ago(time.Minute), ReplyRoundAt: ago(10 * time.Minute)}
+	if got := Throttle(d, f, now); got.Ready {
+		t.Fatalf("without CI red: %+v, want the reply debounce", got)
+	}
+
+	f.CIRedAt = ago(30 * time.Second)
+	wantDecision(t, Throttle(d, f, now), true, now, "")
+	f.RepliedAt, f.ReplyRoundAt = time.Time{}, time.Time{}
+	wantDecision(t, Throttle(d, f, now), true, now, "")
+
+	f.SnoozedUntil = now.Add(time.Hour)
+	got := Throttle(d, f, now)
+	wantDecision(t, got, false, now.Add(time.Hour), ReasonSnoozed)
+	if got.Rule != RuleSnoozed {
+		t.Fatalf("rule = %q, want %q", got.Rule, RuleSnoozed)
+	}
+
+	f.RequestedAt = ago(10 * time.Second)
+	wantDecision(t, Throttle(d, f, now), false, f.RequestedAt.Add(time.Minute), ReasonRequested)
+}

@@ -310,6 +310,12 @@ type RoundInput struct {
 	// posts no review: the round ends OutcomeReplied, verified by the
 	// replies carrying its run's reply marker. 0 = an ordinary round.
 	Replies int
+	// CIRed (with SameHead): the round is a CI follow-up: a check of the
+	// head failed after the judge of its last review was prompted, so that
+	// review did not see it. The judge decides each failed check of the
+	// head's failing-checks.json (a P1 the PR causes, or an unrelated
+	// Checks line) and posts one review (JudgeData.CIRed).
+	CIRed bool
 	// ColdJudge (recovery): the judge alone started in a fresh session
 	// because its conversation's prompt cache had gone cold ([pipeline]
 	// judge_fresh_after) or its session served the role's

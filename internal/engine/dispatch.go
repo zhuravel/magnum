@@ -55,6 +55,12 @@ type roundJob struct {
 	// that many replies came on the review since its judge read the threads,
 	// and it may end with answers in them instead of a review.
 	replies int
+	// ciRed: the same-head re-review is a judge check of the head's red CI
+	// (ciRedDue, ci_red.go): a check failed after the judge of its review was
+	// prompted. It is no reply round (its judge reads the replies all the
+	// same) and counts against no cap; a checkout that finds a newer head
+	// clears it (prepare).
+	ciRed bool
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it
@@ -273,7 +279,8 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 // backstop (the daemon's quiet period, re-review interval and daily cap)
 // holds back although the throttle lets them through, and that the
 // candidates in have lack: a requested round (pendingRequest) skips all of
-// those rules, and a head that arrived during the PR's last review
+// those rules, and so do a reply round (replyTrigger) and a judge check of
+// red CI (ciRedWait), while a head that arrived during the PR's last review
 // (arrivedDuringReview) skips the interval. They are read again without the
 // backstop and kept when eligibility.Throttle, under their watch, says ready.
 func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams, have []store.PR, now time.Time) []store.PR {
@@ -292,7 +299,8 @@ func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams,
 			continue
 		}
 		if _, requested := e.pendingRequest(ctx, pr); !requested && !arrivedDuringReview(pr) {
-			if _, _, replied := e.replyTrigger(ctx, pr); !replied {
+			_, _, replied := e.replyTrigger(ctx, pr)
+			if _, red := e.ciRedWait(ctx, pr); !replied && !red {
 				continue
 			}
 		}
@@ -466,7 +474,9 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		e.deltaFacts(ctx, pr, &f)
 		job.deltaCheck = e.deltaCheckDue(ctx, *w, pr, f, job.requested)
 		job.sameHead = e.sameHeadDue(ctx, pr)
-		job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
+		if job.ciRed = e.ciRedDue(ctx, pr, job.sameHead, job.requested); !job.ciRed {
+			job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
+		}
 	}
 	from := store.ClaimableStates
 	if pr.State == store.PRPaused {
@@ -670,6 +680,8 @@ func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) b
 	switch {
 	case job.deltaCheck:
 		what = "delta check"
+	case job.ciRed:
+		what = "judge check of the red CI (the judge alone)"
 	case job.replies > 0:
 		what = replyLabel(job.replies) + " (the judge alone)"
 	case job.sameHead:

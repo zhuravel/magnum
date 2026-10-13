@@ -445,6 +445,22 @@ and the board flags the PR for you (`pr.stalemate`) until you act on it (`magnum
 mute). Replies older than the daemon's first start with this build start nothing on their own; the board
 counts them (`↩N`), and `magnum review --replies` (the board's `r` on such a row) re-decides them now.
 
+CI that finishes red after the review gets a round of its own too. The judge reads the head's failing
+checks when its prompt goes out (see The judge skill), so a review posted before CI finished never saw a
+check that failed later. When a check of the head Magnum reviewed (no push since) fails after the judge
+prompt behind the latest review posted on that head (the prompt's time, not the post's: a check that
+finished in between was not seen either), the PR waits for a judge check of that head (`pr.ci_red`;
+`CI check · CI red` on the board, "CI turned red after the review; judge check pending" on the card).
+The judge alone, told that CI finished red after its review, decides each failed check from its log (a
+P1 broken build when the PR causes it, else an unrelated Checks line) and posts one review
+(`rereview round (CI red after the review)` in `engine.round_start`). Like a reply round it skips the
+quiet periods, the re-review interval and the daily cap, counts against no cap and runs in quiet hours;
+a snooze or a mute holds it. One judge check covers each failing check of a head: a rerun that fails the
+same way starts no other, a different check failing later does. A rerun that turns the checks pending,
+or passes, while it waits drops it (`pr.ci_red_dropped`, back to reviewed), and a push supersedes it.
+The poll reads a head's checks again when its CI rollup changes or the PR's activity moves, so while a
+check that failed earlier keeps the rollup red, a later failure waits for the PR's next activity.
+
 The rest of the re-review sees a base merge the same way: triage reads the PR's own diff of the files whose
 own change differs, the simplify reviewer's rerun measures that change, and the reviewers' and the judge's
 prompts say the push merged the base branch, so they compare the PR's diff before and after it instead of
@@ -1221,8 +1237,9 @@ speculative (P2 when the rule guards security or business behaviour, else P3), a
 backfill migration carries the read-only query that counts the rows it affects, and before it rejects a
 candidate the judge searches the base branch's log and docs, never the checkout's (the claude reviewers
 do the same). It runs the affected specs on the merged tree when a base commit after the merge base changes
-what the PR calls, and gives each of the head's failing checks (`failing_checks`) a Checks line. A
-finding its earlier reviews missed on code the PR did not change since is posted as new, its title
+what the PR calls, and gives each of the head's failing checks (`failing_checks`) a Checks line; when
+CI finishes red after its review of a head, a judge check of that head asks it to decide those checks
+and post one review (see Re-reviews). A finding its earlier reviews missed on code the PR did not change since is posted as new, its title
 ending with `(missed earlier)`. The rules approved on 2026-10-12 add that a merged finding's Fix names
 every other site of the same defect; a missing guard in a list, registry, validator or call-site set
 gets the whole set swept with one probe and a `swept N <things>: M gaps` Checks line (in the own pass,

@@ -75,6 +75,11 @@ const (
 //     ReplyMinInterval after ReplyRoundAt (the caller sets RepliedAt only
 //     while no push came since the review: a push wins, and its re-review
 //     reads the replies).
+//   - CI red (CIRedAt set, no request): a check of the reviewed head failed
+//     after its judge was prompted, and a judge check of it is due: every
+//     rule above but the snooze is skipped, the reply debounce and interval
+//     too, so the PR is ready (the caller sets CIRedAt only while no push
+//     came since the review).
 //   - Forced bypasses all of it: always ready.
 //
 // A zero timestamp or zero duration never blocks. When several rules hold the
@@ -113,6 +118,9 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		return decide()
 	}
 	hold(f.SnoozedUntil, RuleSnoozed, ReasonSnoozed)
+	if !f.CIRedAt.IsZero() {
+		return decide()
+	}
 	if !f.RepliedAt.IsZero() {
 		if debounce := d.ReplyDebounce.Duration; debounce > 0 {
 			hold(f.RepliedAt.Add(debounce), RuleReplies, fmt.Sprintf("%s (%s after the last)", ReasonReplies, debounce))

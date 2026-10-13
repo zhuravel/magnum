@@ -319,6 +319,62 @@ func TestRunsAfterAreThePRsLaterRuns(t *testing.T) {
 	}
 }
 
+// PostedPromptAt is when the judge of the latest review posted on a head was
+// prompted: the submission of that round's first posted run (its candidates
+// prompt; the nudge after it continues the turn), not a later round that
+// only replied, a review of another head or another PR's.
+func TestPostedPromptAtIsTheJudgePromptOfTheLatestPostedReview(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 1, PRReviewed)
+	other := mustPR(t, st, repo.ID, 2, PRReviewed)
+	newRun := func(prID int64, round int, kind, target, outcome string, review int64, created, submitted time.Duration) {
+		t.Helper()
+		r := Run{PRID: prID, Round: round, Role: RoleJudge, Kind: kind, TargetSHA: target, Identity: "talkable-app",
+			ReviewerLogin: "talkable[bot]", State: RunVerified, PromptText: "p", CreatedAt: t0.Add(created), SubmittedAt: new(t0.Add(submitted))}
+		if outcome != "" {
+			r.Outcome = new(outcome)
+		}
+		if review != 0 {
+			r.ReviewID = new(review)
+		}
+		if _, err := st.CreateRun(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := func(prID int64, target string) (time.Duration, bool) {
+		t.Helper()
+		got, ok, err := st.PostedPromptAt(ctx, prID, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Sub(t0), ok
+	}
+	if _, ok := at(pr.ID, "b1"); ok {
+		t.Fatal("a prompt time with no run")
+	}
+	newRun(pr.ID, 1, RunInitial, "a1", "posted", 701, 0, time.Minute)
+	newRun(pr.ID, 2, RunOwnPass, "b1", "", 0, time.Hour, time.Hour)
+	newRun(pr.ID, 2, RunRereview, "b1", "posted", 702, time.Hour, time.Hour+20*time.Minute)
+	newRun(pr.ID, 2, RunNudge, "b1", "posted", 702, 2*time.Hour, 2*time.Hour)
+	newRun(pr.ID, 3, RunRereview, "b1", "replied", 0, 3*time.Hour, 3*time.Hour)
+	newRun(other.ID, 1, RunInitial, "b1", "posted", 703, 4*time.Hour, 4*time.Hour)
+	if got, ok := at(pr.ID, "b1"); !ok || got != time.Hour+20*time.Minute {
+		t.Errorf("b1: %v %v, want the candidates prompt 1h20m in", got, ok)
+	}
+	if got, ok := at(pr.ID, "a1"); !ok || got != time.Minute {
+		t.Errorf("a1: %v %v, want 1m in", got, ok)
+	}
+	if _, ok := at(pr.ID, "c1"); ok {
+		t.Error("c1: a prompt time with no review on it")
+	}
+	newRun(pr.ID, 4, RunRereview, "b1", "posted", 704, 5*time.Hour, 5*time.Hour+time.Minute)
+	if got, ok := at(pr.ID, "b1"); !ok || got != 5*time.Hour+time.Minute {
+		t.Errorf("b1 after a later review: %v %v", got, ok)
+	}
+}
+
 // LastEndedRun is the session's turn that ended last, by ended_at: an own
 // pass created after the judge's run but ended before it is not the latest,
 // and runs of another session or still in flight do not count.

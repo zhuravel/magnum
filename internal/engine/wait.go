@@ -45,6 +45,7 @@ const (
 	WaitRequested     = "requested"      // a review request (or ready for review): the debounce, then the next dispatch
 	WaitReplies       = "replies"        // replies on the review: the reply debounce after the last one
 	WaitReplyInterval = "reply_interval" // one reply round per PR and head every reply_min_interval
+	WaitCIRed         = "ci_red"         // CI turned red after the review: its judge check starts at the next dispatch
 	WaitRetry         = "retry"          // the backoff after a failed round
 	WaitMuted         = "muted"          // magnum mute
 	WaitQuietHours    = "quiet_hours"    // [daemon] quiet_hours
@@ -89,6 +90,9 @@ type Wait struct {
 	// Replies: the round it waits for is a reply round re-deciding that
 	// many replies on the review (replyTrigger).
 	Replies int `json:"replies,omitempty"`
+	// CIRed: the round it waits for is a judge check of the reviewed head's
+	// CI, which turned red after the review (ciRedWait).
+	CIRed bool `json:"ci_red,omitempty"`
 }
 
 // ParseWait reads a KVPRWait value; ok is false for "" or a value it cannot
@@ -107,6 +111,8 @@ func (w Wait) kind() string {
 		return "post-merge review"
 	case w.DeltaCheck:
 		return "delta check"
+	case w.CIRed:
+		return "CI check"
 	case w.Replies > 0:
 		return "re-decision"
 	case w.Rereview:
@@ -162,6 +168,8 @@ func (w Wait) short(now time.Time, cause bool) string {
 		what = textx.Count(w.Count, "reply", "replies")
 	case WaitReplyInterval:
 		what = "reply interval"
+	case WaitCIRed:
+		what = "CI red"
 	case WaitQuiet:
 		what = "quiet"
 	case WaitBurst:
@@ -254,6 +262,8 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 	switch {
 	case w.Reason == WaitNext, requestedNow:
 		s += " starts at the next dispatch"
+	case w.Reason == WaitCIRed:
+		s += " starts at the next dispatch: " + w.Detail
 	case w.fromGate():
 		s += " waits: " + w.Detail // the dispatcher's own words, with any time in them
 	default:
@@ -332,8 +342,9 @@ func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *W
 // the round runs the judge alone: a delta check, or a re-review of the same
 // head, a reply round's included; quietHoursGate), what holds every PR
 // (global), and finally the reason the last dispatch gave (store.KVPRGate);
-// with none of them it starts at the next dispatch. The wait says whether
-// the round is a delta check (deltaCheckDue).
+// with none of them it starts at the next dispatch (a judge check of red CI
+// says so: WaitCIRed). The wait says whether the round is a delta check
+// (deltaCheckDue) or a judge check of red CI (ciRedWait).
 func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now time.Time) Wait {
 	base := Wait{Rereview: deref(pr.ReviewedSHA) != "", Forced: pr.Forced, PostMerge: postMerge(pr)}
 	repo, _ := e.st.RepoByID(ctx, pr.RepoID)
@@ -346,8 +357,10 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	if !f.RepliedAt.IsZero() {
 		_, base.Replies, _ = e.replyTrigger(ctx, pr)
 	}
+	base.CIRed = !f.CIRedAt.IsZero()
 	with := func(w Wait) Wait {
 		w.Rereview, w.Forced, w.PostMerge, w.DeltaCheck, w.Replies = base.Rereview, base.Forced, base.PostMerge, base.DeltaCheck, base.Replies
+		w.CIRed = base.CIRed
 		return w
 	}
 	if fw, ok := e.fixWaitOf(ctx, pr.ID); ok {
@@ -379,6 +392,9 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	}
 	if req, ok := e.pendingRequest(ctx, pr); ok && !pr.Forced {
 		return with(Wait{Reason: WaitRequested, Subject: req.Phrase(), Detail: "the next dispatch"})
+	}
+	if base.CIRed {
+		return with(Wait{Reason: WaitCIRed, Detail: ciRedText})
 	}
 	return with(Wait{Reason: WaitNext, Detail: "the next dispatch"})
 }

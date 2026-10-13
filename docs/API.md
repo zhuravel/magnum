@@ -823,6 +823,14 @@ type JudgeData struct {
 	// comments since, running no check that review already ran. Rendered as
 	// one instruction, only then.
 	SameHead bool
+	// CIRed (rereview, recovery; with SameHead): a CI follow-up: a check of
+	// the head failed after the judge's last review of it was prompted, so
+	// that review did not see it. The prompt asks the judge to decide each
+	// check `failing_checks` lists (a P1 broken build the PR causes, with
+	// the failing example or step quoted, else an unrelated Checks line) and
+	// to post exactly one review. Rendered as one instruction, only then; no
+	// <magnum> field.
+	CIRed bool
 	// Replies (rereview, recovery; with SameHead): a reply round: Replies
 	// replies came on the judge's review since it last read the threads,
 	// with no new commits. When its verdict and event stay those of its
@@ -4628,6 +4636,12 @@ type PRFacts struct {
 	// started on that head (zero = none).
 	RepliedAt    time.Time
 	ReplyRoundAt time.Time
+	// CIRedAt is when a check of the head magnum reviewed (no push since)
+	// last failed after the judge of that review was prompted, while the
+	// judge check of that red CI is due (a CI follow-up); zero = none.
+	// Throttle then holds the PR only for its snooze: CI has finished, and
+	// no code changed.
+	CIRedAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
 	// (config.SelfLogins, the board's "mine"): include_own = false skips it
@@ -4725,6 +4739,11 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
         skipped; the PR waits ReplyDebounce after RepliedAt and ReplyMinInterval
         after ReplyRoundAt (the caller sets RepliedAt only while no push came
         since the review: a push wins, and its re-review reads the replies).
+      - CI red (CIRedAt set, no request): a check of the reviewed head failed
+        after its judge was prompted, and a judge check of it is due: every rule
+        above but the snooze is skipped, the reply debounce and interval too,
+        so the PR is ready (the caller sets CIRedAt only while no push came
+        since the review).
       - Forced bypasses all of it: always ready.
 
     A zero timestamp or zero duration never blocks. When several rules hold
@@ -5013,6 +5032,7 @@ const (
 	WaitRequested     = "requested"      // a review request (or ready for review): the debounce, then the next dispatch
 	WaitReplies       = "replies"        // replies on the review: the reply debounce after the last one
 	WaitReplyInterval = "reply_interval" // one reply round per PR and head every reply_min_interval
+	WaitCIRed         = "ci_red"         // CI turned red after the review: its judge check starts at the next dispatch
 	WaitRetry         = "retry"          // the backoff after a failed round
 	WaitMuted         = "muted"          // magnum mute
 	WaitQuietHours    = "quiet_hours"    // [daemon] quiet_hours
@@ -6575,6 +6595,9 @@ type Wait struct {
 	// Replies: the round it waits for is a reply round re-deciding that
 	// many replies on the review (replyTrigger).
 	Replies int `json:"replies,omitempty"`
+	// CIRed: the round it waits for is a judge check of the reviewed head's
+	// CI, which turned red after the review (ciRedWait).
+	CIRed bool `json:"ci_red,omitempty"`
 }
     Wait is why a PR waiting for a round has none yet (KVPRWait).
 
@@ -12436,6 +12459,12 @@ type RoundInput struct {
 	// posts no review: the round ends OutcomeReplied, verified by the
 	// replies carrying its run's reply marker. 0 = an ordinary round.
 	Replies int
+	// CIRed (with SameHead): the round is a CI follow-up: a check of the
+	// head failed after the judge of its last review was prompted, so that
+	// review did not see it. The judge decides each failed check of the
+	// head's failing-checks.json (a P1 the PR causes, or an unrelated
+	// Checks line) and posts one review (JudgeData.CIRed).
+	CIRed bool
 	// ColdJudge (recovery): the judge alone started in a fresh session
 	// because its conversation's prompt cache had gone cold ([pipeline]
 	// judge_fresh_after) or its session served the role's
@@ -15985,6 +16014,14 @@ func (s *Store) PostedFindingPaths(ctx context.Context, prIDs []int64) (map[int6
     PostedFindingPaths returns, per PR of prIDs that has any, how many findings
     magnum posted on each path over all its rounds (findings without a path and
     rejected candidates excluded).
+
+func (s *Store) PostedPromptAt(ctx context.Context, prID int64, target string) (time.Time, bool, error)
+    PostedPromptAt is when the judge prompt behind the PR's latest review posted
+    on target went out (runs.submitted_at): that of the first run of its round
+    posted with the review, the judge's run of the round (in a two-prompt round
+    its candidates prompt), whose prompt carried the head's failing checks;
+    a nudge or a model fallback continues that turn later. ok is false when no
+    review posted on target has a prompt time.
 
 func (s *Store) PreExistingFindings(ctx context.Context) ([]Finding, error)
     PreExistingFindings returns the P1 and P2 findings the judge rejected as

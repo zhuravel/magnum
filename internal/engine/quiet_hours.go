@@ -20,11 +20,11 @@ import (
 )
 
 // judgeOnly reports whether the job is a re-review of the judge alone: a
-// delta check, a re-review of the same head or a reply round (one of the
-// same head). A checkout that turns it into a full round (confirmDeltaCheck,
-// confirmSameHead) does so after it started.
+// delta check, a re-review of the same head, a reply round or a judge check
+// of red CI (both of the same head). A checkout that turns it into a full
+// round (confirmDeltaCheck, confirmSameHead) does so after it started.
 func (job *roundJob) judgeOnly() bool {
-	return job.deltaCheck || job.sameHead || job.replies > 0
+	return job.deltaCheck || job.sameHead || job.replies > 0 || job.ciRed
 }
 
 // quietHoursGate is why [daemon] quiet_hours hold job now (the zero gate =
@@ -37,7 +37,7 @@ func (e *Engine) quietHoursGate(job *roundJob) gate {
 		return gate{}
 	}
 	return gate{reason: WaitQuietHours,
-		text: fmt.Sprintf("quiet hours (%s): first reviews and full re-reviews wait; delta checks, reply rounds and `magnum review` still run", spec)}
+		text: fmt.Sprintf("quiet hours (%s): first reviews and full re-reviews wait; delta checks, reply rounds, CI checks and `magnum review` still run", spec)}
 }
 
 // quietHoursHold reports whether [daemon] quiet_hours (spec) hold, at now, a
