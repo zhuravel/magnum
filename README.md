@@ -1238,7 +1238,13 @@ shape carries the query that counts them; a re-review checks what a fix costs at
 calls, pages, loops against throttling and timeouts) before it calls it fixed, and posts one finding
 that a mechanism cannot be completed when fixes of two earlier findings patched it and a new case still
 gets through; and database specs on a merged tree whose base added migrations are skipped as a machine
-limit (the slot's schema is the head's). The claude reviewers list each request entry point that
+limit (the slot's schema is the head's). A flow the PR adds or changes that a third party governs with
+published requirements (an app store listing, a platform app's install, OAuth, billing or webhook flow,
+an API's terms) is checked against the whole section of those requirements that covers it, read on that
+party's own site by web search, sentence by sentence, not only the one a report quotes; a flow they
+forbid is a finding that cites the rule's number and quotes its sentence, P1 when the default path
+reaches it, and a reason that calls it deliberate covers only the rule it names (the claude reviewers
+do the same with WebFetch). The claude reviewers list each request entry point that
 reached an access hole the PR closes, with its access check (a `Description: ✗` line when the
 description names fewer), and check a documentation change's statements about data; the entry-point
 rule is in their prompts only, since text that enumerates the reach of such a fix drew Codex

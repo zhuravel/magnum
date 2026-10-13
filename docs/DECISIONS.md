@@ -6764,6 +6764,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (3 nudges, 112 rows for 109 reviews). `selftest.sh` covers the matching and the nudge on a small registry.
   Rejected: counting the Rejected list's bullets from the reports alone (the judge splits and merges them,
   so the count is not the ledger's) and a mark in the ledger (the judge's output format is pinned).
+- **The judge and the claude reviewers check a changed flow against the platform's published rules**
+  (2026-10-13). On talkable#11932 a colleague's review found that the new signup page asks the merchant
+  for a myshopify.com domain and starts the Platform app's install outside Shopify, which App Store rule
+  2.3.1 forbids ("Apps must be installed and initiated only on Shopify services. Your app must not request
+  the manual entry of a myshopify.com URL or a shop's domain during the installation or configuration
+  flow"); four days earlier the same review had found the form shown before OAuth (rule 2.3.2). Magnum
+  reviewed the page in 28 rounds; one judge (round 15) opened the requirements page, applied the OAuth
+  clause alone, and rejected claude-review's candidate about the retry form as speculative ("The
+  still-supported Talkable-origin signup form is intentional"). The 2026-10-12 improve run's lens 0 called
+  the first miss out of reach (a platform policy) and proposed only a repository note, which never landed.
+  Now the review skill's section 2 says: a flow the PR adds or changes that a third party governs with
+  published requirements (an app store listing, a platform app's install, OAuth, billing or webhook flow,
+  an API's terms) is checked against the whole section of those requirements that covers it, read on that
+  party's own site by web search, sentence by sentence, not only the one a report quotes; a flow they
+  forbid is a finding that cites the rule's number and quotes its sentence, P1 when the default path
+  reaches it, and a reason that calls it deliberate covers only the rule it names. The three claude-review
+  prompts say the same with WebFetch; `codex review` takes no prompt. The skill was at its cap, so
+  fourteen parenthetical examples went (the readiness and machine-failure examples, the related-PR kinds,
+  the second P1, P2 and P3 examples, "idioms, pleasantries", two quoted asides, "Node or Python"); no
+  pinned sentence changed. The improve skill's lens 0 no longer counts a published rule as out of reach,
+  and the local eval corpus gets `install-outside-shopify` (talkable#11932 at 0950625) to measure the
+  change. Rejected: a notes line alone (it reaches one repository, and the judge had the page open and
+  still missed the sentence), and a generic web fetch for the judge (section 1 keeps `gh` for GitHub
+  data; Codex's `--search` is the parity for a documentation lookup, as the plugin entry of 2026-10-12
+  says).
 
 ## Learned rules
 

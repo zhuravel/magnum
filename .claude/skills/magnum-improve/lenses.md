@@ -24,7 +24,8 @@ For each real miss (a problem a person raised that magnum's review on that head 
   `<run-dir>/claude-review-origin.txt`, and its classes are a title match, not a fact).
 - **raised and under-ranked**: posted, but at a priority the person disagreed with;
 - **out of reach**: outside the diff, pre-existing, or it needed something magnum cannot see (production data, a
-  ticket, another repository): say which input would have shown it;
+  ticket, another repository): say which input would have shown it; a third party's published rules (an app
+  store's requirements, an API's terms) are on the web, so a miss against them is a rule gap, never out of reach;
 - **environment**: a check the review needed could not run (readiness, databases, tools).
 
 Then name the smallest change that would have caught it and where it belongs: a general rule in
