@@ -358,7 +358,8 @@ func TestDetailsReportsTruncatedConnections(t *testing.T) {
 // details_ci.json is synthetic, in the shape GitHub answered the fragment
 // with on 2026-10-04: #101 has check runs and commit statuses in every
 // state, re-runs and a job of the same name in two workflows, #102 no
-// checks, #103 more than one page of them, #104 (a draft) only skipped ones.
+// checks, #103 more than one page of them, with the rollup's counts by
+// state, #104 (a draft) only skipped ones.
 func TestDetailsCIFixture(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_ci.json")}}}}
 	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{101, 102, 103, 104})
@@ -367,7 +368,7 @@ func TestDetailsCIFixture(t *testing.T) {
 	}
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
 	for _, want := range []string{"commits { totalCount }", "headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state",
-		"contexts(first: 100) { totalCount pageInfo { hasNextPage }",
+		"contexts(first: 100) { totalCount pageInfo { hasNextPage } checkRunCountsByState { state count } statusContextCountsByState { state count } nodes {",
 		"... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } }",
 		"... on StatusContext { context state createdAt }"} {
 		if !strings.Contains(q, want) {
@@ -411,6 +412,12 @@ func TestDetailsCIFixture(t *testing.T) {
 	}
 	if ci := got[103].CI; ci.State != "PENDING" || ci.Total != 130 || ci.Complete || len(ci.Checks) != 2 {
 		t.Errorf("#103 with a second page = %+v", ci)
+	}
+	// The rollup's own counts by state cover every context, past the page,
+	// normalized as a check is (the poll compares them with CIStates'); a
+	// rollup GitHub gave none for has a zero Total.
+	if c := got[103].CI.Counts; c != (CICounts{Failed: 2, Pending: 8, Passed: 120, Total: 130}) {
+		t.Errorf("#103 counts = %+v", c)
 	}
 	if ci := got[104].CI; ci.State != "SUCCESS" || ci.Total != 2 || len(ci.Checks) != 2 ||
 		ci.Checks[0].State != CheckSkipped || ci.Checks[1].State != CheckSkipped {

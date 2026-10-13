@@ -49,6 +49,63 @@ func tipNode(id, oid, state string) string {
 	return fmt.Sprintf(`{"id":%q,"headRef":{"target":{"oid":%q,"statusCheckRollup":%s}}}`, id, oid, rollup)
 }
 
+// countedNode is tipNode with the rollup's counts by state: runs and
+// statuses as JSON lists of {"state","count"}.
+func countedNode(id, oid, state, runs, statuses string) string {
+	return fmt.Sprintf(`{"id":%q,"headRef":{"target":{"oid":%q,"statusCheckRollup":{"state":%q,"contexts":{"checkRunCountsByState":%s,"statusContextCountsByState":%s}}}}}`,
+		id, oid, state, runs, statuses)
+}
+
+// The live case (talkable#11483, 2026-10-13): a check that failed before
+// magnum's review kept the head's rollup FAILURE while RSpec ran and then
+// failed, so the rollup alone never told the poll to read the checks
+// again. CIStates reads the rollup's counts by state in the same call (a
+// connection of no node), normalized as a check's state is: a run not
+// completed is pending, SUCCESS and NEUTRAL pass, SKIPPED skips, any other
+// conclusion fails, and a status passes on SUCCESS, waits on PENDING or
+// EXPECTED and fails otherwise. A rollup GitHub gives no counts for keeps
+// a zero Total: unknown.
+func TestCIStatesReadsTheRollupsCountsByState(t *testing.T) {
+	prs := ciPRs(3)
+	var query string
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		query = oneLine(req.Query)
+		asked, _ := req.Variables["ids"].([]any)
+		return okResult(ciAnswer(t, asked, func(id string) string {
+			switch id {
+			case "PR_0":
+				return countedNode(id, "h0", "FAILURE",
+					`[{"state":"FAILURE","count":2},{"state":"TIMED_OUT","count":1},{"state":"CANCELLED","count":1},{"state":"SUCCESS","count":5},`+
+						`{"state":"NEUTRAL","count":1},{"state":"SKIPPED","count":3},{"state":"IN_PROGRESS","count":1},{"state":"QUEUED","count":2},{"state":"WAITING","count":1}]`,
+					`[{"state":"ERROR","count":1},{"state":"PENDING","count":1},{"state":"EXPECTED","count":1},{"state":"SUCCESS","count":2}]`)
+			case "PR_1":
+				return countedNode(id, "h1", "PENDING", `null`, `null`)
+			}
+			return tipNode(id, "h2", "")
+		}))
+	})}}
+	states, rate, err := (&Client{Run: f}).CIStates(context.Background(), prs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]CIState{
+		"PR_0": {State: "FAILURE", Counts: CICounts{Failed: 5, Pending: 6, Passed: 8, Skipped: 3, Total: 22}},
+		"PR_1": {State: "PENDING"},
+		"PR_2": {},
+	}
+	if !maps.Equal(states, want) {
+		t.Errorf("states = %+v\nwant %+v", states, want)
+	}
+	for _, s := range []string{"statusCheckRollup { state contexts(first: 0) { checkRunCountsByState { state count } statusContextCountsByState { state count } } }"} {
+		if !strings.Contains(query, s) {
+			t.Errorf("CI query lacks %q:\n%s", s, query)
+		}
+	}
+	if rate.Cost != 1 {
+		t.Errorf("rate = %+v, want one call", rate)
+	}
+}
+
 // TestCIStatesReadsTheHeadRollupByNodeID: the rollup of the head branch is
 // a pull request's CI only while the branch's tip is the head the radar
 // read; a fork's pull request is not asked about (its branch carries the
@@ -79,7 +136,7 @@ func TestCIStatesReadsTheHeadRollupByNodeID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]string{"PR_0": "FAILURE", "PR_1": ""}; !maps.Equal(states, want) {
+	if want := map[string]CIState{"PR_0": {State: "FAILURE"}, "PR_1": {}}; !maps.Equal(states, want) {
 		t.Errorf("states = %v, want %v", states, want)
 	}
 	if fmt.Sprint(asked) != "[PR_0 PR_1 PR_2 PR_4 PR_5]" {
@@ -89,18 +146,22 @@ func TestCIStatesReadsTheHeadRollupByNodeID(t *testing.T) {
 		t.Fatalf("calls = %d, want 1", len(queries))
 	}
 	q := queries[0]
-	for _, want := range []string{"nodes(ids: $ids)", "... on PullRequest", "headRef { target { oid ... on Commit { statusCheckRollup { state } } } }",
+	for _, want := range []string{"nodes(ids: $ids)", "... on PullRequest", "headRef { target { oid ... on Commit { statusCheckRollup { state contexts(first: 0) {",
 		"rateLimit { limit cost remaining used resetAt }"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("CI query lacks %q:\n%s", want, q)
 		}
 	}
-	// No connection: a call costs 1 point whatever its size (rateLimit(dryRun:
-	// true) said 1 for 25, 50 and 100 ids on 2026-10-05), and no check is
-	// listed (Details reads them when the rollup changed).
-	for _, banned := range []string{"first:", "last:", "contexts", "commits"} {
+	// No connection that lists a node: a call cost 1 point whatever its size
+	// without the counts (rateLimit(dryRun: true) said 1 for 25, 50 and 100
+	// ids on 2026-10-05), and the counts' connection asks for none (first:
+	// 0); no check is listed (Details reads them when the rollup changed).
+	if strings.Count(q, "first:") != strings.Count(q, "first: 0") {
+		t.Errorf("CI query lists nodes of a connection:\n%s", q)
+	}
+	for _, banned := range []string{"last:", "commits", "nodes {"} {
 		if strings.Contains(q, banned) {
-			t.Errorf("CI query must not open a connection, found %q", banned)
+			t.Errorf("CI query must not list a connection's nodes, found %q", banned)
 		}
 	}
 	if rate.Cost != 1 || rate.Remaining != 4900 {

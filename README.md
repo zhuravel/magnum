@@ -458,8 +458,9 @@ quiet periods, the re-review interval and the daily cap, counts against no cap a
 a snooze or a mute holds it. One judge check covers each failing check of a head: a rerun that fails the
 same way starts no other, a different check failing later does. A rerun that turns the checks pending,
 or passes, while it waits drops it (`pr.ci_red_dropped`, back to reviewed), and a push supersedes it.
-The poll reads a head's checks again when its CI rollup changes or the PR's activity moves, so while a
-check that failed earlier keeps the rollup red, a later failure waits for the PR's next activity.
+The poll reads a head's checks again when its CI rollup's state changes, and also when its counts of
+failed or pending checks do (a rollup stays FAILURE while an earlier failure is red); the counts come in
+the same rollup request, with more fields.
 
 The rest of the re-review sees a base merge the same way: triage reads the PR's own diff of the files whose
 own change differs, the simplify reviewer's rerun measures that change, and the reviewers' and the judge's

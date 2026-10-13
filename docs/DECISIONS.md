@@ -6825,11 +6825,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   supersedes it (the record goes, `pr.ci_red_dropped`, and the push's round reads the new head's CI). A
   round in flight, a fix loop, a forced or requested round take precedence (their judge reads the
   failing checks too). The event names no check: the PR's workflows name them, so they stay in the
-  registry. Known limit: the poll reads a PR's checks again when the head's rollup changes or the PR's
-  activity moves, and GitHub's rollup stays FAILURE while a check that failed before is still red, so a
-  further check failing on such a head (talkable#11483's case: Dependency Audit had failed already) is
-  seen only with the PR's next activity; reading the checks more often there is a decision of its own
-  (the GitHub budget). Rejected: a notification instead of a round (the author gets no finding, and the
+  registry. GitHub's rollup stays FAILURE while a check that failed before is still red (talkable#11483's
+  case: Dependency Audit had failed already), so the poll's cheap rollup read also takes the rollup's
+  counts by state (`checkRunCountsByState`, `statusContextCountsByState` through `contexts(first: 0)`, the
+  same request with more fields and no node listed), and Details stores the same counts with the checks
+  (`ci_json`'s `rollup`): a failed or pending count that differs reads the checks again, a superseded run
+  counting in both (the stored checks' own tally drops superseded runs, so comparing with it would read
+  the checks of every head with a passed re-run on every poll); when either side has no counts, the
+  rollup state's comparison is all, as before.
+  Rejected: a notification instead of a round (the author gets no finding, and the
   LGTM or "unrelated" stands), a new run kind (`runs.kind` has a SQL CHECK, `0025_fix_runs.sql`, so a
   flag on rereview and recovery rounds is the cheap path), and a skill change (the skill is at its byte
   cap and already says what a failed check means; no new `<magnum>` field either).

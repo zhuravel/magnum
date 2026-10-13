@@ -30,7 +30,7 @@ func (g stoppedGH) Radar(ctx context.Context, org string) ([]github.RepoRadar, g
 	return nil, github.RateLimit{}, g.failure(ctx, "github radar "+org+" page 1")
 }
 
-func (g stoppedGH) CIStates(ctx context.Context, _ []github.PRRadar) (map[string]string, github.RateLimit, error) {
+func (g stoppedGH) CIStates(ctx context.Context, _ []github.PRRadar) (map[string]github.CIState, github.RateLimit, error) {
 	return nil, github.RateLimit{}, g.failure(ctx, "github ci states call 1")
 }
 

@@ -28,11 +28,12 @@ type PRRadar struct {
 	// IsCrossRepository is true for a pull request from a fork.
 	IsCrossRepository bool
 	// CIState is the head commit's check rollup (SUCCESS, FAILURE, PENDING,
-	// ERROR, EXPECTED), "" when it has no checks, and CIKnown says whether
-	// it was read. Radar leaves both unset: the caller fills them from
-	// CIStates.
-	CIState string
-	CIKnown bool
+	// ERROR, EXPECTED), "" when it has no checks, CICounts its counts by
+	// state (a zero Total: unknown), and CIKnown says whether they were
+	// read. Radar leaves them unset: the caller fills them from CIStates.
+	CIState  string
+	CICounts CICounts
+	CIKnown  bool
 }
 
 // prRadarFields are scalars only: a connection below pullRequests

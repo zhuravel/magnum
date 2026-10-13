@@ -282,6 +282,22 @@ type CIStatus struct {
 	// can still appear under several workflows (a check posted through the
 	// API attaches to another workflow's suite): At tells the latest.
 	Checks []CheckResult `json:"checks"`
+	// Rollup is GitHub's own count of the rollup's check runs and statuses
+	// by state when Checks were read (superseded runs included, past the
+	// 100 Checks lists, so not their tally): the poll reads Checks again
+	// when the cheap rollup read counts other failed or pending ones. A zero
+	// Total is unknown (a read before the counts existed, or none given).
+	Rollup CheckCounts `json:"rollup,omitzero"`
+}
+
+// CheckCounts are check runs and statuses by state (CheckResult.State's
+// values).
+type CheckCounts struct {
+	Failed  int `json:"failed"`
+	Pending int `json:"pending"`
+	Passed  int `json:"passed"`
+	Skipped int `json:"skipped"`
+	Total   int `json:"total"`
 }
 
 // CheckResult is one check run or commit status of a CIStatus.

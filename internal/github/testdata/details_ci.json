@@ -432,6 +432,14 @@
                     "pageInfo": {
                       "hasNextPage": true
                     },
+                    "checkRunCountsByState": [
+                      {"state": "SUCCESS", "count": 119},
+                      {"state": "IN_PROGRESS", "count": 8},
+                      {"state": "NEUTRAL", "count": 1}
+                    ],
+                    "statusContextCountsByState": [
+                      {"state": "FAILURE", "count": 2}
+                    ],
                     "nodes": [
                       {
                         "__typename": "CheckRun",

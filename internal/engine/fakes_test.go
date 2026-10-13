@@ -53,8 +53,9 @@ type prSpec struct {
 	// label or latestReviews page (LabelsComplete, LatestReviewsComplete).
 	labelsTruncated, reviewsTruncated bool
 	// ci is the head's check rollup ("" = no checks) CIStates and Details
-	// report, checks the Details' checks; ciUnknown makes CIStates unable to
-	// read the rollup (a fork's PR).
+	// report, checks the Details' checks, whose tally both report as the
+	// rollup's counts (fakeCounts); ciUnknown makes CIStates unable to read
+	// the rollup (a fork's PR).
 	ci        string
 	checks    []github.Check
 	ciUnknown bool
@@ -391,7 +392,27 @@ func (g *fakeGH) hook(fn *func()) func() {
 	return *fn
 }
 
-func (g *fakeGH) CIStates(ctx context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error) {
+// fakeCounts is the rollup's counts by state of checks: their tally (a
+// zero Total for none, as GitHub gives for a head without checks).
+func fakeCounts(checks []github.Check) github.CICounts {
+	var c github.CICounts
+	for _, ch := range checks {
+		switch ch.State {
+		case github.CheckFailed:
+			c.Failed++
+		case github.CheckPending:
+			c.Pending++
+		case github.CheckPassed:
+			c.Passed++
+		case github.CheckSkipped:
+			c.Skipped++
+		}
+		c.Total++
+	}
+	return c
+}
+
+func (g *fakeGH) CIStates(ctx context.Context, prs []github.PRRadar) (map[string]github.CIState, github.RateLimit, error) {
 	github.BetweenCalls(ctx)
 	if fn := g.hook(&g.onCIStates); fn != nil {
 		fn()
@@ -406,12 +427,12 @@ func (g *fakeGH) CIStates(ctx context.Context, prs []github.PRRadar) (map[string
 	if g.ciErr != nil {
 		return nil, github.RateLimit{}, g.ciErr
 	}
-	out := map[string]string{}
+	out := map[string]github.CIState{}
 	for full, specs := range g.repos {
 		for _, s := range specs {
 			id := fmt.Sprintf("PR_%s_%d", full, s.n)
 			if !s.ciUnknown && slices.ContainsFunc(prs, func(p github.PRRadar) bool { return p.NodeID == id && p.HeadRefOid == s.head }) {
-				out[id] = s.ci
+				out[id] = github.CIState{State: s.ci, Counts: fakeCounts(s.checks)}
 			}
 		}
 	}
@@ -451,7 +472,8 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				HeadRefOid: p.head, BaseRefOid: fakeBaseOid, Assignees: append([]string{}, p.assignees...),
 				ReviewRequests: []github.Reviewer{}, LatestReviews: append([]github.LatestReview{}, p.reviews...),
 				Additions: 10 * n, Deletions: n, ChangedFiles: n, Commits: 1,
-				CI: github.CIRollup{SHA: p.head, State: p.ci, Total: len(p.checks), Complete: true, Checks: append([]github.Check{}, p.checks...)}}
+				CI: github.CIRollup{SHA: p.head, State: p.ci, Total: len(p.checks), Complete: true, Checks: append([]github.Check{}, p.checks...),
+					Counts: fakeCounts(p.checks)}}
 			if p.request {
 				d.ReviewRequests = []github.Reviewer{{Type: "User", Login: "zhuravel"}, {Type: "Team", Login: "engineers"}}
 			}

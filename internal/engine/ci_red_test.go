@@ -150,6 +150,58 @@ func TestCIThatTurnsRedAfterTheReviewStartsAJudgeCheck(t *testing.T) {
 	}
 }
 
+// The live case's own shape (talkable#11483): Dependency Audit had failed
+// before the judge was prompted (its review answered it as unrelated) and
+// RSpec was still running, so the head's rollup read FAILURE; RSpec then
+// failed and the rollup still read FAILURE, which never had the poll read
+// the checks again. The rollup's counts by state now say 2 failed and 0
+// pending where the stored checks were read with 1 and 1: the next poll
+// reads the head's checks once and queues the judge check of the red CI. A
+// poll whose rollup and counts are as stored reads nothing.
+func TestAFailureOnARollupThatFailedAlreadyIsSeenByItsCountsAndStartsAJudgeCheck(t *testing.T) {
+	h := newHarness(t)
+	reviewed := ciReviewedPR(h)
+	audit := github.Check{Name: "audit", Workflow: "Dependency Audit", State: github.CheckFailed, At: reviewed.ReviewedAt.Add(-10 * time.Minute).UTC()}
+	h.setCI(2, "FAILURE", audit, github.Check{Name: "rspec", Workflow: "RSpec", State: github.CheckPending, At: reviewed.ReviewedAt.UTC()})
+	h.advance(time.Minute)
+	h.tick()
+	if pr := h.pr(2); pr.CI.Failed != 1 || pr.CI.Pending != 1 || pr.CI.Rollup != (store.CheckCounts{Failed: 1, Pending: 1, Total: 2}) {
+		t.Fatalf("stored CI = %+v", pr.CI)
+	}
+	h.wantState(2, store.PRReviewed) // the audit failed before the prompt: answered
+
+	details := func() int { return h.gh.count("details:talkable/talkable:[2]") }
+	before := details()
+	h.advance(time.Minute)
+	h.tick()
+	if n := details() - before; n != 0 {
+		t.Fatalf("details of #2 = %d with the rollup and its counts as stored", n)
+	}
+
+	h.advance(15 * time.Minute)
+	h.setCI(2, "FAILURE", audit, github.Check{Name: "rspec", Workflow: "RSpec", State: github.CheckFailed, At: h.clock.Now().Add(-time.Minute).UTC()})
+	h.tick()
+	if n := details() - before; n != 1 {
+		t.Fatalf("details of #2 = %d, want 1: the counts moved under an unchanged FAILURE", n)
+	}
+	if red := approvalEvents(t, h, 2, "pr.ci_red"); len(red) != 1 {
+		t.Fatalf("pr.ci_red events: %+v", red)
+	}
+	ins := h.rd.all()
+	if len(ins) != 2 || !ins[1].CIRed || !ins[1].SameHead || ins[1].TargetSHA != "b1" {
+		t.Fatalf("rounds = %d, want the judge check of RSpec's failure", len(ins))
+	}
+	if rec, _ := ciFollowupOfPR(t, h); len(rec.Checks) != 1 || rec.Checks[0].Name != "rspec" {
+		t.Fatalf("follow-up record = %+v: the audit failed before the prompt", rec)
+	}
+
+	h.advance(time.Minute)
+	h.tick()
+	if n := details() - before; n != 1 {
+		t.Fatalf("details of #2 = %d after the counts settled", n)
+	}
+}
+
 // A rerun of a check the judge check covered that fails the same way is
 // covered by the review that stands: one judge check per failing check and
 // head. A check that had not failed yet fails later: it gets its own.

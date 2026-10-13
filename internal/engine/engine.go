@@ -48,9 +48,10 @@ import (
 // head left behind (followApproval), made as the App identity.
 type GitHub interface {
 	Radar(ctx context.Context, org string) ([]github.RepoRadar, github.RateLimit, error)
-	// CIStates reads the head rollups of the watched repositories' open PRs
-	// on every poll (readCI, poll.go); the radar carries none.
-	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error)
+	// CIStates reads the head rollups (state and counts by state) of the
+	// watched repositories' open PRs on every poll (readCI, poll.go); the
+	// radar carries none.
+	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]github.CIState, github.RateLimit, error)
 	Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error)
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)

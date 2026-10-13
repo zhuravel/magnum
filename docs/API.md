@@ -6104,9 +6104,10 @@ type Git interface {
 
 type GitHub interface {
 	Radar(ctx context.Context, org string) ([]github.RepoRadar, github.RateLimit, error)
-	// CIStates reads the head rollups of the watched repositories' open PRs
-	// on every poll (readCI, poll.go); the radar carries none.
-	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error)
+	// CIStates reads the head rollups (state and counts by state) of the
+	// watched repositories' open PRs on every poll (readCI, poll.go); the
+	// radar carries none.
+	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]github.CIState, github.RateLimit, error)
 	Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error)
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)
@@ -7673,6 +7674,15 @@ func (e *APIError) Error() string
 func (e *APIError) Is(target error) bool
     Is maps the error onto the package sentinels.
 
+type CICounts struct {
+	Failed, Pending, Passed, Skipped, Total int
+}
+    CICounts are a check rollup's check runs and commit statuses by state as
+    GitHub counts them (checkRunCountsByState, statusContextCountsByState),
+    normalized as Check.State is: every run the rollup holds, a superseded one
+    and those past a page of 100 included, so they are not CIRollup.Checks'
+    tally. A zero Total is unknown.
+
 type CIRollup struct {
 	SHA   string // the commit; "" when GitHub listed none
 	State string // GitHub's rollup: SUCCESS | FAILURE | PENDING | ERROR | EXPECTED; "" when the commit has no checks
@@ -7686,8 +7696,21 @@ type CIRollup struct {
 	// never nil. A re-run, or a SKIPPED run left from a draft, supersedes or
 	// is superseded by the same job's other runs.
 	Checks []Check
+	// Counts are the rollup's own counts by state, as CIStates reads them
+	// (superseded runs included, so not Checks' tally): the poll compares
+	// the two to tell that a check finished on a rollup whose state did not
+	// move. A zero Total when GitHub gave none.
+	Counts CICounts
 }
     CIRollup is the status check rollup of a pull request's head commit.
+
+type CIState struct {
+	State  string
+	Counts CICounts
+}
+    CIState is a pull request's head check rollup as CIStates reads it:
+    its State (SUCCESS, FAILURE, PENDING, ERROR, EXPECTED; "" when the head has
+    no checks) and its Counts by state (a zero Total when GitHub gave none).
 
 type Check struct {
 	Name  string // the check run's name or the status's context
@@ -7727,15 +7750,16 @@ func (c *Client) AllReviews(ctx context.Context, owner, repo string, number int)
     more reviews than that, the later ones left out. A missing repository or
     pull request is an error matching ErrNotFound.
 
-func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]string, RateLimit, error)
-    CIStates reads the check rollup of each pull request's head (SUCCESS,
-    FAILURE, PENDING, ERROR, EXPECTED; "" when the head has no checks) by node
-    id. A CI run does not move a pull request's updatedAt, so the radar alone
-    cannot tell that it ended. The rollup is read through the head branch: it is
-    the pull request's only while the branch's tip is the HeadRefOid the radar
-    read, and a fork's pull request is not asked about (its branch carries the
-    fork's checks, not the ones the pull request runs); a pull request missing
-    from the result is unknown.
+func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]CIState, RateLimit, error)
+    CIStates reads the check rollup of each pull request's head (its state
+    and counts by state, CIState) by node id. A CI run does not move a pull
+    request's updatedAt, so the radar alone cannot tell that it ended, and the
+    state alone cannot tell that a further check failed on a head whose rollup
+    failed already: the counts can. The rollup is read through the head branch:
+    it is the pull request's only while the branch's tip is the HeadRefOid the
+    radar read, and a fork's pull request is not asked about (its branch carries
+    the fork's checks, not the ones the pull request runs); a pull request
+    missing from the result is unknown.
 
     Each call asks about ciPage pull requests; one GitHub could not answer in
     time is asked once more at half the size (retrySmaller), which the calls
@@ -8063,11 +8087,12 @@ type PRRadar struct {
 	// IsCrossRepository is true for a pull request from a fork.
 	IsCrossRepository bool
 	// CIState is the head commit's check rollup (SUCCESS, FAILURE, PENDING,
-	// ERROR, EXPECTED), "" when it has no checks, and CIKnown says whether
-	// it was read. Radar leaves both unset: the caller fills them from
-	// CIStates.
-	CIState string
-	CIKnown bool
+	// ERROR, EXPECTED), "" when it has no checks, CICounts its counts by
+	// state (a zero Total: unknown), and CIKnown says whether they were
+	// read. Radar leaves them unset: the caller fills them from CIStates.
+	CIState  string
+	CICounts CICounts
+	CIKnown  bool
 }
     PRRadar is the scalar-only view of an open pull request the poller diffs.
 
@@ -14582,6 +14607,12 @@ type CIStatus struct {
 	// can still appear under several workflows (a check posted through the
 	// API attaches to another workflow's suite): At tells the latest.
 	Checks []CheckResult `json:"checks"`
+	// Rollup is GitHub's own count of the rollup's check runs and statuses
+	// by state when Checks were read (superseded runs included, past the
+	// 100 Checks lists, so not their tally): the poll reads Checks again
+	// when the cheap rollup read counts other failed or pending ones. A zero
+	// Total is unknown (a read before the counts existed, or none given).
+	Rollup CheckCounts `json:"rollup,omitzero"`
 }
     CIStatus is prs.ci_json: the checks of a PR's head commit. Its State can
     trail prs.ci_state, which the radar refreshes, until the next Details fetch.
@@ -14602,6 +14633,16 @@ type CandidateParams struct {
 }
     CandidateParams are the throttle settings Candidates applies (mirroring
     config.Daemon). Zero durations and a zero cap disable that gate.
+
+type CheckCounts struct {
+	Failed  int `json:"failed"`
+	Pending int `json:"pending"`
+	Passed  int `json:"passed"`
+	Skipped int `json:"skipped"`
+	Total   int `json:"total"`
+}
+    CheckCounts are check runs and statuses by state (CheckResult.State's
+    values).
 
 type CheckResult struct {
 	Name     string `json:"name"`               // the check run's name or the status's context

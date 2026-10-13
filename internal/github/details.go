@@ -137,6 +137,11 @@ type CIRollup struct {
 	// never nil. A re-run, or a SKIPPED run left from a draft, supersedes or
 	// is superseded by the same job's other runs.
 	Checks []Check
+	// Counts are the rollup's own counts by state, as CIStates reads them
+	// (superseded runs included, so not Checks' tally): the poll compares
+	// the two to tell that a check finished on a rollup whose state did not
+	// move. A zero Total when GitHub gave none.
+	Counts CICounts
 }
 
 // Check is one check run or commit status of a CIRollup.
@@ -232,7 +237,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
   activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { id submittedAt author { login __typename } authorAssociation } ... on IssueComment { createdAt author { login __typename } authorAssociation } ` + activityEvents + ` } }
   replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }
-  headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } committedDate } } }
+  headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } ` + stateCountFields + ` nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } committedDate } } }
 }`
 
 // activityTypes are the timeline items that are activity on a pull request
@@ -380,6 +385,7 @@ type detailsJSON struct {
 					State    string `json:"state"`
 					Contexts struct {
 						connInfo
+						stateCountsJSON
 						Nodes []struct {
 							Typename    string    `json:"__typename"`
 							Name        string    `json:"name"`        // CheckRun
@@ -612,6 +618,7 @@ func (d detailsJSON) ci() CIRollup {
 		return out
 	}
 	out.State = r.State
+	out.Counts = r.Contexts.counts()
 	out.Complete = r.Contexts.complete(len(r.Contexts.Nodes))
 	type key struct{ workflow, name string }
 	at := map[key]int{} // index in out.Checks

@@ -80,7 +80,8 @@ func TestCIThatFailedBeforeTheJudgePromptIsFetchedOnceAndQueuesNothing(t *testin
 	pr := h.wantState(2, store.PRReviewed)
 	want := store.CIStatus{SHA: "b1", State: "FAILURE", Total: 3, Passed: 1, Failed: 1, Skipped: 1, Complete: true,
 		Checks: []store.CheckResult{{Name: "rspec (1)", State: store.CheckPassed}, {Name: "jest", State: store.CheckFailed, Workflow: "CI", At: failedAt},
-			{Name: "completion", State: store.CheckSkipped}}}
+			{Name: "completion", State: store.CheckSkipped}},
+		Rollup: store.CheckCounts{Failed: 1, Passed: 1, Skipped: 1, Total: 3}}
 	if deref(pr.CIState) != "FAILURE" || pr.CI == nil || !reflect.DeepEqual(*pr.CI, want) {
 		t.Fatalf("failed CI = %v %+v", pr.CIState, pr.CI)
 	}
@@ -147,6 +148,33 @@ func TestCIUnreadableRollupIsNotPolled(t *testing.T) {
 	}
 	if pr := h.pr(2); deref(pr.CIState) != "" || pr.CI.State != "" {
 		t.Fatalf("CI = %v %+v", pr.CIState, pr.CI)
+	}
+}
+
+// The rollup's counts read the checks again only when both reads have
+// counts and the failed or pending ones differ: unknown counts (checks
+// stored before they were read, a rollup GitHub gave none for) leave the
+// rollup state's comparison alone, and a check that passed or skipped
+// moves nothing a judge check needs.
+func TestCICountsReadTheChecksAgainOnlyWhenBothAreKnownAndFailedOrPendingMoved(t *testing.T) {
+	stored := store.CheckCounts{Failed: 1, Pending: 1, Passed: 3, Total: 5}
+	for _, tc := range []struct {
+		name   string
+		stored store.CheckCounts
+		now    github.CICounts
+		want   bool
+	}{
+		{"a pending check failed", stored, github.CICounts{Failed: 2, Passed: 3, Total: 5}, true},
+		{"a pending check passed", stored, github.CICounts{Failed: 1, Passed: 4, Total: 5}, true},
+		{"a rerun started", stored, github.CICounts{Failed: 1, Pending: 2, Passed: 3, Total: 6}, true},
+		{"as stored", stored, github.CICounts{Failed: 1, Pending: 1, Passed: 3, Total: 5}, false},
+		{"another passed check", stored, github.CICounts{Failed: 1, Pending: 1, Passed: 4, Total: 6}, false},
+		{"no counts now", stored, github.CICounts{}, false},
+		{"none stored", store.CheckCounts{}, github.CICounts{Failed: 2, Total: 2}, false},
+	} {
+		if got := ciCountsMoved(tc.stored, tc.now); got != tc.want {
+			t.Errorf("%s: moved = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
