@@ -237,8 +237,13 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
   activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { id submittedAt author { login __typename } authorAssociation } ... on IssueComment { createdAt author { login __typename } authorAssociation } ` + activityEvents + ` } }
   replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }
-  headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } ` + stateCountFields + ` nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } committedDate } } }
+  headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } ` + stateCountFields + ` ` + contextNodes + ` } } committedDate } } }
 }`
+
+// contextNodes selects what Details and CommitChecks read of each context of
+// a check rollup (contextJSON): a check run's name, status, conclusion,
+// times and workflow, a commit status's context, state and time.
+const contextNodes = `nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } }`
 
 // activityTypes are the timeline items that are activity on a pull request
 // (PRDetails.ActivityAt): what a reviewer sees happen to it. A review counts
@@ -382,33 +387,76 @@ type detailsJSON struct {
 				Oid               string    `json:"oid"`
 				CommittedDate     time.Time `json:"committedDate"`
 				StatusCheckRollup *struct {
-					State    string `json:"state"`
-					Contexts struct {
-						connInfo
-						stateCountsJSON
-						Nodes []struct {
-							Typename    string    `json:"__typename"`
-							Name        string    `json:"name"`        // CheckRun
-							Status      string    `json:"status"`      // CheckRun
-							Conclusion  string    `json:"conclusion"`  // CheckRun
-							StartedAt   time.Time `json:"startedAt"`   // CheckRun
-							CompletedAt time.Time `json:"completedAt"` // CheckRun
-							CheckSuite  *struct {
-								WorkflowRun *struct {
-									Workflow struct {
-										Name string `json:"name"`
-									} `json:"workflow"`
-								} `json:"workflowRun"`
-							} `json:"checkSuite"` // CheckRun
-							Context   string    `json:"context"`   // StatusContext
-							State     string    `json:"state"`     // StatusContext
-							CreatedAt time.Time `json:"createdAt"` // StatusContext
-						} `json:"nodes"`
-					} `json:"contexts"`
+					State    string             `json:"state"`
+					Contexts rollupContextsJSON `json:"contexts"`
 				} `json:"statusCheckRollup"`
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"headCommit"`
+}
+
+// rollupContextsJSON is a check rollup's contexts connection as Details and
+// CommitChecks read it: its size, its counts by state (stateCountFields,
+// Details only) and its nodes (contextNodes).
+type rollupContextsJSON struct {
+	connInfo
+	stateCountsJSON
+	Nodes []contextJSON `json:"nodes"`
+}
+
+// contextJSON is one context of a check rollup: a check run or a commit
+// status.
+type contextJSON struct {
+	Typename    string    `json:"__typename"`
+	Name        string    `json:"name"`        // CheckRun
+	Status      string    `json:"status"`      // CheckRun
+	Conclusion  string    `json:"conclusion"`  // CheckRun
+	StartedAt   time.Time `json:"startedAt"`   // CheckRun
+	CompletedAt time.Time `json:"completedAt"` // CheckRun
+	CheckSuite  *struct {
+		WorkflowRun *struct {
+			Workflow struct {
+				Name string `json:"name"`
+			} `json:"workflow"`
+		} `json:"workflowRun"`
+	} `json:"checkSuite"` // CheckRun
+	Context   string    `json:"context"`   // StatusContext
+	State     string    `json:"state"`     // StatusContext
+	CreatedAt time.Time `json:"createdAt"` // StatusContext
+}
+
+// checks is the latest run of each (Workflow, Name) of the connection's
+// nodes (olderRun), normalized (checkRunState, statusState), in GitHub's
+// order; never nil.
+func (r rollupContextsJSON) checks() []Check {
+	out := []Check{}
+	type key struct{ workflow, name string }
+	at := map[key]int{} // index in out
+	for _, n := range r.Nodes {
+		var c Check
+		switch n.Typename {
+		case "CheckRun":
+			c = Check{Name: n.Name, State: checkRunState(n.Status, n.Conclusion), At: n.CompletedAt}
+			if c.At.IsZero() {
+				c.At = n.StartedAt
+			}
+			if n.CheckSuite != nil && n.CheckSuite.WorkflowRun != nil {
+				c.Workflow = n.CheckSuite.WorkflowRun.Workflow.Name
+			}
+		case "StatusContext":
+			c = Check{Name: n.Context, State: statusState(n.State), At: n.CreatedAt}
+		default:
+			continue
+		}
+		k := key{c.Workflow, c.Name}
+		if i, ok := at[k]; !ok {
+			at[k] = len(out)
+			out = append(out, c)
+		} else if !olderRun(c, out[i]) {
+			out[i] = c
+		}
+	}
+	return out
 }
 
 func (d detailsJSON) details() PRDetails {
@@ -620,32 +668,7 @@ func (d detailsJSON) ci() CIRollup {
 	out.State = r.State
 	out.Counts = r.Contexts.counts()
 	out.Complete = r.Contexts.complete(len(r.Contexts.Nodes))
-	type key struct{ workflow, name string }
-	at := map[key]int{} // index in out.Checks
-	for _, n := range r.Contexts.Nodes {
-		var c Check
-		switch n.Typename {
-		case "CheckRun":
-			c = Check{Name: n.Name, State: checkRunState(n.Status, n.Conclusion), At: n.CompletedAt}
-			if c.At.IsZero() {
-				c.At = n.StartedAt
-			}
-			if n.CheckSuite != nil && n.CheckSuite.WorkflowRun != nil {
-				c.Workflow = n.CheckSuite.WorkflowRun.Workflow.Name
-			}
-		case "StatusContext":
-			c = Check{Name: n.Context, State: statusState(n.State), At: n.CreatedAt}
-		default:
-			continue
-		}
-		k := key{c.Workflow, c.Name}
-		if i, ok := at[k]; !ok {
-			at[k] = len(out.Checks)
-			out.Checks = append(out.Checks, c)
-		} else if !olderRun(c, out.Checks[i]) {
-			out.Checks[i] = c
-		}
-	}
+	out.Checks = r.Contexts.checks()
 	out.Total = len(out.Checks) + max(0, r.Contexts.TotalCount-len(r.Contexts.Nodes))
 	return out
 }

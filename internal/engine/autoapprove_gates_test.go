@@ -380,10 +380,10 @@ func TestRoundBlocksReadsTheOpenFindingsByPriority(t *testing.T) {
 
 // approvedThenReviewedOn approves PR #2 at b1 after a clean round, then
 // pushes next (#2 at its new head) and ticks until magnum's round r
-// reviewed that head.
-func approvedThenReviewedOn(t *testing.T, next prSpec, r autoRound) *harness {
+// reviewed that head. mods change the harness before it starts.
+func approvedThenReviewedOn(t *testing.T, next prSpec, r autoRound, mods ...func(*harness)) *harness {
 	t.Helper()
-	h, plan := newAutoHarness(t)
+	h, plan := newAutoHarness(t, mods...)
 	plan.set(2, cleanRound, r)
 	h.reviewedPR(2, "b1")
 	h.tick()

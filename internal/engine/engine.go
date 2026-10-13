@@ -72,6 +72,10 @@ type GitHub interface {
 	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)
 	// RequiredChecks reads the checks a branch requires (required.go).
 	RequiredChecks(ctx context.Context, owner, repo, branch string) ([]string, bool, error)
+	// CommitChecks reads a commit's checks: auto-approval's read of a
+	// PR's base tip, whose failing checks do not hold the approval of a
+	// head that fails them too (autoapprove_ci_base.go).
+	CommitChecks(ctx context.Context, owner, repo, sha string) ([]github.Check, error)
 }
 
 // Herdr is the part of *herdr.Client the tick reads: one snapshot per tick
@@ -375,9 +379,12 @@ type Engine struct {
 	// again; autoRefused, by PR, the refusal it last recorded for the card
 	// (KVPRAutoApproveRefused; "" = none). autoMu guards them and
 	// serializes auto-approval, which the tick and a round's goroutine at
-	// its end (autoApproveRound) both run.
+	// its end (autoApproveRound) both run. baseChecks are the base tips'
+	// checks the gates read, by repository and commit, for baseChecksTTL
+	// (autoapprove_ci_base.go), also under autoMu.
 	autoMu                            sync.Mutex
 	autoSeen, autoFollow, autoRefused map[int64]string
+	baseChecks                        map[baseTip]baseTipRead
 
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure

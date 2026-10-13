@@ -6128,6 +6128,10 @@ type GitHub interface {
 	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)
 	// RequiredChecks reads the checks a branch requires (required.go).
 	RequiredChecks(ctx context.Context, owner, repo, branch string) ([]string, bool, error)
+	// CommitChecks reads a commit's checks: auto-approval's read of a
+	// PR's base tip, whose failing checks do not hold the approval of a
+	// head that fails them too (autoapprove_ci_base.go).
+	CommitChecks(ctx context.Context, owner, repo, sha string) ([]github.Check, error)
 }
     GitHub is the part of *github.Client the engine uses (one client per
     identity): the poller's reads, and the dismissal of an App approval the head
@@ -7766,6 +7770,14 @@ func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]CIStat
     after it keep. A call that still fails ends the read: the states read before
     it come back with the error. The RateLimit sums Cost over the calls (1 point
     each).
+
+func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) ([]Check, error)
+    CommitChecks reads the checks of commit sha of owner/repo (a base branch's
+    tip, for auto-approval): the latest run of each (Workflow, Name),
+    normalized as Details' CIRollup.Checks, in GitHub's order; empty, never nil,
+    for a commit without checks. It reads one page of 100: a check past it is
+    not listed. A missing repository or commit is an error matching ErrNotFound;
+    a sha that is no full commit id is refused before any call.
 
 func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (CompareStats, error)
     Compare reads GET /repos/{o}/{r}/compare/{base}...{head} with per_page=1:

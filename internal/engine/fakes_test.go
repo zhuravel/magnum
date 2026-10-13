@@ -60,8 +60,10 @@ type prSpec struct {
 	checks    []github.Check
 	ciUnknown bool
 	// base is the branch the PR merges into ("" = master); another
-	// feature branch for a stacked PR.
-	base string
+	// feature branch for a stacked PR. noBaseOid makes Details report no
+	// tip of it (else fakeBaseOid).
+	base      string
+	noBaseOid bool
 	// files are the paths Details lists for the head (nil = no list);
 	// filesTruncated makes it report a cut-off list (FilesComplete false).
 	files          []string
@@ -103,6 +105,10 @@ type fakeGH struct {
 	// say); requiredErr fails it.
 	required    map[string][]string
 	requiredErr error
+	// commitChecks answers CommitChecks by sha (absent = a commit without
+	// checks); commitChecksErr fails it.
+	commitChecks    map[string][]github.Check
+	commitChecksErr error
 	// threads answers ReviewThreads by number; contents answers FileAt by
 	// "<path>@<ref>" (absent = ErrNotFound); statuses gives
 	// CompareFilesStatus its status by "base...head" (absent = "ahead").
@@ -204,6 +210,16 @@ func (g *fakeGH) RequiredChecks(_ context.Context, owner, repo, branch string) (
 	}
 	checks, ok := g.required[owner+"/"+repo]
 	return slices.Clone(checks), ok, nil
+}
+
+func (g *fakeGH) CommitChecks(_ context.Context, owner, repo, sha string) ([]github.Check, error) {
+	g.record(fmt.Sprintf("commit_checks:%s/%s@%s", owner, repo, sha))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.commitChecksErr != nil {
+		return nil, g.commitChecksErr
+	}
+	return append([]github.Check{}, g.commitChecks[sha]...), nil
 }
 
 func (g *fakeGH) CompareFiles(_ context.Context, owner, repo, base, head string) ([]github.FileDelta, error) {
@@ -474,6 +490,9 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				Additions: 10 * n, Deletions: n, ChangedFiles: n, Commits: 1,
 				CI: github.CIRollup{SHA: p.head, State: p.ci, Total: len(p.checks), Complete: true, Checks: append([]github.Check{}, p.checks...),
 					Counts: fakeCounts(p.checks)}}
+			if p.noBaseOid {
+				d.BaseRefOid = ""
+			}
 			if p.request {
 				d.ReviewRequests = []github.Reviewer{{Type: "User", Login: "zhuravel"}, {Type: "Team", Login: "engineers"}}
 			}

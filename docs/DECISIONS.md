@@ -6837,6 +6837,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
   LGTM or "unrelated" stands), a new run kind (`runs.kind` has a SQL CHECK, `0025_fix_runs.sql`, so a
   flag on rereview and recovery rounds is the cheap path), and a skill change (the skill is at its byte
   cap and already says what a failed check means; no new `<magnum>` field either).
+- **A check that fails on the base too does not hold an auto-approval** (2026-10-13, amends "Auto-approval
+  waits for the head's checks"). On talkable#11483 the Dependency Audit check had been red for days on the
+  PR's heads and on master alike (the same package versions: `ruby_llm` 1.16.0 and `source-map-js` 1.2.1).
+  Magnum's reviews said so in prose ("CI is red: Dependency Audit failed, unrelated (same package versions
+  on master)"), and the gate still refused every approval of the PR with "its head's checks fail (magnum
+  approves it once they pass)". The operator's rule: a red check does not block the approval when it fails
+  the same way on master. "The same way" is the same check (the same workflow and name, as
+  `store.CheckResult` identifies one) failed on the base branch's tip too; conclusions are not compared.
+  On a rollup `FAILURE` or `ERROR` the gate reads the head's stored checks (`ci_json`, only when they are
+  the head's and list every one) and the checks of the tip the last Details fetch read (`prs.base_sha`:
+  magnum's posted review, a CI change of the head and any activity on the PR read it again, so it is the
+  tip at or after the head's checks finished) through the new `github.Client.CommitChecks`
+  (`repository.object(oid:)` as a Commit, with the contexts and the normalization Details reads of a head:
+  the latest run of each workflow and name). When every failed check of the head failed there, the head
+  goes through once its other checks finished: a check that still runs answers "its head's checks have not
+  finished", which a standing approval waits out, since GitHub's rollup fails as soon as one check fails.
+  The base comparison comes first, so a head with a failure of its own and a check still running is
+  refused, and a standing approval withdrawn, as before. A head that goes through records
+  `review.auto_approve_ci_base` ("its head's 1 failing check fails on master's tip <sha7> too; the
+  approval goes ahead") once per head and round (kv `pr.<id>.auto_approve_ci_base`, `<head>|<run id>`: the
+  gates run on every tick until the approval posts); like `pr.ci_red` it names no check, since the
+  repository's workflows name them. Anything else refuses as before: a failed check the tip passes, lacks
+  or fails under another workflow only, a failing rollup with no failed check stored, a head of more
+  checks than GitHub lists (100: "have not finished" would never end there), no known tip, a read that
+  fails (logged at info; the reason never carries an error's text). A tip's checks are kept in memory for
+  10 minutes per repository and commit, a failed read too (one point per tip, not per PR or tick; a
+  restart reads them again), so a tip whose checks still ran is read again after that. A standing approval
+  held to the gates after a later round follows the same rule; the approval's body, the card's refusal
+  text and `auto_approve_refused` do not change. Rejected: parsing the review's Checks lines (prose, not a
+  contract); comparing conclusions (a check cancelled on the tip and failed on the head is red on both); a
+  per-repository allowlist of check names (the operator would have to maintain it, and it would pass a
+  check the PR itself breaks); reading the base ref's tip by name (`base_sha` is the tip of the head's
+  last read, the one its checks ran against).
 
 ## Learned rules
 

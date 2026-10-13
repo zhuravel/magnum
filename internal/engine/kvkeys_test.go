@@ -92,6 +92,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"kvPRGateReason", kvPRGateReason(id), "pr.7.gate_reason"},
 		{"KVPRAutoApproveRefused", KVPRAutoApproveRefused(id), "pr.7.auto_approve_refused"},
 		{"kvAutoApprovalGated", kvAutoApprovalGated(id), "pr.7.auto_approval_gated"},
+		{"kvAutoApproveCIBase", kvAutoApproveCIBase(id), "pr.7.auto_approve_ci_base"},
 		{"kvApprovalKept", kvApprovalKept(id), "pr.7.approval_kept"},
 		{"kvApprovalRefused", kvApprovalRefused(id), "pr.7.approval_refused"},
 		{"kvApprovalPending", kvApprovalPending(id), "pr.7.approval_pending"},

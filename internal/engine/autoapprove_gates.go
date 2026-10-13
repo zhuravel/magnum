@@ -6,8 +6,9 @@ package engine
 // by hand there. A review whose judge went without a reviewer's report
 // (DECISIONS "Auto-approval hears every reviewer"), a PR its watch would not
 // review on its own (a forced round on it), one that changes what steers
-// the review agents, and a head whose checks fail or still run are not
-// approved; the card says why (KVPRAutoApproveRefused) and a
+// the review agents, and a head whose checks fail (other than the way the
+// base branch's tip fails them, autoapprove_ci_base.go) or still run are
+// not approved; the card says why (KVPRAutoApproveRefused) and a
 // review.auto_approve_refused event records it once per head, round and
 // reason. A later round of magnum's on the head of a PR it approved as the
 // operator is held to them too: one they refuse withdraws the approval
@@ -68,9 +69,11 @@ var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.
 // Codex flagged; a forced round's included), it changes what steers the
 // review agents (agentConfigRefusal), and its head's check rollup fails or
 // runs (wait for green: the judge's result says nothing of the failures it
-// found unrelated). waits says the refusal is only checks that still run,
-// which a standing approval waits out (standingGateRefusal). A reason never
-// carries an error's text: a withdrawal posts it on GitHub.
+// found unrelated), unless every failing check fails the same way on the
+// base branch's tip (failingCIRefusal). waits says the refusal is only
+// checks that still run, which a standing approval waits out
+// (standingGateRefusal). A reason never carries an error's text: a
+// withdrawal posts it on GitHub.
 func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
 	pr := c.PR
 	if why := e.missingReports(ctx, pr.ID, sum); why != "" {
@@ -86,9 +89,9 @@ func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.
 	}
 	switch strings.ToUpper(deref(pr.CIState)) {
 	case "FAILURE", "ERROR":
-		return "its head's checks fail (magnum approves it once they pass)", false
+		return e.failingCIRefusal(ctx, c, sum)
 	case "PENDING", "EXPECTED":
-		return "its head's checks have not finished (magnum approves it once they pass)", true
+		return ciRunsRefusal, true
 	}
 	return "", false
 }

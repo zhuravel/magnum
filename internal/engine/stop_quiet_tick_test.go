@@ -34,6 +34,10 @@ func (g stoppedGH) CIStates(ctx context.Context, _ []github.PRRadar) (map[string
 	return nil, github.RateLimit{}, g.failure(ctx, "github ci states call 1")
 }
 
+func (g stoppedGH) CommitChecks(ctx context.Context, _, _, _ string) ([]github.Check, error) {
+	return nil, g.failure(ctx, "github commit checks")
+}
+
 // The daemon restarted 29 times in four days (a drain for each landing), and
 // every stop that came mid-tick logged the cancelled calls as warnings: the
 // Codex usage read, the auto approvals, the PRs that need you, the review

@@ -743,7 +743,12 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   without the PR's project config (they steer the review agents, and their hooks run on every
   teammate's machine once merged). A PR of more files than GitHub lists (100) is not approved either;
 - its head's checks pass, or it has none: while they fail or still run (the rollup `FAILURE`, `ERROR`,
-  `PENDING` or `EXPECTED`) Magnum waits, and approves once they pass;
+  `PENDING` or `EXPECTED`) Magnum waits, and approves once they pass. A check that fails the same way on
+  the base branch's tip (the same workflow and check failed on the tip the poller last read) does not
+  hold it: once the head's other checks finished, a head whose every failing check also fails there is
+  approved, and a `review.auto_approve_ci_base` event says so once per head and review (it names no
+  check). The base tip's checks are read once per tip and ten minutes; a failure Magnum cannot match
+  (another check, another workflow, no known tip, a read that fails) still holds the PR;
 - on GitHub (read just before posting) you have not approved that head, have no review in progress, and
   have not reviewed the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
 
