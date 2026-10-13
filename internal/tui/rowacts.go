@@ -293,7 +293,10 @@ func actionRefusal(a rowAct, r actRow) string {
 			return "magnum has not reviewed this PR: nothing to fix"
 		case r.merged() || r.closed() || r.ended():
 			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to fix"
-		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA):
+		// A reviewed head the review is not on kept its verdict (a push that
+		// only merged the base, a round that only replied): the daemon
+		// decides whether the review stood.
+		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA) && !sameSHA(r.head, r.reviewed):
 			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
 		case f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3]+f.OpenProblems == 0: // an earlier finding the review keeps open is one to fix
 			return l + ": magnum's review of " + textx.ShortSHA(f.SHA) + " found nothing to fix"

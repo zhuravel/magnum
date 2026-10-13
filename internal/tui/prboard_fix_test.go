@@ -124,6 +124,27 @@ func TestFFixesAnEarlierFindingTheReviewKeepsOpen(t *testing.T) {
 	}
 }
 
+// A head that kept the verdict of magnum's last posted review (a push that
+// only merged the base, then a round that only replied in the threads) is
+// the reviewed head although the review is on an older commit: f asks, and
+// the daemon decides whether that review stood, as `magnum fix` does. A
+// head magnum has not reviewed is still refused before asking
+// (TestActionRefusalSaysWhyBeforeAsking).
+func TestFFixesTheReviewAHeadKeptThroughARoundThatOnlyReplied(t *testing.T) {
+	m, act := fixBoard(t, func(r *PRBoardRow) {
+		r.HeadSHA, r.LastReview.CommitSHA = "9e80a11aaa", "9e80a11aaa"
+		r.Findings = &FindingsInfo{Verdict: "non_blocking", Posted: "COMMENT", SHA: "abcdef1234", Fixed: 97, Open: 1, OpenProblems: 1, Answered: 14}
+	})
+	m, _ = send(t, m, keyMsg("f"))
+	if m.confirm == nil || m.confirm.question != "Fix the findings of talkable#5 as you?" || len(act.calls) != 0 {
+		t.Fatalf("f asked %+v, ran %v; want the question", m.confirm, act.calls)
+	}
+	boardAct(t, m, "y")
+	if !slices.Equal(act.calls, []string{"fix talkable/talkable#5"}) {
+		t.Errorf("y called %v, want the fix of the row's ref", act.calls)
+	}
+}
+
 // F takes a PR out of autofix and puts it back: the label, the question and
 // the call follow the row's flag, and only y sends it.
 func TestShiftFTogglesFixOff(t *testing.T) {

@@ -1235,6 +1235,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   row (`FindingsInfo.OpenProblems`), whose FINDINGS cell already read "1 open". An earlier P3 left open
   is optional and counts for neither (a new P3 still counts, as before). Autofix still starts only after
   a review that posts findings.
+- **A head that kept the last review's verdict is fixable by that review (2026-10-13).** A push that only
+  merged master settled a PR at the new head, with the review on the old commit standing. Then a reply round
+  on the new head ended `replied`: its verdict and event stayed the review's, so it posted nothing. The
+  head was reviewed and the review kept a P2 open. Still, `magnum fix` answered "nothing to fix: no review
+  on 9e80a11", because `prepareFix` took only the latest posted review, and only on the head. The board's
+  `f` refused "the head moved since magnum reviewed". Now `prepareFix` accepts that review when the head is
+  the reviewed one and every judge round since the review ended `replied` (`reviewStood`). A round counts by
+  its last judge run, so a continued or nudged turn counts by how it ended. The judge's own pass and the
+  other roles' runs do not count. `store.RunsAfter` lists the runs since the review's run. With no round
+  since (a push that only merged the base), the review stands as `settlePush` says. The job keeps the head
+  it works on (`fixJob.head`) apart from the review's commit. The guard, the pane's env, the loop row's
+  `Since` and `Head`, and the slot's put-back use the head. The prompt keeps the review's URL and file,
+  and the fix run's target is the head. The answer and the fix.start event say "of the review on f83d86a
+  (the head 9e80a11 kept its verdict)". A head that kept the verdict but whose slot is still at the
+  review's commit is refused before the fix starts, so the guard does not fail it. The board's `f` leaves
+  the decision to the daemon when the head is the reviewed one. A loop's re-review that ends `replied`
+  still ends the loop: that path is unchanged.
 
 ## Screens and commands
 

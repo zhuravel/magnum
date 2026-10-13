@@ -52,12 +52,12 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	subject, report := job.subject(), deref(job.run.ReportPath)
 	rep, rerr := e.readFixReport(job)
 	pushed := rerr == nil && len(rep.Pushed) > 0 && !rep.PushFailed
-	target := job.review.SHA
+	target := job.head
 	var headErr error
 	err := steps.Step(ctx, e.st, subject, "fix.settle", func(ctx context.Context) error {
 		if pushed {
 			if target, headErr = e.pushedHead(ctx, job, rep); headErr != nil {
-				target = job.review.SHA
+				target = job.head
 			}
 		}
 		return e.resyncFixSlot(ctx, job, target)
@@ -190,7 +190,7 @@ func (e *Engine) seeFixPush(ctx context.Context, job *fixJob, prID int64) {
 // a newer one) is left as it is. It returns the PR and whether its head
 // moved; the caller lets onHeadChange see the push.
 func (e *Engine) recordFixPush(ctx context.Context, job *fixJob, pr store.PR, head string) (store.PR, bool, error) {
-	if pr.HeadSHA != job.review.SHA || head == pr.HeadSHA {
+	if pr.HeadSHA != job.head || head == pr.HeadSHA {
 		return pr, false, nil
 	}
 	res, err := e.st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: pr.RepoID, NodeID: pr.NodeID, Number: pr.Number, URL: pr.URL,
@@ -451,10 +451,10 @@ func (e *Engine) stopFix(ctx context.Context, job *fixJob, orders []stopOrder) {
 		}
 	}
 	if job.touched {
-		if err := e.resyncFixSlot(ctx, job, job.review.SHA); err != nil {
+		if err := e.resyncFixSlot(ctx, job, job.head); err != nil {
 			problems = append(problems, fmt.Errorf("slot %s not put back: %w", job.slot.Name, err))
 		} else {
-			done = append(done, "slot "+job.slot.Name+" back at "+textx.ShortSHA(job.review.SHA))
+			done = append(done, "slot "+job.slot.Name+" back at "+textx.ShortSHA(job.head))
 		}
 	}
 	e.endFixState(ctx, job)

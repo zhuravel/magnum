@@ -1394,3 +1394,112 @@ func TestADescriptionChangeAloneEndsTheLoopWithItsToast(t *testing.T) {
 	}
 	h.wantToasts("needs attention", 0)
 }
+
+// keptHead is a head that kept the verdict of the review on fixHead: a push
+// that only merged the base, then a round of the judge that only replied.
+const keptHead = "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+
+// stoodPR is PR #2 reviewed on fixHead with an earlier P2 kept open, whose
+// head then moved to keptHead with the review standing (reviewed at
+// keptHead, its slot and HEAD there), with the judge's own pass of the
+// review's round recorded after the review (outcome ok, as it ends) and a
+// round on keptHead whose judge run ended outcome.
+func stoodPR(h *harness, git *fixGit, outcome string) store.PR {
+	h.t.Helper()
+	pr := fixablePROpen(h, "zhuravel", map[string]int{"P0": 0, "P1": 0, "P2": 0, "P3": 0}, map[string]int{"P0": 0, "P1": 0, "P2": 1, "P3": 0})
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) {
+		u.Set("head_sha", keptHead)
+		u.Set("reviewed_sha", keptHead)
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.st.UpdateSlotFields(h.ctx, h.slot("review1").ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", keptHead) }); err != nil {
+		h.t.Fatal(err)
+	}
+	git.setHead(keptHead)
+	insert := func(id string, round int, kind, sha, outcome string) {
+		h.advance(time.Minute)
+		if _, err := h.st.DB().ExecContext(h.ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login,
+  state, outcome, prompt_text, created_at) VALUES (?, ?, ?, 'codex-judge', ?, ?, ?, 'talkable[bot]', 'verified', ?, 'p', ?)`,
+			id, pr.ID, round, kind, sha, pr.Identity, outcome, store.FormatTime(h.clock.Now())); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	insert("run-own-2", 1, store.RunOwnPass, fixHead, "ok")
+	insert("run-reply-2", 2, store.RunRecovery, keptHead, outcome)
+	return h.pr(2)
+}
+
+// A push that only merges the base keeps the review's verdict, and a round
+// of the judge on the new head that only replied in the threads (its
+// verdict and event stayed the last review's) posts no review: the head is
+// reviewed, by the last posted review, and the earlier P2 that review keeps
+// open is still to fix. `magnum fix` (the board's f) starts on the head
+// with that review: the fixer's run is on the head, its prompt names the
+// review and the review's file, the slot goes back to the head after it,
+// and the answer and the fix.start event say whose review it is. A round on
+// the head that ended otherwise (an error) leaves the head without a review
+// to fix, as before.
+func TestAFixStartsAfterARoundThatOnlyReplied(t *testing.T) {
+	t.Run("replied", func(t *testing.T) {
+		const what = "fixes the 1 finding of the review on a1a1a1a (the head d4d4d4d kept its verdict), 1 of them open from earlier reviews, in review1"
+		h, git := fixHarness(t)
+		pr := stoodPR(h, git, "replied")
+		fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+		id := h.fix(FixPayload{})
+		h.handle()
+		if res := h.wantDone(id); !strings.Contains(res, "claude-fix "+what+", cycle 1 of 3") {
+			t.Errorf("answer = %q, want it to say %q", res, what)
+		}
+		if ev, ok := h.fixEvent("fix.start"); !ok || !strings.Contains(ev.Message, what+" (run ") {
+			t.Errorf("fix.start = %q, %v; want it to say %q", ev.Message, ok, what)
+		}
+		runs := h.fixRuns(pr.ID)
+		if len(runs) != 1 || runs[0].TargetSHA != keptHead || runs[0].Round != 1 {
+			t.Fatalf("fix runs = %+v, want one on %s in the review's round", runs, keptHead)
+		}
+		reviewFile := filepath.Join(h.layout.ReviewDir("talkable", "talkable", 2, fixHead), "review.json")
+		want := fmt.Sprintf("fix_prompt:claude-fix:%s|feature|%s|%s|", runs[0].ID, fixReviewURL, reviewFile)
+		if !slices.ContainsFunc(h.ag.all(), func(c string) bool { return strings.HasPrefix(c, want) }) {
+			t.Errorf("no prompt naming the review %s and its file in %v", fixReviewURL, h.ag.all())
+		}
+		if !slices.Contains(h.sl.all(), "resync:review1:"+keptHead) {
+			t.Errorf("slot calls %v lack the resync to the head %s", h.sl.all(), keptHead)
+		}
+	})
+	t.Run("a round that ended otherwise", func(t *testing.T) {
+		h, git := fixHarness(t)
+		stoodPR(h, git, "error")
+		id := h.fix(FixPayload{})
+		h.handle()
+		if r, want := h.request(id), "nothing to fix: no review on d4d4d4d"; r.State != store.RequestFailed || deref(r.Result) != want {
+			t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+		}
+		if h.ag.count("submit:") != 0 {
+			t.Error("a refused request started the fixer")
+		}
+	})
+	// A push that only merged the base, with no round since, keeps the
+	// verdict too, but moves no checkout: the fix is refused before it
+	// starts, instead of failing its guard.
+	t.Run("no round since, the slot at the review", func(t *testing.T) {
+		h, git := fixHarness(t)
+		stoodPR(h, git, "replied")
+		if _, err := h.st.DB().ExecContext(h.ctx, "DELETE FROM runs WHERE id = 'run-reply-2'"); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.st.UpdateSlotFields(h.ctx, h.slot("review1").ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", fixHead) }); err != nil {
+			t.Fatal(err)
+		}
+		id := h.fix(FixPayload{})
+		h.handle()
+		want := "talkable/talkable#2: slot review1 holds a1a1a1a, not its head d4d4d4d, which kept the verdict of the review on a1a1a1a; " +
+			"`magnum review talkable/talkable#2` reviews it first"
+		if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+			t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+		}
+		if h.ag.count("submit:") != 0 {
+			t.Error("a refused request started the fixer")
+		}
+	})
+}

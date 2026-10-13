@@ -171,6 +171,18 @@ func (s *Store) RunsByPR(ctx context.Context, prID int64) ([]Run, error) {
 	return collect(rows, scanRun)
 }
 
+// RunsAfter returns the runs of run id's PR created after it (by creation,
+// then insertion), oldest first; none when id names no run.
+func (s *Store) RunsAfter(ctx context.Context, id string) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("r", runColumns)+" FROM runs a JOIN runs r ON r.pr_id = a.pr_id"+
+		" AND (r.created_at > a.created_at OR (r.created_at = a.created_at AND r.rowid > a.rowid))"+
+		" WHERE a.id = ? ORDER BY r.created_at, r.rowid", id)
+	if err != nil {
+		return nil, fmt.Errorf("runs after %s: %w", id, err)
+	}
+	return collect(rows, scanRun)
+}
+
 // ActiveRuns returns runs still in flight (pending, submitted, working,
 // ended-but-unverified), oldest first.
 func (s *Store) ActiveRuns(ctx context.Context) ([]Run, error) {

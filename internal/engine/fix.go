@@ -89,6 +89,7 @@ type fixJob struct {
 	slot   store.Slot
 	role   config.Role
 	review store.ReviewSummary // the review the run fixes: its run, head, URL and findings
+	head   string              // the head the fixer starts from: the review's, or a later one that kept its verdict (reviewStood)
 	round  int                 // the review's round, the fix run's
 	login  string              // the login that posted the review, whose threads the fixer answers
 	notes  []string            // what the request's answer adds ("this watch posts as you: ...")
@@ -113,9 +114,13 @@ func (j *fixJob) asRound() *roundJob {
 // to P2 it keeps open (ReviewSummary.OpenProblems), with ", 1 of them open
 // from earlier reviews," when it keeps some; "the open earlier findings of
 // the review on b2b2b2b in review1" for a next cycle's review that requests
-// changes with neither (fixRemains).
+// changes with neither (fixRemains). A review on an older commit than the
+// head the fixer starts from adds "(the head c3c3c3c kept its verdict)".
 func (j *fixJob) fixes() string {
 	sha := textx.ShortSHA(j.review.SHA)
+	if j.head != "" && j.head != j.review.SHA {
+		sha += fmt.Sprintf(" (the head %s kept its verdict)", textx.ShortSHA(j.head))
+	}
 	open := j.review.OpenProblems()
 	n := j.review.Findings() + open
 	switch {
@@ -271,13 +276,20 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	}
 	head := textx.ShortSHA(pr.HeadSHA)
 	sum, ok := sums[pr.ID]
+	stood := false
+	if ok {
+		if stood, err = e.reviewStood(ctx, pr, sum); err != nil {
+			return nil, err
+		}
+	}
+	on := textx.ShortSHA(sum.SHA)
 	switch {
-	case !ok || sum.SHA != pr.HeadSHA || deref(pr.ReviewedSHA) != pr.HeadSHA:
+	case !ok || deref(pr.ReviewedSHA) != pr.HeadSHA || (sum.SHA != pr.HeadSHA && !stood):
 		return nil, fmt.Errorf("nothing to fix: no review on %s", head)
 	case sum.Findings()+sum.OpenProblems() == 0 && prev.Cycle == 0: // a next cycle's changes request may keep earlier findings open with neither (fixRemains)
-		return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and left nothing open", head)
+		return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and left nothing open", on)
 	case sum.URL == "":
-		return nil, fmt.Errorf("%s: the review on %s has no URL to fix from", label, head)
+		return nil, fmt.Errorf("%s: the review on %s has no URL to fix from", label, on)
 	case deref(pr.HeadRef) == "":
 		return nil, fmt.Errorf("%s: its branch is not known yet (no details from GitHub)", label)
 	}
@@ -301,6 +313,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		return nil, fmt.Errorf("%s: slot %s is pinned (magnum unpin)", label, slot.Name)
 	case slot.HoldReason != nil:
 		return nil, fmt.Errorf("%s: %s", label, slotHeldReason(slot))
+	case stood && deref(slot.CheckedOutSHA) != pr.HeadSHA: // a push that only merged the base moves no checkout
+		return nil, fmt.Errorf("%s: slot %s holds %s, not its head %s, which kept the verdict of the review on %s; `magnum review %s` reviews it first",
+			label, slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), head, on, label)
 	}
 	now := e.now()
 	if s, ok := e.snoozeOf(ctx, pr.ID, now); ok {
@@ -329,7 +344,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		pr.Pinned, slot.Pinned = false, false
 		notes = append(notes, note)
 	}
-	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum,
+	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
 		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev}
 	if job.state.Cap == 0 {
 		job.state.Cap = e.cfg.FixCyclesFor(w)
@@ -338,6 +353,36 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		job.notes = append(job.notes, "this watch posts as you: the re-review will not read the fixer's replies as yours")
 	}
 	return job, nil
+}
+
+// reviewStood reports whether the PR's head kept the verdict of sum, its
+// last posted review, made on an older commit: the head is the reviewed one
+// (a push that only merged the base settled it, settlePush) and every round
+// of the judge since the review ended replied, posting no review because
+// its verdict and event stayed the review's. A round counts by its last
+// judge run, so a continued or nudged turn counts by how it ended; the
+// judge's own pass, which neither ends a round nor posts, and the other
+// roles' runs do not count.
+func (e *Engine) reviewStood(ctx context.Context, pr store.PR, sum store.ReviewSummary) (bool, error) {
+	if sum.SHA == pr.HeadSHA || deref(pr.ReviewedSHA) != pr.HeadSHA {
+		return false, nil
+	}
+	runs, err := e.st.RunsAfter(ctx, sum.RunID)
+	if err != nil {
+		return false, err
+	}
+	last := map[int]store.Run{}
+	for _, r := range runs {
+		if e.isJudge(r.Role) && r.Kind != store.RunOwnPass {
+			last[r.Round] = r
+		}
+	}
+	for _, r := range last {
+		if deref(r.Outcome) != pipeline.OutcomeReplied {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // startFix starts a fix cycle on pr under prepareFix's refusals: a new loop
@@ -364,11 +409,11 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	}
 	st := job.state
 	if prev.Cycle == 0 {
-		st = FixState{Cycle: 1, Cap: job.state.Cap, Since: job.review.SHA, By: by, StartedAt: e.now().UTC()}
+		st = FixState{Cycle: 1, Cap: job.state.Cap, Since: job.head, By: by, StartedAt: e.now().UTC()}
 	} else {
 		st.Cycle++
 	}
-	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou = FixPhaseFixing, job.review.SHA, "", job.role.Name, nil
+	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou = FixPhaseFixing, job.head, "", job.role.Name, nil
 	job.state = st
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, fix: true}) {
@@ -473,7 +518,7 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 // commits would hold the slot for head drift at the next round's guard). It
 // returns what to add to the failure's message ("" when the slot is back).
 func (e *Engine) putFixSlotBack(ctx context.Context, job *fixJob) string {
-	return e.stopFixerAt(ctx, job, job.review.SHA)
+	return e.stopFixerAt(ctx, job, job.head)
 }
 
 // stopFixerAt stops the job's fixer and puts its slot back at sha: the fix
@@ -532,16 +577,16 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 		return fmt.Errorf("slot %s is %s", slot.Name, slot.State)
 	}
 	job.slot = slot
-	review := job.review.SHA
+	head := job.head
 	switch {
 	case slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused:
 		return fmt.Errorf("a round is in progress (%s)", pr.State)
-	case pr.HeadSHA != review:
-		return fmt.Errorf("the head moved to %s since the review on %s", textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(review))
-	case deref(pr.ReviewedSHA) != review:
-		return fmt.Errorf("the reviewed head is %s, not %s", textx.ShortSHA(deref(pr.ReviewedSHA)), textx.ShortSHA(review))
-	case deref(slot.CheckedOutSHA) != review:
-		return fmt.Errorf("slot %s holds %s, not the reviewed head %s", slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), textx.ShortSHA(review))
+	case pr.HeadSHA != head:
+		return fmt.Errorf("the head moved to %s since the review on %s", textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(job.review.SHA))
+	case deref(pr.ReviewedSHA) != head:
+		return fmt.Errorf("the reviewed head is %s, not %s", textx.ShortSHA(deref(pr.ReviewedSHA)), textx.ShortSHA(head))
+	case deref(slot.CheckedOutSHA) != head:
+		return fmt.Errorf("slot %s holds %s, not the reviewed head %s", slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), textx.ShortSHA(head))
 	}
 	if until := e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt); e.now().Before(until) {
 		return fmt.Errorf("someone typed into the PR's panes, which are theirs until %s (human_cooldown)", until.Local().Format("15:04"))
@@ -566,7 +611,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	if err := e.d.Agents.Preflight(ctx, job.role.AgentKind()); err != nil && isLogin(err) {
 		return err
 	}
-	env, err := e.paneEnv(ctx, job.asRound(), src, job.review.SHA)
+	env, err := e.paneEnv(ctx, job.asRound(), src, job.head)
 	if err != nil {
 		return err
 	}

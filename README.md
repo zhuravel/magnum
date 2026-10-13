@@ -1449,6 +1449,13 @@ open` pins the PR it restores, `magnum pin` too) is unpinned by the fix, as by a
 slot's guards keep (a person's changes, their agent in the slot) still refuses, naming the guard. Autofix
 and a loop's next cycle never unpin: a pin holds them as it holds every automatic round.
 
+A head that kept the verdict of the last posted review counts as reviewed by that review. That happens after
+a push that only merges the base, or a round whose judge only replied in the threads because its verdict and
+event did not change. The fixer then works on the head and fixes that review. The answer and the
+`fix.start` event say so: "the review on f83d86a (the head 9e80a11 kept its verdict)". If a later round on
+the head ended any other way, the head has no review to fix. A slot still at the review's commit is refused
+too, with a pointer to `magnum review`.
+
 One cycle of a loop has four steps.
 
 1. **Fix.** The fixer works in the PR's own slot. That is the pool slot or per-PR worktree that already holds

@@ -274,6 +274,51 @@ func TestRoleRanBefore(t *testing.T) {
 	}
 }
 
+// RunsAfter lists the runs of a run's PR created after it, oldest first: a
+// run created at the same instant counts by its insertion, and the runs of
+// another PR, the run itself and those before it do not; an unknown run has
+// none.
+func TestRunsAfterAreThePRsLaterRuns(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 1, PRReviewed)
+	other := mustPR(t, st, repo.ID, 2, PRReviewed)
+	newRun := func(id string, prID int64, kind string, at time.Duration) {
+		t.Helper()
+		if _, err := st.CreateRun(ctx, Run{ID: id, PRID: prID, Round: 1, Role: RoleJudge, Kind: kind, TargetSHA: "h",
+			Identity: "talkable-app", ReviewerLogin: "talkable[bot]", State: RunVerified, PromptText: "p", CreatedAt: t0.Add(at)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newRun("r-before", pr.ID, RunInitial, 0)
+	newRun("r-posted", pr.ID, RunRereview, time.Hour)
+	newRun("r-own", pr.ID, RunOwnPass, time.Hour) // same instant, inserted after
+	newRun("r-other", other.ID, RunInitial, 2*time.Hour)
+	newRun("r-reply", pr.ID, RunRecovery, 3*time.Hour)
+	ids := func(id string) []string {
+		t.Helper()
+		runs, err := st.RunsAfter(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range runs {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+	if got := ids("r-posted"); !reflect.DeepEqual(got, []string{"r-own", "r-reply"}) {
+		t.Errorf("runs after r-posted = %v", got)
+	}
+	if got := ids("r-reply"); got != nil {
+		t.Errorf("runs after the last run = %v", got)
+	}
+	if got := ids("r-unknown"); got != nil {
+		t.Errorf("runs after an unknown run = %v", got)
+	}
+}
+
 // LastEndedRun is the session's turn that ended last, by ended_at: an own
 // pass created after the judge's run but ended before it is not the latest,
 // and runs of another session or still in flight do not count.

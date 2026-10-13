@@ -16084,6 +16084,10 @@ func (s *Store) RoleRanBefore(ctx context.Context, prID int64, role string) (boo
 func (s *Store) RunByID(ctx context.Context, id string) (Run, error)
     RunByID looks up a run by id.
 
+func (s *Store) RunsAfter(ctx context.Context, id string) ([]Run, error)
+    RunsAfter returns the runs of run id's PR created after it (by creation,
+    then insertion), oldest first; none when id names no run.
+
 func (s *Store) RunsByPR(ctx context.Context, prID int64) ([]Run, error)
     RunsByPR returns every run of a PR, oldest first.
 
