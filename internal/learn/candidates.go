@@ -3,11 +3,12 @@
 // turns what other reviewers said about it into candidates for a
 // classifier, after dropping what cannot be a miss (the author's and
 // magnum's own comments, short approvals, comments on code magnum never
-// saw, findings magnum already posted), and ParseOutput reads the
-// classifier's answer back, refusing anything off schema and any lesson
-// that retells the pull request instead of teaching (ScrubLesson). The
-// threads magnum started that someone answered go to the classifier too
-// (OwnThreads), which says what the author did with each finding.
+// saw, findings magnum already posted or dropped as a duplicate of the
+// comment), and ParseOutput reads the classifier's answer back, refusing
+// anything off schema and any lesson that retells the pull request instead
+// of teaching (ScrubLesson). The threads magnum started that someone
+// answered go to the classifier too (OwnThreads), which says what the
+// author did with each finding.
 //
 // The package is pure: it starts no process and touches no network or
 // registry. The engine reads GitHub and the registry and hands the data in;
@@ -52,18 +53,23 @@ type Input struct {
 	// reviews (ReviewRuns, OwnThreads).
 	Own []string
 	// Threads and Reviews are the pull request's review threads and
-	// reviews as GitHub reports them.
+	// reviews as GitHub reports them. The reviews magnum posted are among
+	// them: a review in ReviewRuns gives the time its run's findings were
+	// posted at (SubmittedAt).
 	Threads []github.Thread
 	Reviews []github.Review
 	// Findings are the judge's findings of the pull request
 	// (store.Store.FindingsByPR): a posted one near a comment means magnum
-	// caught it; a rejected one, that magnum raised it and let it go. The
-	// rejected ones also go to the classifier (Result.Rejected).
+	// caught it; a rejected one, that magnum raised it and let it go, or,
+	// for a duplicate of a thread the comment predates the review of, that
+	// it caught. The rejected ones also go to the classifier
+	// (Result.Rejected).
 	Findings []store.Finding
 	// ReviewRuns names, by review id (runs.review_id), the run of each
 	// review magnum posted whose findings are the review's: a thread is
 	// magnum's only when its root is in one of these reviews, and its
-	// finding is one of that run's (OwnThreads).
+	// finding is one of that run's (OwnThreads). A finding's review, and so
+	// the time it was judged at, is the one its RunID is bound to here.
 	ReviewRuns map[int64]string
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
@@ -123,8 +129,9 @@ type Candidate struct {
 	CreatedAt   time.Time `json:"created_at"`
 	// Raised is store.MissRaisedRejected when the judge raised a finding
 	// near the comment and rejected it (FindingRef "<run id>/<finding id>",
-	// ReasonCode its reason), else store.MissRaisedNone. A rejected finding
-	// the classifier names replaces it (LinkRejected).
+	// ReasonCode its reason; not for a duplicate of a comment made before
+	// the review, which is caught), else store.MissRaisedNone. A rejected
+	// finding the classifier names replaces it (LinkRejected).
 	Raised     string `json:"raised"`
 	FindingRef string `json:"finding_ref,omitempty"`
 	ReasonCode string `json:"reason_code,omitempty"`
@@ -149,8 +156,10 @@ type Result struct {
 	// magnum did not review, stored as such without a classifier.
 	Candidates []Candidate
 	Outside    []Candidate
-	// Caught counts comments near a finding magnum posted, Dropped the
-	// comments too short or only an approval. Neither is stored.
+	// Caught counts comments near a finding magnum posted, or near one the
+	// judge rejected as a duplicate of a comment made before that review
+	// (reasonDuplicate), Dropped the comments too short or only an
+	// approval. Neither is stored.
 	Caught, Dropped int
 	// Rejected are the findings the judge rejected, the newest RejectedMax
 	// with a title, oldest first: the classifier names the one that
@@ -172,20 +181,27 @@ type Result struct {
 // that only approves, is dropped. One near a finding magnum posted on the
 // same path is caught; one near a rejected finding is raised (a comment on
 // deleted lines has no line, so neither), until the classifier names
-// another (Result.Rejected lists them). A comment made on a reviewed
-// commit applies to it; an inline comment on another commit applies to the
-// newest commit magnum reviewed before the comment when that commit
-// descends from the reviewed one and the commented file did not change
-// between the two (Compare), and is outside otherwise, as is a review body
-// on a commit magnum did not review. Only a failing Compare is an error; one
-// GitHub answers with a 404 (github.ErrNotFound: a commit it no longer has)
-// proves nothing, so the comment is outside and the build goes on.
+// another (Result.Rejected lists them). The exception is a finding
+// rejected as a duplicate (reasonDuplicate: an existing thread already
+// covers it) when the comment was made before the review that rejected it
+// (rejectedAsDuplicate): the judge read the comment and agreed, so it is
+// caught. A rejection for any other reason says the judge disagreed, and a
+// comment made after the review was never read by it. A comment made on a
+// reviewed commit applies to it; an inline comment on another commit
+// applies to the newest commit magnum reviewed before the comment when that
+// commit descends from the reviewed one and the commented file did not
+// change between the two (Compare), and is outside otherwise, as is a review
+// body on a commit magnum did not review. Only a failing Compare is an
+// error; one GitHub answers with a 404 (github.ErrNotFound: a commit it no
+// longer has) proves nothing, so the comment is outside and the build goes
+// on.
 func Build(in Input) (Result, error) {
 	res := Result{Rejected: rejectedRows(in.Findings), Threads: OwnThreads(in)}
 	reviewed := map[string]bool{}
 	for _, r := range in.Reviewed {
 		reviewed[r.SHA] = true
 	}
+	postedAt := in.postedAt()
 	compared := map[[2]string]Comparison{}
 	unchanged := func(from, to, path string) (bool, error) {
 		if in.Compare == nil {
@@ -232,6 +248,10 @@ func Build(in Input) (Result, error) {
 			continue
 		}
 		if f := near(in.Findings, store.FindingRejected, c); f != nil {
+			if rejectedAsDuplicate(*f, cm.CreatedAt, postedAt) {
+				res.Caught++
+				continue
+			}
 			c.Raised, c.FindingRef, c.ReasonCode = store.MissRaisedRejected, findingRef(*f), f.ReasonCode
 		}
 		base := in.reviewedBefore(cm.CreatedAt)
@@ -289,6 +309,40 @@ func (in Input) other(login, typename string) bool {
 		return false
 	}
 	return in.IncludeBots || !github.IsBot(typename, login)
+}
+
+// reasonDuplicate is the reason code of a finding the judge dropped because
+// an earlier review, an existing thread or another reviewer's comment
+// already covers it (the review skill's reason codes, as pipeline records
+// them). It is the one rejection that agrees with a comment.
+const reasonDuplicate = "duplicate"
+
+// postedAt is when each review of magnum's was posted, by the id of the run
+// whose findings are the review's (ReviewRuns, Reviews): the time a
+// finding's judge had read the pull request's threads by. A run whose
+// review GitHub does not list, or lists without a time (pending), is not
+// in it.
+func (in Input) postedAt() map[string]time.Time {
+	at := map[string]time.Time{}
+	for _, r := range in.Reviews {
+		if run := in.ReviewRuns[r.DatabaseID]; run != "" && !r.SubmittedAt.IsZero() {
+			at[run] = r.SubmittedAt
+		}
+	}
+	return at
+}
+
+// rejectedAsDuplicate reports whether f, a rejected finding near a comment
+// made at commentAt, says the comment already covered the problem: the
+// judge dropped f as a duplicate (reasonDuplicate) in a review posted
+// after the comment (postedAt, by f's run), so it read the comment and
+// agreed. Any other reason means the judge disagreed or dismissed the
+// problem, a comment made at or after the review was never read by that
+// judge, and a review of unknown time proves nothing, so none of them is
+// caught.
+func rejectedAsDuplicate(f store.Finding, commentAt time.Time, postedAt map[string]time.Time) bool {
+	at, ok := postedAt[f.RunID]
+	return f.ReasonCode == reasonDuplicate && ok && commentAt.Before(at)
 }
 
 // reviewedBefore is the newest commit magnum reviewed before t ("" when

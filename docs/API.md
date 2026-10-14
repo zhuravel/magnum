@@ -50,7 +50,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [identity](#identity) | Package identity provides the GitHub identities magnum acts as. |
 | [inventory](#inventory) | Package inventory is the read-mostly reconciliation view: the registry (slots, assignments, sessions) compared with what is really on disk (`git worktree list` of every watched main clone), in MySQL (per-worktree databases), in herdr (agents per path) and, on request, on GitHub (states of PRs checked out in manual worktrees). |
 | [launchd](#launchd) | Package launchd writes and manages magnum's LaunchAgent (label zhuravel.magnum): rendering the plist, installing it into the user's GUI domain, and querying, restarting and removing the job. |
-| [learn](#learn) | Package learn is the deterministic half of the retro (DECISIONS "Learning loop: daily retro"): after a pull request magnum reviewed closes, Build turns what other reviewers said about it into candidates for a classifier, after dropping what cannot be a miss (the author's and magnum's own comments, short approvals, comments on code magnum never saw, findings magnum already posted), and ParseOutput reads the classifier's answer back, refusing anything off schema and any lesson that retells the pull request instead of teaching (ScrubLesson). |
+| [learn](#learn) | Package learn is the deterministic half of the retro (DECISIONS "Learning loop: daily retro"): after a pull request magnum reviewed closes, Build turns what other reviewers said about it into candidates for a classifier, after dropping what cannot be a miss (the author's and magnum's own comments, short approvals, comments on code magnum never saw, findings magnum already posted or dropped as a duplicate of the comment), and ParseOutput reads the classifier's answer back, refusing anything off schema and any lesson that retells the pull request instead of teaching (ScrubLesson). |
 | [mergecheck](#mergecheck) | Package mergecheck is `magnum merge-check`: whether an open PR's specs still pass once another PR is merged. |
 | [mysqlx](#mysqlx) | Package mysqlx inventories and drops the per-worktree MySQL databases that Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on the local DBngin server. |
 | [notes](#notes) | Package notes measures, versions and curates the repository notes (the file every review role reads first and the judge rewrites, engine.NotesPath) and their harness directory of QA scripts. |
@@ -10151,11 +10151,12 @@ Package learn is the deterministic half of the retro (DECISIONS "Learning loop:
 daily retro"): after a pull request magnum reviewed closes, Build turns what
 other reviewers said about it into candidates for a classifier, after dropping
 what cannot be a miss (the author's and magnum's own comments, short approvals,
-comments on code magnum never saw, findings magnum already posted), and
-ParseOutput reads the classifier's answer back, refusing anything off schema
-and any lesson that retells the pull request instead of teaching (ScrubLesson).
-The threads magnum started that someone answered go to the classifier too
-(OwnThreads), which says what the author did with each finding.
+comments on code magnum never saw, findings magnum already posted or dropped as
+a duplicate of the comment), and ParseOutput reads the classifier's answer back,
+refusing anything off schema and any lesson that retells the pull request
+instead of teaching (ScrubLesson). The threads magnum started that someone
+answered go to the classifier too (OwnThreads), which says what the author did
+with each finding.
 
 The package is pure: it starts no process and touches no network or registry.
 The engine reads GitHub and the registry and hands the data in; the one
@@ -10470,8 +10471,9 @@ type Candidate struct {
 	CreatedAt   time.Time `json:"created_at"`
 	// Raised is store.MissRaisedRejected when the judge raised a finding
 	// near the comment and rejected it (FindingRef "<run id>/<finding id>",
-	// ReasonCode its reason), else store.MissRaisedNone. A rejected finding
-	// the classifier names replaces it (LinkRejected).
+	// ReasonCode its reason; not for a duplicate of a comment made before
+	// the review, which is caught), else store.MissRaisedNone. A rejected
+	// finding the classifier names replaces it (LinkRejected).
 	Raised     string `json:"raised"`
 	FindingRef string `json:"finding_ref,omitempty"`
 	ReasonCode string `json:"reason_code,omitempty"`
@@ -10672,18 +10674,23 @@ type Input struct {
 	// reviews (ReviewRuns, OwnThreads).
 	Own []string
 	// Threads and Reviews are the pull request's review threads and
-	// reviews as GitHub reports them.
+	// reviews as GitHub reports them. The reviews magnum posted are among
+	// them: a review in ReviewRuns gives the time its run's findings were
+	// posted at (SubmittedAt).
 	Threads []github.Thread
 	Reviews []github.Review
 	// Findings are the judge's findings of the pull request
 	// (store.Store.FindingsByPR): a posted one near a comment means magnum
-	// caught it; a rejected one, that magnum raised it and let it go. The
-	// rejected ones also go to the classifier (Result.Rejected).
+	// caught it; a rejected one, that magnum raised it and let it go, or,
+	// for a duplicate of a thread the comment predates the review of, that
+	// it caught. The rejected ones also go to the classifier
+	// (Result.Rejected).
 	Findings []store.Finding
 	// ReviewRuns names, by review id (runs.review_id), the run of each
 	// review magnum posted whose findings are the review's: a thread is
 	// magnum's only when its root is in one of these reviews, and its
-	// finding is one of that run's (OwnThreads).
+	// finding is one of that run's (OwnThreads). A finding's review, and so
+	// the time it was judged at, is the one its RunID is bound to here.
 	ReviewRuns map[int64]string
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
@@ -10797,8 +10804,10 @@ type Result struct {
 	// magnum did not review, stored as such without a classifier.
 	Candidates []Candidate
 	Outside    []Candidate
-	// Caught counts comments near a finding magnum posted, Dropped the
-	// comments too short or only an approval. Neither is stored.
+	// Caught counts comments near a finding magnum posted, or near one the
+	// judge rejected as a duplicate of a comment made before that review
+	// (reasonDuplicate), Dropped the comments too short or only an
+	// approval. Neither is stored.
 	Caught, Dropped int
 	// Rejected are the findings the judge rejected, the newest RejectedMax
 	// with a title, oldest first: the classifier names the one that
@@ -10821,8 +10830,13 @@ func Build(in Input) (Result, error)
     or that only approves, is dropped. One near a finding magnum posted on the
     same path is caught; one near a rejected finding is raised (a comment on
     deleted lines has no line, so neither), until the classifier names another
-    (Result.Rejected lists them). A comment made on a reviewed commit applies to
-    it; an inline comment on another commit applies to the newest commit magnum
+    (Result.Rejected lists them). The exception is a finding rejected as a
+    duplicate (reasonDuplicate: an existing thread already covers it) when the
+    comment was made before the review that rejected it (rejectedAsDuplicate):
+    the judge read the comment and agreed, so it is caught. A rejection for any
+    other reason says the judge disagreed, and a comment made after the review
+    was never read by it. A comment made on a reviewed commit applies to it;
+    an inline comment on another commit applies to the newest commit magnum
     reviewed before the comment when that commit descends from the reviewed
     one and the commented file did not change between the two (Compare),
     and is outside otherwise, as is a review body on a commit magnum did not

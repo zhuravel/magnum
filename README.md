@@ -2038,13 +2038,17 @@ configured identity's, and the ones the PR's reviews were posted as) and, unless
 Replies are not candidates; only those under Magnum's own findings are read (below). A comment shorter than
 `min_comment_chars` (20) once quotes and code blocks are removed, or one that only approves
 ("LGTM, thanks!"), is dropped. A comment within three lines of a finding Magnum posted on the same file was
-caught and is only counted. A comment made on a commit Magnum reviewed applies to that commit; one made on a
+caught and is only counted. So is a comment made before the review in which the judge rejected a finding
+near it as a `duplicate` (an existing thread already covers it): the judge read the comment and agreed. A
+comment made on a commit Magnum reviewed applies to that commit; one made on a
 later commit applies to the newest commit Magnum reviewed before it only when that later commit descends
 from it and GitHub's comparison shows the file unchanged since, and is recorded as `outside` otherwise
 (about code Magnum never saw: a later change, an older commit, a history a force push replaced). A comment
-near a finding the judge rejected is marked as raised and rejected, with the judge's reason code, unless the
-agent below names another rejected finding as the one that reports the comment's problem. A comment on
-deleted lines keeps its file and hunk but no line.
+near any other finding the judge rejected is marked as raised and rejected, with the judge's reason code,
+unless the agent below names another rejected finding as the one that reports the comment's problem. That
+covers a `duplicate` rejection in a review posted before the comment (the judge never read it) and every
+other reason (`not_reproducible`, `speculative`, ...), where the judge read the comment and disagreed. A
+comment on deleted lines keeps its file and hunk but no line.
 
 The rest goes to an interactive agent in a herdr workspace named `learn retro`, tagged `learn` like eval's
 agents are tagged `eval`: `kind` and `model` (Claude sonnet by default; `sonnet` is the default of the

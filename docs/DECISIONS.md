@@ -7121,6 +7121,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
   role's wait into the holder's failure), splitting the lock by role (the roles share one database, which is
   why the lock exists), and making codex-review lock per command (it runs one `codex review` whose spec runs
   it cannot split).
+- **A comment the judge read and rejected as a duplicate is caught, not a miss** (2026-10-14, amends "Learning loop:
+  daily retro" and "The retro's classifier names the rejected finding a miss matches"). On a PR of the 2026-10-14
+  window a colleague posted two inline comments about a minute before round 1 started. The round's judge read
+  both, confirmed them, and rejected its own candidates F1 (P1) and F2 (P3) as `duplicate`, citing those very
+  threads (the review skill's rule: an existing thread already covers it). The retro still made the two comments
+  misses with `raised: rejected`, because `learn.Build` linked every comment near a rejected finding to it,
+  whatever the reason and whenever the comment was posted; both rows went to the skill editor and into the
+  learned eval corpus, where the gate replays them. Now the nearest rejected finding of a comment (the one
+  Build already linked) whose reason is `duplicate` makes the comment caught (`Result.Caught`, no candidate, as
+  for a posted finding) when the comment was created strictly before the review that rejected the finding;
+  the same second keeps today's reading. **A `duplicate` of another thread is the only reason treated so**: for
+  `not_reproducible`, `speculative` and the rest the judge read the problem and disagreed or dismissed it, which
+  is exactly what the retro measures, so the comment stays a candidate, `raised: rejected` with the reason
+  (`pre_existing` and `outside_diff` as well: the judge said the problem is not this PR's, where a duplicate
+  says someone already reported it). A comment made after the review was never read by that judge and stays
+  raised whatever the reason. The skill's `duplicate` also covers an earlier review of magnum's own; the comment
+  is near that review's posted finding then, and was caught already. **The review's time** is the `SubmittedAt` of the GitHub review
+  that `Input.ReviewRuns` binds (runs.review_id) to the finding's run, looked up in `Input.Reviews`; the engine
+  needed no change. `Input.Reviewed` is not used: it is keyed by commit, not by run, and in the engine its time
+  is the run's last stamp (verified or ended), later than the posting, and a head reviewed twice
+  (`--again`) has one row for two reviews. When the link is missing (no review bound to the run, the review not
+  listed, a pending one without a time) nothing proves the judge read the comment, and the comment stays a
+  candidate as before. Rejected: comparing with the finding's `CreatedAt` (when the round's result was
+  recorded, after the posting and the verification) or with the round's start (not in `Input`), which would
+  need an engine change for a window of minutes; and counting any near duplicate rejection, not only the
+  nearest, which would catch a comment whose own nearest finding the judge disagreed with. The cost: a comment
+  made after the judge read the threads and before it posted counts as caught, a lost candidate rather than
+  noise. The two rows already in the registry stay as they are (`magnum retro --again` rebuilds them); no
+  migration. Tests: `TestACommentTheJudgeReadAndRejectedAsADuplicateIsCaught`,
+  `TestACommentAfterTheReviewNearADuplicateRejectionStaysRaised`,
+  `TestADuplicateIsTheOnlyRejectionReasonThatCountsAsCaught`,
+  `TestADuplicateRejectionCountsOnlyWhenTheReviewIsKnown` and
+  `TestTheNearestRejectedFindingDecidesWhetherADuplicateCatchesTheComment`. No new dependencies.
 
 ## Learned rules
 
