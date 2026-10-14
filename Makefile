@@ -43,7 +43,7 @@ lint-fix:
 
 ## vuln: govulncheck: known vulnerabilities the code reaches, in its dependencies and in the Go release it builds with
 vuln:
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 ## install: build, then load the launchd agent and link the herdr plugin (INSTALL_FLAGS="" skips the plugin)
 install: build
