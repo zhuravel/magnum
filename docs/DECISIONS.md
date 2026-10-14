@@ -7425,6 +7425,72 @@ skill versions); people add theirs to the sections before it, at the end of the 
   LaunchAgent plist's PATH, which an upgrade of MySQL or Redis misses (the version is in the directory
   name, and the one file the operator maintains is the shell's exports file), and sourcing a named file,
   which depends on the shell's variables and plugins that only the shell's own startup sets.
+- **Nine review rules from the 2026-10-14 run, and the room they need** (2026-10-14, amends "Thirteen review
+  rules from the 2026-10-12 run" and the claude-review prompts' list of rejected candidates). The operator
+  approved them on 2026-10-14, after the run's analysts read 57 posted reviews, 307 answered threads and the
+  retro's misses. Each has a test in `internal/agents/review_format_test.go`. Eight change
+  `skills/magnum-review/SKILL.md`. (1) Section 4, after the size, count or timing trigger: a race names the
+  window's length and how often the competing writer runs; when a rerun or retry recovers, seconds against a
+  daily or rarer writer is P3, a loss that stays and matters beyond one record is P2, and a failure that a
+  plain rerun clears is not a broken migration or deploy. Five race findings on three PRs were posted as P1
+  or P2 and declined: one a P1 about a row created after a daily ranking job had read the table, a
+  sub-second gap a rerun healed, the others the same PR's next round and three findings on talkable#11958;
+  no comment stated the window or the writer's rate. (2) Section 4's test-double clause: a double that
+  allows an ordering, timing, limit or value the real component never produces proves nothing, and, in a
+  sentence of its own after the order-of-calls clause (whose pin holds), for what an external system sends a
+  recorded payload (the PR's QA evidence, fixtures, logs) outranks its docs; a Shopify app PR's P2 rested on
+  a probe that set a field by hand and on Shopify's docs, while the author's real orders carried the product
+  title. (4) Section 3's `duplicate` bullet: another reviewer's open P0–P2 the judge decided gets a body
+  line, `Confirmed <link> (counted in N)` or `Considered <link>: <why not>`; talkable#11483 round 40 proved
+  a colleague's P1 with a spec, rejected it as a duplicate of her thread and posted "Fix 1 problem", round
+  41 said LGTM, and another Shopify app PR's first round did the same with a P1 from Shopify's changelog.
+  (5) Section 2's authorization list: no caller refused that passes on the base, a key acting as a user
+  included; talkable#12019 was approved, then a colleague found its new write gate refusing an API key whose
+  acting first admin has no role on the key's site (the local eval case `key-write-gate-first-admin`). (6)
+  Section 7: a probe only this machine has gets a Checks line that says what it exercised and its result,
+  not its file name, and codex-review's unrun checks get no Checks line; 333 of 939 Checks lines in 45 of 55
+  reviews named files only this machine has (`REVIEW_MUTATIONS=own-email-kind-scope.json bin/rspec`), and
+  four reviews noted a role's sandbox, against the rule of no notes on the process. (7) Section 2, right
+  after the sweep sentence (whose pin holds): the sinks of a value in a URL or header are such a set,
+  analytics, error trackers, app logs, parameter filters, access logs, log shippers; talkable#11932's P1
+  about status credentials in analytics and server logs stayed blocking for nine reviews while its sinks
+  were found one at a time (analytics, two error trackers, two server filters, request parameters, access
+  logs shipped to storage). (8) Section 7's merged-tree sentence: such specs get no `environment_failures`
+  entry; talkable#12009 filed them as an environment failure three times. (9) Section 3 reads a report's
+  list of what it rejected as context, not as claims to judge, and the three claude-review prompts no longer
+  ask for that list, nor for a `Description: ✗` line beside a closed access hole's entry points (the
+  entry-point list stays): 485 of 543 rejected ledger rows came from claude-review alone, 339 of them its
+  own Rejected bullets that the judge re-judged, none became a posted finding, and the Description clause
+  gave 8 candidates, all on talkable#11483, all rejected as P3 (7 `style_only`).
+  `.claude/skills/magnum-improve/scripts/evidence.sh` still runs on a report without a Rejected list (its
+  `self` column reads 0), so it stays as it is. One is in `judge-rereview.md` and `judge-recovery.md`, the
+  prompts of the rounds that have earlier findings: (3) a verdict that blocks only on earlier findings names
+  each of them in the body with its thread link, not only their count and the previous review's link;
+  talkable#11932 rounds 45 and 46 posted "Blocking: 2 problems" with no new finding and one link to the
+  previous review, while magnum's rebuttals sat in threads the author had resolved. The rules add 908 bytes
+  (the rejected-list clause's change counted, -12). The room came from lens 11's trims: 240 bytes of
+  unpinned wording (`run_id` folded into the next field line, the readiness kinds, "or to stop and ask",
+  which the unattended rule at the top covers, "wrong behaviour" and the missing tests in section 2's
+  checklist, which section 3 and the P2 definition hold, the Plain English guard, with 0 hits in 101
+  comments, "when code names permit" and three words of section 5's word rules), the P1 OAuth callback, P2
+  retried email and P3 wrong-field examples (217), and two merges (121): the two clauses on records thought
+  unsaved or free became "a delete or reuse of records thought unsaved or free (uploads, drafts, unowned
+  rows) that a save path leaves on a stale list or flag, or that another path creates in that state (trace
+  every writer)", and the input no caller produces joined the operator-only trigger's sentence as "an input
+  no caller, documented API or user sends is P3 at most", each ceiling as it was. SKILL.md went from 32,509
+  to 32,839 bytes and `skillMaxBytes` from 32,511 to 32,839 (+328). Pins edited on purpose: the
+  operator-only trigger sentence and the input sentence (TestSkillRanksTriggersOutsideTheAppsPathsLow,
+  TestSkillCarriesTheRulesFromMisses), the unsaved-records clause and the opening of the
+  records-thought-free pin (TestSkillCarriesTheRulesFromMisses,
+  TestSkillChecksRowsThoughtFreeAndARemoteChangeBeforeALocalSave), the by-design limit sentence, rule 6's
+  one (TestSkillKeepsByDesignLimitsOutOfMachineFailures), the merged-tree sentence
+  (TestSkillSkipsDatabaseSpecsOnAMergedTreeWhoseBaseAddedMigrations), and the rejected-list clause, now a
+  phrase the skill must not say (TestSkillDigsIntoChangedBehaviourAndReplacedMechanisms,
+  TestSkillReadsAReportsRejectedListAsContext). Rejected: the skill editor's proposal 1, six one-off
+  simplify rules in the judge prompts (the operator declined it on 2026-10-14; a general rule may still
+  come), and moving the notes procedure to a NOTES.md read after posting for room (1,385 bytes, but it saves
+  no tokens, since judges update the notes in 52 of about 60 rounds, it sidesteps the cap instead of keeping
+  the rules tight, and the daemon would copy and pin a second file).
 
 ## Learned rules
 

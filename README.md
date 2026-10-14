@@ -1428,7 +1428,7 @@ post one review (`REQUEST_CHANGES`, `COMMENT` or the configured no-findings even
 write a machine-readable result. It reads every caller of a method whose behaviour changed, fixtures,
 generators and scripts included, lists what a replaced mechanism (DELETE for TRUNCATE, another library)
 did implicitly and checks each effect against those callers, probes the real engine while it looks,
-weighs the candidates a reviewer rejected itself, replays a chance test failure to state its rate, and
+replays a chance test failure to state its rate, and
 counts developers' time (local runs that diverge from CI, a new flaky test) as harm. It reads the
 changed files' recent commits (`history`) and checks that the PR does not undo or re-break an earlier
 fix, and it verifies the description's claims that bear on risk (a ticked "Can be reverted easily",
@@ -1470,10 +1470,22 @@ party's own site by web search, sentence by sentence, not only the one a report 
 forbid is a finding that cites the rule's number and quotes its sentence, P1 when the default path
 reaches it, and a reason that calls it deliberate covers only the rule it names (the claude reviewers
 do the same with WebFetch). The claude reviewers list each request entry point that
-reached an access hole the PR closes, with its access check (a `Description: ✗` line when the
-description names fewer), and check a documentation change's statements about data; the entry-point
+reached an access hole the PR closes, with its access check, and check a documentation change's
+statements about data; the entry-point
 rule is in their prompts only, since text that enumerates the reach of such a fix drew Codex
-cybersecurity flags on judge turns. In re-review mode magnum hands it the threads its login started with
+cybersecurity flags on judge turns. The rules approved on 2026-10-14 add that a race names its window
+and how often the competing writer runs (seconds against a daily or rarer writer that a rerun heals is P3,
+a loss that stays and matters beyond one record P2, and a failure a plain rerun clears is no broken
+migration or deploy); a recorded payload of an external system (the PR's QA evidence, fixtures, logs)
+outranks its docs, and a test double that produces a value the real component never sends proves
+nothing; another reviewer's open P0–P2 the judge decided gets a body line, `Confirmed <link> (counted in
+N)` or `Considered <link>: <why not>`; a caller the PR refuses that the base passes (an API key acting as
+a user included) is an authorization problem; the sinks of a value in a URL or header (analytics, error
+trackers, app logs, parameter filters, access logs, log shippers) are swept as one set; a probe only the
+review machine has gets a Checks line that says what it exercised, never its file name, and
+codex-review's sandbox gets none; merged-tree database specs get no `environment_failures` entry; and a
+report's own list of rejected candidates is context, not claims (the claude reviewers no longer write
+one). In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
 risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it"
@@ -1486,7 +1498,8 @@ findings are one count with a link to the previous review. Its re-review and rec
 reply wording: a second rebuttal in a thread names, in the same sentence, what both counterexamples
 share and the change that closes the class, never a third instance, and a new P3 whose consequence the
 reason of an answered thread already covers, with no larger harm, is not posted (`duplicate`): that
-answer's line in the body says `(also covers <title>)`.
+answer's line in the body says `(also covers <title>)`; and a verdict that blocks only on earlier
+findings names each of them in the body with its thread link, not only their count.
 The result records every finding the judge weighed with a short title, its sources (`judge` only when
 its own pass found it, not when it confirmed a report) and, for a rejection, a reason code
 (`outside_diff` only for a problem neither in nor caused by the lines the PR changes), marking

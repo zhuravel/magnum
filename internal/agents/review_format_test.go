@@ -268,12 +268,13 @@ func TestSkillRunsTheDatabaseLockAsGiven(t *testing.T) {
 // environment events. Its sandbox does reach the slot's databases on
 // localhost, so since 2026-10-12 its command runs under the checkout's
 // db-lock: the skill names the network and Redis as its limits, not the
-// databases.
+// databases. Four reviews of 2026-10-12 to 10-14 still noted its sandbox
+// in Checks: its unrun checks get no Checks line either.
 func TestSkillKeepsByDesignLimitsOutOfMachineFailures(t *testing.T) {
 	skillSays(t, []string{
 		"A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without the network or Redis (its database runs take their turn under the lock), " +
-			"so its unrun checks are no `environment_failures`; run what you need yourself.",
-	}, []string{"without Redis or databases"})
+			"so its unrun checks are no `environment_failures` and no Checks line; run what you need yourself.",
+	}, []string{"without Redis or databases", "are no `environment_failures`; run"})
 }
 
 // A reply that confirmed a finding and left the decision open landed in a
@@ -312,13 +313,13 @@ func TestSkillCarriesTheRulesFromMisses(t *testing.T) {
 		"`pre_existing`: the base has the same problem and this PR neither makes it worse nor secures the request it is on;",
 		"The PR was never tested with a commit marked `after_merge_base`: if one changes what the PR's code or tests call, run the affected specs on the merged tree (`git merge-tree --write-tree HEAD origin/<base_ref>`, in a scratch worktree in the directory of `result_file`, removed after); a clean merge whose specs fail there is a broken build.",
 		"A case called a known edge case or rare: check how often real traffic reaches it, starting with the paths that traffic takes (a new visitor's first page, the inputs the PR's callers produce).",
-		"An input no caller in the repository or its documented API produces, and no user can send, is P3 at most.",
+		"an input no caller, documented API or user sends is P3 at most;",
 		"parallel copies (of a helper, or a file per client, integration or provider) of which one lacks a guard another has (compare them when the PR edits one; `nearby` if older than the PR)",
-		"a delete of records thought unsaved (uploads, drafts, temp records) whose list or flag a save path leaves stale (trace every path that saves them)",
+		"a delete or reuse of records thought unsaved or free (uploads, drafts, unowned rows) that a save path leaves on a stale list or flag,",
 		"A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`.",
 		"- `failing_checks` (when present): the head's failed CI checks (section 7).",
 		"Each check in `failing_checks` gets one Checks line: caused by the PR (a P1 broken build) or unrelated, as its log shows (`gh run view --log-failed`, or the check's output).",
-	}, []string{"a copy of a helper that misses its edge cases", "and this PR does not make it worse;"})
+	}, []string{"a copy of a helper that misses its edge cases", "and this PR does not make it worse;", "An input no caller in the repository", "whose list or flag a save path leaves stale"})
 }
 
 // Still-open findings were recorded again as posted, mostly as the judge's
@@ -466,9 +467,20 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // and Ruby notes, the local paths post-review refuses and `delta_check`'s
 // "only when true", and the 10 the cap had left. Then 53 for codex-review's
 // database runs, which take their turn under the lock: its limits by design
-// are the network and Redis (2026-10-12). Every rule added must replace or
+// are the network and Redis (2026-10-12). Then 328 for the nine review rules
+// the operator approved on 2026-10-14 (908 bytes: a race's window and its
+// writer's rate, a recorded payload over an external system's docs, a body
+// line for another reviewer's finding the judge decided, a caller the base
+// passed and the PR refuses, a local probe and a role's limits in Checks, a
+// value's sinks in the sweep, no environment failure for merged-tree specs,
+// and a report's Rejected list as context, -12), less 578: unpinned wording
+// (240: `run_id` folded, the readiness kinds, "or to stop and ask", the
+// section 2 checklist, the Plain English guard, section 5's sentence rules),
+// the P1, P2 and wrong-field P3 examples (217), and the records thought
+// unsaved or free in one clause and the two P3 ceilings in one sentence
+// (121), and the 2 the cap had left. Every rule added must replace or
 // shorten text.
-const skillMaxBytes = 32_511
+const skillMaxBytes = 32_839
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -758,9 +770,10 @@ func TestClaudeReviewPromptsAskForTheTrigger(t *testing.T) {
 // behind, and a spec hashing a record id now failed about 1 run in 800.
 // claude-review had raised the first and rejected it itself. The skill reads
 // every caller of changed behaviour, non-production ones included, lists what
-// a replaced mechanism did implicitly, probes while it looks, judges a
-// reviewer's rejections, keeps a stated intent to the consequences it names,
-// replays a chance failure's input space and counts developers' time as harm.
+// a replaced mechanism did implicitly, probes while it looks, keeps a stated
+// intent to the consequences it names, replays a chance failure's input space
+// and counts developers' time as harm. It judged a reviewer's own rejections
+// too until 2026-10-14 (TestSkillReadsAReportsRejectedListAsContext).
 func TestSkillDigsIntoChangedBehaviourAndReplacedMechanisms(t *testing.T) {
 	skillSays(t, []string{
 		"non-production ones too (fixtures, factories, seeds, mock generators, test helpers, scripts, rake tasks)",
@@ -771,7 +784,6 @@ func TestSkillDigsIntoChangedBehaviourAndReplacedMechanisms(t *testing.T) {
 		"check each against every caller",
 		"Probe the real engine and framework while you look",
 		"prove or reject a candidate",
-		"also one a report lists as rejected, dismissed or out of scope",
 		"calls the behaviour deliberate, answer that reason or drop the finding",
 		"covers only the consequences it names",
 		"replay the input space (ids, seeds, orderings) and state its rate; one green run proves nothing",
@@ -779,11 +791,9 @@ func TestSkillDigsIntoChangedBehaviourAndReplacedMechanisms(t *testing.T) {
 	}, nil)
 }
 
-// The reviewers check the same blind spots and list the candidates they
-// dropped, so the judge weighs a reviewer's rejection instead of never seeing
-// it. A restart writes the complete report again, so it carries the same
-// paragraph.
-func TestClaudeReviewPromptsCheckChangedBehaviourAndListRejections(t *testing.T) {
+// The reviewers check the same blind spots. A restart writes the complete
+// report again, so it carries the same paragraph.
+func TestClaudeReviewPromptsCheckChangedBehaviour(t *testing.T) {
 	restart := roleFixture()
 	restart.Mode, restart.RestartedFrom = ModeRestart, "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
 	rereview := roleFixture()
@@ -802,7 +812,6 @@ func TestClaudeReviewPromptsCheckChangedBehaviourAndListRejections(t *testing.T)
 			"when the PR closes an access hole or adds an authorization check to an action, where each request parameter of that action leads, dynamic dispatch included (`send`, `respond_to?(name, true)`, method names built from request keys), since a hole left on that request is this PR's, not a pre-existing one;",
 			"replay the input space (ids, seeds, orderings)",
 			"one green run proves nothing",
-			"under a `Rejected` heading, list each candidate defect you dropped",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s lacks %q:\n%s", name, want, got)
@@ -1413,8 +1422,7 @@ func TestSkillRanksTriggersOutsideTheAppsPathsLow(t *testing.T) {
 	skillSays(t, []string{
 		"name who produces the trigger (a user in normal use, an API caller, an attacker) and its in-app producer (a route, a UI action, a job),",
 		"A trigger that needs an operator-typed setting, a non-default local environment, a console or stored rows no code path writes is P3 (P2 at most), " +
-			"and its comment carries one command that checks the precondition; P1 needs a trigger reached with the defaults.",
-		"An input no caller in the repository or its documented API produces, and no user can send, is P3 at most.",
+			"and its comment carries one command that checks the precondition; an input no caller, documented API or user sends is P3 at most; P1 needs a trigger reached with the defaults.",
 		// A change that breaks every developer's local runs stays P1.
 		"Harm includes developers' time: local runs that diverge from CI, generated files that change, a new flaky test; `P1` when it breaks their normal work.",
 	}, nil)
@@ -1433,9 +1441,10 @@ func TestSkillCountsTheStoredRowsAnyHarmNeeds(t *testing.T) {
 // Two P2 misses on one head: coupon rows another path writes at checkout
 // were adopted as free, and a token refresher's validations refused the
 // local save after the remote had rotated the pair, disconnecting the store.
+// Since 2026-10-14 one clause holds the records thought unsaved or free.
 func TestSkillChecksRowsThoughtFreeAndARemoteChangeBeforeALocalSave(t *testing.T) {
 	skillSays(t, []string{
-		"(trace every path that saves them), a delete or reuse of records thought unsaved or free (unowned rows) that another path creates in that state (trace every writer), " +
+		"or that another path creates in that state (trace every writer), " +
 			"a remote change that cannot be undone (a rotated token, a charge) followed by a local save that validations can refuse.",
 	}, nil)
 }
@@ -1480,10 +1489,13 @@ func TestSkillChecksWhatAFixCostsBeforeCallingItFixed(t *testing.T) {
 
 // One PR's merged-tree specs failed 12 times on a table the base had added
 // (the slot's databases carry the head's schema), and the review reported
-// them as failures: such specs are a machine limit, not run.
+// them as failures: such specs are a machine limit, not run. Another PR's
+// judge still filed them as an environment failure three times: they get
+// no environment_failures entry (2026-10-14).
 func TestSkillSkipsDatabaseSpecsOnAMergedTreeWhoseBaseAddedMigrations(t *testing.T) {
 	skillSays(t, []string{
-		"Database specs on a merged tree whose base added migrations are such a limit too (the slot's schema is the head's): do not run them; their Checks line reads `skipped (machine)`.",
+		"Database specs on a merged tree whose base added migrations are such a limit too (the slot's schema is the head's): " +
+			"do not run them; their Checks line reads `skipped (machine)`, and no `environment_failures` entry.",
 	}, nil)
 }
 
@@ -1544,11 +1556,11 @@ func TestAP3AnAnsweredThreadCoversIsNotPosted(t *testing.T) {
 // scope's callers, not the request entry points. The claude reviewers list
 // them; the skill, which the Codex judge reads, does not, as text that
 // enumerates the reach of such a fix drew Codex cybersecurity flags on judge
-// turns.
+// turns. The `Description: ✗` line they also asked for went on 2026-10-14
+// (TestClaudeReviewPromptsAskForNoRejectedListOrDescriptionLine).
 func TestClaudeReviewersListTheEntryPointsOfAClosedAccessHole(t *testing.T) {
 	promptsSay(t, claudeReviewers(t),
-		"When the PR closes an access hole, list in your report each request entry point that reached it (a route, an action, an export, a job) with its access check, "+
-			"and add a `Description: ✗ <claim>: <why>` line when the description names fewer.")
+		"When the PR closes an access hole, list in your report each request entry point that reached it (a route, an action, an export, a job) with its access check.")
 	skillSays(t, nil, []string{"entry point"})
 }
 
@@ -1562,4 +1574,103 @@ func TestSkillPinsThePlatformRulesParagraph(t *testing.T) {
 		"Platform rules: a flow the PR adds or changes that a third party governs with published requirements",
 		"cites the rule's number and quotes its sentence",
 	}, nil)
+}
+
+// The review rules the operator approved on 2026-10-14 follow, one test per
+// rule, from 57 posted reviews, 307 answered threads and the retro's misses.
+
+// Five race findings on three PRs were posted as P1 or P2 and declined, one a
+// P1 about a row created after a daily ranking job had read the table: a
+// sub-second gap against a daily writer, which a rerun healed. No comment
+// stated the window or the writer's rate.
+func TestSkillRanksARaceByItsWindowAndItsWriter(t *testing.T) {
+	skillSays(t, []string{
+		"A race names the window's length and how often the competing writer runs. When a rerun or retry recovers, seconds against a daily or rarer writer is P3. " +
+			"When the loss stays and matters beyond one record, it is P2. A failure that a plain rerun clears is not a broken migration or deploy.",
+	}, nil)
+}
+
+// A P2 rested on a probe that set a third party's field by hand and on that
+// party's docs, while the author's real orders carried the value: a double
+// that produces a value the real component never sends proves nothing, and a
+// recorded payload outranks the docs.
+func TestSkillTakesARecordedPayloadOverAnExternalSystemsDocs(t *testing.T) {
+	skillSays(t, []string{
+		"a test double that allows an ordering, timing, limit or value the real component never produces, proves nothing;",
+		"For what an external system sends, a recorded payload (the PR's QA evidence, fixtures, logs) outranks its docs.",
+	}, []string{"an ordering, timing or limit the real component forbids"})
+}
+
+// A round proved a colleague's P1 with a spec, rejected it as a duplicate of
+// her thread and posted "Fix 1 problem"; the next round said LGTM. Another
+// PR's first round did the same with a P1 from the platform's changelog.
+func TestSkillGivesAnotherReviewersFindingItDecidedABodyLine(t *testing.T) {
+	skillSays(t, []string{
+		"already covers it. Another reviewer's open P0–P2 you decided gets a body line: `Confirmed <link> (counted in N)` or `Considered <link>: <why not>`;",
+	}, nil)
+}
+
+// A PR was approved, and a colleague then found its new write gate refusing
+// an API key whose acting first admin has no role on the key's site, a call
+// the base had passed (eval case key-write-gate-first-admin).
+func TestSkillChecksForACallerThePRRefusesAndTheBasePassed(t *testing.T) {
+	skillSays(t, []string{
+		"no access widened; no caller refused that passes on the base, a key acting as a user included; one tenant's data its own)",
+	}, nil)
+}
+
+// 333 of 939 Checks lines in 45 of 55 reviews named files only the review
+// machine has (`REVIEW_MUTATIONS=own-email-kind-scope.json bin/rspec`), which
+// the author can neither run nor read.
+func TestSkillDescribesALocalProbeInChecksWithoutItsFileName(t *testing.T) {
+	skillSays(t, []string{
+		"A probe only this machine has gets a line that says what it exercised and its result, not its file name.",
+	}, nil)
+}
+
+// A P1 about credentials in a status URL stayed blocking for nine reviews
+// while its sinks were found one per round (analytics, two error trackers,
+// two server filters, request parameters, access logs shipped to storage):
+// the sinks of a value in a URL or header are a set the sweep lists at once.
+func TestSkillSweepsEverySinkOfAValueInAURLOrHeader(t *testing.T) {
+	skillSays(t, []string{
+		"`unproven: <what is missing>`. The sinks of a value in a URL or header are such a set: analytics, error trackers, app logs, parameter filters, access logs, log shippers.",
+	}, nil)
+}
+
+// 485 of 543 rejected ledger rows came from claude-review alone, 339 of them
+// its own Rejected bullets that the judge re-judged, and none became a
+// posted finding: a list a report still carries is context, not claims.
+func TestSkillReadsAReportsRejectedListAsContext(t *testing.T) {
+	skillSays(t, []string{
+		"Treat each review item as a claim (a report's list of what it rejected is context) and prove or reject it with the same standard as your own findings (section 4).",
+	}, []string{"also one a report lists as rejected"})
+}
+
+// The claude reviewers' Rejected list fed only those re-judged rows, and the
+// `Description: ✗` line asked for with a closed access hole's entry points
+// gave 8 candidates, all on one PR, all rejected as P3 style: the prompts ask
+// for neither.
+func TestClaudeReviewPromptsAskForNoRejectedListOrDescriptionLine(t *testing.T) {
+	for name, got := range claudeReviewers(t) {
+		for _, gone := range []string{"Rejected", "Description: ✗", "candidate defect you dropped"} {
+			if strings.Contains(got, gone) {
+				t.Errorf("%s still says %q:\n%s", name, gone, got)
+			}
+		}
+	}
+}
+
+// Two re-reviews posted "Blocking: 2 problems" with no new finding and only a
+// link to the previous review, while magnum's rebuttals sat in threads the
+// author had resolved: such a verdict names each earlier finding with its
+// thread. The rule is in the prompts of the rounds that have earlier
+// findings.
+func TestJudgeReReviewPromptsNameEachEarlierFindingAVerdictBlocksOn(t *testing.T) {
+	const rule = "A verdict that blocks only on earlier findings names each of them in the body with its thread link, not only their count and the previous review's link."
+	rounds, first := judgeReplyPrompts(t)
+	promptsSay(t, rounds, rule)
+	if strings.Contains(first, "blocks only on earlier findings") {
+		t.Errorf("judge-initial.md names earlier findings:\n%s", first)
+	}
 }
