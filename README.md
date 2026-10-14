@@ -546,6 +546,13 @@ Once every agent of a reviewed PR has been idle for `[daemon] park_idle_after` (
 never) its sessions are parked to free memory; the next round resumes them. The same goes for a PR whose
 review or re-review waits behind `magnum pause`, a drain, the daily cap, or anything else that ends more than
 `park_idle_after` from now. Pinned PRs and PRs you typed into within `human_cooldown` keep their agents.
+The fixer's session is parked with the others; the next fix job resumes its conversation. A park that
+fails, for example because an agent does not quit on ctrl+c, is not tried on every tick. The next try waits
+twice as long as the last wait: two ticks after the first failure, then four, eight and so on, up to 12
+hours. A new round of the PR or a change in its sessions starts the wait over. The first failure of each
+cause records a `pr.park_failed` warning with the cause's class (`quit_timeout`, `busy`, `herdr` or
+`error`) and the wait. Later failures of the same cause record nothing, and a park that works records
+`pr.parked` as usual.
 
 The judge is the exception to resuming. Codex's prompt cache lasts about an hour and a half, so a judge
 resumed later re-reads its whole conversation uncached on its first turn (25 of 39 resumed judge turns did,

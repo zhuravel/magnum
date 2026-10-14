@@ -504,6 +504,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   review requested by <login> (manual repository)", keyed by the PR and the request's time. Dispatch is
   unchanged: whether a request should override `manual_repos` is the operator's call.
 
+- **A park that fails backs off, and its cause is recorded once** (2026-10-14, amends "Idle agents of
+  reviewed PRs are parked"). A failed `Agents.Park` was logged at info and tried again on the next tick: on
+  talkable#11932 the park of the `claude-fix` session failed on every tick for 37 hours with "shell not idle
+  after 10s (foreground: 2.1.296)", 1,434 tries (36% of the window's daemon log) and about 2,868 ctrl+c into
+  a live Claude pane, long after the fix loop had ended, and nothing told the operator. Now the next try
+  waits twice the last wait, starting from the tick interval (two ticks after the first failure, then four,
+  eight and so on), up to 12 hours. A round started since (the PR's `last_round_started_at`) or a change of
+  its live sessions (their ids and last prompts, not their agents' statuses, which the park's own ctrl+c can
+  move) resets the wait, and a park that works forgets the failures and records `pr.parked` as before. The
+  first failure of a cause records `pr.park_failed` (warn) with its class and the wait: `quit_timeout` (an
+  agent's pane was no idle shell after its ctrl+c: `agents.ErrBusy` with herdr's timeout), `busy` (a run, an
+  agent or a pane of the PR at work), `herdr` or `error`. Later failures of the same class record nothing
+  until it changes. The backoff lives in the daemon's memory: a restart tries at once and records the cause
+  again. The Codex-flag release, which parks through the same call and also tried every tick, shares it. A
+  fix role's session is not exempt. The fix job's settle neither parks the fixer nor keeps it live on
+  purpose: it leaves the session as a round leaves its reviewers, and "the fixer's conversation persists
+  across cycles and loops" holds through a park, since the next fix job resumes the parked conversation and
+  `magnum open --role claude-fix` restores it to read. The pane the operator reads is kept already: a loop
+  that leaves findings to them ends in `needs_attention`, which the idle park never touches, and a keystroke
+  within `human_cooldown` or `magnum open`'s pin keeps it as for any role. Rejected: exempting the fixer,
+  since `Park` parks a PR whole, so every agent of a PR with a live fixer would stay up until the PR closes,
+  on every own PR under `autofix = "own"`. Keeping the backoff in the registry, for at most one more try and
+  event per restart.
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

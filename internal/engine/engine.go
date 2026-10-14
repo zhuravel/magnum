@@ -401,6 +401,12 @@ type Engine struct {
 	unwritten     map[int64]CodexFlag
 	releaseFailed map[int64]time.Time
 
+	// parkFails are the PRs whose last park failed, with the backoff of
+	// their next try (park.go). parkMu guards them: the heavy worker writes,
+	// the tick reads.
+	parkMu    sync.Mutex
+	parkFails map[int64]parkBackoff
+
 	// netRuns are the identity checks and token refreshes that could not
 	// reach GitHub, retried with backoff (identity_net.go).
 	netMu   sync.Mutex

@@ -7,24 +7,28 @@ package engine
 // as after any park. A PR that waits for its round behind a pause, a drain,
 // the daily cap or a wait ending more than park_idle_after away is parked
 // the same way (under `magnum pause`, two re-reviews held 8 agents idle for
-// up to 2 hours).
+// up to 2 hours). A park that fails is tried again only after twice the
+// last wait, and its cause is recorded once (parkBackoff).
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
 // parkIdle queues a park for every reviewed PR, and every PR whose round is
 // far off (waitsLong), whose live agents have all been idle longer than
-// park_idle_after (0 = never). It runs right after noteWaits recorded the
-// waits. The park runs on the heavy worker (parkJob), which checks again
+// park_idle_after (0 = never) and whose last failed park, if any, has
+// waited out its backoff (parkHeld). It runs right after noteWaits recorded
+// the waits. The park runs on the heavy worker (parkJob), which checks again
 // under the PR's reservation.
 func (e *Engine) parkIdle(ctx context.Context, ts tickState) {
 	after := e.cfg.Daemon.ParkIdleAfter.Duration
@@ -41,19 +45,20 @@ func (e *Engine) parkIdle(ctx context.Context, ts tickState) {
 		byPR[s.PRID] = append(byPR[s.PRID], s)
 	}
 	now := e.now()
+	e.forgetParkFails(byPR)
 	for _, prID := range slices.Sorted(maps.Keys(byPR)) {
 		if ts.busyPR[prID] || e.roundActive(prID) {
 			continue
 		}
 		pr, idleSince, ok := e.parkable(ctx, prID, byPR[prID], now, after)
-		if !ok {
+		if !ok || e.parkHeld(pr, byPR[prID], now) {
 			continue
 		}
 		if e.d.DryRun {
 			e.rec.Record(ctx, e.prLabelSubject(ctx, pr), "park", fmt.Sprintf("%d agents idle since %s", len(byPR[prID]), idleSince.Local().Format("15:04")))
 			continue
 		}
-		e.enqueueHeavy(fmt.Sprintf("park:%d", prID), e.parkJob(prID))
+		e.enqueueHeavy(fmt.Sprintf("park:%d", prID), e.parkJob(prID, now))
 	}
 }
 
@@ -126,8 +131,10 @@ func (e *Engine) waitsLong(ctx context.Context, prID int64, now time.Time, after
 
 // parkJob parks the PR's sessions under its slot-work reservation, after
 // checking again that they are still parkable (a round may have started, an
-// agent may have woken up). Park itself refuses a busy pane.
-func (e *Engine) parkJob(prID int64) func(ctx context.Context) error {
+// agent may have woken up). Park itself refuses a busy pane. A failure
+// counts as the tick's try at `at` (parkFailed); a park that works forgets
+// the earlier failures.
+func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if !e.reserveSlotWork(prID, "its idle agents are being parked") {
 			return nil
@@ -137,12 +144,7 @@ func (e *Engine) parkJob(prID int64) func(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		var sessions []store.Session
-		for _, s := range live {
-			if s.PRID == prID {
-				sessions = append(sessions, s)
-			}
-		}
+		sessions := sessionsOf(live, prID)
 		if len(sessions) == 0 {
 			return nil
 		}
@@ -152,13 +154,171 @@ func (e *Engine) parkJob(prID int64) func(ctx context.Context) error {
 		}
 		subject := e.prLabelSubject(ctx, pr)
 		if err := e.d.Agents.Park(ctx, pr); err != nil {
-			e.log.Info("park idle agents", "subject", subject, "err", err)
+			e.parkFailed(ctx, pr, subject, at, err)
 			return nil
 		}
+		e.parkWorked(prID)
 		e.event(ctx, "info", subject, "pr.parked",
 			fmt.Sprintf("parked %d idle agents (idle since %s); the next round resumes them", len(sessions), idleSince.Local().Format("15:04")), nil)
 		return nil
 	}
+}
+
+// parkBackoffCap is the longest wait between two tries of a park that
+// failed (parkBackoff).
+const parkBackoffCap = 12 * time.Hour
+
+// The classes of a failed park (parkClass): the cause pr.park_failed names,
+// recorded once until it changes.
+const (
+	parkQuitTimeout = "quit_timeout" // an agent's pane was no idle shell QuitIdleTimeout after its ctrl+c
+	parkBusy        = "busy"         // a run, an agent or a pane of the PR was at work (agents.ErrBusy)
+	parkHerdr       = "herdr"        // herdr could not be reached or failed the request
+	parkError       = "error"        // anything else (the registry, say)
+)
+
+// parkBackoff is a PR's failed parks since its last park that worked (idle
+// parks and Codex-flag releases alike; talkable#11932 failed 1,434 parks
+// in 37 hours, one each tick, each two ctrl+c into a live Claude pane): no
+// try before next, wait is the last wait (twice the one before, from the
+// tick interval, up to parkBackoffCap), cause the class of the last
+// failure, and round and sessions what the PR had at the last failure
+// (its last round's start; its live sessions, by parkFingerprint). A round
+// started or a change of the live sessions since resets the wait and keeps
+// the cause, so the cause is recorded again only when it changes.
+type parkBackoff struct {
+	cause    string
+	wait     time.Duration
+	next     time.Time
+	round    time.Time
+	sessions string
+	failures int
+}
+
+// parkClass is a failed park's class (parkQuitTimeout ...) and its words
+// for the event.
+func parkClass(err error) (class, what string) {
+	_, herdrErr := errors.AsType[*herdr.Error](err)
+	switch {
+	case errors.Is(err, agents.ErrBusy) && herdr.IsTimeout(err):
+		return parkQuitTimeout, "an agent did not quit: its pane was no idle shell after ctrl+c"
+	case errors.Is(err, agents.ErrBusy):
+		return parkBusy, "a run, an agent or a pane of the PR is at work"
+	case herdrErr || errors.Is(err, herdr.ErrUnavailable) || herdr.IsTimeout(err):
+		return parkHerdr, "herdr failed"
+	}
+	return parkError, "an error"
+}
+
+// parkFingerprint is what parkBackoff compares of a PR's live sessions:
+// each one's id and last prompt. Their agents' statuses are left out, since
+// the park's own ctrl+c can move them.
+func parkFingerprint(sessions []store.Session) string {
+	keys := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		at := ""
+		if s.LastPromptAt != nil {
+			at = s.LastPromptAt.UTC().Format(time.RFC3339Nano)
+		}
+		keys = append(keys, fmt.Sprintf("%d@%s", s.ID, at))
+	}
+	slices.Sort(keys)
+	return strings.Join(keys, ",")
+}
+
+// roundStarted is the start of the PR's last round (zero: none).
+func roundStarted(pr store.PR) time.Time {
+	if pr.LastRoundStartedAt == nil {
+		return time.Time{}
+	}
+	return *pr.LastRoundStartedAt
+}
+
+// sessionsOf is the sessions of PR prID among live.
+func sessionsOf(live []store.Session, prID int64) []store.Session {
+	var out []store.Session
+	for _, s := range live {
+		if s.PRID == prID {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// parkHeld reports whether the PR's park waits out the backoff of its last
+// failure at now (sessions: its live sessions). A round started or a change
+// of the live sessions since that failure resets the wait: the next try
+// goes ahead.
+func (e *Engine) parkHeld(pr store.PR, sessions []store.Session, now time.Time) bool {
+	e.parkMu.Lock()
+	defer e.parkMu.Unlock()
+	b, ok := e.parkFails[pr.ID]
+	if !ok {
+		return false
+	}
+	if round, fp := roundStarted(pr), parkFingerprint(sessions); !round.Equal(b.round) || fp != b.sessions {
+		b.wait, b.next, b.round, b.sessions = 0, time.Time{}, round, fp
+		e.parkFails[pr.ID] = b
+		return false
+	}
+	return now.Before(b.next)
+}
+
+// parkFailed records the failed park of pr tried at `at`: the next try
+// waits twice the last wait (two ticks after a first failure, up to
+// parkBackoffCap), and a failure whose class differs from the last one's
+// (the first one included) records pr.park_failed. Every failure is
+// logged. A park the daemon's stop cut short counts no failure.
+func (e *Engine) parkFailed(ctx context.Context, pr store.PR, subject string, at time.Time, err error) {
+	if ctx.Err() != nil {
+		e.log.Info("park agents", "subject", subject, "err", err)
+		return
+	}
+	var sessions []store.Session // after the failure: a session the park did quit is gone
+	if live, lerr := e.st.LiveSessions(ctx); lerr == nil {
+		sessions = sessionsOf(live, pr.ID)
+	}
+	class, what := parkClass(err)
+	e.parkMu.Lock()
+	if e.parkFails == nil {
+		e.parkFails = map[int64]parkBackoff{}
+	}
+	b := e.parkFails[pr.ID]
+	last := b.wait
+	if last == 0 {
+		last = e.cfg.Daemon.PollInterval.Duration
+	}
+	b.wait = min(2*last, parkBackoffCap)
+	b.next = at.Add(b.wait)
+	b.round, b.sessions = roundStarted(pr), parkFingerprint(sessions)
+	b.failures++
+	changed := b.cause != class
+	b.cause = class
+	e.parkFails[pr.ID] = b
+	e.parkMu.Unlock()
+	e.log.Info("park agents", "subject", subject, "class", class, "failures", b.failures, "next_try_in", b.wait, "err", err)
+	if changed {
+		e.event(ctx, "warn", subject, "pr.park_failed",
+			fmt.Sprintf("its agents could not be parked (%s: %s): %v; next try in %s, each failure doubling the wait up to %s",
+				class, what, err, humanDuration(b.wait), humanDuration(parkBackoffCap)),
+			map[string]any{"class": class, "backoff": humanDuration(b.wait), "failures": b.failures})
+	}
+}
+
+// parkWorked forgets the PR's failed parks: its park worked.
+func (e *Engine) parkWorked(prID int64) {
+	e.parkMu.Lock()
+	delete(e.parkFails, prID)
+	e.parkMu.Unlock()
+}
+
+// forgetParkFails drops the failed parks of the PRs that have no live
+// session left (byPR: the live sessions by PR): something else parked or
+// closed them.
+func (e *Engine) forgetParkFails(byPR map[int64][]store.Session) {
+	e.parkMu.Lock()
+	defer e.parkMu.Unlock()
+	maps.DeleteFunc(e.parkFails, func(prID int64, _ parkBackoff) bool { return len(byPR[prID]) == 0 })
 }
 
 // releaseFlagged gives back what each Codex-flagged PR holds (DECISIONS "A
@@ -227,11 +387,14 @@ func (e *Engine) releaseFlagged(ctx context.Context, ts tickState) {
 		if !ok {
 			continue
 		}
+		if sessions := sessionsOf(live, prID); len(sessions) > 0 && e.parkHeld(pr, sessions, now) {
+			continue
+		}
 		if e.d.DryRun {
 			e.rec.Record(ctx, e.prLabelSubject(ctx, pr), "release", "Codex flagged: park its agents and release its slot")
 			continue
 		}
-		e.enqueueHeavy(fmt.Sprintf("flag-release:%d", prID), e.flagReleaseJob(prID))
+		e.enqueueHeavy(fmt.Sprintf("flag-release:%d", prID), e.flagReleaseJob(prID, now))
 	}
 }
 
@@ -266,9 +429,9 @@ func slotReleasable(sl store.Slot) bool {
 // flagReleaseJob parks the flagged PR's live sessions and then releases its
 // held pool slot, under its slot-work reservation, after checking again
 // that it is still flagged and releasable. Park refuses a busy pane, and a
-// failed park keeps the slot (the agents work in it): the next tick tries
-// again.
-func (e *Engine) flagReleaseJob(prID int64) func(ctx context.Context) error {
+// failed park keeps the slot (the agents work in it): it is tried again once
+// the park's backoff has passed (parkFailed), as an idle park is.
+func (e *Engine) flagReleaseJob(prID int64, at time.Time) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if !e.reserveSlotWork(prID, "it is Codex-flagged: its agents are parked and its slot released") {
 			return nil
@@ -299,9 +462,10 @@ func (e *Engine) flagReleaseJob(prID int64) func(ctx context.Context) error {
 		var did []string
 		if n > 0 {
 			if err := e.d.Agents.Park(ctx, pr); err != nil {
-				e.log.Info("park a flagged PR's agents", "subject", subject, "err", err)
+				e.parkFailed(ctx, pr, subject, at, err)
 				return nil
 			}
+			e.parkWorked(prID)
 			did = append(did, fmt.Sprintf("parked its %d agents", n))
 		}
 		if has && slotReleasable(sl) {
