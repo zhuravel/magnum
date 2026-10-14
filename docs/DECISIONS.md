@@ -6920,6 +6920,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   per-repository allowlist of check names (the operator would have to maintain it, and it would pass a
   check the PR itself breaks); reading the base ref's tip by name (`base_sha` is the tip of the head's
   last read, the one its checks ran against).
+- **The judge is told the notes' line limit** (2026-10-14, amends "The notes limits are curation triggers,
+  measured in code"). Five of the eleven notes proposals of the improvement window (30, 31, 33, 35 and 37)
+  had `max_line` as their only trigger: notes of 2 to 7 KB with one to four lines past 300 characters, which
+  a judge had written because nothing told it the limit (neither the judge prompts nor the skill named
+  `max_line`). Each curation only reflowed those lines, and every result was larger than the notes it
+  started from (4786 to 4970, 3230 to 3827, 5494 to 5703, 2243 to 3019 and 6964 to 7216 bytes), at a Claude
+  session of about three minutes and an operator review each. Now `agents.JudgeData.NotesMaxLine` carries
+  `[notes] max_line`, set by the pipeline from the runner's config (`Runner.Config.Notes.MaxLine`) when the
+  round has notes, and the judge-initial, judge-rereview, judge-recovery and judge-continue prompts render
+  it as `notes_max_line: 300` in the `<magnum>` block with one sentence before it: "Keep each line of the
+  `notes` file at most `notes_max_line` characters long: a longer line triggers a curation." Both are left
+  out without notes and without a known limit (0), and the own-pass prompt, which writes no notes, does not
+  carry them. The sentence says "at most" because the measure is `n > max_line` in characters
+  (`notes.MeasureText`). The skill stands unchanged (it is at its byte cap, and the limit is a fact of the
+  configuration, which the prompt already carries for every other notes field). Rejected: magnum reflowing
+  or truncating the judge's lines after the round (the notes are the judge's text, and a cut line loses its
+  meaning); blocking a rewrite that holds a long line (the limits are triggers, not caps, and a curated
+  proposal may keep a line a reader needs whole); the value in the skill's text (it would drift from the
+  config).
 
 ## Learned rules
 

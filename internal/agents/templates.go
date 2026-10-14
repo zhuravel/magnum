@@ -316,6 +316,12 @@ type JudgeData struct {
 	// rest.
 	NotesHarness     []string
 	NotesHarnessMore int
+	// NotesMaxLine is [notes] max_line: a notes line longer than this many
+	// characters marks the repository for a curation. The judge prompts that
+	// rewrite the notes (not the own pass, which writes none) pass it as
+	// `notes_max_line` and ask the judge to keep each line within it; 0 =
+	// unknown, and they leave both out.
+	NotesMaxLine int
 
 	// Re-review / recovery.
 	PreviousReviewID int64

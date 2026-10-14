@@ -61,6 +61,50 @@ func TestNotesPathReachesTheRolePromptsAndTheJudgePrompt(t *testing.T) {
 	}
 }
 
+// [notes] max_line reaches the judge's prompt as notes_max_line, with the
+// sentence that asks to keep each notes line within it, so a judge stops
+// writing lines that mark the repository for a curation; a round without
+// notes says nothing of it.
+func TestTheConfiguredNotesLineLimitReachesTheJudgePrompt(t *testing.T) {
+	const clause = "Keep each line of the `notes` file at most `notes_max_line` characters long"
+	for _, tc := range []struct {
+		name  string
+		limit int // 0 = the built-in default
+		notes string
+		want  string // "" = the prompt names no limit
+	}{
+		{"the default limit", 0, notesFile, "\nnotes_max_line: 300\n"},
+		{"a configured limit", 250, notesFile, "\nnotes_max_line: 250\n"},
+		{"no notes", 250, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			if tc.limit != 0 {
+				e.cfg.Notes.MaxLine = tc.limit
+			}
+			e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(601, "COMMENTED", "COMMENT").behavior(t)}
+			in := e.input(KindInitial)
+			in.NotesPath = tc.notes
+			if _, err := e.r.RunRound(e.ctx, in); err != nil {
+				t.Fatalf("RunRound: %v", err)
+			}
+			judge := e.ag.submitsFor(agents.RoleJudge)[0].Text
+			if tc.want == "" {
+				if strings.Contains(judge, "notes_max_line") {
+					t.Errorf("a round without notes names the limit:\n%s", judge)
+				}
+				return
+			}
+			head, block, ok := strings.Cut(judge, "<magnum>")
+			if !ok {
+				t.Fatalf("no <magnum> block:\n%s", judge)
+			}
+			mustContain(t, "judge prompt block", block, tc.want)
+			mustContain(t, "judge prompt before the block", head, clause)
+		})
+	}
+}
+
 // The judge sees what the harness directory holds right now, so a script
 // the notes no longer mention is visible, and the commands of the notes
 // lock next to it.

@@ -320,6 +320,7 @@ func TestRenderGolden(t *testing.T) {
 	withNotes := judgeFixture()
 	withNotes.NotesPath = "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"
 	withNotes.NotesHarness, withNotes.NotesHarnessMore = []string{"fixtures/", "run-spec.sh"}, 0
+	withNotes.NotesMaxLine = 300
 	withNotes.ThreadsFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review-threads.json"
 	withNotes.ThreadSummary = "3 threads (1 resolved); replies: 1 fixed, 1 not a bug; 1 thread without a reply"
 
@@ -649,6 +650,58 @@ func TestJudgePromptsSayPostMergeOnlyForAPostMergeRound(t *testing.T) {
 		if !strings.Contains(block, "\npost_merge: true\n") || !strings.HasSuffix(strings.TrimSpace(block), "</magnum>") {
 			t.Errorf("%s: post_merge is not in the <magnum> block:\n%s", name, got)
 		}
+	}
+}
+
+// A judge that rewrites the notes is told the limit a line may reach
+// ([notes] max_line) as a fact in the <magnum> block and in one sentence
+// before it, so it stops writing lines that mark the repository for a
+// curation. Without notes, or without a known limit, the prompt says nothing
+// of it; the own pass, which writes no notes, does not carry it.
+func TestJudgePromptCarriesTheNotesLineLimit(t *testing.T) {
+	const clause = "Keep each line of the `notes` file at most `notes_max_line` characters long: a longer line triggers a curation."
+	notes := "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"
+	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md"} {
+		t.Run(name, func(t *testing.T) {
+			p := prompt(t, name)
+			d := judgeFixture()
+			d.NotesPath, d.NotesMaxLine = notes, 250
+			got, err := RenderPrompt(p, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			head, block, ok := strings.Cut(got, "<magnum>")
+			if !ok {
+				t.Fatalf("no <magnum> block:\n%s", got)
+			}
+			if !strings.Contains(head, "\n"+clause+"\n") {
+				t.Errorf("the prompt lacks %q before the block:\n%s", clause, got)
+			}
+			if !strings.Contains(block, "\nnotes_max_line: 250\n") {
+				t.Errorf("notes_max_line is not in the <magnum> block:\n%s", got)
+			}
+			for what, d := range map[string]JudgeData{
+				"without notes":   func() JudgeData { d := judgeFixture(); d.NotesMaxLine = 250; return d }(),
+				"without a limit": func() JudgeData { d := judgeFixture(); d.NotesPath = notes; return d }(),
+			} {
+				got, err := RenderPrompt(p, d)
+				if err != nil {
+					t.Fatalf("%s: %v", what, err)
+				}
+				if strings.Contains(got, "notes_max_line") {
+					t.Errorf("%s: the prompt names the limit:\n%s", what, got)
+				}
+			}
+		})
+	}
+	own := judgeFixture()
+	own.Mode, own.Phase, own.NotesPath, own.NotesMaxLine = "initial", PhaseOwnPass, notes, 250
+	got, err := RenderPrompt(prompt(t, "judge-own-pass.md"), own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "notes_max_line") {
+		t.Errorf("the own pass, which writes no notes, names the limit:\n%s", got)
 	}
 }
 

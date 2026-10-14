@@ -13,6 +13,10 @@ Blind evaluation: magnum measures what a review of exactly `{{.HeadSHA}}` finds,
 
 Post-merge review: GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`. Expect `merged == true` instead of `state == open`. Post `COMMENT` whatever you find (`no_findings_event` and `blocking_event` say so), start the body with `**Post-merge review** of <head_sha, 7 chars>:`, write each finding as a follow-up for a new change, not a change to this PR, and say `in a follow-up` instead of `before merging`.
 {{- end}}
+{{- if and .NotesPath .NotesMaxLine}}
+
+Keep each line of the `notes` file at most `notes_max_line` characters long: a longer line triggers a curation.
+{{- end}}
 
 <magnum>
 mode: initial
@@ -52,6 +56,9 @@ notes_dir: {{.NotesDir}}
 notes_harness:{{range $i, $f := .NotesHarness}}{{if $i}},{{end}} {{$f}}{{end}}{{if .NotesHarnessMore}} (+{{.NotesHarnessMore}} more){{end}}
 notes_lock: {{.NotesLockCommand}}
 notes_unlock: {{.NotesUnlockCommand}}
+{{- if .NotesMaxLine}}
+notes_max_line: {{.NotesMaxLine}}
+{{- end}}
 {{- end}}
 {{- if .RelatedPRs}}
 related_prs: {{.RelatedPRs}}

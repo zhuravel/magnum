@@ -3,7 +3,8 @@
 #
 # Writes what magnum did since <since> (an RFC 3339 UTC time such as
 # 2026-10-04T00:00:00Z, or "3d" for three days ago) into <run-dir>:
-#   evidence.md   the registry's numbers and lists, read-only
+#   evidence.md   the registry's numbers and lists, read-only, and at its end how often each rule of ../rules.txt
+#                 shows in the reports ("Rules applied")
 #   reports.txt   the review report directories written since then
 #   gitlog.txt    magnum's own commits since then
 #   claude-review-origin.txt   each rejected finding claude-review alone raised, with whether it matches a
@@ -311,7 +312,12 @@ rm -f "$stamp"
 # reviewer, "person" for anyone else, and "person?" for a reply the file cut
 # at 600 characters without the marker in what it kept, which may still be
 # the fixer's. A marked reply counts as an answer even when the file calls
-# it own (a watch that posts as the fixer's login).
+# it own (a watch that posts as the fixer's login). A thread whose last
+# reply is magnum's own with kind "rebuttal" reads "rebutted, unanswered" in
+# both the class and the "last reply by" columns: the author never answered
+# the rebuttal, and the reply shown (the last by anyone else) is the one it
+# answered, which a class such as "fixed" would otherwise present as the
+# thread's end.
 python3 - "$dir/reports.txt" "$db" "$repo" >>"$out" <<'PY'
 import hashlib, json, os, re, subprocess, sys, collections
 latest = {}
@@ -359,6 +365,7 @@ if not cur and changed and changed[0]["n"] == 0:
         pass
 
 FIX = "<!-- magnum:fix -->"
+REBUTTED = "rebutted, unanswered"
 
 def who(r):
     body = r.get("body") or ""
@@ -382,11 +389,13 @@ for pr, f in sorted(latest.items()):
             unanswered += 1
             continue
         last = theirs[-1]
+        rebutted = who(replies[-1]) == "own" and replies[-1].get("kind") == "rebuttal"
+        cls = REBUTTED if rebutted else last.get("class") or "-"
         repliers = []
         for r in replies:
             if not repliers or repliers[-1] != who(r):
                 repliers.append(who(r))
-        guess[last.get("class") or "-"] += 1
+        guess[cls] += 1
         at = (t.get("created_at") or "-").replace("T", " ")[:16]
         run = posted.get(t.get("review_id"))
         where = f"run {run[0]}, r{run[1]} {run[2]}" if run else "-"
@@ -394,14 +403,17 @@ for pr, f in sorted(latest.items()):
             at += ", current skill"
             under_current += 1
         text = " ".join((last.get("body") or "").split())[:400].replace("|", "/")
-        by[who(last)] += 1
-        rows.append(f"| {last.get('class') or '-'} | {net(last.get('body'))} | {len(theirs)}/{own} | {', '.join(repliers)} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
+        by[REBUTTED if rebutted else who(last)] += 1
+        rows.append(f"| {cls} | {net(last.get('body'))} | {len(theirs)}/{own} | {', '.join(repliers)} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
 print("\n## Replies to magnum's threads (latest round per PR)\n")
 skill_note = f", {under_current} of them posted under the current skill" if current else ""
 if from_file:
     skill_note += f" ({current}, from SKILL.md: no judge ran since the restart)"
 print(f"{len(rows)} answered threads{skill_note}, {unanswered} without a reply. The class is a keyword guess made at round time, not a verdict:")
-print("read every reply below and decide what it says.\n")
+print("read every reply below and decide what it says. A thread whose last reply is magnum's own rebuttal reads \"rebutted, unanswered\" in the")
+print("class and \"last reply by\" columns: the author has not answered it, and the reply shown is the author's earlier one, which the rebuttal")
+print("answered. \"(here)\" and \"follow-up\" in a reply mark a deferral (\"fixed (here) ... template follow-up\": part of the work is done and the")
+print("rest waits for a later change), not a fix.\n")
 print("| class at round time | threads |\n|---|---|")
 for k, v in guess.most_common():
     print(f"| {k} | {v} |")
@@ -412,6 +424,88 @@ print("\n### Every answered thread\n")
 print("| class at round time | net | replies theirs/own | by | posted (UTC) | round | finding | where | thread | last reply (first 400 chars) |")
 print("|---|---|---|---|---|---|---|---|---|---|")
 print("\n".join(rows) or "| - | - | - | - | - | - | - | - | - | - |")
+PY
+
+# How often each review rule shows in the reports: the phrase counts of rules.txt (one `<rule> | <pattern>` line
+# per rule, in the skill directory beside SKILL.md; the file explains its patterns). For each rule, the report
+# directories of reports.txt where the pattern matches the posted review (review.json: the body and the inline
+# comments), a judge's result file (*-judge.json: every string in it) or claude-review.md, and the posted reviews
+# (a review.json whose judge result says status "posted") whose own text matches. A rule that stays at 0 for
+# three runs is a candidate for a cut when the skill is at its byte cap. The counts are phrase hits, not proof
+# that the rule was applied or that it paid.
+python3 - "$dir/reports.txt" "$(dirname "$0")/../rules.txt" >>"$out" <<'PY'
+import glob, json, os, re, sys
+
+def strings(v):
+    if isinstance(v, str):
+        yield v
+    elif isinstance(v, dict):
+        for x in v.values():
+            yield from strings(x)
+    elif isinstance(v, list):
+        for x in v:
+            yield from strings(x)
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+def text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+rules, problems = [], []
+try:
+    with open(sys.argv[2], encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, sep, pat = line.partition(" | ")
+            if not sep or not name.strip() or not pat.strip():
+                problems.append(f"rules.txt line {n} is not `<rule> | <pattern>`")
+                continue
+            try:
+                rules.append([name.strip(), re.compile(pat.strip()), 0, 0])
+            except re.error as e:
+                problems.append(f"rules.txt line {n}: pattern does not compile ({e})")
+except OSError:
+    problems.append("rules.txt is missing")
+
+dirs, posted = open(sys.argv[1]).read().split(), 0
+for d in dirs:
+    review = load(os.path.join(d, "review.json"))
+    body = ""
+    if isinstance(review, dict):
+        body = "\n".join([review.get("body") or ""] + [c.get("body") or "" for c in review.get("comments") or [] if isinstance(c, dict)])
+    judges = [load(p) for p in sorted(glob.glob(os.path.join(d, "*-judge.json")))]
+    is_posted = isinstance(review, dict) and any(isinstance(j, dict) and j.get("status") == "posted" for j in judges)
+    posted += is_posted
+    other = text(os.path.join(d, "claude-review.md")) + "\n" + "\n".join("\n".join(strings(j)) for j in judges)
+    for r in rules:
+        hit = r[1].search(body)
+        r[2] += bool(hit or r[1].search(other))
+        r[3] += bool(hit and is_posted)
+
+print("\n## Rules applied (rules.txt)\n")
+print(f"{len(dirs)} report directories, {posted} posted reviews. A count is the reports whose posted review, judge result or claude-review.md")
+print("holds the rule's phrase, and the posted reviews whose own text does: a phrase hit, not proof that the rule was applied.")
+print("A rule at 0 for three runs in a row is a cut candidate when the skill is at its byte cap.\n")
+for p in problems:
+    print(f"- {p}")
+if problems:
+    print()
+print("| rule | report dirs | posted reviews |\n|---|---|---|")
+for name, _, d, p in rules:
+    print(f"| {name} | {d} | {p} |")
+if not rules:
+    print("| - | - | - |")
 PY
 
 git -C "$repo" log --since="$since" --format='%h %ad %<(150,trunc)%s' --date=short >"$dir/gitlog.txt"

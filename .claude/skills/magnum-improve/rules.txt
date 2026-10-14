@@ -1,0 +1,29 @@
+# Rules applied: the phrases scripts/evidence.sh counts per review rule ("Rules applied" in evidence.md).
+#
+# One rule per line: <rule name> | <pattern>. A later rule is one line. The pattern is an extended regular
+# expression in grep -E syntax, case-sensitive; the script matches it with Python's re, so keep to groups, |, [],
+# {n,m}, + * ?, escaped \. \( \), and \n for a newline. It is matched against the text of each report directory
+# since the run's `since`: the posted review (review.json: the body and the inline comments), the judge's result
+# file (*-judge.json: every string in it) and claude-review.md. Blank lines and lines that start with # are
+# ignored; a rule's name must not contain " | ".
+#
+# Where a pattern comes from. The swept set's phrases, (also covers, (missed earlier), (in the fix for, the
+# merged-tree "skipped (machine)" line and the platform rule's number or shopify.dev link are the ones the
+# skill-economy analysis of master 3e09420 grepped by hand (analysis/11-skill.md of the 2026-10-14 run, "The 13
+# rules of 275a217 and the de84b79 sentence"). That analysis quotes no phrase for the count query, the
+# operator-only precondition command or the mechanism that cannot be completed (only the one posted case's
+# "Across <sha> → <sha>"). Those lines say "skill wording": their patterns come from the rule's own sentence in
+# skills/magnum-review/SKILL.md (sections 2 and 4). A review may word such a rule differently, so a low count on
+# a "skill wording" line is weaker evidence than a count on a fixed phrase. Add the rule's real phrase once a
+# run shows how reviews write it.
+
+swept set: the Checks line `swept N <things>: M gaps` | swept [0-9]+ [^:\n]{1,120}: [0-9]+ (proven )?gaps?
+swept set: a member left unproven (`unproven:`) | unproven:
+a finding says what else it covers (`(also covers`) | \(also covers
+a finding the earlier reviews missed (`(missed earlier)`) | \(missed earlier\)
+a finding in the fix for an earlier one (`(in the fix for`) | \(in the fix for
+merged-tree specs skipped (machine) | [Mm]erged?[- ]tree[^\n]{0,200}skipped \(machine\)
+platform rules: a rule number or a shopify.dev link | [Rr]ule [0-9]+\.[0-9]+|shopify\.dev
+count query for the rows a migration affects (skill wording) | read-only (query|count)|counts the (affected )?rows|rows it affects
+operator-only trigger as P3 with a precondition command (skill wording) | checks? the precondition
+a mechanism that cannot be completed (skill wording; the posted case: `Across <sha> → <sha>`) | cannot be completed|Across `?[0-9a-f]{7,12}`? →

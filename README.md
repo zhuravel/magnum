@@ -2336,7 +2336,8 @@ notes.
 `max_bytes` (16 KiB), `max_line` (300 characters), `max_harness_files` (15) and `max_harness_bytes` (128
 KiB). Past any of them the repository is marked for curation (a `notes.over_limit` event names the
 limits). They are triggers, not caps: nothing blocks a review, and a curated proposal may stay above them
-when what it keeps helps future reviews.
+when what it keeps helps future reviews. The judge prompts carry `max_line` as `notes_max_line` and ask the
+judge to keep each notes line within it, so the judges do not write the long lines that start a curation.
 
 **History.** Every version of the notes and the harness is kept in the registry, forever: the judge's
 (with the round's PR and run) after every round that changed them, an applied curation's, an edit through

@@ -22,8 +22,10 @@ PR" and "never a second CODEX_HOME".
    other reviewers' comments on recently closed PRs are classified. PRs closed less than 24 hours ago wait for the
    next run, so that late reviews can arrive. Then `scripts/evidence.sh <since> <run-dir>` writes `evidence.md`, a list of review report
    directories, the git log since, and `claude-review-origin.txt` (which rejected findings of claude-review alone
-   are bullets of its own Rejected list, a title match behind the `self` columns). Read the summary yourself; it is
-   the shared input of every analyst.
+   are bullets of its own Rejected list, a title match behind the `self` columns). Its last table, "Rules applied",
+   counts the reports that hold each review rule's phrase (`rules.txt`, one `<rule> | <pattern>` line per rule; a
+   new rule is one line); a rule at 0 for three runs is a cut candidate when the review skill is at its byte cap.
+   Read the summary yourself; it is the shared input of every analyst.
 3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, each with the evidence path and its
    lens; every analyst prompt names [analyst-rules.md](analyst-rules.md) (read-only work and the return format) by
    absolute path. Lenses 0 and 1 run every time: what other reviewers found and magnum did not, and what magnum

@@ -213,7 +213,8 @@ regression_min_findings = 20      #   this many points (1 to 100) over the previ
 # above a limit when what it keeps helps future reviews of the repository.
 [notes]
 max_bytes = 16384                 # notes larger than this
-max_line = 300                    # a line longer than this many characters
+max_line = 300                    # a line longer than this many characters; the judge prompts carry it as
+                                  # notes_max_line and ask the judge to keep each notes line within it
 max_harness_files = 15            # more harness files than this
 max_harness_bytes = 131072        # a larger harness than this
 curate = ["over_limit", "misses"] # what starts a curation besides `magnum notes <repo> --curate`: over_limit, a
