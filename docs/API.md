@@ -4233,7 +4233,7 @@ type Role struct {
 	// stage left modified (pipeline).
 	Capture string `toml:"capture"`
 	// Timeout per turn. A role that sets none takes daemon.judge_timeout
-	// (90m) for a judge, daemon.reviewer_timeout (40m) otherwise; the four
+	// (90m) for a judge, daemon.reviewer_timeout (40m) otherwise; the seven
 	// roles config.defaults.toml writes out set their own.
 	Timeout Duration `toml:"timeout"`
 	// After: roles (names or aliases) that must finish before this one
