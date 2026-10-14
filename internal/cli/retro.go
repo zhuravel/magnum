@@ -40,8 +40,11 @@ func newRetroCmd(c *Context) *cobra.Command {
 			"A retro runs whether or not [learn] enabled schedules the daily one, and even under `magnum pause`, but "+
 			"not while the daemon drains for a restart, an infrastructure failure holds it or its agent's CLI is "+
 			"paused at a usage limit or a logout. The daemon answers "+
-			"at once and runs the retro in the background, one at a time. Exits 1 when no daemon runs (the request "+
-			"stays queued and starts the retro when one does) or the daemon refuses it.",
+			"at once and runs the retro in the background, one at a time. While another learn job runs (a notes "+
+			"curation, a skill edit or gate) the retro is queued: the answer names that job and when it started, "+
+			"and the retro starts, with the lookback and the PRs asked for, once that job ended, before any queued "+
+			"curation; one retro waits at a time, and a second request says one is queued already. Exits 1 when no "+
+			"daemon runs (the request stays queued and starts the retro when one does) or the daemon refuses it.",
 		func(pos []string) int { return runRetro(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.again, "again", false, "also look at PRs a retro already looked at")

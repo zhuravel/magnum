@@ -49,7 +49,7 @@ func TestAShutdownStartsNoRetro(t *testing.T) {
 	if evs := retroEvents(t, h); len(evs) != 0 {
 		t.Fatalf("retro events on the cancelled tick: %v", evs)
 	}
-	if started, _ := h.e.startRetro(stopped, retroSpec{daily: true, lookback: 7 * 24 * time.Hour}); started {
+	if started, _, _ := h.e.startRetro(stopped, retroSpec{daily: true, lookback: 7 * 24 * time.Hour}); started {
 		h.settle()
 		t.Fatal("startRetro started a retro on a cancelled context")
 	}
@@ -125,7 +125,7 @@ func TestADrainingOrStoppingDaemonStartsNoRetroOrCuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if started, _ := h.e.startRetro(h.ctx, retroSpec{lookback: time.Hour}); started {
+	if started, _, _ := h.e.startRetro(h.ctx, retroSpec{lookback: time.Hour}); started {
 		h.settle()
 		t.Fatal("a retro started while draining")
 	}

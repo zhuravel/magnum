@@ -6978,6 +6978,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   for an own PR (an own PR merged while a round was due is still unreviewed; the board should say so);
   skipping the toast by how soon after ready it merged (a threshold to tune, and a person's own PR is
   theirs whatever the delay).
+- **`magnum retro` queues behind a running learn job** (2026-10-14, amends "Learn jobs run one at a time").
+  A curation asked for while another learn job ran was queued, and a retro was refused ("no retro now: the
+  notes curation of talkable/talkable runs (started 17:17), and learn jobs run one at a time"). On
+  2026-10-14 the operator met that twice, once right after their own curations and once when the improve
+  loop's step 2 began with the retro while a curation a proposal review had started ran, and polled by hand.
+  Now a retro asked for while another learn job runs is queued (kv `learn.retro_queued`: the PRs it named,
+  `again`, the lookback it resolved and when it was asked; the settle delay is `[learn] settle`'s when it
+  starts) with a `retro.queued` event, and answered as a queued curation is ("queued: starts when <job>
+  (started HH:MM) ends; `magnum logs` follows it"). The request completes with that answer at once, as a
+  queued curation's does (a request held in flight until the retro ends would outlast the CLI's 30 s wait);
+  the queue is the registry's, so a restart keeps it, as it keeps the curations' queue. The tick tries the
+  queued retro first in `maybeRetro`, which runs before `maybeCurate`, so once the job ended it starts
+  before any curation queued meanwhile: the retro feeds the curations with misses. A curation asked for
+  while the queued retro waits for its turn (the job ended, the next tick has not come) is queued behind
+  it too, unless the retro's CLI is paused. A drain, a stop or an infrastructure pause (`holdReason`) and a
+  pause of the retro's CLI (`retroToolPause`) still refuse a request, since a queue cannot wait them out;
+  when they come after the retro was queued it stays queued, and every tick tries it again. One retro
+  waits at a time: a second request answers "a retro is queued already (asked HH:MM) and starts when ...
+  ends" and changes nothing; a retro running answers "already running" as before, and a queued retro holds
+  the day's, which follows it. A queued value that does not read is dropped with `retro.queue_dropped`.
+  Rejected: a queue of retros (two retros of the same lookback find the same PRs; the second has nothing to
+  do), merging a second request into the first (its lookback and PRs would change what the first answer
+  promised), and keeping the request pending until the retro ends.
 
 ## Learned rules
 

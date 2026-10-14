@@ -50,7 +50,7 @@ func (e *Engine) learnRunning() (string, time.Time) {
 	retro, retroAt := e.retroCancel != nil, e.retroStarted
 	e.retroMu.Unlock()
 	if retro {
-		return "the retro", retroAt
+		return retroJob, retroAt
 	}
 	e.curateMu.Lock()
 	curate, curateAt, repo := e.curateCancel != nil, e.curateStarted, e.curateRepo

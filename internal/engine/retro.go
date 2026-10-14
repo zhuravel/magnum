@@ -44,6 +44,10 @@ const (
 	KVRetroDay = "learn.retro_day"
 	// KVRetroLast is the last retro's RetroSummary (JSON).
 	KVRetroLast = "learn.retro_last"
+	// kvRetroQueued holds the `magnum retro` asked while another learn job
+	// ran (retroQueued as JSON), which starts once that job ended; one at a
+	// time, kept across a restart.
+	kvRetroQueued = "learn.retro_queued"
 	// retroKeep is how long a retro's run directory is kept.
 	retroKeep = 30 * 24 * time.Hour
 	// retroRunFormat names a run directory (local time).
@@ -163,6 +167,16 @@ type retroData struct {
 	Threads      int      // magnum's own findings someone answered (learn.OwnThread)
 }
 
+// retroQueued is a queued `magnum retro` (kvRetroQueued): what it looks at,
+// as the request said, and when it was asked. Its settle delay is [learn]
+// settle's when it starts.
+type retroQueued struct {
+	PRs      []int64   `json:"prs,omitempty"`
+	Again    bool      `json:"again,omitempty"`
+	Lookback string    `json:"lookback"` // time.Duration.String()
+	At       time.Time `json:"at"`
+}
+
 // retroSpec is what one retro looks at.
 type retroSpec struct {
 	daily    bool // the schedule's: it sets KVRetroDay when it finishes
@@ -174,17 +188,18 @@ type retroSpec struct {
 	settle time.Duration
 }
 
-// maybeRetro starts the day's retro ([learn] enabled, past daily_at, not
-// run today, no learn job running (learnBusy: a retro, a notes curation, a
-// skill edit or gate), none waiting after GitHub stopped it, no drain
-// or infrastructure pause, the agent's CLI not paused at a usage limit or a
-// logout). `magnum pause` holds automatic
+// maybeRetro starts the queued retro (startQueuedRetro), which holds the
+// day's while it waits, or else the day's retro ([learn] enabled, past
+// daily_at, not run today, no learn job running (learnBusy: a retro, a
+// notes curation, a skill edit or gate), none waiting after GitHub stopped
+// it, no drain or infrastructure pause, the agent's CLI not paused at a
+// usage limit or a logout). `magnum pause` holds automatic
 // reviews only: the retro reviews nothing, and a pause kept overnight
 // started it hours late. A dry run and `magnum daemon --once` never start
 // one.
 func (e *Engine) maybeRetro(ctx context.Context) {
 	lc := e.cfg.Learn
-	if !lc.Enabled || e.d.DryRun || e.once {
+	if e.d.DryRun || e.once || e.startQueuedRetro(ctx) || !lc.Enabled {
 		return
 	}
 	now := e.now()
@@ -204,8 +219,10 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 }
 
 // requestRetro serves `magnum retro`: a retro now, unless a drain, an
-// infrastructure pause or a pause of the agent's CLI holds it, one is
-// running, or another learn job runs (the answer names it).
+// infrastructure pause or a pause of the agent's CLI holds it (refused: a
+// queue cannot wait them out) or one is running. While another learn job
+// runs it is queued (queueRetro, the answer names the job) and starts once
+// that job ended, before any curation; one retro waits at a time.
 func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, error) {
 	lookback := e.cfg.Learn.Lookback.Duration
 	if p.Lookback != "" {
@@ -218,23 +235,27 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 	if reason := cmp.Or(e.holdReason(ctx), e.retroToolPause(ctx)); reason != "" {
 		return "", fmt.Errorf("no retro now: %s", reason)
 	}
-	if !e.retroBusy() {
-		if why := e.learnOneAtATime(); why != "" {
-			return "", fmt.Errorf("no retro now: %s", why)
-		}
-	}
 	if e.d.DryRun {
 		e.rec.Record(ctx, "", "retro", "a retro of the PRs closed within "+lookback.String())
 		return "dry run: would run a retro", nil
 	}
+	if q, ok := e.queuedRetro(ctx); ok {
+		return "a retro is queued already (asked " + q.At.Local().Format("15:04") + ") and " + e.queuedRetroStarts(), nil
+	}
 	// PRs named explicitly are looked at whether or not a retro did, and
 	// whenever they closed.
 	settle := e.cfg.Learn.Settle.Duration
-	started, since := e.startRetro(ctx, retroSpec{prs: p.PRs, again: p.Again || len(p.PRs) > 0, lookback: lookback, settle: settle})
-	if !started && since.IsZero() { // the daemon began stopping or draining since holdReason
-		return "", fmt.Errorf("no retro now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
+	spec := retroSpec{prs: p.PRs, again: p.Again || len(p.PRs) > 0, lookback: lookback, settle: settle}
+	if job, since := e.learnRunning(); job != "" && job != retroJob { // learn jobs run one at a time
+		return e.queueRetro(ctx, spec, job, since)
 	}
-	if !started {
+	started, since, other := e.startRetro(ctx, spec)
+	switch {
+	case !started && other == "": // the daemon began stopping or draining since holdReason
+		return "", fmt.Errorf("no retro now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
+	case !started && other != retroJob: // another learn job started since learnRunning
+		return e.queueRetro(ctx, spec, other, since)
+	case !started:
 		return fmt.Sprintf("a retro is already running (started %s); `magnum logs` follows it", since.Local().Format("15:04")), nil
 	}
 	what := "the PRs closed within " + lookback.String()
@@ -245,6 +266,75 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 		what += " and at least " + humanDuration(settle) + " ago"
 	}
 	return "retro started on " + what + "; `magnum misses` lists what it finds", nil
+}
+
+// queueRetro makes spec, asked while job (started since) runs, the queued
+// retro (kvRetroQueued) and answers as a queued curation does.
+func (e *Engine) queueRetro(ctx context.Context, spec retroSpec, job string, since time.Time) (string, error) {
+	b, err := json.Marshal(retroQueued{PRs: spec.prs, Again: spec.again, Lookback: spec.lookback.String(), At: e.now()})
+	if err == nil {
+		err = e.st.SetKV(ctx, kvRetroQueued, string(b))
+	}
+	if err != nil {
+		return "", fmt.Errorf("no retro now: %s runs, and the retro could not be queued: %w", job, err)
+	}
+	what := "the PRs closed within " + spec.lookback.String()
+	if len(spec.prs) > 0 {
+		what = fmt.Sprintf("%d PR(s)", len(spec.prs))
+	}
+	at := since.Local().Format("15:04")
+	e.event(ctx, "info", "", "retro.queued", fmt.Sprintf("retro of %s queued: starts when %s (started %s) ends", what, job, at),
+		map[string]any{"lookback": spec.lookback.String(), "prs": len(spec.prs)})
+	return fmt.Sprintf("queued: starts when %s (started %s) ends; `magnum logs` follows it", job, at), nil
+}
+
+// queuedRetro reads the queued retro (false: none, or a value that does
+// not read, which startQueuedRetro drops).
+func (e *Engine) queuedRetro(ctx context.Context) (retroQueued, bool) {
+	var q retroQueued
+	if v, ok := e.getKV(ctx, kvRetroQueued); !ok || v == "" || json.Unmarshal([]byte(v), &q) != nil {
+		return retroQueued{}, false
+	}
+	return q, true
+}
+
+// queuedRetroStarts says when the queued retro starts, for an answer.
+func (e *Engine) queuedRetroStarts() string {
+	if job, since := e.learnRunning(); job != "" {
+		return fmt.Sprintf("starts when %s (started %s) ends; `magnum logs` follows it", job, since.Local().Format("15:04"))
+	}
+	return "starts at the next tick; `magnum logs` follows it"
+}
+
+// startQueuedRetro starts the queued retro once no learn job runs and
+// nothing holds it (a drain, an infrastructure pause, a pause of its
+// agent's CLI): meanwhile it stays queued, and the next tick tries again.
+// The tick runs it before maybeCurate, so it goes before the curations
+// queued or due then: a retro feeds them with misses. True while a retro is
+// queued or when it started; one whose value does not read is dropped.
+func (e *Engine) startQueuedRetro(ctx context.Context) bool {
+	v, ok := e.getKV(ctx, kvRetroQueued)
+	if !ok || v == "" {
+		return false
+	}
+	var q retroQueued
+	err := json.Unmarshal([]byte(v), &q)
+	lookback := time.Duration(0)
+	if err == nil {
+		lookback, err = time.ParseDuration(q.Lookback)
+	}
+	if err != nil || lookback <= 0 {
+		e.delKV(ctx, kvRetroQueued)
+		e.event(ctx, "warn", "", "retro.queue_dropped", "the queued retro does not read, so it is dropped: `magnum retro` asks again", nil)
+		return false
+	}
+	if e.learnBusy() != "" || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
+		return true
+	}
+	if started, _, _ := e.startRetro(ctx, retroSpec{prs: q.PRs, again: q.Again, lookback: lookback, settle: e.cfg.Learn.Settle.Duration}); started {
+		e.delKV(ctx, kvRetroQueued)
+	}
+	return true
 }
 
 // retroToolPause is why the retro's agent cannot work now ("" = it can):
@@ -272,18 +362,22 @@ func (e *Engine) retryRetroAt() time.Time {
 	return e.retroRetry
 }
 
+// retroJob is the retro's name among the learn jobs (learnRunning).
+const retroJob = "the retro"
+
 // startRetro runs a retro in its own goroutine on a child of ctx (the
 // daemon's: shutdown cancels it), unless the daemon is stopping or draining
-// (stopping: it reports false and a zero time) or a learn job runs, a retro
-// or another (false and when that one started).
-func (e *Engine) startRetro(ctx context.Context, spec retroSpec) (bool, time.Time) {
+// (stopping: it reports false, a zero time and no job) or a learn job runs,
+// a retro or another (false, when that one started and learnRunning's name
+// of it).
+func (e *Engine) startRetro(ctx context.Context, spec retroSpec) (bool, time.Time, string) {
 	if e.stopping(ctx) != "" {
-		return false, time.Time{}
+		return false, time.Time{}, ""
 	}
 	e.learnMu.Lock()
 	defer e.learnMu.Unlock()
 	if job, since := e.learnRunning(); job != "" {
-		return false, since
+		return false, since, job
 	}
 	e.retroMu.Lock()
 	defer e.retroMu.Unlock()
@@ -300,7 +394,7 @@ func (e *Engine) startRetro(ctx context.Context, spec retroSpec) (bool, time.Tim
 		e.safely(rctx, "retro", "", func() { e.runRetro(rctx, spec) },
 			func(ctx context.Context, msg string) { e.retroPanicked(ctx, spec, started, msg) })
 	})
-	return true, e.retroStarted
+	return true, e.retroStarted, ""
 }
 
 // retroPanicked records a retro that panicked as a stopped one (KVRetroLast)

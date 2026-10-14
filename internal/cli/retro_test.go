@@ -171,6 +171,23 @@ func TestRetroAlreadyRunningStillPointsAtTheResults(t *testing.T) {
 	actContains(t, h.out.String(), "a retro is already running", "`magnum misses` lists the results")
 }
 
+// A retro queued behind another learn job is an answer, not a refusal: the
+// command prints it and exits 0.
+func TestRetroQueuedBehindALearnJobPrintsTheAnswer(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "queued: starts when the notes curation of talkable/talkable (started 17:17) ends; `magnum logs` follows it")
+	}
+	if code := h.cmd("retro"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "queued: starts when the notes curation of talkable/talkable (started 17:17) ends", "`magnum misses` lists the results")
+	if h.errb.Len() != 0 {
+		t.Errorf("stderr = %q", h.errb.String())
+	}
+}
+
 func TestRetroJSONCarriesPayloadAndRequest(t *testing.T) {
 	h := newActHarness(t)
 	pr := h.retroClosed("talkable/talkable", 5)

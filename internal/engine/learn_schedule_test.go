@@ -198,8 +198,8 @@ func fakeLearnJob(h *harness, job string) func() {
 
 // Learn jobs run one at a time: a running notes curation holds the day's
 // retro, which starts once the curation ended, and a `magnum retro` is
-// refused naming the curation; a running retro holds a skill edit and the
-// gate of a gating proposal.
+// queued naming the curation (it goes first, then the day's); a running
+// retro holds a skill edit and the gate of a gating proposal.
 func TestLearnJobsRunOneAtATime(t *testing.T) {
 	fc := &fakeClassifier{}
 	h := newHarness(t, withClassifier(fc), func(h *harness) {
@@ -220,10 +220,15 @@ func TestLearnJobsRunOneAtATime(t *testing.T) {
 	if _, ok := h.e.getKV(h.ctx, KVRetroDay); ok {
 		t.Fatal("the day's retro ran during a curation")
 	}
-	if req := h.requestRetro(RetroPayload{}); req.State != store.RequestFailed || !strings.Contains(deref(req.Result), "the notes curation of example/tools") {
+	if req := h.requestRetro(RetroPayload{}); req.State != store.RequestDone || !strings.Contains(deref(req.Result), "queued: starts when the notes curation of example/tools") {
 		t.Fatalf("a retro request during a curation = %s %q", req.State, deref(req.Result))
 	}
 	end()
+	h.e.maybeRetro(h.ctx) // the queued retro
+	h.settle()
+	if _, ok := h.e.getKV(h.ctx, KVRetroDay); ok || len(h.events("retro.start")) != 1 {
+		t.Fatal("the day's retro went before the queued one")
+	}
 	h.e.maybeRetro(h.ctx)
 	h.settle()
 	if day, _ := h.e.getKV(h.ctx, KVRetroDay); day != store.DayKey(h.clock.Now()) {

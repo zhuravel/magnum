@@ -416,9 +416,10 @@ func (e *Engine) curateTriedRecently(repoID int64, now time.Time) bool {
 // pause of the curator's CLI holds it or a proposal of the repository waits
 // for review. With Supersede naming that proposal (a stale one the operator
 // gave up on) it is superseded first and the new curation reads it. While a
-// round of the repository is in its judge stage, or another learn job runs
-// (a curation, the retro, a skill edit or gate), the curation is queued and
-// starts once that ended (startQueuedCuration).
+// round of the repository is in its judge stage, another learn job runs
+// (a curation, the retro, a skill edit or gate) or a queued retro waits for
+// its turn, the curation is queued and starts once that ended
+// (startQueuedCuration).
 func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (string, error) {
 	repo, err := e.st.RepoByFullName(ctx, p.Repo)
 	if errors.Is(err, store.ErrNotFound) {
@@ -468,6 +469,12 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	if job, since := e.learnRunning(); job != "" && !e.curateBusy() { // learn jobs run one at a time
 		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedBusy)
 		return fmt.Sprintf("%squeued: starts when %s (started %s) ends; `magnum logs` follows it", prefix, job, since.Local().Format("15:04")), nil
+	}
+	// A queued retro whose turn came goes first (it feeds the curations with
+	// misses), unless its agent's CLI is paused (startQueuedRetro waits).
+	if q, ok := e.queuedRetro(ctx); ok && e.retroToolPause(ctx) == "" {
+		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedBusy)
+		return fmt.Sprintf("%squeued: starts after the retro queued at %s; `magnum logs` follows it", prefix, q.At.Local().Format("15:04")), nil
 	}
 	if started, since, other := e.startCurate(ctx, repo, CurateTriggerRequest); !started {
 		if other == "" { // the daemon began stopping or draining since holdReason
