@@ -5,6 +5,7 @@ import (
 	"encoding"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -88,13 +89,17 @@ type Pipeline struct {
 	// whiteboard job at all, automatic or by hand. A [[watch]] may
 	// override it (Watch.WhiteboardRole); see Config.WhiteboardRoleFor.
 	WhiteboardRole string `toml:"whiteboard_role"`
-	// Spend is how hard the built-in roles think: SpendMedium (default; ""
-	// counts as it) keeps the effort and rereview_effort config.defaults.toml
-	// writes out, SpendHigh makes every one xhigh, SpendLow takes each one
-	// notch down, to medium at the lowest (see spendEffort). Load applies it
-	// to the values a built-in role (DefaultRoles) inherits, never to a key a
-	// [[role]] block of a config file sets, nor to a role that is not built
-	// in; it changes no model.
+	// Spend is the spend level, how hard and on which models the roles
+	// think: SpendMedium (default; "" counts as it) keeps the effort and
+	// rereview_effort config.defaults.toml writes out, SpendHigh makes every
+	// one xhigh, SpendLow takes each one notch down, to medium at the lowest
+	// (see spendEffort); Load applies that notch mapping to the values a
+	// built-in role (DefaultRoles) inherits, never to a key a [[role]] block
+	// of a config file sets, nor to a role that is not built in. Any other
+	// level is the operator's own, declared by a [spend.<level>] table
+	// (Config.SpendLevels), and starts from SpendMedium. The active level's
+	// table then sets the keys it names on its roles over everything else
+	// (applySpend).
 	Spend string `toml:"spend"`
 	// StatusComment switches the review status comment on: one comment on
 	// the conversation of each PR magnum means to review, posted as the PR's
@@ -286,10 +291,51 @@ const (
 	SpendHigh   = "high"   // xhigh, the strongest effort both Codex and Claude take, everywhere
 )
 
+// SpendRole is a role's entry in a [spend.<level>] table: the keys the level
+// sets on the role while [pipeline] spend names it, over the role's own
+// [[role]] keys and the notch mapping alike; nil = the role's value stays.
+type SpendRole struct {
+	Model          *string `toml:"model"`
+	Effort         *string `toml:"effort"`
+	RereviewEffort *string `toml:"rereview_effort"`
+	MaxSubagents   *int    `toml:"max_subagents"`
+}
+
+// spendLevelName is what a [spend.<level>] table's level name must match.
+var spendLevelName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,15}$`)
+
+// isBuiltinSpend reports whether level is one of the three built-in levels
+// (or "", which counts as SpendMedium).
+func isBuiltinSpend(level string) bool {
+	return level == "" || level == SpendLow || level == SpendMedium || level == SpendHigh
+}
+
+// mergeSpendLevels merges over's [spend.<level>] tables into base's, level by
+// level, role by role and key by key, a key over sets winning, and returns
+// the result (base, filled in place).
+func mergeSpendLevels(base, over map[string]map[string]SpendRole) map[string]map[string]SpendRole {
+	for level, roles := range over {
+		if base == nil {
+			base = map[string]map[string]SpendRole{}
+		}
+		if base[level] == nil {
+			base[level] = map[string]SpendRole{}
+		}
+		for name, o := range roles {
+			b := base[level][name]
+			b.Model, b.Effort, b.RereviewEffort = cmp.Or(o.Model, b.Model), cmp.Or(o.Effort, b.Effort), cmp.Or(o.RereviewEffort, b.RereviewEffort)
+			b.MaxSubagents = cmp.Or(o.MaxSubagents, b.MaxSubagents)
+			base[level][name] = b
+		}
+	}
+	return base
+}
+
 // spendEffort is a built-in role's effort (or rereview_effort) under the
-// spend profile: xhigh for SpendHigh, empty or not; for SpendLow xhigh
-// becomes high and high medium, and anything else (medium, "") stays; for
-// SpendMedium and "" the effort as it is.
+// spend level's notch mapping: xhigh for SpendHigh, empty or not; for
+// SpendLow xhigh becomes high and high medium, and anything else (medium,
+// "") stays; for SpendMedium, "" and an operator's own level the effort as
+// it is.
 func spendEffort(spend, effort string) string {
 	switch spend {
 	case SpendHigh:
@@ -492,8 +538,9 @@ func readLayerData(file string, data []byte, md toml.MetaData, kinds map[string]
 
 // buildPipeline computes Kinds and Roles from the built-in defaults, the
 // config file's blocks and the overlay's blocks, in that order, then applies
-// [pipeline] spend to the efforts of the built-in roles that no block of the
-// operator's set (applySpend).
+// [pipeline] spend: its notch mapping to the efforts of the built-in roles
+// that no block of the operator's set, and its [spend.<level>] table over
+// them (applySpend).
 func (c *Config) buildPipeline(base, over *layer) {
 	kinds := DefaultKinds()
 	builtins := DefaultRoles()
@@ -542,16 +589,21 @@ func (c *Config) buildPipeline(base, over *layer) {
 			roles = append(roles, mergeRole(builtinRole(builtins, r.Name), r, over.raw, i))
 		}
 	}
-	c.Kinds, c.Roles = kinds, applySpend(c.Pipeline.Spend, roles, builtins, set)
+	c.Kinds, c.Roles = kinds, applySpend(c.Pipeline.Spend, c.SpendLevels, roles, builtins, set)
 }
 
-// applySpend sets the effort and rereview_effort of each built-in role (one
-// named like a role of builtins) through spendEffort, unless a [[role]] block
-// of the operator's set that key (set, by role name): an explicit key wins
-// over the profile, in the user config and in a base configuration of their
-// own alike, while the embedded config.defaults.toml only writes the
-// built-in values out. A role that is not built in keeps what it has.
-func applySpend(spend string, roles, builtins []Role, set map[string]map[string]bool) []Role {
+// applySpend applies the spend level to roles, in two steps. First the notch
+// mapping: the effort and rereview_effort of each built-in role (one named
+// like a role of builtins) go through spendEffort, unless a [[role]] block of
+// the operator's set that key (set, by role name): an explicit key wins over
+// the mapping, in the user config and in a base configuration of their own
+// alike, while the embedded config.defaults.toml only writes the built-in
+// values out; a role that is not built in keeps what it has. Then the
+// level's table (levels[spend], "" counting as SpendMedium): each role it
+// names, built in or not, takes the keys the table sets, over its own
+// [[role]] keys and the mapping alike, the table being the more specific
+// intent. A name no role has is skipped (Validate reports it).
+func applySpend(spend string, levels map[string]map[string]SpendRole, roles, builtins []Role, set map[string]map[string]bool) []Role {
 	for i := range roles {
 		r := &roles[i]
 		if !slices.ContainsFunc(builtins, func(b Role) bool { return b.Name == r.Name }) {
@@ -562,6 +614,26 @@ func applySpend(spend string, roles, builtins []Role, set map[string]map[string]
 		}
 		if !set[r.Name]["rereview_effort"] {
 			r.RereviewEffort = spendEffort(spend, r.RereviewEffort)
+		}
+	}
+	table := levels[cmp.Or(spend, SpendMedium)]
+	for i := range roles {
+		t, ok := table[roles[i].Name]
+		if !ok {
+			continue
+		}
+		r := &roles[i]
+		if t.Model != nil {
+			r.Model = *t.Model
+		}
+		if t.Effort != nil {
+			r.Effort = *t.Effort
+		}
+		if t.RereviewEffort != nil {
+			r.RereviewEffort = *t.RereviewEffort
+		}
+		if t.MaxSubagents != nil {
+			r.MaxSubagents = new(*t.MaxSubagents)
 		}
 	}
 	return roles

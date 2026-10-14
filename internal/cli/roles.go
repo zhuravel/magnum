@@ -28,10 +28,10 @@ type rolesOpts struct {
 func newRolesCmd(c *Context) *cobra.Command {
 	var o rolesOpts
 	cmd := newCommand(groupInspect, "roles "+rolesUsage, "the effective review roles per watch (--kinds: the agent CLIs magnum drives)",
-		"Print the review roles each [[watch]] runs, resolved from [[role]], [pipeline] spend and the built-in defaults: name, kind, "+
+		"Print the review roles each [[watch]] runs, resolved from [[role]], [pipeline] spend and its [spend.<level>] table, and the built-in defaults: name, kind, "+
 			"runs, model, effort, the rounds one session serves (max_session_rounds), capture, report file, initial prompt (and whether prompts_dir or the embedded copy "+
 			"provides it), the roles it runs after, the judge and the aliases --role accepts; the first line names prompts_dir and "+
-			"the spend profile. --repo shows the roles "+
+			"the spend level. --repo shows the roles "+
 			"of the watch covering one repository. --kinds prints the [kinds.<name>] specs instead: wrapper mode, "+
 			"login check, the resume, model, effort, subagents, MCP-off and name args, the session source and the command line each "+
 			"role starts with. --json prints the resolved roles (or kinds) as JSON keyed like config.toml.",
@@ -162,8 +162,8 @@ func rolesPrompt(cfg *config.Config, r config.Role) (name, source string) {
 }
 
 func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
-	// The header: where the prompts come from and the spend profile the
-	// built-in roles' efforts follow (the EFFORT column shows the result).
+	// The header: where the prompts come from and the spend level the roles'
+	// models and efforts follow (the MODEL and EFFORT columns show the result).
 	dir, prompts := cfg.Pipeline.PromptsDir, ""
 	switch {
 	case dir == "":

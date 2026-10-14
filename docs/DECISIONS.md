@@ -1456,6 +1456,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   running at the operator's own Claude Code `effortLevel` there. The operator's own `effort` and
   `rereview_effort` lines keep their values under every level until they are deleted. Not done: a
   per-watch override and the efforts outside `[[role]]` (`[learn]`'s classifier and editor, `[notes]`).
+- **A spend level can set models and efforts per role, and levels can be the operator's own** (2026-10-14;
+  amends "One `[pipeline] spend` key sets how hard every built-in role thinks"). A level is a budget mood,
+  and a mood also picks models: with many Codex tokens the judge runs on the astra model, with few Claude
+  tokens the reviewers run on Sonnet. The notch mapping changed no model, and a role block's own `model`
+  and `effort` won over the level, so each change still meant editing the role blocks; the operator asked
+  for full flexibility in one switch. Now a `[spend.<level>]` table (`Config.SpendLevels`, a map of level
+  name to role name to `SpendRole`, whose four pointer fields keep the loader's unknown-key refusal exact)
+  gives the roles of one level any of `model`, `effort`, `rereview_effort` and `max_subagents`; it names a
+  built-in role or a declared `[[role]]` by name (`spend.high: unknown role "..."`), and a level's name
+  matches `^[a-z][a-z0-9_-]{0,15}$`. The precedence, highest first: the active level's table, the role
+  block's own keys, the notch mapping of `low`, `medium` and `high` (unchanged), the built-in defaults;
+  `applySpend` applies the table after the mapping, to the role's inherited and set keys alike, the table
+  being the more specific intent. Any other level name is the operator's own: it starts from `medium` and
+  applies its table; `spend` naming a level that is neither built in nor declared is refused with the
+  declared names (`pipeline: spend must be "low", "medium", "high" or "burn", got "turbo"`), and a table
+  for a level `spend` does not name is kept for later (and validated). The user config's tables merge into
+  the base's level by level, role by role and key by key (`mergeSpendLevels`). codex-review is a shell
+  role whose model travelled in its `args`, after the command, so an `args` line would win over a level's
+  model: the built-in command (and `prompts/codex-review.sh`) now passes ` -c model={{.Model}}` right after
+  `codex review`, before the effort, only for a role with a model, so a level's or the block's `model`
+  reaches Codex and a later `args` override still wins, as it does for the effort. Validation refused any
+  `model` on a shell role; it now refuses one only when the role's command or full-line template leaves
+  `.Model` out, so a model is never dropped without a word. `magnum roles` keeps `spend: <level>` in its
+  first line and shows the resulting model and effort; its JSON gains nothing. Not done: a per-watch level,
+  and the tables cover only `[[role]]`s, not `[learn]` or `[notes]`.
 
 ## Screens and commands
 

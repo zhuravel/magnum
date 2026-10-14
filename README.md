@@ -910,7 +910,7 @@ name = "codex-review"
 kind = "shell"
 tool = "codex"                     # codex's login check, pauses and health patterns apply
 effort = "high"                    # -c model_reasoning_effort=high, never your global Codex effort
-command = "{{.DBLockCommand}} codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # takes its turn on the slot's databases; no MCP servers; the merge base
+command = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # takes its turn on the slot's databases; no MCP servers; the merge base
 capture = "stdout"
 
 [[role]]
@@ -1142,10 +1142,12 @@ there overrides the built-in role of the same name key by key, so it needs only 
 effort of first reviews and `rereview_effort` that of re-reviews of new commits. Claude roles get both as
 `--model` and `--effort` at launch and on every resume, so a role without them runs at your own Claude
 Code `model` and `effortLevel` settings, and a resumed conversation keeps the model it started on. `codex-review` is a
-shell role that runs `codex review`: its command passes the role's `effort` (`high` by default) as `-c
-model_reasoning_effort=…`, so it never runs at the effort of your global Codex config (it did, at `xhigh`,
-for 23% of the Codex spend), and its `args`, appended after, take a model or another effort as Codex config
-overrides.
+shell role that runs `codex review`: its command passes the role's `model` as `-c model=…` (only when it
+has one; else Codex's own model) and its `effort` (`high` by default) as `-c model_reasoning_effort=…`,
+so it never runs at the effort of your global Codex config (it did, at `xhigh`, for 23% of the Codex
+spend). Its model belongs in `model =`, not in `args`: the `args`, appended after, still win as Codex
+config overrides, over a spend level's model too. A `command` of your own that leaves `{{.Model}}` out
+refuses a `model` rather than dropping it.
 
 `[pipeline] spend` sets how hard every built-in role thinks, so a week of tight or of free usage is one
 line: `"medium"` (the default) keeps the efforts config.defaults.toml writes out, `"high"` makes every
@@ -1169,12 +1171,43 @@ and a Claude role without `effort` runs at your own Claude Code `effortLevel`):
 spend = "high"                       # or "low"; "medium" is the default
 ```
 
-A key your own `[[role]]` block sets wins over the profile under every level: a `codex-judge` block with
+A key your own `[[role]]` block sets wins over that mapping under every level: a `codex-judge` block with
 `effort = "medium"` keeps `medium` under `spend = "high"`, while the `rereview_effort` it leaves out
-follows the profile, so delete a role's `effort` and `rereview_effort` lines to hand them to it. A role
-that is not built in keeps its own effort (none when it sets none), and the profile changes no model.
-`magnum roles` names the profile in its first line and shows the resulting first-review effort in its
-EFFORT column. The daemon reads it at startup, so `magnum daemon-restart --drain` applies a change.
+follows the level, so delete a role's `effort` and `rereview_effort` lines to hand them to it. A role
+that is not built in keeps its own effort (none when it sets none), and the mapping changes no model.
+
+A level is a budget mood, and a mood also picks models: a `[spend.<level>]` table gives the roles of one
+level their `model`, `effort`, `rereview_effort` and `max_subagents` (any of the four, no other key). It
+names a built-in role or one your `[[role]]` blocks declare, and a level's name matches
+`^[a-z][a-z0-9_-]{0,15}$`:
+
+```toml
+[pipeline]
+spend = "high"
+
+[spend.high]                       # applied when spend = "high"
+codex-judge = { model = "gpt-6.1-astra", effort = "xhigh", rereview_effort = "xhigh" }
+codex-review = { model = "gpt-6.1-astra" }
+claude-review = { model = "fable", effort = "xhigh" }
+
+[spend.low]
+codex-judge = { model = "gpt-6.1-sol", effort = "high", rereview_effort = "medium" }
+claude-review = { model = "sonnet", effort = "medium", rereview_effort = "medium" }
+claude-simplify = { model = "sonnet", effort = "low" }
+```
+
+The precedence, highest first: the active level's table, then your `[[role]]` block's own keys, then the
+notch mapping of `low`, `medium` and `high` above, then the built-in defaults. The table is the more
+specific intent, so it wins over the role's inherited and set keys alike: a `claude-review` block with
+`model = "opus"` runs `fable` under `spend = "high"` above and `opus` under any other level. A key the
+table leaves out follows the rest of the order (`claude-review`'s `rereview_effort` is the mapping's
+`xhigh` under `high`). Any level name other than `low`, `medium` and `high` is your own: declare it with
+its table (`[spend.burn]`) and name it in `spend`; it starts from `medium`, the defaults as written, and
+applies its table. `spend` naming a level that is neither built in nor declared is refused with the
+declared names, and a table for a level `spend` does not name waits for later. The user config's tables
+merge into a base configuration's level by level, role by role and key by key. `magnum roles` names the
+level in its first line and shows each role's resulting model and first-review effort in its MODEL and
+EFFORT columns. The daemon reads it at startup, so `magnum daemon-restart --drain` applies a change.
 
 A role you can do without is turned off with `runs = "never"` (or `"manual"`: only when you ask). To
 spend less than `spend = "low"`, or on other models, for example:
@@ -1193,7 +1226,8 @@ effort = "medium"
 
 [[role]]
 name = "codex-review"
-args = ["-c", "model=gpt-6.1-sol", "-c", "model_reasoning_effort=medium"]
+model = "gpt-6.1-sol"                # passed as -c model=gpt-6.1-sol
+effort = "medium"
 
 [[role]]
 name = "claude-simplify"

@@ -82,6 +82,12 @@ type Config struct {
 	// through KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
+	// SpendLevels are the [spend.<level>] tables, by level name, then role
+	// name: the keys a level of [pipeline] spend sets on a role. A level that
+	// is not low, medium or high is the operator's own. Load merges the user
+	// config's tables into the base's level by level, role by role and key
+	// by key, and Roles already holds the active level's keys (applySpend).
+	SpendLevels map[string]map[string]SpendRole `toml:"spend"`
 
 	// Layout is filled by Load; it is not part of the file.
 	Layout paths.Layout `toml:"-"`
@@ -724,7 +730,8 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 
 // applyOverlay merges the user config: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [github], [pipeline], [usage], [triage], [learn] and [notes] override the committed values key by key.
+// [github], [pipeline], [usage], [triage], [learn] and [notes] override the committed values key by key,
+// and [spend.<level>] tables merge into the base's by level, role and key (mergeSpendLevels).
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
 // overrides the keys it sets, any other [[role]] is appended.
@@ -741,6 +748,7 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	c.Watches = append(c.Watches, o.Watches...)
 	c.Pools = append(c.Pools, o.Pools...)
 	c.Repos = append(c.Repos, o.Repos...)
+	c.SpendLevels = mergeSpendLevels(c.SpendLevels, o.SpendLevels)
 	overlaySection(md, "daemon", &c.Daemon, &o.Daemon)
 	overlaySection(md, "herdr", &c.Herdr, &o.Herdr)
 	overlaySection(md, "terminal", &c.Terminal, &o.Terminal)

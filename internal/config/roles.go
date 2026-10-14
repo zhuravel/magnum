@@ -73,9 +73,12 @@ type Role struct {
 	Identity string `toml:"identity"`
 	// Model and Effort are passed through the kind's model/effort args
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
-	// shell role's command gets them too, codex-review its effort as a
-	// config override). A built-in role's Effort and RereviewEffort follow
-	// [pipeline] spend (Pipeline.Spend) unless a [[role]] block sets them.
+	// shell role's command gets them too, codex-review both as config
+	// overrides, and a shell role's model needs a command that uses it). A
+	// built-in role's Effort and RereviewEffort follow [pipeline] spend
+	// (Pipeline.Spend) unless a [[role]] block sets them, and the active
+	// level's [spend.<level>] table (Config.SpendLevels) sets Model, Effort,
+	// RereviewEffort and MaxSubagents over both.
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after
@@ -291,8 +294,8 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     rereview_effort medium; aliases claude.
 //   - codex-review: shell, tool codex, effort high, command
 //     defaultCodexReviewCommand (run through the checkout's db-lock, its
-//     effort and the MCP servers to turn off as config overrides, then the
-//     merge base, else the base ref),
+//     model when it has one, its effort and the MCP servers to turn off as
+//     config overrides, then the merge base, else the base ref),
 //     ok_status [0], capture stdout; aliases
 //     codex, codex_review.
 //   - claude-simplify: claude, runs first, rerun_min_lines
@@ -347,8 +350,9 @@ func DefaultRoles() []Role {
 }
 
 // defaultCodexReviewCommand is the codex-review role's command: `codex
-// review` at the role's effort (a config override, so it never runs at the
-// effort of the user's global Codex config; args after it still win),
+// review` on the role's model when it has one (its block's or its spend
+// level's) and at the role's effort (config overrides, so it never runs at
+// the effort of the user's global Codex config; args after them still win),
 // without the MCP servers of the user's Codex config (.MCPOff, the codex
 // kind's mcp_off), against the PR's merge base, or its base ref when the
 // merge base is unknown. The merge base does not move: with --base
@@ -357,7 +361,7 @@ func DefaultRoles() []Role {
 // (.DBLockCommand) like the other roles' database commands: its sandbox
 // still reaches the slot's databases on localhost, which they use at the
 // same time.
-const defaultCodexReviewCommand = "{{.DBLockCommand}} codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+const defaultCodexReviewCommand = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
 
 // DefaultJudgeSubagents is the judge's max_subagents: on its own it started
 // 53 subagent threads in 36 sessions, 27% of the Codex spend.

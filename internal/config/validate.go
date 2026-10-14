@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"path"
 	"path/filepath"
@@ -706,11 +707,7 @@ func (c *Config) validatePipeline() []error {
 	fixCycles("pipeline", c.Pipeline.FixCycles)
 	autofix("pipeline", c.Pipeline.Autofix)
 	whiteboardRole("pipeline", c.Pipeline.WhiteboardRole)
-	switch v := c.Pipeline.Spend; v {
-	case "", SpendLow, SpendMedium, SpendHigh:
-	default:
-		errs = append(errs, fmt.Errorf("pipeline: spend must be %q, %q or %q, got %q", SpendLow, SpendMedium, SpendHigh, v))
-	}
+	errs = append(errs, c.validateSpend()...)
 	for i := range c.Watches {
 		w := &c.Watches[i]
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
@@ -761,6 +758,46 @@ func (c *Config) validatePipeline() []error {
 	errs = append(errs, validateAfter(roles)...)
 	for _, w := range c.Watches {
 		errs = append(errs, c.validateWatchRoles(w, roles)...)
+	}
+	return errs
+}
+
+// validateSpend checks [pipeline] spend and the [spend.<level>] tables: a
+// level's name is short and lower case, a table names only built-in roles
+// and declared [[role]]s (by name; the loader's unknown-key refusal covers
+// the keys), and spend names a built-in level or a declared one. A table for
+// a level spend does not name is checked too: it is declared for later.
+func (c *Config) validateSpend() []error {
+	var errs []error
+	builtins := DefaultRoles()
+	var own []string
+	for _, level := range slices.Sorted(maps.Keys(c.SpendLevels)) {
+		if !spendLevelName.MatchString(level) {
+			errs = append(errs, fmt.Errorf("spend: level name %q must match %s", level, spendLevelName))
+		}
+		if !isBuiltinSpend(level) {
+			own = append(own, level)
+		}
+		for _, name := range slices.Sorted(maps.Keys(c.SpendLevels[level])) {
+			named := func(r Role) bool { return r.Name == name }
+			if !slices.ContainsFunc(c.roles(), named) && !slices.ContainsFunc(builtins, named) {
+				errs = append(errs, fmt.Errorf("spend.%s: unknown role %q (name a built-in role or a declared [[role]])", level, name))
+			}
+		}
+	}
+	if v := c.Pipeline.Spend; !isBuiltinSpend(v) && !slices.Contains(own, v) {
+		names := []string{SpendLow, SpendMedium, SpendHigh}
+		for _, l := range own {
+			if spendLevelName.MatchString(l) {
+				names = append(names, l)
+			}
+		}
+		quoted := make([]string, len(names))
+		for i, n := range names {
+			quoted[i] = fmt.Sprintf("%q", n)
+		}
+		list := strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
+		errs = append(errs, fmt.Errorf("pipeline: spend must be %s, got %q", list, v))
 	}
 	return errs
 }
@@ -942,8 +979,12 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 				bad("tool %q is not a declared kind", r.Tool)
 			}
 		}
-		if r.Model != "" {
-			bad("model is for agent roles only")
+		// A shell role's model reaches its command only as a template
+		// variable (codex-review: -c model={{.Model}}); one its command does
+		// not use would be dropped without a word. A full-line template
+		// (prompt) is checked with the prompts below.
+		if r.Model != "" && r.Command != "" && !strings.Contains(r.Command, ".Model") {
+			bad("model %q reaches a shell role only as {{.Model}} in its command, which does not use it", r.Model)
 		}
 	} else {
 		if r.Command != "" {
@@ -1000,6 +1041,9 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 		if err != nil {
 			bad("%s prompt: %v", kind, err)
 			continue
+		}
+		if r.IsShell() && kind == PromptInitial && r.Model != "" && !strings.Contains(p.Text, ".Model") {
+			bad("model %q reaches a shell role only as {{.Model}} in its prompt %s, which does not use it", r.Model, name)
 		}
 		if parsed[name] {
 			continue

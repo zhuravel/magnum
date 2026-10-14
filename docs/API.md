@@ -2934,6 +2934,12 @@ type Config struct {
 	// through KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
+	// SpendLevels are the [spend.<level>] tables, by level name, then role
+	// name: the keys a level of [pipeline] spend sets on a role. A level that
+	// is not low, medium or high is the operator's own. Load merges the user
+	// config's tables into the base's level by level, role by role and key
+	// by key, and Roles already holds the active level's keys (applySpend).
+	SpendLevels map[string]map[string]SpendRole `toml:"spend"`
 
 	// Layout is filled by Load; it is not part of the file.
 	Layout paths.Layout `toml:"-"`
@@ -3921,13 +3927,17 @@ type Pipeline struct {
 	// whiteboard job at all, automatic or by hand. A [[watch]] may
 	// override it (Watch.WhiteboardRole); see Config.WhiteboardRoleFor.
 	WhiteboardRole string `toml:"whiteboard_role"`
-	// Spend is how hard the built-in roles think: SpendMedium (default; ""
-	// counts as it) keeps the effort and rereview_effort config.defaults.toml
-	// writes out, SpendHigh makes every one xhigh, SpendLow takes each one
-	// notch down, to medium at the lowest (see spendEffort). Load applies it
-	// to the values a built-in role (DefaultRoles) inherits, never to a key a
-	// [[role]] block of a config file sets, nor to a role that is not built
-	// in; it changes no model.
+	// Spend is the spend level, how hard and on which models the roles
+	// think: SpendMedium (default; "" counts as it) keeps the effort and
+	// rereview_effort config.defaults.toml writes out, SpendHigh makes every
+	// one xhigh, SpendLow takes each one notch down, to medium at the lowest
+	// (see spendEffort); Load applies that notch mapping to the values a
+	// built-in role (DefaultRoles) inherits, never to a key a [[role]] block
+	// of a config file sets, nor to a role that is not built in. Any other
+	// level is the operator's own, declared by a [spend.<level>] table
+	// (Config.SpendLevels), and starts from SpendMedium. The active level's
+	// table then sets the keys it names on its roles over everything else
+	// (applySpend).
 	Spend string `toml:"spend"`
 	// StatusComment switches the review status comment on: one comment on
 	// the conversation of each PR magnum means to review, posted as the PR's
@@ -4176,9 +4186,12 @@ type Role struct {
 	Identity string `toml:"identity"`
 	// Model and Effort are passed through the kind's model/effort args
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
-	// shell role's command gets them too, codex-review its effort as a
-	// config override). A built-in role's Effort and RereviewEffort follow
-	// [pipeline] spend (Pipeline.Spend) unless a [[role]] block sets them.
+	// shell role's command gets them too, codex-review both as config
+	// overrides, and a shell role's model needs a command that uses it). A
+	// built-in role's Effort and RereviewEffort follow [pipeline] spend
+	// (Pipeline.Spend) unless a [[role]] block sets them, and the active
+	// level's [spend.<level>] table (Config.SpendLevels) sets Model, Effort,
+	// RereviewEffort and MaxSubagents over both.
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after
@@ -4302,10 +4315,10 @@ func DefaultRoles() []Role
         claude-rereview.md, restart claude-restart.md, effort high,
         rereview_effort medium; aliases claude.
       - codex-review: shell, tool codex, effort high, command
-        defaultCodexReviewCommand (run through the checkout's db-lock,
-        its effort and the MCP servers to turn off as config overrides,
-        then the merge base, else the base ref), ok_status [0], capture stdout;
-        aliases codex, codex_review.
+        defaultCodexReviewCommand (run through the checkout's db-lock, its model
+        when it has one, its effort and the MCP servers to turn off as config
+        overrides, then the merge base, else the base ref), ok_status [0],
+        capture stdout; aliases codex, codex_review.
       - claude-simplify: claude, runs first, rerun_min_lines
         DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only:
         it writes its proposals to claude-simplify.md), no after, so it runs in
@@ -4381,6 +4394,16 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool
 func (r Role) StatusOK(status int) bool
     StatusOK reports whether a shell command's exit status counts as a finished
     report: only 0 when OKStatus is empty, else any status in it.
+
+type SpendRole struct {
+	Model          *string `toml:"model"`
+	Effort         *string `toml:"effort"`
+	RereviewEffort *string `toml:"rereview_effort"`
+	MaxSubagents   *int    `toml:"max_subagents"`
+}
+    SpendRole is a role's entry in a [spend.<level>] table: the keys the level
+    sets on the role while [pipeline] spend names it, over the role's own
+    [[role]] keys and the notch mapping alike; nil = the role's value stays.
 
 type Terminal struct {
 	App               string `toml:"app"`      // Terminal | iTerm2 | Ghostty | WezTerm | custom | generic

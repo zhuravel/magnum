@@ -207,18 +207,21 @@ func TestValidatePipeline(t *testing.T) {
 			role(c, "claude-simplify").After = []string{"claude-review"}
 			role(c, "claude-review").After = []string{"claude-simplify"}
 		}, "cycle"},
-		"judge after":        {func(c *Config) { role(c, "codex-judge").After = []string{"claude-review"} }, "a judge takes no after"},
-		"judge runs first":   {func(c *Config) { role(c, "codex-judge").Runs = RunsFirst }, "runs = always"},
-		"judge stdout":       {func(c *Config) { role(c, "codex-judge").Capture = CaptureStdout }, "shell roles only"},
-		"capture git-diff":   {func(c *Config) { role(c, "claude-simplify").Capture = "git-diff" }, `capture must be file or stdout, got "git-diff"`},
-		"judge shell":        {add(Role{Name: "sh-judge", Kind: KindShell, Judge: true, Command: "x"}), "not a shell command"},
-		"bad runs":           {func(c *Config) { role(c, "claude-review").Runs = "sometimes" }, "runs must be"},
-		"stdout on session":  {func(c *Config) { role(c, "claude-review").Capture = CaptureStdout }, "shell roles only"},
-		"bad capture":        {func(c *Config) { role(c, "claude-review").Capture = "tmux" }, "capture must be"},
-		"shell no command":   {func(c *Config) { role(c, "codex-review").Command = "" }, "needs command"},
-		"shell both":         {func(c *Config) { role(c, "codex-review").Prompt = "codex-review.sh" }, "not both"},
-		"shell bad tool":     {func(c *Config) { role(c, "codex-review").Tool = "gemini" }, `tool "gemini"`},
-		"shell model":        {func(c *Config) { role(c, "codex-review").Model = "o3" }, "agent roles only"},
+		"judge after":       {func(c *Config) { role(c, "codex-judge").After = []string{"claude-review"} }, "a judge takes no after"},
+		"judge runs first":  {func(c *Config) { role(c, "codex-judge").Runs = RunsFirst }, "runs = always"},
+		"judge stdout":      {func(c *Config) { role(c, "codex-judge").Capture = CaptureStdout }, "shell roles only"},
+		"capture git-diff":  {func(c *Config) { role(c, "claude-simplify").Capture = "git-diff" }, `capture must be file or stdout, got "git-diff"`},
+		"judge shell":       {add(Role{Name: "sh-judge", Kind: KindShell, Judge: true, Command: "x"}), "not a shell command"},
+		"bad runs":          {func(c *Config) { role(c, "claude-review").Runs = "sometimes" }, "runs must be"},
+		"stdout on session": {func(c *Config) { role(c, "claude-review").Capture = CaptureStdout }, "shell roles only"},
+		"bad capture":       {func(c *Config) { role(c, "claude-review").Capture = "tmux" }, "capture must be"},
+		"shell no command":  {func(c *Config) { role(c, "codex-review").Command = "" }, "needs command"},
+		"shell both":        {func(c *Config) { role(c, "codex-review").Prompt = "codex-review.sh" }, "not both"},
+		"shell bad tool":    {func(c *Config) { role(c, "codex-review").Tool = "gemini" }, `tool "gemini"`},
+		"shell model": {func(c *Config) {
+			r := role(c, "codex-review")
+			r.Model, r.Command = "o3", "codex review --base {{.BaseRef}}"
+		}, `model "o3" reaches a shell role only as {{.Model}} in its command`},
 		"agent command":      {func(c *Config) { role(c, "claude-review").Command = "ls" }, "command is for shell roles only"},
 		"agent tool":         {func(c *Config) { role(c, "claude-review").Tool = "codex" }, "tool is for shell roles only"},
 		"model without args": {add(Role{Name: "droid-review", Kind: "droid", Prompt: "claude-review.md", Model: "x"}), "has no model args"},

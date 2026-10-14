@@ -2,8 +2,8 @@
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
 # appended, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [usage], [triage],
-# [learn], [notes] or [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same
-# name key by key (other names are appended). App private keys are PEM files ([[identity]] private_key_file, by
+# [learn], [notes] or [kinds.<name>] overrides the value here, its [[role]] blocks override the role of the same
+# name key by key (other names are appended), and its [spend.<level>] tables merge by level, role and key. App private keys are PEM files ([[identity]] private_key_file, by
 # convention ~/.config/magnum/keys/<identity>.pem); only the older private_key_env reads one from an environment
 # variable, e.g. from a checkout's gitignored .mise.local.toml (the LaunchAgent then runs through `mise exec`).
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
@@ -286,13 +286,23 @@ whiteboard = false                # true: writes a whiteboard (an interactive do
                                   # [[watch]] may override
 whiteboard_role = "claude-whiteboard"   # the role with whiteboard = true that writes it. "" = no whiteboard job,
                                   # by hand or automatic. [[watch]] may override
-spend = "medium"                  # how hard the built-in roles think, their effort and rereview_effort: medium =
-                                  # the values the [[role]] blocks below write out; high = xhigh for every one
-                                  # (the strongest level both Codex and Claude take); low = one notch down
-                                  # (xhigh to high, high to medium), medium the floor and "" left empty. A key
-                                  # your own [[role]] block sets wins under every level, a role that is not built
-                                  # in keeps its own, and no model changes. Read at startup: `magnum
-                                  # daemon-restart --drain` applies a change; `magnum roles` shows the efforts
+spend = "medium"                  # the spend level: how hard, and on which models, the roles think. medium = the
+                                  # efforts the [[role]] blocks below write out; high = xhigh for every built-in
+                                  # effort and rereview_effort (the strongest level both Codex and Claude take);
+                                  # low = one notch down (xhigh to high, high to medium), medium the floor and ""
+                                  # left empty. A key your own [[role]] block sets wins over that mapping, and a
+                                  # role that is not built in keeps its own. Any other name is a level of your
+                                  # own, declared by its [spend.<name>] table, and starts from medium. The active
+                                  # level's table sets model, effort, rereview_effort or max_subagents per role
+                                  # (a built-in role or one of your [[role]]s) over everything, your [[role]]
+                                  # blocks included; a table spend does not name waits for later. In your config:
+                                  #   [spend.high]
+                                  #   codex-judge = { model = "gpt-6.1-astra", rereview_effort = "xhigh" }
+                                  #   claude-review = { model = "fable", effort = "xhigh" }
+                                  #   [spend.low]
+                                  #   claude-review = { model = "sonnet", effort = "medium" }
+                                  # Read at startup: `magnum daemon-restart --drain` applies a change; `magnum
+                                  # roles` shows the models and efforts
 status_comment = false            # true: one comment on each PR magnum means to review, posted as the PR's
                                   # posting identity (the one the reviews use) and edited in place: Scheduled
                                   # (the head and why it waits), In progress, Posted (the review's link), or one
@@ -475,15 +485,19 @@ name = "codex-review"
 kind = "shell"                        # a shell pane, not an agent session
 summary = "Codex's own static review of the diff"
 tool = "codex"                        # codex's login check, pauses and health patterns apply
-# args = ["-c", "model=gpt-6.1-sol"]  # `codex review` takes the model as a config override
+# model = "gpt-6.1-sol"               # passed by the command as -c model=gpt-6.1-sol (empty = codex's own model);
+                                      # set it here or in a [spend.<level>] table, not in args, which come last and
+                                      # would win over the level's model
 effort = "high"                       # passed by the command as -c model_reasoning_effort=high, so `codex review`
                                       # never runs at your global Codex effort; args come after it and win
-command = "{{.DBLockCommand}} codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+command = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
                                       # .DBLockCommand is `magnum db-lock --checkout <slot> --role codex-review --`:
                                       # codex review is sandboxed but reaches the slot's databases on localhost
                                       # (Rails boots and truncates them), so it takes its turn on them like the
                                       # other roles, and db-lock runs codex from PATH, not your shell function.
-                                      # .MCPOff turns off your Codex MCP servers ([kinds.codex] mcp_off) and
+                                      # The model (when the role or its spend level has one) and the effort
+                                      # follow as config overrides. A command of your own that leaves .Model
+                                      # out refuses a model rather than dropping it. .MCPOff turns off your Codex MCP servers ([kinds.codex] mcp_off) and
                                       # keeps a PR's .codex/ and AGENTS.md changes out (project_untrust,
                                       # project_docs_off); then
                                       # the merge base (fixed), else the base ref (moves with the base branch)

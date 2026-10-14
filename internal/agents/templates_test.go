@@ -598,6 +598,43 @@ func TestRenderGolden(t *testing.T) {
 	}
 }
 
+// The built-in codex-review command passes the role's model (its [[role]]
+// block's or the spend level's) to `codex review` as -c model=<model>, before
+// the effort, and only for a role with a model; args still come last, so an
+// args override wins. The shipped codex-review.sh types the same line.
+func TestTheCodexReviewCommandRendersTheModel(t *testing.T) {
+	role := defaultRole(t, RoleCodexReview)
+	data := ShellData{BaseRef: "origin/master", ReportPath: "/rep/codex-review.md", Marker: DoneMarker("r-7"), Checkout: "/tmp/slot"}
+	for _, tc := range []struct {
+		model string
+		args  []string
+		want  string
+	}{
+		{"", nil, " codex review -c model_reasoning_effort=high --base origin/master; }"},
+		{"gpt-6.1-astra", nil, " codex review -c model=gpt-6.1-astra -c model_reasoning_effort=high --base origin/master; }"},
+		{"gpt-6.1-astra", []string{"-c", "model=gpt-6.1-sol"},
+			" codex review -c model=gpt-6.1-astra -c model_reasoning_effort=high --base origin/master -c model=gpt-6.1-sol; }"},
+	} {
+		r := role
+		r.Model, r.Args = tc.model, tc.args
+		got, err := ShellLine(r, data)
+		if err != nil {
+			t.Fatalf("model %q: %v", tc.model, err)
+		}
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("model %q, args %q: line %s\nwant it to contain %q", tc.model, tc.args, got, tc.want)
+		}
+		if tc.model == "" && strings.Contains(got, "-c model=") {
+			t.Errorf("no model: line %s passes one", got)
+		}
+		sh := r
+		sh.Command, sh.Prompt = "", "codex-review.sh"
+		if line, err := ShellLine(sh, data); err != nil || line != got {
+			t.Errorf("model %q: codex-review.sh line = %q, %v\nwant %q", tc.model, line, err, got)
+		}
+	}
+}
+
 func checkGolden(t *testing.T, golden, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", golden+".golden")
