@@ -334,11 +334,17 @@ func (e *Engine) remoteHead(ctx context.Context, job *fixJob) (string, error) {
 // detached, recorded as checked out), once the slot is still claimed or
 // held for the PR.
 func (e *Engine) resyncFixSlot(ctx context.Context, job *fixJob, sha string) error {
-	slot, err := e.st.SlotByID(ctx, job.slot.ID)
+	return e.resyncSlot(ctx, job.pr.ID, job.slot, sha)
+}
+
+// resyncSlot puts slot, PR prID's, back in order at sha (Slots.Resync), once
+// it is still claimed or held for the PR: the fix and whiteboard jobs'.
+func (e *Engine) resyncSlot(ctx context.Context, prID int64, of store.Slot, sha string) error {
+	slot, err := e.st.SlotByID(ctx, of.ID)
 	if err != nil {
 		return err
 	}
-	if deref(slot.PRID) != job.pr.ID || (slot.State != store.SlotClaimed && slot.State != store.SlotHeld) {
+	if deref(slot.PRID) != prID || (slot.State != store.SlotClaimed && slot.State != store.SlotHeld) {
 		return fmt.Errorf("slot %s is no longer the PR's (%s)", slot.Name, slot.State)
 	}
 	return e.d.Slots.Resync(ctx, slot, sha)

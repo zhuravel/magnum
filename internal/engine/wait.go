@@ -60,6 +60,7 @@ const (
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
 	WaitCapacity      = "capacity"       // max_concurrent_reviews or max_total_working_codex
 	WaitFixing        = "fixing"         // the fix job's fixer works on the PR (fix.go): its re-review comes after
+	WaitWhiteboard    = "whiteboard"     // the whiteboard job writes the PR's whiteboard (whiteboard.go): the round comes after
 	WaitOther         = "other"          // any other dispatch gate (details, a human, a paused watch, ...)
 	WaitNext          = "next"           // nothing holds it: the next dispatch starts it
 )
@@ -218,6 +219,8 @@ func (w Wait) short(now time.Time, cause bool) string {
 		what = "capacity"
 	case WaitFixing:
 		what = "fixing"
+	case WaitWhiteboard:
+		what = strings.TrimSuffix("whiteboard in progress · "+w.Subject, " · ")
 	case WaitNext:
 		what = "next tick"
 	default:
@@ -288,6 +291,8 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 		s += "; `magnum resume` lifts the pause"
 	case w.Reason == WaitFixing && ref != "":
 		s += "; `magnum abort " + ref + "` stops the fixer"
+	case w.Reason == WaitWhiteboard && ref != "":
+		s += "; `magnum abort " + ref + "` stops the writer"
 	}
 	return s
 }
@@ -365,6 +370,9 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	}
 	if fw, ok := e.fixWaitOf(ctx, pr.ID); ok {
 		return with(fw) // nothing starts while the fixer works (fixHolds)
+	}
+	if ww, ok := e.whiteboardWaitOf(pr.ID, w); ok {
+		return with(ww) // nor while the whiteboard is being written (its reservation)
 	}
 	if pr.NextAttemptAt != nil && pr.NextAttemptAt.After(now) {
 		return with(Wait{Reason: WaitRetry, Until: *pr.NextAttemptAt, Count: pr.Attempts + 1, Max: maxAttempts,

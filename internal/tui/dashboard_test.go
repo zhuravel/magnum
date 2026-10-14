@@ -136,6 +136,9 @@ func (f *fakeActions) FixOff(_ context.Context, ref string, off bool) (ActionRes
 	}
 	return f.record("fix --on " + ref)
 }
+func (f *fakeActions) OpenWhiteboard(_ context.Context, ref string) (ActionResult, error) {
+	return f.record("whiteboard --open " + ref)
+}
 func (f *fakeActions) Ignore(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("ignore " + ref)
 }

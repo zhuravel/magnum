@@ -190,6 +190,12 @@ type PRBoardRow struct {
 	Fixing  string
 	FixLoop bool
 	FixOff  bool
+	// Whiteboard is the PR's whiteboard, the Whiteboard session that holds
+	// it and the head it describes (engine.KVPRWhiteboard, written after a
+	// review or by `magnum whiteboard`); nil when the PR has none. The card
+	// says "whiteboard <head>" among the PR's flags, and w opens it in
+	// Whiteboard Desktop.
+	Whiteboard *PRWhiteboard
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -270,6 +276,14 @@ type AutoApproval struct {
 	Head     string
 	URL      string
 	At       time.Time
+}
+
+// PRWhiteboard is a PR's whiteboard as the board knows it: the Whiteboard
+// session that holds it, which w opens, and the head it describes
+// (engine.WhiteboardRecord).
+type PRWhiteboard struct {
+	Session string
+	Head    string
 }
 
 // PRBoardRow.NeedsMe values (store.NeedsMe's).
@@ -672,6 +686,11 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
 	r.Fixing = cleanText(r.Fixing)
+	if r.Whiteboard != nil {
+		w := *r.Whiteboard
+		w.Session, w.Head = cleanText(w.Session), cleanText(w.Head)
+		r.Whiteboard = &w
+	}
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	r.AutoStopped, r.AutoRefused = cleanText(r.AutoStopped), cleanText(r.AutoRefused)

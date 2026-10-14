@@ -360,11 +360,12 @@ func TestBoardRightClickMenu(t *testing.T) {
 		"snooze 2h":         true,
 		"fix findings":      false, // nor a review to fix
 		"fix off":           true,
+		"open whiteboard":   false, // nor a whiteboard
 	}
 	if got := menuState(m.menuItems()); !maps.Equal(got, want) {
 		t.Errorf("menu of #11920:\n got %v\nwant %v", got, want)
 	}
-	if len(m.menuItems()) != 21 {
+	if len(m.menuItems()) != 22 {
 		t.Errorf("%d items", len(m.menuItems()))
 	}
 

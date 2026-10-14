@@ -109,6 +109,23 @@ func fixFixture() RoleData {
 	return d
 }
 
+// whiteboardFixture is the whiteboard job's data: the PR, its reviewed head
+// and base, the slot's checkout, the posted review and the whiteboard of an
+// earlier head (session; "" = none yet).
+func whiteboardFixture(session string) RoleData {
+	return RoleData{
+		URL: "https://github.com/talkable/talkable/pull/11920", Owner: "talkable", Repo: "talkable", Number: 11920,
+		HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", BaseRef: "origin/master",
+		Checkout:          "/Users/bohdan/Projects/talkable.review3",
+		ReportPath:        "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-whiteboard.md",
+		RunID:             "r-20261003T120000-9",
+		Role:              "claude-whiteboard",
+		ReviewURL:         "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
+		ReviewFile:        "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review.json",
+		WhiteboardSession: session,
+	}
+}
+
 // triageFixture has the shape of the engine's triage data (internal/engine
 // triageData, which this package cannot import); the engine checks the
 // shipped prompt against the real type (CheckPrompts).
@@ -511,6 +528,8 @@ func TestRenderGolden(t *testing.T) {
 		{"claude_rereview_no_base", "claude-rereview.md", noBase},
 		{"simplify", "claude-simplify.md", simplifyData(roleFixture())},
 		{"fix", "fix.md", fixFixture()},
+		{"whiteboard", "whiteboard.md", whiteboardFixture("")},
+		{"whiteboard_update", "whiteboard.md", whiteboardFixture("6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b")},
 		{"model_fallback", FallbackPromptName, FallbackData{Model: "opus", Previous: "fable", Role: "claude-review",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3",
 			ReportPath: "/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md"}},
@@ -601,7 +620,7 @@ func checkGolden(t *testing.T, golden, got string) {
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "fix.md", "judge-continue.md",
 		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md",
-		"skill-edit.md", "triage.md"}
+		"skill-edit.md", "triage.md", "whiteboard.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
 	}

@@ -81,6 +81,9 @@ type prsJSONRow struct {
 	Recent           bool              `json:"recent"`             // merged or closed within [board] recent_closed
 	MergedUnreviewed bool              `json:"merged_unreviewed"`
 	FlagDismissed    bool              `json:"flag_dismissed"`
+	// Whiteboard is the PR's whiteboard (magnum whiteboard): its Whiteboard
+	// session and the head it describes; null when it has none.
+	Whiteboard *prsJSONWhiteboard `json:"whiteboard"`
 	// NeedsMe: magnum approved the head, but GitHub still blocks the PR on
 	// your approval: "approve" (a review that counts is required), "lift"
 	// (your changes request is the only one); "" otherwise.
@@ -106,6 +109,14 @@ type prsJSONApproveAs struct {
 	Identity string `json:"identity"`
 	Login    string `json:"login"`
 	Refusal  string `json:"refusal"` // "" when it would post
+}
+
+// prsJSONWhiteboard is the PR's whiteboard: the Whiteboard session that
+// holds it (`whiteboard app pick --session <session>` opens it) and the head
+// it describes.
+type prsJSONWhiteboard struct {
+	Session string `json:"session"`
+	Head    string `json:"head"`
 }
 
 type prsJSONAutoApproval struct {
@@ -293,6 +304,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
 		SnoozedUntil: r.SnoozedUntil, SnoozedAt: r.SnoozedAt, SnoozedBy: r.SnoozedBy,
 		CodexFlag: r.CodexFlag, CodexFlagDetail: r.CodexFlagSentence, MuteReason: r.MuteReason, Fixing: r.Fixing, FixLoop: r.FixLoop, FixOff: r.FixOff,
+		Whiteboard:    mapPtr(r.Whiteboard, func(w tui.PRWhiteboard) prsJSONWhiteboard { return prsJSONWhiteboard{Session: w.Session, Head: w.Head} }),
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped, AutoApproveRefused: r.AutoRefused,

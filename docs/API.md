@@ -1430,6 +1430,15 @@ func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool
     a Codex session id, a rollout it cannot find or read, and a turn that ended
     without an error, its helpers' turns too.
 
+func (m *Manager) WhiteboardPrompt(pr store.PR, role Role, run store.Run, in WhiteboardPromptInput) (string, error)
+    WhiteboardPrompt renders the whiteboard role's prompt (its initial prompt,
+    whiteboard.md by default) for run, a run of that role on pr (NewRun,
+    kind store.RunWhiteboard): RoleData with the PR's URL, name and number,
+    the run's target as HeadSHA, its report path and id, and in's fields. It
+    never carries PR text: the writer reads the PR's title with gh. A role that
+    is not a whiteboard role, a run without a report path or an input without a
+    checkout is an error.
+
 func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error)
     Wrapper reports whether the kind's command is a zsh wrapper function (or
     alias) that supplies its own flags, per [kinds.<kind>] wrapper: "true"
@@ -1705,6 +1714,11 @@ type RoleData struct {
 	// that posted it, whose threads the fixer answers; SkillPath the fix
 	// skill's startup copy, absolute.
 	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, SkillPath string
+	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
+	// empty for every other role, ReviewURL and ReviewFile its review as
+	// for the fix prompt): the Whiteboard session of an earlier head of the
+	// PR, which the writer moves to HeadSHA; "" = it creates the PR's first.
+	WhiteboardSession string
 }
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
@@ -1798,6 +1812,17 @@ type TurnError struct {
 	Helper string
 }
     TurnError is the error a Codex turn ended with, as its rollout records it.
+
+type WhiteboardPromptInput struct {
+	Owner, Repo, Checkout, BaseRef, ReviewURL, ReviewFile, Session string
+}
+    WhiteboardPromptInput is what the whiteboard job knows beyond the PR, the
+    role and the run that WhiteboardPrompt reads: the PR's repository (Owner,
+    Repo), the slot's checkout the whiteboard's code views read (Checkout,
+    absolute), the base ref the writer takes the merge base from (BaseRef,
+    e.g. origin/master), the review magnum posted on the head (ReviewURL and
+    its review.json ReviewFile) and the Whiteboard session of an earlier head
+    (Session; "" = none yet).
 
 type Workspace struct {
 	WorkspaceID string
@@ -2544,6 +2569,10 @@ const (
 	// RoleClaudeFix is the built-in fix role, the fixer of the fix job
 	// (Role.Fix); [pipeline] fix_role names it by default.
 	RoleClaudeFix = "claude-fix"
+	// RoleClaudeWhiteboard is the built-in whiteboard role, the writer of
+	// the whiteboard job (Role.Whiteboard); [pipeline] whiteboard_role
+	// names it by default.
+	RoleClaudeWhiteboard = "claude-whiteboard"
 
 	KindCodex  = "codex"
 	KindClaude = "claude"
@@ -2661,6 +2690,10 @@ const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
 
 const DefaultTriagePrompt = "triage.md"
     DefaultTriagePrompt is the triage prompt file.
+
+const DefaultWhiteboardPrompt = "whiteboard.md"
+    DefaultWhiteboardPrompt is a whiteboard role's default prompt (it has no
+    skill: the Whiteboard app's own instructions guide it).
 
 const EditorRoleName = "skill"
     EditorRoleName is the name of the role the skill editor runs as
@@ -2915,9 +2948,10 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
     cfg.Sources lists what was read.
 
 func (c *Config) AllRoles() []Role
-    AllRoles returns every declared role in [[role]] order, the judges held in
-    reserve and the fix roles included (RolesFor leaves them out): what names a
-    role on the command line, lists roles, or copies the configuration.
+    AllRoles returns every declared role in [[role]] order, the judges held
+    in reserve and the fix and whiteboard roles included (RolesFor leaves them
+    out): what names a role on the command line, lists roles, or copies the
+    configuration.
 
 func (c *Config) AutoApproveBodyFor(fullName string) string
     AutoApproveBodyFor is the approval body template of repository fullName's
@@ -3075,8 +3109,9 @@ func (c *Config) RolePrompt(r Role, kind string) (Prompt, error)
 func (c *Config) RolesFor(w *Watch) []Role
     RolesFor returns the roles a watch runs, in [[role]] order: every role
     when w is nil or w.Roles is empty, else the ones w.Roles names (names or
-    aliases). A fix role is never one of them (FixRoleFor finds it), and when w
-    names no roles only the first judge is, the others standing in reserve.
+    aliases). A fix or whiteboard role is never one of them (FixRoleFor and
+    WhiteboardRoleFor find them), and when w names no roles only the first judge
+    is, the others standing in reserve.
 
 func (c *Config) SelfLogins() []string
     SelfLogins are the logins that count as the operator's own (the board's
@@ -3150,6 +3185,32 @@ func (c *Config) Warnings() []string
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
+
+func (c *Config) WhiteboardFor(w *Watch) bool
+    WhiteboardFor reports whether the whiteboard job is on for watch w:
+    the watch's whiteboard when it sets one, else [pipeline] whiteboard. A nil w
+    is [pipeline]'s. The job still needs a role: WhiteboardRoleFor.
+
+func (c *Config) WhiteboardRoleFor(w *Watch) (Role, bool)
+    WhiteboardRoleFor is the whiteboard role of watch w: the watch's
+    whiteboard_role when it sets one (an empty one switches the whiteboard job
+    off for the watch, automatic or by hand), else [pipeline] whiteboard_role,
+    found among every declared role (not only the watch's). ok is false when
+    none is set or the name matches no whiteboard role; Validate reports
+    the latter. A whiteboard role that names no identity acts as w's poll
+    identity (its identity when it has no poll_identity, as Normalize sets it):
+    the operator's own gh login in a `magnum init` config, which polls as it.
+    Without a watch the identity stays empty.
+
+func (c *Config) WhiteboardRoleName(w *Watch) string
+    WhiteboardRoleName is the whiteboard_role that applies to w: the
+    watch's when it sets one, else [pipeline]'s ("" = no whiteboard job).
+    WhiteboardRoleFor resolves it.
+
+func (c *Config) WhiteboardRoles() []Role
+    WhiteboardRoles returns every declared whiteboard role in [[role]] order:
+    the built-in claude-whiteboard, and the whiteboard roles a configuration
+    adds for the watches whose whiteboard_role names them (WhiteboardRoleFor).
 
 func (c *Config) WithCandidate(dir string) (*Config, error)
     WithCandidate is the config a replay or a check of candidate dir runs with:
@@ -3826,6 +3887,17 @@ type Pipeline struct {
 	// review with findings on a PR whose author is one of the operator's
 	// logins. A [[watch]] may override it; see Config.AutofixFor.
 	Autofix string `toml:"autofix"`
+	// Whiteboard switches the whiteboard job on: after every review magnum
+	// posts on a new head, the whiteboard role writes a whiteboard of the
+	// PR (an interactive document in the dev.fast Whiteboard app) in the
+	// PR's slot. Default false. A [[watch]] may override it
+	// (Watch.Whiteboard); see Config.WhiteboardFor.
+	Whiteboard bool `toml:"whiteboard"`
+	// WhiteboardRole names the whiteboard role that writes it: a [[role]]
+	// with whiteboard = true, RoleClaudeWhiteboard by default. "" = no
+	// whiteboard job at all, automatic or by hand. A [[watch]] may
+	// override it (Watch.WhiteboardRole); see Config.WhiteboardRoleFor.
+	WhiteboardRole string `toml:"whiteboard_role"`
 }
     Pipeline is the [pipeline] section.
 
@@ -4035,12 +4107,21 @@ type Role struct {
 	// identity (the account it pushes and replies as), and its Skill is the
 	// fix skill (DefaultFixSkill) the way a judge's is the review skill.
 	Fix bool `toml:"fix"`
+	// Whiteboard: the role that writes the whiteboard of a PR magnum
+	// reviewed (the whiteboard job): a session role that, like a fix role,
+	// never takes part in a round, so RolesFor, Stages and a watch's roles
+	// leave it out; Config.WhiteboardRoleFor finds it by [pipeline]
+	// whiteboard_role. It takes no runs, after, own_pass, judge, fix or
+	// skill, and its Identity is a gh identity (the account its pane reads
+	// the PR as). Its Args give the session the Whiteboard MCP server.
+	Whiteboard bool `toml:"whiteboard"`
 	// Summary is a one-line description of what the role checks, shown to the
 	// triage model ([triage]; Removable). A role without one is never
 	// removed from a round, and neither is the judge.
 	Summary string `toml:"summary"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
-	// A fix role has none: it stays "" and validation refuses a value.
+	// A fix or whiteboard role has none: it stays "" and validation refuses
+	// a value.
 	Runs string `toml:"runs"`
 	// RerunMinLines, for runs = "first": the role runs again once the code
 	// lines changed since the head of its last completed run reach this
@@ -4198,9 +4279,17 @@ func DefaultRoles() []Role
         and replies as), model opus, effort high, skill DefaultFixSkill, prompt
         fix.md, timeout 60m, no runs; the fixer of the fix job, never part of a
         round, its session kept like a reviewer's (no max_session_rounds).
+      - claude-whiteboard: claude, whiteboard, no identity (WhiteboardRoleFor
+        gives it each watch's poll identity), model opus, effort medium,
+        prompt whiteboard.md, output claude-whiteboard.md, timeout 30m,
+        no runs, no skill; args give the session the Whiteboard MCP server
+        alone (`--mcp-config` with the whiteboard command's `mcp` server;
+        the claude kind's mcp_strict keeps every other server out); the writer
+        of the whiteboard job, never part of a round.
 
     Each non-judge role carries a Summary, which makes it a candidate for triage
-    ([triage]); the fix role has none, it is never in a round.
+    ([triage]); the fix and whiteboard roles have none, they are never in a
+    round.
 
 func (r Role) AgentKind() string
     AgentKind is the agent CLI whose login preflight, pauses and health patterns
@@ -4220,6 +4309,10 @@ func (r Role) IsFix() bool
 
 func (r Role) IsShell() bool
     IsShell reports whether the role runs a shell command (kind "shell").
+
+func (r Role) IsWhiteboard() bool
+    IsWhiteboard reports whether the role is a whiteboard role (Whiteboard):
+    the writer of the whiteboard job, never part of a round.
 
 func (r Role) Matches(s string) bool
     Matches reports whether s (case and surrounding space ignored) is the role's
@@ -4388,6 +4481,13 @@ type Watch struct {
 	FixRole   *string `toml:"fix_role"`
 	FixCycles *int    `toml:"fix_cycles"`
 	Autofix   string  `toml:"autofix"`
+	// Whiteboard and WhiteboardRole override [pipeline] whiteboard and
+	// whiteboard_role for this watch's PRs: unset keeps the pipeline's, a
+	// whiteboard of false switches the automatic job off for the watch, a
+	// whiteboard_role of "" switches the job off altogether (see
+	// Config.WhiteboardFor, WhiteboardRoleFor).
+	Whiteboard     *bool   `toml:"whiteboard"`
+	WhiteboardRole *string `toml:"whiteboard_role"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
 	// related_lookback and related_ignore for this watch's PRs: unset keeps
 	// the pipeline's, a related_lookback of "0s" turns the lookback off (open
@@ -5047,6 +5147,7 @@ const (
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
 	WaitCapacity      = "capacity"       // max_concurrent_reviews or max_total_working_codex
 	WaitFixing        = "fixing"         // the fix job's fixer works on the PR (fix.go): its re-review comes after
+	WaitWhiteboard    = "whiteboard"     // the whiteboard job writes the PR's whiteboard (whiteboard.go): the round comes after
 	WaitOther         = "other"          // any other dispatch gate (details, a human, a paused watch, ...)
 	WaitNext          = "next"           // nothing holds it: the next dispatch starts it
 )
@@ -5098,6 +5199,10 @@ const ReqSnooze = "snooze"
 const ReqUnapprove = "unapprove"
     ReqUnapprove is `magnum unapprove` and the board's D (UnapprovePayload).
 
+const ReqWhiteboard = "whiteboard"
+    ReqWhiteboard starts the whiteboard job on a PR's reviewed head
+    (WhiteboardPayload).
+
 const RequestReadyForReview = "(ready for review)"
     RequestReadyForReview is KVPRRequestBy for a draft that became ready for
     review.
@@ -5106,6 +5211,10 @@ const SkipIgnored = "ignored"
     SkipIgnored is the skip_reason `magnum ignore` stores on a muted PR:
     classify keeps it instead of the generic "muted", and the board shows such a
     PR as ignored.
+
+const WhiteboardCommand = "whiteboard"
+    WhiteboardCommand is the Whiteboard CLI magnum runs: `whiteboard` on PATH
+    (the daemon's LaunchAgent PATH has ~/.local/bin).
 
 
 VARIABLES
@@ -5317,6 +5426,10 @@ func KVPRTrivial(prID int64) string
 func KVPRWait(prID int64) string
     KVPRWait holds why a waiting PR has no round yet (Wait as JSON).
 
+func KVPRWhiteboard(prID int64) string
+    KVPRWhiteboard holds the whiteboard of a PR's latest written head
+    (WhiteboardRecord as JSON).
+
 func KickDaemon(layout paths.Layout) (int, error)
     KickDaemon asks the running daemon for a tick now (SIGUSR1, `magnum kick`);
     it returns the daemon's pid, or 0 when none runs. The pidfile can outlive
@@ -5411,6 +5524,16 @@ func TrivialDelta(files []github.FileDelta, allowed []string) (classes []string,
     A class missing from allowed makes the files that need it non-trivial,
     so an empty allowed never skips.
 
+func WhiteboardOpenCmd(session string) execx.Cmd
+    WhiteboardOpenCmd opens the whiteboard session in Whiteboard Desktop,
+    focused: `whiteboard app pick --session <id> --focus`.
+
+func WhiteboardStatusCmd() execx.Cmd
+    WhiteboardStatusCmd is Whiteboard's readiness check, `whiteboard api
+    whiteboard_status`: it exits 0 only while a Whiteboard server runs
+    (Whiteboard Desktop, or `whiteboard server start`). A failed exit is an
+    answer (Probe).
+
 func WriteTabBarFile(path string, at time.Time, maxAge time.Duration, text string) error
     WriteTabBarFile atomically replaces the tab-bar file with two lines:
     when it was written and how long it stays fresh (unix seconds and seconds,
@@ -5454,6 +5577,9 @@ type Agents interface {
 	// gives a fixer whose time ran out its last call within the run.
 	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
 	FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error)
+	// WhiteboardPrompt renders the whiteboard job's prompt (whiteboard.go),
+	// whose run NewRun and Submit start as the fix job's.
+	WhiteboardPrompt(pr store.PR, role agents.Role, run store.Run, in agents.WhiteboardPromptInput) (string, error)
 	Submit(ctx context.Context, run store.Run, text string) error
 	Tell(ctx context.Context, run store.Run, text string) error
 }
@@ -6648,6 +6774,25 @@ func (p WatchPoll) Failing(now time.Time) time.Duration
 
 func (p WatchPoll) Value() string
     Value is p as store.KVWatchPoll stores it (times in UTC).
+
+type WhiteboardPayload struct {
+	PRTarget
+}
+    WhiteboardPayload is a `magnum whiteboard` request: write the whiteboard of
+    the PR's reviewed head.
+
+type WhiteboardRecord struct {
+	Session string    `json:"session"`
+	Head    string    `json:"head"`
+	At      time.Time `json:"at"`
+	Role    string    `json:"role"`
+}
+    WhiteboardRecord is a PR's whiteboard: its Whiteboard session, the head it
+    describes, when it was written and by which role.
+
+func ParseWhiteboardRecord(s string) (WhiteboardRecord, bool)
+    ParseWhiteboardRecord reads a KVPRWhiteboard value; ok is false for one that
+    names no session or head.
 
 ```
 
@@ -14133,6 +14278,9 @@ const (
 	// RunFix is the fix job's run: the fixer's agent prompted to fix magnum's
 	// findings on its author's PR (engine), a run of the fix role.
 	RunFix = "fix"
+	// RunWhiteboard is the whiteboard job's run: the whiteboard role's agent
+	// prompted to write the whiteboard of the head magnum reviewed (engine).
+	RunWhiteboard = "whiteboard"
 )
     Run kinds.
 
@@ -16873,6 +17021,10 @@ type DashboardActions interface {
 	// start no loop.
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	// OpenWhiteboard opens the PR's whiteboard, the Whiteboard session its
+	// record names, in Whiteboard Desktop (magnum whiteboard --open); the
+	// board's w, which refuses a row without one before asking.
+	OpenWhiteboard(ctx context.Context, ref string) (ActionResult, error)
 	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	// Requests re-reads the requests ids name; one the registry no longer
@@ -17149,6 +17301,12 @@ type PRBoardRow struct {
 	Fixing  string
 	FixLoop bool
 	FixOff  bool
+	// Whiteboard is the PR's whiteboard, the Whiteboard session that holds
+	// it and the head it describes (engine.KVPRWhiteboard, written after a
+	// review or by `magnum whiteboard`); nil when the PR has none. The card
+	// says "whiteboard <head>" among the PR's flags, and w opens it in
+	// Whiteboard Desktop.
+	Whiteboard *PRWhiteboard
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -17296,6 +17454,14 @@ func PRViews() []PRView
 func ParsePRView(s string) (PRView, error)
     ParsePRView reads a view name ("all", "magnum", "mine", "ready"; case does
     not matter); empty means ViewAll.
+
+type PRWhiteboard struct {
+	Session string
+	Head    string
+}
+    PRWhiteboard is a PR's whiteboard as the board knows it: the Whiteboard
+    session that holds it, which w opens, and the head it describes
+    (engine.WhiteboardRecord).
 
 type Pause struct {
 	Key    string // scope: daemon, codex, claude, watch:<owner>, identity:<name>, github

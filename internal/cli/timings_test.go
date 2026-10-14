@@ -134,7 +134,10 @@ func TestTimingsFromTheRegistry(t *testing.T) {
 	}
 	fix := store.Run{ID: "f", Round: 1, Role: "claude-fix", Kind: store.RunFix, State: store.RunVerified, CreatedAt: timingT0.Add(40 * time.Minute),
 		SubmittedAt: timingAt(40 * time.Minute), EndedAt: timingAt(95 * time.Minute), VerifiedAt: timingAt(95 * time.Minute)}
-	for _, r := range append(runs, fix) {
+	// The whiteboard writer's run shares the round the same way and is no part of it either.
+	whiteboard := store.Run{ID: "w", Round: 1, Role: "claude-whiteboard", Kind: store.RunWhiteboard, State: store.RunVerified, CreatedAt: timingT0.Add(100 * time.Minute),
+		SubmittedAt: timingAt(100 * time.Minute), EndedAt: timingAt(130 * time.Minute), VerifiedAt: timingAt(130 * time.Minute)}
+	for _, r := range append(runs, fix, whiteboard) {
 		created := r.CreatedAt
 		h.st.Clock = func() time.Time { return created }
 		r.PRID, r.TargetSHA, r.Identity, r.ReviewerLogin, r.PromptText, r.ID = pr.ID, "abcdef1", "i", "l", "p", ""

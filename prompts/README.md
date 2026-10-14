@@ -46,6 +46,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `claude-restart.md` | claude-review, a push cut its review short and the round restarted on the new head | role |
 | `claude-simplify.md` | claude-simplify | role |
 | `fix.md` | the fix role (claude-fix), which fixes the findings of magnum's review of your own PR (the fix job) | role |
+| `whiteboard.md` | the whiteboard role (claude-whiteboard), which writes the dev.fast Whiteboard of the head magnum reviewed once the review posts, with the review as its last section (the whiteboard job) | role |
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
 | `retro.md` | the retro's agent, which classifies what other reviewers said about a closed pull request ([learn]) | retro |
@@ -155,7 +156,12 @@ reviewer, ...), initial, rereview and restart alike, and the fix role's `fix.md`
 fixer starts from), `.ReportPath`, `.RunID` and `.DBLockCommand`, plus the fix rows at the end of the
 table (`.HeadRef`, `.ReviewURL`, `.ReviewFile`, `.ReviewerLogin` and `.SkillPath`). Every other variable,
 `.Owner`, `.Repo`, `.BaseSHA`, `.BaseRef`, `.Budget`, `.Effort` and `.NotesPath` among them, renders empty
-in `fix.md`.
+in `fix.md`. The whiteboard job renders the whiteboard role's `whiteboard.md` with `.URL`, `.Owner`, `.Repo`,
+`.Number`, `.HeadSHA` (the reviewed head), `.BaseRef`, `.Checkout` (the slot's checkout, whose code the
+whiteboard's views read), `.ReportPath`, `.RunID`, `.Role`, `.ReviewURL`, `.ReviewFile` and
+`.WhiteboardSession`; `.BaseSHA`, `.HeadRef`, `.ReviewerLogin`, `.SkillPath`, `.Budget`, `.Effort` and
+`.NotesPath` render empty in it. The prompt carries URLs, SHAs and paths, never PR text: the writer reads
+the PR's title with `gh` in its pane.
 
 | Variable | Meaning |
 |---|---|
@@ -178,13 +184,14 @@ in `fix.md`.
 | `.DocsFile` | the round's `docs.json`, the base's `.md` pages that name each changed file or its directory (as the judge's `.DocsFile`); the claude-review prompts (initial, rereview, restart) name it in one sentence: read the pages that bear on the change as the base has them (`git show <base>:<page>`), and report what a page records as deliberate, or as a known gap, only as pre-existing (`nearby` at most). Empty when there is none |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (a post-merge review); the prompts that name the PR say "The PR is already merged; review it anyway." only then |
 | `.Budget` | the role's `timeout` in words (`40 minutes`): the claude prompts give it as the time budget, within which the turn must end with the report written (background work only when it finishes well within it, waited for before the report) |
-| `.Magnum`, `.Checkout`, `.Role` | the magnum binary the daemon runs (absolute; empty: `magnum` on `PATH`), the checkout the role works in, and the role's name |
+| `.Magnum`, `.Checkout`, `.Role` | the magnum binary the daemon runs (absolute; empty: `magnum` on `PATH`), the checkout the role works in (absolute; in `whiteboard.md` the slot's checkout, the `repositoryPath` the whiteboard's code views read), and the role's name |
 | `.DBLockCommand` | the line the role runs each command that touches the checkout's databases through, as the judge's (`magnum db-lock --checkout .Checkout --role .Role --`, shell-quoted; derived when empty, and the fix job passes its own): the claude prompts (review, rereview, restart, simplify) and the fix prompt name it in one sentence, `` `{{.DBLockCommand}} <command>` ``, with exit 75 meaning the check did not run |
 | `.RunID` | the run the prompt starts. The shipped prompts ask for `<!-- magnum:run={{.RunID}} -->` as the report's first line; a prompt that names this marker makes it required: a report without it, or with another run's, is stale (`missing`), since report paths are per head and an earlier run that kept working may write there. A prompt that does not name it needs none |
 | `.HeadRef` | the fix prompt only: the PR's branch, which the fixer pushes to (`git push origin HEAD:{{.HeadRef}}`); refused at render, like `.BaseRef`, when a shell would read it |
-| `.ReviewURL`, `.ReviewFile` | the fix prompt only: the review the fixer fixes, and its `review.json` (the review's event, body and comments with path, line, side and body, as the judge posted it) |
+| `.ReviewURL`, `.ReviewFile` | the fix and whiteboard prompts only: the review the fixer fixes, or the one the whiteboard's last section quotes, and its `review.json` (the review's event, body and comments with path, line, side and body, as the judge posted it) |
 | `.ReviewerLogin` | the fix prompt only: the login that posted the review, whose threads the fixer answers |
 | `.SkillPath` | the fix prompt only: the fix role's `skill` (`skills/magnum-fix/SKILL.md`; without a checkout, the copy built into the binary), absolute; in the daemon, the copy it took at startup. `fix.md` starts with its link and "Read <path> first, unless this session already read that file, and follow it; load no other skill." |
+| `.WhiteboardSession` | the whiteboard prompt only: the Whiteboard session of an earlier head of the PR (the registry's `pr.<id>.whiteboard` record), which the writer moves to `.HeadSHA` with `session_set_target` and updates; `""` for a PR's first whiteboard, which the writer creates with `session_create` |
 
 When a session role's `timeout` passes, magnum types one fixed last call into its agent within the same
 run (not a prompt file): time is up, stop every background task with TaskStop, write the report to

@@ -88,13 +88,16 @@ type roundJob struct {
 	evalStored bool
 }
 
-// roundHandle tracks a round goroutine, a `magnum open` restore or a fix
-// job.
+// roundHandle tracks a round goroutine, a `magnum open` restore, a fix job
+// or a whiteboard job.
 type roundHandle struct {
 	cancel context.CancelFunc
 	open   bool      // a magnum open restore, not a review round
 	fix    bool      // a fix job (fix.go), not a review round
 	stop   roundStop // magnum abort / ignore requests (abort.go)
+	// whiteboard: a whiteboard job (whiteboard.go), not a review round,
+	// which a close on GitHub stops (stopClosedRound).
+	whiteboard bool
 	// asked: a round someone asked for (forced by `magnum review` or the
 	// board's r, or started by a review request) or a post-merge review,
 	// which a close on GitHub never stops (stopClosedRound).
@@ -108,14 +111,14 @@ func (e *Engine) activeRounds() int {
 	return len(e.rounds)
 }
 
-// reviewRounds counts the review rounds (opens and fix jobs left out): what
-// max_concurrent_reviews limits and the tab bar shows.
+// reviewRounds counts the review rounds (opens, fix and whiteboard jobs
+// left out): what max_concurrent_reviews limits and the tab bar shows.
 func (e *Engine) reviewRounds() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	n := 0
 	for _, h := range e.rounds {
-		if !h.open && !h.fix {
+		if !h.open && !h.fix && !h.whiteboard {
 			n++
 		}
 	}
@@ -188,6 +191,9 @@ func (e *Engine) heldReason(prID int64) string {
 	}
 	if h := e.rounds[prID]; h != nil && h.fix {
 		return "the fixer is at work (`magnum abort` stops it)"
+	}
+	if h := e.rounds[prID]; h != nil && h.whiteboard {
+		return "the whiteboard is being written"
 	}
 	return "round in progress"
 }

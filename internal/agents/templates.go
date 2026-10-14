@@ -586,6 +586,11 @@ type RoleData struct {
 	// that posted it, whose threads the fixer answers; SkillPath the fix
 	// skill's startup copy, absolute.
 	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, SkillPath string
+	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
+	// empty for every other role, ReviewURL and ReviewFile its review as
+	// for the fix prompt): the Whiteboard session of an earlier head of the
+	// PR, which the writer moves to HeadSHA; "" = it creates the PR's first.
+	WhiteboardSession string
 }
 
 // completed is d with DBLockCommand derived when empty (a copy).
@@ -623,6 +628,43 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
+	})
+}
+
+// WhiteboardPromptInput is what the whiteboard job knows beyond the PR, the
+// role and the run that WhiteboardPrompt reads: the PR's repository (Owner,
+// Repo), the slot's checkout the whiteboard's code views read (Checkout,
+// absolute), the base ref the writer takes the merge base from (BaseRef,
+// e.g. origin/master), the review magnum posted on the head (ReviewURL and
+// its review.json ReviewFile) and the Whiteboard session of an earlier head
+// (Session; "" = none yet).
+type WhiteboardPromptInput struct {
+	Owner, Repo, Checkout, BaseRef, ReviewURL, ReviewFile, Session string
+}
+
+// WhiteboardPrompt renders the whiteboard role's prompt (its initial
+// prompt, whiteboard.md by default) for run, a run of that role on pr
+// (NewRun, kind store.RunWhiteboard): RoleData with the PR's URL, name and
+// number, the run's target as HeadSHA, its report path and id, and in's
+// fields. It never carries PR text: the writer reads the PR's title with gh.
+// A role that is not a whiteboard role, a run without a report path or an
+// input without a checkout is an error.
+func (m *Manager) WhiteboardPrompt(pr store.PR, role Role, run store.Run, in WhiteboardPromptInput) (string, error) {
+	spec, ok := m.roleSpec(role)
+	if !ok || !spec.IsWhiteboard() {
+		return "", fmt.Errorf("agents: whiteboard prompt pr %d: %q is not a whiteboard role", pr.Number, role)
+	}
+	report := store.Deref(run.ReportPath)
+	switch {
+	case report == "":
+		return "", fmt.Errorf("agents: whiteboard prompt pr %d: run %s has no report path", pr.Number, run.ID)
+	case in.Checkout == "":
+		return "", fmt.Errorf("agents: whiteboard prompt pr %d: no checkout to read the code from", pr.Number)
+	}
+	return m.RolePrompt(spec, config.PromptInitial, RoleData{
+		URL: pr.URL, Owner: in.Owner, Repo: in.Repo, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA),
+		BaseRef: in.BaseRef, Checkout: in.Checkout, ReportPath: report, RunID: run.ID,
+		ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, WhiteboardSession: in.Session,
 	})
 }
 

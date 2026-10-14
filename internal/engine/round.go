@@ -45,7 +45,8 @@ func backoff(attempts int) time.Duration {
 // is the daemon's. A round that panics is a failed round (roundPanicked);
 // the daemon goes on. Once the reservation is gone, the round's end goes on
 // to the PR's fix loop (fixAfterRound, on ctx: a next fix cycle reserves the
-// PR itself), unless an abort, an ignore or a shutdown stopped the round.
+// PR itself), then to its whiteboard (whiteboardAfterRound, which reserves
+// the PR too), unless an abort, an ignore or a shutdown stopped the round.
 func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 	subject := prSubject(job.repo, job.pr.Number)
 	e.roundWG.Go(func() {
@@ -54,6 +55,7 @@ func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 			return
 		}
 		e.safely(ctx, "fix", subject, func() { e.fixAfterRound(ctx, job.pr, res) }, nil)
+		e.safely(ctx, "whiteboard", subject, func() { e.whiteboardAfterRound(ctx, job.pr, res) }, nil)
 	})
 }
 

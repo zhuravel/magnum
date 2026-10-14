@@ -100,6 +100,9 @@ const (
 	// RunFix is the fix job's run: the fixer's agent prompted to fix magnum's
 	// findings on its author's PR (engine), a run of the fix role.
 	RunFix = "fix"
+	// RunWhiteboard is the whiteboard job's run: the whiteboard role's agent
+	// prompted to write the whiteboard of the head magnum reviewed (engine).
+	RunWhiteboard = "whiteboard"
 )
 
 // Run states.

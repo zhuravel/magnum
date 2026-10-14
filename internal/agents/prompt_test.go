@@ -431,3 +431,64 @@ func TestARefusedPromptToAnAgentGoneCarriesThePanesError(t *testing.T) {
 		})
 	}
 }
+
+// The whiteboard prompt carries the facts the writer needs and no PR text:
+// the PR's URL and name, the reviewed head, the checkout it reads, the base
+// it diffs from, the posted review and its file, and the report it writes;
+// with the whiteboard of an earlier head it moves that one
+// (session_set_target), else it creates one in the background.
+func TestWhiteboardPromptRendersTheFacts(t *testing.T) {
+	e := newEnv(t)
+	role := Role(config.RoleClaudeWhiteboard)
+	run, err := e.m.NewRun(e.ctx, e.pr, role, store.RunWhiteboard, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := WhiteboardPromptInput{
+		Owner: "talkable", Repo: "talkable",
+		Checkout:   "/p/talkable.review3",
+		BaseRef:    "origin/master",
+		ReviewURL:  "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
+		ReviewFile: "/state/reviews/talkable/talkable/11920/abc1234/review.json",
+	}
+	got, err := e.m.WhiteboardPrompt(e.pr, role, run, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{e.pr.URL, "`" + e.pr.HeadSHA + "`", "`talkable/talkable#11920: `", "repositoryPath `" + in.Checkout + "`",
+		"`git merge-base origin/master " + e.pr.HeadSHA + "`", in.ReviewURL, in.ReviewFile, store.Deref(run.ReportPath),
+		"`session_create`", "open `false`", "`head: " + e.pr.HeadSHA + "`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the whiteboard prompt lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "session_set_target") {
+		t.Errorf("a first whiteboard moves one:\n%s", got)
+	}
+	if strings.Contains(got, store.Deref(e.pr.Title)) || strings.Contains(got, "\n") {
+		t.Errorf("the whiteboard prompt carries the PR title or is not one paragraph:\n%s", got)
+	}
+
+	in.Session = "6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b"
+	got, err = e.m.WhiteboardPrompt(e.pr, role, run, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "`session_set_target` (sessionId `"+in.Session+"`") || strings.Contains(got, "`session_create`") {
+		t.Errorf("the update prompt does not move the whiteboard %s:\n%s", in.Session, got)
+	}
+
+	if _, err := e.m.WhiteboardPrompt(e.pr, RoleClaude, run, in); err == nil {
+		t.Error("WhiteboardPrompt rendered the prompt of claude-review, which is no whiteboard role")
+	}
+	noReport := run
+	noReport.ReportPath = nil
+	if _, err := e.m.WhiteboardPrompt(e.pr, role, noReport, in); err == nil {
+		t.Error("WhiteboardPrompt rendered a prompt for a run without a report path")
+	}
+	noCheckout := in
+	noCheckout.Checkout = ""
+	if _, err := e.m.WhiteboardPrompt(e.pr, role, run, noCheckout); err == nil {
+		t.Error("WhiteboardPrompt rendered a prompt without the checkout the whiteboard reads")
+	}
+}

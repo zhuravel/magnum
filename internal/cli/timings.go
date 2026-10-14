@@ -240,12 +240,13 @@ func roundTimingsFor(ctx context.Context, st *store.Store, cfg *config.Config, p
 	return roundTimings(runs, co, func(role string) bool { return actIsJudge(cfg, role) }, now), nil
 }
 
-// roundRuns leaves the fixer's runs (kind fix) out of runs: a fix run shares
-// the round of the review it fixes, but is no part of that round, so it
-// would add a stage and stretch the round's total (`magnum stats` leaves
-// them out of its rounds the same way).
+// roundRuns leaves the fixer's runs (kind fix) and the whiteboard writer's
+// (kind whiteboard) out of runs: such a run shares the round of the review
+// it follows, but is no part of that round, so it would add a stage and
+// stretch the round's total (`magnum stats` leaves them out of its rounds
+// the same way).
 func roundRuns(runs []store.Run) []store.Run {
-	return slices.DeleteFunc(slices.Clone(runs), func(r store.Run) bool { return r.Kind == store.RunFix })
+	return slices.DeleteFunc(slices.Clone(runs), func(r store.Run) bool { return r.Kind == store.RunFix || r.Kind == store.RunWhiteboard })
 }
 
 // latestRound keeps the runs of the highest round.

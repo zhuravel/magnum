@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -28,7 +30,8 @@ func newDoctorCmd(c *Context) *cobra.Command {
 	var asJSON bool
 	cmd := newCommand(groupInspect, "doctor "+doctorUsage, "check herdr, the agent CLIs, prompts, gh, MySQL, clones, SSH, disk, launchd and the registry",
 		"Check everything magnum depends on: config, herdr (version and socket methods), every agent CLI the "+
-			"configured roles use (on PATH in zsh, logged in, shell wrapper), the judge skill, the role prompts and "+
+			"configured roles use (on PATH in zsh, logged in, shell wrapper), the judge skill, the fix role, the Whiteboard "+
+			"CLI and server (when a watch has whiteboards on), the role prompts and "+
 			"prompts_dir, gh and each identity, MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
 			"origins, a pool's reset_db when it names schema_paths, mise (when a pool, the LaunchAgent or your PATH uses it), free disk, codex staging, the launchd agent "+
 			"and the mise it starts the daemon through, the terminal's Automation permission on macOS (named, never probed: "+
@@ -161,7 +164,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 // a fixed order.
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
-		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSkill, doctorFixRole, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
+		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
 		doctorClones, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
 		doctorLearnEditor, doctorRegistry,
 	}
@@ -202,28 +205,28 @@ func doctorSkipped(name, detail string) doctorCheck {
 // doctorExecGit runs git with the redirecting GIT_* variables scrubbed, like
 // every other git call magnum makes.
 func doctorExecGit(ctx context.Context, d doctorDeps, timeout time.Duration, env map[string]string, args ...string) (string, error) {
-	if d.Run == nil {
-		return "", errors.New("no runner")
-	}
-	res, err := d.Run.Run(ctx, execx.Cmd{Name: "git", Args: args, Env: env, Unset: gitx.ScrubbedEnv(), Timeout: timeout, Label: "doctor"})
-	if err != nil {
-		var ee *execx.ExitError
-		if errors.As(err, &ee) && strings.TrimSpace(ee.Stderr) != "" {
-			return res.Out(), fmt.Errorf("%s", textx.FirstLine(execx.Redact(ee.Stderr)))
-		}
-		return res.Out(), err
-	}
-	return res.Out(), nil
+	return doctorCmd(ctx, d, execx.Cmd{Name: "git", Args: args, Env: env, Unset: gitx.ScrubbedEnv(), Timeout: timeout, Label: "doctor"})
 }
 
 // doctorShellProbe asks an interactive zsh (`zsh -ic script`) what the user's
 // shell config defines, detached from the terminal doctor runs in (NoTTY),
 // as the daemon asks it under launchd.
 func doctorShellProbe(ctx context.Context, d doctorDeps, timeout time.Duration, script string) (string, error) {
+	return doctorCmd(ctx, d, execx.Cmd{Name: "zsh", Args: []string{"-ic", script}, Timeout: timeout, NoTTY: true, Label: "doctor"})
+}
+
+func doctorExec(ctx context.Context, d doctorDeps, timeout time.Duration, dir string, env map[string]string, name string, args ...string) (string, error) {
+	return doctorCmd(ctx, d, execx.Cmd{Name: name, Args: args, Dir: dir, Env: env, Timeout: timeout, Label: "doctor"})
+}
+
+// doctorCmd runs a read-only probe cmd through doctor's runner and returns
+// trimmed stdout; a failed exit's error is the first line of its stderr,
+// redacted, when it wrote one.
+func doctorCmd(ctx context.Context, d doctorDeps, cmd execx.Cmd) (string, error) {
 	if d.Run == nil {
 		return "", errors.New("no runner")
 	}
-	res, err := d.Run.Run(ctx, execx.Cmd{Name: "zsh", Args: []string{"-ic", script}, Timeout: timeout, NoTTY: true, Label: "doctor"})
+	res, err := d.Run.Run(ctx, cmd)
 	if err != nil {
 		var ee *execx.ExitError
 		if errors.As(err, &ee) && strings.TrimSpace(ee.Stderr) != "" {
@@ -234,19 +237,44 @@ func doctorShellProbe(ctx context.Context, d doctorDeps, timeout time.Duration, 
 	return res.Out(), nil
 }
 
-func doctorExec(ctx context.Context, d doctorDeps, timeout time.Duration, dir string, env map[string]string, name string, args ...string) (string, error) {
-	if d.Run == nil {
-		return "", errors.New("no runner")
-	}
-	res, err := d.Run.Run(ctx, execx.Cmd{Name: name, Args: args, Dir: dir, Env: env, Timeout: timeout, Label: "doctor"})
-	if err != nil {
-		var ee *execx.ExitError
-		if errors.As(err, &ee) && strings.TrimSpace(ee.Stderr) != "" {
-			return res.Out(), fmt.Errorf("%s", textx.FirstLine(execx.Redact(ee.Stderr)))
+// doctorWhiteboard checks what the whiteboard job needs once a watch has
+// whiteboards on (config.WhiteboardFor; off everywhere is a SKIP that runs
+// nothing): the `whiteboard` CLI on PATH, with the version it reports
+// (`whiteboard version --json`), and a Whiteboard server that answers
+// (engine.WhiteboardStatusCmd: Whiteboard Desktop, or `whiteboard server
+// start`). A missing CLI fails: the job cannot run at all. A server that is
+// down only warns: the daemon skips the whiteboard of each review it posts
+// until one runs, and the next posted review is the next chance.
+func doctorWhiteboard(ctx context.Context, d doctorDeps) []doctorCheck {
+	const name = "whiteboard"
+	cfg := d.Config
+	var on []string
+	for i := range cfg.Watches {
+		if cfg.WhiteboardFor(&cfg.Watches[i]) {
+			on = append(on, cfg.Watches[i].Owner)
 		}
-		return res.Out(), err
 	}
-	return res.Out(), nil
+	if len(on) == 0 {
+		return []doctorCheck{doctorSkipped(name, "whiteboards are off (whiteboard = false in [pipeline] and every [[watch]])")}
+	}
+	who := fmt.Sprintf("whiteboards are on for %s %s", textx.Plural(len(on), "watch", "watches"), strings.Join(on, ", "))
+	out, err := doctorCmd(ctx, d, execx.Cmd{Name: engine.WhiteboardCommand, Args: []string{"version", "--json"}, Timeout: 15 * time.Second, Probe: true, Label: "doctor"})
+	if err != nil {
+		return []doctorCheck{doctorFailed(name, fmt.Sprintf("`whiteboard` is not on PATH (%s): %s", who, err.Error()),
+			"install dev.fast Whiteboard and put its `whiteboard` CLI on PATH")}
+	}
+	label := engine.WhiteboardCommand
+	var v struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal([]byte(out), &v) == nil && strings.TrimSpace(v.Version) != "" {
+		label += " " + textx.FirstLine(strings.TrimSpace(v.Version))
+	}
+	if _, err := doctorCmd(ctx, d, engine.WhiteboardStatusCmd()); err != nil {
+		return []doctorCheck{doctorWarned(name, fmt.Sprintf("Whiteboard is not running: the job skips whiteboards until Whiteboard Desktop or `whiteboard server start` runs (%s is on PATH; %s; %s)",
+			label, who, err.Error()), "start Whiteboard Desktop, or run `whiteboard server start`")}
+	}
+	return []doctorCheck{doctorOK(name, fmt.Sprintf("%s is on PATH and Whiteboard runs (%s)", label, who))}
 }
 
 func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {

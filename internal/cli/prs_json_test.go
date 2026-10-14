@@ -198,7 +198,7 @@ func TestPRsJSONMarksTheJudgesOwnPass(t *testing.T) {
 // so a consumer indexes without checking the key first.
 func TestPRsJSONOptionalPartsAreNullAndListsAreEmpty(t *testing.T) {
 	out := marshalPRsJSON(t, tui.PRBoardRow{Ref: "talkable/example#1", Number: 1})[0]
-	for _, key := range []string{"last_review", "findings", "ci", "since_review", "last_round", "progress", "requested_to_me", "last_request"} {
+	for _, key := range []string{"last_review", "findings", "ci", "since_review", "last_round", "progress", "requested_to_me", "last_request", "whiteboard"} {
 		if v, ok := out[key]; !ok || v != nil {
 			t.Errorf("%s = %v (present %v), want null", key, v, ok)
 		}
@@ -252,6 +252,7 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 		{tui.RoleProgress{}, prsJSONRoleProgress{}},
 		{tui.SpendInfo{}, prsJSONSpend{}},
 		{tui.ApproveAs{}, prsJSONApproveAs{}},
+		{tui.PRWhiteboard{}, prsJSONWhiteboard{}},
 	} {
 		b, o := reflect.TypeOf(p.board), reflect.TypeOf(p.out)
 		if b.NumField() != o.NumField() {

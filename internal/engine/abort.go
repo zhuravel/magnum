@@ -106,9 +106,10 @@ func (c closeStop) stopped(round int) string {
 // closed on GitHub (confirmMissing), to stop as `magnum abort` stops one
 // (afterRound serves it) and returns the cancel that stops it, or nil when
 // there is nothing to stop: no round (an open's restore, a fix job and an
-// abort's own stop are none), a round past its end, and a round someone
-// asked for (roundHandle.asked: forced, a review request's, a post-merge
-// review), which runs on as before. The caller cancels once it recorded the
+// abort's own stop are none; a whiteboard job stops, its whiteboard of a
+// closed PR has no reader), a round past its end, and a round someone asked
+// for (roundHandle.asked: forced, a review request's, a post-merge review),
+// which runs on as before. The caller cancels once it recorded the
 // close, so the events read in order.
 func (e *Engine) stopClosedRound(prID int64, c closeStop) context.CancelFunc {
 	e.mu.Lock()
@@ -220,6 +221,9 @@ func (e *Engine) stopHeld(ctx context.Context, id int64, repo store.Repo, pr sto
 		cancel, what := h.cancel, "the running review"
 		if h.fix {
 			what = "the fixer" // the fix job serves the order (fix.go)
+		}
+		if h.whiteboard {
+			what = "the whiteboard writer" // the whiteboard job serves the order (whiteboard.go)
 		}
 		e.mu.Unlock()
 		cancel()

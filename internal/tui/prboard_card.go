@@ -43,7 +43,8 @@ func (p *prbPainter) helpContent(width int) []string {
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix findings as you / fix off or on (asks y/N)"},
 		{"o", "open the " + judgeName(p.judge) + " pane"},
-		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
+		{"b / t", "open the PR / its issue in the browser"}, {"w", "open the PR's whiteboard (asks y/N)"},
+		{"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
 		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"},
 		{"D", "withdraw magnum's approval as you (asks y/N)"},
@@ -188,6 +189,9 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.FixOff {
 		flags = append(flags, p.pal.tag.Render("fix off"))
+	}
+	if r.Whiteboard != nil { // the head it describes: the PR's may have moved since
+		flags = append(flags, p.pal.tag.Render("whiteboard "+textx.ShortSHA(r.Whiteboard.Head)))
 	}
 	if gh := strings.ToUpper(strings.TrimSpace(r.GHState)); gh != "" && gh != "OPEN" {
 		flags = append(flags, p.st.Warn.Render(strings.ToLower(gh)))

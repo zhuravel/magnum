@@ -671,6 +671,30 @@ func (c *Config) validatePipeline() []error {
 			errs = append(errs, fmt.Errorf("%s: fix_cycles must be at least 1, got %d", where, n))
 		}
 	}
+	// whiteboard_role names a whiteboard role (whiteboard = true): an agent
+	// session that takes no part in a round, so a judge, a shell command, a
+	// fix role and a reviewer are refused. The pipeline's default, the
+	// built-in claude-whiteboard, may be missing as claude-fix may: a base
+	// configuration that declares its own [[role]] list has no whiteboard
+	// job then.
+	whiteboardRole := func(where, name string) {
+		if strings.TrimSpace(name) == "" {
+			return
+		}
+		switch r, ok := c.roleNamed(name); {
+		case !ok && where == "pipeline" && strings.EqualFold(strings.TrimSpace(name), RoleClaudeWhiteboard):
+		case !ok:
+			errs = append(errs, fmt.Errorf("%s: whiteboard_role names unknown role %q", where, name))
+		case r.Judge:
+			errs = append(errs, fmt.Errorf("%s: whiteboard_role role %s is a judge; name a role with whiteboard = true", where, r.Name))
+		case r.IsShell():
+			errs = append(errs, fmt.Errorf("%s: whiteboard_role role %s must be an agent session, not a shell command", where, r.Name))
+		case r.Fix:
+			errs = append(errs, fmt.Errorf("%s: whiteboard_role role %s is a fix role; name a role with whiteboard = true", where, r.Name))
+		case !r.Whiteboard:
+			errs = append(errs, fmt.Errorf("%s: whiteboard_role role %s is not a whiteboard role (whiteboard = true)", where, r.Name))
+		}
+	}
 	autofix := func(where, v string) {
 		switch v {
 		case "", AutofixNever, AutofixOwn:
@@ -681,6 +705,7 @@ func (c *Config) validatePipeline() []error {
 	fixRole("pipeline", c.Pipeline.FixRole)
 	fixCycles("pipeline", c.Pipeline.FixCycles)
 	autofix("pipeline", c.Pipeline.Autofix)
+	whiteboardRole("pipeline", c.Pipeline.WhiteboardRole)
 	for i := range c.Watches {
 		w := &c.Watches[i]
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
@@ -696,6 +721,9 @@ func (c *Config) validatePipeline() []error {
 			fixCycles("watch "+w.Owner, *w.FixCycles)
 		}
 		autofix("watch "+w.Owner, w.Autofix)
+		if w.WhiteboardRole != nil {
+			whiteboardRole("watch "+w.Owner, *w.WhiteboardRole)
+		}
 	}
 	kinds := c.kinds()
 	for _, name := range c.KindNames() {
@@ -855,6 +883,10 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 		if r.Runs != "" {
 			bad("a fix role has no runs (it never takes part in a round), got %q", r.Runs)
 		}
+	case r.Whiteboard: // the same
+		if r.Runs != "" {
+			bad("a whiteboard role has no runs (it never takes part in a round), got %q", r.Runs)
+		}
 	case r.Runs == RunsAlways, r.Runs == RunsFirst, r.Runs == RunsManual, r.Runs == RunsNever:
 	default:
 		bad("runs must be always, first, manual or never, got %q", r.Runs)
@@ -889,6 +921,9 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 	}
 	if r.Fix {
 		c.validateFixRole(r, bad)
+	}
+	if r.Whiteboard {
+		c.validateWhiteboardRole(r, bad)
 	}
 	if r.IsShell() {
 		switch {
@@ -925,8 +960,9 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 		}
 	}
 	// A fix role's undeclared identity is no error (fixRoleWarnings warns
-	// under autofix = "own", and the fix job refuses it).
-	if r.Identity != "" && !ids[r.Identity] && !r.Fix {
+	// under autofix = "own", and the fix job refuses it); a whiteboard
+	// role's neither (the whiteboard job refuses it).
+	if r.Identity != "" && !ids[r.Identity] && !r.Fix && !r.Whiteboard {
 		bad("unknown identity %q", r.Identity)
 	}
 	if out := r.ReportFile(); out == "." || out == ".." || strings.ContainsAny(out, `/\`) {
@@ -1007,6 +1043,39 @@ func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
 	}
 }
 
+// validateWhiteboardRole checks what makes a whiteboard role fit the
+// whiteboard job, as validateFixRole does for the fix job: an agent session
+// that is no judge and no fix role (one role cannot serve both jobs) and
+// takes no after, own_pass or max_session_rounds (it is not part of a
+// round), acting as a gh identity when it names one: the account whose
+// pane reads the PR. A role that names none takes each watch's poll
+// identity (WhiteboardRoleFor); an identity the configuration does not
+// declare is no error here (the whiteboard job refuses it). Its skill is
+// refused with every other non-judge, non-fix role's.
+func (c *Config) validateWhiteboardRole(r Role, bad func(string, ...any)) {
+	if r.Judge {
+		bad("a whiteboard role cannot also be a judge")
+	}
+	if r.Fix {
+		bad("a whiteboard role cannot also be a fix role")
+	}
+	if r.IsShell() {
+		bad("a whiteboard role must be an agent session, not a shell command")
+	}
+	if len(r.After) > 0 {
+		bad("a whiteboard role takes no after (it never takes part in a round)")
+	}
+	if r.OwnPass != "" {
+		bad("a whiteboard role takes no own_pass (that is the judge's)")
+	}
+	if r.MaxSessionRounds > 0 {
+		bad("a whiteboard role takes no max_session_rounds (a whiteboard job is no round)")
+	}
+	if id := c.IdentityByName(r.Identity); id != nil && id.Kind != "gh" {
+		bad("identity %s must be a gh identity (your own account), not kind %q: the whiteboard's pane reads the PR as you", id.Name, id.Kind)
+	}
+}
+
 // parseTemplate checks that text is a valid Go template the way
 // internal/agents renders prompts and commands (no funcs, missingkey=error),
 // without executing it.
@@ -1035,6 +1104,8 @@ func validateAfter(roles []Role) []error {
 				errs = append(errs, fmt.Errorf("role %s: after names judge %s (the judge always runs last)", r.Name, a))
 			case dep.Fix:
 				errs = append(errs, fmt.Errorf("role %s: after names fix role %s (a fix role takes no part in a round)", r.Name, a))
+			case dep.Whiteboard:
+				errs = append(errs, fmt.Errorf("role %s: after names whiteboard role %s (a whiteboard role takes no part in a round)", r.Name, a))
 			}
 		}
 	}
@@ -1084,6 +1155,10 @@ func (c *Config) validateWatchRoles(w Watch, roles []Role) []error {
 		if roles[i].Fix {
 			errs = append(errs, fmt.Errorf("watch %s: role %s is a fix role, which takes no part in a round; "+
 				"fix_role names it, roles must not list it", w.Owner, roles[i].Name))
+		}
+		if roles[i].Whiteboard {
+			errs = append(errs, fmt.Errorf("watch %s: role %s is a whiteboard role, which takes no part in a round; "+
+				"whiteboard_role names it, roles must not list it", w.Owner, roles[i].Name))
 		}
 		seen[roles[i].Name] = true
 	}

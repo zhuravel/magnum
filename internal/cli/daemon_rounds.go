@@ -76,11 +76,12 @@ func daemonGate(c *Context, a *app.App) func(*engine.Deps) {
 // inFlight is what stopping the daemon now would cut short: the review
 // rounds in flight and the background work running (the notes curation,
 // engine.KVNotesCurating, the retro, engine.KVRetroRunning, the skill
-// edit, engine.KVLearnEditing, and the fix jobs whose fixer works,
-// engine.KVPRFix).
+// edit, engine.KVLearnEditing, the fix jobs whose fixer works,
+// engine.KVPRFix, and the whiteboard jobs whose writer works, their runs of
+// kind whiteboard).
 type inFlight struct {
 	rounds []string // "owner/repo#N (state)"
-	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since 15:04)", "fix of owner/repo#N (cycle 1, since 15:04)"
+	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since 15:04)", "fix of owner/repo#N (cycle 1, since 15:04)", "whiteboard of owner/repo#N (since 15:04)"
 }
 
 func (f inFlight) none() bool { return len(f.rounds) == 0 && len(f.work) == 0 }
@@ -111,7 +112,7 @@ func (f inFlight) cutShort() string {
 	}
 	if len(f.work) > 0 {
 		parts = append(parts, "cuts the background work short (a notes curation or a skill edit proposes nothing, a retro or a skill gate runs again, "+
-			"a fix loop ends and needs you)")
+			"a fix loop ends and needs you, a whiteboard is lost)")
 	}
 	return "stopping the daemon now " + strings.Join(parts, " and ")
 }
@@ -201,7 +202,8 @@ func (c *Context) gateRunning(ctx context.Context) (string, error) {
 // owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since
 // 15:04)" (or "revert of skill version 2 (since 15:04)", which runs in the
 // edit's slot), "skill gate of proposal 3 (since 15:04)"; then the fix jobs
-// whose fixer works (fixesAtWork). A mark it cannot parse still counts.
+// whose fixer works (fixesAtWork) and the whiteboard jobs whose writer works
+// (whiteboardsAtWork). A mark it cannot parse still counts.
 func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?, ?, ?) AND value != '' ORDER BY key`,
 		engine.KVNotesCurating, engine.KVRetroRunning, engine.KVLearnEditing, engine.KVLearnGating)
@@ -253,7 +255,41 @@ func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 		return nil, err
 	}
 	fixes, err := fixesAtWork(ctx, db, now)
-	return append(out, fixes...), err
+	if err != nil {
+		return nil, err
+	}
+	whiteboards, err := whiteboardsAtWork(ctx, db, now)
+	return append(append(out, fixes...), whiteboards...), err
+}
+
+// whiteboardsAtWork lists the whiteboard jobs whose writer works, from their
+// runs of kind whiteboard not yet ended: "whiteboard of owner/repo#N (since
+// 15:04)", since the prompt went out. The job keeps the PR reviewed, so no
+// round state shows it, and a daemon stopped meanwhile fails the run (lost
+// in a restart).
+func whiteboardsAtWork(ctx context.Context, db *sql.DB, now time.Time) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT r.owner, r.name, p.number, coalesce(u.submitted_at, u.created_at) FROM runs u
+		JOIN prs p ON p.id = u.pr_id JOIN repos r ON r.id = p.repo_id
+		WHERE u.kind = ? AND u.state IN (?, ?, ?) ORDER BY r.owner, r.name, p.number`,
+		store.RunWhiteboard, store.RunPending, store.RunSubmitted, store.RunWorking)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var owner, name, at string
+		var n int
+		if err := rows.Scan(&owner, &name, &n, &at); err != nil {
+			return nil, err
+		}
+		what := fmt.Sprintf("whiteboard of %s/%s#%d", owner, name, n)
+		if t, err := store.ParseTime(at); err == nil {
+			what += " (since " + inspClock(now, t) + ")"
+		}
+		out = append(out, what)
+	}
+	return out, rows.Err()
 }
 
 // fixesAtWork lists the fix loops whose fixer works, from their

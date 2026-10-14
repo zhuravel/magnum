@@ -476,10 +476,12 @@ func statsCompute(runs []store.RoundRun, findings []store.Finding, events []stor
 
 	// The fix job's runs are fix cycles, counted apart. The fixer runs in the
 	// round of the review it fixes, so left in that round it would stretch the
-	// round's duration, hold its outcome back and appear under its role.
+	// round's duration, hold its outcome back and appear under its role. The
+	// whiteboard job's runs share a round the same way and count nowhere.
 	var reviewRuns []store.RoundRun
 	for _, rr := range runs {
 		switch {
+		case rr.Kind == store.RunWhiteboard:
 		case rr.Kind != store.RunFix:
 			reviewRuns = append(reviewRuns, rr)
 		case (repo == "" || rr.Repo == repo) && !rr.CreatedAt.Before(since):

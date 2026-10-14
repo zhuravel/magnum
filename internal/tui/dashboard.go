@@ -224,6 +224,10 @@ type DashboardActions interface {
 	// start no loop.
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	// OpenWhiteboard opens the PR's whiteboard, the Whiteboard session its
+	// record names, in Whiteboard Desktop (magnum whiteboard --open); the
+	// board's w, which refuses a row without one before asking.
+	OpenWhiteboard(ctx context.Context, ref string) (ActionResult, error)
 	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	// Requests re-reads the requests ids name; one the registry no longer

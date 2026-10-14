@@ -232,6 +232,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, e.requestCodexFlag)
 	case ReqFix: // fix.go
 		answer(e, ctx, req, e.requestFix)
+	case ReqWhiteboard: // whiteboard.go
+		answer(e, ctx, req, e.requestWhiteboard)
 	case ReqApprove, ReqRequestChanges:
 		event := map[string]string{ReqApprove: "APPROVE", ReqRequestChanges: "REQUEST_CHANGES"}[req.Kind]
 		answer(e, ctx, req, func(ctx context.Context, p VerdictPayload) (string, error) {

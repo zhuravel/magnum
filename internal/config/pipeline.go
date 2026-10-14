@@ -77,6 +77,17 @@ type Pipeline struct {
 	// review with findings on a PR whose author is one of the operator's
 	// logins. A [[watch]] may override it; see Config.AutofixFor.
 	Autofix string `toml:"autofix"`
+	// Whiteboard switches the whiteboard job on: after every review magnum
+	// posts on a new head, the whiteboard role writes a whiteboard of the
+	// PR (an interactive document in the dev.fast Whiteboard app) in the
+	// PR's slot. Default false. A [[watch]] may override it
+	// (Watch.Whiteboard); see Config.WhiteboardFor.
+	Whiteboard bool `toml:"whiteboard"`
+	// WhiteboardRole names the whiteboard role that writes it: a [[role]]
+	// with whiteboard = true, RoleClaudeWhiteboard by default. "" = no
+	// whiteboard job at all, automatic or by hand. A [[watch]] may
+	// override it (Watch.WhiteboardRole); see Config.WhiteboardRoleFor.
+	WhiteboardRole string `toml:"whiteboard_role"`
 }
 
 // JudgeFallbackFor is the judge role that takes over a PR of watch w after
@@ -129,6 +140,50 @@ func (c *Config) FixRoleName(w *Watch) string {
 		return *w.FixRole
 	}
 	return c.Pipeline.FixRole
+}
+
+// WhiteboardFor reports whether the whiteboard job is on for watch w: the
+// watch's whiteboard when it sets one, else [pipeline] whiteboard. A nil w
+// is [pipeline]'s. The job still needs a role: WhiteboardRoleFor.
+func (c *Config) WhiteboardFor(w *Watch) bool {
+	if w != nil && w.Whiteboard != nil {
+		return *w.Whiteboard
+	}
+	return c.Pipeline.Whiteboard
+}
+
+// WhiteboardRoleFor is the whiteboard role of watch w: the watch's
+// whiteboard_role when it sets one (an empty one switches the whiteboard
+// job off for the watch, automatic or by hand), else [pipeline]
+// whiteboard_role, found among every declared role (not only the watch's).
+// ok is false when none is set or the name matches no whiteboard role;
+// Validate reports the latter. A whiteboard role that names no identity
+// acts as w's poll identity (its identity when it has no poll_identity, as
+// Normalize sets it): the operator's own gh login in a `magnum init`
+// config, which polls as it. Without a watch the identity stays empty.
+func (c *Config) WhiteboardRoleFor(w *Watch) (Role, bool) {
+	name := c.WhiteboardRoleName(w)
+	if strings.TrimSpace(name) == "" {
+		return Role{}, false
+	}
+	r, ok := c.roleNamed(name)
+	if !ok || !r.Whiteboard {
+		return Role{}, false
+	}
+	if r.Identity == "" && w != nil {
+		r.Identity = cmp.Or(w.PollIdentity, w.Identity)
+	}
+	return r, true
+}
+
+// WhiteboardRoleName is the whiteboard_role that applies to w: the watch's
+// when it sets one, else [pipeline]'s ("" = no whiteboard job).
+// WhiteboardRoleFor resolves it.
+func (c *Config) WhiteboardRoleName(w *Watch) string {
+	if w != nil && w.WhiteboardRole != nil {
+		return *w.WhiteboardRole
+	}
+	return c.Pipeline.WhiteboardRole
 }
 
 // Values of [pipeline] autofix.
@@ -271,6 +326,10 @@ const (
 	// RoleClaudeFix is the built-in fix role, the fixer of the fix job
 	// (Role.Fix); [pipeline] fix_role names it by default.
 	RoleClaudeFix = "claude-fix"
+	// RoleClaudeWhiteboard is the built-in whiteboard role, the writer of
+	// the whiteboard job (Role.Whiteboard); [pipeline] whiteboard_role
+	// names it by default.
+	RoleClaudeWhiteboard = "claude-whiteboard"
 
 	KindCodex  = "codex"
 	KindClaude = "claude"
@@ -305,6 +364,10 @@ const (
 	DefaultFixSkill  = "{{repo}}/skills/magnum-fix/SKILL.md"
 	DefaultFixPrompt = "fix.md"
 )
+
+// DefaultWhiteboardPrompt is a whiteboard role's default prompt (it has no
+// skill: the Whiteboard app's own instructions guide it).
+const DefaultWhiteboardPrompt = "whiteboard.md"
 
 // Normalize fills the defaulted fields of Kinds and Roles in place (Load
 // and Defaults call it; call it again after editing either in code). It is

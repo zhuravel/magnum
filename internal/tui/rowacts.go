@@ -45,6 +45,7 @@ const (
 	actSnooze
 	actFix
 	actFixOff
+	actWhiteboard
 )
 
 // boardSnooze is how long the board's z snoozes a PR.
@@ -78,13 +79,15 @@ var rowActDefs = [...]rowActDef{
 	actSnooze:         {"z", "snooze 2h", "snooze", "snooze"},
 	actFix:            {"f", "fix findings", "fix", "fix"},
 	actFixOff:         {"F", "fix off", "fix off", "fix --off"},
+	actWhiteboard:     {"w", "open whiteboard", "whiteboard", "whiteboard --open"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
-// them.
+// them. The whiteboard is the board's alone: the dashboard's w shows and
+// hides the manual worktrees, as its t switches to the board.
 var (
 	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
-		actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease, actMute, actUnmute, actSnooze}
+		actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actRelease, actMute, actUnmute, actSnooze}
 	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
 )
@@ -166,6 +169,10 @@ type actRow struct {
 	// (PRBoardRow.FixLoop, PRRow.FixLoop), which K aborts although the PR
 	// stays reviewed while its fixer works.
 	fixOff, fixLoop bool
+	// whiteboard is the head the PR's whiteboard describes
+	// (PRBoardRow.Whiteboard; "" when it has none, or the screen does not
+	// know: only the board offers w), which w's question names.
+	whiteboard string
 
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
@@ -374,6 +381,10 @@ func actionRefusal(a rowAct, r actRow) string {
 		if !r.snoozed() && (r.merged() || r.closed() || r.ended()) {
 			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to snooze"
 		}
+	case actWhiteboard: // the daemon decides the rest: Whiteboard running, the session still there
+		if r.whiteboard == "" {
+			return "no whiteboard of " + l + " yet (magnum whiteboard writes one)"
+		}
 	}
 	return ""
 }
@@ -443,6 +454,8 @@ func actionQuestion(a rowAct, r actRow) string {
 		}
 		return "Snooze " + l + " for " + HumanDuration(boardSnooze) + ": no automatic review starts on it until " +
 			untilClock(r.now.Add(boardSnooze), r.now) + " (" + cmp.Or(r.key(actReview), "a review") + " and review requests still run)?"
+	case actWhiteboard: // the whiteboard may describe an earlier head than the PR's: say which
+		return "Open the whiteboard of " + l + " (" + textx.ShortSHA(r.whiteboard) + ") in Whiteboard Desktop?"
 	}
 	return ""
 }
@@ -596,6 +609,8 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
 			return act.FixOff(ctx, target, off)
 		}
+	case actWhiteboard:
+		return what, on(DashboardActions.OpenWhiteboard)
 	}
 	return what, unknownAction(a)
 }
@@ -754,6 +769,9 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != ""}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
+	}
+	if r.Whiteboard != nil {
+		row.whiteboard = r.Whiteboard.Head
 	}
 	row.facts = boardReviewFacts(r, now)
 	row.replies = r.Replies

@@ -109,6 +109,9 @@ type Agents interface {
 	// gives a fixer whose time ran out its last call within the run.
 	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
 	FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error)
+	// WhiteboardPrompt renders the whiteboard job's prompt (whiteboard.go),
+	// whose run NewRun and Submit start as the fix job's.
+	WhiteboardPrompt(pr store.PR, role agents.Role, run store.Run, in agents.WhiteboardPromptInput) (string, error)
 	Submit(ctx context.Context, run store.Run, text string) error
 	Tell(ctx context.Context, run store.Run, text string) error
 }
@@ -857,6 +860,7 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recoverFixes(ctx) // fix.go: a fixer at work never survives a restart
 	e.retryParked(ctx)  // retry_parked.go: what failed rounds parked under another build, config or prompts
 	e.reclassifyIneligible(ctx)
+	e.recoverWhiteboards(ctx)
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
 	// No curation, retro, skill edit or gate runs yet: a mark left behind
 	// is a crashed daemon's (a gating proposal keeps its state and its gate

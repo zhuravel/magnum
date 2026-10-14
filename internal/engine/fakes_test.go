@@ -1036,6 +1036,20 @@ func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in 
 	return fmt.Sprintf("fix the findings of %s on %s; report to %s, first line %s", in.ReviewURL, pr.URL, deref(run.ReportPath), agents.ReportMarker(run.ID)), nil
 }
 
+// WhiteboardPrompt records what the whiteboard job gave it
+// ("whiteboard_prompt:<role>:<run>|<owner>/<repo>|<checkout>|<base
+// ref>|<review url>|<review file>|<session>") and renders a prompt that
+// names the run's report; an empty input but the session is an error, as
+// the real prompt would render a broken target or review line.
+func (f *fakeAgents) WhiteboardPrompt(pr store.PR, role agents.Role, run store.Run, in agents.WhiteboardPromptInput) (string, error) {
+	f.record(fmt.Sprintf("whiteboard_prompt:%s:%s|%s/%s|%s|%s|%s|%s|%s", role, run.ID, in.Owner, in.Repo, in.Checkout, in.BaseRef,
+		in.ReviewURL, in.ReviewFile, in.Session))
+	if in.Owner == "" || in.Repo == "" || in.Checkout == "" || in.BaseRef == "" || in.ReviewURL == "" || in.ReviewFile == "" {
+		return "", fmt.Errorf("fake whiteboard prompt of %s: an empty input %+v", run.ID, in)
+	}
+	return fmt.Sprintf("write the whiteboard of %s at %s; report to %s", pr.URL, run.TargetSHA, deref(run.ReportPath)), nil
+}
+
 func (f *fakeAgents) LatestRound(ctx context.Context, prID int64) (int, error) {
 	runs, err := f.st.RunsByPR(ctx, prID)
 	n := 0

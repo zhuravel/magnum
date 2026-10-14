@@ -213,3 +213,42 @@ func TestARunningFixRefusesAStop(t *testing.T) {
 		t.Fatalf("after the fix ended: %q, %v", running, err)
 	}
 }
+
+// A whiteboard whose writer works is background work too: the PR stays
+// reviewed while it runs, and a stop loses the whiteboard (its run fails as
+// lost in a restart). A stop is refused and names it; a whiteboard run that
+// ended counts no more.
+func TestARunningWhiteboardRefusesAStop(t *testing.T) {
+	c, _, errb := bareContext(t)
+	if err := c.Layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	st := storetest.Open(t, c.Layout.DB())
+	ctx := context.Background()
+	_, pr := inspSeedPR(t, st, "talkable/talkable", 7, store.PRReviewed, nil)
+	run, err := st.CreateRun(ctx, store.Run{ID: "r-wb", PRID: pr.ID, Round: 1, Role: "claude-whiteboard", Kind: store.RunWhiteboard,
+		TargetSHA: pr.HeadSHA, Identity: pr.Identity, ReviewerLogin: "x", State: store.RunPending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().Add(-3 * time.Minute)
+	if err := st.TransitionRun(ctx, run.ID, nil, store.RunWorking, func(u *store.RunUpdate) { u.Set("submitted_at", started) }); err != nil {
+		t.Fatal(err)
+	}
+	running, err := c.activeRounds(ctx)
+	clock := inspClock(time.Now(), started)
+	if err != nil || running.String() != "whiteboard of talkable/talkable#7 (since "+clock+")" {
+		t.Fatalf("in flight %q, err %v", running, err)
+	}
+	if c.refuseWhileRoundsRun("daemon-restart", false) {
+		t.Fatal("a whiteboard in flight must refuse")
+	}
+	actContains(t, errb.String(), "1 background job(s) in flight: whiteboard of talkable/talkable#7 (since "+clock+")",
+		"a whiteboard is lost", "--drain")
+	if err := st.TransitionRun(ctx, run.ID, nil, store.RunVerified, nil); err != nil {
+		t.Fatal(err)
+	}
+	if running, err := c.activeRounds(ctx); err != nil || !running.none() {
+		t.Fatalf("after the whiteboard ended: %q, %v", running, err)
+	}
+}

@@ -114,6 +114,8 @@ func doctorFixture(t *testing.T) (*inspFixture, doctorDeps, *fakeDoctorHerdr, *f
 		{Prefix: []string{"mise", "-C", f.Home + "/talkable.review1", "exec", "--", "ruby", "-v"}, Result: execx.Result{Stdout: []byte("ruby 3.4.1\n")}},
 		{Prefix: []string{"du", "-sk"}, Result: execx.Result{Stdout: []byte("256976\t/x\n")}},
 		{Prefix: []string{"zsh", "-lc", "print -r -- $PATH"}, Result: execx.Result{Stdout: []byte(f.Home + "/user/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin\n")}},
+		{Prefix: []string{"whiteboard", "version", "--json"}, Result: execx.Result{Stdout: []byte(`{"event":"version","version":"0.2.4"}` + "\n")}},
+		{Prefix: []string{"whiteboard", "api", "whiteboard_status"}, Result: execx.Result{Stdout: []byte(`{"event":"whiteboard_status","running":true}` + "\n")}},
 	}
 	h := &fakeDoctorHerdr{info: herdr.ServerInfo{Version: "0.9.1", Protocol: 22}, plugins: []string{"other.plugin", "zhuravel.magnum"}}
 	ag := &fakeDoctorAgents{wrapper: map[string]bool{"codex": true, "claude": true}}
@@ -851,5 +853,81 @@ func TestDoctorChecksTheFixRole(t *testing.T) {
 	if c := fixCheck(gone); c.Status != doctorFail || !strings.Contains(c.Detail, `watch talkable: autofix = "own" but fix_role "claude-fix" names no declared fix role`) ||
 		!strings.Contains(c.Fix, "fix = true") {
 		t.Fatalf("a fix role left out under autofix = %+v", c)
+	}
+}
+
+// The whiteboard line says whether the whiteboard job can run: skipped, with
+// nothing run, while no watch has whiteboards on; with them on, the
+// `whiteboard` CLI must be on PATH (a failure: the job cannot run at all)
+// and a Whiteboard server must answer (a warning: the daemon skips
+// whiteboards until one runs); both pass with the CLI's version.
+func TestDoctorChecksWhiteboard(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	check := func(d doctorDeps) doctorCheck {
+		t.Helper()
+		var found []doctorCheck
+		for _, c := range doctorRun(context.Background(), d) {
+			if c.Name == "whiteboard" {
+				found = append(found, c)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%d whiteboard checks: %+v", len(found), found)
+		}
+		return found[0]
+	}
+	fake := d.Run.(*execx.Fake)
+	base := fake.Rules
+
+	// Off by default: nothing is run.
+	if c := check(d); c.Status != doctorSkip || !strings.Contains(c.Detail, "whiteboards are off") {
+		t.Fatalf("off = %+v", c)
+	}
+	if n := len(fake.CallsWithPrefix("whiteboard")); n != 0 {
+		t.Errorf("the whiteboard CLI was run %d times with whiteboards off", n)
+	}
+
+	// On through [pipeline], or through one watch's override.
+	on := d
+	cfg := *d.Config
+	cfg.Pipeline.Whiteboard = true
+	on.Config = &cfg
+	if c := check(on); c.Status != doctorPass || !strings.Contains(c.Detail, "whiteboard 0.2.4 is on PATH") || !strings.Contains(c.Detail, "Whiteboard runs") ||
+		!strings.Contains(c.Detail, "watches talkable, zhuravel") {
+		t.Fatalf("on = %+v", c)
+	}
+	one := d
+	wcfg := *d.Config
+	wcfg.Watches = slices.Clone(wcfg.Watches)
+	yes := true
+	wcfg.Watches[0].Whiteboard = &yes
+	one.Config = &wcfg
+	if c := check(one); c.Status != doctorPass || !strings.Contains(c.Detail, "watch talkable") || strings.Contains(c.Detail, "zhuravel") {
+		t.Fatalf("one watch = %+v", c)
+	}
+
+	// The CLI is not on PATH: the server is not asked.
+	fake.Rules = append([]execx.Rule{{Prefix: []string{"whiteboard", "version"}, Err: errors.New(`exec: "whiteboard": executable file not found in $PATH`)}}, base...)
+	before := len(fake.CallsWithPrefix("whiteboard", "api"))
+	if c := check(on); c.Status != doctorFail || !strings.Contains(c.Detail, "`whiteboard` is not on PATH") || !strings.Contains(c.Detail, "not found in $PATH") ||
+		!strings.Contains(c.Fix, "install dev.fast Whiteboard and put its `whiteboard` CLI on PATH") {
+		t.Fatalf("missing CLI = %+v", c)
+	}
+	if n := len(fake.CallsWithPrefix("whiteboard", "api")); n != before {
+		t.Errorf("the server was asked %d times without the CLI", n-before)
+	}
+
+	// The CLI answers but no server runs: a warning, the job skips whiteboards.
+	fake.Rules = append([]execx.Rule{{Prefix: []string{"whiteboard", "api", "whiteboard_status"}, Result: execx.Result{Code: 1, Stderr: []byte("error: no Whiteboard server is running\n")}}}, base...)
+	if c := check(on); c.Status != doctorWarn ||
+		!strings.Contains(c.Detail, "Whiteboard is not running: the job skips whiteboards until Whiteboard Desktop or `whiteboard server start` runs") ||
+		!strings.Contains(c.Detail, "whiteboard 0.2.4") || !strings.Contains(c.Fix, "whiteboard server start") {
+		t.Fatalf("down = %+v", c)
+	}
+
+	// A version the CLI does not report as JSON still passes, unnamed.
+	fake.Rules = append([]execx.Rule{{Prefix: []string{"whiteboard", "version"}, Result: execx.Result{Stdout: []byte("whiteboard dev\n")}}}, base...)
+	if c := check(on); c.Status != doctorPass || !strings.Contains(c.Detail, "whiteboard is on PATH and Whiteboard runs") {
+		t.Fatalf("unparsed version = %+v", c)
 	}
 }

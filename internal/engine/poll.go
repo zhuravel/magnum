@@ -1016,15 +1016,19 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 				kept, pinned := e.closedPinnedSlot(ctx, cur)
 				// A round nobody asked for stops: its review would come
 				// after the merge, for nobody (abort.go).
+				whiteboard := e.whiteboardHolds(pr.ID) // its stop hands back no slot (whiteboard.go)
 				stop := e.stopClosedRound(pr.ID, closeStop{state: st.State, count: count})
 				slotNote := fmt.Sprintf("slot released after %s", e.cfg.Daemon.CloseGrace.Duration)
 				switch {
 				case pinned:
 					slotNote = "slot kept: pinned (magnum unpin)"
-				case stop != nil && kept.Kind == store.SlotKindPool:
+				case stop != nil && kept.Kind == store.SlotKindPool && !whiteboard:
 					slotNote = "slot handed back when it stops"
 				}
-				if stop != nil {
+				switch {
+				case stop != nil && whiteboard:
+					slotNote = "stopping its whiteboard; " + slotNote
+				case stop != nil:
 					slotNote = "stopping its round; " + slotNote
 				}
 				e.event(ctx, "info", subject, "pr.closed", fmt.Sprintf("%s on GitHub (confirmed %d×); %s", strings.ToLower(st.State), count, slotNote), nil)

@@ -276,6 +276,14 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
                                   # hand for a first week, then switch. Post the reviews as an App identity
                                   # with own: the fixer's replies must not look like the reviewer's.
                                   # [[watch]] may override
+whiteboard = false                # true: writes a whiteboard (an interactive document in the dev.fast Whiteboard
+                                  # app) of every PR after every review magnum posts on a new head, through
+                                  # whiteboard_role, in the PR's slot. Needs dev.fast Whiteboard: Whiteboard
+                                  # Desktop running, or `whiteboard server start`, and the `whiteboard` CLI on
+                                  # PATH; a Whiteboard that is down skips the whiteboard, it does not wait.
+                                  # [[watch]] may override
+whiteboard_role = "claude-whiteboard"   # the role with whiteboard = true that writes it. "" = no whiteboard job,
+                                  # by hand or automatic. [[watch]] may override
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
@@ -522,6 +530,23 @@ skill = "{{repo}}/skills/magnum-fix/SKILL.md"   # the fix skill, copied at start
 prompt = "fix.md"
 output = "claude-fix.md"
 timeout = "60m"
+
+[[role]]
+name = "claude-whiteboard"            # the writer of the whiteboard job (`whiteboard_role` above): never part of a
+kind = "claude"                       # review round, so a watch's roles do not list it
+whiteboard = true
+# identity = "me"                     # unset: the writer acts as each watch's poll identity, your gh login in a
+                                      # `magnum init` config; its pane's gh reads the PR's title as you (an App
+                                      # is refused)
+model = "opus"
+effort = "medium"
+prompt = "whiteboard.md"
+output = "claude-whiteboard.md"
+timeout = "30m"
+args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","args":["mcp"]}}}']
+                                      # the session gets the Whiteboard MCP server alone: the claude kind's
+                                      # mcp_strict (--strict-mcp-config) keeps every other server out, your own
+                                      # whiteboard plugin included. The `whiteboard` command must be on PATH
 
 # Identities, watches and pools are personal: declare them in ~/.config/magnum/config.toml (its
 # blocks are appended to this file). The examples below show every key.

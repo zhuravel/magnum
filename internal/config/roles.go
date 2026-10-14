@@ -44,12 +44,21 @@ type Role struct {
 	// identity (the account it pushes and replies as), and its Skill is the
 	// fix skill (DefaultFixSkill) the way a judge's is the review skill.
 	Fix bool `toml:"fix"`
+	// Whiteboard: the role that writes the whiteboard of a PR magnum
+	// reviewed (the whiteboard job): a session role that, like a fix role,
+	// never takes part in a round, so RolesFor, Stages and a watch's roles
+	// leave it out; Config.WhiteboardRoleFor finds it by [pipeline]
+	// whiteboard_role. It takes no runs, after, own_pass, judge, fix or
+	// skill, and its Identity is a gh identity (the account its pane reads
+	// the PR as). Its Args give the session the Whiteboard MCP server.
+	Whiteboard bool `toml:"whiteboard"`
 	// Summary is a one-line description of what the role checks, shown to the
 	// triage model ([triage]; Removable). A role without one is never
 	// removed from a round, and neither is the judge.
 	Summary string `toml:"summary"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
-	// A fix role has none: it stays "" and validation refuses a value.
+	// A fix or whiteboard role has none: it stays "" and validation refuses
+	// a value.
 	Runs string `toml:"runs"`
 	// RerunMinLines, for runs = "first": the role runs again once the code
 	// lines changed since the head of its last completed run reach this
@@ -165,6 +174,10 @@ type Role struct {
 // IsFix reports whether the role is a fix role (Fix): the fixer of the fix
 // job, never part of a round.
 func (r Role) IsFix() bool { return r.Fix }
+
+// IsWhiteboard reports whether the role is a whiteboard role (Whiteboard):
+// the writer of the whiteboard job, never part of a round.
+func (r Role) IsWhiteboard() bool { return r.Whiteboard }
 
 // IsShell reports whether the role runs a shell command (kind "shell").
 func (r Role) IsShell() bool { return r.Kind == KindShell || r.Mode == ModeShell }
@@ -296,9 +309,17 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     DefaultFixSkill, prompt fix.md, timeout 60m, no runs; the fixer of
 //     the fix job, never part of a round, its session kept like a
 //     reviewer's (no max_session_rounds).
+//   - claude-whiteboard: claude, whiteboard, no identity (WhiteboardRoleFor
+//     gives it each watch's poll identity), model opus, effort medium,
+//     prompt whiteboard.md, output claude-whiteboard.md, timeout 30m, no
+//     runs, no skill; args give the session the Whiteboard MCP server
+//     alone (`--mcp-config` with the whiteboard command's `mcp` server; the
+//     claude kind's mcp_strict keeps every other server out); the writer
+//     of the whiteboard job, never part of a round.
 //
 // Each non-judge role carries a Summary, which makes it a candidate for
-// triage ([triage]); the fix role has none, it is never in a round.
+// triage ([triage]); the fix and whiteboard roles have none, they are never
+// in a round.
 func DefaultRoles() []Role {
 	return []Role{
 		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", MaxSubagents: new(DefaultJudgeSubagents),
@@ -318,6 +339,9 @@ func DefaultRoles() []Role {
 			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md"},
 		{Name: RoleClaudeFix, Kind: KindClaude, Fix: true, Model: "opus", Effort: "high",
 			Skill: DefaultFixSkill, Prompt: DefaultFixPrompt, Output: "claude-fix.md", Capture: CaptureFile, Timeout: Duration{60 * time.Minute}},
+		{Name: RoleClaudeWhiteboard, Kind: KindClaude, Whiteboard: true, Model: "opus", Effort: "medium",
+			Prompt: DefaultWhiteboardPrompt, Output: "claude-whiteboard.md", Capture: CaptureFile, Timeout: Duration{30 * time.Minute},
+			Args: []string{"--mcp-config", `{"mcpServers":{"whiteboard":{"command":"whiteboard","args":["mcp"]}}}`}},
 	}
 }
 
@@ -361,8 +385,9 @@ func (c *Config) roles() []Role {
 
 // RolesFor returns the roles a watch runs, in [[role]] order: every role
 // when w is nil or w.Roles is empty, else the ones w.Roles names (names or
-// aliases). A fix role is never one of them (FixRoleFor finds it), and when
-// w names no roles only the first judge is, the others standing in reserve.
+// aliases). A fix or whiteboard role is never one of them (FixRoleFor and
+// WhiteboardRoleFor find them), and when w names no roles only the first
+// judge is, the others standing in reserve.
 func (c *Config) RolesFor(w *Watch) []Role {
 	all := c.roles()
 	var out []Role
@@ -371,7 +396,7 @@ func (c *Config) RolesFor(w *Watch) []Role {
 		// held in reserve (JudgeFallbackFor) or named by a roles list.
 		judged := false
 		for _, r := range all {
-			if r.Fix {
+			if r.Fix || r.Whiteboard {
 				continue
 			}
 			if r.Judge {
@@ -385,7 +410,7 @@ func (c *Config) RolesFor(w *Watch) []Role {
 		return out
 	}
 	for _, r := range all {
-		if !r.Fix && slices.ContainsFunc(w.Roles, r.Matches) {
+		if !r.Fix && !r.Whiteboard && slices.ContainsFunc(w.Roles, r.Matches) {
 			out = append(out, r)
 		}
 	}
@@ -393,8 +418,9 @@ func (c *Config) RolesFor(w *Watch) []Role {
 }
 
 // AllRoles returns every declared role in [[role]] order, the judges held in
-// reserve and the fix roles included (RolesFor leaves them out): what names
-// a role on the command line, lists roles, or copies the configuration.
+// reserve and the fix and whiteboard roles included (RolesFor leaves them
+// out): what names a role on the command line, lists roles, or copies the
+// configuration.
 func (c *Config) AllRoles() []Role { return slices.Clone(c.roles()) }
 
 // Judges returns every declared judge role in [[role]] order: the first is
@@ -403,7 +429,7 @@ func (c *Config) AllRoles() []Role { return slices.Clone(c.roles()) }
 func (c *Config) Judges() []Role {
 	var out []Role
 	for _, r := range c.roles() {
-		if r.Judge && !r.Fix {
+		if r.Judge && !r.Fix && !r.Whiteboard {
 			out = append(out, r)
 		}
 	}
@@ -417,6 +443,19 @@ func (c *Config) FixRoles() []Role {
 	var out []Role
 	for _, r := range c.roles() {
 		if r.Fix {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// WhiteboardRoles returns every declared whiteboard role in [[role]] order:
+// the built-in claude-whiteboard, and the whiteboard roles a configuration
+// adds for the watches whose whiteboard_role names them (WhiteboardRoleFor).
+func (c *Config) WhiteboardRoles() []Role {
+	var out []Role
+	for _, r := range c.roles() {
+		if r.Whiteboard {
 			out = append(out, r)
 		}
 	}
@@ -456,7 +495,8 @@ func (c *Config) RoleByNameOrAlias(w *Watch, s string) (Role, bool) {
 	// Without a watch the name is a stored one (a session's or run's role, a
 	// result file's): any declared role answers, the judge in reserve
 	// included, which a flagged PR's rounds run (engine judge_fallback.go),
-	// and the fix role, whose fix runs are stored under its name.
+	// and the fix and whiteboard roles, whose runs are stored under their
+	// names.
 	roles := c.RolesFor(w)
 	if w == nil {
 		roles = c.AllRoles()
@@ -559,7 +599,7 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 				r.Mode = ModeShell
 			}
 		}
-		if r.Runs == "" && !r.Fix { // a fix role has no runs; validation refuses one
+		if r.Runs == "" && !r.Fix && !r.Whiteboard { // a fix or whiteboard role has no runs; validation refuses one
 			r.Runs = RunsAlways
 		}
 		if r.Capture == "" {
@@ -605,6 +645,10 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 			}
 			if r.Skill == "" {
 				r.Skill = DefaultFixSkill
+			}
+		case r.Whiteboard && !r.IsShell(): // one prompt, no skill, no re-review or restart prompt
+			if r.Prompt == "" {
+				r.Prompt = DefaultWhiteboardPrompt
 			}
 		case !r.IsShell():
 			if r.Prompt == "" {

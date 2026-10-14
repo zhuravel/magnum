@@ -901,9 +901,11 @@ func TestStatsCountsHowAuthorsAnsweredBySourceAndPriority(t *testing.T) {
 }
 
 // statsFixRound seeds a PR's review round and the fix cycle that follows it:
-// the review (reviewer and judge) at 12:00 on day, the fixer's run (round
-// round, kind fix, as the fix job records it: in the round of the review it
-// fixes) an hour after the judge ended.
+// the review (reviewer and judge) at 12:00 on day, the whiteboard writer's
+// run (round round, kind whiteboard, in the round of the review as the
+// whiteboard job records it) right after the judge, and the fixer's run
+// (round round, kind fix, as the fix job records it: in the round of the
+// review it fixes) an hour after the judge ended.
 func statsFixRound(t *testing.T, st *store.Store, pr store.PR, round int, day time.Time, judgeKind string) {
 	t.Helper()
 	statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: store.RoleClaude, state: store.RunVerified, outcome: "ok",
@@ -911,6 +913,8 @@ func statsFixRound(t *testing.T, st *store.Store, pr store.PR, round int, day ti
 	statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: store.RoleJudge, kind: judgeKind, state: store.RunVerified, outcome: "posted",
 		created: day.Add(12 * time.Minute), submitted: day.Add(12 * time.Minute), ended: day.Add(29 * time.Minute), verified: day.Add(30 * time.Minute),
 		result: `{"findings":{"P2":2}}`})
+	statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: "claude-whiteboard", kind: store.RunWhiteboard, state: store.RunVerified, outcome: "done",
+		created: day.Add(35 * time.Minute), submitted: day.Add(35 * time.Minute), ended: day.Add(50 * time.Minute), verified: day.Add(51 * time.Minute)})
 	statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: "claude-fix", kind: store.RunFix, state: store.RunVerified, outcome: "pushed",
 		created: day.Add(90 * time.Minute), submitted: day.Add(90 * time.Minute), ended: day.Add(130 * time.Minute), verified: day.Add(131 * time.Minute)})
 }
@@ -918,7 +922,9 @@ func statsFixRound(t *testing.T, st *store.Store, pr store.PR, round int, day ti
 // The fix job's runs (kind fix) are fix cycles, counted per day and
 // repository beside the rounds: the fixer runs in the round of the review it
 // fixes, so a cycle is no round of its own and does not stretch the round it
-// follows, add a duration under its role or hold its outcome back.
+// follows, add a duration under its role or hold its outcome back. The
+// whiteboard job's runs (kind whiteboard) are left out the same way, and
+// counted nowhere.
 func TestStatsCountsFixCycles(t *testing.T) {
 	f := newInspFixture(t)
 	prev := inspNow
@@ -971,6 +977,9 @@ func TestStatsCountsFixCycles(t *testing.T) {
 	}
 	if d, ok := r.Total.Durations["claude-fix"]; ok {
 		t.Errorf("the fixer has a duration: %+v", d)
+	}
+	if d, ok := r.Total.Durations["claude-whiteboard"]; ok {
+		t.Errorf("the whiteboard writer has a duration: %+v", d)
 	}
 	// Each round runs from its first run to its judge's verification (30 minutes), not to the end of the fix.
 	if d := r.Total.Durations[statsRoundRole]; d.N != 3 || d.P90Seconds != 30*60 {

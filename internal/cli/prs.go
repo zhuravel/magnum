@@ -361,6 +361,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				}
 			}
 			row.Fixing, row.FixLoop, row.FixOff = boardFix(ctx, st, r.PRID)
+			row.Whiteboard = boardWhiteboard(ctx, st, r.PRID)
 			if f, ok := codexFlagOf(ctx, st, r.PRID); ok { // codex_flag.go
 				row.CodexFlag, row.CodexFlagSentence = f.Short(), f.Sentence(actRefLabel(defaultRepo(cfg), full, r.Number))
 			}
@@ -432,6 +433,21 @@ func boardFix(ctx context.Context, st *store.Store, prID int64) (fixing string, 
 	}
 	_, off, err := st.GetKV(ctx, engine.KVPRFixOff(prID))
 	return fixing, loop, off && err == nil
+}
+
+// boardWhiteboard is the PR's whiteboard as the board shows it (its
+// engine.KVPRWhiteboard row: the Whiteboard session w opens and the head it
+// describes); nil when it has none, or the registry cannot say.
+func boardWhiteboard(ctx context.Context, st *store.Store, prID int64) *tui.PRWhiteboard {
+	v, ok, err := st.GetKV(ctx, engine.KVPRWhiteboard(prID))
+	if err != nil || !ok {
+		return nil
+	}
+	rec, ok := engine.ParseWhiteboardRecord(v)
+	if !ok {
+		return nil
+	}
+	return &tui.PRWhiteboard{Session: rec.Session, Head: rec.Head}
 }
 
 // prsMuteReason is the reason of the PR's latest mute (`magnum mute`'s, in

@@ -109,6 +109,8 @@ func TestDefaultsEqualExplicitConfig(t *testing.T) {
 		"claude-judge":    {"claude", "session", "always", "file", "claude-judge.json", "judge-initial.md", "judge-rereview.md", "claude", 90 * time.Minute},
 		// A fix role has no runs and no re-review prompt (its prompt serves both).
 		"claude-fix": {"claude", "session", "", "file", "claude-fix.md", "fix.md", "fix.md", "claude", 60 * time.Minute},
+		// So has a whiteboard role, and no skill.
+		"claude-whiteboard": {"claude", "session", "", "file", "claude-whiteboard.md", "whiteboard.md", "whiteboard.md", "claude", 30 * time.Minute},
 	}
 	for _, r := range explicit.Roles {
 		x := want[r.Name]
@@ -143,7 +145,7 @@ func TestDefaultsValidate(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if got := roleNames(Defaults().Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "claude-fix"}) {
+	if got := roleNames(Defaults().Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "claude-fix", "claude-whiteboard"}) {
 		t.Fatalf("Defaults roles = %v", got)
 	}
 	// A Config built without Kinds/Roles falls back to the defaults.
@@ -793,7 +795,7 @@ identity = "z"
 roles = ["judge", "droid-review"]
 `,
 	})
-	if got := roleNames(cfg.Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "claude-fix", "droid-review"}) {
+	if got := roleNames(cfg.Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "claude-fix", "claude-whiteboard", "droid-review"}) {
 		t.Fatalf("roles = %v", got)
 	}
 	cr, _ := cfg.RoleByNameOrAlias(nil, "claude-review")

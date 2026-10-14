@@ -534,3 +534,22 @@ func TestBypassFailsTheStartWhenTheShellNeverEchoes(t *testing.T) {
 		t.Fatalf("removal lines = %d, starts = %d", n, len(e.h.starts))
 	}
 }
+
+// The whiteboard role's session gets the Whiteboard MCP server alone: its
+// args carry the server as one inline JSON string, after the claude kind's
+// --strict-mcp-config, which keeps every other server (the operator's own
+// whiteboard plugin included) out. herdr shell-quotes each argument, so the
+// string reaches the launch as one element, intact.
+func TestTheWhiteboardRolesMCPServerReachesItsLaunchIntact(t *testing.T) {
+	e := newEnv(t)
+	role := e.spec(Role(config.RoleClaudeWhiteboard))
+	if err := e.m.StartAgent(e.ctx, e.pr, role, "p-whiteboard", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := e.h.starts[0].Args
+	const server = `{"mcpServers":{"whiteboard":{"command":"whiteboard","args":["mcp"]}}}`
+	strict := slices.Index(got, "--strict-mcp-config")
+	if strict < 0 || len(got) < 2 || !slices.Equal(got[len(got)-2:], []string{"--mcp-config", server}) || slices.Index(got, "--mcp-config") < strict {
+		t.Fatalf("whiteboard args = %q, want --strict-mcp-config, then --mcp-config %s last", got, server)
+	}
+}

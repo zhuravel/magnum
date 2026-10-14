@@ -705,6 +705,13 @@ func (e *Engine) fixWait(ctx context.Context, job *fixJob) error {
 // loses its session (an error), timeout passes (errFixTimeout; 0 = none) or
 // ctx ends.
 func (e *Engine) waitFixRun(ctx context.Context, runID string, timeout time.Duration) error {
+	return e.waitAgentRun(ctx, runID, timeout, nil)
+}
+
+// waitAgentRun is waitFixRun with each, when set, run on every poll of a
+// run still at work: its error ends the wait (the whiteboard job's look at
+// the PR, whiteboard.go).
+func (e *Engine) waitAgentRun(ctx context.Context, runID string, timeout time.Duration, each func(ctx context.Context) error) error {
 	deadline := e.now().Add(timeout)
 	for {
 		run, err := e.st.RunByID(ctx, runID)
@@ -720,6 +727,11 @@ func (e *Engine) waitFixRun(ctx context.Context, runID string, timeout time.Dura
 		if run.SessionID != nil {
 			if s, err := e.st.SessionByID(ctx, *run.SessionID); err == nil && s.State != store.SessionLive && s.State != store.SessionStarting {
 				return fmt.Errorf("%s session %d is %s", run.Role, s.ID, s.State)
+			}
+		}
+		if each != nil {
+			if err := each(ctx); err != nil {
+				return err
 			}
 		}
 		if timeout > 0 && !e.now().Before(deadline) {

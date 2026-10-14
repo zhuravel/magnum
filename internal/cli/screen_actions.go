@@ -232,6 +232,14 @@ func (s *screenActions) FixOff(ctx context.Context, ref string, off bool) (tui.A
 	})
 }
 
+// OpenWhiteboard opens the PR's whiteboard in Whiteboard Desktop (magnum
+// whiteboard --open); the screen asked first, and refused a row without one.
+func (s *screenActions) OpenWhiteboard(ctx context.Context, ref string) (tui.ActionResult, error) {
+	return s.do(ctx, "whiteboard", func(ctx context.Context, c *Context, d *actDeps) int {
+		return whiteboardMain(ctx, c, d, ref, whiteboardOpts{open: true, yes: true})
+	})
+}
+
 // Abort kills the PR's running review; the screen asked first.
 func (s *screenActions) Abort(ctx context.Context, ref string) (tui.ActionResult, error) {
 	return s.stop(ctx, stopAbort, ref)

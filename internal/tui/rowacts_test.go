@@ -69,6 +69,7 @@ func TestActionRefusalSaysWhyBeforeAsking(t *testing.T) {
 		{"pin a pinned PR", actPin, func(r *PRBoardRow) { r.Pinned = true }, "talkable#5 is already pinned"},
 		{"unpin an unpinned PR", actUnpin, nil, "talkable#5 is not pinned"},
 		{"tracker without an issue", actTracker, nil, "the title names no issue: [board] trackers lists the issue keys and their URLs"},
+		{"whiteboard without one", actWhiteboard, nil, "no whiteboard of talkable#5 yet (magnum whiteboard writes one)"},
 	} {
 		r := boardActRow(actPR(c.edit), "talkable#5", boardNow)
 		if got := actionRefusal(c.act, r); got != c.want {
@@ -95,6 +96,10 @@ func TestActionRefusalSaysWhyBeforeAsking(t *testing.T) {
 		{actFixOff, nil},
 		{actFixOff, func(r *PRBoardRow) { r.FixOff = true }},
 		{actFixOff, func(r *PRBoardRow) { r.Findings = nil }}, // the opt-out needs no review
+		{actWhiteboard, func(r *PRBoardRow) { r.Whiteboard = &PRWhiteboard{Session: "wb-5", Head: "abcdef1234"} }},
+		{actWhiteboard, func(r *PRBoardRow) { // of an earlier head, the PR merged since: it still opens
+			r.Whiteboard, r.GHState, r.State, r.HeadSHA = &PRWhiteboard{Session: "wb-5", Head: "abcdef1234"}, "MERGED", "released", "fedcba9876"
+		}},
 		{actRelease, nil},
 		{actReview, func(r *PRBoardRow) { r.GHState, r.State, r.HeadSHA = "MERGED", "closed", "fedcba9876" }}, // post-merge
 	} {

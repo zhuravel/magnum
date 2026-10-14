@@ -117,6 +117,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"KVPRWait", KVPRWait(id), "pr.7.wait"},
 		{"KVPRFix", KVPRFix(id), "pr.7.fix"},
 		{"KVPRFixOff", KVPRFixOff(id), "pr.7.fix_off"},
+		{"KVPRWhiteboard", KVPRWhiteboard(id), "pr.7.whiteboard"},
 	}
 	byKey := map[string]string{}
 	for _, c := range cases {

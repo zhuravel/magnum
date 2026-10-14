@@ -1252,6 +1252,56 @@ skill versions); people add theirs to the sections before it, at the end of the 
   review's commit is refused before the fix starts, so the guard does not fail it. The board's `f` leaves
   the decision to the daemon when the head is the reviewed one. A loop's re-review that ends `replied`
   still ends the loop: that path is unchanged.
+- **Whiteboards of reviewed PRs, written by a role after the review posts** (2026-10-14; amends "Magnum's
+  Claude sessions run without MCP servers", 2026-10-07). The operator asked for a human-friendly way to read
+  a reviewed PR, at their own choice: a review says what is wrong with a PR, not what the PR is. A dev.fast
+  Whiteboard is that, an interactive document in Whiteboard Desktop with diagrams and code views pinned to
+  the commits, explained by the authoring guide of `whiteboard mcp`; only a person's request to an agent
+  made one before (one existed on this machine, written by hand through the MCP tools), and magnum had no
+  code that named Whiteboard. Verified on 2026-10-14 with CLI 0.2.4: `whiteboard mcp` serves the authoring
+  tools over stdio to one agent and needs a running server, Whiteboard Desktop or a headless `whiteboard
+  server start` (the same `~/.dev` state directory); `whiteboard api whiteboard_status` exits 0 only then
+  ("not ready in ~/.dev" otherwise) and `whiteboard app pick --session <id> --focus` opens one whiteboard in
+  Desktop; `session_create` takes a `commits` target (`repositoryPath`, `head`, `base`), the PR's URL and
+  `open: false`, which authors in the background without taking over Desktop, and its default
+  `reuseExisting` returns the existing whiteboard of the same PR URL (`created: false`, `headMoved`);
+  `session_set_target` moves a whiteboard to a new head and keeps its document; `repositoryPath` must be a
+  git checkout, a `git worktree add` worktree works, the code views read it at the pinned commits, and a
+  path that disappears later leaves the text and loses the views. Magnum's Claude sessions pass
+  `--strict-mcp-config` and no `--mcp-config`, and a role's `args` come last in `Kind.Argv`, after the kind's
+  `mcp_strict`, so the role's args carry one inline JSON string (`--mcp-config
+  '{"mcpServers":{"whiteboard":{"command":"whiteboard","args":["mcp"]}}}'`) and magnum writes no file: the
+  whiteboard role's session gets exactly one server, the one its args name, and the strict flag keeps the
+  operator's own whiteboard plugin and every other server out. Now `[pipeline] whiteboard` (false) and
+  `whiteboard_role` ("claude-whiteboard"; "" = no job, by hand or automatic), each with a `[[watch]]`
+  override (`Config.WhiteboardFor`, `WhiteboardRoleFor`), and the built-in role `claude-whiteboard` (kind
+  claude, opus, medium, `whiteboard.md`, no skill, 30m, no identity: it acts as the watch's poll identity,
+  and a declared identity must be a gh one; validation refuses `runs`, `after`, `own_pass`,
+  `max_session_rounds`, a judge, a fix or a shell role, and a watch's `roles` that names it). After a round
+  that posted a review on a head, once the fix loop's hook ran, `whiteboardAfterRound` starts the job
+  (`whiteboard.go`) when the PR is open, not muted, at the reviewed head and the head has no whiteboard;
+  `magnum whiteboard <ref>` starts it by hand (`ReqWhiteboard`), `--open` and the board's `w` open the
+  recorded one. Decided: a readiness check before every job (`whiteboard api whiteboard_status` through the
+  daemon's runner, 15 s): a Whiteboard that is down is a skip (`whiteboard.skipped`, "Whiteboard is not
+  running (start Whiteboard Desktop or `whiteboard server start`)"), never a wait, and the next posted
+  review is the next chance; the job holds the PR under a reservation of its own (`roundHandle.whiteboard`)
+  in the PR's slot, as the fix job does, with guard, start and wait steps, outside the daily cap, the
+  interval, quiet hours and `max_concurrent_reviews`, and the wait code `whiteboard` reads "whiteboard in
+  progress · <role>"; the record is the kv row `pr.<id>.whiteboard` (session, head, time, role), one
+  whiteboard per PR that the next head's job moves with `session_set_target`, and a head that has its
+  whiteboard gets no second (the request answers "<sha7> has its whiteboard <id>; magnum whiteboard <ref>
+  --open opens it"); the writer's report is two lines, `session: <id>` and `head: <sha>`, or `failed: <one
+  sentence>`, and anything else fails the run; a failure asks nothing of the operator (no attention, no
+  toast: the whiteboard is optional), only `whiteboard.failed` says why; a push and `magnum abort` stop a
+  job in progress as they stop a fixer, and a close on GitHub stops it too, unlike a fix job, because a
+  whiteboard of a closed PR has no reader (`whiteboard.stopped`); a daemon restart fails the run it left at
+  work ("whiteboard run lost in a restart"). The prompt carries URLs, SHAs and paths, never PR text: the
+  writer reads the PR's title with gh in its pane, and the "Review" section it ends with quotes the posted
+  review from its review.json. Rejected: magnum authoring the whiteboard itself (it has no model); the
+  operator's whiteboard plugin (the strict MCP config keeps plugins out, and the plugin's tools are the
+  operator's); a create from the PR URL alone, without a `commits` target (Whiteboard then fetches the PR
+  itself, with Desktop's gh and git, in the slot's clone); a notification on failure (the whiteboard is
+  optional); a whiteboard on every round (a reply round posts nothing).
 
 ## Screens and commands
 

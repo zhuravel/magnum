@@ -141,7 +141,9 @@ that declares databases: DBngin's server at 127.0.0.1:3306 (root, no password), 
 `MAGNUM_MYSQL_DSN` names (a [go-sql-driver DSN](https://github.com/go-sql-driver/mysql#dsn-data-source-name)
 such as `root:secret@tcp(127.0.0.1:3307)/`) in the environment of the daemon and the CLI (the LaunchAgent
 does not carry it: a daemon launchd runs sees it only through `mise exec`, from the checkout's mise env);
-[mise](https://mise.jdx.dev) only for a pool whose worktrees use it.
+[mise](https://mise.jdx.dev) only for a pool whose worktrees use it; dev.fast Whiteboard only for
+`[pipeline] whiteboard = true` ([Whiteboards of reviewed PRs](#whiteboards-of-reviewed-prs)): Whiteboard
+Desktop running (or `whiteboard server start`) and its `whiteboard` CLI on PATH.
 
 ```bash
 brew install zhuravel/tap/magnum             # built from source by Homebrew
@@ -889,6 +891,20 @@ switches the job off for that watch. `fix_cycles` (default 3, at least 1) caps t
 findings on your own PRs. A watch's `roles` list may not name a fix role, and `magnum roles` leaves it out.
 Validation refuses a `fix_role` that names no role, a judge, a shell role or a role without `fix = true`, and
 a fix role without an `identity` or whose declared identity is not a `gh` one.
+
+A fourth kind of role takes part in no round either: the whiteboard role (`whiteboard = true`). The built-in
+`claude-whiteboard` (kind claude, model opus, effort medium, the prompt `whiteboard.md`, no skill, `timeout`
+30m, no identity) belongs to the whiteboard job, which writes a dev.fast Whiteboard of a PR after Magnum
+posts a review on it (see [Whiteboards of reviewed PRs](#whiteboards-of-reviewed-prs)). Two `[pipeline]`
+keys configure the job, and a `[[watch]]` may set its own of each: `whiteboard` (default `false`) switches
+the automatic job on, and `whiteboard_role` (default `"claude-whiteboard"`) names the role that writes it;
+`whiteboard_role = ""` means no whiteboard job at all, by hand or automatic. The role's `args` give its
+session the Whiteboard MCP server alone (`--mcp-config` with an inline JSON that starts `whiteboard mcp`),
+and the claude kind's `--strict-mcp-config` keeps every other server out. A whiteboard role without an
+`identity` acts as the watch's poll identity; one it declares must be a `gh` identity. A watch's `roles` list
+may not name a whiteboard role, and `magnum roles` leaves it out. Validation refuses a `whiteboard_role` that
+names no role, a judge, a fix role, a shell role or a role without `whiteboard = true`, and a whiteboard role
+with `runs`, `after`, `own_pass` or `max_session_rounds`.
 
 What the reviewers add is measured, not guessed: in a round with the own pass, `judge` among a posted
 finding's sources means the own pass found it before any report was read. `magnum stats` (WHO FOUND THE
@@ -1639,12 +1655,96 @@ out, as the board's does.
   keeps the fixer's pane, so that start first interrupts a fixer still at work and puts the slot back on
   the reviewed head: nothing pushes or replies as you after Magnum said the run was lost.
 
+### Whiteboards of reviewed PRs
+
+A posted review says what is wrong with a PR. It does not say what the PR is, and a diff is a slow way to
+find out. A **whiteboard** is a dev.fast Whiteboard: an interactive document in Whiteboard Desktop, with
+diagrams and code views pinned to the PR's commits, written for the person who decides from it whether to
+read the PR themselves. Magnum can have one written after each review it posts, so the PR is explained by
+the time you look at it. The job is off by default and needs dev.fast Whiteboard on the machine: Whiteboard
+Desktop running (or a headless `whiteboard server start`) and its `whiteboard` CLI on PATH.
+
+**Configuration.** Two `[pipeline]` keys set the job, and a `[[watch]]` may set its own of each.
+
+```toml
+[pipeline]
+whiteboard = false                      # true: a whiteboard after every review Magnum posts on a new head
+whiteboard_role = "claude-whiteboard"   # the role that writes it; "" = no whiteboard job, by hand or automatic
+```
+
+`whiteboard = true` on a watch turns the automatic job on for its PRs, and `whiteboard_role = ""` on a watch
+switches the job off there altogether, `magnum whiteboard` included. The writer is the whiteboard role, the
+built-in `claude-whiteboard` (kind claude, model opus, effort medium, the prompt `whiteboard.md`, no skill,
+30 minutes). Its `args` give the session the Whiteboard MCP server alone: `--mcp-config` with an inline JSON
+that starts `whiteboard mcp`, while the claude kind's `--strict-mcp-config` keeps every other server out,
+your own whiteboard plugin included. So the session's tools are the role's, and Magnum writes no MCP file.
+The role names no identity, so its pane acts as the watch's poll identity, your own gh login in the config
+`magnum init` writes, and `gh` in its pane reads the PR's title as you. An identity you declare for it must
+be a `gh` one. The role takes part in no round: a watch's `roles` may not name it, and it takes no `runs`,
+`after`, `own_pass` or `max_session_rounds`.
+
+**When a whiteboard is written.** After each review Magnum posts on a head, once the fix loop's hook ran
+(a fix loop that starts first holds the PR, and the whiteboard is skipped). The PR must be open, not muted
+and still at the reviewed head, and the head must have no whiteboard yet. Magnum first asks Whiteboard
+whether it runs (`whiteboard api whiteboard_status`). When it does not, the whiteboard is skipped, not waited
+for: a `whiteboard.skipped` event says "Whiteboard is not running (start Whiteboard Desktop or `whiteboard
+server start`)", and the next posted review is the next chance. The job holds the PR as the fix job does, in
+the PR's own slot, so no round, release or `magnum open` touches the checkout meanwhile, and a round that
+waits for it reads `whiteboard in progress · claude-whiteboard` (`magnum abort` stops the writer). It is no
+round: the daily cap, the interval and quiet hours do not apply, and it does not count toward `[daemon]
+max_concurrent_reviews`. One Claude session runs per posted review on a new head. A reply round posts
+nothing and gets none, and a head that has its whiteboard gets no second one.
+
+**What it contains.** The writer calls Whiteboard's own authoring guide (`session_get_instructions`) and
+follows it: what the PR does and why, the design, the implementation walk, every claim linked to the code,
+short for a small change. Then a last top-level section, "Review", gives Magnum's posted review as one line
+with its verdict and one callout per finding (danger for P0 and P1, warning for P2, info for P3 and notes)
+that quotes the finding's title and links the lines it names. The whiteboard is created with `open: false`,
+so it does not take over Whiteboard Desktop: you open it when you want to. The writer's report is
+`claude-whiteboard.md` in the head's report directory, two lines (the session and the head) or one line that
+says why there is none.
+
+**The record.** A written whiteboard is kept in the registry's kv as `pr.<id>.whiteboard`: the Whiteboard
+session, the head it describes, when it was written and by which role. The next head's whiteboard moves the
+same session to the new head (`session_set_target`, which keeps the document) and follows the guide's update
+flow, so a PR has one whiteboard over its life.
+
+**By hand.** `magnum whiteboard <pr>` writes the whiteboard of the reviewed head now, whatever `whiteboard`
+says, as long as a whiteboard role is set. A terminal asks y/N first (`--yes` skips the question). The daemon
+answers "writing the whiteboard of <sha7> in <slot>", or refuses in one sentence: no whiteboard role
+("whiteboard_role is empty"), no review on the head, a round or a job that holds the PR ("try again after
+it"), Whiteboard not running, a slot not at the head, a pinned slot (`magnum open`, `magnum pin`; unpin
+first) or a head whose whiteboard exists ("<sha7> has its whiteboard <id>; magnum whiteboard <pr> --open
+opens it"). `--wait` follows the job to its end (exit 0 once the whiteboard is written, 1 otherwise). `--open` opens the
+recorded whiteboard in Whiteboard Desktop
+(`whiteboard app pick --session <id> --focus`) and refuses "no whiteboard of <pr> yet" without a record. The
+board's `w` opens it the same way, after y/N, and refuses a row without a record; the card shows `whiteboard
+<sha7>` when one exists, and `magnum prs --json` has `whiteboard` (`session` and `head`, `null` without one).
+
+**Good to know.**
+
+- `magnum logs <ref>` shows `whiteboard.start`, `whiteboard.done` (the session, the head and how long it
+  took), `whiteboard.failed`, `whiteboard.stopped` and `whiteboard.skipped`.
+- A push, a close on GitHub or `magnum abort` ends a job in progress: the writer is interrupted, its run
+  abandoned, the slot put back at the head, and `whiteboard.stopped` says why. A whiteboard of a closed PR
+  has no reader, so a close stops the writer, unlike a fixer.
+- A failure asks nothing of you: no needs attention, no toast. `whiteboard.failed` says why: the sentence
+  the writer reported, a report that is not the two lines, no report, the role's 30 minutes run out, or a
+  daemon restart in the middle of the run ("whiteboard run lost in a restart"). `magnum daemon-restart`
+  refuses while the writer works, as under a fixer, and `--drain` waits for it. The next posted review tries
+  again.
+- The code views read the slot's checkout at the pinned commits. When the slot is handed back and its
+  worktree removed, the whiteboard keeps its text and loses its code views.
+- `magnum doctor` has a `whiteboard` check: SKIP while no watch has `whiteboard = true`, FAIL when the
+  `whiteboard` CLI is not on PATH, WARN when it is but Whiteboard is not running (the job skips whiteboards
+  until it does).
+
 ## Daily use
 
 | Command | What it does |
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
-| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--desc] [--all] [--needs-me] [--auto-approved] [--json] [--limit N]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge; `--desc` (the default) puts the largest first and `--desc=false` reverses the order, `--limit` caps the rows (0 = all). Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list; UPDATED is `activity_at`, the PR's last activity, and GitHub's own updatedAt is `github_updated_at`. `--needs-me` lists only the PRs Magnum approved that GitHub still blocks on your approval (below); `needs_me` (`approve`, `lift` or `""`) and `review_decision` (GitHub's) say it in the JSON, and `approve_as` whom the board's `A` approves such a PR as (the watch's `auto_approve_as`: its `identity`, `login` and the `refusal` that would stop it now, `""` when none; `null` without one). `--auto-approved` lists only the PRs Magnum approved as you (Approving as you); `auto_approved` (its `review_id`, `head`, `url` and `at`, or `null`) and `auto_approve_stopped` (why Magnum no longer approves the PR as you, or `""`) say it in the JSON, as does `auto_approve_refused` (why it does not approve the head as you although the review left nothing to fix, or `""`), `auto-approved` in the printed STATE. `pending_replies` counts the replies on Magnum's review its judge has not re-decided (", 2 replies" in the printed LAST REVIEW) and `stalemate_threads` lists the threads where it stopped arguing (`stalemate` in the printed STATE). As on the board, the printed STATE names a snooze (`snoozed→18:00`) and FINDINGS the earlier findings still open when the review posted none new (`blocking 3 open`); `open_problems` in the JSON counts those of them that `magnum fix` and `f` fix (P0 to P2). |
+| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--desc] [--all] [--needs-me] [--auto-approved] [--json] [--limit N]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge; `--desc` (the default) puts the largest first and `--desc=false` reverses the order, `--limit` caps the rows (0 = all). Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list; UPDATED is `activity_at`, the PR's last activity, and GitHub's own updatedAt is `github_updated_at`. `--needs-me` lists only the PRs Magnum approved that GitHub still blocks on your approval (below); `needs_me` (`approve`, `lift` or `""`) and `review_decision` (GitHub's) say it in the JSON, and `approve_as` whom the board's `A` approves such a PR as (the watch's `auto_approve_as`: its `identity`, `login` and the `refusal` that would stop it now, `""` when none; `null` without one). `--auto-approved` lists only the PRs Magnum approved as you (Approving as you); `auto_approved` (its `review_id`, `head`, `url` and `at`, or `null`) and `auto_approve_stopped` (why Magnum no longer approves the PR as you, or `""`) say it in the JSON, as does `auto_approve_refused` (why it does not approve the head as you although the review left nothing to fix, or `""`), `auto-approved` in the printed STATE. `pending_replies` counts the replies on Magnum's review its judge has not re-decided (", 2 replies" in the printed LAST REVIEW) and `stalemate_threads` lists the threads where it stopped arguing (`stalemate` in the printed STATE). As on the board, the printed STATE names a snooze (`snoozed→18:00`) and FINDINGS the earlier findings still open when the review posted none new (`blocking 3 open`); `open_problems` in the JSON counts those of them that `magnum fix` and `f` fix (P0 to P2). `whiteboard` is the PR's whiteboard (its Whiteboard `session` and the `head` it describes), `null` without one (Whiteboards of reviewed PRs). |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. The codex line says how fast the Codex budget is spent, the share used over the share of the window elapsed, the same over the last 24 hours (which leaves out one-off spending days ago; not shown when the window reset within them), and when `[usage]` codex_soft and codex_hard come at the window's pace if before the reset ("pace 2.8x since the reset, 1.1x in the last 24h: 80% Oct 7 13:30, 95% Oct 8 09:10"; `pace`, `pace_24h`, `soft_at` and `hard_at` in the JSON); the daemon toasts once per window, naming both paces, when codex_soft would come before the reset at the window's pace (not in the window's first tenth, when one burst is no pace). The notes line sums up the repositories with notes, the proposals to review and those past a limit (`magnum notes` lists them). A queue line adds, as the board does, the PR's snooze and the earlier findings still open (`· snoozed → 18:00 · 3 open`; `snoozed_until` and `open` in the JSON), and a PR's card its snooze on the state line. A `machine:` line per repository and command sums up what the judges reported of the review machine in the last 24 hours (`round.environment`: "machine:  6 rounds of talkable: `bundle exec rspec`: no test database for the worktree, last 09:24", a test file's path left out of the command; `machine` in the JSON); a command that fails in 3 rounds of one repository toasts once a day. A `pinned:` line per pinned slot (or pinned PR without one) gives the PR, what GitHub says of it and the pin's age ("pinned:   review16 (talkable#11999, closed 5h ago, pinned 5d)"; `pins` in the JSON). `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority (only the new ones: a re-review's still-open earlier findings are not counted again), median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), model switches, denied prompts and round restarts, and the top 10 PRs by agent time (the sum of their runs' durations in the window, the rounds and the share of all agent time; `top_prs` in the JSON), so a PR burning the budget can be muted; and, for first reviews and re-reviews with the judge's own pass and for delta checks, who found the posted findings (the own pass, the own pass and a reviewer, reviewers only), the reviewer-only P0–P2 per 10 rounds and each role's median turn (`value`; see [Roles and kinds](#roles-and-kinds-the-review-pipeline)). |
 | `magnum eval run\|score\|list\|show\|baseline` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) and in the learned corpus the retro writes (`--corpus FILE`: that file alone) at their pinned heads as blind dry runs (`--candidate <dir>`: with another checkout's prompts and skill; `--judge-only`: the judge alone on a full replay's reviewer reports) and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run, with the Codex points each case used and the cases whose judge read other notes than in that run; it refuses to start while the daemon's skill gate replays cases (naming its proposal). `score` re-scores a run after a match rule is fixed, without the agents. `baseline` (read-only) names the stored replays a run of the cases would repeat: same head, same skill, prompts and role config. Two runs started in the same second get separate ids (`<time>`, then `<time>-2`), so they keep separate records and agent tags. |
@@ -1655,6 +1755,7 @@ out, as the board's does.
 | `magnum debt [<repo>] [--json]` | Bugs found next door: the P1 and P2 problems the judge proved at a PR's head in or near its changes but did not post because the PR did not bring them, across PRs, newest first and once per path and title, with the PR and day it was found (security ones appear only here). Rows recorded before findings had titles show the path and reason only. |
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--replies] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--replies` has the judge alone re-decide the replies on Magnum's review now, answering in the threads unless its verdict changes (a head Magnum reviewed; see the replies under Re-reviews). `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a head Magnum already reviewed (no new commits) only the judge runs, to re-decide its earlier findings from the replies; `--role`, `--simplify` and `--fresh` keep the full round. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. |
 | `magnum fix <url\|owner/repo#N\|repo#N\|N> [--off \| --on] [--wait] [--timeout 2h] [--dry-run] [--json] [--yes]` | Fix Magnum's findings on your own PR now (see Fixing your own PRs). The fixer, the fix role (`claude-fix` by default), works in the PR's slot as you. It fixes the findings of Magnum's review on the current head, answers the review's threads, pushes and writes a report. Magnum then reviews the push and goes on while findings remain, up to `[pipeline] fix_cycles` cycles. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a PR Magnum has not reviewed at its current head, a review without findings that keeps no earlier one open, a PR that is not yours or lives in a fork, a round in flight, a snooze, a loop that already runs and a watch without a fix role. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it, as for `magnum review`; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. A review agent's pane is refused. `--wait` follows the loop and says how it ended: exit 0 for "clean after N fix cycles" and "pushed nothing", exit 1 for "needs you", "aborted" and "ended". `--timeout` (default `2h`, `0` = no limit) stops following after that long while the loop goes on. `--off` takes the PR out of autofix and `--on` puts it back (both ask y/N, start no loop and exclude `--wait`). `--dry-run` only asks what would happen. `magnum abort` ends a loop. Board keys `f` and `F`. |
+| `magnum whiteboard <url\|owner/repo#N\|repo#N\|N> [--open] [--wait] [--timeout <duration>] [--json] [--yes]` | Write the PR's whiteboard now (see Whiteboards of reviewed PRs): the whiteboard role (`claude-whiteboard` by default) writes a dev.fast Whiteboard of the head Magnum reviewed, in the PR's slot, with Magnum's review as its last section. It runs whatever `[pipeline] whiteboard` says, as long as a whiteboard role is set. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a watch without a whiteboard role, a PR Magnum has not reviewed at its current head, a round or a fix loop that holds the PR, a Whiteboard that is not running, a slot not at the head, a pinned PR (`magnum open`, `magnum pin`) and a head that has its whiteboard. The command refuses inside a review agent's pane too. `--wait` follows the job and says how it ended: exit 0 when the whiteboard was written (`whiteboard.done`), exit 1 when the run failed or a push, a close or `magnum abort` stopped it (`whiteboard.failed`, `whiteboard.stopped`). `--timeout` (default `2h`, `0` = no limit) stops following after that long while the job goes on. `--open` asks the daemon nothing: it opens the recorded whiteboard in Whiteboard Desktop (`whiteboard app pick --session <id> --focus`) and refuses a PR without one. `magnum abort` ends a job. Board key `w`. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr (its judge's; the fixer's while a fix loop's fixer works; any role's with `--role`) and reveal the herdr client of `[terminal] session` (default `default`) in `[terminal] app` (Terminal, iTerm2, Ghostty, WezTerm, or `custom` with a `launcher` template): focus the tab that runs it, or open a new one. When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. With `[terminal] reveal_on_attention = true` the daemon does the same by itself for a PR that needs you (an agent waiting on a dialog, a round that needs attention), at most once in 30 minutes for the same agent or cause. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. `--ansi` keeps the pane's colors and text styles only: links, clipboard writes, cursor moves and screen erases are dropped, and both modes show a control character as a space. |
 | `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, the rounds one session serves (`max_session_rounds`), capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
@@ -1713,7 +1814,7 @@ enough to run again, the roles asked for), and the PR's agent time over 7 days w
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
 last); `r`, `R`, `i` start review variants (a post-merge review on a
-merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `z` snoozes the PR for 2h, or lifts its snooze (`magnum snooze`); `f` fixes the PR's findings as you (`magnum fix`, your own PRs) and `F` takes the PR out of autofix or puts it back (`magnum fix --off`, `--on`); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
+merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `z` snoozes the PR for 2h, or lifts its snooze (`magnum snooze`); `f` fixes the PR's findings as you (`magnum fix`, your own PRs) and `F` takes the PR out of autofix or puts it back (`magnum fix --off`, `--on`); `w` opens the PR's whiteboard in Whiteboard Desktop (`magnum whiteboard --open`, Whiteboards of reviewed PRs); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`), and on a row that needs your
 approval `A` approves as you (below); `b` opens the browser;
@@ -1721,7 +1822,7 @@ approval `A` approves as you (below); `b` opens the browser;
 and only when `y` will do what it asks: a key that cannot act on the row says why at once instead (`x` on a
 pinned PR: unpin first, or with no slot: nothing to release, while a round runs or is paused (`K` kills
 it) or inside a closed PR's close grace (the slot is released when it ends); `A`/`C` after the head moved: review again
-first, since a screen cannot force a verdict; `r`, `R`, `i` while a round runs: `K` kills it; `f` on a PR Magnum has not reviewed, a merged or closed one, a head that moved since the review, a review without findings or while a round runs; `I` on a
+first, since a screen cannot force a verdict; `r`, `R`, `i` while a round runs: `K` kills it; `f` on a PR Magnum has not reviewed, a merged or closed one, a head that moved since the review, a review without findings or while a round runs; `w` on a PR without a whiteboard; `I` on a
 merged PR; `K` with no review running or waiting; `U` on a PR that is not muted; `z` on a merged or closed
 PR; `D` on a merged or closed PR), and the right-click
 menu dims and the card's ACTIONS leave out the same actions; the status dashboard and `magnum pick` refuse
@@ -2470,7 +2571,9 @@ baseline (`eval baseline` lists full replays only).
 Troubleshooting lives in `magnum doctor` (`--json` stays JSON even when the registry cannot be opened: a
 build with a new migration under a running daemon is a failed `registry` check whose fix is `magnum
 daemon-restart --drain`). It checks what the config uses and says how to fix each problem: the config,
-prompts, the judge and fix skills and the fix role, herdr and the plugin, the agent CLIs (logins, wrappers or autonomy flags), gh and
+prompts, the judge and fix skills and the fix role, Whiteboard when a watch asks for whiteboards (SKIP while
+whiteboards are off; FAIL when the `whiteboard` CLI is not on PATH; WARN when Whiteboard is not running, since
+the job then skips whiteboards), herdr and the plugin, the agent CLIs (logins, wrappers or autonomy flags), gh and
 the identities, MySQL, the main clones and pools' schema reset, mise and the LaunchAgent, free disk, the
 size of Codex's marketplace staging directory and the registry. It also checks login shells that do not
 see mise: Codex and Claude run their tool commands as `zsh -lc`, which skips `.zshrc` and lets macOS put
