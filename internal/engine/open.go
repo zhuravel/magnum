@@ -19,7 +19,8 @@ import (
 // the PR's checkout and sessions are restored in a goroutine of their own
 // (like a round: dispatch leaves the PR alone meanwhile), which completes
 // the request. OpenPayload.Role is any role of the PR's watch, by name or
-// alias ("" = its judge).
+// alias ("" = its judge). A whiteboard job holding the PR yields to the
+// request (yieldWhiteboard), which goes on once the job let go of it.
 func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -43,7 +44,7 @@ func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 		e.complete(ctx, id, nil, fmt.Sprintf("%s %s is live in pane %s; nothing to restore", label, role, deref(s.HerdrPaneID)))
 		return
 	}
-	if e.roundActive(pr.ID) || slices.Contains(store.InFlightStates, pr.State) {
+	if e.roundActiveBesidesWhiteboard(pr.ID) || slices.Contains(store.InFlightStates, pr.State) {
 		e.complete(ctx, id, nil, fmt.Sprintf("%s has a round running (%s); its sessions start with it", label, pr.State))
 		return
 	}
@@ -54,6 +55,9 @@ func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 		return
 	case e.d.Agents == nil || e.d.Slots == nil:
 		e.complete(ctx, id, errors.New("the daemon has no agents or slots manager"), "")
+		return
+	}
+	if e.yieldWhiteboard(pr.ID, id, "magnum open") { // whiteboard.go: the request goes on once the job let go of the PR
 		return
 	}
 

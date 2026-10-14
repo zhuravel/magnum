@@ -182,7 +182,9 @@ type PausePayload struct {
 
 // handleRequests consumes pending CLI requests, oldest first. Quick ones
 // complete in the tick; release, cleanup, provision, repair and adopt run on
-// the heavy worker and open in its own goroutine, which complete them.
+// the heavy worker and open and whiteboard in their own goroutines, which
+// complete them; a review, fix or open request on a PR a whiteboard job
+// holds waits for the job to stop (answerYielding, yieldWhiteboard).
 func (e *Engine) handleRequests(ctx context.Context) {
 	reqs, err := e.st.PendingRequests(ctx, maxRequestsPerTick)
 	if err != nil {
@@ -216,8 +218,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 	switch req.Kind {
 	case ReqKick:
 		e.complete(ctx, req.ID, nil, "ok")
-	case ReqReview:
-		answer(e, ctx, req, e.requestReview)
+	case ReqReview: // a whiteboard job yields to it (whiteboard.go)
+		answerYielding(e, ctx, req, "magnum review", e.requestReview)
 	case ReqPin, ReqUnpin:
 		answer(e, ctx, req, func(ctx context.Context, p TargetPayload) (string, error) {
 			return e.requestPin(ctx, p, req.Kind == ReqPin)
@@ -230,10 +232,12 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, e.requestSnooze)
 	case ReqCodexFlag: // codex_flag.go
 		answer(e, ctx, req, e.requestCodexFlag)
-	case ReqFix: // fix.go
-		answer(e, ctx, req, e.requestFix)
+	case ReqFix: // fix.go; a whiteboard job yields to it
+		answerYielding(e, ctx, req, fixBy, e.requestFix)
 	case ReqWhiteboard: // whiteboard.go
-		answer(e, ctx, req, e.requestWhiteboard)
+		if p, ok := payload[WhiteboardPayload](e, ctx, req); ok {
+			e.requestWhiteboardAsync(ctx, req.ID, p)
+		}
 	case ReqApprove, ReqRequestChanges:
 		event := map[string]string{ReqApprove: "APPROVE", ReqRequestChanges: "REQUEST_CHANGES"}[req.Kind]
 		answer(e, ctx, req, func(ctx context.Context, p VerdictPayload) (string, error) {
@@ -383,6 +387,8 @@ func (e *Engine) resolve(ctx context.Context, t PRTarget) (store.Repo, store.PR,
 // GitHub merged gets a post-merge review (post_merge.go): it leaves closed
 // or released the same way, unless its merged head was reviewed already or
 // its checkout is being released; a PR closed without merging is refused.
+// A whiteboard job holding the PR is refused with whiteboardHeld once every
+// other refusal passed: it yields to the request (answerYielding).
 func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -403,7 +409,7 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	switch {
 	case w == nil:
 		return "", fmt.Errorf("%s is not watched (no [[watch]] covers it)", repo.FullName())
-	case slices.Contains(store.InFlightStates, pr.State) || e.roundActive(pr.ID):
+	case slices.Contains(store.InFlightStates, pr.State) || e.roundActiveBesidesWhiteboard(pr.ID): // a whiteboard job yields, below
 		return "", fmt.Errorf("%s: a round is already in progress (%s)", label, pr.State)
 	case merged:
 		if why := postMergeRefusal(label, pr); why != "" {
@@ -424,6 +430,9 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	requested, err := e.resolveRequested(repo, asked)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", label, err)
+	}
+	if e.whiteboardHolds(pr.ID) { // every other refusal passed: the job stops for the request (answerYielding)
+		return "", heldByWhiteboard(repo, pr)
 	}
 	to, err := e.forceReview(ctx, repo, pr, p, requested, "magnum review")
 	if err != nil {

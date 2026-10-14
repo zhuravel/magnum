@@ -1700,8 +1700,12 @@ and still at the reviewed head, and the head must have no whiteboard yet. Magnum
 whether it runs (`whiteboard api whiteboard_status`). When it does not, the whiteboard is skipped, not waited
 for: a `whiteboard.skipped` event says "Whiteboard is not running (start Whiteboard Desktop or `whiteboard
 server start`)", and the next posted review is the next chance. The job holds the PR as the fix job does, in
-the PR's own slot, so no round, release or `magnum open` touches the checkout meanwhile, and a round that
-waits for it reads `whiteboard in progress · claude-whiteboard` (`magnum abort` stops the writer). It is no
+the PR's own slot, so no round or release touches the checkout meanwhile, and a round that waits for it
+reads `whiteboard in progress · claude-whiteboard` (`magnum abort` stops the writer). Your own request wins
+over it: `magnum review` and the board's `r`, `magnum fix` and `f`, and `magnum open` and `o` stop the writer
+first (`whiteboard.stopped` says "superseded by magnum review", "by magnum fix" or "by magnum open"), then go
+on as they would have without the job, with their own answer. A dry run of `magnum fix` stops nothing and
+says it would stop the writer first. It is no
 round: the daily cap, the interval and quiet hours do not apply, and it does not count toward `[daemon]
 max_concurrent_reviews`. One Claude session runs per posted review on a new head. A reply round posts
 nothing and gets none, and a head that has its whiteboard gets no second one.
@@ -1739,11 +1743,13 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
 - A push, a close on GitHub or `magnum abort` ends a job in progress: the writer is interrupted, its run
   abandoned, the slot put back at the head, and `whiteboard.stopped` says why. A whiteboard of a closed PR
   has no reader, so a close stops the writer, unlike a fixer.
-- A failure asks nothing of you: no needs attention, no toast. `whiteboard.failed` says why: the sentence
-  the writer reported, a report that is not the two lines, no report, the role's 30 minutes run out, or a
-  daemon restart in the middle of the run ("whiteboard run lost in a restart"). `magnum daemon-restart`
-  refuses while the writer works, as under a fixer, and `--drain` waits for it. The next posted review tries
-  again.
+- A failure asks nothing of you: no needs attention, no toast. `whiteboard.failed` says why: the writer
+  reported a failure ("claude-whiteboard failed (its report: <path>)": its sentence may quote the PR, so it
+  stays in the report for you to read), a report that is not the two lines, no report, the role's 30 minutes
+  run out, or a daemon restart in the middle of the run ("whiteboard run lost in a restart"). herdr keeps the
+  writer's pane across a crash or `daemon-restart --now`, so the next start interrupts a writer still at work
+  and puts the slot back at the run's head before it says so. `magnum daemon-restart` refuses while the
+  writer works, as under a fixer, and `--drain` waits for it. The next posted review tries again.
 - The code views read the slot's checkout at the pinned commits. When the slot is handed back and its
   worktree removed, the whiteboard keeps its text and loses its code views.
 - `magnum doctor` has a `whiteboard` check: SKIP while no watch has `whiteboard = true`, FAIL when the

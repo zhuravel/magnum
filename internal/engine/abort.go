@@ -64,6 +64,10 @@ type roundStop struct {
 	// back of a queued review) without a round goroutine, which serves no
 	// later request: those are answered at once.
 	stopping bool
+	// yields: the review, fix and open requests a whiteboard job yields the
+	// PR to (yieldWhiteboard), handed back to the request dispatch once the
+	// job let go of it (unreserveWhiteboard).
+	yields []whiteboardYield
 }
 
 // closeStop is why a close stops a round: GitHub's state (MERGED or CLOSED)

@@ -1364,6 +1364,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   builds that sentence and both use it: dispatch's slot gate and `prepareFix`, for a broken or lost
   slot. The slot's other states (busy, releasing) keep their short sentence, since `magnum slots repair`
   repairs neither. `prepareWhiteboard` is another change's and takes the helper after both have landed.
+- **A whiteboard job yields the PR to the operator's review, fix and open requests** (2026-10-14; amends
+  "Whiteboards of reviewed PRs"). The job held the PR for its whole run, 6 to 9 minutes in the first live
+  runs, each started right after a review posted, which is when the operator acts on the review; meanwhile
+  `magnum review` and `r`, `magnum fix` and `f` refused with "a round is already in progress (reviewed)" and
+  `magnum open` and `o` answered "has a round running" and restored nothing. The whiteboard is optional, so
+  the request wins. Now each of them, once every other refusal of its own passed, leaves a yield on the
+  job's reservation (`roundStop.yields`, `yieldWhiteboard`) and cancels the job, as `magnum abort` leaves an
+  order: the writer is interrupted, its run abandoned, the slot put back at the head, and
+  `whiteboard.stopped` says "superseded by magnum review" ("by magnum fix", "by magnum open"); a writer
+  whose run had ended is settled instead. The request stays in flight until the job let go of the PR, then
+  goes back to the request dispatch still pending (`unreserveWhiteboard`, with a `Kick`), whose next pass
+  answers it as if the job had never been, so it is answered once, with its own answer, and the tick never
+  waits for the writer. A dry run of `magnum fix` stops nothing and says "would stop the whiteboard writer
+  first". Rejected: the request's goroutine waiting for the job's end with a bound (the writer's quiet wait
+  and the resync take up to half a minute, and the request would then run off the tick); answering the
+  request at the stop (it would answer before its own path ran). `magnum abort` and `magnum ignore` keep
+  their own stop. A CLI waits 30 s for a quick answer, which an interrupt, the quiet wait and the resync
+  usually fit in; beyond that it reports the request pending and the daemon still answers it.
+- **A restart stops a whiteboard writer that outlived the daemon** (2026-10-14; amends "Whiteboards of
+  reviewed PRs"). `recoverWhiteboards` only abandoned the run and recorded `whiteboard.failed`, while herdr
+  keeps the writer's pane across a crash, a drain that timed out or `daemon-restart --now`: the writer went
+  on working in the slot with no reservation, and the next round could take the slot under it. Now the
+  recovery stops it as the fix job's does (`stopFixerAt`): the run's role is interrupted on the PR until
+  quiet (`interruptSessions`, `waitAgentsQuiet`), and the slot is put back at the run's head (`r.TargetSHA`)
+  from a job built from the run and the PR's slot (`lostWhiteboardJob`); a slot no longer the PR's is
+  logged, and one that cannot be put back is named in the event's message, as the fix job does.
+- **`whiteboard.failed` names the writer's report, never its `failed:` sentence** (2026-10-14; amends
+  "Whiteboards of reviewed PRs"). The event's message and the run's error carried the sentence after
+  `failed:`, redacted and cut at 200 runes; the writer reads the PR, so the sentence can quote PR text, and
+  logs and events never carry PR text. Now the message reads "<role> failed (its report: <path>)", the
+  event's data keeps the report path as before, and the operator reads the sentence in the report.
+- **`magnum whiteboard` is answered off the tick** (2026-10-14; amends "Whiteboards of reviewed PRs"). Its
+  Whiteboard readiness check (`whiteboard api whiteboard_status`, 15 s) ran on the tick that handles
+  requests, so a slow or hung `whiteboard` CLI held the daemon's tick for up to 15 s. Now the request runs on
+  a goroutine of its own, as `magnum open` does (`requestWhiteboardAsync`): its refusals, the check, the
+  reservation and the start, which completes the request with the same answers; it stays in flight
+  meanwhile. The check after a posted review already runs on the round's goroutine.
+- **A refused whiteboard names the slot's last error and the repair command** (2026-10-14; follows "A
+  refused fix names the slot's last error and the repair command"). `prepareWhiteboard` refused a broken or
+  lost slot with the bare state ("slot review1 is broken"); now it says what `prepareFix` and dispatch's
+  wait say (`unusableSlotSentence`: "slot review1 is broken: <last error> (magnum slots repair review1)"),
+  and the slot's other states keep their short sentence.
 
 ## Screens and commands
 

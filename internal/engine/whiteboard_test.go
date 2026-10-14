@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,11 +24,13 @@ const wbSession = "6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b"
 // wbEnv is a harness for the whiteboard job: its git knows the slot's HEAD
 // (fixGit), its waits take a real millisecond, its rounds post a review the
 // registry records (wbPostsReviews), and its exec runner answers the
-// Whiteboard readiness check (down: Whiteboard is not running).
+// Whiteboard readiness check (down: Whiteboard is not running; hold, when
+// set, keeps the check from answering until it is closed).
 type wbEnv struct {
 	*harness
 	run  *execx.Fake
 	down atomic.Bool
+	hold atomic.Pointer[chan struct{}]
 }
 
 // wbHarness builds a wbEnv; auto switches [pipeline] whiteboard on, so a
@@ -36,6 +39,9 @@ func wbHarness(t *testing.T, auto bool, mods ...func(*harness)) *wbEnv {
 	t.Helper()
 	w := &wbEnv{}
 	w.run = &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"whiteboard", "api", "whiteboard_status"}, Fn: func(execx.Cmd) (execx.Result, error) {
+		if hold := w.hold.Load(); hold != nil {
+			<-*hold
+		}
 		if w.down.Load() {
 			return execx.Result{Code: 1, Stderr: []byte("not ready")}, errors.New("whiteboard: exit status 1")
 		}
@@ -118,10 +124,16 @@ func wbDone(session string) func(run store.Run) string {
 // wbReviewed has PR #2 reviewed at fixHead by a posted round.
 func (w *wbEnv) wbReviewed() store.PR {
 	w.t.Helper()
+	return w.wbReviewedBy("")
+}
+
+// wbReviewedBy is wbReviewed with PR #2 by author ("" = the fake's default).
+func (w *wbEnv) wbReviewedBy(author string) store.PR {
+	w.t.Helper()
 	w.open(prSpec{n: 1, head: "base1"})
 	w.startup()
 	w.tick() // first sync: #1 baseline
-	w.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead})
+	w.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: author})
 	w.tick() // #2 queued
 	w.advance(5 * time.Minute)
 	w.tick() // dispatched and reviewed; the job, if any, runs to its end
@@ -166,6 +178,95 @@ func (w *wbEnv) wbAwaitSubmit() {
 func (w *wbEnv) wbRequest() int64 {
 	w.t.Helper()
 	return w.enqueue(ReqWhiteboard, WhiteboardPayload{PRTarget: PRTarget{Ref: "2"}})
+}
+
+// wbAnswered handles the pending requests and waits until request id has
+// its answer: a whiteboard request is answered off the tick, and the job it
+// starts may still run when the answer comes.
+func (w *wbEnv) wbAnswered(id int64) {
+	w.t.Helper()
+	w.e.handleRequests(w.ctx)
+	w.wbAwaitAnswer(id)
+}
+
+// wbAwaitAnswer waits until request id is no longer pending.
+func (w *wbEnv) wbAwaitAnswer(id int64) {
+	w.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); w.request(id).State == store.RequestPending; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			w.t.Fatalf("request %d was never answered", id)
+		}
+	}
+}
+
+// wbAtWork starts the whiteboard job on PR #2 by request and waits until
+// its writer got its prompt and herdr shows it working, as a writer is
+// until it ends its run (the test sets no wbWriter).
+func (w *wbEnv) wbAtWork() {
+	w.t.Helper()
+	start := w.wbRequest()
+	w.wbAnswered(start)
+	w.wantDone(start)
+	w.wbAwaitSubmit()
+	w.hd.mu.Lock()
+	w.hd.agents = append(w.hd.agents, herdr.AgentInfo{PaneID: "p-claude-whiteboard", Name: "mg-t-2-claude-whiteboard", Agent: "claude",
+		AgentStatus: herdr.StatusWorking})
+	w.hd.mu.Unlock()
+}
+
+// wbAnswers are the request.* events of request id: a request is answered
+// once.
+func (w *wbEnv) wbAnswers(id int64) []store.Event {
+	w.t.Helper()
+	evs, err := w.st.EventsBySubject(w.ctx, fmt.Sprintf("request:%d", id), 0)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return slices.DeleteFunc(evs, func(ev store.Event) bool { return !strings.HasPrefix(ev.Kind, "request.") })
+}
+
+// wbYielded hands request id, which a whiteboard job at work on PR #2
+// yields to, through the yield: the first pass leaves it unanswered while
+// the job stops, the job's end hands it back, and the next pass answers it.
+func (w *wbEnv) wbYielded(id int64) {
+	w.t.Helper()
+	w.e.handleRequests(w.ctx)
+	if r := w.request(id); r.State != store.RequestPending {
+		w.t.Fatalf("request %d answered while the whiteboard job held the PR: %s %q", id, r.State, deref(r.Result))
+	}
+	w.settle() // the job stops and lets go of the PR
+	w.e.handleRequests(w.ctx)
+	w.settle()
+}
+
+// wbWantSuperseded fails unless the whiteboard job on PR #2 stopped for a
+// request by: whiteboard.stopped names it, the writer got ctrl+c, its run is
+// abandoned, the slot is back at the head, the job let go of the PR and
+// request id was answered once. It returns the answer.
+func (w *wbEnv) wbWantSuperseded(kh *keyHerdr, id int64, by string) string {
+	w.t.Helper()
+	pr := w.pr(2)
+	ev, ok := w.fixEvent("whiteboard.stopped")
+	if !ok || !strings.Contains(ev.Message, "stopped: superseded by "+by) || !strings.Contains(ev.Message, "writer interrupted") {
+		w.t.Errorf("whiteboard.stopped = %+v, %v", ev, ok)
+	}
+	if got := kh.all(); !slices.Contains(got, "agent:mg-t-2-claude-whiteboard:ctrl+c") {
+		w.t.Errorf("keys %v: the writer was not interrupted", got)
+	}
+	if runs := w.wbRuns(pr.ID); len(runs) != 1 || runs[0].State != store.RunAbandoned || deref(runs[0].Error) != "stopped: superseded by "+by {
+		w.t.Errorf("whiteboard runs = %+v", runs)
+	}
+	if !slices.Contains(w.sl.all(), "resync:review1:"+fixHead) {
+		w.t.Errorf("slot calls %v, want the slot back at the head", w.sl.all())
+	}
+	if w.e.whiteboardHolds(pr.ID) {
+		w.t.Error("the whiteboard job still holds the PR")
+	}
+	res := w.wantDone(id)
+	if got := w.wbAnswers(id); len(got) != 1 {
+		w.t.Errorf("request %d answered %d times: %+v", id, len(got), got)
+	}
+	return res
 }
 
 // wbFailed fails unless request id failed with an answer that has want.
@@ -278,7 +379,7 @@ func TestAHeadWithAWhiteboardGetsNoSecond(t *testing.T) {
 		t.Error("a head that has its whiteboard recorded a skip")
 	}
 	id := w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(id)
 	w.wbFailed(id, "a1a1a1a has its whiteboard "+wbSession+"; magnum whiteboard talkable/talkable#2 --open opens it")
 }
 
@@ -315,13 +416,13 @@ func TestAPushEndsTheWhiteboardJob(t *testing.T) {
 	w := wbHarness(t, false)
 	pr := w.wbReviewed()
 	id := w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(id)
 	if res := w.wantDone(id); res != "writing the whiteboard of a1a1a1a in review1" {
 		t.Errorf("answer = %q", res)
 	}
 	w.wbAwaitSubmit()
 	rounds := len(w.rd.all())
-	w.advance(time.Hour)
+	w.advance(10 * time.Minute) // within the writer's 30m: past it, the job's next look could time the run out before the push is seen
 	w.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixPushed})
 	w.tick() // the push; the job sees it at its next look and stops
 	ev, ok := w.fixEvent("whiteboard.stopped")
@@ -348,14 +449,7 @@ func TestAbortEndsAWhiteboardJob(t *testing.T) {
 	var kh *keyHerdr
 	w := wbHarness(t, false, withKeys(&kh))
 	pr := w.wbReviewed()
-	start := w.wbRequest()
-	w.e.handleRequests(w.ctx)
-	w.wantDone(start)
-	w.wbAwaitSubmit()
-	w.hd.mu.Lock()
-	w.hd.agents = append(w.hd.agents, herdr.AgentInfo{PaneID: "p-claude-whiteboard", Name: "mg-t-2-claude-whiteboard", Agent: "claude",
-		AgentStatus: herdr.StatusWorking})
-	w.hd.mu.Unlock()
+	w.wbAtWork()
 
 	id := w.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
 	w.e.handleRequests(w.ctx)
@@ -388,7 +482,7 @@ func TestTheWhiteboardJobHoldsDispatch(t *testing.T) {
 	w := wbHarness(t, false)
 	pr := w.wbReviewed()
 	start := w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(start)
 	w.wantDone(start)
 	w.wbAwaitSubmit()
 	if err := w.st.TransitionPR(w.ctx, pr.ID, []string{store.PRReviewed}, store.PRRereviewPending, func(u *store.PRUpdate) {
@@ -429,7 +523,7 @@ func TestAWhiteboardRequestStartsTheJobAndItsRefusals(t *testing.T) {
 
 	w.down.Store(true)
 	id := w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(id)
 	w.wbFailed(id, whiteboardDownText)
 	w.down.Store(false)
 
@@ -437,7 +531,7 @@ func TestAWhiteboardRequestStartsTheJobAndItsRefusals(t *testing.T) {
 		t.Fatal("reserve")
 	}
 	id = w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(id)
 	w.wbFailed(id, "round in progress; try again after it")
 	w.e.unreserve(pr.ID)
 
@@ -446,24 +540,24 @@ func TestAWhiteboardRequestStartsTheJobAndItsRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	id = w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(id)
 	w.wbFailed(id, "slot review1 holds c3c3c3c, not the reviewed head a1a1a1a")
 	if err := w.st.UpdateSlotFields(w.ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", fixHead) }); err != nil {
 		t.Fatal(err)
 	}
 
 	no := w.enqueue(ReqWhiteboard, WhiteboardPayload{PRTarget: PRTarget{Ref: "1"}})
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(no)
 	w.wbFailed(no, "no review on base1")
 
 	w.cfg.Pipeline.WhiteboardRole = ""
 	id = w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(id)
 	w.wbFailed(id, "no whiteboard role: whiteboard_role is empty")
 	w.cfg.Pipeline.WhiteboardRole = "claude-whiteboard"
 
 	id = w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(id)
 	w.settle()
 	if res := w.wantDone(id); res != "writing the whiteboard of a1a1a1a in review1" {
 		t.Errorf("answer = %q", res)
@@ -477,9 +571,12 @@ func TestAWhiteboardRequestStartsTheJobAndItsRefusals(t *testing.T) {
 }
 
 // A writer that a restart left at work is lost: the next start abandons its
-// run and records whiteboard.failed, asking nothing of the operator.
+// run, interrupts the writer, which herdr kept at work in its pane, until
+// quiet, puts the slot back at the run's head and records whiteboard.failed,
+// asking nothing of the operator.
 func TestAWhiteboardRunLostInARestartFails(t *testing.T) {
-	w := wbHarness(t, false)
+	var kh *keyHerdr
+	w := wbHarness(t, false, withKeys(&kh))
 	pr := w.wbReviewed()
 	run, err := w.st.CreateRun(w.ctx, store.Run{ID: "r-wb-lost", PRID: pr.ID, Round: 1, Role: "claude-whiteboard", Kind: store.RunWhiteboard,
 		TargetSHA: fixHead, Identity: pr.Identity, ReviewerLogin: "x", State: store.RunPending})
@@ -489,14 +586,32 @@ func TestAWhiteboardRunLostInARestartFails(t *testing.T) {
 	if err := w.st.TransitionRun(w.ctx, run.ID, []string{store.RunPending}, store.RunWorking, nil); err != nil {
 		t.Fatal(err)
 	}
+	name := "mg-t-2-claude-whiteboard"
+	if _, err := w.st.CreateSession(w.ctx, store.Session{PRID: pr.ID, Role: "claude-whiteboard", AgentName: &name, AgentKind: new("claude"),
+		HerdrPaneID: new("p-claude-whiteboard"), HerdrWorkspaceID: new("w1"), State: store.SessionLive}); err != nil {
+		t.Fatal(err)
+	}
+	w.hd.mu.Lock()
+	w.hd.agents = append(w.hd.agents, herdr.AgentInfo{PaneID: "p-claude-whiteboard", Name: name, Agent: "claude", AgentStatus: herdr.StatusWorking})
+	w.hd.mu.Unlock()
+	resyncs := slices.Clone(w.sl.all())
+
 	w.startup()
 	if r, err := w.st.RunByID(w.ctx, run.ID); err != nil || r.State != store.RunAbandoned {
 		t.Errorf("the lost run: %+v, %v", r, err)
 	}
-	if ev, ok := w.fixEvent("whiteboard.failed"); !ok || !strings.Contains(ev.Message, "lost in a restart") {
+	if got, want := kh.all(), []string{"agent:" + name + ":ctrl+c", "agent:" + name + ":ctrl+c"}; !slices.Equal(got, want) {
+		t.Errorf("keys %v, want %v: the writer that outlived the daemon was not interrupted", got, want)
+	}
+	if got := w.sl.all()[len(resyncs):]; !slices.Contains(got, "resync:review1:"+fixHead) {
+		t.Errorf("slot calls since the restart %v, want the slot back at the run's head", got)
+	}
+	if ev, ok := w.fixEvent("whiteboard.failed"); !ok || ev.Message != whiteboardLostText || !strings.Contains(string(ev.Data), run.ID) {
 		t.Errorf("whiteboard.failed = %+v, %v", ev, ok)
 	}
 	w.wantState(2, store.PRReviewed)
+	w.flush()
+	w.wantToasts("needs attention", 0)
 }
 
 // Whiteboards are off by default: a posted review starts nothing and asks
@@ -539,13 +654,16 @@ func TestTheWhiteboardJobLaysOutOnlyItsPane(t *testing.T) {
 }
 
 // A whiteboard that fails asks nothing of the operator: the run fails,
-// whiteboard.failed carries the writer's sentence (or "no report"), the slot
-// is resynced, and the PR stays reviewed, with no record and no toast.
+// whiteboard.failed says why (the writer's `failed:` line: that it failed
+// and where its report is, never the line's sentence, which may quote the
+// PR; "no report"), the slot is resynced, and the PR stays reviewed, with no
+// record and no toast.
 func TestAFailedWhiteboardAsksNothingOfTheOperator(t *testing.T) {
+	const sentence = "The PR's title says DROP TABLE accounts."
 	for _, tc := range []struct {
 		name, report, want string
 	}{
-		{"failed", "failed: Whiteboard answered that it is not running.\n", "Whiteboard answered that it is not running."},
+		{"failed", "failed: " + sentence + "\n", "claude-whiteboard failed (its report: "},
 		{"no report", "", "no report"},
 		{"another head", "session: " + wbSession + "\nhead: " + fixPushed + "\n", "not the two lines"},
 	} {
@@ -553,11 +671,29 @@ func TestAFailedWhiteboardAsksNothingOfTheOperator(t *testing.T) {
 			w := wbHarness(t, true)
 			wbWriter(w.harness, func(store.Run) string { return tc.report })
 			pr := w.wbReviewed()
-			if runs := w.wbRuns(pr.ID); len(runs) != 1 || runs[0].State != store.RunFailed {
-				t.Errorf("whiteboard runs = %+v", runs)
+			runs := w.wbRuns(pr.ID)
+			if len(runs) != 1 || runs[0].State != store.RunFailed {
+				t.Fatalf("whiteboard runs = %+v", runs)
 			}
-			if ev, ok := w.fixEvent("whiteboard.failed"); !ok || !strings.Contains(ev.Message, tc.want) {
+			ev, ok := w.fixEvent("whiteboard.failed")
+			if !ok || !strings.Contains(ev.Message, tc.want) {
 				t.Errorf("whiteboard.failed = %+v, %v", ev, ok)
+			}
+			report := deref(runs[0].ReportPath)
+			if tc.name == "failed" && (ev.Message != "claude-whiteboard failed (its report: "+report+")" || !strings.Contains(string(ev.Data), report)) {
+				t.Errorf("whiteboard.failed = %q (data %s), want the role and the report %s", ev.Message, ev.Data, report)
+			}
+			evs, err := w.st.EventsBySubject(w.ctx, "pr:talkable/talkable#2", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ev := range evs {
+				if strings.Contains(ev.Message, "DROP TABLE") || strings.Contains(string(ev.Data), "DROP TABLE") {
+					t.Errorf("event %s carries the report's sentence: %q %s", ev.Kind, ev.Message, ev.Data)
+				}
+			}
+			if strings.Contains(deref(runs[0].Error), "DROP TABLE") {
+				t.Errorf("the run's error carries the report's sentence: %q", deref(runs[0].Error))
 			}
 			if _, ok := w.wbRecord(); ok {
 				t.Error("a failed whiteboard left a record")
@@ -582,7 +718,7 @@ func TestAClosedPRStopsTheWhiteboardJob(t *testing.T) {
 	w := wbHarness(t, false)
 	pr := w.wbReviewed()
 	start := w.wbRequest()
-	w.e.handleRequests(w.ctx)
+	w.wbAnswered(start)
 	w.wantDone(start)
 	w.wbAwaitSubmit()
 	cancel := w.e.stopClosedRound(pr.ID, closeStop{state: "CLOSED", count: 2})
@@ -599,5 +735,169 @@ func TestAClosedPRStopsTheWhiteboardJob(t *testing.T) {
 	}
 	if w.e.roundActive(pr.ID) {
 		t.Error("the job still holds the PR")
+	}
+}
+
+// A review request on a PR whose whiteboard is being written stops the
+// writer and goes on as an ordinary request: the whiteboard is optional, and
+// the moment after a review posts is the operator's. whiteboard.stopped says
+// the request superseded it, the writer's session got ctrl+c, the slot is
+// back at the head, and the request, answered once, queued the PR's forced
+// round.
+func TestAReviewRequestStopsTheWhiteboardJob(t *testing.T) {
+	var kh *keyHerdr
+	w := wbHarness(t, false, withKeys(&kh))
+	w.wbReviewed()
+	w.wbAtWork()
+
+	id := w.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	w.wbYielded(id)
+	if res := w.wbWantSuperseded(kh, id, "magnum review"); !strings.HasPrefix(res, "queued talkable/talkable#2 (rereview_pending, forced)") {
+		t.Errorf("answer = %q, want the review request's own", res)
+	}
+	if cur := w.wantState(2, store.PRRereviewPending); !cur.Forced {
+		t.Errorf("PR #2 = %+v, want its round forced", cur)
+	}
+}
+
+// A fix request on a PR whose whiteboard is being written stops the writer
+// and starts the fix loop it asks for, with the fix request's own answer.
+func TestAFixRequestStopsTheWhiteboardJob(t *testing.T) {
+	var kh *keyHerdr
+	w := wbHarness(t, false, withKeys(&kh))
+	w.wbReviewedBy("zhuravel")
+	w.wbAtWork()
+	w.ag.mu.Lock()
+	w.ag.onSubmit = func(run store.Run, _ string) { // the fixer ends its run at once, with no report
+		if run.Kind != store.RunFix {
+			return
+		}
+		if err := w.st.TransitionRun(w.ctx, run.ID, []string{store.RunWorking}, store.RunEnded, nil); err != nil {
+			t.Error(err)
+		}
+	}
+	w.ag.mu.Unlock()
+
+	id := w.fix(FixPayload{})
+	w.wbYielded(id)
+	if res := w.wbWantSuperseded(kh, id, "magnum fix"); !strings.HasPrefix(res, "fixing talkable/talkable#2: claude-fix fixes the 1 finding of the review on a1a1a1a in review1") {
+		t.Errorf("answer = %q, want the fix request's own", res)
+	}
+	if runs := w.fixRuns(w.pr(2).ID); len(runs) != 1 {
+		t.Errorf("fix runs = %+v, want the requested cycle's", runs)
+	}
+}
+
+// A fix request's dry run on a PR whose whiteboard is being written says
+// what the request would do, stopping the writer first, and stops nothing.
+func TestAFixDryRunLeavesTheWhiteboardJobAtWork(t *testing.T) {
+	w := wbHarness(t, false)
+	w.wbReviewedBy("zhuravel")
+	w.wbAtWork()
+	id := w.fix(FixPayload{DryRun: true})
+	w.e.handleRequests(w.ctx)
+	if res := w.wantDone(id); !strings.HasPrefix(res, "dry run: would start fixing talkable/talkable#2") || !strings.Contains(res, "would stop the whiteboard writer first") {
+		t.Errorf("answer = %q", res)
+	}
+	if !w.e.whiteboardHolds(w.pr(2).ID) {
+		t.Error("a dry run stopped the whiteboard job")
+	}
+	stop := w.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	w.e.handleRequests(w.ctx)
+	w.settle()
+	w.wantDone(stop)
+}
+
+// `magnum open` on a PR whose whiteboard is being written stops the writer
+// and restores the PR for the operator, with the open request's own answer.
+func TestAnOpenRequestStopsTheWhiteboardJob(t *testing.T) {
+	var kh *keyHerdr
+	w := wbHarness(t, false, withKeys(&kh))
+	pr := w.wbReviewed()
+	w.wbAtWork()
+	judge, err := w.st.LiveSessionByPRRole(w.ctx, pr.ID, "codex-judge") // parked since the round: nothing live to focus
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.st.TransitionSession(w.ctx, judge.ID, []string{store.SessionLive}, store.SessionParked, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	id := w.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Ref: "2"}})
+	w.wbYielded(id)
+	if res := w.wbWantSuperseded(kh, id, "magnum open"); !strings.HasPrefix(res, "restored talkable/talkable#2 in review1 at a1a1a1a (pinned;") {
+		t.Errorf("answer = %q, want the open request's own", res)
+	}
+	if cur := w.pr(pr.Number); !cur.Pinned {
+		t.Error("the restored PR is not pinned")
+	}
+}
+
+// `magnum whiteboard` on a PR whose slot is broken or lost refuses with the
+// slot's last error and the command that repairs it, as `magnum fix` and
+// dispatch's wait name them, not with the bare state.
+func TestAWhiteboardRefusedForABrokenSlotNamesTheRepair(t *testing.T) {
+	for _, tc := range []struct{ state, lastError, want string }{
+		{store.SlotBroken, "schema reset failed",
+			"talkable/talkable#2: slot review1 is broken: schema reset failed (magnum slots repair review1)"},
+		{store.SlotLost, "", "talkable/talkable#2: slot review1 is lost (magnum slots repair review1)"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			w := wbHarness(t, false)
+			w.wbReviewed()
+			sl := w.slot("review1")
+			if err := w.st.TransitionSlot(w.ctx, sl.ID, []string{sl.State}, tc.state, func(u *store.SlotUpdate) {
+				if tc.lastError != "" {
+					u.Set("last_error", tc.lastError)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			id := w.wbRequest()
+			w.wbAnswered(id)
+			if r := w.request(id); r.State != store.RequestFailed || deref(r.Result) != tc.want {
+				t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), tc.want)
+			}
+			if w.ag.count("submit:") != 0 {
+				t.Error("the writer started in an unusable slot")
+			}
+		})
+	}
+}
+
+// The Whiteboard readiness check of `magnum whiteboard` runs off the tick:
+// with the check hanging, the tick goes on and the request stays pending,
+// and once the check answers the request gets its answer and the job runs.
+func TestAWhiteboardRequestDoesNotBlockTheTick(t *testing.T) {
+	w := wbHarness(t, false)
+	wbWriter(w.harness, wbDone(wbSession))
+	w.wbReviewed()
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(release)
+	w.hold.Store(&hold)
+
+	id := w.wbRequest()
+	ticked := make(chan error, 1)
+	go func() { ticked <- w.e.Tick(w.ctx) }()
+	select {
+	case err := <-ticked:
+		if err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tick waits for the Whiteboard readiness check")
+	}
+	if r := w.request(id); r.State != store.RequestPending {
+		t.Errorf("request %d answered before the readiness check did: %s %q", id, r.State, deref(r.Result))
+	}
+	release()
+	w.wbAwaitAnswer(id)
+	w.settle()
+	if res := w.wantDone(id); res != "writing the whiteboard of a1a1a1a in review1" {
+		t.Errorf("answer = %q", res)
+	}
+	if rec, ok := w.wbRecord(); !ok || rec.Head != fixHead {
+		t.Errorf("whiteboard record = %+v, %v", rec, ok)
 	}
 }

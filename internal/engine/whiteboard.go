@@ -8,7 +8,9 @@ package engine
 // after the fix loop's hook), or when `magnum whiteboard <ref>` asks for it
 // (ReqWhiteboard). Like the fix job (fix.go) it holds the PR with a
 // reservation of its own (roundHandle.whiteboard) for its whole run, in the
-// PR's slot, and its steps are begin/ok/fail steps on the PR's subject:
+// PR's slot, but yields it to the operator: a review, fix or open request
+// stops the writer and goes on once the job let go of the PR
+// (yieldWhiteboard). Its steps are begin/ok/fail steps on the PR's subject:
 // guard (the slot is the PR's, nobody is in it, it holds the reviewed head),
 // start (the writer's session in the PR's workspace, a run of kind
 // whiteboard, its prompt) and wait (the run's end; a push, a close or an
@@ -176,10 +178,38 @@ func (j *whiteboardJob) eventData() map[string]any {
 	return map[string]any{"run": j.run.ID, "role": j.role.Name, "head": j.head, "session": j.session, "report": deref(j.run.ReportPath)}
 }
 
-// requestWhiteboard handles `magnum whiteboard`: the job starts on the PR's
-// reviewed head unless one of prepareWhiteboard's refusals applies, or
-// Whiteboard is down, and the answer says where it writes. A dry run
-// answers what would start.
+// requestWhiteboardAsync handles a `magnum whiteboard` request off the
+// tick, as an open's restore is: Whiteboard's readiness check may take up
+// to whiteboardCmdTimeout, so requestWhiteboard (its refusals, the check,
+// the reservation and the start) runs on a goroutine of its own, which
+// completes the request; the request stays in flight meanwhile. ctx is the
+// daemon's, which the job's derives from.
+func (e *Engine) requestWhiteboardAsync(ctx context.Context, id int64, p WhiteboardPayload) {
+	e.mu.Lock()
+	e.inflight[id] = true
+	e.mu.Unlock()
+	e.roundWG.Go(func() {
+		defer func() {
+			e.mu.Lock()
+			delete(e.inflight, id)
+			e.mu.Unlock()
+		}()
+		e.safely(ctx, "whiteboard request", "", func() {
+			res, err := e.requestWhiteboard(ctx, p)
+			if err != nil && ctx.Err() != nil {
+				return // daemon shutdown: the request stays pending for the next start
+			}
+			e.complete(context.WithoutCancel(ctx), id, err, res)
+		}, func(ctx context.Context, msg string) {
+			e.complete(ctx, id, fmt.Errorf("magnum whiteboard panicked: %s", msg), "")
+		})
+	})
+}
+
+// requestWhiteboard handles `magnum whiteboard` (requestWhiteboardAsync's
+// goroutine): the job starts on the PR's reviewed head unless one of
+// prepareWhiteboard's refusals applies, or Whiteboard is down, and the
+// answer says where it writes. A dry run answers what would start.
 func (e *Engine) requestWhiteboard(ctx context.Context, p WhiteboardPayload) (string, error) {
 	_, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -318,6 +348,8 @@ func (e *Engine) prepareWhiteboard(ctx context.Context, pr store.PR, by string) 
 		return nil, err
 	case !has:
 		return nil, fmt.Errorf("%s has no checkout of its reviewed head: its slot was handed back", label)
+	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
+		return nil, fmt.Errorf("%s: %s", label, unusableSlotSentence(slot))
 	case slot.State != store.SlotClaimed && slot.State != store.SlotHeld:
 		return nil, fmt.Errorf("%s: slot %s is %s", label, slot.Name, slot.State)
 	case slot.Pinned:
@@ -375,7 +407,7 @@ func (e *Engine) startWhiteboard(ctx context.Context, pr store.PR, by string) (*
 	job.started = e.now()
 	started := *job
 	e.roundWG.Go(func() {
-		defer e.unreserve(pr.ID)
+		defer e.unreserveWhiteboard(pr.ID)
 		e.safely(rctx, "whiteboard", job.subject(), func() { e.runWhiteboard(rctx, job) },
 			func(ctx context.Context, msg string) { e.whiteboardPanicked(ctx, job, msg) })
 	})
@@ -390,10 +422,12 @@ func (s *whiteboardStopped) Error() string { return s.why }
 
 // runWhiteboard runs the job under its reservation: guard, start and wait,
 // then the settle. `magnum abort` cancels ctx and leaves its orders on the
-// reservation, a close on GitHub its mark (stopClosedRound): the writer is
-// stopped and the job ends with whiteboard.stopped (stopWhiteboard), as it
-// does when the wait sees a push or a close. A daemon shutdown cancels ctx
-// with neither: the run stays for the next start (recoverWhiteboards).
+// reservation, a review, fix or open request its yield (yieldWhiteboard), a
+// close on GitHub its mark (stopClosedRound): the writer is stopped and the
+// job ends with whiteboard.stopped (stopWhiteboard), as it does when the
+// wait sees a push or a close; a writer whose run ended before a yield
+// stopped it is settled. A daemon shutdown cancels ctx with none of them:
+// the run stays for the next start (recoverWhiteboards).
 func (e *Engine) runWhiteboard(ctx context.Context, job *whiteboardJob) {
 	subject := job.subject()
 	if err := steps.ResetSubject(ctx, e.st, subject); err != nil {
@@ -409,11 +443,15 @@ func (e *Engine) runWhiteboard(ctx context.Context, job *whiteboardJob) {
 		failed = "whiteboard run failed: "
 	}
 	fctx := context.WithoutCancel(ctx)
-	orders, closed := e.closeWhiteboardHandle(job.pr.ID)
+	orders, closed, superseded := e.closeWhiteboardHandle(job.pr.ID)
 	var stopped *whiteboardStopped
 	switch {
 	case len(orders) > 0:
 		e.stopWhiteboard(fctx, job, "aborted", orders)
+	case superseded != "" && err == nil:
+		e.settleWhiteboard(fctx, job) // the writer was done: its whiteboard stands
+	case superseded != "":
+		e.stopWhiteboard(fctx, job, "superseded by "+superseded, nil)
 	case closed:
 		e.stopWhiteboard(fctx, job, "the PR closed", nil)
 	case errors.As(err, &stopped):
@@ -427,18 +465,23 @@ func (e *Engine) runWhiteboard(ctx context.Context, job *whiteboardJob) {
 	}
 }
 
-// closeWhiteboardHandle ends the job's part that an abort or a close can
-// stop (closeFixHandle's) and returns the abort and ignore orders that
-// arrived before, and whether a close on GitHub stopped it.
-func (e *Engine) closeWhiteboardHandle(prID int64) ([]stopOrder, bool) {
+// closeWhiteboardHandle ends the job's part that an abort, a yield or a
+// close can stop (closeFixHandle's) and returns the abort and ignore orders
+// that arrived before, whether a close on GitHub stopped it, and who the
+// first request it yields to is ("" = none): a request that yields later
+// waits for the job's end (unreserveWhiteboard).
+func (e *Engine) closeWhiteboardHandle(prID int64) (orders []stopOrder, closed bool, superseded string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.rounds[prID]
 	if h == nil {
-		return nil, false
+		return nil, false, ""
 	}
 	h.stop.ended = true
-	return slices.Clone(h.stop.reqs), h.stop.closed != nil
+	if len(h.stop.yields) > 0 {
+		superseded = h.stop.yields[0].by
+	}
+	return slices.Clone(h.stop.reqs), h.stop.closed != nil, superseded
 }
 
 // whiteboardGuard checks that the writer may work in the job's slot: the
@@ -619,8 +662,10 @@ func (e *Engine) settleWhiteboard(ctx context.Context, job *whiteboardJob) {
 // readWhiteboardReport reads the writer's report of the job's run: the
 // session of a whiteboard written ("" with why otherwise). Exactly the lines
 // `session: <id>` and `head: <the job's head>` are a whiteboard; a `failed:
-// <one sentence>` line gives why, redacted; anything else, or no report, is
-// a failure that names the path, never a line of it.
+// <one sentence>` line is a failure that names the role and the report, not
+// the sentence, which may quote the PR (the operator reads it in the
+// report); anything else, or no report, is a failure that names the path,
+// never a line of it.
 func (e *Engine) readWhiteboardReport(job *whiteboardJob) (session, why string) {
 	path := deref(job.run.ReportPath)
 	b, err := os.ReadFile(path)
@@ -637,8 +682,8 @@ func (e *Engine) readWhiteboardReport(job *whiteboardJob) (session, why string) 
 		}
 	}
 	for _, l := range lines {
-		if rest, ok := strings.CutPrefix(l, "failed:"); ok {
-			return "", job.role.Name + " failed: " + cmp.Or(oneLine(execx.Redact(strings.TrimSpace(rest)), 200), "no reason given")
+		if strings.HasPrefix(l, "failed:") {
+			return "", fmt.Sprintf("%s failed (its report: %s)", job.role.Name, path)
 		}
 	}
 	bad := fmt.Sprintf("the report at %s is not the two lines the prompt asks for (the session, and head %s)", path, textx.ShortSHA(job.head))
@@ -749,9 +794,10 @@ func (e *Engine) stopWhiteboard(ctx context.Context, job *whiteboardJob, why str
 }
 
 // whiteboardPanicked settles a job that panicked as a failed one; the abort
-// and ignore orders it held hear why (stopsPanicked).
+// and ignore orders it held hear why (stopsPanicked), and the requests it
+// yields to go on after it (unreserveWhiteboard).
 func (e *Engine) whiteboardPanicked(ctx context.Context, job *whiteboardJob, msg string) {
-	if orders, _ := e.closeWhiteboardHandle(job.pr.ID); len(orders) > 0 {
+	if orders, _, _ := e.closeWhiteboardHandle(job.pr.ID); len(orders) > 0 {
 		e.stopsPanicked(ctx, orders, msg)
 	}
 	e.failWhiteboard(ctx, job, "whiteboard job panicked: "+msg)
@@ -786,6 +832,11 @@ func (e *Engine) whiteboardWaitOf(prID int64, w *config.Watch) (Wait, bool) {
 // recoverWhiteboards fails the whiteboard runs a stopped daemon left at
 // work: no writer's run survives a restart, so its run is abandoned and
 // whiteboard.failed says it was lost, asking nothing of the operator.
+// herdr keeps the writer's pane across a crash, a drain that timed out or
+// `daemon-restart --now`, so a writer still at work is interrupted until
+// quiet and the slot is put back at the run's head first, as the fix job's
+// recovery does (stopFixerAt): with no reservation left, the next round
+// could take the slot under it.
 func (e *Engine) recoverWhiteboards(ctx context.Context) {
 	if e.d.DryRun {
 		return
@@ -807,7 +858,150 @@ func (e *Engine) recoverWhiteboards(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		e.event(ctx, "warn", prSubject(repo, pr.Number), "whiteboard.failed", whiteboardLostText,
-			map[string]any{"run": r.ID, "role": r.Role, "head": r.TargetSHA, "report": deref(r.ReportPath)})
+		job := e.lostWhiteboardJob(ctx, repo, pr, r)
+		if e.interruptSessions(ctx, pr, &job.watch, r.Role) > 0 && !e.waitAgentsQuiet(ctx, pr.ID) {
+			e.log.Info("the whiteboard writer still works after the interrupt", "subject", job.subject())
+		}
+		msg := whiteboardLostText
+		if job.slot.ID == 0 {
+			e.log.Info("recovery: the lost whiteboard run's PR has no slot to put back", "subject", job.subject(), "run", r.ID)
+		} else {
+			msg += e.resyncWhiteboardSlot(ctx, job)
+		}
+		e.event(ctx, "warn", job.subject(), "whiteboard.failed", msg, job.eventData())
+	}
+}
+
+// lostWhiteboardJob is the whiteboard job of run r, which a restart left at
+// work, for the recovery's stop: the PR, its watch and slot (none when it
+// has none now), the run's role and head. The writer may have touched the
+// slot unless the run never left pending (its prompt was never sent).
+func (e *Engine) lostWhiteboardJob(ctx context.Context, repo store.Repo, pr store.PR, r store.Run) *whiteboardJob {
+	job := &whiteboardJob{repo: repo, pr: pr, role: config.Role{Name: r.Role}, head: r.TargetSHA, run: r, touched: r.State != store.RunPending}
+	if w := e.cfg.WatchFor(repo.FullName()); w != nil {
+		job.watch, job.pool = *w, e.cfg.PoolFor(repo.FullName())
+	}
+	switch slot, has, err := e.slotOf(ctx, pr.ID); {
+	case err != nil:
+		e.log.Warn("recovery: the lost whiteboard run's slot", "subject", job.subject(), "err", err)
+	case has:
+		job.slot = slot
+	}
+	return job
+}
+
+// whiteboardYield is a request a whiteboard job yields the PR to
+// (roundStop.yields): its id and who asks ("magnum review", "magnum fix",
+// "magnum open").
+type whiteboardYield struct {
+	id int64
+	by string
+}
+
+// whiteboardHeld is the refusal of a review or fix request whose PR a
+// whiteboard job holds, once every other refusal passed: answerYielding
+// stops the job for the request (yieldWhiteboard) instead of answering with
+// it. Its text is the refusal the request had before.
+type whiteboardHeld struct {
+	prID    int64
+	refusal error
+}
+
+func (w *whiteboardHeld) Error() string { return w.refusal.Error() }
+
+// heldByWhiteboard is the whiteboardHeld refusal of a request on pr:
+// "<label>: a round is already in progress (<state>)".
+func heldByWhiteboard(repo store.Repo, pr store.PR) error {
+	return &whiteboardHeld{prID: pr.ID, refusal: fmt.Errorf("%s#%d: a round is already in progress (%s)", repo.FullName(), pr.Number, pr.State)}
+}
+
+// roundActiveBesidesWhiteboard is roundActive for a request a whiteboard
+// job yields to: whether a reservation other than a whiteboard job's holds
+// the PR.
+func (e *Engine) roundActiveBesidesWhiteboard(prID int64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h, ok := e.rounds[prID]
+	return ok && !h.whiteboard
+}
+
+// fixHeld is prepareFix's roundActive: a reservation holds the PR against
+// a fix cycle, but a whiteboard job's does not for the pass of `magnum fix`
+// without side effects (fixPinWouldUnpin): the job yields to the request
+// (requestFix).
+func (e *Engine) fixHeld(prID int64, pin fixPin) bool {
+	if pin == fixPinWouldUnpin {
+		return e.roundActiveBesidesWhiteboard(prID)
+	}
+	return e.roundActive(prID)
+}
+
+// answerYielding is answer for a request a whiteboard job yields the PR to
+// (by names it: "magnum review", "magnum fix"): when fn refuses because such
+// a job holds the PR (whiteboardHeld), the job is stopped and the request
+// is answered once it let go of the PR (yieldWhiteboard), by the request
+// dispatch, as if the job had never been; a job that let go meanwhile
+// leaves the request pending for the next pass.
+func answerYielding[T any](e *Engine, ctx context.Context, req store.Request, by string, fn func(context.Context, T) (string, error)) {
+	p, ok := payload[T](e, ctx, req)
+	if !ok {
+		return
+	}
+	res, err := fn(ctx, p)
+	if held, ok := errors.AsType[*whiteboardHeld](err); ok {
+		if !e.yieldWhiteboard(held.prID, req.ID, by) {
+			e.Kick()
+		}
+		return
+	}
+	e.complete(ctx, req.ID, err, res)
+}
+
+// yieldWhiteboard hands the PR a whiteboard job holds to request id (by):
+// the request stays in flight, the job is stopped unless it is past the
+// point a stop reaches (its run ended: it settles), and once the job let go
+// of the PR the request goes back to the request dispatch
+// (unreserveWhiteboard), which answers it as if the job had never been, so
+// it is answered once and the tick never waits for the writer. It reports
+// whether a whiteboard job held the PR.
+func (e *Engine) yieldWhiteboard(prID, id int64, by string) bool {
+	e.mu.Lock()
+	h := e.rounds[prID]
+	if h == nil || !h.whiteboard {
+		e.mu.Unlock()
+		return false
+	}
+	h.stop.yields = append(h.stop.yields, whiteboardYield{id: id, by: by})
+	e.inflight[id] = true
+	cancel, ended := h.cancel, h.stop.ended
+	e.mu.Unlock()
+	e.log.Info("the whiteboard job yields to a request", "pr", prID, "request", id, "by", by)
+	if !ended {
+		cancel()
+	}
+	return true
+}
+
+// unreserveWhiteboard drops a whiteboard job's reservation (unreserve) and
+// hands the requests it yields to back to the request dispatch: they leave
+// the in-flight set, still pending, and the loop ticks now (Kick), so the
+// next pass answers them.
+func (e *Engine) unreserveWhiteboard(prID int64) {
+	e.mu.Lock()
+	h := e.rounds[prID]
+	delete(e.rounds, prID)
+	yielded := 0
+	if h != nil {
+		for _, y := range h.stop.yields {
+			delete(e.inflight, y.id)
+		}
+		yielded = len(h.stop.yields)
+	}
+	e.mu.Unlock()
+	if h != nil {
+		h.cancel()
+	}
+	if yielded > 0 {
+		e.Kick()
 	}
 }

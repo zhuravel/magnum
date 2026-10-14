@@ -157,7 +157,9 @@ func fixRunningSentence(st FixState) string {
 // opt-out of autofix; otherwise a fix loop starts (startFix) unless one of
 // prepareFix's refusals applies, and the answer says what runs, with the
 // notes that concern it. A dry run (the request's or the daemon's) answers
-// what would start.
+// what would start. A whiteboard job holding the PR is refused with
+// whiteboardHeld once every other refusal passed: it yields to the request
+// (answerYielding).
 func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -191,17 +193,27 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 		return "", err
 	}
 	var job *fixJob
-	if p.DryRun || e.d.DryRun {
+	dry := p.DryRun || e.d.DryRun
+	switch {
+	case dry:
 		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin)
-	} else {
+	case e.whiteboardHolds(pr.ID): // the job yields to the request once every other refusal passed (answerYielding)
+		if _, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin); err != nil {
+			return "", err
+		}
+		return "", heldByWhiteboard(repo, pr)
+	default:
 		job, err = e.startFix(ctx, pr, fixBy, FixState{})
 	}
 	if err != nil {
 		return "", err
 	}
+	if dry && e.whiteboardHolds(pr.ID) {
+		job.notes = append(job.notes, "would stop the whiteboard writer first")
+	}
 	what := fmt.Sprintf("%s fixes %s, cycle %d of %d", job.role.Name, job.fixes(), max(job.state.Cycle, 1), job.state.Cap)
 	res := fmt.Sprintf("fixing %s: %s; `magnum abort %s` stops it", job.label(), what, job.label())
-	if p.DryRun || e.d.DryRun {
+	if dry {
 		e.rec.Record(ctx, subject, "fix", what)
 		res = fmt.Sprintf("dry run: would start fixing %s: %s, then a forced re-review of what it pushes", job.label(), what)
 	}
@@ -267,7 +279,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	if pr.GHState != store.GHOpen {
 		return nil, fmt.Errorf("%s is not open (GitHub %s): nothing to fix", label, pr.GHState)
 	}
-	if slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused || e.roundActive(pr.ID) {
+	if slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused || e.fixHeld(pr.ID, pin) {
 		return nil, fmt.Errorf("%s: a round is already in progress (%s)", label, pr.State)
 	}
 	sums, err := e.st.LastReviewSummaries(ctx, []int64{pr.ID})
