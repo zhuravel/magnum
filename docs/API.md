@@ -2523,6 +2523,13 @@ const (
     Values of [pipeline] autofix.
 
 const (
+	SpendLow    = "low"    // each built-in effort one notch down, medium the floor
+	SpendMedium = "medium" // the built-in efforts as config.defaults.toml writes them
+	SpendHigh   = "high"   // xhigh, the strongest effort both Codex and Claude take, everywhere
+)
+    Values of [pipeline] spend.
+
+const (
 	OwnPassParallel = "parallel" // the judge's own pass runs with the reviewers
 	OwnPassAfter    = "after"    // one judge prompt after the reviewers
 )
@@ -3909,6 +3916,14 @@ type Pipeline struct {
 	// whiteboard job at all, automatic or by hand. A [[watch]] may
 	// override it (Watch.WhiteboardRole); see Config.WhiteboardRoleFor.
 	WhiteboardRole string `toml:"whiteboard_role"`
+	// Spend is how hard the built-in roles think: SpendMedium (default; ""
+	// counts as it) keeps the effort and rereview_effort config.defaults.toml
+	// writes out, SpendHigh makes every one xhigh, SpendLow takes each one
+	// notch down, to medium at the lowest (see spendEffort). Load applies it
+	// to the values a built-in role (DefaultRoles) inherits, never to a key a
+	// [[role]] block of a config file sets, nor to a role that is not built
+	// in; it changes no model.
+	Spend string `toml:"spend"`
 }
     Pipeline is the [pipeline] section.
 
@@ -4148,7 +4163,8 @@ type Role struct {
 	// Model and Effort are passed through the kind's model/effort args
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
 	// shell role's command gets them too, codex-review its effort as a
-	// config override).
+	// config override). A built-in role's Effort and RereviewEffort follow
+	// [pipeline] spend (Pipeline.Spend) unless a [[role]] block sets them.
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after

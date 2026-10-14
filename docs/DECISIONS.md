@@ -1430,6 +1430,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   lost slot with the bare state ("slot review1 is broken"); now it says what `prepareFix` and dispatch's
   wait say (`unusableSlotSentence`: "slot review1 is broken: <last error> (magnum slots repair review1)"),
   and the slot's other states keep their short sentence.
+- **One `[pipeline] spend` key sets how hard every built-in role thinks** (2026-10-14). The operator
+  rotates several Claude and Codex subscriptions: some weeks usage is tight and the roles should run at a
+  lower effort, other weeks capacity is free and they should run at full effort, and each change meant
+  editing several `effort` and `rereview_effort` keys of the user config (two were raised to `xhigh` on
+  10-14, earlier runs had lowered claude-review and claude-simplify to `medium`). The operator asked for one
+  toggle with three levels. Now `[pipeline] spend` takes `low`, `medium` (the default; "" counts as it) and
+  `high` (`spendEffort`): `medium` keeps the efforts config.defaults.toml writes out; `high` makes every
+  built-in role's `effort` and `rereview_effort` `xhigh`, the strongest level both Codex's
+  `model_reasoning_effort` and Claude Code's `--effort` take (its help lists low, medium, high, xhigh,
+  max; claude-judge already ran at `xhigh` through it); `low` takes each one notch down, `xhigh` to `high`
+  and `high` to `medium`, with `medium` the floor and an unset value left unset. Load applies it after
+  the role merge (`applySpend`, in `buildPipeline`) to each role named like a built-in role, for each of
+  the two keys that no `[[role]]` block of the operator's set: the blocks of the user config and those of a
+  base configuration of their own (`--config`, `MAGNUM_CONFIG`, a checkout's old `config.toml`) count as
+  set, the embedded config.defaults.toml does not (`layer.builtin`), since it only writes the built-in
+  values out. So an explicit key wins under every level, and a block that sets `effort` alone leaves its
+  `rereview_effort` to the profile. A role that is not built in keeps its effort, none when it sets none.
+  Validation refuses any other value (`pipeline: spend must be "low", "medium" or "high", got "max"`). `magnum roles`
+  names the profile once, in its first line (`prompts_dir: …; spend: high`), and its EFFORT column shows the
+  result; the daemon reads it at startup, so `magnum daemon-restart --drain` applies a change. Decided: the
+  profile changes no model (the claude-judge comment names the model choices); `high` also gives the keys
+  the built-in roles leave unset `xhigh` (claude-simplify's two, the `rereview_effort` of codex-review,
+  claude-fix and claude-whiteboard), while `medium` and `low` leave them unset, so claude-simplify keeps
+  running at the operator's own Claude Code `effortLevel` there. The operator's own `effort` and
+  `rereview_effort` lines keep their values under every level until they are deleted. Not done: a
+  per-watch override and the efforts outside `[[role]]` (`[learn]`'s classifier and editor, `[notes]`).
 
 ## Screens and commands
 

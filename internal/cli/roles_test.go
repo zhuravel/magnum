@@ -94,7 +94,7 @@ func TestRolesPrintsTheEffectiveRolesPerWatch(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, f.Err.String())
 	}
 	out := f.Out.String()
-	actContains(t, out, "prompts_dir: "+f.Home+"/prompts",
+	actContains(t, out, "prompts_dir: "+f.Home+"/prompts; spend: medium\n",
 		"NAME           KIND    RUNS    MODEL  EFFORT  SESSION   CAPTURE  OUTPUT            PROMPT",
 		"claude-review.md (prompts_dir)", "judge-initial.md (embedded)")
 	groups := rolesGroups(out)
@@ -137,6 +137,45 @@ func TestRolesPrintsTheEffectiveRolesPerWatch(t *testing.T) {
 	}
 	if code := f.run("roles", "extra"); code != 2 {
 		t.Errorf("extra argument: exit %d", code)
+	}
+}
+
+// The header names the [pipeline] spend profile once, and the EFFORT column
+// shows what it makes of the built-in roles' efforts; a role that is not
+// built in and sets none still shows none.
+func TestRolesPrintsTheSpendProfile(t *testing.T) {
+	f := newRolesFixture(t)
+	path := filepath.Join(f.Home, "config.toml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := strings.Replace(string(b), "[pipeline]\n", "[pipeline]\nspend = \"high\"\n", 1)
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.run("roles", "--repo", "talkable/talkable"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.Err.String())
+	}
+	out := f.Out.String()
+	if n := strings.Count(out, "spend: "); n != 1 {
+		t.Errorf("spend named %d times, want once:\n%s", n, out)
+	}
+	actContains(t, out, "prompts_dir: "+f.Home+"/prompts; spend: high\n")
+	rows := map[string]string{}
+	for line := range strings.SplitSeq(out, "\n") {
+		if fs := strings.Fields(line); len(fs) > 0 {
+			rows[fs[0]] = strings.Join(fs, " ")
+		}
+	}
+	for role, want := range map[string]string{
+		"codex-judge":   "codex-judge codex always - xhigh 6 rounds",
+		"claude-review": "claude-review claude always - xhigh -",
+		"droid-lint":    "droid-lint droid manual - - -",
+	} {
+		if !strings.HasPrefix(rows[role], want) {
+			t.Errorf("%s row = %q, want it to start %q", role, rows[role], want)
+		}
 	}
 }
 

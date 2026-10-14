@@ -286,6 +286,13 @@ whiteboard = false                # true: writes a whiteboard (an interactive do
                                   # [[watch]] may override
 whiteboard_role = "claude-whiteboard"   # the role with whiteboard = true that writes it. "" = no whiteboard job,
                                   # by hand or automatic. [[watch]] may override
+spend = "medium"                  # how hard the built-in roles think, their effort and rereview_effort: medium =
+                                  # the values the [[role]] blocks below write out; high = xhigh for every one
+                                  # (the strongest level both Codex and Claude take); low = one notch down
+                                  # (xhigh to high, high to medium), medium the floor and "" left empty. A key
+                                  # your own [[role]] block sets wins under every level, a role that is not built
+                                  # in keeps its own, and no model changes. Read at startup: `magnum
+                                  # daemon-restart --drain` applies a change; `magnum roles` shows the efforts
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.

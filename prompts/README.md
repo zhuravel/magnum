@@ -492,7 +492,7 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `runs` | `always` | `always`, `first` (until it completed once for the PR, then on request), `manual` (on request only) or `never` (disabled; requests are refused). Request a role with `magnum review <ref> --role <name>` |
 | `rerun_min_lines` | `0`; claude-simplify `150` | with `runs = "first"`: the role runs again once this many code lines changed since its last completed run (comments, blank lines, whitespace moves and documentation do not count); `0` = only the first round, then on request. The other `runs` values ignore it |
 | `identity` | the watch's | the `[[identity]]` whose GitHub environment the pane gets |
-| `model`, `effort` | none | passed through the kind's `model`/`effort` args; also template variables (a shell role's command gets them too: codex-review's passes `effort`, `high` by default, as `-c model_reasoning_effort=…`) |
+| `model`, `effort` | none | passed through the kind's `model`/`effort` args; also template variables (a shell role's command gets them too: codex-review's passes `effort`, `high` by default, as `-c model_reasoning_effort=…`). A built-in role's `effort` and `rereview_effort` follow `[pipeline] spend` (`low`, `medium`, `high`) unless its block sets them |
 | `max_subagents` | none; the judge `2` | the subagents the role's agent may have open at once, through the kind's `subagents` args; `0` = none (`no_subagents`); a kind without those args ignores it |
 | `max_session_rounds` | `0`; the judge `6` | session roles: the review rounds one session of the role may serve on a PR, its resumes included (an own pass, a continue or a nudge is part of its round); when a round starts after that many, the role starts in a fresh session (a live one is quit first, history kept), the judge through the recovery prompt at its `rereview_effort` while the reviewers keep theirs, any other role alone with the round's prompt. Never inside a round, for a continue or for a session at work; an `agent.session_rotated` event each time. `0` = no limit |
 | `rereview_effort` | `effort` | the effort of re-review rounds (new commits after an earlier review); the judge's built-in default is `high`. A re-review starts or resumes an agent at it; a live session of a kind that sets effort only at launch is asked for it in the prompt (`.EffortInPrompt`) |
@@ -555,7 +555,8 @@ take any role name or alias of the PR's watch and default to the watch's judge.
 `magnum roles [--repo owner/name] [--kinds] [--json]` prints the effective roles per watch: name, kind,
 `runs`, model, effort, the rounds one session serves (`max_session_rounds`, `-` for no limit), capture,
 output, the initial prompt file (and whether it comes from `prompts_dir`
-or the embedded copy), `after`, the judge and the aliases. `--kinds` prints the effective agent kinds
+or the embedded copy), `after`, the judge and the aliases, under a first line that names `prompts_dir`
+and the `[pipeline] spend` profile (the effort shown is the one after the profile). `--kinds` prints the effective agent kinds
 instead, i.e. what magnum will type to start, resume and name each one. `--json` prints either as JSON.
 
 ### The built-in roles

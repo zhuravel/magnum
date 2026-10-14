@@ -1082,8 +1082,39 @@ Code `model` and `effortLevel` settings, and a resumed conversation keeps the mo
 shell role that runs `codex review`: its command passes the role's `effort` (`high` by default) as `-c
 model_reasoning_effort=…`, so it never runs at the effort of your global Codex config (it did, at `xhigh`,
 for 23% of the Codex spend), and its `args`, appended after, take a model or another effort as Codex config
-overrides. A role you can do without is turned off with `runs = "never"` (or `"manual"`: only when you
-ask). To spend less as a subscription runs low, for example:
+overrides.
+
+`[pipeline] spend` sets how hard every built-in role thinks, so a week of tight or of free usage is one
+line: `"medium"` (the default) keeps the efforts config.defaults.toml writes out, `"high"` makes every
+`effort` and `rereview_effort` `xhigh` (the strongest level both Codex and Claude take), and `"low"` takes
+each one notch down (`xhigh` to `high`, `high` to `medium`), with `medium` the floor and an unset one left
+unset. Each cell is `effort`, then `rereview_effort` ("-": unset; an unset `rereview_effort` is `effort`,
+and a Claude role without `effort` runs at your own Claude Code `effortLevel`):
+
+| Role | `low` | `medium` | `high` |
+|---|---|---|---|
+| `codex-judge` | `high`, `medium` | `xhigh`, `high` | `xhigh`, `xhigh` |
+| `claude-review` | `medium`, `medium` | `high`, `medium` | `xhigh`, `xhigh` |
+| `codex-review` | `medium`, - | `high`, - | `xhigh`, `xhigh` |
+| `claude-simplify` | -, - | -, - | `xhigh`, `xhigh` |
+| `claude-judge` | `high`, `medium` | `xhigh`, `high` | `xhigh`, `xhigh` |
+| `claude-fix` | `medium`, - | `high`, - | `xhigh`, `xhigh` |
+| `claude-whiteboard` | `medium`, - | `medium`, - | `xhigh`, `xhigh` |
+
+```toml
+[pipeline]
+spend = "high"                       # or "low"; "medium" is the default
+```
+
+A key your own `[[role]]` block sets wins over the profile under every level: a `codex-judge` block with
+`effort = "medium"` keeps `medium` under `spend = "high"`, while the `rereview_effort` it leaves out
+follows the profile, so delete a role's `effort` and `rereview_effort` lines to hand them to it. A role
+that is not built in keeps its own effort (none when it sets none), and the profile changes no model.
+`magnum roles` names the profile in its first line and shows the resulting first-review effort in its
+EFFORT column. The daemon reads it at startup, so `magnum daemon-restart --drain` applies a change.
+
+A role you can do without is turned off with `runs = "never"` (or `"manual"`: only when you ask). To
+spend less than `spend = "low"`, or on other models, for example:
 
 ```toml
 [[role]]
@@ -1791,7 +1822,7 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
 | `magnum whiteboard <url\|owner/repo#N\|repo#N\|N> [--open] [--wait] [--timeout <duration>] [--json] [--yes]` | Write the PR's whiteboard now (see Whiteboards of reviewed PRs): the whiteboard role (`claude-whiteboard` by default) writes a dev.fast Whiteboard of the head Magnum reviewed, in the PR's slot, with Magnum's review as its last section. It runs whatever `[pipeline] whiteboard` says, as long as a whiteboard role is set. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a watch without a whiteboard role, a PR Magnum has not reviewed at its current head, a round or a fix loop that holds the PR, a Whiteboard that is not running, a slot not at the head, a pinned PR (`magnum open`, `magnum pin`) and a head that has its whiteboard. The command refuses inside a review agent's pane too. `--wait` follows the job and says how it ended: exit 0 when the whiteboard was written (`whiteboard.done`), exit 1 when the run failed or a push, a close or `magnum abort` stopped it (`whiteboard.failed`, `whiteboard.stopped`). `--timeout` (default `2h`, `0` = no limit) stops following after that long while the job goes on. `--open` asks the daemon nothing: it opens the recorded whiteboard in Whiteboard Desktop (`whiteboard app pick --session <id> --focus`) and refuses a PR without one. `magnum abort` ends a job. Board key `w`. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr (its judge's; the fixer's while a fix loop's fixer works; any role's with `--role`) and reveal the herdr client of `[terminal] session` (default `default`) in `[terminal] app` (Terminal, iTerm2, Ghostty, WezTerm, `custom` with a `launcher` template, or any other app name, which is only brought to the front with `open -a`): focus the tab that runs it, or open a new one. When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. With `[terminal] reveal_on_attention = true` the daemon does the same by itself for a PR that needs you (an agent waiting on a dialog, a round that needs attention), at most once in 30 minutes for the same agent or cause. `--no-reveal` only focuses inside herdr and leaves the terminal where it is, and `--new-window` opens a new terminal window instead of a tab when no herdr client is found. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. `--ansi` keeps the pane's colors and text styles only: links, clipboard writes, cursor moves and screen erases are dropped, and both modes show a control character as a space. `--interval` sets the redraw interval (default `2s`) and `--lines` the lines shown (default: the terminal's height). |
-| `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, the rounds one session serves (`max_session_rounds`), capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
+| `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, the rounds one session serves (`max_session_rounds`), capture, output, prompt file and whether it is yours or built in, after, judge, aliases), under a first line that names `prompts_dir` and the `[pipeline] spend` profile. `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
 | `magnum attention [--list]` | Jump to whatever needs you: a blocked agent, a failed round, an unseen result. A PR in needs_attention is explained in one line (the stage, how many attempts on which head, the line of the output that names the cause) with the next step; `magnum status <ref>` adds the failing step and the end of its output, and the dashboard, the PR board's card and `magnum review --wait` say the same. `--json` omits `since` for an item that has no time. It takes `--no-reveal` and `--new-window` as `magnum open` does. |
 | `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. `enter` reviews (a reviewed head again too), `ctrl+f` fresh, `ctrl+g` opens the pane, `ctrl+o` the browser, `ctrl+p` pins or unpins, `ctrl+x` releases, `ctrl+r` refreshes the list; a key that cannot act on the PR says why instead (a review while its round runs, a release of a pinned PR). In the herdr popup a failure stays on screen until a key is pressed. `--query` sets the initial filter, and a PR URL or reference there preselects that PR (or offers it when Magnum does not know it). |
 | `magnum ui open picker\|status\|cleanup\|doctor [--workspace id] [--width 90%] [--height 60%]` | Open one of the herdr plugin's popup panes over the herdr socket (what the plugin's keys run); the sizes come from the `[[panes]]` of `herdr-plugin.toml` unless given, the workspace from the plugin's context. |

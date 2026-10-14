@@ -706,6 +706,11 @@ func (c *Config) validatePipeline() []error {
 	fixCycles("pipeline", c.Pipeline.FixCycles)
 	autofix("pipeline", c.Pipeline.Autofix)
 	whiteboardRole("pipeline", c.Pipeline.WhiteboardRole)
+	switch v := c.Pipeline.Spend; v {
+	case "", SpendLow, SpendMedium, SpendHigh:
+	default:
+		errs = append(errs, fmt.Errorf("pipeline: spend must be %q, %q or %q, got %q", SpendLow, SpendMedium, SpendHigh, v))
+	}
 	for i := range c.Watches {
 		w := &c.Watches[i]
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)

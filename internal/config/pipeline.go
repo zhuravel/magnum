@@ -88,6 +88,14 @@ type Pipeline struct {
 	// whiteboard job at all, automatic or by hand. A [[watch]] may
 	// override it (Watch.WhiteboardRole); see Config.WhiteboardRoleFor.
 	WhiteboardRole string `toml:"whiteboard_role"`
+	// Spend is how hard the built-in roles think: SpendMedium (default; ""
+	// counts as it) keeps the effort and rereview_effort config.defaults.toml
+	// writes out, SpendHigh makes every one xhigh, SpendLow takes each one
+	// notch down, to medium at the lowest (see spendEffort). Load applies it
+	// to the values a built-in role (DefaultRoles) inherits, never to a key a
+	// [[role]] block of a config file sets, nor to a role that is not built
+	// in; it changes no model.
+	Spend string `toml:"spend"`
 }
 
 // JudgeFallbackFor is the judge role that takes over a PR of watch w after
@@ -252,6 +260,32 @@ func (c *Config) RelatedFor(w *Watch) Related {
 	return r
 }
 
+// Values of [pipeline] spend.
+const (
+	SpendLow    = "low"    // each built-in effort one notch down, medium the floor
+	SpendMedium = "medium" // the built-in efforts as config.defaults.toml writes them
+	SpendHigh   = "high"   // xhigh, the strongest effort both Codex and Claude take, everywhere
+)
+
+// spendEffort is a built-in role's effort (or rereview_effort) under the
+// spend profile: xhigh for SpendHigh, empty or not; for SpendLow xhigh
+// becomes high and high medium, and anything else (medium, "") stays; for
+// SpendMedium and "" the effort as it is.
+func spendEffort(spend, effort string) string {
+	switch spend {
+	case SpendHigh:
+		return "xhigh"
+	case SpendLow:
+		switch effort {
+		case "xhigh":
+			return "high"
+		case "high":
+			return "medium"
+		}
+	}
+	return effort
+}
+
 // Values of [pipeline] judge_own_pass.
 const (
 	OwnPassParallel = "parallel" // the judge's own pass runs with the reviewers
@@ -410,6 +444,9 @@ type layer struct {
 	kinds map[string]Kind
 	roles []Role
 	raw   []map[string]any // the [[role]] tables as written, for their key sets
+	// builtin: the layer is the embedded config.defaults.toml, whose role
+	// keys are the built-in defaults written out, not the operator's.
+	builtin bool
 }
 
 func readLayer(file string, md toml.MetaData, kinds map[string]Kind, roles []Role) (*layer, error) {
@@ -431,15 +468,29 @@ func readLayerData(file string, data []byte, md toml.MetaData, kinds map[string]
 	if err != nil {
 		return nil, fmt.Errorf("config %s: %w", file, err)
 	}
-	return &layer{md: md, kinds: kinds, roles: roles, raw: raw.Role}, nil
+	return &layer{md: md, kinds: kinds, roles: roles, raw: raw.Role, builtin: data != nil}, nil
 }
 
 // buildPipeline computes Kinds and Roles from the built-in defaults, the
-// config file's blocks and the overlay's blocks, in that order.
+// config file's blocks and the overlay's blocks, in that order, then applies
+// [pipeline] spend to the efforts of the built-in roles that no block of the
+// operator's set (applySpend).
 func (c *Config) buildPipeline(base, over *layer) {
 	kinds := DefaultKinds()
 	builtins := DefaultRoles()
 	roles := builtins
+	set := map[string]map[string]bool{} // role name -> the keys a [[role]] block of the operator's sets
+	mark := func(l *layer, name string, i int) {
+		if l.builtin || i >= len(l.raw) {
+			return
+		}
+		if set[name] == nil {
+			set[name] = map[string]bool{}
+		}
+		for k := range l.raw[i] {
+			set[name][k] = true
+		}
+	}
 	for _, l := range []*layer{base, over} {
 		if l == nil {
 			continue
@@ -458,11 +509,13 @@ func (c *Config) buildPipeline(base, over *layer) {
 	if base != nil && len(base.roles) > 0 {
 		roles = nil
 		for i, r := range base.roles {
+			mark(base, r.Name, i)
 			roles = append(roles, mergeRole(builtinRole(builtins, r.Name), r, base.raw, i))
 		}
 	}
 	if over != nil {
 		for i, r := range over.roles {
+			mark(over, r.Name, i)
 			if j := slices.IndexFunc(roles, func(x Role) bool { return x.Name == r.Name }); j >= 0 {
 				roles[j] = mergeRole(roles[j], r, over.raw, i)
 				continue
@@ -470,7 +523,29 @@ func (c *Config) buildPipeline(base, over *layer) {
 			roles = append(roles, mergeRole(builtinRole(builtins, r.Name), r, over.raw, i))
 		}
 	}
-	c.Kinds, c.Roles = kinds, roles
+	c.Kinds, c.Roles = kinds, applySpend(c.Pipeline.Spend, roles, builtins, set)
+}
+
+// applySpend sets the effort and rereview_effort of each built-in role (one
+// named like a role of builtins) through spendEffort, unless a [[role]] block
+// of the operator's set that key (set, by role name): an explicit key wins
+// over the profile, in the user config and in a base configuration of their
+// own alike, while the embedded config.defaults.toml only writes the
+// built-in values out. A role that is not built in keeps what it has.
+func applySpend(spend string, roles, builtins []Role, set map[string]map[string]bool) []Role {
+	for i := range roles {
+		r := &roles[i]
+		if !slices.ContainsFunc(builtins, func(b Role) bool { return b.Name == r.Name }) {
+			continue
+		}
+		if !set[r.Name]["effort"] {
+			r.Effort = spendEffort(spend, r.Effort)
+		}
+		if !set[r.Name]["rereview_effort"] {
+			r.RereviewEffort = spendEffort(spend, r.RereviewEffort)
+		}
+	}
+	return roles
 }
 
 func builtinRole(builtins []Role, name string) Role {

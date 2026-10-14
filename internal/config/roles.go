@@ -74,7 +74,8 @@ type Role struct {
 	// Model and Effort are passed through the kind's model/effort args
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
 	// shell role's command gets them too, codex-review its effort as a
-	// config override).
+	// config override). A built-in role's Effort and RereviewEffort follow
+	// [pipeline] spend (Pipeline.Spend) unless a [[role]] block sets them.
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after
