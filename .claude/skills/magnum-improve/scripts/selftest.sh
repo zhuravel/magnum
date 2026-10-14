@@ -449,11 +449,16 @@ class_of() { awk -F'\t' -v t="$1" '$9 == t { print $2 }' "$origin"; }
 [[ $(class_of "Cache key ignores the locale setting") == reported ]] || fail "a title that matches a finding of the report is reported"
 [[ $(grep -c . "$origin") == 4 ]] || fail "only the rejected rows of claude-review alone are listed (not the posted one, not codex-review's)"
 ev_md=$ev/out/evidence.md
-grep -Eq '^\| rejected +\| speculative +\| P3 +\| +2 \| +1 \|$' "$ev_md" &&
-    grep -Eq '^\| rejected +\| not_reproducible +\| P1 +\| +1 \| +1 \|$' "$ev_md" &&
-    grep -Eq '^\| rejected +\| duplicate +\| P2 +\| +1 \| +0 \|$' "$ev_md" || fail "the findings table counts the self rows apart in its self column"
-grep -Eq '^\| P2 +\| +1 \| +1 \| +0 \| +0 \| +0 \|$' "$ev_md" &&
-    grep -Eq '^\| P3 +\| +0 \| +0 \| +1 \| +0 \| +0 \|$' "$ev_md" || fail "the claude-review table splits posted, reported, self and unmatched"
+# The tables are sqlite3's markdown mode, whose column padding differs between sqlite versions (the CI runner's
+# sqlite3 pads numbers on the other side than a current one), so each row is compared with its spaces squeezed.
+rows=$(tr -s ' ' <"$ev_md")
+grep -Fxq '| rejected | speculative | P3 | 2 | 1 |' <<<"$rows" &&
+    grep -Fxq '| rejected | not_reproducible | P1 | 1 | 1 |' <<<"$rows" &&
+    grep -Fxq '| rejected | duplicate | P2 | 1 | 0 |' <<<"$rows" ||
+    fail "the findings table counts the self rows apart in its self column: $(sed -n '/^## Findings/,/^## Posted findings/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
+grep -Fxq '| P2 | 1 | 1 | 0 | 0 | 0 |' <<<"$rows" &&
+    grep -Fxq '| P3 | 0 | 0 | 1 | 0 | 0 |' <<<"$rows" ||
+    fail "the claude-review table splits posted, reported, self and unmatched: $(sed -n '/^## claude-review alone/,/^## Role minutes/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
 sed -n '/^## Posted reviews/,/^## Findings/p' "$ev_md" >"$tmp/out"
 [[ $(grep -c '^| 2026' "$tmp/out") == 2 && $(grep -c '| nudge ' "$tmp/out") == 1 ]] ||
     fail "the nudge whose twin is listed has no row; the one whose review id is its own stays"
