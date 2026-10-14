@@ -3365,6 +3365,13 @@ type Daemon struct {
 	// verifying, it exits for launchd to start the new build. Dispatch never
 	// stops for it. Needs launchd (`magnum install`).
 	RestartOnNewBuild bool `toml:"restart_on_new_build"`
+	// ShellPath: at its start, before it runs anything, the daemon asks the
+	// operator's login shell for its PATH (`$SHELL -ilc`, 20 s at most) and
+	// appends the directories its own PATH lacks, which stays first, so every
+	// command it starts finds the tools only the shell's exports name (DBngin's
+	// MySQL, PostgreSQL and Redis). A change of the shell's PATH takes effect
+	// at the next start. The CLI keeps its own environment.
+	ShellPath bool `toml:"shell_path"`
 }
 
 func (d Daemon) CooldownUntil(at *time.Time) time.Time
@@ -5236,6 +5243,11 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
 
+const KVDaemonShellPATH = "daemon.shell_path"
+    KVDaemonShellPATH is what the running daemon took from the login shell's
+    PATH at its start, as ShellPATH's JSON (the count, never a directory);
+    absent with [daemon] shell_path off.
+
 const KVLearnEditing = "learn.editing"
     KVLearnEditing holds the skill edit running now (EditMark as JSON), which
     the CLI reads before it stops the daemon: set when it starts, deleted when
@@ -6479,6 +6491,10 @@ type Options struct {
 	// Supervised: launchd runs this daemon and starts it again when it exits
 	// non-zero, so it may exit for a new build.
 	Supervised bool
+	// ShellPATH is what the daemon command took from the login shell's PATH
+	// before the engine was built ([daemon] shell_path), recorded at startup
+	// (KVDaemonShellPATH, event daemon.shell_path); nil with the key off.
+	ShellPATH *ShellPATH
 }
     Options tune Run.
 
@@ -6641,6 +6657,32 @@ type Rounds interface {
 }
     Rounds runs one review round (*pipeline.Runner, one per identity) and edits
     the reviews its identity posted.
+
+type ShellPATH struct {
+	// Shell is the login shell's base name ("zsh").
+	Shell string `json:"shell"`
+	// Added are the directories appended to the daemon's PATH, in the
+	// shell's order. Only the debug log names them: a directory's name can
+	// carry a secret's path, so the event and the kv row keep Count.
+	Added []string `json:"-"`
+	// Count is how many directories were appended.
+	Count int `json:"added"`
+	// Failed says why the shell gave no PATH ("answered nothing in 20s",
+	// "exited with status 1", "printed no PATH", "could not start"); "" when
+	// it gave one. The daemon's PATH is then launchd's alone.
+	Failed string `json:"failed,omitempty"`
+}
+    ShellPATH is what the daemon's start took from the operator's login shell's
+    PATH ([daemon] shell_path).
+
+func ReadShellPATH(ctx context.Context, st *store.Store) (ShellPATH, bool)
+    ReadShellPATH is what the running daemon took from the login shell's PATH at
+    its start (KVDaemonShellPATH); false with [daemon] shell_path off or before
+    a daemon recorded it.
+
+func (s ShellPATH) Message() string
+    Message is the daemon.shell_path event's text: "PATH from zsh: 4 directories
+    added", or why the launchd PATH stays.
 
 type Slots interface {
 	Claim(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)

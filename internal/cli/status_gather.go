@@ -153,6 +153,9 @@ func statusGatherDaemon(ctx context.Context, d statusDeps, kv statusKV, r *statu
 			r.Daemon.Skew = engine.SkewNote(b, d.Version, modTime)
 		}
 	}
+	if s, ok := engine.ReadShellPATH(ctx, d.Store); ok {
+		r.Daemon.ShellPATH = &s
+	}
 	r.Daemon.PromptsLoadedAt = kv.getTime(engine.KVPromptsLoadedAt)
 	if n := kv.getInt(engine.KVPromptsChanged); n != nil && *n > 0 {
 		r.Daemon.PromptsChanged = *n

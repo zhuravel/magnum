@@ -7400,6 +7400,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   only has the first prompt's time; the round start of past rounds lives in the `engine.round_start`
   events, the spec's stop condition, and a runs-only figure would understate a pool repository's rounds by
   their checkout, inviting the merge the comment tries to prevent.
+- **The daemon can take its PATH from the operator's login shell** (2026-10-14). launchd gives the daemon
+  a fixed PATH (`launchdPATH`: `~/.local/bin`, mise's shims, Homebrew's and the system directories),
+  which every command it runs inherits, while DBngin's MySQL, PostgreSQL and Redis directories, with the
+  version in each name, are on the PATH only the operator's zsh plugin exports build. When talkable's test
+  boot started to spawn `redis-server`, every test schema load the daemon ran failed (talkable#12025 four
+  times, #12026, #12028), and two failed resets broke slots review11 and review18. Now `[daemon]
+  shell_path` (default `false`) has the daemon command ask `$SHELL -ilc` (`zsh` when SHELL is unset) for
+  its PATH once, in runDaemonEngine before app.New, so before anything the daemon runs (config loading
+  and the prompt check run no command), detached from any terminal (NoTTY), without stdin and for 20 s
+  at most, and append the entries its own PATH lacks, in the shell's order, with os.Setenv: launchd's
+  PATH stays first and in order, so mise's shims still win, and the commands it starts inherit the rest
+  (exec resolves names through the process's PATH). The script is `printf '%s\n' "$PATH"`, not the
+  spec's `print -r -- $PATH`, which bash lacks. The last non-empty line that reads as a PATH (colon-
+  separated absolute directories) counts, so banners and hook output around it are skipped. The engine
+  records it at startup (engine.Options.ShellPATH): one `daemon.shell_path` event, info "PATH from zsh: 4
+  directories added", or warn "the login shell (zsh) answered nothing in 20s. The launchd PATH stays"
+  (fixed words for an exit, no PATH line or a shell that does not start, never the shell's output), and
+  kv `daemon.shell_path` with the count for `magnum status`'s daemon line; the directories go to the
+  debug log only, since a directory's name can carry a secret's path. A change of the shell's PATH takes
+  effect at the next restart, as a config change does; the CLI keeps its terminal's environment and
+  doctor gains nothing. daemonSys.RunEngine nil now means runDaemonEngine (which reads daemonSys for the
+  capture: an initialization cycle otherwise). Rejected: the directories in a magnum key or in the
+  LaunchAgent plist's PATH, which an upgrade of MySQL or Redis misses (the version is in the directory
+  name, and the one file the operator maintains is the shell's exports file), and sourcing a named file,
+  which depends on the shell's variables and plugins that only the shell's own startup sets.
 
 ## Learned rules
 

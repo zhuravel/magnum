@@ -62,6 +62,13 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 		daemon += ")"
 	}
 	daemon += ", launchd " + statusSafe(dm.Launchd, 0)
+	if s := dm.ShellPATH; dm.Running && s != nil {
+		if s.Failed != "" {
+			daemon += ", no PATH from " + statusSafe(s.Shell, 0) + " (" + statusSafe(s.Failed, 0) + ")"
+		} else {
+			daemon += fmt.Sprintf(", PATH +%s from %s", textx.Count(s.Count, "directory", "directories"), statusSafe(s.Shell, 0))
+		}
+	}
 	fmt.Fprintf(w, "daemon:   %s\n", daemon)
 	if dm.Skew != "" {
 		fmt.Fprintf(w, "build:    %s\n", statusSafe(dm.Skew, 0))

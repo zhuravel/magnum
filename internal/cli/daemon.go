@@ -90,7 +90,7 @@ func runDaemonCmd(c *Context, f daemonFlags, pos []string) int {
 	// engine.Run installs the SIGTERM/SIGINT/SIGUSR1 handlers and returns nil
 	// on a stop signal and when another daemon already holds the lock, so
 	// launchd (KeepAlive SuccessfulExit=false) does not restart those exits.
-	rep, err := daemonSys.RunEngine(context.Background(), c, opts)
+	rep, err := daemonSys.runEngine(context.Background(), c, opts)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum daemon: %v\n", err)
 		return 1
@@ -151,6 +151,11 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	// once instead of the process dying with "killed by signal").
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	// [daemon] shell_path: the login shell's PATH joins the daemon's own
+	// before anything runs; the engine records it at its start.
+	eo := o.Engine
+	eo.Once = o.Once
+	eo.ShellPATH = daemonShellPATH(ctx, c.Config)
 	a, err := app.New(c.Config, c.Layout, daemonAppOptions(c, o))
 	if err != nil {
 		return daemonDryRunReport{}, err
@@ -164,8 +169,6 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 		}
 	}
 	e := engine.FromApp(a, daemonGate(c, a))
-	eo := o.Engine
-	eo.Once = o.Once
 	err = e.Run(ctx, eo)
 	var rep daemonDryRunReport
 	if o.DryRun {

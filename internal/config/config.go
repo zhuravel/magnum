@@ -197,6 +197,13 @@ type Daemon struct {
 	// verifying, it exits for launchd to start the new build. Dispatch never
 	// stops for it. Needs launchd (`magnum install`).
 	RestartOnNewBuild bool `toml:"restart_on_new_build"`
+	// ShellPath: at its start, before it runs anything, the daemon asks the
+	// operator's login shell for its PATH (`$SHELL -ilc`, 20 s at most) and
+	// appends the directories its own PATH lacks, which stays first, so every
+	// command it starts finds the tools only the shell's exports name (DBngin's
+	// MySQL, PostgreSQL and Redis). A change of the shell's PATH takes effect
+	// at the next start. The CLI keeps its own environment.
+	ShellPath bool `toml:"shell_path"`
 }
 
 // CooldownUntil is at + human_cooldown, the end of the human cooldown a

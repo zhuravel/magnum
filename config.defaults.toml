@@ -84,6 +84,12 @@ restart_on_new_build = false      # true: once a new bin/magnum on disk passes i
                                   # on it at the first tick with no round claiming, reviewing or verifying and no
                                   # notes curation or retro running (it exits for launchd to start the new build;
                                   # dispatch never stops for it; needs launchd)
+shell_path = false                # true: at its start the daemon asks your login shell for its PATH ($SHELL -ilc,
+                                  # 20s at most) and appends the directories its own PATH lacks (launchd's stays
+                                  # first, mise's shims still win), so its hooks and commands find what only your
+                                  # shell's exports name (DBngin's mysql, psql, redis-server); a change of your
+                                  # shell's PATH takes effect at the next `magnum daemon-restart`; event
+                                  # daemon.shell_path, `magnum status` shows the count; the CLI keeps its own PATH
 
 [herdr]
 socket = "~/.config/herdr/herdr.sock"

@@ -260,6 +260,10 @@ type statusDaemon struct {
 	PromptsLoadedAt     *time.Time `json:"prompts_loaded_at,omitempty"`
 	PromptsChanged      int        `json:"prompts_changed,omitempty"`
 	PromptsChangedFiles []string   `json:"prompts_changed_files,omitempty"`
+	// ShellPATH is what the daemon took from the login shell's PATH at its
+	// start ([daemon] shell_path; engine.KVDaemonShellPATH): the count, or
+	// why the shell gave none; nil with the key off.
+	ShellPATH *engine.ShellPATH `json:"shell_path,omitempty"`
 }
 
 // statusPollFailing is a watch whose radar calls fail: since when, the last

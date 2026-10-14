@@ -303,6 +303,10 @@ type Options struct {
 	// Supervised: launchd runs this daemon and starts it again when it exits
 	// non-zero, so it may exit for a new build.
 	Supervised bool
+	// ShellPATH is what the daemon command took from the login shell's PATH
+	// before the engine was built ([daemon] shell_path), recorded at startup
+	// (KVDaemonShellPATH, event daemon.shell_path); nil with the key off.
+	ShellPATH *ShellPATH
 }
 
 // Engine is the daemon. Create it with New or FromApp.
@@ -422,6 +426,8 @@ type Engine struct {
 	checkBuild func(ctx context.Context, path string) (string, error)
 	supervised bool
 	builds     buildWatch
+	// shellPATH is Options.ShellPATH (shell_path.go).
+	shellPATH *ShellPATH
 	// run is what this daemon runs (its build, config and prompts), taken
 	// once, at its first use: the start (retry_parked.go).
 	runOnce sync.Once
@@ -660,6 +666,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	e.once = opts.Once
 	e.build, e.checkBuild, e.supervised = opts.Build, opts.CheckBuild, opts.Supervised
+	e.shellPATH = opts.ShellPATH
 	e.log.Info("magnum daemon starting", "pid", os.Getpid(), "dry_run", e.d.DryRun, "once", opts.Once)
 	if err := e.loadPrompts(ctx); err != nil {
 		e.log.Error("magnum daemon refusing to start", "err", err)
@@ -856,6 +863,7 @@ func (e *Engine) startup(ctx context.Context) {
 		e.setKV(ctx, store.KVDaemonPid, strconv.Itoa(os.Getpid()))
 	}
 	e.recordBuild(ctx)
+	e.recordShellPATH(ctx)    // shell_path.go
 	e.noteLearnRestarted(ctx) // learn_land.go: this start runs the landed skill version
 	e.expireRequests(ctx, lastTick)
 	// A drain (daemon-restart --drain) ends with the restart: this daemon

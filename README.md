@@ -266,6 +266,21 @@ verifying, and launchd starts the new build (events `daemon.restart_pending`, th
 `daemon.restarted_for_build`). Dispatch is never held for it, and a daemon launchd does not run (started
 by hand) only says so: nothing would start it again.
 
+`[daemon] shell_path` (default `false`): launchd gives the daemon a fixed `PATH` (`~/.local/bin`, mise's
+shims, Homebrew's and the system directories), and every command it runs inherits it: the pool hooks, the
+readiness commands, `mise exec`, gh and the agent CLIs. A tool only your shell's exports put on `PATH`, such
+as DBngin's `mysql`, `psql` or `redis-server` in versioned directories, is missing there. With `true` the
+daemon asks your login shell for its `PATH` once at its start, before it runs anything (`$SHELL -ilc`, `zsh`
+when `SHELL` is unset, 20 s at most, no terminal and no stdin), and appends the directories its own `PATH`
+lacks, in the shell's order. launchd's `PATH` stays first, so mise's shims still win. Banners and hook
+output are skipped: the last line that reads as a `PATH` (colon-separated absolute directories) counts. The
+`daemon.shell_path` event says how many directories were added ("PATH from zsh: 4 directories added"),
+and `magnum status` shows the count on its daemon line. The debug log names the directories, the event
+never does. A shell that fails, prints no `PATH` or answers nothing in 20 s leaves launchd's `PATH`
+alone, with a warning event ("the login shell (zsh) answered nothing in 20s. The launchd PATH stays"). A
+change of your shell's `PATH` (a DBngin upgrade) takes effect at the next `magnum daemon-restart`, as a
+config change does. The CLI keeps the environment of the terminal it runs in.
+
 Three more `[daemon]` keys pace the agents. `max_total_working_codex` (default 5) caps the Codex agents working at once, your own sessions included. `agent_start_stagger` (default `"15s"`) is the least time between two agent launches, across rounds, and at most 3 Codex agents start at once. `min_warm` (default `"30m"`) is how long a pool slot another PR holds must stay unused before a waiting PR may take it back, its sessions parked and the slot released: with no human typing, no session working, blocked or prompted within it, no run and no pin.
 
 A command handed to the daemon waits up to 30 s for its answer (the daemon answers requests before its
@@ -2639,7 +2654,8 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
 - **gh extension**: `magnum install --gh` installs a `gh magnum` shim, so `gh magnum prs` works anywhere.
 - **gh-dash**: [docs/gh-dash.yml](docs/gh-dash.yml) has keybindings that hand the selected PR to Magnum.
 - **launchd**: `magnum install` writes `~/Library/LaunchAgents/zhuravel.magnum.plist`, running the daemon
-  with mise's shims on its `PATH`, so it sees your shell's toolchain; through `mise exec` only while an App
+  with mise's shims on its `PATH`, so it sees your mise toolchain (`[daemon] shell_path = true` also appends
+  your login shell's `PATH`, see [Configuration](#configuration)); through `mise exec` only while an App
   identity reads its key from an environment variable (`private_key_env` without `private_key_file`).
 
 ## Under the hood

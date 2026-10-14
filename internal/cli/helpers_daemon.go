@@ -35,8 +35,12 @@ type daemonGroupSys struct {
 	UID func() int
 	// UserHome is the user's home directory (LaunchAgents, PATH, HOME).
 	UserHome func() (string, error)
-	// Getenv reads MAGNUM_CONFIG and HERDR_BIN_PATH.
+	// Getenv reads MAGNUM_CONFIG and HERDR_BIN_PATH, and the daemon's SHELL
+	// and PATH ([daemon] shell_path).
 	Getenv func(string) string
+	// Setenv sets the daemon's own PATH ([daemon] shell_path); nil means
+	// os.Setenv.
+	Setenv func(key, value string) error
 	// Kill signals a process (syscall.Kill).
 	Kill func(pid int, sig syscall.Signal) error
 	// DaemonPID reads the daemon pidfile (engine.DaemonPID).
@@ -47,7 +51,8 @@ type daemonGroupSys struct {
 	// Signals is the context a command of the group runs under, ended by
 	// ctrl+c, SIGTERM or SIGHUP; nil means signalContext.
 	Signals func() (context.Context, context.CancelFunc)
-	// RunEngine runs the daemon in the foreground (app.New + engine.Run).
+	// RunEngine runs the daemon in the foreground (app.New + engine.Run);
+	// nil means runDaemonEngine, which reads daemonSys itself.
 	RunEngine func(ctx context.Context, c *Context, o daemonOptions) (daemonDryRunReport, error)
 }
 
@@ -55,10 +60,10 @@ var daemonSys = daemonGroupSys{
 	UID:       os.Getuid,
 	UserHome:  os.UserHomeDir,
 	Getenv:    os.Getenv,
+	Setenv:    os.Setenv,
 	Kill:      syscall.Kill,
 	DaemonPID: engine.DaemonPID,
 	Sleep:     actSleep,
-	RunEngine: runDaemonEngine,
 }
 
 // signals is the context a command of the group runs under (Signals, else
@@ -68,6 +73,15 @@ func (s daemonGroupSys) signals() (context.Context, context.CancelFunc) {
 		return s.Signals()
 	}
 	return signalContext()
+}
+
+// runEngine runs the daemon in the foreground (RunEngine, else
+// runDaemonEngine).
+func (s daemonGroupSys) runEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDryRunReport, error) {
+	if s.RunEngine != nil {
+		return s.RunEngine(ctx, c, o)
+	}
+	return runDaemonEngine(ctx, c, o)
 }
 
 // runner returns the subprocess runner for one command. Under --dry-run it
