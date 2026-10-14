@@ -188,3 +188,37 @@ func TestClosedWithoutMergeIsNotFlaggedAsMergedUnreviewed(t *testing.T) {
 		t.Fatalf("toasts = %q, want none", got)
 	}
 }
+
+// TestAnOwnPRMergedByHandRaisesNoToast: the operator merges their own PR on
+// purpose, often seconds after it went ready, so it records the warn event
+// and keeps the flag the board shows (merged_unreviewed) but raises no toast,
+// while a colleague's PR merged the same way keeps its toast.
+func TestAnOwnPRMergedByHandRaisesNoToast(t *testing.T) {
+	h := newHarness(t)
+	base := prSpec{n: 1, head: "base1"}
+	own := prSpec{n: 2, head: muMergedHead, author: "zhuravel"}
+	colleague := prSpec{n: 3, head: muMergedHead, author: "alice"}
+	h.open(base)
+	h.startup()
+	h.tick() // first sync: #1 baseline
+	h.open(base, own, colleague)
+	h.tick()
+	h.wantState(2, store.PRQueued)
+	h.wantState(3, store.PRQueued)
+
+	h.closeOnGitHub(2, "MERGED", base, colleague)
+	h.closeOnGitHub(3, "MERGED", base)
+
+	for _, n := range []int{2, 3} {
+		if evs := h.mergedUnreviewedEvents(n); len(evs) != 1 || evs[0].Level != "warn" {
+			t.Errorf("PR #%d: pr.merged_unreviewed events = %+v, want one warn", n, evs)
+		}
+		if pr := h.pr(n); !pr.MergedUnreviewed() {
+			t.Errorf("PR #%d lost its merged-unreviewed flag: %+v", n, pr)
+		}
+	}
+	toasts := h.mergedUnreviewedToasts()
+	if len(toasts) != 1 || !strings.HasPrefix(toasts[0], "magnum: talkable#3 merged unreviewed") {
+		t.Fatalf("toasts = %q, want the colleague's alone", toasts)
+	}
+}

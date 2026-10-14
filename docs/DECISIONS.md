@@ -1302,6 +1302,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
   operator's); a create from the PR URL alone, without a `commits` target (Whiteboard then fetches the PR
   itself, with Desktop's gh and git, in the slot's clone); a notification on failure (the whiteboard is
   optional); a whiteboard on every round (a reply round posts nothing).
+- **A fixer's "needs your call" after a push toasts at once, one toast per loop cycle** (2026-10-14,
+  amends "The fix loop: magnum fixes its own findings on your PRs"). A fix run pushed at 08:50:58Z and
+  left one P1 for the operator; the settle recorded only `fix.needs_you`, and the toast and
+  `needs_attention` came at 10:04:06Z, 73 minutes later, after the push's re-review, while the operator
+  could have acted on the P1 meanwhile. A fixer that pushed nothing and left findings already asked at
+  once (`fixAttention`). Now the settle's branch for a push with findings left to the author toasts too,
+  as soon as the re-review is queued (`fixCallToast`: the urgent toast alone, the text of the no-push
+  branch, whatever state a dispatch has moved the PR to since), and the event keeps saying that the
+  re-review runs first. The PR itself goes to `needs_attention` only after the re-review, at the loop's
+  end (`endLoopForAttention`), so a push of the operator's meanwhile, or a re-review that makes the call
+  moot, changes nothing in the PR's state; when the re-review cannot be queued, `failFix`'s toast is the
+  one. Decided: the toast's dedupe key is the loop cycle's own and the loop's end builds the same one, so
+  the call is told once. The key used to end with the fix run's id, which the loop's end (`loopJob`: no
+  run) lacks, so the end would have toasted the same call a second time; it is now
+  `attention:<pr>:fix:<loop start>:<cycle>` (`fixAttentionKey`), and its window a day
+  (`fixAttentionWindow`; `needsAttentionKeyed` takes the window), since a re-review can wait for hours
+  and the 30 minutes of `attentionWindow` would let the end toast again (this one took 73). A second
+  loop on the PR, or the next cycle, has another start or cycle and toasts as before. Rejected: moving
+  the PR to `needs_attention` before the re-review (the forced re-review takes it out of that state
+  again); one toast at the loop's end only (the delay above); a toast per event (the end's would
+  repeat the first).
+- **A refused fix names the slot's last error and the repair command** (2026-10-14). A by-hand
+  `magnum fix` or whiteboard on a PR whose slot was broken answered "slot review11 is broken", with no
+  cause and no command, where the dispatcher's wait for the same slot says "slot review11 is broken:
+  <last error> (magnum slots repair review11)". Now one helper (`unusableSlotSentence`, in dispatch.go)
+  builds that sentence and both use it: dispatch's slot gate and `prepareFix`, for a broken or lost
+  slot. The slot's other states (busy, releasing) keep their short sentence, since `magnum slots repair`
+  repairs neither. `prepareWhiteboard` is another change's and takes the helper after both have landed.
 
 ## Screens and commands
 
@@ -6939,6 +6967,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   meaning); blocking a rewrite that holds a long line (the limits are triggers, not caps, and a curated
   proposal may keep a line a reader needs whole); the value in the skill's text (it would drift from the
   config).
+- **An own PR merged by hand raises no merged-unreviewed toast** (2026-10-14, amends "merged before
+  magnum reviewed its last push is flagged"). Two of the seven `pr.merged_unreviewed` events of a week
+  were the operator's own PRs, merged seconds after they went ready (3 and 30 seconds); each raised an
+  urgent toast and a red attention row for 24 hours, for a merge the operator did on purpose. The four
+  colleague cases were right to flag. Now `mergedUnreviewed` skips the toast for a PR whose author is one
+  of the operator's logins (`ownPR`, the board's "mine"); the `pr.merged_unreviewed` warning and the flag
+  (the red pill, the card's sentence, `M` to dismiss it) stay as they are, so a merge that was an accident
+  still shows on the board. A PR whose author is not known yet keeps its toast. Rejected: no flag at all
+  for an own PR (an own PR merged while a round was due is still unreviewed; the board should say so);
+  skipping the toast by how soon after ready it merged (a threshold to tune, and a person's own PR is
+  theirs whatever the delay).
 
 ## Learned rules
 

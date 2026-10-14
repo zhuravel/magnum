@@ -4,11 +4,11 @@ package engine
 // puts the slot back in order (Slots.Resync at the pushed head, or at the
 // reviewed one when nothing was pushed, so the next round's guard sees no
 // drift) and ends the cycle: a push goes on to a forced re-review (phase
-// reviewing; findings the fixer left to the author wait in the loop's row
-// for that round's end), anything else ends the loop, with an info toast
-// when the fixer answered everything without a push and as needs attention
-// (attention.KindFix) otherwise. A stop (`magnum abort`) ends the loop
-// quietly.
+// reviewing; findings the fixer left to the author are toasted at once and
+// wait in the loop's row for that round's end), anything else ends the
+// loop, with an info toast when the fixer answered everything without a
+// push and as needs attention (attention.KindFix) otherwise. A stop
+// (`magnum abort`) ends the loop quietly.
 
 import (
 	"context"
@@ -103,7 +103,9 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	case pushed && n > 0:
 		e.event(ctx, "warn", subject, "fix.needs_you", needs+"; the re-review of "+textx.ShortSHA(target)+" runs first", data)
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
-		e.fixReReview(ctx, job, target, rep.NeedsYou)
+		if e.fixReReview(ctx, job, target, rep.NeedsYou) {
+			e.fixCallToast(job, needs) // the operator can act on it while the re-review runs
+		}
 	case pushed:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
 		e.fixReReview(ctx, job, target, nil)
@@ -140,13 +142,14 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 // after the head moved still lets onHeadChange see the push before the
 // loop ends, so the push is recorded and its re-review queued the normal
 // way (the poller, which finds the head already moved, would never queue
-// it). A PR GitHub closed meanwhile ends the loop instead.
-func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, needs []string) {
+// it). A PR GitHub closed meanwhile ends the loop instead. It reports whether
+// the loop goes on to its re-review (false: the loop ended, closed or failed).
+func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, needs []string) bool {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err == nil && pr.GHState != store.GHOpen {
 		e.endFixState(ctx, job)
 		e.event(ctx, "info", job.subject(), "fix.ended", fmt.Sprintf("the fix loop ends: the PR is %s on GitHub", strings.ToLower(pr.GHState)), job.eventData())
-		return
+		return false
 	}
 	st := job.state
 	st.Phase, st.Head, st.NeedsYou = FixPhaseReviewing, head, needs
@@ -165,9 +168,10 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, need
 	}
 	if err != nil {
 		e.failFix(ctx, job, "fix settle failed: the re-review could not be queued: "+err.Error(), "")
-		return
+		return false
 	}
 	job.state = st
+	return true
 }
 
 // seeFixPush lets onHeadChange see the push recordFixPush put on the PR row,
@@ -393,7 +397,8 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 // for a round keeps it, because a push came during the fix and that
 // re-review still runs: it gets the urgent toast alone. A PR elsewhere
 // (closed, ineligible) has the events only. The toast's dedupe key is the
-// loop's cycle's own, so each loop that needs the author toasts.
+// loop's cycle's own (fixAttentionKey), so each loop that needs the author
+// toasts and a cycle's call is told once, however late the loop ends.
 func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
@@ -402,14 +407,37 @@ func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	}
 	rj := job.asRound()
 	rj.pr = pr
-	key := fmt.Sprintf("attention:%d:%s:%s:%d:%s", pr.ID, attention.KindFix, store.FormatTime(job.state.StartedAt), job.state.Cycle, job.run.ID)
 	switch {
 	case pr.State == store.PRReviewed || pr.State == store.PRNeedsAttention:
-		e.needsAttentionKeyed(ctx, rj, pr, []string{store.PRReviewed, store.PRNeedsAttention}, attention.KindFix, msg, nil, key)
+		e.needsAttentionKeyed(ctx, rj, pr, []string{store.PRReviewed, store.PRNeedsAttention}, attention.KindFix, msg, nil,
+			fixAttentionKey(job), fixAttentionWindow)
 	case slices.Contains(waitingStates, pr.State):
-		label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
-		e.urgent(key, "magnum: "+label+" needs attention", attention.Explain(attention.KindFix, msg, label).Summary, attentionWindow)
+		e.fixCallToast(job, msg)
 	}
+}
+
+// fixAttentionWindow is how long a loop cycle's attention toast (its key,
+// fixAttentionKey) holds back a second one: a day, since the key is the
+// cycle's own and a re-review can wait for hours before the loop's end asks
+// for the same call again.
+const fixAttentionWindow = 24 * time.Hour
+
+// fixAttentionKey is the dedupe key of the toast of the job's loop cycle:
+// the PR, the loop (when it started) and the cycle. The loop's end after a
+// re-review (loopJob, which has no run) builds the key of the settle that
+// started that re-review, so a call toasted at once is not toasted again.
+func fixAttentionKey(job *fixJob) string {
+	return fmt.Sprintf("attention:%d:%s:%s:%d", job.pr.ID, attention.KindFix, store.FormatTime(job.state.StartedAt), job.state.Cycle)
+}
+
+// fixCallToast is the fix job's urgent toast alone (no state change): msg,
+// as the fix job's attention, for the PR the job's loop is on. The settle
+// raises it when the fixer pushed and left findings to the author, so they
+// can act on them while the push is re-reviewed; fixAttention raises it for
+// a PR waiting for a round.
+func (e *Engine) fixCallToast(job *fixJob, msg string) {
+	label := fmt.Sprintf("%s#%d", job.repo.Name, job.pr.Number)
+	e.urgent(fixAttentionKey(job), "magnum: "+label+" needs attention", attention.Explain(attention.KindFix, msg, label).Summary, fixAttentionWindow)
 }
 
 // finishFixRun moves the fixer's run to to (verified or failed) with

@@ -422,6 +422,47 @@ func TestNeedsYouEndsTheLoopAfterItsReReview(t *testing.T) {
 	}
 }
 
+// Findings the fixer left to the author after a push toast at once, while
+// the push's re-review is still to run, so the operator can act on them
+// meanwhile (a re-review can take longer than the attention dedupe window):
+// the PR keeps waiting for its round, and the loop's end after that round,
+// which asks for the same call, does not toast it a second time.
+func TestAFixersCallAfterAPushToastsAtOnce(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
+	fixer(h, git, fixPushed, func(run store.Run) string {
+		return fixReport(run.ID, "b2b2b2b Guard the nil owner", fixReplied, "- 2102 P2 app/lib/x.rb:7: contested")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+
+	if cur := h.wantState(2, store.PRRereviewPending); deref(cur.LastError) != "" {
+		t.Errorf("the PR waiting for its re-review has last_error %q", deref(cur.LastError))
+	}
+	want := "fix: 1 finding needs your call"
+	if got := toastsWith(h, "talkable#2 needs attention"); len(got) != 1 || !strings.Contains(got[0], want) {
+		t.Fatalf("toasts before the re-review = %v, want one with %q", h.nh.shown(), want)
+	}
+	if strings.Contains(strings.Join(h.nh.shown(), "\n"), "contested") {
+		t.Errorf("the toast carries the fixer's words: %v", h.nh.shown())
+	}
+
+	reviewWith(h, findings(map[string]int{"P2": 1}, "COMMENTED"))
+	h.advance(attentionWindow + time.Hour) // a re-review that waited for long
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if wantLast := "fix: 1 finding needs your call (2102 P2 app/lib/x.rb:7): " + report; deref(cur.LastError) != wantLast {
+		t.Errorf("last_error = %q, want %q", deref(cur.LastError), wantLast)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+	h.flush()
+	h.wantToasts("needs attention", 1)
+}
+
 // A re-review that does not post ends the loop: it says so as the fix
 // job's attention (a PR the round sent back in line keeps its retry and gets
 // the toast alone), and a PR the round itself left needing attention keeps

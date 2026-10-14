@@ -609,11 +609,7 @@ func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, 
 		}
 		return slotWait("slot " + slot.Name + " is being released")
 	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
-		why := fmt.Sprintf("slot %s is %s", slot.Name, slot.State)
-		if le := deref(slot.LastError); le != "" {
-			why += ": " + le
-		}
-		why += " (magnum slots repair " + slot.Name + ")"
+		why := unusableSlotSentence(*slot)
 		e.noteLastError(ctx, job.pr, why)
 		return slotWait(why)
 	default:
@@ -644,6 +640,20 @@ func (e *Engine) pinWait(ctx context.Context, pr store.PR, slot store.Slot, subj
 		why += " by " + by + " since " + pastClock(at, e.now())
 	}
 	return gate{reason: WaitPinned, text: why, by: by, at: at}
+}
+
+// unusableSlotSentence is why a broken or lost slot cannot be used, as a
+// dispatch wait and a refused request both say it: the slot, its state, the
+// last error it recorded (when it has one) and the command that repairs it,
+// "slot review1 is broken: schema reset failed (magnum slots repair
+// review1)". The last error is magnum's own text (a failed setup step),
+// never a PR's.
+func unusableSlotSentence(slot store.Slot) string {
+	why := fmt.Sprintf("slot %s is %s", slot.Name, slot.State)
+	if le := deref(slot.LastError); le != "" {
+		why += ": " + le
+	}
+	return why + " (magnum slots repair " + slot.Name + ")"
 }
 
 // recreatedPerPR are the states of a per-PR worktree row the round's

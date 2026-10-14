@@ -559,6 +559,38 @@ func TestAFixOnAPinnedSlotUnpinsIt(t *testing.T) {
 	})
 }
 
+// `magnum fix` on a PR whose slot is broken or lost refuses with the slot's
+// last error and the command that repairs it, as dispatch's wait names them,
+// not with the bare state.
+func TestAFixRefusedForABrokenSlotNamesTheRepair(t *testing.T) {
+	for _, tc := range []struct{ state, lastError, want string }{
+		{store.SlotBroken, "schema reset failed",
+			"talkable/talkable#2: slot review1 is broken: schema reset failed (magnum slots repair review1)"},
+		{store.SlotLost, "", "talkable/talkable#2: slot review1 is lost (magnum slots repair review1)"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			h, _ := fixHarness(t)
+			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+			sl := h.slot("review1")
+			if err := h.st.TransitionSlot(h.ctx, sl.ID, []string{sl.State}, tc.state, func(u *store.SlotUpdate) {
+				if tc.lastError != "" {
+					u.Set("last_error", tc.lastError)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			id := h.fix(FixPayload{})
+			h.handle()
+			if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != tc.want {
+				t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), tc.want)
+			}
+			if h.ag.count("submit:") != 0 {
+				t.Error("the fixer started in an unusable slot")
+			}
+		})
+	}
+}
+
 // A fixer that pushed with nobody needed counts the cycle: the slot is put
 // back in order at the pushed head, the push is recorded on the PR row as
 // the poller records one (so the poller's own sight of it changes nothing),
@@ -693,7 +725,8 @@ func TestNeedsYouEndsTheLoopAsNeedsAttention(t *testing.T) {
 // Findings the fixer leaves to the author after a push wait for the push's
 // re-review: the slot moves to the pushed head, the cycle counts, the loop
 // waits in phase reviewing with the entries kept for the round's end, and
-// the re-review is forced; nobody is asked yet.
+// the re-review is forced; the operator is told at once (a toast), the PR's
+// state waits for the round.
 func TestAPushWithNeedsYouIsReReviewedFirst(t *testing.T) {
 	h, git := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
@@ -715,7 +748,7 @@ func TestAPushWithNeedsYouIsReReviewedFirst(t *testing.T) {
 		t.Errorf("slot calls %v", h.sl.all())
 	}
 	h.wantReportInData("fix.needs_you", report)
-	h.wantToasts("needs attention", 0)
+	h.wantToasts("needs attention", 1)
 }
 
 // A run that ends without a report of its own fails the job: the loop ends

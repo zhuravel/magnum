@@ -307,6 +307,8 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		return nil, err
 	case !has:
 		return nil, fmt.Errorf("%s has no checkout of its reviewed head: its slot was handed back", label)
+	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
+		return nil, fmt.Errorf("%s: %s", label, unusableSlotSentence(slot))
 	case slot.State != store.SlotClaimed && slot.State != store.SlotHeld:
 		return nil, fmt.Errorf("%s: slot %s is %s", label, slot.Name, slot.State)
 	case slot.Pinned && pin == fixPinRefuses:

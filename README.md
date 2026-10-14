@@ -1588,7 +1588,9 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   about the fixer, and the PR does not go to needs attention. An urgent toast names the reason and the
   report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list the
   PR. When the fixer pushed and also left findings, the push still gets its re-review first, and the loop ends
-  after it.
+  after it. The urgent toast comes at once, with the fixer's push, not after the re-review (which can wait
+  or run for an hour): you can act on the findings meanwhile. The loop's end after the re-review asks for the
+  same call and toasts it no second time (one toast per loop cycle); the PR goes to needs attention then.
 - **Ended.** GitHub closed the PR, or you pushed a newer head, before the next cycle started. The loop ends
   quietly with a `fix.ended` event, and your push gets its own review.
 
@@ -1919,7 +1921,9 @@ merged in a state where Magnum still meant to review it (queued, re-review, a ro
 needing attention) before Magnum reviewed its last push reads `merged · unreviewed` in the red attention
 pill; the summary counts them in a red "N merged unreviewed" pill, the card says when it merged and which
 commits (the one Magnum last reviewed, the merged head), the status dashboard lists it under ATTENTION, and
-the daemon writes a `pr.merged_unreviewed` warning and sends one toast per PR (`[herdr] notify`). A baseline,
+the daemon writes a `pr.merged_unreviewed` warning and sends one toast per PR (`[herdr] notify`), except
+for your own PR (its author is one of your logins), which you merged on purpose: it gets the warning and
+the pill, no toast. A baseline,
 skipped, ignored or reviewed PR is never flagged: Magnum was not going to review it, and a muted one is
 not flagged either unless a review of it was forced before it merged. A merged or closed PR gets no
 automatic reviews, so `M` does not ask to stop them there: on a flagged row it asks "Dismiss the

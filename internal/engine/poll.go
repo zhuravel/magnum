@@ -1054,7 +1054,9 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 // mergedUnreviewed flags a PR, just confirmed closed, that GitHub merged
 // before magnum reviewed its last push (PR.MergedUnreviewed: prev_state is
 // the state it closed in): a warn event and one toast per PR, since this is
-// a PR magnum meant to review and did not get to.
+// a PR magnum meant to review and did not get to. The operator's own PR
+// (ownPR) raises no toast: they merged it themselves, often seconds after it
+// went ready, so the event and the flag the board shows are all it gets.
 func (e *Engine) mergedUnreviewed(ctx context.Context, repo store.Repo, pr store.PR) {
 	if !pr.MergedUnreviewed() {
 		return
@@ -1069,6 +1071,9 @@ func (e *Engine) mergedUnreviewed(ctx context.Context, repo store.Repo, pr store
 	}
 	e.event(ctx, "warn", prSubject(repo, pr.Number), "pr.merged_unreviewed",
 		fmt.Sprintf("merged before magnum reviewed %s (%s)", textx.ShortSHA(pr.HeadSHA), last), data)
+	if e.ownPR(pr) {
+		return
+	}
 	e.urgent(fmt.Sprintf("merged-unreviewed:%d", pr.ID), "magnum: "+label+" merged unreviewed",
 		fmt.Sprintf("%s merged before magnum reviewed its last push: merged head %s, %s", label, textx.ShortSHA(pr.HeadSHA), last),
 		mergedUnreviewedWindow)
