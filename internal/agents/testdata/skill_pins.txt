@@ -60,6 +60,7 @@ Merge duplicates, keeping the strongest wording and the most precise location; t
 Name a probe file, overlay, mutant or log after what it checks (`own-probes_spec.rb`, `own-overlay.json`), never `security`, `exploit`, `attack` or `bypass`, and a mutant removes one rule of the code under test to show which example fails, nothing more.
 Notes for <owner>/<repo> (updated YYYY-MM-DD)
 Numbered steps are fine for a UI flow no test covers, never for a security finding.
+Platform rules: a flow the PR adds or changes that a third party governs with published requirements
 Post every thread reply through `post_replies`, one per thread, after `post_review` printed `posted` or `already_posted` (or alone where the prompt allows: then `"status":"replied"`)
 Post exactly one GitHub review, or only thread replies where the prompt allows.
 Probe the real engine and framework while you look
@@ -163,6 +164,7 @@ as `<db_lock> <command>`, as given (add no `--timeout`).
 calls the behaviour deliberate, answer that reason or drop the finding
 check each against every caller
 check the real component; for an order of calls (a call before async data arrives), find what sets it there (a library's load queue, the boot sequence) and read it or run it with a `notes_dir` probe.
+cites the rule's number and quotes its sentence
 covers only the consequences it names
 exit 0, `posted` or `already_posted`: it has read the review back;
 exit 75

@@ -1551,3 +1551,15 @@ func TestClaudeReviewersListTheEntryPointsOfAClosedAccessHole(t *testing.T) {
 			"and add a `Description: ✗ <claim>: <why>` line when the description names fewer.")
 	skillSays(t, nil, []string{"entry point"})
 }
+
+// The "Platform rules:" paragraph (de84b79) made five own passes read the
+// whole App Store section 2.3 and judges look up shopify.dev, but no pin held
+// it, so a skill edit could drop it unnoticed (the editor's only proposal
+// collided with it). Its first clause and the words that make the finding
+// citeable are pinned.
+func TestSkillPinsThePlatformRulesParagraph(t *testing.T) {
+	skillSays(t, []string{
+		"Platform rules: a flow the PR adds or changes that a third party governs with published requirements",
+		"cites the rule's number and quotes its sentence",
+	}, nil)
+}

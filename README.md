@@ -1392,7 +1392,9 @@ waiting role prints once `db-lock: waiting for <role> (<command>) since <time>`.
 did not run`, which the skill treats as a check that did not run, never a finding. Exit 125 is db-lock's
 own failure (no command, a checkout it cannot find), 126 and 127 a command it cannot start, 128+n one a
 signal ended. Without `--checkout` it locks the git work tree it runs in. Like `post-review` it reads no
-config and no registry. codex-review takes its turn on the databases like the others: it is sandboxed
+config and no registry. The lock covers one command: the claude prompts ask for one spec command per call
+(never a batch or a loop of them) and for each mutant or overlay run to take the lock on its own, so the other
+roles get their turn between commands. codex-review takes its turn on the databases like the others: it is sandboxed
 without Redis and the network, but its workspace-write sandbox still reaches MySQL and Postgres on
 localhost, and its sessions ran specs on the slot's test databases (Rails boots and truncates them) while
 the other roles did, which lost their fixture rows. Its shell line therefore runs `codex review` through

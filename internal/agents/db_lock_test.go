@@ -79,3 +79,22 @@ func TestRolePromptNamesTheRoleInTheDBLockLine(t *testing.T) {
 		t.Errorf("RolePrompt changed the caller's data: Role %q", judge.Role)
 	}
 }
+
+// Four checks of one window hit the lock's 20-minute timeout (exit 75) and a
+// codex-review report was lost, because claude-review held the lock for a
+// multi-file spec batch or a whole mutation loop in one call. The lock is
+// per command: one spec command per call, each mutant or overlay run takes it
+// on its own, and the other roles get their turn between commands.
+func TestClaudePromptsTakeTheLockPerCommand(t *testing.T) {
+	const clause = "which waits its turn and covers one command: one spec command per call, never a batch or a loop of them, " +
+		"and each mutant or overlay run takes the lock on its own, so other roles get their turn between commands"
+	for _, name := range []string{"claude-review.md", "claude-rereview.md", "claude-restart.md", "claude-simplify.md"} {
+		got, err := RenderPrompt(prompt(t, name), roleFixture())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(got, clause) {
+			t.Errorf("%s lacks %q:\n%s", name, clause, got)
+		}
+	}
+}

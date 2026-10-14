@@ -7035,6 +7035,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Rejected: a queue of retros (two retros of the same lookback find the same PRs; the second has nothing to
   do), merging a second request into the first (its lookback and PRs would change what the first answer
   promised), and keeping the request pending until the retro ends.
+- **The claude reviewers take the database lock per command, and the platform-rules paragraph is pinned**
+  (2026-10-14, amends "The roles of a round take turns on the slot's databases"). Four checks of one
+  improvement window ended in exit 75, the lock's 20-minute timeout (talkable#11483 once, #11932 three times),
+  and one codex-review report was lost: #11932 round 44 waited 20 minutes and the judge had no codex-review
+  candidates. The reports name claude-review as the holder, running a multi-file spec batch or a whole mutation
+  loop (`REVIEW_MUTATIONS=...`) under one lock call, while codex-review holds the lock for its whole `codex
+  review` by design, so it is the role that starves. The sentence of the four claude prompts (claude-review,
+  claude-rereview, claude-restart, claude-simplify) said to run every database command as `<db_lock> <command>`
+  and nothing about the size of a command. It now says the lock covers one command: one spec command per call,
+  never a batch or a loop of them, and each mutant or overlay run takes the lock on its own, so the other roles
+  get their turn between commands (`TestClaudePromptsTakeTheLockPerCommand`). SKILL.md is unchanged (it is at
+  its byte cap, and its line about `db_lock` stays); `fix.md` and the judge prompts are not part of this. The
+  "Platform rules:" paragraph of the skill (de84b79, 551 bytes) was in none of the 205 pins of
+  `skill_pins.txt`, so the landing's "no pinned sentence changed" said nothing about it and the skill editor's
+  only proposal collided with it. Its first clause and the words "cites the rule's number and quotes its
+  sentence" are pinned now (`TestSkillPinsThePlatformRulesParagraph`), so an edit of them fails the pin test
+  and the editor sees them. Rejected: a shorter `--timeout` for the claude roles (it only turns the starved
+  role's wait into the holder's failure), splitting the lock by role (the roles share one database, which is
+  why the lock exists), and making codex-review lock per command (it runs one `codex review` whose spec runs
+  it cannot split).
 
 ## Learned rules
 
