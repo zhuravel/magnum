@@ -3162,6 +3162,11 @@ func (c *Config) Stages(w *Watch) [][]Role
     dependencies outside the watch's set are ignored), then the judge alone.
     Validation guarantees After is acyclic.
 
+func (c *Config) StatusCommentFor(w *Watch) bool
+    StatusCommentFor reports whether the review status comment is on for
+    watch w: the watch's status_comment when it sets one, else [pipeline]
+    status_comment. A nil w is [pipeline]'s.
+
 func (c *Config) ThrottleFor(w *Watch) Daemon
     ThrottleFor is the [daemon] section with w's burst, re-review delta,
     delta check and own PR interval overrides applied: the throttle settings
@@ -3924,6 +3929,15 @@ type Pipeline struct {
 	// [[role]] block of a config file sets, nor to a role that is not built
 	// in; it changes no model.
 	Spend string `toml:"spend"`
+	// StatusComment switches the review status comment on: one comment on
+	// the conversation of each PR magnum means to review, posted as the PR's
+	// posting identity and edited in place as the review is scheduled, runs
+	// and posts (engine, status_comment.go). Default false. A [[watch]] may
+	// override it (Watch.StatusComment); see Config.StatusCommentFor.
+	StatusComment bool `toml:"status_comment"`
+	// StatusCommentNote is a line the operator writes, appended to every
+	// status comment ("" = none), e.g. "Need it sooner? Ping me on Slack."
+	StatusCommentNote string `toml:"status_comment_note"`
 }
     Pipeline is the [pipeline] section.
 
@@ -4515,6 +4529,10 @@ type Watch struct {
 	// Config.WhiteboardFor, WhiteboardRoleFor).
 	Whiteboard     *bool   `toml:"whiteboard"`
 	WhiteboardRole *string `toml:"whiteboard_role"`
+	// StatusComment overrides [pipeline] status_comment for this watch's
+	// PRs: unset keeps the pipeline's, false switches the review status
+	// comment off for the watch, true on (see Config.StatusCommentFor).
+	StatusComment *bool `toml:"status_comment"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
 	// related_lookback and related_ignore for this watch's PRs: unset keeps
 	// the pipeline's, a related_lookback of "0s" turns the lookback off (open
@@ -6288,6 +6306,10 @@ type GitHub interface {
 	// PR's base tip, whose failing checks do not hold the approval of a
 	// head that fails them too (autoapprove_ci_base.go).
 	CommitChecks(ctx context.Context, owner, repo, sha string) ([]github.Check, error)
+	// CreateIssueComment and EditIssueComment post and edit a PR's review
+	// status comment as its posting identity (status_comment.go).
+	CreateIssueComment(ctx context.Context, owner, repo string, number int, body string) (github.IssueComment, error)
+	EditIssueComment(ctx context.Context, owner, repo string, commentID int64, body string) (github.IssueComment, error)
 }
     GitHub is the part of *github.Client the engine uses (one client per
     identity): the poller's reads, and the dismissal of an App approval the head
@@ -8001,6 +8023,12 @@ func (c *Client) ConfirmStates(ctx context.Context, owner, repo string, numbers 
     resolve are returned in notFound (callers treat them as UNKNOWN and never
     clean them up); any other error fails the call.
 
+func (c *Client) CreateIssueComment(ctx context.Context, owner, repo string, number int, body string) (IssueComment, error)
+    CreateIssueComment posts body on the conversation of pull request (or issue)
+    number (POST /repos/{o}/{r}/issues/{n}/comments) as the client's identity,
+    the request {"body": …} sent as JSON on gh's stdin so no text reaches argv.
+    It is marked Mutates, so execx.DryRun only plans it.
+
 func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (RESTReview, error)
     CreateReview submits a review without inline comments (POST
     /repos/{o}/{r}/pulls/{n}/reviews) on commitID as the client's identity.
@@ -8028,6 +8056,13 @@ func (c *Client) DismissReview(ctx context.Context, owner, repo string, number i
     the message as JSON on gh's stdin, so a failing call logs none of it.
     It is marked Mutates, so execx.DryRun only plans it. A missing permission is
     an error matching ErrForbidden; callers report it and do not retry.
+
+func (c *Client) EditIssueComment(ctx context.Context, owner, repo string, commentID int64, body string) (IssueComment, error)
+    EditIssueComment replaces the body of issue comment commentID (PATCH
+    /repos/{o}/{r}/issues/comments/{id}) as the client's identity, the body as
+    JSON on gh's stdin. GitHub lets only the comment's author edit it; a comment
+    someone deleted is an error matching ErrNotFound. It is marked Mutates,
+    so execx.DryRun only plans it.
 
 func (c *Client) FileAt(ctx context.Context, owner, repo, path, ref string) ([]byte, error)
     FileAt reads the raw content of path at ref (a commit SHA, a branch
@@ -8196,6 +8231,13 @@ type GraphQLError struct {
 
 func (g *GraphQLError) UnmarshalJSON(b []byte) error
     UnmarshalJSON accepts GitHub's mixed string/number paths.
+
+type IssueComment struct {
+	ID  int64  // REST comment id
+	URL string // html_url
+}
+    IssueComment is a comment on the conversation of an issue or a pull request,
+    as GitHub answered its creation or edit.
 
 type LatestReview struct {
 	State       string // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING

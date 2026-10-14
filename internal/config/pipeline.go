@@ -96,6 +96,15 @@ type Pipeline struct {
 	// [[role]] block of a config file sets, nor to a role that is not built
 	// in; it changes no model.
 	Spend string `toml:"spend"`
+	// StatusComment switches the review status comment on: one comment on
+	// the conversation of each PR magnum means to review, posted as the PR's
+	// posting identity and edited in place as the review is scheduled, runs
+	// and posts (engine, status_comment.go). Default false. A [[watch]] may
+	// override it (Watch.StatusComment); see Config.StatusCommentFor.
+	StatusComment bool `toml:"status_comment"`
+	// StatusCommentNote is a line the operator writes, appended to every
+	// status comment ("" = none), e.g. "Need it sooner? Ping me on Slack."
+	StatusCommentNote string `toml:"status_comment_note"`
 }
 
 // JudgeFallbackFor is the judge role that takes over a PR of watch w after
@@ -158,6 +167,16 @@ func (c *Config) WhiteboardFor(w *Watch) bool {
 		return *w.Whiteboard
 	}
 	return c.Pipeline.Whiteboard
+}
+
+// StatusCommentFor reports whether the review status comment is on for
+// watch w: the watch's status_comment when it sets one, else [pipeline]
+// status_comment. A nil w is [pipeline]'s.
+func (c *Config) StatusCommentFor(w *Watch) bool {
+	if w != nil && w.StatusComment != nil {
+		return *w.StatusComment
+	}
+	return c.Pipeline.StatusComment
 }
 
 // WhiteboardRoleFor is the whiteboard role of watch w: the watch's

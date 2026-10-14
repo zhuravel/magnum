@@ -363,6 +363,10 @@ type Watch struct {
 	// Config.WhiteboardFor, WhiteboardRoleFor).
 	Whiteboard     *bool   `toml:"whiteboard"`
 	WhiteboardRole *string `toml:"whiteboard_role"`
+	// StatusComment overrides [pipeline] status_comment for this watch's
+	// PRs: unset keeps the pipeline's, false switches the review status
+	// comment off for the watch, true on (see Config.StatusCommentFor).
+	StatusComment *bool `toml:"status_comment"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
 	// related_lookback and related_ignore for this watch's PRs: unset keeps
 	// the pipeline's, a related_lookback of "0s" turns the lookback off (open

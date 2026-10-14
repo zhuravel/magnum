@@ -76,6 +76,10 @@ type GitHub interface {
 	// PR's base tip, whose failing checks do not hold the approval of a
 	// head that fails them too (autoapprove_ci_base.go).
 	CommitChecks(ctx context.Context, owner, repo, sha string) ([]github.Check, error)
+	// CreateIssueComment and EditIssueComment post and edit a PR's review
+	// status comment as its posting identity (status_comment.go).
+	CreateIssueComment(ctx context.Context, owner, repo string, number int, body string) (github.IssueComment, error)
+	EditIssueComment(ctx context.Context, owner, repo string, commentID int64, body string) (github.IssueComment, error)
 }
 
 // Herdr is the part of *herdr.Client the tick reads: one snapshot per tick
@@ -822,6 +826,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.closeGrace(ctx)
 	e.dispatch(ctx, ts)
 	e.noteWaits(ctx, ts)
+	e.noteStatusComments(ctx) // status_comment.go: after the waits it names
 	e.parkIdle(ctx, ts)
 	e.flagTick(ctx, ts) // codex_flag.go
 	e.maybeReconcile(ctx)

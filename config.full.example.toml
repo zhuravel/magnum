@@ -74,6 +74,8 @@ skip_authors = ["dependabot"]
 # judge_own_pass = "after"              # [pipeline]'s "parallel" (the judge's own pass with the reviewers) or "after"
 # related_lookback = "30d"              # [pipeline]'s 14d: how long a merged PR on the same paths stays related ("0s": none)
 # related_ignore = ["**/*.lock", "db/schema.rb"]   # [pipeline]'s lockfiles: paths that never relate two PRs nor reach history.json
+# status_comment = true                 # [pipeline]'s false: one comment per PR, edited in place, that says whether its review is
+#                                       # scheduled (and why it waits), in progress or posted (README, Review status comment)
 
 [[pool]]
 repo = "talkable/talkable"

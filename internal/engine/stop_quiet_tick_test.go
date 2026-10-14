@@ -38,6 +38,14 @@ func (g stoppedGH) CommitChecks(ctx context.Context, _, _, _ string) ([]github.C
 	return nil, g.failure(ctx, "github commit checks")
 }
 
+func (g stoppedGH) CreateIssueComment(ctx context.Context, _, _ string, _ int, _ string) (github.IssueComment, error) {
+	return github.IssueComment{}, g.failure(ctx, "github comment")
+}
+
+func (g stoppedGH) EditIssueComment(ctx context.Context, _, _ string, _ int64, _ string) (github.IssueComment, error) {
+	return github.IssueComment{}, g.failure(ctx, "github edit issue comment")
+}
+
 // The daemon restarted 29 times in four days (a drain for each landing), and
 // every stop that came mid-tick logged the cancelled calls as warnings: the
 // Codex usage read, the auto approvals, the PRs that need you, the review

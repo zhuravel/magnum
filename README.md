@@ -89,6 +89,10 @@ A false claim of the description that bears on risk (a ticked "Can be reverted e
 release cannot keep) is a finding, or one `Description: ✗ <claim>: <why>` line when it harms nothing.
 [The judge skill](#the-judge-skill) has the full format.
 
+With `[pipeline] status_comment = true` the PR also gets one comment, edited in place, that says whether
+its review is scheduled (and why it waits), in progress or posted, so nobody merges before it by accident
+(see [Review status comment](#review-status-comment)).
+
 ## How it works
 
 ```mermaid
@@ -574,6 +578,65 @@ first, which parks its conversation (history kept), and the fresh one starts onc
 A continue finishes its paused turn in the old conversation. Each such start is a `round.judge_fresh_cold`
 event with the idle time. A session that has served its role's `max_session_rounds` (the judge's 6) starts
 fresh the same way, however recent its last turn (see Roles and kinds).
+
+### Review status comment
+
+People on a PR cannot see that Magnum is about to review it: they merge before the review posts, or ask
+you where it is while it waits out a quiet period or a slot. `[pipeline] status_comment = true` (default
+`false`) gives every PR Magnum means to review one comment on its conversation that says where the review
+stands. Magnum posts it as the PR's posting identity (the watch's `identity`, the one the reviews use),
+edits it in place and never posts a second one; its first line is the marker `<!-- magnum:status -->`:
+
+```
+<!-- magnum:status -->
+**magnum review status** (updated 12:34 UTC)
+- [x] Scheduled: review of `a1b2c3d` waits for the push quiet period (15m), until 12:45 UTC
+- [ ] In progress
+- [ ] Posted
+
+A merge before the review posts skips it.
+Need it sooner? Ping me on Slack.
+```
+
+```toml
+[pipeline]
+status_comment = true                                       # default false
+status_comment_note = "Need it sooner? Ping me on Slack."   # a line of yours under every status comment; "" = none
+
+[[watch]]
+owner = "example"
+status_comment = false                                      # this watch's PRs get none (true: only this watch's get one)
+```
+
+The ticks move down the list:
+
+- **Scheduled** once the PR waits for its round (queued, or waiting for a re-review, with the wait
+  `magnum status` shows) or its round starts without a wait. The line names the head ("re-review of" after
+  an earlier review) and why it waits: the timing rules in their own words (the push or burst quiet
+  period, the re-review intervals, the daily round cap, a small delta, a snooze, a review request's
+  debounce) with the end in UTC, or a fixed phrase for the rest ("the end of quiet hours", "a retry after a
+  failed attempt", "a free review slot", "is held on magnum's side" for a pause, an identity, a pinned slot
+  and the like), whose own words can name an error, a branch, a pool or an identity. The comment carries no
+  PR text.
+- **In progress since HH:MM UTC** once the round started.
+- **Posted** with the review's link. A push starts the list again on the same comment; a round on the
+  reviewed head (a reply round, a judge check of red CI) leaves it at Posted.
+- One line replaces the list when Magnum will not review the head: "magnum will not review this head. The
+  operator was told." for a PR muted, ignored, flagged by Codex (with no fallback judge) or parked for you
+  (needs_attention), with no word of the cause; "Merged before the review of `a1b2c3d` posted." when GitHub
+  merged it first. A PR closed without a merge, and any closed PR after that, is not edited again.
+
+A draft, a post-merge review, an eval replay, a dry run (`magnum daemon --dry-run`, `magnum review
+--no-post`) and a watch with the key off get none, and a PR of a manual repository gets one once a review
+request queues it. The daemon brings the comment in line with the registry at every tick, after it
+recorded the waits, and edits only a changed text, at most once per PR every 2 minutes and 10 comments a
+tick, so In progress and Posted can follow the round by a tick or two. The comment never holds a round:
+a write GitHub refuses records a `pr.status_comment_failed` warning (at most one per PR an hour) and a
+later tick tries again, and each comment posted or edited records a `pr.status_comment` event with its
+stage. A comment someone deleted is posted once more at its next change; deleted a second time, the PR
+gets none until its next push. The kv row `pr.<id>.status_comment` keeps the comment's id, the identity
+that posted it and what it last said. An App identity comments with the "Pull requests" write permission
+its reviews already need.
 
 ### Identities: who posts
 

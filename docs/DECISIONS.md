@@ -7295,6 +7295,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `WriteFileAtomic` for the heartbeat in production (the flush buys nothing there and holds up the daemon's
   other writes), and skipping the syncs for every caller (the state files, notes, skill copies and reports
   must survive a crash).
+- **A status comment on the PR says where its review stands** (2026-10-14). Colleagues could not see that
+  magnum was about to review a PR: the window had 7 `pr.merged_unreviewed` events, four of them 4 to 58
+  minutes after the last push, inside or near the quiet period, and the operator was asked in Slack for
+  reviews that waited out a quiet period, an interval or a slot. `[pipeline] status_comment` (default
+  `false`, so the distributable defaults post nothing new; a `[[watch]] status_comment` overrides it as
+  `whiteboard` does) gives each PR magnum means to review one comment on its conversation, posted as the
+  PR's posting identity (`github.Client.CreateIssueComment`, `EditIssueComment`; the JSON body on gh's
+  stdin), edited in place, its first line the marker `<!-- magnum:status -->`, its id, identity and last
+  text's fingerprint in kv `pr.<id>.status_comment`. A checklist ticks down Scheduled (the head, "re-review
+  of" after a review, and why it waits, with the end in UTC), In progress (since the round's start) and
+  Posted (the review's link), with one fixed sentence ("A merge before the review posts skips it.") and
+  `[pipeline] status_comment_note`, a line of the operator's; one line replaces it when magnum will not
+  review the head (muted, ignored, Codex-flagged and held, needs_attention: "magnum will not review this
+  head. The operator was told.", no cause) or GitHub merged it before the review posted. A closed PR is not
+  edited again; drafts, post-merge reviews, dry runs and scratch registries (eval replays) get none.
+  One place drives it: the tick reconciles every comment with the registry after `noteWaits`
+  (`noteStatusComments`, engine/status_comment.go), the stage following from the PR's state, its recorded
+  wait (`KVPRWait`) and its last review. The spec named the hooks a wait, a round start, a posted review, a
+  mute, an ignore, a Codex flag, a park and a merge pass through; they lie in six files (wait.go, round.go,
+  round_settle.go, abort.go and requests.go, codex_flag.go, poll.go) and run on the round goroutines as
+  well as the tick, so they would need a lock per PR and a retry of their own for a write GitHub refused.
+  From the tick, a refused or rate-held write is simply written by a later tick, a restart goes on from the
+  registry, and only one goroutine ever writes a comment; the price is that In progress and Posted follow
+  the round by a tick (30 s) or two. Rate: only a changed text is written (the header's time left out of the
+  comparison), at most once per PR every 2 minutes (a failed attempt counts) and 10 writes a tick, which
+  applies to every stage change too, not only to the waits. The words: the timing rules' waits (quiet,
+  burst, the intervals, the cap, the delta, a snooze, a request's debounce) keep their own `Wait.Detail`,
+  which holds only the config's durations and counts; every other wait gets a fixed phrase ("the end of
+  quiet hours", "a retry after a failed attempt", "a free review slot", "is held on magnum's side"),
+  because a retry's Detail quotes the failed attempt's error (a fetch's error names the PR's branch, which
+  is PR text), a gate's names a pool, an identity or its error, and quiet hours are written in the
+  operator's zone. A round on the reviewed head (a reply round, a CI check, a re-decision) leaves the
+  comment at Posted. Failures never touch a round: `pr.status_comment_failed` (warn) at most once per PR an
+  hour, `pr.status_comment` (info) for each write with its stage. A comment gone at an edit (404, a person
+  deleted it) is posted once more; gone a second time, the PR gets none until its next head. Rejected: a
+  comment per round (noise on every PR), a check run or a commit status (an App token on every repository,
+  and no words: a status cannot say why it waits), a label (no progress, no time), hooks at each event
+  (above), quoting every wait's Detail (PR and error text on a public conversation), and finding a lost
+  comment again by its marker (a read of every PR's comments for a kv row the registry keeps; the marker
+  is there for a person or a later tool).
 
 ## Learned rules
 

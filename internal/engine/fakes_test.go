@@ -141,6 +141,74 @@ type fakeGH struct {
 	// onRadar and onCIStates run during those calls (outside the lock):
 	// what a person does while the daemon waits for GitHub.
 	onRadar, onCIStates func()
+	// comments are the issue comments CreateIssueComment posted, by id
+	// (EditIssueComment edits them; one deleteComment removed answers 404);
+	// commentErr fails both calls.
+	comments   map[int64]*fakeComment
+	commentSeq int64
+	commentErr error
+}
+
+// fakeComment is an issue comment on PR number of repo.
+type fakeComment struct {
+	id     int64
+	repo   string
+	number int
+	body   string
+	edits  int
+}
+
+func (g *fakeGH) CreateIssueComment(_ context.Context, owner, repo string, number int, body string) (github.IssueComment, error) {
+	g.record(fmt.Sprintf("issue_comment:%s/%s#%d", owner, repo, number))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.commentErr != nil {
+		return github.IssueComment{}, g.commentErr
+	}
+	if g.comments == nil {
+		g.comments = map[int64]*fakeComment{}
+	}
+	g.commentSeq++
+	id := 5000 + g.commentSeq
+	g.comments[id] = &fakeComment{id: id, repo: owner + "/" + repo, number: number, body: body}
+	return github.IssueComment{ID: id, URL: fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%d", owner, repo, number, id)}, nil
+}
+
+func (g *fakeGH) EditIssueComment(_ context.Context, owner, repo string, commentID int64, body string) (github.IssueComment, error) {
+	g.record(fmt.Sprintf("edit_issue_comment:%s/%s:%d", owner, repo, commentID))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.commentErr != nil {
+		return github.IssueComment{}, g.commentErr
+	}
+	c, ok := g.comments[commentID]
+	if !ok || c.repo != owner+"/"+repo {
+		return github.IssueComment{}, &github.APIError{Op: "edit issue comment", Status: 404, Message: "Not Found"}
+	}
+	c.body = body
+	c.edits++
+	return github.IssueComment{ID: c.id, URL: fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%d", owner, repo, c.number, c.id)}, nil
+}
+
+// commentsOn lists the issue comments standing on PR #number, oldest first.
+func (g *fakeGH) commentsOn(number int) []fakeComment {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []fakeComment
+	for _, c := range g.comments {
+		if c.number == number {
+			out = append(out, *c)
+		}
+	}
+	slices.SortFunc(out, func(a, b fakeComment) int { return cmp.Compare(a.id, b.id) })
+	return out
+}
+
+// deleteComment is a person deleting comment id on GitHub.
+func (g *fakeGH) deleteComment(id int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.comments, id)
 }
 
 // ComparePush answers like CompareFilesStatus (one "compare_files:" call),

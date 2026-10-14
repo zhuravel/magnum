@@ -293,6 +293,14 @@ spend = "medium"                  # how hard the built-in roles think, their eff
                                   # your own [[role]] block sets wins under every level, a role that is not built
                                   # in keeps its own, and no model changes. Read at startup: `magnum
                                   # daemon-restart --drain` applies a change; `magnum roles` shows the efforts
+status_comment = false            # true: one comment on each PR magnum means to review, posted as the PR's
+                                  # posting identity (the one the reviews use) and edited in place: Scheduled
+                                  # (the head and why it waits), In progress, Posted (the review's link), or one
+                                  # line when magnum will not review the head or GitHub merged it first. Never on
+                                  # drafts, post-merge reviews or dry runs; edited at most once every 2 minutes.
+                                  # [[watch]] may override (status_comment = false there keeps a watch quiet)
+status_comment_note = ""          # a line of yours appended to every status comment, e.g. "Need it sooner? Ping
+                                  # me on Slack."; "" = none
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
