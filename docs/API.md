@@ -3941,12 +3941,15 @@ type Pipeline struct {
 	Spend string `toml:"spend"`
 	// StatusComment switches the review status comment on: one comment on
 	// the conversation of each PR magnum means to review, posted as the PR's
-	// posting identity and edited in place as the review is scheduled, runs
-	// and posts (engine, status_comment.go). Default false. A [[watch]] may
-	// override it (Watch.StatusComment); see Config.StatusCommentFor.
+	// posting identity and edited in place as the review is queued and runs,
+	// collapsed to one line once it posts, and ended by a last line when the
+	// PR is closed, merged or turned into a draft before that (engine,
+	// status_comment.go). Default false. A [[watch]] may override it
+	// (Watch.StatusComment); see Config.StatusCommentFor.
 	StatusComment bool `toml:"status_comment"`
-	// StatusCommentNote is a line the operator writes, appended to every
-	// status comment ("" = none), e.g. "Need it sooner? Ping me on Slack."
+	// StatusCommentNote is a line the operator writes under the status
+	// comment while a review is queued, under way or held, not under the
+	// posted line nor a last line ("" = none).
 	StatusCommentNote string `toml:"status_comment_note"`
 }
     Pipeline is the [pipeline] section.
@@ -15589,7 +15592,10 @@ type PRFilter struct {
 	// is ignored without GHOpen.
 	GHOpen    bool
 	OrNodeIDs []string
-	Limit     int
+	// UpdatedSince, when set, keeps only the PRs whose row changed at or
+	// after it (updated_at, which every update and transition stamps).
+	UpdatedSince time.Time
+	Limit        int
 }
     PRFilter selects PRs for ListPRs. Zero values match everything.
 

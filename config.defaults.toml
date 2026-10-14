@@ -304,13 +304,17 @@ spend = "medium"                  # the spend level: how hard, and on which mode
                                   # Read at startup: `magnum daemon-restart --drain` applies a change; `magnum
                                   # roles` shows the models and efforts
 status_comment = false            # true: one comment on each PR magnum means to review, posted as the PR's
-                                  # posting identity (the one the reviews use) and edited in place: Scheduled
-                                  # (the head and why it waits), In progress, Posted (the review's link), or one
-                                  # line when magnum will not review the head or GitHub merged it first. Never on
-                                  # drafts, post-merge reviews or dry runs; edited at most once every 2 minutes.
-                                  # [[watch]] may override (status_comment = false there keeps a watch quiet)
-status_comment_note = ""          # a line of yours appended to every status comment, e.g. "Need it sooner? Ping
-                                  # me on Slack."; "" = none
+                                  # posting identity (the one the reviews use) and edited in place: a checklist
+                                  # (Review queued for the head and why it waits, In progress, Posted) that
+                                  # collapses to one line with the review's link once it posts, one line when
+                                  # magnum will not review the head, and a last line when the PR is closed,
+                                  # merged or turned into a draft before its review posted. Never posted on
+                                  # drafts, post-merge reviews or dry runs; edited at most once every 2 minutes
+                                  # (a last line at once). [[watch]] may override (status_comment = false there
+                                  # keeps a watch quiet)
+status_comment_note = ""          # a line of yours under the status comment while a review is queued, under way
+                                  # or held (not under the posted line nor a last line), e.g. "Reviews by the
+                                  # team's magnum."; "" = none
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.

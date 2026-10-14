@@ -7360,6 +7360,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (above), quoting every wait's Detail (PR and error text on a public conversation), and finding a lost
   comment again by its marker (a read of every PR's comments for a kv row the registry keeps; the marker
   is there for a person or a later tool).
+- **The status comment ends truthfully, leads with the state in plain words and shows the earlier
+  review** (2026-10-14). The first live comment showed three gaps. A PR closed without a merge was never
+  edited again, so its comment stayed at Scheduled or In progress for good. A merged PR got its line only
+  while closed or releasing, so a release before the tick left a stale one. A `magnum review` of the
+  reviewed head stayed at Posted, because the reviewed-head check came before the queued and running
+  states. The wording also misled: "updated HH:MM" moved only with the text, so it read as a heartbeat it
+  is not; "a free review slot" is magnum's jargon; "until HH:MM" promised a start that capacity can delay.
+  Now every comment ends on a true line, written at once (past the 2-minute spacing, unless its last
+  attempt failed) and once: "Closed before the review of `<sha7>` posted.", "Merged before the review of
+  `<sha7>` posted.", the posted line for a PR closed or merged after its review, the not-reviewing line
+  kept for a muted one, and "Not reviewing: the PR is a draft." for a PR that turned into a draft (with
+  `include_drafts = false`, so it left review) while the comment promised a review. The kv row records the
+  end (its head, time and whether the PR was forced), and nothing is written after it until a new head, a
+  review request newer than the end, a `magnum review`, a reopen, or the draft's ready for review. Released
+  PRs are read too, but only those whose row changed in the last 24 hours (`store.PRFilter.UpdatedSince`):
+  the last edit normally goes out while the PR is closed (the close grace), so the read only catches one
+  GitHub refused, and reading every released PR at every tick would cost a kv read each for good. On the
+  reviewed head, a round someone asked for restarts the list as "Another review requested for
+  `<sha7>`": forced (`magnum review`, unless it asks to re-decide the replies, `kvPRRedecide`), a pending
+  review request, the running round's `roundHandle.asked`, or a list the comment already shows for that
+  head (a restart lost the handle); a reply round, a judge check of red CI and a re-decision leave the
+  posted line, as before. The header reads "status changed 14 Oct, 18:43 UTC" and moves only with the
+  stage, the review or the wait (kv `state` and `changed`); the first line leads with the state ("Review
+  queued for", "Re-review queued for", "Another review requested for") and fixed words for every wait:
+  "other reviews are running" for the slots and the capacity, "not before HH:MM UTC (<rule>)" for the
+  timing rules, which now use a fixed name instead of their Detail (the spec's example drops the
+  durations, and the nested parentheses would read badly), "a retry after a failed attempt", "starts
+  shortly" or "held on magnum's side"; "This comment updates by itself." precedes the merge sentence. A
+  posted review collapses the comment to one line ("Review of `<sha7>` posted 18:52 UTC: <link>") without
+  the sentences or the operator's note, which is kept only while a review is to come or held. A re-review's
+  list is followed by "Earlier review of `<sha7>`: <link>" (the latest one only) and, from the last
+  review's `ReviewSummary.Open` when its record is that review's, "The last review recorded N earlier
+  findings still open." (left out at 0 or unknown). A fix loop shows from its row alone: "Applying
+  automatic fixes, cycle N of M" under the posted line in phase fixing, and "Reviewing the fixes in
+  `<sha7>`" leading its re-review in phase reviewing. Left out: the usual duration of a round ("Reviews
+  like this usually take 12 to 25 minutes"), since an honest figure runs from the round's start, which
+  the In progress line shows and which includes the checkout and the sessions' start, while the runs table
+  only has the first prompt's time; the round start of past rounds lives in the `engine.round_start`
+  events, the spec's stop condition, and a runs-only figure would understate a pool repository's rounds by
+  their checkout, inviting the merge the comment tries to prevent.
 
 ## Learned rules
 

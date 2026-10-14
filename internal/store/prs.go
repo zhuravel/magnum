@@ -411,7 +411,10 @@ type PRFilter struct {
 	// is ignored without GHOpen.
 	GHOpen    bool
 	OrNodeIDs []string
-	Limit     int
+	// UpdatedSince, when set, keeps only the PRs whose row changed at or
+	// after it (updated_at, which every update and transition stamps).
+	UpdatedSince time.Time
+	Limit        int
 }
 
 // ListPRs returns PRs matching f ordered by repo and number.
@@ -437,6 +440,10 @@ func (s *Store) ListPRs(ctx context.Context, f PRFilter) ([]PR, error) {
 	case f.GHOpen:
 		where = append(where, "gh_state = ?")
 		args = append(args, GHOpen)
+	}
+	if !f.UpdatedSince.IsZero() {
+		where = append(where, "updated_at >= ?")
+		args = append(args, FormatTime(f.UpdatedSince))
 	}
 	q := "SELECT " + cols("", prColumns) + " FROM prs"
 	if len(where) > 0 {

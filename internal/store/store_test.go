@@ -1176,6 +1176,29 @@ func TestListPRsFilter(t *testing.T) {
 	}
 }
 
+// UpdatedSince keeps the PRs whose row changed at or after it: a
+// transition stamps updated_at, so a PR released an hour ago is kept and
+// one released a day before is not.
+func TestListPRsKeepsTheRowsUpdatedSince(t *testing.T) {
+	st, c := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	old := mustPR(t, st, repo.ID, 1, PRClosed)
+	recent := mustPR(t, st, repo.ID, 2, PRClosed)
+	if err := st.TransitionPR(ctx, old.ID, []string{PRClosed}, PRReleased, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.Add(24 * time.Hour)
+	if err := st.TransitionPR(ctx, recent.ID, []string{PRClosed}, PRReleased, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.Add(time.Hour)
+	got, err := st.ListPRs(ctx, PRFilter{States: []string{PRReleased}, UpdatedSince: c.Now().Add(-2 * time.Hour)})
+	if err != nil || len(got) != 1 || got[0].Number != 2 {
+		t.Fatalf("released within 2 hours: %+v (%v)", got, err)
+	}
+}
+
 // Two handles on one file stand in for the daemon and the CLI: concurrent
 // claims across them must serialize (BEGIN IMMEDIATE + busy_timeout) with
 // exactly one winner and no SQLITE_BUSY errors.
