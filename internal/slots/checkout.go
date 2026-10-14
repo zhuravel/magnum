@@ -100,8 +100,8 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
 // checked_out_sha right after, so a retry after a failure in a later step
 // recognizes HEAD as magnum's own switch, not a human's commit), and for
 // pool slots render_mise, deps (pool.post_checkout
-// through mise exec, 30m, when the Gemfile.lock/pnpm-lock.yaml hash differs
-// from lock_sha) and schema (dirty_schema = 1 when the PR changes
+// through mise exec, 30m, when the hash of the LockFiles and the commands
+// differs from lock_sha) and schema (dirty_schema = 1 when the PR changes
 // pool.schema_paths since its merge base with origin/<base>), for per-PR
 // slots render_mise alone (preparePerPR, as at the worktree's creation: the
 // main clone's local mise file with the [[repo]] strip_env and env as the
@@ -399,13 +399,14 @@ func isCommitID(s string) bool {
 	return len(s) >= 7 && len(s) <= 64 && strings.Trim(s, "0123456789abcdef") == ""
 }
 
-// deps reruns pool.post_checkout when the lockfile hash differs from lock_sha.
+// deps reruns pool.post_checkout when the hash of the checkout's LockFiles
+// and the commands (lockHash) differs from lock_sha.
 func (m *Manager) deps(ctx context.Context, slot store.Slot, pool config.Pool) error {
 	sl, err := m.reload(ctx, slot)
 	if err != nil {
 		return err
 	}
-	lock, err := lockHash(sl.Path)
+	lock, err := lockHash(sl.Path, pool.PostCheckout)
 	if err != nil {
 		return err
 	}
@@ -460,7 +461,8 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // the version of the schema recorded for them; otherwise when dirty_schema
 // is set or that version differs from db/schema.rb at HEAD: the slot moves
 // to dirty_schema and pool.reset_db runs through mise exec, 30m; a second
-// failure in a row moves the slot to broken and returns ErrBroken) and
+// failure in a row moves the slot to broken, with its PR released unless
+// it is pinned, and returns ErrBroken) and
 // mark_free (store.ReleaseSlot: free, pr_id cleared, assignment closed with
 // reason). A releasing or dirty_schema slot resumes after its last completed
 // step, after Guard ran again: whatever a human did since the last attempt
@@ -597,9 +599,12 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 // round reloads them only when its checkout needs another (CheckSchema).
 // Otherwise, and on a drift, it reloads them with the base schema when the
 // PR touched the schema or the dev database is not at db/schema.rb's
-// version, and records the base schema as theirs. With a hold (ReleaseHeld)
+// version, and records the base schema as theirs. Two failed reloads in a
+// row move the slot to broken (store.BreakSlot): an unpinned slot lets its
+// PR go, so the PR's next round takes another slot instead of waiting for a
+// repair, and a slot pinned meanwhile keeps it. With a hold (ReleaseHeld)
 // the slot stays held during the reload instead of moving to dirty_schema,
-// and two failed reloads move it from held to broken without the hold.
+// and the failures move it from held to broken without the hold.
 func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.Pool, hold string) error {
 	sl, err := m.reload(ctx, slot)
 	if err != nil {
@@ -674,7 +679,7 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 	if hold != "" {
 		from = []string{store.SlotHeld}
 	}
-	terr := m.d.Store.TransitionSlot(context.WithoutCancel(ctx), sl.ID, from, store.SlotBroken,
+	terr := m.d.Store.BreakSlot(context.WithoutCancel(ctx), sl.ID, from, "broken",
 		func(u *store.SlotUpdate) {
 			u.Set("last_error", redactErr(broken))
 			if hold != "" { // so `magnum slots repair` takes it

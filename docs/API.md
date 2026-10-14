@@ -13351,8 +13351,14 @@ var ErrMiseLocal = errors.New("slots: cannot render the main clone's mise.local.
     ErrMiseLocal means the main clone's local mise file cannot be rendered
     safely.
 
-var LockFiles = []string{"Gemfile.lock", "pnpm-lock.yaml"}
-    LockFiles are hashed into slots.lock_sha; a change reruns pool.PostCheckout.
+var LockFiles = []string{
+	"Gemfile.lock", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "bun.lock",
+	"composer.lock", "go.sum", "Cargo.lock", "poetry.lock", "uv.lock",
+}
+    LockFiles are the lockfiles, at the checkout's root, that lockHash hashes
+    with pool.PostCheckout into slots.lock_sha: a change of one the checkout
+    holds, or of the commands, reruns them. A name added here moves the hash
+    only of a checkout that has the file; reordering the names moves them all.
 
 var WorkspaceNameVars = []string{
 	"CONDUCTOR_WORKSPACE_NAME", "EMDASH_TASK_NAME", "SUPERSET_WORKSPACE_NAME",
@@ -13610,12 +13616,12 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
     guard, switch (detached at refs/magnum/pr/N, discarding tracked changes the
     guard took for magnum's residue after a slot.discarded event names them;
     the target commit is written to the kv store first and checked_out_sha
-    right after, so a retry after a failure in a later step recognizes
-    HEAD as magnum's own switch, not a human's commit), and for pool
-    slots render_mise, deps (pool.post_checkout through mise exec, 30m,
-    when the Gemfile.lock/pnpm-lock.yaml hash differs from lock_sha) and schema
-    (dirty_schema = 1 when the PR changes pool.schema_paths since its merge
-    base with origin/<base>), for per-PR slots render_mise alone (preparePerPR,
+    right after, so a retry after a failure in a later step recognizes HEAD as
+    magnum's own switch, not a human's commit), and for pool slots render_mise,
+    deps (pool.post_checkout through mise exec, 30m, when the hash of the
+    LockFiles and the commands differs from lock_sha) and schema (dirty_schema
+    = 1 when the PR changes pool.schema_paths since its merge base with
+    origin/<base>), for per-PR slots render_mise alone (preparePerPR,
     as at the worktree's creation: the main clone's local mise file with the
     [[repo]] strip_env and env as the daemon has them now, its copy_files);
     finally verify (HEAD == fetched head → checked_out_sha, last_used_at).
@@ -13819,14 +13825,15 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
     schema_check (resetSchema: a LazySchema pool keeps the databases unless
     MAX(schema_migrations.version) of the development database differs from
     the version of the schema recorded for them; otherwise when dirty_schema
-    is set or that version differs from db/schema.rb at HEAD: the slot moves to
-    dirty_schema and pool.reset_db runs through mise exec, 30m; a second failure
-    in a row moves the slot to broken and returns ErrBroken) and mark_free
-    (store.ReleaseSlot: free, pr_id cleared, assignment closed with reason).
-    A releasing or dirty_schema slot resumes after its last completed step,
-    after Guard ran again: whatever a human did since the last attempt refuses
-    the release before its next destructive step. Per-PR slots are removed
-    instead (RemovePRWorktree semantics).
+    is set or that version differs from db/schema.rb at HEAD: the slot moves
+    to dirty_schema and pool.reset_db runs through mise exec, 30m; a second
+    failure in a row moves the slot to broken, with its PR released unless it
+    is pinned, and returns ErrBroken) and mark_free (store.ReleaseSlot: free,
+    pr_id cleared, assignment closed with reason). A releasing or dirty_schema
+    slot resumes after its last completed step, after Guard ran again:
+    whatever a human did since the last attempt refuses the release before its
+    next destructive step. Per-PR slots are removed instead (RemovePRWorktree
+    semantics).
 
 func (m *Manager) ReleaseHeld(ctx context.Context, slot store.Slot, pool config.Pool, hold string, refs ...string) error
     ReleaseHeld hands a slot held for hold back to the pool with Release's
@@ -15858,6 +15865,13 @@ func (s *Store) AutoApproveHolds(ctx context.Context, prIDs []int64) (map[int64]
 func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error)
     Board returns the PRs the board shows, the latest activity first
     (BoardRow.ActivityAt; PRs never fetched last). It reads only the registry.
+
+func (s *Store) BreakSlot(ctx context.Context, slotID int64, from []string, reason string, set func(*SlotUpdate)) error
+    BreakSlot atomically moves slot slotID from one of from to broken with set
+    applied. An unpinned slot lets its PR go as ReleaseSlot does (pr_id cleared,
+    the open assignment closed with reason), so the PR takes another slot;
+    a pinned one keeps its PR and assignment, as a pin keeps the PR's rounds in
+    its slot. The pin is read and the slot moved in one transaction.
 
 func (s *Store) Candidates(ctx context.Context, p CandidateParams) ([]PR, error)
     Candidates returns the PRs the dispatcher may start a round for, in dispatch

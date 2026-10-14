@@ -161,7 +161,7 @@ func TestCheckoutRetryAfterDepsFailureIsNotDrift(t *testing.T) {
 	if cur := gitT(t, sl.Path, "rev-parse", "HEAD"); cur != head {
 		t.Fatalf("HEAD = %s, want %s", cur, head)
 	}
-	lock, err := lockHash(sl.Path)
+	lock, err := lockHash(sl.Path, h.pool.PostCheckout)
 	if err != nil || store.Deref(got.LockSHA) != lock {
 		t.Fatalf("lock_sha = %s, want %s (%v)", store.Deref(got.LockSHA), lock, err)
 	}
@@ -862,7 +862,7 @@ func TestAdoptRevivesARowWithAnOpenAssignment(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Adopt: %v", err)
 			}
-			lock, err := lockHash(sl.Path)
+			lock, err := lockHash(sl.Path, h.pool.PostCheckout)
 			if err != nil {
 				t.Fatal(err)
 			}

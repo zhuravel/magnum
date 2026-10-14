@@ -178,6 +178,38 @@ func (s *Store) ReleaseSlot(ctx context.Context, slotID int64, from []string, to
 	return nil
 }
 
+// BreakSlot atomically moves slot slotID from one of from to broken with set
+// applied. An unpinned slot lets its PR go as ReleaseSlot does (pr_id
+// cleared, the open assignment closed with reason), so the PR takes another
+// slot; a pinned one keeps its PR and assignment, as a pin keeps the PR's
+// rounds in its slot. The pin is read and the slot moved in one transaction.
+func (s *Store) BreakSlot(ctx context.Context, slotID int64, from []string, reason string, set func(*SlotUpdate)) error {
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var pinned bool
+		if err := tx.QueryRowContext(ctx, "SELECT pinned FROM slots WHERE id = ?", slotID).Scan(&pinned); err != nil {
+			return notFound(err, "slot", slotID)
+		}
+		u := &SlotUpdate{Update{table: slotTable}}
+		if set != nil {
+			set(u)
+		}
+		u.Where("pinned", pinned)
+		if !pinned {
+			u.Set("pr_id", nil)
+		}
+		if err := s.apply(ctx, tx, slotTable, slotID, from, SlotBroken, &u.Update); err != nil || pinned {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE assignments SET ended_at = ?, end_reason = ? WHERE slot_id = ? AND ended_at IS NULL",
+			FormatTime(s.now()), reason, slotID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("break slot %d %v: %w", slotID, from, err)
+	}
+	return nil
+}
+
 // OpenAssignment inserts an open assignment (for flows other than ClaimSlot,
 // e.g. per-PR worktrees). StartedAt defaults to now. A second open assignment
 // for the same slot or PR is ErrConflict.

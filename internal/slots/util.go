@@ -42,33 +42,42 @@ func freeDiskBytes(path string) (uint64, error) {
 }
 
 // Caps on the checkout files a slot reads (fsx.ReadRegular): the pull
-// request controls them. A large application's Gemfile.lock, pnpm-lock.yaml
-// or db/schema.rb is under 1 MiB; the slug marker is one short line.
+// request controls them. A large application's lockfile (Gemfile.lock,
+// pnpm-lock.yaml, yarn.lock) or db/schema.rb is under 1 MiB; the slug marker
+// is one short line.
 const (
 	lockFileMax   = 16 << 20
 	schemaFileMax = 16 << 20
 	markerMax     = 4 << 10
 )
 
-// lockHash hashes the slot's LockFiles (a missing file hashes as missing).
+// lockHash hashes the LockFiles that dir holds and the pool's post_checkout
+// commands in their order, so a change of either reruns the commands. A
+// missing lockfile adds nothing: a checkout whose files and commands stay as
+// they are keeps its hash, also when a name joins LockFiles. A file adds its
+// name, length and bytes, and the commands come last under a name no
+// lockfile has, each with its length, so no two inputs hash alike.
 // A lockfile that is a symlink or a special file (fsx.ErrNotRegular) or past
 // lockFileMax (fsx.ErrTooLarge) is an error, never a hash: deps would
 // otherwise skip post_checkout for the next checkout refused the same way,
 // or run it against a file magnum would not read, and lock_sha would record
 // a hash of nothing the checkout holds.
-func lockHash(dir string) (string, error) {
+func lockHash(dir string, postCheckout []string) (string, error) {
 	h := sha256.New()
 	for _, name := range LockFiles {
 		b, err := fsx.ReadRegular(filepath.Join(dir, name), lockFileMax)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			fmt.Fprintf(h, "%s\x00<missing>\x00", name)
 		case err != nil:
 			return "", fmt.Errorf("slots: hash %s: %w", name, err)
 		default:
 			fmt.Fprintf(h, "%s\x00%d\x00", name, len(b))
 			h.Write(b)
 		}
+	}
+	fmt.Fprintf(h, "post_checkout\x00%d\x00", len(postCheckout))
+	for _, c := range postCheckout {
+		fmt.Fprintf(h, "%d\x00%s", len(c), c)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

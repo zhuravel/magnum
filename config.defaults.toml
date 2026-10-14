@@ -680,6 +680,12 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # checkout's local mise file's env over the pool's), within 30m of its
 #                                         # own, and ready_timeout starts after it
 # post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
+#                                         # runs in the slot after a checkout or a release (mise exec, 30m) when
+#                                         # the checkout's lockfiles or these commands differ from the last run's:
+#                                         # Gemfile.lock, pnpm-lock.yaml, yarn.lock, package-lock.json, bun.lock,
+#                                         # composer.lock, go.sum, Cargo.lock, poetry.lock, uv.lock (at the root;
+#                                         # one the checkout lacks counts for nothing), so an edit here reruns
+#                                         # them at each slot's next checkout; the setup counts as their first run
 # databases = ["your_app_development__{slug}", "your_app_test__{slug}"]   # each must end in __{slug}
 # prepare = ["bin/rails db:test:prepare"] # readiness: run in the checkout before the reviewers of every
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]  # round (`zsh -lc`, the slot's env), then

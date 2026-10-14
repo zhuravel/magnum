@@ -315,6 +315,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
   slug; provisioning, its revival and adopt store and compare the sanitized slug; and the drop guard's
   AllowRegexp is slot_name sanitized the same way (`^example_review[0-9]+$`), so a removal can drop those
   databases. A name that already is a slug (`review3`) gives the same value everywhere.
+- **A slot reruns post_checkout when any lockfile it holds or the commands change** (2026-10-14). On
+  2026-10-12 the operator added `yarn install --frozen-lockfile` and `yarn build:css` to a pool's
+  post_checkout after ten rounds had failed with `Propshaft::MissingAssetError`. The commands never ran
+  and five more rounds failed the same way: only a change of lock_sha, a hash of Gemfile.lock and
+  pnpm-lock.yaml, reran post_checkout, and the repository's yarn.lock was not hashed, nor were the
+  commands. Now lockHash hashes each file of slots.LockFiles the checkout holds at its root
+  (Gemfile.lock, pnpm-lock.yaml, yarn.lock, package-lock.json, bun.lock, composer.lock, go.sum,
+  Cargo.lock, poetry.lock, uv.lock; each as its name, length and bytes), then the pool's post_checkout
+  commands in their order, each with its length. A missing file adds nothing, so a checkout whose files
+  and commands stay as they are keeps its hash, also when a name joins the list later (only the slots
+  whose checkout has the new file reinstall); a test pins the hash of one input. The hash's input grew
+  with this change, so every slot runs post_checkout once at its first checkout or release after the
+  build. A lockfile that is refused (a symlink, a special file, past 16 MiB) fails the deps step as
+  before, now under every listed name. Kept: provisioning and adopt record the same hash after the
+  setup, so a slot's setup still counts as post_checkout's first run, and a new slot whose setup does not
+  do what post_checkout does gets it at the first change of a lockfile or of the commands. Rejected:
+  lockfiles below the root (no pool has a workspace of packages) and a column of its own for the
+  commands' hash (one comparison covers both).
+- **A release that breaks an unpinned pool slot lets its PR go** (2026-10-14). A schema reload that
+  failed twice at release moved the slot to broken and left its pr_id as it was. On 2026-10-14 review11
+  kept talkable#12012 and review18 kept #12011, so their next pushes waited for `magnum slots repair` in
+  dispatch's slot gate while an unpinned pool PR can take any free slot, and a whiteboard request for
+  #12012 was refused the same way. Now resetSchema moves the slot with the new store.BreakSlot: in one
+  transaction it reads the pin and, for an unpinned slot, clears pr_id and closes the open assignment
+  (end reason "broken") with the move to broken, so the PR claims another slot at its next round and
+  the cleanup of a closed PR finds no broken slot to skip. A slot pinned while the reload ran keeps its
+  PR and assignment, since a pin keeps its PR's rounds in its slot. The slot keeps the reload's error as
+  last_error, and `magnum slots repair` provisions it again as before; a held release (no PR) breaks as
+  before. Left out: after a failed reload, preferring the tick's further evictions of slots that need no
+  reload (on 2026-10-14 one waiting PR's two evictions broke two slots in one minute on the same
+  reload). needSlot takes the least recently used slot of EvictableSlots, and whether a release reloads
+  depends on the pool's reset_db_on_schema_change, the dirty_schema flag and the development database's
+  schema_migrations, which only the release reads; it needs that read and a record of the failure across
+  the tick's jobs, not a sort key.
 
 ## Scheduling
 

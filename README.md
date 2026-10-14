@@ -672,7 +672,13 @@ check posts, at most an hour); `keep_approvals = true` on the `[[repo]]` (or the
 `ready` (probes, exit 0 = ready) on a `[[pool]]` or `[[repo]]` run in the checkout before the
 reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) together, followed by a
 check that the login shell runs the Ruby the checkout pins; a failure never stops the round, it tells
-the judge what will not work. When the files under a pool's `schema_paths` (such as `["db/"]`) differ
+the judge what will not work. A pool's `post_checkout` commands (such as
+`["bundle check >/dev/null || bundle install --jobs 4", "yarn install --frozen-lockfile"]`) run in the
+slot through `mise exec` after a checkout or a release, within 30 minutes, when the checkout's lockfiles
+or the commands themselves differ from those of their last run in that slot: Gemfile.lock,
+pnpm-lock.yaml, yarn.lock, package-lock.json, bun.lock, composer.lock, go.sum, Cargo.lock, poetry.lock
+and uv.lock at the checkout's root, one it lacks counting for nothing. So an edit to the commands reruns
+them at each slot's next checkout; a slot's `setup` counts as their first run. When the files under a pool's `schema_paths` (such as `["db/"]`) differ
 from those the slot's databases were last loaded from, or the development database's
 `schema_migrations` no longer match them, the pool's `reset_db` commands run first, as a release runs
 them (through `mise exec` in the slot, not `zsh -lc`, so the checkout's local mise file does not
@@ -686,8 +692,9 @@ before it hands a person a free slot. `reset_db_on_schema_change = false` on the
 base carries the `dirty_schema` flag, and a release that must reload the databases (the flag with
 `reset_db_on_schema_change = false`, or kept databases that no longer match what was loaded) moves the slot
 to the `dirty_schema` state and runs `reset_db` through `mise exec` within 30 minutes. A reload that fails
-twice in a row makes the slot `broken`; `magnum slots repair <slot>` provisions it again and puts it back in
-the pool. A free slot above a pool's `min` is removed once it has been idle for
+twice in a row makes the slot `broken`, with the reload's error as its last error, and lets its PR go: the
+PR's next round takes another slot (a slot pinned meanwhile keeps its PR, which waits for it).
+`magnum slots repair <slot>` provisions the slot again and puts it back in the pool. A free slot above a pool's `min` is removed once it has been idle for
 `idle_remove_after` (168h when unset or 0; a negative value is refused). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
 `magnum review` still runs it. A watch's `manual_repos` (names of repositories it covers, without owner
@@ -2484,7 +2491,7 @@ data: PR text is never interpolated into prompts, fork PRs are skipped by defaul
 stripped from review worktrees so the configured identity always posts, and a posted review is accepted
 only if its author matches that identity. Magnum pre-trusts only the directories it creates, by writing
 the same entries Codex and Claude write when you click "trust". The files a pull request controls that magnum
-reads itself (Gemfile.lock, pnpm-lock.yaml, db/schema.rb, the setup's tmp/.worktree-db-slug, .codex/config.toml)
+reads itself (the lockfiles a pool slot hashes, such as Gemfile.lock and yarn.lock, db/schema.rb, the setup's tmp/.worktree-db-slug, .codex/config.toml)
 are read only as regular files under a size cap: a symlink, a FIFO or a device in their place is refused (the
 slot's checkout fails naming the file, the slug marker is not trusted, the hooks review is declined). Magnum's git commands run none of a checkout's git hooks (`core.hooksPath=/dev/null`), so hooks that a PR's setup
 installs (husky, lefthook) never run on its checkouts; a per-PR repository's existing clone must have its origin on

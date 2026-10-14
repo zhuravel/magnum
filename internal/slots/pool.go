@@ -210,7 +210,7 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 		return err
 	}
 	return m.step(ctx, subject, "mark_free", func(ctx context.Context) error {
-		lock, err := lockHash(sl.Path)
+		lock, err := lockHash(sl.Path, pool.PostCheckout)
 		if err != nil {
 			return err
 		}
@@ -427,7 +427,7 @@ func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (sto
 	if err != nil {
 		return store.Slot{}, err
 	}
-	lock, err := lockHash(path)
+	lock, err := lockHash(path, pool.PostCheckout)
 	if err != nil {
 		return store.Slot{}, err
 	}

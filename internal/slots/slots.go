@@ -50,8 +50,14 @@ const (
 // any other agent as a human's.
 const AgentPrefix = "mg-"
 
-// LockFiles are hashed into slots.lock_sha; a change reruns pool.PostCheckout.
-var LockFiles = []string{"Gemfile.lock", "pnpm-lock.yaml"}
+// LockFiles are the lockfiles, at the checkout's root, that lockHash hashes
+// with pool.PostCheckout into slots.lock_sha: a change of one the checkout
+// holds, or of the commands, reruns them. A name added here moves the hash
+// only of a checkout that has the file; reordering the names moves them all.
+var LockFiles = []string{
+	"Gemfile.lock", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "bun.lock",
+	"composer.lock", "go.sum", "Cargo.lock", "poetry.lock", "uv.lock",
+}
 
 // SchemaFile is read for the `define(version: …)` the slot's dev database
 // must match after a release.

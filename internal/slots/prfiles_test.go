@@ -84,7 +84,7 @@ func TestLockHashRefusesALockfileThePRCommitsAsASymlinkOrPastItsCap(t *testing.T
 				dir := t.TempDir()
 				plantRefused(t, kind, filepath.Join(dir, name), "GEM\n", lockFileMax)
 				var err error
-				soon(t, "lockHash", func() { _, err = lockHash(dir) })
+				soon(t, "lockHash", func() { _, err = lockHash(dir, nil) })
 				if !refused(err) {
 					t.Fatalf("lockHash = %v, want a refusal", err)
 				}
@@ -94,8 +94,53 @@ func TestLockHashRefusesALockfileThePRCommitsAsASymlinkOrPastItsCap(t *testing.T
 	// A lockfile at its cap is still hashed.
 	dir := t.TempDir()
 	sparseFile(t, filepath.Join(dir, "pnpm-lock.yaml"), lockFileMax)
-	if _, err := lockHash(dir); err != nil {
+	if _, err := lockHash(dir, nil); err != nil {
 		t.Fatalf("lockHash at the cap: %v", err)
+	}
+}
+
+// The hash a slot records moves with a lockfile of LockFiles or a
+// post_checkout command and with nothing else. A missing lockfile adds
+// nothing, so a name added to LockFiles later reinstalls only the slots
+// whose checkout has that file. The value is pinned: a change of the hash's
+// input makes every slot run post_checkout once, and must be meant.
+func TestTheLockHashMovesOnlyWithTheLockfilesAndTheCommands(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "Gemfile.lock"), "GEM v1\n")
+	cmds := []string{"bundle install"}
+	hash := func(cmds []string) string {
+		t.Helper()
+		got, err := lockHash(dir, cmds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	base := hash(cmds)
+	if want := "49d89a582d67bad4ff588e4e26c0145af7647688e811b949e4790ca6436b2c2d"; base != want {
+		t.Errorf("lockHash = %s, want the pinned %s", base, want)
+	}
+	writeFile(t, filepath.Join(dir, "README"), "not a lockfile\n")
+	if got := hash(cmds); got != base {
+		t.Errorf("a file outside LockFiles moved the hash to %s", got)
+	}
+	for _, other := range [][]string{nil, {"bundle install", "yarn install"}, {"bundle  install"}, {"bundle", "install"}} {
+		if hash(other) == base {
+			t.Errorf("commands %q hash as %q do", other, cmds)
+		}
+	}
+	for _, name := range LockFiles[1:] {
+		writeFile(t, filepath.Join(dir, name), "")
+		if hash(cmds) == base {
+			t.Errorf("an empty %s hashes as a missing one", name)
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := hash(cmds); got != base {
+		t.Errorf("lockHash after the files went = %s, want %s", got, base)
 	}
 }
 

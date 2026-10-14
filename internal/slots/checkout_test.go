@@ -186,6 +186,70 @@ func TestCheckoutWithoutSchemaOrLockChanges(t *testing.T) {
 	}
 }
 
+// A pool on yarn reruns post_checkout when the PR adds or changes yarn.lock
+// (from 2026-10-12 a pool's yarn install never ran: only Gemfile.lock and
+// pnpm-lock.yaml were hashed); a checkout of the same head again keeps the
+// hash and installs nothing.
+func TestAChangedYarnLockRerunsPostCheckout(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	deps := h.pool.PostCheckout[0]
+	if n := len(h.scriptCalls(deps)); n != 0 {
+		t.Fatalf("post_checkout ran %d times for a README-only head", n)
+	}
+	work := h.ownOrigin(t)
+	before, head := store.Deref(sl.LockSHA), h.shaPR8
+	for i, content := range []string{"yarn v1\n", "yarn v2\n"} {
+		head = pushPR(t, work, 8, head, "yarn.lock", content)
+		if err := h.m.Checkout(h.ctx, h.slot(sl.Name), pr, h.pool, head); err != nil {
+			t.Fatalf("Checkout of yarn.lock %q: %v", content, err)
+		}
+		if n := len(h.scriptCalls(deps)); n != i+1 {
+			t.Fatalf("yarn.lock %q: post_checkout ran %d times, want %d", content, n, i+1)
+		}
+		got := store.Deref(h.slot(sl.Name).LockSHA)
+		if got == before {
+			t.Fatalf("yarn.lock %q: lock_sha stayed %s", content, got)
+		}
+		before = got
+	}
+	if err := h.m.Checkout(h.ctx, h.slot(sl.Name), pr, h.pool, head); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.scriptCalls(deps)); n != 2 {
+		t.Fatalf("post_checkout ran again for an unchanged checkout (%d)", n)
+	}
+	if got := store.Deref(h.slot(sl.Name).LockSHA); got != before {
+		t.Fatalf("lock_sha of an unchanged checkout moved: %s, was %s", got, before)
+	}
+}
+
+// An edit to the pool's post_checkout commands reruns them at the slot's
+// next checkout, of the same head too; the checkout after that, with the
+// commands as they are now, installs nothing.
+func TestChangedPostCheckoutCommandsRerunIt(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	if n := len(h.scriptCalls(h.pool.PostCheckout[0])); n != 0 {
+		t.Fatalf("post_checkout ran %d times before the edit", n)
+	}
+	before := store.Deref(sl.LockSHA)
+	h.pool.PostCheckout = append(slices.Clone(h.pool.PostCheckout), "yarn install --frozen-lockfile")
+	for range 2 {
+		if err := h.m.Checkout(h.ctx, h.slot(sl.Name), pr, h.pool, h.shaPR8); err != nil {
+			t.Fatalf("Checkout: %v", err)
+		}
+	}
+	for _, cmd := range h.pool.PostCheckout {
+		if n := len(h.scriptCalls(cmd)); n != 1 {
+			t.Errorf("%q ran %d times, want once after the edit", cmd, n)
+		}
+	}
+	if got := store.Deref(h.slot(sl.Name).LockSHA); got == before {
+		t.Fatalf("lock_sha stayed %s after the commands changed", got)
+	}
+}
+
 func TestCheckoutUsesFetchedHeadWhenTargetMoved(t *testing.T) {
 	h := newHarness(t)
 	h.provisioned(1)
@@ -376,6 +440,73 @@ func TestReleaseSchemaResetFailsTwiceBreaksSlot(t *testing.T) {
 	if got.State != store.SlotBroken || got.LastError == nil || strings.Contains(*got.LastError, "ghp_") {
 		t.Fatalf("slot = %s %v", got.State, store.Deref(got.LastError))
 	}
+}
+
+// A release whose schema reset fails twice lets the slot's PR go with the
+// slot: on 2026-10-14 two broken slots kept their PRs, whose next pushes
+// waited for `magnum slots repair` while other slots were free. The PR's
+// assignment closes and it claims another slot; the slot keeps the reset's
+// error and a repair takes it back. A slot pinned while the reset ran
+// keeps its PR, which waits for its own slot.
+func TestAReleaseThatBreaksAnUnpinnedSlotFreesItsPR(t *testing.T) {
+	t.Run("unpinned", func(t *testing.T) {
+		h := newHarness(t)
+		h.eager()
+		sl, pr := h.claimedCheckout(7, h.shaPR7)
+		h.failScript[h.pool.ResetDB[0]] = 2
+		if err := h.m.Release(h.ctx, sl, h.pool, "evicted"); !errors.Is(err, ErrBroken) {
+			t.Fatalf("err = %v, want ErrBroken", err)
+		}
+		got := h.slot(sl.Name)
+		if got.State != store.SlotBroken || got.PRID != nil || !strings.Contains(store.Deref(got.LastError), "schema reset failed twice") {
+			t.Fatalf("slot = %s pr %v last_error %q; want broken without its PR, the reset's error kept",
+				got.State, got.PRID, store.Deref(got.LastError))
+		}
+		if _, err := h.openAssignment(pr.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("open assignment of the PR: %v, want none", err)
+		}
+		if _, err := h.st.SlotByPR(h.ctx, pr.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("SlotByPR = %v, want the PR without a slot", err)
+		}
+		h.provisioned(2)
+		if err := h.st.TransitionPR(h.ctx, pr.ID, nil, store.PRQueued, nil); err != nil {
+			t.Fatal(err)
+		}
+		pr, _ = h.st.PRByID(h.ctx, pr.ID)
+		if other, err := h.m.Claim(h.ctx, pr, h.pool); err != nil || other.Name != h.pool.Slot(2) {
+			t.Fatalf("Claim after the break = %s, %v; want %s", other.Name, err, h.pool.Slot(2))
+		}
+		if err := h.m.Repair(h.ctx, h.slot(sl.Name), h.pool); err != nil {
+			t.Fatalf("Repair: %v", err)
+		}
+		if got := h.slot(sl.Name); got.State != store.SlotFree || got.PRID != nil {
+			t.Fatalf("after the repair: %s pr %v", got.State, got.PRID)
+		}
+	})
+	t.Run("pinned", func(t *testing.T) {
+		h := newHarness(t)
+		h.eager()
+		sl, pr := h.claimedCheckout(7, h.shaPR7)
+		h.failScript[h.pool.ResetDB[0]] = 2
+		ctx := steps.WithFailpoint(h.ctx, func(subject, name string, at steps.Point) error {
+			if name == "schema_check" && at == steps.BeforeRun {
+				if err := h.m.Pin(h.ctx, sl); err != nil {
+					t.Errorf("Pin: %v", err)
+				}
+			}
+			return nil
+		})
+		if err := h.m.Release(ctx, sl, h.pool, "evicted"); !errors.Is(err, ErrBroken) {
+			t.Fatalf("err = %v, want ErrBroken", err)
+		}
+		got := h.slot(sl.Name)
+		if got.State != store.SlotBroken || !got.Pinned || store.Deref(got.PRID) != pr.ID {
+			t.Fatalf("slot = %s pinned %v pr %v; want broken with its PR", got.State, got.Pinned, got.PRID)
+		}
+		if a, err := h.openAssignment(pr.ID); err != nil || a.SlotID != sl.ID {
+			t.Fatalf("open assignment = %+v, %v; want the pinned slot's", a, err)
+		}
+	})
 }
 
 func TestReleaseSchemaResetRetriesOnce(t *testing.T) {
