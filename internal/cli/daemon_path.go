@@ -93,25 +93,29 @@ func lastPATHLine(out string) (string, bool) {
 	return "", false
 }
 
-// looksLikePATH: colon-separated absolute directories (an empty entry is
-// skipped), at least one.
+// looksLikePATH: colon-separated directories, at least one absolute. An
+// entry may start with `~` (a shell's PATH can carry an unexpanded one,
+// such as `~/.dotnet/tools`) or be relative (`.`, `bin`): neither makes the
+// line something else than a PATH, and mergePATH expands the first and
+// skips the second. A line with a space, or with no absolute entry, is a
+// banner, not a PATH.
 func looksLikePATH(line string) bool {
 	found := false
 	for entry := range strings.SplitSeq(line, ":") {
-		if entry == "" {
-			continue
-		}
-		if !filepath.IsAbs(entry) {
+		if strings.ContainsAny(entry, " \t") {
 			return false
 		}
-		found = true
+		if filepath.IsAbs(entry) {
+			found = true
+		}
 	}
 	return found
 }
 
 // mergePATH appends to own the entries of shell it lacks (compared cleaned,
-// so a trailing slash or a repeat counts once), in shell's order; own keeps
-// its order and stays first. added are the appended entries.
+// so a trailing slash or a repeat counts once), in shell's order, a `~`
+// expanded to HOME and a relative entry left out; own keeps its order and
+// stays first. added are the appended entries.
 func mergePATH(own, shell string) (merged string, added []string) {
 	var out []string
 	if own != "" {
@@ -123,8 +127,12 @@ func mergePATH(own, shell string) (merged string, added []string) {
 			have[filepath.Clean(e)] = true
 		}
 	}
+	home := daemonSys.Getenv("HOME")
 	for e := range strings.SplitSeq(shell, ":") {
-		if e == "" || have[filepath.Clean(e)] {
+		if home != "" && (e == "~" || strings.HasPrefix(e, "~/")) {
+			e = home + e[1:] // the shell left it unexpanded; the daemon's PATH holds directories
+		}
+		if e == "" || !filepath.IsAbs(e) || have[filepath.Clean(e)] { // a relative entry (`.`) is never appended
 			continue
 		}
 		have[filepath.Clean(e)] = true

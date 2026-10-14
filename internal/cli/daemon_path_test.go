@@ -105,6 +105,21 @@ func TestTheShellsBannerIsSkipped(t *testing.T) {
 	}
 }
 
+// The operator's zsh printed a PATH with an unexpanded `~/.dotnet/tools` in
+// it, and the first capture called the whole line "no PATH": a tilde entry
+// is expanded to HOME, a relative one skipped, and the line still counts.
+func TestTheShellsPATHMayHoldATildeOrARelativeEntry(t *testing.T) {
+	st := newShellPATHTest(t, "echo '/usr/bin:~/.dotnet/tools:.:/Users/Shared/DBngin/redis/7.4.9_arm/bin'")
+	st.env["HOME"] = "/Users/alice"
+	got := daemonShellPATH(context.Background(), st.cfg)
+	if want := launchdTestPATH + ":/Users/alice/.dotnet/tools:/Users/Shared/DBngin/redis/7.4.9_arm/bin"; st.env["PATH"] != want {
+		t.Fatalf("PATH = %s\nwant   %s", st.env["PATH"], want)
+	}
+	if got == nil || got.Count != 2 || got.Failed != "" {
+		t.Fatalf("result = %+v", got)
+	}
+}
+
 // A shell that fails or prints no PATH leaves the launchd PATH too, and says
 // why without quoting anything it printed.
 func TestAShellThatFailsLeavesTheLaunchdPATH(t *testing.T) {
