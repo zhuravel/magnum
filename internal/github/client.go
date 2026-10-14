@@ -484,10 +484,16 @@ func httpStatus(stderr []byte) int {
 
 // overloaded reports whether err is GitHub failing to answer a query in
 // time: an HTTP 5xx (a query past GitHub's time limit answers 502 or 504),
-// a GraphQL error naming a timeout, or the HTTP/2 stream GitHub cancelled.
-// A smaller query may succeed where this one did not; a network failure, a
-// refused or a malformed query would fail the same way again.
+// a GraphQL error naming a timeout, the HTTP/2 stream GitHub cancelled or
+// refused (REFUSED_STREAM), or the empty body GitHub answers a query past
+// its 10 s limit with, which gh (or the decode) reports as "unexpected end
+// of JSON input" 11 to 13 s later. A smaller query may succeed where this
+// one did not; a network failure, a refused or a malformed query would
+// fail the same way again.
 func overloaded(err error) bool {
+	if err == nil {
+		return false
+	}
 	if apiErr, ok := errors.AsType[*APIError](err); ok {
 		if apiErr.Status >= 500 {
 			return true
@@ -500,8 +506,12 @@ func overloaded(err error) bool {
 		}
 		return false
 	}
-	var exitErr *execx.ExitError
-	return errors.As(err, &exitErr) && strings.Contains(exitErr.Stderr, "CANCEL; received from peer")
+	msg := err.Error()
+	if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
+		msg += "\n" + exitErr.Stderr // the whole of it: the error's text may cut it
+	}
+	return strings.Contains(msg, "CANCEL; received from peer") || strings.Contains(msg, "REFUSED_STREAM") ||
+		strings.Contains(msg, "unexpected end of JSON input")
 }
 
 // minPage is the fewest items a page shrinks to when GitHub could not

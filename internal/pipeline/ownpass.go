@@ -124,17 +124,20 @@ func (e *judgeGoneError) Unwrap() error { return e.err }
 
 // judgeGone reports whether a prompt that never reached the judge was
 // refused because its session or agent is gone: no live session
-// (agents.ErrNoSession), or herdr no longer knows its agent or pane.
+// (agents.ErrNoSession), herdr no longer knows its agent or pane, or herdr
+// never registered the agent its start launched (agent_not_ready, which
+// Submit returns only after it waited for the agent to show up).
 func judgeGone(t turn) bool {
 	return t.unsent && (errors.Is(t.err, agents.ErrNoSession) || herdr.IsCode(t.err, herdr.CodeAgentNotFound) ||
-		herdr.IsCode(t.err, herdr.CodePaneNotFound))
+		herdr.IsCode(t.err, herdr.CodePaneNotFound) || herdr.IsCode(t.err, herdr.CodeAgentNotReady))
 }
 
 // ownPassTurn prompts the own pass and waits for its turn to end; its run
 // ends final, except when ctx was cancelled (a push: the restart settles
 // it; the round's end: it stays in flight, observed, as a reviewer's). A
 // prompt refused because the judge's session is gone (judgeGone; a start
-// adopted an agent that was quitting, say) starts the judge once more
+// adopted an agent that was quitting, say, or launched one herdr never
+// registered) starts the judge once more
 // (RoundInput.RestartJudge) and sends the pass again in a new own_pass run;
 // a second refusal, or a start that fails, returns gone: the round ends.
 func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) (RoleReport, *judgeGoneError) {
@@ -178,7 +181,7 @@ func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) 
 			rd.ownPassEnded(ctx, rep)
 			return rep, &judgeGoneError{err: err}
 		}
-		nrun, err := rd.restartJudge(ctx, t.err)
+		nrun, err := rd.restartJudge(ctx, t.err, "its own pass's prompt", store.RunOwnPass)
 		if err != nil {
 			return gone(errors.Join(t.err, err))
 		}
@@ -200,26 +203,29 @@ func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) 
 }
 
 // restartJudge starts the judge once more after its session was found gone
-// (cause) at the own pass's prompt (RoundInput.RestartJudge, the engine's
-// start path) and returns the own_pass run the pass is sent again in, the
-// own pass's latest run from now on (ownRun).
-func (rd *round) restartJudge(ctx context.Context, cause error) (store.Run, error) {
+// (cause, judgeGone) at prompt (what names it) through
+// RoundInput.RestartJudge, the engine's start path, and returns the run of
+// kind the prompt is sent again in: an own_pass run, the own pass's latest
+// run from now on (ownRun), or the round's judge run (judgeAgain).
+func (rd *round) restartJudge(ctx context.Context, cause error, what, kind string) (store.Run, error) {
 	rd.event(ctx, "warn", "round.judge_restarted",
-		fmt.Sprintf("%s's session was gone at its own pass's prompt (%s): starting it again", rd.judge.Name, execx.Redact(cause.Error())),
-		map[string]any{"role": rd.judge.Name})
+		fmt.Sprintf("%s's session was gone at %s (%s): starting it again", rd.judge.Name, what, execx.Redact(cause.Error())),
+		map[string]any{"role": rd.judge.Name, "kind": kind})
 	if err := rd.in.RestartJudge(ctx); err != nil {
 		return store.Run{}, fmt.Errorf("pipeline: start %s again: %w", rd.judge.Name, err)
 	}
-	nrun, err := rd.newRun(ctx, rd.judge, store.RunOwnPass)
+	nrun, err := rd.newRun(ctx, rd.judge, kind)
 	if err != nil {
 		return store.Run{}, err
 	}
-	rd.mu.Lock()
-	if rd.cont == nil {
-		rd.cont = map[string]store.Run{}
+	if kind == store.RunOwnPass {
+		rd.mu.Lock()
+		if rd.cont == nil {
+			rd.cont = map[string]store.Run{}
+		}
+		rd.cont[rd.judge.Name] = *nrun
+		rd.mu.Unlock()
 	}
-	rd.cont[rd.judge.Name] = *nrun
-	rd.mu.Unlock()
 	return *nrun, nil
 }
 

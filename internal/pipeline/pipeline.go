@@ -329,8 +329,10 @@ type RoundInput struct {
 	// the whole PR at the full effort.
 	ColdJudge bool
 	// RestartJudge starts the round's judge once more in its pane, the way
-	// the round started it, when its session is gone at the own pass's
-	// prompt (ownPassTurn); nil = the own pass fails as any other.
+	// the round started it, when its session is gone, or herdr never
+	// registered its agent, at the own pass's prompt (ownPassTurn) or at
+	// its prompt for the review, the candidates prompt after an own pass
+	// (judgeAgain), once for each; nil = such a prompt fails as any other.
 	RestartJudge func(ctx context.Context) error
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted

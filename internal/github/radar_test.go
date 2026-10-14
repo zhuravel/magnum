@@ -378,6 +378,47 @@ func TestRadarRetriesAServerErrorAtHalfThePageSize(t *testing.T) {
 	}
 }
 
+// TestAnEmptyGraphQLAnswerCountsAsOverloaded: a query past GitHub's 10 s
+// limit is often answered with an empty body, which gh reports as
+// "unexpected end of JSON input" 11 to 13 s later, or with the HTTP/2
+// stream refused (REFUSED_STREAM); either is asked again once at half the
+// page, as a 502 is.
+func TestAnEmptyGraphQLAnswerCountsAsOverloaded(t *testing.T) {
+	exit := func(stderr string) error {
+		return fmt.Errorf("github radar: %w", &execx.ExitError{Cmd: execx.Cmd{Name: "gh"}, Code: 1, Stderr: stderr})
+	}
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{exit("unexpected end of JSON input"), true},
+		{exit(`Post "https://api.github.com/graphql": stream error: stream ID 3; REFUSED_STREAM`), true},
+		{fmt.Errorf("github radar: decode response: %w", errors.New("unexpected end of JSON input")), true},
+		{exit("invalid character '<' looking for beginning of value"), false},
+	} {
+		if got := overloaded(tc.err); got != tc.want {
+			t.Errorf("overloaded(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+	for _, stderr := range []string{"unexpected end of JSON input\n", "Post \"https://api.github.com/graphql\": stream error: stream ID 1; REFUSED_STREAM\n"} {
+		var asked []string
+		f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+			asked = append(asked, fmt.Sprint(req.Variables["first"], "@", req.Variables["after"]))
+			if req.Variables["first"] == float64(100) {
+				return failResult(c, nil, []byte(stderr))
+			}
+			return okResult(syntheticRadarPage(t, 0, 50, ""))
+		})}}
+		repos, _, err := (&Client{Run: f}).Radar(context.Background(), "talkable")
+		if err != nil || len(repos) != 50 {
+			t.Fatalf("%q: radar = %d repositories, %v; want the page asked again at half size", stderr, len(repos), err)
+		}
+		if want := []string{"100@<nil>", "50@<nil>"}; !slices.Equal(asked, want) {
+			t.Errorf("%q: pages asked = %v, want %v", stderr, asked, want)
+		}
+	}
+}
+
 // TestRadarGivesUpAfterOneRetry: when the smaller page fails too, the radar
 // fails for this poll with the retry's error.
 func TestRadarGivesUpAfterOneRetry(t *testing.T) {

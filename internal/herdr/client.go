@@ -73,6 +73,7 @@ const (
 	CodeInvalidKey         = "invalid_key"
 	CodeInvalidRequest     = "invalid_request"
 	CodeAgentNotFound      = "agent_not_found"
+	CodeAgentNotReady      = "agent_not_ready" // agent.start: blocked in its startup; agent.prompt: no active named agent (not registered)
 	CodePaneNotFound       = "pane_not_found"
 	CodeTabNotFound        = "tab_not_found"
 	CodeWorkspaceNotFound  = "workspace_not_found"

@@ -578,8 +578,9 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 }
 
 // restartJudge is a round's RoundInput.RestartJudge: the judge's session
-// was gone at its own pass's prompt (its start adopted an agent that was
-// quitting, say), so its session row, when still live, is marked lost and
+// was gone at its own pass's or its candidates prompt (its start adopted an
+// agent that was quitting, say, or herdr never registered the agent it
+// launched), so its session row, when still live, is marked lost and
 // the judge starts again in its pane the way startRoles started it: fresh
 // unless the round re-reviews in the judge's conversation, at the same
 // effort (judgeEffort). nil when the round has no agent judge.

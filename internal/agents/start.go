@@ -26,7 +26,12 @@ import (
 //     name is taken. A fresh start (resume "") never adopts one whose
 //     conversation magnum parked for the role (parkedConversation: herdr
 //     still lists an agent Quit just stopped): ErrBusy, as when the
-//     sessions cannot be read to tell.
+//     sessions cannot be read to tell. No start adopts the agent of a
+//     session magnum ended (adoptable, endedAgent): one it closed within
+//     endedAgentMemory, or, while a session of the name it closed or
+//     marked lost exists, one that never came up (status unknown, no
+//     conversation: a launch herdr never registered). Such an agent in
+//     paneID is launched anew there; one in another pane is ErrBusy.
 //   - With resume set (ignored for a kind with session_source "none"), a
 //     pane whose agent_session.value equals resume (herdr restored it) is
 //     adopted instead of starting a second copy, and the agent is renamed to
@@ -110,10 +115,34 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	if checkout == "" {
 		checkout = paneIndex(snap)[paneID].Cwd
 	}
-	if a, ok := snap.AgentByName(name); ok {
-		if err := adoptable(snap, a, kindName, checkout); err != nil {
+	a, named := snap.AgentByName(name)
+	restored := false
+	if resume != "" {
+		_, restored = snap.PaneBySession(resume)
+	}
+	var ended []store.Session
+	if named || restored {
+		if ended, err = m.endedSessions(ctx, pr.ID, role.Name, sess.ID); err != nil { // fail closed: it may be one magnum ended
+			return fmt.Errorf("agents: start %s: cannot tell whether herdr lists the agent of a session magnum ended: %w: %w", name, ErrBusy, err)
+		}
+	}
+	now := m.now()
+	if named {
+		err := adoptable(snap, a, kindName, checkout, ended, now)
+		ea, isEnded := errors.AsType[*endedAgentError](err)
+		switch {
+		case isEnded && a.PaneID != "" && a.PaneID == paneID:
+			// Herdr still lists, in the very pane this start launches
+			// in, an agent of a session magnum ended: launch anew.
+			m.logf("start %s: not adopting the agent in pane %s: %v; launching it anew", name, a.PaneID, ea)
+			named = false
+		case isEnded:
+			return fmt.Errorf("agents: start %s: %w: %w", name, ea, ErrBusy)
+		case err != nil:
 			return fmt.Errorf("agents: start %s: the name is taken: %w", name, err)
 		}
+	}
+	if named {
 		if resume == "" {
 			switch parked, err := m.parkedConversation(ctx, pr.ID, role.Name, a); {
 			case err != nil: // fail closed: it may be the parked conversation
@@ -140,7 +169,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 					a = x
 				}
 			}
-			if err := adoptable(snap, a, kindName, checkout); err != nil {
+			if err := adoptable(snap, a, kindName, checkout, ended, now); err != nil {
 				m.logErr(ctx, err, "agents: start %s: not adopting conversation %s restored in pane %s: %v", name, resume, p.ID, err)
 			} else {
 				agentName := name
@@ -222,7 +251,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 		}
 		return fmt.Errorf("agents: start %s in %s: %w", name, paneID, mapHerdr(err))
 	}
-	a := withPane(res.Agent, paneID)
+	a = withPane(res.Agent, paneID)
 	if a.AgentStatus == herdr.StatusBlocked {
 		if b, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, ref, dir, gate); ok {
 			a = withPane(b, paneID)
@@ -249,10 +278,18 @@ func (m *Manager) parkedConversation(ctx context.Context, prID int64, role strin
 	}), nil
 }
 
+// endedAgentMemory is how long after magnum closed a session an agent herdr
+// lists under that session's name counts as that session's (adoptable): a
+// Codex judge that never came up was still listed 90 s after its session
+// was closed, and gone 13 s later.
+const endedAgentMemory = 10 * time.Minute
+
 // adoptable checks that running agent a may serve a role of kind in the PR's
-// checkout: it is of that kind (when herdr names one) and its pane works in
-// checkout (both directories known).
-func adoptable(snap herdr.Snapshot, a herdr.AgentInfo, kind, checkout string) error {
+// checkout: it is of that kind (when herdr names one), its pane works in
+// checkout (both directories known), and it is no agent of a session magnum
+// ended (endedAgent; ended are the role's sessions magnum closed or marked
+// lost, now the time of the start): an *endedAgentError then.
+func adoptable(snap herdr.Snapshot, a herdr.AgentInfo, kind, checkout string, ended []store.Session, now time.Time) error {
 	if a.Agent != "" && a.Agent != kind {
 		return fmt.Errorf("pane %s runs a %s agent, the role runs %s", a.PaneID, a.Agent, kind)
 	}
@@ -265,7 +302,67 @@ func adoptable(snap herdr.Snapshot, a herdr.AgentInfo, kind, checkout string) er
 	case !sameTree(p.Cwd, checkout):
 		return fmt.Errorf("pane %s works in %s, not in the PR's checkout %s", a.PaneID, p.Cwd, checkout)
 	}
+	if s, why, ok := endedAgent(a, ended, now); ok {
+		return &endedAgentError{pane: a.PaneID, session: s.ID, why: why}
+	}
 	return nil
+}
+
+// endedAgentError is adoptable's refusal of an agent herdr still lists for
+// a session magnum ended.
+type endedAgentError struct {
+	pane    string
+	session int64
+	why     string
+}
+
+func (e *endedAgentError) Error() string {
+	return fmt.Sprintf("herdr still lists in pane %s the agent of session %d, %s", e.pane, e.session, e.why)
+}
+
+// endedAgent finds the session of ended (the role's sessions magnum closed
+// or marked lost) whose agent a, listed under its name, still is: one magnum
+// closed within endedAgentMemory, whatever a carries, or, when a carries no
+// conversation id and herdr never saw it come up (status unknown), any of
+// them (a launch that never registered: herdr keeps its name for minutes).
+// An agent of such a name that is up, or that has a conversation, after
+// endedAgentMemory is adoptable as before: a launch the daemon never
+// recorded, a conversation herdr restored.
+func endedAgent(a herdr.AgentInfo, ended []store.Session, now time.Time) (store.Session, string, bool) {
+	if a.Name == "" {
+		return store.Session{}, "", false
+	}
+	conversation := a.AgentSession != nil && a.AgentSession.Value != ""
+	up := a.AgentStatus != "" && a.AgentStatus != herdr.StatusUnknown
+	for _, s := range ended {
+		if store.Deref(s.AgentName) != a.Name {
+			continue
+		}
+		if s.State == store.SessionClosed && s.ClosedAt != nil && now.Sub(*s.ClosedAt) < endedAgentMemory {
+			return s, fmt.Sprintf("which magnum closed %s ago", now.Sub(*s.ClosedAt).Round(time.Second)), true
+		}
+		if !conversation && !up {
+			verb := "closed"
+			if s.State == store.SessionLost {
+				verb = "marked lost"
+			}
+			return s, "which magnum " + verb + "; the agent never came up and has no conversation", true
+		}
+	}
+	return store.Session{}, "", false
+}
+
+// endedSessions are the sessions of the PR's role other than cur that
+// magnum closed or marked lost (adoptable weighs an agent herdr lists
+// against them).
+func (m *Manager) endedSessions(ctx context.Context, prID int64, role string, cur int64) ([]store.Session, error) {
+	sessions, err := m.d.Store.SessionsByPR(ctx, prID)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(sessions, func(s store.Session) bool {
+		return s.ID == cur || s.Role != role || s.State != store.SessionClosed && s.State != store.SessionLost
+	}), nil
 }
 
 func withPane(a herdr.AgentInfo, paneID string) herdr.AgentInfo {

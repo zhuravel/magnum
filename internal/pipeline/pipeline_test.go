@@ -665,6 +665,61 @@ func TestMarkerNeedsExactRunID(t *testing.T) {
 	}
 }
 
+// A round prompted half a minute after the previous one posted (a live
+// case: 33 s) must not take that review for its own: the judge's result
+// named it, the reviewer posted it on the target after the prompt less the
+// clock skew, and its marker was another run's, which verification read as
+// no marker. A review that carries no marker at all is still accepted.
+func TestARoundRejectsAnotherRunsReview(t *testing.T) {
+	const earlier = int64(5503811057)
+	for _, tc := range []struct {
+		name   string
+		marker string // the earlier review's marker ("" = none)
+		named  bool   // the judge's result names the review
+		posted bool
+	}{
+		{"named in the judge's result", "r-20261013T120000-abcdef", true, false},
+		{"found as the last resort", "r-20261013T120000-abcdef", false, false},
+		{"no marker, named in the judge's result", "", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.ag.behaviors[agents.RoleJudge] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+				body := "**Verdict** no new problems\n"
+				if tc.marker != "" {
+					body += "<!-- magnum:run=" + tc.marker + " head=" + target[:7] + " -->"
+				}
+				at := f.st.Clock().Add(-33 * time.Second)
+				e.gh.add(github.Review{DatabaseID: earlier, State: "COMMENTED", Body: body, CommitOid: target,
+					AuthorLogin: "talkable", AuthorType: "Bot", SubmittedAt: at},
+					github.RESTReview{ID: earlier, UserLogin: "talkable[bot]", UserType: "Bot", State: "COMMENTED", Body: body,
+						SubmittedAt: at, CommitID: target})
+				if tc.named {
+					if err := writeJudgeJSON(store.Deref(run.ReportPath), map[string]any{"status": "posted",
+						"run_id": markerRunID(t, text), "review_id": earlier, "event": "COMMENT", "findings": map[string]int{}}); err != nil {
+						return err
+					}
+				}
+				return f.end(run.ID)
+			}, func(f *fakeAgents, run store.Run, text string) error { return f.end(run.ID) }}
+			e.ag.reads[agents.RoleJudge] = "Done.\n"
+			res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+			if err != nil {
+				t.Fatalf("RunRound: %v", err)
+			}
+			if tc.posted {
+				if res.Outcome != OutcomePosted || res.ReviewID != earlier {
+					t.Fatalf("result = %+v, want the marker-less review accepted", res)
+				}
+				return
+			}
+			if res.Outcome == OutcomePosted || res.ReviewID != 0 {
+				t.Fatalf("result = %+v, want another run's review %d not taken for this round's", res, earlier)
+			}
+		})
+	}
+}
+
 func TestCodexLoginRequiredPausesBeforePrompting(t *testing.T) {
 	e := newEnv(t)
 	e.ag.preflight[agents.KindCodex] = fmt.Errorf("codex: %w", agents.ErrLoginRequired)

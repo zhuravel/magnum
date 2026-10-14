@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -433,6 +434,9 @@ func (f *fakeHerdr) AgentStart(ctx context.Context, o herdr.AgentStartOptions) (
 		status = herdr.StatusIdle
 	}
 	a := herdr.AgentInfo{PaneID: o.PaneID, WorkspaceID: ws, TabID: tab, Name: o.Name, Agent: o.Kind, AgentStatus: status}
+	// One agent a pane: the launch replaces what herdr listed there (an
+	// agent that never came up, say).
+	f.agents = slices.DeleteFunc(f.agents, func(x herdr.AgentInfo) bool { return x.PaneID == o.PaneID })
 	f.agents = append(f.agents, a)
 	if f.startErr != nil {
 		return herdr.AgentStarted{}, f.startErr

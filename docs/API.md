@@ -1295,11 +1295,16 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 
       - An agent already carrying the role's name is adopted as is,
         when it is of the role's kind and its pane works in the PR's checkout
-        (the session's cwd, else paneID's); otherwise StartAgent fails, since
-        the name is taken. A fresh start (resume "") never adopts one whose
-        conversation magnum parked for the role (parkedConversation: herdr still
-        lists an agent Quit just stopped): ErrBusy, as when the sessions cannot
-        be read to tell.
+        (the session's cwd, else paneID's); otherwise StartAgent fails,
+        since the name is taken. A fresh start (resume "") never adopts one
+        whose conversation magnum parked for the role (parkedConversation: herdr
+        still lists an agent Quit just stopped): ErrBusy, as when the sessions
+        cannot be read to tell. No start adopts the agent of a session magnum
+        ended (adoptable, endedAgent): one it closed within endedAgentMemory,
+        or, while a session of the name it closed or marked lost exists,
+        one that never came up (status unknown, no conversation: a launch herdr
+        never registered). Such an agent in paneID is launched anew there;
+        one in another pane is ErrBusy.
       - With resume set (ignored for a kind with session_source "none"),
         a pane whose agent_session.value equals resume (herdr restored it) is
         adopted instead of starting a second copy, and the agent is renamed to
@@ -9041,6 +9046,7 @@ const (
 	CodeInvalidKey         = "invalid_key"
 	CodeInvalidRequest     = "invalid_request"
 	CodeAgentNotFound      = "agent_not_found"
+	CodeAgentNotReady      = "agent_not_ready" // agent.start: blocked in its startup; agent.prompt: no active named agent (not registered)
 	CodePaneNotFound       = "pane_not_found"
 	CodeTabNotFound        = "tab_not_found"
 	CodeWorkspaceNotFound  = "workspace_not_found"
@@ -12680,8 +12686,10 @@ type RoundInput struct {
 	// the whole PR at the full effort.
 	ColdJudge bool
 	// RestartJudge starts the round's judge once more in its pane, the way
-	// the round started it, when its session is gone at the own pass's
-	// prompt (ownPassTurn); nil = the own pass fails as any other.
+	// the round started it, when its session is gone, or herdr never
+	// registered its agent, at the own pass's prompt (ownPassTurn) or at
+	// its prompt for the review, the candidates prompt after an own pass
+	// (judgeAgain), once for each; nil = such a prompt fails as any other.
 	RestartJudge func(ctx context.Context) error
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted

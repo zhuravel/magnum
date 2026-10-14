@@ -108,6 +108,23 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	}
 	ids := map[string]bool{marker: true, run.ID: true}
 	t := rd.submitAndWait(ctx, run, text, rd.timeout(rd.judge), jd.ResultFile, ids)
+	if judgeGone(t) && rd.in.RestartJudge != nil && ctx.Err() == nil {
+		// The judge's session was gone, or herdr never registered the
+		// agent its start launched: start it once more and send the
+		// prompt again, the reports as they are, rather than throw away
+		// the reviewers' work.
+		if nrun, ntext, err := rd.judgeAgain(ctx, run, t, &jd); err != nil {
+			t.err = errors.Join(t.err, err)
+		} else {
+			run, text, marker = nrun, ntext, jd.RunID
+			markers = []string{marker}
+			if marker != run.ID {
+				markers = append(markers, run.ID)
+			}
+			ids = map[string]bool{marker: true, run.ID: true}
+			t = rd.submitAndWait(ctx, run, text, rd.timeout(rd.judge), jd.ResultFile, ids)
+		}
+	}
 
 	runIDs := []string{run.ID}
 	since := rd.start
@@ -157,6 +174,41 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 		t = rd.submitAndWait(ctx, *nrun, ntext, rd.timeout(rd.judge), jd.ResultFile, ids)
 		anchor = marker
 	}
+}
+
+// judgeAgain is the candidates prompt's one restart of a judge it found gone
+// (judgeGone, turn t of run, prompted from jd): the judge starts again
+// (restartJudge) in a new judge run, and the run that never reached it is
+// replaced, abandoned unsent as a push's restart replaces it, so the
+// engine's crash recovery (latestJudge) and the search for an unverified
+// review (findUnverified) both take the new run's id for the review's
+// marker, which jd carries from now on (a nudge quotes it too); the prompt
+// is rendered once more for the new run, its reports and files as they are.
+func (rd *round) judgeAgain(ctx context.Context, run store.Run, t turn, jd *agents.JudgeData) (store.Run, string, error) {
+	what := "its prompt"
+	if jd.Phase == agents.PhaseCandidates {
+		what = "its candidates prompt"
+	}
+	nrun, err := rd.restartJudge(ctx, t.err, what, run.Kind)
+	if err != nil {
+		return store.Run{}, "", err
+	}
+	err = rd.r.Store.TransitionRun(context.WithoutCancel(ctx), run.ID, []string{store.RunPending, store.RunFailed}, store.RunAbandoned,
+		func(u *store.RunUpdate) { u.Set("outcome", refusedStatus(t.err)) })
+	if err != nil && !errors.Is(err, store.ErrConflict) { // a refused prompt's run is abandoned already
+		rd.logErr(ctx, err, "pipeline: replace judge run %s: %v", run.ID, err)
+	}
+	marker := rd.marker(nrun)
+	rd.mu.Lock()
+	rd.res.JudgeRunID = marker
+	rd.mu.Unlock()
+	jd.RunID = marker
+	text, err := rd.r.Agents.RolePrompt(rd.judge, judgePrompt(rd.in.Kind), *jd)
+	if err != nil {
+		rd.finishRun(ctx, nrun.ID, store.RunFailed, OutcomeError, err.Error())
+		return store.Run{}, "", fmt.Errorf("pipeline: judge prompt: %w", err)
+	}
+	return nrun, text, nil
 }
 
 // marker is the run id the round's review carries: the paused run's for a
@@ -417,9 +469,9 @@ func (rd *round) findReview(ctx context.Context, markers []string, res judgeResu
 	for i := range all {
 		rv := all[i]
 		// A reply in a thread is a review of its own, with no body: never
-		// the round's review.
+		// the round's review; nor is one that carries another run's marker.
 		if rd.isReviewer(rv.AuthorLogin, rv.AuthorType) && rv.CommitOid == target && submitted(rv.State, rv.SubmittedAt) &&
-			!rv.SubmittedAt.Before(since) && strings.TrimSpace(rv.Body) != "" {
+			!rv.SubmittedAt.Before(since) && strings.TrimSpace(rv.Body) != "" && otherRunMarker(rv.Body, markers) == "" {
 			pick = &rv
 		}
 	}
@@ -432,7 +484,8 @@ func (rd *round) findReview(ctx context.Context, markers []string, res judgeResu
 
 // findClaimed is findReview without its last resort: the review carrying one
 // of markers, else the one the result file names (res.ReviewID) when the
-// reviewer posted it on the target after since; nil when neither is there.
+// reviewer posted it on the target after since and it carries no other
+// run's marker (otherRunMarker); nil when neither is there.
 func (rd *round) findClaimed(ctx context.Context, markers []string, res judgeResult, since time.Time) (*postedReview, error) {
 	target := rd.in.TargetSHA
 	for _, id := range markers {
@@ -500,11 +553,36 @@ func (rd *round) findClaimed(ctx context.Context, markers []string, res judgeRes
 			rd.logErr(ctx, err, "pipeline: review %d from the result file: %v", res.ReviewID, err)
 		case rd.isReviewer(rest.UserLogin, rest.UserType) && rest.CommitID == target &&
 			submitted(rest.State, rest.SubmittedAt) && !rest.SubmittedAt.Before(since):
+			if other := otherRunMarker(rest.Body, markers); other != "" {
+				// An earlier round's review, posted moments before this
+				// round's prompt (within clockSkew), is not this round's.
+				rd.warn(ctx, "review %d named in the judge's result carries the marker of run %s; not taken for this round's review", rest.ID, other)
+				break
+			}
 			rd.warn(ctx, "review %d has no magnum:run marker; accepted from the judge's result", rest.ID)
 			return &postedReview{id: rest.ID, url: rest.HTMLURL, commit: rest.CommitID, state: rest.State, body: rest.Body}, nil
 		}
 	}
 	return nil, nil
+}
+
+// runMarkerRe finds the run id of a magnum:run marker in a review's body.
+var runMarkerRe = regexp.MustCompile(`magnum:run=([A-Za-z0-9._-]+)`)
+
+// otherRunMarker is the run id of the first magnum:run marker body carries
+// when none of its markers is one of markers (the round's): the review is
+// another run's. "" when body carries no marker, or one of markers.
+func otherRunMarker(body string, markers []string) string {
+	other := ""
+	for _, m := range runMarkerRe.FindAllStringSubmatch(body, -1) {
+		if slices.Contains(markers, m[1]) {
+			return ""
+		}
+		if other == "" {
+			other = m[1]
+		}
+	}
+	return other
 }
 
 // restCheck confirms the posting login over REST, where an App keeps its

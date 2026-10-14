@@ -31,8 +31,9 @@ const (
 const EventTrustDialogAnswered = "agents.trust_dialog_answered"
 
 // herdr's agent.start error for an agent blocked during startup (the name
-// stays usable for agent.read / agent.send_keys).
-const codeAgentNotReady = "agent_not_ready"
+// stays usable for agent.read / agent.send_keys), and agent.prompt's for a
+// name herdr has not registered as an active agent.
+const codeAgentNotReady = herdr.CodeAgentNotReady
 
 // herdr's agent.start error when the pane is not an available shell yet; the
 // idle-shell check can pass a moment before herdr agrees, so StartAgent

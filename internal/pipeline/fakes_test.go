@@ -89,6 +89,10 @@ type fakeAgents struct {
 	// blocked: the next n Submits of a role are rejected before sending
 	// (herdr agent_blocked): run failed, agents.ErrBlocked.
 	blocked map[agents.Role]int
+	// notReady: the next n Submits of a role are rejected before sending
+	// because herdr never registered its agent (agent_not_ready after
+	// Submit's wait): run failed.
+	notReady map[agents.Role]int
 	// hangs: a role's Submit, once its run is working, returns only when
 	// ctx ends (or after 10 s, an error), and its behaviors never run: a
 	// turn still in flight when the round cancels it, whose waits cannot
@@ -225,6 +229,18 @@ func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) err
 			return err
 		}
 		return fmt.Errorf("agents: prompt %s: %w", run.Role, agents.ErrBlocked)
+	}
+	if f.notReady[role] > 0 {
+		f.notReady[role]--
+		f.mu.Unlock()
+		herr := &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotReady, Message: "agent " + run.Role + " is not an active named agent"}
+		if err := f.st.TransitionRun(ctx, run.ID, []string{store.RunPending}, store.RunFailed, func(u *store.RunUpdate) {
+			u.Set("error", herr.Error())
+			u.Set("ended_at", f.st.Clock())
+		}); err != nil {
+			return err
+		}
+		return fmt.Errorf("agents: prompt %s: %w", run.Role, herr)
 	}
 	var b behavior
 	if q := f.behaviors[role]; len(q) > 0 {
@@ -997,7 +1013,7 @@ func newEnv(t *testing.T) *env {
 		gh: newFakeGitHub(), git: &fakeGit{head: target}, exec: &execx.Fake{}, keys: &fakeKeys{clock: clk}, log: &logSink{},
 		sess: map[agents.Role]store.Session{}}
 	e.ag = &fakeAgents{t: t, st: st, behaviors: map[agents.Role][]behavior{}, reads: map[agents.Role]string{},
-		preflight: map[string]error{}, refuse: map[agents.Role]error{}, blocked: map[agents.Role]int{},
+		preflight: map[string]error{}, refuse: map[agents.Role]error{}, blocked: map[agents.Role]int{}, notReady: map[agents.Role]int{},
 		exitStatus: map[agents.Role]int{},
 		m:          agents.New(agents.Deps{Store: st, Config: cfg, Layout: layout, Clock: clk.Now})}
 

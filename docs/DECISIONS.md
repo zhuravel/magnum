@@ -7154,6 +7154,51 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestADuplicateIsTheOnlyRejectionReasonThatCountsAsCaught`,
   `TestADuplicateRejectionCountsOnlyWhenTheReviewIsKnown` and
   `TestTheNearestRejectedFindingDecidesWhetherADuplicateCatchesTheComment`. No new dependencies.
+- **A judge that never comes up is started once more, and no start adopts the agent of a session magnum
+  ended** (2026-10-14, amends "A cold judge is not lost to the agent it quit"). Three rounds ended in error
+  from 2026-10-12 to 10-14 because a fresh Codex judge never came up. In talkable#11359 round 2 herdr's
+  agent.start answered ok in 11 ms, but herdr never registered the agent (its log has no "agent changed"
+  line for the pane until the next round's start, which registered in 0.4 s); the own pass's prompt failed
+  with `agent_not_ready` after Submit's 60 s wait for the agent, which `judgeGone` did not count (only no
+  session, `agent_not_found` and `pane_not_found`), and the candidates prompt 13 minutes later failed with
+  `agent_not_found` and had no restart of its own, so 20 minutes of reviewer work were lost and the head got
+  no review. In another PR's round 6 the start adopted round 5's judge, which had never come up (status
+  unknown, no conversation) and whose session magnum had closed 90 s before: the prompt found it gone 13 s
+  later. Now `judgeGone` also counts `agent_not_ready` (`herdr.CodeAgentNotReady`, which Submit returns only
+  after that wait), and the candidates prompt gets the own pass's single restart (`judgeAgain`): the judge
+  run that never reached the judge is abandoned unsent, as a push's restart replaces it, so the engine's
+  crash recovery and the unverified-review search both take the new run for the review's marker; the judge
+  starts again through `RoundInput.RestartJudge` (`round.judge_restarted`); and the prompt is rendered
+  again for the new run with the reports and files as they were. A second refusal, or a start that fails,
+  ends the round as before. `adoptable` refuses an agent herdr lists under the role's name when a session of
+  that name was closed by magnum within the last 10 minutes (`endedAgentMemory`: how long magnum remembers
+  a closed session), and, when the agent never came up (status unknown) and carries no conversation id,
+  while any session of that name exists that magnum closed or marked lost (the engine's restart marks the
+  gone judge lost). Such an agent in the start's own pane is launched anew there (the idle-shell wait and
+  agent.start, as in a fresh pane); one in another pane makes the start busy (`ErrBusy`: the setup is
+  retried in a minute, uncharged); the sessions not read make it busy too. Beyond the spec: the second rule
+  needs the agent not up, and counts lost sessions with closed ones. An agent the daemon launched but never
+  recorded (a crash between agent.start and markStarted) is up, and refusing it would make every later
+  start wait for an idle shell that agent occupies; without lost sessions the round's own restart would
+  adopt the agent it restarts for. Not known: whether herdr's agent.start takes the name while it still
+  lists the never-registered agent in that pane; if it refuses, the start fails as the adopted agent's
+  prompt did.
+- **A round never takes another run's review for its own** (2026-10-14). talkable#12009's round 10 was
+  prompted 33 s after round 9 posted its review, and its judge's result file named that review. The REST
+  fallback of verification (the review the result names, by the reviewer, on the target, submitted after
+  the prompt less `clockSkew`'s 2 minutes) accepted it, reading its marker, round 9's run's, as no marker,
+  and the round counted as posted with a review it did not write. Now the fallback refuses a review whose
+  body carries a `magnum:run` marker of none of the round's markers (`otherRunMarker`), with a warning that
+  names the run, and so does verification's marker-less last resort; a review with no marker at all is
+  accepted as before. Such a round then ends as one whose result names a review GitHub does not show for
+  its marker (needs attention), or is nudged when the result names none.
+- **An empty GraphQL answer is asked again at half the page** (2026-10-14, amends "The radar reads no CI; a
+  read by node id does, and a page GitHub cannot answer in time is asked again smaller"). 75 of the 89
+  failed `gh api graphql` calls from 2026-10-12 to 10-14 took 11 to 13 s, past GitHub's 10 s limit, and
+  answered "unexpected end of JSON input" (an empty body) or REFUSED_STREAM; `overloaded` counted a 5xx, a
+  GraphQL error naming a timeout and the stream the peer cancelled, so talkable's radar failed 5 polls
+  without the half-size retry a 502 gets. Now `overloaded` also counts an error whose text, or the gh
+  exit's whole stderr, holds "unexpected end of JSON input" or "REFUSED_STREAM".
 
 ## Learned rules
 
