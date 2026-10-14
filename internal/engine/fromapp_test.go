@@ -3,10 +3,12 @@ package engine
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
@@ -17,7 +19,10 @@ import (
 
 // TestFromAppDryRunOnce wires the real components (hermetically: scripted
 // subprocesses, no herdr socket, a closed MySQL port) and runs one dry-run
-// tick end to end.
+// tick end to end. The Codex budget the tick reads comes from a rollout the
+// test writes into a Codex home of its own (the machine's $CODEX_HOME and
+// ~/.codex are never read), so the budget gate it exercises is the same on
+// every machine.
 func TestFromAppDryRunOnce(t *testing.T) {
 	home := t.TempDir()
 	cfgText := strings.ReplaceAll(testConfigTOML, "HOME", home)
@@ -28,6 +33,16 @@ func TestFromAppDryRunOnce(t *testing.T) {
 	layout := paths.Layout{Home: home}
 	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Usage.CodexHome = filepath.Join(home, "codex")
+	rollouts := filepath.Join(cfg.Usage.CodexHome, "sessions", "2026", "10", "04")
+	if err := os.MkdirAll(rollouts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	report := fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":37,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro"}}}`+"\n",
+		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), time.Now().Add(72*time.Hour).Unix())
+	if err := os.WriteFile(filepath.Join(rollouts, "rollout-a.jsonl"), []byte(report), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// A real registry the dry run must leave alone.
@@ -82,5 +97,12 @@ func TestFromAppDryRunOnce(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "would provision") {
 		t.Fatalf("expected a planned provision (pool below min):\n%s", logs.String())
+	}
+	// The budget gate read the test's Codex home, not the machine's.
+	e.usageMu.Lock()
+	snap := e.usageSnap
+	e.usageMu.Unlock()
+	if snap == nil || snap.Window.UsedPercent != 37 || !strings.HasPrefix(snap.Path, cfg.Usage.CodexHome) {
+		t.Fatalf("the tick did not read the Codex budget from the test's Codex home %s: %+v", cfg.Usage.CodexHome, snap)
 	}
 }

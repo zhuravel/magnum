@@ -64,8 +64,8 @@ and fix what it reports in the lines you touched (CI fails a PR on new issues on
 blanket `golangci-lint run --fix` (errorlint's fix breaks `internal/pipeline/restart.go`).
 
 Run `go test -count=1 -race` on the packages you touched before `make test`; go test's 10-minute
-default is enough (the whole suite took about 3 minutes under `-race` at a load of 50-70, the engine
-the longest). A change is done when the gate is green, the API doc is regenerated if exports changed,
+default is enough (the whole suite takes about 3 minutes under `-race` at a load of 15-25, the engine
+the longest, and about 40 seconds without it: a test binary skips the file syncs of `fsx.WriteFileAtomic`). A change is done when the gate is green, the API doc is regenerated if exports changed,
 and the README or config comments describe any new key, command or key binding.
 
 Tests open their registry with `storetest.Open` (`internal/store/storetest`: a copy of a database

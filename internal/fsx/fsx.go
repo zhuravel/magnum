@@ -1,7 +1,7 @@
 // Package fsx holds the file helpers several packages share: an atomic file
-// write, plain or confined to an os.Root, a size-limited read of a regular
-// file, an existence check and a canonical path. It imports only the
-// standard library.
+// write, plain or confined to an os.Root, a replacement without disk syncs,
+// a size-limited read of a regular file, an existence check and a canonical
+// path. It imports only the standard library.
 package fsx
 
 import (
@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"testing"
 )
 
 // WriteFileAtomic replaces path with data, mode exactly perm whatever the
@@ -22,7 +23,9 @@ import (
 // synced and renamed over path, then the directory is synced, so a reader (or
 // a crash) sees the old content or the new, never part of a file. A symlink
 // at path is replaced, not followed. The directory must exist; the
-// temporary file is removed on failure.
+// temporary file is removed on failure. A test binary (testing.Testing)
+// skips both syncs: no test can observe them, and each is a full disk flush
+// on macOS (about 9 ms) that the suite's thousands of writes queued on.
 func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
 	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
@@ -36,7 +39,33 @@ func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
 // absolute or escapes root (.., or a symlink in a parent pointing outside) is
 // an error and nothing is written outside root. name's directory is resolved
 // once, so the temporary file and the rename land in the same one.
-func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode) (err error) {
+func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode) error {
+	return writeFile(root, name, data, perm, !testing.Testing())
+}
+
+// ReplaceFile is WriteFileAtomic without the file sync and the directory
+// sync: the temporary file is written and renamed over path at once, so a
+// reader still sees the old content or the new, never part of a file, but a
+// crash or a power loss can leave an empty or a missing file. A caller picks
+// it for a file that is rewritten all the time and that nothing misses when
+// it is lost, where the two syncs (each a full disk flush on macOS, about 9
+// ms, which also holds up every other process writing to the disk) cost more
+// than the file is worth: the tab-bar heartbeat, whose missing or stale
+// first line already reads as "magnum down". Everything that must survive a
+// crash uses WriteFileAtomic. The mode, the symlink and the temporary file
+// follow WriteFileAtomic.
+func ReplaceFile(path string, data []byte, perm fs.FileMode) error {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return writeFile(root, filepath.Base(path), data, perm, false)
+}
+
+// writeFile is the one copy of the atomic write: durable says whether the file
+// and, after the rename, the directory are flushed to the disk.
+func writeFile(root *os.Root, name string, data []byte, perm fs.FileMode, durable bool) (err error) {
 	dir, base := filepath.Split(name)
 	parent := root
 	if dir != "" {
@@ -65,7 +94,7 @@ func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode
 		}
 	}()
 	if err = f.Chmod(perm.Perm()); err == nil {
-		if _, err = f.Write(data); err == nil {
+		if _, err = f.Write(data); err == nil && durable {
 			err = f.Sync()
 		}
 	}
@@ -77,6 +106,9 @@ func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode
 	}
 	if err = parent.Rename(tmp, base); err != nil {
 		return err
+	}
+	if !durable {
+		return nil
 	}
 	// Best effort: the file is in place; the sync only makes the rename
 	// itself survive a crash.

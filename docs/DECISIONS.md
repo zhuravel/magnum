@@ -7230,6 +7230,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a comment of an exported field is in docs/API.md and the change belongs with a code change, and the value
   `generic` of `[terminal] app`, which names no application to bring to the front (any other name is
   brought to it with `open -a`).
+- **The atomic file write skips its disk syncs in a test binary** (2026-10-14, amends "One atomic file
+  write"). The gate was slow because it waited on the disk, not because it computed. At 3e09420 `go test
+  ./...` took 106 to 112 s (217 s with `-race`), and the engine package, the critical path at 105 s, used
+  1.1 cores on average for 16 parallel tests. `fsx.WriteFileAtomic` syncs the file and then the directory,
+  and Go's `File.Sync` is F_FULLFSYNC on macOS: about 9 ms a call against 0.05 to 0.2 ms for a plain write,
+  and a flush queues on the whole device, so the tests of one package slowed the others. The tab-bar
+  heartbeat alone made 8,537 atomic writes in six packages' tests. Now `WriteFileAtomic` and
+  `WriteFileAtomicIn` skip both syncs when `testing.Testing()` is true (the style of the five sites in
+  `internal/agents`); production is unchanged, and no test can observe a sync, so none pins one. Measured on
+  this machine with `go test -count=1 ./...` back to back, master against the change: 118 s and 115 s
+  against 44 s and 39 s (load 15 to 32), and 254 s and 281 s against 82 s and 42 s earlier in the day at
+  load 22 to 57. Under `-race` the suite takes about 190 s now and the engine package about 180 s of it,
+  which is the race detector's cost, not the disk's. `TestFromAppDryRunOnce` left `Usage.CodexHome` empty,
+  so its tick read `$CODEX_HOME` or `~/.codex/sessions` of the machine it ran on: it points the Codex home
+  at a temporary directory with one rollout (37% used) and asserts that the budget the tick read is that
+  rollout's, so the budget gate it exercises is the same everywhere. Tried and left out: a scratch registry
+  for `storetest.Open` (`store.Options.Scratch`: `journal_mode=MEMORY`, `synchronous=OFF`,
+  `locking_mode=EXCLUSIVE`). 22 tests of the cli and evalrun packages open the file a second time (the
+  command under test opens the registry of the fixture that `storetest.Open` holds), which the exclusive
+  lock locks out; and with the syncs gone the four settings (as it is, all three pragmas, without the
+  exclusive lock, WAL with `synchronous=OFF`) ran the engine package in 25.1 to 25.9 s and the slots package
+  in 11.6 to 12.4 s, back to back twice, so no setting had anything left to save. Rejected: skipping the
+  syncs through an environment variable or a package variable a test sets (a test that forgets it syncs
+  again, and the binary keeps a switch that production could flip), and a file system the writers take as
+  a parameter (about 40 call sites for one decision `testing.Testing()` already makes).
+- **The tab-bar heartbeat is written without disk syncs** (2026-10-14, amends "One atomic file write").
+  `WriteTabBarFile` writes the file at the start and the end of every tick. It went through
+  `WriteFileAtomic`, so each of the two writes paid two full disk flushes (about 9 ms each, queued behind
+  every other write to the device) for a file that is worth nothing after a crash: the tab-bar command
+  prints "magnum down" for a file that is missing, empty or has no fresh timestamp, which is what a lost
+  heartbeat is. Now `fsx.ReplaceFile(path, data, perm)` writes a temporary file with a unique name in the
+  directory and renames it over the target, with no file sync and no directory sync: a reader still sees the
+  old content or the new, never part of a file, the mode is exact whatever the umask, a symlink at the path
+  is replaced and a failed write leaves no temporary file (`TestReplaceFileWritesReplacesAndLeavesNoTempFiles`,
+  `TestReplaceFileReplacesASymlinkInsteadOfFollowingIt`, `TestReplaceFileFailureLeavesNoTempFile`). Only
+  `WriteTabBarFile` uses it, and its doc comment says why a caller picks it. Rejected: keeping
+  `WriteFileAtomic` for the heartbeat in production (the flush buys nothing there and holds up the daemon's
+  other writes), and skipping the syncs for every caller (the state files, notes, skill copies and reports
+  must survive a crash).
 
 ## Learned rules
 

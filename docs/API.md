@@ -43,7 +43,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [evalrun](#evalrun) | Package evalrun replays one case of an eval corpus (internal/eval) as a blind dry-run round and scores it: what `magnum eval run` does for each case, in a package the daemon can call too. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
-| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a size-limited read of a regular file, an existence check and a canonical path. |
+| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
 | [herdr](#herdr) | Package herdr is magnum's client for the herdr terminal multiplexer's Unix-socket API (verified against herdr 0.9.x, protocol 22). |
@@ -5546,13 +5546,16 @@ func WhiteboardStatusCmd() execx.Cmd
     answer (Probe).
 
 func WriteTabBarFile(path string, at time.Time, maxAge time.Duration, text string) error
-    WriteTabBarFile atomically replaces the tab-bar file with two lines:
-    when it was written and how long it stays fresh (unix seconds and seconds,
-    "1791710538 90"), then text flattened to one plain line (secrets redacted).
-    herdr renders only the last line a tab-bar command prints, so `cat` of the
-    file still shows the status; the command magnum suggests (TabBarCommand in
-    the cli) prints "magnum down" once the first line is older than its own max
-    age.
+    WriteTabBarFile replaces the tab-bar file with two lines: when it was
+    written and how long it stays fresh (unix seconds and seconds, "1791710538
+    90"), then text flattened to one plain line (secrets redacted). herdr
+    renders only the last line a tab-bar command prints, so `cat` of the file
+    still shows the status; the command magnum suggests (TabBarCommand in the
+    cli) prints "magnum down" once the first line is older than its own max age.
+    The write is fsx.ReplaceFile, with no disk sync: the file is written at the
+    start and the end of every tick, a reader sees the old file or the new,
+    and a file a crash loses (missing, empty or without a timestamp) reads as
+    "magnum down" as well.
 
 
 TYPES
@@ -7623,9 +7626,10 @@ type Runner interface {
 ```text
 package fsx // import "github.com/zhuravel/magnum/internal/fsx"
 
-Package fsx holds the file helpers several packages share: an atomic file write,
-plain or confined to an os.Root, a size-limited read of a regular file,
-an existence check and a canonical path. It imports only the standard library.
+Package fsx holds the file helpers several packages share: an atomic file
+write, plain or confined to an os.Root, a replacement without disk syncs,
+a size-limited read of a regular file, an existence check and a canonical path.
+It imports only the standard library.
 
 VARIABLES
 
@@ -7663,15 +7667,30 @@ func ReadRegular(path string, limit int64) ([]byte, error)
     is ErrTooLarge, and none of it is returned. A missing file is the error
     os.Lstat returns, unwrapped (errors.Is fs.ErrNotExist).
 
+func ReplaceFile(path string, data []byte, perm fs.FileMode) error
+    ReplaceFile is WriteFileAtomic without the file sync and the directory sync:
+    the temporary file is written and renamed over path at once, so a reader
+    still sees the old content or the new, never part of a file, but a crash
+    or a power loss can leave an empty or a missing file. A caller picks it
+    for a file that is rewritten all the time and that nothing misses when it
+    is lost, where the two syncs (each a full disk flush on macOS, about 9 ms,
+    which also holds up every other process writing to the disk) cost more than
+    the file is worth: the tab-bar heartbeat, whose missing or stale first
+    line already reads as "magnum down". Everything that must survive a crash
+    uses WriteFileAtomic. The mode, the symlink and the temporary file follow
+    WriteFileAtomic.
+
 func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error
     WriteFileAtomic replaces path with data, mode exactly perm whatever the
     umask: a temporary file with a unique name in path's directory is written,
     synced and renamed over path, then the directory is synced, so a reader (or
     a crash) sees the old content or the new, never part of a file. A symlink at
     path is replaced, not followed. The directory must exist; the temporary file
-    is removed on failure.
+    is removed on failure. A test binary (testing.Testing) skips both syncs:
+    no test can observe them, and each is a full disk flush on macOS (about 9
+    ms) that the suite's thousands of writes queued on.
 
-func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode) (err error)
+func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode) error
     WriteFileAtomicIn is WriteFileAtomic for name inside root: a name that is
     absolute or escapes root (.., or a symlink in a parent pointing outside) is
     an error and nothing is written outside root. name's directory is resolved

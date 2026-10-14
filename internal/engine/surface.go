@@ -133,13 +133,16 @@ func (e *Engine) writeTabBar() {
 	}
 }
 
-// WriteTabBarFile atomically replaces the tab-bar file with two lines: when
-// it was written and how long it stays fresh (unix seconds and seconds,
+// WriteTabBarFile replaces the tab-bar file with two lines: when it was
+// written and how long it stays fresh (unix seconds and seconds,
 // "1791710538 90"), then text flattened to one plain line (secrets
 // redacted). herdr renders only the last line a tab-bar command prints, so
 // `cat` of the file still shows the status; the command magnum suggests
 // (TabBarCommand in the cli) prints "magnum down" once the first line is
-// older than its own max age.
+// older than its own max age. The write is fsx.ReplaceFile, with no disk
+// sync: the file is written at the start and the end of every tick, a reader
+// sees the old file or the new, and a file a crash loses (missing, empty or
+// without a timestamp) reads as "magnum down" as well.
 func WriteTabBarFile(path string, at time.Time, maxAge time.Duration, text string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("tab bar: %w", err)
@@ -154,7 +157,7 @@ func WriteTabBarFile(path string, at time.Time, maxAge time.Duration, text strin
 		return r
 	}, execx.Redact(text)))
 	data := fmt.Sprintf("%d %d\n%s\n", at.Unix(), int64(maxAge/time.Second), line)
-	if err := fsx.WriteFileAtomic(path, []byte(data), 0o644); err != nil {
+	if err := fsx.ReplaceFile(path, []byte(data), 0o644); err != nil {
 		return fmt.Errorf("tab bar: %w", err)
 	}
 	return nil

@@ -225,3 +225,65 @@ func TestCanon(t *testing.T) {
 		}
 	}
 }
+
+// ReplaceFile is the write for a file nothing misses when a crash loses it
+// (the tab-bar heartbeat): it keeps WriteFileAtomic's rename, its mode and its
+// clean-up, and only leaves out the disk syncs, which a test cannot observe.
+func TestReplaceFileWritesReplacesAndLeavesNoTempFiles(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tabbar.txt")
+	for _, text := range []string{"one\n", "two\n", ""} {
+		if err := ReplaceFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFile(t, path); got != text {
+			t.Errorf("content = %q, want %q", got, text)
+		}
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o644 {
+		t.Errorf("mode = %v (%v), want 0644 whatever the umask", st, err)
+	}
+	if got := entries(t, dir); len(got) != 1 {
+		t.Errorf("entries = %v, want only tabbar.txt", got)
+	}
+}
+
+func TestReplaceFileReplacesASymlinkInsteadOfFollowingIt(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("orig"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "link")
+	if err := os.Symlink(victim, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceFile(path, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, victim); got != "orig" {
+		t.Errorf("the symlink's target was written: %q", got)
+	}
+	if got := readFile(t, path); got != "new" {
+		t.Errorf("content = %q, want new", got)
+	}
+}
+
+func TestReplaceFileFailureLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target")
+	if err := os.Mkdir(path, 0o700); err != nil { // a directory squats on the target
+		t.Fatal(err)
+	}
+	if err := ReplaceFile(path, []byte("x"), 0o600); err == nil {
+		t.Errorf("expected an error when the target is a directory")
+	}
+	if got := entries(t, dir); len(got) != 1 {
+		t.Errorf("temp file left behind after a failed write: %v", got)
+	}
+	if err := ReplaceFile(filepath.Join(dir, "missing", "f"), []byte("x"), 0o600); err == nil {
+		t.Errorf("expected an error for a missing directory (the caller creates it)")
+	}
+}
