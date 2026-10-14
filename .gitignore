@@ -1,4 +1,5 @@
 .mise.local.toml
+mise.local.toml
 /bin/
 /dist/
 *.pem

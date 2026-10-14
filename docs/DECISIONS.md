@@ -7498,6 +7498,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   counts as a PATH when more than half of its entries are absolute; a `~` entry is expanded to HOME when appended,
   a relative one (`.`, `bin`) is left out, since the daemon's PATH holds directories, and a space is kept. Rejected: appending the entry as written (the daemon would search a literal `~`); refusing
   the line (one odd entry would cost every other directory).
+- **Magnum's own mise files are undotted, and launchd goes through mise for either spelling** (2026-10-15).
+  The repository's `.mise.toml` is now `mise.toml`, and the docs keep the private patterns and logins in
+  `mise.local.toml`, as the repositories it reviews do; `.gitignore` names both local spellings, so an older
+  `.mise.local.toml` stays ignored (mise still loads it). launchPrefix sent launchd and the gh shim through
+  `mise exec` only when the checkout held `.mise.toml` or `.mise.local.toml`, so a checkout with only the
+  undotted files would start the daemon without the variable an App's private_key_env reads. Now any of
+  `mise.toml`, `.mise.toml`, `mise.local.toml` and `.mise.local.toml` counts, since mise reads each (the
+  dotted file overrides the undotted one, https://mise.jdx.dev/configuration.html). The placeholder-key
+  error names `mise.toml` and `mise.local.toml`. A reviewed repository's mise files already worked under
+  either name ("The rendered local mise file keeps the main clone's spelling").
 
 ## Learned rules
 

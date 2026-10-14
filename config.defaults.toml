@@ -5,7 +5,7 @@
 # [learn], [notes] or [kinds.<name>] overrides the value here, its [[role]] blocks override the role of the same
 # name key by key (other names are appended), and its [spend.<level>] tables merge by level, role and key. App private keys are PEM files ([[identity]] private_key_file, by
 # convention ~/.config/magnum/keys/<identity>.pem); only the older private_key_env reads one from an environment
-# variable, e.g. from a checkout's gitignored .mise.local.toml (the LaunchAgent then runs through `mise exec`).
+# variable, e.g. from a checkout's gitignored mise.local.toml (the LaunchAgent then runs through `mise exec`).
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
@@ -699,7 +699,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # or 0; never negative; each removal is about 1 GB the next provision
 #                                         # writes again)
 # min_free_disk_gb = 15
-# copy_files = [".mise.local.toml", "config/initializers/local.rb"]   # the local mise file is rendered, not
+# copy_files = ["mise.local.toml", "config/initializers/local.rb"]    # the local mise file is rendered, not
 #                                         # copied: under the main clone's spelling, mise.local.toml or
 #                                         # .mise.local.toml (dotted when both exist, as mise prefers it;
 #                                         # mise.local.toml when there is none); a file magnum rendered under

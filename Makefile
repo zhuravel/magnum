@@ -23,14 +23,14 @@ test: check-private
 	$(GO) test ./...
 
 ## check-private: this repo is public; fail when a tracked file mentions a name listed in MAGNUM_PRIVATE_PATTERNS
-## (a grep -E pattern set in the gitignored .mise.local.toml, never in a tracked file), or a person's GitHub
+## (a grep -E pattern set in the gitignored mise.local.toml, never in a tracked file), or a person's GitHub
 ## login from the local registry (scripts/check-logins.sh; MAGNUM_OWN_LOGINS and MAGNUM_LOGIN_ALLOW exempt)
 check-private:
 	@if [ -n "$$MAGNUM_PRIVATE_PATTERNS" ] && git grep -qiIE -e "$$MAGNUM_PRIVATE_PATTERNS" -- . ':!config.local.toml'; then \
 	  echo "tracked files mention a private name:"; git grep -niIE -e "$$MAGNUM_PRIVATE_PATTERNS" -- . ':!config.local.toml'; exit 1; fi
 	@scripts/check-logins.sh
 
-## lint: golangci-lint with .golangci.yml (the version .mise.toml pins); not part of `test` until the backlog is cleared
+## lint: golangci-lint with .golangci.yml (the version mise.toml pins); not part of `test` until the backlog is cleared
 lint:
 	$(GOLANGCI_LINT) run ./...
 

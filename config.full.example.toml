@@ -86,7 +86,7 @@ slot_path = "~/Projects/talkable.review{n}"
 min = 12
 max = 18
 idle_remove_after = "48h"
-copy_files = [".mise.local.toml", "config/initializers/local.rb"]
+copy_files = ["mise.local.toml", "config/initializers/local.rb"]
 strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
 setup = ["bin/worktree-setup"]
 teardown = ["bin/worktree-archive"]
@@ -126,7 +126,7 @@ databases = [
 
 # Per-PR worktrees (repos without a [[pool]]) run as workspace "magnum-pr-<N>": WT_BRANCH is exported to
 # their hooks and agents, the outranking workspace-name variables are blanked, and the main clone's
-# .mise.local.toml is rendered into them with GitHub tokens stripped. Without a [[repo]] block the main
+# local mise file is rendered into them with GitHub tokens stripped. Without a [[repo]] block the main
 # clone's .config/wt.toml hooks run ([post-create]/[post-start] after creation, [pre-remove] before
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
@@ -148,7 +148,7 @@ databases = [
 # setup = ["bin/setup --database"]        # replaces wt.toml's post-create/post-start hooks
 # teardown = ["bin/drop-database"]        # replaces wt.toml's pre-remove hooks; failures are logged
 # copy_files = ["config/master.key"]      # copied from the main clone when present
-# strip_env = ["STRIPE_SECRET_KEY"]       # dropped from the rendered .mise.local.toml
+# strip_env = ["STRIPE_SECRET_KEY"]       # dropped from the rendered local mise file
 # wt_hooks = true                         # false: ignore .config/wt.toml without replacing it
 #
 #   [repo.env]                            # {slug} = magnum-pr-<N>, {path} = worktree, {clone} = main clone

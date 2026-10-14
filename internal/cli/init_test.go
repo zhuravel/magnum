@@ -96,7 +96,7 @@ func TestInitWritesAMinimalConfigForTheGHLogin(t *testing.T) {
 			t.Errorf("report lacks %q:\n%s", want, it.out.String())
 		}
 	}
-	if strings.Contains(it.out.String(), ".mise.local.toml") {
+	if strings.Contains(it.out.String(), "mise.local.toml") {
 		t.Errorf("no App, no key line:\n%s", it.out.String())
 	}
 

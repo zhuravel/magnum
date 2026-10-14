@@ -57,14 +57,14 @@ func looseKeyFile(value string) (path string, mode fs.FileMode) {
 }
 
 // ErrPlaceholderKey matches (errors.Is) the error for a key variable that
-// still holds the placeholder sentence the tracked .mise.toml sets, instead
-// of the PEM text or key file path from .mise.local.toml.
+// still holds the placeholder sentence the tracked mise.toml sets, instead
+// of the PEM text or key file path from mise.local.toml.
 var ErrPlaceholderKey = errors.New("identity: placeholder private key")
 
 type placeholderKeyError struct{ env string }
 
 func (e placeholderKeyError) Error() string {
-	return fmt.Sprintf("the private key in $%s is the placeholder from .mise.toml; put the PEM in .mise.local.toml", e.env)
+	return fmt.Sprintf("the private key in $%s is the placeholder from mise.toml; put the PEM in mise.local.toml", e.env)
 }
 
 func (e placeholderKeyError) Is(target error) bool { return target == ErrPlaceholderKey }
@@ -89,7 +89,7 @@ func isPlaceholderKey(v string) bool {
 
 // loadPrivateKey parses the App key from the value of env var envName: PEM
 // text (real or \n-escaped newlines) or a path to a PEM file. PKCS#1 and
-// PKCS#8 RSA keys are accepted. The placeholder of the tracked .mise.toml is
+// PKCS#8 RSA keys are accepted. The placeholder of the tracked mise.toml is
 // reported as such (ErrPlaceholderKey), never read as a path. Errors never
 // echo the value.
 func loadPrivateKey(envName, value string) (*rsa.PrivateKey, error) {

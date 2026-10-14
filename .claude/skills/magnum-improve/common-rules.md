@@ -4,7 +4,7 @@
 - Tests first. For a bug, write the failing test before the fix and name it after the behavior it protects.
   Fix the root cause.
 - Gate: `go test -count=1 -race` on the packages you touched, then `mise exec -- make test`, and `make api-doc` when
-  exported names change. The worktree has no `.mise.local.toml`. To run `make check-private` with the operator's
+  exported names change. The worktree has no `mise.local.toml`. To run `make check-private` with the operator's
   patterns, load them through `mise -C <main checkout> exec`; never print them or copy the file.
 - Commit on your worktree branch in the style of `git log`: one paragraph that says what changed and why, ending
   with "No new dependencies." when true. No attribution lines, no private names. Do not push.

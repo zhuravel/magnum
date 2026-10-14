@@ -122,7 +122,7 @@ jobs:
         env:
           GOOS: darwin # lint the build magnum ships
         with:
-          version: v2.14.0 # the version .mise.toml pins
+          version: v2.14.0 # the version mise.toml pins
           only-new-issues: true
 
       - name: govulncheck

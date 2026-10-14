@@ -72,11 +72,11 @@ func newDaemonGroupTest(t *testing.T, rules ...execx.Rule) *daemonGroupTest {
 }
 
 // useMiseKey makes the checkout's mise environment hold an App's key
-// (.mise.toml, an App identity with private_key_env and no
+// (mise.toml, an App identity with private_key_env and no
 // private_key_file): launchd and the gh shim then go through mise.
 func (dt *daemonGroupTest) useMiseKey(t *testing.T) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dt.ctx.Layout.Home, ".mise.toml"), []byte("[env]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dt.ctx.Layout.Home, "mise.toml"), []byte("[env]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg := *dt.ctx.Config
