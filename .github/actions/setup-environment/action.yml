@@ -1,0 +1,53 @@
+name: Set up the mise.toml tools
+description: >-
+  Installs the tools mise.toml pins (Go, golangci-lint) with mise and exports its [env], then restores the Go
+  module and build caches and downloads the modules
+
+inputs:
+  go-version:
+    description: >-
+      A Go version to use instead of mise.toml's (it becomes MISE_GO_VERSION for the rest of the job), such as
+      "latest" for the weekly run on the newest Go; empty keeps mise.toml's
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Go version instead of mise.toml's
+      if: inputs.go-version != ''
+      shell: bash
+      env:
+        GO_VERSION: ${{ inputs.go-version }}
+      run: echo "MISE_GO_VERSION=$GO_VERSION" >> "$GITHUB_ENV"
+
+    - name: Set up Go and golangci-lint
+      id: mise
+      uses: jdx/mise-action@v5
+      with:
+        # Another Go gets a cache of mise's installs of its own, so the weekly run on the newest Go never saves
+        # the cache every other run restores.
+        cache_key_prefix: mise-v1${{ inputs.go-version != '' && format('-go-{0}', inputs.go-version) || '' }}
+
+    - name: Go cache directories
+      id: go-env
+      shell: bash
+      run: |
+        echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+        echo "buildcache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+    # One cache per job, platform and Go: the test job's race builds, the stress job's plain ones and the static
+    # job's Linux ones stay apart. The workflow is in the hash, so a change of test flags (-race) saves a new
+    # build cache instead of rebuilding the race flavour of modernc.org/sqlite every run.
+    - name: Cache Go modules and builds
+      uses: actions/cache@v6
+      with:
+        path: |
+          ${{ steps.go-env.outputs.modcache }}
+          ${{ steps.go-env.outputs.buildcache }}
+        key: go-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.mise.outputs.go }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+        restore-keys: go-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.mise.outputs.go }}-
+
+    - name: Download Go modules
+      shell: bash
+      run: go mod download

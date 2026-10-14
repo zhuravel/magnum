@@ -9,6 +9,9 @@
 #   - static: on ubuntu (no macOS queue): modules verified and tidy, gofmt over every tracked .go file,
 #             golangci-lint (only the issues a change adds, until the backlog is cleared), govulncheck for
 #             darwin, and the docs/API.md drift check.
+# Every job gets Go and golangci-lint from mise.toml through .github/actions/setup-environment (jdx/mise-action,
+# then the Go module and build caches); mise.toml's [env] holds no secret, and an empty MAGNUM_PRIVATE_PATTERNS
+# skips the private-name grep as an unset one did.
 # Read-only token, no persisted credentials, timeouts; a new push to a PR cancels its older run, and every
 # master commit keeps its own result.
 name: CI
@@ -37,22 +40,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ${{ fromJSON(github.event_name == 'schedule' && '["go.mod","stable"]' || '["go.mod"]') }}
+        go: ${{ fromJSON(github.event_name == 'schedule' && '["mise.toml","stable"]' || '["mise.toml"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-environment
         with:
-          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
-          go-version: ${{ matrix.go != 'go.mod' && matrix.go || '' }}
-          check-latest: ${{ matrix.go != 'go.mod' }}
-          # The cache key is these files' hash: listing the workflow makes a change of test flags (-race)
-          # save a new build cache instead of rebuilding the race flavour of modernc.org/sqlite every run.
-          cache-dependency-path: |
-            go.sum
-            .github/workflows/ci.yml
+          go-version: ${{ matrix.go == 'stable' && 'latest' || '' }}
 
       - name: gate under the race detector (gofmt, modules, vet, tests; the private-name checks skip without local patterns and registry)
         env:
@@ -82,9 +78,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
+      - uses: ./.github/actions/setup-environment
       - name: scheduling-sensitive packages, shuffled, twice
         run: go test -count=2 -cpu 1,3 -shuffle=on -timeout=30m ./internal/pipeline ./internal/engine ./internal/agents
 
@@ -100,9 +94,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
+      - uses: ./.github/actions/setup-environment
 
       - name: modules verified and tidy
         run: |
@@ -122,13 +114,13 @@ jobs:
         env:
           GOOS: darwin # lint the build magnum ships
         with:
-          version: v2.14.0 # the version mise.toml pins
+          install-mode: none # the golangci-lint mise.toml pins, on PATH from the setup step
           only-new-issues: true
 
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-          GOOS=darwin "$(go env GOPATH)/bin/govulncheck" ./...
+          GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          GOOS=darwin "$RUNNER_TEMP/bin/govulncheck" ./...
 
       - name: docs/API.md matches the exported API
         run: make api-doc-check

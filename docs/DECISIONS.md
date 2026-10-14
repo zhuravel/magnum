@@ -7508,6 +7508,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   dotted file overrides the undotted one, https://mise.jdx.dev/configuration.html). The placeholder-key
   error names `mise.toml` and `mise.local.toml`. A reviewed repository's mise files already worked under
   either name ("The rendered local mise file keeps the main clone's spelling").
+- **CI takes Go and golangci-lint from mise.toml** (2026-10-15, amends "A lint and CI gate"). Each job set up
+  Go with actions/setup-go from go.mod, and golangci-lint-action installed its own pinned binary, so the
+  workflow repeated the versions `mise.toml` pins. Now every job runs `.github/actions/setup-environment`:
+  jdx/mise-action installs the `mise.toml` tools and exports its `[env]`, then actions/cache restores the
+  module and build caches keyed on the job, the platform, the Go version mise reports, and the hash of
+  `go.sum` and the workflow (a change of test flags still saves a new build cache), and `go mod download`
+  runs. The weekly run on the newest Go sets MISE_GO_VERSION=latest, with mise's install cache under its own
+  key, and its matrix leg is named `stable` beside `mise.toml` (was `go.mod`). golangci-lint-action keeps
+  only-new-issues and runs the binary from PATH (install-mode none). govulncheck installs into
+  `$RUNNER_TEMP/bin`, since mise sets GOBIN to its Go's directory. The exported `[env]` holds only
+  MAGNUM_PRIVATE_PATTERNS = "", which `make check-private` treats as unset, and the workflow uses no secret it
+  could shadow. Dependabot also watches `.github/actions/*`. Rejected: running golangci-lint by hand with
+  `--new-from-rev` (the action already finds a push's and a PR's base).
 
 ## Learned rules
 

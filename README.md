@@ -2743,9 +2743,9 @@ Releasing: `make release VERSION=v0.2.0` on a pushed, clean master runs the gate
 GitHub release and points the tap's formula ([packaging/homebrew/magnum.rb](packaging/homebrew/magnum.rb),
 pushed to github.com/zhuravel/homebrew-tap) at the new tag. CI (`.github/workflows/ci.yml`) runs the gate under
 the race detector on macOS for every push to master and every pull request, and on ubuntu checks the modules,
-gofmt, golangci-lint (only the issues a change adds), govulncheck and docs/API.md; a weekly run adds Go stable
-and reruns the pipeline, engine and agents tests at GOMAXPROCS 1 and 3, and Dependabot opens weekly update PRs
-for the modules and the actions.
+gofmt, golangci-lint (only the issues a change adds), govulncheck and docs/API.md, every job on the Go and
+golangci-lint that `mise.toml` pins; a weekly run adds the newest stable Go and reruns the pipeline, engine and
+agents tests at GOMAXPROCS 1 and 3, and Dependabot opens weekly update PRs for the modules and the actions.
 
 To measure a change to the prompts, the skill or a model before the daemon picks it up, keep a corpus
 of PRs whose defects you know in `~/.config/magnum/eval.toml` (a checkout's gitignored `eval.local.toml` still

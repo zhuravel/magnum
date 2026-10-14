@@ -1,7 +1,8 @@
 [tools]
 go = "1.27"
 air = "latest"
-# `make lint`; CI pins the same version (.github/workflows/ci.yml), so both report the same issues.
+# `make lint`; CI installs the tools of this file (.github/actions/setup-environment), so both report
+# the same issues.
 golangci-lint = "2.14.0"
 
 [env]
