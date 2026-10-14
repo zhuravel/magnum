@@ -7494,9 +7494,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
 - **The login shell's PATH may hold a tilde or a relative entry** (2026-10-14, amends "The daemon can take its
   PATH from the operator's login shell"). The first capture on the operator's machine answered "printed no PATH":
   their zsh exports `~/.dotnet/tools` unexpanded, and `looksLikePATH` refused the whole line for one entry that
-  was not absolute. A line counts as a PATH when it has at least one absolute entry and no entry with a space; a
-  `~` entry is expanded to HOME when appended, and a relative one (`.`, `bin`) is left out, since the daemon's PATH
-  holds directories. Rejected: appending the entry as written (the daemon would search a literal `~`); refusing
+  was not absolute. The second capture failed on `/Applications/Little Snitch.app/Contents/Components`, an entry with a space. A line
+  counts as a PATH when more than half of its entries are absolute; a `~` entry is expanded to HOME when appended,
+  a relative one (`.`, `bin`) is left out, since the daemon's PATH holds directories, and a space is kept. Rejected: appending the entry as written (the daemon would search a literal `~`); refusing
   the line (one odd entry would cost every other directory).
 
 ## Learned rules

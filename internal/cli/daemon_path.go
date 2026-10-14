@@ -93,23 +93,25 @@ func lastPATHLine(out string) (string, bool) {
 	return "", false
 }
 
-// looksLikePATH: colon-separated directories, at least one absolute. An
-// entry may start with `~` (a shell's PATH can carry an unexpanded one,
-// such as `~/.dotnet/tools`) or be relative (`.`, `bin`): neither makes the
+// looksLikePATH: colon-separated directories, more than half of them
+// absolute. An entry may start with `~` (a shell's PATH can carry an
+// unexpanded `~/.dotnet/tools`), be relative (`.`) or hold a space
+// (`/Applications/Little Snitch.app/Contents/Components`): none makes the
 // line something else than a PATH, and mergePATH expands the first and
-// skips the second. A line with a space, or with no absolute entry, is a
-// banner, not a PATH.
+// skips the second. A banner such as `/etc/motd: 3 updates waiting` has at
+// most half of its entries absolute.
 func looksLikePATH(line string) bool {
-	found := false
+	entries, abs := 0, 0
 	for entry := range strings.SplitSeq(line, ":") {
-		if strings.ContainsAny(entry, " \t") {
-			return false
+		if entry == "" {
+			continue
 		}
+		entries++
 		if filepath.IsAbs(entry) {
-			found = true
+			abs++
 		}
 	}
-	return found
+	return abs > 0 && 2*abs > entries
 }
 
 // mergePATH appends to own the entries of shell it lacks (compared cleaned,
