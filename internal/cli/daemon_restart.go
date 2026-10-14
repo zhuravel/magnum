@@ -48,8 +48,8 @@ type restartFlags struct {
 // addRestartFlags declares --now, --drain and --timeout on cmd.
 func addRestartFlags(cmd *cobra.Command, f *restartFlags) {
 	fs := cmd.Flags()
-	fs.BoolVar(&f.now, "now", false, "restart even while review rounds, a notes curation or the retro are in flight (rounds start over)")
-	fs.BoolVar(&f.drain, "drain", false, "start nothing new, wait for the rounds, curation and retro in flight, then restart")
+	fs.BoolVar(&f.now, "now", false, "restart even while review rounds, a notes curation, the retro, a skill edit or gate, a fix job or a whiteboard job are in flight (rounds start over)")
+	fs.BoolVar(&f.drain, "drain", false, "start nothing new, wait for the rounds and background jobs in flight, then restart")
 	fs.DurationVar(&f.timeout, "timeout", defaultDrainTimeout, "with --drain: give up (and restart nothing) after this long")
 }
 
@@ -77,7 +77,7 @@ func newDaemonRestartCmd(c *Context) *cobra.Command {
 			"agent on the current binary, after stopping a daemon that was started by hand. Without a loaded "+
 			"agent a running daemon is stopped (SIGTERM) and `magnum install` is suggested. The binary launchd runs "+
 			"checks the configuration and renders every prompt first (`<binary> config`); the restart is refused when it "+
-			"fails. While review rounds, a notes curation or the retro are in flight the restart is refused, because "+
+			"fails. While review rounds, a notes curation, the retro, a skill edit or gate, a fix job or a whiteboard job are in flight the restart is refused, because "+
 			"it abandons them; --drain starts nothing new, waits for those in flight (a line every 15s, at most "+
 			"--timeout, default 2h) and then restarts; --when-idle waits the same way without stopping anything and "+
 			"restarts at the first moment nothing runs (it waits again when something starts in between); --now "+
@@ -86,7 +86,7 @@ func newDaemonRestartCmd(c *Context) *cobra.Command {
 		func(pos []string) int { return runDaemonRestartCmd(c, pos, f) })
 	addRestartFlags(cmd, &f)
 	cmd.Flags().Lookup("timeout").Usage = "with --drain or --when-idle: give up (and restart nothing) after this long"
-	cmd.Flags().BoolVar(&f.whenIdle, "when-idle", false, "wait, stopping nothing, until nothing is in flight (rounds, a notes curation, the retro), then restart")
+	cmd.Flags().BoolVar(&f.whenIdle, "when-idle", false, "wait, stopping nothing, until nothing is in flight (rounds, background jobs), then restart")
 	return cmd
 }
 

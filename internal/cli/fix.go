@@ -50,8 +50,8 @@ func newFixCmd(c *Context) *cobra.Command {
 			"and writes a report. Magnum then reviews what it pushed and, while findings are left, starts the next cycle, up "+
 			"to [pipeline] fix_cycles. A loop ends clean, or needing you when the fixer leaves findings to you, the cap is "+
 			"reached or a run fails. The daemon refuses, with the reason as its answer, a PR magnum has not reviewed at its "+
-			"current head, a review without findings, a PR that is not yours or lives in a fork, a round in flight, a loop "+
-			"already running and a watch without a fix role. A pinned PR (magnum open, magnum pin) is unpinned by the fix, as "+
+			"current head, a review that found nothing and left nothing open, a PR that is not yours or lives in a fork, a round in "+
+			"flight, a snooze, a loop already running and a watch without a fix role. A pinned PR (magnum open, magnum pin) is unpinned by the fix, as "+
 			"by a review; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. "+
 			"A terminal asks y/N first (--yes does not; there --json needs "+
 			"--yes), and a review agent's pane is refused. --wait follows the loop until its end and says how it ended "+

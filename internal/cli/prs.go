@@ -44,7 +44,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"owners, s cycles the sort and S reverses it, h hides ignored and skipped PRs. On the selected PR: r "+
 			"reviews (R fresh, i with /simplify), K kills its running or queued review, I ignores it (kill, mute, free "+
 			"its slot), A/C approve and request changes (on a row that needs you, A approves as you), D withdraws "+
-			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), o opens the judge's pane, "+
+			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), f fixes its findings as you "+
+			"(F takes it out of autofix or puts it back), w opens its whiteboard, o opens the judge's pane, "+
 			"p/u pin and unpin, x releases, M/U mute and unmute, b opens the PR in the browser and t its issue in "+
 			"the tracker; every one of them but o, p, u, b and t asks y/N first, and only y confirms. a jumps to "+
 			"what needs you, ! shows the action log, ctrl+r or F5 refreshes now, tab switches to the status "+

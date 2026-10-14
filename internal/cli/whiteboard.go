@@ -51,7 +51,8 @@ func newWhiteboardCmd(c *Context) *cobra.Command {
 			"dev.fast Whiteboard: Whiteboard Desktop running, or `whiteboard server start`, and the `whiteboard` CLI "+
 			"on PATH. The daemon refuses, with the reason as its answer, a PR magnum has not reviewed at its current "+
 			"head, a round or a fix loop in flight, a head that has its whiteboard already, a watch without a "+
-			"whiteboard role and a Whiteboard that is not running. A terminal asks y/N first (--yes does not; there "+
+			"whiteboard role, a slot that is not at the head, a pinned PR (`magnum open`, `magnum pin`) and a "+
+			"Whiteboard that is not running. A terminal asks y/N first (--yes does not; there "+
 			"--json needs --yes), and a review agent's pane is refused. --wait follows the job until its end and says "+
 			"how it ended (the whiteboard written, the run failed, or stopped by a push, a close or `magnum abort`); "+
 			"--timeout (default 2h, 0 = no limit) stops following it after that long, and the job goes on. --open "+

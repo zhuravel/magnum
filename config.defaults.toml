@@ -23,7 +23,7 @@ max_rounds_per_pr_per_day = 12    # automatic rounds only: requested and forced 
                                   # not render) are refunded
 close_grace = "10m"               # wait after CLOSED/MERGED before releasing (covers reopen; 0 = release at once)
 # reviewer_timeout = "40m"        # the turn timeout of a non-judge [[role]] that sets no timeout of its own, and
-# judge_timeout = "90m"           #   judge_timeout a judge's; a role's own timeout wins, and the four [[role]]
+# judge_timeout = "90m"           #   judge_timeout a judge's; a role's own timeout wins, and the seven [[role]]
                                   #   blocks below set theirs, so these change only roles you add without one
                                   #   (`magnum config` warns when they change nothing); to change a built-in
                                   #   role's, set timeout in a [[role]] block of its name in your config
@@ -91,7 +91,8 @@ notify = true                     # toasts (false = none); a review you ask for 
 toast_every_review = false        # also toast every automatic review posted
 
 [terminal]
-app = "Terminal"                  # Terminal | iTerm2 | Ghostty | WezTerm | custom (override in your config)
+app = "Terminal"                  # Terminal | iTerm2 | Ghostty | WezTerm | custom | any other app name (only brought
+                                  # to the front with `open -a`); override in your config
 session = "default"               # the herdr session `magnum open` focuses a client of, or opens one for
                                   # (`herdr --session <name>`)
 launcher = ""                     # custom: template with {herdr} {args} {command}
@@ -234,8 +235,8 @@ timeout = "30m"                   # a curator turn that takes longer is abandone
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it
 # runs. Prompts are files in prompts_dir, loaded when the daemon starts, and so are the judge and fix skills,
-# which it copies (an edit takes effect at the next `magnum daemon-restart`). The fix role is the one role
-# that is no part of a round: the fix job runs it. prompts/README.md documents every key, the template variables
+# which it copies (an edit takes effect at the next `magnum daemon-restart`). The fix role and the whiteboard
+# role are no part of a round: the fix job and the whiteboard job run them. prompts/README.md documents every key, the template variables
 # and examples (a droid or omp role, a watch with two roles). `magnum roles` prints the effective roles per
 # watch and `magnum roles --kinds` the kinds.
 
@@ -407,7 +408,7 @@ whiteboard_role = "claude-whiteboard"   # the role with whiteboard = true that w
 # model = ["--model={model}"]
 # effort = ["--thinking={effort}"]
 
-# The four roles below are the built-in defaults written out; declaring any [[role]] here replaces the
+# The seven roles below are the built-in defaults written out; declaring any [[role]] here replaces the
 # built-in list. Non-judge roles run in parallel unless `after` orders them; the judge runs last, reads
 # their reports and posts the review.
 
@@ -639,7 +640,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA,
 #                                       # .ReviewURL, .Repo, .Number (unset: a default line linking the review);
 #                                       # magnum adds its marker
-# roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
+# roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every round role, the first judge only
 # trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key
 #                                       # prefix named here wins over [board]'s (another org's PR- in another tracker)
 #

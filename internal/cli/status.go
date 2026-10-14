@@ -33,8 +33,9 @@ func newStatusCmd(c *Context) *cobra.Command {
 			"sizes with du.\n\n"+
 			"--watch on a terminal opens the live dashboard, refreshed every 2s: j/k select a slot or PR, enter "+
 			"(or o) opens its judge pane, r reviews (R fresh, i with /simplify), K kills the PR's running or queued "+
-			"review, I ignores the PR (kill, mute, free its slot), p/u pin and unpin, x releases, M/U mute and "+
-			"unmute (every review, kill, ignore, release, mute and unmute key asks y/N first; only y confirms), g, "+
+			"review, I ignores the PR (kill, mute, free its slot), f fixes its findings as you (F takes it out of "+
+			"autofix or puts it back), p/u pin and unpin, x releases, M/U mute and unmute (every review, fix, kill, "+
+			"ignore, release, mute and unmute key asks y/N first; only y confirms), g, "+
 			"ctrl+r or F5 refreshes now, b opens the PR in the browser, a jumps to what needs you, w shows the manual "+
 			"worktrees, ! shows the action log, m turns the mouse off and on (wheel, click, double click to open, "+
 			"right click for the row's actions, a drag between two headings resizes a column), W resets the column "+

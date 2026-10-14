@@ -7199,6 +7199,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   GraphQL error naming a timeout and the stream the peer cancelled, so talkable's radar failed 5 polls
   without the half-size retry a 502 gets. Now `overloaded` also counts an error whose text, or the gh
   exit's whole stderr, holds "unexpected end of JSON input" or "REFUSED_STREAM".
+- **The docs say what the code does: the fix role's identity, seven built-in roles, the help texts**
+  (2026-10-14, after the docs-accuracy read of 3e09420). The read compared README.md, prompts/README.md, the
+  three config files and the cobra help texts with the code and found these statements false. The README gave
+  the built-in claude-fix the identity `me` and said the loader refuses a fix role without an identity, where
+  the role names none, acts as the watch's poll identity and the loader refuses only a declared identity that
+  is not a gh one. "Four built-in roles" stood in seven places where the code has seven (the round's four, the
+  reserve judge, the fix role and the whiteboard role), and "omitted `roles` = every role" was loose, since a
+  watch without `roles` runs the roles of a round and its first judge only. prompts/README.md lacked the
+  roles' `fix`, `whiteboard` and `rerun_min_lines` and the kinds' `login_file`, `plugin_allow` and
+  `plugin_disable`, and its `wrapper` row the value `bypass`. The help texts of `magnum fix` (a review that
+  found nothing and left nothing open, a snooze), `prs` and `status` (the keys f, F and w), daemon-restart,
+  daemon-stop, install and uninstall (a skill edit or gate, a fix job and a whiteboard job also hold a stop),
+  `abort` and `ignore` (a whiteboard job is stopped too) and `whiteboard` (a slot not at the head, a pinned PR)
+  lagged the code, and so did the README on the board's `f` (a head that kept its verdict and a review that
+  keeps an earlier finding open are let through), the Claude sessions' MCP flags (the whiteboard writer's
+  `args` add an `--mcp-config`), Whiteboard's prerequisites (`magnum whiteboard` by hand needs it too) and
+  `cleanup` (a review screen on a terminal). "See Re-reviews" pointed at no heading: the re-review prose is
+  under `### Re-reviews` now, and the paragraphs after it under `### Review requests, caps and pauses`, with
+  no text moved. The footer fields `.QuietHours`, `.DraftsSkipped` and `.RequestLogin` are in
+  config.full.example.toml, and the behaviour only the cobra help or a config comment named (`[terminal] app`
+  for any app name, `resume --tool` and `--watch`, the flags of review, open, attention, logs, watch, pick,
+  daemon and cleanup, the daemon's `agent_start_stagger`, `max_total_working_codex` and `min_warm`,
+  `[github] transport`, a repository's `wt_hooks`, a watch's `clone_root` and `skip_cross_repository`, the
+  learn editor's `editor_effort`, `editor_args` and `editor_prompt`) has a line in the README. Two tests keep
+  the count and the keys: `TestEveryTomlBlockInTheDocsDecodesWithoutUnknownKeys` decodes every toml block of
+  both READMEs through the loader's decoder, and `TestTheDocsCountTheBuiltInRoles` fails when a doc writes
+  another number of built-in roles than `len(DefaultRoles())`. Left as written: the Go comment of
+  `Role.Timeout` (config/roles.go) that still says "the four roles config.defaults.toml writes out", since
+  a comment of an exported field is in docs/API.md and the change belongs with a code change, and the value
+  `generic` of `[terminal] app`, which names no application to bring to the front (any other name is
+  brought to it with `open -a`).
 
 ## Learned rules
 

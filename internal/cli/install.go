@@ -33,7 +33,7 @@ func newInstallCmd(c *Context) *cobra.Command {
 			"keybindings use it, see docs/gh-dash.yml); --dry-run prints what would be written and run. `make install` "+
 			"runs `install --plugin`; `install --gh --no-launchd` only writes the shim. The binary launchd will run "+
 			"checks the configuration and renders every prompt first (`<binary> config`); the install is refused when it "+
-			"fails. Reloading the agent restarts a running daemon, so while review rounds, a notes curation or the retro are in flight it is "+
+			"fails. Reloading the agent restarts a running daemon, so while review rounds, a notes curation, the retro, a skill edit or gate, a fix job or a whiteboard job are in flight it is "+
 			"refused (it abandons them); --drain starts nothing new and waits for those in flight (at most "+
 			"--timeout), --now installs at once.",
 		func(pos []string) int { return runInstallCmd(c, f, pos) })

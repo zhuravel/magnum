@@ -46,7 +46,9 @@ func newAbortCmd(c *Context) *cobra.Command {
 			"reviewed, or baseline when it was never reviewed (a merged PR's post-merge review: back to closed), "+
 			"and the next push queues it again. A fix loop (`magnum fix`) is stopped too, whether its fixer works (the PR "+
 			"stays reviewed meanwhile) or the loop waits for its re-review or next cycle: the fixer is interrupted, its "+
-			"slot put back and the loop ended. Exits 1 when no review of the PR runs or waits and it has no fix loop.")
+			"slot put back and the loop ended. A whiteboard job (`magnum whiteboard`, or the one after a posted review) is "+
+			"stopped the same way: the writer is interrupted, its run abandoned and the slot put back. Exits 1 when no "+
+			"review of the PR runs or waits and it has no fix loop or whiteboard job.")
 }
 
 func newStopCmd(c *Context, k stopKind, short, long string) *cobra.Command {
