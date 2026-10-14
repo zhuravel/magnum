@@ -1186,8 +1186,8 @@ names a built-in role or one your `[[role]]` blocks declare, and a level's name 
 spend = "high"
 
 [spend.high]                       # applied when spend = "high"
-codex-judge = { model = "gpt-6.1-astra", effort = "xhigh", rereview_effort = "xhigh" }
-codex-review = { model = "gpt-6.1-astra" }
+codex-judge = { model = "gpt-6-astra", effort = "xhigh", rereview_effort = "xhigh" }
+codex-review = { model = "gpt-6-astra" }
 claude-review = { model = "fable", effort = "xhigh" }
 
 [spend.low]

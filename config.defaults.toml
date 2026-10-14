@@ -297,7 +297,7 @@ spend = "medium"                  # the spend level: how hard, and on which mode
                                   # (a built-in role or one of your [[role]]s) over everything, your [[role]]
                                   # blocks included; a table spend does not name waits for later. In your config:
                                   #   [spend.high]
-                                  #   codex-judge = { model = "gpt-6.1-astra", rereview_effort = "xhigh" }
+                                  #   codex-judge = { model = "gpt-6-astra", rereview_effort = "xhigh" }
                                   #   claude-review = { model = "fable", effort = "xhigh" }
                                   #   [spend.low]
                                   #   claude-review = { model = "sonnet", effort = "medium" }

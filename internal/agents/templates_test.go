@@ -611,9 +611,9 @@ func TestTheCodexReviewCommandRendersTheModel(t *testing.T) {
 		want  string
 	}{
 		{"", nil, " codex review -c model_reasoning_effort=high --base origin/master; }"},
-		{"gpt-6.1-astra", nil, " codex review -c model=gpt-6.1-astra -c model_reasoning_effort=high --base origin/master; }"},
-		{"gpt-6.1-astra", []string{"-c", "model=gpt-6.1-sol"},
-			" codex review -c model=gpt-6.1-astra -c model_reasoning_effort=high --base origin/master -c model=gpt-6.1-sol; }"},
+		{"gpt-6-astra", nil, " codex review -c model=gpt-6-astra -c model_reasoning_effort=high --base origin/master; }"},
+		{"gpt-6-astra", []string{"-c", "model=gpt-6.1-sol"},
+			" codex review -c model=gpt-6-astra -c model_reasoning_effort=high --base origin/master -c model=gpt-6.1-sol; }"},
 	} {
 		r := role
 		r.Model, r.Args = tc.model, tc.args

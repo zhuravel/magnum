@@ -193,8 +193,8 @@ func roleOf(cfg *Config, name string) Role {
 // model and fable, a low one on the cheaper models.
 const spendTables = `
 [spend.high]
-codex-judge = { model = "gpt-6.1-astra", effort = "xhigh", rereview_effort = "xhigh" }
-codex-review = { model = "gpt-6.1-astra" }
+codex-judge = { model = "gpt-6-astra", effort = "xhigh", rereview_effort = "xhigh" }
+codex-review = { model = "gpt-6-astra" }
 claude-review = { model = "fable", effort = "xhigh" }
 
 [spend.low]
@@ -228,9 +228,9 @@ func TestASpendLevelTableSetsModelsAndEfforts(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkSpend(t, "spend high", cfg, map[string]spendWant{
-		RoleCodexJudge:     {"gpt-6.1-astra", [2]string{"xhigh", "xhigh"}},
+		RoleCodexJudge:     {"gpt-6-astra", [2]string{"xhigh", "xhigh"}},
 		RoleClaudeReview:   {"fable", [2]string{"xhigh", "xhigh"}}, // rereview_effort: the notch mapping's
-		RoleCodexReview:    {"gpt-6.1-astra", [2]string{"xhigh", "xhigh"}},
+		RoleCodexReview:    {"gpt-6-astra", [2]string{"xhigh", "xhigh"}},
 		RoleClaudeFix:      {"opus", [2]string{"xhigh", "xhigh"}}, // not in the table
 		RoleClaudeSimplify: {"", [2]string{"xhigh", "xhigh"}},     // in the low table only
 	})
@@ -268,7 +268,7 @@ claude-fix = { model = "sonnet" }
 		t.Fatal(err)
 	}
 	judge := roleOf(cfg, RoleCodexJudge)
-	if judge.Model != "gpt-6.1-astra" || judge.MaxSubagents == nil || *judge.MaxSubagents != 4 {
+	if judge.Model != "gpt-6-astra" || judge.MaxSubagents == nil || *judge.MaxSubagents != 4 {
 		t.Errorf("base and user tables: codex-judge model %q, max_subagents %v; want the user's astra and the base's 4", judge.Model, judge.MaxSubagents)
 	}
 	if fix := roleOf(cfg, RoleClaudeFix); fix.Model != "sonnet" {
@@ -308,7 +308,7 @@ claude-review = { model = "fable", effort = "xhigh" }
 func TestAnOperatorsOwnSpendLevelStartsFromMedium(t *testing.T) {
 	const body = `
 [spend.burn]
-codex-judge = { model = "gpt-6.1-astra", rereview_effort = "xhigh", max_subagents = 0 }
+codex-judge = { model = "gpt-6-astra", rereview_effort = "xhigh", max_subagents = 0 }
 claude-review = { effort = "xhigh" }
 `
 	cfg, _, err := loadUser(t, spendUser("burn", body))
@@ -328,7 +328,7 @@ claude-review = { effort = "xhigh" }
 		}
 	}
 	judge := roleOf(cfg, RoleCodexJudge)
-	if judge.Model != "gpt-6.1-astra" || judge.MaxSubagents == nil || *judge.MaxSubagents != 0 {
+	if judge.Model != "gpt-6-astra" || judge.MaxSubagents == nil || *judge.MaxSubagents != 0 {
 		t.Errorf("spend burn: codex-judge model %q, max_subagents %v; want astra and 0", judge.Model, judge.MaxSubagents)
 	}
 	if r := roleOf(cfg, RoleClaudeReview); r.Model != "" {
@@ -421,8 +421,8 @@ func TestAShellRolesModelNeedsItsCommandToUseIt(t *testing.T) {
 	const own = "\n[[role]]\nname = \"codex-review\"\ncommand = \"codex review --base {{.BaseRef}}\"\n"
 	_, _, err = loadUser(t, spendUser("", own+"model = \"gpt-6.1-sol\"\n"))
 	wantError(t, err, `role codex-review`, `model "gpt-6.1-sol" reaches a shell role only as {{.Model}} in its command, which does not use it`)
-	_, _, err = loadUser(t, spendUser(SpendHigh, own+"\n[spend.high]\ncodex-review = { model = \"gpt-6.1-astra\" }\n"))
-	wantError(t, err, `model "gpt-6.1-astra" reaches a shell role only as {{.Model}}`)
+	_, _, err = loadUser(t, spendUser(SpendHigh, own+"\n[spend.high]\ncodex-review = { model = \"gpt-6-astra\" }\n"))
+	wantError(t, err, `model "gpt-6-astra" reaches a shell role only as {{.Model}}`)
 	if _, _, err = loadUser(t, spendUser("", "\n[[role]]\nname = \"codex-review\"\ncommand = \"\"\nprompt = \"codex-review.sh\"\nmodel = \"gpt-6.1-sol\"\n")); err != nil {
 		t.Fatalf("codex-review.sh with a model: %v", err)
 	}
