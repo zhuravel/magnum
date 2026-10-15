@@ -3162,6 +3162,12 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
     that cannot be copied is a warning (PromptSnapshot.Warnings). Call it once,
     before the goroutines that resolve prompts start.
 
+func (c *Config) SpendLevel(kind string) string
+    SpendLevel is the spend level of the roles whose agent kind (Role.AgentKind)
+    is kind: the kind's own spend ([kinds.<name>] spend), else [pipeline] spend,
+    SpendMedium when neither names one. A shell role without a tool (kind "")
+    and an undeclared kind take [pipeline] spend.
+
 func (c *Config) Stages(w *Watch) [][]Role
     Stages orders the watch's roles for a round: non-judge roles layered by
     After (a stage holds the roles whose dependencies all ran in earlier stages;
@@ -3508,6 +3514,12 @@ type Kind struct {
 	// Effort: args that set reasoning effort {effort}; empty = the effort
 	// reaches prompts only (Role.Effort is a template variable either way).
 	Effort []string `toml:"effort"`
+	// Spend: the spend level of the kind's roles (those whose
+	// Role.AgentKind is the kind, a shell role's tool counting), in place
+	// of [pipeline] spend: its notch mapping and its [spend.<level>] table
+	// apply to them (Config.SpendLevel, applySpend). A built-in level or
+	// one a [spend.<level>] table declares; "" = [pipeline] spend.
+	Spend string `toml:"spend"`
 	// Subagents: args that cap the subagents a session may have open at
 	// once to {subagents} (Role.MaxSubagents, 1 or more), e.g. codex's
 	// ["-c", "agents.max_concurrent_threads_per_session={subagents}"];
@@ -3944,7 +3956,8 @@ type Pipeline struct {
 	// level is the operator's own, declared by a [spend.<level>] table
 	// (Config.SpendLevels), and starts from SpendMedium. The active level's
 	// table then sets the keys it names on its roles over everything else
-	// (applySpend).
+	// (applySpend). A kind's own level (Kind.Spend) takes its place for the
+	// roles of that kind (Config.SpendLevel).
 	Spend string `toml:"spend"`
 	// StatusComment switches the review status comment on: one comment on
 	// the conversation of each PR magnum means to review, posted as the PR's
@@ -4198,10 +4211,11 @@ type Role struct {
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
 	// shell role's command gets them too, codex-review both as config
 	// overrides, and a shell role's model needs a command that uses it). A
-	// built-in role's Effort and RereviewEffort follow [pipeline] spend
-	// (Pipeline.Spend) unless a [[role]] block sets them, and the active
-	// level's [spend.<level>] table (Config.SpendLevels) sets Model, Effort,
-	// RereviewEffort and MaxSubagents over both.
+	// built-in role's Effort and RereviewEffort follow its spend level (its
+	// kind's spend, else [pipeline] spend: Config.SpendLevel) unless a
+	// [[role]] block sets them, and that level's [spend.<level>] table
+	// (Config.SpendLevels) sets Model, Effort, RereviewEffort and
+	// MaxSubagents over both.
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after

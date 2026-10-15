@@ -47,6 +47,12 @@ type Kind struct {
 	// Effort: args that set reasoning effort {effort}; empty = the effort
 	// reaches prompts only (Role.Effort is a template variable either way).
 	Effort []string `toml:"effort"`
+	// Spend: the spend level of the kind's roles (those whose
+	// Role.AgentKind is the kind, a shell role's tool counting), in place
+	// of [pipeline] spend: its notch mapping and its [spend.<level>] table
+	// apply to them (Config.SpendLevel, applySpend). A built-in level or
+	// one a [spend.<level>] table declares; "" = [pipeline] spend.
+	Spend string `toml:"spend"`
 	// Subagents: args that cap the subagents a session may have open at
 	// once to {subagents} (Role.MaxSubagents, 1 or more), e.g. codex's
 	// ["-c", "agents.max_concurrent_threads_per_session={subagents}"];

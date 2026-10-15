@@ -28,10 +28,10 @@ type rolesOpts struct {
 func newRolesCmd(c *Context) *cobra.Command {
 	var o rolesOpts
 	cmd := newCommand(groupInspect, "roles "+rolesUsage, "the effective review roles per watch (--kinds: the agent CLIs magnum drives)",
-		"Print the review roles each [[watch]] runs, resolved from [[role]], [pipeline] spend and its [spend.<level>] table, and the built-in defaults: name, kind, "+
+		"Print the review roles each [[watch]] runs, resolved from [[role]], [pipeline] spend (or the role's kind's own spend) and its [spend.<level>] table, and the built-in defaults: name, kind, "+
 			"runs, model, effort, the rounds one session serves (max_session_rounds), capture, report file, initial prompt (and whether prompts_dir or the embedded copy "+
 			"provides it), the roles it runs after, the judge and the aliases --role accepts; the first line names prompts_dir and "+
-			"the spend level. --repo shows the roles "+
+			"the spend level, with each kind whose own [kinds.<name>] spend differs. --repo shows the roles "+
 			"of the watch covering one repository. --kinds prints the [kinds.<name>] specs instead: wrapper mode, "+
 			"login check, the resume, model, effort, subagents, MCP-off and name args, the session source and the command line each "+
 			"role starts with. --json prints the resolved roles (or kinds) as JSON keyed like config.toml.",
@@ -161,6 +161,23 @@ func rolesPrompt(cfg *config.Config, r config.Role) (name, source string) {
 	return name, "prompts_dir"
 }
 
+// rolesSpend is the header's spend level: [pipeline] spend, then each kind
+// whose own level ([kinds.<name>] spend) differs, in kind name order, e.g.
+// "high (codex: low)".
+func rolesSpend(cfg *config.Config) string {
+	spend := cmp.Or(cfg.Pipeline.Spend, config.SpendMedium)
+	var own []string
+	for _, name := range cfg.KindNames() {
+		if lvl := cfg.SpendLevel(name); lvl != spend {
+			own = append(own, name+": "+lvl)
+		}
+	}
+	if len(own) == 0 {
+		return spend
+	}
+	return spend + " (" + strings.Join(own, ", ") + ")"
+}
+
 func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
 	// The header: where the prompts come from and the spend level the roles'
 	// models and efforts follow (the MODEL and EFFORT columns show the result).
@@ -173,7 +190,7 @@ func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
 	default:
 		prompts = inspTilde(dir)
 	}
-	fmt.Fprintf(w, "prompts_dir: %s; spend: %s\n", prompts, cmp.Or(cfg.Pipeline.Spend, config.SpendMedium))
+	fmt.Fprintf(w, "prompts_dir: %s; spend: %s\n", prompts, rolesSpend(cfg))
 	for _, g := range groups {
 		fmt.Fprintf(w, "\n%s\n", rolesHeader(g))
 		if len(g.Roles) == 0 {

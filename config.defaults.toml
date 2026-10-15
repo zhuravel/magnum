@@ -307,6 +307,8 @@ spend = "medium"                  # the spend level: how hard, and on which mode
                                   #   claude-review = { model = "fable", effort = "xhigh" }
                                   #   [spend.low]
                                   #   claude-review = { model = "sonnet", effort = "medium" }
+                                  # A kind's own spend (spend in [kinds.codex] below, or any kind's) takes this
+                                  # one's place for that kind's roles.
                                   # Read at startup: `magnum daemon-restart --drain` applies a change; `magnum
                                   # roles` shows the models and efforts
 status_comment = false            # true: one comment on each PR magnum means to review, posted as the PR's
@@ -345,6 +347,12 @@ status_comment_note = ""          # a line of yours under the status comment whi
 #                                     # `model` args; e.g. "gpt-6.1-sol" makes the judge start with
 #                                     # --model gpt-6.1-sol ("" = codex's own default; a role's model wins)
 # effort = ["-c", "model_reasoning_effort={effort}"]
+# spend = ""                          # the spend level of the codex roles (codex-judge, and codex-review through
+#                                     # its tool) in place of [pipeline] spend: that level's notch and its
+#                                     # [spend.<level>] table apply to them, e.g. "low" while Codex's week runs
+#                                     # short and Claude's does not; built in or declared by a table, as for
+#                                     # [pipeline] spend; "" = [pipeline] spend. Every kind takes it, and a
+#                                     # [kinds.codex] block that sets only spend keeps the rest of the kind
 # subagents = ["-c", "agents.max_concurrent_threads_per_session={subagents}"]   # a role's max_subagents: the
 #                                     # spawned-agent threads open at once, the primary excluded (at least 1)
 # no_subagents = ["-c", "agents.enabled=false"]   # max_subagents = 0: no multi-agent tools at all

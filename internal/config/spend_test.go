@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/zhuravel/magnum"
@@ -425,5 +426,105 @@ func TestAShellRolesModelNeedsItsCommandToUseIt(t *testing.T) {
 	wantError(t, err, `model "gpt-6-astra" reaches a shell role only as {{.Model}}`)
 	if _, _, err = loadUser(t, spendUser("", "\n[[role]]\nname = \"codex-review\"\ncommand = \"\"\nprompt = \"codex-review.sh\"\nmodel = \"gpt-6.1-sol\"\n")); err != nil {
 		t.Fatalf("codex-review.sh with a model: %v", err)
+	}
+}
+
+// A kind's own spend level ([kinds.<name>] spend) wins over [pipeline] spend
+// for the roles of that agent kind, a shell role's tool counting as its kind:
+// they take the kind's notch and its level's table, and every other role
+// keeps [pipeline] spend's.
+func TestAKindsOwnSpendLevelWinsForItsRoles(t *testing.T) {
+	cfg, _, err := loadUser(t, spendUser(SpendHigh, spendTables+"\n[kinds.codex]\nspend = \"low\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkSpend(t, "spend high, codex low", cfg, map[string]spendWant{
+		RoleCodexJudge: {"gpt-6.1-sol", [2]string{"high", "medium"}}, // [spend.low]'s
+		// A shell role with tool = "codex": the low notch, and the low table's
+		// model, which it does not name, rather than [spend.high]'s astra.
+		RoleCodexReview:  {"", [2]string{"medium", ""}},
+		RoleClaudeReview: {"fable", [2]string{"xhigh", "xhigh"}}, // [spend.high]'s
+		RoleClaudeFix:    {"opus", [2]string{"xhigh", "xhigh"}},  // the high notch
+	})
+	if lvl := cfg.SpendLevel(KindCodex); lvl != SpendLow {
+		t.Errorf("SpendLevel(codex) = %q, want low", lvl)
+	}
+	if lvl := cfg.SpendLevel(KindClaude); lvl != SpendHigh {
+		t.Errorf("SpendLevel(claude) = %q, want [pipeline] spend's high", lvl)
+	}
+
+	// A kind without the key, and a shell role without a tool, keep
+	// [pipeline] spend.
+	const own = `
+[[role]]
+name = "lint"
+kind = "shell"
+command = "true"
+
+[spend.low]
+lint = { effort = "low" }
+codex-judge = { model = "gpt-6.1-sol" }
+
+[spend.high]
+lint = { effort = "xhigh" }
+claude-review = { model = "fable" }
+
+[kinds.claude]
+spend = "high"
+`
+	cfg, _, err = loadUser(t, spendUser(SpendLow, own))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkSpend(t, "spend low, claude high", cfg, map[string]spendWant{
+		RoleCodexJudge:   {"gpt-6.1-sol", [2]string{"high", "medium"}},
+		RoleCodexReview:  {"", [2]string{"medium", ""}},
+		RoleClaudeReview: {"fable", [2]string{"xhigh", "xhigh"}},
+		"lint":           {"", [2]string{"low", ""}},
+	})
+	if lvl := cfg.SpendLevel(""); lvl != SpendLow {
+		t.Errorf(`SpendLevel("") = %q, want [pipeline] spend's low`, lvl)
+	}
+}
+
+// A kind's spend names a level as [pipeline] spend does: built in or declared
+// by a [spend.<level>] table; any other name is refused with the declared
+// names and the kind that named it.
+func TestAKindsSpendNamingAnUndeclaredLevelIsRefused(t *testing.T) {
+	_, _, err := loadUser(t, spendUser(SpendHigh, spendTables+"\n[kinds.codex]\nspend = \"burn\"\n"))
+	wantError(t, err, `kinds.codex: spend must be "low", "medium" or "high", got "burn"`)
+	_, _, err = loadUser(t, spendUser("", "\n[spend.tight]\nclaude-review = { model = \"sonnet\" }\n\n[kinds.droid]\nspend = \"burn\"\n"))
+	wantError(t, err, `kinds.droid: spend must be "low", "medium", "high" or "tight", got "burn"`)
+	cfg, _, err := loadUser(t, spendUser("", "\n[spend.burn]\ncodex-judge = { model = \"gpt-6-astra\" }\n\n[kinds.codex]\nspend = \"burn\"\n"))
+	if err != nil {
+		t.Fatalf("a declared level: %v", err)
+	}
+	if r := roleOf(cfg, RoleCodexJudge); r.Model != "gpt-6-astra" {
+		t.Errorf("codex at burn: codex-judge model %q, want [spend.burn]'s astra", r.Model)
+	}
+}
+
+// [kinds.codex] spend alone in the operator's file sets that key only: the
+// kinds merge key by key, so the rest of the built-in codex kind stays.
+func TestAKindsSpendKeepsTheRestOfTheKind(t *testing.T) {
+	plain, _, err := loadUser(t, spendUser("", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := loadUser(t, spendUser("", "\n[kinds.codex]\nspend = \"low\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := plain.KindSpec(KindCodex)
+	got, ok := cfg.KindSpec(KindCodex)
+	if !ok || got.Spend != SpendLow {
+		t.Fatalf("codex kind %v, spend %q; want spend low", ok, got.Spend)
+	}
+	if len(got.Resume) == 0 || len(got.Args) == 0 || len(got.HealthPatterns.UsageLimit) == 0 || len(got.HealthPatterns.Refused) == 0 {
+		t.Errorf("codex kind lost its built-in keys: resume %q, args %q, health patterns %+v", got.Resume, got.Args, got.HealthPatterns)
+	}
+	got.Spend = ""
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("codex kind with spend = %+v\nwant the built-in %+v", got, want)
 	}
 }

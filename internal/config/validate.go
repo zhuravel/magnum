@@ -765,8 +765,9 @@ func (c *Config) validatePipeline() []error {
 // validateSpend checks [pipeline] spend and the [spend.<level>] tables: a
 // level's name is short and lower case, a table names only built-in roles
 // and declared [[role]]s (by name; the loader's unknown-key refusal covers
-// the keys), and spend names a built-in level or a declared one. A table for
-// a level spend does not name is checked too: it is declared for later.
+// the keys), and spend, [pipeline]'s and each kind's, names a built-in level
+// or a declared one. A table for a level no spend names is checked too: it is
+// declared for later.
 func (c *Config) validateSpend() []error {
 	var errs []error
 	builtins := DefaultRoles()
@@ -785,7 +786,12 @@ func (c *Config) validateSpend() []error {
 			}
 		}
 	}
-	if v := c.Pipeline.Spend; !isBuiltinSpend(v) && !slices.Contains(own, v) {
+	// level refuses a spend value (of where) that names neither a built-in
+	// level nor a declared one, listing the declared names.
+	level := func(where, v string) {
+		if isBuiltinSpend(v) || slices.Contains(own, v) {
+			return
+		}
 		names := []string{SpendLow, SpendMedium, SpendHigh}
 		for _, l := range own {
 			if spendLevelName.MatchString(l) {
@@ -797,7 +803,12 @@ func (c *Config) validateSpend() []error {
 			quoted[i] = fmt.Sprintf("%q", n)
 		}
 		list := strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
-		errs = append(errs, fmt.Errorf("pipeline: spend must be %s, got %q", list, v))
+		errs = append(errs, fmt.Errorf("%s: spend must be %s, got %q", where, list, v))
+	}
+	level("pipeline", c.Pipeline.Spend)
+	kinds := c.kinds()
+	for _, name := range c.KindNames() {
+		level("kinds."+name, kinds[name].Spend)
 	}
 	return errs
 }

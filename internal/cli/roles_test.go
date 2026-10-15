@@ -179,6 +179,52 @@ func TestRolesPrintsTheSpendProfile(t *testing.T) {
 	}
 }
 
+// The header adds the kinds whose own spend level ([kinds.<name>] spend)
+// differs from [pipeline] spend, in kind name order; a kind that names the
+// same level is left out, and the EFFORT column shows the kind's level.
+func TestRolesNamesTheKindsWithTheirOwnSpendLevel(t *testing.T) {
+	fixture := func(kinds string) *inspFixture {
+		f := newRolesFixture(t)
+		path := filepath.Join(f.Home, "config.toml")
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := strings.Replace(string(b), "[pipeline]\n", "[pipeline]\nspend = \"high\"\n", 1)
+		cfg = strings.Replace(cfg, "[kinds.claude]\n", "[kinds.claude]\nspend = \"high\"\n", 1)
+		if err := os.WriteFile(path, []byte(cfg+kinds), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	f := fixture("\n[kinds.codex]\nspend = \"low\"\n")
+	if code := f.run("roles", "--repo", "talkable/talkable"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.Err.String())
+	}
+	out := f.Out.String()
+	actContains(t, out, "prompts_dir: "+f.Home+"/prompts; spend: high (codex: low)\n")
+	rows := map[string]string{}
+	for line := range strings.SplitSeq(out, "\n") {
+		if fs := strings.Fields(line); len(fs) > 0 {
+			rows[fs[0]] = strings.Join(fs, " ")
+		}
+	}
+	for role, want := range map[string]string{
+		"codex-judge":   "codex-judge codex always - high 6 rounds",
+		"claude-review": "claude-review claude always - xhigh -",
+	} {
+		if !strings.HasPrefix(rows[role], want) {
+			t.Errorf("%s row = %q, want it to start %q", role, rows[role], want)
+		}
+	}
+
+	f = fixture("\n[kinds.droid]\nspend = \"medium\"\n\n[kinds.codex]\nspend = \"low\"\n")
+	if code := f.run("roles"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.Err.String())
+	}
+	actContains(t, f.Out.String(), "; spend: high (codex: low, droid: medium)\n")
+}
+
 // The rounds one session of a role serves (max_session_rounds) are shown
 // with the other role keys: the built-in judge's 6, "-" for no limit and for
 // a shell role, which keeps no session; --json keys it like config.toml.

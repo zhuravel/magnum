@@ -99,7 +99,8 @@ type Pipeline struct {
 	// level is the operator's own, declared by a [spend.<level>] table
 	// (Config.SpendLevels), and starts from SpendMedium. The active level's
 	// table then sets the keys it names on its roles over everything else
-	// (applySpend).
+	// (applySpend). A kind's own level (Kind.Spend) takes its place for the
+	// roles of that kind (Config.SpendLevel).
 	Spend string `toml:"spend"`
 	// StatusComment switches the review status comment on: one comment on
 	// the conversation of each PR magnum means to review, posted as the PR's
@@ -541,9 +542,10 @@ func readLayerData(file string, data []byte, md toml.MetaData, kinds map[string]
 
 // buildPipeline computes Kinds and Roles from the built-in defaults, the
 // config file's blocks and the overlay's blocks, in that order, then applies
-// [pipeline] spend: its notch mapping to the efforts of the built-in roles
-// that no block of the operator's set, and its [spend.<level>] table over
-// them (applySpend).
+// each role's spend level (its kind's spend, else [pipeline] spend:
+// SpendLevel): its notch mapping to the efforts of the built-in roles that
+// no block of the operator's set, and its [spend.<level>] table over them
+// (applySpend).
 func (c *Config) buildPipeline(base, over *layer) {
 	kinds := DefaultKinds()
 	builtins := DefaultRoles()
@@ -592,40 +594,49 @@ func (c *Config) buildPipeline(base, over *layer) {
 			roles = append(roles, mergeRole(builtinRole(builtins, r.Name), r, over.raw, i))
 		}
 	}
-	c.Kinds, c.Roles = kinds, applySpend(c.Pipeline.Spend, c.SpendLevels, roles, builtins, set)
+	c.Kinds = kinds
+	c.Roles = applySpend(c.SpendLevel, c.SpendLevels, roles, builtins, set)
 }
 
-// applySpend applies the spend level to roles, in two steps. First the notch
-// mapping: the effort and rereview_effort of each built-in role (one named
-// like a role of builtins) go through spendEffort, unless a [[role]] block of
-// the operator's set that key (set, by role name): an explicit key wins over
+// SpendLevel is the spend level of the roles whose agent kind
+// (Role.AgentKind) is kind: the kind's own spend ([kinds.<name>] spend),
+// else [pipeline] spend, SpendMedium when neither names one. A shell role
+// without a tool (kind "") and an undeclared kind take [pipeline] spend.
+func (c *Config) SpendLevel(kind string) string {
+	if k, ok := c.kinds()[kind]; ok && k.Spend != "" {
+		return k.Spend
+	}
+	return cmp.Or(c.Pipeline.Spend, SpendMedium)
+}
+
+// applySpend applies each role's spend level (level, by the role's agent
+// kind: Config.SpendLevel) to roles, in two steps. First the notch mapping:
+// the effort and rereview_effort of each built-in role (one named like a
+// role of builtins) go through spendEffort, unless a [[role]] block of the
+// operator's set that key (set, by role name): an explicit key wins over
 // the mapping, in the user config and in a base configuration of their own
 // alike, while the embedded config.defaults.toml only writes the built-in
 // values out; a role that is not built in keeps what it has. Then the
-// level's table (levels[spend], "" counting as SpendMedium): each role it
-// names, built in or not, takes the keys the table sets, over its own
-// [[role]] keys and the mapping alike, the table being the more specific
-// intent. A name no role has is skipped (Validate reports it).
-func applySpend(spend string, levels map[string]map[string]SpendRole, roles, builtins []Role, set map[string]map[string]bool) []Role {
+// level's table (levels[level]): each role it names, built in or not,
+// takes the keys the table sets, over its own [[role]] keys and the
+// mapping alike, the table being the more specific intent. A name no role
+// has is skipped (Validate reports it).
+func applySpend(level func(kind string) string, levels map[string]map[string]SpendRole, roles, builtins []Role, set map[string]map[string]bool) []Role {
 	for i := range roles {
 		r := &roles[i]
-		if !slices.ContainsFunc(builtins, func(b Role) bool { return b.Name == r.Name }) {
-			continue
+		spend := level(r.AgentKind())
+		if slices.ContainsFunc(builtins, func(b Role) bool { return b.Name == r.Name }) {
+			if !set[r.Name]["effort"] {
+				r.Effort = spendEffort(spend, r.Effort)
+			}
+			if !set[r.Name]["rereview_effort"] {
+				r.RereviewEffort = spendEffort(spend, r.RereviewEffort)
+			}
 		}
-		if !set[r.Name]["effort"] {
-			r.Effort = spendEffort(spend, r.Effort)
-		}
-		if !set[r.Name]["rereview_effort"] {
-			r.RereviewEffort = spendEffort(spend, r.RereviewEffort)
-		}
-	}
-	table := levels[cmp.Or(spend, SpendMedium)]
-	for i := range roles {
-		t, ok := table[roles[i].Name]
+		t, ok := levels[spend][r.Name]
 		if !ok {
 			continue
 		}
-		r := &roles[i]
 		if t.Model != nil {
 			r.Model = *t.Model
 		}

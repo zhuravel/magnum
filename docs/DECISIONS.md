@@ -1501,6 +1501,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `.Model` out, so a model is never dropped without a word. `magnum roles` keeps `spend: <level>` in its
   first line and shows the resulting model and effort; its JSON gains nothing. Not done: a per-watch level,
   and the tables cover only `[[role]]`s, not `[learn]` or `[notes]`.
+- **An agent kind can have its own spend level** (2026-10-15; amends "A spend level can set models and
+  efforts per role, and levels can be the operator's own"). On 10-15 the operator's Codex weekly window
+  reached 97% and the hard cap paused Codex while Claude had room, and `[pipeline] spend` is one level for
+  every role: the `[spend.<level>]` tables hang off that one level, so "Codex low, Claude high" could not
+  be said. The operator asked for separate spend settings for Claude and Codex. Now a kind takes `spend`
+  (`Kind.Spend`, default empty): a role whose `AgentKind()` is that kind runs at the kind's level in place
+  of `[pipeline] spend` (`Config.SpendLevel`, which `applySpend` asks per role), with that level's notch
+  mapping and its table; a shell role counts as the kind its `tool` names (`codex-review` as `codex`), and
+  a shell role without a tool, like a kind without the key, keeps `[pipeline] spend`. The precedence below
+  the level is unchanged (the level's table, the role block's keys, the notch mapping, the built-in
+  defaults); only which level is active for a role changed. Validation is `[pipeline] spend`'s: a built-in
+  level or one a `[spend.<level>]` table declares, refused otherwise with the declared names and the kind
+  (`kinds.codex: spend must be "low", "medium" or "high", got "burn"`). A `[kinds.codex]` block that sets
+  only `spend` keeps the rest of the built-in kind, since the kinds merge key by key (`mergeDefined`).
+  `magnum roles` keeps `spend: <level>` in its first line and adds the kinds whose level differs, in kind
+  name order (`spend: high (codex: low)`); its roles JSON carries no level, so it gains nothing, and
+  `--kinds --json` shows the key with the rest of each kind. Rejected: flat keys such as `spend_codex`
+  under `[pipeline]`, which hardcode kind names and leave the operator's own kinds without one; a map
+  `spend_kinds` under `[pipeline]`, a second place for a kind's setting beside its `[kinds.<name>]` block.
 
 ## Screens and commands
 

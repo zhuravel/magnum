@@ -75,10 +75,11 @@ type Role struct {
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
 	// shell role's command gets them too, codex-review both as config
 	// overrides, and a shell role's model needs a command that uses it). A
-	// built-in role's Effort and RereviewEffort follow [pipeline] spend
-	// (Pipeline.Spend) unless a [[role]] block sets them, and the active
-	// level's [spend.<level>] table (Config.SpendLevels) sets Model, Effort,
-	// RereviewEffort and MaxSubagents over both.
+	// built-in role's Effort and RereviewEffort follow its spend level (its
+	// kind's spend, else [pipeline] spend: Config.SpendLevel) unless a
+	// [[role]] block sets them, and that level's [spend.<level>] table
+	// (Config.SpendLevels) sets Model, Effort, RereviewEffort and
+	// MaxSubagents over both.
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after
