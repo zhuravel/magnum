@@ -25,7 +25,7 @@ type FindingsInfo struct {
 	// post: blocking (request changes), non_blocking (comment) or clean
 	// (approve).
 	Verdict string
-	Posted  string // the event it posted: APPROVE, REQUEST_CHANGES or COMMENT
+	Posted  string // what it was posted as: APPROVED, CHANGES_REQUESTED or COMMENTED (an event's name, APPROVE, is read alike)
 	SHA     string // the reviewed head
 }
 

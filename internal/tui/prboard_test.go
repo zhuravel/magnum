@@ -1075,6 +1075,39 @@ func TestPRBoardShowsFindingsAndPostsAVerdict(t *testing.T) {
 	}
 }
 
+// The registry records what a review was posted as in GitHub's state names
+// (COMMENTED, APPROVED, CHANGES_REQUESTED), the decision is a request's
+// event (COMMENT, APPROVE, REQUEST_CHANGES): the card's decision says
+// "posted as" only when the posting differs from the decision, whichever
+// names either side uses.
+func TestTheCardComparesPostedStatesWithRequestEvents(t *testing.T) {
+	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{})
+	p := m.painter()
+	for _, tc := range []struct {
+		verdict, posted, want string // want: the posting the line names, "" for none
+	}{
+		{"non_blocking", "COMMENTED", ""},
+		{"non_blocking", "COMMENT", ""},
+		{"clean", "APPROVED", ""},
+		{"clean", "approve", ""},
+		{"blocking", "CHANGES_REQUESTED", ""},
+		{"blocking", "REQUEST_CHANGES", ""},
+		{"clean", "COMMENTED", "commented"},
+		{"clean", "COMMENT", "comment"},
+		{"blocking", "COMMENTED", "commented"},
+		{"blocking", "COMMENT", "comment"},
+		{"non_blocking", "APPROVED", "approved"},
+	} {
+		line := ansi.Strip(p.findingsLines(FindingsInfo{Verdict: tc.verdict, Posted: tc.posted})[0])
+		switch {
+		case tc.want == "" && strings.Contains(line, "posted as"):
+			t.Errorf("%s posted as %s: %q, want no posting override", tc.verdict, tc.posted, line)
+		case tc.want != "" && !strings.HasSuffix(line, "; posted as "+tc.want+" (A approves, C requests changes)"):
+			t.Errorf("%s posted as %s: %q, want it posted as %s", tc.verdict, tc.posted, line, tc.want)
+		}
+	}
+}
+
 // A PR open before magnum watched its repository reads "not reviewed", and
 // its card says what starts a review; A has nothing to approve on it.
 func TestPRBoardNotReviewedRows(t *testing.T) {

@@ -34,7 +34,7 @@ func TestBoardStateCellShowsTheStageAndTimeOfARunningRound(t *testing.T) {
 	ended := RoleProgress{Role: "claude-review", Label: "claude", Started: since, Ended: boardNow.Add(-time.Minute)}
 	judge := RoleProgress{Role: "codex-judge", Label: "cj", Judge: true, Started: since, Working: true}
 	delta := runningRow(boardNow.Add(-4*time.Minute), judge)
-	delta.RoundWhy = &RoundWhy{Kind: "rereview", DeltaCheck: true, DeltaLines: 4, Roles: []string{"codex-judge"}}
+	delta.RoundWhy = &RoundWhy{Kind: "rereview", DeltaCheck: true, DeltaLines: 4, Roles: []string{"codex-judge"}, At: delta.Progress.StartedAt}
 	done := runningRow(start, ended)
 	done.State = "reviewed"
 

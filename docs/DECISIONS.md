@@ -2007,6 +2007,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   prints the help. Rejected: dropping the `prs` alias (a rename with no grace costs every alias and script
   the operator has); keeping `magnum` at the help (the help is one word away, the board is what the
   operator opens many times a day).
+- **The card's "posted as" compares like with like, and a running round's kind waits for its own
+  round_start** (2026-10-16). The registry records what a review was posted as in GitHub's state names
+  (`COMMENTED`, `APPROVED`, `CHANGES_REQUESTED`, pipeline normalizeEvent), and findingsLines compared them
+  with the decision's request event (`COMMENT`, `APPROVE`, `REQUEST_CHANGES`), so every posted review's card
+  read "Decision: approve; posted as approved (A approves, C requests changes)". Both sides now go through
+  normVerdict, and a real override (a clean verdict posted as a comment) still says so. The engine stamps a
+  round's start (`last_round_started_at`, enterReviewing) before it writes `engine.round_start`, so for one
+  refresh a running round's RoundWhy is the previous round's: a round after a delta check read "delta
+  check". runningRoundWhy trusts RoundWhy for a running round only with a start of its own at or after the
+  round's (the rule the cli's listNamedRoles already follows); until then the state cell shows the stage and
+  the time with no kind, and the card's LAST ROUND the timeline without the previous round's roles and
+  kind. A delta check that waits keeps its words, which the daemon's wait decides. Rejected: a new row field
+  for the running round's kind (both times already reach the row).
 
 ## Operations
 

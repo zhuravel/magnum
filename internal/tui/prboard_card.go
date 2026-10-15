@@ -386,8 +386,13 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		}
 	}
 	// A round in flight shows its roles' timeline in place of the stage
-	// timings, which were measured when the rows were read.
-	if t, why, g := r.LastRound, r.RoundWhy, roundProgress(r); t != nil || why != nil || g != nil {
+	// timings, which were measured when the rows were read, and why it runs
+	// once that is known (runningRoundWhy), never the previous round's.
+	why, g := r.RoundWhy, roundProgress(r)
+	if g != nil {
+		why = runningRoundWhy(r)
+	}
+	if t := r.LastRound; t != nil || why != nil || g != nil {
 		head := p.g.headed("LAST ROUND")
 		if t != nil {
 			head += fmt.Sprintf(" (%d", t.Round)
@@ -742,7 +747,9 @@ func (p *prbPainter) findingsLines(f FindingsInfo) []string {
 		glyph, st := p.findingsVerdict(f.Verdict)
 		line = st.Render(glyph) + " " + line
 	}
-	if f.Posted != "" && want != "" && !strings.EqualFold(f.Posted, want) {
+	// Posted is a review state (COMMENTED), want a request's event (COMMENT):
+	// normVerdict folds both, as the pipeline's normalizeEvent does.
+	if f.Posted != "" && want != "" && normVerdict(f.Posted) != normVerdict(want) {
 		line += "; posted as " + strings.ToLower(strings.ReplaceAll(f.Posted, "_", " ")) +
 			" (A approves, C requests changes)"
 	}

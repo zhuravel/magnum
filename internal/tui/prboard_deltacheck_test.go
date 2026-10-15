@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -28,8 +29,9 @@ func TestPRBoardShowsTheDeltaCheckKind(t *testing.T) {
 	}
 
 	row.State, row.Wait, row.DeltaCheck = "reviewing", "", false
-	row.RoundWhy = &RoundWhy{Kind: "rereview", DeltaCheck: true, DeltaLines: 4, Roles: []string{"codex-judge"}}
-	if got := cell(row); !strings.Contains(got, "reviewing") || !strings.HasSuffix(got, " delta check") {
+	row.Progress = &RoundProgress{StartedAt: boardNow.Add(-4 * time.Minute)}
+	row.RoundWhy = &RoundWhy{Kind: "rereview", DeltaCheck: true, DeltaLines: 4, Roles: []string{"codex-judge"}, At: row.Progress.StartedAt}
+	if got := cell(row); !strings.Contains(got, "reviewing") || !strings.HasSuffix(got, " delta check · 4m") {
 		t.Errorf("in flight: state cell = %q", got)
 	}
 	row.State = "reviewed" // the round ended: the pill says nothing more
@@ -102,5 +104,63 @@ func TestPRBoardSinceReviewMarksAMergeOfTheBase(t *testing.T) {
 	row.SinceReview = plain
 	if got := sinceSection(t, row); strings.Contains(got, "merge") || strings.Contains(got, "raw") {
 		t.Errorf("a plain push: %q", got)
+	}
+}
+
+// The engine stamps a round's start (Progress.StartedAt) before it writes
+// the round's engine.round_start, so for a moment the RoundWhy a row carries
+// is the previous round's. A running round's state cell and card trust it
+// only once it is the running round's: a start of its own at or after the
+// round's; until then the cell shows the stage and time with no kind. A
+// delta check that waits keeps its words, which the daemon's wait decides.
+func TestARunningRoundIgnoresThePreviousRoundsDeltaCheck(t *testing.T) {
+	m, _, _ := newBoard(t, 220, 40, PRBoardOptions{})
+	p := m.painter()
+	start := boardNow.Add(-4 * time.Minute)
+	judge := RoleProgress{Role: "codex-judge", Label: "cj", Judge: true, Started: start, Working: true}
+	running := func(at time.Time) PRBoardRow {
+		r := runningRow(start, judge)
+		r.RoundWhy = &RoundWhy{Kind: "rereview", DeltaCheck: true, DeltaLines: 4, Roles: []string{"codex-judge"}, At: at}
+		return r
+	}
+	noProgress := running(start)
+	noProgress.Progress = nil
+	unstarted := running(start)
+	unstarted.Progress = &RoundProgress{Roles: []RoleProgress{judge}}
+
+	for _, tc := range []struct {
+		name  string
+		row   PRBoardRow
+		delta bool
+	}{
+		{"the previous round's delta check", running(start.Add(-time.Hour)), false},
+		{"a delta check a second before the round", running(start.Add(-time.Second)), false},
+		{"a RoundWhy with no start", running(time.Time{}), false},
+		{"a round whose progress is unknown", noProgress, false},
+		{"a round with no start", unstarted, false},
+		{"the round's own delta check, at its start", running(start), true},
+		{"the round's own delta check, after its start", running(start.Add(3 * time.Second)), true},
+	} {
+		r := sanitizeRow(tc.row)
+		for _, d := range []stateDetail{stateFull, stateTime, stateBare} {
+			got := ansi.Strip(p.stateWaitDetail(r, d).render(nil))
+			if strings.Contains(got, "delta check") != tc.delta {
+				t.Errorf("%s (detail %d): state cell = %q, delta check shown: %v, want %v", tc.name, d, got, !tc.delta, tc.delta)
+			}
+		}
+		section := lastRoundSection(t, roundsCard(t, tc.row, 100))
+		said := slices.ContainsFunc(section, func(l string) bool { return strings.Contains(l, "delta check (4 lines)") })
+		if said != tc.delta && roundProgress(r) != nil { // the card of a round it cannot see runs names the last round
+			t.Errorf("%s: LAST ROUND = %q, delta check named: %v, want %v", tc.name, section, said, tc.delta)
+		}
+	}
+	if got := ansi.Strip(p.stateWaitCell(sanitizeRow(running(start.Add(-time.Hour)))).render(nil)); !strings.HasSuffix(got, " judge · 4m") {
+		t.Errorf("a round whose kind is not known yet: state cell = %q, want its stage and time", got)
+	}
+
+	queued := running(start.Add(-time.Hour))
+	queued.State, queued.Progress, queued.Wait, queued.DeltaCheck = "rereview_pending", nil, "delta check · quiet → 14:09", true
+	if got := ansi.Strip(p.stateWaitCell(sanitizeRow(queued)).render(nil)); !strings.HasSuffix(got, " delta check · quiet → 14:09") {
+		t.Errorf("a delta check that waits: state cell = %q", got)
 	}
 }

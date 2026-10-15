@@ -165,6 +165,21 @@ func progressText(g RoundProgress, now time.Time, withStage bool) string {
 	return t
 }
 
+// runningRoundWhy is the RoundWhy of the round r runs; nil when no round
+// runs (roundProgress) or r's RoundWhy is not that round's yet: the engine
+// stamps the round's start (Progress.StartedAt) before it writes the
+// round's engine.round_start, so until then RoundWhy is the previous
+// round's, or has no start at all. A RoundWhy is the running round's when
+// it started at or after the round did (the rule the cli's listNamedRoles
+// follows).
+func runningRoundWhy(r PRBoardRow) *RoundWhy {
+	g, w := roundProgress(r), r.RoundWhy
+	if g == nil || w == nil || w.At.IsZero() || w.At.Before(g.StartedAt) {
+		return nil
+	}
+	return w
+}
+
 // cleanRoundProgress is g with its text safe to draw.
 func cleanRoundProgress(g RoundProgress) RoundProgress {
 	g.Roles = slices.Clone(g.Roles)

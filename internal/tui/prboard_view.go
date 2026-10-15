@@ -811,13 +811,15 @@ func roundProgress(r PRBoardRow) *RoundProgress {
 	return r.Progress
 }
 
-// deltaCheckRound reports whether r waits for a delta check or runs one.
+// deltaCheckRound reports whether r waits for a delta check or runs one
+// (runningRoundWhy: never while the running round's kind is not known yet).
 func deltaCheckRound(r PRBoardRow) bool {
 	switch normState(r.State) {
 	case "queued", "rereview_pending":
 		return r.DeltaCheck
 	case "reviewing", "verifying":
-		return r.RoundWhy != nil && r.RoundWhy.DeltaCheck
+		w := runningRoundWhy(r)
+		return w != nil && w.DeltaCheck
 	}
 	return false
 }
