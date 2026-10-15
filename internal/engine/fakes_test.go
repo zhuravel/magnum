@@ -656,6 +656,7 @@ type fakeHerdr struct {
 	workspaces []herdr.Workspace
 	panes      []herdr.Pane
 	closed     []string // WorkspaceClose calls
+	paneClosed []string // PaneClose calls
 	calls      int
 	// lingering lists agents for that many more snapshots (-1: always),
 	// as herdr still lists an agent a moment after it quit.
@@ -702,6 +703,17 @@ func (h *fakeHerdr) WorkspaceClose(_ context.Context, id string) error {
 	h.agents = slices.DeleteFunc(h.agents, func(a herdr.AgentInfo) bool { return a.WorkspaceID == id })
 	h.panes = slices.DeleteFunc(h.panes, func(p herdr.Pane) bool { return p.WorkspaceID == id })
 	h.workspaces = slices.DeleteFunc(h.workspaces, func(w herdr.Workspace) bool { return w.ID == id })
+	return nil
+}
+
+// PaneClose closes one pane with its agent; its workspace and the other
+// panes stay.
+func (h *fakeHerdr) PaneClose(_ context.Context, id string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.paneClosed = append(h.paneClosed, id)
+	h.agents = slices.DeleteFunc(h.agents, func(a herdr.AgentInfo) bool { return a.PaneID == id })
+	h.panes = slices.DeleteFunc(h.panes, func(p herdr.Pane) bool { return p.ID == id })
 	return nil
 }
 
@@ -773,6 +785,9 @@ type fakeAgents struct {
 	// reloads names the roles whose sessions ReloadsProject reports (an
 	// agent that reloads the checkout's project config it loaded).
 	reloads map[string]bool
+	// parkHardErr, when set, is what ParkHard returns (else it parks as
+	// Park does without an error).
+	parkHardErr error
 	// onQuit, when set, runs as Quit starts, with the session it quits.
 	onQuit func(store.Session)
 	// quitErr, when set, is what Quit returns after onQuit (the session stays live).
@@ -974,9 +989,17 @@ func (f *fakeAgents) Park(ctx context.Context, pr store.PR) error {
 			return ctx.Err()
 		}
 	}
-	if f.parkErr != nil {
-		return f.parkErr
+	f.mu.Lock()
+	err := f.parkErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
 	}
+	return f.parkSessions(ctx, pr)
+}
+
+// parkSessions parks the PR's live and starting sessions.
+func (f *fakeAgents) parkSessions(ctx context.Context, pr store.PR) error {
 	ss, err := f.st.SessionsByPR(ctx, pr.ID)
 	if err != nil {
 		return err
@@ -987,6 +1010,18 @@ func (f *fakeAgents) Park(ctx context.Context, pr store.PR) error {
 		}
 	}
 	return nil
+}
+
+// ParkHard parks as Park does, and fails with parkHardErr when set.
+func (f *fakeAgents) ParkHard(ctx context.Context, pr store.PR) error {
+	f.record(fmt.Sprintf("park_hard:%d", pr.ID))
+	f.mu.Lock()
+	err := f.parkHardErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return f.parkSessions(ctx, pr)
 }
 
 // Quit parks one session, as agents.Manager.Quit does with a resumable

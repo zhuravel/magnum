@@ -98,6 +98,7 @@ func (h *miniHerdr) PaneGet(context.Context, string) (herdr.Pane, error) {
 func (h *miniHerdr) PaneSendKeys(context.Context, string, ...string) error {
 	return errUnused
 }
+func (h *miniHerdr) PaneClose(context.Context, string) error { return errUnused }
 func (h *miniHerdr) PaneProcessInfo(context.Context, string) (herdr.ProcessInfo, error) {
 	return herdr.ProcessInfo{}, errUnused
 }

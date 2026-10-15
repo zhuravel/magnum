@@ -105,7 +105,7 @@ const (
 	AgentStartTimeout   = 120 * time.Second // agent.start timeout_ms
 	PromptAckTimeout    = 60 * time.Second  // agent.prompt --wait --until working|blocked
 	IdleShellTimeout    = 60 * time.Second  // a fresh pane's shell (oh-my-zsh + mise) must be idle by then
-	QuitIdleTimeout     = 10 * time.Second  // after two ctrl+c the pane must be a shell again
+	QuitIdleTimeout     = 10 * time.Second  // after two ctrl+c (and again after a hard quit's exit keys) the pane must be a shell again
 	PreflightTimeout    = 30 * time.Second
 	WrapperProbeTimeout = 20 * time.Second
 )
@@ -246,6 +246,12 @@ const EventDefaultModelRestored = "agent.default_model_restored"
 const EventHumanActive = "agent.human_active"
     EventHumanActive is recorded on the PR when an ObsHumanActive begins its
     cooldown (Observation.CooldownUntil; data: role, until).
+
+const EventParkForced = "pr.park_forced"
+    EventParkForced is recorded when a hard park (ParkHard) closed the pane
+    of an agent that was still its pane's foreground process after ctrl+c and
+    its kind's exit keys; it names the role, the pane and the cause, never the
+    pane's text.
 
 const EventTrustDialogAnswered = "agents.trust_dialog_answered"
     EventTrustDialogAnswered is the event kind recorded (subject
@@ -710,6 +716,7 @@ type Herdr interface {
 	PaneRead(ctx context.Context, paneID string, o herdr.ReadOptions) (herdr.ReadResult, error)
 	PaneGet(ctx context.Context, paneID string) (herdr.Pane, error)
 	PaneSendKeys(ctx context.Context, paneID string, keys ...string) error
+	PaneClose(ctx context.Context, paneID string) error
 	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
 	WaitIdleShell(ctx context.Context, paneID string, timeout time.Duration) (herdr.ProcessInfo, error)
 	AgentStart(ctx context.Context, o herdr.AgentStartOptions) (herdr.AgentStarted, error)
@@ -1232,6 +1239,13 @@ func (m *Manager) Park(ctx context.Context, pr store.PR) error
     agents are quit. Live sessions with a session_id become parked, the rest
     closed (see Quit); lost sessions stay lost. No live or lost sessions: no-op.
 
+func (m *Manager) ParkHard(ctx context.Context, pr store.PR) error
+    ParkHard is Park for an agent that will not quit: the live agents it quits
+    go on where Quit waits (forceQuit), so one still its pane's foreground
+    process after ctrl+c and its kind's exit keys has that pane closed and its
+    session closed. Every refusal of Park (a run in flight, an agent working or
+    blocked, a busy pane of a workspace it closes) stands.
+
 func (m *Manager) Preflight(ctx context.Context, kind string) error
     Preflight checks that the agent CLI of kind is logged in before a start or
     prompt, with the kind's read-only login_check command (split on spaces,
@@ -1264,11 +1278,11 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
 func (m *Manager) Quit(ctx context.Context, s store.Session) error
     Quit stops a session's agent the way a human would: ctrl+c, 1 s, ctrl+c,
     then waits up to QuitIdleTimeout for the pane to be an idle shell again
-    (ErrBusy otherwise, session unchanged). The session id is captured first
-    (RecordSessionID); the session becomes parked when it is resumable (an
-    agent session with a session id whose kind reports ids), else closed.
-    A pane or agent that is already gone counts as quit. For a shell role's pane
-    this interrupts the running command.
+    (ErrBusy otherwise, session unchanged, herdr's timeout in the chain). The
+    session id is captured first (RecordSessionID); the session becomes parked
+    when it is resumable (an agent session with a session id whose kind reports
+    ids), else closed. A pane or agent that is already gone counts as quit.
+    For a shell role's pane this interrupts the running command.
 
 func (m *Manager) ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
     ReadRecent returns the last lines of a session's pane output (unwrapped
@@ -2879,7 +2893,8 @@ func DefaultKinds() map[string]Kind
         "claude auth status" + login_ok "json:loggedIn", switch_model "/model
         {model}", fallback_models ["opus","sonnet"], reset_model "default",
         project_untrust ["--setting-sources","user"], mcp_off true with
-        mcp_strict ["--strict-mcp-config"].
+        mcp_strict ["--strict-mcp-config"], exit_keys ["/","e","x","i",
+        "t","enter"].
       - droid (0.232): resume ["--resume","{session}"]; no model, effort or name
         flag in interactive mode, no login check.
       - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
@@ -3746,6 +3761,14 @@ type Kind struct {
 	// without a model (claude: "default"); "" = such a session stays on its
 	// fallback.
 	ResetModel string `toml:"reset_model"`
+	// ExitKeys: the keys a hard quit sends, as herdr's pane send-keys takes
+	// them (key combos: a printable key, "enter", "esc", "ctrl+d"), when
+	// the agent is still the pane's foreground process two ctrl+c after
+	// magnum asked it to quit; the pane is closed alone when it is still
+	// not an idle shell after them (agents.Manager.ParkHard). claude:
+	// "/exit" then enter, one key each (send-keys takes no word). Empty =
+	// the hard quit goes straight to the close.
+	ExitKeys []string `toml:"exit_keys"`
 }
     Kind is a [kinds.<name>] block: how magnum drives one agent CLI that
     herdr knows by that name (`herdr agent start --kind <name>`). User blocks
@@ -5805,6 +5828,11 @@ type Agents interface {
 	// pause a run proved holds until it changes (health).
 	LoginStamp(kind string) string
 	Park(ctx context.Context, pr store.PR) error
+	// ParkHard is Park for an agent that will not quit: one still its
+	// pane's foreground process after ctrl+c and its kind's exit keys has
+	// that pane closed alone and its session closed (a fresh start's second
+	// try, parkFresh; a stop's last, parkForStop).
+	ParkHard(ctx context.Context, pr store.PR) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
 	// rotateSessions; a session parkReloading takes out of the checkout's
@@ -9656,6 +9684,10 @@ func (c *Client) Call(ctx context.Context, method string, params, out any) error
 
 func (c *Client) NotificationShow(ctx context.Context, title, body string) (NotificationResult, error)
     NotificationShow shows a herdr toast (delivered per herdr's [ui.toast]).
+
+func (c *Client) PaneClose(ctx context.Context, paneID string) error
+    PaneClose closes one pane and ends what runs in it (pane.close, in herdr's
+    socket API since 0.9.3); the other panes of its workspace stay.
 
 func (c *Client) PaneGet(ctx context.Context, paneID string) (Pane, error)
     PaneGet returns one pane.

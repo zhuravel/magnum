@@ -654,6 +654,15 @@ cause records a `pr.park_failed` warning with the cause's class (`quit_timeout`,
 `error`) and the wait. Later failures of the same cause record nothing, and a park that works records
 `pr.parked` as usual.
 
+A fresh start (`magnum review --fresh`, a full or audit pass, a new identity) parks every agent of the PR
+first. When an agent stays in its pane through ctrl+c, that park waits like any busy agent: a minute at a
+time, no attempt charged, and the board and the card count the tries (`retry 2/3 agent busy`). The second
+try parks in the hard mode. Magnum sends the kind's `exit_keys` (Claude: `/exit`), waits again, and then
+closes that pane alone, never the workspace, whose other panes may be yours. The session is closed, not
+parked, and a `pr.park_forced` event names the role and the pane. A park that waits for a run of the PR (a
+fixer or another round at work) is never forced, and `magnum abort` parks the same hard way on its last of
+three tries. The idle park and the release of a Codex-flagged PR keep the plain park and its backoff.
+
 The judge is the exception to resuming. Codex's prompt cache lasts about an hour and a half, so a judge
 resumed later re-reads its whole conversation uncached on its first turn (25 of 39 resumed judge turns did,
 4.7M tokens in 2.3 days). A judge whose last turn on the PR ended longer than `[pipeline] judge_fresh_after`

@@ -7851,6 +7851,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the program, not the product. Rejected: lower case everywhere (the footer and the README's product
   name are capitalized already, and a sentence that starts with the name reads as a typo in lower case).
 
+- **A fresh start heals an agent that will not quit** (2026-10-15, amends "A park that fails backs off, and
+  its cause is recorded once"). The operator asked for fresh sessions on talkable#11932 twice (`magnum review
+  --fresh`), and the round parks every agent of the PR first. The fixer's Claude Code stayed its pane's
+  foreground process through two ctrl+c, so the quit's wait for an idle shell timed out (`agents: quit
+  session 535: agent busy: herdr pane w9J:p1: shell not idle after 10s (foreground: 2.1.296)`). A busy agent
+  is a wait, not a failure, so no attempt was charged: the board said "retry 1/3, agent busy" for 40 minutes
+  while the setup failed every 90 seconds, 26 times, and no round started. The park went through `Quit` at
+  all because the PR's workspace held a fifth pane, a plain shell no session owns, and the park closes a
+  workspace only when it holds the PR's panes alone. Now `agents.Manager.ParkHard` is `Park` whose quits go
+  on where `Quit` waits. It sends the kind's `exit_keys` (a new `[kinds.<name>]` key, keys as herdr's
+  send-keys takes them; claude: `/exit` then enter, one key each; the other built-in kinds: none) and waits
+  `QuitIdleTimeout` again. A pane still not an idle shell is closed alone through herdr's `pane.close`
+  (`herdr.Client.PaneClose`; herdr 0.9.3 has it, and `magnum doctor` now requires it), never its
+  workspace, whose other panes may be anyone's. The session becomes closed with `closed_at`, never parked,
+  and `pr.park_forced` (info) records the role, the pane and the cause (`no idle shell after ctrl+c and the
+  exit keys; pane closed`), never the pane's text. An agent the exit keys quit is parked as by a plain quit,
+  a pane herdr refuses to close fails as before (`agents.ErrBusy` with herdr's timeout), and every refusal
+  of `Park` (a run in flight, an agent working or blocked, a busy pane of a workspace it closes) stands. The
+  fresh start's park (`startSessions`, engine `parkFresh`) counts the tries an agent did not quit for (the
+  `quit_timeout` class) in kv `pr.<id>.fresh_park_busy`: the first waits as today, the second and later ones
+  park hard. A refusal because a run of the PR is in flight (a fixer or another round at work) counts
+  nothing and is never forced, since that agent works and is not stuck. A round's start, a park that works,
+  `magnum abort` and the PR leaving the round states delete the count. `magnum abort`'s park
+  (`parkForStop`) is hard on its last of three tries. The retry label on the board and the card counts
+  these tries too (`retry 2/3 agent busy` after the second, at most 3/3), since they charge no attempt; the
+  status comment is unchanged. The idle park and the Codex-flag release keep the plain park and their
+  backoff. Rejected: closing the pane on the first timeout, since a slow exit would lose a conversation
+  that a second try keeps; a retry budget alone, since the third failure would leave the PR in
+  needs_attention with the same stuck pane; closing the workspace, which on this machine holds a shell no
+  session owns; typing `/exit` as one word, since herdr validates every key before it writes any and takes
+  key combos only.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

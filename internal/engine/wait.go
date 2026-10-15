@@ -302,6 +302,7 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 // noteWaits records, after the dispatch of a tick, why every PR still
 // waiting for a round waits (KVPRWait, rewritten only when it changed).
 func (e *Engine) noteWaits(ctx context.Context, ts tickState) {
+	e.sweepFreshParkBusy(ctx) // fresh_park.go: a PR out of the round states keeps no busy count
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRQueued, store.PRRereviewPending}})
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "wait reasons")
@@ -377,8 +378,9 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 		return with(ww) // nor while the whiteboard is being written (its reservation)
 	}
 	if pr.NextAttemptAt != nil && pr.NextAttemptAt.After(now) {
-		return with(Wait{Reason: WaitRetry, Until: *pr.NextAttemptAt, Count: pr.Attempts + 1, Max: maxAttempts,
-			Subject: retryCause(deref(pr.LastError)), Detail: fmt.Sprintf("a retry (attempt %d) after: %s", pr.Attempts+1, clipRunes(strings.Join(strings.Fields(deref(pr.LastError)), " "), 120))})
+		n := e.busyTries(ctx, pr) // fresh_park.go: an agent that did not quit counts its tries, which charge none
+		return with(Wait{Reason: WaitRetry, Until: *pr.NextAttemptAt, Count: n, Max: maxAttempts,
+			Subject: retryCause(deref(pr.LastError)), Detail: fmt.Sprintf("a retry (attempt %d) after: %s", n, clipRunes(strings.Join(strings.Fields(deref(pr.LastError)), " "), 120))})
 	}
 	if !pr.Forced && w != nil {
 		if td := eligibility.Throttle(e.cfg.ThrottleFor(w), f, now.Local()); !td.Ready {

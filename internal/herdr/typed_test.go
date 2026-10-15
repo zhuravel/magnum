@@ -139,6 +139,11 @@ func typedCases() []typedCase {
 			method: "pane.send_keys", params: `{"pane_id":"w1:p1","keys":["ctrl+c","Enter"]}`, cli: "herdr pane send-keys w1:p1 ctrl+c Enter", result: ok,
 		},
 		{
+			name:   "pane close",
+			call:   func(ctx context.Context, c *Client) error { return c.PaneClose(ctx, "w1:p2") },
+			method: "pane.close", params: `{"pane_id":"w1:p2"}`, cli: "herdr pane close w1:p2", result: ok,
+		},
+		{
 			name:   "pane get",
 			call:   func(ctx context.Context, c *Client) error { _, err := c.PaneGet(ctx, "w1:p1"); return err },
 			method: "pane.get", params: `{"pane_id":"w1:p1"}`, cli: "herdr pane get w1:p1", result: pane,

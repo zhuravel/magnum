@@ -236,6 +236,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		return pipeline.RoundInput{}, ws, serr
 	}
 	e.finalizeStaleRuns(ctx, pr.ID)
+	e.delKV(ctx, kvPRFreshParkBusy(pr.ID)) // the round started: its fresh park's busy tries are over
 	if rs.kind != kindContinue {
 		e.noteDeltaCheckRound(ctx, pr.ID, rs.delta, rs.target) // a continue keeps the paused round's
 		e.noteFullPassRound(ctx, pr.ID, rs.fullPass)
@@ -451,7 +452,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		e.event(ctx, "info", prSubject(job.repo, pr.Number), "pr.identity_changed", why+": starting fresh sessions", nil)
 	}
 	if fresh {
-		if err := e.d.Agents.Park(ctx, pr); err != nil {
+		if err := e.parkFresh(ctx, pr); err != nil { // fresh_park.go: a second try after an agent did not quit parks hard
 			return fail(fmt.Errorf("park for a fresh start: %w", err))
 		}
 	}

@@ -187,6 +187,14 @@ type Kind struct {
 	// without a model (claude: "default"); "" = such a session stays on its
 	// fallback.
 	ResetModel string `toml:"reset_model"`
+	// ExitKeys: the keys a hard quit sends, as herdr's pane send-keys takes
+	// them (key combos: a printable key, "enter", "esc", "ctrl+d"), when
+	// the agent is still the pane's foreground process two ctrl+c after
+	// magnum asked it to quit; the pane is closed alone when it is still
+	// not an idle shell after them (agents.Manager.ParkHard). claude:
+	// "/exit" then enter, one key each (send-keys takes no word). Empty =
+	// the hard quit goes straight to the close.
+	ExitKeys []string `toml:"exit_keys"`
 }
 
 // RoleModel is the model a role's sessions are configured to run: the
@@ -390,7 +398,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //     "claude auth status" + login_ok "json:loggedIn", switch_model
 //     "/model {model}", fallback_models ["opus","sonnet"], reset_model
 //     "default", project_untrust ["--setting-sources","user"], mcp_off true
-//     with mcp_strict ["--strict-mcp-config"].
+//     with mcp_strict ["--strict-mcp-config"], exit_keys ["/","e","x","i",
+//     "t","enter"].
 //   - droid (0.232): resume ["--resume","{session}"]; no model, effort or
 //     name flag in interactive mode, no login check.
 //   - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
@@ -478,6 +487,10 @@ func DefaultKinds() map[string]Kind {
 			// cli-reference "--strict-mcp-config"); it has no flag that
 			// turns one server off.
 			MCPOff: true, MCPStrict: []string{"--strict-mcp-config"},
+			// Claude Code 2.1 exits on /exit; herdr's send-keys validates
+			// every key before it writes any and takes no word, so the
+			// command goes one key at a time.
+			ExitKeys: []string{"/", "e", "x", "i", "t", "enter"},
 		}),
 		KindDroid: base(Kind{Resume: []string{"--resume", PlaceholderSession}}),
 		KindOMP: base(Kind{
@@ -768,6 +781,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.ProjectDocsOff = cloneOrNil(k.ProjectDocsOff)
 		k.MCPStrict = cloneOrNil(k.MCPStrict)
 		k.PluginDisable, k.PluginAllow = cloneOrNil(k.PluginDisable), cloneOrNil(k.PluginAllow)
+		k.ExitKeys = cloneOrNil(k.ExitKeys)
 		k.SwitchModel, k.DefaultModel = strings.TrimSpace(k.SwitchModel), strings.TrimSpace(k.DefaultModel)
 		k.ResetModel = strings.TrimSpace(k.ResetModel)
 		h := &k.HealthPatterns

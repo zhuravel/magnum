@@ -311,7 +311,8 @@ func (e *Engine) holdFlagged(ctx context.Context, pr store.PR, f CodexFlag) bool
 		e.log.Info("hold a flagged PR", "pr", pr.ID, "err", err)
 		return false
 	}
-	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID),
+		kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	repo, _ := e.st.RepoByID(ctx, pr.RepoID)
 	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.codex_flag_held", fmt.Sprintf("%s → %s: %s", pr.State, to, f.SkipReason()),

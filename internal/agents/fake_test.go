@@ -72,6 +72,9 @@ type fakeHerdr struct {
 	keys     []keysCall
 	closed   []string
 	agentRen []string
+
+	// paneCloses are the PaneClose calls, in order.
+	paneCloses []string
 }
 
 type splitCall struct {
@@ -279,6 +282,22 @@ func (f *fakeHerdr) WorkspaceClose(ctx context.Context, id string) error {
 		return err
 	}
 	f.removeWorkspaceLocked(id)
+	return nil
+}
+
+// PaneClose closes one pane with its agent; the workspace and its other
+// panes stay.
+func (f *fakeHerdr) PaneClose(ctx context.Context, paneID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("PaneClose %s", paneID)
+	f.paneCloses = append(f.paneCloses, paneID)
+	if err := f.err("PaneClose"); err != nil {
+		return err
+	}
+	f.panes = slices.DeleteFunc(f.panes, func(p herdr.Pane) bool { return p.ID == paneID })
+	f.agents = slices.DeleteFunc(f.agents, func(a herdr.AgentInfo) bool { return a.PaneID == paneID })
+	delete(f.busy, paneID)
 	return nil
 }
 

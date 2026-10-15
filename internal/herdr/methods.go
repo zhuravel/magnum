@@ -299,6 +299,12 @@ func (c *Client) PaneSendKeys(ctx context.Context, paneID string, keys ...string
 	return c.do(ctx, callSpec{method: "pane.send_keys", params: params, cli: cliLine(append([]string{"pane", "send-keys", paneID}, keys...)...)})
 }
 
+// PaneClose closes one pane and ends what runs in it (pane.close, in
+// herdr's socket API since 0.9.3); the other panes of its workspace stay.
+func (c *Client) PaneClose(ctx context.Context, paneID string) error {
+	return c.do(ctx, callSpec{method: "pane.close", params: map[string]string{"pane_id": paneID}, cli: cliLine("pane", "close", paneID)})
+}
+
 // PaneGet returns one pane.
 func (c *Client) PaneGet(ctx context.Context, paneID string) (Pane, error) {
 	var out struct {

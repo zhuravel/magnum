@@ -13,14 +13,29 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
+// EventParkForced is recorded when a hard park (ParkHard) closed the pane
+// of an agent that was still its pane's foreground process after ctrl+c
+// and its kind's exit keys; it names the role, the pane and the cause,
+// never the pane's text.
+const EventParkForced = "pr.park_forced"
+
+// parkForcedCause is the cause EventParkForced records.
+const parkForcedCause = "no idle shell after ctrl+c and the exit keys; pane closed"
+
 // Quit stops a session's agent the way a human would: ctrl+c, 1 s, ctrl+c,
 // then waits up to QuitIdleTimeout for the pane to be an idle shell again
-// (ErrBusy otherwise, session unchanged). The session id is captured first
-// (RecordSessionID); the session becomes parked when it is resumable (an
-// agent session with a session id whose kind reports ids), else closed. A
-// pane or agent that is already gone counts as quit. For a shell role's pane
-// this interrupts the running command.
+// (ErrBusy otherwise, session unchanged, herdr's timeout in the chain). The
+// session id is captured first (RecordSessionID); the session becomes
+// parked when it is resumable (an agent session with a session id whose
+// kind reports ids), else closed. A pane or agent that is already gone
+// counts as quit. For a shell role's pane this interrupts the running
+// command.
 func (m *Manager) Quit(ctx context.Context, s store.Session) error {
+	return m.quit(ctx, s, false)
+}
+
+// quit is Quit; hard goes on where Quit waits (forceQuit).
+func (m *Manager) quit(ctx context.Context, s store.Session, hard bool) error {
 	if sid, err := m.RecordSessionID(ctx, s); err == nil && sid != "" {
 		s.SessionID = &sid
 	}
@@ -47,13 +62,59 @@ func (m *Manager) Quit(ctx context.Context, s store.Session) error {
 	}
 	if !gone && pane != "" {
 		if _, err := m.d.Herdr.WaitIdleShell(ctx, pane, QuitIdleTimeout); err != nil && !isGone(err) {
-			if herdr.IsTimeout(err) {
-				return fmt.Errorf("agents: quit session %d: %w: %w", s.ID, ErrBusy, err)
+			switch {
+			case !herdr.IsTimeout(err):
+				return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+			case hard:
+				return m.forceQuit(ctx, s, pane, err)
 			}
-			return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+			return fmt.Errorf("agents: quit session %d: %w: %w", s.ID, ErrBusy, err)
 		}
 	}
 	return m.retire(ctx, s)
+}
+
+// forceQuit goes on with the quit of session s, whose pane was no idle shell
+// QuitIdleTimeout after two ctrl+c (waited: that wait's timeout): it sends
+// the kind's exit keys (Kind.ExitKeys; none: skipped) and waits
+// QuitIdleTimeout again, and an agent they quit is retired as by Quit. A
+// pane still not an idle shell is closed alone (Herdr.PaneClose), never its
+// workspace, whose other panes may be anyone's (on talkable#11932 a shell
+// no session owns shared the PR's), and the session becomes closed, never
+// parked, with one EventParkForced. A pane herdr refuses to close fails
+// with ErrBusy and herdr's timeout, the session unchanged, as Quit's wait
+// does.
+func (m *Manager) forceQuit(ctx context.Context, s store.Session, pane string, waited error) error {
+	if k, ok := m.kindSpec(m.sessionKind(s)); ok && len(k.ExitKeys) > 0 {
+		err := m.d.Herdr.PaneSendKeys(ctx, pane, k.ExitKeys...)
+		switch {
+		case isGone(err):
+			return m.retire(ctx, s)
+		case err != nil && ctx.Err() != nil:
+			return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+		case err != nil: // keys herdr refused (invalid_key, say): the close is all that is left
+			m.logErr(ctx, err, "agents: exit keys to %s pane %s of session %d: %v", s.Role, pane, s.ID, err)
+		default:
+			_, err := m.d.Herdr.WaitIdleShell(ctx, pane, QuitIdleTimeout)
+			switch {
+			case err == nil, isGone(err):
+				return m.retire(ctx, s)
+			case !herdr.IsTimeout(err):
+				return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+			}
+			waited = err
+		}
+	}
+	if err := m.d.Herdr.PaneClose(ctx, pane); err != nil && !isGone(err) {
+		return fmt.Errorf("agents: quit session %d: %w: %w; close pane %s: %w", s.ID, ErrBusy, waited, pane, err)
+	}
+	if err := m.retireAs(ctx, s, store.SessionClosed); err != nil {
+		return err
+	}
+	m.event(ctx, m.prSubject(ctx, s.PRID), "info", EventParkForced,
+		fmt.Sprintf("%s did not quit: %s (pane %s)", s.Role, parkForcedCause, pane),
+		map[string]any{"role": s.Role, "pane": pane, "cause": parkForcedCause})
+	return nil
 }
 
 // retire parks a resumable agent session (see resumable) and closes
@@ -63,6 +124,12 @@ func (m *Manager) retire(ctx context.Context, s store.Session) error {
 	if m.resumable(s) {
 		to = store.SessionParked
 	}
+	return m.retireAs(ctx, s, to)
+}
+
+// retireAs moves a starting, live or lost session to state to (parked or
+// closed, with closed_at); a session already elsewhere stays.
+func (m *Manager) retireAs(ctx context.Context, s store.Session, to string) error {
 	now := m.now()
 	err := m.d.Store.TransitionSession(ctx, s.ID, []string{store.SessionStarting, store.SessionLive, store.SessionLost}, to,
 		func(u *store.SessionUpdate) {
@@ -77,6 +144,15 @@ func (m *Manager) retire(ctx context.Context, s store.Session) error {
 	return nil
 }
 
+// ParkHard is Park for an agent that will not quit: the live agents it
+// quits go on where Quit waits (forceQuit), so one still its pane's
+// foreground process after ctrl+c and its kind's exit keys has that pane
+// closed and its session closed. Every refusal of Park (a run in flight, an
+// agent working or blocked, a busy pane of a workspace it closes) stands.
+func (m *Manager) ParkHard(ctx context.Context, pr store.PR) error {
+	return m.park(ctx, pr, true)
+}
+
 // Park releases a PR's panes while keeping its conversations resumable.
 // It refuses with ErrBusy while a run of the PR is pending/submitted/working,
 // an agent is working or blocked, a shell role's pane runs a command, or any
@@ -89,6 +165,11 @@ func (m *Manager) retire(ctx context.Context, s store.Session) error {
 // the rest closed (see Quit); lost sessions stay lost. No live or lost
 // sessions: no-op.
 func (m *Manager) Park(ctx context.Context, pr store.PR) error {
+	return m.park(ctx, pr, false)
+}
+
+// park is Park; hard quits as ParkHard does.
+func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 	sessions, err := m.d.Store.SessionsByPR(ctx, pr.ID)
 	if err != nil {
 		return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
@@ -155,7 +236,7 @@ func (m *Manager) Park(ctx context.Context, pr store.PR) error {
 		}
 		for _, s := range byWS[ws] {
 			if _, ok := findAgent(snap, s); ok && isLive(s) && m.isAgentSession(s) {
-				if err := m.Quit(ctx, s); err != nil {
+				if err := m.quit(ctx, s, hard); err != nil {
 					return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
 				}
 			}

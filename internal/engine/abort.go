@@ -291,7 +291,7 @@ func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (
 	if to == "" {
 		return "", fmt.Errorf("%s moved on meanwhile; `magnum status %s` says where it is", label, label)
 	}
-	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	what := "queued review"
 	if pr.Forced {
@@ -421,7 +421,8 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, 
 	case to != "":
 		done = append(done, "PR "+to)
 	}
-	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID),
+		kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	if note := e.endFixLoop(ctx, repo, pr, by); note != "" {
 		done = append(done, note) // the loop whose re-review this was
@@ -641,14 +642,20 @@ func (e *Engine) abandonRuns(ctx context.Context, prID int64, why string) int {
 }
 
 // parkForStop parks the PR's sessions, retrying while Park reports an agent
-// still busy.
+// still busy; the last try parks hard (agents.Manager.ParkHard), so an
+// agent that stays in its pane through ctrl+c and its exit keys has that
+// pane closed rather than holding the stop's slot.
 func (e *Engine) parkForStop(ctx context.Context, pr store.PR) error {
 	if e.d.Agents == nil {
 		return nil
 	}
 	var err error
 	for try := 1; try <= abortParkTries; try++ {
-		if err = e.d.Agents.Park(ctx, pr); err == nil || !errors.Is(err, agents.ErrBusy) || try == abortParkTries {
+		park := e.d.Agents.Park
+		if try == abortParkTries {
+			park = e.d.Agents.ParkHard
+		}
+		if err = park(ctx, pr); err == nil || !errors.Is(err, agents.ErrBusy) || try == abortParkTries {
 			break
 		}
 		if e.d.Sleep(ctx, 2*time.Second) != nil {

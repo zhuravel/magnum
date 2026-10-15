@@ -900,6 +900,11 @@ func validateKind(name string, k Kind) []error {
 		}
 		seenModel[strings.ToLower(mdl)] = true
 	}
+	for _, key := range k.ExitKeys {
+		if key == "" || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+			bad("exit_keys: %q is no key (one key combo per entry, e.g. \"enter\" or \"ctrl+d\")", key)
+		}
+	}
 	for _, x := range []struct{ key, model string }{{"default_model", k.DefaultModel}, {"reset_model", k.ResetModel}} {
 		if x.model != "" && !oneWord(x.model) {
 			bad("%s %q must be one word", x.key, x.model)

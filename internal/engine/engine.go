@@ -100,6 +100,11 @@ type Agents interface {
 	// pause a run proved holds until it changes (health).
 	LoginStamp(kind string) string
 	Park(ctx context.Context, pr store.PR) error
+	// ParkHard is Park for an agent that will not quit: one still its
+	// pane's foreground process after ctrl+c and its kind's exit keys has
+	// that pane closed alone and its session closed (a fresh start's second
+	// try, parkFresh; a stop's last, parkForStop).
+	ParkHard(ctx context.Context, pr store.PR) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
 	// rotateSessions; a session parkReloading takes out of the checkout's

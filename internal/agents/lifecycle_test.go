@@ -1,10 +1,14 @@
 package agents
 
 import (
+	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -181,4 +185,148 @@ func TestRecoverRestoresParkedSession(t *testing.T) {
 	if store.Deref(j.HerdrPaneID) != "w5:p1" || j.State != store.SessionLive {
 		t.Fatalf("judge = %+v", j)
 	}
+}
+
+// A park whose agent stays in its pane's foreground after two ctrl+c waits
+// (ErrBusy, the herdr timeout kept). The hard park goes on: the kind's exit
+// keys, a second wait, then that pane alone is closed, never the workspace
+// (a shell no session owns shares it, as on talkable#11932), and its
+// session is closed, never parked, with one pr.park_forced event that names
+// the role, the pane and the cause, never the pane's text.
+func TestAHardParkClosesThePaneOfAnAgentThatWillNotQuit(t *testing.T) {
+	e := newEnv(t)
+	ws := e.started()
+	foreign := ws.WorkspaceID + ":p99"
+	e.h.addPane(herdr.Pane{ID: foreign, WorkspaceID: ws.WorkspaceID})
+	e.h.setAgentSession("mg-11920-codex-judge-5d01cf", "judge-uuid")
+	e.h.setAgentSession("mg-11920-claude-review-5d01cf", "claude-id")
+	e.observe()
+	stuck := ws.Panes[RoleClaude]
+	e.h.busy[stuck] = true
+	e.h.reads[stuck] = "SECRET-PANE-TEXT"
+	claude := e.session(RoleClaude)
+	started := len(e.h.callsWith("WaitIdleShell " + stuck)) // the agent's start waited for its shell
+
+	err := e.m.Park(e.ctx, e.pr)
+	if !errors.Is(err, ErrBusy) || !herdr.IsTimeout(err) {
+		t.Fatalf("plain park: err = %v, want ErrBusy with the herdr timeout", err)
+	}
+	if got := e.keysTo(stuck); len(got) != 2 || len(e.h.paneCloses) != 0 {
+		t.Fatalf("plain park: keys %q, pane closes %v: want two ctrl+c and no close", got, e.h.paneCloses)
+	}
+
+	if err := e.m.ParkHard(e.ctx, e.pr); err != nil {
+		t.Fatalf("hard park: %v", err)
+	}
+	want := [][]string{{"ctrl+c"}, {"ctrl+c"}, {"ctrl+c"}, {"ctrl+c"}, {"/", "e", "x", "i", "t", "enter"}}
+	if got := e.keysTo(stuck); !slices.EqualFunc(got, want, slices.Equal) {
+		t.Fatalf("keys to %s = %q, want %q", stuck, got, want)
+	}
+	if waits := len(e.h.callsWith("WaitIdleShell "+stuck)) - started; waits != 3 {
+		t.Fatalf("waits for an idle shell = %d, want one plain and two hard", waits)
+	}
+	if !slices.Equal(e.h.paneCloses, []string{stuck}) || len(e.h.closed) != 0 {
+		t.Fatalf("pane closes %v, workspace closes %v: want the stuck pane alone", e.h.paneCloses, e.h.closed)
+	}
+	snap, _ := e.h.Snapshot(e.ctx)
+	if _, ok := paneIndex(snap)[foreign]; !ok {
+		t.Fatal("the shell no session owns was closed")
+	}
+	got, _ := e.st.SessionByID(e.ctx, claude.ID)
+	if got.State != store.SessionClosed || got.ClosedAt == nil {
+		t.Fatalf("claude session = %s (closed_at %v), want closed", got.State, got.ClosedAt)
+	}
+	if judge, _ := e.st.SessionByID(e.ctx, e.sessions()[0].ID); judge.State != store.SessionParked {
+		t.Fatalf("judge session = %s, want parked", judge.State)
+	}
+	evs := e.eventsOf(EventParkForced)
+	if len(evs) != 1 || evs[0].Level != "info" {
+		t.Fatalf("%s events = %+v, want one info", EventParkForced, evs)
+	}
+	var data map[string]string
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["role"] != "claude-review" || data["pane"] != stuck || data["cause"] != "no idle shell after ctrl+c and the exit keys; pane closed" {
+		t.Fatalf("event data = %v", data)
+	}
+	if strings.Contains(evs[0].Message+string(evs[0].Data), "SECRET-PANE-TEXT") {
+		t.Fatalf("the event carries the pane's text: %+v", evs[0])
+	}
+}
+
+// The hard park closes a pane only when the agent still runs after its exit
+// keys: one the keys quit is parked as by a plain quit, nothing closed; a
+// pane herdr refuses to close leaves the session live and the park busy; a
+// run in flight refuses the hard park as the plain one, before any key; a
+// kind without exit keys goes straight to the close.
+func TestAHardParkClosesNothingTheExitKeysQuitAndWaitsWhenHerdrRefuses(t *testing.T) {
+	setup := func(t *testing.T) (*env, string, store.Session) {
+		t.Helper()
+		e := newEnv(t)
+		ws := e.started()
+		e.h.addPane(herdr.Pane{ID: ws.WorkspaceID + ":p99", WorkspaceID: ws.WorkspaceID})
+		e.h.setAgentSession("mg-11920-claude-review-5d01cf", "claude-id")
+		e.observe()
+		stuck := ws.Panes[RoleClaude]
+		e.h.busy[stuck] = true
+		claude := e.session(RoleClaude)
+		return e, stuck, claude
+	}
+	t.Run("the exit keys quit it", func(t *testing.T) {
+		e, stuck, claude := setup(t)
+		e.h.onKeys = func(f *fakeHerdr, target string, keys []string) {
+			if target == stuck && slices.Contains(keys, "enter") {
+				f.busy[stuck] = false
+			}
+		}
+		if err := e.m.ParkHard(e.ctx, e.pr); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := e.st.SessionByID(e.ctx, claude.ID)
+		if got.State != store.SessionParked || len(e.h.paneCloses) != 0 || len(e.eventsOf(EventParkForced)) != 0 {
+			t.Fatalf("session %s, pane closes %v: want parked, nothing closed, no event", got.State, e.h.paneCloses)
+		}
+	})
+	t.Run("herdr refuses the close", func(t *testing.T) {
+		e, stuck, claude := setup(t)
+		e.h.errs["PaneClose"] = &herdr.Error{Method: "pane.close", Code: herdr.CodeInvalidRequest, Message: "no"}
+		err := e.m.ParkHard(e.ctx, e.pr)
+		if !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), "close pane "+stuck) {
+			t.Fatalf("err = %v, want ErrBusy naming the close", err)
+		}
+		got, _ := e.st.SessionByID(e.ctx, claude.ID)
+		if got.State != store.SessionLive || len(e.eventsOf(EventParkForced)) != 0 {
+			t.Fatalf("session %s: want still live, no event", got.State)
+		}
+	})
+	t.Run("a run in flight", func(t *testing.T) {
+		e, stuck, claude := setup(t)
+		run, err := e.m.NewRun(e.ctx, e.pr, RoleClaude, store.RunFix, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.m.ParkHard(e.ctx, e.pr); !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), "run "+run.ID) {
+			t.Fatalf("err = %v, want the run's refusal", err)
+		}
+		if got := e.keysTo(stuck); len(got) != 0 || len(e.h.paneCloses) != 0 {
+			t.Fatalf("keys %q, pane closes %v: want none while the run is in flight", got, e.h.paneCloses)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionLive {
+			t.Fatalf("session = %s, want live", got.State)
+		}
+	})
+	t.Run("a kind without exit keys", func(t *testing.T) {
+		e, stuck, claude := setup(t)
+		e.setKind(KindClaude, func(k *config.Kind) { k.ExitKeys = nil })
+		if err := e.m.ParkHard(e.ctx, e.pr); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.keysTo(stuck); len(got) != 2 || !slices.Equal(e.h.paneCloses, []string{stuck}) {
+			t.Fatalf("keys %q, pane closes %v: want two ctrl+c, then the close", got, e.h.paneCloses)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionClosed {
+			t.Fatalf("session = %s, want closed", got.State)
+		}
+	})
 }

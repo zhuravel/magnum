@@ -21,3 +21,34 @@ func TestACodexResumeTakesTheCurrentDirectory(t *testing.T) {
 		t.Errorf("fresh argv = %q carries the resume setting", fresh)
 	}
 }
+
+// An agent that stays in its pane's foreground after two ctrl+c is asked to
+// exit by its kind's exit_keys before its pane is closed: claude types /exit
+// and enter, one key each (herdr's send_keys takes key combos, never a
+// word); codex has none, so its quit goes straight to the close. A user
+// block sets them key by key like any other kind key, an explicit empty
+// list turns them off, and an empty key is refused.
+func TestExitKeysDefaultToSlashExitForClaudeOnly(t *testing.T) {
+	kinds := DefaultKinds()
+	if got, want := kinds[KindClaude].ExitKeys, []string{"/", "e", "x", "i", "t", "enter"}; !slices.Equal(got, want) {
+		t.Errorf("claude exit_keys = %q, want %q", got, want)
+	}
+	for _, name := range []string{KindCodex, KindDroid, KindOMP} {
+		if got := kinds[name].ExitKeys; len(got) != 0 {
+			t.Errorf("%s exit_keys = %q, want none", name, got)
+		}
+	}
+	cfg := mustLoad(t, map[string]string{"config.toml": minimalConfig + "[kinds.codex]\nexit_keys = [\"ctrl+d\"]\n"})
+	if codex, _ := cfg.KindSpec(KindCodex); !slices.Equal(codex.ExitKeys, []string{"ctrl+d"}) {
+		t.Errorf("codex exit_keys = %q, want [ctrl+d]", codex.ExitKeys)
+	}
+	if claude, _ := cfg.KindSpec(KindClaude); len(claude.ExitKeys) != 6 {
+		t.Errorf("claude exit_keys = %q, want the default kept", claude.ExitKeys)
+	}
+	cfg = mustLoad(t, map[string]string{"config.toml": minimalConfig + "[kinds.claude]\nexit_keys = []\n"})
+	if claude, _ := cfg.KindSpec(KindClaude); len(claude.ExitKeys) != 0 {
+		t.Errorf("claude exit_keys = %q, want none", claude.ExitKeys)
+	}
+	_, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": minimalConfig + "[kinds.claude]\nexit_keys = [\"/\", \" \"]\n"})
+	wantError(t, err, "exit_keys")
+}

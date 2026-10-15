@@ -17,7 +17,7 @@ func TestDoctorHerdrMethodsAreTheOnesMagnumSends(t *testing.T) {
 	sent := []string{
 		"ping", "session.snapshot", "workspace.create", "workspace.close", "workspace.report_metadata",
 		"pane.split", "pane.send_input", "pane.send_keys", "pane.read", "pane.wait_for_output", "pane.rename",
-		"pane.process_info", "pane.get", "agent.start", "agent.prompt", "agent.read", "agent.focus", "agent.rename",
+		"pane.process_info", "pane.get", "pane.close", "agent.start", "agent.prompt", "agent.read", "agent.focus", "agent.rename",
 		"agent.send_keys", "notification.show", "plugin.pane.open", "plugin.list",
 		"client.window_title.set", "client.window_title.clear", "worktree.list",
 	}

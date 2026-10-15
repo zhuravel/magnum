@@ -110,6 +110,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"kvPRAuditRound", kvPRAuditRound(id), "pr.7.audit_round"},
 		{"kvPRApprovalHold", kvPRApprovalHold(id), "pr.7.approval_hold"},
 		{"kvPRApprovalHoldRound", kvPRApprovalHoldRound(id), "pr.7.approval_hold_round"},
+		{"kvPRFreshParkBusy", kvPRFreshParkBusy(id), "pr.7.fresh_park_busy"},
 		{"KVPRSkippedBaseline", KVPRSkippedBaseline(id), "pr.7.skipped_baseline"},
 		{"KVPRFormerIdentities", KVPRFormerIdentities(id), "pr.7.former_identities"},
 		{"KVPRIdentityPinned", KVPRIdentityPinned(id), "pr.7.identity_pinned"},

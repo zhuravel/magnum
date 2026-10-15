@@ -1,5 +1,5 @@
 {
-  "_comment": "Excerpt of `herdr api schema --json` (herdr CLI 0.9.3, server 0.9.1, protocol 22) limited to what internal/herdr uses. cli_requests are the exact socket requests the herdr 0.9.3 CLI sends, captured against a fake socket (HERDR_SOCKET_PATH); the CLI pings first, and `pane run` maps to pane.send_input with keys [Enter]. Live probes: pane.agent_status_changed subscriptions require pane_id; semantic errors echo the request id, invalid_request errors carry id \"\".",
+  "_comment": "Excerpt of `herdr api schema --json` (herdr CLI 0.9.3, server 0.9.1, protocol 22) limited to what internal/herdr uses. cli_requests are the exact socket requests the herdr 0.9.3 CLI sends, captured against a fake socket (HERDR_SOCKET_PATH); the CLI pings first, and `pane run` maps to pane.send_input with keys [Enter]. pane.close (params PaneTarget), which the herdr 0.9.3 socket docs list too, is from the herdr 0.9.5 schema, protocol 22 as well. Live probes: pane.agent_status_changed subscriptions require pane_id; semantic errors echo the request id, invalid_request errors carry id \"\".",
   "protocol": 22,
   "schema_version": 1,
   "methods": {
@@ -26,6 +26,7 @@
     "pane.process_info": "PaneProcessInfoParams",
     "pane.list": "PaneListParams",
     "pane.get": "PaneTarget",
+    "pane.close": "PaneTarget",
     "pane.rename": "PaneRenameParams",
     "pane.send_keys": "PaneSendKeysParams",
     "pane.send_input": "PaneSendInputParams",
