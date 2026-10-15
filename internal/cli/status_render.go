@@ -690,6 +690,9 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 	if f := d.Findings; f != nil {
 		fmt.Fprintf(w, "  findings:  %s\n", statusSafe(findingsSentence(*f), 0))
 	}
+	if c := d.Evidence; c != nil {
+		fmt.Fprintf(w, "  evidence:  %s\n", c.Sentence())
+	}
 	switch {
 	case d.Slot != nil:
 		sha := store.Deref(d.Slot.Slot.CheckedOutSHA)

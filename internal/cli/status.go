@@ -456,6 +456,9 @@ type statusDetail struct {
 	Attention *attention.Reason `json:"attention,omitempty"`
 	// Findings is what magnum's latest posted review concluded.
 	Findings *store.ReviewSummary `json:"findings,omitempty"`
+	// Evidence counts the PR's evidence map (engine.EvidenceMap): what its
+	// rounds read and probed, and what none did; nil when it has none.
+	Evidence *engine.EvidenceCounts `json:"evidence,omitempty"`
 	// Snooze is the PR's snooze while it holds (magnum snooze, the board's z).
 	Snooze *engine.Snooze `json:"snooze,omitempty"`
 	// Fix is the PR's fix loop while it runs (magnum fix, autofix), and

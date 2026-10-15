@@ -1652,6 +1652,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the shape by indentation and braces is enough for a lead; the outermost enclosing method, which for a
   closure or a callback in a long component passes the line cap and comes without a body; listing a method
   the diff adds whole, whose body the reviewer already reads in the diff.
+- **The judge says what it examined, and the PR keeps an evidence map** (2026-10-15). A review of the
+  full-pass ideas by Codex found that magnum cannot say what it examined: a finding locates a problem
+  and says nothing about the areas that passed, and a Checks line is a command in prose, so nobody could
+  tell which files and behaviours of a 268-file PR any round probed, and a full pass repeats the whole PR
+  instead of the part nobody read; on talkable#11483 three latent defects sat in areas 38 rounds never
+  probed. Now the judge writes `evidence.json` beside its result file (`evidence_file` in the `<magnum>`
+  block next to `result_file`; the initial, rereview and recovery prompts give its shape, the continue
+  only the field): `head_sha` and one entry per behaviour it read or probed in the round (`path`, an
+  optional `symbol`, `behaviour`, `state` `read`, `probed` with its `command`, `control` and `result`, or
+  `skipped` with the reason in `result`) and one `unknown` entry without a behaviour per file of the diff
+  it reviewed that it did not read, 30 to 80 for 30 files. The round removes an earlier round's file on
+  the same head before the judge's prompt (a continue keeps its paused turn's), reads it at its end
+  (`pipeline.Evidence` on `RoundResult.Evidence`), drops an entry without a path or with another state,
+  and those past 400, in one `round.warning` that counts them, keeps a probe without a command as
+  `read`, makes a path in the checkout relative to it and records a `round.evidence` event with the
+  counts. When the review posts, `onPosted` merges it (engine evidence.go) into the PR's map,
+  `evidence.json` in the root of its review reports above the per-head directories
+  (`pipeline.EvidenceMapPath`, `paths.Layout.PRReviews`), keyed by path and behaviour (case aside): a
+  newer entry replaces an older one, a file a round read, probed or skipped loses its file-level
+  `unknown` entries, and on a new head every read, probed or skipped entry whose file differs between
+  the map's head and the round's (`gitx.ChangedBetween`, `git diff --name-only <from> <to>` in the
+  slot: the two trees, so a rewritten branch that drops an earlier head's change counts it) goes
+  `stale`, keeping its state in `was`, unless the round wrote it again; when git cannot tell, every such
+  entry goes stale. Each entry keeps the head, round and judge run that wrote it; the map holds at most
+  3,000 entries, the oldest stale ones dropped first, and each merge records a `pr.evidence` event with
+  the counts. The next rounds get the map as `evidence` (the own pass and the initial, rereview and
+  recovery prompts, next to `prepass`; never in a continue or a blind replay) and the claude-review
+  prompts in one sentence: the `unknown` and `stale` areas are leads to read first, never findings by
+  themselves, and a `probed` entry with a control needs no new probe, its file unchanged since. The
+  sentence lives in the prompts; the skill's section 0 only names the fields. `magnum status <ref>`
+  counts the map on the card (`evidence: 41 behaviours probed, 12 read, 9 unknown, 4 stale (3 files
+  never read)`, the skipped ones only when there are some; `--json` `detail.evidence`). Rejected:
+  coverage from the findings and Checks alone, which say what failed and never what passed; a
+  method-level parser for the denominator, where the files git names are enough to start; more whole-PR
+  passes instead of focused ones on what nobody read.
 
 ## Screens and commands
 

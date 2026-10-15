@@ -21,6 +21,14 @@ Keep each line of the `notes` file at most `notes_max_line` characters long: a l
 
 Read `prepass` first: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
 {{- end}}
+{{- if .EvidenceMap}}
+
+`evidence` lists what earlier rounds examined in this PR, by path and behaviour: read the areas marked `unknown` or `stale` (changed since) first, as leads, never as findings by themselves; a `probed` entry with `control: true` needs no new probe, as its file is unchanged since.
+{{- end}}
+{{- if .EvidenceFile}}
+
+Before you write `result_file`, write `evidence_file`, what you examined in this round: `{"head_sha":"<head_sha>","entries":[{"path":"app/x.rb","symbol":"X#y","behaviour":"<what holds, one clause>","state":"probed","command":"<the probe>","control":true,"result":"passed"}]}`. One entry per behaviour you read (`read`) or probed (`probed`: its `command`, `control: true` when a control ran, its `result`), `skipped` with the reason in `result`, and one `unknown` entry without `behaviour` per file of the diff you reviewed that you did not read; `symbol`, `command`, `control` and `result` are optional. Keep it short: 30 to 80 entries for 30 files.
+{{- end}}
 
 <magnum>
 mode: initial
@@ -76,6 +84,9 @@ docs: {{.DocsFile}}
 {{- if .PrepassFile}}
 prepass: {{.PrepassFile}}
 {{- end}}
+{{- if .EvidenceMap}}
+evidence: {{.EvidenceMap}}
+{{- end}}
 {{- if .FailingChecks}}
 failing_checks: {{.FailingChecks}}
 {{- end}}
@@ -86,6 +97,9 @@ project_checks: {{.ProjectChecks}}
 own_findings: {{.OwnFindings}}
 {{- end}}
 result_file: {{.ResultFile}}
+{{- if .EvidenceFile}}
+evidence_file: {{.EvidenceFile}}
+{{- end}}
 post_review: {{.PostReviewCommand}}
 dry_run: {{.DryRun}}
 {{- if .Blind}}

@@ -466,6 +466,22 @@ type JudgeData struct {
 	// each item a lead to check, never a finding by itself; "" in a
 	// continued turn and without Git.
 	PrepassFile string
+	// EvidenceFile is where the judge writes what it examined in the round
+	// (EvidenceFile in the report directory, beside ResultFile): one entry
+	// per behaviour it read or probed and one unknown entry per file of the
+	// diff it reviewed that it did not read (pipeline.Evidence), rendered
+	// as `evidence_file` beside
+	// `result_file` by the initial, rereview, recovery and continue
+	// prompts, the first three with the instruction; "" = none (the
+	// pipeline always sets it).
+	EvidenceFile string
+	// EvidenceMap is the PR's evidence map (pipeline.EvidenceMapPath): what
+	// the earlier rounds examined, merged by the engine, each entry read,
+	// probed, skipped, unknown or stale (its file changed since), rendered
+	// as `evidence` by the own pass and the initial, rereview and recovery
+	// prompts, which say to read the unknown and stale areas first; "" when
+	// the PR has none, in a continued turn and in a blind replay.
+	EvidenceMap string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
 	// name, workflow, state, time), rendered as `failing_checks` by the
@@ -508,6 +524,12 @@ const (
 // report directory (JudgeData.OwnFindings): its findings, their proofs and
 // the checks it ran.
 const OwnFindingsFile = "judge-own.md"
+
+// EvidenceFile is the file the judge writes what it examined to, in the
+// report directory next to its result file (JudgeData.EvidenceFile), and
+// the name of the PR's merged evidence map above the per-head directories
+// (JudgeData.EvidenceMap).
+const EvidenceFile = "evidence.json"
 
 // completed is d with its Reports, notes fields, PreviousHeadShort and
 // post-review line completed (a copy; d is not modified).
@@ -586,6 +608,10 @@ type RoleData struct {
 	// prompts say to read it first, a changed method's body before its
 	// hunk, each item a lead to check; "" = none.
 	PrepassFile string
+	// EvidenceMap is the PR's evidence map, what the earlier rounds
+	// examined (see JudgeData.EvidenceMap): the claude reviewer prompts say
+	// to read its unknown and stale areas first; "" = none.
+	EvidenceMap string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool

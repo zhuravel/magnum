@@ -1168,6 +1168,24 @@ prompts say to read it first, a changed method's body before its hunk and the si
 file: each item is a lead to check, never a finding by itself. codex-review runs the stock `codex review`
 and does not get it.
 
+Each round's judge also says what it examined, since a finding locates a problem and says nothing about the
+areas that passed, and on a 268-file PR three latent defects sat in areas 38 rounds never probed. Before
+it writes its result file, the judge writes `evidence.json` beside it (`evidence_file`): one entry per
+behaviour it read or probed in the round (`path`, an optional `symbol`, `behaviour` and `state`: `read`;
+`probed` with the probe's `command`, whether it ran a `control` and its `result`; or `skipped` with the
+reason in `result`) and one `unknown` entry per file of the diff it reviewed that it did not read, 30 to
+80 entries for 30 files. The round drops an entry without a path or with another state (one warning counts them) and
+keeps a probe without a command as `read`. When the review posts, Magnum merges the file into the PR's
+evidence map, `evidence.json` in the root of the PR's reports (`reviews/<owner>/<repo>/<number>/`, above
+the per-head directories), keyed by path and behaviour: a newer entry replaces an older one, a file a round
+read loses its `unknown` entry, and on a new head every entry whose file differs between the map's head and
+the new one becomes `stale` unless the round wrote it again (every one, when git cannot tell). Each entry
+keeps the head and the round that wrote it. The next rounds' judge prompts name the map as `evidence` and
+the claude-review prompts in one sentence: the areas marked `unknown` or `stale` are leads to read first,
+never findings by themselves, and a `probed` entry with a control needs no new probe. `magnum status <ref>`
+shows it on the card, `evidence: 41 behaviours probed, 12 read, 9 unknown, 4 stale (3 files never read)`
+(`--json`: `detail.evidence`), a file never read being one no round read or probed.
+
 The judge also sees the head's failing CI checks, since a PR once got LGTM while a check had failed on
 that head. When a judge prompt goes out (initial, rereview, continue), Magnum reads the PR's checks from
 the registry (`prs.ci_json`, the poller's last Details fetch) and, when they belong to the head under

@@ -566,6 +566,29 @@ func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths
 	return c.diffNames(ctx, dir, base, head, nil, specs)
 }
 
+// ChangedBetween lists the files whose content differs between the commits
+// from and to (git diff --name-only from to: the two trees, whatever the
+// history between them), a rename as a deletion plus an addition. Unlike
+// ChangedPaths it names a file an earlier head changed and a rewritten
+// branch left as the base has it. nil when the trees are the same.
+func (c *Client) ChangedBetween(ctx context.Context, dir, from, to string) ([]string, error) {
+	if err := checkRange(from, to); err != nil {
+		return nil, err
+	}
+	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("diff --name-only %s %s", from, to)},
+		"diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", from, to, "--")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
 // AnyDir is the prefix of a path that names a file in any directory of
 // the repository, its top included ("**/CLAUDE.md"; pathspecs).
 const AnyDir = "**/"

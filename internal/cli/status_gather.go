@@ -21,6 +21,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/notes"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
 	"github.com/zhuravel/magnum/internal/usage"
@@ -943,6 +944,10 @@ func statusGatherDetail(ctx context.Context, d statusDeps, r statusReport, ref s
 			}
 		}
 		det.Notes = notesExist(d.Layout, t.Repo.Owner, t.Repo.Name)
+		if m, ok, err := engine.ReadEvidenceMap(pipeline.EvidenceMapPath(d.Layout, t.Repo.Owner, t.Repo.Name, pr.Number)); err == nil && ok {
+			c := m.Counts()
+			det.Evidence = &c
+		}
 	}
 	if z, ok := statusSnooze(ctx, d.Store, pr.ID, now); ok {
 		det.Snooze = &z

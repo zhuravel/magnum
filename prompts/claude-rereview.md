@@ -26,6 +26,10 @@ Repository notes at {{.NotesPath}}: read them first; they are hints from earlier
 
 Read {{.PrepassFile}} first, magnum's reading of the diff: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
 {{- end}}
+{{- if .EvidenceMap}}
+
+{{.EvidenceMap}} lists what earlier magnum rounds examined in this PR, by path and behaviour: read the areas marked `unknown` or `stale` (changed since) first, as leads, never as findings by themselves, and probe no `probed` entry with `control: true` again, as its file is unchanged since.
+{{- end}}
 {{- if .HistoryFile}}
 
 The last commits on the base branch that touched each changed file are in {{.HistoryFile}}: when one fixed something in the code or mechanism this PR touches, read it (`git show <sha>`) and check the PR does not undo or re-break that fix.

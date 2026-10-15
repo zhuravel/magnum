@@ -2,6 +2,7 @@
 For a missing guard in a set (a list, registry, validator or call sites), sweep the whole set in this pass as the skill's section 2 says: each gap with the same probe, and the `swept N <things>: M gaps` line among your checks.
 magnum checked out the PR head `d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3` (detached) in this directory.
 Read `prepass` first: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
+`evidence` lists what earlier rounds examined in this PR, by path and behaviour: read the areas marked `unknown` or `stale` (changed since) first, as leads, never as findings by themselves; a `probed` entry with `control: true` needs no new probe, as its file is unchanged since.
 
 <magnum>
 mode: initial
@@ -25,6 +26,7 @@ related_prs: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920
 history: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/history.json
 docs: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/docs.json
 prepass: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/prepass.json
+evidence: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/evidence.json
 own_findings: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md
 dry_run: false
 </magnum>

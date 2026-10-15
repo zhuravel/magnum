@@ -177,6 +177,9 @@ type Git interface {
 	// DiffStat measures the PR's size at a full pass's baseline, in the
 	// round's checkout (prSize, fullpass.go).
 	DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error)
+	// ChangedBetween names the files that differ between two heads: the
+	// PR's evidence map marks what they held stale (evidence.go).
+	ChangedBetween(ctx context.Context, dir, from, to string) ([]string, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom

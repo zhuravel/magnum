@@ -355,12 +355,19 @@ func (l Layout) LearnWorktrees() string { return filepath.Join(l.State(), "learn
 // removes the gate's.
 func (l Layout) LearnEvalWorktrees() string { return filepath.Join(l.State(), "learn", "eval", "wt") }
 
-// ReviewDir is where one review round's reports live.
+// ReviewDir is where one review round's reports live: a directory per head
+// in PRReviews.
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string {
 	if len(sha) > 12 {
 		sha = sha[:12]
 	}
-	return filepath.Join(l.Reviews(), owner, repo, fmt.Sprint(number), sha)
+	return filepath.Join(l.PRReviews(owner, repo, number), sha)
+}
+
+// PRReviews is the root of one PR's review reports: its per-head
+// directories (ReviewDir) and what spans its heads (the evidence map).
+func (l Layout) PRReviews(owner, repo string, number int) string {
+	return filepath.Join(l.Reviews(), owner, repo, fmt.Sprint(number))
 }
 
 // EnsureDirs creates the state tree and makes every directory in it private

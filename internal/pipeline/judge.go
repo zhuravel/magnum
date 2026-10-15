@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -74,7 +75,9 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	rd.mu.Unlock()
 
 	jd := rd.judgeData(run, marker)
-	rd.recordMissing(ctx, jd.Reports) // auto-approval and a continue read it (missing_reports.go)
+	rd.evidenceFile = jd.EvidenceFile
+	rd.clearEvidence(ctx, jd.EvidenceFile) // evidence.go
+	rd.recordMissing(ctx, jd.Reports)      // auto-approval and a continue read it (missing_reports.go)
 	rd.mu.Lock()
 	rd.res.JudgePromptedAt = rd.r.now() // the threads and comments it re-decides are those up to now
 	rd.mu.Unlock()
@@ -689,6 +692,7 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		}
 		return rd.stopped(ctx)
 	}
+	rd.readEvidence(ctx, rd.evidenceFile) // evidence.go
 	rd.mu.Lock()
 	if v.review != nil {
 		rd.res.ReviewID, rd.res.ReviewURL, rd.res.ReviewCommit = v.review.id, v.review.url, v.review.commit
@@ -887,7 +891,9 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
 		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), CIRed: rd.ciRed(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile,
 		PrepassFile: rd.prepassFile, ColdJudge: cold, FullPass: in.FullPass && in.Kind == KindRecovery,
+		EvidenceMap: rd.evidenceMap(),
 	}
+	jd.EvidenceFile = filepath.Join(filepath.Dir(jd.ResultFile), EvidenceFile)
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {
 		jd.NotesDir, jd.NotesLock = agents.NotesFiles(in.NotesPath)

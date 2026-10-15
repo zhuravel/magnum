@@ -424,6 +424,7 @@ func TestRenderGolden(t *testing.T) {
 	// own-pass prompt (no reports, no posting fields) per round kind, then
 	// the candidates phase of the usual prompts.
 	ownDir := "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/"
+	evidenceMap := "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/evidence.json"
 	ownPass := func(mode string) JudgeData {
 		d := judgeFixture()
 		d.Mode, d.Phase, d.OwnFindings, d.Reports = mode, PhaseOwnPass, ownDir+OwnFindingsFile, nil
@@ -473,12 +474,19 @@ func TestRenderGolden(t *testing.T) {
 		d.RelatedPRs = ownDir + "related.json"
 		return d
 	}
-	// The changed files' history, the base docs that name them and the
-	// pre-pass: the judge prompts with a block (the continued turn aside)
-	// name history.json, docs.json and prepass.json, and say to read the
-	// pre-pass first; the claude reviewers get one sentence naming each.
+	// The changed files' history, the base docs that name them, the
+	// pre-pass and the PR's evidence map: the judge prompts with a block
+	// (the continued turn aside) name history.json, docs.json, prepass.json
+	// and the map, and say to read the pre-pass first and the map's unknown
+	// and stale areas; the claude reviewers get one sentence naming each.
+	// The posting prompts name evidence_file too (the continue only the
+	// field), the initial, rereview and recovery ones with its shape.
 	withHistory := func(d JudgeData) JudgeData {
 		d.HistoryFile, d.DocsFile, d.PrepassFile = ownDir+"history.json", ownDir+"docs.json", ownDir+"prepass.json"
+		d.EvidenceMap = evidenceMap
+		if d.Phase != PhaseOwnPass {
+			d.EvidenceFile = ownDir + EvidenceFile
+		}
 		return d
 	}
 	// The head's failing checks: the posting judge prompts name the file.
@@ -493,6 +501,7 @@ func TestRenderGolden(t *testing.T) {
 	ciRed.CIRed = true
 	roleHistory := func(d RoleData) RoleData {
 		d.HistoryFile, d.DocsFile, d.PrepassFile = ownDir+"history.json", ownDir+"docs.json", ownDir+"prepass.json"
+		d.EvidenceMap = evidenceMap
 		return d
 	}
 	// A round whose Codex sessions ran with the checkout untrusted because
@@ -536,6 +545,7 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_initial_failing_checks", "judge-initial.md", withFailingChecks(withHistory(candidates(judgeFixture())))},
 		{"judge_rereview_failing_checks", "judge-rereview.md", withFailingChecks(withHistory(withNotes))},
 		{"judge_continue_failing_checks", "judge-continue.md", withFailingChecks(withRelated(judgeFixture()))},
+		{"judge_continue_evidence", "judge-continue.md", withHistory(judgeFixture())},
 		{"judge_recovery_failing_checks", "judge-recovery.md", withFailingChecks(candidates(judgeFixture()))},
 		{"claude_initial_history", "claude-review.md", roleHistory(roleFixture())},
 		{"claude_rereview_history", "claude-rereview.md", roleHistory(roleFixture())},

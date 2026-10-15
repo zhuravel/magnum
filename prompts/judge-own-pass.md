@@ -54,6 +54,9 @@ GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`: expect `merged == tr
 {{- if .PrepassFile}}
 Read `prepass` first: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
 {{- end}}
+{{- if .EvidenceMap}}
+`evidence` lists what earlier rounds examined in this PR, by path and behaviour: read the areas marked `unknown` or `stale` (changed since) first, as leads, never as findings by themselves; a `probed` entry with `control: true` needs no new probe, as its file is unchanged since.
+{{- end}}
 
 <magnum>
 mode: {{.Mode}}
@@ -120,6 +123,9 @@ docs: {{.DocsFile}}
 {{- end}}
 {{- if .PrepassFile}}
 prepass: {{.PrepassFile}}
+{{- end}}
+{{- if .EvidenceMap}}
+evidence: {{.EvidenceMap}}
 {{- end}}
 own_findings: {{.OwnFindings}}
 dry_run: {{.DryRun}}

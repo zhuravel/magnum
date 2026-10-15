@@ -251,6 +251,12 @@ const EventTrustDialogAnswered = "agents.trust_dialog_answered"
     EventTrustDialogAnswered is the event kind recorded (subject
     "pr:<owner>/<name>#<N>") each time a trust dialog is answered.
 
+const EvidenceFile = "evidence.json"
+    EvidenceFile is the file the judge writes what it examined to,
+    in the report directory next to its result file (JudgeData.EvidenceFile),
+    and the name of the PR's merged evidence map above the per-head directories
+    (JudgeData.EvidenceMap).
+
 const FallbackPromptName = "model-fallback.md"
     FallbackPromptName is the prompt file the continuation after a model switch
     renders (with FallbackData).
@@ -934,6 +940,22 @@ type JudgeData struct {
 	// each item a lead to check, never a finding by itself; "" in a
 	// continued turn and without Git.
 	PrepassFile string
+	// EvidenceFile is where the judge writes what it examined in the round
+	// (EvidenceFile in the report directory, beside ResultFile): one entry
+	// per behaviour it read or probed and one unknown entry per file of the
+	// diff it reviewed that it did not read (pipeline.Evidence), rendered
+	// as `evidence_file` beside
+	// `result_file` by the initial, rereview, recovery and continue
+	// prompts, the first three with the instruction; "" = none (the
+	// pipeline always sets it).
+	EvidenceFile string
+	// EvidenceMap is the PR's evidence map (pipeline.EvidenceMapPath): what
+	// the earlier rounds examined, merged by the engine, each entry read,
+	// probed, skipped, unknown or stale (its file changed since), rendered
+	// as `evidence` by the own pass and the initial, rereview and recovery
+	// prompts, which say to read the unknown and stale areas first; "" when
+	// the PR has none, in a continued turn and in a blind replay.
+	EvidenceMap string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
 	// name, workflow, state, time), rendered as `failing_checks` by the
@@ -1719,6 +1741,10 @@ type RoleData struct {
 	// prompts say to read it first, a changed method's body before its
 	// hunk, each item a lead to check; "" = none.
 	PrepassFile string
+	// EvidenceMap is the PR's evidence map, what the earlier rounds
+	// examined (see JudgeData.EvidenceMap): the claude reviewer prompts say
+	// to read its unknown and stale areas first; "" = none.
+	EvidenceMap string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
@@ -6265,6 +6291,51 @@ type EvalGateOptions struct {
     and the run it belongs to, its directory under Layout.Eval and its agent tag
     (eval.AgentTag), both its own.
 
+type EvidenceCounts struct {
+	Probed         int `json:"probed"`
+	Read           int `json:"read"`
+	Skipped        int `json:"skipped"`
+	Unknown        int `json:"unknown"`
+	Stale          int `json:"stale"`
+	FilesNeverRead int `json:"files_never_read"`
+}
+    EvidenceCounts counts a map's entries by state, and the paths no round ever
+    read or probed (FilesNeverRead: only unknown or skipped entries, a stale
+    entry counting as what it was).
+
+func (c EvidenceCounts) Sentence() string
+    Sentence is the card's line: "41 behaviours probed, 12 read, 9 unknown,
+    4 stale (3 files never read)", the skipped ones only when there are any.
+
+type EvidenceMap struct {
+	PR string `json:"pr"` // owner/repo#N
+	// HeadSHA is the head of the last round merged in, from which the next
+	// one measures what changed; Round is that round.
+	HeadSHA   string             `json:"head_sha"`
+	Round     int                `json:"round"`
+	UpdatedAt time.Time          `json:"updated_at"`
+	Entries   []EvidenceMapEntry `json:"entries"`
+}
+    EvidenceMap is a PR's evidence map: what its rounds examined, merged.
+
+func ReadEvidenceMap(path string) (m EvidenceMap, ok bool, err error)
+    ReadEvidenceMap reads the evidence map at path (pipeline.EvidenceMapPath);
+    ok is false when there is none.
+
+func (m EvidenceMap) Counts() EvidenceCounts
+    Counts counts m's entries (EvidenceCounts).
+
+type EvidenceMapEntry struct {
+	pipeline.EvidenceEntry
+	Was   string `json:"was,omitempty"`
+	Head  string `json:"head"`
+	Round int    `json:"round"`
+	Run   string `json:"run,omitempty"` // the round's judge run
+}
+    EvidenceMapEntry is an entry of a judge's evidence file with the head and
+    the round that wrote it. A stale entry (pipeline.EvidenceStale) keeps the
+    state it was written with in Was.
+
 type FixCommit struct {
 	SHA     string // 7 to 40 hex digits, as the fixer wrote it
 	Message string
@@ -6399,6 +6470,9 @@ type Git interface {
 	// DiffStat measures the PR's size at a full pass's baseline, in the
 	// round's checkout (prSize, fullpass.go).
 	DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error)
+	// ChangedBetween names the files that differ between two heads: the
+	// PR's evidence map marks what they held stale (evidence.go).
+	ChangedBetween(ctx context.Context, dir, from, to string) ([]string, error)
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -8886,6 +8960,13 @@ func (c *Client) BranchesUnder(ctx context.Context, repo, prefix string) ([]stri
     BranchesUnder lists the local branches of repo under prefix, one or more
     path segments ending in "/" ("learn/"), by their short names, sorted:
     the skill editor's orphan cleanup finds the branches no proposal holds.
+
+func (c *Client) ChangedBetween(ctx context.Context, dir, from, to string) ([]string, error)
+    ChangedBetween lists the files whose content differs between the commits
+    from and to (git diff --name-only from to: the two trees, whatever the
+    history between them), a rename as a deletion plus an addition. Unlike
+    ChangedPaths it names a file an earlier head changed and a rewritten branch
+    left as the base has it. nil when the trees are the same.
 
 func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
     ChangedPaths lists the files head changed relative to its merge base with
@@ -12340,6 +12421,10 @@ func (l Layout) OpsLock() string
     OpsLock is the lock a CLI command takes before Lock for in-process work,
     so a daemon that starts meanwhile can tell the command from a daemon.
 
+func (l Layout) PRReviews(owner, repo string, number int) string
+    PRReviews is the root of one PR's review reports: its per-head directories
+    (ReviewDir) and what spans its heads (the evidence map).
+
 func (l Layout) Pid() string
     Pid is the daemon's pidfile under State.
 
@@ -12347,7 +12432,8 @@ func (l Layout) Plugin() string
     Plugin is the checkout's herdr plugin manifest; "" without a checkout.
 
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string
-    ReviewDir is where one review round's reports live.
+    ReviewDir is where one review round's reports live: a directory per head in
+    PRReviews.
 
 func (l Layout) Reviews() string
     Reviews is the root of the review reports in the data directory.
@@ -12400,6 +12486,17 @@ step; the agent may still print its final message, which agents counts as the
 run's), and when a file with another status has been present for ResultSettle.
 
 CONSTANTS
+
+const (
+	EvidenceRead    = "read"    // the judge read the code of the behaviour
+	EvidenceProbed  = "probed"  // it ran a probe (Command), with a control or not
+	EvidenceSkipped = "skipped" // it left the behaviour alone on purpose (Result says why)
+	EvidenceUnknown = "unknown" // nobody read it: a file of the diff the judge did not read
+	EvidenceStale   = "stale"   // the map's: read, probed or skipped on a head its file changed since
+)
+    The states of an evidence entry. The judge writes the first four;
+    EvidenceStale is the engine's, for an entry of the map whose file changed
+    since its round wrote it.
 
 const (
 	KindInitial  = store.RunInitial  // first review of the PR
@@ -12505,6 +12602,10 @@ const DocsFile = "docs.json"
     DocsFile is the base docs that name the changed files, in the round's report
     directory.
 
+const EvidenceFile = agents.EvidenceFile
+    EvidenceFile is the judge's evidence file in its report directory, and the
+    name of the PR's evidence map (EvidenceMapPath).
+
 const FailingChecksFile = "failing-checks.json"
     FailingChecksFile is the head's failing checks in the round's report
     directory.
@@ -12542,6 +12643,10 @@ var PrepassTimeout = 60 * time.Second
 
 
 FUNCTIONS
+
+func EvidenceMapPath(l paths.Layout, owner, repo string, number int) string
+    EvidenceMapPath is PR owner/repo#number's evidence map: EvidenceFile in the
+    root of its review reports, above the per-head directories.
 
 func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, commentOnly bool, reports ...agents.Report) (noFindings, blocking string)
     JudgeEvents are the review events the judge's prompt names for a round of
@@ -12642,6 +12747,24 @@ type DirDocs struct {
 }
     DirDocs is one directory of BaseDocs: changed paths in it that no page
     names, and the pages that name the directory ("<dir>/").
+
+type Evidence struct {
+	HeadSHA string          `json:"head_sha"` // the head the judge examined ("" = the round's)
+	Entries []EvidenceEntry `json:"entries"`
+}
+    Evidence is the judge's evidence file as the round kept it.
+
+type EvidenceEntry struct {
+	Path      string `json:"path"`                // relative to the repository's top
+	Symbol    string `json:"symbol,omitempty"`    // e.g. Restorer#apply_incentives
+	Behaviour string `json:"behaviour,omitempty"` // what holds, one clause
+	State     string `json:"state"`               // EvidenceRead, EvidenceProbed, EvidenceSkipped, EvidenceUnknown
+	Command   string `json:"command,omitempty"`   // a probe's command
+	Control   bool   `json:"control,omitempty"`   // the probe ran a control
+	Result    string `json:"result,omitempty"`    // a probe's result; a skip's reason
+}
+    EvidenceEntry is one behaviour the judge read or probed, or one file it did
+    not read (State EvidenceUnknown, no Behaviour).
 
 type FailingChecks struct {
 	PR      string `json:"pr"`       // owner/repo#N
@@ -13159,6 +13282,10 @@ type RoundResult struct {
 	// ran or read (its result's harness_used), as written: names relative to
 	// notes_dir or paths under it.
 	HarnessUsed []string
+	// Evidence is what the judge said it examined in the round (its
+	// evidence file, validated: evidence.go), which the engine merges into
+	// the PR's evidence map when the review posted; nil when it wrote none.
+	Evidence *Evidence
 
 	Pause *Pause
 	// Refusal is who was refused in which run (OutcomeRefused); nil

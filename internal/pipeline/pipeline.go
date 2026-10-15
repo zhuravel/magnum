@@ -472,6 +472,10 @@ type RoundResult struct {
 	// ran or read (its result's harness_used), as written: names relative to
 	// notes_dir or paths under it.
 	HarnessUsed []string
+	// Evidence is what the judge said it examined in the round (its
+	// evidence file, validated: evidence.go), which the engine merges into
+	// the PR's evidence map when the review posted; nil when it wrote none.
+	Evidence *Evidence
 
 	Pause *Pause
 	// Refusal is who was refused in which run (OutcomeRefused); nil
@@ -639,6 +643,9 @@ type round struct {
 	// prepassFile is the head under review's prepass.json (prepass.go), as
 	// historyFile.
 	prepassFile string
+	// evidenceFile is the judge's evidence file (evidence.go), named in its
+	// prompt and read at the round's end; "" until the judge is prompted.
+	evidenceFile string
 	// ownFindings is the file of the judge's own pass once its prompt
 	// reached the judge (ownpass.go): the candidates prompt starts from it;
 	// "" = the judge gets one prompt. Guarded by mu; a restart resets it.

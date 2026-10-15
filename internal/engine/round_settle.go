@@ -401,6 +401,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 		e.delKV(ctx, KVPRTrivial(pr.ID)) // a review of the head itself replaces the note
 	}
 	e.settleKeptApproval(ctx, job.repo, pr, target, res)
+	e.mergeEvidence(ctx, job, pr, target, res) // evidence.go
 	e.dismissFormer(ctx, job, pr, target, res)
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request is served
 	// The request is served; the kinds that just worked lose their backoff.

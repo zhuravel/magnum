@@ -1673,6 +1673,12 @@ func (fakeGit) ChangedUnder(_ context.Context, _, base, head string, _ ...string
 	return nil, fmt.Errorf("fake git: no diff of %s...%s", base, head)
 }
 
+// ChangedBetween cannot tell either: the evidence map marks stale what an
+// older head examined, unless a test's git (evidenceGit) names the files.
+func (fakeGit) ChangedBetween(_ context.Context, _, from, to string) ([]string, error) {
+	return nil, fmt.Errorf("fake git: no diff of %s..%s", from, to)
+}
+
 func (fakeGit) MergeBase(_ context.Context, _, a, _ string) (string, error) {
 	if strings.HasPrefix(a, "origin/") {
 		return "base0000", nil

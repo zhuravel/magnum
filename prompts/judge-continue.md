@@ -38,6 +38,9 @@ related_prs: {{.RelatedPRs}}
 failing_checks: {{.FailingChecks}}
 {{- end}}
 result_file: {{.ResultFile}}
+{{- if .EvidenceFile}}
+evidence_file: {{.EvidenceFile}}
+{{- end}}
 post_review: {{.PostReviewCommand}}
 {{- if .PostRepliesCommand}}
 post_replies: {{.PostRepliesCommand}}
