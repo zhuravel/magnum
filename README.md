@@ -1549,7 +1549,12 @@ trackers, app logs, parameter filters, access logs, log shippers) are swept as o
 review machine has gets a Checks line that says what it exercised, never its file name, and
 codex-review's sandbox gets none; merged-tree database specs get no `environment_failures` entry; and a
 report's own list of rejected candidates is context, not claims (the claude reviewers no longer write
-one). In re-review mode magnum hands it the threads its login started with
+one). An optional or keep-current branch the PR adds (a skip, a retain, a force flag) gets the state it
+keeps checked against every later step of its flow that assumes the skipped thing was created or
+replaced, with each reachable combination probed end to end. Before the verdict the own pass lists under
+`## Notes applied` each line of the repository notes that applies to the PR, with the probe or argument
+that discharged it or `unknown`, and a lesson the judge writes into the notes applies to its own round
+first. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
 risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it"
@@ -1559,7 +1564,9 @@ only when the code shows it (a defect that is an end state only when every write
 it is covered, with a probe of one the fix left untouched), honours an answered finding unless it proves the reason wrong (then it
 says why in one sentence in that thread), and lists only what changed since its last review: findings
 now fixed or answered, findings still open despite a reply or a commit, and new ones; the unchanged open
-findings are one count with a link to the previous review. Its re-review and recovery prompts add the
+findings are one count with a link to the previous review. The own pass records each fix of an end
+state under `## Fix evidence` (the invariant, the writes that reach the state, those it probed and those
+unproven), and an unproven write the fix left untouched keeps the finding open. Its re-review and recovery prompts add the
 reply wording: a second rebuttal in a thread names, in the same sentence, what both counterexamples
 share and the change that closes the class, never a third instance, and a new P3 whose consequence the
 reason of an answered thread already covers, with no larger harm, is not posted (`duplicate`): that

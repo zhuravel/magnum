@@ -481,8 +481,15 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // (121), and the 2 the cap had left; then 32,956 for the end-state fix rule
 // (2026-10-15: 238 bytes, less 121 from section 6's threads-file fallback and
 // a shorter magnum's-own-line sentence), and 33,119 for section 0's `prepass`
-// input line (163). Every rule added must replace or shorten text.
-const skillMaxBytes = 33119
+// input line (163). Then 33,692 for three rules from the same PR's misses
+// (2026-10-15: 675 bytes, a fix's write set under `## Fix evidence`, a skip
+// or keep-current branch against the later steps of its flow, and the notes
+// applied under `## Notes applied`), less 102 of unpinned wording: the
+// readiness statuses (28), "edit files" that "Do not change the code" says
+// (12), the stacked PR's lower layer (24), an answered thread's reply (14)
+// and a report's priority (24). Every rule added must replace or shorten
+// text.
+const skillMaxBytes = 33692
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -1688,5 +1695,41 @@ func TestAFixOfAnEndStateIsJudgedAgainstEveryWriteThatReachesIt(t *testing.T) {
 	skillSays(t, []string{
 		"A defect that is an end state (a record left as the code cannot serve it, a value a reader cannot use) is fixed only when every write " +
 			"of the same flow that reaches that state is covered: list them, and probe one the fix leaves untouched.",
+	}, nil)
+}
+
+// The own pass that verified that fix recorded it as "limits writes to
+// inserted actions" and the judge approved, while another write of the same
+// restore still reached the state: nothing showed which writes the
+// verification covered. Each such fix gets a record under a heading of its
+// own, the writes left unproven in it.
+func TestSkillRecordsAFixesWriteSetAndUnprovenWrites(t *testing.T) {
+	skillSays(t, []string{
+		"Record each such fix in the own pass under `## Fix evidence`: the invariant, the writes that reach the state, " +
+			"those you probed and those unproven; an unproven write the fix left untouched keeps the finding open.",
+	}, nil)
+}
+
+// Three defects a colleague found on that PR in one round shared one shape:
+// an optional or keep-current branch of a feature (skip these blockers, keep
+// the live rewards, keep the current tiers) composed with a later step that
+// assumed the skipped thing was created or replaced. The probe runs the flow
+// end to end, the skill naming no "entry point"
+// (TestClaudeReviewersListTheEntryPointsOfAClosedAccessHole).
+func TestSkillProbesOptionalBranchesAgainstLaterSteps(t *testing.T) {
+	skillSays(t, []string{
+		"For each optional or keep-current branch the PR adds (a skip, a retain, a force flag), name the state it keeps and every later step " +
+			"of the flow that assumes the skipped thing was created or replaced; probe the reachable combinations end to end.",
+	}, nil)
+}
+
+// The judge wrote that round's lesson into the repository notes (probe every
+// later step that writes records depending on the kept thing) in the same
+// round in which it called the fix fixed, and did not apply it: writing a
+// lesson is not applying it.
+func TestSkillAppliesTheNotesBeforeTheVerdict(t *testing.T) {
+	skillSays(t, []string{
+		"Before the verdict, list in the own pass, under `## Notes applied`, each notes line that applies, with the probe or argument " +
+			"that discharged it, or `unknown`; a lesson you write this round applies to this round first.",
 	}, nil)
 }

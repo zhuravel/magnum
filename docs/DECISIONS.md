@@ -7639,6 +7639,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
   skill rule (the same discipline applies to the own pass and to recovery rounds); undoing the fix and
   watching the new test fail as the rule (magnum's mutation runs do that already, and they proved the test,
   not the fix's reach).
+- **A fix's write set, a feature's optional branches and the notes applied are on the record** (2026-10-15,
+  amends "A fix of an end state is judged against every write that reaches it"). A Codex read of the
+  talkable#11483 misses named three habits the judge lacks. A fix was called fixed with no record of what
+  it covered: the end-state rule says to list every write and probe one, and nothing made the list
+  visible, so nobody could see a narrow verification. The three defects a colleague's round found share
+  one shape: a feature that offers an optional or keep-current branch (skip these blockers, keep the live
+  rewards, keep the current tiers) composed with a later step that assumes the skipped thing was created
+  or replaced; the skill asked for callers and data flow, not for that composition. And the judge wrote
+  that round's lesson into the repository notes in the same round in which it verified the fix, and did
+  not apply it: the notes are read at the start and rewritten at the end, and writing a lesson is not
+  applying it. Three rules in SKILL.md: (1) section 6's `fixed` bullet, after the end-state sentence: record
+  each such fix in the own pass under `## Fix evidence` (the invariant, the writes that reach the state,
+  those probed and those unproven); an unproven write the fix left untouched keeps the finding open. (2)
+  Section 2, after the structure sentence and its "Report one only with the input that goes wrong.": for
+  each optional or keep-current branch the PR adds (a skip, a retain, a force flag), name the state it
+  keeps and every later step of the flow that assumes the skipped thing was created or replaced, and probe
+  the reachable combinations end to end; not "through the real entry point", as the spec had it, since the
+  skill must not say "entry point" (TestClaudeReviewersListTheEntryPointsOfAClosedAccessHole: such text
+  drew Codex cybersecurity flags on judge turns). (3) Section 2's notes paragraph: before the verdict, the
+  own pass lists under `## Notes applied` each notes line that applies, with the probe or argument that
+  discharged it, or `unknown`; a lesson written this round applies to this round first. Each rule names
+  its heading itself, shorter than a line about it in section 0 or 8. The rules add 675 bytes (212, 245
+  and 218); 102 came from unpinned wording: the readiness statuses, now "each with its status and reason"
+  (28), "edit files" in section 1, which "Do not change the code" at the top says (12), a stacked PR's
+  lower layer "only as context" (24), an answered thread's "a reply, never a new comment" (14), and "A
+  report's priority is a claim like any other", now "whatever a report says" (24). No pin was edited.
+  SKILL.md went from 33,119 to 33,692 bytes and `skillMaxBytes` from 33,119 to 33,692 (+573). New tests
+  TestSkillRecordsAFixesWriteSetAndUnprovenWrites, TestSkillProbesOptionalBranchesAgainstLaterSteps and
+  TestSkillAppliesTheNotesBeforeTheVerdict, with the regenerated skill_pins.txt. Rejected: a judge prompt
+  clause instead of skill rules (the own pass and the recovery round need them too).
 
 ## Learned rules
 
