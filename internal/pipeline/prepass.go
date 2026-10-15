@@ -23,7 +23,7 @@ package pipeline
 //
 // The watch's related_ignore paths (lockfiles) are left out, as history.json
 // and docs.json do. The file says `skipped` and why instead when there is
-// no base sha, the diff has more than 20,000 changed lines, git fails, or
+// no base sha, the diff has more than 50,000 changed lines, git fails, or
 // the reads take more than PrepassTimeout; the review goes on either way.
 // The judge and claude-review prompts name it and say each item is a lead
 // to check, never a finding by itself. Paths and names are data in the
@@ -56,7 +56,7 @@ const PrepassFile = "prepass.json"
 
 // prepass.json's caps.
 const (
-	maxPrepassLines   = 20000 // changed lines past which the diff is not read
+	maxPrepassLines   = 50000 // changed lines past which the diff is not read
 	maxPrepassUses    = 20    // files listed per removed symbol
 	maxPrepassSymbols = 200   // removed symbols searched; the rest are counted
 	minPrepassName    = 4     // a shorter name is never searched
@@ -76,7 +76,7 @@ type Prepass struct {
 	HeadSHA string `json:"head_sha"` // the head under review, whose tree is searched
 	BaseSHA string `json:"base_sha"` // the merge base: the diff is base_sha...head_sha
 	// Skipped says why the pre-pass did not run ("no base sha", "the diff
-	// has 24113 changed lines, over 20000", a failure, the timeout); the
+	// has 61400 changed lines, over 50000", a failure, the timeout); the
 	// lists are absent then.
 	Skipped        string          `json:"skipped,omitempty"`
 	RemovedSymbols []RemovedSymbol `json:"removed_symbols,omitzero"`

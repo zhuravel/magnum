@@ -1118,7 +1118,7 @@ source file whose test the diff leaves alone by its language's naming convention
 and `spec/models/order_spec.rb`, `x.go` and `x_test.go`, `x.ts` and `x.test.ts` or `__tests__/x.ts`, `x.py`
 and `test_x.py`), tests, fixtures, migrations, generated files, views, styles, documents and configuration
 files aside; and `siblings`, the closest existing file to each new one (the same suffix and the longest
-common prefix, in its directory, else its parent). When it cannot run (no base sha, more than 20,000
+common prefix, in its directory, else its parent). When it cannot run (no base sha, more than 50,000
 changed lines, a git failure, more than 60 seconds) the file says `skipped` and why, and the review goes
 on; each head's `round.prepass` event counts the lists or gives the reason. The judge's prompts (the own
 pass, the candidates phase, a round's one prompt) name the file as `prepass`, and they and the

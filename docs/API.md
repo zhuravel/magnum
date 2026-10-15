@@ -12729,7 +12729,7 @@ type Prepass struct {
 	HeadSHA string `json:"head_sha"` // the head under review, whose tree is searched
 	BaseSHA string `json:"base_sha"` // the merge base: the diff is base_sha...head_sha
 	// Skipped says why the pre-pass did not run ("no base sha", "the diff
-	// has 24113 changed lines, over 20000", a failure, the timeout); the
+	// has 61400 changed lines, over 50000", a failure, the timeout); the
 	// lists are absent then.
 	Skipped        string          `json:"skipped,omitempty"`
 	RemovedSymbols []RemovedSymbol `json:"removed_symbols,omitzero"`

@@ -1549,7 +1549,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   parent, from one `git ls-tree` of the head; none when no such file exists. gitx gains `DiffStat`
   (numstat), `DiffLines` (`-U0`, parsed file by file, a removed `-- note` read as content, quoted names
   unquoted), `WordUses` and `DirFiles`, each on the object store. A pre-pass that cannot run writes the
-  file with `skipped` and why: no base sha, more than 20,000 changed lines (counted from the numstat
+  file with `skipped` and why: no base sha, more than 50,000 changed lines (counted from the numstat
   before the diff is read, lockfiles aside, so a lockfile bump does not hide the code), a git failure or
   more than 60 seconds (`PrepassTimeout`); a failure never fails the round, and each head records one
   `round.prepass` event with the counts or the reason (a warning for a failure or the timeout), never a

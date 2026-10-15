@@ -238,7 +238,7 @@ func TestPrepassNamesTheSiblingOfANewFile(t *testing.T) {
 	}
 }
 
-// Past 20,000 changed lines (the watch's related_ignore paths aside) the
+// Past 50,000 changed lines (the watch's related_ignore paths aside) the
 // pre-pass does not read the diff: prepass.json says why, the prompts still
 // name it, and the event gives the reason. A round without a base sha says
 // so too, without a git call.
@@ -246,28 +246,28 @@ func TestPrepassSkipsAHugeDiffAndSaysWhy(t *testing.T) {
 	e := newEnv(t)
 	e.git.stats = []gitx.FileStat{
 		{Path: "Gemfile.lock", Added: 30000, Removed: 29000},
-		{Path: "app/models/order.rb", Added: 15000, Removed: 5001},
+		{Path: "app/models/order.rb", Added: 45000, Removed: 5001},
 	}
 	got, _ := e.runPrepass(905)
 	want := Prepass{PR: "talkable/talkable#11920", HeadSHA: target, BaseSHA: e.input(KindInitial).BaseSHA,
-		Skipped: "the diff has 20001 changed lines, over 20000"}
+		Skipped: "the diff has 50001 changed lines, over 50000"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("prepass.json = %+v\nwant %+v", got, want)
 	}
 	if calls := e.git.prepassCallsMade(); len(calls) != 1 || !strings.HasPrefix(calls[0], "stat ") {
 		t.Errorf("pre-pass git calls = %q, want the line count only", calls)
 	}
-	if level, msg, data := e.prepassEvent(); level != "info" || !strings.Contains(msg, "20001 changed lines") || data["skipped"] != want.Skipped {
+	if level, msg, data := e.prepassEvent(); level != "info" || !strings.Contains(msg, "50001 changed lines") || data["skipped"] != want.Skipped {
 		t.Errorf("round.prepass = %s %q %v, want the reason", level, msg, data)
 	}
 
 	e = newEnv(t)
 	e.git.stats = []gitx.FileStat{
 		{Path: "Gemfile.lock", Added: 30000, Removed: 29000},
-		{Path: "app/models/order.rb", Added: 15000, Removed: 5000},
+		{Path: "app/models/order.rb", Added: 45000, Removed: 5000},
 	}
 	if got, _ := e.runPrepass(906); got.Skipped != "" {
-		t.Fatalf("20,000 lines: prepass.json = %+v, want it read", got)
+		t.Fatalf("50,000 lines: prepass.json = %+v, want it read", got)
 	}
 
 	e = newEnv(t)

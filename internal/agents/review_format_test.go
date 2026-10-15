@@ -480,9 +480,9 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // unsaved or free in one clause and the two P3 ceilings in one sentence
 // (121), and the 2 the cap had left; then 32,956 for the end-state fix rule
 // (2026-10-15: 238 bytes, less 121 from section 6's threads-file fallback and
-// a shorter magnum's-own-line sentence). Every rule added must replace or
-// shorten text.
-const skillMaxBytes = 32_956
+// a shorter magnum's-own-line sentence), and 33,119 for section 0's `prepass`
+// input line (163). Every rule added must replace or shorten text.
+const skillMaxBytes = 33119
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {

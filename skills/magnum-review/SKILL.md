@@ -19,6 +19,7 @@ The latest prompt's `<magnum>` block holds:
 - `reports`: each reviewer role's candidate report, or why it is missing (section 3).
 - `readiness` (when present): what magnum ran in the checkout before the reviewers, each `ok`, `failed`, `timeout` or `skipped` with its reason; its JSON file holds each command's last output line.
 - `related_prs` (when present): open and lately merged PRs on the same paths; `history`, `docs`: section 2.
+- `prepass` (when present): removed definitions other files still name, source files without a test change, each new file's closest sibling, or `skipped` and why.
 - `failing_checks` (when present): the head's failed CI checks (section 7).
 - `project_checks`: add it as one Checks line, `- <project_checks>`.
 - `notes` (when present): the repository notes file. `notes_dir`: its harness directory; `notes_harness`: the files there now; `notes_lock`, `notes_unlock`: the commands that take and release its lock (section 2).
