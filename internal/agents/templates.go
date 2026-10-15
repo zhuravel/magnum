@@ -338,6 +338,14 @@ type JudgeData struct {
 	// PreviousHeadSHA, so the own pass reads the commits since (unless
 	// ForcePushed or BaseMerged says otherwise).
 	ColdJudge bool
+	// FullPass (recovery): a scheduled full pass ([pipeline]
+	// full_pass_every; pipeline.RoundInput.FullPass): every session started
+	// fresh, and the judge reviews the full PR diff again as a first review
+	// does, then decides every earlier thread under the reply contract; a
+	// finding the earlier reviews missed ends its title with `(missed
+	// earlier)`, and the body is headed as a full pass. Rendered as
+	// `full_pass: true` and one instruction, only then.
+	FullPass bool
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string

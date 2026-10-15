@@ -40,6 +40,27 @@ func TestReviewQueuesForcedRequestAndPrintsPosition(t *testing.T) {
 	actContains(t, h.out.String(), "talkable#5  Fix coupon export (@alice)", pr.URL, "state reviewed", "position 1")
 }
 
+// `magnum review --full` asks the daemon for a full pass: every role in a
+// fresh session over the whole PR, the judge deciding every earlier thread.
+func TestReviewFullAsksForAFullPass(t *testing.T) {
+	h := newActHarness(t)
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.pid = 4242
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "queued talkable/talkable#5 (rereview_pending, forced), position 1")
+	}
+	if code := h.cmd("review", "5", "--full"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].Kind != engine.ReqReview {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if p := actDecode[engine.ReviewPayload](t, reqs[0].Payload); !p.Full || p.Number != 5 {
+		t.Fatalf("payload = %+v, want a full pass of #5", p)
+	}
+}
+
 func TestReviewImportsUnknownPRWithOneDetailsCall(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then

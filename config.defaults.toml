@@ -266,6 +266,12 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
                                   # GitHub): Codex's prompt cache lasts about 1.5 h, so resuming re-reads the whole
                                   # conversation uncached. A live judge is quit first (parked, history kept); the
                                   # other roles keep their sessions; a continue resumes. "0" = always resume
+full_pass_every = 10              # the Nth automatic re-review of a PR, counted since its first review or its
+                                  # last full pass, is a full pass: every role starts in a fresh session and
+                                  # reviews the whole PR as a first review does, and the judge re-decides the
+                                  # earlier threads. Costs a first review's rounds of every role. A delta check,
+                                  # a same-head or reply round and `magnum review` never become one (`magnum
+                                  # review --full` asks for one). 0 = never
 judge_fallback = ""               # a judge role of another kind that takes over a PR's rounds once the judge's
                                   # kind refused one (Codex's cybersecurity classifier): the PR is flagged for
                                   # that kind, its roles of that kind are dropped, and this role judges from

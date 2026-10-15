@@ -886,7 +886,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(rereview),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
 		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), CIRed: rd.ciRed(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile,
-		PrepassFile: rd.prepassFile, ColdJudge: cold,
+		PrepassFile: rd.prepassFile, ColdJudge: cold, FullPass: in.FullPass && in.Kind == KindRecovery,
 	}
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {

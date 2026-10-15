@@ -31,9 +31,12 @@ type RoundWhy struct {
 	// alone (a delta check).
 	DeltaCheck bool
 	DeltaLines int
-	Roles      []string // the roles it ran, in the order the round named them
-	Requested  []string // the roles asked for this round
-	Reruns     []RoleRerun
+	// FullPass: a scheduled full pass ([pipeline] full_pass_every), a
+	// recovery of every role in fresh sessions over the whole PR.
+	FullPass  bool
+	Roles     []string // the roles it ran, in the order the round named them
+	Requested []string // the roles asked for this round
+	Reruns    []RoleRerun
 	// Triaged: triage decided this round's roles; Skipped are the roles it
 	// dropped and Reason its words (the model read the PR: PR content,
 	// cleaned like any). EveryRole is why triage kept every role ("the diff
@@ -211,8 +214,11 @@ func roundKindPhrase(w RoundWhy) string {
 	if phrase == "" {
 		phrase = w.Kind
 	}
-	if w.DeltaCheck {
+	switch {
+	case w.DeltaCheck:
 		phrase = DeltaCheckPhrase(w.DeltaLines)
+	case w.FullPass:
+		phrase = "full pass"
 	}
 	if phrase != "" && w.PostMerge {
 		phrase = "post-merge " + phrase

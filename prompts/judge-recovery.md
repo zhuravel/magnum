@@ -5,7 +5,9 @@ Earlier reviews by `{{.ReviewerLogin}}`{{if .FormerLogins}} or, before magnum mo
 {{- end}}
 Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`), then follow the skill's re-review section for head `{{.HeadSHA}}`.{{if not .SameHead}} Candidate reports for this head are listed below; word a security candidate as the skill's section 4 says, not as its report does.{{end}}
 {{- $merged := and .BaseMerged (not .ForcePushed)}}
-{{- if .ForcePushed}}
+{{- if .FullPass}}
+This is a scheduled full pass: review the full PR diff again (`git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`), the way a first review does (section 2 of the skill), not only the commits since `{{.PreviousHeadSHA}}`. Then decide every earlier thread under the reply contract (section 6). Earlier findings stay counted. A proved finding the earlier reviews missed ends its title with `(missed earlier)`. Head the body `**Re-review <previous_head_sha, 7 chars> → <head_sha, 7 chars> (full pass):**`.
+{{- else if .ForcePushed}}
 The author rewrote history: `{{.PreviousHeadSHA}}` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.
 {{- else if $merged}}
 The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
@@ -81,6 +83,9 @@ base_merged: true
 {{- end}}
 {{- if .DeltaCheck}}
 delta_check: true
+{{- end}}
+{{- if .FullPass}}
+full_pass: true
 {{- end}}
 threads_file: {{.ThreadsFile}}
 reports:

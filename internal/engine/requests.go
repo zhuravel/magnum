@@ -88,6 +88,11 @@ type ReviewPayload struct {
 	// older CLI queued with --again still decodes (decode refuses unknown fields).
 	Again bool `json:"again,omitempty"`
 	Fresh bool `json:"fresh,omitempty"` // park the sessions and start new conversations
+	// Full asks for a full pass (`magnum review --full`, fullpass.go): fresh
+	// sessions, and every role reviews the whole PR again as a first review
+	// does, the judge deciding every earlier thread; on a PR never reviewed
+	// it is a first review as any.
+	Full bool `json:"full,omitempty"`
 	// Simplify asks for the role answering to "simplify" (claude-simplify
 	// by default) this round, whatever its runs; kept for older CLIs, the
 	// same as Roles ["simplify"].
@@ -523,7 +528,10 @@ func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, 
 	if p.As != "" {
 		e.setKV(ctx, KVPRIdentityPinned(pr.ID), p.As) // never migrated to the watch's identity
 	}
-	if p.Fresh {
+	switch {
+	case p.Full:
+		e.setKV(ctx, store.KVPRFresh(pr.ID), store.FreshFullPass)
+	case p.Fresh:
 		e.setKV(ctx, store.KVPRFresh(pr.ID), "1")
 	}
 	if p.Replies {

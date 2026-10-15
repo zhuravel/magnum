@@ -102,6 +102,8 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"KVPRTrivial", KVPRTrivial(id), "pr.7.trivial"},
 		{"KVPRDelta", KVPRDelta(id), "pr.7.delta"},
 		{"KVPRDeltaCheck", KVPRDeltaCheck(id), "pr.7.delta_check"},
+		{"kvPRFullPass", kvPRFullPass(id), "pr.7.full_pass"},
+		{"kvPRFullPassRound", kvPRFullPassRound(id), "pr.7.full_pass_round"},
 		{"KVPRSkippedBaseline", KVPRSkippedBaseline(id), "pr.7.skipped_baseline"},
 		{"KVPRFormerIdentities", KVPRFormerIdentities(id), "pr.7.former_identities"},
 		{"KVPRIdentityPinned", KVPRIdentityPinned(id), "pr.7.identity_pinned"},

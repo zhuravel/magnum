@@ -1139,6 +1139,10 @@ type fakeRounds struct {
 	// appendErr is their error.
 	appends   []string
 	appendErr error
+	// judgeLogin, when set, makes posted record the judge's verified run
+	// with its review, as login, as the pipeline leaves it (the full pass's
+	// count reads them).
+	judgeLogin string
 }
 
 func (f *fakeRounds) AppendToReview(_ context.Context, owner, repo string, number int, reviewID int64, text string) error {
@@ -1258,8 +1262,21 @@ func (f *fakeRounds) posted(ctx context.Context, in pipeline.RoundInput, n int) 
 			return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
 		}
 	}
-	return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Round: round, ReviewID: int64(100 + n),
-		Event: "COMMENTED", ReviewCommit: in.TargetSHA, Findings: map[string]int{"P2": 1}, Reports: reports}, nil
+	res := pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Round: round, ReviewID: int64(100 + n),
+		Event: "COMMENTED", ReviewCommit: in.TargetSHA, Findings: map[string]int{"P2": 1}, Reports: reports}
+	f.mu.Lock()
+	login := f.judgeLogin
+	f.mu.Unlock()
+	if login != "" && f.st != nil {
+		run, err := f.st.CreateRun(ctx, store.Run{PRID: in.PR.ID, Round: round, Role: store.RoleJudge, Kind: in.Kind, TargetSHA: in.TargetSHA,
+			PrevReviewedSHA: in.PR.ReviewedSHA, Identity: in.PR.Identity, ReviewerLogin: login, State: store.RunVerified,
+			ReviewID: new(res.ReviewID), ReviewEvent: new(res.Event), PromptText: "judge"})
+		if err != nil {
+			return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
+		}
+		res.JudgeRunID = run.ID
+	}
+	return res, nil
 }
 
 func (f *fakeRounds) all() []pipeline.RoundInput {

@@ -611,6 +611,9 @@ func (c *Config) validatePipeline() []error {
 	if d := c.Pipeline.JudgeFreshAfter.Duration; d < 0 {
 		errs = append(errs, fmt.Errorf("pipeline: judge_fresh_after must be 0 (always resume) or positive, got %s", d))
 	}
+	if n := c.Pipeline.FullPassEvery; n < 0 {
+		errs = append(errs, fmt.Errorf("pipeline: full_pass_every must be 0 (no full pass) or positive, got %d", n))
+	}
 	// judge_fallback names a judge role of another kind than the watch's
 	// judge, outside the watch's roles (it stands in for the judge, never
 	// beside it).

@@ -150,6 +150,8 @@ type statusView struct {
 	// ends: the comment's last edit, for a PR closed, merged or turned into
 	// a draft (statusRecord.End).
 	ends bool
+	// fullPass: the round under way is a scheduled full pass (fullpass.go).
+	fullPass bool
 }
 
 // opens reports whether the stage posts a comment where none stands: a
@@ -220,6 +222,9 @@ func (v statusView) body(note string, now time.Time) string {
 		}
 		if v.stage == statusInProgress {
 			progress = "- [x] In progress"
+			if v.fullPass {
+				progress += " (full pass)"
+			}
 			if !v.since.IsZero() {
 				progress += " since " + statusClock(v.since, now)
 			}
@@ -584,8 +589,9 @@ func (e *Engine) statusFailed(ctx context.Context, repo store.Repo, pr store.PR,
 // comment promised a review gets "not reviewing", and a round on the
 // reviewed head leaves it posted unless someone asked for it
 // (anotherReview). It reads the registry only for a forced PR's dry run, a
-// waiting PR's wait, a re-review's earlier findings and a round on the
-// reviewed head: the tick asks it of every PR.
+// waiting PR's wait, a re-review's earlier findings, whether a round under
+// way is a full pass and a round on the reviewed head: the tick asks it of
+// every PR.
 func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, flagged bool, now time.Time) (statusView, bool) {
 	reviewed := deref(pr.ReviewedSHA)
 	v := statusView{kind: statusReview, head: pr.HeadSHA}
@@ -645,6 +651,7 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 		if pr.LastRoundStartedAt != nil {
 			v.since = *pr.LastRoundStartedAt
 		}
+		v.fullPass = e.fullPassRunning(ctx, pr.ID)
 		e.statusEarlier(ctx, pr, &v)
 		return v, true
 	}

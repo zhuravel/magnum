@@ -548,6 +548,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
   refresh the reading (it spends, and it is what the resumed round does anyway); discarding the snapshot
   on resume (the status would show no gauge, and a restart would read the same file again).
 
+- **Every tenth re-review of a PR is a full pass** (2026-10-15). After its first review nothing read a
+  long-lived PR whole again: a re-review reads the commits since the last review in the judge's
+  conversation, and a judge whose session is gone reads the earlier reviews, then only the new commits
+  too (the recovery prompt). talkable#11483 (268 files, 24k added lines, open since April) had about 38
+  rounds; on 2026-10-13 a colleague's whole-branch review found three latent defects in PR code outside
+  the delta 90 minutes after magnum's re-review of that head said "no new problems". Now `[pipeline]
+  full_pass_every` (default 10, 0 = off) makes the Nth automatic re-review, counted since the PR's first
+  review or its last full pass, a full pass: the sessions are parked and every role starts fresh as
+  `--fresh` does, the round runs as a recovery (its runs keep kind `recovery`), the reviewers get their
+  first-review prompts at their full effort, triage judges the whole PR as for a first review, and the
+  judge's own pass and recovery prompt carry the full-pass clause (`full_pass: true`): review the full PR
+  diff again as a first review does (section 2 of the skill), then decide every earlier thread under the
+  reply contract, earlier findings still counted, a finding the earlier reviews missed titled `(missed
+  earlier)`, the body headed `Re-review <a> → <b> (full pass):`. The count reads the runs table: the PR's
+  rereview and recovery rounds whose judge posted a review on a head other than the one reviewed before
+  them (so no same-head, reply or CI-red round), numbered after the last full pass, which
+  `pr.<id>.full_pass` records with its judge run and round when it posts (`pr.<id>.full_pass_round` marks
+  one in flight, for the status comment and a continue of a paused one). Existing PRs count their past
+  re-reviews, so talkable#11483 gets its full pass at its next automatic full re-review. A delta check counts
+  but never becomes one (the small push keeps its check, and the next full re-review is the full pass); a
+  forced or requested round counts, since no run says who asked for it, but never becomes one, nor does a
+  re-review of the same head, a reply round or a CI check; the soft Codex budget cap holds a full pass as
+  any automatic full re-review. `round.full_pass` says why one runs, `engine.round_start` says `re-review
+  (full pass)`, the card's last round `full pass` and the status comment `In progress (full pass)`.
+  `magnum review --full <ref>` asks for one by hand (`pr.<id>.fresh` = `full`). Rejected: a full pass by
+  PR size or age alone (a large PR with two rounds needs none); a fresh judge with the delta scope (that
+  is the recovery round, which reads the new commits only); a `full_pass` value of `runs.kind` (a 0027
+  rebuild of runs, findings and declines for one flag); a kv counter that only automatic rounds increment
+  (it would start at 0, so a PR with 38 rounds would wait 10 more re-reviews).
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

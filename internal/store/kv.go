@@ -82,8 +82,12 @@ func KVPRSimplify(prID int64) string { return fmt.Sprintf("pr.%d.simplify", prID
 func KVPRRoles(prID int64) string { return fmt.Sprintf("pr.%d.roles", prID) }
 
 // KVPRFresh is "1" when the PR's next round parks its sessions and starts
-// new conversations (magnum review --fresh).
+// new conversations (magnum review --fresh), FreshFullPass when that round
+// is a full pass too (magnum review --full).
 func KVPRFresh(prID int64) string { return fmt.Sprintf("pr.%d.fresh", prID) }
+
+// FreshFullPass is the KVPRFresh value of a requested full pass.
+const FreshFullPass = "full"
 
 // KVPRSessionsIdentity is the identity the PR's live agent sessions were
 // created for (their panes carry that identity's gh config); a round for

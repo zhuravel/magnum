@@ -190,6 +190,12 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		rs.sameHead = e.confirmSameHead(ctx, job, rs.target) // false: the round runs in full
 	}
 	job.ciRed = job.ciRed && rs.sameHead // a newer head: its round reads its CI, and counts
+	switch job.kind {
+	case pipeline.KindRereview:
+		rs.fullPass = job.fullPass != ""
+	case kindContinue:
+		rs.fullPass = e.fullPassRunning(ctx, pr.ID) // a paused full pass goes on as one
+	}
 	if job.kind != kindContinue && job.evalHead == "" && !rs.judgeOnly() {
 		rs.requested = append(rs.requested, e.rerunRoles(ctx, job, rs.roles, rs.target)...)
 	}
@@ -231,6 +237,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	e.finalizeStaleRuns(ctx, pr.ID)
 	if rs.kind != kindContinue {
 		e.noteDeltaCheckRound(ctx, pr.ID, rs.delta, rs.target) // a continue keeps the paused round's
+		e.noteFullPassRound(ctx, pr.ID, rs.fullPass)
 	}
 	switch {
 	case rs.kind == kindContinue:
@@ -272,6 +279,12 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if rs.ciRed {
 		what, data["ci_red"] = what+" (CI red after the review)", true
 	}
+	switch {
+	case rs.fullPass && rs.kind == kindContinue:
+		what, data["full_pass"] = what+" (full pass)", true
+	case rs.fullPass:
+		what, data["full_pass"] = fullReReviewLabel, true
+	}
 	if job.postMerge {
 		what = "post-merge " + what
 	}
@@ -309,6 +322,11 @@ type roundSetup struct {
 	// ciRed: the round is a judge check of the head's red CI
 	// (pipeline.RoundInput.CIRed; ci_red.go).
 	ciRed bool
+	// fullPass: the round is a scheduled full pass (fullpass.go): a
+	// re-review the dispatcher made one (roundJob.fullPass), whose roles all
+	// start fresh and which runs as a recovery, or a continue of a paused
+	// one (pipeline.RoundInput.FullPass).
+	fullPass bool
 }
 
 // judgeOnly reports whether the round runs its judge alone: a delta check
@@ -377,8 +395,9 @@ func (e *Engine) checkoutHead(ctx context.Context, job *roundJob, pr store.PR, p
 // starts or resumes their agents, the judge first, then settles the round's
 // kind in rs: a judge without its conversation re-reads the history
 // (recovery, or initial before any review; a delta check or a same-head
-// re-review stays one, checkFresh), and a continue that became a full
-// round starts the other roles too.
+// re-review stays one, checkFresh), a full pass parks every session and
+// starts every role fresh at its full effort, as a recovery (fullpass.go),
+// and a continue that became a full round starts the other roles too.
 func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetup) (agents.Workspace, *setupError) {
 	var ws agents.Workspace
 	fail := func(err error) (agents.Workspace, *setupError) {
@@ -386,8 +405,17 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	}
 	pr := job.pr
 	fresh, why := false, "" // why: what made the sessions fresh, for the events
-	if v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID)); v == "1" {
+	if v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID)); v != "" {
 		fresh, why = true, "fresh sessions were requested"
+	}
+	// A full pass starts every role fresh and reviews the whole PR again,
+	// as a recovery (fullpass.go).
+	fullPass := rs.fullPass && job.kind == pipeline.KindRereview
+	if fullPass {
+		fresh, why = true, "a full pass"
+		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.full_pass",
+			"full pass: "+job.fullPass+": every role starts in a fresh session and reviews the whole PR",
+			map[string]any{"reason": job.fullPass, "full_pass_every": e.cfg.Pipeline.FullPassEvery})
 	}
 	// Sessions post as the identity their panes were created for; a PR whose
 	// identity changed since (watch config, magnum review --as) must not
@@ -414,7 +442,10 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	}
 	e.setKV(ctx, store.KVPRSessionsIdentity(pr.ID), pr.Identity)
 	effort := effortOf(job.kind)
-	if rs.judgeOnly() && e.hasOwnReview(ctx, pr, rs.src.Login()) {
+	switch {
+	case fullPass:
+		effort = effortFull // every role reviews the whole PR, as in a first review
+	case rs.judgeOnly() && e.hasOwnReview(ctx, pr, rs.src.Login()):
 		effort = effortCheck // a fresh judge checks the delta, or the same head, too (checkFresh)
 	}
 	if !fresh {
@@ -439,7 +470,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	if rs.kind == kindContinue {
 		rs.round = job.round
 	}
-	if recovered && rs.kind != pipeline.KindInitial {
+	if (recovered || fullPass) && rs.kind != pipeline.KindInitial {
 		rs.round = 0
 		rs.kind = pipeline.KindRecovery
 		if deref(pr.ReviewedSHA) == "" {
@@ -533,6 +564,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		CIRed:   rs.ciRed,
 		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel, Related: e.cfg.RelatedFor(&job.watch),
 		ColdJudge: rs.freshJudge && rs.kind == pipeline.KindRecovery,
+		FullPass:  rs.fullPass,
 	}
 	if job.evalHead != "" {
 		in.Blind = true

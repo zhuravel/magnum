@@ -18,7 +18,9 @@ An earlier session reviewed this PR, but its history is gone. Earlier reviews by
   - {{.ID}} {{.Event}} on `{{.SHA}}` ({{.SubmittedAt}})
 {{- end}}
 Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`).
-{{- if .ForcePushed}}
+{{- if .FullPass}}
+This is a scheduled full pass: review the full PR diff again (`git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`), the way a first review does (section 2 of the skill), not only the commits since `{{.PreviousHeadSHA}}`.
+{{- else if .ForcePushed}}
 The author rewrote history: `{{.PreviousHeadSHA}}` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.
 {{- else if .BaseMerged}}
 The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
@@ -84,6 +86,9 @@ force_pushed: {{.ForcePushed}}
 {{- end}}
 {{- if and .BaseMerged (or (eq .Mode "rereview") (not .ForcePushed)) (ne .Mode "initial")}}
 base_merged: true
+{{- end}}
+{{- if .FullPass}}
+full_pass: true
 {{- end}}
 {{- if eq .Mode "rereview"}}
 moved_from: {{.MovedFrom}}

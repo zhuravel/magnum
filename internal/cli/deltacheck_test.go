@@ -24,6 +24,19 @@ func TestBoardRoundFactsNameADeltaCheck(t *testing.T) {
 	}
 }
 
+// The board's round facts name a scheduled full pass (a recovery of every
+// role, its start event's full_pass).
+func TestBoardRoundFactsNameAFullPass(t *testing.T) {
+	f := newRoundsFixture(t)
+	f.roundStart("rereview", []string{"codex-judge", "claude-review"}, nil, false)
+	f.event("engine.round_start", map[string]any{"slot": "review1", "kind": "recovery", "target_sha": "abc1234",
+		"roles": []string{"codex-judge", "claude-review"}, "requested": nil, "post_merge": false, "full_pass": true, "delta_lines": 120})
+	want := &tui.RoundWhy{Kind: "recovery", FullPass: true, Roles: []string{"codex-judge", "claude-review"}}
+	if got := f.why(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RoundWhy = %+v, want %+v", got, want)
+	}
+}
+
 // A full re-review's start event records the size of its delta too
 // (delta_lines, delta_files), but the board names a delta check only: the
 // round's facts carry the lines of a check and none for another round.

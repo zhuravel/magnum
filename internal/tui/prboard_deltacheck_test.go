@@ -43,6 +43,18 @@ func TestPRBoardShowsTheDeltaCheckKind(t *testing.T) {
 	}
 }
 
+// A scheduled full pass runs as a recovery of every role: the card's LAST
+// ROUND calls it a full pass, not a recovery.
+func TestTheCardNamesAFullPass(t *testing.T) {
+	row := PRBoardRow{Owner: "talkable", Repo: "talkable", Number: 730, State: "reviewed",
+		RoundWhy: &RoundWhy{Kind: "recovery", FullPass: true, Roles: []string{"codex-judge", "claude-review"}}}
+	section := lastRoundSection(t, roundsCard(t, row, 100))
+	if !slices.ContainsFunc(section, func(l string) bool { return strings.Contains(l, "full pass: codex-judge, claude-review") }) ||
+		slices.ContainsFunc(section, func(l string) bool { return strings.Contains(l, "recovery") }) {
+		t.Errorf("LAST ROUND = %q", section)
+	}
+}
+
 // sinceSection is the SINCE REVIEW section of the card of row.
 func sinceSection(t *testing.T, row PRBoardRow) string {
 	t.Helper()

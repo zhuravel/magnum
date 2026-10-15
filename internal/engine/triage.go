@@ -63,8 +63,9 @@ type triageRole struct {
 // ([triage]): rs.toRun, the roles the round starts, and rs.roles, the
 // candidates the pipeline plans from, lose the same roles, so the pipeline
 // runs the set decided here. It applies to the first review and re-reviews
-// only, not to a continued round, an eval or a round whose roles were named
-// (`magnum review --role`, or a rerun of a role that earned one); only roles
+// only (to a full pass as to a first review, on the whole PR), not to a
+// continued round, an eval or a round whose roles were named (`magnum
+// review --role`, or a rerun of a role that earned one); only roles
 // RolesToRun picked and that carry a summary can be dropped, never the
 // judge. A diff above max_lines, one that cannot be read in full, and every
 // failure of the command run every role; a failure records why. Nor does
@@ -78,6 +79,10 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 	if !tc.Enabled || job.evalHead != "" || len(rs.requested) > 0 ||
 		(job.kind != pipeline.KindInitial && job.kind != pipeline.KindRereview) {
 		return
+	}
+	kind := job.kind
+	if rs.fullPass {
+		kind = pipeline.KindInitial // a full pass reviews the whole PR, as a first review does
 	}
 	if e.cfg.AutoApproveFor(job.repo.FullName()) != nil {
 		e.log.Info("triage: every role runs: magnum approves this repository's PRs as the operator, which needs every reviewer",
@@ -101,7 +106,7 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 		e.event(ctx, level, subject, "round.triage", "triage: every role runs: "+why, map[string]any{"why": why})
 	}
 
-	files, own, err := e.triageFiles(ctx, job, rs.target)
+	files, own, err := e.triageFiles(ctx, job, kind, rs.target)
 	if err != nil {
 		everyRole("warn", "the diff could not be read: "+oneLine(err.Error(), triageWhyRunes))
 		return
@@ -130,7 +135,7 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 		return
 	}
 
-	ans, err := e.askTriage(ctx, tc, triageData{Kind: job.kind, OwnDiff: own, Lines: lines, Roles: offered, Diff: diff})
+	ans, err := e.askTriage(ctx, tc, triageData{Kind: kind, OwnDiff: own, Lines: lines, Roles: offered, Diff: diff})
 	if err != nil {
 		everyRole("warn", err.Error())
 		return
@@ -177,21 +182,22 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 }
 
 // triageFiles reads the diff the round reviews from GitHub, as the watch's
-// poll identity (like rerunRoles): for a re-review the commits since the
-// reviewed one, measured like the re-review gate measured them
+// poll identity (like rerunRoles): for a re-review (kind, as triage judges
+// the round) the commits since the reviewed one, measured as the re-review
+// gate measured them
 // (measureRange): when they merged the base branch in or were rebased (own
 // is true), the PR's own diff of each file whose own change they altered,
-// not the base branch's files. Else (a first review, or a re-review of the
-// reviewed commit itself) the whole PR, i.e. the base branch's merge base
+// not the base branch's files. Else (a first review, a full pass, or a
+// re-review of the reviewed commit itself) the whole PR, i.e. the base branch's merge base
 // with target, which GitHub's comparison of the base branch with target
 // is. A post-merge round compares with its merge base instead: the base
 // branch holds the merged head after a merge-commit merge.
-func (e *Engine) triageFiles(ctx context.Context, job *roundJob, target string) (files []github.FileDelta, own bool, err error) {
+func (e *Engine) triageFiles(ctx context.Context, job *roundJob, kind, target string) (files []github.FileDelta, own bool, err error) {
 	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
 		return nil, false, errors.New("no GitHub client")
 	}
-	if reviewed := deref(job.pr.ReviewedSHA); job.kind == pipeline.KindRereview && reviewed != "" && reviewed != target {
+	if reviewed := deref(job.pr.ReviewedSHA); kind == pipeline.KindRereview && reviewed != "" && reviewed != target {
 		m, err := e.measureRange(ctx, gh, job.repo, job.diffBase(), reviewed, target)
 		if err != nil {
 			return nil, false, err

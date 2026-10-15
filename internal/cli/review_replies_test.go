@@ -86,7 +86,7 @@ func TestReviewRepliesDryRunShowsTheFlag(t *testing.T) {
 	}
 }
 
-// --role, --simplify and --fresh ask for a full round, which a reply round
+// --role, --simplify, --fresh and --full ask for a full round, which a reply round
 // is not: the command refuses the mix before it resolves or queues anything.
 func TestReviewRepliesRefusesWhatAsksForAFullRound(t *testing.T) {
 	h := newActHarness(t)
@@ -101,6 +101,7 @@ func TestReviewRepliesRefusesWhatAsksForAFullRound(t *testing.T) {
 		{[]string{"--simplify"}, "--simplify,"},
 		{[]string{"--fresh"}, "--fresh,"},
 		{[]string{"--simplify", "--fresh"}, "--simplify, --fresh,"},
+		{[]string{"--full"}, "--full,"},
 	} {
 		h.errb.Reset()
 		code := h.cmd("review", append([]string{"5", "--replies"}, tc.args...)...)

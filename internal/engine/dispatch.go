@@ -61,6 +61,10 @@ type roundJob struct {
 	// same) and counts against no cap; a checkout that finds a newer head
 	// clears it (prepare).
 	ciRed bool
+	// fullPass says why the re-review runs as a scheduled full pass
+	// (fullPassDue, fullpass.go): every role in a fresh session, the whole
+	// PR reviewed again; "" = it does not.
+	fullPass string
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it
@@ -483,6 +487,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		if job.ciRed = e.ciRedDue(ctx, pr, job.sameHead, job.requested); !job.ciRed {
 			job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
 		}
+		job.fullPass = e.fullPassDue(ctx, job) // fullpass.go
 	}
 	from := store.ClaimableStates
 	if pr.State == store.PRPaused {
@@ -702,6 +707,8 @@ func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) b
 		what = replyLabel(job.replies) + " (the judge alone)"
 	case job.sameHead:
 		what = "re-review of the same head (the judge alone)"
+	case job.fullPass != "":
+		what = fullReReviewLabel
 	}
 	switch {
 	case job.hasSlot:

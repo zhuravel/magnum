@@ -54,6 +54,15 @@ type Pipeline struct {
 	// whole conversation uncached. Default 90m; 0 = always resume. Only the
 	// judge; a continue of a paused turn keeps its conversation.
 	JudgeFreshAfter Duration `toml:"judge_fresh_after"`
+	// FullPassEvery: the Nth automatic re-review of a PR, counted since its
+	// first review or its last full pass, runs as a scheduled full pass:
+	// every role starts in a fresh session, the reviewers review the whole
+	// PR with their first-review prompts and effort, and the judge reviews
+	// the full diff again through the recovery prompt (engine fullpass.go).
+	// A delta check, a re-review of the same head, a reply round, a CI
+	// check and a round someone asked for never become one. Default
+	// DefaultFullPassEvery; 0 = never.
+	FullPassEvery int `toml:"full_pass_every"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -231,6 +240,10 @@ const (
 // DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
 // followed by a re-review, before the PR is left to the operator.
 const DefaultFixCycles = 3
+
+// DefaultFullPassEvery is [pipeline] full_pass_every's default: every tenth
+// automatic re-review of a PR reviews the whole PR again.
+const DefaultFullPassEvery = 10
 
 // FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
 // sets one, else [pipeline]'s, else DefaultFixCycles. A nil w is

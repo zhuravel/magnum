@@ -23,7 +23,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const reviewUsage = "review <url|owner/repo#N|repo#N|N> [--fresh] [--role <role>]... [--simplify] [--replies] [--as <identity>] [--no-post] [--focus] [--wait] [--timeout <duration>] [--dry-run] [--json] [--workspace id] [--cwd path]"
+const reviewUsage = "review <url|owner/repo#N|repo#N|N> [--fresh] [--full] [--role <role>]... [--simplify] [--replies] [--as <identity>] [--no-post] [--focus] [--wait] [--timeout <duration>] [--dry-run] [--json] [--workspace id] [--cwd path]"
 
 const (
 	// reviewDefaultTimeout is how long --wait/--focus follow a round by default.
@@ -33,10 +33,10 @@ const (
 )
 
 type reviewOpts struct {
-	fresh, simplify, replies, focus, wait, dryRun, noPost, json bool
-	as, workspace, cwd                                          string
-	roles                                                       []string      // --role: on-request roles to run this round
-	timeout                                                     time.Duration // --timeout: stop following after this long (0 = no limit)
+	fresh, full, simplify, replies, focus, wait, dryRun, noPost, json bool
+	as, workspace, cwd                                                string
+	roles                                                             []string      // --role: on-request roles to run this round
+	timeout                                                           time.Duration // --timeout: stop following after this long (0 = no limit)
 }
 
 // reviewClosing are the end of a PR's life (prInFlight are the states of a
@@ -51,12 +51,14 @@ func newReviewCmd(c *Context) *cobra.Command {
 			"merged gets a post-merge review: the commits magnum missed since its last review (the whole PR when "+
 			"it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR "+
 			"whose head was reviewed, and a PR closed without merging, are refused. --fresh parks "+
-			"the sessions and starts new conversations, --role also runs an on-request role of the PR's watch "+
+			"the sessions and starts new conversations, --full makes the round a full pass (fresh sessions, every "+
+			"role reviews the whole PR again as a first review does, and the judge decides every earlier thread; "+
+			"[pipeline] full_pass_every schedules one), --role also runs an on-request role of the PR's watch "+
 			"this round (runs = \"first\" after its first completion, or \"manual\"; repeat it for several; "+
 			"`magnum roles` lists them), --simplify is the shorthand for the role aliased simplify "+
 			"(claude-simplify by default), --replies has the judge alone re-decide the replies on Magnum's review "+
 			"now (a PR whose head Magnum reviewed; it answers in its threads unless its verdict changes, and "+
-			"it excludes --role, --simplify and --fresh, which ask for a full round), --as switches the "+
+			"it excludes --role, --simplify, --fresh and --full, which ask for a full round), --as switches the "+
 			"posting identity from now on, --no-post runs the "+
 			"round but posts nothing (the judge writes its planned review), and --dry-run only prints the "+
 			"request. --wait follows the round until it is reviewed, needs attention or pauses; --timeout "+
@@ -64,6 +66,7 @@ func newReviewCmd(c *Context) *cobra.Command {
 		func(pos []string) int { return runReview(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.fresh, "fresh", false, "park the sessions and start new conversations (no resume)")
+	fs.BoolVar(&o.full, "full", false, "a full pass: fresh sessions, every role reviews the whole PR again and the judge decides every earlier thread")
 	fs.StringArrayVar(&o.roles, "role", nil, "also run this on-request `role` this round; repeatable")
 	fs.BoolVar(&o.simplify, "simplify", false, "shorthand for --role <the role aliased simplify> (claude-simplify by default)")
 	fs.BoolVar(&o.replies, "replies", false, "re-decide the replies on magnum's review now: the judge alone, which answers in its threads unless its verdict changes (a PR whose head magnum reviewed)")
@@ -142,6 +145,9 @@ func reviewCheckOpts(c *Context, d *actDeps, o reviewOpts) (code int, ok bool) {
 		}
 		if o.fresh {
 			with = append(with, "--fresh")
+		}
+		if o.full {
+			with = append(with, "--full")
 		}
 		if len(with) > 0 {
 			return actUsage(c, "review", "--replies (the judge alone re-decides the replies) cannot be combined with "+
@@ -223,7 +229,7 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 	}
 
 	// A forced round always reviews the head again: there is no "again" to send.
-	payload := engine.ReviewPayload{PRTarget: t.prTarget(), Fresh: o.fresh, Simplify: o.simplify, Replies: o.replies,
+	payload := engine.ReviewPayload{PRTarget: t.prTarget(), Fresh: o.fresh, Full: o.full, Simplify: o.simplify, Replies: o.replies,
 		Roles: roles, As: o.as, DryRun: o.noPost}
 	if o.dryRun {
 		out.Payload = &payload
@@ -856,7 +862,7 @@ func (f *reviewFollower) focusSession(ctx context.Context, pr store.PR) (store.S
 	if err != nil || store.Deref(sess.HerdrPaneID) == "" {
 		return store.Session{}, false
 	}
-	if f.o.fresh && f.reqID != 0 && sess.StartedAt.Before(f.start) {
+	if (f.o.fresh || f.o.full) && f.reqID != 0 && sess.StartedAt.Before(f.start) {
 		return store.Session{}, false
 	}
 	return sess, true

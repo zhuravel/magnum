@@ -334,6 +334,14 @@ type RoundInput struct {
 	// (agents.JudgeData.ColdJudge); a recovery after a lost session reviews
 	// the whole PR at the full effort.
 	ColdJudge bool
+	// FullPass (recovery): the round is a scheduled full pass ([pipeline]
+	// full_pass_every; the engine's fullpass.go): every role started in a
+	// fresh session, the reviewers review the whole PR with their
+	// first-review prompts and effort (as in any recovery without
+	// ColdJudge), and the judge's own pass and recovery prompt ask it to
+	// review the full PR diff again as a first review does, then decide
+	// every earlier thread (agents.JudgeData.FullPass).
+	FullPass bool
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at

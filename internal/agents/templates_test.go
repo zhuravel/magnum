@@ -392,6 +392,13 @@ func TestRenderGolden(t *testing.T) {
 	ownColdForced.ForcePushed = true
 	recoveryForced := judgeFixture()
 	recoveryForced.ForcePushed = true
+	// A scheduled full pass ([pipeline] full_pass_every): every session
+	// started fresh, and the judge reviews the full PR diff again as a first
+	// review does, then decides the earlier threads; its own pass too.
+	fullPass := judgeFixture()
+	fullPass.FullPass = true
+	ownFullPass := ownRecovery
+	ownFullPass.FullPass = true
 	ownBlind := ownPass("initial")
 	ownBlind.DryRun, ownBlind.Blind = true, true
 	ownDryRun := ownPass("initial")
@@ -459,6 +466,9 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_own_pass_recovery_cold", "judge-own-pass.md", ownCold},
 		{"judge_own_pass_recovery_cold_forced", "judge-own-pass.md", ownColdForced},
 		{"judge_recovery_forced", "judge-recovery.md", recoveryForced},
+		{"judge_recovery_full_pass", "judge-recovery.md", fullPass},
+		{"judge_recovery_full_pass_candidates", "judge-recovery.md", candidates(fullPass)},
+		{"judge_own_pass_recovery_full_pass", "judge-own-pass.md", ownFullPass},
 		{"judge_own_pass_blind", "judge-own-pass.md", ownBlind},
 		{"judge_own_pass_dry_run", "judge-own-pass.md", ownDryRun},
 		{"judge_own_pass_restart", "judge-own-pass.md", ownRestart},

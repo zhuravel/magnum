@@ -806,6 +806,14 @@ type JudgeData struct {
 	// PreviousHeadSHA, so the own pass reads the commits since (unless
 	// ForcePushed or BaseMerged says otherwise).
 	ColdJudge bool
+	// FullPass (recovery): a scheduled full pass ([pipeline]
+	// full_pass_every; pipeline.RoundInput.FullPass): every session started
+	// fresh, and the judge reviews the full PR diff again as a first review
+	// does, then decides every earlier thread under the reply contract; a
+	// finding the earlier reviews missed ends its title with `(missed
+	// earlier)`, and the body is headed as a full pass. Rendered as
+	// `full_pass: true` and one instruction, only then.
+	FullPass bool
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string
@@ -2668,6 +2676,10 @@ const DefaultFixCycles = 3
     DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
     followed by a re-review, before the PR is left to the operator.
 
+const DefaultFullPassEvery = 10
+    DefaultFullPassEvery is [pipeline] full_pass_every's default: every tenth
+    automatic re-review of a PR reviews the whole PR again.
+
 const DefaultIdleRemoveAfter = 168 * time.Hour
     DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or
     0): a free slot above pool.min is removed once it has been idle this long.
@@ -3924,6 +3936,15 @@ type Pipeline struct {
 	// whole conversation uncached. Default 90m; 0 = always resume. Only the
 	// judge; a continue of a paused turn keeps its conversation.
 	JudgeFreshAfter Duration `toml:"judge_fresh_after"`
+	// FullPassEvery: the Nth automatic re-review of a PR, counted since its
+	// first review or its last full pass, runs as a scheduled full pass:
+	// every role starts in a fresh session, the reviewers review the whole
+	// PR with their first-review prompts and effort, and the judge reviews
+	// the full diff again through the recovery prompt (engine fullpass.go).
+	// A delta check, a re-review of the same head, a reply round, a CI
+	// check and a round someone asked for never become one. Default
+	// DefaultFullPassEvery; 0 = never.
+	FullPassEvery int `toml:"full_pass_every"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -6661,6 +6682,11 @@ type ReviewPayload struct {
 	// older CLI queued with --again still decodes (decode refuses unknown fields).
 	Again bool `json:"again,omitempty"`
 	Fresh bool `json:"fresh,omitempty"` // park the sessions and start new conversations
+	// Full asks for a full pass (`magnum review --full`, fullpass.go): fresh
+	// sessions, and every role reviews the whole PR again as a first review
+	// does, the judge deciding every earlier thread; on a PR never reviewed
+	// it is a first review as any.
+	Full bool `json:"full,omitempty"`
 	// Simplify asks for the role answering to "simplify" (claude-simplify
 	// by default) this round, whatever its runs; kept for older CLIs, the
 	// same as Roles ["simplify"].
@@ -12955,6 +12981,14 @@ type RoundInput struct {
 	// (agents.JudgeData.ColdJudge); a recovery after a lost session reviews
 	// the whole PR at the full effort.
 	ColdJudge bool
+	// FullPass (recovery): the round is a scheduled full pass ([pipeline]
+	// full_pass_every; the engine's fullpass.go): every role started in a
+	// fresh session, the reviewers review the whole PR with their
+	// first-review prompts and effort (as in any recovery without
+	// ColdJudge), and the judge's own pass and recovery prompt ask it to
+	// review the full PR diff again as a first review does, then decide
+	// every earlier thread (agents.JudgeData.FullPass).
+	FullPass bool
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at
@@ -14693,6 +14727,9 @@ const (
     Verdicts: what a review concluded, whatever its repository lets it post
     (ReviewSummary.Verdict).
 
+const FreshFullPass = "full"
+    FreshFullPass is the KVPRFresh value of a requested full pass.
+
 const LearnDismissFailures = 2
     LearnDismissFailures is how many failed gates of skill proposals may compare
     an input's learned case without improving it before the input is dismissed
@@ -14806,7 +14843,8 @@ func KVPRDryRun(prID int64) string
 
 func KVPRFresh(prID int64) string
     KVPRFresh is "1" when the PR's next round parks its sessions and starts new
-    conversations (magnum review --fresh).
+    conversations (magnum review --fresh), FreshFullPass when that round is a
+    full pass too (magnum review --full).
 
 func KVPRGate(prID int64) string
     KVPRGate is why the daemon skipped the PR at its last dispatch (an agent
@@ -17980,9 +18018,12 @@ type RoundWhy struct {
 	// alone (a delta check).
 	DeltaCheck bool
 	DeltaLines int
-	Roles      []string // the roles it ran, in the order the round named them
-	Requested  []string // the roles asked for this round
-	Reruns     []RoleRerun
+	// FullPass: a scheduled full pass ([pipeline] full_pass_every), a
+	// recovery of every role in fresh sessions over the whole PR.
+	FullPass  bool
+	Roles     []string // the roles it ran, in the order the round named them
+	Requested []string // the roles asked for this round
+	Reruns    []RoleRerun
 	// Triaged: triage decided this round's roles; Skipped are the roles it
 	// dropped and Reason its words (the model read the PR: PR content,
 	// cleaned like any). EveryRole is why triage kept every role ("the diff
