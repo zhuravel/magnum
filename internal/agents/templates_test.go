@@ -277,6 +277,58 @@ func TestAColdOwnPassReadsTheNewCommits(t *testing.T) {
 	}
 }
 
+// A full pass starts every session fresh, and its judge's own pass reads no
+// earlier review first, or the fresh session would inherit the old framing
+// before it reads the code: the own pass names no earlier review, former
+// login, thread or reply-contract decision, reviews the full diff as a first
+// review does, and leaves the earlier reviews to the candidates phase, whose
+// prompt lists them with the full-pass clause. Without an own pass the
+// recovery prompt keeps today's order.
+func TestAFullPassOwnPassIsBlind(t *testing.T) {
+	render := func(name string, d JudgeData) string {
+		t.Helper()
+		got, err := RenderPrompt(prompt(t, name), d)
+		if err != nil {
+			t.Fatalf("RenderPrompt(%s): %v", name, err)
+		}
+		return got
+	}
+	d := judgeFixture()
+	d.FullPass, d.FormerLogins = true, []string{"alice"}
+	d.ThreadsFile, d.ThreadSummary = "/state/reviews/review-threads.json", "3 threads (1 resolved)"
+	own := d
+	own.Mode, own.Phase, own.OwnFindings, own.Reports = "recovery", PhaseOwnPass, "/state/reviews/judge-own.md", nil
+	got := render("judge-own-pass.md", own)
+	earlier := []string{"3012345678", "3012399999", "Read them and their threads first", "alice", own.ThreadsFile,
+		"reply contract for your earlier findings now", "previous_review_id", own.PreviousHeadSHA}
+	for _, s := range earlier {
+		if strings.Contains(got, s) {
+			t.Errorf("the full pass's own pass names %q:\n%s", s, got)
+		}
+	}
+	for _, s := range []string{"git diff " + d.BaseSHA + "..." + d.HeadSHA, "sections 1, 2 and 4", "the next prompt lists them", "full_pass: true"} {
+		if !strings.Contains(got, s) {
+			t.Errorf("the full pass's own pass lacks %q:\n%s", s, got)
+		}
+	}
+
+	cand := d
+	cand.Phase, cand.OwnFindings = PhaseCandidates, own.OwnFindings
+	got = render("judge-recovery.md", cand)
+	for _, s := range []string{"3012345678", "3012399999", "Read them and their threads first", "This is a scheduled full pass", "decide every earlier thread",
+		"written before you read the earlier reviews", own.ThreadsFile} {
+		if !strings.Contains(got, s) {
+			t.Errorf("the full pass's candidates prompt lacks %q:\n%s", s, got)
+		}
+	}
+	if strings.Contains(got, "with your reply-contract decisions") {
+		t.Errorf("the candidates prompt says the blind own pass decided the threads:\n%s", got)
+	}
+	if got := render("judge-recovery.md", d); !strings.Contains(got, "Read them and their threads first") || strings.Contains(got, own.OwnFindings) {
+		t.Errorf("a full pass without an own pass:\n%s", got)
+	}
+}
+
 func TestRenderGolden(t *testing.T) {
 	forced := judgeFixture()
 	forced.ForcePushed = true

@@ -578,6 +578,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   rebuild of runs, findings and declines for one flag); a kv counter that only automatic rounds increment
   (it would start at 0, so a PR with 38 rounds would wait 10 more re-reviews).
 
+- **A full pass also follows churn and age, overrides a delta check, and starts blind** (2026-10-15). A
+  Codex review of the full-pass design found two gaps and a third point. Rounds measure how often the
+  whole-PR view was lost, not how much the code changed: one round can replace a subsystem and ten can fix
+  spelling. A delta check counted toward `full_pass_every` but never became a full pass, so a PR that only
+  ever got small pushes put its full pass off without end. And the full pass started every session fresh,
+  but the own-pass prompt had the judge read the earlier reviews first, so the fresh session took on the old
+  framing before it read the code. Now a PR keeps a baseline, its last full pass (`pr.<id>.full_pass`, which
+  gains the base, the files and the lines) or else its first review (`pr.<id>.review_baseline`; a PR
+  reviewed before the rule takes its next review), with the PR's size then: changed files and added plus
+  deleted lines, lockfiles and the watch's `related_ignore` left out, from `git diff --numstat` in the
+  round's checkout at settle. Every review that posts on new commits adds them to `pr.<id>.full_pass_churn`
+  (lines summed, touched paths as a union of at most 500, then only the count grows), measured as the
+  re-review reads them: `prev_reviewed_sha...head` through GitHub's comparison, or, after a base merge or a
+  rebase, the change of the PR's own diff before and after (`compareOwnDiffs`, which now keeps each file's
+  lines); a comparison file's own line count (`github.FileDelta.Lines`) covers a patch GitHub left out. The
+  churn counts what the posted reviews read, not the pending push. `fullPassDue` fires, in this order, on
+  `magnum review --full`, `full_pass_every`, churn lines reaching the larger of `full_pass_lines` (500) and a
+  quarter of the baseline's lines, touched files reaching the larger of `full_pass_files` (10) and a quarter
+  of the baseline's files, or `full_pass_after` (168h) since the baseline of a large PR (50 files or 2,000
+  lines then); 0 turns each rule off, the quarter and the large-PR sizes are fixed in code. A due full pass
+  clears the delta classification before the roles are selected (`planFullPass`), so the round runs in
+  full; a same-head, reply, CI-red or requested round keeps its scope. `round.full_pass` gains `rule`, and
+  `engine.round_start` gains `full_pass_reason`. The own pass of a full pass is blind: it reviews the full
+  diff as a first review does (sections 1, 2 and 4), names no earlier review, former login, thread or
+  reply-contract decision, and leaves them to the candidates phase, whose recovery prompt lists the earlier
+  reviews with the full-pass clause and says the own pass came before them; without an own pass
+  (`judge_own_pass = "after"`) the order stays. Rejected: counting files outside the last full pass's delta
+  (a full pass covers the whole diff, so every file is inside it); the count of fixed findings (the findings
+  table records posted or rejected only, with no fixed state to count); charging the pending push to the
+  churn (it needs a measure at dispatch, and the review that crosses the line is followed by the full pass
+  at the next push).
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

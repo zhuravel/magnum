@@ -15,7 +15,7 @@ The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries
 Read the new commits with `git log --oneline {{.PreviousHeadSHA}}..{{.HeadSHA}}` and `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- end}}
 {{- if .OwnFindings}}
-{{if .OwnFindingsMissing}}Your own pass left no {{.OwnFindings}}: do it now.{{else}}Your own pass, with your reply-contract decisions, is in {{.OwnFindings}}: judge every candidate against it.{{end}}
+{{if .OwnFindingsMissing}}Your own pass left no {{.OwnFindings}}: do it now.{{else if .FullPass}}Your own pass, written before you read the earlier reviews, is in {{.OwnFindings}}: judge every candidate against it.{{else}}Your own pass, with your reply-contract decisions, is in {{.OwnFindings}}: judge every candidate against it.{{end}}
 {{- end}}
 {{- if .DeltaCheck}}
 Only the commits since your last review (`{{.PreviousHeadShort}}`) changed ({{.DeltaLines}} {{if eq .DeltaLines 1}}line{{else}}lines{{end}}{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}){{if $merged}}, counted as the change between the PR's own diff before and after them{{end}}. Read your previous review and its threads for context, then review just those changes; the rest stands as reviewed. Post one short review.

@@ -455,15 +455,32 @@ as with `--fresh`, the reviewers review the whole PR with their first-review pro
 (triage judges the whole PR, as for a first review), and the judge gets the recovery prompt with a full-pass
 clause (`full_pass: true`): review the full PR diff again as a first review does, then decide every earlier
 thread under the reply contract; a finding the earlier reviews missed ends its title with `(missed
-earlier)`, and the body is headed `Re-review <a> → <b> (full pass):`. It costs a first review's rounds of
-every role. The count is the PR's re-reviews that posted a review on new commits since its first review or
-its last full pass, read from the registry's runs, so a PR reviewed before the key existed counts its past
-re-reviews. A delta check counts but never becomes a full pass (the small push keeps its check, and the next
-full re-review is the full pass); a forced or requested round counts but never becomes one either; a
-re-review of the same head, a reply round and a CI check neither count nor become one. The soft Codex
-budget cap holds a full pass as any automatic full re-review. `round.full_pass` says why it runs,
-`engine.round_start` says `re-review (full pass)`, the card's last round `full pass`, and the status
-comment `In progress (full pass)`. `magnum review --full <ref>` asks for one by hand.
+earlier)`, and the body is headed `Re-review <a> → <b> (full pass):`. The judge's own pass (with the
+default `judge_own_pass = "parallel"`) is blind: it reviews the full diff as a first review does and reads
+no earlier review, thread or reply, so the fresh session does not take on the old framing before it reads
+the code; the candidates prompt then lists the earlier reviews, and the judge decides their threads there.
+It costs a first review's rounds of every role. The count is the PR's re-reviews that posted a review on new
+commits since its first review or its last full pass, read from the registry's runs, so a PR reviewed
+before the key existed counts its past re-reviews. A delta check counts, and a due full pass overrides it:
+the small push runs the full pass instead of the judge's check, so small pushes never put one off. A forced
+or requested round counts but never becomes one; a re-review of the same head, a reply round and a CI check
+neither count nor become one. The soft Codex budget cap holds a full pass as any automatic full re-review.
+
+Rounds say how often the whole-PR view was lost, not how much the code changed, so churn and age make a
+full pass too. A PR's baseline is its last full pass, else its first review (a PR reviewed before these
+rules: its next review), with the PR's size then: its changed files and their added plus deleted lines,
+lockfiles and the watch's `related_ignore` paths left out (`git diff --numstat` in the round's checkout).
+Every review that posts on new commits adds them to the churn since the baseline, measured as the re-review
+reads them: from the reviewed commit to the head, or, when the push merged the base branch, the change of
+the PR's own diff before and after it, so the base branch's commits are not the PR's. The next automatic
+re-review is a full pass once that churn reaches `full_pass_lines` lines (default `500`) or touches
+`full_pass_files` files (default `10`, each file once), or a quarter of the PR's lines or files at the
+baseline when that is more, or once `full_pass_after` (default `"168h"`) passed since the baseline of a
+large PR (50 files or 2,000 lines then); `0` turns each rule off alone. The rules apply in that order, after
+`magnum review --full` and `full_pass_every`, and a full pass that posts is the new baseline. `round.full_pass`
+says why one runs and which rule fired (`rule`: the key, or `requested`), `engine.round_start` says
+`re-review (full pass)` with the reason in `full_pass_reason`, the card's last round `full pass`, and the
+status comment `In progress (full pass)`. `magnum review --full <ref>` asks for one by hand.
 
 Replies get that round on their own, without a push. The poll reads, for a PR whose activity moved, its
 reviews and comments with their authors and their association with the repository (no text): a reply in

@@ -157,9 +157,6 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	if outcome == "" {
 		outcome = pipeline.OutcomeError
 	}
-	if outcome == pipeline.OutcomePosted && e.fullPassRunning(ctx, pr.ID) {
-		e.recordFullPass(ctx, pr.ID, res, in.TargetSHA) // fullpass.go: the next count starts here
-	}
 	switch {
 	case cancelled, outcome == pipeline.OutcomeUsageLimit, outcome == pipeline.OutcomeLoginRequired, outcome == pipeline.OutcomeOverloaded:
 		// The round goes on later (a recovery, a continue): it keeps its kind.
@@ -408,6 +405,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request is served
 	// The request is served; the kinds that just worked lose their backoff.
 	e.clearRequested(ctx, pr.ID)
+	e.settleFullPass(ctx, job, in, res)
 	if to == store.PRReviewed && err == nil { // replies that came after the judge read them
 		if err := e.considerReplies(ctx, job.repo, job.watch, pr.ID, now); err != nil {
 			e.log.Info("replies after the round", "pr", pr.ID, "err", err)

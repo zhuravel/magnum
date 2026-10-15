@@ -26,6 +26,9 @@ type FileDelta struct {
 	// blob, in a listing below the cap is complete: its diff is empty, not
 	// missing.
 	Truncated bool
+	// Lines is what GitHub counts of the file's diff, its additions plus
+	// deletions, a patch it left out included (a comparison's file only).
+	Lines int
 }
 
 // CompareFiles reads the changed files of base...head with their patches in
@@ -125,7 +128,7 @@ func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head strin
 		// send; none, an empty or binary file, whose diff is empty and which
 		// its blob tells apart (GitHub's sha may be null).
 		d := FileDelta{Path: f.Filename, PreviousPath: f.PreviousFilename, Status: f.Status, BlobSHA: f.SHA,
-			Truncated: cut || (f.Patch == nil && (f.Additions+f.Deletions > 0 || f.SHA == ""))}
+			Truncated: cut || (f.Patch == nil && (f.Additions+f.Deletions > 0 || f.SHA == "")), Lines: f.Additions + f.Deletions}
 		if f.Patch != nil {
 			d.Patch = *f.Patch
 		}

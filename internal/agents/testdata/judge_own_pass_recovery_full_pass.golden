@@ -1,12 +1,6 @@
 [$magnum-review](/Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md) Read /Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md first, unless this session already read that file, and follow it; load no other skill. Start your own pass on https://github.com/talkable/talkable/pull/11920 now, while magnum's reviewer roles work: `phase: own_pass` in the skill. Write it to /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md, post nothing, then end your turn; their reports follow in the next prompt.
 For a missing guard in a set (a list, registry, validator or call sites), sweep the whole set in this pass as the skill's section 2 says: each gap with the same probe, and the `swept N <things>: M gaps` line among your checks.
-An earlier session reviewed this PR, but its history is gone. Earlier reviews by `talkable[bot]` or, before magnum moved this PR to that login, by `alice`:
-  - 3012345678 REQUEST_CHANGES on `a1b2c3d` (2026-10-03T09:15:00Z)
-  - 3012399999 COMMENT on `b2c3d4e` (2026-10-03T10:40:00Z)
-Read them and their threads first (`gh api repos/talkable/talkable/pulls/11920/reviews/<id>/comments`).
-This is a scheduled full pass: review the full PR diff again (`git diff 0123456789abcdef0123456789abcdef01234567...d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3`), the way a first review does (section 2 of the skill), not only the commits since `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0`.
-The reviews and threads of `alice` are yours: count their findings as your earlier findings and decide their threads under the reply contract.
-Decide the reply contract for your earlier findings now and note each decision in /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md; post the rebuttals only in the next phase.
+This is a scheduled full pass: earlier sessions reviewed this PR, but review it now as a first review does (sections 1, 2 and 4 of the skill), on the full PR diff (`git diff 0123456789abcdef0123456789abcdef01234567...d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3`). Read no earlier review, review thread or reply in this pass: the next prompt lists them, and you decide every earlier thread under the reply contract then.
 
 <magnum>
 mode: recovery
@@ -24,15 +18,10 @@ checkout: /Users/bohdan/Projects/talkable.review3
 db_lock: /Users/bohdan/Projects/magnum/bin/magnum db-lock --checkout /Users/bohdan/Projects/talkable.review3 --role codex-judge --
 identity: app
 reviewer_login: talkable[bot]
-former_logins: alice
 gh_config_dir: /Users/bohdan/Projects/magnum/state/gh/talkable-app
 self_authored: false
-previous_review_id: 3012345678
-previous_head_sha: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
-since: 2026-10-03T09:15:00Z
 force_pushed: false
 full_pass: true
-threads_file: 
 own_findings: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md
 dry_run: false
 </magnum>

@@ -44,7 +44,8 @@ type roundJob struct {
 
 	// deltaCheck: the re-review was dispatched as a delta check
 	// (deltaCheckDue): only the judge runs, unless prepare finds the commits
-	// it reviews no longer make one (confirmDeltaCheck).
+	// it reviews no longer make one (confirmDeltaCheck). A due full pass
+	// clears it (planFullPass).
 	deltaCheck bool
 	// sameHead: the re-review was dispatched with no commits since the
 	// reviewed one (sameHeadDue): only the judge runs, to re-decide its
@@ -63,8 +64,10 @@ type roundJob struct {
 	ciRed bool
 	// fullPass says why the re-review runs as a scheduled full pass
 	// (fullPassDue, fullpass.go): every role in a fresh session, the whole
-	// PR reviewed again; "" = it does not.
-	fullPass string
+	// PR reviewed again; "" = it does not. fullPassRule names the rule that
+	// fired: the [pipeline] key, or "requested".
+	fullPass     string
+	fullPassRule string
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it
@@ -487,7 +490,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		if job.ciRed = e.ciRedDue(ctx, pr, job.sameHead, job.requested); !job.ciRed {
 			job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
 		}
-		job.fullPass = e.fullPassDue(ctx, job) // fullpass.go
+		e.planFullPass(ctx, job) // fullpass.go: a due full pass clears the delta check
 	}
 	from := store.ClaimableStates
 	if pr.State == store.PRPaused {

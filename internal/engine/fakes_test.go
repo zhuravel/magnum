@@ -1639,6 +1639,16 @@ func (f *fakeInventory) UpsertSlotDatabases(context.Context, inventory.Inventory
 
 type fakeGit struct {
 	clones map[string]string // owner/name -> discovered clone
+	// stats are DiffStat's answers by "base...head"; a range without one
+	// cannot be measured.
+	stats map[string][]gitx.FileStat
+}
+
+func (g fakeGit) DiffStat(_ context.Context, _, base, head string) ([]gitx.FileStat, error) {
+	if s, ok := g.stats[base+"..."+head]; ok {
+		return slices.Clone(s), nil
+	}
+	return nil, fmt.Errorf("fake git: no diff --numstat of %s...%s", base, head)
 }
 
 func (g fakeGit) FindClone(_ context.Context, _, owner, name string) (string, error) {

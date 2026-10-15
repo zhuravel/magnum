@@ -29,9 +29,15 @@ func TestAFullPassReviewsTheWholePRWithEveryRoleAsAFirstReview(t *testing.T) {
 	if len(judge) != 2 {
 		t.Fatalf("judge prompts = %d, want the own pass and the candidates", len(judge))
 	}
-	mustContain(t, "own-pass prompt", judge[0].Text, "mode: recovery", "phase: own_pass", clause, "full_pass: true")
+	// The own pass is blind: a first review's pass of the full diff, no
+	// earlier review read before it (agents.TestAFullPassOwnPassIsBlind).
+	mustContain(t, "own-pass prompt", judge[0].Text, "mode: recovery", "phase: own_pass", "full_pass: true",
+		"This is a scheduled full pass: earlier sessions reviewed this PR, but review it now as a first review does")
+	if strings.Contains(judge[0].Text, "previous_review_id") {
+		t.Errorf("a full pass's own pass names the earlier review:\n%s", judge[0].Text)
+	}
 	mustContain(t, "candidates prompt", judge[1].Text, "mode: recovery", "phase: candidates", clause, "full_pass: true",
-		"(missed earlier)", "(full pass):**")
+		"(missed earlier)", "(full pass):**", "previous_review_id: 3012345678")
 	for _, p := range judge {
 		if strings.Contains(p.Text, "git log --oneline "+prevSHA+".."+target) {
 			t.Errorf("a full pass's judge is scoped to the new commits:\n%s", p.Text)

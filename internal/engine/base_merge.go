@@ -52,6 +52,9 @@ type ownDiff struct {
 	// size, ownLineDelta); commits are the PR's own commits since the push's
 	// start (ownCommits).
 	additions, deletions, commits int
+	// lines are each changed file's additions plus deletions (the churn
+	// since a full pass, fullpass.go).
+	lines map[string]int
 }
 
 // prBase is the branch a PR merges into: its base_ref, else the
@@ -118,7 +121,7 @@ func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 	}
 	paths := slices.AppendSeq(slices.Collect(maps.Keys(b)), maps.Keys(a))
 	slices.Sort(paths)
-	d := ownDiff{size: DeltaSize{Complete: true}}
+	d := ownDiff{size: DeltaSize{Complete: true}, lines: map[string]int{}}
 	for _, p := range slices.Compact(paths) {
 		fb, inBefore := b[p]
 		fa, inAfter := a[p]
@@ -146,7 +149,7 @@ func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 			d.files = append(d.files, undone(fb))
 		}
 		add, del := ownLineDelta(old, cur)
-		d.additions, d.deletions = d.additions+add, d.deletions+del
+		d.additions, d.deletions, d.lines[p] = d.additions+add, d.deletions+del, add+del
 		if !inBefore && (fa.Status == "added" || fa.Status == "renamed" || fa.Status == "copied") {
 			d.size.AddedFiles++
 			continue

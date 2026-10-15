@@ -59,10 +59,25 @@ type Pipeline struct {
 	// every role starts in a fresh session, the reviewers review the whole
 	// PR with their first-review prompts and effort, and the judge reviews
 	// the full diff again through the recovery prompt (engine fullpass.go).
-	// A delta check, a re-review of the same head, a reply round, a CI
-	// check and a round someone asked for never become one. Default
-	// DefaultFullPassEvery; 0 = never.
+	// A re-review of the same head, a reply round, a CI check and a round
+	// someone asked for never become one; a delta check does, when one is
+	// due. Default DefaultFullPassEvery; 0 = this rule off.
 	FullPassEvery int `toml:"full_pass_every"`
+	// FullPassLines: an automatic re-review is also a full pass once the
+	// lines the PR's re-reviews changed since its baseline (its last full
+	// pass, else its first review), added plus deleted, lockfiles and
+	// related_ignore's paths left out, reach the larger of this and a
+	// quarter of the PR's lines at the baseline (engine fullpass.go).
+	// Default DefaultFullPassLines; 0 = this rule off.
+	FullPassLines int `toml:"full_pass_lines"`
+	// FullPassFiles: likewise once the files those re-reviews touched
+	// reach the larger of this and a quarter of the PR's files at the
+	// baseline. Default DefaultFullPassFiles; 0 = this rule off.
+	FullPassFiles int `toml:"full_pass_files"`
+	// FullPassAfter: an automatic re-review of a large PR (50 files or 2,000
+	// lines at its baseline) is also a full pass once this long passed
+	// since the baseline. Default DefaultFullPassAfter; 0 = this rule off.
+	FullPassAfter Duration `toml:"full_pass_after"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -244,6 +259,19 @@ const DefaultFixCycles = 3
 // DefaultFullPassEvery is [pipeline] full_pass_every's default: every tenth
 // automatic re-review of a PR reviews the whole PR again.
 const DefaultFullPassEvery = 10
+
+// DefaultFullPassLines and DefaultFullPassFiles are [pipeline]
+// full_pass_lines' and full_pass_files' defaults: the churn since a PR's
+// baseline that makes its next automatic re-review a full pass, unless a
+// quarter of the PR's size at the baseline is more.
+const (
+	DefaultFullPassLines = 500
+	DefaultFullPassFiles = 10
+)
+
+// DefaultFullPassAfter is [pipeline] full_pass_after's default: a large
+// PR's next automatic re-review a week after its baseline is a full pass.
+const DefaultFullPassAfter = 7 * 24 * time.Hour
 
 // FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
 // sets one, else [pipeline]'s, else DefaultFixCycles. A nil w is

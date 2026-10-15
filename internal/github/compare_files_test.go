@@ -37,7 +37,7 @@ func TestCompareFilesReadsPatchesRenamesAndBinaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []FileDelta{
-		{Path: "config/app.yml", Status: "modified", Patch: "@@ -1,2 +1,2 @@\n key: a\n-old: 1\n+new: 2"},
+		{Path: "config/app.yml", Status: "modified", Patch: "@@ -1,2 +1,2 @@\n key: a\n-old: 1\n+new: 2", Lines: 2},
 		{Path: "lib/new_name.rb", PreviousPath: "lib/old_name.rb", Status: "renamed", Patch: "@@ -3 +3 @@\n-x\n+y"},
 		{Path: "public/logo.png", Status: "added", BlobSHA: logoBlob},
 	}
@@ -167,7 +167,7 @@ func TestCompareFilesAPatchlessFileWithoutLinesIsCompleteWithItsBlob(t *testing.
 	want := []FileDelta{
 		{Path: "app/views/partials/.keep", Status: "added", BlobSHA: emptyBlob},
 		{Path: "public/logo.png", Status: "modified", BlobSHA: logoBlob},
-		{Path: "db/structure.sql", Status: "modified", BlobSHA: sqlBlob, Truncated: true},
+		{Path: "db/structure.sql", Status: "modified", BlobSHA: sqlBlob, Truncated: true, Lines: 4012},
 		{Path: "public/icon.png", Status: "modified", Truncated: true},
 	}
 	if !reflect.DeepEqual(got, want) {

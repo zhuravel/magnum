@@ -174,6 +174,9 @@ type Git interface {
 	// ChangedUnder tells whether a head changes the project config a
 	// running agent reloads (parkReloading).
 	ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
+	// DiffStat measures the PR's size at a full pass's baseline, in the
+	// round's checkout (prSize, fullpass.go).
+	DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom

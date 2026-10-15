@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -203,35 +205,44 @@ func TestFullPassOffByZero(t *testing.T) {
 	}
 }
 
-// A delta check never becomes a full pass: a small push at the Nth
-// re-review keeps its check (the judge alone, in its conversation), and the
-// next full re-review is the full pass.
-func TestADeltaCheckIsNeverAFullPass(t *testing.T) {
-	h, _, _ := deltaCheckHarness(t, func(h *harness) { h.cfg.Pipeline.FullPassEvery = 1 })
+// An overdue full pass overrides a delta check: a small push gets the
+// judge's check alone, but when the next one is the Nth re-review, its push
+// of 2 lines runs the full pass of every role instead, with no delta check
+// in flight, so small pushes no longer defer the full pass without end.
+func TestAnOverdueFullPassOverridesADeltaCheck(t *testing.T) {
+	h, _, _ := deltaCheckHarness(t, func(h *harness) { h.cfg.Pipeline.FullPassEvery = 2 })
 	h.rd.mu.Lock()
 	h.rd.judgeLogin = "talkable[bot]"
 	h.rd.mu.Unlock()
-	verdictRounds(h, "APPROVED")
+	inFlight := verdictRounds(h, "APPROVED")
 	keptForCheck(t, h, liveDelta)
 	quietEnd := h.pr(2).HeadChangedAt.Add(5 * time.Minute)
 	pollPR(h, quietEnd.Sub(h.clock.Now()), 2, "b2")
 	ins := h.rd.all()
-	if len(ins) != 2 || ins[1].DeltaCheck == nil || ins[1].FullPass || ins[1].Kind != pipeline.KindRereview ||
-		!slices.Equal(roleNames(ins[1].Roles), []string{"codex-judge"}) {
-		t.Fatalf("rounds = %d: want the delta check of the judge alone, no full pass", len(ins))
-	}
-	if evs := approvalEvents(t, h, 2, "round.full_pass"); len(evs) != 0 {
-		t.Fatalf("round.full_pass events: %+v", evs)
+	if len(ins) != 2 || ins[1].DeltaCheck == nil || ins[1].FullPass || !slices.Equal(roleNames(ins[1].Roles), []string{"codex-judge"}) {
+		t.Fatalf("rounds = %d: want the delta check of b2, re-review 1", len(ins))
 	}
 
-	reqSetFiles(h, "b2...b3", codeDelta(30))
-	pollPR(h, time.Minute, 2, "b3")
+	reqSetFiles(h, "b2...b3", liveDelta[2:])
+	pollPR(h, 30*time.Minute, 2, "b3")
 	pollPR(h, 30*time.Minute, 2, "b3")
 	ins = h.rd.all()
 	if len(ins) != 3 {
-		t.Fatalf("rounds = %d, want the full re-review of b3", len(ins))
+		t.Fatalf("rounds = %d, want the full pass of b3", len(ins))
 	}
-	wantFullPass(t, "the full re-review after the check", ins[2])
+	wantFullPass(t, "the small push at the Nth re-review", ins[2])
+	if got := (*inFlight)[2]; got != "" {
+		t.Fatalf("delta check in flight %q: want none", got)
+	}
+	for _, kind := range []string{"round.delta_check_dropped", "round.delta_check_fresh"} {
+		if evs := approvalEvents(t, h, 2, kind); len(evs) != 0 {
+			t.Fatalf("%s events %+v: the full pass was dispatched as a delta check", kind, evs)
+		}
+	}
+	why := approvalEvents(t, h, 2, "round.full_pass")
+	if len(why) != 1 || eventData(t, why[0])["rule"] != "full_pass_every" {
+		t.Fatalf("round.full_pass events: %+v", why)
+	}
 }
 
 // A round someone asked for (`magnum review`, the board's r) never becomes
@@ -297,5 +308,234 @@ func TestTheStatusCommentNamesAFullPassUnderWay(t *testing.T) {
 	h.wantState(7, store.PRReviewed)
 	if _, ok := kvValue(h, kvPRFullPassRound(pr.ID)); ok {
 		t.Error("the in-flight full pass mark outlived its round")
+	}
+}
+
+// sizedGit sizes PR #2 at each head of sizes ({files, lines}) for git diff
+// --numstat from the round's merge base: that many source files of that
+// many lines in all, and a lockfile of 5,000 lines the size leaves out.
+func sizedGit(sizes map[string][2]int) func(*harness) {
+	return func(h *harness) {
+		stats := map[string][]gitx.FileStat{}
+		for head, s := range sizes {
+			files, lines := s[0], s[1]
+			fs := []gitx.FileStat{{Path: "Gemfile.lock", Added: 4000, Removed: 1000}}
+			for i := range files {
+				n := lines / files
+				if i == 0 {
+					n += lines % files
+				}
+				fs = append(fs, gitx.FileStat{Path: fmt.Sprintf("app/models/m%d.rb", i), Added: n})
+			}
+			stats["base0000..."+head] = fs
+		}
+		h.d.Git = fakeGit{stats: stats}
+	}
+}
+
+// touched is a push that adds lines code lines to each of paths, and
+// changes a lockfile the churn leaves out.
+func touched(lines int, paths ...string) []github.FileDelta {
+	out := []github.FileDelta{{Path: "yarn.lock", Status: "modified", Lines: 900}}
+	for _, p := range paths {
+		d := codeDelta(lines)[0]
+		d.Path = p
+		out = append(out, d)
+	}
+	return out
+}
+
+// churnOfPR is PR n's churn since its baseline.
+func churnOfPR(t *testing.T, h *harness, n int) fullPassChurn {
+	t.Helper()
+	c, _ := h.e.churnSince(h.ctx, h.pr(n).ID)
+	return c
+}
+
+// fullPassWhyOf is the reason and the rule of PR n's last round.full_pass
+// event, and the reason its last round start gives.
+func fullPassWhyOf(t *testing.T, h *harness, n int) (reason, rule, start string) {
+	t.Helper()
+	evs := approvalEvents(t, h, n, "round.full_pass")
+	if len(evs) == 0 {
+		t.Fatal("no round.full_pass event")
+	}
+	d := eventData(t, evs[len(evs)-1])
+	starts := approvalEvents(t, h, n, "engine.round_start")
+	reason, _ = d["reason"].(string)
+	rule, _ = d["rule"].(string)
+	start, _ = eventData(t, starts[len(starts)-1])["full_pass_reason"].(string)
+	return reason, rule, start
+}
+
+// Rounds measure how often the whole-PR view was lost, not how much the
+// code changed. A first review of a 1,000-line PR (its lockfile left out)
+// is its baseline; three re-reviews of 200 lines each change 600 lines,
+// over the larger of full_pass_lines (500) and a quarter of the PR (250),
+// so the fourth runs as a full pass, its reason naming the lines. The full
+// pass is the new baseline, with the PR's size then, and the churn starts
+// again after it.
+func TestChurnSinceTheBaselineTriggersAFullPass(t *testing.T) {
+	h := fullPassHarness(t, 0, sizedGit(map[string][2]int{"b1": {20, 1000}, "b5": {22, 1800}}))
+	h.reviewedPR(2, "b1")
+	id := h.pr(2).ID
+	base, ok := h.e.readBaseline(h.ctx, kvPRReviewBaseline(id))
+	if !ok || base.Target != "b1" || base.Base != "base0000" || base.Files != 20 || base.Lines != 1000 || !base.Initial {
+		t.Fatalf("review baseline %+v (%v): want the first review of b1, 20 files and 1000 lines", base, ok)
+	}
+	heads := []string{"b1", "b2", "b3", "b4"}
+	for i, head := range heads[1:] {
+		reqSetFiles(h, heads[i]+"..."+head, touched(200, "app/models/coupon.rb"))
+		wantOrdinary(t, "the re-review of "+head, pushAndRereview(t, h, head))
+	}
+	if c := churnOfPR(t, h, 2); c.Lines != 600 || c.Files != 1 || !slices.Equal(c.Paths, []string{"app/models/coupon.rb"}) || c.To != "b4" {
+		t.Fatalf("churn %+v: want 600 lines in coupon.rb, the lockfile left out", c)
+	}
+
+	reqSetFiles(h, "b4...b5", touched(200, "app/models/coupon.rb"))
+	wantFullPass(t, "the fourth re-review", pushAndRereview(t, h, "b5"))
+	reason, rule, start := fullPassWhyOf(t, h, 2)
+	if want := "600 lines changed since the first review (full_pass_lines 500; a quarter of its 1000 lines then: 250)"; reason != want || rule != "full_pass_lines" || start != want {
+		t.Fatalf("full pass reason %q, rule %q, start %q: want %q", reason, rule, start, want)
+	}
+	if _, ok := kvValue(h, kvPRFullPassChurn(id)); ok {
+		t.Fatal("the churn outlived the full pass")
+	}
+	if _, ok := kvValue(h, kvPRReviewBaseline(id)); ok {
+		t.Fatal("the review baseline outlived the full pass")
+	}
+	if rec := lastFullPassOf(t, h, 2); rec.Target != "b5" || rec.Files != 22 || rec.Lines != 1800 {
+		t.Fatalf("full pass record %+v: want b5 with 22 files and 1800 lines", rec)
+	}
+
+	reqSetFiles(h, "b5...b6", touched(200, "app/models/coupon.rb"))
+	wantOrdinary(t, "the re-review after the full pass", pushAndRereview(t, h, "b6"))
+	if c := churnOfPR(t, h, 2); c.Lines != 200 || c.To != "b6" {
+		t.Fatalf("churn after the full pass %+v: want the 200 lines of b6", c)
+	}
+}
+
+// The files the re-reviews touched since the baseline count once each: 4,
+// then 2 more (two of the push's four were touched before), then 4 more
+// reach full_pass_files (10, over a quarter of the PR's 8), and the next
+// re-review is a full pass, its reason naming the files.
+func TestTouchedFilesSinceTheBaselineTriggerAFullPass(t *testing.T) {
+	h := fullPassHarness(t, 0, sizedGit(map[string][2]int{"b1": {8, 300}}))
+	h.reviewedPR(2, "b1")
+	pushes := [][]string{
+		{"app/a.rb", "app/b.rb", "app/c.rb", "app/d.rb"},
+		{"app/a.rb", "app/b.rb", "app/e.rb", "app/f.rb"},
+		{"app/g.rb", "app/h.rb", "app/i.rb", "app/j.rb"},
+	}
+	heads := []string{"b1", "b2", "b3", "b4"}
+	for i, head := range heads[1:] {
+		reqSetFiles(h, heads[i]+"..."+head, touched(10, pushes[i]...))
+		wantOrdinary(t, "the re-review of "+head, pushAndRereview(t, h, head))
+	}
+	if c := churnOfPR(t, h, 2); c.Files != 10 || c.Lines != 120 || len(c.Paths) != 10 {
+		t.Fatalf("churn %+v: want 10 files and 120 lines", c)
+	}
+	reqSetFiles(h, "b4...b5", touched(10, "app/a.rb"))
+	wantFullPass(t, "the fourth re-review", pushAndRereview(t, h, "b5"))
+	reason, rule, _ := fullPassWhyOf(t, h, 2)
+	if want := "10 files touched since the first review (full_pass_files 10; a quarter of its 8 files then: 2)"; reason != want || rule != "full_pass_files" {
+		t.Fatalf("full pass reason %q, rule %q: want %q", reason, rule, want)
+	}
+}
+
+// A large PR (60 files at its baseline) gets a full pass at its first
+// re-review a week after the baseline, however small the push; a 5-file PR
+// does not.
+func TestAnOldLargePRGetsAFullPass(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files int
+		full  bool
+	}{{"60 files", 60, true}, {"5 files", 5, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := fullPassHarness(t, 0, sizedGit(map[string][2]int{"b1": {tc.files, 600}}))
+			h.reviewedPR(2, "b1")
+			h.advance(7 * 24 * time.Hour)
+			reqSetFiles(h, "b1...b2", touched(40, "app/models/coupon.rb"))
+			in := pushAndRereview(t, h, "b2")
+			if !tc.full {
+				wantOrdinary(t, "a small PR's re-review a week later", in)
+				return
+			}
+			wantFullPass(t, "a large PR's re-review a week later", in)
+			reason, rule, _ := fullPassWhyOf(t, h, 2)
+			if want := "168h since the first review of a large PR (60 files, 600 lines then; full_pass_after 168h)"; reason != want || rule != "full_pass_after" {
+				t.Fatalf("full pass reason %q, rule %q: want %q", reason, rule, want)
+			}
+		})
+	}
+}
+
+// A push that merges the base branch is charged with the PR's own change
+// only: master's 46 lines in three files are not the PR's churn, the 2
+// lines of coupon.rb its own diff changed are.
+func TestABaseMergeIsNotChurn(t *testing.T) {
+	h := newHarness(t, noThreshold)
+	mergedRereview(t, h)
+	h.wantState(2, store.PRReviewed)
+	if c := churnOfPR(t, h, 2); c.Lines != 2 || c.Files != 1 || !slices.Equal(c.Paths, []string{"app/models/coupon.rb"}) || c.To != mergedHead {
+		t.Fatalf("churn %+v: want the 2 lines of the PR's own change in coupon.rb", c)
+	}
+}
+
+// 0 turns each churn or age rule off alone: with all three due (a large
+// PR, 600 lines in 16 files since a baseline 8 days old), the full pass
+// names the first rule left on, and none runs with all three off.
+func TestFullPassRulesOffByZero(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		off  func(*harness)
+		rule string
+	}{
+		{"every rule on", func(*harness) {}, "full_pass_lines"},
+		{"full_pass_lines 0", func(h *harness) { h.cfg.Pipeline.FullPassLines = 0 }, "full_pass_files"},
+		{"full_pass_files 0 too", func(h *harness) { h.cfg.Pipeline.FullPassLines, h.cfg.Pipeline.FullPassFiles = 0, 0 }, "full_pass_after"},
+		{"full_pass_after 0 too", func(h *harness) {
+			h.cfg.Pipeline.FullPassLines, h.cfg.Pipeline.FullPassFiles, h.cfg.Pipeline.FullPassAfter.Duration = 0, 0, 0
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := fullPassHarness(t, 0, tc.off)
+			h.reviewedPR(2, "b1")
+			id := h.pr(2).ID
+			h.e.setBaseline(h.ctx, kvPRReviewBaseline(id), fullPassRecord{Target: "b1", At: h.clock.Now().Add(-8 * 24 * time.Hour),
+				Files: 60, Lines: 1200, Initial: true})
+			churn := fullPassChurn{To: "b1"}
+			churn.add(600, []string{"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "b1", "b2", "b3", "b4", "b5", "b6", "b7"})
+			b, err := json.Marshal(churn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.e.setKV(h.ctx, kvPRFullPassChurn(id), string(b))
+			in := pushAndRereview(t, h, "b2")
+			if tc.rule == "" {
+				wantOrdinary(t, "every rule off", in)
+				return
+			}
+			wantFullPass(t, tc.name, in)
+			if _, rule, _ := fullPassWhyOf(t, h, 2); rule != tc.rule {
+				t.Fatalf("rule %q, want %q", rule, tc.rule)
+			}
+		})
+	}
+}
+
+// A churn keeps at most maxChurnPaths paths; past it only the count grows.
+func TestTheChurnKeepsAtMost500Paths(t *testing.T) {
+	var c fullPassChurn
+	var paths []string
+	for i := range maxChurnPaths + 20 {
+		paths = append(paths, fmt.Sprintf("app/f%04d.rb", i))
+	}
+	c.add(10, paths[:maxChurnPaths])
+	c.add(10, paths[:5]) // touched before: no new file
+	c.add(10, paths[maxChurnPaths:])
+	if c.Files != maxChurnPaths+20 || len(c.Paths) != maxChurnPaths || c.Lines != 30 || !slices.IsSorted(c.Paths) {
+		t.Fatalf("churn: %d files, %d paths, %d lines", c.Files, len(c.Paths), c.Lines)
 	}
 }

@@ -283,7 +283,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	case rs.fullPass && rs.kind == kindContinue:
 		what, data["full_pass"] = what+" (full pass)", true
 	case rs.fullPass:
-		what, data["full_pass"] = fullReReviewLabel, true
+		what, data["full_pass"], data["full_pass_reason"] = fullReReviewLabel, true, job.fullPass
 	}
 	if job.postMerge {
 		what = "post-merge " + what
@@ -415,7 +415,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		fresh, why = true, "a full pass"
 		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.full_pass",
 			"full pass: "+job.fullPass+": every role starts in a fresh session and reviews the whole PR",
-			map[string]any{"reason": job.fullPass, "full_pass_every": e.cfg.Pipeline.FullPassEvery})
+			map[string]any{"reason": job.fullPass, "rule": job.fullPassRule, "full_pass_every": e.cfg.Pipeline.FullPassEvery})
 	}
 	// Sessions post as the identity their panes were created for; a PR whose
 	// identity changed since (watch config, magnum review --as) must not

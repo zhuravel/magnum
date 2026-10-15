@@ -268,10 +268,20 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
                                   # other roles keep their sessions; a continue resumes. "0" = always resume
 full_pass_every = 10              # the Nth automatic re-review of a PR, counted since its first review or its
                                   # last full pass, is a full pass: every role starts in a fresh session and
-                                  # reviews the whole PR as a first review does, and the judge re-decides the
-                                  # earlier threads. Costs a first review's rounds of every role. A delta check,
-                                  # a same-head or reply round and `magnum review` never become one (`magnum
-                                  # review --full` asks for one). 0 = never
+                                  # reviews the whole PR as a first review does (the judge's own pass without
+                                  # the earlier reviews), and the judge then re-decides the earlier threads.
+                                  # Costs a first review's rounds of every role. A due one overrides a delta
+                                  # check; a same-head or reply round and `magnum review` never become one
+                                  # (`magnum review --full` asks for one). 0 = this rule off
+full_pass_lines = 500             # also a full pass once the PR's re-reviews since its baseline (its last full
+                                  # pass, else its first review) changed this many lines (added plus deleted,
+                                  # lockfiles and related_ignore left out, a push that merged the base branch
+                                  # counted by the PR's own diff), or a quarter of the PR's lines at the
+                                  # baseline when that is more. 0 = this rule off
+full_pass_files = 10              # likewise for the files those re-reviews touched, or a quarter of the PR's
+                                  # files at the baseline when that is more. 0 = this rule off
+full_pass_after = "168h"          # and once this long passed since the baseline of a large PR (50 files or
+                                  # 2,000 lines then). "0" = this rule off
 judge_fallback = ""               # a judge role of another kind that takes over a PR's rounds once the judge's
                                   # kind refused one (Codex's cybersecurity classifier): the PR is flagged for
                                   # that kind, its roles of that kind are dropped, and this role judges from
