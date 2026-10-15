@@ -668,23 +668,14 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip fun
 // diffNames lists the paths of `git diff --name-only base...head`, opts
 // after the fixed options and pathspecs after "--".
 func (c *Client) diffNames(ctx context.Context, dir, base, head string, opts, pathspecs []string) ([]string, error) {
-	for _, rev := range []string{base, head} {
-		if err := checkRev("revision", rev); err != nil {
-			return nil, err
-		}
-		if strings.Contains(rev, "..") {
-			return nil, fmt.Errorf("gitx: revision %q must not be a range", rev)
-		}
+	if err := checkRange(base, head); err != nil {
+		return nil, err
 	}
 	args := append([]string{"diff", "--name-only", "-z", "--no-renames"}, opts...)
 	args = append(append(args, base+"..."+head, "--"), pathspecs...)
 	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("diff --name-only %s...%s", base, head)}, args...)
 	if err != nil {
-		var ee *execx.ExitError
-		if errors.As(err, &ee) && strings.Contains(ee.Stderr, "no merge base") {
-			return nil, fmt.Errorf("gitx: diff %s...%s: %w", base, head, ErrNoMergeBase)
-		}
-		return nil, err
+		return nil, rangeErr(err, base, head)
 	}
 	var paths []string
 	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {

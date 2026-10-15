@@ -17,6 +17,10 @@ Post-merge review: GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`. E
 
 Keep each line of the `notes` file at most `notes_max_line` characters long: a longer line triggers a curation.
 {{- end}}
+{{- if .PrepassFile}}
+
+Read `prepass` first: the removed definitions that files outside the diff still name, the changed source files without a test change, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
+{{- end}}
 
 <magnum>
 mode: initial
@@ -68,6 +72,9 @@ history: {{.HistoryFile}}
 {{- end}}
 {{- if .DocsFile}}
 docs: {{.DocsFile}}
+{{- end}}
+{{- if .PrepassFile}}
+prepass: {{.PrepassFile}}
 {{- end}}
 {{- if .FailingChecks}}
 failing_checks: {{.FailingChecks}}

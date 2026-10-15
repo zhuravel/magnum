@@ -49,6 +49,9 @@ Blind evaluation: magnum measures what a review of exactly `{{.HeadSHA}}` finds,
 {{- if .PostMerge}}
 GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`: expect `merged == true` instead of `state == open`, and find follow-ups for a new change, not changes to this PR.
 {{- end}}
+{{- if .PrepassFile}}
+Read `prepass` first: the removed definitions that files outside the diff still name, the changed source files without a test change, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
+{{- end}}
 
 <magnum>
 mode: {{.Mode}}
@@ -109,6 +112,9 @@ history: {{.HistoryFile}}
 {{- end}}
 {{- if .DocsFile}}
 docs: {{.DocsFile}}
+{{- end}}
+{{- if .PrepassFile}}
+prepass: {{.PrepassFile}}
 {{- end}}
 own_findings: {{.OwnFindings}}
 dry_run: {{.DryRun}}

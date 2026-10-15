@@ -175,8 +175,10 @@ type GitHub interface {
 
 // Git is the subset of *gitx.Client the checkout check after each stage
 // (and its restore) uses, a restart's check that a head is not an older
-// one (MergeBase), and the changed files' history (ModifiedPaths, FileLog;
-// history.go).
+// one (MergeBase), the changed files' history (ModifiedPaths, FileLog;
+// history.go), the base docs that name them (ChangedPaths, Mentions;
+// docs.go) and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles;
+// prepass.go).
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	SwitchDetach(ctx context.Context, dir, ref string) error
@@ -186,6 +188,10 @@ type Git interface {
 	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
 	Mentions(ctx context.Context, dir, rev string, words []string, pathspecs ...string) (map[string]map[string]int, error)
+	DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error)
+	DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]gitx.FileLines, error)
+	WordUses(ctx context.Context, dir, rev, word string) ([]gitx.Use, error)
+	DirFiles(ctx context.Context, dir, rev string, dirs ...string) ([]string, error)
 }
 
 // Keys interrupts a timed-out or cut role (esc to an agent, ctrl+c twice to
@@ -621,6 +627,9 @@ type round struct {
 	// docsFile is the head under review's docs.json (docs.go), as
 	// historyFile.
 	docsFile string
+	// prepassFile is the head under review's prepass.json (prepass.go), as
+	// historyFile.
+	prepassFile string
 	// ownFindings is the file of the judge's own pass once its prompt
 	// reached the judge (ownpass.go): the candidates prompt starts from it;
 	// "" = the judge gets one prompt. Guarded by mu; a restart resets it.

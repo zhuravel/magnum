@@ -1104,6 +1104,27 @@ claude-review prompts in one sentence. The reviewers read the pages that bear on
 them (`git show <base>:<page>`); what a page records as deliberate, or as a known gap, is a nearby problem
 at most, never this PR's finding, and a finding against documented behaviour needs a proof.
 
+Beside `related.json`, `history.json` and `docs.json`, the reviewers get Magnum's own reading of the diff,
+since a colleague's review tool lists the references a PR broke before any model reads code, and its
+reviewers found defects from those leads that Magnum's missed. Before the reviewers of each head, Magnum
+writes `prepass.json` in the report directory, read with git alone from the PR's diff
+(`base_sha...head_sha`) and the head's tree, paths matching `related_ignore` aside, with three lists:
+`removed_symbols`, each definition the diff removes or renames and does not add back under the same name
+(Ruby `def`, `class` and `module`; Go `func` and `type`; JavaScript and TypeScript `function`, `class`,
+`export const` and `const x = (`; Python `def` and `class`), with the files of the head outside the diff
+that still name it as a whole word (`git grep -w`; each file's first line, at most 20 files; names under 4
+characters and a short stop list such as `call` and `init` are never searched); `test_gaps`, each changed
+source file whose test the diff leaves alone by its language's naming convention (`app/models/order.rb`
+and `spec/models/order_spec.rb`, `x.go` and `x_test.go`, `x.ts` and `x.test.ts` or `__tests__/x.ts`, `x.py`
+and `test_x.py`), tests, fixtures, migrations, generated files, views, styles, documents and configuration
+files aside; and `siblings`, the closest existing file to each new one (the same suffix and the longest
+common prefix, in its directory, else its parent). When it cannot run (no base sha, more than 20,000
+changed lines, a git failure, more than 60 seconds) the file says `skipped` and why, and the review goes
+on; each head's `round.prepass` event counts the lists or gives the reason. The judge's prompts (the own
+pass, the candidates phase, a round's one prompt) name the file as `prepass`, and they and the
+claude-review prompts say to read it first, the sibling before the new file: each item is a lead to check,
+never a finding by itself. codex-review runs the stock `codex review` and does not get it.
+
 The judge also sees the head's failing CI checks, since a PR once got LGTM while a check had failed on
 that head. When a judge prompt goes out (initial, rereview, continue), Magnum reads the PR's checks from
 the registry (`prs.ci_json`, the poller's last Details fetch) and, when they belong to the head under

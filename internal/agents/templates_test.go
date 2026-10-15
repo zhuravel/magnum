@@ -414,12 +414,12 @@ func TestRenderGolden(t *testing.T) {
 		d.RelatedPRs = ownDir + "related.json"
 		return d
 	}
-	// The changed files' history and the base docs that name them: the
-	// judge prompts with a block (the continued turn aside) name
-	// history.json and docs.json, the claude reviewers get one sentence
-	// naming each.
+	// The changed files' history, the base docs that name them and the
+	// pre-pass: the judge prompts with a block (the continued turn aside)
+	// name history.json, docs.json and prepass.json, and say to read the
+	// pre-pass first; the claude reviewers get one sentence naming each.
 	withHistory := func(d JudgeData) JudgeData {
-		d.HistoryFile, d.DocsFile = ownDir+"history.json", ownDir+"docs.json"
+		d.HistoryFile, d.DocsFile, d.PrepassFile = ownDir+"history.json", ownDir+"docs.json", ownDir+"prepass.json"
 		return d
 	}
 	// The head's failing checks: the posting judge prompts name the file.
@@ -433,7 +433,7 @@ func TestRenderGolden(t *testing.T) {
 	ciRed := withFailingChecks(sameHead)
 	ciRed.CIRed = true
 	roleHistory := func(d RoleData) RoleData {
-		d.HistoryFile, d.DocsFile = ownDir+"history.json", ownDir+"docs.json"
+		d.HistoryFile, d.DocsFile, d.PrepassFile = ownDir+"history.json", ownDir+"docs.json", ownDir+"prepass.json"
 		return d
 	}
 	// A round whose Codex sessions ran with the checkout untrusted because

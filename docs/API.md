@@ -916,6 +916,15 @@ type JudgeData struct {
 	// prompts; "" when no page names a changed path, and as for
 	// HistoryFile.
 	DocsFile string
+	// PrepassFile is prepass.json in the report directory, magnum's reading
+	// of the PR's diff with git (pipeline.Prepass: the removed definitions
+	// files outside the diff still name, the changed source files without a
+	// test change, each added file's closest existing sibling; or why it
+	// was skipped), rendered as `prepass` by the own pass and the initial,
+	// rereview and recovery prompts, which say to read it first, each item
+	// a lead to check, never a finding by itself; "" in a continued turn
+	// and without Git.
+	PrepassFile string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
 	// name, workflow, state, time), rendered as `failing_checks` by the
@@ -1696,6 +1705,10 @@ type RoleData struct {
 	// name the changed files (see JudgeData.DocsFile): the claude reviewer
 	// prompts name it in one sentence; "" = none.
 	DocsFile string
+	// PrepassFile is prepass.json in the report directory, magnum's reading
+	// of the PR's diff (see JudgeData.PrepassFile): the claude reviewer
+	// prompts say to read it first, each item a lead to check; "" = none.
+	PrepassFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
@@ -8845,6 +8858,27 @@ func (c *Client) CurrentBranch(ctx context.Context, repo string) (string, error)
     CurrentBranch is the branch checked out in repo, "" when its HEAD is
     detached (a rebase in progress included).
 
+func (c *Client) DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]FileLines, error)
+    DiffLines is the diff head made relative to its merge base with base, file
+    by file in git's order, without context lines (git diff -U0 base...head;
+    a rename as a deletion plus an addition; none of the user's settings that
+    change it: an external diff, textconv, path prefixes, quoted non-ASCII
+    names), leaving out the paths skip names (relative to the top, taken
+    literally). nil when nothing is left.
+
+func (c *Client) DiffStat(ctx context.Context, dir, base, head string) ([]FileStat, error)
+    DiffStat counts the lines of each file head changed relative to its merge
+    base with base (git diff --numstat base...head; a rename as a deletion plus
+    an addition, no external diff or textconv), in git's order; nil when head
+    changes nothing.
+
+func (c *Client) DirFiles(ctx context.Context, dir, rev string, dirs ...string) ([]string, error)
+    DirFiles lists the files directly in each of dirs (relative to the top,
+    "." for the top itself) at rev, never a directory, a submodule or a file
+    of a subdirectory: one `git ls-tree` of rev's tree, each file as its path
+    from the top, in git's order. nil when there are none or dirs is empty.
+    rev must name a commit.
+
 func (c *Client) DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
     DirtyPaths returns the paths among paths (relative to the top of the work
     tree at dir) that differ from HEAD or are untracked, sorted, nil when none;
@@ -9048,6 +9082,13 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
     never followed: one pointing outside refs/magnum/ is refused, and the delete
     runs with --no-deref so git removes the ref itself, not its target.
 
+func (c *Client) WordUses(ctx context.Context, dir, rev, word string) ([]Use, error)
+    WordUses lists the files of rev that name word as a whole word, each
+    with its first line that does, in git's order: one `git grep -w -F` on
+    rev's tree, which reads the object store only (an uncommitted edit of the
+    work tree never counts), binary files left out. word is taken literally,
+    one line; nil when no file names it. rev must name a commit.
+
 func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip func(untracked string) bool, paths ...string) ([]string, error)
     WorkTreeChanges lists the files paths name (each relative to the
     repository's top in any case, pathspecs: a directory or a file taken
@@ -9116,6 +9157,23 @@ type Commit struct {
 }
     Commit is one commit of a file's log (FileLog).
 
+type FileLines struct {
+	Path string
+	// Status is 'A' for a file head adds, 'D' for one it deletes, 'M' for
+	// any other change (its content, mode or type).
+	Status byte
+	// Removed and Added are the lines the diff removes and adds, in order,
+	// without their "-" or "+"; none for a binary file or a submodule.
+	Removed, Added []string
+}
+    FileLines is one file of DiffLines.
+
+type FileStat struct {
+	Path           string
+	Added, Removed int // both 0 for a binary file
+}
+    FileStat is one file of DiffStat: the lines its diff adds and removes.
+
 type Remote struct {
 	Host  string // lower-cased, e.g. github.com
 	Owner string
@@ -9164,6 +9222,12 @@ func (e StatusEntry) Ignored() bool
 
 func (e StatusEntry) Untracked() bool
     Untracked reports whether the entry is an untracked file or directory.
+
+type Use struct {
+	Path string
+	Line int
+}
+    Use is a file that names a word, and the first line that does (WordUses).
 
 type Worktree struct {
 	Path       string // as reported by git (symlinks resolved); compare with FindWorktree
@@ -12370,6 +12434,9 @@ const PostMergeEvent = "COMMENT"
     PostMergeEvent is the review event of a post-merge round
     (RoundInput.PostMerge), with or without findings.
 
+const PrepassFile = "prepass.json"
+    PrepassFile is the round's reading of its own diff in its report directory.
+
 const RelatedFile = "related.json"
     RelatedFile is the related PRs' file in the round's report directory.
 
@@ -12387,6 +12454,9 @@ var HistoryTimeout = 2 * time.Minute
     HistoryTimeout bounds reading the history: it is a hint, and the reviewers
     wait for it (a big repository without a commit-graph walks its whole history
     for a file changed long ago).
+
+var PrepassTimeout = 60 * time.Second
+    PrepassTimeout bounds the pre-pass's git reads: the reviewers wait for it.
 
 
 FUNCTIONS
@@ -12527,11 +12597,16 @@ type Git interface {
 	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
 	Mentions(ctx context.Context, dir, rev string, words []string, pathspecs ...string) (map[string]map[string]int, error)
+	DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error)
+	DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]gitx.FileLines, error)
+	WordUses(ctx context.Context, dir, rev, word string) ([]gitx.Use, error)
+	DirFiles(ctx context.Context, dir, rev string, dirs ...string) ([]string, error)
 }
     Git is the subset of *gitx.Client the checkout check after each stage
     (and its restore) uses, a restart's check that a head is not an older
-    one (MergeBase), and the changed files' history (ModifiedPaths, FileLog;
-    history.go).
+    one (MergeBase), the changed files' history (ModifiedPaths, FileLog;
+    history.go), the base docs that name them (ChangedPaths, Mentions; docs.go)
+    and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles; prepass.go).
 
 type GitHub interface {
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
@@ -12649,6 +12724,23 @@ type PostedReply struct {
     PostedReply is a reply a replied round's judge posted in one of its threads,
     as GitHub shows it.
 
+type Prepass struct {
+	PR      string `json:"pr"`       // owner/repo#N
+	HeadSHA string `json:"head_sha"` // the head under review, whose tree is searched
+	BaseSHA string `json:"base_sha"` // the merge base: the diff is base_sha...head_sha
+	// Skipped says why the pre-pass did not run ("no base sha", "the diff
+	// has 24113 changed lines, over 20000", a failure, the timeout); the
+	// lists are absent then.
+	Skipped        string          `json:"skipped,omitempty"`
+	RemovedSymbols []RemovedSymbol `json:"removed_symbols,omitzero"`
+	// UnsearchedSymbols counts the removed definitions past the 200
+	// searched.
+	UnsearchedSymbols int       `json:"unsearched_symbols,omitempty"`
+	TestGaps          []string  `json:"test_gaps,omitzero"` // changed source files whose test the diff leaves alone, in git's order
+	Siblings          []Sibling `json:"siblings,omitzero"`  // the added files that have one, in git's order
+}
+    Prepass is prepass.json.
+
 type PreviousReview struct {
 	ID          int64
 	Event       string // review state: APPROVED | COMMENTED | CHANGES_REQUESTED (REQUEST_CHANGES accepted)
@@ -12752,6 +12844,17 @@ type RelatedPRs struct {
 	More           int         `json:"more,omitempty"` // related PRs past the cap of ten
 }
     RelatedPRs is related.json.
+
+type RemovedSymbol struct {
+	Name string `json:"name"`
+	File string `json:"file"` // the first file the diff removes it from
+	// Uses are "<path>:<line>": each file's first line naming it as a
+	// whole word, at most 20 files, in git's order.
+	Uses []string `json:"uses"`
+	More int      `json:"more,omitempty"` // files past the 20
+}
+    RemovedSymbol is a definition the diff removes or renames that files of the
+    head outside the diff still name.
 
 type ReviewCommentLister interface {
 	ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]github.ReviewComment, error)
@@ -13028,6 +13131,12 @@ func (r *Runner) RunRound(ctx context.Context, in RoundInput) (RoundResult, erro
     and pauses, returns a nil error. Run rows created but never prompted are
     abandoned; runs already sent stay submitted/working when ctx is cancelled
     (they are observed, never re-sent).
+
+type Sibling struct {
+	File    string `json:"file"`
+	Sibling string `json:"sibling"`
+}
+    Sibling is an added file and the closest existing file to it.
 
 type StopThread struct {
 	ID        string // GraphQL node id

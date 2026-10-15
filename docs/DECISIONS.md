@@ -1520,6 +1520,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `--kinds --json` shows the key with the rest of each kind. Rejected: flat keys such as `spend_codex`
   under `[pipeline]`, which hardcode kind names and leave the operator's own kinds without one; a map
   `spend_kinds` under `[pipeline]`, a second place for a kind's setting beside its `[kinds.<name>]` block.
+- **A round reads its own diff before the reviewers** (2026-10-15). A colleague's review tool runs a
+  pre-processor before any model reads code: the references a PR broke (a symbol it removed or renamed
+  that other files still use), its test gaps (a changed source file with no matching test change) and the
+  closest existing file to each new one; its reviewers read that list first, and on talkable#11483 its
+  rounds found defects magnum's did not. magnum gave its roles `related.json`, `history.json` and
+  `docs.json`, nothing read from the diff itself, and the skill asked them to find every caller of a
+  changed method, and the example a new rule fails without, by hand in a 24k-line PR. Now, before the
+  reviewers of each head and beside `docs.json` (a restart writes the new head's; a continued turn gets
+  none), a round writes `prepass.json` in its report directory (`pipeline.PrepassFile`, prepass.go), read
+  with git alone from `base_sha...head_sha` and the head's tree, never the work tree a role may change,
+  paths matching `related_ignore` aside as history.json and docs.json do: `removed_symbols`, each name a
+  `-` line defines (a regular expression per language: Ruby `def`, `class`, `module`; Go `func`, `type`;
+  JavaScript and TypeScript `function`, `class`, `export const`, `const x = (`; Python `def`, `class`)
+  that no `+` line defines again, searched with one `git grep -w -F --max-count=1` of the head per name
+  (four at a time, at most 200 names, the rest counted), listed only when files outside the diff still
+  name it, with the first 20 as `path:line`; names under 4 characters and the stop list (`new`, `call`,
+  `run`, `get`, `set`, `init`, `main`, `test`, and the constructors `initialize`, `constructor` and
+  `__init__`, which callers never name) are never searched. `test_gaps`, each added or modified source
+  file whose test by its language's convention the diff leaves alone (Ruby `<x>/app/<y>.rb` and
+  `<x>/lib/<y>.rb` to `<x>/spec/<y>_spec.rb` or `<x>/test/<y>_test.rb`, lib's also under `spec/lib/` and
+  `test/lib/`, which is where Rails apps keep them; Go `x_test.go` beside `x.go`; JavaScript and
+  TypeScript `x.test.*`, `x.spec.*` or `__tests__/x.*`; Python `test_x.py` or `x_test.py` anywhere), a
+  file being source by its extension and its path: no test, fixture, migration, generated or vendored
+  file, and for Ruby no `views/`, `config/` or `db/` file, names Go and Python packages use for code.
+  `siblings`, each added file's existing file of the same suffix (from the first dot: a test's sibling is
+  a test) with the longest common prefix, then the longest common ending, in its directory, else its
+  parent, from one `git ls-tree` of the head; none when no such file exists. gitx gains `DiffStat`
+  (numstat), `DiffLines` (`-U0`, parsed file by file, a removed `-- note` read as content, quoted names
+  unquoted), `WordUses` and `DirFiles`, each on the object store. A pre-pass that cannot run writes the
+  file with `skipped` and why: no base sha, more than 20,000 changed lines (counted from the numstat
+  before the diff is read, lockfiles aside, so a lockfile bump does not hide the code), a git failure or
+  more than 60 seconds (`PrepassTimeout`); a failure never fails the round, and each head records one
+  `round.prepass` event with the counts or the reason (a warning for a failure or the timeout), never a
+  name or a path. The judge prompts (the own pass, initial, rereview, recovery) name the file as
+  `prepass` in the `<magnum>` block, as `docs` and `related_prs`, and they and the three claude-review
+  prompts carry one sentence: read it first, the sibling before the new file, each item a lead to check,
+  never a finding by itself. The sentence lives in the prompts, not the skill, whose section 0 only names
+  the field. codex-review runs the stock `codex review`, to which magnum passes no prompt, so it gets
+  nothing, as with `history` and `docs`. Rejected: a per-language parser (prism, tree-sitter), a
+  dependency for lists that are leads, where a regular expression's precision is enough; a notes script
+  per repository, since every repository gains from the lists and the notes directory is for what one
+  repository alone needs.
 
 ## Screens and commands
 

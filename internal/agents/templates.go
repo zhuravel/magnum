@@ -448,6 +448,15 @@ type JudgeData struct {
 	// prompts; "" when no page names a changed path, and as for
 	// HistoryFile.
 	DocsFile string
+	// PrepassFile is prepass.json in the report directory, magnum's reading
+	// of the PR's diff with git (pipeline.Prepass: the removed definitions
+	// files outside the diff still name, the changed source files without a
+	// test change, each added file's closest existing sibling; or why it
+	// was skipped), rendered as `prepass` by the own pass and the initial,
+	// rereview and recovery prompts, which say to read it first, each item
+	// a lead to check, never a finding by itself; "" in a continued turn
+	// and without Git.
+	PrepassFile string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
 	// name, workflow, state, time), rendered as `failing_checks` by the
@@ -563,6 +572,10 @@ type RoleData struct {
 	// name the changed files (see JudgeData.DocsFile): the claude reviewer
 	// prompts name it in one sentence; "" = none.
 	DocsFile string
+	// PrepassFile is prepass.json in the report directory, magnum's reading
+	// of the PR's diff (see JudgeData.PrepassFile): the claude reviewer
+	// prompts say to read it first, each item a lead to check; "" = none.
+	PrepassFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool

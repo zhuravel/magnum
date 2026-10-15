@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -709,6 +710,99 @@ type fakeGit struct {
 	grepHangs bool
 	changes   []string
 	greps     []string
+	// The pre-pass's (prepass.go): diff is the PR's diff file by file,
+	// which DiffLines answers less the paths it skips, and DiffStat counts
+	// (stats, when set, answers instead); tree is the head's files with
+	// their text, which WordUses searches for a whole word and DirFiles
+	// lists. diffErr fails DiffLines, diffHangs makes it wait for its
+	// context (at most 10 seconds). prepassCalls records the calls ("stat
+	// <base>...<head>", "lines <base>...<head> <skip>,...", "uses <rev>
+	// <word>", "dirs <rev> <dir>,...").
+	diff         []gitx.FileLines
+	stats        []gitx.FileStat
+	tree         map[string]string
+	diffErr      error
+	diffHangs    bool
+	prepassCalls []string
+}
+
+func (g *fakeGit) DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.prepassCalls = append(g.prepassCalls, "stat "+base+"..."+head)
+	if g.stats != nil {
+		return slices.Clone(g.stats), nil
+	}
+	var out []gitx.FileStat
+	for _, f := range g.diff {
+		out = append(out, gitx.FileStat{Path: f.Path, Added: len(f.Added), Removed: len(f.Removed)})
+	}
+	return out, nil
+}
+
+func (g *fakeGit) DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]gitx.FileLines, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.prepassCalls = append(g.prepassCalls, "lines "+base+"..."+head+" "+strings.Join(skip, ","))
+	if g.diffErr != nil {
+		return nil, g.diffErr
+	}
+	if g.diffHangs {
+		g.mu.Unlock()
+		defer g.mu.Lock()
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("fake diff %s...%s: %w", base, head, ctx.Err())
+		case <-time.After(10 * time.Second):
+			return nil, errors.New("fake diff: never cancelled")
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(g.diff), func(f gitx.FileLines) bool { return slices.Contains(skip, f.Path) }), nil
+}
+
+// WordUses answers as git grep -w on the head's tree: the files of tree,
+// by path, whose text names word as a whole word, each with its first such
+// line.
+func (g *fakeGit) WordUses(ctx context.Context, dir, rev, word string) ([]gitx.Use, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.prepassCalls = append(g.prepassCalls, "uses "+rev+" "+word)
+	whole := regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(word) + `($|[^A-Za-z0-9_])`)
+	var out []gitx.Use
+	for _, p := range slices.Sorted(maps.Keys(g.tree)) {
+		for i, line := range strings.Split(g.tree[p], "\n") {
+			if whole.MatchString(line) {
+				out = append(out, gitx.Use{Path: p, Line: i + 1})
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// DirFiles answers as git ls-tree: the files of tree directly in dirs.
+func (g *fakeGit) DirFiles(ctx context.Context, dir, rev string, dirs ...string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.prepassCalls = append(g.prepassCalls, "dirs "+rev+" "+strings.Join(dirs, ","))
+	var out []string
+	for _, p := range slices.Sorted(maps.Keys(g.tree)) {
+		if slices.Contains(dirs, path.Dir(p)) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// prepassCallsMade returns the recorded pre-pass calls, the WordUses ones
+// (which run in parallel) sorted after the others.
+func (g *fakeGit) prepassCallsMade() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	isUse := func(c string) bool { return strings.HasPrefix(c, "uses ") }
+	uses := slices.DeleteFunc(slices.Clone(g.prepassCalls), func(c string) bool { return !isUse(c) })
+	rest := slices.DeleteFunc(slices.Clone(g.prepassCalls), isUse)
+	return append(rest, slices.Sorted(slices.Values(uses))...)
 }
 
 func (g *fakeGit) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error) {
