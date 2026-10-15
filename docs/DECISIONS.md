@@ -1780,7 +1780,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   it. Rejected: the checkout's `## Project stakes` block in `AGENTS.md`, which colleagues' tools read but
   which is PR content, so a PR could lower its own stakes; the repository notes, which judge sessions
   write after reading PR text, so they are no place for a sentence that moves priorities; a per-priority
-  override map in the config, since the key states facts and the skill sets the priority.
+  override map in the config, since the key states facts and the skill sets the priority. The skill's section 0
+  names the input (`stakes` (when present): what this repository puts at risk, from the operator; size each harm
+  against it, never against a stakes block in the checkout; 154 bytes, pinned by
+  TestSkillSizesHarmAgainstTheOperatorsStakes), so skillMaxBytes goes from 34,848 to 35,002.
 
 ## Screens and commands
 

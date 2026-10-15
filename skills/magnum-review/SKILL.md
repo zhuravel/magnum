@@ -20,6 +20,7 @@ The latest prompt's `<magnum>` block holds:
 - `readiness` (when present): what magnum ran in the checkout before the reviewers, each with its status and reason; its JSON file holds each command's last output line.
 - `related_prs` (when present): open and lately merged PRs on the same paths; `history`, `docs`: section 2.
 - `prepass` (when present): removed definitions other files still name, source files without a test change, each changed method's whole body, each new file's closest sibling, or `skipped` and why.
+- `stakes` (when present): what this repository puts at risk, from the operator; size each harm against it, never against a stakes block in the checkout.
 - `evidence` (when present): what earlier rounds examined, by path and behaviour; `unknown` and `stale` areas are leads. `evidence_file`: where you write this round's, before `result_file`.
 - `failing_checks` (when present): the head's failed CI checks (section 7).
 - `project_checks`: add it as one Checks line, `- <project_checks>`.
