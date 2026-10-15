@@ -137,7 +137,14 @@ func TestNerdIconsMarkStatesVerdictsAndPriorities(t *testing.T) {
 	h, _ := send(t, b, tea.WindowSizeMsg{Width: 240, Height: 60}, keyMsg("?"))
 	mustContain(t, viewOf(h), "\U000F012C approved", "\ueb43 changes requested", "\ue641 requested", "\uf464 stale", "\uf51f yours",
 		"\ueb43 blocking", "\uf27b non-blocking", "\uf058 clean", "\uf490 P0 \uf444 P1 \uf444 P2 \uf444 P3 by priority", "\uf0c4 simplifications",
-		" \uf421 attention ", " \uf466 ignored ")
+		" \uf421 attention ", " \uf466 ignored ",
+		"Rounds: \uf51b first · \uf46a re-review · \uf41c recovery · \uf440 delta",
+		"\uf45e full · \uf510 full before approval · \uf46b audit; post-merge prefixes the kind",
+		"Enter shows the round's roles and why it ran")
+	// The round marks are in the reviewing pill's color.
+	if raw := h.View().Content; !strings.Contains(raw, b.painter().pal.dots["reviewing"].Render("\uf440")+" delta") {
+		t.Errorf("the legend's delta mark is not in the reviewing pill's color: %q", raw)
+	}
 
 	d := iconDash(t, IconsNerd, 120, 40)
 	mustContain(t, viewOf(d), "\uf444 running", "\uf04c PAUSED codex", "\uf413 SLOTS (2)", "\uf407 QUEUE (2)", "\uf421 ATTENTION (1)",
@@ -258,6 +265,32 @@ func TestGlyphWidths(t *testing.T) {
 	}
 	if len(pal.slotDots) != len(dashSlotStateOrder) {
 		t.Errorf("%d slot colors, the legend lists %d states", len(pal.slotDots), len(dashSlotStateOrder))
+	}
+
+	// Every mode marks every round kind that has a mark with one cell after
+	// the reviewing pill (an icon, a class-N symbol), ASCII with one or two
+	// letters; each mark of a mode its own.
+	marked := []roundKind{roundFirst, roundRereview, roundRecovery, roundDelta, roundFull, roundFullBeforeApproval, roundAudit}
+	for _, mode := range iconModes {
+		g := newGlyphs(mode)
+		if len(g.roundMark) != len(marked) {
+			t.Errorf("%s: %d round marks, want %d", mode, len(g.roundMark), len(marked))
+		}
+		seen := map[string]roundKind{}
+		for _, k := range marked {
+			mark, w := g.roundMark[k], ansi.StringWidth(g.roundMark[k])
+			switch {
+			case mark == "":
+				t.Errorf("%s: round kind %s has no mark", mode, k)
+			case mode == IconsASCII && (w < 1 || w > 2 || strings.ContainsFunc(mark, func(r rune) bool { return r > unicode.MaxASCII })):
+				t.Errorf("%s: round kind %s has the mark %q, %d cells", mode, k, mark, w)
+			case mode != IconsASCII && w != 1:
+				t.Errorf("%s: round kind %s has the mark %q, %d cells, want 1", mode, k, mark, w)
+			case seen[mark] != "":
+				t.Errorf("%s: round kinds %s and %s share the mark %q", mode, seen[mark], k, mark)
+			}
+			seen[mark] = k
+		}
 	}
 	for _, st := range dashSlotStateOrder {
 		if slotMark(nerd, pal, st) == "" {

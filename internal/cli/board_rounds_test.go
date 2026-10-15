@@ -99,6 +99,24 @@ func TestBoardRoundFactsContinueRoundRunsTheJudgeAlone(t *testing.T) {
 	}
 }
 
+// A reply round (the judge re-decides the replies on the head it reviewed)
+// says how many replies its start event counted, which the board's row
+// shows as "replies" and `magnum tui --json` mirrors.
+func TestBoardRoundFactsNameAReplyRound(t *testing.T) {
+	f := newRoundsFixture(t)
+	f.roundStart("rereview", []string{"codex-judge", "claude-review"}, nil, false)
+	f.event("engine.round_start", map[string]any{"slot": "review1", "kind": "rereview", "target_sha": "abc1234",
+		"roles": []string{"codex-judge"}, "requested": nil, "post_merge": false, "same_head": true, "replies": 2})
+	want := &tui.RoundWhy{Kind: "rereview", Replies: 2, Roles: []string{"codex-judge"}}
+	got := f.why()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("RoundWhy = %+v, want %+v", got, want)
+	}
+	if j := prsJSONRoundWhyOf(*got); j.Replies != 2 {
+		t.Fatalf("the JSON mirror = %+v, want replies 2", j)
+	}
+}
+
 func TestBoardRoundFactsTriageDecisionWithSkipsAndReason(t *testing.T) {
 	f := newRoundsFixture(t)
 	f.triageDecision([]string{"codex-judge", "claude-review"}, []string{"codex-review", "claude-simplify"}, "small Ruby-only change")

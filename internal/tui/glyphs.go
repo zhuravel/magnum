@@ -60,6 +60,11 @@ type glyphs struct {
 	// finding priorities, the card's decision and section headings.
 	rich      bool
 	stateIcon map[string]string // in a board state pill, before its label
+	// roundMark is the kind of a running round, right after the reviewing
+	// pill and before its stage and time (prbPainter.kindMark): one cell in
+	// every mode but ASCII, whose "rc" and "F+" take two; a continue, a nudge
+	// and a reply round say so in a word instead.
+	roundMark map[roundKind]string
 	// markDot is drawn in its state's color before a slot state and the
 	// daemon's status (dashboard); a PR state outside its pill gets the
 	// pill's icon in its color (stateMark). "" = no marks.
@@ -86,7 +91,11 @@ func newGlyphs(mode IconMode) glyphs {
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
 			sortDesc: "v", sortAsc: "^", refresh: "at", sep: " | ", chipSep: ":",
 			pinAccent: true,
-			spinner:   spinner.Line,
+			roundMark: map[roundKind]string{
+				roundFirst: "1", roundRereview: "r", roundRecovery: "rc", roundDelta: "d",
+				roundFull: "F", roundFullBeforeApproval: "F+", roundAudit: "a",
+			},
+			spinner: spinner.Line,
 		}
 	case IconsNerd:
 		return glyphs{
@@ -141,6 +150,15 @@ func newGlyphs(mode IconMode) glyphs {
 				// GitHub merged it before magnum reviewed its last push.
 				"merged_unreviewed": "\uf421", // nf-oct-alert
 			},
+			roundMark: map[roundKind]string{
+				roundFirst:              "\uf51b", // nf-oct-sparkle_fill
+				roundRereview:           "\uf46a", // nf-oct-sync, as the re-review pill
+				roundRecovery:           "\uf41c", // nf-oct-issue_reopened
+				roundDelta:              "\uf440", // nf-oct-diff
+				roundFull:               "\uf45e", // nf-oct-checklist
+				roundFullBeforeApproval: "\uf510", // nf-oct-shield_check
+				roundAudit:              "\uf46b", // nf-oct-telescope
+			},
 			markDot: "\uf444", // nf-oct-dot_fill
 			// Finding priorities: icons in the priority's color (red,
 			// red, yellow, dim), quieter than colour emoji.
@@ -175,6 +193,12 @@ func newGlyphs(mode IconMode) glyphs {
 		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 		sortDesc: "↓", sortAsc: "↑", refresh: "↻", sep: " · ",
+		// East Asian width N, which no terminal draws wide (∆ U+2206, not
+		// the ambiguous Δ U+0394).
+		roundMark: map[roundKind]string{
+			roundFirst: "✦", roundRereview: "»", roundRecovery: "✚", roundDelta: "∆",
+			roundFull: "◉", roundFullBeforeApproval: "⚑", roundAudit: "☑",
+		},
 		spinner: spinner.MiniDot,
 		working: workingFrames,
 	}

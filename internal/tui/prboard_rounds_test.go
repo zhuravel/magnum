@@ -63,6 +63,10 @@ func TestCardLastRoundSaysWhichRolesRanAndWhy(t *testing.T) {
 			RoundWhy{Kind: "continue", Roles: []string{"codex-judge"}},
 			[]string{"continue (finishing an interrupted round): judge only"},
 			[]string{"triage", "codex-judge"}}, // "judge only", not the judge's name
+		{"a reply round runs the judge alone",
+			RoundWhy{Kind: "rereview", Replies: 2, Roles: []string{"codex-judge"}},
+			[]string{"reply round (2 replies): judge only"},
+			[]string{"re-review", "codex-judge"}},
 		{"a recovery",
 			RoundWhy{Kind: "recovery", Roles: []string{"codex-judge", "claude-review"}},
 			[]string{"recovery (a fresh judge session): codex-judge, claude-review"}, nil},

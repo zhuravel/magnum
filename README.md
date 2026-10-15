@@ -428,10 +428,10 @@ delta's files listed in `delta-check.json` in the report directory). A modified 
 (no patch) counts 0 lines there and is named in that list; an added file still means a full round. Pauses,
 the re-review interval, the daily cap, capacity and drains hold it as any round, and a forced or requested
 round, or one that names roles, runs in full. The board, the card and `magnum status` call it a delta
-check (`delta check · quiet → 14:09`, `delta check (4 lines)` on the card's last round and in
-`engine.round_start`). A judge whose session is gone (lost, parked by an identity migration, or fresh
-sessions requested) checks the delta in a fresh session (`round.delta_check_fresh`): a recovery round of the
-judge alone at its `rereview_effort`, whose prompt has it read its previous review and threads before it
+check (`delta check · quiet → 14:09` while it waits, `delta check (4 lines)` on the card's last round and
+in `engine.round_start`); the board marks a running one `∆` after its pill. A judge whose session is gone
+(lost, parked by an identity migration, or fresh sessions requested) checks the delta in a fresh session
+(`round.delta_check_fresh`): a recovery round of the judge alone at its `rereview_effort`, whose prompt has it read its previous review and threads before it
 reviews just those commits (`delta_check: true` in `judge-recovery.md`); only when no review by the PR's
 current or former identities is on record to build on does it become a full recovery round
 (`round.delta_check_dropped`). An App's approval of the reviewed commit stands meanwhile (`review.approval_kept_for_check`): the check's approval supersedes it
@@ -2331,16 +2331,29 @@ none), in a pool slot or a per-PR worktree, against the base branch as it was be
 parent of GitHub's merge commit, so a merge-commit merge still has a diff), posted as a COMMENT whatever
 the identity or `[[repo]]` events say (a review posted otherwise stands, with a `pr.post_merge_event`
 warning), with findings framed as follow-ups and no earlier review dismissed. Its row shows the round's state with `post-merge` in the state cell
-(`re-review post-merge · next tick`), the flag clears once the review is verified on the merged head, and
+(`re-review post-merge · next tick`; while it runs, before the round's kind mark:
+`⣷ reviewing  post-merge » judge · 4m`), the flag clears once the review is verified on the merged head, and
 the PR goes back to closed and is released after a fresh `close_grace`. A round that cannot post (the
 judge is blocked, say) also goes back to closed, with a `pr.post_merge_failed` warning and a toast. A row
 closed without merging, or merged with its head reviewed, refuses at once.
 
-While a round runs, the state cell says what it is doing and for how long, in whole minutes since the
-round started: `⣷ reviewing simplify · 17m`, `reviewers · 9m` while several reviewers work at once,
-`judge · 31m` (a delta check too: `delta check · judge · 4m`), or the time alone (`3m`) during the
-readiness step and between stages. A role is named by the shortest of its name and aliases; the judge is
-always `judge`. On a narrow screen the cell gives up the stage first and keeps the time. The card's LAST
+While a round runs, the state cell says what kind of round it is, what it is doing and for how long, in
+whole minutes since the round started: `⣷ reviewing  » simplify · 17m`, `reviewers · 9m` while several
+reviewers work at once, `judge · 31m`, or the time alone (`3m`) during the readiness step and between
+stages. A role is named by the shortest of its name and aliases; the judge is always `judge`. The kind is
+one mark right after the pill, in the reviewing pill's color and the `[terminal] icons` mode's symbols
+(nerd, unicode, ascii): a first review `nf-oct-sparkle_fill` `✦` `1`, a re-review `nf-oct-sync` `»` `r`, a
+recovery (a fresh judge session) `nf-oct-issue_reopened` `✚` `rc`, a delta check `nf-oct-diff` `∆` `d`, a
+full pass `nf-oct-checklist` `◉` `F`, the full pass before approval `nf-oct-shield_check` `⚑` `F+` and an
+audit pass `nf-oct-telescope` `☑` `a`. A delta check wins over the full pass before approval, that over a
+full pass, that over an audit pass, and each over the round's own kind (a full pass runs as a recovery); a
+continue, a nudge and a reply round (the judge re-deciding replies on the head it reviewed) say
+`continue`, `nudge` and `replies` in its place, and a post-merge round puts `post-merge` before it. The
+mark appears once the round's `engine.round_start` is written (until then the cell shows the stage and
+the time alone, never the previous round's kind) and keeps a plain space after it. On a narrow screen the
+cell gives up the stage first, then the time, and keeps the mark: `⣷ reviewing  ∆ judge · 4m`,
+`⣷ reviewing  ∆ 4m`, `⣷ reviewing  ∆`; a column dragged narrower still keeps the pill alone. The `?`
+legend lists the marks of the mode in use, and the card says the round's kind in words. The card's LAST
 ROUND lists each role of the running round with when it started and ended and how long it took (a role
 still working shows its time so far, one without a run "not started yet"), and the status dashboard's
 rounds line shows the same stage and time after each PR.
@@ -2377,7 +2390,14 @@ to be `m`).
 verdicts and check states use gh-dash's icons, so both boards read alike; finding priorities are a flame
 for P0 and a dot for P1 to P3 in the priority's color; the summary and the status dashboard mark each
 state with its pill's icon in the state's color, and slots and the daemon with a colored dot), or `ascii`. Outside ASCII a reviewing PR's state
-pill spins (herdr-radar's braille spinner) while its round runs. `?` shows the legend for the mode in use.
+pill spins (herdr-radar's braille spinner) while its round runs, followed by the round's kind mark (see the
+state cell above). `?` shows the legend for the mode in use, the round marks included:
+
+```text
+Rounds: ✦ first · » re-review · ✚ recovery · ∆ delta
+◉ full · ⚑ full before approval · ☑ audit; post-merge prefixes the kind
+Enter shows the round's roles and why it ran
+```
 
 ### Learning from other reviewers
 

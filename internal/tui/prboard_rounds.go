@@ -41,6 +41,9 @@ type RoundWhy struct {
 	// recovery in fresh sessions whose judge first probes what no round
 	// probed.
 	AuditPass bool
+	// Replies: a reply round, whose judge re-decides this many replies on
+	// the head it reviewed.
+	Replies   int
 	Roles     []string // the roles it ran, in the order the round named them
 	Requested []string // the roles asked for this round
 	Reruns    []RoleRerun
@@ -224,27 +227,69 @@ func spendLabel(s *SpendInfo) string {
 	return "Agent time " + HumanDuration(s.Window)
 }
 
-// roundKindPhrase says what kind of round it was.
-func roundKindPhrase(w RoundWhy) string {
-	phrase := map[string]string{
-		"initial":  "first review",
-		"rereview": "re-review",
-		"continue": "continue (finishing an interrupted round)",
-		"recovery": "recovery (a fresh judge session)",
-		"nudge":    "nudge",
-	}[w.Kind]
-	if phrase == "" {
-		phrase = w.Kind
-	}
+// roundKind is what kind of round a RoundWhy is: the engine's kind
+// (initial, rereview, recovery, continue, nudge) or what the round does
+// instead. The card's phrase (roundKindPhrase) and the row's mark
+// (prbPainter.kindMark) both read it (roundKindOf).
+type roundKind string
+
+const (
+	roundFirst              roundKind = "initial"
+	roundRereview           roundKind = "rereview"
+	roundRecovery           roundKind = "recovery"
+	roundContinue           roundKind = "continue"
+	roundNudge              roundKind = "nudge"
+	roundReplies            roundKind = "replies"
+	roundDelta              roundKind = "delta_check"
+	roundFull               roundKind = "full_pass"
+	roundFullBeforeApproval roundKind = "full_pass_before_approval"
+	roundAudit              roundKind = "audit_pass"
+)
+
+// roundKindOf is w's kind: a delta check, then a full pass before
+// approval, a full pass, an audit pass and a reply round win, in that
+// order, over the engine's kind. Post-merge composes with any of them.
+func roundKindOf(w RoundWhy) roundKind {
 	switch {
 	case w.DeltaCheck:
-		phrase = DeltaCheckPhrase(w.DeltaLines)
+		return roundDelta
 	case w.FullPass && w.BeforeApproval:
-		phrase = "full pass (before approval)"
+		return roundFullBeforeApproval
 	case w.FullPass:
-		phrase = "full pass"
+		return roundFull
 	case w.AuditPass:
-		phrase = "audit pass"
+		return roundAudit
+	case w.Replies > 0:
+		return roundReplies
+	}
+	return roundKind(w.Kind)
+}
+
+// roundKindPhrases are the card's words for each kind of round.
+var roundKindPhrases = map[roundKind]string{
+	roundFirst:              "first review",
+	roundRereview:           "re-review",
+	roundContinue:           "continue (finishing an interrupted round)",
+	roundRecovery:           "recovery (a fresh judge session)",
+	roundNudge:              "nudge",
+	roundFullBeforeApproval: "full pass (before approval)",
+	roundFull:               "full pass",
+	roundAudit:              "audit pass",
+}
+
+// roundKindPhrase says what kind of round it was (roundKindOf): "re-review",
+// "delta check (4 lines)", "reply round (2 replies)", "post-merge full
+// pass"; an unknown kind in its own word.
+func roundKindPhrase(w RoundWhy) string {
+	k := roundKindOf(w)
+	phrase := roundKindPhrases[k]
+	switch {
+	case k == roundDelta:
+		phrase = DeltaCheckPhrase(w.DeltaLines)
+	case k == roundReplies:
+		phrase = "reply round (" + textx.Count(w.Replies, "reply", "replies") + ")"
+	case phrase == "":
+		phrase = w.Kind
 	}
 	if phrase != "" && w.PostMerge {
 		phrase = "post-merge " + phrase
@@ -261,13 +306,13 @@ func DeltaCheckPhrase(lines int) string {
 // roundWhyLines say which roles the last round ran and why, one fact a line
 // (the caller wraps them): the round's kind and roles, what triage decided,
 // the roles a change of their code added, the ones asked for and the ones
-// it started in a fresh session after their max_session_rounds. A continue
-// round and a delta check run the judge alone, which they say instead of
-// naming it.
+// it started in a fresh session after their max_session_rounds. A continue,
+// a delta check and a reply round run the judge alone, which they say
+// instead of naming it.
 func (p *prbPainter) roundWhyLines(w RoundWhy) []string {
 	var out []string
 	roles := strings.Join(w.Roles, ", ")
-	if (w.Kind == "continue" || w.DeltaCheck) && len(w.Roles) <= 1 {
+	if (w.Kind == "continue" || w.DeltaCheck || w.Replies > 0) && len(w.Roles) <= 1 {
 		roles = "judge only"
 	}
 	switch kind := roundKindPhrase(w); {

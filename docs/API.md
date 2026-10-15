@@ -18370,6 +18370,9 @@ type RoundWhy struct {
 	// recovery in fresh sessions whose judge first probes what no round
 	// probed.
 	AuditPass bool
+	// Replies: a reply round, whose judge re-decides this many replies on
+	// the head it reviewed.
+	Replies   int
 	Roles     []string // the roles it ran, in the order the round named them
 	Requested []string // the roles asked for this round
 	Reruns    []RoleRerun

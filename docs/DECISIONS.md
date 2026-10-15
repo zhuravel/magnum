@@ -2020,6 +2020,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the time with no kind, and the card's LAST ROUND the timeline without the previous round's roles and
   kind. A delta check that waits keeps its words, which the daemon's wait decides. Rejected: a new row field
   for the running round's kind (both times already reach the row).
+- **A running round's row marks its kind with one cell after the pill** (2026-10-16; the operator chose the
+  mockup). A round is a first review, a re-review, a recovery, a delta check, a full pass, the full pass
+  before approval or an audit pass, and only the card said which; the row showed the words "delta check"
+  and "post-merge" and nothing for the rest, while a running first review and a re-review both show the
+  spinner. One classifier, roundKindOf, serves the card's phrase and the row: a delta check, then the full
+  pass before approval, a full pass, an audit pass and a reply round win over the engine's kind. Right after
+  the reviewing pill the state cell draws the kind's mark from glyphs.roundMark in the configured icon mode
+  (nerd: Octicons sparkle_fill, sync, issue_reopened, diff, checklist, shield_check, telescope; unicode: ✦ »
+  ✚ ∆ ◉ ⚑ ☑, all East Asian width N; ascii: 1 r rc d F F+ a), in the reviewing pill's color, then a plain
+  space and the stage and time: `⣷ reviewing  ∆ judge · 4m`, narrowing to `⣷ reviewing  ∆ 4m` and
+  `⣷ reviewing  ∆`, the mark kept as "delta check" was (a column dragged narrower still keeps the pill
+  alone, not a cut one). A continue, a nudge and a reply round (`replies` from engine.round_start, now
+  RoundWhy.Replies and `round_why.replies` in `magnum tui --json`; the card says "reply round (2 replies):
+  judge only") say `continue`, `nudge` and `replies` in its place; a post-merge round keeps its word before
+  it (`post-merge » judge · 4m`); a delta check that waits keeps its words, and its line count stays on
+  the card. The `?` legend gains the round marks of the mode in use. No cache key changes: the mark derives
+  from the loaded row and the glyph set, and a refresh advances the rows' generation. Rejected: a text tag
+  after the pill (the STATE cell grows by up to 9 cells and drops UPDATED at 140 columns); a mark column
+  (3 cells on every row, and a new column was rejected on 2026-10-05); marking only the rare kinds (a
+  running first review and a re-review both show the spinner, so the operator's question stays open).
 
 ## Operations
 

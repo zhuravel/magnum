@@ -81,6 +81,16 @@ func (p *prbPainter) helpContent(width int) []string {
 		p.stateCell("merged_unreviewed").render(nil) + " GitHub merged it before magnum reviewed its last push",
 		p.st.Dim.Render("merged or closed in the last …") + " the recently closed PRs, dimmed, newest first ([board] recent_closed)",
 	}, "   ", inner)...)
+	// The marks after a running round's pill (kindMark).
+	kind := func(k roundKind, word string) string {
+		return p.pal.dots["reviewing"].Render(g.roundMark[k]) + " " + word
+	}
+	lines = append(lines, flow([]string{"Rounds: " + kind(roundFirst, "first"), kind(roundRereview, "re-review"),
+		kind(roundRecovery, "recovery"), kind(roundDelta, "delta")}, " · ", inner)...)
+	lines = append(lines, flow([]string{kind(roundFull, "full"), kind(roundFullBeforeApproval, "full before approval"),
+		kind(roundAudit, "audit") + "; post-merge prefixes the kind"}, " · ", inner)...)
+	lines = append(lines, strings.Split(lipgloss.NewStyle().Width(inner).Render(
+		p.st.Key.Render("Enter")+" shows the round's roles and why it ran"), "\n")...)
 	prios := make([]string, len(g.priority))
 	for i := range prios {
 		prios[i] = p.priorityStyle(i).Render(p.priorityMark(i) + fmt.Sprintf("P%d", i))

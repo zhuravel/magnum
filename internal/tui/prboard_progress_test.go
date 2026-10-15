@@ -50,7 +50,7 @@ func TestBoardStateCellShowsTheStageAndTimeOfARunningRound(t *testing.T) {
 			workingRole("codex-review", "codex", since), RoleProgress{Role: "codex-judge", Label: "cj", Judge: true, OwnPass: true, Started: since, Working: true}),
 			" reviewers+judge · 17m"},
 		{"the judge", runningRow(boardNow.Add(-31*time.Minute), ended, judge), " judge · 31m"},
-		{"a delta check", delta, " delta check · judge · 4m"},
+		{"a delta check", delta, " ∆ judge · 4m"},
 		{"no role working", runningRow(start, ended), " 17m"},
 		{"the readiness step of a round just started", runningRow(boardNow.Add(-20 * time.Second)), " 0m"},
 		{"a round over an hour", runningRow(boardNow.Add(-65*time.Minute-30*time.Second), judge), " judge · 1h5m"},
@@ -65,12 +65,16 @@ func TestBoardStateCellShowsTheStageAndTimeOfARunningRound(t *testing.T) {
 }
 
 // On a narrow screen the state cell of a running round gives up its stage
-// before its time, and the stage never outlives the time; a column dragged
-// narrower than the time keeps the pill alone.
+// before its time, and the stage never outlives the time; the round's kind
+// mark outlives both. A column dragged narrower than the time keeps the
+// pill and the mark, and one narrower than those the pill alone.
 func TestBoardStateCellDropsTheStageBeforeTheTimeOnANarrowScreen(t *testing.T) {
 	m, _, _ := newBoard(t, 220, 40, PRBoardOptions{})
 	p := m.painter()
-	run := sanitizeRow(runningRow(boardNow.Add(-17*time.Minute), workingRole("claude-simplify", "simplify", boardNow.Add(-5*time.Minute))))
+	start := boardNow.Add(-17 * time.Minute)
+	run := runningRow(start, workingRole("claude-simplify", "simplify", boardNow.Add(-5*time.Minute)))
+	run.RoundWhy = &RoundWhy{Kind: "rereview", Roles: []string{"claude-simplify", "codex-judge"}, At: start}
+	run = sanitizeRow(run)
 	rows := append(boardRows(), run)
 	for i := range rows {
 		rows[i] = sanitizeRow(rows[i])
@@ -86,26 +90,38 @@ func TestBoardStateCellDropsTheStageBeforeTheTimeOnANarrowScreen(t *testing.T) {
 		}
 		line := ansi.Strip(p.rowLine(run, lay, w, false, false))
 		switch {
-		case strings.Contains(line, "simplify · 17m"):
+		case strings.Contains(line, "reviewing  » simplify · 17m"):
 			full = true
 		case strings.Contains(line, "simplify"):
-			t.Fatalf("width %d: the stage stays without its time: %q", w, line)
-		case strings.Contains(line, "reviewing  17m") || strings.Contains(line, "reviewing 17m"):
+			t.Fatalf("width %d: the stage stays without its time or its mark: %q", w, line)
+		case strings.Contains(line, "reviewing  » 17m"):
 			timeOnly = true
 		default:
-			t.Fatalf("width %d: the time is gone while the state column is whole: %q", w, line)
+			t.Fatalf("width %d: the time or the mark is gone while the state column is whole: %q", w, line)
 		}
 	}
 	if !full || !timeOnly {
 		t.Errorf("widths showed the stage: %v, the time alone: %v; want both", full, timeOnly)
 	}
 
-	var dragged prbWidths
-	dragged[colState] = ansi.StringWidth(ansi.Strip(p.stateCell(run.State).render(nil)))
-	lay := p.fit(n, 300, dragged)
-	line := ansi.Strip(p.rowLine(run, lay, 300, false, false))
-	if !strings.Contains(line, "reviewing") || strings.Contains(line, "17m") || strings.Contains(line, "…") {
-		t.Errorf("a state column dragged to the pill's width: %q", line)
+	pill := ansi.StringWidth(ansi.Strip(p.stateCell(run.State).render(nil)))
+	for _, tc := range []struct {
+		name       string
+		width      int
+		mark, time bool
+	}{
+		{"the pill, the mark and its space", pill + 3, true, false},
+		{"the pill and the mark without its space", pill + 2, false, false},
+		{"the pill", pill, false, false},
+	} {
+		var dragged prbWidths
+		dragged[colState] = tc.width
+		lay := p.fit(n, 300, dragged)
+		line := ansi.Strip(p.rowLine(run, lay, 300, false, false))
+		if !strings.Contains(line, "reviewing") || strings.Contains(line, "17m") || strings.Contains(line, "…") ||
+			strings.Contains(line, "reviewing  »") != tc.mark {
+			t.Errorf("a state column dragged to %s: %q", tc.name, line)
+		}
 	}
 }
 

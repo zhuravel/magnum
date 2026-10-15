@@ -478,7 +478,8 @@ func (p *prbPainter) colTitle(c prbCol) string {
 // prbCells are one row's cells; the reviewers are chips joined only once
 // the column's width is known. stateAlt are the state cell's narrower
 // forms, widest first (a running round's without its stage, then without
-// its time); none when it has no other.
+// its time, keeping its kind's mark, then the pill alone); none when it has
+// no other.
 type prbCells struct {
 	c        [prbNumCols]cell
 	revs     []cell
@@ -506,6 +507,11 @@ func (p *prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 		cs.stateAlt = []cell{p.flagNarrow(r.CodexFlag)}
 	case roundProgress(r) != nil:
 		cs.stateAlt = []cell{p.stateWaitDetail(r, stateTime), p.stateWaitDetail(r, stateBare)}
+		// A column dragged narrower than the pill and the round's kind
+		// keeps the pill whole.
+		if pill := p.stateCell(rowState(r)); cs.stateAlt[1].width() > pill.width() {
+			cs.stateAlt = append(cs.stateAlt, pill)
+		}
 	case r.WaitNarrow != "" && r.WaitNarrow != r.Wait: // a retry without its cause
 		narrow := r
 		narrow.Wait = r.WaitNarrow
@@ -706,12 +712,13 @@ const (
 
 // stateWaitCell is the state pill followed, for a PR waiting for a round,
 // by what holds it and until when, dimmed ("quiet → 14:09"), for a round in
-// flight by its stage and time ("simplify · 17m", progressText; d says how
-// much of it), and for a skipped PR by why in a word ("· bot"). A merged PR
-// in a post-merge round says so: "post-merge · next tick", and so does a
-// delta check, waiting or in flight: "delta check · quiet → 14:09",
-// "delta check · judge · 4m". A snoozed PR with nothing else there says
-// until when: "snoozed → 18:00".
+// flight by its kind's mark and its stage and time ("∆ judge · 4m",
+// kindMark, progressText; d says how much of them: "∆ 4m", "∆ "), and for a
+// skipped PR by why in a word ("· bot"). A merged PR in a post-merge round
+// says so, before the mark when the round runs: "post-merge · next tick",
+// "post-merge ∆ judge · 4m"; so does a delta check that waits: "delta
+// check · quiet → 14:09". A snoozed PR with nothing else there says until
+// when: "snoozed → 18:00".
 func (p *prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
@@ -739,13 +746,23 @@ func (p *prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 	if (!held || rest == "") && snoozeShown(r, p.now) {
 		rest, held = "snoozed → "+untilClock(r.SnoozedUntil, p.now), true
 	}
-	switch {
+	switch mark := p.kindMark(r); {
+	case mark != "": // a plain space after the mark, whatever follows it
+		if postMergeRound(r) {
+			c = append(c, seg{" post-merge", p.st.Dim})
+		}
+		c = append(c, seg{" " + mark, p.pal.dots["reviewing"]})
+		tail := " "
+		if held && rest != "" {
+			tail += rest
+		}
+		c = append(c, seg{tail, p.st.Dim})
 	case postMergeRound(r):
 		c = append(c, seg{" post-merge", p.st.Dim})
 		if held && rest != "" {
 			c = append(c, seg{" · " + rest, p.st.Dim})
 		}
-	case deltaCheckRound(r):
+	case deltaCheckRound(r): // one that waits: a running one has its mark
 		c = append(c, seg{" delta check", p.st.Dim})
 		if held && rest != "" {
 			c = append(c, seg{" · " + rest, p.st.Dim})
@@ -809,6 +826,23 @@ func roundProgress(r PRBoardRow) *RoundProgress {
 		return nil
 	}
 	return r.Progress
+}
+
+// kindMark is the kind of the round r runs as its state cell marks it
+// after the pill (roundKindOf): the mode's mark (glyphs.roundMark), or the
+// word of a continue, a nudge or a reply round; "" when no round runs, its
+// kind is not known yet (runningRoundWhy) or is one magnum does not know.
+func (p *prbPainter) kindMark(r PRBoardRow) string {
+	w := runningRoundWhy(r)
+	if w == nil {
+		return ""
+	}
+	switch k := roundKindOf(*w); k {
+	case roundContinue, roundNudge, roundReplies:
+		return string(k)
+	default:
+		return p.g.roundMark[k]
+	}
 }
 
 // deltaCheckRound reports whether r waits for a delta check or runs one

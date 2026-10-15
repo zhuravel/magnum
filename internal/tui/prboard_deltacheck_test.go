@@ -9,9 +9,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// A delta check says so in the state cell, waiting ("delta check · quiet →
-// 14:09") or in flight; an ordinary re-review does not. The card's LAST
-// ROUND names it and its judge.
+// A delta check says so in the state cell, waiting in words ("delta check ·
+// quiet → 14:09") and in flight with its mark ("∆ 4m"); an ordinary
+// re-review does not. The card's LAST ROUND names it and its judge.
 func TestPRBoardShowsTheDeltaCheckKind(t *testing.T) {
 	m, _, _ := newBoard(t, 220, 40, PRBoardOptions{})
 	p := m.painter()
@@ -31,11 +31,11 @@ func TestPRBoardShowsTheDeltaCheckKind(t *testing.T) {
 	row.State, row.Wait, row.DeltaCheck = "reviewing", "", false
 	row.Progress = &RoundProgress{StartedAt: boardNow.Add(-4 * time.Minute)}
 	row.RoundWhy = &RoundWhy{Kind: "rereview", DeltaCheck: true, DeltaLines: 4, Roles: []string{"codex-judge"}, At: row.Progress.StartedAt}
-	if got := cell(row); !strings.Contains(got, "reviewing") || !strings.HasSuffix(got, " delta check · 4m") {
+	if got := cell(row); !strings.HasSuffix(got, "reviewing  ∆ 4m") || strings.Contains(got, "delta check") {
 		t.Errorf("in flight: state cell = %q", got)
 	}
 	row.State = "reviewed" // the round ended: the pill says nothing more
-	if got := cell(row); strings.Contains(got, "delta check") {
+	if got := cell(row); strings.Contains(got, "delta check") || strings.Contains(got, "∆") {
 		t.Errorf("reviewed: state cell = %q", got)
 	}
 
@@ -144,8 +144,8 @@ func TestARunningRoundIgnoresThePreviousRoundsDeltaCheck(t *testing.T) {
 		r := sanitizeRow(tc.row)
 		for _, d := range []stateDetail{stateFull, stateTime, stateBare} {
 			got := ansi.Strip(p.stateWaitDetail(r, d).render(nil))
-			if strings.Contains(got, "delta check") != tc.delta {
-				t.Errorf("%s (detail %d): state cell = %q, delta check shown: %v, want %v", tc.name, d, got, !tc.delta, tc.delta)
+			if strings.Contains(got, "∆") != tc.delta {
+				t.Errorf("%s (detail %d): state cell = %q, delta check mark shown: %v, want %v", tc.name, d, got, !tc.delta, tc.delta)
 			}
 		}
 		section := lastRoundSection(t, roundsCard(t, tc.row, 100))

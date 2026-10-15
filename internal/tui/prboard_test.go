@@ -390,7 +390,7 @@ func TestPRBoardHelpFitsAndScrolls(t *testing.T) {
 	}
 	mustContain(t, seen, "mute / unmute", "Mouse", "Shift-drag")
 	s, _ = send(t, s, keyMsg("G"))
-	mustContain(t, viewOf(s), "Legend", "released")
+	mustContain(t, viewOf(s), "Rounds:", "released") // the legend's end
 }
 
 func TestPRBoardFilterKeepsSelectionAndRoom(t *testing.T) {
@@ -766,6 +766,15 @@ func TestPRBoardHelpOverlay(t *testing.T) {
 		"✔ approved", "✗ changes requested", "💬 commented", "◌ requested", "⟳ stale", "★ yours", "📌 pinned",
 		"ctrl+r / F5", "refresh now", "review now (asks y/N)", "release (asks y/N)", "answer yes; any other key, enter too, cancels",
 		"? close help")
+	// The legend's round marks, in the mode's symbols, at its end.
+	end, _ := send(t, m, keyMsg("G"))
+	mustContain(t, viewOf(end), "Rounds: ✦ first · » re-review · ✚ recovery · ∆ delta",
+		"◉ full · ⚑ full before approval · ☑ audit; post-merge prefixes the kind",
+		"Enter shows the round's roles and why it ran")
+	a, _, _ := newBoard(t, 120, 42, PRBoardOptions{Icons: IconsASCII})
+	a, _ = send(t, a, keyMsg("?"), keyMsg("G"))
+	mustContain(t, viewOf(a), "Rounds: 1 first · r re-review · rc recovery · d delta",
+		"F full · F+ full before approval · a audit; post-merge prefixes the kind")
 	m, _ = send(t, m, keyMsg("?"))
 	if m.mode != prbTable {
 		t.Error("? did not close the help")

@@ -23,7 +23,8 @@ const boardRoundsWindow = 7 * 24 * time.Hour
 // The events a round leaves, as the engine writes them: engine.round_start
 // (round.go, prepare) with {"kind", "roles", "requested", "post_merge"} and,
 // for a delta check, {"delta_check"}, for a full pass {"full_pass"} (and
-// {"before_approval"} after a held review); every re-review and recovery round with
+// {"before_approval"} after a held review), for an audit pass {"audit_pass"}, for
+// a reply round {"replies"} (how many); every re-review and recovery round with
 // a delta to measure also has {"delta_lines", "delta_files"} (and
 // "delta_partial"), which the card names for a delta check only;
 // round.triage (triage.go), before it, with {"runs", "skips", "reason"} for a
@@ -119,6 +120,7 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 		FullPass:       dataBool(start, "full_pass"),
 		BeforeApproval: dataBool(start, "before_approval"),
 		AuditPass:      dataBool(start, "audit_pass"),
+		Replies:        dataInt(start, "replies"),
 		Roles:          dataStrings(start, "roles"),
 		Requested:      dataStrings(start, "requested"),
 		At:             evs[last].At,
