@@ -1592,6 +1592,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
   dependency for lists that are leads, where a regular expression's precision is enough; a notes script
   per repository, since every repository gains from the lists and the notes directory is for what one
   repository alone needs.
+- **The pre-pass carries the full bodies of changed methods** (2026-10-15). The pre-pass listed removed
+  symbols, test gaps and siblings; the colleague's pre-processor also prints the whole body of every
+  changed method, so its reviewers read the method and not the hunk, and magnum's round 11 on
+  talkable#11483 missed a write in the same method as the fix it judged, outside the hunk. `prepass.json`
+  now has `methods`: for each hunk of a modified source file (source as for `test_gaps`), the innermost
+  method enclosing a changed line at the head, and for a hunk that only removes lines the innermost one
+  holding the lines on both sides of it, with its file, name, first and last line and body, read with one
+  `git cat-file blob <head>:<path>` per file (`gitx.FileAt`, the object store only, four at a time; a file
+  past 8 MB is left out). The method is found by the language's shape, no parser: Ruby `def` (also
+  `private def`, `def self.x`, one-line and endless defs) to the first `end` at its indentation; Go
+  `func`, JavaScript and TypeScript `function`, a name bound to a function or a block-bodied arrow, and a
+  method whose body opens on its line, to the line that closes the first brace opened at the signature's
+  parenthesis depth, counted outside strings, runes, raw and template strings and comments (none when a
+  semicolon, a blank line or 20 lines end the signature first, as an overload's does); Python `def` from
+  the line that closes its parentheses to the last line before one at its indentation or less, blank
+  lines, comments and triple-quoted strings aside. One entry per method however many hunks change it; a
+  hunk outside any method gets none, and a method the diff adds whole is none (the diff is its body; its
+  lines count for the method around it), so an added file is never read. The caps sit beside the others in
+  prepass.go: a method over 300 lines is listed with its lines and no body; at most 120 methods per round,
+  in git's order and by line, the rest counted in `unlisted_methods`; at most 400 KB of bodies, past which
+  the largest are dropped first and counted in `dropped_bodies`. `gitx.DiffLines` gains each file's
+  `Hunks` (the head's side of each `@@` header, which its parser read and dropped), prepass.json is
+  written without HTML escaping so a body's `<`, `>` and `&` read as code, and the `round.prepass` event
+  counts the methods. The prepass sentence of the judge and claude-review prompts adds "each changed
+  method's body before its hunk". Rejected: a parser per language (prism, tree-sitter), a dependency where
+  the shape by indentation and braces is enough for a lead; the outermost enclosing method, which for a
+  closure or a callback in a long component passes the line cap and comes without a body; listing a method
+  the diff adds whole, whose body the reviewer already reads in the diff.
 
 ## Screens and commands
 

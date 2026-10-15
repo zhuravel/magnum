@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -100,6 +101,7 @@ func TestPrepassListsRemovedSymbolsStillUsed(t *testing.T) {
 			Uses: []string{"app/services/checkout.rb:3", "app/views/orders/show.html.erb:1"}}},
 		TestGaps: []string{"internal/billing/charge.go", "lib/report.rb"},
 		Siblings: []Sibling{},
+		Methods:  []Method{},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("prepass.json = %+v\nwant %+v", got, want)
@@ -235,6 +237,277 @@ func TestPrepassNamesTheSiblingOfANewFile(t *testing.T) {
 	}
 	if want := []string{"dirs " + target + " app/services/mailer,app/services,app/services/payouts,app/assets/images,app/assets"}; !slices.Equal(dirs, want) {
 		t.Errorf("DirFiles calls = %q, want %q", dirs, want)
+	}
+}
+
+// textOf is a file of lines; bodyOf its lines first to last (1-based).
+func textOf(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
+
+func bodyOf(text string, first, last int) string {
+	return strings.Join(strings.Split(text, "\n")[first-1:last], "\n")
+}
+
+// A reviewer reads the whole method a hunk changes, not the hunk alone: on
+// talkable#11483 a write in the same method as a fix, outside its hunk, went
+// unseen. prepass.json lists the enclosing method of each hunk of a changed
+// source file, read from the head's tree, with its lines and its body.
+// Ruby's def runs to its end at the same indentation; Go's and
+// TypeScript's to the brace that closes it, braces in strings, runes, raw
+// strings and comments aside; Python's to the first line at the def's
+// indentation or less, a docstring's and a comment's lines aside. A method
+// two hunks change is listed once, one a hunk only removes lines from too;
+// a hunk in a file's header lists nothing, nor does a method the diff adds
+// whole, and an added file and a test are never read.
+func TestPrepassListsTheEnclosingMethodOfEachHunk(t *testing.T) {
+	ruby := textOf(
+		"# frozen_string_literal: true",
+		"",
+		"class Order",
+		"  # Applies a discount.",
+		"  def apply(discount)",
+		"    self.total -= discount",
+		"    self.tier = nil",
+		"    save!",
+		"  end",
+		"",
+		"  def total_cents",
+		"    total * 100",
+		"  end",
+		"",
+		"  def refund",
+		"    update!(total: 0)",
+		"  end",
+		"end",
+	)
+	goSrc := textOf(
+		"package billing",
+		"",
+		`import "fmt"`,
+		"",
+		"// Describe names the charge.",
+		"func (c *Charge) Describe() string {",
+		"\tparts := map[string]string{\"open\": \"{\"}",
+		"\tif c.Paid {",
+		"\t\tparts[\"state\"] = \"paid }\"",
+		"\t}",
+		"\t// a } in a comment",
+		"\treturn fmt.Sprintf(\"%v %c\", parts, '}') /* } */",
+		"}",
+		"",
+		"func Raw() string {",
+		"\treturn `{",
+		"` + \"x\"",
+		"}",
+	)
+	py := textOf(
+		"import os",
+		"",
+		"",
+		"def clean(paths):",
+		`    """Removes the files.`,
+		"",
+		"A note at column zero.",
+		`    """`,
+		"    for p in paths:",
+		"# a comment at column zero",
+		"        if os.path.exists(p):",
+		"            os.remove(p)",
+		"",
+		"    return len(paths)",
+		"",
+		"",
+		"def other():",
+		"    pass",
+	)
+	ts := textOf(
+		"export class Cart {",
+		"  private items: Item[] = [];",
+		"",
+		"  total(): number {",
+		"    return this.items.reduce((sum, i) => {",
+		"      return sum + i.price;",
+		"    }, 0);",
+		"  }",
+		"}",
+		"",
+		"export const clear = (cart: Cart) => {",
+		"  cart.items = [];",
+		"};",
+	)
+	e := newEnv(t)
+	e.git.diff = []gitx.FileLines{
+		{Path: "app/models/order.rb", Status: 'M',
+			Hunks: []gitx.Hunk{{Start: 1, Count: 1}, {Start: 6, Count: 1}, {Start: 8, Count: 1}, {Start: 12}, {Start: 14, Count: 4}}},
+		{Path: "app/models/coupon.rb", Status: 'A', Hunks: []gitx.Hunk{{Start: 1, Count: 4}}},
+		{Path: "spec/models/order_spec.rb", Status: 'M', Hunks: []gitx.Hunk{{Start: 2, Count: 1}}},
+		{Path: "internal/billing/charge.go", Status: 'M', Hunks: []gitx.Hunk{{Start: 3, Count: 1}, {Start: 9, Count: 1}, {Start: 17, Count: 1}}},
+		{Path: "tools/clean.py", Status: 'M', Hunks: []gitx.Hunk{{Start: 1, Count: 1}, {Start: 12, Count: 1}}},
+		{Path: "web/src/cart.ts", Status: 'M', Hunks: []gitx.Hunk{{Start: 6, Count: 1}, {Start: 12, Count: 1}}},
+	}
+	e.git.tree = map[string]string{
+		"app/models/order.rb":        ruby,
+		"app/models/coupon.rb":       "class Coupon\n  def code\n  end\nend\n",
+		"spec/models/order_spec.rb":  "describe Order do\n  def helper\n  end\nend\n",
+		"internal/billing/charge.go": goSrc,
+		"tools/clean.py":             py,
+		"web/src/cart.ts":            ts,
+	}
+	got, _ := e.runPrepass(910)
+	want := []Method{
+		{File: "app/models/order.rb", Name: "apply", FirstLine: 5, LastLine: 9, Body: bodyOf(ruby, 5, 9)},
+		{File: "app/models/order.rb", Name: "total_cents", FirstLine: 11, LastLine: 13, Body: bodyOf(ruby, 11, 13)},
+		{File: "internal/billing/charge.go", Name: "Describe", FirstLine: 6, LastLine: 13, Body: bodyOf(goSrc, 6, 13)},
+		{File: "internal/billing/charge.go", Name: "Raw", FirstLine: 15, LastLine: 18, Body: bodyOf(goSrc, 15, 18)},
+		{File: "tools/clean.py", Name: "clean", FirstLine: 4, LastLine: 14, Body: bodyOf(py, 4, 14)},
+		{File: "web/src/cart.ts", Name: "total", FirstLine: 4, LastLine: 8, Body: bodyOf(ts, 4, 8)},
+		{File: "web/src/cart.ts", Name: "clear", FirstLine: 11, LastLine: 13, Body: bodyOf(ts, 11, 13)},
+	}
+	if !reflect.DeepEqual(got.Methods, want) || got.UnlistedMethods != 0 || got.DroppedBodies != 0 {
+		t.Fatalf("methods = %+v (unlisted %d, dropped %d)\nwant %+v", got.Methods, got.UnlistedMethods, got.DroppedBodies, want)
+	}
+	var reads []string
+	for _, c := range e.git.prepassCallsMade() {
+		if strings.HasPrefix(c, "file ") {
+			reads = append(reads, c)
+		}
+	}
+	if want := []string{"file " + target + " app/models/order.rb", "file " + target + " internal/billing/charge.go",
+		"file " + target + " tools/clean.py", "file " + target + " web/src/cart.ts"}; !slices.Equal(reads, want) {
+		t.Errorf("FileAt calls = %q\nwant %q (an added file and a test never read)", reads, want)
+	}
+	if level, msg, data := e.prepassEvent(); level != "info" || data["methods"] != float64(7) || !strings.Contains(msg, "7 changed method(s)") ||
+		strings.Contains(msg, "apply") {
+		t.Errorf("round.prepass = %s %q %v, want info counting 7 methods, naming none", level, msg, data)
+	}
+}
+
+// Each language's method runs from its first line to its end in the shapes
+// code has it: Ruby's private, endless, class and one-line defs; Python's
+// signature over several lines and a one-line def; TypeScript's arrow
+// function with its parameters on their own lines, an overload without a
+// body (none), a component whose parameters destructure and whose JSX holds
+// an apostrophe; Go's method with a brace in its result type and a
+// one-line func.
+func TestEachLanguagesMethodRunsToItsEnd(t *testing.T) {
+	for _, tc := range []struct {
+		path  string
+		lines []string
+		want  []methodSpan
+	}{
+		{"app/models/a.rb", []string{
+			"class A",
+			"  private def secret",
+			"    1",
+			"  end",
+			"",
+			`  def name = "a"`,
+			"",
+			"  def self.build(x)",
+			"    new(x)",
+			"  end",
+			"",
+			"  def run; go; end",
+			"end",
+		}, []methodSpan{{"secret", 2, 4}, {"name", 6, 6}, {"build", 8, 10}, {"run", 12, 12}}},
+		{"tools/c.py", []string{
+			"class C:",
+			"    def method(",
+			"        self,",
+			"        a,",
+			"    ):",
+			"        return a",
+			"",
+			"    async def other(self): pass",
+		}, []methodSpan{{"method", 2, 6}, {"other", 8, 8}}},
+		{"web/src/order.tsx", []string{
+			"export const createOrder = async (",
+			"  input: Input,",
+			"): Promise<Order> => {",
+			"  return save({ ...input });",
+			"};",
+			"",
+			"export function overload(a: string): void;",
+			"export function overload(a: any) {",
+			"  return a;",
+			"}",
+			"",
+			"const View = ({ name }: Props) => {",
+			"  if (name) {",
+			"    return <p>Don't {name}</p>;",
+			"  }",
+			"  return null;",
+			"};",
+		}, []methodSpan{{"createOrder", 1, 5}, {"overload", 8, 10}, {"View", 12, 17}}},
+		{"internal/set/set.go", []string{
+			"func (s *Set[T]) Items() interface{} {",
+			"\treturn s.items",
+			"}",
+			"",
+			"func One() int { return 1 }",
+		}, []methodSpan{{"Items", 1, 3}, {"One", 5, 5}}},
+	} {
+		if got := sourceLang(tc.path).methods(tc.lines); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: methods = %+v\nwant %+v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// The bodies stay bounded: a method over 300 lines is listed with its lines
+// and no body; at most 120 methods are listed, the rest counted in
+// unlisted_methods; and past 400 KB of bodies the largest are dropped first
+// and counted in dropped_bodies.
+func TestPrepassCapsTheMethodBodies(t *testing.T) {
+	funcOf := func(name string, n int, line string) []string { // a Go func of n lines
+		out := []string{"func " + name + "() {"}
+		for range n - 2 {
+			out = append(out, "\t"+line)
+		}
+		return append(out, "}")
+	}
+	long := textOf(slices.Concat(funcOf("Long", 301, "x()"), []string{""}, funcOf("Fits", 300, "x()"))...)
+	e := newEnv(t)
+	e.git.diff = []gitx.FileLines{{Path: "internal/big/big.go", Status: 'M', Hunks: []gitx.Hunk{{Start: 2, Count: 1}, {Start: 304, Count: 1}}}}
+	e.git.tree = map[string]string{"internal/big/big.go": long}
+	got, _ := e.runPrepass(911)
+	want := []Method{
+		{File: "internal/big/big.go", Name: "Long", FirstLine: 1, LastLine: 301},
+		{File: "internal/big/big.go", Name: "Fits", FirstLine: 303, LastLine: 602, Body: bodyOf(long, 303, 602)},
+	}
+	if !reflect.DeepEqual(got.Methods, want) || got.UnlistedMethods != 0 || got.DroppedBodies != 0 {
+		t.Fatalf("methods = %+v (unlisted %d, dropped %d)\nwant %+v", got.Methods, got.UnlistedMethods, got.DroppedBodies, want)
+	}
+
+	var many []string
+	var hunks []gitx.Hunk
+	for i := range 121 {
+		hunks = append(hunks, gitx.Hunk{Start: len(many) + 2, Count: 1})
+		many = append(many, funcOf(fmt.Sprintf("F%d", i), 3, "x()")...)
+	}
+	e = newEnv(t)
+	e.git.diff = []gitx.FileLines{{Path: "internal/many/many.go", Status: 'M', Hunks: hunks}}
+	e.git.tree = map[string]string{"internal/many/many.go": textOf(many...)}
+	got, _ = e.runPrepass(912)
+	if len(got.Methods) != 120 || got.Methods[119].Name != "F119" || got.Methods[119].Body == "" || got.UnlistedMethods != 1 {
+		t.Fatalf("121 methods: %d listed (unlisted %d), want the first 120 and one unlisted", len(got.Methods), got.UnlistedMethods)
+	}
+	if _, _, data := e.prepassEvent(); data["methods"] != float64(120) || data["unlisted_methods"] != float64(1) {
+		t.Errorf("round.prepass data = %v, want 120 methods and 1 unlisted", data)
+	}
+
+	wide := strings.Repeat("y", 1000)
+	sized := textOf(slices.Concat(funcOf("A", 152, wide), funcOf("B", 202, wide), funcOf("C", 102, wide))...)
+	e = newEnv(t)
+	e.git.diff = []gitx.FileLines{{Path: "internal/wide/wide.go", Status: 'M',
+		Hunks: []gitx.Hunk{{Start: 2, Count: 1}, {Start: 154, Count: 1}, {Start: 356, Count: 1}}}}
+	e.git.tree = map[string]string{"internal/wide/wide.go": sized}
+	got, _ = e.runPrepass(913)
+	want = []Method{
+		{File: "internal/wide/wide.go", Name: "A", FirstLine: 1, LastLine: 152, Body: bodyOf(sized, 1, 152)},
+		{File: "internal/wide/wide.go", Name: "B", FirstLine: 153, LastLine: 354},
+		{File: "internal/wide/wide.go", Name: "C", FirstLine: 355, LastLine: 456, Body: bodyOf(sized, 355, 456)},
+	}
+	if !reflect.DeepEqual(got.Methods, want) || got.DroppedBodies != 1 {
+		t.Fatalf("over 400 KB: methods %d, dropped %d; want B's body dropped", len(got.Methods), got.DroppedBodies)
 	}
 }
 

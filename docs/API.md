@@ -927,11 +927,12 @@ type JudgeData struct {
 	// PrepassFile is prepass.json in the report directory, magnum's reading
 	// of the PR's diff with git (pipeline.Prepass: the removed definitions
 	// files outside the diff still name, the changed source files without a
-	// test change, each added file's closest existing sibling; or why it
-	// was skipped), rendered as `prepass` by the own pass and the initial,
-	// rereview and recovery prompts, which say to read it first, each item
-	// a lead to check, never a finding by itself; "" in a continued turn
-	// and without Git.
+	// test change, the body of each method a hunk changes, each added
+	// file's closest existing sibling; or why it was skipped), rendered as
+	// `prepass` by the own pass and the initial, rereview and recovery
+	// prompts, which say to read it first, a method's body before its hunk,
+	// each item a lead to check, never a finding by itself; "" in a
+	// continued turn and without Git.
 	PrepassFile string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
@@ -1715,7 +1716,8 @@ type RoleData struct {
 	DocsFile string
 	// PrepassFile is prepass.json in the report directory, magnum's reading
 	// of the PR's diff (see JudgeData.PrepassFile): the claude reviewer
-	// prompts say to read it first, each item a lead to check; "" = none.
+	// prompts say to read it first, a changed method's body before its
+	// hunk, each item a lead to check; "" = none.
 	PrepassFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
@@ -8750,6 +8752,9 @@ var (
 	// ErrNoMergeBase is returned when two revisions share no history.
 	ErrNoMergeBase = errors.New("gitx: no merge base")
 )
+var ErrFileTooLarge = errors.New("gitx: file too large")
+    ErrFileTooLarge is FileAt's error for a file past execx.MaxOutput.
+
 var ErrNoClone = errors.New("gitx: no clone of the repository")
     ErrNoClone is returned by FindClone when no directory under the clone root
     is a git clone of the repository.
@@ -8885,12 +8890,12 @@ func (c *Client) CurrentBranch(ctx context.Context, repo string) (string, error)
     detached (a rebase in progress included).
 
 func (c *Client) DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]FileLines, error)
-    DiffLines is the diff head made relative to its merge base with base, file
-    by file in git's order, without context lines (git diff -U0 base...head;
-    a rename as a deletion plus an addition; none of the user's settings that
-    change it: an external diff, textconv, path prefixes, quoted non-ASCII
-    names), leaving out the paths skip names (relative to the top, taken
-    literally). nil when nothing is left.
+    DiffLines is the diff head made relative to its merge base with base,
+    file by file in git's order, with its hunks' places in head's files and
+    without context lines (git diff -U0 base...head; a rename as a deletion plus
+    an addition; none of the user's settings that change it: an external diff,
+    textconv, path prefixes, quoted non-ASCII names), leaving out the paths skip
+    names (relative to the top, taken literally). nil when nothing is left.
 
 func (c *Client) DiffStat(ctx context.Context, dir, base, head string) ([]FileStat, error)
     DiffStat counts the lines of each file head changed relative to its merge
@@ -8935,6 +8940,12 @@ func (c *Client) FetchPR(ctx context.Context, mainClone string, number int) (str
     only planned, so the final lookup returns whatever refs/magnum/pr/N already
     holds (the sha of an earlier real fetch, possibly stale) or fails with
     ErrNoSuchRef.
+
+func (c *Client) FileAt(ctx context.Context, dir, rev, file string) (string, error)
+    FileAt is the content of file (a clean path from the top) as rev has it:
+    `git cat-file blob <rev>:<file>`, the object store's bytes without
+    textconv or filters, never the work tree's. A file past execx.MaxOutput is
+    ErrFileTooLarge; a path rev lacks fails. rev must name a commit.
 
 func (c *Client) FileDiff(ctx context.Context, dir, base, head, path string) (string, error)
     FileDiff returns the unified diff of one file from base to head (git diff
@@ -9191,6 +9202,9 @@ type FileLines struct {
 	// Removed and Added are the lines the diff removes and adds, in order,
 	// without their "-" or "+"; none for a binary file or a submodule.
 	Removed, Added []string
+	// Hunks are where each hunk's lines are in head's file, in order; none
+	// for a binary file or a submodule.
+	Hunks []Hunk
 }
     FileLines is one file of DiffLines.
 
@@ -9199,6 +9213,14 @@ type FileStat struct {
 	Added, Removed int // both 0 for a binary file
 }
     FileStat is one file of DiffStat: the lines its diff adds and removes.
+
+type Hunk struct {
+	Start, Count int
+}
+    Hunk is the head's side of a hunk without context lines (the "+<start>,
+    <count>" of its header): the Count lines from line Start (1-based).
+    A hunk that only removes lines has Count 0 and sits after line Start (0:
+    at the top of the file).
 
 type Remote struct {
 	Host  string // lower-cased, e.g. github.com
@@ -12627,12 +12649,14 @@ type Git interface {
 	DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]gitx.FileLines, error)
 	WordUses(ctx context.Context, dir, rev, word string) ([]gitx.Use, error)
 	DirFiles(ctx context.Context, dir, rev string, dirs ...string) ([]string, error)
+	FileAt(ctx context.Context, dir, rev, file string) (string, error)
 }
     Git is the subset of *gitx.Client the checkout check after each stage
     (and its restore) uses, a restart's check that a head is not an older
     one (MergeBase), the changed files' history (ModifiedPaths, FileLog;
-    history.go), the base docs that name them (ChangedPaths, Mentions; docs.go)
-    and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles; prepass.go).
+    history.go), the base docs that name them (ChangedPaths, Mentions;
+    docs.go) and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles, FileAt;
+    prepass.go).
 
 type GitHub interface {
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
@@ -12666,6 +12690,19 @@ type Keys interface {
     the judge, ctrl+c to a shell role's pane) and waits for a cut shell role's
     pane to be an idle shell again (round.stopShell). *herdr.Client satisfies
     it.
+
+type Method struct {
+	File      string `json:"file"`
+	Name      string `json:"name"`
+	FirstLine int    `json:"first_line"`
+	LastLine  int    `json:"last_line"`
+	// Body is the method's lines, first to last; absent for a method over
+	// 300 lines and for one whose body was dropped past 400 KB.
+	Body string `json:"body,omitempty"`
+}
+    Method is a method the diff changes, as the head has it: the innermost
+    method enclosing a changed line, or the lines on both sides of a hunk that
+    only removes lines.
 
 type MissingReport struct {
 	Role   string `json:"role"`
@@ -12764,6 +12801,11 @@ type Prepass struct {
 	UnsearchedSymbols int       `json:"unsearched_symbols,omitempty"`
 	TestGaps          []string  `json:"test_gaps,omitzero"` // changed source files whose test the diff leaves alone, in git's order
 	Siblings          []Sibling `json:"siblings,omitzero"`  // the added files that have one, in git's order
+	// Methods are the methods the diff's hunks change in its source files,
+	// as the head has them, in git's order and by line, at most 120.
+	Methods         []Method `json:"methods,omitzero"`
+	UnlistedMethods int      `json:"unlisted_methods,omitempty"` // changed methods past the 120
+	DroppedBodies   int      `json:"dropped_bodies,omitempty"`   // bodies dropped past 400 KB, the largest first
 }
     Prepass is prepass.json.
 

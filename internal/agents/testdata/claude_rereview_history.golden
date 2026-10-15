@@ -12,7 +12,7 @@ Prove a security finding with the repository's own tests (a focused or request s
 
 Time budget: 40 minutes. Your turn must end with the report written. Start background work (a background command, an asynchronous subagent) only when it can finish well within the budget, wait for it before you write the report, and prefer the specs of the changed code to a whole-suite run.
 
-Read /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/prepass.json first, magnum's reading of the diff: the removed definitions that files outside the diff still name, the changed source files without a test change, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
+Read /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/prepass.json first, magnum's reading of the diff: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
 
 The last commits on the base branch that touched each changed file are in /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/history.json: when one fixed something in the code or mechanism this PR touches, read it (`git show <sha>`) and check the PR does not undo or re-break that fix.
 

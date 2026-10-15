@@ -459,11 +459,12 @@ type JudgeData struct {
 	// PrepassFile is prepass.json in the report directory, magnum's reading
 	// of the PR's diff with git (pipeline.Prepass: the removed definitions
 	// files outside the diff still name, the changed source files without a
-	// test change, each added file's closest existing sibling; or why it
-	// was skipped), rendered as `prepass` by the own pass and the initial,
-	// rereview and recovery prompts, which say to read it first, each item
-	// a lead to check, never a finding by itself; "" in a continued turn
-	// and without Git.
+	// test change, the body of each method a hunk changes, each added
+	// file's closest existing sibling; or why it was skipped), rendered as
+	// `prepass` by the own pass and the initial, rereview and recovery
+	// prompts, which say to read it first, a method's body before its hunk,
+	// each item a lead to check, never a finding by itself; "" in a
+	// continued turn and without Git.
 	PrepassFile string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
@@ -582,7 +583,8 @@ type RoleData struct {
 	DocsFile string
 	// PrepassFile is prepass.json in the report directory, magnum's reading
 	// of the PR's diff (see JudgeData.PrepassFile): the claude reviewer
-	// prompts say to read it first, each item a lead to check; "" = none.
+	// prompts say to read it first, a changed method's body before its
+	// hunk, each item a lead to check; "" = none.
 	PrepassFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.

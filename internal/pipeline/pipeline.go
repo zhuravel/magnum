@@ -177,8 +177,8 @@ type GitHub interface {
 // (and its restore) uses, a restart's check that a head is not an older
 // one (MergeBase), the changed files' history (ModifiedPaths, FileLog;
 // history.go), the base docs that name them (ChangedPaths, Mentions;
-// docs.go) and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles;
-// prepass.go).
+// docs.go) and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles,
+// FileAt; prepass.go).
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	SwitchDetach(ctx context.Context, dir, ref string) error
@@ -192,6 +192,7 @@ type Git interface {
 	DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]gitx.FileLines, error)
 	WordUses(ctx context.Context, dir, rev, word string) ([]gitx.Use, error)
 	DirFiles(ctx context.Context, dir, rev string, dirs ...string) ([]string, error)
+	FileAt(ctx context.Context, dir, rev, file string) (string, error)
 }
 
 // Keys interrupts a timed-out or cut role (esc to an agent, ctrl+c twice to

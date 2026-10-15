@@ -48,7 +48,7 @@ Keep each line of the `notes` file at most `notes_max_line` characters long: a l
 {{- end}}
 {{- if .PrepassFile}}
 
-Read `prepass` first: the removed definitions that files outside the diff still name, the changed source files without a test change, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
+Read `prepass` first: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
 {{- end}}
 
 <magnum>

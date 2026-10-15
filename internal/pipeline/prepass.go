@@ -19,7 +19,13 @@ package pipeline
 //   - test_gaps: each changed source file whose test file, by its
 //     language's naming convention, the diff leaves alone;
 //   - siblings: for each added file, the existing file of the same suffix
-//     in its directory, else in the parent, with the longest common prefix.
+//     in its directory, else in the parent, with the longest common prefix;
+//   - methods (DECISIONS "The pre-pass carries the full bodies of changed
+//     methods"): the method enclosing each hunk of a changed source file at
+//     the head, with its lines and body, found by the language's shape
+//     (indentation, or braces outside strings and comments), since a
+//     reviewer who reads only the hunk misses a write elsewhere in the same
+//     method, as on talkable#11483.
 //
 // The watch's related_ignore paths (lockfiles) are left out, as history.json
 // and docs.json do. The file says `skipped` and why instead when there is
@@ -30,11 +36,14 @@ package pipeline
 // file, never in a prompt or an event.
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -56,11 +65,15 @@ const PrepassFile = "prepass.json"
 
 // prepass.json's caps.
 const (
-	maxPrepassLines   = 50000 // changed lines past which the diff is not read
-	maxPrepassUses    = 20    // files listed per removed symbol
-	maxPrepassSymbols = 200   // removed symbols searched; the rest are counted
-	minPrepassName    = 4     // a shorter name is never searched
-	prepassWorkers    = 4     // git greps at a time
+	maxPrepassLines   = 50000     // changed lines past which the diff is not read
+	maxPrepassUses    = 20        // files listed per removed symbol
+	maxPrepassSymbols = 200       // removed symbols searched; the rest are counted
+	minPrepassName    = 4         // a shorter name is never searched
+	prepassWorkers    = 4         // git greps and file reads at a time
+	maxPrepassMethods = 120       // changed methods listed; the rest are counted
+	maxMethodLines    = 300       // a longer method is listed without its body
+	maxMethodBytes    = 400 << 10 // the bodies' bytes; past them the largest are dropped and counted
+	maxSignatureLines = 20        // a method whose body opens no sooner is none
 )
 
 // PrepassTimeout bounds the pre-pass's git reads: the reviewers wait for it.
@@ -85,6 +98,24 @@ type Prepass struct {
 	UnsearchedSymbols int       `json:"unsearched_symbols,omitempty"`
 	TestGaps          []string  `json:"test_gaps,omitzero"` // changed source files whose test the diff leaves alone, in git's order
 	Siblings          []Sibling `json:"siblings,omitzero"`  // the added files that have one, in git's order
+	// Methods are the methods the diff's hunks change in its source files,
+	// as the head has them, in git's order and by line, at most 120.
+	Methods         []Method `json:"methods,omitzero"`
+	UnlistedMethods int      `json:"unlisted_methods,omitempty"` // changed methods past the 120
+	DroppedBodies   int      `json:"dropped_bodies,omitempty"`   // bodies dropped past 400 KB, the largest first
+}
+
+// Method is a method the diff changes, as the head has it: the innermost
+// method enclosing a changed line, or the lines on both sides of a hunk
+// that only removes lines.
+type Method struct {
+	File      string `json:"file"`
+	Name      string `json:"name"`
+	FirstLine int    `json:"first_line"`
+	LastLine  int    `json:"last_line"`
+	// Body is the method's lines, first to last; absent for a method over
+	// 300 lines and for one whose body was dropped past 400 KB.
+	Body string `json:"body,omitempty"`
 }
 
 // RemovedSymbol is a definition the diff removes or renames that files of
@@ -105,44 +136,63 @@ type Sibling struct {
 }
 
 // prepassLang is a language the pre-pass reads: its definition patterns
-// (group 1 the name) and how a changed test file matches a source file.
+// (group 1 the name), how a changed test file matches a source file, and
+// the methods of a file's lines.
 type prepassLang struct {
-	defs  []*regexp.Regexp
-	tests func(src string, changed map[string]bool) bool
+	defs    []*regexp.Regexp
+	tests   func(src string, changed map[string]bool) bool
+	methods func(lines []string) []methodSpan
 }
 
 var (
+	goFunc     = regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)`)
+	jsFunction = regexp.MustCompile(`^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)`)
+	// jsArrow is a name bound to a function or a block-bodied arrow
+	// function (a variable or a class field), its parameters on one line
+	// or opening at the line's end; jsMethod a class or object method
+	// whose body opens on its line.
+	jsArrow = regexp.MustCompile(`^\s*(?:export\s+)?(?:(?:const|let|var|static|readonly|public|private|protected|override)\s+)*` +
+		`(#?[A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\(\s*$|(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]*)?=>\s*\{)`)
+	jsMethod = regexp.MustCompile(`^\s*(?:(?:static|async|public|private|protected|override|get|set)\s+)*\*?\s*(#?[A-Za-z_$][\w$]*)\s*` +
+		`(?:<[^>]*>)?\s*\((?:[^()]|\([^()]*\))*\)\s*(?::[^{=;]*)?\{\s*(?://.*)?$`)
+	// jsNotMethods are the keywords jsMethod's shape also matches.
+	jsNotMethods = []string{"if", "for", "while", "switch", "catch", "with", "function", "return", "typeof", "await", "yield",
+		"new", "super", "do", "else", "try", "finally"}
+
 	rubyLang = &prepassLang{
 		defs: []*regexp.Regexp{
 			regexp.MustCompile(`^\s*def\s+(?:self\.)?([A-Za-z_]\w*[?!]?)`),
 			regexp.MustCompile(`^\s*(?:class|module)\s+(?:[A-Z]\w*::)*([A-Z]\w*)`),
 		},
-		tests: rubyTests,
+		tests:   rubyTests,
+		methods: rubyMethods,
 	}
 	goLang = &prepassLang{
-		defs: []*regexp.Regexp{
-			regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)`),
-			regexp.MustCompile(`^type\s+([A-Za-z_]\w*)`),
-		},
+		defs: []*regexp.Regexp{goFunc, regexp.MustCompile(`^type\s+([A-Za-z_]\w*)`)},
 		tests: func(src string, changed map[string]bool) bool {
 			return changed[strings.TrimSuffix(src, ".go")+"_test.go"]
 		},
+		methods: func(lines []string) []methodSpan { return braceMethods(lines, true, nil, goFunc) },
 	}
 	jsLang = &prepassLang{
 		defs: []*regexp.Regexp{
-			regexp.MustCompile(`^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)`),
+			jsFunction,
 			regexp.MustCompile(`^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)`),
 			regexp.MustCompile(`^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)`),
 			regexp.MustCompile(`^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(`),
 		},
 		tests: jsTests,
+		methods: func(lines []string) []methodSpan {
+			return braceMethods(lines, false, jsNotMethods, jsFunction, jsArrow, jsMethod)
+		},
 	}
 	pyLang = &prepassLang{
 		defs: []*regexp.Regexp{
 			regexp.MustCompile(`^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)`),
 			regexp.MustCompile(`^\s*class\s+([A-Za-z_]\w*)`),
 		},
-		tests: pyTests,
+		tests:   pyTests,
+		methods: pyMethods,
 	}
 	prepassLangs = map[string]*prepassLang{
 		".rb": rubyLang, ".rake": rubyLang, ".go": goLang, ".py": pyLang,
@@ -380,6 +430,375 @@ func (rd *round) siblings(ctx context.Context, files []gitx.FileLines) ([]Siblin
 	return out, nil
 }
 
+// methodSpan is a method of a file: its name and its first and last line
+// (1-based).
+type methodSpan struct {
+	name        string
+	first, last int
+}
+
+var (
+	// rubyDef starts a method: group 1 its indentation, group 2 its name.
+	rubyDef = regexp.MustCompile(`^(\s*)(?:(?:private|protected|public|module_function)\s+)?def\s+(?:self\.)?([^\s(;]+)`)
+	// rubyOneLine is a method on one line: def x; y; end, or the endless
+	// def x = y (a setter, def x=(v), is not one).
+	rubyOneLine = regexp.MustCompile(`;\s*end\s*$|^\s*(?:(?:private|protected|public|module_function)\s+)?def\s+(?:self\.)?` +
+		`[A-Za-z_]\w*[?!]?(?:\s*\([^)]*\)\s*|\s+)=(?:[^=~>]|$)`)
+	rubyEnd = regexp.MustCompile(`^end\b`)
+	// rubyLeaves, at a lower indentation than a def, means its scope ended
+	// without the def's end: the code's indentation does not say where the
+	// method ends.
+	rubyLeaves = regexp.MustCompile(`^(?:end|def|class|module)\b`)
+	pyDef      = regexp.MustCompile(`^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)`)
+)
+
+// rubyMethods: a def runs to the first end at its indentation, comments
+// and lower-indented lines (a heredoc's) aside.
+func rubyMethods(lines []string) []methodSpan {
+	var out []methodSpan
+	for i, l := range lines {
+		m := rubyDef.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		if rubyOneLine.MatchString(l) {
+			out = append(out, methodSpan{name: m[2], first: i + 1, last: i + 1})
+			continue
+		}
+		for j := i + 1; j < len(lines); j++ {
+			t := strings.TrimLeft(lines[j], " \t")
+			if t == "" || strings.HasPrefix(t, "#") {
+				continue
+			}
+			indent := len(lines[j]) - len(t)
+			if indent == len(m[1]) && rubyEnd.MatchString(t) {
+				out = append(out, methodSpan{name: m[2], first: i + 1, last: j + 1})
+				break
+			}
+			if indent < len(m[1]) && rubyLeaves.MatchString(t) {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// pyMethods: a def's signature runs to the line that closes its
+// parentheses, and its body to the last line before the first one at the
+// def's indentation or less, blank lines, comments and the lines of a
+// triple-quoted string aside.
+func pyMethods(lines []string) []methodSpan {
+	var out []methodSpan
+	for i, l := range lines {
+		m := pyDef.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		sig, depth := -1, 0
+		for j := i; j < min(len(lines), i+maxSignatureLines); j++ {
+			depth += strings.Count(lines[j], "(") - strings.Count(lines[j], ")")
+			if depth <= 0 {
+				sig = j
+				break
+			}
+		}
+		if sig < 0 {
+			continue
+		}
+		last, quote := sig, ""
+		for j := sig + 1; j < len(lines); j++ {
+			if quote != "" { // inside a triple-quoted string
+				last = j
+				if strings.Count(lines[j], quote)%2 == 1 {
+					quote = ""
+				}
+				continue
+			}
+			t := strings.TrimLeft(lines[j], " \t")
+			if t == "" || strings.HasPrefix(t, "#") {
+				continue
+			}
+			if len(lines[j])-len(t) <= len(m[1]) {
+				break
+			}
+			last = j
+			for _, q := range []string{`"""`, `'''`} {
+				if strings.Count(lines[j], q)%2 == 1 {
+					quote = q
+					break
+				}
+			}
+		}
+		out = append(out, methodSpan{name: m[2], first: i + 1, last: last + 1})
+	}
+	return out
+}
+
+// braceLine is a line of a brace language as lexed by lexBraces, braces,
+// parentheses and semicolons in strings and comments aside.
+type braceLine struct {
+	inside     bool // the line starts inside a block comment or a multi-line string
+	startDepth int  // the brace depth at the line's start
+	endDepth   int  // and at its end
+	startParen int  // the parenthesis depth at its start
+	openParen  int  // the lowest parenthesis depth at which a brace opens on it; math.MaxInt for none
+	semi       bool // its code ends with a semicolon
+	blank      bool // it holds no code
+}
+
+// lexBraces reads a Go (raw: a backquoted string has no escapes) or
+// JavaScript and TypeScript file's lines: // and /* */ comments, "" and ”
+// strings (to the line's end when unclosed) and “ strings across lines (a
+// template's ${} read as part of it).
+func lexBraces(lines []string, raw bool) []braceLine {
+	out := make([]braceLine, len(lines))
+	depth, paren := 0, 0
+	inBlock, inTick := false, false
+	for i, l := range lines {
+		bl := braceLine{inside: inBlock || inTick, startDepth: depth, startParen: paren, openParen: math.MaxInt, blank: true}
+		var last byte
+		for j := 0; j < len(l); j++ {
+			c := l[j]
+			switch {
+			case inBlock:
+				if c == '*' && j+1 < len(l) && l[j+1] == '/' {
+					inBlock = false
+					j++
+				}
+				continue
+			case inTick:
+				if c == '\\' && !raw {
+					j++
+				} else if c == '`' {
+					inTick = false
+				}
+				continue
+			}
+			switch c {
+			case ' ', '\t', '\r':
+				continue
+			case '/':
+				if j+1 < len(l) && l[j+1] == '/' {
+					j = len(l)
+					continue
+				}
+				if j+1 < len(l) && l[j+1] == '*' {
+					inBlock = true
+					j++
+					continue
+				}
+			case '"', '\'':
+				for j++; j < len(l) && l[j] != c; j++ {
+					if l[j] == '\\' {
+						j++
+					}
+				}
+			case '`':
+				inTick = true
+			case '{':
+				depth++
+				bl.openParen = min(bl.openParen, paren)
+			case '}':
+				depth--
+			case '(':
+				paren++
+			case ')':
+				paren--
+			}
+			bl.blank, last = false, c
+		}
+		bl.endDepth, bl.semi = depth, last == ';'
+		out[i] = bl
+	}
+	return out
+}
+
+// braceMethods: a line one of starts matches (group 1 the name, none of
+// skip) begins a method whose body is the first brace it opens at the
+// line's parenthesis depth (a brace in its parameters, a destructuring, is
+// not one), and which ends on the line that closes it; none when its
+// signature ends first (a semicolon, a blank line, maxSignatureLines).
+func braceMethods(lines []string, raw bool, skip []string, starts ...*regexp.Regexp) []methodSpan {
+	lx := lexBraces(lines, raw)
+	var out []methodSpan
+	for i, l := range lines {
+		if lx[i].inside {
+			continue
+		}
+		name := ""
+		for _, re := range starts {
+			if m := re.FindStringSubmatch(l); m != nil {
+				name = m[1]
+				break
+			}
+		}
+		if name == "" || slices.Contains(skip, name) {
+			continue
+		}
+		open := false
+		for j := i; j < len(lines); j++ {
+			if !open {
+				if lx[j].openParen <= lx[i].startParen {
+					open = true
+				} else if lx[j].semi || j > i && lx[j].blank || j-i >= maxSignatureLines {
+					break
+				}
+			}
+			if open && lx[j].endDepth <= lx[i].startDepth {
+				out = append(out, methodSpan{name: name, first: i + 1, last: j + 1})
+				break
+			}
+		}
+	}
+	return out
+}
+
+// changedMethods are the methods of text (f's file at the head) that f's
+// hunks change, by line: the innermost method enclosing each changed line,
+// and for a hunk that only removes lines the innermost one holding the
+// lines on both sides of it. A method the diff adds whole is none, its
+// body being in the diff, so its lines count for the method around it.
+// A method over maxMethodLines lines gets no body.
+func changedMethods(f gitx.FileLines, text string) []Method {
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	n := len(lines)
+	changed := make([]bool, n+1)
+	for _, h := range f.Hunks {
+		for l := max(h.Start, 1); l < h.Start+h.Count && l <= n; l++ {
+			changed[l] = true
+		}
+	}
+	spans := slices.DeleteFunc(sourceLang(f.Path).methods(lines), func(s methodSpan) bool {
+		return !slices.Contains(changed[s.first:s.last+1], false)
+	})
+	// inner[l] is line l's innermost method, its index in spans plus one:
+	// the longer spans are painted first.
+	inner := make([]int, n+1)
+	byLength := make([]int, len(spans))
+	for k := range spans {
+		byLength[k] = k
+	}
+	slices.SortStableFunc(byLength, func(a, b int) int {
+		return cmp.Compare(spans[b].last-spans[b].first, spans[a].last-spans[a].first)
+	})
+	for _, k := range byLength {
+		for l := spans[k].first; l <= spans[k].last; l++ {
+			inner[l] = k + 1
+		}
+	}
+	hit := make([]bool, len(spans))
+	for _, h := range f.Hunks {
+		if h.Count > 0 {
+			for l := max(h.Start, 1); l < h.Start+h.Count && l <= n; l++ {
+				if inner[l] > 0 {
+					hit[inner[l]-1] = true
+				}
+			}
+			continue
+		}
+		best := -1
+		for k, s := range spans {
+			if s.first <= h.Start && h.Start+1 <= s.last && (best < 0 || s.last-s.first < spans[best].last-spans[best].first) {
+				best = k
+			}
+		}
+		if best >= 0 {
+			hit[best] = true
+		}
+	}
+	var out []Method
+	for k, s := range spans {
+		if !hit[k] {
+			continue
+		}
+		m := Method{File: f.Path, Name: s.name, FirstLine: s.first, LastLine: s.last}
+		if s.last-s.first < maxMethodLines {
+			m.Body = strings.Join(lines[s.first-1:s.last], "\n")
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// methods lists the methods files' hunks change in their modified source
+// files (changedMethods), read from the head's tree prepassWorkers at a
+// time, in git's order and by line; a file past execx.MaxOutput is left
+// out, and an added file, whose methods the diff adds whole, is never
+// read. Past maxPrepassMethods the rest are counted in unlisted; past
+// maxMethodBytes of bodies the largest are dropped first and counted in
+// dropped. An empty list when no hunk changes a method.
+func (rd *round) methods(ctx context.Context, files []gitx.FileLines) (ms []Method, unlisted, dropped int, err error) {
+	var read []gitx.FileLines
+	for _, f := range files {
+		if f.Status == 'M' && len(f.Hunks) > 0 && sourceLang(f.Path) != nil {
+			read = append(read, f)
+		}
+	}
+	found := make([][]Method, len(read))
+	if err := rd.parallel(len(read), "a changed file's methods", func(i int) error {
+		text, err := rd.r.Git.FileAt(ctx, rd.in.SlotPath, rd.in.TargetSHA, read[i].Path)
+		if errors.Is(err, gitx.ErrFileTooLarge) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		found[i] = changedMethods(read[i], text)
+		return nil
+	}); err != nil {
+		return nil, 0, 0, err
+	}
+	ms = append([]Method{}, slices.Concat(found...)...)
+	if len(ms) > maxPrepassMethods {
+		unlisted, ms = len(ms)-maxPrepassMethods, ms[:maxPrepassMethods]
+	}
+	total := 0
+	bySize := make([]int, len(ms))
+	for i := range ms {
+		total += len(ms[i].Body)
+		bySize[i] = i
+	}
+	slices.SortStableFunc(bySize, func(a, b int) int { return cmp.Compare(len(ms[b].Body), len(ms[a].Body)) })
+	for _, i := range bySize {
+		if total <= maxMethodBytes {
+			break
+		}
+		total -= len(ms[i].Body)
+		ms[i].Body = ""
+		dropped++
+	}
+	return ms, unlisted, dropped, nil
+}
+
+// parallel runs do for 0 to n-1, prepassWorkers at a time, and returns the
+// first error by index; a panic fails its call (the pre-pass only warns),
+// never the daemon.
+func (rd *round) parallel(n int, what string, do func(i int) error) error {
+	errs := make([]error, n)
+	sem := make(chan struct{}, prepassWorkers)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					rd.logAt(slog.LevelError, "pipeline: %s %s panicked: %v\n%s", rd.subject, what, r, debug.Stack())
+					errs[i] = fmt.Errorf("%s panicked: %v", what, r)
+				}
+			}()
+			errs[i] = do(i)
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // removedSymbols lists the definitions files remove and add back under no
 // name of the same, in their order, that files of the head outside own
 // (the diff's paths) still name: one git grep -w per name, prepassWorkers
@@ -411,39 +830,26 @@ func (rd *round) removedSymbols(ctx context.Context, files []gitx.FileLines, own
 		more, names = len(names)-maxPrepassSymbols, names[:maxPrepassSymbols]
 	}
 	found := make([]RemovedSymbol, len(names))
-	errs := make([]error, len(names))
-	sem := make(chan struct{}, prepassWorkers)
-	var wg sync.WaitGroup
-	for i, n := range names {
-		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			defer func() { // a panic fails the pre-pass, which only warns, never the daemon
-				if r := recover(); r != nil {
-					rd.logAt(slog.LevelError, "pipeline: %s a removed symbol's search panicked: %v\n%s", rd.subject, r, debug.Stack())
-					errs[i] = fmt.Errorf("a removed symbol's search panicked: %v", r)
-				}
-			}()
-			uses, err := rd.r.Git.WordUses(ctx, rd.in.SlotPath, rd.in.TargetSHA, n)
-			s := RemovedSymbol{Name: n, File: from[n], Uses: []string{}}
-			for _, u := range uses {
-				switch {
-				case own[u.Path]:
-				case len(s.Uses) < maxPrepassUses:
-					s.Uses = append(s.Uses, u.Path+":"+strconv.Itoa(u.Line))
-				default:
-					s.More++
-				}
+	if err := rd.parallel(len(names), "a removed symbol's search", func(i int) error {
+		n := names[i]
+		uses, err := rd.r.Git.WordUses(ctx, rd.in.SlotPath, rd.in.TargetSHA, n)
+		s := RemovedSymbol{Name: n, File: from[n], Uses: []string{}}
+		for _, u := range uses {
+			switch {
+			case own[u.Path]:
+			case len(s.Uses) < maxPrepassUses:
+				s.Uses = append(s.Uses, u.Path+":"+strconv.Itoa(u.Line))
+			default:
+				s.More++
 			}
-			found[i], errs[i] = s, err
-		})
-	}
-	wg.Wait()
-	syms = []RemovedSymbol{}
-	for i, s := range found {
-		if errs[i] != nil {
-			return nil, 0, errs[i]
 		}
+		found[i] = s
+		return err
+	}); err != nil {
+		return nil, 0, err
+	}
+	syms = []RemovedSymbol{}
+	for _, s := range found {
 		if len(s.Uses) > 0 {
 			syms = append(syms, s)
 		}
@@ -496,6 +902,9 @@ func (rd *round) prepass(ctx context.Context) (p Prepass, lines int, err error) 
 	if p.Siblings, err = rd.siblings(ctx, files); err != nil {
 		return p, lines, err
 	}
+	if p.Methods, p.UnlistedMethods, p.DroppedBodies, err = rd.methods(ctx, files); err != nil {
+		return p, lines, err
+	}
 	return p, lines, nil
 }
 
@@ -525,11 +934,17 @@ func (rd *round) writePrepass(ctx context.Context) {
 			p.Skipped = "the pre-pass took more than " + PrepassTimeout.String()
 		}
 		p.RemovedSymbols, p.UnsearchedSymbols, p.TestGaps, p.Siblings = nil, 0, nil, nil
+		p.Methods, p.UnlistedMethods, p.DroppedBodies = nil, 0, 0
 	}
 	file := filepath.Join(rd.dir, PrepassFile)
-	b, err := json.MarshalIndent(p, "", "  ")
+	// The bodies' <, > and & stay as they are, as the reviewers read them.
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	err = enc.Encode(p)
 	if err == nil {
-		err = fsx.WriteFileAtomic(file, append(b, '\n'), 0o600)
+		err = fsx.WriteFileAtomic(file, b.Bytes(), 0o600)
 	}
 	if err != nil {
 		rd.event(ctx, "warn", "round.prepass", fmt.Sprintf("could not write %s; the reviewers go without it: %v", PrepassFile, err), nil)
@@ -540,8 +955,9 @@ func (rd *round) writePrepass(ctx context.Context) {
 		rd.event(ctx, level, "round.prepass", PrepassFile+" skipped: "+p.Skipped, map[string]any{"skipped": p.Skipped, "lines": lines, "file": file})
 		return
 	}
-	rd.event(ctx, "info", "round.prepass", fmt.Sprintf("%s: %d removed symbol(s) still named, %d changed source file(s) without a test change, %d new file(s) with a sibling, from %d changed line(s)",
-		PrepassFile, len(p.RemovedSymbols), len(p.TestGaps), len(p.Siblings), lines),
+	rd.event(ctx, "info", "round.prepass", fmt.Sprintf("%s: %d removed symbol(s) still named, %d changed source file(s) without a test change, %d new file(s) with a sibling, %d changed method(s), from %d changed line(s)",
+		PrepassFile, len(p.RemovedSymbols), len(p.TestGaps), len(p.Siblings), len(p.Methods), lines),
 		map[string]any{"removed_symbols": len(p.RemovedSymbols), "unsearched_symbols": p.UnsearchedSymbols, "test_gaps": len(p.TestGaps),
-			"siblings": len(p.Siblings), "lines": lines, "file": file})
+			"siblings": len(p.Siblings), "methods": len(p.Methods), "unlisted_methods": p.UnlistedMethods, "dropped_bodies": p.DroppedBodies,
+			"lines": lines, "file": file})
 }

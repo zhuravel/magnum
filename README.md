@@ -1125,7 +1125,7 @@ Beside `related.json`, `history.json` and `docs.json`, the reviewers get Magnum'
 since a colleague's review tool lists the references a PR broke before any model reads code, and its
 reviewers found defects from those leads that Magnum's missed. Before the reviewers of each head, Magnum
 writes `prepass.json` in the report directory, read with git alone from the PR's diff
-(`base_sha...head_sha`) and the head's tree, paths matching `related_ignore` aside, with three lists:
+(`base_sha...head_sha`) and the head's tree, paths matching `related_ignore` aside, with four lists:
 `removed_symbols`, each definition the diff removes or renames and does not add back under the same name
 (Ruby `def`, `class` and `module`; Go `func` and `type`; JavaScript and TypeScript `function`, `class`,
 `export const` and `const x = (`; Python `def` and `class`), with the files of the head outside the diff
@@ -1134,13 +1134,22 @@ characters and a short stop list such as `call` and `init` are never searched); 
 source file whose test the diff leaves alone by its language's naming convention (`app/models/order.rb`
 and `spec/models/order_spec.rb`, `x.go` and `x_test.go`, `x.ts` and `x.test.ts` or `__tests__/x.ts`, `x.py`
 and `test_x.py`), tests, fixtures, migrations, generated files, views, styles, documents and configuration
-files aside; and `siblings`, the closest existing file to each new one (the same suffix and the longest
-common prefix, in its directory, else its parent). When it cannot run (no base sha, more than 50,000
-changed lines, a git failure, more than 60 seconds) the file says `skipped` and why, and the review goes
-on; each head's `round.prepass` event counts the lists or gives the reason. The judge's prompts (the own
-pass, the candidates phase, a round's one prompt) name the file as `prepass`, and they and the
-claude-review prompts say to read it first, the sibling before the new file: each item is a lead to check,
-never a finding by itself. codex-review runs the stock `codex review` and does not get it.
+files aside; `siblings`, the closest existing file to each new one (the same suffix and the longest
+common prefix, in its directory, else its parent); and `methods`, since a reviewer who reads only a hunk
+misses a write elsewhere in the same method: for each hunk of a modified source file, the method that
+encloses it at the head, with its file, name, first and last line and whole body, found by the language's
+shape rather than a parser (Ruby `def` to its `end` at the same indentation; Go, JavaScript and TypeScript
+to the closing brace, braces in strings and comments aside; Python `def` to the first line at its
+indentation or less). A method two hunks change is listed once; a hunk outside any method, and a method
+the diff adds whole, list nothing. A method over 300 lines comes without its body, at most 120 methods are
+listed (the rest counted as `unlisted_methods`), and past 400 KB of bodies the largest are dropped first
+(counted as `dropped_bodies`). When it cannot run (no base sha, more than 50,000 changed lines, a git
+failure, more than 60 seconds) the file says `skipped` and why, and the review goes on; each head's
+`round.prepass` event counts the lists or gives the reason. The judge's prompts (the own pass, the
+candidates phase, a round's one prompt) name the file as `prepass`, and they and the claude-review
+prompts say to read it first, a changed method's body before its hunk and the sibling before the new
+file: each item is a lead to check, never a finding by itself. codex-review runs the stock `codex review`
+and does not get it.
 
 The judge also sees the head's failing CI checks, since a PR once got LGTM while a check had failed on
 that head. When a judge prompt goes out (initial, rereview, continue), Magnum reads the PR's checks from

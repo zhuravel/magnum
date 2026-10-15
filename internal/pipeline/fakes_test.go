@@ -713,11 +713,11 @@ type fakeGit struct {
 	// The pre-pass's (prepass.go): diff is the PR's diff file by file,
 	// which DiffLines answers less the paths it skips, and DiffStat counts
 	// (stats, when set, answers instead); tree is the head's files with
-	// their text, which WordUses searches for a whole word and DirFiles
-	// lists. diffErr fails DiffLines, diffHangs makes it wait for its
-	// context (at most 10 seconds). prepassCalls records the calls ("stat
-	// <base>...<head>", "lines <base>...<head> <skip>,...", "uses <rev>
-	// <word>", "dirs <rev> <dir>,...").
+	// their text, which WordUses searches for a whole word, DirFiles lists
+	// and FileAt reads. diffErr fails DiffLines, diffHangs makes it wait for
+	// its context (at most 10 seconds). prepassCalls records the calls
+	// ("stat <base>...<head>", "lines <base>...<head> <skip>,...", "uses
+	// <rev> <word>", "dirs <rev> <dir>,...", "file <rev> <path>").
 	diff         []gitx.FileLines
 	stats        []gitx.FileStat
 	tree         map[string]string
@@ -794,15 +794,28 @@ func (g *fakeGit) DirFiles(ctx context.Context, dir, rev string, dirs ...string)
 	return out, nil
 }
 
-// prepassCallsMade returns the recorded pre-pass calls, the WordUses ones
-// (which run in parallel) sorted after the others.
+// FileAt answers as git cat-file blob <rev>:<path>: the file of tree, an
+// error for a path tree lacks.
+func (g *fakeGit) FileAt(ctx context.Context, dir, rev, file string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.prepassCalls = append(g.prepassCalls, "file "+rev+" "+file)
+	text, ok := g.tree[file]
+	if !ok {
+		return "", fmt.Errorf("fake cat-file: %s:%s does not exist", rev, file)
+	}
+	return text, nil
+}
+
+// prepassCallsMade returns the recorded pre-pass calls, the WordUses and
+// FileAt ones (which run in parallel) sorted after the others.
 func (g *fakeGit) prepassCallsMade() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	isUse := func(c string) bool { return strings.HasPrefix(c, "uses ") }
-	uses := slices.DeleteFunc(slices.Clone(g.prepassCalls), func(c string) bool { return !isUse(c) })
-	rest := slices.DeleteFunc(slices.Clone(g.prepassCalls), isUse)
-	return append(rest, slices.Sorted(slices.Values(uses))...)
+	parallel := func(c string) bool { return strings.HasPrefix(c, "uses ") || strings.HasPrefix(c, "file ") }
+	par := slices.DeleteFunc(slices.Clone(g.prepassCalls), func(c string) bool { return !parallel(c) })
+	rest := slices.DeleteFunc(slices.Clone(g.prepassCalls), parallel)
+	return append(rest, slices.Sorted(slices.Values(par))...)
 }
 
 func (g *fakeGit) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error) {

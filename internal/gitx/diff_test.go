@@ -2,17 +2,21 @@ package gitx
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // prepassFixture commits a base and a PR head on branch feature in the
 // fixture's origin: the head renames a method, deletes a file, adds two,
-// edits a lockfile, a SQL file whose removed line starts with "--" and a
-// file whose added line starts with "++", adds a binary file and a file
-// whose name git quotes. It returns the base and the head.
+// edits a lockfile, a SQL file whose removed line starts with "--", a
+// file whose added line starts with "++" and a file in two places, adds a
+// binary file and a file whose name git quotes. It returns the base and
+// the head.
 func prepassFixture(t *testing.T, fx *fixture) (base, head string) {
 	t.Helper()
 	dir := fx.origin
@@ -25,6 +29,7 @@ func prepassFixture(t *testing.T, fx *fixture) (base, head string) {
 		"app/counter.txt":       "+x\n",
 		"app/services/check.rb": "order.total_price\n",
 		"app/models/cache.rb":   "total_price_cache = 1\n",
+		"app/jobs/sync.rb":      "class Sync\n  def a\n    1\n  end\n\n  def b\n    2\n  end\nend\n",
 	} {
 		fx.write(dir, rel, content)
 	}
@@ -39,6 +44,7 @@ func prepassFixture(t *testing.T, fx *fixture) (base, head string) {
 	fx.write(dir, "Gemfile.lock", "GEM\n  rails (7.2)\n")
 	fx.write(dir, "db/notes.sql", "-- keep\nSELECT 1;\n")
 	fx.write(dir, "app/counter.txt", "+x\n++y\n")
+	fx.write(dir, "app/jobs/sync.rb", "class Sync\n  def a\n    10\n  end\n\n  def b\n    20\n  end\nend\n")
 	fx.write(dir, "app/logo.png", "\x89PNG\x00 total_price\n")
 	fx.write(dir, `app/we"ird.rb`, "def odd_name\nend\n")
 	fx.write(dir, "app/views/orders/show.html.erb", "<%= @order.total_price %>\n<%= total_price_cache %>\n")
@@ -51,10 +57,12 @@ func prepassFixture(t *testing.T, fx *fixture) (base, head string) {
 }
 
 // The pre-pass reads a PR's diff with no context, file by file, as git has
-// it on the two commits: each file's status and the lines it removes and
-// adds, a removed "-- note" and an added "++y" as content, not headers; a
-// binary file without lines; a quoted name unquoted; and the paths it is
-// told to skip (a lockfile) left out. DiffStat counts each file's lines.
+// it on the two commits: each file's status, the lines it removes and adds,
+// a removed "-- note" and an added "++y" as content, not headers, and where
+// each hunk's lines are at the head (a hunk that only removes lines sits
+// after the line it follows, 0 at the top); a binary file without lines or
+// hunks; a quoted name unquoted; and the paths it is told to skip (a
+// lockfile) left out. DiffStat counts each file's lines.
 func TestRealDiffLinesReadsThePRsDiffFileByFile(t *testing.T) {
 	fx := newFixture(t)
 	ctx := context.Background()
@@ -67,6 +75,7 @@ func TestRealDiffLinesReadsThePRsDiffFileByFile(t *testing.T) {
 	wantStats := []FileStat{
 		{Path: "Gemfile.lock", Added: 1, Removed: 1},
 		{Path: "app/counter.txt", Added: 1},
+		{Path: "app/jobs/sync.rb", Added: 2, Removed: 2},
 		{Path: "app/logo.png"},
 		{Path: "app/models/order.rb", Added: 1, Removed: 1},
 		{Path: "app/models/order_item.rb", Added: 2},
@@ -84,14 +93,19 @@ func TestRealDiffLinesReadsThePRsDiffFileByFile(t *testing.T) {
 		t.Fatalf("DiffLines: %v", err)
 	}
 	want := []FileLines{
-		{Path: "app/counter.txt", Status: 'M', Added: []string{"++y"}},
+		{Path: "app/counter.txt", Status: 'M', Added: []string{"++y"}, Hunks: []Hunk{{Start: 2, Count: 1}}},
+		{Path: "app/jobs/sync.rb", Status: 'M', Removed: []string{"    1", "    2"}, Added: []string{"    10", "    20"},
+			Hunks: []Hunk{{Start: 3, Count: 1}, {Start: 7, Count: 1}}},
 		{Path: "app/logo.png", Status: 'A'},
-		{Path: "app/models/order.rb", Status: 'M', Removed: []string{"  def total_price"}, Added: []string{"  def total_amount"}},
-		{Path: "app/models/order_item.rb", Status: 'A', Added: []string{"class OrderItem", "end"}},
-		{Path: "app/views/orders/show.html.erb", Status: 'A', Added: []string{"<%= @order.total_price %>", "<%= total_price_cache %>"}},
-		{Path: `app/we"ird.rb`, Status: 'A', Added: []string{"def odd_name", "end"}},
-		{Path: "db/notes.sql", Status: 'M', Removed: []string{"-- note"}},
-		{Path: "lib/report.rb", Status: 'D', Removed: []string{"module Report", "  def self.summarize(rows)", "  end", "end"}},
+		{Path: "app/models/order.rb", Status: 'M', Removed: []string{"  def total_price"}, Added: []string{"  def total_amount"},
+			Hunks: []Hunk{{Start: 2, Count: 1}}},
+		{Path: "app/models/order_item.rb", Status: 'A', Added: []string{"class OrderItem", "end"}, Hunks: []Hunk{{Start: 1, Count: 2}}},
+		{Path: "app/views/orders/show.html.erb", Status: 'A', Added: []string{"<%= @order.total_price %>", "<%= total_price_cache %>"},
+			Hunks: []Hunk{{Start: 1, Count: 2}}},
+		{Path: `app/we"ird.rb`, Status: 'A', Added: []string{"def odd_name", "end"}, Hunks: []Hunk{{Start: 1, Count: 2}}},
+		{Path: "db/notes.sql", Status: 'M', Removed: []string{"-- note"}, Hunks: []Hunk{{Start: 1}}},
+		{Path: "lib/report.rb", Status: 'D', Removed: []string{"module Report", "  def self.summarize(rows)", "  end", "end"},
+			Hunks: []Hunk{{}}},
 	}
 	if !reflect.DeepEqual(files, want) {
 		t.Fatalf("DiffLines = %+v\nwant %+v", files, want)
@@ -131,6 +145,40 @@ func TestRealWordUsesReadsTheRevisionsWholeWords(t *testing.T) {
 		if _, err := fx.c.WordUses(ctx, fx.origin, tc.rev, tc.word); err == nil {
 			t.Errorf("WordUses(%q, %q) succeeded, want an error", tc.rev, tc.word)
 		}
+	}
+}
+
+// The pre-pass reads a changed file as a revision has it, from the object
+// store: an uncommitted edit of the checkout never counts. A path the
+// revision lacks fails, as do a range, a path not from the top and a path
+// of two lines; a file past execx.MaxOutput is ErrFileTooLarge.
+func TestRealFileAtReadsARevisionsFile(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	base, head := prepassFixture(t, fx)
+
+	for _, tc := range []struct{ rev, path, want string }{
+		{head, "app/jobs/sync.rb", "class Sync\n  def a\n    10\n  end\n\n  def b\n    20\n  end\nend\n"},
+		{base, "app/jobs/sync.rb", "class Sync\n  def a\n    1\n  end\n\n  def b\n    2\n  end\nend\n"},
+		{head, "app/models/user.rb", "class User\nend\n"},
+		{head, `app/we"ird.rb`, "def odd_name\nend\n"},
+	} {
+		if got, err := fx.c.FileAt(ctx, fx.origin, tc.rev, tc.path); err != nil || got != tc.want {
+			t.Errorf("FileAt(%s) = %q, %v; want %q", tc.path, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct{ rev, path string }{
+		{head, "lib/report.rb"}, {"a..b", "app/jobs/sync.rb"}, {head + ":app", "jobs/sync.rb"}, {head, ""}, {head, "/etc/hosts"},
+		{head, "../x.rb"}, {head, "./app/jobs/sync.rb"}, {head, "app//jobs/sync.rb"}, {head, "two\nlines.rb"},
+	} {
+		if _, err := fx.c.FileAt(ctx, fx.origin, tc.rev, tc.path); err == nil {
+			t.Errorf("FileAt(%q, %q) succeeded, want an error", tc.rev, tc.path)
+		}
+	}
+
+	c, _ := newFake(execx.Rule{Prefix: []string{"git", "-C", slot, "cat-file"}, Result: execx.Result{Stdout: []byte("x"), Truncated: true}})
+	if _, err := c.FileAt(ctx, slot, sha1, "app/assets/bundle.js"); !errors.Is(err, ErrFileTooLarge) {
+		t.Errorf("FileAt of a truncated file = %v, want ErrFileTooLarge", err)
 	}
 }
 

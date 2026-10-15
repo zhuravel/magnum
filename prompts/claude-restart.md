@@ -25,7 +25,7 @@ Repository notes at {{.NotesPath}}: read them first; they are hints from earlier
 {{- end}}
 {{- if .PrepassFile}}
 
-Read {{.PrepassFile}} first, magnum's reading of the diff: the removed definitions that files outside the diff still name, the changed source files without a test change, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
+Read {{.PrepassFile}} first, magnum's reading of the diff: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
 {{- end}}
 {{- if .HistoryFile}}
 

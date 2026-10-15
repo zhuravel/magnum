@@ -1,10 +1,10 @@
 package gitx
 
 // The reads of a round's pre-pass (internal/pipeline/prepass.go): a PR's
-// diff with its line counts and its lines, whole-word uses of a name in a
-// revision's tree, and the files of a revision's directories. Each reads
-// the object store only, never the work tree, whose files a role may have
-// changed.
+// diff with its line counts, its lines and its hunks, whole-word uses of a
+// name in a revision's tree, the files of a revision's directories and a
+// file as a revision has it. Each reads the object store only, never the
+// work tree, whose files a role may have changed.
 
 import (
 	"context"
@@ -106,10 +106,22 @@ type FileLines struct {
 	// Removed and Added are the lines the diff removes and adds, in order,
 	// without their "-" or "+"; none for a binary file or a submodule.
 	Removed, Added []string
+	// Hunks are where each hunk's lines are in head's file, in order; none
+	// for a binary file or a submodule.
+	Hunks []Hunk
+}
+
+// Hunk is the head's side of a hunk without context lines (the "+<start>,
+// <count>" of its header): the Count lines from line Start (1-based). A
+// hunk that only removes lines has Count 0 and sits after line Start (0:
+// at the top of the file).
+type Hunk struct {
+	Start, Count int
 }
 
 // DiffLines is the diff head made relative to its merge base with base,
-// file by file in git's order, without context lines (git diff -U0
+// file by file in git's order, with its hunks' places in head's files and
+// without context lines (git diff -U0
 // base...head; a rename as a deletion plus an addition; none of the user's
 // settings that change it: an external diff, textconv, path prefixes,
 // quoted non-ASCII names), leaving out the paths skip names (relative to
@@ -166,6 +178,11 @@ func parseDiffLines(patch string) ([]FileLines, error) {
 		}
 		switch {
 		case strings.HasPrefix(line, "@@"):
+			h, err := hunkHeader(line)
+			if err != nil {
+				return nil, err
+			}
+			cur.Hunks = append(cur.Hunks, h)
 			inHunk = true
 		case !inHunk:
 			if strings.HasPrefix(line, "new file mode ") {
@@ -183,6 +200,27 @@ func parseDiffLines(patch string) ([]FileLines, error) {
 		}
 	}
 	return out, nil
+}
+
+// hunkHeader reads the head's side of a hunk header, "@@ -<a>[,<b>]
+// +<start>[,<count>] @@[ <section>]" (a count of 1 is left out).
+func hunkHeader(line string) (Hunk, error) {
+	f := strings.Fields(line)
+	if len(f) < 4 || f[0] != "@@" || f[3] != "@@" {
+		return Hunk{}, errors.New("unexpected hunk header")
+	}
+	start, count, hasCount := strings.Cut(strings.TrimPrefix(f[2], "+"), ",")
+	h := Hunk{Count: 1}
+	var err error
+	if h.Start, err = strconv.Atoi(start); err != nil || !strings.HasPrefix(f[2], "+") || h.Start < 0 {
+		return Hunk{}, errors.New("unexpected hunk header")
+	}
+	if hasCount {
+		if h.Count, err = strconv.Atoi(count); err != nil || h.Count < 0 {
+			return Hunk{}, errors.New("unexpected hunk header")
+		}
+	}
+	return h, nil
 }
 
 // diffHeaderPath is the path of a "diff --git a/<path> b/<path>" header
@@ -309,4 +347,29 @@ func (c *Client) DirFiles(ctx context.Context, dir, rev string, dirs ...string) 
 		}
 	}
 	return out, nil
+}
+
+// ErrFileTooLarge is FileAt's error for a file past execx.MaxOutput.
+var ErrFileTooLarge = errors.New("gitx: file too large")
+
+// FileAt is the content of file (a clean path from the top) as rev has it:
+// `git cat-file blob <rev>:<file>`, the object store's bytes without
+// textconv or filters, never the work tree's. A file past execx.MaxOutput
+// is ErrFileTooLarge; a path rev lacks fails. rev must name a commit.
+func (c *Client) FileAt(ctx context.Context, dir, rev, file string) (string, error) {
+	if err := checkCommit(rev); err != nil {
+		return "", err
+	}
+	if file == "" || path.Clean(file) != file || path.IsAbs(file) || file == ".." || strings.HasPrefix(file, "../") ||
+		strings.ContainsAny(file, "\n\x00") {
+		return "", errors.New("gitx: cat-file: the file must be a clean path from the top, one line")
+	}
+	res, err := c.git(ctx, dir, call{label: "cat-file blob " + rev}, "cat-file", "blob", rev+":"+file)
+	if err != nil {
+		return "", err
+	}
+	if res.Truncated {
+		return "", fmt.Errorf("gitx: cat-file blob %s: %w", rev, ErrFileTooLarge)
+	}
+	return string(res.Stdout), nil
 }
