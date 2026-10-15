@@ -5198,6 +5198,10 @@ const (
 	KVUsageCodexPlan     = "usage.codex_plan"
 	KVUsageCodexAt       = "usage.codex_at"
 	KVUsageCodexPace24h  = "usage.codex_pace_24h"
+	// KVUsageCodexOverruledAt is when `magnum resume --tool` lifted a
+	// budget-cap pause (store.FormatTime): the caps wait for a snapshot
+	// stamped after it (budget.go, overruleBudget).
+	KVUsageCodexOverruledAt = "usage.codex_overruled_at"
 )
     kv keys of the daemon's own operations, read by `magnum status`.
 
@@ -5247,6 +5251,10 @@ const (
 
 const ApprovalDismissMessage = "magnum: new commits since this approval; a re-review follows"
     ApprovalDismissMessage is the reason a dismissed approval shows on GitHub.
+
+const BudgetOverruledNote = "the Codex budget caps wait for Codex's next reading"
+    BudgetOverruledNote is what a resume of a budget-cap pause means (the CLI's
+    offline resume says it too).
 
 const EvPRMuted = "pr.muted"
     EvPRMuted is the event a mute records, its reason in the data's "reason"
