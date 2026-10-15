@@ -58,6 +58,7 @@ func (e *Engine) readBudget(ctx context.Context) (usage.Snapshot, bool) {
 		switch {
 		case err == nil:
 			e.usageSnap = &snap
+			e.settleOverrule(ctx, snap)
 		case errors.Is(err, usage.ErrNoData):
 			e.log.Debug("codex usage: no snapshot", "err", err)
 		case isStop(ctx, err): // the daemon is stopping: not an error to remember
@@ -180,7 +181,8 @@ func (e *Engine) recordBudget(ctx context.Context, snap usage.Snapshot, now time
 }
 
 // budgetLevel is the cached snapshot judged against [usage] (usage.OK while
-// nothing was read).
+// nothing was read, and while the operator's resume overrules the snapshot,
+// usageOverruled).
 func (e *Engine) budgetLevel() (usage.Level, usage.Snapshot) {
 	e.usageMu.Lock()
 	defer e.usageMu.Unlock()
@@ -188,7 +190,51 @@ func (e *Engine) budgetLevel() (usage.Level, usage.Snapshot) {
 		return usage.OK, usage.Snapshot{}
 	}
 	snap := currentBudget(*e.usageSnap, e.now())
+	if !e.usageOverruled.IsZero() {
+		return usage.OK, snap
+	}
 	return usage.Decide(snap, e.cfg.Usage.CodexSoft, e.cfg.Usage.CodexHard), snap
+}
+
+// overruleBudget records that the operator lifted the budget-cap pause
+// (`magnum resume --tool`): the reading Codex last gave is stale to them,
+// as after a switch to another Codex account, whose limits reach the
+// session files only once a Codex session runs, which the pause prevents.
+// Both caps wait for a snapshot stamped after now (settleOverrule), from the
+// next Codex session magnum or the operator runs, and the cap's toast is
+// forgotten so a pause from that snapshot toasts at once. The mark is kept
+// in kv for a restart and for the CLI's offline resume (loadBudgetOverrule).
+func (e *Engine) overruleBudget(ctx context.Context) {
+	now := e.now()
+	e.usageMu.Lock()
+	e.usageOverruled = now
+	e.usageMu.Unlock()
+	e.setKV(ctx, KVUsageCodexOverruledAt, store.FormatTime(now))
+	e.forgetSend(ctx, budgetToastKey)
+}
+
+// loadBudgetOverrule (startup) takes over the overrule the CLI recorded while
+// no daemon ran, or the previous daemon's.
+func (e *Engine) loadBudgetOverrule(ctx context.Context) {
+	at, ok := e.kvTime(ctx, KVUsageCodexOverruledAt)
+	if !ok {
+		return
+	}
+	e.usageMu.Lock()
+	e.usageOverruled = at
+	e.usageMu.Unlock()
+}
+
+// settleOverrule ends the overrule once Codex reported again: a snapshot
+// stamped after it is the reading the caps judge from now on. The caller
+// holds usageMu.
+func (e *Engine) settleOverrule(ctx context.Context, snap usage.Snapshot) {
+	if e.usageOverruled.IsZero() || !snap.At.After(e.usageOverruled) {
+		return
+	}
+	e.usageOverruled = time.Time{}
+	e.delKV(ctx, KVUsageCodexOverruledAt)
+	e.log.Info("codex usage: Codex reported again after magnum resume", "used", fmt.Sprintf("%.0f%%", snap.Used()))
 }
 
 // budgetKinds are the declared agent kinds backed by Codex (their pause

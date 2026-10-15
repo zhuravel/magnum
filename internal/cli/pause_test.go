@@ -125,6 +125,18 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	if code := h.cmd("resume", "--tool", "codex"); code != 0 || strings.TrimSpace(h.out.String()) != "codex had no pause" {
 		t.Fatalf("resume codex again: exit %d %q", code, h.out.String())
 	}
+	// A budget-cap pause lifted by hand overrules Codex's reading: the mark
+	// the daemon takes over at its start is written, and the answer says so.
+	_ = h.st.SetKV(h.ctx, store.KVToolPausedUntil("codex"), store.FormatTime(h.now.Add(time.Hour)))
+	_ = h.st.SetKV(h.ctx, store.KVToolPausedReason("codex"), engine.BudgetPauseReason)
+	_ = h.st.SetKV(h.ctx, store.KVToolPausedDetail("codex"), "Codex budget 97% used (hard cap 95%)")
+	h.out.Reset()
+	if code := h.cmd("resume", "--tool", "codex"); code != 0 || strings.TrimSpace(h.out.String()) != "resumed codex (the Codex budget caps wait for Codex's next reading)" {
+		t.Fatalf("resume a budget pause: exit %d %q", code, h.out.String())
+	}
+	if v, ok := h.kv(engine.KVUsageCodexOverruledAt); !ok || v != store.FormatTime(h.now) {
+		t.Errorf("overruled_at = %q %v", v, ok)
+	}
 
 	seedToolPause("claude")
 	_ = h.st.SetKV(h.ctx, store.KVWatchPaused("talkable"), "identity_leak")

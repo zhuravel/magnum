@@ -181,3 +181,29 @@ func TestStatusCodexPaceIsLeftOutWhenUnknown(t *testing.T) {
 		})
 	}
 }
+
+// TestStatusShowsALiftedBudgetCap: after `magnum resume --tool codex` the
+// codex line says the caps wait for Codex's next reading instead of naming
+// the cap the stale reading is at, and the JSON carries overruled_at.
+func TestStatusShowsALiftedBudgetCap(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	ctx := context.Background()
+	lifted := now.Add(-10 * time.Minute)
+	for k, v := range map[string]string{engine.KVUsageCodexPercent: "97", engine.KVUsageCodexPlan: "pro", engine.KVUsageCodexWindow: "10080",
+		engine.KVUsageCodexResetsAt: store.FormatTime(now.Add(72 * time.Hour)), engine.KVUsageCodexOverruledAt: store.FormatTime(lifted)} {
+		if err := st.SetKV(ctx, k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := statusGather(ctx, d, statusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Codex == nil || r.Codex.OverruledAt == nil || !r.Codex.OverruledAt.Equal(lifted) {
+		t.Fatalf("codex = %+v", r.Codex)
+	}
+	text := statusCodexText(*r.Codex, now)
+	if want := "; lifted by magnum resume " + inspClock(now, lifted) + ": the caps wait for Codex's next reading"; !strings.HasSuffix(text, want) || strings.Contains(text, "hard cap") {
+		t.Fatalf("text = %q, want suffix %q", text, want)
+	}
+}

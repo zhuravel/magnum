@@ -754,17 +754,20 @@ func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (
 		return "resumed watch " + p.Watch, nil
 	case p.Tool == "all":
 		var cleared []string
+		note := ""
 		for _, t := range e.kinds() {
-			e.clearToolPause(ctx, t)
+			if n := e.liftToolPause(ctx, t); note == "" {
+				note = n
+			}
 			cleared = append(cleared, e.clearModelLimits(ctx, t)...)
 		}
-		return "resumed " + strings.Join(e.kinds(), ", ") + modelLimitsNote(cleared), nil
+		return "resumed " + strings.Join(e.kinds(), ", ") + note + modelLimitsNote(cleared), nil
 	case p.Tool != "":
 		if !e.isKind(p.Tool) {
 			return "", fmt.Errorf("unknown tool %q (%s or all)", p.Tool, strings.Join(e.kinds(), ", "))
 		}
-		e.clearToolPause(ctx, p.Tool)
-		return "resumed " + p.Tool + modelLimitsNote(e.clearModelLimits(ctx, p.Tool)), nil
+		note := e.liftToolPause(ctx, p.Tool)
+		return "resumed " + p.Tool + note + modelLimitsNote(e.clearModelLimits(ctx, p.Tool)), nil
 	}
 	e.delKV(ctx, store.KVDaemonPaused, store.KVDaemonPausedReason, store.KVDaemonPausedUntil, KVDaemonPausedAt, KVDaemonPausedHeld)
 	if _, ok := e.infraPause(ctx); ok {
@@ -774,6 +777,24 @@ func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (
 	e.event(ctx, "info", "", "daemon.resumed", "automation resumed", nil)
 	return "resumed", nil
 }
+
+// liftToolPause is clearToolPause for `magnum resume --tool`: a budget-cap
+// pause lifted by hand overrules Codex's reading (overruleBudget), with an
+// event, and the answer's note says what that means ("" for any other pause).
+func (e *Engine) liftToolPause(ctx context.Context, tool string) string {
+	p, paused := e.toolPause(ctx, tool)
+	e.clearToolPause(ctx, tool)
+	if !paused || p.Reason != BudgetPauseReason {
+		return ""
+	}
+	e.overruleBudget(ctx)
+	e.event(ctx, "info", "tool:"+tool, "tool.resumed", tool+" pause ("+BudgetPauseReason+") lifted by magnum resume: "+BudgetOverruledNote, nil)
+	return " (" + BudgetOverruledNote + ")"
+}
+
+// BudgetOverruledNote is what a resume of a budget-cap pause means (the
+// CLI's offline resume says it too).
+const BudgetOverruledNote = "the Codex budget caps wait for Codex's next reading"
 
 // clearModelLimits lifts kind's per-model limits (ClearModelLimits) and
 // returns them as "kind/model".

@@ -188,7 +188,7 @@ func TestWaitDispatchGates(t *testing.T) {
 		if w.Reason != WaitKind || w.Subject != "codex" || !w.Until.Equal(until) || w.Short(h.clock.Now()) != "re-review · codex paused → "+until.Format("15:04") {
 			t.Fatalf("wait = %+v", w)
 		}
-		if got := w.Sentence("talkable#2", h.clock.Now()); got != "re-review waits: codex paused (usage_limit) until "+until.Format("15:04")+"; `magnum resume` lifts the pause" {
+		if got := w.Sentence("talkable#2", h.clock.Now()); got != "re-review waits: codex paused (usage_limit) until "+until.Format("15:04")+"; `magnum resume --tool codex` lifts the pause" {
 			t.Errorf("sentence = %q", got)
 		}
 	})

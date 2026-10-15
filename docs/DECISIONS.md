@@ -528,6 +528,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   on every own PR under `autofix = "own"`. Keeping the backoff in the registry, for at most one more try and
   event per restart.
 
+- **`magnum resume --tool codex` overrules a stale Codex reading** (2026-10-15; three re-reviews waited at
+  the hard cap behind the last session's 97% while the operator had switched to a Codex account with the
+  whole week left, and `magnum resume`, which the wait's hint named, lifts only the automation pause). The
+  budget comes from Codex's newest session file, so after a switch of the account it stays the old
+  account's until a Codex session runs, which the pause prevents; and a `--tool codex` resume was undone at
+  the next budget check, which re-read the same snapshot. Now a budget-cap pause lifted by `magnum resume
+  --tool codex` (or `all`, through the daemon or offline) records `usage.codex_overruled_at`
+  (engine.KVUsageCodexOverruledAt): both caps read as no reading until a snapshot stamped after it
+  (budgetLevel is OK, so neither the hard cap's pause nor the soft cap's hold applies), the cap's toast is
+  forgotten so a pause from the next reading toasts at once, and the next snapshot, from the next Codex
+  session magnum or the operator runs, ends the overrule (settleOverrule) and is judged as usual: at the
+  cap, the pause returns. The daemon takes the CLI's offline mark over at startup (loadBudgetOverrule).
+  The resume's answer and a `tool.resumed` event say "the Codex budget caps wait for Codex's next
+  reading"; `magnum status` says it on the codex line (`overruled_at` in the JSON) and in the pause's fix,
+  and a kind's wait hint names `magnum resume --tool <kind>` instead of `magnum resume`. Rejected:
+  reading the account from the login file (Codex can keep its credentials in the keyring, and the file's
+  stamp says nothing about which account a session file's limits belong to); a Codex probe turn to
+  refresh the reading (it spends, and it is what the resumed round does anyway); discarding the snapshot
+  on resume (the status would show no gauge, and a restart would read the same file again).
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

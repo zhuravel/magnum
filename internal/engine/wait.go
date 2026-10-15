@@ -287,8 +287,10 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 		s += "; `magnum unmute " + ref + "` brings it back"
 	case w.Reason == WaitPinned && ref != "":
 		s += "; `magnum unpin " + ref + "` lets it run (a pin never lapses by itself)"
-	case w.Reason == WaitPaused || w.Reason == WaitInfra || w.Reason == WaitKind:
+	case w.Reason == WaitPaused || w.Reason == WaitInfra:
 		s += "; `magnum resume` lifts the pause"
+	case w.Reason == WaitKind:
+		s += "; `magnum resume --tool " + cmp.Or(w.Subject, "all") + "` lifts the pause"
 	case w.Reason == WaitFixing && ref != "":
 		s += "; `magnum abort " + ref + "` stops the fixer"
 	case w.Reason == WaitWhiteboard && ref != "":

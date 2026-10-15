@@ -238,6 +238,8 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 	}
 	pct := float64(u.Percent)
 	switch {
+	case u.OverruledAt != nil:
+		s += "; lifted by magnum resume " + inspClock(now, *u.OverruledAt) + ": the caps wait for Codex's next reading"
 	case u.Hard > 0 && pct >= u.Hard:
 		s += fmt.Sprintf("; at the hard cap %g%%: rounds that need Codex pause", u.Hard)
 	case u.Soft > 0 && pct >= u.Soft:

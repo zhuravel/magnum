@@ -284,7 +284,8 @@ type statusPollFailing struct {
 // Pace24h is the same ratio over the last 24 hours as the daemon last
 // recorded it (engine.KVUsageCodexPace24h), which leaves out one-off spending
 // days ago; nil when unknown, when the window reset within the last 24 hours,
-// and whenever Pace is.
+// and whenever Pace is. OverruledAt is when `magnum resume --tool` lifted a
+// budget-cap pause: the caps wait for Codex's next reading.
 type statusCodexUsage struct {
 	Percent       int        `json:"percent"`
 	WindowMinutes int        `json:"window_minutes,omitempty"`
@@ -297,6 +298,7 @@ type statusCodexUsage struct {
 	Pace24h       *float64   `json:"pace_24h,omitempty"`
 	SoftAt        *time.Time `json:"soft_at,omitempty"`
 	HardAt        *time.Time `json:"hard_at,omitempty"`
+	OverruledAt   *time.Time `json:"overruled_at,omitempty"`
 }
 
 // statusRetro is the learning loop: whether [learn] schedules the daily

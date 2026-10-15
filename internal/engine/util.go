@@ -57,6 +57,10 @@ const (
 	KVUsageCodexPlan     = "usage.codex_plan"
 	KVUsageCodexAt       = "usage.codex_at"
 	KVUsageCodexPace24h  = "usage.codex_pace_24h"
+	// KVUsageCodexOverruledAt is when `magnum resume --tool` lifted a
+	// budget-cap pause (store.FormatTime): the caps wait for a snapshot
+	// stamped after it (budget.go, overruleBudget).
+	KVUsageCodexOverruledAt = "usage.codex_overruled_at"
 )
 
 // kvPRGateReason holds the code of the PR's dispatch gate (gateCode as

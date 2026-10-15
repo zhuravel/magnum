@@ -193,7 +193,9 @@ func newResumeCmd(c *Context) *cobra.Command {
 		"Resume automation after `magnum pause` (and lift an infrastructure pause, whose probe would otherwise "+
 			"lift it). --tool lifts a usage-limit, login or Codex-budget pause of an agent kind (codex, claude or "+
 			"any [kinds.<name>]; `magnum roles --kinds` lists them) or of all, and forgets the kind's per-model "+
-			"limits, so its sessions go back to their roles' models; --watch lifts the identity-leak pause of a "+
+			"limits, so its sessions go back to their roles' models. A Codex-budget pause lifted this way overrules "+
+			"Codex's last reading, which is stale after a switch to another Codex account: both [usage] caps wait "+
+			"for Codex's next reading, from the next Codex session. --watch lifts the identity-leak pause of a "+
 			"watch owner.",
 		func(pos []string) int { return runResume(c, o, pos) })
 	fs := cmd.Flags()
@@ -273,6 +275,7 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 			tools, quiet = []string{o.tool}, []string{o.tool}
 		}
 		var lifted, limits []string
+		budget := false
 		for _, t := range tools {
 			reason, _, err := d.Store.GetKV(ctx, store.KVToolPausedReason(t))
 			if err != nil {
@@ -289,6 +292,7 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 			}
 			if had {
 				lifted = append(lifted, t)
+				budget = budget || reason == engine.BudgetPauseReason
 			}
 			models, err := engine.ClearModelLimits(ctx, d.Store, t)
 			if err != nil {
@@ -299,8 +303,14 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 			}
 		}
 		note := ""
+		if budget { // the daemon takes the mark over at its start (engine.overruleBudget)
+			if err := d.Store.SetKV(ctx, engine.KVUsageCodexOverruledAt, store.FormatTime(d.now())); err != nil {
+				return "", err
+			}
+			note = " (" + engine.BudgetOverruledNote + ")"
+		}
 		if len(limits) > 0 {
-			note = " (model limits cleared: " + strings.Join(limits, ", ") + ")"
+			note += " (model limits cleared: " + strings.Join(limits, ", ") + ")"
 		}
 		if len(lifted) == 0 {
 			return strings.Join(quiet, " and ") + " had no pause" + note, nil

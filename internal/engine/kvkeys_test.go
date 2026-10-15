@@ -65,6 +65,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"KVUsageCodexPlan", KVUsageCodexPlan, "usage.codex_plan"},
 		{"KVUsageCodexAt", KVUsageCodexAt, "usage.codex_at"},
 		{"KVUsageCodexPace24h", KVUsageCodexPace24h, "usage.codex_pace_24h"},
+		{"KVUsageCodexOverruledAt", KVUsageCodexOverruledAt, "usage.codex_overruled_at"},
 		{"KVDaemonBuild", KVDaemonBuild, "daemon.build"},
 		{"KVDaemonShellPATH", KVDaemonShellPATH, "daemon.shell_path"},
 		{"kvRestartForBuild", kvRestartForBuild, "daemon.restart_for_build"},

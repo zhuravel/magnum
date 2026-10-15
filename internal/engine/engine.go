@@ -474,8 +474,11 @@ type Engine struct {
 	usageSnap *usage.Snapshot
 	// usageRecorded is what recordBudget last wrote to kv.
 	usageRecorded string
-	usagePastRead time.Time
-	usagePast     *usage.Snapshot // Codex's reading from recentSpan ago (readPast)
+	// usageOverruled is when the operator lifted a budget-cap pause
+	// (overruleBudget): the caps wait for a snapshot stamped after it.
+	usageOverruled time.Time
+	usagePastRead  time.Time
+	usagePast      *usage.Snapshot // Codex's reading from recentSpan ago (readPast)
 	// usagePaceRecorded is what recordRecentPace last wrote to kv ("none":
 	// deleted).
 	usagePaceRecorded string
@@ -864,6 +867,7 @@ func (e *Engine) startup(ctx context.Context) {
 	}
 	e.recordBuild(ctx)
 	e.recordShellPATH(ctx)    // shell_path.go
+	e.loadBudgetOverrule(ctx) // budget.go: a resume the CLI recorded while no daemon ran
 	e.noteLearnRestarted(ctx) // learn_land.go: this start runs the landed skill version
 	e.expireRequests(ctx, lastTick)
 	// A drain (daemon-restart --drain) ends with the restart: this daemon

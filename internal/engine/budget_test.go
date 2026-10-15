@@ -30,6 +30,14 @@ func (f *fakeUsage) set(pct float64, resets time.Time) {
 	f.snap = &usage.Snapshot{Window: usage.Window{UsedPercent: pct, WindowMinutes: 10080, ResetsAt: resets}, Plan: "pro", At: resets.Add(-time.Hour)}
 }
 
+// setAt is set with the snapshot stamped at (Snapshot.At).
+func (f *fakeUsage) setAt(pct float64, resets, at time.Time) {
+	f.set(pct, resets)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snap.At = at
+}
+
 // setPast sets what readAt finds: pct of the weekly window resetting at
 // resets; nothing (usage.ErrNoData) when pct is negative.
 func (f *fakeUsage) setPast(pct float64, resets time.Time) {
@@ -274,4 +282,87 @@ func TestBudgetWindowResetEndsTheHardCap(t *testing.T) {
 	if v, _ := h.e.getKV(h.ctx, KVUsageCodexPercent); v != "0" {
 		t.Fatalf("recorded percent after the reset = %q", v)
 	}
+}
+
+// TestAResumeOverrulesTheBudgetCapUntilCodexReportsAgain: Codex's newest
+// snapshot is the last session's, so after a switch to another Codex account
+// it still says 97% while the pause keeps the session that would refresh it
+// from running (2026-10-15: three re-reviews waited at the cap behind a
+// reading the operator knew was stale, and `magnum resume` lifted nothing).
+// `magnum resume --tool codex` lifts the pause and overrules the reading: the
+// same snapshot read again pauses nothing and holds nothing, a later one at
+// the cap pauses again, with its toast, and one below it ends the overrule.
+// The CLI's offline resume leaves the same mark for the daemon's start.
+func TestAResumeOverrulesTheBudgetCapUntilCodexReportsAgain(t *testing.T) {
+	h, u := newBudgetHarness(t)
+	resets := h.clock.Now().Add(72 * time.Hour)
+	u.setAt(97, resets, h.clock.Now().Add(-time.Hour))
+	h.startup()
+	h.tick()
+	if _, ok := h.e.toolPause(h.ctx, agents.KindCodex); !ok {
+		t.Fatal("not paused at 97%")
+	}
+	h.advance(time.Minute)
+	h.tick()
+	if got := h.nh.titles("Codex budget"); len(got) != 1 {
+		t.Fatalf("toasts = %v", got)
+	}
+	resumed := h.clock.Now()
+	res, err := h.e.requestPause(h.ctx, PausePayload{Tool: agents.KindCodex}, false)
+	if err != nil || res != "resumed codex (the Codex budget caps wait for Codex's next reading)" {
+		t.Fatalf("resume = %q, %v", res, err)
+	}
+	if v, _ := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); v != store.FormatTime(resumed) {
+		t.Fatalf("overruled_at = %q", v)
+	}
+	// The same snapshot, read again a minute later, pauses nothing and holds
+	// no round.
+	h.advance(time.Minute)
+	h.tick()
+	if p, ok := h.e.toolPause(h.ctx, agents.KindCodex); ok {
+		t.Fatalf("paused again from the overruled snapshot: %+v", p)
+	}
+	if level, _ := h.e.budgetLevel(); level != usage.OK {
+		t.Fatalf("level under the overrule = %v", level)
+	}
+	// Codex reports again, still at the cap: the pause is back and toasts.
+	u.setAt(97, resets, h.clock.Now())
+	h.advance(time.Minute)
+	h.tick()
+	if p, ok := h.e.toolPause(h.ctx, agents.KindCodex); !ok || p.Reason != BudgetPauseReason {
+		t.Fatalf("not paused from the new snapshot: %+v %v", p, ok)
+	}
+	if _, ok := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); ok {
+		t.Fatal("overrule kept after Codex reported again")
+	}
+	h.advance(time.Minute)
+	h.tick()
+	if got := h.nh.titles("Codex budget"); len(got) != 2 {
+		t.Fatalf("toasts after the new reading = %v", got)
+	}
+	// Lifted again, then a reading below the cap ends the overrule quietly.
+	if _, err := h.e.requestPause(h.ctx, PausePayload{Tool: agents.KindCodex}, false); err != nil {
+		t.Fatal(err)
+	}
+	u.setAt(10, resets, h.clock.Now().Add(time.Minute))
+	h.advance(time.Minute)
+	h.tick()
+	if _, ok := h.e.toolPause(h.ctx, agents.KindCodex); ok {
+		t.Fatal("paused at 10%")
+	}
+	if _, ok := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); ok {
+		t.Fatal("overrule kept after a reading below the cap")
+	}
+
+	t.Run("the CLI's offline resume", func(t *testing.T) {
+		h, u := newBudgetHarness(t)
+		resets := h.clock.Now().Add(72 * time.Hour)
+		u.setAt(97, resets, h.clock.Now().Add(-time.Hour))
+		h.e.setKV(h.ctx, KVUsageCodexOverruledAt, store.FormatTime(h.clock.Now().Add(-time.Minute)))
+		h.startup()
+		h.tick()
+		if p, ok := h.e.toolPause(h.ctx, agents.KindCodex); ok {
+			t.Fatalf("paused despite the CLI's mark: %+v", p)
+		}
+	})
 }

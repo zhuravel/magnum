@@ -203,7 +203,8 @@ func statusGatherUsage(d statusDeps, kv statusKV, r *statusReport) {
 	if pct == nil {
 		return
 	}
-	u := &statusCodexUsage{Percent: *pct, ResetsAt: kv.getTime(engine.KVUsageCodexResetsAt), ReportedAt: kv.getTime(engine.KVUsageCodexAt)}
+	u := &statusCodexUsage{Percent: *pct, ResetsAt: kv.getTime(engine.KVUsageCodexResetsAt), ReportedAt: kv.getTime(engine.KVUsageCodexAt),
+		OverruledAt: kv.getTime(engine.KVUsageCodexOverruledAt)}
 	if w := kv.getInt(engine.KVUsageCodexWindow); w != nil {
 		u.WindowMinutes = *w
 	}
@@ -394,7 +395,7 @@ func statusGatherPauses(d statusDeps, kv statusKV, r *statusReport) {
 		case reason == string(agents.HealthLoginRequired):
 			p.Fix = rolesLoginCommand(tool) + " (magnum re-checks every minute)"
 		case reason == engine.BudgetPauseReason:
-			p.Fix = "rounds that need " + tool + " resume by themselves once the Codex budget is below [usage] codex_hard (raise it, or set it to 0, to go on)"
+			p.Fix = "rounds that need " + tool + " resume by themselves once the Codex budget is below [usage] codex_hard (raise it, or set it to 0, to go on); `magnum resume --tool " + tool + "` lifts it when Codex's reading is stale, as after a switch to another Codex account"
 		default:
 			p.Fix = "wait, or `magnum resume --tool " + tool + "` to retry now"
 		}
