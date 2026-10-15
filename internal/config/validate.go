@@ -13,6 +13,7 @@ import (
 	"text/template"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/github"
 )
@@ -175,6 +176,9 @@ func (c *Config) Validate() error {
 			}
 		}
 		errs = append(errs, w.validateAutoApprove(ids)...)
+		if err := validateStakes(w.Stakes); err != nil {
+			errs = append(errs, fmt.Errorf("watch %s: stakes %w", w.Owner, err))
+		}
 		for _, n := range w.ManualRepos {
 			switch {
 			case strings.TrimSpace(n) == "" || strings.ContainsAny(n, "/*?[]\\ "):
@@ -428,7 +432,7 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: no [[watch]] covers it", r.Repo))
 		}
 		if c.PoolFor(r.Repo) != nil && r.worktreeKeys() {
-			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals and required_checks apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes and required_checks apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
 		}
 		for _, g := range r.RequiredChecks {
 			// A malformed glob would match no check; Match reports it even for "".
@@ -444,6 +448,9 @@ func (c *Config) validateRepos() []error {
 		}
 		errs = append(errs, validateReadiness("repo "+r.Repo, r.Prepare, r.Ready, r.ReadyTimeout)...)
 		errs = append(errs, validateVerdicts("repo "+r.Repo, r.NoFindingsEvent, r.BlockingEvent)...)
+		if err := validateStakes(r.Stakes); err != nil {
+			errs = append(errs, fmt.Errorf("repo %s: stakes %w", r.Repo, err))
+		}
 		for k := range r.Env {
 			if !envKeyRe.MatchString(k) {
 				errs = append(errs, fmt.Errorf("repo %s: env key %q is not a valid variable name", r.Repo, k))
@@ -496,6 +503,19 @@ func validateReadiness(label string, prepare, ready []string, timeout Duration) 
 		errs = append(errs, fmt.Errorf("%s: ready_timeout must not be negative", label))
 	}
 	return errs
+}
+
+// validateStakes checks a [[repo]] or [[watch]] stakes line ("" = unset):
+// one line of at most StakesMax characters, as the judge's prompts carry it
+// as one <magnum> field.
+func validateStakes(s string) error {
+	if n := utf8.RuneCountInString(s); n > StakesMax {
+		return fmt.Errorf("must be at most %d characters (it has %d)", StakesMax, n)
+	}
+	if strings.ContainsFunc(s, unicode.IsControl) {
+		return errors.New("must be one line (no line breaks or control characters)")
+	}
+	return nil
 }
 
 // validateVerdicts checks the no_findings_event and blocking_event of an

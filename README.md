@@ -835,6 +835,11 @@ include_drafts = true              # false: a draft waits until ready for review
 skip_bot_authors = true
 skip_departed_authors = true       # default: a branch PR by someone no longer a member or collaborator is not reviewed
 roles = ["claude-review", "codex-review", "claude-simplify", "codex-judge"]
+stakes = "A SaaS on the public internet: merchants' money and shoppers' personal data."   # what its repositories put at risk
+
+[[repo]]                           # an internal tool of the same owner states its own
+repo = "talkable/example"
+stakes = "Internal tooling with no customers: a defect costs a colleague an hour at most."
 
 [[pool]]                           # a big app with its own databases: a pool of warm slots
 repo = "talkable/talkable"
@@ -866,7 +871,12 @@ marker), even where the PR's `.gitignore` names only the other spelling; a file 
 marker still counts. Its `no_findings_event` and `blocking_event` override the posting identity's
 verdicts for that repository, pooled or not. When a PR an App identity approved gets new commits,
 Magnum dismisses that approval before the re-review is queued (a small delta keeps it until its delta
-check posts, at most an hour); `keep_approvals = true` on the `[[repo]]` (or the `[[watch]]`) keeps it. `prepare` (such as `["bin/rails db:test:prepare"]`) and
+check posts, at most an hour); `keep_approvals = true` on the `[[repo]]` (or the `[[watch]]`) keeps it.
+`stakes` on the `[[repo]]` (or the `[[watch]]`; the repo's wins), one line of at most 300 characters, says
+what the repository puts at risk, as in the example above: the judge's prompts carry it as `stakes` in
+their `<magnum>` block and the claude-review prompts in one sentence, and the judge sizes each finding's
+harm against it, never against a stakes block in the checkout, which is PR content; codex-review gets
+none. Unset, nothing renders. `prepare` (such as `["bin/rails db:test:prepare"]`) and
 `ready` (probes, exit 0 = ready) on a `[[pool]]` or `[[repo]]` run in the checkout before the
 reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) together, followed by a
 check that the login shell runs the Ruby the checkout pins; a failure never stops the round, it tells

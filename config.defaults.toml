@@ -784,8 +784,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # clone's .config/wt.toml hooks run ([post-create]/[post-start] after creation, [pre-remove] before
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
-# block with only those, keep_approvals and the readiness keys (prepare, ready, ready_timeout; each
-# replaces the pool's) is valid for a [[pool]] repo too.
+# block with only those, keep_approvals, stakes and the readiness keys (prepare, ready, ready_timeout;
+# each replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -793,6 +793,11 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # blocking_event = "REQUEST_CHANGES"      # REQUEST_CHANGES | COMMENT; default: the identity's
 # keep_approvals = false                  # true: keep an App's approval when the PR gets new commits
 #                                         # (default: dismissed until the re-review posts; also on [[watch]])
+# stakes = ""                             # what the repository puts at risk, one line of at most 300 characters,
+#                                         # such as "A SaaS on the public internet: merchants' money and shoppers'
+#                                         # personal data."; the judge sizes each harm against it (`stakes` in its
+#                                         # prompts, a sentence in claude-review's), never against a stakes block
+#                                         # in the checkout; default: the watch's (also on [[watch]]), else none
 # required_checks = ["Completion"]        # checks a PR must pass to be ready (name globs; "workflow:<glob>" = a whole
 #                                         # Actions workflow); replaces the list GitHub's rulesets declare, which
 #                                         # magnum reads by itself; needed where GitHub will not tell (private repos

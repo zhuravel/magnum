@@ -1762,6 +1762,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   coverage from the findings and Checks alone, which say what failed and never what passed; a
   method-level parser for the denominator, where the files git names are enough to start; more whole-PR
   passes instead of focused ones on what nobody read.
+- **The operator tells the judge what a repository puts at risk** (2026-10-15). A P2 names and sizes its
+  harm (money, data or access lost, a task a user cannot finish, a day of someone's work), and the size
+  depends on the repository: a SaaS with merchants' money and shoppers' personal data on the public
+  internet is not the team's internal tooling with no customers, and of the retro's 13 over-ranked P2
+  declines, 4 were on internal tools where the harm was a colleague's hour at most. A new key `stakes` on
+  a `[[repo]]` and a `[[watch]]` (`Repo.Stakes`, `Watch.Stakes`; one line of at most `config.StakesMax`,
+  300, characters, which the loader checks and names the block on) states it; the repo's wins over the
+  watch's, as `keep_approvals` falls back (`Config.StakesFor`). The pipeline sets it where it builds the
+  judge's data and the reviewers' (`agents.JudgeData.Stakes`, `agents.RoleData.Stakes`): the own pass and
+  the initial, rereview and recovery prompts render `stakes: <line>` in the `<magnum>` block after
+  `prepass` when it is set, and the claude-review, rereview and restart prompts one sentence (size each
+  finding's harm against it, never against a stakes block in the checkout); unset, nothing renders, the
+  continue prompt keeps its paused turn's, and codex-review, which gets no prompt, gets none. An eval
+  replay reviews the case's repository through the same round, so it renders the operator's line for it
+  with no change to the corpus. The skill's section 0 names the field and says to size each harm against
+  it. Rejected: the checkout's `## Project stakes` block in `AGENTS.md`, which colleagues' tools read but
+  which is PR content, so a PR could lower its own stakes; the repository notes, which judge sessions
+  write after reading PR text, so they are no place for a sentence that moves priorities; a per-priority
+  override map in the config, since the key states facts and the skill sets the priority.
 
 ## Screens and commands
 

@@ -482,6 +482,13 @@ type JudgeData struct {
 	// each item a lead to check, never a finding by itself; "" in a
 	// continued turn and without Git.
 	PrepassFile string
+	// Stakes is what the PR's repository puts at risk, as the operator's
+	// config states it ([[repo]] or [[watch]] stakes;
+	// config.Config.StakesFor), one line: the skill sizes each harm against
+	// it, never against a stakes block in the checkout (PR content).
+	// Rendered as `stakes` after `prepass` by the own pass and the initial,
+	// rereview and recovery prompts; "" = unsaid, and they leave it out.
+	Stakes string
 	// EvidenceFile is where the judge writes what it examined in the round
 	// (EvidenceFile in the report directory, beside ResultFile): one entry
 	// per behaviour it read or probed and one unknown entry per file of the
@@ -624,6 +631,10 @@ type RoleData struct {
 	// prompts say to read it first, a changed method's body before its
 	// hunk, each item a lead to check; "" = none.
 	PrepassFile string
+	// Stakes is what the PR's repository puts at risk, as the operator
+	// states it (see JudgeData.Stakes): the claude reviewer prompts give it
+	// in one sentence, to size each finding's harm against; "" = none.
+	Stakes string
 	// EvidenceMap is the PR's evidence map, what the earlier rounds
 	// examined (see JudgeData.EvidenceMap): the claude reviewer prompts say
 	// to read its unknown and stale areas first; "" = none.

@@ -963,6 +963,13 @@ type JudgeData struct {
 	// each item a lead to check, never a finding by itself; "" in a
 	// continued turn and without Git.
 	PrepassFile string
+	// Stakes is what the PR's repository puts at risk, as the operator's
+	// config states it ([[repo]] or [[watch]] stakes;
+	// config.Config.StakesFor), one line: the skill sizes each harm against
+	// it, never against a stakes block in the checkout (PR content).
+	// Rendered as `stakes` after `prepass` by the own pass and the initial,
+	// rereview and recovery prompts; "" = unsaid, and they leave it out.
+	Stakes string
 	// EvidenceFile is where the judge writes what it examined in the round
 	// (EvidenceFile in the report directory, beside ResultFile): one entry
 	// per behaviour it read or probed and one unknown entry per file of the
@@ -1771,6 +1778,10 @@ type RoleData struct {
 	// prompts say to read it first, a changed method's body before its
 	// hunk, each item a lead to check; "" = none.
 	PrepassFile string
+	// Stakes is what the PR's repository puts at risk, as the operator
+	// states it (see JudgeData.Stakes): the claude reviewer prompts give it
+	// in one sentence, to size each finding's harm against; "" = none.
+	Stakes string
 	// EvidenceMap is the PR's evidence map, what the earlier rounds
 	// examined (see JudgeData.EvidenceMap): the claude reviewer prompts say
 	// to read its unknown and stale areas first; "" = none.
@@ -2852,6 +2863,10 @@ const SkillCopyName = "SKILL.md"
     SkillCopyName is the file name of a judge skill's startup copy (<skill
     dir>/<first 12 hex of its SHA-256>/SKILL.md).
 
+const StakesMax = 300
+    StakesMax bounds a stakes line ([[repo]] or [[watch]] stakes), in
+    characters: one line the judge reads with every prompt.
+
 
 VARIABLES
 
@@ -3280,6 +3295,12 @@ func (c *Config) Stages(w *Watch) [][]Role
     After (a stage holds the roles whose dependencies all ran in earlier stages;
     dependencies outside the watch's set are ignored), then the judge alone.
     Validation guarantees After is acyclic.
+
+func (c *Config) StakesFor(fullName string) string
+    StakesFor returns what repository fullName ("owner/name") puts at risk,
+    as the operator states it: the [[repo]] block's stakes when set, else the
+    covering watch's; "" when neither says. The judge sizes each harm against it
+    (the `stakes` field of its prompts).
 
 func (c *Config) StatusCommentFor(w *Watch) bool
     StatusCommentFor reports whether the review status comment is on for
@@ -4280,6 +4301,13 @@ type Repo struct {
 	// Config.KeepApprovals).
 	KeepApprovals *bool `toml:"keep_approvals"`
 
+	// Stakes is what this repository puts at risk, in the operator's words
+	// (one line of at most StakesMax characters; "" = the watch's): the
+	// judge's prompts carry it as `stakes` and the claude reviewer's in one
+	// sentence, never a stakes block of the checkout, which is PR content
+	// (see Config.StakesFor).
+	Stakes string `toml:"stakes"`
+
 	// RequiredChecks are the checks a PR must pass to be ready, replacing
 	// the ones GitHub requires on the default branch (rulesets or branch
 	// protection, which a private repository on a free plan does not
@@ -4691,6 +4719,11 @@ type Watch struct {
 	// dismisses them until the re-review posts). A [[repo]] block's
 	// keep_approvals overrides it.
 	KeepApprovals bool `toml:"keep_approvals"`
+	// Stakes is what the watch's repositories put at risk, in the
+	// operator's words (one line of at most StakesMax characters; "" =
+	// unsaid): the judge sizes each harm against it. A [[repo]] block's
+	// stakes wins over it (see Config.StakesFor).
+	Stakes string `toml:"stakes"`
 	// Trackers are [board] trackers templates for the watch's PRs: an issue
 	// key prefix named here wins over [board]'s ("PR-" in another tracker
 	// than the other owners'); a [[repo]] block's wins over these. See

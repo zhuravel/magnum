@@ -84,6 +84,9 @@ docs: {{.DocsFile}}
 {{- if .PrepassFile}}
 prepass: {{.PrepassFile}}
 {{- end}}
+{{- if .Stakes}}
+stakes: {{.Stakes}}
+{{- end}}
 {{- if .EvidenceMap}}
 evidence: {{.EvidenceMap}}
 {{- end}}

@@ -605,6 +605,11 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_continue_notes", "judge-continue.md", withNotes},
 		{"judge_recovery_notes", "judge-recovery.md", withNotes},
 		{"claude_initial", "claude-review.md", roleFixture()},
+		// The operator's stakes line: the judge's <magnum> field after
+		// prepass, the claude reviewer's sentence (every prompt in
+		// TestTheJudgePromptCarriesTheStakesLine).
+		{"judge_initial_stakes", "judge-initial.md", stakesJudgeFixture()},
+		{"claude_initial_stakes", "claude-review.md", stakesRoleFixture()},
 		{"claude_rereview", "claude-rereview.md", roleFixture()},
 		{"claude_rereview_forced_effort", "claude-rereview.md", forcedRole},
 		{"claude_restart", "claude-restart.md", restarted},

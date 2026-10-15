@@ -335,6 +335,11 @@ type Watch struct {
 	// dismisses them until the re-review posts). A [[repo]] block's
 	// keep_approvals overrides it.
 	KeepApprovals bool `toml:"keep_approvals"`
+	// Stakes is what the watch's repositories put at risk, in the
+	// operator's words (one line of at most StakesMax characters; "" =
+	// unsaid): the judge sizes each harm against it. A [[repo]] block's
+	// stakes wins over it (see Config.StakesFor).
+	Stakes string `toml:"stakes"`
 	// Trackers are [board] trackers templates for the watch's PRs: an issue
 	// key prefix named here wins over [board]'s ("PR-" in another tracker
 	// than the other owners'); a [[repo]] block's wins over these. See
@@ -608,6 +613,13 @@ type Repo struct {
 	// Config.KeepApprovals).
 	KeepApprovals *bool `toml:"keep_approvals"`
 
+	// Stakes is what this repository puts at risk, in the operator's words
+	// (one line of at most StakesMax characters; "" = the watch's): the
+	// judge's prompts carry it as `stakes` and the claude reviewer's in one
+	// sentence, never a stakes block of the checkout, which is PR content
+	// (see Config.StakesFor).
+	Stakes string `toml:"stakes"`
+
 	// RequiredChecks are the checks a PR must pass to be ready, replacing
 	// the ones GitHub requires on the default branch (rulesets or branch
 	// protection, which a private repository on a free plan does not
@@ -628,7 +640,7 @@ type Repo struct {
 const RequiredWorkflowPrefix = "workflow:"
 
 // worktreeKeys reports whether the block sets any per-PR worktree key
-// (everything but repo, the verdicts, readiness, keep_approvals,
+// (everything but repo, the verdicts, readiness, keep_approvals, stakes,
 // required_checks and trackers).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
@@ -1030,6 +1042,27 @@ func (c *Config) KeepApprovals(fullName string) bool {
 		return w.KeepApprovals
 	}
 	return false
+}
+
+// StakesMax bounds a stakes line ([[repo]] or [[watch]] stakes), in
+// characters: one line the judge reads with every prompt.
+const StakesMax = 300
+
+// StakesFor returns what repository fullName ("owner/name") puts at risk,
+// as the operator states it: the [[repo]] block's stakes when set, else the
+// covering watch's; "" when neither says. The judge sizes each harm against
+// it (the `stakes` field of its prompts).
+func (c *Config) StakesFor(fullName string) string {
+	if c == nil {
+		return ""
+	}
+	if r := c.RepoFor(fullName); r != nil && r.Stakes != "" {
+		return r.Stakes
+	}
+	if w := c.WatchFor(fullName); w != nil {
+		return w.Stakes
+	}
+	return ""
 }
 
 // TrackersFor returns the issue trackers of repository fullName's PRs: the
