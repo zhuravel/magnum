@@ -350,6 +350,14 @@ type RoundInput struct {
 	// their real entry points with a control before it re-reviews the
 	// delta (audit.go, agents.JudgeData.AuditFile). nil = no audit pass.
 	Audit []AuditArea
+	// HoldApproval (rereview, recovery, continue): the round cannot approve
+	// ([pipeline] approve_after_full_pass; the engine's approval_hold.go):
+	// the PR had that many re-reviews since its last full pass, so its
+	// no-findings event is COMMENT (JudgeEvents' noApproveEvent) and the
+	// judge's prompt says that a clean verdict posts as a comment and a full
+	// pass of the whole PR follows before the approval
+	// (agents.JudgeData.HoldApproval).
+	HoldApproval bool
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at

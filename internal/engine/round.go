@@ -251,6 +251,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		rs.ciRed = true
 		e.noteCIRound(ctx, pr.ID, rs.target, job.startedAt) // ci_red.go
 	}
+	e.planApprovalHold(ctx, job, &rs, dryRun) // approval_hold.go
 
 	in := e.roundInput(ctx, job, rs, ws, dryRun)
 	e.sidebar(ctx, ws.WorkspaceID, map[string]string{"magnum": "reviewing " + textx.ShortSHA(rs.target)})
@@ -286,10 +287,16 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		what, data["full_pass"] = what+" (full pass)", true
 	case rs.fullPass:
 		what, data["full_pass"], data["full_pass_reason"] = fullReReviewLabel, true, job.fullPass
+		if job.fullPassRule == fullPassApproval {
+			data["before_approval"] = true
+		}
 	case rs.auditPass && rs.kind == kindContinue:
 		what, data["audit_pass"] = what+" (audit pass)", true
 	case rs.auditPass:
 		what, data["audit_pass"], data["audit_areas"] = auditReReviewLabel, true, len(rs.audit)
+	}
+	if job.approvalHold != "" {
+		data["approval_hold"] = true
 	}
 	if job.postMerge {
 		what = "post-merge " + what
@@ -582,9 +589,10 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta, SameHead: rs.sameHead, Replies: rs.replies,
 		CIRed:   rs.ciRed,
 		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel, Related: e.cfg.RelatedFor(&job.watch),
-		ColdJudge: rs.freshJudge && rs.kind == pipeline.KindRecovery,
-		FullPass:  rs.fullPass,
-		Audit:     rs.audit,
+		ColdJudge:    rs.freshJudge && rs.kind == pipeline.KindRecovery,
+		FullPass:     rs.fullPass,
+		Audit:        rs.audit,
+		HoldApproval: job.approvalHold != "",
 	}
 	if job.evalHead != "" {
 		in.Blind = true

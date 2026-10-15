@@ -626,6 +626,9 @@ func (c *Config) validatePipeline() []error {
 	if n := c.Pipeline.AuditEvery; n < 0 {
 		errs = append(errs, fmt.Errorf("pipeline: audit_every must be 0 (no audit pass) or positive, got %d", n))
 	}
+	if n := c.Pipeline.ApproveAfterFullPass; n < 0 {
+		errs = append(errs, fmt.Errorf("pipeline: approve_after_full_pass must be 0 (off) or positive, got %d", n))
+	}
 	// judge_fallback names a judge role of another kind than the watch's
 	// judge, outside the watch's roles (it stands in for the judge, never
 	// beside it).

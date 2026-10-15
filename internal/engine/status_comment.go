@@ -152,6 +152,10 @@ type statusView struct {
 	ends bool
 	// fullPass: the round under way is a scheduled full pass (fullpass.go).
 	fullPass bool
+	// held: the PR's last review held its approval, and a full pass of the
+	// whole PR follows before the approval (approval_hold.go): the posted
+	// line says so, and the full pass is no review someone asked for.
+	held bool
 }
 
 // opens reports whether the stage posts a comment where none stands: a
@@ -172,6 +176,8 @@ func (v statusView) label() string {
 	switch {
 	case v.fixes:
 		return "Reviewing the fixes in"
+	case v.kind == statusAnother && v.held:
+		return "Full pass before approval of"
 	case v.kind == statusRereview:
 		return "Re-review queued for"
 	case v.kind == statusAnother:
@@ -181,16 +187,25 @@ func (v statusView) label() string {
 }
 
 // postedLine is the posted review in one line: "Review of `a1b2c3d` posted
-// 18:52 UTC: <link>".
+// 18:52 UTC: <link>", and for a review that held its approval ". A full
+// pass follows before approval." after it.
 func (v statusView) postedLine(now time.Time) string {
 	line := "Review of `" + textx.ShortSHA(v.head) + "` posted"
 	if !v.at.IsZero() {
 		line += " " + statusClock(v.at, now)
 	}
 	if v.link == "" {
-		return line + "."
+		line += "."
+	} else {
+		line += ": " + v.link
 	}
-	return line + ": " + v.link
+	if v.held {
+		if v.link != "" {
+			line += "."
+		}
+		line += " A full pass follows before approval."
+	}
+	return line
 }
 
 // body is the comment below its header: the checklist (ticked down to the
@@ -588,10 +603,12 @@ func (e *Engine) statusFailed(ctx context.Context, repo store.Repo, pr store.PR,
 // review posted, or "closed" or "merged before the review"), a draft whose
 // comment promised a review gets "not reviewing", and a round on the
 // reviewed head leaves it posted unless someone asked for it
-// (anotherReview). It reads the registry only for a forced PR's dry run, a
-// waiting PR's wait, a re-review's earlier findings, whether a round under
-// way is a full pass and a round on the reviewed head: the tick asks it of
-// every PR.
+// (anotherReview), and so does a held review's full pass while it waits
+// (approvalPassDue: the posted line says that it follows). It reads the
+// registry only for a forced PR's dry run, a waiting PR's wait, a
+// re-review's earlier findings, whether a round under way is a full pass, a
+// round on the reviewed head and a held review: the tick asks it of every
+// PR.
 func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, flagged bool, now time.Time) (statusView, bool) {
 	reviewed := deref(pr.ReviewedSHA)
 	v := statusView{kind: statusReview, head: pr.HeadSHA}
@@ -615,15 +632,18 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 		v.stage, v.ends = statusDraft, true
 		return v, true
 	case pr.HeadSHA == reviewed:
-		if !e.anotherReview(ctx, pr, rec) {
+		// A held review's full pass is magnum's own: while it waits, the
+		// comment stays at the posted line, which says that it follows.
+		held := e.approvalPassDue(ctx, pr)
+		if (held && !slices.Contains(statusRoundStates, pr.State)) || !e.anotherReview(ctx, pr, rec) {
 			v.stage, v.kind, v.link = statusPosted, statusReview, reviewLink(pr)
-			v.at = deref(pr.ReviewedAt)
+			v.at, v.held = deref(pr.ReviewedAt), held
 			if st, ok := e.statusFix(ctx, pr.ID); ok && st.Phase == FixPhaseFixing {
 				v.stage, v.cycle, v.cycles = statusFixing, st.Cycle, st.Cap
 			}
 			return v, true
 		}
-		v.kind = statusAnother
+		v.kind, v.held = statusAnother, held
 	}
 	switch {
 	case pr.State == store.PRNeedsAttention:

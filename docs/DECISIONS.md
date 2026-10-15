@@ -645,6 +645,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   table records posted or rejected only, with no fixed state to count); charging the pending push to the
   churn (it needs a measure at dispatch, and the review that crosses the line is followed by the full pass
   at the next push).
+- **An approval rests on a whole-PR read** (2026-10-15). A re-review reads the commits since the last
+  review, and its clean verdict posted APPROVE, so after several re-reviews an approval rested on one whole
+  read long ago and a chain of deltas, each read on its own. On talkable#11483 magnum approved after a delta
+  re-review of the fix; a colleague's whole-branch round then found a second path to the same defect, and
+  the operator asked for a full review, not a delta, before magnum approves. Now `[pipeline]
+  approve_after_full_pass` (default 2, 0 = off, a negative value refused) is the number of re-reviews since
+  the PR's baseline (its last full pass, else its first review; `rereviewsSinceFullPass`) at or above which
+  an approval needs a full pass first. A round that holds (`approvalHoldDue` at the round's setup,
+  `pr.<id>.approval_hold_round` while it runs, so a continue holds too; `round.approval_hold`, and
+  `approval_hold` in `engine.round_start`) gets `pipeline.RoundInput.HoldApproval`: its no-findings event is
+  COMMENT, and the rereview and recovery prompts say that a clean verdict posts as a comment and a full pass
+  of the whole PR follows, with the body line `A full pass of the whole PR follows before approval.` after
+  the verdict line (the prompt's words, not the skill's). When it posts with the verdict `clean` (the
+  judge's stored result), `onPosted` records the held review (`pr.<id>.approval_hold`) and forces the PR
+  as `magnum review --full` does (`forceReview`, as the fix loop forces its re-review, never seeing the
+  operator's stalemates), so the next dispatch runs a full pass of the same head with every role fresh,
+  `fullPassDue`'s rule `approval`, whose clean verdict approves and which is the new baseline; any later
+  review drops the record. The hold applies to automatic and requested rounds alike (a delta check, a
+  recovery, an audit pass, a re-review of the same head) and to the operator's own PR, whose clean verdict
+  is a comment already, so the full pass still follows; a full pass, `magnum review --full`, a post-merge
+  review, a reply round, a CI check, a dry run and an eval replay never hold. With the default, one round of
+  fixes after the first review approves on its delta. Auto-approval as the operator waits on a held review
+  (`autoGateRefusal`, as a wait that withdraws no standing approval). The status comment's posted line adds
+  `A full pass follows before approval.` while the full pass waits, the full pass shows as `Full pass before
+  approval of` with `In progress (full pass)`, and the card's last round says `full pass (before
+  approval)` (`tui.RoundWhy.BeforeApproval`, `before_approval` in `magnum tui --json`). Rejected: a full
+  pass before every approval (the one-fix path would cost a whole review twice); the judge reviewing the
+  whole PR itself in the round that would approve (one reused session, while the reviewers see only the
+  delta).
 
 ## Agents in panes
 

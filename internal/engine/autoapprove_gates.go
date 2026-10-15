@@ -63,7 +63,9 @@ var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.
 
 // autoGateRefusal says why auto-approval holds c back after magnum's round
 // sum although the registry lets it approve (autoApproveRefusal); "" when
-// it does not. In order: the review did not hear every reviewer
+// it does not. In order: the review held its approval for a full pass of
+// the whole PR (heldReviewOf, which waits: the full pass decides), the
+// review did not hear every reviewer
 // (missingReports), the PR's watch would not review it on its own
 // (classify: a manual repository's, a bot's, one skip_paths leaves out, one
 // Codex flagged; a forced round's included), it changes what steers the
@@ -76,6 +78,9 @@ var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.
 // withdrawal posts it on GitHub.
 func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
 	pr := c.PR
+	if _, held := e.heldReviewOf(ctx, pr.ID, sum.ReviewID); held {
+		return approvalHoldRefusal, true // approval_hold.go: the full pass after it decides
+	}
 	if why := e.missingReports(ctx, pr.ID, sum); why != "" {
 		return why, false
 	}

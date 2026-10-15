@@ -45,6 +45,10 @@ A second rebuttal in a thread that holds one of yours names, in the same sentenc
 
 Post-merge review: GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`. Expect `merged == true` instead of `state == open`. Post `COMMENT` whatever you find (`no_findings_event` and `blocking_event` say so), start the body with `**Post-merge review** <previous_head_sha, 7 chars> → <head_sha, 7 chars>:`, write each finding as a follow-up for a new change, not a change to this PR, and say `in a follow-up` instead of `before merging`.
 {{- end}}
+{{- if .HoldApproval}}
+
+This round cannot approve: the PR has had several re-reviews since it was last read whole, so a clean verdict posts as a comment (`no_findings_event` says so), and a full pass of the whole PR follows before the approval. With the verdict `clean`, add the line `A full pass of the whole PR follows before approval.` right after the verdict line.
+{{- end}}
 {{- if and .NotesPath .NotesMaxLine}}
 
 Keep each line of the `notes` file at most `notes_max_line` characters long: a longer line triggers a curation.

@@ -456,6 +456,11 @@ func TestRenderGolden(t *testing.T) {
 	audit.ColdJudge, audit.AuditFile, audit.AuditAreas = true, ownDir+"audit.json", 4
 	ownFullPass := ownRecovery
 	ownFullPass.FullPass = true
+	// A re-review that cannot approve ([pipeline] approve_after_full_pass):
+	// COMMENT for no findings, and a clean verdict's body line that a full
+	// pass follows before the approval, in the judge's session or a fresh one.
+	holdApproval := judgeFixture()
+	holdApproval.HoldApproval, holdApproval.NoFindingsEvent = true, "COMMENT"
 	ownBlind := ownPass("initial")
 	ownBlind.DryRun, ownBlind.Blind = true, true
 	ownDryRun := ownPass("initial")
@@ -533,6 +538,8 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_forced", "judge-recovery.md", recoveryForced},
 		{"judge_recovery_full_pass", "judge-recovery.md", fullPass},
 		{"judge_recovery_audit", "judge-recovery.md", audit},
+		{"judge_rereview_hold_approval", "judge-rereview.md", holdApproval},
+		{"judge_recovery_hold_approval", "judge-recovery.md", holdApproval},
 		{"judge_recovery_full_pass_candidates", "judge-recovery.md", candidates(fullPass)},
 		{"judge_own_pass_recovery_full_pass", "judge-own-pass.md", ownFullPass},
 		{"judge_own_pass_blind", "judge-own-pass.md", ownBlind},

@@ -738,7 +738,8 @@ type JudgeData struct {
 	ReviewerLogin string // REST form, e.g. talkable[bot]
 	GhConfigDir   string // "" for the gh identity
 	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
-	// of the round left no usable report (pipeline.JudgeEvents).
+	// of the round left no usable report (pipeline.JudgeEvents), or the
+	// round holds its approval for a full pass (HoldApproval).
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
@@ -829,6 +830,12 @@ type JudgeData struct {
 	// never a finding. Rendered as one instruction, only then; "" = none.
 	AuditFile  string
 	AuditAreas int
+	// HoldApproval (rereview, recovery): the round cannot approve
+	// ([pipeline] approve_after_full_pass; pipeline.RoundInput.HoldApproval):
+	// NoFindingsEvent is COMMENT, a clean verdict posts as a comment, and a
+	// full pass of the whole PR follows before the approval. Rendered as
+	// one instruction, with the body line a clean verdict adds, only then.
+	HoldApproval bool
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string
@@ -2711,6 +2718,11 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
     DefaultAfterDenyPrompt is every built-in and declared kind's
     after_deny_prompt.
 
+const DefaultApproveAfterFullPass = 2
+    DefaultApproveAfterFullPass is [pipeline] approve_after_full_pass' default:
+    the first two re-reviews after a PR's baseline approve on their delta,
+    so one round of fixes after the first review approves at once.
+
 const DefaultAuditEvery = 5
     DefaultAuditEvery is [pipeline] audit_every's default: every fifth automatic
     re-review of a PR probes what no round probed.
@@ -4022,6 +4034,15 @@ type Pipeline struct {
 	// and one earlier probe again (engine audit.go). A full pass due on the
 	// same round wins. Default DefaultAuditEvery; 0 = never.
 	AuditEvery int `toml:"audit_every"`
+	// ApproveAfterFullPass: a re-review (a delta check, a recovery, an audit
+	// pass or a round someone asked for alike) of a PR that has this many
+	// re-reviews or more since its baseline (its last full pass, else its
+	// first review) cannot approve: its clean verdict posts as a comment,
+	// and a full pass of the whole PR on the same head follows at once,
+	// whose clean verdict approves (engine approval_hold.go). A full pass, a
+	// post-merge review, a reply round, a CI check and a dry run never hold.
+	// Default DefaultApproveAfterFullPass; 0 = off.
+	ApproveAfterFullPass int `toml:"approve_after_full_pass"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -13232,6 +13253,14 @@ type RoundInput struct {
 	// their real entry points with a control before it re-reviews the
 	// delta (audit.go, agents.JudgeData.AuditFile). nil = no audit pass.
 	Audit []AuditArea
+	// HoldApproval (rereview, recovery, continue): the round cannot approve
+	// ([pipeline] approve_after_full_pass; the engine's approval_hold.go):
+	// the PR had that many re-reviews since its last full pass, so its
+	// no-findings event is COMMENT (JudgeEvents' noApproveEvent) and the
+	// judge's prompt says that a clean verdict posts as a comment and a full
+	// pass of the whole PR follows before the approval
+	// (agents.JudgeData.HoldApproval).
+	HoldApproval bool
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at
@@ -18266,8 +18295,11 @@ type RoundWhy struct {
 	DeltaCheck bool
 	DeltaLines int
 	// FullPass: a scheduled full pass ([pipeline] full_pass_every), a
-	// recovery of every role in fresh sessions over the whole PR.
-	FullPass bool
+	// recovery of every role in fresh sessions over the whole PR;
+	// BeforeApproval: the one that follows a review that held its approval
+	// ([pipeline] approve_after_full_pass).
+	FullPass       bool
+	BeforeApproval bool
 	// AuditPass: a scheduled audit pass ([pipeline] audit_every), a
 	// recovery in fresh sessions whose judge first probes what no round
 	// probed.

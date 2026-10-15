@@ -289,6 +289,12 @@ audit_every = 5                   # the Nth automatic re-review of a PR, counted
                                   # (the riskiest first) and one earlier probe again, each with a control. A delta
                                   # check, a same-head or reply round and `magnum review` never become one, and a
                                   # full pass due on the same round wins. 0 = never
+approve_after_full_pass = 2       # a re-review of a PR with this many re-reviews or more since its last full pass
+                                  # (else its first review) cannot approve: its clean verdict posts as a comment
+                                  # whose body says "A full pass of the whole PR follows before approval.", and a
+                                  # full pass of every role on the same head follows at once, which approves when
+                                  # it finds nothing. A full pass, a post-merge review, a reply round and a CI
+                                  # check never hold. 2 lets one round of fixes approve on its delta. 0 = off
 judge_fallback = ""               # a judge role of another kind that takes over a PR's rounds once the judge's
                                   # kind refused one (Codex's cybersecurity classifier): the PR is flagged for
                                   # that kind, its roles of that kind are dropped, and this role judges from

@@ -224,21 +224,22 @@ type prsJSONStage struct {
 }
 
 type prsJSONRoundWhy struct {
-	Kind       string             `json:"kind"`
-	PostMerge  bool               `json:"post_merge"`
-	DeltaCheck bool               `json:"delta_check"` // the judge alone on a small delta
-	DeltaLines int                `json:"delta_lines"`
-	FullPass   bool               `json:"full_pass"`  // a scheduled full pass of every role over the whole PR
-	AuditPass  bool               `json:"audit_pass"` // a scheduled audit pass: the judge probes what no round probed first
-	Roles      []string           `json:"roles"`
-	Requested  []string           `json:"requested"`
-	Reruns     []prsJSONRoleRerun `json:"reruns"`
-	Triaged    bool               `json:"triaged"`
-	Skipped    []string           `json:"skipped"`
-	Reason     string             `json:"reason"`
-	EveryRole  string             `json:"every_role"`          // why triage kept every role
-	Rotated    []prsJSONRotation  `json:"rotated"`             // roles started in a fresh session after their max_session_rounds
-	StartedAt  time.Time          `json:"started_at,omitzero"` // its engine.round_start
+	Kind           string             `json:"kind"`
+	PostMerge      bool               `json:"post_merge"`
+	DeltaCheck     bool               `json:"delta_check"` // the judge alone on a small delta
+	DeltaLines     int                `json:"delta_lines"`
+	FullPass       bool               `json:"full_pass"`       // a scheduled full pass of every role over the whole PR
+	BeforeApproval bool               `json:"before_approval"` // the full pass after a review that held its approval (approve_after_full_pass)
+	AuditPass      bool               `json:"audit_pass"`      // a scheduled audit pass: the judge probes what no round probed first
+	Roles          []string           `json:"roles"`
+	Requested      []string           `json:"requested"`
+	Reruns         []prsJSONRoleRerun `json:"reruns"`
+	Triaged        bool               `json:"triaged"`
+	Skipped        []string           `json:"skipped"`
+	Reason         string             `json:"reason"`
+	EveryRole      string             `json:"every_role"`          // why triage kept every role
+	Rotated        []prsJSONRotation  `json:"rotated"`             // roles started in a fresh session after their max_session_rounds
+	StartedAt      time.Time          `json:"started_at,omitzero"` // its engine.round_start
 }
 
 type prsJSONRoleRerun struct {
@@ -320,8 +321,8 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 }
 
 func prsJSONRoundWhyOf(w tui.RoundWhy) prsJSONRoundWhy {
-	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, DeltaCheck: w.DeltaCheck, DeltaLines: w.DeltaLines, FullPass: w.FullPass, AuditPass: w.AuditPass,
-		Roles: listOf(w.Roles), Requested: listOf(w.Requested),
+	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, DeltaCheck: w.DeltaCheck, DeltaLines: w.DeltaLines, FullPass: w.FullPass, BeforeApproval: w.BeforeApproval,
+		AuditPass: w.AuditPass, Roles: listOf(w.Roles), Requested: listOf(w.Requested),
 		Reruns:  mapList(w.Reruns, func(r tui.RoleRerun) prsJSONRoleRerun { return prsJSONRoleRerun{Role: r.Role, Lines: r.Lines} }),
 		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole, StartedAt: w.At,
 		Rotated: mapList(w.Rotated, func(r tui.RoleRotation) prsJSONRotation { return prsJSONRotation{Role: r.Role, Rounds: r.Rounds} })}

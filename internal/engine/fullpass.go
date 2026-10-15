@@ -146,7 +146,8 @@ func (e *Engine) planFullPass(ctx context.Context, job *roundJob) {
 
 // fullPassDue reports why job, a re-review the dispatcher plans, runs as a
 // full pass (the zero fullPassWhy = it does not), its rules in this order:
-// `magnum review --full` asked for one; this automatic re-review is the
+// `magnum review --full` asked for one, or a held review did
+// (approval_hold.go: rule fullPassApproval); this automatic re-review is the
 // full_pass_every-th since the PR's first review or its last full pass
 // (rereviewsSinceFullPass); the churn since the baseline reached
 // full_pass_lines lines or full_pass_files files, or a quarter of the PR's
@@ -160,6 +161,9 @@ func (e *Engine) fullPassDue(ctx context.Context, job *roundJob) fullPassWhy {
 		return fullPassWhy{}
 	}
 	if v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID)); v == store.FreshFullPass {
+		if h, ok := e.heldReviewOf(ctx, pr.ID, deref(pr.LastReviewID)); ok { // approval_hold.go: the held review's full pass
+			return fullPassWhy{fullPassApproval, h.reason()}
+		}
 		return fullPassWhy{"requested", "requested by magnum review --full"}
 	}
 	if pr.Forced || job.requested || job.sameHead || job.replies > 0 || job.ciRed {

@@ -482,6 +482,22 @@ says why one runs and which rule fired (`rule`: the key, or `requested`), `engin
 `re-review (full pass)` with the reason in `full_pass_reason`, the card's last round `full pass`, and the
 status comment `In progress (full pass)`. `magnum review --full <ref>` asks for one by hand.
 
+An approval rests on a whole read of the PR, not on a chain of deltas each read on its own. A re-review of a
+PR that had `[pipeline] approve_after_full_pass` re-reviews or more since its baseline (default `2`, counted
+as `full_pass_every` counts; `0` turns it off) cannot approve: its `no_findings_event` is `COMMENT`, its
+prompt says why, and a clean verdict's body adds the line `A full pass of the whole PR follows before
+approval.` after the verdict line. When such a review posts with the verdict `clean`, Magnum forces a full
+pass of the same head at once, as `magnum review --full` does: every role starts fresh on the whole diff,
+its clean verdict approves (one that finds problems posts as usual), and it is the new baseline, so the
+next push and a clean re-review approve on their delta again. With the default, one round of fixes after
+the first review approves on its delta. The hold applies to automatic and requested rounds alike (a delta
+check, a recovery, an audit pass, a re-review of the same head) and to your own PRs, whose clean verdict
+is a comment anyway; a full pass, a post-merge review, a reply round, a CI check and a dry run never hold.
+Auto-approval as you waits for the full pass too. `round.approval_hold` says why a round holds
+(`engine.round_start` carries `approval_hold`), `pr.approval_full_pass` that the full pass follows, whose
+`round.full_pass` names the rule `approval` (`before_approval` in its start event), and the card's last
+round says `full pass (before approval)`.
+
 A full pass reads the whole PR again; what the evidence map (see the judge's `evidence.json` under the
 pre-pass) says no round read or probed, or changed since one did, needs only those areas read. Every fifth
 automatic re-review of a PR whose map holds `unknown` or `stale` entries is therefore an audit pass
@@ -702,7 +718,10 @@ link that turned up, your note) leaves it. The first line says where the review 
 - **Posted**: the list collapses to one line, "Review of `54fc258` posted 18:52 UTC: <link>", without the
   sentences or your note. The comment stays, and the next review of the PR starts the list again in it. A
   round on the reviewed head that nobody asked for (a reply round, a judge check of red CI, a re-decision of
-  the replies) leaves the posted line.
+  the replies) leaves the posted line. A review that held its approval (`approve_after_full_pass`, under
+  Re-reviews) reads "Review of `54fc258` posted 18:52 UTC: <link>. A full pass follows before approval."
+  while its full pass waits; the full pass then shows as "Full pass before approval of `54fc258`" with
+  "In progress (full pass) since 18:53 UTC", and its posted line replaces it.
 - A [fix loop](#fixing-your-own-prs) shows as its own line: "Applying automatic fixes, cycle 1 of 3"
   under the posted line while the fixer works, and "Reviewing the fixes in `b2c3d4e`" for its re-review of
   what the fixer pushed, from the loop's state (never the fixer's words).

@@ -32,8 +32,11 @@ type RoundWhy struct {
 	DeltaCheck bool
 	DeltaLines int
 	// FullPass: a scheduled full pass ([pipeline] full_pass_every), a
-	// recovery of every role in fresh sessions over the whole PR.
-	FullPass bool
+	// recovery of every role in fresh sessions over the whole PR;
+	// BeforeApproval: the one that follows a review that held its approval
+	// ([pipeline] approve_after_full_pass).
+	FullPass       bool
+	BeforeApproval bool
 	// AuditPass: a scheduled audit pass ([pipeline] audit_every), a
 	// recovery in fresh sessions whose judge first probes what no round
 	// probed.
@@ -221,6 +224,8 @@ func roundKindPhrase(w RoundWhy) string {
 	switch {
 	case w.DeltaCheck:
 		phrase = DeltaCheckPhrase(w.DeltaLines)
+	case w.FullPass && w.BeforeApproval:
+		phrase = "full pass (before approval)"
 	case w.FullPass:
 		phrase = "full pass"
 	case w.AuditPass:

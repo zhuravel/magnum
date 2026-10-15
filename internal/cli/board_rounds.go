@@ -22,7 +22,8 @@ const boardRoundsWindow = 7 * 24 * time.Hour
 
 // The events a round leaves, as the engine writes them: engine.round_start
 // (round.go, prepare) with {"kind", "roles", "requested", "post_merge"} and,
-// for a delta check, {"delta_check"}, for a full pass {"full_pass"}; every re-review and recovery round with
+// for a delta check, {"delta_check"}, for a full pass {"full_pass"} (and
+// {"before_approval"} after a held review); every re-review and recovery round with
 // a delta to measure also has {"delta_lines", "delta_files"} (and
 // "delta_partial"), which the card names for a delta check only;
 // round.triage (triage.go), before it, with {"runs", "skips", "reason"} for a
@@ -112,14 +113,15 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 	}
 	start := eventData(evs[last])
 	w := &tui.RoundWhy{
-		Kind:       dataString(start, "kind"),
-		PostMerge:  dataBool(start, "post_merge"),
-		DeltaCheck: dataBool(start, "delta_check"),
-		FullPass:   dataBool(start, "full_pass"),
-		AuditPass:  dataBool(start, "audit_pass"),
-		Roles:      dataStrings(start, "roles"),
-		Requested:  dataStrings(start, "requested"),
-		At:         evs[last].At,
+		Kind:           dataString(start, "kind"),
+		PostMerge:      dataBool(start, "post_merge"),
+		DeltaCheck:     dataBool(start, "delta_check"),
+		FullPass:       dataBool(start, "full_pass"),
+		BeforeApproval: dataBool(start, "before_approval"),
+		AuditPass:      dataBool(start, "audit_pass"),
+		Roles:          dataStrings(start, "roles"),
+		Requested:      dataStrings(start, "requested"),
+		At:             evs[last].At,
 	}
 	if w.DeltaCheck {
 		w.DeltaLines = dataInt(start, "delta_lines")

@@ -1,0 +1,206 @@
+package engine
+
+// Approval holds (DECISIONS "An approval rests on a whole-PR read"): a
+// re-review reads the commits since the last review, and when its verdict
+// is clean the judge posts APPROVE, so after several re-reviews an approval
+// rests on one whole read long ago and a chain of deltas, each read on its
+// own. On talkable#11483 magnum approved after a delta re-review of a fix,
+// and a colleague's whole-branch round then found a second path to the
+// same defect. So a re-review of a PR that had [pipeline]
+// approve_after_full_pass re-reviews or more since its baseline (its last
+// full pass, else its first review: rereviewsSinceFullPass) cannot approve
+// (pipeline.RoundInput.HoldApproval): its no-findings event is COMMENT, and
+// its prompt asks a clean verdict for the body line "A full pass of the
+// whole PR follows before approval.". When such a review posts with the
+// verdict clean, the PR is forced into a full pass of the same head at once
+// (store.KVPRFresh = FreshFullPass, as `magnum review --full` does;
+// fullPassDue names its rule fullPassApproval), every role fresh on the
+// whole diff, whose clean verdict approves and which is the PR's new
+// baseline. The hold applies to automatic and requested rounds alike (a
+// delta check, a recovery, an audit pass, a re-review of the same head); a
+// full pass, a post-merge review, a reply round, a CI check, a dry run and
+// an eval replay never hold. Auto-approval as the operator waits for the
+// full pass too (autoGateRefusal), and the status comment's posted line
+// says that it follows.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
+)
+
+// kvPRApprovalHold holds the PR's held review whose full pass follows
+// (heldReview as JSON); any later review that posts deletes it.
+func kvPRApprovalHold(prID int64) string { return fmt.Sprintf("pr.%d.approval_hold", prID) }
+
+// kvPRApprovalHoldRound holds why the PR's round in flight cannot approve
+// (approvalHoldDue), so a continue of a paused one holds too; the round's
+// end deletes it, a pause keeps it for the continue.
+func kvPRApprovalHoldRound(prID int64) string {
+	return fmt.Sprintf("pr.%d.approval_hold_round", prID)
+}
+
+// fullPassApproval is the rule of the full pass that follows a held review
+// (fullPassWhy.rule).
+const fullPassApproval = "approval"
+
+// approvalBy names, in the pr.forced event, who forces the full pass after
+// a held review (forceReview): no act of the operator's.
+const approvalBy = "magnum (approve_after_full_pass)"
+
+// approvalHoldRefusal is why auto-approval waits on a held review
+// (autoGateRefusal; the card's words).
+const approvalHoldRefusal = "its review held the approval: a full pass of the whole PR follows before approval"
+
+// heldReview is a review that held its approval (kvPRApprovalHold): its
+// review, judge run, round and target, and why it held.
+type heldReview struct {
+	ReviewID int64     `json:"review_id"`
+	Run      string    `json:"run"`
+	Round    int       `json:"round"`
+	Target   string    `json:"target"`
+	Why      string    `json:"why"`
+	At       time.Time `json:"at"`
+}
+
+// reason is why the full pass after h runs (round.full_pass, the round's
+// start event).
+func (h heldReview) reason() string {
+	return fmt.Sprintf("before approval: the clean re-review of %s in round %d posted as a comment after %s",
+		textx.ShortSHA(h.Target), h.Round, h.Why)
+}
+
+// approvalHoldDue says why the round rs sets up for job cannot approve ("" =
+// it may): approve_after_full_pass is set, the round is a re-review (a
+// delta check, a recovery, an audit pass, a re-review of the same head, a
+// round someone asked for), not a full pass, a post-merge review, an eval
+// replay, a dry run, a reply round or a CI check, and the PR had that many
+// re-reviews or more since its last full pass, else its first review
+// (rereviewsSinceFullPass).
+func (e *Engine) approvalHoldDue(ctx context.Context, job *roundJob, rs *roundSetup, dryRun bool) string {
+	after := e.cfg.Pipeline.ApproveAfterFullPass
+	switch {
+	case after <= 0, job.kind != pipeline.KindRereview, rs.fullPass, job.postMerge, job.evalHead != "", dryRun, rs.replies > 0, rs.ciRed:
+		return ""
+	}
+	n, last := e.rereviewsSinceFullPass(ctx, job.pr.ID)
+	if n < after {
+		return ""
+	}
+	since := "the first review"
+	if last.Round > 0 {
+		since = fmt.Sprintf("the full pass of round %d", last.Round)
+	}
+	return fmt.Sprintf("%s since %s (approve_after_full_pass %d)", textx.Count(n, "re-review", "re-reviews"), since, after)
+}
+
+// planApprovalHold settles whether the round rs sets up for job holds its
+// approval (job.approvalHold): a continue goes on as the paused round
+// decided (kvPRApprovalHoldRound), any other round decides now
+// (approvalHoldDue) and records it, with a round.approval_hold event when
+// it holds.
+func (e *Engine) planApprovalHold(ctx context.Context, job *roundJob, rs *roundSetup, dryRun bool) {
+	pr := job.pr
+	if job.kind == kindContinue {
+		job.approvalHold, _ = e.getKV(ctx, kvPRApprovalHoldRound(pr.ID))
+	} else {
+		job.approvalHold = e.approvalHoldDue(ctx, job, rs, dryRun)
+	}
+	if rs.kind == kindContinue {
+		return // the paused round's record stands
+	}
+	if job.approvalHold == "" {
+		e.delKV(ctx, kvPRApprovalHoldRound(pr.ID))
+		return
+	}
+	e.setKV(ctx, kvPRApprovalHoldRound(pr.ID), job.approvalHold)
+	if job.kind != kindContinue {
+		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.approval_hold",
+			"approval held: "+job.approvalHold+": a clean verdict posts as a comment, and a full pass of the whole PR follows before the approval",
+			map[string]any{"reason": job.approvalHold, "approve_after_full_pass": e.cfg.Pipeline.ApproveAfterFullPass})
+	}
+}
+
+// settleApprovalHold keeps a review that posted (onPosted) for the hold: a
+// round that held its approval and whose verdict is clean records the held
+// review (kvPRApprovalHold) and forces a full pass of the PR at once, as
+// `magnum review --full` does (forceReview), which the next dispatch runs
+// with every role fresh on the whole diff (fullPassDue: fullPassApproval);
+// any other review drops the record, the full pass's included.
+func (e *Engine) settleApprovalHold(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult) {
+	if !in.HoldApproval || job.postMerge || !e.postedClean(ctx, pr.ID, res.ReviewID) {
+		e.delKV(ctx, kvPRApprovalHold(pr.ID))
+		return
+	}
+	cur, err := e.st.PRByID(ctx, pr.ID)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "approval hold: the PR after its review", "pr", pr.ID)
+		return
+	}
+	if cur.GHState != store.GHOpen || !slices.Contains([]string{store.PRReviewed, store.PRRereviewPending, store.PRQueued}, cur.State) {
+		e.log.Info("approval hold: no full pass follows", "pr", pr.ID, "state", cur.State, "gh_state", cur.GHState)
+		e.delKV(ctx, kvPRApprovalHold(pr.ID))
+		return
+	}
+	held := heldReview{ReviewID: res.ReviewID, Run: res.JudgeRunID, Round: res.Round, Target: in.TargetSHA, Why: job.approvalHold, At: e.now().UTC()}
+	b, err := json.Marshal(held)
+	if err != nil {
+		return
+	}
+	e.setKV(ctx, kvPRApprovalHold(pr.ID), string(b))
+	subject := prSubject(job.repo, pr.Number)
+	if _, err := e.forceReview(ctx, job.repo, cur, ReviewPayload{Full: true}, nil, approvalBy); err != nil {
+		e.event(ctx, "warn", subject, "pr.approval_full_pass_failed", "the full pass after the held review could not be queued: "+err.Error(),
+			map[string]any{"review_id": res.ReviewID})
+		return
+	}
+	e.event(ctx, "info", subject, "pr.approval_full_pass",
+		fmt.Sprintf("the clean re-review of %s posted as a comment; a full pass of the whole PR on %s follows before approval",
+			textx.ShortSHA(in.TargetSHA), textx.ShortSHA(cur.HeadSHA)),
+		map[string]any{"review_id": res.ReviewID, "target_sha": in.TargetSHA, "head_sha": cur.HeadSHA})
+}
+
+// postedClean reports whether review reviewID, which a round of PR prID
+// just posted, is its latest and has the verdict clean (the judge's result
+// the round stored: store.ReviewSummary).
+func (e *Engine) postedClean(ctx context.Context, prID, reviewID int64) bool {
+	if reviewID == 0 {
+		return false
+	}
+	sums, err := e.st.LastReviewSummaries(ctx, []int64{prID})
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "approval hold: review summary", "pr", prID)
+		return false
+	}
+	s, ok := sums[prID]
+	return ok && s.ReviewID == reviewID && s.Verdict == store.VerdictClean
+}
+
+// heldReviewOf is PR prID's held review (kvPRApprovalHold) when it is
+// review reviewID (the PR's last one, for the callers); ok is false
+// otherwise.
+func (e *Engine) heldReviewOf(ctx context.Context, prID, reviewID int64) (heldReview, bool) {
+	v, ok := e.getKV(ctx, kvPRApprovalHold(prID))
+	var h heldReview
+	if !ok || reviewID == 0 || json.Unmarshal([]byte(v), &h) != nil || h.ReviewID != reviewID {
+		return heldReview{}, false
+	}
+	return h, true
+}
+
+// approvalPassDue reports whether pr's last review held its approval and
+// its full pass is still asked for (store.KVPRFresh): the status comment's
+// posted line says that it follows.
+func (e *Engine) approvalPassDue(ctx context.Context, pr store.PR) bool {
+	if _, ok := e.heldReviewOf(ctx, pr.ID, deref(pr.LastReviewID)); !ok {
+		return false
+	}
+	v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID))
+	return v == store.FreshFullPass
+}

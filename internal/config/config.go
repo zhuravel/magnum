@@ -831,7 +831,7 @@ func Defaults() *Config {
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
 		GitHub:   GitHub{Transport: "gh"},
-		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FullPassEvery: DefaultFullPassEvery, AuditEvery: DefaultAuditEvery, FullPassLines: DefaultFullPassLines, FullPassFiles: DefaultFullPassFiles, FullPassAfter: Duration{DefaultFullPassAfter}, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever, WhiteboardRole: RoleClaudeWhiteboard, Spend: SpendMedium},
+		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FullPassEvery: DefaultFullPassEvery, AuditEvery: DefaultAuditEvery, ApproveAfterFullPass: DefaultApproveAfterFullPass, FullPassLines: DefaultFullPassLines, FullPassFiles: DefaultFullPassFiles, FullPassAfter: Duration{DefaultFullPassAfter}, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever, WhiteboardRole: RoleClaudeWhiteboard, Spend: SpendMedium},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),

@@ -264,7 +264,8 @@ type JudgeData struct {
 	ReviewerLogin string // REST form, e.g. talkable[bot]
 	GhConfigDir   string // "" for the gh identity
 	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
-	// of the round left no usable report (pipeline.JudgeEvents).
+	// of the round left no usable report (pipeline.JudgeEvents), or the
+	// round holds its approval for a full pass (HoldApproval).
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
@@ -355,6 +356,12 @@ type JudgeData struct {
 	// never a finding. Rendered as one instruction, only then; "" = none.
 	AuditFile  string
 	AuditAreas int
+	// HoldApproval (rereview, recovery): the round cannot approve
+	// ([pipeline] approve_after_full_pass; pipeline.RoundInput.HoldApproval):
+	// NoFindingsEvent is COMMENT, a clean verdict posts as a comment, and a
+	// full pass of the whole PR follows before the approval. Rendered as
+	// one instruction, with the body line a clean verdict adds, only then.
+	HoldApproval bool
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string

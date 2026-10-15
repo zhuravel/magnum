@@ -498,7 +498,8 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 // ("magnum review"; "magnum fix" for the fix loop's re-review, which calls it
 // directly: the loop's own review is not refused while the loop runs, and,
 // being no act of the operator's, leaves the stalemate threads flagged for
-// them). It returns the state the PR moved to.
+// them; approvalBy likewise for the full pass after a held review,
+// approval_hold.go). It returns the state the PR moved to.
 func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, p ReviewPayload, requested []string, by string) (string, error) {
 	// The dry-run marker is settled before the PR is forced: a forced PR
 	// must never run in the wrong mode because a kv write failed.
@@ -539,7 +540,7 @@ func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, 
 	} else {
 		e.delKV(ctx, kvPRRedecide(pr.ID)) // this request is a review, whatever an earlier one asked
 	}
-	if by != fixBy { // the fix loop's own re-review is no act of the operator's
+	if by != fixBy && by != approvalBy { // the fix loop's re-review and a held review's full pass are magnum's own
 		e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
 	}
 	forced := "forced"

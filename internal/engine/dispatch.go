@@ -73,6 +73,10 @@ type roundJob struct {
 	// unknown and stale areas first; "" = it does not, as whenever a full
 	// pass is due.
 	audit string
+	// approvalHold says why the round cannot approve (approval_hold.go:
+	// planApprovalHold, at the round's setup): its clean verdict posts as a
+	// comment and a full pass of the whole PR follows; "" = it may approve.
+	approvalHold string
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it

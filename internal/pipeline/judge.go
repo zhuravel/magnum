@@ -102,7 +102,11 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 		}
 	}
 	if usual, _ := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge || jd.SelfAuthored); usual != jd.NoFindingsEvent {
-		msg += fmt.Sprintf("; no %s this round, a report is missing: %s", usual, strings.Join(missingReports(jd.Reports), ", "))
+		if missing := missingReports(jd.Reports); len(missing) > 0 || !in.HoldApproval {
+			msg += fmt.Sprintf("; no %s this round, a report is missing: %s", usual, strings.Join(missing, ", "))
+		} else {
+			msg += fmt.Sprintf("; no %s this round: a full pass of the whole PR follows before approval (approve_after_full_pass)", usual)
+		}
 	}
 	rd.event(ctx, "info", "round.judge", msg,
 		map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports, "no_findings_event": jd.NoFindingsEvent, "phase": jd.Phase})
@@ -829,7 +833,8 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 const PostMergeEvent = "COMMENT"
 
 // noApproveEvent is the no-findings event of a round that lacks a reviewer's
-// report (JudgeEvents).
+// report (JudgeEvents), or that holds its approval for a full pass
+// (RoundInput.HoldApproval).
 const noApproveEvent = "COMMENT"
 
 // JudgeEvents are the review events the judge's prompt names for a round of
@@ -870,6 +875,9 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	reports := rd.judgeReports()
 	self := rd.selfAuthored()
 	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge || self, reports...)
+	if in.HoldApproval {
+		nf = noApproveEvent // the approval waits for a full pass of the whole PR (RoundInput.HoldApproval)
+	}
 	skill := config.SkillPath(rd.judge.Skill, rd.r.Layout) // config.Defaults keeps {{repo}} unexpanded
 	base := in.BaseRef
 	if base == "" {
@@ -891,7 +899,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(rereview),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
 		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), CIRed: rd.ciRed(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile,
-		PrepassFile: rd.prepassFile, ColdJudge: cold, FullPass: in.FullPass && in.Kind == KindRecovery,
+		PrepassFile: rd.prepassFile, ColdJudge: cold, FullPass: in.FullPass && in.Kind == KindRecovery, HoldApproval: in.HoldApproval,
 		EvidenceMap: rd.evidenceMap(),
 	}
 	jd.EvidenceFile = filepath.Join(filepath.Dir(jd.ResultFile), EvidenceFile)

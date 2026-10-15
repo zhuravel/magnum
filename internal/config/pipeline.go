@@ -86,6 +86,15 @@ type Pipeline struct {
 	// and one earlier probe again (engine audit.go). A full pass due on the
 	// same round wins. Default DefaultAuditEvery; 0 = never.
 	AuditEvery int `toml:"audit_every"`
+	// ApproveAfterFullPass: a re-review (a delta check, a recovery, an audit
+	// pass or a round someone asked for alike) of a PR that has this many
+	// re-reviews or more since its baseline (its last full pass, else its
+	// first review) cannot approve: its clean verdict posts as a comment,
+	// and a full pass of the whole PR on the same head follows at once,
+	// whose clean verdict approves (engine approval_hold.go). A full pass, a
+	// post-merge review, a reply round, a CI check and a dry run never hold.
+	// Default DefaultApproveAfterFullPass; 0 = off.
+	ApproveAfterFullPass int `toml:"approve_after_full_pass"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -284,6 +293,11 @@ const DefaultFullPassAfter = 7 * 24 * time.Hour
 // DefaultAuditEvery is [pipeline] audit_every's default: every fifth
 // automatic re-review of a PR probes what no round probed.
 const DefaultAuditEvery = 5
+
+// DefaultApproveAfterFullPass is [pipeline] approve_after_full_pass'
+// default: the first two re-reviews after a PR's baseline approve on their
+// delta, so one round of fixes after the first review approves at once.
+const DefaultApproveAfterFullPass = 2
 
 // FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
 // sets one, else [pipeline]'s, else DefaultFixCycles. A nil w is
