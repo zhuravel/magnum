@@ -7882,6 +7882,51 @@ skill versions); people add theirs to the sections before it, at the end of the 
   needs_attention with the same stuck pane; closing the workspace, which on this machine holds a shell no
   session owns; typing `/exit` as one word, since herdr validates every key before it writes any and takes
   key combos only.
+- **A finding names its harm, its size and the fix's cost in words, and P2 means the 10 anchor**
+  (2026-10-15). Since 2026-10-13 the colleagues' reply skill scores every comment's suggestion: pros minus
+  cons on an open scale with anchors (1 nobody notices, 3 the next person to touch the code feels it, 10
+  real money, real user harm or a day of work, 30 not safe to ship), `Low priority` below a net of +5, and
+  four kinds exempt whatever their net (a defect the diff introduced, a broken reference, a failing test, a
+  crash). On talkable#12032 two of magnum's P3s got `Low priority, net 0` and `net +2.2`, and a Codex
+  connector P2 got `net -6`. The operator asked whether magnum should post the same pros, cons and net; the
+  evidence says no, as "No score before posting" (2026-10-05) did. Two blind scorers put the colleague's
+  scale on 106 posted findings whose outcome the retro knows: they agreed (rank correlation 0.89), yet the
+  chance that a fixed finding outscores a declined one was only 0.51 to 0.59, the median net of a fixed P2
+  was 1.7 to 2.0, a +5 bar would have dropped 54 of the 79 findings the authors fixed, and a P-level derived
+  from the net gives no P1 and at most three P2s. The colleague's tool itself scores magnum's fixed P2s at
+  +3 to +4.5, and people fix them anyway; it adopts a posted net 11 times of 13. What carries across the
+  two tools is a named consequence with its size (the tool weighs a pro above 3 only when the comment names
+  one, and quotes the deciding pro), a stated regression (never dropped), and the fix's cost. The retro's
+  13 over-ranked P2 declines all said the finding was right and the consequence small: a self-healing
+  millisecond race, a hand-made request that fails only itself, a product choice, a risk the diff cannot
+  fix, a throwaway test rig. P2's definition named reach and "harm beyond the triggering request", not the
+  size of the harm. Four rules in `skills/magnum-review/SKILL.md`: section 4's P2 bullet adds that the
+  comment names and sizes the harm (money, data or access lost, a task a user cannot finish, or a day of
+  someone's work), and a harm that heals itself or ends with the request is P3; section 5's comment form
+  gives the consequence its size (who loses what, how many, how often) and **Fix** what it costs (the lines
+  it touches, what it could break), the cost never lowering the priority (2026-10-05 kept cost out of
+  "is this real"); when the reproduction also ran at the base, one line before **Fix** states the
+  regression, `This PR introduced it: on <base_ref>, <result>; with this PR, <result>.`, `base_ref` being
+  the `<magnum>` block's name for the base branch (a finding in a feature the PR adds has no base result,
+  which the rule's condition already covers, so the skill does not say it); and section 6 decides a reply
+  that scores the fix (`Low priority, net -6. <reason>`) by its reason, never by the number: the judge
+  rebuts only a fact it disproves at `head_sha`, or a consequence its comment sized that the reply leaves
+  out, with the evidence and no score of its own, and honours a product decision, data only the author
+  holds and every decline of a P3. That sentence follows "Then the finding stays open: …", not the
+  "Honour it unless…" sentence before it, so that "Then" still follows a reason proved wrong. The rules
+  add 838 bytes (175, 147, 165 and 351); three unpinned trims win back 114: section 4's two sentences after
+  the P-list become one (41), section 5's "the author cannot see your machine" goes (36), and so does
+  section 7's "Finish all analysis before you post." (37). SKILL.md goes from 34,124 to 34,848 bytes and
+  `skillMaxBytes` from 34,124 to 34,848. New tests TestSkillP2NamesAndSizesItsHarm,
+  TestSkillCommentsSizeTheConsequenceAndCostTheFix, TestSkillStatesARegressionAgainstTheBase and
+  TestSkillDecidesAScoredDeclineByItsReason pin the four rules, and the two pins of the Fix sentence read
+  "one smallest safe change, what it must keep" for "and what it must keep", the rule they protect kept;
+  `skill_pins.txt` is regenerated. `skills/magnum-fix/SKILL.md` keeps its own scoring (the fixer fixes at a
+  net of 3 on the same anchors). Rejected: posting `Pros:`, `Cons:` and `Net:` lines, since a posted net
+  of +2 under a P2 hands the author's tool a number below its own bar and the nets did not predict fixes;
+  deriving the P-level from a net, which on real data gives no P1 and at most three P2s; an internal net in
+  the result file as a measurement, since the blind experiment already measured it; and leaving P3s out,
+  since colleagues fixed 27 of 33 answered P3s.
 
 ## Learned rules
 

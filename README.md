@@ -1651,7 +1651,10 @@ and "No guard for now"; "added in", "removed in" and "closed by … in" with a c
 judge decides a reply by what it does, not by that hint, accepts a fix
 only when the code shows it (a defect that is an end state only when every write of the same flow that reaches
 it is covered, with a probe of one the fix left untouched), honours an answered finding unless it proves the reason wrong (then it
-says why in one sentence in that thread), and lists only what changed since its last review: findings
+says why in one sentence in that thread), decides a reply that scores the fix (`Low priority, net -6`) by
+its reason, never by the number (it rebuts only a fact it disproves at the head, or a consequence its
+comment sized that the reply leaves out, with the evidence and no score of its own, and honours a product
+decision, data only the author holds and every decline of a P3), and lists only what changed since its last review: findings
 now fixed or answered, findings still open despite a reply or a commit, and new ones; the unchanged open
 findings are one count with a link to the previous review. The own pass records each fix of an end
 state under `## Fix evidence` (the invariant, the writes that reach the state, those it probed and those
@@ -1770,19 +1773,23 @@ What an author gets, every review alike:
   and Checks names the missing reviewer. A PR the posting login (or the human behind it) opened gets
   `COMMENT` both ways, as a post-merge review does.
 - **Each finding on the defective line**, the code that must change: a title that states the wrong result;
-  the trigger, who can produce it and the concrete consequence; a test that proves it as a fenced block
-  naming its spec file and line (the test the judge ran, never only its output); **Fix** with the code
-  cause, one smallest safe change and the behaviour it must keep, any code in it run with the reproduction
-  before it is posted (a `suggestion` is only ever the code fix). A P3's title ends "(optional, no reply
-  needed)"; a re-review's finding in code written to fix an earlier one ends "(in the fix for <earlier
-  title>)".
+  the trigger, who can produce it and the concrete consequence with its size (who loses what, how many,
+  how often); a test that proves it as a fenced block naming its spec file and line (the test the judge
+  ran, never only its output); when that test also ran at the base, one line that states the regression
+  (`This PR introduced it: on master, <result>; with this PR, <result>.`); **Fix** with the code cause, one
+  smallest safe change, the behaviour it must keep and what it costs (the lines it touches, what it could
+  break; the cost never lowers the priority), any code in it run with the reproduction before it is posted
+  (a `suggestion` is only ever the code fix). A P3's title ends "(optional, no reply needed)"; a
+  re-review's finding in code written to fix an earlier one ends "(in the fix for <earlier title>)".
 - **The description's claims checked**: a false claim that bears on risk (a ticked "Can be reverted
   easily" whose previous release cannot run on the new schema or the jobs queued meanwhile) is a finding
   at its priority; one without impact is one body line, `Description: ✗ <claim>: <why>`; a true claim
   gets no line.
 - **Priority by reachability**: P2 is a defect that real use or an attacker reaches, with harm beyond the
-  triggering request; one that only crafted input or a stack of unlikely preconditions reaches, harming
-  only that request, is P3. A size or timing trigger states its threshold and why real data reaches it.
+  triggering request that the comment names and sizes (money, data or access lost, a task a user cannot
+  finish, a day of someone's work); one that only crafted input or a stack of unlikely preconditions
+  reaches, harming only that request, is P3, as is a harm that heals itself or ends with the request. A
+  size or timing trigger states its threshold and why real data reaches it. No finding carries a score.
 - **At most three simplifications**, the most substantial, one comment per idea, titled
   "**Simplification** (optional, no reply needed)", each backed by an equivalence probe listed in Checks.
   Each removes something a reader must hold (a branch, helper, flag, duplicated block), never only renames

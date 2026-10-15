@@ -489,9 +489,15 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // (12), the stacked PR's lower layer (24), an answered thread's reply (14)
 // and a report's priority (24); then 33,891 for the blind own pass of a full
 // pass in section 0 (165), then 34,081 for section 0's `evidence` input line
-// (190), then 34,124 for the product's name in section 5 (46). Every rule
+// (190), then 34,124 for the product's name in section 5 (46). Then 34,848
+// for a finding's harm in words (2026-10-15: 838 bytes, a P2 that names and
+// sizes its harm (175), the consequence's size and the fix's cost in the
+// comment form (147), the regression line (165) and a scored decline decided
+// by its reason (351)), less 114 of unpinned wording: section 4's reread
+// sentences (41), section 5's "the author cannot see your machine" (36) and
+// section 7's "Finish all analysis before you post." (37). Every rule
 // added must replace or shorten text.
-const skillMaxBytes = 34124
+const skillMaxBytes = 34848
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -649,7 +655,7 @@ func TestJudgePromptsPostAtMostThreeSimplificationsThatRemoveSomething(t *testin
 // input that goes wrong; the drafted review is reread once before posting.
 func TestSkillShapesCommentsAroundTriggerAndSmallestFix(t *testing.T) {
 	skillSays(t, []string{
-		"**Fix**: the code cause, one smallest safe change and what it must keep",
+		"**Fix**: the code cause, one smallest safe change, what it must keep",
 		"Structure can hide a defect",
 		"Report one only with the input that goes wrong.",
 		"reread every comment once",
@@ -663,7 +669,7 @@ func TestSkillShapesCommentsAroundTriggerAndSmallestFix(t *testing.T) {
 // with the reproduction first, and a finding in such code says so.
 func TestSkillChecksTheFixAndSaysWhatItKeeps(t *testing.T) {
 	skillSays(t, []string{
-		"**Fix**: the code cause, one smallest safe change and what it must keep (the behaviour the surrounding code relies on).",
+		"**Fix**: the code cause, one smallest safe change, what it must keep (the behaviour the surrounding code relies on)",
 		"Run any code you suggest with the reproduction (a probe, or a scratch worktree as in section 2) before you post it.",
 		"A finding in code written to fix an earlier one ends its title with `(in the fix for <earlier title>)`.",
 	}, []string{"**Fix**: the code cause and the smallest safe change"})
@@ -1734,5 +1740,49 @@ func TestSkillAppliesTheNotesBeforeTheVerdict(t *testing.T) {
 	skillSays(t, []string{
 		"Before the verdict, list in the own pass, under `## Notes applied`, each notes line that applies, with the probe or argument " +
 			"that discharged it, or `unknown`; a lesson you write this round applies to this round first.",
+	}, nil)
+}
+
+// The colleagues' review tool scores every comment on anchors (1 nobody
+// notices, 3 the next person feels it, 10 real money, real user harm or a
+// day of work, 30 not safe to ship) and weighs a pro above 3 only when the
+// comment names the consequence. The retro's 13 over-ranked P2 declines were
+// right and small: a self-healing millisecond race, a hand-made request that
+// fails only itself. P2 means the 10 anchor in words, never a number.
+func TestSkillP2NamesAndSizesItsHarm(t *testing.T) {
+	skillSays(t, []string{
+		"with harm beyond the triggering request that the comment names and sizes: money, data or access lost, " +
+			"a task a user cannot finish, or a day of someone's work; or missing tests for changed business behaviour.",
+		"A harm that heals itself or ends with the request is P3.",
+	}, nil)
+}
+
+// The author's tool quotes the deciding pro or con, and the cons it invents
+// are the fix's cost: the comment states the consequence's size and the
+// fix's cost itself, and the cost never lowers the priority (2026-10-05).
+func TestSkillCommentsSizeTheConsequenceAndCostTheFix(t *testing.T) {
+	skillSays(t, []string{
+		"the trigger, who produces it and the consequence with its size (who loses what, how many, how often);",
+		"and what it costs (the lines it touches, what it could break); the cost never lowers the priority.",
+	}, []string{"who produces it and the consequence; the reproduction"})
+}
+
+// The author's tool never drops a defect the diff introduced, whatever its
+// net: a reproduction that also ran at the base says so in one line.
+func TestSkillStatesARegressionAgainstTheBase(t *testing.T) {
+	skillSays(t, []string{
+		"When the reproduction also ran at the base, one line before **Fix** states the regression: " +
+			"`This PR introduced it: on <base_ref>, <result>; with this PR, <result>.`",
+	}, nil)
+}
+
+// On talkable#12032 two P3s were declined at net 0 and +2.2 and a P2 at net
+// -6: a net is the author's weighing of costs only they see, so the judge
+// answers the reason's facts, never the number, and posts no score of its own.
+func TestSkillDecidesAScoredDeclineByItsReason(t *testing.T) {
+	skillSays(t, []string{
+		"A reply that scores the fix (`Low priority, net -6. <reason>`) is decided by its reason, never by the number: " +
+			"rebut only a fact in it you disprove at `head_sha`, or a consequence your comment sized that the reply leaves out, " +
+			"with the evidence and no score of your own; honour a product decision, data only the author holds, and every decline of a P3.",
 	}, nil)
 }

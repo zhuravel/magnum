@@ -104,19 +104,19 @@ Reachability decides the priority: name who produces the trigger (a user in norm
 Rank every finding by these definitions, whatever a report says; they decide the verdict (section 7):
 
 - `P1` blocks the merge: wrong behaviour on a realistic path, a security or privacy hole, data loss or corruption, a broken build, migration or deploy.
-- `P2` should be fixed before the merge: a real defect on an edge path that real use or an attacker reaches, with harm beyond the triggering request; or missing tests for changed business behaviour.
+- `P2` should be fixed before the merge: a real defect on an edge path that real use or an attacker reaches, with harm beyond the triggering request that the comment names and sizes: money, data or access lost, a task a user cannot finish, or a day of someone's work; or missing tests for changed business behaviour. A harm that heals itself or ends with the request is P3.
 - `P3` optional: a small real defect the author may leave as is; its title ends with `(optional, no reply needed)`. Example: a failure only crafted input or a stack of unlikely preconditions reaches, harming only that request.
 - `P0` is a `P1` that does broad damage as soon as it deploys (rare).
 
 Harm includes developers' time: local runs that diverge from CI, generated files that change, a new flaky test; `P1` when it breaks their normal work.
 
-Then read the full PR diff again: check that you inspected every file and that each finding belongs to this PR. Stop only when a pass finds no new material problem.
+Then reread the full PR diff: every file inspected, each finding this PR's; stop when a pass finds no new material problem.
 
 ## 5. Write GitHub comments that are easy to scan
 
 Anchor each finding on the defective line: the smallest changed line of the code that must change, never a test file unless it is a flaky test the PR adds. Put details in the review body only for a cross-cutting problem with no useful changed line.
 
-Comment form, in plain English: a title that states the wrong result; the trigger, who produces it and the consequence; the reproduction; **Fix**: the code cause, one smallest safe change and what it must keep (the behaviour the surrounding code relies on). Run any code you suggest with the reproduction (a probe, or a scratch worktree as in section 2) before you post it.
+Comment form, in plain English: a title that states the wrong result; the trigger, who produces it and the consequence with its size (who loses what, how many, how often); the reproduction; **Fix**: the code cause, one smallest safe change, what it must keep (the behaviour the surrounding code relies on) and what it costs (the lines it touches, what it could break); the cost never lowers the priority. When the reproduction also ran at the base, one line before **Fix** states the regression: `This PR introduced it: on <base_ref>, <result>; with this PR, <result>.` Run any code you suggest with the reproduction (a probe, or a scratch worktree as in section 2) before you post it.
 
 ````markdown
 **[P2] Old Reject error appears in a new chat**
@@ -140,7 +140,7 @@ it("keeps a late Reject error out of a new chat", async () => {
 The `catch` changes state before the session check. Check the captured session first; keep showing the open chat's errors.
 ````
 
-Reproductions travel with the finding; the author cannot see your machine:
+Reproductions travel with the finding:
 
 - Put it into the comment as a fenced block of at most about 25 lines: the minimal failing input, a command with its output, or the test or script you ran as its code, never only its output; a test names its file and line (`spec/models/order_spec.rb:42`), never as a `suggestion`. Numbered steps are fine for a UI flow no test covers, never for a security finding.
 - Name files by their repository path, never by a local one; describe output instead of linking a file that holds it.
@@ -158,7 +158,7 @@ Read the replies to your earlier threads and every review or issue comment since
 The reply contract. Decide each earlier finding:
 
 - **fixed**: the code at `head_sha` fixes it, whatever a reply says; a commit after `head_sha` does not count (section 7). Before you call it fixed, check what the fix costs at real sizes (its new remote calls, pages and loops, against the remote's limits: throttling, timeouts) and, for a gap in a set, sweep the set again (section 2). A defect that is an end state (a record left as the code cannot serve it, a value a reader cannot use) is fixed only when every write of the same flow that reaches that state is covered: list them, and probe one the fix leaves untouched. Record each such fix in the own pass under `## Fix evidence`: the invariant, the writes that reach the state, those you probed and those unproven; an unproven write the fix left untouched keeps the finding open.
-- **answered**: a reply that disputes the finding or declines the fix with a reason. Weighing the fix and turning it down (a negative score, "not worth it", "we accept the risk") is `won't fix`, even if the reply calls the thread open or the remedy undecided. Honour it unless you prove the reason wrong at `head_sha` (say, the impact is larger). Then the finding stays open: reply in its thread with one sentence that says why (section 8), never in a new comment. Do not repeat a rebuttal you already posted there (`own`) unless the author answered it.
+- **answered**: a reply that disputes the finding or declines the fix with a reason. Weighing the fix and turning it down (a negative score, "not worth it", "we accept the risk") is `won't fix`, even if the reply calls the thread open or the remedy undecided. Honour it unless you prove the reason wrong at `head_sha` (say, the impact is larger). Then the finding stays open: reply in its thread with one sentence that says why (section 8), never in a new comment. A reply that scores the fix (`Low priority, net -6. <reason>`) is decided by its reason, never by the number: rebut only a fact in it you disprove at `head_sha`, or a consequence your comment sized that the reply leaves out, with the evidence and no score of your own; honour a product decision, data only the author holds, and every decline of a P3. Do not repeat a rebuttal you already posted there (`own`) unless the author answered it.
 - **still open**: no fix, no reasoned dispute or decline, or a reason you proved wrong.
 
 Post nothing new for fixed or answered findings, and do not re-post a still-open one inline. A reply that states a standing decision of the repository goes into the repository notes (section 2).
@@ -167,7 +167,7 @@ Body: `**Re-review 9be04f2 → 4c1d2e3:**`, or `**Re-review of 4c1d2e3 (no new c
 
 ## 7. Post one review
 
-Finish all analysis before you post. Validate, rank and dedupe the findings, then reread every comment once: cut preamble, repeated context and vague words; check each finding keeps its trigger, result, reproduction and fix.
+Validate, rank and dedupe the findings, then reread every comment once: cut preamble, repeated context and vague words; check each finding keeps its trigger, result, reproduction and fix.
 
 Body (under 150 words in normal cases, collapsed blocks excluded): the verdict line, the finding titles by priority (counts by priority when there are more than five), any related-PR or `Description: ✗` line (section 2), any nearby block, the Checks block, nothing after it (`post_review` adds the run's marker, magnum the footer). No GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process.
 
