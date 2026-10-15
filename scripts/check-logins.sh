@@ -4,7 +4,7 @@
 # a human GitHub login from the local registry (PR authors, assignees,
 # requested reviewers), except the logins in MAGNUM_OWN_LOGINS and
 # MAGNUM_LOGIN_ALLOW (comma or space separated, set in the gitignored
-# .mise.local.toml). Tests use placeholders (alice, bob, rev-ann). Without a
+# mise.local.toml). Tests use placeholders (alice, bob, rev-ann). Without a
 # registry (a fresh clone, CI) there is nothing to check.
 set -eu
 db="${MAGNUM_DB:-}"

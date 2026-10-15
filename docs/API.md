@@ -10061,8 +10061,8 @@ VARIABLES
 
 var ErrPlaceholderKey = errors.New("identity: placeholder private key")
     ErrPlaceholderKey matches (errors.Is) the error for a key variable that
-    still holds the placeholder sentence the tracked .mise.toml sets, instead of
-    the PEM text or key file path from .mise.local.toml.
+    still holds the placeholder sentence the tracked mise.toml sets, instead of
+    the PEM text or key file path from mise.local.toml.
 
 
 FUNCTIONS

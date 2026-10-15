@@ -7812,6 +7812,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   counts as a PATH when more than half of its entries are absolute; a `~` entry is expanded to HOME when appended,
   a relative one (`.`, `bin`) is left out, since the daemon's PATH holds directories, and a space is kept. Rejected: appending the entry as written (the daemon would search a literal `~`); refusing
   the line (one odd entry would cost every other directory).
+- **Magnum's own mise files are undotted, and launchd goes through mise for either spelling** (2026-10-15).
+  The repository's `.mise.toml` is now `mise.toml`, and the docs keep the private patterns and logins in
+  `mise.local.toml`, as the repositories it reviews do; `.gitignore` names both local spellings, so an older
+  `.mise.local.toml` stays ignored (mise still loads it). launchPrefix sent launchd and the gh shim through
+  `mise exec` only when the checkout held `.mise.toml` or `.mise.local.toml`, so a checkout with only the
+  undotted files would start the daemon without the variable an App's private_key_env reads. Now any of
+  `mise.toml`, `.mise.toml`, `mise.local.toml` and `.mise.local.toml` counts, since mise reads each (the
+  dotted file overrides the undotted one, https://mise.jdx.dev/configuration.html). The placeholder-key
+  error names `mise.toml` and `mise.local.toml`. A reviewed repository's mise files already worked under
+  either name ("The rendered local mise file keeps the main clone's spelling").
+- **CI takes Go and golangci-lint from mise.toml** (2026-10-15, amends "A lint and CI gate"). Each job set up
+  Go with actions/setup-go from go.mod, and golangci-lint-action installed its own pinned binary, so the
+  workflow repeated the versions `mise.toml` pins. Now every job runs `.github/actions/setup-environment`:
+  jdx/mise-action installs the `mise.toml` tools and exports its `[env]`, then actions/cache restores the
+  module and build caches keyed on the job, the platform, the Go version mise reports, and the hash of
+  `go.sum` and the workflow (a change of test flags still saves a new build cache), and `go mod download`
+  runs. The weekly run on the newest Go sets MISE_GO_VERSION=latest, with mise's install cache under its own
+  key, and its matrix leg is named `stable` beside `mise.toml` (was `go.mod`). golangci-lint-action keeps
+  only-new-issues and runs the binary from PATH (install-mode none). govulncheck installs into
+  `$RUNNER_TEMP/bin`, since mise sets GOBIN to its Go's directory. The exported `[env]` holds only
+  MAGNUM_PRIVATE_PATTERNS = "", which `make check-private` treats as unset, and the workflow uses no secret it
+  could shadow. Dependabot also watches `.github/actions/*`. Rejected: running golangci-lint by hand with
+  `--new-from-rev` (the action already finds a push's and a PR's base).
 
 - **A fix of an end state is judged against every write that reaches it** (2026-10-15, amends "Nine review
   rules from the 2026-10-14 run"). On a 24k-line PR the judge called a kept-tiers defect fixed, with a

@@ -1,4 +1,4 @@
-# golangci-lint configuration for magnum (golangci-lint v2.14, pinned in .mise.toml and the CI workflow;
+# golangci-lint configuration for magnum (golangci-lint v2.14, pinned in mise.toml, which CI installs from;
 # Go 1.27). `make lint` runs it; CI reports only the issues a change adds.
 #
 # Tuned against a full run over this repository on 2026-10-09. Every linter that is off says why, and

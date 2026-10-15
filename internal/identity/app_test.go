@@ -477,7 +477,7 @@ func assertFile(t *testing.T, path, want string, perm os.FileMode) {
 	}
 }
 
-// The tracked .mise.toml ships a sentence where the key belongs. It must be
+// The tracked mise.toml ships a sentence where the key belongs. It must be
 // reported as the placeholder, not as a missing key file.
 func TestLoadPrivateKeyReportsThePlaceholder(t *testing.T) {
 	dir := t.TempDir()
@@ -485,9 +485,10 @@ func TestLoadPrivateKeyReportsThePlaceholder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "appkey"), []byte("not pem"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := "the private key in $KEY_ENV is the placeholder from .mise.toml; put the PEM in .mise.local.toml"
+	want := "the private key in $KEY_ENV is the placeholder from mise.toml; put the PEM in mise.local.toml"
 	for name, value := range map[string]string{
-		"tracked placeholder":      "you-must-configure-this-in-your-.mise.local.toml",
+		"tracked placeholder":      "you-must-configure-this-in-your-mise.local.toml",
+		"older dotted placeholder": "you-must-configure-this-in-your-.mise.local.toml",
 		"placeholder any case":     "  You-Must-Configure-This  ",
 		"placeholder with a slash": "you-must-configure/this",
 		"a word, not a path":       "TODO",
@@ -514,14 +515,14 @@ func TestLoadPrivateKeyReportsThePlaceholder(t *testing.T) {
 	}
 }
 
-// The tracked .mise.toml never carries key material: no [env] value is PEM
+// The tracked mise.toml never carries key material: no [env] value is PEM
 // text, and a *_PRIVATE_KEY variable it declares holds the placeholder
 // (App keys are files named by private_key_file).
 func TestTrackedMiseTomlHoldsNoKeys(t *testing.T) {
 	var mise struct {
 		Env map[string]any `toml:"env"`
 	}
-	if _, err := toml.DecodeFile(filepath.Join("..", "..", ".mise.toml"), &mise); err != nil {
+	if _, err := toml.DecodeFile(filepath.Join("..", "..", "mise.toml"), &mise); err != nil {
 		t.Fatal(err)
 	}
 	for name, v := range mise.Env {
@@ -530,11 +531,11 @@ func TestTrackedMiseTomlHoldsNoKeys(t *testing.T) {
 			continue
 		}
 		if strings.Contains(s, "PRIVATE KEY") {
-			t.Errorf("%s in .mise.toml holds key material", name)
+			t.Errorf("%s in mise.toml holds key material", name)
 		}
 		if strings.HasSuffix(name, "_PRIVATE_KEY") {
 			if _, err := loadPrivateKey(name, s); !errors.Is(err, ErrPlaceholderKey) {
-				t.Errorf("%s from .mise.toml: err = %v, want the placeholder error", name, err)
+				t.Errorf("%s from mise.toml: err = %v, want the placeholder error", name, err)
 			}
 		}
 	}

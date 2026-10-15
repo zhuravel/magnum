@@ -1,5 +1,6 @@
-# Dependabot: weekly update PRs for the Go modules and the CI workflow's actions. AGENTS.md asks for the
-# latest dependencies; each update still goes through CI and the gate (`make test`) before it lands.
+# Dependabot: weekly update PRs for the Go modules and the actions of the CI workflow and its setup action.
+# AGENTS.md asks for the latest dependencies; each update still goes through CI and the gate (`make test`)
+# before it lands.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -15,7 +16,10 @@ updates:
           - "github.com/charmbracelet/*"
 
   - package-ecosystem: github-actions
-    directory: /
+    # "/" covers only .github/workflows; the composite setup action needs its own directory
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
       day: monday

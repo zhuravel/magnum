@@ -296,6 +296,26 @@ func TestLaunchRunsTheBinaryDirectlyUnlessAKeyComesFromMise(t *testing.T) {
 	}
 }
 
+// mise reads a checkout's shared and local config undotted or dotted
+// (mise.toml, .mise.toml, mise.local.toml, .mise.local.toml), so an App key
+// from the checkout's mise environment sends launchd through mise whichever
+// of them the checkout has; a checkout with none runs the binary directly.
+func TestLaunchGoesThroughMiseForEitherSpellingOfTheCheckoutsMiseFile(t *testing.T) {
+	cfg := &config.Config{Identities: []config.Identity{{Name: "app", Kind: "app", PrivateKeyEnv: "K"}}}
+	for _, name := range []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml"} {
+		repo := t.TempDir()
+		if err := os.WriteFile(filepath.Join(repo, name), []byte("[env]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := launchPrefix(paths.Layout{Home: repo}, cfg, "/m/mise"); !slices.Equal(got, []string{"/m/mise", "-C", repo, "exec", "--"}) {
+			t.Errorf("%s: %q, want mise exec", name, got)
+		}
+	}
+	if got := launchPrefix(paths.Layout{Home: t.TempDir()}, cfg, "/m/mise"); got != nil {
+		t.Errorf("no mise file: %q, want the binary itself", got)
+	}
+}
+
 // An installed binary has no checkout to link: `install --plugin` writes the
 // plugin it embeds under the data directory and links that copy.
 func TestInstallPluginWritesTheEmbeddedPluginWithoutACheckout(t *testing.T) {

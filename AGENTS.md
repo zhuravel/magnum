@@ -12,7 +12,7 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
   files, tests, docs or commit messages. That includes people's GitHub logins, even in tests and
   recorded fixtures: only the maintainer's own login (`zhuravel`) or placeholders (`alice`, `rev-ann`).
   `make test` runs `make check-private`, which greps tracked files for patterns kept only in the
-  gitignored `.mise.local.toml` (`MAGNUM_PRIVATE_PATTERNS`) and for every human login in the local
+  gitignored `mise.local.toml` (`MAGNUM_PRIVATE_PATTERNS`) and for every human login in the local
   registry (`scripts/check-logins.sh`; `MAGNUM_OWN_LOGINS` and `MAGNUM_LOGIN_ALLOW` exempt).
   Use `talkable` or `example` in examples. Personal config goes into `~/.config/magnum/config.toml`
   (outside the repository); `config.defaults.toml` holds the built-in defaults (embedded in the binary),

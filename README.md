@@ -240,7 +240,7 @@ Two layers and the App keys:
 - App private keys: PEM files the identity's `private_key_file` names, by convention
   `~/.config/magnum/keys/<identity>.pem` (chmod 600; doctor warns about a looser mode). The older
   `private_key_env` (an environment variable holding the PEM or its path, e.g. from a checkout's
-  `.mise.local.toml`) still works; launchd then runs the daemon through `mise exec`.
+  `mise.local.toml`) still works; launchd then runs the daemon through `mise exec`.
 
 Magnum keeps its own files where XDG says: the registry, review reports and repository notes in
 `~/.local/share/magnum` (`$XDG_DATA_HOME`), logs, locks, the identities' gh config dirs and the tab-bar
@@ -849,7 +849,7 @@ min = 12
 max = 18
 setup = ["bin/worktree-setup"]     # runs once per slot with WT_BRANCH=review<n>
 teardown = ["bin/worktree-archive"]
-copy_files = [".mise.local.toml", "config/initializers/local.rb"]
+copy_files = ["mise.local.toml", "config/initializers/local.rb"]
 ```
 
 Repositories without a pool get a worktree per PR (`<clone>__worktrees/pr-<N>`). The clone is the one found
@@ -2548,7 +2548,7 @@ the landing's rebase conflict), put back as it was before each check, so a nudge
 must pass in the worktree: the golden files regenerated from the prompts by every test that writes one
 (and put back as they were before each check, so a golden edited by hand is not committed), `go test
 ./internal/agents ./internal/pipeline ./internal/config`, and `make
-check-private` with the checkout's `mise` environment (its `.mise.local.toml` holds the private patterns,
+check-private` with the checkout's `mise` environment (its `mise.local.toml` holds the private patterns,
 and the login check reads your registry), which so checks the entry and the commit's headline too.
 Whatever fails gets one nudge with the problems. The agent edits the existing files in place (none
 created or deleted), keeps every `{{...}}` action of a prompt, adds no login, repository or link, and
@@ -2925,9 +2925,9 @@ Releasing: `make release VERSION=v0.2.0` on a pushed, clean master runs the gate
 GitHub release and points the tap's formula ([packaging/homebrew/magnum.rb](packaging/homebrew/magnum.rb),
 pushed to github.com/zhuravel/homebrew-tap) at the new tag. CI (`.github/workflows/ci.yml`) runs the gate under
 the race detector on macOS for every push to master and every pull request, and on ubuntu checks the modules,
-gofmt, golangci-lint (only the issues a change adds), govulncheck and docs/API.md; a weekly run adds Go stable
-and reruns the pipeline, engine and agents tests at GOMAXPROCS 1 and 3, and Dependabot opens weekly update PRs
-for the modules and the actions.
+gofmt, golangci-lint (only the issues a change adds), govulncheck and docs/API.md, every job on the Go and
+golangci-lint that `mise.toml` pins; a weekly run adds the newest stable Go and reruns the pipeline, engine and
+agents tests at GOMAXPROCS 1 and 3, and Dependabot opens weekly update PRs for the modules and the actions.
 
 To measure a change to the prompts, the skill or a model before the daemon picks it up, keep a corpus
 of PRs whose defects you know in `~/.config/magnum/eval.toml` (a checkout's gitignored `eval.local.toml` still

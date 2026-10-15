@@ -1264,7 +1264,7 @@ func (e *Engine) pruneEdits() {
 // goTestRunner is Deps.GoTest for a checkout: args[0], go or make (both
 // take -C), runs on dir under the checkout's mise environment (`mise -C
 // <checkout> exec -- <tool> -C <dir> ...`: a worktree's own mise config is
-// not trusted, and the checkout's gitignored .mise.local.toml holds what
+// not trusted, and the checkout's gitignored mise.local.toml holds what
 // `make check-private` greps for), with none of the variables that point
 // git elsewhere, the GitHub tokens or the identities' keys, and MAGNUM_DB
 // naming the registry db (the login check reads it; from a worktree it

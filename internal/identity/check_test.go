@@ -608,7 +608,7 @@ func TestAppCheckPlaceholderKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertLines(t, r,
-		"FAIL the private key in $MAGNUM_TEST_APP_KEY is the placeholder from .mise.toml; put the PEM in .mise.local.toml",
+		"FAIL the private key in $MAGNUM_TEST_APP_KEY is the placeholder from mise.toml; put the PEM in mise.local.toml",
 		"     fix: set MAGNUM_TEST_APP_KEY (PEM text or a file path) in magnum's environment, or save the PEM as ~/.config/magnum/keys/talkable-app.pem and set private_key_file = \"~/.config/magnum/keys/talkable-app.pem\"",
 	)
 }
@@ -619,7 +619,7 @@ func TestAppTokenMintingNamesThePlaceholder(t *testing.T) {
 	getenv := func(string) string { return "you-must-configure-this-in-your-.mise.local.toml" }
 	app := NewApp(f.id, newLayout(t), f.server.Client(), getenv, clock.Now, WithBaseURL(f.server.URL))
 	_, err := app.Token(context.Background())
-	if !errors.Is(err, ErrPlaceholderKey) || !strings.Contains(err.Error(), "is the placeholder from .mise.toml; put the PEM in .mise.local.toml") {
+	if !errors.Is(err, ErrPlaceholderKey) || !strings.Contains(err.Error(), "is the placeholder from mise.toml; put the PEM in mise.local.toml") {
 		t.Fatalf("Token err = %v; want the placeholder named", err)
 	}
 	if f.mintCount() != 0 {

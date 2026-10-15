@@ -1,11 +1,12 @@
 [tools]
 go = "1.27"
 air = "latest"
-# `make lint`; CI pins the same version (.github/workflows/ci.yml), so both report the same issues.
+# `make lint`; CI installs the tools of this file (.github/actions/setup-environment), so both report
+# the same issues.
 golangci-lint = "2.14.0"
 
 [env]
-# Real values live in the gitignored .mise.local.toml. App keys do not: an [[identity]] of kind "app"
+# Real values live in the gitignored mise.local.toml. App keys do not: an [[identity]] of kind "app"
 # names its PEM file in `private_key_file` (~/.config/magnum/keys/<app>.pem, chmod 600).
 # grep -E pattern of names that must never appear in tracked files (`make check-private`, part of `make test`).
 MAGNUM_PRIVATE_PATTERNS = ""

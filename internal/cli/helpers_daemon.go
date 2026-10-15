@@ -180,6 +180,11 @@ func resolveMisePath(ctx context.Context, run execx.Runner) string {
 	return defaultMisePath
 }
 
+// miseConfigNames are the files at a checkout's root that give it a mise
+// environment: the shared and the local config, each undotted or dotted, as
+// mise reads both (https://mise.jdx.dev/configuration.html).
+var miseConfigNames = []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml"}
+
 // launchPrefix is what a bare environment (the LaunchAgent, the gh
 // extension) puts before the binary: `mise -C <checkout> exec --` while an
 // App identity reads its key from an env var (private_key_env without
@@ -189,7 +194,7 @@ func launchPrefix(layout paths.Layout, cfg *config.Config, misePath string) []st
 	if layout.Home == "" || cfg == nil || misePath == "" {
 		return nil
 	}
-	if !fsx.Exists(filepath.Join(layout.Home, ".mise.toml")) && !fsx.Exists(filepath.Join(layout.Home, ".mise.local.toml")) {
+	if !slices.ContainsFunc(miseConfigNames, func(name string) bool { return fsx.Exists(filepath.Join(layout.Home, name)) }) {
 		return nil
 	}
 	for _, id := range cfg.Identities {

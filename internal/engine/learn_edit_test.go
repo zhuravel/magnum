@@ -1007,7 +1007,7 @@ func TestThePaneEditorStopsWhenBothTurnsTimeOut(t *testing.T) {
 
 // The real format gate runs each command on the worktree under the
 // checkout's mise environment (the worktree's own mise config is not
-// trusted, and the checkout's .mise.local.toml holds the private patterns),
+// trusted, and the checkout's mise.local.toml holds the private patterns),
 // without the variables that point git elsewhere, the GitHub tokens or the
 // identities' keys, and hands back the output of a failure.
 func TestTheFormatGateRunsUnderTheCheckoutsMise(t *testing.T) {
