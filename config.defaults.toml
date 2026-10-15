@@ -707,7 +707,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # auto_approve = ["your-app"]           # repositories of the watch (names, or ["*"]) on whose PRs magnum posts YOUR
 #                                       # approval once its review of the head leaves nothing to fix (default: none)
 # auto_approve_as = "me"                # the gh identity of your own account (GitHub does not count an App's approval)
-# auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA,
+# auto_approve_body = "Approved after Magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA,
 #                                       # .ReviewURL, .Repo, .Number (unset: a default line linking the review);
 #                                       # magnum adds its marker
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every round role, the first judge only

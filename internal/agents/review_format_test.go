@@ -489,8 +489,9 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // (12), the stacked PR's lower layer (24), an answered thread's reply (14)
 // and a report's priority (24); then 33,891 for the blind own pass of a full
 // pass in section 0 (165), then 34,081 for section 0's `evidence` input line
-// (190). Every rule added must replace or shorten text.
-const skillMaxBytes = 34081
+// (190), then 34,124 for the product's name in section 5 (46). Every rule
+// added must replace or shorten text.
+const skillMaxBytes = 34124
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {

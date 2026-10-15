@@ -203,7 +203,7 @@ func (v statusView) body(note string, now time.Time) string {
 	var lines, tail []string
 	switch v.stage {
 	case statusNotReviewing:
-		lines, tail = []string{"magnum will not review this head. The operator was told."}, []string{note}
+		lines, tail = []string{"Magnum will not review this head. The operator was told."}, []string{note}
 	case statusMerged:
 		lines = []string{"Merged before the review of " + sha + " posted."}
 	case statusClosed:
@@ -252,7 +252,7 @@ func (v statusView) body(note string, now time.Time) string {
 // statusText is the whole comment: the marker, the header with the time the
 // stage or the wait last changed, and body.
 func statusText(body string, changed time.Time) string {
-	return statusMarker + "\n**magnum review status** (status changed " + statusDay(changed) + ")\n" + body
+	return statusMarker + "\n**Magnum review status** (status changed " + statusDay(changed) + ")\n" + body
 }
 
 // statusSum fingerprints a comment's body, which a write compares with the
@@ -314,7 +314,7 @@ func statusWaitWords(w Wait, now time.Time) string {
 	case WaitRetry:
 		s = "a retry after a failed attempt"
 	default:
-		s = "held on magnum's side"
+		s = "held on Magnum's side"
 	}
 	until := ""
 	if w.Until.After(now) {

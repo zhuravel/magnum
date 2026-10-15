@@ -282,7 +282,7 @@ func verdictBody(event, message, sha string, sum *store.ReviewSummary) string {
 	if event == "REQUEST_CHANGES" {
 		what = "Changes requested"
 	}
-	fmt.Fprintf(&b, "%s after magnum's review of `%s`", what, textx.ShortSHA(sha))
+	fmt.Fprintf(&b, "%s after Magnum's review of `%s`", what, textx.ShortSHA(sha))
 	if sum != nil {
 		var parts []string
 		for i, n := range sum.Counts {

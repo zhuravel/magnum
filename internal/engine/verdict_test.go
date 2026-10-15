@@ -27,7 +27,7 @@ func TestManualVerdictPostsOnTheReviewedHead(t *testing.T) {
 	h.gh.mu.Lock()
 	created := append([]string(nil), h.gh.created...)
 	h.gh.mu.Unlock()
-	if len(created) != 1 || !strings.HasPrefix(created[0], "APPROVE@b1:Approved after magnum's review of `b1`") ||
+	if len(created) != 1 || !strings.HasPrefix(created[0], "APPROVE@b1:Approved after Magnum's review of `b1`") ||
 		!strings.Contains(created[0], "<!-- magnum:verdict=APPROVE head=b1 -->") {
 		t.Fatalf("posted %q", created)
 	}
@@ -47,7 +47,7 @@ func TestManualVerdictPostsOnTheReviewedHead(t *testing.T) {
 	h.gh.mu.Lock()
 	last := h.gh.created[len(h.gh.created)-1]
 	h.gh.mu.Unlock()
-	if !strings.HasPrefix(last, "REQUEST_CHANGES@b1:The refund path still double-counts.\n\nChanges requested after magnum's review") {
+	if !strings.HasPrefix(last, "REQUEST_CHANGES@b1:The refund path still double-counts.\n\nChanges requested after Magnum's review") {
 		t.Fatalf("posted %q", last)
 	}
 	if deref(h.pr(2).LastReviewEvent) != "CHANGES_REQUESTED" {
@@ -132,7 +132,7 @@ func TestApproveAsTheOperatorIsFollowedLikeAnAutoApproval(t *testing.T) {
 		t.Fatalf("approve as the operator: %s %q", r.State, deref(r.Result))
 	}
 	got := h.created()
-	if len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:Approved after magnum's review of `b1`") ||
+	if len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:Approved after Magnum's review of `b1`") ||
 		!strings.HasSuffix(got[0], "<!-- magnum:auto-approval head=b1 -->") {
 		t.Fatalf("posted %q", got)
 	}

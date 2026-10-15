@@ -369,7 +369,7 @@ func TestTheOperatorsWordOnGitHub(t *testing.T) {
 			t.Errorf("%s by hand: %+v (%q)", state, w, w.handReason())
 		}
 	}
-	verdict := rev(6, "zhuravel", "User", "APPROVED", "h1", "Approved after magnum's review.\n<!-- magnum:verdict=APPROVE head=h1 -->", 5)
+	verdict := rev(6, "zhuravel", "User", "APPROVED", "h1", "Approved after Magnum's review.\n<!-- magnum:verdict=APPROVE head=h1 -->", 5)
 	if w := operatorWord([]github.Review{verdict}, "zhuravel", "h1", time.Time{}); w.hand == nil {
 		t.Error("a verdict the operator posted through magnum is not theirs")
 	}

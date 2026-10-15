@@ -662,7 +662,7 @@ edits it in place and never posts a second one; its first line is the marker `<!
 
 ```
 <!-- magnum:status -->
-**magnum review status** (status changed 14 Oct, 18:43 UTC)
+**Magnum review status** (status changed 14 Oct, 18:43 UTC)
 - [x] Review queued for `54fc258`: not before 18:45 UTC (the push quiet period)
 - [ ] In progress
 - [ ] Posted
@@ -693,7 +693,7 @@ link that turned up, your note) leaves it. The first line says where the review 
   before 18:45 UTC (the push quiet period)", and the same for the burst quiet period, the re-review
   intervals, the daily round cap, a small change, a snooze, quiet hours and a review request's short
   delay), never a promised start, since the capacity can delay it, "a retry after a failed attempt", "starts
-  shortly", or "held on magnum's side" for a pause, an identity, a pinned slot and the like, whose own words
+  shortly", or "held on Magnum's side" for a pause, an identity, a pinned slot and the like, whose own words
   can name an error, a branch, a pool or an identity. The comment carries no PR text. A re-review's list is
   followed by the latest earlier review, "Earlier review of `a1b2c3d`: <link>", and, when that review's
   result recorded earlier findings it kept open, "The last review recorded 2 earlier findings still open."
@@ -706,7 +706,7 @@ link that turned up, your note) leaves it. The first line says where the review 
 - A [fix loop](#fixing-your-own-prs) shows as its own line: "Applying automatic fixes, cycle 1 of 3"
   under the posted line while the fixer works, and "Reviewing the fixes in `b2c3d4e`" for its re-review of
   what the fixer pushed, from the loop's state (never the fixer's words).
-- One line replaces the list when Magnum will not review the head: "magnum will not review this head. The
+- One line replaces the list when Magnum will not review the head: "Magnum will not review this head. The
   operator was told." for a PR muted, ignored, flagged by Codex (with no fallback judge) or parked for you
   (needs_attention), with no word of the cause.
 
@@ -894,7 +894,7 @@ include = ["talkable"]
 identity = "reviewer-app"
 auto_approve = ["talkable"]        # repository names of the watch, or ["*"]
 auto_approve_as = "me"             # an identity of kind gh: your own account
-# auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line; magnum adds its marker
+# auto_approve_body = "Approved after Magnum's review of {{.Short}}."   # one line; magnum adds its marker
 ```
 
 Magnum approves as `auto_approve_as`, on the head it reviewed, as soon as the round that posted the review

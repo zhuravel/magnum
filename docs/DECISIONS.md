@@ -7801,6 +7801,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestSkillAppliesTheNotesBeforeTheVerdict, with the regenerated skill_pins.txt. Rejected: a judge prompt
   clause instead of skill rules (the own pass and the recovery round need them too).
 
+- **The product is Magnum in everything it posts** (2026-10-15; the operator found "Magnum" and "magnum"
+  mixed in GitHub comments). The review footer said "About Magnum" and "Automated review by Magnum" while
+  the status comment was headed "magnum review status", said "held on magnum's side" and "magnum will not
+  review this head", the operator's verdicts read "after magnum's review of", the withdrawn auto-approval
+  "magnum: this automatic approval is withdrawn" and the default `auto_approve_body` "Approved after
+  magnum's review of". Every text a person reads on GitHub now says Magnum; `magnum` stays the command
+  (`magnum review`, `magnum unapprove`) and the markers (`<!-- magnum:… -->`), and the skill's section 5
+  says so for the judge's own prose. The CLI, the logs and the events keep the lower-case name: they are
+  the program, not the product. Rejected: lower case everywhere (the footer and the README's product
+  name are capitalized already, and a sentence that starts with the name reads as a typo in lower case).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

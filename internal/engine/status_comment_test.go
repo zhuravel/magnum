@@ -59,7 +59,7 @@ func (h *harness) wantStatusSince(c fakeComment, changed time.Time, body string)
 // statusHeader is the status comment's marker and header, its status
 // changed at t.
 func statusHeader(t time.Time) string {
-	return "<!-- magnum:status -->\n**magnum review status** (status changed " + t.UTC().Format("2 Jan, 15:04") + " UTC)\n"
+	return "<!-- magnum:status -->\n**Magnum review status** (status changed " + t.UTC().Format("2 Jan, 15:04") + " UTC)\n"
 }
 
 // utcClock is t as the status comment writes a time of the harness's day.
@@ -311,7 +311,7 @@ func TestAMutedPRsStatusCommentSaysNotReviewing(t *testing.T) {
 	h.advance(2 * time.Minute)
 	h.muteRequest(ReqMute, 7)
 	h.wantState(7, store.PRIneligible)
-	h.wantStatus(h.statusComment(7), "magnum will not review this head. The operator was told.")
+	h.wantStatus(h.statusComment(7), "Magnum will not review this head. The operator was told.")
 
 	h.advance(2 * time.Minute) // still within the push quiet period
 	h.muteRequest(ReqUnmute, 7)
@@ -601,7 +601,7 @@ func TestADeletedStatusCommentIsPostedOnceMore(t *testing.T) {
 	if second.id == first.id {
 		t.Fatal("the deleted comment answered the edit")
 	}
-	h.wantStatus(second, "magnum will not review this head. The operator was told.")
+	h.wantStatus(second, "Magnum will not review this head. The operator was told.")
 
 	h.gh.deleteComment(second.id)
 	h.advance(2 * time.Minute) // still within the push quiet period
@@ -642,8 +642,8 @@ func TestTheStatusCommentNamesOnlyMagnumsOwnWaits(t *testing.T) {
 			"a retry after a failed attempt, not before 12:45 UTC"},
 		{Wait{Reason: WaitSlot, Detail: "no free slot in the talkable/talkable pool"}, "other reviews are running"},
 		{Wait{Reason: WaitCapacity, Detail: "review capacity: 3 rounds running"}, "other reviews are running"},
-		{Wait{Reason: WaitIdentity, Detail: "identity talkable-app: token refresh failed"}, "held on magnum's side"},
-		{Wait{Reason: WaitOther, Detail: "human active in the PR's panes"}, "held on magnum's side"},
+		{Wait{Reason: WaitIdentity, Detail: "identity talkable-app: token refresh failed"}, "held on Magnum's side"},
+		{Wait{Reason: WaitOther, Detail: "human active in the PR's panes"}, "held on Magnum's side"},
 	} {
 		if got := statusWaitWords(c.w, now); got != c.want {
 			t.Errorf("%s: %q, want %q", c.w.Reason, got, c.want)
@@ -697,7 +697,7 @@ func TestAFlaggedOrParkedPRsStatusCommentSaysNotReviewing(t *testing.T) {
 	h.setFlag(7, "Codex warned about cyber abuse")
 	h.tick()
 	h.wantState(7, store.PRIneligible)
-	h.wantStatus(h.statusComment(7), "magnum will not review this head. The operator was told.")
+	h.wantStatus(h.statusComment(7), "Magnum will not review this head. The operator was told.")
 
 	h.rd.mu.Lock()
 	h.rd.script = func(pipeline.RoundInput) (pipeline.RoundResult, error) {
@@ -709,5 +709,5 @@ func TestAFlaggedOrParkedPRsStatusCommentSaysNotReviewing(t *testing.T) {
 	h.wantState(8, store.PRNeedsAttention)
 	h.advance(2 * time.Minute)
 	h.tick()
-	h.wantStatus(h.statusComment(8), "magnum will not review this head. The operator was told.")
+	h.wantStatus(h.statusComment(8), "Magnum will not review this head. The operator was told.")
 }

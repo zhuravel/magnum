@@ -5083,8 +5083,8 @@ const (
     PR): see requestAbort.
 
 const (
-	UnapproveMessage      = "magnum: this automatic approval is withdrawn by its owner (magnum unapprove)."
-	RequestChangesMessage = "magnum: this automatic approval is withdrawn: its owner requested changes (magnum request-changes)."
+	UnapproveMessage      = "Magnum: this automatic approval is withdrawn by its owner (magnum unapprove)."
+	RequestChangesMessage = "Magnum: this automatic approval is withdrawn: its owner requested changes (magnum request-changes)."
 )
     UnapproveMessage is the dismissal message of an automatic approval the
     operator withdraws (magnum unapprove, the board's D); RequestChangesMessage
