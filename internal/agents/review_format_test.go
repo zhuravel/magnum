@@ -478,9 +478,11 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // section 2 checklist, the Plain English guard, section 5's sentence rules),
 // the P1, P2 and wrong-field P3 examples (217), and the records thought
 // unsaved or free in one clause and the two P3 ceilings in one sentence
-// (121), and the 2 the cap had left. Every rule added must replace or
+// (121), and the 2 the cap had left; then 32,956 for the end-state fix rule
+// (2026-10-15: 238 bytes, less 121 from section 6's threads-file fallback and
+// a shorter magnum's-own-line sentence). Every rule added must replace or
 // shorten text.
-const skillMaxBytes = 32_839
+const skillMaxBytes = 32_956
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -1673,4 +1675,18 @@ func TestJudgeReReviewPromptsNameEachEarlierFindingAVerdictBlocksOn(t *testing.T
 	if strings.Contains(first, "blocks only on earlier findings") {
 		t.Errorf("judge-initial.md names earlier findings:\n%s", first)
 	}
+}
+
+// On a 24k-line PR a colleague found a second path to a defect magnum had
+// called fixed the day before: the fix covered the write the finding named
+// (a re-created action under kept tiers) and the judge's own pass recorded
+// it as "limits writes to inserted actions", while another write of the same
+// restore copied the flag that left a live action in the same unusable
+// state. A fix of an end state is judged against every write that reaches
+// it, and one the fix leaves untouched gets a probe.
+func TestAFixOfAnEndStateIsJudgedAgainstEveryWriteThatReachesIt(t *testing.T) {
+	skillSays(t, []string{
+		"A defect that is an end state (a record left as the code cannot serve it, a value a reader cannot use) is fixed only when every write " +
+			"of the same flow that reaches that state is covered: list them, and probe one the fix leaves untouched.",
+	}, nil)
 }

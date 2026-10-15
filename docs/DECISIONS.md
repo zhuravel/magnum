@@ -7549,6 +7549,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a relative one (`.`, `bin`) is left out, since the daemon's PATH holds directories, and a space is kept. Rejected: appending the entry as written (the daemon would search a literal `~`); refusing
   the line (one odd entry would cost every other directory).
 
+- **A fix of an end state is judged against every write that reaches it** (2026-10-15, amends "Nine review
+  rules from the 2026-10-14 run"). On a 24k-line PR the judge called a kept-tiers defect fixed, with a
+  mutation that proved the new regression test and its own pass recording the fix as "limits writes to
+  inserted actions", and approved; a colleague's next round found a second path to the same failure in the
+  same restore: another write copied the tier flag onto a live action, which then paid nothing, and the
+  fix had not touched it. The notes line the judge had written in that very round said to probe every
+  later step that writes records depending on the kept thing, and the judge did not apply it to the fix
+  before it. Section 6's `fixed` bullet now says that a defect that is an end state (a record left as the
+  code cannot serve it, a value a reader cannot use) is fixed only when every write of the same flow that
+  reaches that state is covered: list them, and probe one the fix leaves untouched. The rule adds 238 bytes;
+  121 came from section 6's threads-file fallback (`gh api … --paginate` is in the prompt's `threads_file`
+  anyway) and a shorter magnum's-own-line sentence, both unpinned, and the cap goes from 32,839 to 32,956.
+  New test TestAFixOfAnEndStateIsJudgedAgainstEveryWriteThatReachesIt. The eval case
+  `restore-turns-action-tier-based` holds the miss; it replays a first review, not a fix verification, so
+  the next run reads the live re-reviews under the rule instead. Rejected: a judge prompt clause instead of a
+  skill rule (the same discipline applies to the own pass and to recovery rounds); undoing the fix and
+  watching the new test fail as the rule (magnum's mutation runs do that already, and they proved the test,
+  not the fix's reach).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
