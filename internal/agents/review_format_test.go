@@ -487,9 +487,9 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // applied under `## Notes applied`), less 102 of unpinned wording: the
 // readiness statuses (28), "edit files" that "Do not change the code" says
 // (12), the stacked PR's lower layer (24), an answered thread's reply (14)
-// and a report's priority (24). Every rule added must replace or shorten
-// text.
-const skillMaxBytes = 33726
+// and a report's priority (24); then 33,891 for the blind own pass of a full
+// pass in section 0 (165). Every rule added must replace or shorten text.
+const skillMaxBytes = 33891
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
