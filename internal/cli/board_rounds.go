@@ -116,6 +116,7 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 		PostMerge:  dataBool(start, "post_merge"),
 		DeltaCheck: dataBool(start, "delta_check"),
 		FullPass:   dataBool(start, "full_pass"),
+		AuditPass:  dataBool(start, "audit_pass"),
 		Roles:      dataStrings(start, "roles"),
 		Requested:  dataStrings(start, "requested"),
 		At:         evs[last].At,

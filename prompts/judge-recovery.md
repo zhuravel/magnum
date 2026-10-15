@@ -14,6 +14,9 @@ The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries
 {{- else if and .PreviousHeadSHA (not .SameHead)}}
 Read the new commits with `git log --oneline {{.PreviousHeadSHA}}..{{.HeadSHA}}` and `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- end}}
+{{- if .AuditFile}}
+This is an audit pass: {{.AuditFile}} lists {{.AuditAreas}} {{if eq .AuditAreas 1}}area{{else}}areas{{end}} of this PR that no round probed or whose files changed since (`why` says what makes each risky), and, marked `rotation`, an earlier probe to run again. First probe each through its real entry point, the way its callers reach it, with a control, and give each probe one line in Checks; write each probe that passes to `evidence_file` as `probed`. An area you could not probe is a lead, never a finding: post no finding that says an area is unknown or unprobed. Then review the commits as this prompt says above and decide the earlier threads under the reply contract (section 6).
+{{- end}}
 {{- if .OwnFindings}}
 {{if .OwnFindingsMissing}}Your own pass left no {{.OwnFindings}}: do it now.{{else if .FullPass}}Your own pass, written before you read the earlier reviews, is in {{.OwnFindings}}: judge every candidate against it.{{else}}Your own pass, with your reply-contract decisions, is in {{.OwnFindings}}: judge every candidate against it.{{end}}
 {{- end}}

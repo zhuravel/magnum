@@ -343,6 +343,13 @@ type RoundInput struct {
 	// review the full PR diff again as a first review does, then decide
 	// every earlier thread (agents.JudgeData.FullPass).
 	FullPass bool
+	// Audit (recovery, with ColdJudge): the round is an audit pass
+	// ([pipeline] audit_every; the engine's audit.go): every session
+	// started fresh, the reviewers re-review the delta, and the judge gets
+	// these areas of the PR's evidence map in AuditFile, to probe through
+	// their real entry points with a control before it re-reviews the
+	// delta (audit.go, agents.JudgeData.AuditFile). nil = no audit pass.
+	Audit []AuditArea
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at

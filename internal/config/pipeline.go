@@ -78,6 +78,14 @@ type Pipeline struct {
 	// lines at its baseline) is also a full pass once this long passed
 	// since the baseline. Default DefaultFullPassAfter; 0 = this rule off.
 	FullPassAfter Duration `toml:"full_pass_after"`
+	// AuditEvery: the Nth automatic re-review of a PR, counted since its
+	// first review, its last full pass or its last audit pass, runs as an
+	// audit pass while the PR's evidence map holds unknown or stale areas:
+	// every session starts fresh, the reviewers re-review the delta, and the
+	// judge first probes at most three of those areas, the riskiest first,
+	// and one earlier probe again (engine audit.go). A full pass due on the
+	// same round wins. Default DefaultAuditEvery; 0 = never.
+	AuditEvery int `toml:"audit_every"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -272,6 +280,10 @@ const (
 // DefaultFullPassAfter is [pipeline] full_pass_after's default: a large
 // PR's next automatic re-review a week after its baseline is a full pass.
 const DefaultFullPassAfter = 7 * 24 * time.Hour
+
+// DefaultAuditEvery is [pipeline] audit_every's default: every fifth
+// automatic re-review of a PR probes what no round probed.
+const DefaultAuditEvery = 5
 
 // FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
 // sets one, else [pipeline]'s, else DefaultFixCycles. A nil w is

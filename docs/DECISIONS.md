@@ -577,6 +577,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   is the recovery round, which reads the new commits only); a `full_pass` value of `runs.kind` (a 0027
   rebuild of runs, findings and declines for one flag); a kv counter that only automatic rounds increment
   (it would start at 0, so a PR with 38 rounds would wait 10 more re-reviews).
+- **Every fifth re-review audits what no round probed** (2026-10-15). A review of the full-pass ideas by
+  Codex: once the PR's evidence map ("The judge says what it examined") says which areas no round read or
+  probed and which changed since one did, a full pass that reads the whole PR again is the expensive way
+  to reach them, and a re-review never does, as it reads the delta. `[pipeline] audit_every`
+  (`Config.Pipeline.AuditEvery`, default 5, 0 = off, a negative value refused) makes the Nth automatic
+  re-review of a PR whose map holds `unknown` or `stale` entries an audit pass (engine audit.go), counted
+  as the full pass counts (the runs table, no migration: rereview and recovery rounds that posted on a
+  head other than their `prev_reviewed_sha`) after the later of the last full pass and the last audit
+  pass, which kv `pr.<id>.audit_pass` records with its judge run, round and target when it posts
+  (`pr.<id>.audit_round` marks one in flight, for a continue of a paused one and for the record; the next
+  round's start resets it). The dispatcher decides it after `fullPassDue` (`roundJob.audit`), never with
+  a full pass: when both are due the full pass runs, and an audit pass, a recovery that posts on a new
+  head, counts toward the full pass's count. A forced or requested round, a post-merge review, a delta
+  check, a re-review of the same head, a reply round and a CI check never become one, nor does a round on
+  the reviewed head. prepare picks its areas (`pipeline.RoundInput.Audit`, `AuditArea`): at most three
+  `unknown` or `stale` entries ranked by the words of their path, symbol and behaviour (an irreversible
+  write: delete, update, restore, send and the like; authorization; money; an optional branch: nil,
+  empty, fallback and the like), then a file the reviewed head's `prepass.json` lists, an unknown entry
+  before a stale one and the oldest first; and the oldest `probed` entry on a file the pushes touched
+  since the last audit or full pass (else the map's oldest head; one `gitx.ChangedBetween`), marked
+  `rotation`, to run again. With no area left the round is an ordinary re-review. startSessions parks
+  every session and starts every role fresh with a `round.audit_pass` event naming why and how many
+  areas; the judge is a fresh judge (`ColdJudge`), so the round runs as a recovery whose reviewers
+  re-review the delta at their rereview effort and whose judge works at its rereview effort. The round
+  writes the areas to `audit.json` in its report directory (pipeline audit.go; the paths and behaviours
+  come from the PR, so the prompt names only the file), and `judge-recovery.md` gets one clause
+  (`agents.JudgeData.AuditFile`, `AuditAreas`): probe each through its real entry point with a control,
+  one Checks line per probe, each probe that passes a `probed` entry of `evidence_file`; an area it could
+  not probe is a lead, never a finding (no finding says an area is unknown); then review the commits and
+  decide the earlier threads under the reply contract. `engine.round_start` says `re-review (audit pass)`
+  with `audit_pass` in its data, and the card's last round says `audit pass` (`tui.RoundWhy.AuditPass`,
+  mirrored in `magnum tui --json`). Rejected: coverage from the findings and Checks alone, which never say
+  what passed; a method-level parser for what to audit, where the map's files and behaviours are enough
+  to start; more whole-PR passes instead of focused ones; a fresh judge alone with the reviewers' old
+  sessions kept (an audit is rare, and fresh sessions read the probes without the earlier rounds'
+  conclusions).
 
 - **A full pass also follows churn and age, overrides a delta check, and starts blind** (2026-10-15). A
   Codex review of the full-pass design found two gaps and a third point. Rounds measure how often the

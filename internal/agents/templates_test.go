@@ -450,6 +450,10 @@ func TestRenderGolden(t *testing.T) {
 	// review does, then decides the earlier threads; its own pass too.
 	fullPass := judgeFixture()
 	fullPass.FullPass = true
+	// An audit pass ([pipeline] audit_every): a fresh judge probes the areas
+	// of the evidence map that audit.json lists, then re-reviews the delta.
+	audit := judgeFixture()
+	audit.ColdJudge, audit.AuditFile, audit.AuditAreas = true, ownDir+"audit.json", 4
 	ownFullPass := ownRecovery
 	ownFullPass.FullPass = true
 	ownBlind := ownPass("initial")
@@ -528,6 +532,7 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_own_pass_recovery_cold_forced", "judge-own-pass.md", ownColdForced},
 		{"judge_recovery_forced", "judge-recovery.md", recoveryForced},
 		{"judge_recovery_full_pass", "judge-recovery.md", fullPass},
+		{"judge_recovery_audit", "judge-recovery.md", audit},
 		{"judge_recovery_full_pass_candidates", "judge-recovery.md", candidates(fullPass)},
 		{"judge_own_pass_recovery_full_pass", "judge-own-pass.md", ownFullPass},
 		{"judge_own_pass_blind", "judge-own-pass.md", ownBlind},

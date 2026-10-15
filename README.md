@@ -482,6 +482,23 @@ says why one runs and which rule fired (`rule`: the key, or `requested`), `engin
 `re-review (full pass)` with the reason in `full_pass_reason`, the card's last round `full pass`, and the
 status comment `In progress (full pass)`. `magnum review --full <ref>` asks for one by hand.
 
+A full pass reads the whole PR again; what the evidence map (see the judge's `evidence.json` under the
+pre-pass) says no round read or probed, or changed since one did, needs only those areas read. Every fifth
+automatic re-review of a PR whose map holds `unknown` or `stale` entries is therefore an audit pass
+(`[pipeline] audit_every`, default `5`; `0` turns it off), counted as the full pass counts, since the PR's
+first review, its last full pass or its last audit pass: every session starts fresh, the round runs as a
+recovery whose reviewers re-review the delta at their rereview effort (as with a cold judge), and the judge
+gets `audit.json` in the report directory (the areas come from the PR, so the prompt names only the file):
+at most three `unknown` or `stale` areas, the riskiest first (an irreversible write, authorization, money,
+an optional branch, a file of the pre-pass's lists), and, marked `rotation`, the oldest probe on a file the
+pushes touched since, to run again. It probes each through its real entry point with a control, writes each
+probe that passes as `probed` in its evidence, posts no finding that only says an area is unknown, then
+re-reviews the delta and decides the earlier threads. An audit pass counts toward the full pass's count and
+never replaces one: when both are due, the full pass runs. A delta check, a re-review of the same head, a
+reply round, a CI check, a forced or requested round and a push that left the head as reviewed never become
+one. `round.audit_pass` says why it runs, `engine.round_start` says `re-review (audit pass)` and the card's
+last round `audit pass`.
+
 Replies get that round on their own, without a push. The poll reads, for a PR whose activity moved, its
 reviews and comments with their authors and their association with the repository (no text): a reply in
 one of Magnum's threads by the PR's author or by an owner, member or collaborator of the repository, or a

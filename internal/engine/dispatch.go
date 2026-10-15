@@ -68,6 +68,11 @@ type roundJob struct {
 	// fired: the [pipeline] key, or "requested".
 	fullPass     string
 	fullPassRule string
+	// audit says why the re-review runs as an audit pass (auditDue,
+	// audit.go): every session fresh, the judge probing the evidence map's
+	// unknown and stale areas first; "" = it does not, as whenever a full
+	// pass is due.
+	audit string
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it
@@ -490,7 +495,8 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		if job.ciRed = e.ciRedDue(ctx, pr, job.sameHead, job.requested); !job.ciRed {
 			job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
 		}
-		e.planFullPass(ctx, job) // fullpass.go: a due full pass clears the delta check
+		e.planFullPass(ctx, job)         // fullpass.go: a due full pass clears the delta check
+		job.audit = e.auditDue(ctx, job) // audit.go: never with a full pass
 	}
 	from := store.ClaimableStates
 	if pr.State == store.PRPaused {
@@ -712,6 +718,8 @@ func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) b
 		what = "re-review of the same head (the judge alone)"
 	case job.fullPass != "":
 		what = fullReReviewLabel
+	case job.audit != "":
+		what = auditReReviewLabel
 	}
 	switch {
 	case job.hasSlot:

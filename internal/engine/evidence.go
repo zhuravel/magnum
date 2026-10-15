@@ -136,6 +136,14 @@ type evidenceRound struct {
 	run   string
 }
 
+// settleEvidence settles what a round that posted on target examined
+// (onPosted): an audit pass is recorded (settleAudit, audit.go) and the
+// judge's evidence merged into the PR's map (mergeEvidence).
+func (e *Engine) settleEvidence(ctx context.Context, job *roundJob, pr store.PR, target string, res pipeline.RoundResult) {
+	e.settleAudit(ctx, pr.ID, res, target)
+	e.mergeEvidence(ctx, job, pr, target, res)
+}
+
 // mergeEvidence merges the evidence of a round that posted on target into
 // PR pr's map (onPosted). When the map's head is another, the files that
 // differ between the two (Git.ChangedBetween in the round's checkout) mark

@@ -346,6 +346,15 @@ type JudgeData struct {
 	// earlier)`, and the body is headed as a full pass. Rendered as
 	// `full_pass: true` and one instruction, only then.
 	FullPass bool
+	// AuditFile (recovery): an audit pass ([pipeline] audit_every;
+	// pipeline.RoundInput.Audit): audit.json in the report directory lists
+	// AuditAreas areas of the PR's evidence map (unknown or stale ones, the
+	// riskiest first, and an earlier probe to run again; PR content, so
+	// never in the prompt), which the judge probes through their real entry
+	// points with a control before the re-review; an unknown area is a lead,
+	// never a finding. Rendered as one instruction, only then; "" = none.
+	AuditFile  string
+	AuditAreas int
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string

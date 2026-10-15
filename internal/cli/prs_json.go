@@ -228,7 +228,8 @@ type prsJSONRoundWhy struct {
 	PostMerge  bool               `json:"post_merge"`
 	DeltaCheck bool               `json:"delta_check"` // the judge alone on a small delta
 	DeltaLines int                `json:"delta_lines"`
-	FullPass   bool               `json:"full_pass"` // a scheduled full pass of every role over the whole PR
+	FullPass   bool               `json:"full_pass"`  // a scheduled full pass of every role over the whole PR
+	AuditPass  bool               `json:"audit_pass"` // a scheduled audit pass: the judge probes what no round probed first
 	Roles      []string           `json:"roles"`
 	Requested  []string           `json:"requested"`
 	Reruns     []prsJSONRoleRerun `json:"reruns"`
@@ -319,7 +320,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 }
 
 func prsJSONRoundWhyOf(w tui.RoundWhy) prsJSONRoundWhy {
-	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, DeltaCheck: w.DeltaCheck, DeltaLines: w.DeltaLines, FullPass: w.FullPass,
+	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, DeltaCheck: w.DeltaCheck, DeltaLines: w.DeltaLines, FullPass: w.FullPass, AuditPass: w.AuditPass,
 		Roles: listOf(w.Roles), Requested: listOf(w.Requested),
 		Reruns:  mapList(w.Reruns, func(r tui.RoleRerun) prsJSONRoleRerun { return prsJSONRoleRerun{Role: r.Role, Lines: r.Lines} }),
 		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole, StartedAt: w.At,

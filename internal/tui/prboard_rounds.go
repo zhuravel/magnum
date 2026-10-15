@@ -33,7 +33,11 @@ type RoundWhy struct {
 	DeltaLines int
 	// FullPass: a scheduled full pass ([pipeline] full_pass_every), a
 	// recovery of every role in fresh sessions over the whole PR.
-	FullPass  bool
+	FullPass bool
+	// AuditPass: a scheduled audit pass ([pipeline] audit_every), a
+	// recovery in fresh sessions whose judge first probes what no round
+	// probed.
+	AuditPass bool
 	Roles     []string // the roles it ran, in the order the round named them
 	Requested []string // the roles asked for this round
 	Reruns    []RoleRerun
@@ -219,6 +223,8 @@ func roundKindPhrase(w RoundWhy) string {
 		phrase = DeltaCheckPhrase(w.DeltaLines)
 	case w.FullPass:
 		phrase = "full pass"
+	case w.AuditPass:
+		phrase = "audit pass"
 	}
 	if phrase != "" && w.PostMerge {
 		phrase = "post-merge " + phrase

@@ -820,6 +820,15 @@ type JudgeData struct {
 	// earlier)`, and the body is headed as a full pass. Rendered as
 	// `full_pass: true` and one instruction, only then.
 	FullPass bool
+	// AuditFile (recovery): an audit pass ([pipeline] audit_every;
+	// pipeline.RoundInput.Audit): audit.json in the report directory lists
+	// AuditAreas areas of the PR's evidence map (unknown or stale ones, the
+	// riskiest first, and an earlier probe to run again; PR content, so
+	// never in the prompt), which the judge probes through their real entry
+	// points with a control before the re-review; an unknown area is a lead,
+	// never a finding. Rendered as one instruction, only then; "" = none.
+	AuditFile  string
+	AuditAreas int
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string
@@ -2702,6 +2711,10 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
     DefaultAfterDenyPrompt is every built-in and declared kind's
     after_deny_prompt.
 
+const DefaultAuditEvery = 5
+    DefaultAuditEvery is [pipeline] audit_every's default: every fifth automatic
+    re-review of a PR probes what no round probed.
+
 const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
     DefaultAutoApproveBody is the body of an automatic approval when the watch
     sets no auto_approve_body.
@@ -4001,6 +4014,14 @@ type Pipeline struct {
 	// lines at its baseline) is also a full pass once this long passed
 	// since the baseline. Default DefaultFullPassAfter; 0 = this rule off.
 	FullPassAfter Duration `toml:"full_pass_after"`
+	// AuditEvery: the Nth automatic re-review of a PR, counted since its
+	// first review, its last full pass or its last audit pass, runs as an
+	// audit pass while the PR's evidence map holds unknown or stale areas:
+	// every session starts fresh, the reviewers re-review the delta, and the
+	// judge first probes at most three of those areas, the riskiest first,
+	// and one earlier probe again (engine audit.go). A full pass due on the
+	// same round wins. Default DefaultAuditEvery; 0 = never.
+	AuditEvery int `toml:"audit_every"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -12594,6 +12615,9 @@ const (
 	// ThreadsFile is the threads file in the round's report directory.
 	ThreadsFile = "review-threads.json"
 )
+const AuditFile = "audit.json"
+    AuditFile is an audit pass's areas in the round's report directory.
+
 const DeltaCheckFile = "delta-check.json"
     DeltaCheckFile is the delta check's file list in the round's report
     directory.
@@ -12708,6 +12732,19 @@ type Agents interface {
     started the sessions of the roles that run (RolesToRun: EnsureWorkspace,
     EnsurePane, StartAgent) before RunRound; a role without a live session is
     reported as no_session.
+
+type AuditArea struct {
+	EvidenceEntry
+	Was   string `json:"was,omitempty"`  // a stale entry's state when written
+	Head  string `json:"head,omitempty"` // the head its round examined
+	Round int    `json:"round,omitempty"`
+	Why   string `json:"why,omitempty"`
+}
+    AuditArea is an area an audit pass probes: an entry of the PR's evidence map
+    (unknown, stale, or a probe to run again) with the head and round that wrote
+    it and why the engine chose it: the risk it ranked by ("irreversible write",
+    "authorization", "money", "optional branch", "pre-pass lead"), "" for none,
+    or "rotation" for the probe run again.
 
 type BaseDocs struct {
 	PR      string `json:"pr"`       // owner/repo#N
@@ -13188,6 +13225,13 @@ type RoundInput struct {
 	// review the full PR diff again as a first review does, then decide
 	// every earlier thread (agents.JudgeData.FullPass).
 	FullPass bool
+	// Audit (recovery, with ColdJudge): the round is an audit pass
+	// ([pipeline] audit_every; the engine's audit.go): every session
+	// started fresh, the reviewers re-review the delta, and the judge gets
+	// these areas of the PR's evidence map in AuditFile, to probe through
+	// their real entry points with a control before it re-reviews the
+	// delta (audit.go, agents.JudgeData.AuditFile). nil = no audit pass.
+	Audit []AuditArea
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at
@@ -18223,7 +18267,11 @@ type RoundWhy struct {
 	DeltaLines int
 	// FullPass: a scheduled full pass ([pipeline] full_pass_every), a
 	// recovery of every role in fresh sessions over the whole PR.
-	FullPass  bool
+	FullPass bool
+	// AuditPass: a scheduled audit pass ([pipeline] audit_every), a
+	// recovery in fresh sessions whose judge first probes what no round
+	// probed.
+	AuditPass bool
 	Roles     []string // the roles it ran, in the order the round named them
 	Requested []string // the roles asked for this round
 	Reruns    []RoleRerun

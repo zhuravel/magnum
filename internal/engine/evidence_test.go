@@ -33,10 +33,10 @@ func (g *evidenceGit) ChangedBetween(_ context.Context, _, from, to string) ([]s
 
 // evidenceHarness is the harness whose rounds post as the pipeline does,
 // each with the judge's evidence for its head from byHead (none when
-// absent), over git.
-func evidenceHarness(t *testing.T, git *evidenceGit, byHead map[string]*pipeline.Evidence) *harness {
+// absent), over git, after mods.
+func evidenceHarness(t *testing.T, git *evidenceGit, byHead map[string]*pipeline.Evidence, mods ...func(*harness)) *harness {
 	t.Helper()
-	h := newHarness(t, func(h *harness) { h.d.Git = git })
+	h := newHarness(t, append([]func(*harness){func(h *harness) { h.d.Git = git }}, mods...)...)
 	var mu sync.Mutex
 	n := 0
 	h.rd.mu.Lock()

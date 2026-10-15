@@ -196,6 +196,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	case kindContinue:
 		rs.fullPass = e.fullPassRunning(ctx, pr.ID) // a paused full pass goes on as one
 	}
+	e.planAudit(ctx, job, &rs) // audit.go
 	if job.kind != kindContinue && job.evalHead == "" && !rs.judgeOnly() {
 		rs.requested = append(rs.requested, e.rerunRoles(ctx, job, rs.roles, rs.target)...)
 	}
@@ -238,6 +239,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if rs.kind != kindContinue {
 		e.noteDeltaCheckRound(ctx, pr.ID, rs.delta, rs.target) // a continue keeps the paused round's
 		e.noteFullPassRound(ctx, pr.ID, rs.fullPass)
+		e.noteAuditRound(ctx, pr.ID, rs.auditPass) // audit.go
 	}
 	switch {
 	case rs.kind == kindContinue:
@@ -284,6 +286,10 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		what, data["full_pass"] = what+" (full pass)", true
 	case rs.fullPass:
 		what, data["full_pass"], data["full_pass_reason"] = fullReReviewLabel, true, job.fullPass
+	case rs.auditPass && rs.kind == kindContinue:
+		what, data["audit_pass"] = what+" (audit pass)", true
+	case rs.auditPass:
+		what, data["audit_pass"], data["audit_areas"] = auditReReviewLabel, true, len(rs.audit)
 	}
 	if job.postMerge {
 		what = "post-merge " + what
@@ -327,6 +333,13 @@ type roundSetup struct {
 	// start fresh and which runs as a recovery, or a continue of a paused
 	// one (pipeline.RoundInput.FullPass).
 	fullPass bool
+	// auditPass: the round is an audit pass (audit.go): a re-review the
+	// dispatcher made one (roundJob.audit) with the areas its judge probes
+	// first (audit; pipeline.RoundInput.Audit), whose sessions all start
+	// fresh and which runs as a recovery with a fresh judge, or a continue
+	// of a paused one (no areas: the paused turn has them).
+	auditPass bool
+	audit     []pipeline.AuditArea
 }
 
 // judgeOnly reports whether the round runs its judge alone: a delta check
@@ -416,6 +429,12 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.full_pass",
 			"full pass: "+job.fullPass+": every role starts in a fresh session and reviews the whole PR",
 			map[string]any{"reason": job.fullPass, "rule": job.fullPassRule, "full_pass_every": e.cfg.Pipeline.FullPassEvery})
+	}
+	// An audit pass starts every session fresh too, and runs as a recovery
+	// with a fresh judge: the reviewers re-review the delta (audit.go).
+	if rs.auditPass && job.kind == pipeline.KindRereview {
+		fresh, why, rs.freshJudge = true, "an audit pass", true
+		e.auditStarted(ctx, job, rs)
 	}
 	// Sessions post as the identity their panes were created for; a PR whose
 	// identity changed since (watch config, magnum review --as) must not
@@ -565,6 +584,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel, Related: e.cfg.RelatedFor(&job.watch),
 		ColdJudge: rs.freshJudge && rs.kind == pipeline.KindRecovery,
 		FullPass:  rs.fullPass,
+		Audit:     rs.audit,
 	}
 	if job.evalHead != "" {
 		in.Blind = true
