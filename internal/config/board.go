@@ -26,7 +26,7 @@ type Board struct {
 	Trackers []string `toml:"trackers"`
 	// RecentClosed is how long a merged or closed PR stays on the board, in
 	// its own section after the open PRs (merged_at, else closed_at, within
-	// it); 0 turns the section off. `magnum prs --all` lists every closed PR
+	// it); 0 turns the section off. `magnum tui --all` lists every closed PR
 	// whatever it says.
 	RecentClosed Duration `toml:"recent_closed"`
 	// Shimmer slides a rainbow across the state cell of a PR magnum approved

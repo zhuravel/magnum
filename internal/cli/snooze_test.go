@@ -108,7 +108,7 @@ func TestScreenSnoozeAndUnsnooze(t *testing.T) {
 	}
 }
 
-// `prs --json` gains snoozed_until (with when and by whom) for a PR whose
+// `tui --json` gains snoozed_until (with when and by whom) for a PR whose
 // snooze holds; one that has ended is left out.
 func TestPRsJSONSaysTheSnooze(t *testing.T) {
 	f := newInspFixture(t)
@@ -134,7 +134,7 @@ func TestPRsJSONSaysTheSnooze(t *testing.T) {
 		}
 	}
 	st.Close()
-	if code := f.run("prs", "--json"); code != 0 {
+	if code := f.run("tui", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []map[string]any

@@ -79,7 +79,7 @@ func TestBoardRowsAndTheStatusCardCarryTheFixLoop(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !strings.Contains(js.String(), want) {
-			t.Errorf("prs --json of %d lacks %s:\n%s", n, want, js.String())
+			t.Errorf("tui --json of %d lacks %s:\n%s", n, want, js.String())
 		}
 	}
 

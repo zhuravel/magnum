@@ -89,12 +89,12 @@ func TestPRsSourceCarriesTheRepliesAndTheStalemate(t *testing.T) {
 	}
 }
 
-// `prs --json` gains pending_replies and stalemate_threads (a list: [] when
+// `tui --json` gains pending_replies and stalemate_threads (a list: [] when
 // there is none), and the table says them in words.
 func TestPRsJSONAndTableSayTheRepliesAndTheStalemate(t *testing.T) {
 	f := newInspFixture(t)
 	prsSeedReplies(t, f)
-	if code := f.run("prs", "--json"); code != 0 {
+	if code := f.run("tui", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []map[string]any
@@ -120,7 +120,7 @@ func TestPRsJSONAndTableSayTheRepliesAndTheStalemate(t *testing.T) {
 	}
 
 	f.Out.Reset()
-	if code := f.run("prs"); code != 0 {
+	if code := f.run("tui"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var withReplies, without string

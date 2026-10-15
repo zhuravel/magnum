@@ -348,7 +348,7 @@ func installGhShim(ctx context.Context, c *Context, run execx.Runner, dry bool) 
 		}
 		fmt.Fprintf(out, "gh extension: wrote %s\n", path)
 	}
-	fmt.Fprintf(out, "  gh magnum <command> runs %s: gh magnum prs, gh magnum status <ref>, gh magnum review <ref>\n", bin)
+	fmt.Fprintf(out, "  gh magnum <command> runs %s: gh magnum tui, gh magnum status <ref>, gh magnum review <ref>\n", bin)
 	fmt.Fprintf(out, "  gh-dash keybindings: merge %s into ~/.config/gh-dash/config.yml\n", filepath.Join(c.Layout.Home, "docs", "gh-dash.yml"))
 	return nil
 }

@@ -1,6 +1,7 @@
 package cli
 
-// `magnum prs`: the PR board. On a terminal it opens tui.RunPRBoard (tab
+// `magnum tui` (alias `prs`, and what a bare `magnum` runs): the PR board.
+// On a terminal it opens tui.RunPRBoard (tab
 // switches to the status dashboard and back); elsewhere, and with --json, it
 // prints the same rows. Rows come from the registry only (store.Board): the
 // board never asks GitHub, the daemon's poller keeps the fields fresh.
@@ -33,7 +34,7 @@ const prsUsage = "[--repo owner/name|name] [--view all|magnum|mine|ready] [--sor
 
 func newPRsCmd(c *Context) *cobra.Command {
 	var f prsFlags
-	cmd := newCommand(groupInspect, "prs "+prsUsage, "PR board: every watched PR with its reviews, reviewers and changes since",
+	cmd := newCommand(groupInspect, "tui "+prsUsage, "PR board: every watched PR with its reviews, reviewers and changes since (what `magnum` alone opens)",
 		"List the pull requests magnum knows of, most recently updated first, with the last review (who, verdict, "+
 			"whether the head moved since), every reviewer's latest verdict or pending request, and what changed "+
 			"since the last review. Rows come from the registry only; the daemon's poller keeps them fresh, so the "+
@@ -71,6 +72,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"printed rows. REQUESTED is when a review was last requested of you (starred on the board), else of "+
 			"anyone; requested sorts by it, PRs with no request last.",
 		func(pos []string) int { return runPRs(c, f, pos) })
+	cmd.Aliases = []string{"prs"} // the board's name until 2026-10-15: scripts and the gh shim keep working
 	fs := cmd.Flags()
 	fs.StringVar(&f.repo, "repo", "", "show one repository (owner/name or name)")
 	fs.StringVar(&f.view, "view", string(tui.ViewAll), "rows: all, magnum, mine or ready (v cycles them on the board)")
@@ -87,7 +89,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 	return cmd
 }
 
-// prsFlags are the parsed `magnum prs` flags.
+// prsFlags are the parsed `magnum tui` flags.
 type prsFlags struct {
 	repo, sort, view                       string
 	desc, all, json, needsMe, autoApproved bool
@@ -153,28 +155,28 @@ func (o prsOptions) source(src tui.PRBoardSourceFunc) tui.PRBoardSourceFunc {
 
 func runPRs(c *Context, f prsFlags, pos []string) int {
 	if len(pos) > 0 {
-		return inspUsage(c, "prs", fmt.Sprintf("unexpected argument %q", pos[0]), prsUsage)
+		return inspUsage(c, "tui", fmt.Sprintf("unexpected argument %q", pos[0]), prsUsage)
 	}
 	by, err := tui.ParsePRSort(f.sort)
 	if err != nil {
-		return inspUsage(c, "prs", err.Error(), prsUsage)
+		return inspUsage(c, "tui", err.Error(), prsUsage)
 	}
 	view, err := tui.ParsePRView(f.view)
 	if err != nil {
-		return inspUsage(c, "prs", "--view: "+err.Error(), prsUsage)
+		return inspUsage(c, "tui", "--view: "+err.Error(), prsUsage)
 	}
 	if f.limit < 0 {
-		return inspUsage(c, "prs", "--limit must be 0 (all) or more", prsUsage)
+		return inspUsage(c, "tui", "--limit must be 0 (all) or more", prsUsage)
 	}
 	repo := strings.TrimSpace(f.repo)
 	if owner, name, ok := strings.Cut(repo, "/"); ok && (owner == "" || name == "" || strings.Contains(name, "/")) {
-		return inspUsage(c, "prs", fmt.Sprintf("--repo %q: want owner/name or name", f.repo), prsUsage)
+		return inspUsage(c, "tui", fmt.Sprintf("--repo %q: want owner/name or name", f.repo), prsUsage)
 	}
 	o := prsOptions{Repo: repo, View: view, Sort: by, Desc: f.desc, All: f.all, Limit: f.limit, NeedsMe: f.needsMe, AutoApproved: f.autoApproved}
 
 	a, err := inspOpenApp(c, false)
 	if err != nil {
-		return cmdFail(c, "prs", err)
+		return cmdFail(c, "tui", err)
 	}
 	defer a.Close()
 	ctx, cancel := signalContext()
@@ -183,13 +185,13 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 
 	if !f.json && inspScreen(c) {
 		if err := runInspScreens(ctx, c, d, statusOptions{}, o, screenBoard); err != nil {
-			return cmdFail(c, "prs", err)
+			return cmdFail(c, "tui", err)
 		}
 		return 0
 	}
 	rows, err := prsRows(ctx, d.Store, d.Config, o, prsSelfLogins(d.Config), c.Layout)
 	if err != nil {
-		return cmdFail(c, "prs", err)
+		return cmdFail(c, "tui", err)
 	}
 	var b bytes.Buffer
 	if f.json {
@@ -198,7 +200,7 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 		prsRender(&b, rows, prsDefaultRepo(d.Config), inspNow())
 	}
 	if err != nil {
-		return cmdFail(c, "prs", err)
+		return cmdFail(c, "tui", err)
 	}
 	io.WriteString(c.Stdout, b.String())
 	return 0

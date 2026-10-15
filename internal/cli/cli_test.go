@@ -83,7 +83,6 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{nil, []string{"Usage:", "Inspect:"}},
 		{[]string{"bogus"}, []string{`magnum: unknown command "bogus"`}},
 		{[]string{"status", "--bogus"}, []string{"magnum status: unknown flag: --bogus", "usage: magnum status [<ref>|<slot>]"}},
 		{[]string{"logs", "-n", "many"}, []string{"magnum logs: invalid argument"}},

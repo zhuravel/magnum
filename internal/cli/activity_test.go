@@ -11,7 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-// UPDATED is a PR's last activity: `magnum prs` shows and sorts by it, and
+// UPDATED is a PR's last activity: `magnum tui` shows and sorts by it, and
 // its JSON says activity_at with GitHub's own updatedAt as
 // github_updated_at. #11940 was last active five days ago though an
 // invisible change moved GitHub's updatedAt 11 minutes ago; #11941's
@@ -28,7 +28,7 @@ func TestPRsShowTheActivityTime(t *testing.T) {
 	inspSeedPR(t, st, "talkable/talkable", 11941, store.PRQueued, func(u *store.PRUpdate) { u.Set("gh_updated_at", unread) })
 	st.Close()
 
-	if code := f.run("prs"); code != 0 {
+	if code := f.run("tui"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	lines := strings.Split(strings.TrimSpace(f.Out.String()), "\n")
@@ -39,7 +39,7 @@ func TestPRsShowTheActivityTime(t *testing.T) {
 		t.Errorf("UPDATED shows the activity:\n%s", f.Out.String())
 	}
 
-	if code := f.run("prs", "--json"); code != 0 {
+	if code := f.run("tui", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var raw []map[string]any

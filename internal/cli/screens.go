@@ -1,7 +1,7 @@
 package cli
 
 // The interactive screens of internal/tui: `status --watch` (dashboard),
-// `prs` (PR board; tab switches between the two), `pick` (picker), `cleanup`
+// `tui` (PR board; tab switches between the two), `pick` (picker), `cleanup`
 // (plan review) and `watch` (pane mirror). A command runs its screen only
 // when stdin and stdout are terminals; anywhere else, and always with
 // --json, it keeps its plain-text output.
@@ -31,7 +31,7 @@ var (
 // The screens tab switches between.
 const (
 	screenDashboard = "dashboard"
-	screenBoard     = "prs"
+	screenBoard     = "tui"
 )
 
 // runScreens runs the screen named first, then whichever one the user

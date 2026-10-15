@@ -50,7 +50,7 @@ func seedNeedsMe(t *testing.T, st *store.Store) {
 	}
 }
 
-// `magnum prs --json` says which PRs magnum approved still need the
+// `magnum tui --json` says which PRs magnum approved still need the
 // operator (needs_me: approve, lift or "") and GitHub's review decision;
 // --needs-me lists only them, first in the updated sort, and the printed
 // rows flag them.
@@ -60,7 +60,7 @@ func TestPRsNeedsMeListsThePRsWaitingForYourApproval(t *testing.T) {
 	seedNeedsMe(t, st)
 	st.Close()
 
-	if code := f.run("prs", "--json"); code != 0 {
+	if code := f.run("tui", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var raw []map[string]any
@@ -81,7 +81,7 @@ func TestPRsNeedsMeListsThePRsWaitingForYourApproval(t *testing.T) {
 		}
 	}
 
-	if code := f.run("prs", "--needs-me", "--json"); code != 0 {
+	if code := f.run("tui", "--needs-me", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []prsJSONRow
@@ -97,7 +97,7 @@ func TestPRsNeedsMeListsThePRsWaitingForYourApproval(t *testing.T) {
 		t.Fatalf("--needs-me rows %v", nums)
 	}
 
-	if code := f.run("prs", "--needs-me"); code != 0 {
+	if code := f.run("tui", "--needs-me"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	out := f.Out.String()
@@ -110,7 +110,7 @@ func TestPRsNeedsMeListsThePRsWaitingForYourApproval(t *testing.T) {
 		t.Errorf("--needs-me printed a PR that does not need you:\n%s", out)
 	}
 
-	if code := f.run("prs"); code != 0 {
+	if code := f.run("tui"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	lines := strings.Split(strings.TrimSpace(f.Out.String()), "\n")[1:]

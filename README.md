@@ -330,7 +330,7 @@ reply round or delta check starts a round on it (the first review of a new PR in
 snooze in place. It ends on its own at its time and survives a daemon restart (the registry keeps it); a
 round in flight finishes. The board's `z` snoozes the selected PR for 2h after a y/N, and on a snoozed PR
 offers to lift it; the state cell says `snoozed → 18:00` (in the wait, or after the state when nothing
-waits), the card until when, since when and by whom (`magnum snooze` or the board), and `prs --json`
+waits), the card until when, since when and by whom (`magnum snooze` or the board), and `tui --json`
 has `snoozed_until`, `snoozed_at` and `snoozed_by`.
 
 Codex may block an account it takes for a cyber abuser, also when all it reads is your team's own code. So
@@ -359,8 +359,8 @@ and agents, and `magnum review` works; the board's cell reads `Codex flagged · 
 refusal by the fallback's kind too, or a fallback no longer declared as a judge of another kind, holds
 the PR as below. Without the key, the board's state cell and
 card read `Codex flagged · never reviewed again`, the card says when and where and how to lift it,
-`magnum status` lists the PR among what needs you, `magnum prs` prints `codex-flagged` in STATE and
-`prs --json` has `codex_flag` and `codex_flag_detail`; `magnum stats` counts such rounds as `refused`.
+`magnum status` lists the PR among what needs you, `magnum tui` prints `codex-flagged` in STATE and
+`tui --json` has `codex_flag` and `codex_flag_detail`; `magnum stats` counts such rounds as `refused`.
 Review it by hand. Only `magnum codex-flag clear <ref>` lifts the flag, after a y/N question on a
 terminal that names the account risk; `magnum codex-flag set <ref> [reason]` flags a PR by hand (one
 Codex warned about elsewhere). The flag fails closed: a flag record magnum cannot parse is a flag, a
@@ -817,7 +817,7 @@ PR's next round takes another slot (a slot pinned meanwhile keeps its PR, which 
 `idle_remove_after` (168h when unset or 0; a negative value is refused). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
 `magnum review` still runs it. A watch's `skip_cross_repository` (default `true`) skips a PR whose head lives in a fork, and `false` reviews it. A watch's `manual_repos` (names of repositories it covers, without owner
-or pattern, such as `["example"]`) keeps them on the board, in `magnum prs`, the status and the retro,
+or pattern, such as `["example"]`) keeps them on the board, in `magnum tui`, the status and the retro,
 but starts no round there on its own: not for a new PR, a push or a review request on GitHub. Their PRs
 read "skipped · manual"; `magnum review`, the board's `r`/`R` and the picker review one. A review request
 on such a repository is still recorded: its `pr.review_requested` event says "manual repository: no round
@@ -881,7 +881,7 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   have not reviewed the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
 
 When the review, the watch, the agents' files or the checks hold a PR back, the card says why ("magnum does
-not approve it as you: its head's checks fail …"; `auto_approve_refused` in `magnum prs --json`) and a
+not approve it as you: its head's checks fail …"; `auto_approve_refused` in `magnum tui --json`) and a
 `review.auto_approve_refused` event records each reason once. They do not refuse the board's `A` (or
 `magnum approve --as`) on a row that needs you: there you decide by hand.
 
@@ -920,7 +920,7 @@ as `✔ lift your ✗` instead. `magnum review` does not change that; `magnum un
 it too.
 
 You see every one: a toast per approval ("approved as you: talkable#12001", with the link) and per
-withdrawal, `✔ auto` in the board's STATE and "N auto-approved" in the titles, the card, `magnum prs
+withdrawal, `✔ auto` in the board's STATE and "N auto-approved" in the titles, the card, `magnum tui
 --auto-approved`, and "approvals: auto-approved: N today, M standing" in `magnum status`. Each post and
 withdrawal is a row of the registry's `auto_approvals` with begin, ok and fail events
 (`review.auto_approve_begin`, `review.auto_approved`, `review.auto_approve_failed`,
@@ -991,7 +991,7 @@ reports against it, posts and updates the notes. Over 54 rounds a first review t
 median (51 at p90), the reviewers 17 and then the judge 15 one after the other; overlapping the own pass
 leaves about the longer of the two plus 5 to 8 minutes of judging and posting, some 9 minutes off the
 median at about the same usage. The own pass is a run of its own (kind `own_pass`, `round.own_pass`
-events, `codex-judge own pass` on the board's card, in `magnum stats` and `own_pass` in `prs --json`;
+events, `codex-judge own pass` on the board's card, in `magnum stats` and `own_pass` in `tui --json`;
 the state cell reads `reviewers+judge` while both work), bounded by the judge's `timeout`; a push cuts
 it short and the restart prompts it again on the new head, naming the head it moved from, and a pass
 that left no file only makes the candidates prompt ask for it. Crash recovery counts it with the
@@ -1863,7 +1863,7 @@ out, as the board's does.
   cell), then the usual `reviewing` for the re-review. A PR taken out of autofix carries `fix off` in its
   flags and on its card. The dashboard shows the fixer's pane like any agent's.
 - `magnum status <pr>` prints a `fix:` line with the cycle, the cap, who started the loop and the report's
-  path, or `off since 12:30 (magnum fix --off)`. `magnum prs --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
+  path, or `off since 12:30 (magnum fix --off)`. `magnum tui --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
 - `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.needs_you`,
   `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.
@@ -1952,7 +1952,7 @@ opens it"). `--wait` follows the job to its end (exit 0 once the whiteboard is w
 recorded whiteboard in Whiteboard Desktop
 (`whiteboard app pick --session <id> --focus`) and refuses "no whiteboard of <pr> yet" without a record. The
 board's `w` opens it the same way, after y/N, and refuses a row without a record; the card shows `whiteboard
-<sha7>` when one exists, and `magnum prs --json` has `whiteboard` (`session` and `head`, `null` without one).
+<sha7>` when one exists, and `magnum tui --json` has `whiteboard` (`session` and `head`, `null` without one).
 
 **Good to know.**
 
@@ -1976,10 +1976,14 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
 
 ## Daily use
 
+`magnum` alone opens the PR board, `magnum tui` (the printed rows when the output is not a terminal, so
+`magnum | head` lists the PRs). `magnum help` and `magnum --help` list the commands by group, and
+`magnum <command> --help` explains one.
+
 | Command | What it does |
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
-| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--desc] [--all] [--needs-me] [--auto-approved] [--json] [--limit N]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge; `--desc` (the default) puts the largest first and `--desc=false` reverses the order, `--limit` caps the rows (0 = all). Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list; UPDATED is `activity_at`, the PR's last activity, and GitHub's own updatedAt is `github_updated_at`. `--needs-me` lists only the PRs Magnum approved that GitHub still blocks on your approval (below); `needs_me` (`approve`, `lift` or `""`) and `review_decision` (GitHub's) say it in the JSON, and `approve_as` whom the board's `A` approves such a PR as (the watch's `auto_approve_as`: its `identity`, `login` and the `refusal` that would stop it now, `""` when none; `null` without one). `--auto-approved` lists only the PRs Magnum approved as you (Approving as you); `auto_approved` (its `review_id`, `head`, `url` and `at`, or `null`) and `auto_approve_stopped` (why Magnum no longer approves the PR as you, or `""`) say it in the JSON, as does `auto_approve_refused` (why it does not approve the head as you although the review left nothing to fix, or `""`), `auto-approved` in the printed STATE. `pending_replies` counts the replies on Magnum's review its judge has not re-decided (", 2 replies" in the printed LAST REVIEW) and `stalemate_threads` lists the threads where it stopped arguing (`stalemate` in the printed STATE). As on the board, the printed STATE names a snooze (`snoozed→18:00`) and FINDINGS the earlier findings still open when the review posted none new (`blocking 3 open`); `open_problems` in the JSON counts those of them that `magnum fix` and `f` fix (P0 to P2). `whiteboard` is the PR's whiteboard (its Whiteboard `session` and the `head` it describes), `null` without one (Whiteboards of reviewed PRs). |
+| `magnum tui [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--desc] [--all] [--needs-me] [--auto-approved] [--json] [--limit N]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge; `--desc` (the default) puts the largest first and `--desc=false` reverses the order, `--limit` caps the rows (0 = all). Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list; UPDATED is `activity_at`, the PR's last activity, and GitHub's own updatedAt is `github_updated_at`. `--needs-me` lists only the PRs Magnum approved that GitHub still blocks on your approval (below); `needs_me` (`approve`, `lift` or `""`) and `review_decision` (GitHub's) say it in the JSON, and `approve_as` whom the board's `A` approves such a PR as (the watch's `auto_approve_as`: its `identity`, `login` and the `refusal` that would stop it now, `""` when none; `null` without one). `--auto-approved` lists only the PRs Magnum approved as you (Approving as you); `auto_approved` (its `review_id`, `head`, `url` and `at`, or `null`) and `auto_approve_stopped` (why Magnum no longer approves the PR as you, or `""`) say it in the JSON, as does `auto_approve_refused` (why it does not approve the head as you although the review left nothing to fix, or `""`), `auto-approved` in the printed STATE. `pending_replies` counts the replies on Magnum's review its judge has not re-decided (", 2 replies" in the printed LAST REVIEW) and `stalemate_threads` lists the threads where it stopped arguing (`stalemate` in the printed STATE). As on the board, the printed STATE names a snooze (`snoozed→18:00`) and FINDINGS the earlier findings still open when the review posted none new (`blocking 3 open`); `open_problems` in the JSON counts those of them that `magnum fix` and `f` fix (P0 to P2). `whiteboard` is the PR's whiteboard (its Whiteboard `session` and the `head` it describes), `null` without one (Whiteboards of reviewed PRs). `prs` is its alias, and `magnum` alone opens it. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. The codex line says how fast the Codex budget is spent, the share used over the share of the window elapsed, the same over the last 24 hours (which leaves out one-off spending days ago; not shown when the window reset within them), and when `[usage]` codex_soft and codex_hard come at the window's pace if before the reset ("pace 2.8x since the reset, 1.1x in the last 24h: 80% Oct 7 13:30, 95% Oct 8 09:10"; `pace`, `pace_24h`, `soft_at` and `hard_at` in the JSON); the daemon toasts once per window, naming both paces, when codex_soft would come before the reset at the window's pace (not in the window's first tenth, when one burst is no pace). The notes line sums up the repositories with notes, the proposals to review and those past a limit (`magnum notes` lists them). A queue line adds, as the board does, the PR's snooze and the earlier findings still open (`· snoozed → 18:00 · 3 open`; `snoozed_until` and `open` in the JSON), and a PR's card its snooze on the state line. A `machine:` line per repository and command sums up what the judges reported of the review machine in the last 24 hours (`round.environment`: "machine:  6 rounds of talkable: `bundle exec rspec`: no test database for the worktree, last 09:24", a test file's path left out of the command; `machine` in the JSON); a command that fails in 3 rounds of one repository toasts once a day. A `pinned:` line per pinned slot (or pinned PR without one) gives the PR, what GitHub says of it and the pin's age ("pinned:   review16 (talkable#11999, closed 5h ago, pinned 5d)"; `pins` in the JSON). `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority (only the new ones: a re-review's still-open earlier findings are not counted again), median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), model switches, denied prompts and round restarts, and the top 10 PRs by agent time (the sum of their runs' durations in the window, the rounds and the share of all agent time; `top_prs` in the JSON), so a PR burning the budget can be muted; and, for first reviews and re-reviews with the judge's own pass and for delta checks, who found the posted findings (the own pass, the own pass and a reviewer, reviewers only), the reviewer-only P0–P2 per 10 rounds and each role's median turn (`value`; see [Roles and kinds](#roles-and-kinds-the-review-pipeline)). |
 | `magnum eval run\|score\|list\|show\|baseline` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) and in the learned corpus the retro writes (`--corpus FILE`: that file alone) at their pinned heads as blind dry runs (`--candidate <dir>`: with another checkout's prompts and skill; `--judge-only`: the judge alone on a full replay's reviewer reports) and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run, with the Codex points each case used and the cases whose judge read other notes than in that run; it refuses to start while the daemon's skill gate replays cases (naming its proposal). `score` re-scores a run after a match rule is fixed, without the agents. `baseline` (read-only) names the stored replays a run of the cases would repeat: same head, same skill, prompts and role config. Two runs started in the same second get separate ids (`<time>`, then `<time>-2`), so they keep separate records and agent tags. |
@@ -1997,7 +2001,7 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
 | `magnum attention [--list]` | Jump to whatever needs you: a blocked agent, a failed round, an unseen result. A PR in needs_attention is explained in one line (the stage, how many attempts on which head, the line of the output that names the cause) with the next step; `magnum status <ref>` adds the failing step and the end of its output, and the dashboard, the PR board's card and `magnum review --wait` say the same. `--json` omits `since` for an item that has no time. It takes `--no-reveal` and `--new-window` as `magnum open` does. |
 | `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. `enter` reviews (a reviewed head again too), `ctrl+f` fresh, `ctrl+g` opens the pane, `ctrl+o` the browser, `ctrl+p` pins or unpins, `ctrl+x` releases, `ctrl+r` refreshes the list; a key that cannot act on the PR says why instead (a review while its round runs, a release of a pinned PR). In the herdr popup a failure stays on screen until a key is pressed. `--query` sets the initial filter, and a PR URL or reference there preselects that PR (or offers it when Magnum does not know it). |
 | `magnum ui open picker\|status\|cleanup\|doctor [--workspace id] [--width 90%] [--height 60%]` | Open one of the herdr plugin's popup panes over the herdr socket (what the plugin's keys run); the sizes come from the `[[panes]]` of `herdr-plugin.toml` unless given, the workspace from the plugin's context. |
-| `magnum pin\|unpin\|release\|mute\|unmute <ref>`, `magnum mute <ref> [reason…]` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). The words after a muted PR are the mute's reason, kept in the request, its answer and the `pr.muted` event, and shown under the head of the board's card (`muted: <reason>`; `mute_reason` in `prs --json`); a mute takes a PR waiting for an automatic round out of the queue at once (ineligible, `muted`), and `unmute` decides its eligibility again. A mute stops every automatic round. To leave only autofix alone, use `magnum fix --off`, which the board shows as `fix off` where it shows `muted`. |
+| `magnum pin\|unpin\|release\|mute\|unmute <ref>`, `magnum mute <ref> [reason…]` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). The words after a muted PR are the mute's reason, kept in the request, its answer and the `pr.muted` event, and shown under the head of the board's card (`muted: <reason>`; `mute_reason` in `tui --json`); a mute takes a PR waiting for an automatic round out of the queue at once (ineligible, `muted`), and `unmute` decides its eligibility again. A mute stops every automatic round. To leave only autofix alone, use `magnum fix --off`, which the board shows as `fix off` where it shows `muted`. |
 | `magnum snooze <ref> [--for 2h \| --until 18:00 \| --off]` | Hold a PR's automatic reviews until then (default 2h): no push, re-review, reply round or delta check starts a round, while `magnum review`, the board and a GitHub review request still do; it ends on its own and survives restarts, `--off` lifts it (see Configuration). Board key `z`. |
 | `magnum codex-flag set <ref> [reason...]`, `magnum codex-flag clear <ref>` | Flag a PR Codex warned about (a round Codex refuses flags its PR by itself, a refused helper agent of a role too): magnum never reviews it again, not even `magnum review` or the board's `r`/`R`, parks its agents and releases its pool slot unless `magnum open` pinned it, and names it in no other PR's `related.json`; with `[pipeline] judge_fallback` set, the PR goes on without Codex, with that judge (see "Codex may block an account" above). `clear` lifts the flag after a y/N question on a terminal that names the account risk; the PR is then judged by its watch again (see Configuration). |
 | `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. It also ends a PR's fix loop, whether its fixer works (the PR stays reviewed meanwhile) or the loop waits for its re-review or next cycle: the fixer is interrupted, its run abandoned and the slot put back. A whiteboard job at work is stopped the same way: the writer is interrupted, its run abandoned and the slot put back. |
@@ -2027,7 +2031,7 @@ a push, a comment, a review or a reply in a thread, a label added or removed, a 
 for review or back to draft, a title rename, a description edit, a base change, a close, reopen or merge, bots
 included and CI checks not; GitHub's own updatedAt also moves for what a reviewer never sees, such as a project
 field, a resolved thread, someone's pending review or a deleted comment, so it is left to `github_updated_at` in
-`prs --json`; a PR shows GitHub's until Magnum next reads its details), when a review was last requested
+`tui --json`; a PR shows GitHub's until Magnum next reads its details), when a review was last requested
 (`★ 2h` when of you, also for an older PR whose author asked again; the dimmed age of the latest request
 when of someone else; it comes from the PR's timeline, which Magnum reads for the newest ten requests),
 Magnum's state badge, the last review (who, verdict, age, ⟳ when the head moved since, and `↩2`, `<-2` in
@@ -2102,7 +2106,7 @@ and only reviewers with write access count, as for GitHub's decision. Magnum rea
 a row is on screen its text shimmers, a rainbow sliding across it four times a second (`[board] shimmer =
 false` keeps it still; with `NO_COLOR` or a terminal without colors it is bold reverse video); the updated
 sort lists these PRs first, the titles of the board and the status dashboard count them ("3 need your
-✓"), `magnum prs --needs-me` lists only them (`needs-you` and `lift-yours` in the printed STATE),
+✓"), `magnum tui --needs-me` lists only them (`needs-you` and `lift-yours` in the printed STATE),
 `magnum pick` marks them, and the daemon toasts each once per head with its link (`[herdr] notify`). A PR
 that also waits for a round, is paused or needs attention keeps that state's pill in STATE instead (the card
 shows both).
@@ -2167,7 +2171,7 @@ and `M` asks "Restore the merged-unreviewed flag on talkable#7?" and sends an un
 back (the forced mark does not return); on any other merged or closed row `M` only says there is nothing
 to mute (the status dashboard and the right-click menu do the same); `U` there restores a dismissed flag and
 otherwise says there is nothing to unmute. Printed rows
-(`magnum prs` without a terminal) list the section too, with `closed,merged,unreviewed` in STATE.
+(`magnum tui` without a terminal) list the section too, with `closed,merged,unreviewed` in STATE.
 `r` on a merged row asks "Post-merge review talkable#7 (comment only)?" (`R` and `i` their fresh and
 simplify variants; the status dashboard and `magnum pick` ask the same) and, on `y`, runs `magnum review`
 for it: a re-review from the commit Magnum last reviewed to the merged head (a first review when there is
@@ -2202,7 +2206,7 @@ requested) and `ready`: open and not a draft, approved on the current head (a st
 count), no changes requested, magnum's latest review not blocking, and
 every required check passed (a skipped, missing or pending required check is not passed; a repository
 without required checks is not held back by its CI). `v` cycles the views and `O` the owners (all, then
-each user or organization with PRs); the title bar names both and `magnum prs --view` picks the view the
+each user or organization with PRs); the title bar names both and `magnum tui --view` picks the view the
 board opens in. The filter
 matches words fuzzily against the reference, title, author, reviewers and labels, and takes
 `state:<state>` (a prefix is enough: `state:needs`), `assignee:<login>`, `author:<login>` (`@me` means
@@ -2690,7 +2694,7 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
   = false` turns all toasts off. `magnum install` prints a tab-bar entry for herdr's config that shows the
   daemon's status line ("magnum · 1 reviewing · paused 19h · 6 requests held"), or "magnum down" once the
   daemon stopped writing it for three poll intervals.
-- **gh extension**: `magnum install --gh` installs a `gh magnum` shim, so `gh magnum prs` works anywhere.
+- **gh extension**: `magnum install --gh` installs a `gh magnum` shim, so `gh magnum tui` works anywhere.
 - **gh-dash**: [docs/gh-dash.yml](docs/gh-dash.yml) has keybindings that hand the selected PR to Magnum.
 - **launchd**: `magnum install` writes `~/Library/LaunchAgents/zhuravel.magnum.plist`, running the daemon
   with mise's shims on its `PATH`, so it sees your mise toolchain (`[daemon] shell_path = true` also appends

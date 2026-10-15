@@ -1733,6 +1733,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   each prints `usage: magnum slots <subcommand> ...` from its own Use string, and the usage-line test no
   longer accepts a family line.
 
+- **The board is `magnum tui`, and `magnum` alone opens it** (2026-10-15; the operator asked). `prs` named
+  the rows, not the screen, and a bare `magnum` printed the help on stderr with exit 2. The command is `tui`
+  (newPRsCmd and the prs_*.go files keep their names in the code), `prs` stays as its alias so scripts and
+  the gh shim's examples keep working (`gh magnum tui` in the install text, `Aliases: prs` in the help), the
+  usage errors say `magnum tui`, and `execute` turns no arguments into `tui`: the live board on a terminal,
+  the printed rows elsewhere, so `magnum | head` lists the PRs. `magnum help` and `--help` list the commands
+  as before, `magnum <command> --help` explains one, and `magnum --config x` without a command still
+  prints the help. Rejected: dropping the `prs` alias (a rename with no grace costs every alias and script
+  the operator has); keeping `magnum` at the help (the help is one word away, the board is what the
+  operator opens many times a day).
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

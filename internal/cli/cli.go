@@ -115,18 +115,14 @@ func newRoot(c *Context) *cobra.Command {
 // execute runs args against a command tree bound to c.
 func execute(c *Context, args []string) int {
 	root := newRoot(c)
+	if len(args) == 0 {
+		// No command opens the PR board, as `magnum tui` does (the printed
+		// rows off a terminal); `magnum help` and --help list the commands.
+		args = []string{"tui"}
+	}
 	root.SetArgs(args)
 	root.SetOut(c.Stdout)
 	root.SetErr(c.Stderr)
-	if len(args) == 0 {
-		// No command: the help on stderr and a usage error.
-		root.SetOut(c.Stderr)
-		root.InitDefaultHelpFlag()
-		root.InitDefaultHelpCmd()
-		root.InitDefaultCompletionCmd()
-		_ = root.Help()
-		return 2
-	}
 	cmd, err := root.ExecuteC()
 	if err == nil {
 		return 0

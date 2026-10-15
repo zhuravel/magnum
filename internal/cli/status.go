@@ -39,7 +39,7 @@ func newStatusCmd(c *Context) *cobra.Command {
 			"ctrl+r or F5 refreshes now, b opens the PR in the browser, a jumps to what needs you, w shows the manual "+
 			"worktrees, ! shows the action log, m turns the mouse off and on (wheel, click, double click to open, "+
 			"right click for the row's actions, a drag between two headings resizes a column), W resets the column "+
-			"widths, tab (or t) switches to the PR board of `magnum prs` and back, ? lists every key and q quits. Elsewhere, or with a <ref>, --watch redraws "+
+			"widths, tab (or t) switches to the PR board of `magnum tui` and back, ? lists every key and q quits. Elsewhere, or with a <ref>, --watch redraws "+
 			"the text every 2s until interrupted.",
 		func(pos []string) int { return runStatus(c, f, pos) })
 	fs := cmd.Flags()

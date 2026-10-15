@@ -1,6 +1,6 @@
 package cli
 
-// The JSON shape of `magnum prs --json`. It is its own set of types, not tags
+// The JSON shape of `magnum tui --json`. It is its own set of types, not tags
 // on the board's (tui.PRBoardRow and what it holds): the screen's types are
 // free to change with the screen, and the output is a contract. Like the other
 // --json outputs its keys are snake_case; a time is RFC 3339 and left out
@@ -15,7 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-// prsJSONRow is one PR of `magnum prs --json`: tui.PRBoardRow's fields, in its order.
+// prsJSONRow is one PR of `magnum tui --json`: tui.PRBoardRow's fields, in its order.
 type prsJSONRow struct {
 	Ref              string            `json:"ref"` // owner/name#N
 	Owner            string            `json:"owner"`
@@ -278,7 +278,7 @@ type prsJSONRequest struct {
 	Mine bool      `json:"mine"`
 }
 
-// prsJSONRows is the output of `prs --json` for rows: never nil, so no rows
+// prsJSONRows is the output of `tui --json` for rows: never nil, so no rows
 // print as [].
 func prsJSONRows(rows []tui.PRBoardRow) []prsJSONRow {
 	out := make([]prsJSONRow, 0, len(rows))

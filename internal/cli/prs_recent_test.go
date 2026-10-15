@@ -44,14 +44,14 @@ func prsSeedRecent(t *testing.T, f *inspFixture) {
 	st.Close()
 }
 
-// `magnum prs` without a terminal lists the PRs GitHub merged or closed
+// `magnum tui` without a terminal lists the PRs GitHub merged or closed
 // within [board] recent_closed after the open ones, newest closed first;
 // the state column flags the one merged before magnum reviewed it.
 func TestPRsListsRecentlyClosedAfterTheOpenOnes(t *testing.T) {
 	f := newInspFixture(t)
 	prsSeedRecent(t, f)
 
-	if code := f.run("prs"); code != 0 {
+	if code := f.run("tui"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	out := f.Out.String()
@@ -70,7 +70,7 @@ func TestPRsListsRecentlyClosedAfterTheOpenOnes(t *testing.T) {
 		t.Errorf("the closed row's state:\n%s", lines[4])
 	}
 
-	if code := f.run("prs", "--json"); code != 0 {
+	if code := f.run("tui", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []prsJSONRow
@@ -94,7 +94,7 @@ func TestPRsListsRecentlyClosedAfterTheOpenOnes(t *testing.T) {
 
 	// --all keeps listing every closed PR; the ones outside the window are
 	// not in the section.
-	if code := f.run("prs", "--all", "--json"); code != 0 {
+	if code := f.run("tui", "--all", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
@@ -123,7 +123,7 @@ func TestPRsRecentClosedZeroListsOnlyOpenPRs(t *testing.T) {
 		t.Fatal(err)
 	}
 	prsSeedRecent(t, f)
-	if code := f.run("prs", "--json"); code != 0 {
+	if code := f.run("tui", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []prsJSONRow

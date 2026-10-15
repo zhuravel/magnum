@@ -11,7 +11,7 @@ import (
 // loaded the user's settings only because the PR changes .claude/,
 // .mcp.json or an instruction file, naming those its record names, after
 // the Codex sentence when both CLIs ran without the PR's project config;
-// the record of an older head says nothing, and prs --json carries the
+// the record of an older head says nothing, and tui --json carries the
 // same note.
 func TestPRsSourceCarriesTheClaudeProjectRecordOfTheHead(t *testing.T) {
 	f := newInspFixture(t)

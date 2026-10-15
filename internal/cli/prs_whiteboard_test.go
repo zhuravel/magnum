@@ -14,7 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-// The board rows and `magnum prs --json` carry a PR's whiteboard as the
+// The board rows and `magnum tui --json` carry a PR's whiteboard as the
 // daemon records it (engine.KVPRWhiteboard): the session w opens and the
 // head it describes; a PR without a record has none (null), and so has one
 // whose record names no session.
@@ -75,7 +75,7 @@ func TestBoardRowsAndPRsJSONCarryThePRsWhiteboard(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got, ok := out["whiteboard"]; !ok || !reflect.DeepEqual(got, want) {
-			t.Errorf("prs --json of %d: whiteboard = %#v (present %v), want %#v", n, got, ok, want)
+			t.Errorf("tui --json of %d: whiteboard = %#v (present %v), want %#v", n, got, ok, want)
 		}
 	}
 }

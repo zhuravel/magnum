@@ -373,7 +373,7 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	f := newInspFixture(t)
 	prsSeed(t, f)
 
-	if code := f.run("prs"); code != 0 {
+	if code := f.run("tui"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	out := f.Out.String()
@@ -390,7 +390,7 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 		t.Errorf("the REQUESTED column:\n%s", out)
 	}
 
-	if code := f.run("prs", "--all", "--sort", "last-review", "--json"); code != 0 {
+	if code := f.run("tui", "--all", "--sort", "last-review", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []prsJSONRow
@@ -412,7 +412,7 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	}
 
 	// The newest request first, whatever it asked; PRs nobody asked come last.
-	if code := f.run("prs", "--all", "--sort", "requested", "--json"); code != 0 {
+	if code := f.run("tui", "--all", "--sort", "requested", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
@@ -421,7 +421,7 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	if refs := prsJSONRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11931", "talkable/talkable#11920", "zhuravel/app#3"}) {
 		t.Fatalf("--all --sort requested: %v (the hour-old request, the five-hour-old one, then none)", refs)
 	}
-	if code := f.run("prs", "--all", "--sort", "requested", "--desc=false", "--json"); code != 0 {
+	if code := f.run("tui", "--all", "--sort", "requested", "--desc=false", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
@@ -431,11 +431,11 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 		t.Fatalf("--all --sort requested --desc=false: %v (oldest request first, none still last)", refs)
 	}
 
-	if code := f.run("prs", "--repo", "app", "--all", "--json"); code != 0 || !strings.Contains(f.Out.String(), "zhuravel/app#3") ||
+	if code := f.run("tui", "--repo", "app", "--all", "--json"); code != 0 || !strings.Contains(f.Out.String(), "zhuravel/app#3") ||
 		strings.Contains(f.Out.String(), "talkable#") {
 		t.Fatalf("--repo app: code %d\n%s", code, f.Out.String())
 	}
-	if code := f.run("prs", "--desc=false", "--limit", "1", "--json"); code != 0 {
+	if code := f.run("tui", "--desc=false", "--limit", "1", "--json"); code != 0 {
 		t.Fatalf("code %d", code)
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Ref != "talkable/talkable#11920" {
@@ -443,13 +443,13 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	}
 	// The limit cuts after the requested sort, not after the registry's
 	// newest-update order.
-	if code := f.run("prs", "--all", "--sort", "last-review", "--limit", "1", "--json"); code != 0 {
+	if code := f.run("tui", "--all", "--sort", "last-review", "--limit", "1", "--json"); code != 0 {
 		t.Fatalf("code %d", code)
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Ref != "talkable/talkable#11920" {
 		t.Fatalf("--sort last-review --limit 1: %v %v", err, prsJSONRefs(rows))
 	}
-	if code := f.run("prs", "--repo", "nope", "--json"); code != 0 || strings.TrimSpace(f.Out.String()) != "[]" {
+	if code := f.run("tui", "--repo", "nope", "--json"); code != 0 || strings.TrimSpace(f.Out.String()) != "[]" {
 		t.Fatalf("no rows: code %d %q", code, f.Out.String())
 	}
 }
@@ -476,15 +476,15 @@ func TestPRsUsageErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"--sort", "bogus"}, {"--limit", "-1"}, {"--repo", "talkable/"}, {"--repo", "a/b/c"}, {"extra"},
 	} {
-		if code := f.run("prs", args...); code != 2 {
+		if code := f.run("tui", args...); code != 2 {
 			t.Errorf("prs %v: code %d, want 2 (stderr %s)", args, code, f.Err.String())
 		}
 	}
-	if code := f.run("prs", "--sort", "bogus"); code != 2 || !strings.Contains(f.Err.String(), "usage: magnum prs") {
+	if code := f.run("tui", "--sort", "bogus"); code != 2 || !strings.Contains(f.Err.String(), "usage: magnum tui") {
 		t.Errorf("bad sort message: %s", f.Err.String())
 	}
 	for _, s := range []string{"last_review", "Reviewer Activity", "Requested", "CHANGES", "state", ""} {
-		if code := f.run("prs", "--sort", s, "--json"); code != 0 {
+		if code := f.run("tui", "--sort", s, "--json"); code != 0 {
 			t.Errorf("--sort %q: code %d %s", s, code, f.Err.String())
 		}
 	}
@@ -506,7 +506,7 @@ func TestPRsOpensTheBoard(t *testing.T) {
 	}
 	t.Cleanup(func() { tuiPRBoard = old })
 
-	if code := f.run("prs", "--repo", "talkable/talkable", "--sort", "changes"); code != 0 {
+	if code := f.run("tui", "--repo", "talkable/talkable", "--sort", "changes"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	if f.Out.Len() != 0 {
@@ -527,7 +527,7 @@ func TestPRsOpensTheBoard(t *testing.T) {
 			t.Errorf("the board's row lacks the review request to me: %+v", r.RequestedToMe)
 		}
 	}
-	if code := f.run("prs", "--json"); code != 0 || !strings.HasPrefix(f.Out.String(), "[") {
+	if code := f.run("tui", "--json"); code != 0 || !strings.HasPrefix(f.Out.String(), "[") {
 		t.Errorf("--json on a terminal prints: code %d %q", code, f.Out.String())
 	}
 }
@@ -674,7 +674,7 @@ func TestScreensFollowTheMouseSetting(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { tuiPRBoard = old })
-	if code := f.run("prs"); code != 0 {
+	if code := f.run("tui"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	if !opts.NoMouse {
@@ -704,10 +704,10 @@ func TestPRsCompletion(t *testing.T) {
 		t.Errorf("sorts %v, want %v", sorts, want)
 	}
 
-	if code := f.run(cobra.ShellCompRequestCmd, "prs", "--sort", "la"); code != 0 || !strings.Contains(f.Out.String(), "last-review") {
+	if code := f.run(cobra.ShellCompRequestCmd, "tui", "--sort", "la"); code != 0 || !strings.Contains(f.Out.String(), "last-review") {
 		t.Errorf("--sort completion: code %d\n%s", code, f.Out.String())
 	}
-	if code := f.run(cobra.ShellCompRequestCmd, "prs", "--repo", ""); code != 0 || !strings.Contains(f.Out.String(), "zhuravel/app") {
+	if code := f.run(cobra.ShellCompRequestCmd, "tui", "--repo", ""); code != 0 || !strings.Contains(f.Out.String(), "zhuravel/app") {
 		t.Errorf("--repo completion: code %d\n%s", code, f.Out.String())
 	}
 }
@@ -782,7 +782,7 @@ func TestPRsView(t *testing.T) {
 		"Mine":   {"talkable/talkable#11950"},
 		"ready":  {"talkable/talkable#11950"},
 	} {
-		if code := f.run("prs", "--view", view, "--json"); code != 0 {
+		if code := f.run("tui", "--view", view, "--json"); code != 0 {
 			t.Fatalf("--view %s: code %d err %s", view, code, f.Err.String())
 		}
 		var rows []prsJSONRow
@@ -793,7 +793,7 @@ func TestPRsView(t *testing.T) {
 			t.Errorf("--view %s = %v, want %v", view, got, want)
 		}
 	}
-	if code := f.run("prs", "--view", "bogus"); code != 2 || !strings.Contains(f.Err.String(), "all, magnum, mine, ready") {
+	if code := f.run("tui", "--view", "bogus"); code != 2 || !strings.Contains(f.Err.String(), "all, magnum, mine, ready") {
 		t.Errorf("--view bogus: code %d %s", code, f.Err.String())
 	}
 	var views []string
@@ -819,7 +819,7 @@ func TestPRsView(t *testing.T) {
 		}
 		return nil
 	}
-	if code := f.run("prs", "--view", "mine"); code != 0 {
+	if code := f.run("tui", "--view", "mine"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	if !slices.Equal(opened, []tui.PRView{tui.ViewMine, tui.ViewReady}) {
@@ -996,5 +996,34 @@ func TestPRsSourceCarriesThePinWaitTheRetryAndTheGrace(t *testing.T) {
 	}
 	if r := byN[73]; !r.ReleaseAfter.Equal(releaseAt) {
 		t.Errorf("grace row: release after %v, want %v", r.ReleaseAfter, releaseAt)
+	}
+}
+
+// TestTuiIsTheBoardAndPrsItsAlias: the board is `magnum tui` since
+// 2026-10-15 (`prs` named the rows, not the screen), `prs` works as its
+// alias, a bare `magnum` opens the board (the printed rows off a terminal)
+// instead of the help, and `magnum help` and --help list the commands.
+func TestTuiIsTheBoardAndPrsItsAlias(t *testing.T) {
+	f := newInspFixture(t)
+	prsSeed(t, f)
+	for _, name := range []string{"tui", "prs"} {
+		if code := f.run(name, "--json"); code != 0 || !strings.HasPrefix(f.Out.String(), "[") {
+			t.Fatalf("%s --json: exit %d\n%s%s", name, code, f.Out.String(), f.Err.String())
+		}
+	}
+	f.Out.Reset()
+	f.Err.Reset()
+	if code := execute(f.Ctx, nil); code != 0 || !strings.HasPrefix(f.Out.String(), "REF") {
+		t.Fatalf("magnum alone: exit %d\n%s%s", code, f.Out.String(), f.Err.String())
+	}
+	for _, args := range [][]string{{"help"}, {"--help"}} {
+		f.Out.Reset()
+		f.Err.Reset()
+		if code := execute(f.Ctx, args); code != 0 || !strings.Contains(f.Out.String(), "Inspect:") || !strings.Contains(f.Out.String(), "  tui ") {
+			t.Fatalf("magnum %s: exit %d\n%s%s", args[0], code, f.Out.String(), f.Err.String())
+		}
+	}
+	if code := f.run("tui", "--help"); code != 0 || !strings.Contains(f.Out.String(), "Aliases:") || !strings.Contains(f.Out.String(), "prs") {
+		t.Fatalf("tui --help lacks the alias: exit %d\n%s", code, f.Out.String())
 	}
 }

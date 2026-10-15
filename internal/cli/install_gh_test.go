@@ -33,7 +33,7 @@ func TestInstallGhWritesTheShim(t *testing.T) {
 		t.Errorf("--no-launchd ran launchctl: %+v", calls)
 	}
 	out := dt.stdout.String()
-	for _, want := range []string{"wrote " + path, "gh magnum prs", filepath.Join(l.Home, "docs", "gh-dash.yml")} {
+	for _, want := range []string{"wrote " + path, "gh magnum tui", filepath.Join(l.Home, "docs", "gh-dash.yml")} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

@@ -77,7 +77,7 @@ func marshalPRsJSON(t *testing.T, rows ...tui.PRBoardRow) []map[string]any {
 	return out
 }
 
-// `magnum prs --json` marshalled tui.PRBoardRow, which has no json tags: keys
+// `magnum tui --json` marshalled tui.PRBoardRow, which has no json tags: keys
 // came out PascalCase ("Ref", "GHState"), unset times as 0001-01-01, durations
 // in nanoseconds, while every other --json output is snake_case. The output
 // has its own shape now: snake_case keys at every depth, times RFC3339 and
@@ -271,7 +271,7 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 func TestPRsJSONCommandPrintsTheSnakeCaseShape(t *testing.T) {
 	f := newInspFixture(t)
 	prsSeed(t, f)
-	if code := f.run("prs", "--all", "--json"); code != 0 {
+	if code := f.run("tui", "--all", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []map[string]any

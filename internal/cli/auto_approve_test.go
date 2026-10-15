@@ -51,7 +51,7 @@ func seedAutoApprovals(t *testing.T, st *store.Store, at time.Time) {
 	}
 }
 
-// `magnum prs --json` names the automatic approval standing on a PR (its
+// `magnum tui --json` names the automatic approval standing on a PR (its
 // review and head) and why magnum stopped approving one as the operator; a
 // PR approved as the operator no longer needs them; --auto-approved lists
 // only those PRs, and the printed rows flag them.
@@ -61,7 +61,7 @@ func TestPRsShowTheAutoApprovals(t *testing.T) {
 	seedAutoApprovals(t, st, time.Now())
 	st.Close()
 
-	if code := f.run("prs", "--json"); code != 0 {
+	if code := f.run("tui", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var rows []prsJSONRow
@@ -87,7 +87,7 @@ func TestPRsShowTheAutoApprovals(t *testing.T) {
 		t.Error("a PR without one has no auto_approved: null")
 	}
 
-	if code := f.run("prs", "--auto-approved", "--json"); code != 0 {
+	if code := f.run("tui", "--auto-approved", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	rows = nil
@@ -101,7 +101,7 @@ func TestPRsShowTheAutoApprovals(t *testing.T) {
 	if !slices.Equal(nums, []int{11970}) {
 		t.Fatalf("--auto-approved rows %v", nums)
 	}
-	if code := f.run("prs", "--auto-approved"); code != 0 {
+	if code := f.run("tui", "--auto-approved"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	if out := f.Out.String(); !strings.Contains(out, "reviewed,auto-approved") || strings.Contains(out, "needs-you") {

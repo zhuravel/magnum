@@ -143,7 +143,7 @@ func retroResolve(ctx context.Context, d *actDeps, refs []string) ([]int64, erro
 func retroLookupPR(ctx context.Context, st *store.Store, refs app.RefParser, ref string) (store.PR, error) {
 	_, pr, err := app.LookupPR(ctx, st, refs, ref)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.PR{}, fmt.Errorf("%s is not in the registry (`magnum prs --all` lists the PRs magnum knows)", ref)
+		return store.PR{}, fmt.Errorf("%s is not in the registry (`magnum tui --all` lists the PRs magnum knows)", ref)
 	}
 	return pr, err
 }
