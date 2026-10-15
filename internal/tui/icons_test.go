@@ -140,7 +140,9 @@ func TestNerdIconsMarkStatesVerdictsAndPriorities(t *testing.T) {
 		" \uf421 attention ", " \uf466 ignored ",
 		"Rounds: \uf51b first · \uf46a re-review · \uf41c recovery · \uf440 delta",
 		"\uf45e full · \uf510 full before approval · \uf46b audit; post-merge prefixes the kind",
-		"Enter shows the round's roles and why it ran")
+		"Enter shows the round's roles and why it ran",
+		"\uf421 attention · failed or blocked", "\uf42e reviewed · argued magnum stopped arguing",
+		"\uf058 held clean, the approval waits for a full pass")
 	// The round marks are in the reviewing pill's color.
 	if raw := h.View().Content; !strings.Contains(raw, b.painter().pal.dots["reviewing"].Render("\uf440")+" delta") {
 		t.Errorf("the legend's delta mark is not in the reviewing pill's color: %q", raw)

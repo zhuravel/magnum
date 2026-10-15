@@ -34,6 +34,12 @@ const (
 	KindFix = "fix"
 )
 
+// Kinds are every kind above: Explain reads each as a message's leading
+// "<kind>: ", and the PR board names each in its attention pill.
+func Kinds() []string {
+	return []string{KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak, KindFix}
+}
+
 // Stages: where the failure happened.
 const (
 	StageFetch        = "fetch"
@@ -109,7 +115,7 @@ func Explain(kind, msg, ref string) Reason {
 		}
 	}
 	// "identity_error: …": the engine's event form, and older rows, lead with the kind.
-	for _, k := range []string{KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak, KindFix} {
+	for _, k := range Kinds() {
 		if rest, ok := strings.CutPrefix(text, k+": "); ok {
 			text = rest
 			if r.Kind == "" {

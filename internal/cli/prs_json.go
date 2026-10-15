@@ -51,6 +51,7 @@ type prsJSONRow struct {
 	LastError        string            `json:"last_error"`
 	ErrorFix         string            `json:"error_fix"`
 	ErrorDetail      []string          `json:"error_detail"`
+	AttentionKind    string            `json:"attention_kind"` // why it needs attention: failed, overloaded, blocked, needs_attention, identity_error, identity_leak, fix; "" otherwise
 	RoundsToday      int               `json:"rounds_today"`
 	LastRound        *prsJSONRound     `json:"last_round"`
 	RoundWhy         *prsJSONRoundWhy  `json:"round_why"` // which roles the last round ran and why
@@ -151,6 +152,7 @@ type prsJSONFindings struct {
 	Verdict         string `json:"verdict"` // blocking, non_blocking, clean
 	Posted          string `json:"posted"`  // APPROVE, REQUEST_CHANGES, COMMENT
 	SHA             string `json:"sha"`
+	Held            bool   `json:"held"` // its approval waits for a full pass of the whole PR (approve_after_full_pass)
 }
 
 type prsJSONCI struct {
@@ -302,7 +304,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Findings: mapPtr(r.Findings, prsJSONFindingsOf), CI: mapPtr(r.CI, prsJSONCIOf),
 		Reviewers: mapList(r.Reviewers, prsJSONReviewerOf), SinceReview: mapPtr(r.SinceReview, prsJSONDeltaOf),
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
-		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), RoundsToday: r.RoundsToday,
+		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), AttentionKind: r.AttentionKind, RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail,
 		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
@@ -350,7 +352,7 @@ func prsJSONReviewOf(r tui.ReviewInfo) prsJSONReview {
 
 func prsJSONFindingsOf(f tui.FindingsInfo) prsJSONFindings {
 	return prsJSONFindings{Counts: f.Counts, Simplifications: f.Simplifications, Fixed: f.Fixed, Open: f.Open,
-		OpenProblems: f.OpenProblems, Answered: f.Answered, Verdict: f.Verdict, Posted: f.Posted, SHA: f.SHA}
+		OpenProblems: f.OpenProblems, Answered: f.Answered, Verdict: f.Verdict, Posted: f.Posted, SHA: f.SHA, Held: f.Held}
 }
 
 func prsJSONCIOf(c tui.CIInfo) prsJSONCI {

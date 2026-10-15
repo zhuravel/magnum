@@ -354,6 +354,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				extra := strings.TrimPrefix(row.LastError, r.LastError) // "; compare since the last review: …"
 				if why, ok := prAttention(ctx, st, pr, actRefLabel(defaultRepo(cfg), full, r.Number)); ok {
 					row.LastError, row.ErrorFix, row.ErrorDetail = why.Summary+extra, why.Fix, why.Tail
+					row.AttentionKind = why.Kind // the pill's cause: the recorded kind, never the sentence
 				} else {
 					row.LastError = errorSummary(r.LastError) + extra
 				}
@@ -389,7 +390,8 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			for i := range out {
 				if s, ok := sums[ids[i]]; ok {
 					out[i].Findings = &tui.FindingsInfo{Counts: s.Counts, Simplifications: s.Simplifications,
-						Fixed: s.Fixed, Open: s.Open, OpenProblems: s.OpenProblems(), Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA}
+						Fixed: s.Fixed, Open: s.Open, OpenProblems: s.OpenProblems(), Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA,
+						Held: boardHeld(ctx, st, ids[i], s)}
 				}
 			}
 		}
@@ -436,6 +438,24 @@ func boardFix(ctx context.Context, st *store.Store, prID int64) (fixing string, 
 	}
 	_, off, err := st.GetKV(ctx, engine.KVPRFixOff(prID))
 	return fixing, loop, off && err == nil
+}
+
+// boardHeld reports whether s, PR prID's latest posted review, held its
+// approval: the approval hold record (engine.KVPRApprovalHold) names that
+// very review, as the engine's heldReviewOf requires; one it left behind for
+// an older review holds nothing. Only a clean verdict holds, so no other
+// reads the record; a clean comment without one is a comment-only
+// repository's. A registry that cannot say holds nothing.
+func boardHeld(ctx context.Context, st *store.Store, prID int64, s store.ReviewSummary) bool {
+	if s.Verdict != store.VerdictClean || s.ReviewID == 0 {
+		return false
+	}
+	v, ok, err := st.GetKV(ctx, engine.KVPRApprovalHold(prID))
+	if err != nil || !ok {
+		return false
+	}
+	id, ok := engine.HeldReviewID(v)
+	return ok && id == s.ReviewID
 }
 
 // boardWhiteboard is the PR's whiteboard as the board shows it (its

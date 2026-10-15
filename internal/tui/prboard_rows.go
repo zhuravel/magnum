@@ -27,6 +27,13 @@ type FindingsInfo struct {
 	Verdict string
 	Posted  string // what it was posted as: APPROVED, CHANGES_REQUESTED or COMMENTED (an event's name, APPROVE, is read alike)
 	SHA     string // the reviewed head
+	// Held: this review held its approval ([pipeline]
+	// approve_after_full_pass): its clean verdict posted as a comment and a
+	// full pass of the whole PR decides the approval. Only the review the
+	// hold record names (engine.HeldReviewID) is held, never a clean comment
+	// by itself (a comment-only repository posts every one so); FINDINGS
+	// reads "✔ held" in place of "✔ clean".
+	Held bool
 }
 
 // CIInfo is the head commit's CI as the board shows it.
@@ -135,8 +142,14 @@ type PRBoardRow struct {
 	LastError   string
 	ErrorFix    string
 	ErrorDetail []string
-	RoundsToday int
-	LastRound   *RoundTimings // the stages of the last review round; nil when none ran
+	// AttentionKind is why the engine parked a PR in needs_attention, the
+	// reason kind it recorded (attention.Kind*: failed, overloaded, blocked,
+	// needs_attention, identity_error, identity_leak, fix; inferred from the
+	// stored error for older rows); the attention pill names it in a word
+	// ("attention · failed"). "" for a PR that does not need attention.
+	AttentionKind string
+	RoundsToday   int
+	LastRound     *RoundTimings // the stages of the last review round; nil when none ran
 	// RoundWhy says which roles the last round ran and why; nil when unknown.
 	RoundWhy *RoundWhy
 	// Progress is the round in flight: its start and its roles, which the
@@ -714,7 +727,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		}
 		r.Badges = badges
 	}
-	r.ErrorFix, r.ErrorDetail = cleanText(r.ErrorFix), cleanAll(r.ErrorDetail)
+	r.ErrorFix, r.ErrorDetail, r.AttentionKind = cleanText(r.ErrorFix), cleanAll(r.ErrorDetail), cleanText(r.AttentionKind)
 	r.Labels, r.Assignees = cleanAll(r.Labels), cleanAll(r.Assignees)
 	if r.LastReview != nil {
 		li := *r.LastReview

@@ -2040,6 +2040,72 @@ skill versions); people add theirs to the sections before it, at the end of the 
   after the pill (the STATE cell grows by up to 9 cells and drops UPDATED at 140 columns); a mark column
   (3 cells on every row, and a new column was rejected on 2026-10-05); marking only the rare kinds (a
   running first review and a re-review both show the spinner, so the operator's question stays open).
+- **The row says why a PR needs you, that a clean review is held, and that a thread is argued**
+  (2026-10-16; the operator approved the plan on spec 48's mockup). Over 14 days 32 `pr.needs_attention`
+  events on 18 PRs had six causes (failed attempts 15, a capped fix loop 5, a fix call 4, blocked 4, the
+  judge stopping 2, identity 2), and each asks something else (`r` retries, a fix call means reading the
+  report, blocked means the judge's pane), yet the row read `attention` alone; 27 of 341 posted reviews were
+  clean verdicts posted as comments, and the held ones read `✔ clean` while a full pass still decided the
+  approval; 6 stalemates on 4 PRs shared the title's `!` with a failed round. Now the attention pill names
+  its cause after it, dimmed as the skip word is (`attention · failed`, `· blocked`, `· identity`, `· fix`,
+  `· overload`, `· no review`), from the reason kind the row already builds (prAttention's
+  attention.Reason.Kind: the kind the engine recorded, `engine.KVPRAttention`, else the one Explain infers
+  from the stored error), never from the rendered sentence; an unknown kind keeps `attention`, `fix` covers
+  a fix call and a capped loop (they share the kind), the cause wins over a snooze's time, and
+  attention.Kinds lists every kind so a new one without a word fails a test. FINDINGS reads `✔ held`
+  (`held` in yellow, before the counts, the open findings and the simplifications) only when the latest
+  posted review is the one the approval hold record names (`engine.KVPRApprovalHold`, now exported with
+  `engine.HeldReviewID`; the engine's heldReviewOf rule: a later review drops the record, and one left
+  behind names an older review, so the later one reads clean); a clean verdict posted as a comment is not a
+  hold by itself, since a
+  comment-only identity posts every clean verdict so, and only a clean summary reads the record. A reviewed
+  PR with stalemate threads reads `reviewed · argued`; a running round, a wait, a snooze and the cells that
+  replace the pill (`✔ auto`, `✔ needs you`) keep precedence, and the title's `!` stays. `magnum tui
+  --json` gains `attention_kind` and `findings.held`; argued derives from `stalemate_threads`. The legend
+  gains the two state lines and the held item. No migration and no new query for the cause (prAttention
+  already reads the kind); one kv read per row with a clean latest review for the hold. Neither word is
+  wider than a wait (`attention · no review` is 22 cells, `re-review  quiet → 14:09` 25), so where a PR
+  waits or a round runs no column moves, as the painter draws it (unicode; nerd and ascii keep the same
+  columns):
+
+  ```text
+  100 columns
+    REPO           #  TITLE                           STATE                       FINDINGS   REVIEWERS
+  ▌ talkable  #12001  ! Speed up the referral grid…    attention · failed         ✗ P1 P2×2  rev-ann✔
+    talkable  #12002  ! Add the coupon list importer   attention · fix            ● P2×2     rev-ann✔
+    talkable  #12003  Move the campaign builder to…    reviewed                   ✔ held ✂2  rev-ann✔
+    talkable  #12004  ! Retry the webhook delivery…    reviewed · argued          ● P2       rev-ann✔
+    talkable  #12005  Fix the widget alignment on S…   reviewed                   ✔ clean    rev-ann✔
+    talkable  #12006  Bump rails to 7.2.1              re-review  quiet → 14:09   ● P3×2     rev-ann✔
+    talkable  #12007  Split the payouts job            ⣷ reviewing  ∆ judge · 4m  ● P2       rev-ann✔
+  140 columns
+    REPO           #  TITLE                 UPDATED ↓  REQUESTED  STATE                       LAST REVIEW        FINDINGS   CI       REVIEWERS
+  ▌ talkable  #12001  ! Speed up the refe…        40m  —           attention · failed         ★ 💬 commented 1h  ✗ P1 P2×2  ✓ 65/65  rev-ann✔
+    talkable  #12002  ! Add the coupon li…        40m  —           attention · fix            ★ 💬 commented 1h  ● P2×2     ✓ 65/65  rev-ann✔
+    talkable  #12003  Move the campaign b…        40m  —           reviewed                   ★ 💬 commented 1h  ✔ held ✂2  ✓ 65/65  rev-ann✔
+    talkable  #12004  ! Retry the webhook…        40m  —           reviewed · argued          ★ 💬 commented 1h  ● P2       ✓ 65/65  rev-ann✔
+    talkable  #12005  Fix the widget alig…        40m  —           reviewed                   ★ 💬 commented 1h  ✔ clean    ✓ 65/65  rev-ann✔
+    talkable  #12006  Bump rails to 7.2.1         40m  —           re-review  quiet → 14:09   ★ 💬 commented 1h  ● P3×2     ✓ 65/65  rev-ann✔
+    talkable  #12007  Split the payouts j…        40m  —           ⣷ reviewing  ∆ judge · 4m  ★ 💬 commented 1h  ● P2       ✓ 65/65  rev-ann✔
+  200 columns
+    REPO           #  TITLE                                 AUTHOR  ASSIGNEE  UPDATED ↓  REQUESTED  STATE                       LAST REVIEW        FINDINGS   CI       SINCE REVIEW  REVIEWERS
+  ▌ talkable  #12001  ! Speed up the referral grid export   alice   —               40m  —           attention · failed         ★ 💬 commented 1h  ✗ P1 P2×2  ✓ 65/65  1c +12 −3     rev-ann✔
+    talkable  #12002  ! Add the coupon list importer        alice   —               40m  —           attention · fix            ★ 💬 commented 1h  ● P2×2     ✓ 65/65  1c +12 −3     rev-ann✔
+    talkable  #12003  Move the campaign builder to Hotwire  alice   —               40m  —           reviewed                   ★ 💬 commented 1h  ✔ held ✂2  ✓ 65/65  1c +12 −3     rev-ann✔
+    talkable  #12004  ! Retry the webhook delivery on 5xx   alice   —               40m  —           reviewed · argued          ★ 💬 commented 1h  ● P2       ✓ 65/65  1c +12 −3     rev-ann✔
+    talkable  #12005  Fix the widget alignment on Safari    alice   —               40m  —           reviewed                   ★ 💬 commented 1h  ✔ clean    ✓ 65/65  1c +12 −3     rev-ann✔
+    talkable  #12006  Bump rails to 7.2.1                   alice   —               40m  —           re-review  quiet → 14:09   ★ 💬 commented 1h  ● P3×2     ✓ 65/65  1c +12 −3     rev-ann✔
+    talkable  #12007  Split the payouts job                 alice   —               40m  —           ⣷ reviewing  ∆ judge · 4m  ★ 💬 commented 1h  ● P2       ✓ 65/65  1c +12 −3     rev-ann✔
+  ```
+
+  On a board where nothing waits or runs, STATE grows by up to 11 cells, as a wait's text grows it: at 100
+  columns LAST REVIEW gives way, at 140 AUTHOR. Rejected: a `no auto` title tag for a stopped
+  auto-approval (the stop can be the operator's own doing, the card explains it, and a tag shortens every
+  title); a whiteboard mark and a trivial-push mark (rarely acted on); agent time on the row (cost only, and
+  cost-only items were dropped on 2026-10-12); `fix call` for the fix kind (a failed fixer run shares it,
+  so the word would overpromise); the cause inside the red pill (it grows the pill, and every other word
+  after a pill is dimmed text); a narrower form that drops the cause with a running round's stage (the cause
+  is what decides the operator's next key, as a wait's text is, which keeps its words too).
 
 ## Operations
 

@@ -2202,6 +2202,13 @@ const TailLines = 8
     TailLines bounds Reason.Tail.
 
 
+FUNCTIONS
+
+func Kinds() []string
+    Kinds are every kind above: Explain reads each as a message's leading
+    "<kind>: ", and the PR board names each in its attention pill.
+
+
 TYPES
 
 type Reason struct {
@@ -5640,6 +5647,13 @@ func EditNext(editor bool, evidence, editDay string, now time.Time) string
 func FileModTime(path string) (time.Time, bool)
     FileModTime is SkewNote's reader of a binary's mtime on disk.
 
+func HeldReviewID(v string) (int64, bool)
+    HeldReviewID is the review a KVPRApprovalHold value names: the one whose
+    approval waits for the full pass after it, while it is the PR's latest
+    (heldReviewOf's rule, which the board's FINDINGS follows: a later review
+    drops the record, and one left behind names an older review). ok is false
+    for a value that names none.
+
 func KVNotesMisses(fullName string) string
     KVNotesMisses marks a repository whose retro recorded misses for its notes:
     the time of the retro that did (store.FormatTime). The misses trigger
@@ -5650,6 +5664,10 @@ func KVNotesOver(fullName string) string
     comma-separated ("max_bytes,max_line"): the mark a curation looks for.
     It is set when they are measured past a limit and deleted when they are back
     within all of them.
+
+func KVPRApprovalHold(prID int64) string
+    KVPRApprovalHold holds the PR's held review whose full pass follows
+    (heldReview as JSON); any later review that posts deletes it.
 
 func KVPRAttention(prID int64) string
     KVPRAttention holds why the engine parked a PR in needs_attention (the kind
@@ -17794,6 +17812,13 @@ type FindingsInfo struct {
 	Verdict string
 	Posted  string // what it was posted as: APPROVED, CHANGES_REQUESTED or COMMENTED (an event's name, APPROVE, is read alike)
 	SHA     string // the reviewed head
+	// Held: this review held its approval ([pipeline]
+	// approve_after_full_pass): its clean verdict posted as a comment and a
+	// full pass of the whole PR decides the approval. Only the review the
+	// hold record names (engine.HeldReviewID) is held, never a clean comment
+	// by itself (a comment-only repository posts every one so); FINDINGS
+	// reads "✔ held" in place of "✔ clean".
+	Held bool
 }
     FindingsInfo is what magnum's latest posted review of a PR concluded.
 
@@ -17947,8 +17972,14 @@ type PRBoardRow struct {
 	LastError   string
 	ErrorFix    string
 	ErrorDetail []string
-	RoundsToday int
-	LastRound   *RoundTimings // the stages of the last review round; nil when none ran
+	// AttentionKind is why the engine parked a PR in needs_attention, the
+	// reason kind it recorded (attention.Kind*: failed, overloaded, blocked,
+	// needs_attention, identity_error, identity_leak, fix; inferred from the
+	// stored error for older rows); the attention pill names it in a word
+	// ("attention · failed"). "" for a PR that does not need attention.
+	AttentionKind string
+	RoundsToday   int
+	LastRound     *RoundTimings // the stages of the last review round; nil when none ran
 	// RoundWhy says which roles the last round ran and why; nil when unknown.
 	RoundWhy *RoundWhy
 	// Progress is the round in flight: its start and its roles, which the

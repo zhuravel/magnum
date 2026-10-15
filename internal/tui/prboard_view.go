@@ -714,11 +714,13 @@ const (
 // by what holds it and until when, dimmed ("quiet → 14:09"), for a round in
 // flight by its kind's mark and its stage and time ("∆ judge · 4m",
 // kindMark, progressText; d says how much of them: "∆ 4m", "∆ "), and for a
-// skipped PR by why in a word ("· bot"). A merged PR in a post-merge round
-// says so, before the mark when the round runs: "post-merge · next tick",
-// "post-merge ∆ judge · 4m"; so does a delta check that waits: "delta
-// check · quiet → 14:09". A snoozed PR with nothing else there says until
-// when: "snoozed → 18:00".
+// skipped PR by why in a word ("· bot"), as for a PR that needs attention
+// (its cause: "· failed", attentionCause) and a reviewed one with a thread
+// magnum stopped arguing in ("· argued", arguedShown). A merged PR in a
+// post-merge round says so, before the mark when the round runs:
+// "post-merge · next tick", "post-merge ∆ judge · 4m"; so does a delta
+// check that waits: "delta check · quiet → 14:09". A snoozed PR with
+// nothing else there says until when: "snoozed → 18:00".
 func (p *prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
@@ -746,6 +748,7 @@ func (p *prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 	if (!held || rest == "") && snoozeShown(r, p.now) {
 		rest, held = "snoozed → "+untilClock(r.SnoozedUntil, p.now), true
 	}
+	cause := attentionCause(r)
 	switch mark := p.kindMark(r); {
 	case mark != "": // a plain space after the mark, whatever follows it
 		if postMergeRound(r) {
@@ -767,8 +770,12 @@ func (p *prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 		if held && rest != "" {
 			c = append(c, seg{" · " + rest, p.st.Dim})
 		}
+	case cause != "": // over a snooze: the parked PR waits for the operator, whose card says both
+		c = append(c, seg{"· " + cause, p.st.Dim})
 	case held && rest != "":
 		c = append(c, seg{" " + rest, p.st.Dim})
+	case arguedShown(r): // a wait, a round or a snooze keeps the cell
+		c = append(c, seg{"· argued", p.st.Dim})
 	}
 	if why := skipWord(r); why != "" {
 		c = append(c, seg{"· " + why, p.st.Dim})
@@ -880,6 +887,33 @@ func skipWord(r PRBoardRow) string {
 		}
 	}
 	return ""
+}
+
+// attentionCauses are the words the attention pill names a reason kind by
+// (PRBoardRow.AttentionKind, attention.Kind*): each asks something else of
+// the operator (r retries a failure, a fix reads the fixer's report, blocked
+// frees the judge's pane). fix covers a fix call and a capped fix loop alike,
+// which share the kind.
+var attentionCauses = map[string]string{
+	"failed": "failed", "overloaded": "overload", "blocked": "blocked", "needs_attention": "no review",
+	"identity_error": "identity", "identity_leak": "identity", "fix": "fix",
+}
+
+// attentionCause is the word after the attention pill of r ("failed"): its
+// reason kind's, while it needs attention; "" for any other state, or a
+// kind the board does not know (the pill alone).
+func attentionCause(r PRBoardRow) string {
+	if normState(rowState(r)) != "needs_attention" {
+		return ""
+	}
+	return attentionCauses[r.AttentionKind]
+}
+
+// arguedShown reports whether r's state cell says "reviewed · argued": a
+// reviewed PR with threads where magnum stopped arguing (PRBoardRow.Stalemate),
+// which wait for the operator's decision; the title's "!" marks it too.
+func arguedShown(r PRBoardRow) bool {
+	return len(r.Stalemate) > 0 && normState(rowState(r)) == "reviewed"
 }
 
 // needsMeShown reports whether r's state cell says it needs the operator
@@ -1054,19 +1088,24 @@ func workingState(s string) bool {
 // priority ("P1 P2×3", each behind its mark in the nerd mode: "🔴P1"), or
 // "3 open" when it posted none new but earlier ones stay open, and its
 // simplifications ("✂4"): what the review concluded, also where it could
-// only comment.
+// only comment. A review that held its approval (FindingsInfo.Held) says
+// "held" in place of "clean", in the yellow of a wait, before whatever else
+// it left ("✔ held ✂2").
 func (p *prbPainter) findingsCell(f *FindingsInfo) cell {
 	if f == nil {
 		return p.dash()
 	}
 	glyph, vst := p.findingsVerdict(f.Verdict)
 	c := cell{{glyph + " ", vst}}
+	if f.Held {
+		c = append(c, seg{"held", p.pal.yellow})
+	}
 	listed := false
 	for i, n := range f.Counts {
 		if n <= 0 {
 			continue
 		}
-		if listed {
+		if listed || f.Held {
 			c = append(c, seg{" ", lipgloss.Style{}})
 		}
 		listed = true
@@ -1080,8 +1119,12 @@ func (p *prbPainter) findingsCell(f *FindingsInfo) cell {
 	case !listed && f.Open > 0:
 		// Nothing new, but earlier findings stay open: they decide the
 		// verdict, so say so rather than "clean" beside its glyph.
-		c = append(c, seg{strconv.Itoa(f.Open) + " open", vst})
-	case !listed:
+		open := strconv.Itoa(f.Open) + " open"
+		if f.Held {
+			open = " " + open
+		}
+		c = append(c, seg{open, vst})
+	case !listed && !f.Held:
 		c = append(c, seg{"clean", p.pal.green})
 	}
 	if f.Simplifications > 0 {

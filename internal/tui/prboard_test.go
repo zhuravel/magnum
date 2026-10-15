@@ -390,7 +390,7 @@ func TestPRBoardHelpFitsAndScrolls(t *testing.T) {
 	}
 	mustContain(t, seen, "mute / unmute", "Mouse", "Shift-drag")
 	s, _ = send(t, s, keyMsg("G"))
-	mustContain(t, viewOf(s), "Rounds:", "released") // the legend's end
+	mustContain(t, viewOf(s), "· argued", "released") // the legend's end
 }
 
 func TestPRBoardFilterKeepsSelectionAndRoom(t *testing.T) {
@@ -770,11 +770,16 @@ func TestPRBoardHelpOverlay(t *testing.T) {
 	end, _ := send(t, m, keyMsg("G"))
 	mustContain(t, viewOf(end), "Rounds: ✦ first · » re-review · ✚ recovery · ∆ delta",
 		"◉ full · ⚑ full before approval · ☑ audit; post-merge prefixes the kind",
-		"Enter shows the round's roles and why it ran")
+		"Enter shows the round's roles and why it ran",
+		// The words after the attention and the reviewed pills, and FINDINGS' held review.
+		"attention · failed or blocked, identity, fix, overload, no review",
+		"reviewed · argued magnum stopped arguing in a thread: you decide",
+		"✔ held clean, the approval waits for a full pass")
 	a, _, _ := newBoard(t, 120, 42, PRBoardOptions{Icons: IconsASCII})
 	a, _ = send(t, a, keyMsg("?"), keyMsg("G"))
 	mustContain(t, viewOf(a), "Rounds: 1 first · r re-review · rc recovery · d delta",
-		"F full · F+ full before approval · a audit; post-merge prefixes the kind")
+		"F full · F+ full before approval · a audit; post-merge prefixes the kind",
+		"attention · failed or blocked", "reviewed · argued magnum stopped arguing", "held clean, the approval waits")
 	m, _ = send(t, m, keyMsg("?"))
 	if m.mode != prbTable {
 		t.Error("? did not close the help")

@@ -91,13 +91,24 @@ func (p *prbPainter) helpContent(width int) []string {
 		kind(roundAudit, "audit") + "; post-merge prefixes the kind"}, " · ", inner)...)
 	lines = append(lines, strings.Split(lipgloss.NewStyle().Width(inner).Render(
 		p.st.Key.Render("Enter")+" shows the round's roles and why it ran"), "\n")...)
+	// The words after the attention and the reviewed pills (attentionCause,
+	// arguedShown), drawn as the rows draw them.
+	for _, l := range []string{
+		p.stateWaitCell(PRBoardRow{State: "needs_attention", AttentionKind: "failed"}).render(nil) +
+			" or blocked, identity, fix, overload, no review",
+		p.stateWaitCell(PRBoardRow{State: "reviewed", Stalemate: []string{"-"}}).render(nil) +
+			" magnum stopped arguing in a thread: you decide",
+	} {
+		lines = append(lines, strings.Split(lipgloss.NewStyle().Width(inner).Render(l), "\n")...)
+	}
 	prios := make([]string, len(g.priority))
 	for i := range prios {
 		prios[i] = p.priorityStyle(i).Render(p.priorityMark(i) + fmt.Sprintf("P%d", i))
 	}
 	lines = append(lines, flow([]string{
 		p.st.Header.Render("FINDINGS"), p.pal.red.Render(g.changes) + " blocking", p.pal.yellow.Render(g.nonBlocking) + " non-blocking",
-		p.pal.green.Render(g.ok) + " clean", strings.Join(prios, " ") + " by priority, " + g.times + "n how many",
+		p.pal.green.Render(g.ok) + " clean", p.pal.green.Render(g.ok) + " " + p.pal.yellow.Render("held") + " clean, the approval waits for a full pass",
+		strings.Join(prios, " ") + " by priority, " + g.times + "n how many",
 		p.st.Dim.Render(g.simplify) + " simplifications",
 	}, "   ", inner)...)
 	lines = append(lines, flow([]string{

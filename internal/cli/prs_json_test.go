@@ -42,7 +42,7 @@ func fullBoardRow() tui.PRBoardRow {
 		GHState: "OPEN", ActivityAt: at.Add(-time.Hour), GitHubUpdatedAt: at, HeadSHA: "abc1234",
 		LastReview: &tui.ReviewInfo{Login: "zhuravel", Event: "APPROVED", SubmittedAt: at, CommitSHA: "abc1234", Stale: true, Mine: true},
 		Findings: &tui.FindingsInfo{Counts: [4]int{1, 2, 3, 4}, Simplifications: 5, Fixed: 6, Open: 7, Answered: 8,
-			Verdict: "blocking", Posted: "REQUEST_CHANGES", SHA: "abc1234"},
+			Verdict: "blocking", Posted: "REQUEST_CHANGES", SHA: "abc1234", Held: true},
 		CI: &tui.CIInfo{State: "failed", Total: 9, Passed: 5, Failed: 2, Pending: 1, Skipped: 1, Failing: []string{"CI / rspec"},
 			Workflows:      []tui.WorkflowCI{{Name: "CI", State: "failed", Passed: 5, Failed: 2, Pending: 1, Total: 8}},
 			Required:       []tui.CheckState{{Name: "workflow:CI", Label: "CI", State: "failed", Done: 7, Total: 8}},
@@ -50,7 +50,7 @@ func fullBoardRow() tui.PRBoardRow {
 		Reviewers:   []tui.ReviewerInfo{{Login: "rev-ann", Verdict: "approved", SubmittedAt: at, CommitSHA: "abc1234", Stale: true, Requested: true, Mine: true}},
 		SinceReview: &tui.ReviewDelta{Base: "reviewed", BaseSHA: "def5678", Commits: 2, Files: 3, Additions: 40, Deletions: 5, Truncated: true},
 		Slot:        "review3", Pinned: true, Muted: true, Notes: true, NextEligibleAt: at.Add(time.Hour),
-		LastError: "boom", ErrorFix: "run magnum doctor", ErrorDetail: []string{"line one"}, RoundsToday: 3,
+		LastError: "boom", ErrorFix: "run magnum doctor", ErrorDetail: []string{"line one"}, AttentionKind: "failed", RoundsToday: 3,
 		LastRound: &tui.RoundTimings{Round: 2, Kind: "rereview", Total: 754 * time.Second, Running: true, Stages: []tui.StageTiming{
 			{Name: "fetch/checkout", Duration: 12 * time.Second}, {Name: "claude-review", Duration: 18*time.Minute + 4*time.Second, Running: true, Failed: true}}},
 		Progress: &tui.RoundProgress{StartedAt: at.Add(-20 * time.Minute), Roles: []tui.RoleProgress{
@@ -231,8 +231,25 @@ func TestPRsJSONOptionalPartsAreNullAndListsAreEmpty(t *testing.T) {
 }
 
 // A field added to the board row, or to a type it holds, must get a place in
-// the JSON: each output type has as many fields as the type it mirrors.
+// the JSON: each output type has as many fields as the type it mirrors. The
+// facts the board's cells turn into a word reach their keys: the attention
+// pill's cause (attention_kind) and FINDINGS' held review (findings.held).
 func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
+	full := marshalPRsJSON(t, fullBoardRow())[0]
+	if got := full["attention_kind"]; got != "failed" {
+		t.Errorf("attention_kind = %v, want failed", got)
+	}
+	if got := full["findings"].(map[string]any)["held"]; got != true {
+		t.Errorf("findings.held = %v, want true", got)
+	}
+	bare := marshalPRsJSON(t, tui.PRBoardRow{Findings: &tui.FindingsInfo{Verdict: "clean"}})[0]
+	if got, ok := bare["attention_kind"]; !ok || got != "" {
+		t.Errorf(`attention_kind of a PR that needs nothing = %v (present %v), want ""`, got, ok)
+	}
+	if got, ok := bare["findings"].(map[string]any)["held"]; !ok || got != false {
+		t.Errorf("findings.held of a review that holds nothing = %v (present %v), want false", got, ok)
+	}
+
 	for _, p := range []struct{ board, out any }{
 		{tui.PRBoardRow{}, prsJSONRow{}},
 		{tui.Badge{}, prsJSONBadge{}},

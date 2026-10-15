@@ -35,9 +35,9 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// kvPRApprovalHold holds the PR's held review whose full pass follows
+// KVPRApprovalHold holds the PR's held review whose full pass follows
 // (heldReview as JSON); any later review that posts deletes it.
-func kvPRApprovalHold(prID int64) string { return fmt.Sprintf("pr.%d.approval_hold", prID) }
+func KVPRApprovalHold(prID int64) string { return fmt.Sprintf("pr.%d.approval_hold", prID) }
 
 // kvPRApprovalHoldRound holds why the PR's round in flight cannot approve
 // (approvalHoldDue), so a continue of a paused one holds too; the round's
@@ -58,7 +58,7 @@ const approvalBy = "magnum (approve_after_full_pass)"
 // (autoGateRefusal; the card's words).
 const approvalHoldRefusal = "its review held the approval: a full pass of the whole PR follows before approval"
 
-// heldReview is a review that held its approval (kvPRApprovalHold): its
+// heldReview is a review that held its approval (KVPRApprovalHold): its
 // review, judge run, round and target, and why it held.
 type heldReview struct {
 	ReviewID int64     `json:"review_id"`
@@ -129,13 +129,13 @@ func (e *Engine) planApprovalHold(ctx context.Context, job *roundJob, rs *roundS
 
 // settleApprovalHold keeps a review that posted (onPosted) for the hold: a
 // round that held its approval and whose verdict is clean records the held
-// review (kvPRApprovalHold) and forces a full pass of the PR at once, as
+// review (KVPRApprovalHold) and forces a full pass of the PR at once, as
 // `magnum review --full` does (forceReview), which the next dispatch runs
 // with every role fresh on the whole diff (fullPassDue: fullPassApproval);
 // any other review drops the record, the full pass's included.
 func (e *Engine) settleApprovalHold(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult) {
 	if !in.HoldApproval || job.postMerge || !e.postedClean(ctx, pr.ID, res.ReviewID) {
-		e.delKV(ctx, kvPRApprovalHold(pr.ID))
+		e.delKV(ctx, KVPRApprovalHold(pr.ID))
 		return
 	}
 	cur, err := e.st.PRByID(ctx, pr.ID)
@@ -145,7 +145,7 @@ func (e *Engine) settleApprovalHold(ctx context.Context, job *roundJob, pr store
 	}
 	if cur.GHState != store.GHOpen || !slices.Contains([]string{store.PRReviewed, store.PRRereviewPending, store.PRQueued}, cur.State) {
 		e.log.Info("approval hold: no full pass follows", "pr", pr.ID, "state", cur.State, "gh_state", cur.GHState)
-		e.delKV(ctx, kvPRApprovalHold(pr.ID))
+		e.delKV(ctx, KVPRApprovalHold(pr.ID))
 		return
 	}
 	held := heldReview{ReviewID: res.ReviewID, Run: res.JudgeRunID, Round: res.Round, Target: in.TargetSHA, Why: job.approvalHold, At: e.now().UTC()}
@@ -153,7 +153,7 @@ func (e *Engine) settleApprovalHold(ctx context.Context, job *roundJob, pr store
 	if err != nil {
 		return
 	}
-	e.setKV(ctx, kvPRApprovalHold(pr.ID), string(b))
+	e.setKV(ctx, KVPRApprovalHold(pr.ID), string(b))
 	subject := prSubject(job.repo, pr.Number)
 	if _, err := e.forceReview(ctx, job.repo, cur, ReviewPayload{Full: true}, nil, approvalBy); err != nil {
 		e.event(ctx, "warn", subject, "pr.approval_full_pass_failed", "the full pass after the held review could not be queued: "+err.Error(),
@@ -182,13 +182,33 @@ func (e *Engine) postedClean(ctx context.Context, prID, reviewID int64) bool {
 	return ok && s.ReviewID == reviewID && s.Verdict == store.VerdictClean
 }
 
-// heldReviewOf is PR prID's held review (kvPRApprovalHold) when it is
+// heldReviewOf is PR prID's held review (KVPRApprovalHold) when it is
 // review reviewID (the PR's last one, for the callers); ok is false
 // otherwise.
 func (e *Engine) heldReviewOf(ctx context.Context, prID, reviewID int64) (heldReview, bool) {
-	v, ok := e.getKV(ctx, kvPRApprovalHold(prID))
+	v, ok := e.getKV(ctx, KVPRApprovalHold(prID))
+	h, parsed := parseHeldReview(v)
+	if !ok || !parsed || h.ReviewID != reviewID {
+		return heldReview{}, false
+	}
+	return h, true
+}
+
+// HeldReviewID is the review a KVPRApprovalHold value names: the one whose
+// approval waits for the full pass after it, while it is the PR's latest
+// (heldReviewOf's rule, which the board's FINDINGS follows: a later review
+// drops the record, and one left behind names an older review). ok is
+// false for a value that names none.
+func HeldReviewID(v string) (int64, bool) {
+	h, ok := parseHeldReview(v)
+	return h.ReviewID, ok
+}
+
+// parseHeldReview reads a KVPRApprovalHold value; ok is false for one that
+// does not parse or names no review.
+func parseHeldReview(v string) (heldReview, bool) {
 	var h heldReview
-	if !ok || reviewID == 0 || json.Unmarshal([]byte(v), &h) != nil || h.ReviewID != reviewID {
+	if v == "" || json.Unmarshal([]byte(v), &h) != nil || h.ReviewID == 0 {
 		return heldReview{}, false
 	}
 	return h, true

@@ -184,7 +184,7 @@ func TestAnApprovalAfterTwoReReviewsWaitsForAFullPass(t *testing.T) {
 	if rec := lastFullPassOf(t, h, 2); rec.Round != 5 || rec.Target != "b4" {
 		t.Fatalf("full pass record %+v: want round 5 on b4", rec)
 	}
-	if _, ok := kvValue(h, kvPRApprovalHold(pr.ID)); ok {
+	if _, ok := kvValue(h, KVPRApprovalHold(pr.ID)); ok {
 		t.Error("the held review's record outlived its full pass")
 	}
 	wantNoMoreRounds(t, h, 2)
@@ -239,7 +239,7 @@ func TestAFullPassThatFindsProblemsBlocks(t *testing.T) {
 	if deref(pr.LastReviewEvent) != "CHANGES_REQUESTED" {
 		t.Fatalf("the full pass that found a problem posted %q, want CHANGES_REQUESTED", deref(pr.LastReviewEvent))
 	}
-	if _, ok := kvValue(h, kvPRApprovalHold(pr.ID)); ok {
+	if _, ok := kvValue(h, KVPRApprovalHold(pr.ID)); ok {
 		t.Error("the held review's record outlived its full pass")
 	}
 	if evs := approvalEvents(t, h, 2, "pr.approval_full_pass"); len(evs) != 1 {
@@ -339,7 +339,7 @@ func TestAHeldReviewSaysSoInTheStatusComment(t *testing.T) {
 func TestAutoApprovalWaitsForAHeldReviewsFullPass(t *testing.T) {
 	h := newHarness(t)
 	pr := h.reviewedPR(2, "b1")
-	h.e.setKV(h.ctx, kvPRApprovalHold(pr.ID), `{"review_id":501,"round":4,"target":"b1"}`)
+	h.e.setKV(h.ctx, KVPRApprovalHold(pr.ID), `{"review_id":501,"round":4,"target":"b1"}`)
 	c := store.RepoPR{PR: pr, Repo: "talkable/talkable"}
 	held := store.ReviewSummary{ReviewID: 501, SHA: "b1", Verdict: store.VerdictClean}
 	if why, waits := h.e.autoGateRefusal(h.ctx, c, held); why != approvalHoldRefusal || !waits {
