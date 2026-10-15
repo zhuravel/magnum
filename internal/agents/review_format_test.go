@@ -488,8 +488,9 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // readiness statuses (28), "edit files" that "Do not change the code" says
 // (12), the stacked PR's lower layer (24), an answered thread's reply (14)
 // and a report's priority (24); then 33,891 for the blind own pass of a full
-// pass in section 0 (165). Every rule added must replace or shorten text.
-const skillMaxBytes = 33891
+// pass in section 0 (165), then 34,081 for section 0's `evidence` input line
+// (190). Every rule added must replace or shorten text.
+const skillMaxBytes = 34081
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -509,6 +510,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
 	d.RelatedPRs, d.HistoryFile, d.DocsFile = "/r/related.json", "/r/history.json", "/r/docs.json"
+	d.EvidenceFile, d.EvidenceMap = "/r/evidence.json", "/r/../evidence.json"
 	d.ProjectChecks = "Codex ran without the PR's AGENTS.md changes; Claude ran without the PR's CLAUDE.md changes"
 	d.FailingChecks = "/r/failing-checks.json"
 	d.DeltaCheck, d.DeltaLines, d.DeltaFile, d.Replies = true, 4, "/r/delta-check.json", 2
