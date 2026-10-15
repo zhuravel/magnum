@@ -676,7 +676,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   delta).
 
 - **A full pass at least daily while a PR moves** (2026-10-15, amends "A full pass also follows churn and
-  age"). The age rule ran a full pass once a week, and only on a PR of 50 files or 2,000 lines; the
+  age"; the same evening the default became `"12h"`, so the first push of a workday after an evening's
+  pass gets a whole read). The age rule ran a full pass once a week, and only on a PR of 50 files or 2,000 lines; the
   operator found a week too rare. `full_pass_after` now defaults to `"24h"` and applies to a PR of any
   size: an automatic re-review a day or more after the baseline (the last full pass, else the first review)
   runs as a full pass, however small the push, and the reason reads "24h since the first review

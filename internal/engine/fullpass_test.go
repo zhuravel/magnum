@@ -443,17 +443,17 @@ func TestTouchedFilesSinceTheBaselineTriggerAFullPass(t *testing.T) {
 	}
 }
 
-// A PR of any size gets a full pass at its first re-review a day after
-// the baseline, however small the push (2026-10-15: the operator wants a
-// whole read at least daily; a week was too rare); a push 23 hours after
-// the baseline runs an ordinary re-review.
+// A PR of any size gets a full pass at its first re-review half a day
+// after the baseline, however small the push (2026-10-15: the operator
+// wants the first push of a workday read whole; a week was too rare); a
+// push 11 hours after the baseline runs an ordinary re-review.
 func TestAnOldPRGetsAFullPass(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		files int
 		age   time.Duration
 		full  bool
-	}{{"60 files, a day", 60, 24 * time.Hour, true}, {"5 files, a day", 5, 24 * time.Hour, true}, {"5 files, 23 hours", 5, 23 * time.Hour, false}} {
+	}{{"60 files, 12 hours", 60, 12 * time.Hour, true}, {"5 files, 12 hours", 5, 12 * time.Hour, true}, {"5 files, 11 hours", 5, 11 * time.Hour, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := fullPassHarness(t, 0, sizedGit(map[string][2]int{"b1": {tc.files, 600}}))
 			h.reviewedPR(2, "b1")
@@ -461,12 +461,12 @@ func TestAnOldPRGetsAFullPass(t *testing.T) {
 			reqSetFiles(h, "b1...b2", touched(40, "app/models/coupon.rb"))
 			in := pushAndRereview(t, h, "b2")
 			if !tc.full {
-				wantOrdinary(t, "a re-review 23 hours after the baseline", in)
+				wantOrdinary(t, "a re-review 11 hours after the baseline", in)
 				return
 			}
-			wantFullPass(t, "a re-review a day after the baseline", in)
+			wantFullPass(t, "a re-review half a day after the baseline", in)
 			reason, rule, _ := fullPassWhyOf(t, h, 2)
-			if want := "24h since the first review (full_pass_after 24h)"; reason != want || rule != "full_pass_after" {
+			if want := "12h since the first review (full_pass_after 12h)"; reason != want || rule != "full_pass_after" {
 				t.Fatalf("full pass reason %q, rule %q: want %q", reason, rule, want)
 			}
 		})

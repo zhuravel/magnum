@@ -287,8 +287,9 @@ const (
 )
 
 // DefaultFullPassAfter is [pipeline] full_pass_after's default: a PR's next
-// automatic re-review a day after its baseline is a full pass.
-const DefaultFullPassAfter = 24 * time.Hour
+// automatic re-review half a day after its baseline is a full pass, so the
+// first push of a workday gets a whole read.
+const DefaultFullPassAfter = 12 * time.Hour
 
 // DefaultAuditEvery is [pipeline] audit_every's default: every fifth
 // automatic re-review of a PR probes what no round probed.

@@ -2738,9 +2738,10 @@ const DefaultFixCycles = 3
     DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
     followed by a re-review, before the PR is left to the operator.
 
-const DefaultFullPassAfter = 24 * time.Hour
+const DefaultFullPassAfter = 12 * time.Hour
     DefaultFullPassAfter is [pipeline] full_pass_after's default: a PR's next
-    automatic re-review a day after its baseline is a full pass.
+    automatic re-review half a day after its baseline is a full pass, so the
+    first push of a workday gets a whole read.
 
 const DefaultFullPassEvery = 10
     DefaultFullPassEvery is [pipeline] full_pass_every's default: every tenth
