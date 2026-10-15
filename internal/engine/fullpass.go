@@ -34,8 +34,8 @@ package engine
 // re-review reads them. The next automatic re-review is also a full pass
 // once that churn reaches full_pass_lines or full_pass_files, or a quarter of
 // the PR's lines or files at the baseline (fullPassShare) when that is more,
-// or once full_pass_after passed since the baseline of a large PR
-// (fullPassLargeFiles, fullPassLargeLines). A due full pass overrides a
+// or once full_pass_after passed since the baseline (a day by default:
+// the operator wants a whole read at least daily). A due full pass overrides a
 // delta check (planFullPass), which small pushes would otherwise renew
 // without end.
 
@@ -72,14 +72,10 @@ func kvPRReviewBaseline(prID int64) string { return fmt.Sprintf("pr.%d.review_ba
 // as JSON); a new baseline deletes it.
 func kvPRFullPassChurn(prID int64) string { return fmt.Sprintf("pr.%d.full_pass_churn", prID) }
 
-// The fixed parts of the churn and age rules: the churn must reach at least
-// a fullPassShare-th of the PR's lines or files at the baseline, and only a
-// PR of fullPassLargeFiles files or fullPassLargeLines lines then gets a
-// full pass by age.
+// The fixed part of the churn rules: the churn must reach at least a
+// fullPassShare-th of the PR's lines or files at the baseline.
 const (
-	fullPassShare      = 4
-	fullPassLargeFiles = 50
-	fullPassLargeLines = 2000
+	fullPassShare = 4
 	// maxChurnPaths caps the touched paths a churn keeps; past it only its
 	// count grows.
 	maxChurnPaths = 500
@@ -192,10 +188,10 @@ func (e *Engine) fullPassDue(ctx context.Context, job *roundJob) fullPassWhy {
 		return fullPassWhy{"full_pass_files", fmt.Sprintf("%d files touched since %s (full_pass_files %d; a quarter of its %d files then: %d)",
 			churn.Files, since, n, base.Files, base.Files/fullPassShare)}
 	}
-	if after := p.FullPassAfter.Duration; after > 0 && (base.Files >= fullPassLargeFiles || base.Lines >= fullPassLargeLines) {
+	if after := p.FullPassAfter.Duration; after > 0 {
 		if age := e.now().Sub(base.At); age >= after {
-			return fullPassWhy{"full_pass_after", fmt.Sprintf("%s since %s of a large PR (%d files, %d lines then; full_pass_after %s)",
-				humanDuration(age.Truncate(time.Hour)), since, base.Files, base.Lines, humanDuration(after))}
+			return fullPassWhy{"full_pass_after", fmt.Sprintf("%s since %s (full_pass_after %s)",
+				humanDuration(age.Truncate(time.Hour)), since, humanDuration(after))}
 		}
 	}
 	return fullPassWhy{}

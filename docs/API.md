@@ -2738,9 +2738,9 @@ const DefaultFixCycles = 3
     DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
     followed by a re-review, before the PR is left to the operator.
 
-const DefaultFullPassAfter = 7 * 24 * time.Hour
-    DefaultFullPassAfter is [pipeline] full_pass_after's default: a large PR's
-    next automatic re-review a week after its baseline is a full pass.
+const DefaultFullPassAfter = 24 * time.Hour
+    DefaultFullPassAfter is [pipeline] full_pass_after's default: a PR's next
+    automatic re-review a day after its baseline is a full pass.
 
 const DefaultFullPassEvery = 10
     DefaultFullPassEvery is [pipeline] full_pass_every's default: every tenth
@@ -4022,9 +4022,9 @@ type Pipeline struct {
 	// reach the larger of this and a quarter of the PR's files at the
 	// baseline. Default DefaultFullPassFiles; 0 = this rule off.
 	FullPassFiles int `toml:"full_pass_files"`
-	// FullPassAfter: an automatic re-review of a large PR (50 files or 2,000
-	// lines at its baseline) is also a full pass once this long passed
-	// since the baseline. Default DefaultFullPassAfter; 0 = this rule off.
+	// FullPassAfter: an automatic re-review is also a full pass once this
+	// long passed since the baseline, whatever the PR's size. Default
+	// DefaultFullPassAfter; 0 = this rule off.
 	FullPassAfter Duration `toml:"full_pass_after"`
 	// AuditEvery: the Nth automatic re-review of a PR, counted since its
 	// first review, its last full pass or its last audit pass, runs as an

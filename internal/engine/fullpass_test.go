@@ -443,28 +443,30 @@ func TestTouchedFilesSinceTheBaselineTriggerAFullPass(t *testing.T) {
 	}
 }
 
-// A large PR (60 files at its baseline) gets a full pass at its first
-// re-review a week after the baseline, however small the push; a 5-file PR
-// does not.
-func TestAnOldLargePRGetsAFullPass(t *testing.T) {
+// A PR of any size gets a full pass at its first re-review a day after
+// the baseline, however small the push (2026-10-15: the operator wants a
+// whole read at least daily; a week was too rare); a push 23 hours after
+// the baseline runs an ordinary re-review.
+func TestAnOldPRGetsAFullPass(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		files int
+		age   time.Duration
 		full  bool
-	}{{"60 files", 60, true}, {"5 files", 5, false}} {
+	}{{"60 files, a day", 60, 24 * time.Hour, true}, {"5 files, a day", 5, 24 * time.Hour, true}, {"5 files, 23 hours", 5, 23 * time.Hour, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := fullPassHarness(t, 0, sizedGit(map[string][2]int{"b1": {tc.files, 600}}))
 			h.reviewedPR(2, "b1")
-			h.advance(7 * 24 * time.Hour)
+			h.advance(tc.age)
 			reqSetFiles(h, "b1...b2", touched(40, "app/models/coupon.rb"))
 			in := pushAndRereview(t, h, "b2")
 			if !tc.full {
-				wantOrdinary(t, "a small PR's re-review a week later", in)
+				wantOrdinary(t, "a re-review 23 hours after the baseline", in)
 				return
 			}
-			wantFullPass(t, "a large PR's re-review a week later", in)
+			wantFullPass(t, "a re-review a day after the baseline", in)
 			reason, rule, _ := fullPassWhyOf(t, h, 2)
-			if want := "168h since the first review of a large PR (60 files, 600 lines then; full_pass_after 168h)"; reason != want || rule != "full_pass_after" {
+			if want := "24h since the first review (full_pass_after 24h)"; reason != want || rule != "full_pass_after" {
 				t.Fatalf("full pass reason %q, rule %q: want %q", reason, rule, want)
 			}
 		})

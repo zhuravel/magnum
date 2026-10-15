@@ -675,6 +675,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   whole PR itself in the round that would approve (one reused session, while the reviewers see only the
   delta).
 
+- **A full pass at least daily while a PR moves** (2026-10-15, amends "A full pass also follows churn and
+  age"). The age rule ran a full pass once a week, and only on a PR of 50 files or 2,000 lines; the
+  operator found a week too rare. `full_pass_after` now defaults to `"24h"` and applies to a PR of any
+  size: an automatic re-review a day or more after the baseline (the last full pass, else the first review)
+  runs as a full pass, however small the push, and the reason reads "24h since the first review
+  (full_pass_after 24h)". The size floor and its constants went, since a small PR's full pass costs little
+  and the rule is about time, not size. Rejected: a size floor as a key (two knobs for one wish), and a
+  full pass on every push after a day (one a day is the floor, the churn rules add the rest).
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

@@ -280,8 +280,8 @@ full_pass_lines = 500             # also a full pass once the PR's re-reviews si
                                   # baseline when that is more. 0 = this rule off
 full_pass_files = 10              # likewise for the files those re-reviews touched, or a quarter of the PR's
                                   # files at the baseline when that is more. 0 = this rule off
-full_pass_after = "168h"          # and once this long passed since the baseline of a large PR (50 files or
-                                  # 2,000 lines then). "0" = this rule off
+full_pass_after = "24h"           # and once this long passed since the baseline, whatever the PR's size: a
+                                  # whole read at least daily while the PR moves. "0" = this rule off
 audit_every = 5                   # the Nth automatic re-review of a PR, counted since its first review, its last
                                   # full pass or its last audit pass, is an audit pass while the PR's evidence map
                                   # holds unknown or stale areas: every session starts fresh, the reviewers

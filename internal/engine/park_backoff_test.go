@@ -49,6 +49,7 @@ func (h *harness) nextParkAttempt(prID int64) int {
 // Claude pane). A round of the PR resets the wait.
 func TestAFailedParkBacksOff(t *testing.T) {
 	h := newHarness(t)
+	h.cfg.Pipeline.FullPassAfter.Duration = 0 // 55 hours pass: the age rule would make the push's re-review a full pass, whose fresh start the failing park blocks
 	pr := h.reviewedPR(2, "b1")
 	h.failParks(quitTimedOut(2))
 	before := h.parks(pr.ID)

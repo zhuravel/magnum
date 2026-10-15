@@ -475,8 +475,8 @@ reads them: from the reviewed commit to the head, or, when the push merged the b
 the PR's own diff before and after it, so the base branch's commits are not the PR's. The next automatic
 re-review is a full pass once that churn reaches `full_pass_lines` lines (default `500`) or touches
 `full_pass_files` files (default `10`, each file once), or a quarter of the PR's lines or files at the
-baseline when that is more, or once `full_pass_after` (default `"168h"`) passed since the baseline of a
-large PR (50 files or 2,000 lines then); `0` turns each rule off alone. The rules apply in that order, after
+baseline when that is more, or once `full_pass_after` (default `"24h"`) passed since the baseline, whatever
+the PR's size, so a PR that keeps moving gets a whole read at least daily; `0` turns each rule off alone. The rules apply in that order, after
 `magnum review --full` and `full_pass_every`, and a full pass that posts is the new baseline. `round.full_pass`
 says why one runs and which rule fired (`rule`: the key, or `requested`), `engine.round_start` says
 `re-review (full pass)` with the reason in `full_pass_reason`, the card's last round `full pass`, and the
