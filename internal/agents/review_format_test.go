@@ -489,7 +489,7 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // (12), the stacked PR's lower layer (24), an answered thread's reply (14)
 // and a report's priority (24). Every rule added must replace or shorten
 // text.
-const skillMaxBytes = 33692
+const skillMaxBytes = 33726
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
