@@ -8210,6 +8210,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
   as its pane lives, and the workspace would still grow by a pane per attempt); closing the whole workspace
   (it can hold the operator's own shell); leaving the panes (17 slivers after a day of retries, and `o`
   opened a workspace of them).
+- **A fix is probed on the shapes its writers leave, and a reviewer reads the writer before it drops a
+  candidate** (2026-10-16, amends "A fix of an end state is judged against every write that reaches it").
+  On talkable#11483 a colleague's whole-branch review found, for the third time, a defect in the restore's
+  tier handling right after a magnum round said the fix was fine. The round-11 fix rested on a premise its
+  commit message and a code comment state: the action editor saves a flat action with only disabled tier
+  rows. Rounds 43 and 46 both probed the fix with flat actions built by hand from disabled rows, so the
+  premise was in every probe; the editor's store keeps enabled rows when staff switch "Tier based reward"
+  off, so the restore overwrote them and a renamed tier's members got 0 points. Round 43's claude-review
+  had weighed that exact outcome and dropped it on the same premise ("which is what the disabled row gave
+  before"), and the judge never sees a reviewer's drops. The end-state rule pointed away from the defect:
+  "every write of the same flow" and "probe one the fix leaves untouched" send the judge to the flow's
+  other writes, while this one was the fix's own write on an input shape nobody built through its real
+  writer. SKILL.md section 6 now says "every write that reaches that state", and after "probe one the fix
+  leaves untouched." adds: a fix can rest on what another part writes (a comment: the editor saves
+  disabled rows); probe it on each shape those writers leave, built through them (a UI form, an API
+  outside the diff), not by hand; what passed before the fix and fails now is a finding. The three
+  claude-review prompts add, after the base-branch search before a drop: a candidate or a fix can rest on
+  what another part of the app writes (a code comment says an editor saves only disabled rows); read that
+  writer before you drop the candidate or accept the fix. The skill grows by 193 bytes (257 for the
+  sentence, less 17 for "of the same flow" and 47 of unpinned wording: section 2's "existing" review
+  comments, section 6's "that" before the new commits, its rebuttal sentence and "repository" before its
+  notes, and section 7's "if any"), and the cap goes from 35,179 to 35,372. New test
+  TestAFixIsProbedOnTheShapesItsWritersLeave; TestAFixOfAnEndStateIsJudgedAgainstEveryWriteThatReachesIt
+  pins the shorter rule and refuses "every write of the same flow", and
+  TestReviewersSearchTheBaseBeforeTheyReject the prompts' sentence. Rejected: reading the reviewers'
+  dropped candidates in the judge's prompt (339 of claude-review's Rejected bullets in one run were
+  re-judged and none became a posted finding: "Nine review rules from the 2026-10-14 run"); a judge prompt
+  clause instead of the skill rule (the own pass and recovery rounds verify fixes too).
 
 ## Learned rules
 

@@ -511,8 +511,13 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // section 0's `stakes` input line (154), then 35,179 for section 8's
 // sentence that another's thread is theirs and a reply round with nothing to
 // answer ends `replied`, never `blocked` (2026-10-16: 177 bytes, spec 51).
+// Then 35,372 for a fix probed on the shapes its writers leave (2026-10-16:
+// 257 bytes, spec 53, less 17 for the end-state rule's "of the same flow"),
+// less 47 of unpinned wording: section 2's "existing" review comments (9),
+// section 6's "that" before the new commits (5), its rebuttal sentence (14)
+// and "repository" before its notes (11), and section 7's "if any" (8).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 35179
+const skillMaxBytes = 35372
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -1355,6 +1360,15 @@ func TestReviewersSearchTheBaseBeforeTheyReject(t *testing.T) {
 	if got := reviewers["claude-review.md"]; strings.Contains(got, "blind run") {
 		t.Errorf("claude-review.md names a blind run in a usual one:\n%s", got)
 	}
+	// Round 43's claude-review on talkable#11483 weighed the defect a
+	// colleague later found in a fix and dropped it on the premise the fix's
+	// code comment states (the editor saves only disabled rows); the judge
+	// never sees a reviewer's drops. The reviewers read the writer a
+	// candidate or a fix rests on before they drop the one or accept the
+	// other.
+	promptsSay(t, reviewers, "`git grep -i <word> origin/<base> -- '*.md'`. "+
+		"A candidate or a fix can rest on what another part of the app writes (a code comment says an editor saves only disabled rows). "+
+		"Read that writer before you drop the candidate or accept the fix.")
 	d := roleFixture()
 	d.Blind = true
 	got, err := RenderPrompt(prompt(t, "claude-review.md"), d)
@@ -1714,12 +1728,34 @@ func TestJudgeReReviewPromptsNameEachEarlierFindingAVerdictBlocksOn(t *testing.T
 // it as "limits writes to inserted actions", while another write of the same
 // restore copied the flag that left a live action in the same unusable
 // state. A fix of an end state is judged against every write that reaches
-// it, and one the fix leaves untouched gets a probe.
+// it, and one the fix leaves untouched gets a probe. "Of the same flow" went
+// (2026-10-16): it kept the judge on the restore's own writes, while the
+// third defect came from another part's (the action editor's).
 func TestAFixOfAnEndStateIsJudgedAgainstEveryWriteThatReachesIt(t *testing.T) {
 	skillSays(t, []string{
 		"A defect that is an end state (a record left as the code cannot serve it, a value a reader cannot use) is fixed only when every write " +
-			"of the same flow that reaches that state is covered: list them, and probe one the fix leaves untouched.",
+			"that reaches that state is covered: list them, and probe one the fix leaves untouched.",
+	}, []string{"every write of the same flow"})
+}
+
+// On the same PR a colleague's whole-branch review found a third defect in
+// the restore's tier handling right after a magnum round called the fix
+// fine. The fix rested on a premise its code comment states (the action
+// editor saves a flat action with only disabled tier rows), and the two
+// rounds that verified it built every flat action by hand from disabled
+// rows, so each probe carried the premise. The editor keeps enabled rows
+// when staff switch "Tier based reward" off, so the restore overwrote them
+// and a renamed tier's members got 0 points. A fix that rests on what
+// another part writes is probed on each shape those writers leave, built
+// through them, and what passed before the fix and fails now is a finding.
+func TestAFixIsProbedOnTheShapesItsWritersLeave(t *testing.T) {
+	skillSays(t, []string{
+		"A fix can rest on what another part writes (a comment: the editor saves disabled rows). Probe it on each shape those writers leave, " +
+			"built through them (a UI form, an API outside the diff), not by hand. What passed before the fix and fails now is a finding.",
 	}, nil)
+	if !strings.Contains(string(magnum.Skill), "probe one the fix leaves untouched. A fix can rest on what another part writes") {
+		t.Error("SKILL.md's writers sentence does not follow the end-state rule")
+	}
 }
 
 // The own pass that verified that fix recorded it as "limits writes to

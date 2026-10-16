@@ -1646,7 +1646,8 @@ not make its unnamed consequences deliberate. A missing test for the PR's new or
 speculative (P2 when the rule guards security or business behaviour, else P3), a finding in a cleanup or
 backfill migration carries the read-only query that counts the rows it affects, and before it rejects a
 candidate the judge searches the base branch's log and docs, never the checkout's (the claude reviewers
-do the same). It runs the affected specs on the merged tree when a base commit after the merge base changes
+do the same, and read the writer a candidate or a fix rests on, such as an editor a code comment says saves
+only disabled rows, before they drop the candidate or accept the fix). It runs the affected specs on the merged tree when a base commit after the merge base changes
 what the PR calls, and gives each of the head's failing checks (`failing_checks`) a Checks line; when
 CI finishes red after its review of a head, a judge check of that head asks it to decide those checks
 and post one review (see Re-reviews). A finding its earlier reviews missed on code the PR did not change since is posted as new, its title
@@ -1698,8 +1699,10 @@ every reply classified by its first clause, after an opening "Good catch", "Vali
 risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it"
 and "No guard for now"; "added in", "removed in" and "closed by … in" with a commit are `fixed`); the
 judge decides a reply by what it does, not by that hint, accepts a fix
-only when the code shows it (a defect that is an end state only when every write of the same flow that reaches
-it is covered, with a probe of one the fix left untouched), honours an answered finding unless it proves the reason wrong (then it
+only when the code shows it (a defect that is an end state only when every write that reaches it is
+covered, with a probe of one the fix left untouched; a fix that rests on what another part writes, such as
+a code comment's "the editor saves disabled rows", is probed on each shape those writers leave, built
+through them, never by hand, and what passed before the fix and fails now is a finding), honours an answered finding unless it proves the reason wrong (then it
 says why in one sentence in that thread), decides a reply that scores the fix (`Low priority, net -6`) by
 its reason, never by the number (it rebuts only a fact it disproves at the head, or a consequence its
 comment sized that the reply leaves out, with the evidence and no score of its own, and honours a product
