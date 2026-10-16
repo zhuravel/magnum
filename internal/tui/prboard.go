@@ -75,6 +75,10 @@ type PRBoardOptions struct {
 	// Facts, when set, reads what the title says of the daemon (an older
 	// build, a pause, a drain, the Codex budget's pace) with every load.
 	Facts func(ctx context.Context) DaemonFacts
+	// Limit caps the rows the table lists after the view, the filter and the
+	// sort (`magnum tui --limit`), as the printed rows are capped: the sort
+	// decides which rows show, and a starred PR shows first. 0 lists all.
+	Limit int
 }
 
 // RunPRBoard shows the live PR board until the user quits or ctx ends. act
@@ -557,7 +561,8 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 }
 
 // rebuild keeps the rows of the owner scope, the view and the filter,
-// sorts them and keeps the cursor on the same PR when it is still listed.
+// sorts them, caps them at opts.Limit and keeps the cursor on the same PR
+// when it is still listed.
 func (m *prBoardModel) rebuild() {
 	m.all = m.loaded
 	if m.owner != "" {
@@ -582,6 +587,9 @@ func (m *prBoardModel) rebuild() {
 		}
 	}
 	m.view = SortPRBoard(rows, m.sort, m.desc)
+	if m.opts.Limit > 0 && len(m.view) > m.opts.Limit {
+		m.view = m.view[:m.opts.Limit]
+	}
 	m.section = slices.IndexFunc(m.view, func(r PRBoardRow) bool { return r.Recent })
 	m.working = slices.ContainsFunc(m.all, func(r PRBoardRow) bool { return workingState(r.State) })
 	m.gen = nextGen()
@@ -692,6 +700,13 @@ func (m prBoardModel) selected() (PRBoardRow, bool) {
 		return PRBoardRow{}, false
 	}
 	return m.view[m.cursor], true
+}
+
+// cursorStarred reports whether the cursor row is starred: the table's *
+// hint then says unstar.
+func (m prBoardModel) cursorStarred() bool {
+	r, ok := m.selected()
+	return ok && r.Starred
 }
 
 func (m prBoardModel) updateKey(msg tea.KeyPressMsg) (prBoardModel, tea.Cmd) {
@@ -1243,11 +1258,18 @@ func (m prBoardModel) hintLine(w int) string {
 		}
 		room := max(w-ansi.StringWidth(pos)-2, 10)
 		details := []hint{{"enter", "details"}}
+		// The star's hint (star, or unstar on a starred row) shows where it
+		// fits beside the rest of a set; a set without it comes first.
+		star := []hint{{rowActDefs[actStar].key, actionLabel(actStar, actRow{starred: m.cursorStarred()})}}
+		wide := actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease)
+		wideRest := []hint{{"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {logKey, "log"}, {"?", "help"}, {"q", "quit"}}
+		mid := actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actPin, actUnpin, actRelease)
+		midRest := []hint{{"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}
 		sets := [][]hint{
-			withHints(details, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease),
-				[]hint{{"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {logKey, "log"}, {"?", "help"}, {"q", "quit"}}),
-			withHints(details, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actPin, actUnpin, actRelease),
-				[]hint{{"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
+			withHints(details, wide, star, wideRest),
+			withHints(details, wide, wideRest),
+			withHints(details, mid, star, midRest),
+			withHints(details, mid, midRest),
 			withHints(details, actionHints(actReview, actOpen, actBrowser),
 				[]hint{{"/", "filter"}, {"v", "view"}, {"s", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
 			{{"enter", "details"}, {"/", "filter"}, {"v", "view"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},

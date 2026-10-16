@@ -129,11 +129,18 @@ type PRBoardRow struct {
 	// comment; nil when magnum has not reviewed the PR.
 	Findings *FindingsInfo
 	// CI is the head commit's checks; nil when unknown.
-	CI             *CIInfo
-	Reviewers      []ReviewerInfo // everyone who reviewed or was asked to
-	SinceReview    *ReviewDelta   // what changed since the last review; nil when unknown
-	Slot           string         // folder of the review slot holding the PR, if any
-	Pinned, Muted  bool
+	CI          *CIInfo
+	Reviewers   []ReviewerInfo // everyone who reviewed or was asked to
+	SinceReview *ReviewDelta   // what changed since the last review; nil when unknown
+	Slot        string         // folder of the review slot holding the PR, if any
+	Pinned      bool
+	// Starred: the operator starred the PR (`magnum star`, the board's *;
+	// store.KVPRStar), so it leads its section, the open PRs or the
+	// recently closed ones, whatever the sort; StarredAt is when (zero when
+	// the record does not say). The title's first tag marks it.
+	Starred        bool
+	StarredAt      time.Time
+	Muted          bool
 	Notes          bool      // the repository has reviewer notes (magnum notes)
 	NextEligibleAt time.Time // earliest next automatic review; zero when not scheduled
 	// LastError is the one-line explanation of the PR's stored error (for a
@@ -416,8 +423,11 @@ func (f PRBoardSourceFunc) Rows(ctx context.Context) ([]PRBoardRow, error) { ret
 // the newest update first, then order by ref. An unknown sort means
 // SortUpdated. The recently closed rows (Recent) come after all the others,
 // newest closed first, whatever the sort: they are the board's own section.
-// The updated sort, the board's default, lists the PRs that need the
-// operator's approval (NeedsMe) first, either way, each part in its order.
+// In each section the starred rows come first, newest update first (then by
+// ref), whatever the sort and its direction: the operator starred them to
+// keep them in sight. The updated sort, the board's default, lists the
+// unstarred PRs that need the operator's approval (NeedsMe) first, either
+// way, each part in its order.
 func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow {
 	out := slices.Clone(rows)
 	key := prSortKey(by)
@@ -429,6 +439,16 @@ func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow {
 				return -1
 			}
 			return 1
+		case a.Starred != b.Starred:
+			if a.Starred {
+				return -1
+			}
+			return 1
+		case a.Starred:
+			if c := b.ActivityAt.Compare(a.ActivityAt); c != 0 {
+				return c
+			}
+			return cmp.Compare(prRef(a), prRef(b))
 		case a.Recent:
 			if c := b.ClosedAt.Compare(a.ClosedAt); c != 0 {
 				return c

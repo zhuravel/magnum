@@ -49,7 +49,7 @@ func fullBoardRow() tui.PRBoardRow {
 			RequiredSource: "github", Stale: true},
 		Reviewers:   []tui.ReviewerInfo{{Login: "rev-ann", Verdict: "approved", SubmittedAt: at, CommitSHA: "abc1234", Stale: true, Requested: true, Mine: true}},
 		SinceReview: &tui.ReviewDelta{Base: "reviewed", BaseSHA: "def5678", Commits: 2, Files: 3, Additions: 40, Deletions: 5, Truncated: true},
-		Slot:        "review3", Pinned: true, Muted: true, Notes: true, NextEligibleAt: at.Add(time.Hour),
+		Slot:        "review3", Pinned: true, Starred: true, StarredAt: at.Add(-2 * time.Hour), Muted: true, Notes: true, NextEligibleAt: at.Add(time.Hour),
 		LastError: "boom", ErrorFix: "run magnum doctor", ErrorDetail: []string{"line one"}, AttentionKind: "failed", RoundsToday: 3,
 		LastRound: &tui.RoundTimings{Round: 2, Kind: "rereview", Total: 754 * time.Second, Running: true, Stages: []tui.StageTiming{
 			{Name: "fetch/checkout", Duration: 12 * time.Second}, {Name: "claude-review", Duration: 18*time.Minute + 4*time.Second, Running: true, Failed: true}}},
@@ -248,6 +248,17 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 	}
 	if got, ok := bare["findings"].(map[string]any)["held"]; !ok || got != false {
 		t.Errorf("findings.held of a review that holds nothing = %v (present %v), want false", got, ok)
+	}
+	// The star (magnum star, the board's *): starred always, starred_at
+	// while it is set.
+	if full["starred"] != true || full["starred_at"] != "2026-10-05T12:30:00Z" {
+		t.Errorf("starred = %v, starred_at = %v; want true at 2026-10-05T12:30:00Z", full["starred"], full["starred_at"])
+	}
+	if got, ok := bare["starred"]; !ok || got != false {
+		t.Errorf("starred of an unstarred PR = %v (present %v), want false", got, ok)
+	}
+	if got, ok := bare["starred_at"]; ok {
+		t.Errorf("starred_at of an unstarred PR = %v, want it left out", got)
 	}
 
 	for _, p := range []struct{ board, out any }{

@@ -45,7 +45,7 @@ type glyphs struct {
 	approved, changes, commented, pending, dismissed, other string
 	nonBlocking, simplify, times                            string
 	ciPass, ciFail, ciPending, ciMissing, ciSkip            string // a check's state: the CI column and card
-	stale, mine, pin, errMark, fail, ok                     string
+	stale, mine, pin, star, errMark, fail, ok               string // star: a starred PR's first title tag (magnum star), never mine
 	merge                                                   string // SINCE REVIEW: the base branch's merge is left out
 	reply                                                   string // LAST REVIEW: replies waiting for the judge, before their count
 	bot                                                     string // before a bot's login in the narrow columns; "" = keep "[bot]"
@@ -85,7 +85,7 @@ func newGlyphs(mode IconMode) glyphs {
 		return glyphs{
 			mode:     IconsASCII,
 			approved: "+", changes: "x", commented: "c", pending: "?", dismissed: "-", other: "*",
-			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+", queued: "?", merge: "m", reply: "<-",
+			stale: "~", mine: "*", pin: "pin", star: "star", errMark: "!", fail: "x", ok: "+", queued: "?", merge: "m", reply: "<-",
 			nonBlocking: "~", simplify: "s", times: "x",
 			ciPass: "+", ciFail: "x", ciPending: "o", ciMissing: "-", ciSkip: "/",
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
@@ -122,6 +122,7 @@ func newGlyphs(mode IconMode) glyphs {
 			mine:        "\uf51f",     // nf-oct-star_fill
 			bot:         "\U000F06A9", // nf-md-robot
 			pin:         "\uf435",     // nf-oct-pin
+			star:        "\uf4cd",     // nf-oct-feed_star: GitHub's starred mark, apart from star_fill (mine)
 			errMark:     "\uf530",     // nf-oct-x_circle_fill
 			fail:        "\U000F0159", // gh-dash FailureIcon
 			ok:          "\uf058",     // gh-dash SuccessIcon
@@ -188,7 +189,7 @@ func newGlyphs(mode IconMode) glyphs {
 	return glyphs{
 		mode:     IconsUnicode,
 		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
-		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔", queued: "◷", merge: "⑂", reply: "↩",
+		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", star: "✪", errMark: "!", fail: "✗", ok: "✔", queued: "◷", merge: "⑂", reply: "↩",
 		nonBlocking: "●", simplify: "✂", times: "×",
 		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",

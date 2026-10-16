@@ -759,7 +759,7 @@ func TestPRBoardNavigationAndScroll(t *testing.T) {
 }
 
 func TestPRBoardHelpOverlay(t *testing.T) {
-	m, _, _ := newBoard(t, 120, 42, PRBoardOptions{}) // tall enough for every key line and the whole legend
+	m, _, _ := newBoard(t, 120, 44, PRBoardOptions{}) // tall enough for every key line and the whole legend
 	m, _ = send(t, m, keyMsg("?"))
 	v := viewOf(m)
 	mustContain(t, v, "Move and view", "Act on the PR", "Legend", "fresh review in new agent sessions (asks y/N)",

@@ -2221,6 +2221,7 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
 | `magnum ui open picker\|status\|cleanup\|doctor [--workspace id] [--width 90%] [--height 60%]` | Open one of the herdr plugin's popup panes over the herdr socket (what the plugin's keys run); the sizes come from the `[[panes]]` of `herdr-plugin.toml` unless given, the workspace from the plugin's context. |
 | `magnum pin\|unpin\|release\|mute\|unmute <ref>`, `magnum mute <ref> [reason…]` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). The words after a muted PR are the mute's reason, kept in the request, its answer and the `pr.muted` event, and shown under the head of the board's card (`muted: <reason>`; `mute_reason` in `tui --json`); a mute takes a PR waiting for an automatic round out of the queue at once (ineligible, `muted`), and `unmute` decides its eligibility again. A mute stops every automatic round. To leave only autofix alone, use `magnum fix --off`, which the board shows as `fix off` where it shows `muted`. |
 | `magnum snooze <ref> [--for 2h \| --until 18:00 \| --off]` | Hold a PR's automatic reviews until then (default 2h): no push, re-review, reply round or delta check starts a round, while `magnum review`, the board and a GitHub review request still do; it ends on its own and survives restarts, `--off` lifts it (see Configuration). Board key `z`. |
+| `magnum star <ref> [--off] [--json]` | Star a PR you must deliver, your own or a colleague's: the board lists it first in its section, newest update first among the starred whatever the sort, and marks it ✪ (The PR board). Starring again keeps when it was first starred, `--off` unstars it, and both print the PR's state (`--json`: `ref`, `starred`, `starred_at`, `starred_by`, `changed`); it sets the state and never toggles. The registry keeps the star (`pr.<id>.star`), written at once without the daemon, which never reads it: no review, queue, dispatch or `magnum pick` changes. A PR the registry does not know yet is refused. Board key `*`. |
 | `magnum codex-flag set <ref> [reason...]`, `magnum codex-flag clear <ref>` | Flag a PR Codex warned about (a round Codex refuses flags its PR by itself, a refused helper agent of a role too): magnum never reviews it again, not even `magnum review` or the board's `r`/`R`, parks its agents and releases its pool slot unless `magnum open` pinned it, and names it in no other PR's `related.json`; with `[pipeline] judge_fallback` set, the PR goes on without Codex, with that judge (see "Codex may block an account" above). `clear` lifts the flag after a y/N question on a terminal that names the account risk; the PR is then judged by its watch again (see Configuration). |
 | `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. It also ends a PR's fix loop, whether its fixer works (the PR stays reviewed meanwhile) or the loop waits for its re-review or next cycle: the fixer is interrupted, its run abandoned and the slot put back. A whiteboard job at work is stopped the same way: the writer is interrupted, its run abandoned and the slot put back. |
 | `magnum approve <ref> [-m TEXT] [--as IDENTITY] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. `--as` the watch's `auto_approve_as` posts your own approval, which GitHub counts (an App's never does), followed like an automatic one (PRs that need you, below); `--as` the PR's posting identity is the approval without it. Board keys `A` and `C`. |
@@ -2262,7 +2263,7 @@ with a merge mark, `⑂`, and the card says "(excluding a merge of master)", or 
 master)" when the PR's own diff could not be compared in full (a patch GitHub left out as too large, or 300
 files or more): the files and lines then include the merge's, the commits are still the PR's own; an empty
 or binary file, which GitHub sends without a patch, is compared by its blob), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
-💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are starred, and a bot's login carries the bot
+💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are marked ★, and a bot's login carries the bot
 mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. `enter` opens the card with the full
 per-reviewer table (and a line with the latest request to each reviewer: who asked and when) and the last
 round's stage timings (fetch/checkout, each role, verify, total), which roles that round ran and why (its
@@ -2271,7 +2272,7 @@ enough to run again, the roles asked for), and the PR's agent time over 7 days w
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
 last); `r`, `R`, `i` start review variants (a post-merge review on a
-merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `z` snoozes the PR for 2h, or lifts its snooze (`magnum snooze`); `f` fixes the PR's findings as you (`magnum fix`, your own PRs) and `F` takes the PR out of autofix or puts it back (`magnum fix --off`, `--on`); `w` opens the PR's whiteboard in Whiteboard Desktop (`magnum whiteboard --open`, Whiteboards of reviewed PRs); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
+merged PR, below); `o` opens the pane; `p`/`u` pin; `*` stars the PR or unstars a starred one (below); `x` releases; `M`/`U` mute (on a merged PR, below); `z` snoozes the PR for 2h, or lifts its snooze (`magnum snooze`); `f` fixes the PR's findings as you (`magnum fix`, your own PRs) and `F` takes the PR out of autofix or puts it back (`magnum fix --off`, `--on`); `w` opens the PR's whiteboard in Whiteboard Desktop (`magnum whiteboard --open`, Whiteboards of reviewed PRs); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`), and on a row that needs your
 approval `A` approves as you (below); `b` opens the browser;
@@ -2287,6 +2288,21 @@ the same way. `I` names what it will do: kill or drop the review when one runs o
 the slot only when the PR holds one that is not pinned (the daemon keeps a pinned slot). `A` and `C` say
 what Magnum's review found, the earlier findings still open included ("magnum found no new findings; 3
 earlier findings still open").
+
+Star the PRs you must deliver, your own or a colleague's, so they stay on top. `*` stars the PR under the
+cursor, or unstars a starred one, at once: like `p`, `u`, `o`, `b` and `t` it asks nothing, since it starts
+and stops no work and the same key undoes it. It writes the registry itself (`magnum star`, no daemon
+request), and the board reloads with the cursor still on that PR. A starred PR carries ✪ in yellow
+(nf-oct-feed_star in nerd mode, `star` in ASCII) as the title's first tag, before the pin; ★ still marks
+yours. Starred PRs lead their section, the open PRs or the merged and closed ones, newest update first, then
+by reference, whatever the sort and its direction (`s`/`S`) and ahead of the PRs that need you; the others
+keep the sort. A star never shows a row the owner scope, the view, the filter or `h` hides. A starred PR
+that merges or closes leads the recently closed section and leaves with its window like any other PR; its
+star stays in the registry, so a reopened PR returns starred. The summary line counts them (`✪ 3 starred`),
+the card says when the PR was starred (`✪ starred 2h ago (* unstars)`), the printed rows flag `starred`,
+`tui --json` has `starred` and `starred_at`, and `--limit` caps the live board after its sort, as it caps
+the printed rows, so an old starred PR is never cut first. The status dashboard's queue, eligibility,
+throttling and `magnum pick` ignore stars: a star is what you track, not a request for review capacity.
 
 An action hands its work to the daemon as a request and shows the daemon's answer, not "queued": when the
 answer is not there by the time the action returns (a release always, which runs on the daemon's heavy
@@ -2318,7 +2334,7 @@ counts a GitHub App's approval toward a branch's required approvals, so while it
 request is yours (an old one counts until you approve or dismiss it). Both need Magnum's latest review to
 approve the PR's current head (or, for an identity that comments when clean, `no_findings_event = "COMMENT"`,
 to comment with a clean verdict), an open PR that is not a draft and not yours, and no changes request of
-anyone else's; yours are the logins the board stars (every watch's posting identity and every gh identity),
+anyone else's; yours are the logins the board marks ★ (every watch's posting identity and every gh identity),
 and only reviewers with write access count, as for GitHub's decision. Magnum reads the decision
 (`reviewDecision`, `latestOpinionatedReviews`) with the PR's details, at no extra GitHub point. While such
 a row is on screen its text shimmers, a rainbow sliding across it four times a second (`[board] shimmer =

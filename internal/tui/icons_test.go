@@ -254,6 +254,18 @@ func TestGlyphWidths(t *testing.T) {
 		}
 	}
 
+	// The star of a starred PR is its own mark in every mode, never yours:
+	// nf-oct-feed_star, ✪ (East Asian width N: one cell) and the word star.
+	for mode, want := range map[IconMode]string{IconsNerd: "\uf4cd", IconsUnicode: "✪", IconsASCII: "star"} {
+		g := newGlyphs(mode)
+		if g.star != want || g.star == g.mine || g.star == g.pin {
+			t.Errorf("%s: star %q (mine %q, pin %q), want %q", mode, g.star, g.mine, g.pin, want)
+		}
+		if mode != IconsASCII && ansi.StringWidth(g.star) != 1 {
+			t.Errorf("%s: the star measures %d cells, want 1", mode, ansi.StringWidth(g.star))
+		}
+	}
+
 	// Every PR state and slot state has a mark in the nerd mode: an icon
 	// in the state's color, never a colour emoji.
 	nerd, pal := newGlyphs(IconsNerd), newPRBPalette(defaultStyles)

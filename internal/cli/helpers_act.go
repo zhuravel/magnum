@@ -456,8 +456,10 @@ func verbFix(verb string, err error) error {
 	}
 	var fix string
 	switch verb {
-	case "mute", "ignore", "pin", "snooze":
+	case "mute", "ignore", "pin", "snooze", "star":
 		fix = fmt.Sprintf("wait for the daemon's next poll to record it (`magnum kick` polls now), then run `magnum %s %s` again", verb, nir.ref)
+	case "unstar":
+		fix = "nothing to unstar: a PR magnum has not recorded is not starred"
 	case "unmute":
 		fix = "nothing to unmute: a PR magnum has not recorded is not muted"
 	case "unpin":

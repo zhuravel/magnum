@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 )
@@ -85,5 +86,32 @@ func TestSetKVIfAndDeleteKVIfCompareTheValue(t *testing.T) {
 	}
 	if _, found, _ := st.GetKV(ctx, "pr.7.fix"); found {
 		t.Fatal("the key outlived DeleteKVIf")
+	}
+}
+
+// KVValues reads the keys a glob matches with their values in one query
+// (the board's pr.*.star): a key the glob does not match, a near miss
+// included, stays out, and a glob that matches nothing reads an empty map.
+func TestKVValuesReadsTheMatchingKeysWithTheirValues(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	for k, v := range map[string]string{
+		KVPRStar(7): `{"at":"2026-10-16T12:00:00Z","by":"the board"}`, KVPRStar(12): `{"by":"magnum star"}`,
+		"pr.7.star_x": "1", "pr.7.fix": "a", "board.hide_skipped": "1",
+	} {
+		if err := st.SetKV(ctx, k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.KVValues(ctx, "pr.*.star")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"pr.7.star": `{"at":"2026-10-16T12:00:00Z","by":"the board"}`, "pr.12.star": `{"by":"magnum star"}`}
+	if !maps.Equal(got, want) {
+		t.Fatalf("KVValues = %v, want %v", got, want)
+	}
+	if none, err := st.KVValues(ctx, "pr.*.nothing"); err != nil || len(none) != 0 {
+		t.Fatalf("a glob that matches nothing = %v, %v", none, err)
 	}
 }

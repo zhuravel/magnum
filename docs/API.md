@@ -15379,6 +15379,13 @@ func KVPRSimplify(prID int64) string
     KVPRSimplify is "1" when the PR's next round runs /simplify (magnum review
     --simplify).
 
+func KVPRStar(prID int64) string
+    KVPRStar marks a PR the operator starred (`magnum star`, the board's *):
+    a small JSON record of when and by whom ({"at": RFC 3339, "by": "the board"
+    | "magnum star"}); absent while the PR is not starred, and an unstar deletes
+    it. Only the CLI writes and reads it: the board lists the starred PRs first
+    in their section, and the daemon never reads it.
+
 func KVRepoRequiredChecks(fullName string) string
     KVRepoRequiredChecks holds a repository's GitHubRequiredChecks (JSON),
     written by the poller.
@@ -16913,6 +16920,11 @@ func (s *Store) KVKeys(ctx context.Context, glob string) ([]string, error)
     KVKeys returns the keys that match glob (SQLite GLOB: * and ? are wildcards,
     case-sensitive), in key order.
 
+func (s *Store) KVValues(ctx context.Context, glob string) (map[string]string, error)
+    KVValues returns the keys that match glob (as KVKeys reads it) with
+    their values, in one query: each load of the board reads every PR's star
+    (pr.*.star) with it. A glob that matches nothing returns an empty map.
+
 func (s *Store) LandLearnProposal(ctx context.Context, id int64, from []string, v LearnVersion) (LearnProposal, LearnVersion, error)
     LandLearnProposal records that proposal id landed, in one transaction: it
     moves from one of from to landed (compare-and-set, ErrConflict when it is in
@@ -17892,6 +17904,10 @@ type DashboardActions interface {
 	// record names, in Whiteboard Desktop (magnum whiteboard --open); the
 	// board's w, which refuses a row without one before asking.
 	OpenWhiteboard(ctx context.Context, ref string) (ActionResult, error)
+	// Star stars the PR (on) or unstars it (magnum star [--off]): the
+	// board's *, which asks nothing. The registry keeps the star and only
+	// the board reads it: no daemon request.
+	Star(ctx context.Context, ref string, on bool) (ActionResult, error)
 	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	// Requests re-reads the requests ids name; one the registry no longer
@@ -18059,6 +18075,10 @@ type PRBoardOptions struct {
 	// Facts, when set, reads what the title says of the daemon (an older
 	// build, a pause, a drain, the Codex budget's pace) with every load.
 	Facts func(ctx context.Context) DaemonFacts
+	// Limit caps the rows the table lists after the view, the filter and the
+	// sort (`magnum tui --limit`), as the printed rows are capped: the sort
+	// decides which rows show, and a starred PR shows first. 0 lists all.
+	Limit int
 }
     PRBoardOptions tune the PR board.
 
@@ -18107,11 +18127,18 @@ type PRBoardRow struct {
 	// comment; nil when magnum has not reviewed the PR.
 	Findings *FindingsInfo
 	// CI is the head commit's checks; nil when unknown.
-	CI             *CIInfo
-	Reviewers      []ReviewerInfo // everyone who reviewed or was asked to
-	SinceReview    *ReviewDelta   // what changed since the last review; nil when unknown
-	Slot           string         // folder of the review slot holding the PR, if any
-	Pinned, Muted  bool
+	CI          *CIInfo
+	Reviewers   []ReviewerInfo // everyone who reviewed or was asked to
+	SinceReview *ReviewDelta   // what changed since the last review; nil when unknown
+	Slot        string         // folder of the review slot holding the PR, if any
+	Pinned      bool
+	// Starred: the operator starred the PR (`magnum star`, the board's *;
+	// store.KVPRStar), so it leads its section, the open PRs or the
+	// recently closed ones, whatever the sort; StarredAt is when (zero when
+	// the record does not say). The title's first tag marks it.
+	Starred        bool
+	StarredAt      time.Time
+	Muted          bool
 	Notes          bool      // the repository has reviewer notes (magnum notes)
 	NextEligibleAt time.Time // earliest next automatic review; zero when not scheduled
 	// LastError is the one-line explanation of the PR's stored error (for a
@@ -18267,9 +18294,11 @@ func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow
     (never reviewed, no request, no delta) come last either way; ties put the
     newest update first, then order by ref. An unknown sort means SortUpdated.
     The recently closed rows (Recent) come after all the others, newest closed
-    first, whatever the sort: they are the board's own section. The updated
-    sort, the board's default, lists the PRs that need the operator's approval
-    (NeedsMe) first, either way, each part in its order.
+    first, whatever the sort: they are the board's own section. In each section
+    the starred rows come first, newest update first (then by ref), whatever the
+    sort and its direction: the operator starred them to keep them in sight.
+    The updated sort, the board's default, lists the unstarred PRs that need the
+    operator's approval (NeedsMe) first, either way, each part in its order.
 
 type PRBoardSource interface {
 	Rows(ctx context.Context) ([]PRBoardRow, error)

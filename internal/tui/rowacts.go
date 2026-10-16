@@ -46,6 +46,7 @@ const (
 	actFix
 	actFixOff
 	actWhiteboard
+	actStar
 )
 
 // boardSnooze is how long the board's z snoozes a PR.
@@ -80,14 +81,16 @@ var rowActDefs = [...]rowActDef{
 	actFix:            {"f", "fix findings", "fix", "fix"},
 	actFixOff:         {"F", "fix off", "fix off", "fix --off"},
 	actWhiteboard:     {"w", "open whiteboard", "whiteboard", "whiteboard --open"},
+	actStar:           {"*", "star", "star", "star"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
-// them. The whiteboard is the board's alone: the dashboard's w shows and
-// hides the manual worktrees, as its t switches to the board.
+// them. The whiteboard and the star are the board's alone: the dashboard's w
+// shows and hides the manual worktrees, as its t switches to the board, and
+// a star orders the board's rows, not the dashboard's queue.
 var (
 	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
-		actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actRelease, actMute, actUnmute, actSnooze}
+		actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute, actUnmute, actSnooze}
 	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
 )
@@ -148,6 +151,7 @@ type actRow struct {
 	url, issue, issueURL string
 
 	pinned, pinKnown                bool
+	starred                         bool // the operator starred the PR (only the board offers *)
 	muted, mutedKnown               bool
 	inSlot, slotKnown               bool // the PR holds a slot
 	mergedUnreviewed, flagDismissed bool
@@ -391,7 +395,7 @@ func actionRefusal(a rowAct, r actRow) string {
 
 // actionQuestion is the y/N question before a runs on r, saying what y
 // will do; "" for the actions that run at once (open, browser, tracker, pin,
-// unpin).
+// unpin, and the star, which only the board reads and the same key undoes).
 func actionQuestion(a rowAct, r actRow) string {
 	l := r.label
 	switch a {
@@ -524,6 +528,10 @@ func actionLabel(a rowAct, r actRow) string {
 		if r.fixOff {
 			return "fix on"
 		}
+	case actStar:
+		if r.starred {
+			return "unstar"
+		}
 	}
 	return rowActDefs[a].label
 }
@@ -611,6 +619,14 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		}
 	case actWhiteboard:
 		return what, on(DashboardActions.OpenWhiteboard)
+	case actStar:
+		star := !r.starred
+		if !star {
+			what = "unstar " + target
+		}
+		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+			return act.Star(ctx, target, star)
+		}
 	}
 	return what, unknownAction(a)
 }
@@ -763,7 +779,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 	row := actRow{ok: true, ref: ref, label: cmp.Or(label, ref), none: "this row names no PR",
 		state: normState(r.State), ghState: strings.ToUpper(strings.TrimSpace(r.GHState)), head: r.HeadSHA,
 		findings: r.Findings, verdicts: true, url: prURL(r), issue: r.Issue, issueURL: r.IssueURL,
-		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
+		pinned: r.Pinned, pinKnown: true, starred: r.Starred, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
 		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != ""}

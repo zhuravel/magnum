@@ -579,12 +579,15 @@ func (p *prbPainter) numCell(r PRBoardRow) cell {
 	return cell{{"#" + strconv.Itoa(n), p.pal.num}}
 }
 
-// titleCell is the title after the row's tags: 📌 pinned, ! failed or
-// stalemated (a thread magnum stopped arguing in), the label badges, draft,
-// muted, fix off (switched out of autofix). The title is the last run (the
-// cursor row bolds it; titleFit cuts only it).
+// titleCell is the title after the row's tags: ✪ starred, 📌 pinned, !
+// failed or stalemated (a thread magnum stopped arguing in), the label
+// badges, draft, muted, fix off (switched out of autofix). The title is the
+// last run (the cursor row bolds it; titleFit cuts only it).
 func (p *prbPainter) titleCell(r PRBoardRow) cell {
 	var c cell
+	if r.Starred {
+		c = append(c, seg{p.g.star + " ", p.pal.yellow})
+	}
 	if r.Pinned {
 		c = append(c, seg{p.g.pin + " ", p.pinStyle()})
 	}
@@ -1925,14 +1928,17 @@ func (p *prbPainter) titleRights(spin, clock string, facts []fact) []string {
 }
 
 // summaryLine counts the rows per state, most urgent first, with the
-// stale reviews, failures and pins on the right.
+// stale reviews, failures, pins and stars on the right.
 func (p *prbPainter) summaryLine(width int) string {
 	if len(p.all) == 0 {
 		return " " + p.st.Dim.Render("no pull requests yet")
 	}
 	counts := map[string]int{}
-	var stale, failing, pinned, pinnedClosed int
+	var stale, failing, pinned, pinnedClosed, starred int
 	for _, r := range p.all {
+		if r.Starred {
+			starred++
+		}
 		counts[normState(r.State)]++
 		if r.LastReview != nil && r.LastReview.Stale {
 			stale++
@@ -1992,6 +1998,9 @@ func (p *prbPainter) summaryLine(width int) string {
 			pill += p.st.Dim.Render(p.g.sep) + p.pal.bold.Render(strconv.Itoa(pinnedClosed)) + " " + p.st.Dim.Render("on closed PRs")
 		}
 		right = append(right, pill)
+	}
+	if starred > 0 {
+		right = append(right, p.pal.yellow.Render(p.g.star)+" "+p.pal.bold.Render(strconv.Itoa(starred))+" "+p.st.Dim.Render("starred"))
 	}
 	for _, b := range badgeCounts(p.all) {
 		right = append(right, p.pal.named[b.color].Render(b.text)+" "+p.pal.bold.Render(strconv.Itoa(b.n)))

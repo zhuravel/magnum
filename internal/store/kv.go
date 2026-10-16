@@ -116,6 +116,13 @@ func KVPRProject(prID int64, kind string) string { return fmt.Sprintf("pr.%d.%s_
 // one that cannot be read too.
 func KVPRCodexFlag(prID int64) string { return fmt.Sprintf("pr.%d.codex_flag", prID) }
 
+// KVPRStar marks a PR the operator starred (`magnum star`, the board's *):
+// a small JSON record of when and by whom ({"at": RFC 3339, "by": "the
+// board" | "magnum star"}); absent while the PR is not starred, and an
+// unstar deletes it. Only the CLI writes and reads it: the board lists the
+// starred PRs first in their section, and the daemon never reads it.
+func KVPRStar(prID int64) string { return fmt.Sprintf("pr.%d.star", prID) }
+
 // CodexFlaggedPRs returns the ids of the PRs that hold a Codex flag
 // (KVPRCodexFlag), whatever its value.
 func (s *Store) CodexFlaggedPRs(ctx context.Context) (map[int64]bool, error) {
@@ -159,6 +166,29 @@ func (s *Store) KVKeys(ctx context.Context, glob string) ([]string, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("kv keys %s: %w", glob, err)
+	}
+	return out, nil
+}
+
+// KVValues returns the keys that match glob (as KVKeys reads it) with their
+// values, in one query: each load of the board reads every PR's star
+// (pr.*.star) with it. A glob that matches nothing returns an empty map.
+func (s *Store) KVValues(ctx context.Context, glob string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT key, value FROM kv WHERE key GLOB ?", glob)
+	if err != nil {
+		return nil, fmt.Errorf("kv values %s: %w", glob, err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, fmt.Errorf("kv values %s: %w", glob, err)
+		}
+		out[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("kv values %s: %w", glob, err)
 	}
 	return out, nil
 }

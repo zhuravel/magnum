@@ -240,6 +240,14 @@ func (s *screenActions) OpenWhiteboard(ctx context.Context, ref string) (tui.Act
 	})
 }
 
+// Star stars the PR (on) or unstars it (magnum star [--off]) as "the
+// board": the screen asks nothing, since the same key undoes it.
+func (s *screenActions) Star(ctx context.Context, ref string, on bool) (tui.ActionResult, error) {
+	return s.do(ctx, "star", func(ctx context.Context, c *Context, d *actDeps) int {
+		return starMain(ctx, c, d, ref, starOpts{off: !on, by: "the board"})
+	})
+}
+
 // Abort kills the PR's running review; the screen asked first.
 func (s *screenActions) Abort(ctx context.Context, ref string) (tui.ActionResult, error) {
 	return s.stop(ctx, stopAbort, ref)

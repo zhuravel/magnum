@@ -47,8 +47,10 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"its slot), A/C approve and request changes (on a row that needs you, A approves as you), D withdraws "+
 			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), f fixes its findings as you "+
 			"(F takes it out of autofix or puts it back), w opens its whiteboard, o opens the judge's pane, "+
-			"p/u pin and unpin, x releases, M/U mute and unmute, b opens the PR in the browser and t its issue in "+
-			"the tracker; every one of them but o, p, u, b and t asks y/N first, and only y confirms. a jumps to "+
+			"p/u pin and unpin, * stars it or unstars it (`magnum star`), x releases, M/U mute and unmute, b opens the "+
+			"PR in the browser and t its issue in the tracker; every one of them but o, p, u, *, b and t asks y/N "+
+			"first, and only y confirms. Starred PRs (✪ before the title) lead their section, the open PRs or the "+
+			"recently closed ones, newest update first whatever the sort. a jumps to "+
 			"what needs you, ! shows the action log, ctrl+r or F5 refreshes now, tab switches to the status "+
 			"dashboard (and back), ? lists every key and q quits. With the mouse ([terminal] mouse, on by default; "+
 			"m toggles it) the wheel scrolls, a "+
@@ -66,10 +68,11 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"blocks on your approval, because it never counts a GitHub App's (its review decision is REVIEW_REQUIRED), "+
 			"and \"✔ lift your ✗\" (lift-yours) one whose only changes request is yours; the updated sort lists them "+
 			"first, the title counts them and --needs-me shows only them. "+
-			"--repo shows one repository, --all adds every closed and merged PR, --limit caps the rows. --sort picks the "+
+			"--repo shows one repository, --all adds every closed and merged PR, --limit caps the rows once they are "+
+			"sorted (on the live board too, so a starred PR is never left out for its age). --sort picks the "+
 			"order (updated, last-review, reviewer-activity, requested, changes, state); --desc (the default) puts the "+
 			"newest, latest, most recently requested, most changed or most urgent first and --desc=false reverses the "+
-			"printed rows. REQUESTED is when a review was last requested of you (starred on the board), else of "+
+			"printed rows. REQUESTED is when a review was last requested of you (marked ★ on the board), else of "+
 			"anyone; requested sorts by it, PRs with no request last.",
 		func(pos []string) int { return runPRs(c, f, pos) })
 	cmd.Aliases = []string{"prs"} // the board's name until 2026-10-15: scripts and the gh shim keep working
@@ -113,21 +116,19 @@ type prsOptions struct {
 	AutoApproved bool
 }
 
-// filter is the registry query of o. The registry orders by last update,
-// so the board (which re-sorts interactively) caps the most recently
-// updated PRs; the printed rows read everything and cut after the requested
-// sort (prsRows).
+// filter is the registry query of o. It never caps the rows: the registry
+// orders by the last update, while the printed rows (prsRows) and the live
+// board (tui.PRBoardOptions.Limit) cut after their own sort, which puts the
+// starred PRs first however old.
 func (o prsOptions) filter() store.BoardFilter {
-	return store.BoardFilter{Repo: o.Repo, IncludeClosed: o.All, Limit: o.Limit}
+	return store.BoardFilter{Repo: o.Repo, IncludeClosed: o.All}
 }
 
 // prsRows reads the PRs of o, keeps o.View's, sorts them by o.Sort and
 // o.Desc and only then applies o.Limit, so `--sort changes --limit 1` is
 // the most changed PR.
 func prsRows(ctx context.Context, st *store.Store, cfg *config.Config, o prsOptions, self []string, layout paths.Layout) ([]tui.PRBoardRow, error) {
-	f := o.filter()
-	f.Limit = 0
-	rows, err := o.source(prsSource(st, cfg, f, self, layout))(ctx)
+	rows, err := o.source(prsSource(st, cfg, o.filter(), self, layout))(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +259,7 @@ const kvBoardHideSkipped = "board.hide_skipped"
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {
 	return tui.PRBoardOptions{SelfLogins: prsSelfLogins(cfg), DefaultSort: o.Sort, DefaultView: o.View, Repo: o.Repo, Now: inspNow,
 		Judge: rolesJudgeName(cfg), Icons: screenIcons(cfg), DefaultRepo: defaultRepo(cfg), DefaultOwner: o.Owner,
-		RecentClosed: prsRecentClosed(cfg), NoShimmer: cfg != nil && !cfg.Board.Shimmer}
+		RecentClosed: prsRecentClosed(cfg), NoShimmer: cfg != nil && !cfg.Board.Shimmer, Limit: o.Limit}
 }
 
 // screenIcons is the screens' symbols, [terminal] icons: the screens read
@@ -384,6 +385,16 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			row.ProjectNote = agents.ProjectSentences(ctx, st, r.PRID, r.HeadSHA)
 			out = append(out, row)
+		}
+		// Every star in one read (star.go), before the board filters and
+		// sorts; a registry that cannot say leaves them out rather than the
+		// board.
+		if stars, err := prStars(ctx, st); err == nil {
+			for i := range out {
+				if s, ok := stars[ids[i]]; ok {
+					out[i].Starred, out[i].StarredAt = true, s.At
+				}
+			}
 		}
 		sums, err := st.LastReviewSummaries(ctx, ids)
 		if err == nil {
@@ -784,7 +795,7 @@ func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
 }
 
 // prsStateCell is the magnum state with the flags that matter
-// ("reviewed,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
+// ("reviewed,starred,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
 // merged before magnum reviewed its last push; "reviewed,fixing" while its
 // fixer works, "fix-off" when it was switched out of autofix), and a snooze
 // that holds at now while no round runs ("reviewed,snoozed→18:00", as the
@@ -809,7 +820,7 @@ func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 	for _, f := range []struct {
 		on   bool
 		name string
-	}{{r.Fixing != "", "fixing"}, {r.Draft, "draft"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.FixOff, "fix-off"},
+	}{{r.Fixing != "", "fixing"}, {r.Draft, "draft"}, {r.Starred, "starred"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.FixOff, "fix-off"},
 		{r.CodexFlag != "", "codex-flagged"}, {r.LastError != "", "error"}, {len(r.Stalemate) > 0, "stalemate"}} {
 		if f.on {
 			s += "," + f.name

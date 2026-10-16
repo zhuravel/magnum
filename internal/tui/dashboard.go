@@ -228,6 +228,10 @@ type DashboardActions interface {
 	// record names, in Whiteboard Desktop (magnum whiteboard --open); the
 	// board's w, which refuses a row without one before asking.
 	OpenWhiteboard(ctx context.Context, ref string) (ActionResult, error)
+	// Star stars the PR (on) or unstars it (magnum star [--off]): the
+	// board's *, which asks nothing. The registry keeps the star and only
+	// the board reads it: no daemon request.
+	Star(ctx context.Context, ref string, on bool) (ActionResult, error)
 	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	// Requests re-reads the requests ids name; one the registry no longer

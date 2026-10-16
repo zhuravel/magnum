@@ -2135,6 +2135,165 @@ skill versions); people add theirs to the sections before it, at the end of the 
   so the word would overpromise); the cause inside the red pill (it grows the pill, and every other word
   after a pill is dimmed text); a narrower form that drops the cause with a running round's stage (the cause
   is what decides the operator's next key, as a wait's text is, which keeps its words too).
+- **Starred PRs lead the board** (2026-10-16, the operator approved spec 55's mockup). The operator must
+  deliver some PRs, usually their own and sometimes a colleague's. They want these PRs always at the top,
+  newest update first, whatever sort the other rows use. Before this change, nothing moved a row up. The
+  pin is a slot mark and a title tag. A badge never reorders, because "the sort is the reviewer's choice".
+  The ★ mark means yours.
+
+  Now the board's `*` and `magnum star <ref> [--off] [--json]` star a PR. The kv key `pr.<id>.star`
+  (`store.KVPRStar`) holds `{"at": <RFC 3339>, "by": "the board" | "magnum star"}`. No key means not
+  starred, and an unstar deletes the key. One setter writes the registry directly: setPRStar in the CLI,
+  which both paths reach through starMain. There is no daemon request and no migration. A second star keeps
+  the first record. `magnum star` sets the state and never toggles it. It resolves the reference as `magnum
+  snooze` does, refuses a PR that the registry does not know, and prints the result.
+
+  The board's source reads every star in one query: the new `store.KVValues` returns the keys of `pr.*.star`
+  with their values. The source sets PRBoardRow.Starred and StarredAt before the board filters and sorts.
+  Thus the live board, the printed rows and `tui --json` agree. The printed rows get a `starred` flag in
+  STATE. The JSON gets `starred` on every row and `starred_at` while it is set.
+
+  SortPRBoard keeps the open block and the recently closed block. In each block, starred rows come first.
+  Two starred rows compare by ActivityAt, newest first, then by reference. This comparison comes before
+  the Recent order, the needs-you rule and the chosen sort and direction. A starred merged PR thus leads the
+  Recent block. It leaves with its window like any closed PR, and a reopened PR returns starred. A star
+  never shows a row that the owner scope, a view, the filter or `h` hides. Other people set labels, and so
+  a badge does not change the order. The operator sets each star, and so a star does.
+
+  The mark is the first tag of the title, before the pin. It is yellow and a space follows it. The nerd mode
+  draws nf-oct-feed_star U+F4CD, the Unicode mode ✪ U+272A (East Asian width N, one cell) and the ASCII
+  mode the word `star`. The ★ mark stays yours. The summary line adds `✪ N starred` after the pins. The
+  card adds the line `✪ starred 2h ago (* unstars)`. The `?` legend adds
+  `✪ starred: floats to the top, * toggles; ★ is still yours`, and its keys add `* star or unstar`.
+
+  The `*` key toggles at once, without a y/N question. The table's hints label it star or unstar where a
+  set has room for it. The card and the menu label it too. It starts and stops no work, only the board reads
+  the star, and the same key undoes it. The keys `p`, `u`, `o`, `b` and `t` also run at once. The y/N rule
+  above stays for every action that starts or stops work. Only the board has the key. The dashboard's
+  queue is the daemon's queue. The queue, eligibility, throttling and `magnum pick` ignore stars.
+
+  The live board's `--limit` capped the registry query, which orders by the last update, before the board's
+  own sort. An old starred PR fell off before it moved up. Now the source reads every matching row, and the
+  board caps the rows after its view, filter and sort (PRBoardOptions.Limit), as the printed rows did. The
+  summary line counts every row in scope. The README and `magnum tui --help` said "starred" for yours. They
+  now say "marked ★".
+
+  The real painter draws these rows in TestTheStarredBoardMockup, the mockup test. Three PRs are starred:
+  the operator's own PR with a failed round (updated 50h ago), a colleague's PR (updated 90m ago) and a
+  merged PR. The cursor is on the first row. The summary line ends with `📌 1 pinned   ✪ 3 starred`, or
+  `pin 1 pinned   star 3 starred` in ASCII.
+
+  ```text
+  unicode, 100 columns
+    REPO           #  TITLE                STATE           LAST REVIEW          FINDINGS  REVIEWERS
+  ▌ talkable  #11950  ✪ Add OAuth login…    re-review      ★ 💬 commented 5h ⟳  —         ★zhurave… +1
+    talkable  #11902  ✪ ! Referral analy…   attention      ★ ✗  changes 1d ⟳    —         ★🤖talka… +1
+    magnum       #42  draft PR board scr…   ⣷ reviewing    —                    —         —
+    talkable  #11931  Bump rails from 7.…   queued         —                    —         bob-rev◌
+    talkable  #11920  📌 Fix referral wi…   reviewed       ★ ✔  approved 2h     —         ★zhurave… +3
+    talkable  #11000  Legacy cleanup        not reviewed   —                    —         —
+  ── merged or closed in the last 24h (2) ────────────────────────────────────────────────────────────
+    talkable  #11992  ✪ Speed up the cam…   merged         ★ ✔  approved 6h     —         —
+    talkable  #11991  Spike: referral sh…   closed         —                    —         —
+  unicode, 140 columns
+    REPO           #  TITLE                AUTHOR        UPDATED ↓  REQUESTED  STATE           LAST REVIEW          FINDINGS  CI  REVIEWERS
+  ▌ talkable  #11950  ✪ Add OAuth login…   alice                1h  —           re-review      ★ 💬 commented 5h ⟳  —         —   ★zhurave… +1
+    talkable  #11902  ✪ ! Referral analy…  zhuravel             2d  —           attention      ★ ✗  changes 1d ⟳    —         —   ★🤖talka… +1
+    magnum       #42  draft PR board scr…  bob-rev              5m  —           ⣷ reviewing    —                    —         —   —
+    talkable  #11931  Bump rails from 7.…  🤖dependabot        20m  —           queued         —                    —         —   bob-rev◌
+    talkable  #11920  📌 Fix referral wi…  rev-ann              3h  —           reviewed       ★ ✔  approved 2h     —         —   ★zhurave… +3
+    talkable  #11000  Legacy cleanup       alice                3w  —           not reviewed   —                    —         —   —
+  ── merged or closed in the last 24h (2) ────────────────────────────────────────────────────────────────────────────────────────────────────
+    talkable  #11992  ✪ Speed up the cam…  alice                1m  —           merged         ★ ✔  approved 6h     —         —   —
+    talkable  #11991  Spike: referral sh…  rev-ann             30m  —           closed         —                    —         —   —
+  unicode, 200 columns
+    REPO           #  TITLE                                     AUTHOR        ASSIGNEE     UPDATED ↓  REQUESTED  STATE           LAST REVIEW          FINDINGS  CI  SINCE REVIEW    REVIEWERS
+  ▌ talkable  #11950  ✪ Add OAuth login for the merchant port…  alice         zhuravel +1         1h  —           re-review      ★ 💬 commented 5h ⟳  —         —    2c   +10   −0  ★zhuravel💬⟳ bob-rev✔
+    talkable  #11902  ✪ ! Referral analytics: add the campaig…  zhuravel      —                   2d  —           attention      ★ ✗  changes 1d ⟳    —         —    7c +1.2k −321  ★🤖talkable✗⟳ +1
+    magnum       #42  draft PR board screen                     bob-rev       —                   5m  —           ⣷ reviewing    —                    —         —   —               —
+    talkable  #11931  Bump rails from 7.1.4 to 7.2.1            🤖dependabot  —                  20m  —           queued         —                    —         —   12c  +900  −40  bob-rev◌
+    talkable  #11920  📌 Fix referral widget alignment on mob…  rev-ann       bob-rev             3h  —           reviewed       ★ ✔  approved 2h     —         —    3c   +41   −7  ★zhuravel✔ +3
+    talkable  #11000  Legacy cleanup                            alice         —                   3w  —           not reviewed   —                    —         —   —               —
+  ── merged or closed in the last 24h (2) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    talkable  #11992  ✪ Speed up the campaign list query        alice         —                   1m  —           merged         ★ ✔  approved 6h     —         —   —               —
+    talkable  #11991  Spike: referral sharing via SMS           rev-ann       —                  30m  —           closed         —                    —         —   —               —
+  nerd, 100 columns
+    REPO           #  TITLE               STATE             LAST REVIEW         FINDINGS  REVIEWERS
+  ▌ talkable  #11950   Add OAuth login…    re-review        commented 5h   —          zhurav… +1
+    talkable  #11902    Referral anal…    attention        changes 1d     —          󰚩 talk… +1
+    magnum       #42  draft PR board sc…   ⣷ reviewing      —                   —         —
+    talkable  #11931  Bump rails from 7…    queued         —                   —         bob-rev
+    talkable  #11920   Fix referral wi…    reviewed        󰄬 approved 2h     —          zhurav… +3
+    talkable  #11000  Legacy cleanup        not reviewed   —                   —         —
+  ── merged or closed in the last 24h (2) ────────────────────────────────────────────────────────────
+    talkable  #11992   Speed up the ca…    merged          󰄬 approved 6h     —         —
+    talkable  #11991  Spike: referral s…    closed         —                   —         —
+  nerd, 140 columns
+    REPO           #  TITLE               AUTHOR        UPDATED   REQUESTED  STATE             LAST REVIEW         FINDINGS  CI  REVIEWERS
+  ▌ talkable  #11950   Add OAuth login…  alice                1h  —            re-review        commented 5h   —         —    zhurav… +1
+    talkable  #11902    Referral anal…  zhuravel             2d  —            attention        changes 1d     —         —    󰚩 talk… +1
+    magnum       #42  draft PR board sc…  bob-rev              5m  —           ⣷ reviewing      —                   —         —   —
+    talkable  #11931  Bump rails from 7…  󰚩 dependabot        20m  —            queued         —                   —         —   bob-rev
+    talkable  #11920   Fix referral wi…  rev-ann              3h  —            reviewed        󰄬 approved 2h     —         —    zhurav… +3
+    talkable  #11000  Legacy cleanup      alice                3w  —            not reviewed   —                   —         —   —
+  ── merged or closed in the last 24h (2) ────────────────────────────────────────────────────────────────────────────────────────────────────
+    talkable  #11992   Speed up the ca…  alice                1m  —            merged          󰄬 approved 6h     —         —   —
+    talkable  #11991  Spike: referral s…  rev-ann             30m  —            closed         —                   —         —   —
+  nerd, 200 columns
+    REPO           #  TITLE                                    AUTHOR        ASSIGNEE     UPDATED   REQUESTED  STATE             LAST REVIEW         FINDINGS  CI  SINCE REVIEW    REVIEWERS
+  ▌ talkable  #11950   Add OAuth login for the merchant por…  alice         zhuravel +1         1h  —            re-review        commented 5h   —         —    2c   +10   −0   zhuravel  bob-rev󰄬
+    talkable  #11902    Referral analytics: add the campai…  zhuravel      —                   2d  —            attention        changes 1d     —         —    7c +1.2k −321   󰚩 talkable  +1
+    magnum       #42  draft PR board screen                    bob-rev       —                   5m  —           ⣷ reviewing      —                   —         —   —               —
+    talkable  #11931  Bump rails from 7.1.4 to 7.2.1           󰚩 dependabot  —                  20m  —            queued         —                   —         —   12c  +900  −40  bob-rev
+    talkable  #11920   Fix referral widget alignment on mob…  rev-ann       bob-rev             3h  —            reviewed        󰄬 approved 2h     —         —    3c   +41   −7   zhuravel󰄬 +3
+    talkable  #11000  Legacy cleanup                           alice         —                   3w  —            not reviewed   —                   —         —   —               —
+  ── merged or closed in the last 24h (2) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    talkable  #11992   Speed up the campaign list query       alice         —                   1m  —            merged          󰄬 approved 6h     —         —   —               —
+    talkable  #11991  Spike: referral sharing via SMS          rev-ann       —                  30m  —            closed         —                   —         —   —               —
+  ascii, 100 columns
+    REPO           #  TITLE                 STATE           LAST REVIEW         FINDINGS  REVIEWERS
+  > talkable  #11950  star Add OAuth logi…   re-review      * c commented 5h ~  -         *zhurave… +1
+    talkable  #11902  star ! Referral ana…   attention      * x changes 1d ~    -         *talkabl… +1
+    magnum       #42  draft PR board scre…   reviewing      -                   -         -
+    talkable  #11931  Bump rails from 7.1…   queued         -                   -         bob-rev:?
+    talkable  #11920  pin Fix referral wi…   reviewed       * + approved 2h     -         *zhurave… +3
+    talkable  #11000  Legacy cleanup         not reviewed   -                   -         -
+  -- merged or closed in the last 24h (2) ------------------------------------------------------------
+    talkable  #11992  star Speed up the c…   merged         * + approved 6h     -         -
+    talkable  #11991  Spike: referral sha…   closed         -                   -         -
+  ascii, 140 columns
+    REPO           #  TITLE               AUTHOR          UPDATED v  REQUESTED  STATE           LAST REVIEW         FINDINGS  CI  REVIEWERS
+  > talkable  #11950  star Add OAuth lo…  alice                  1h  -           re-review      * c commented 5h ~  -         -   *zhurave… +1
+    talkable  #11902  star ! Referral a…  zhuravel               2d  -           attention      * x changes 1d ~    -         -   *talkabl… +1
+    magnum       #42  draft PR board sc…  bob-rev                5m  -           reviewing      -                   -         -   -
+    talkable  #11931  Bump rails from 7…  dependabot[bo…        20m  -           queued         -                   -         -   bob-rev:?
+    talkable  #11920  pin Fix referral…   rev-ann                3h  -           reviewed       * + approved 2h     -         -   *zhurave… +3
+    talkable  #11000  Legacy cleanup      alice                  3w  -           not reviewed   -                   -         -   -
+  -- merged or closed in the last 24h (2) ----------------------------------------------------------------------------------------------------
+    talkable  #11992  star Speed up the…  alice                  1m  -           merged         * + approved 6h     -         -   -
+    talkable  #11991  Spike: referral s…  rev-ann               30m  -           closed         -                   -         -   -
+  ascii, 200 columns
+    REPO           #  TITLE                                    AUTHOR          ASSIGNEE     UPDATED v  REQUESTED  STATE           LAST REVIEW         FINDINGS  CI  SINCE REVIEW    REVIEWERS
+  > talkable  #11950  star Add OAuth login for the merchant…   alice           zhuravel +1         1h  -           re-review      * c commented 5h ~  -         -    2c   +10   -0  *zhuravel:c~ bob-rev:+
+    talkable  #11902  star ! Referral analytics: add the cam…  zhuravel        -                   2d  -           attention      * x changes 1d ~    -         -    7c +1.2k -321  *talkable[bot]:x~ +1
+    magnum       #42  draft PR board screen                    bob-rev         -                   5m  -           reviewing      -                   -         -   -               -
+    talkable  #11931  Bump rails from 7.1.4 to 7.2.1           dependabot[bo…  -                  20m  -           queued         -                   -         -   12c  +900  -40  bob-rev:?
+    talkable  #11920  pin Fix referral widget alignment on m…  rev-ann         bob-rev             3h  -           reviewed       * + approved 2h     -         -    3c   +41   -7  *zhuravel:+ +3
+    talkable  #11000  Legacy cleanup                           alice           -                   3w  -           not reviewed   -                   -         -   -               -
+  -- merged or closed in the last 24h (2) ----------------------------------------------------------------------------------------------------------------------------------------------------------------
+    talkable  #11992  star Speed up the campaign list query    alice           -                   1m  -           merged         * + approved 6h     -         -   -               -
+    talkable  #11991  Spike: referral sharing via SMS          rev-ann         -                  30m  -           closed         -                   -         -   -               -
+  ```
+
+  Rejected alternatives:
+  - A `prs.starred` column. It needs a migration and a drained restart for a field that only the screens
+    read.
+  - A mark in the cell after the cursor. That cell is one cell wide, the queued mark ◷ shares it, and the
+    mark touches REPO.
+  - ⭐ as the mark. It is two cells wide, and the nerd mode has an icon.
+  - The chosen sort inside the starred group. The operator asked for the newest update first.
+  - A star as a queue priority. A star is what the operator tracks, not a request for review capacity. A
+    board key that changes usage and scheduling is a risk.
 
 ## Operations
 

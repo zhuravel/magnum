@@ -44,7 +44,8 @@ func (p *prbPainter) helpContent(width int) []string {
 		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix findings as you / fix off or on (asks y/N)"},
 		{"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"w", "open the PR's whiteboard (asks y/N)"},
-		{"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
+		{"p / u", "pin / unpin"}, {"*", "star or unstar: starred PRs lead their section"},
+		{"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
 		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"},
 		{"D", "withdraw magnum's approval as you (asks y/N)"},
@@ -78,6 +79,8 @@ func (p *prbPainter) helpContent(width int) []string {
 		p.pal.tag.Render("muted") + " dimmed row",
 	}, "   ", inner)...)
 	lines = append(lines, flow([]string{
+		p.pal.yellow.Render(g.star) + " starred: floats to the top, " + p.st.Key.Render(rowActDefs[actStar].key) + " toggles; " +
+			p.pal.mine.Render(g.mine) + " is still yours",
 		p.stateCell("merged_unreviewed").render(nil) + " GitHub merged it before magnum reviewed its last push",
 		p.st.Dim.Render("merged or closed in the last …") + " the recently closed PRs, dimmed, newest first ([board] recent_closed)",
 	}, "   ", inner)...)
@@ -232,6 +235,9 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	add(tl...)
 	if url := prURL(r); url != "" {
 		add(p.st.Accent.Render(url))
+	}
+	if r.Starred {
+		add(p.starLine(r))
 	}
 	if r.MergedUnreviewed {
 		for l := range strings.SplitSeq(lipgloss.NewStyle().Width(inner).Render(p.mergedUnreviewedSentence(r)), "\n") {
@@ -522,6 +528,20 @@ func (p *prbPainter) snoozeSentence(r PRBoardRow) string {
 		}
 	}
 	return s + ": no automatic review starts (" + rowActDefs[actSnooze].key + " lifts it)"
+}
+
+// starLine is the card's line on a starred PR: when it was starred and the
+// key that unstars it ("✪ starred 2h ago (* unstars)").
+func (p *prbPainter) starLine(r PRBoardRow) string {
+	s := "starred"
+	if !r.StarredAt.IsZero() {
+		if age := shortAge(max(p.now.Sub(r.StarredAt), 0)); age == "now" {
+			s += " just now"
+		} else {
+			s += " " + age + " ago"
+		}
+	}
+	return p.pal.yellow.Render(p.g.star) + " " + s + p.st.Dim.Render(" ("+rowActDefs[actStar].key+" unstars)")
 }
 
 // maxStalemateURLs is how many threads after the first the card lists.

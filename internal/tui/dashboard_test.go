@@ -139,6 +139,12 @@ func (f *fakeActions) FixOff(_ context.Context, ref string, off bool) (ActionRes
 func (f *fakeActions) OpenWhiteboard(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("whiteboard --open " + ref)
 }
+func (f *fakeActions) Star(_ context.Context, ref string, on bool) (ActionResult, error) {
+	if on {
+		return f.record("star " + ref)
+	}
+	return f.record("unstar " + ref)
+}
 func (f *fakeActions) Ignore(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("ignore " + ref)
 }
