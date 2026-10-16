@@ -6626,6 +6626,10 @@ type GitHub interface {
 	// radar carries none.
 	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]github.CIState, github.RateLimit, error)
 	Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error)
+	// ReviewAnswers reads what the inline comments of reviews answer, by
+	// node id: the reviews since magnum's latest review that Details left
+	// unresolved (resolveAnswers, poll.go).
+	ReviewAnswers(ctx context.Context, ids []string) (map[string]github.ReviewAnswer, error)
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)
 	// CompareFiles reads base...head's changed files with their patches
@@ -8507,6 +8511,18 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
     would have to answer, logged at Debug (restProbe). Any other failure is an
     error.
 
+func (c *Client) ReviewAnswers(ctx context.Context, ids []string) (map[string]ReviewAnswer, error)
+    ReviewAnswers reads what the inline comments of each review answer
+    (ReviewAnswer), by the review's node id (Remark.ID): Details reads it for
+    a pull request's last two reviews only (Remark.AnswersKnown), and the poll
+    asks for the reviews it needs beyond them (DECISIONS "An author's own inline
+    threads are not replies"). A review GitHub does not know is missing from
+    the result. Each call asks about answersPage reviews and costs 1 point:
+    each review's comments connection is one request of GitHub's count,
+    so a hundred reviews are a hundred requests (GitHub's dry run, 2026-10-16:
+    1 point for 1, 10, 40 and 100 reviews). A call that fails ends the read:
+    the answers read before it come back with the error.
+
 func (c *Client) ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]ReviewComment, error)
     ReviewComments lists the inline comments of a review (GET
     /repos/{o}/{r}/pulls/{n}/reviews/{id}/comments), 100 a page until a page is
@@ -8781,6 +8797,7 @@ type RateLimit struct {
 
 type Remark struct {
 	Review bool      // a submitted review (a reply in a thread is one); false: an issue comment
+	ID     string    // a review's node id (ReviewAnswers); "" for an issue comment
 	At     time.Time // the review's submittedAt, the comment's createdAt
 	Author string    // Account form ("app[bot]" for a bot); "" for a ghost
 	Bot    bool      // the author is a bot
@@ -8791,17 +8808,22 @@ type Remark struct {
 	Association string
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
-	// They are read for the timeline's last two reviews only
-	// (AnswersKnown), with Comments, how many inline comments the review
-	// has (of its first ten): a comment that starts a thread answers none,
-	// so a review whose comments all start threads has Comments and no
-	// Answers, and one with a body alone has neither.
+	// Details reads them for the timeline's last two reviews only
+	// (AnswersKnown; ReviewAnswers reads them for others, Resolve), with
+	// Comments, how many inline comments the review has (of its first ten):
+	// a comment that starts a thread answers none, so a review whose
+	// comments all start threads has Comments and no Answers, and one with a
+	// body alone has neither.
 	Answers      []string
 	AnswersKnown bool
 	Comments     int
 }
     Remark is a submitted review or an issue comment on a pull request
     (PRDetails.Remarks): who wrote it and when, never what it says.
+
+func (r *Remark) Resolve(a ReviewAnswer)
+    Resolve records what r's inline comments answer: AnswersKnown, Answers and
+    Comments.
 
 type RepoRadar struct {
 	NodeID        string
@@ -8825,6 +8847,13 @@ type Review struct {
 }
     Review is a pull request review as GraphQL reports it. AuthorLogin is the
     GraphQL login (no "[bot]" suffix); ReviewREST has the REST login.
+
+type ReviewAnswer struct {
+	Answers  []string // the authors (Account form) of the threads they reply to, each once; nil: none
+	Comments int      // how many inline comments the review has (of its first ten)
+}
+    ReviewAnswer is what a review's inline comments answer (Remark.Answers and
+    Remark.Comments), as Details and ReviewAnswers read it.
 
 type ReviewComment struct {
 	ID      int64

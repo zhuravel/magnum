@@ -147,6 +147,27 @@ type fakeGH struct {
 	comments   map[int64]*fakeComment
 	commentSeq int64
 	commentErr error
+	// answers answers ReviewAnswers by review node id (absent: a review
+	// GitHub does not know); answersErr fails it.
+	answers    map[string]github.ReviewAnswer
+	answersErr error
+}
+
+func (g *fakeGH) ReviewAnswers(ctx context.Context, ids []string) (map[string]github.ReviewAnswer, error) {
+	github.BetweenCalls(ctx)
+	g.record(fmt.Sprintf("answers:%v", ids))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.answersErr != nil {
+		return nil, g.answersErr
+	}
+	out := map[string]github.ReviewAnswer{}
+	for _, id := range ids {
+		if a, ok := g.answers[id]; ok {
+			out[id] = a
+		}
+	}
+	return out, nil
 }
 
 // fakeComment is an issue comment on PR number of repo.

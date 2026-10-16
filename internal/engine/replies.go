@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -123,6 +124,63 @@ func repliesOf(d github.PRDetails, own []string) []store.Reply {
 		}
 	}
 	return out
+}
+
+// maxAnsweredReviews caps the reviews of one PR whose answered threads
+// resolveAnswers reads: the newest ten (the activity timeline Details reads
+// lists ten items).
+const maxAnsweredReviews = 10
+
+// resolveAnswers reads what the inline comments of a PR's reviews answer
+// where Details left it unknown (Remark.AnswersKnown: Details resolves the
+// last two reviews only), for every review newer than magnum's latest review
+// of the PR (reviewed_at: the review a reply round would answer), up to
+// maxAnsweredReviews per PR, the newest; older ones beyond the cap stay
+// unknown, and repliesOf keeps its old rule for them. The 12031 shape (eight
+// author reviews in a minute, each starting a thread) needs it: six would
+// count as replies otherwise. One ReviewAnswers call for the whole batch
+// (1 point per hundred reviews), none when no PR needs it; a failure leaves
+// the reviews unknown and is reported once per distinct error.
+func (e *Engine) resolveAnswers(ctx context.Context, gh GitHub, full string, details map[int]github.PRDetails, byNode map[string]store.PR) {
+	type place struct{ number, remark int }
+	var ids []string
+	where := map[string]place{}
+	for _, n := range slices.Sorted(maps.Keys(details)) {
+		d := details[n]
+		cur, ok := byNode[d.NodeID]
+		if !ok || cur.ReviewedAt == nil {
+			continue // never reviewed: no reply round answers anything
+		}
+		var pick []int
+		for i, r := range d.Remarks {
+			if r.Review && !r.AnswersKnown && r.ID != "" && r.At.After(*cur.ReviewedAt) {
+				pick = append(pick, i)
+			}
+		}
+		for _, i := range pick[max(0, len(pick)-maxAnsweredReviews):] {
+			if _, dup := where[d.Remarks[i].ID]; !dup {
+				ids = append(ids, d.Remarks[i].ID)
+				where[d.Remarks[i].ID] = place{n, i}
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	answers, err := gh.ReviewAnswers(ctx, ids)
+	if err != nil {
+		if e.changed("answers:"+full, err.Error()) {
+			e.event(ctx, "warn", "repo:"+full, "poll.answers_error",
+				fmt.Sprintf("the threads %s answer: %v; they count as before", textx.Count(len(ids), "review", "reviews"), err), nil)
+		}
+	} else {
+		e.changed("answers:"+full, "")
+	}
+	for id, a := range answers {
+		if p, ok := where[id]; ok {
+			details[p.number].Remarks[p.remark].Resolve(a)
+		}
+	}
 }
 
 // trustedReplier reports whether an authorAssociation is one whose reply in

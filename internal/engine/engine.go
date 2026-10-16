@@ -53,6 +53,10 @@ type GitHub interface {
 	// radar carries none.
 	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]github.CIState, github.RateLimit, error)
 	Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error)
+	// ReviewAnswers reads what the inline comments of reviews answer, by
+	// node id: the reviews since magnum's latest review that Details left
+	// unresolved (resolveAnswers, poll.go).
+	ReviewAnswers(ctx context.Context, ids []string) (map[string]github.ReviewAnswer, error)
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)
 	// CompareFiles reads base...head's changed files with their patches

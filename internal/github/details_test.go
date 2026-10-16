@@ -565,9 +565,9 @@ func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
 	}
 	want := []Remark{
 		{At: at("2026-10-06T09:00:00Z"), Author: "alice", Association: "CONTRIBUTOR"},
-		{Review: true, At: at("2026-10-06T09:10:00Z"), Author: "alice", Association: "CONTRIBUTOR", Answers: []string{"magnum-app[bot]"}, AnswersKnown: true, Comments: 1},
-		{Review: true, At: at("2026-10-06T09:20:00Z"), Author: "coder[bot]", Bot: true, Association: "NONE", Answers: []string{"rev-ann"}, AnswersKnown: true, Comments: 3},
-		{Review: true, At: at("2026-10-06T08:00:00Z"), Author: "magnum-app[bot]", Bot: true, Association: "MEMBER"},
+		{ID: "PRR_1", Review: true, At: at("2026-10-06T09:10:00Z"), Author: "alice", Association: "CONTRIBUTOR", Answers: []string{"magnum-app[bot]"}, AnswersKnown: true, Comments: 1},
+		{ID: "PRR_2", Review: true, At: at("2026-10-06T09:20:00Z"), Author: "coder[bot]", Bot: true, Association: "NONE", Answers: []string{"rev-ann"}, AnswersKnown: true, Comments: 3},
+		{ID: "PRR_0", Review: true, At: at("2026-10-06T08:00:00Z"), Author: "magnum-app[bot]", Bot: true, Association: "MEMBER"},
 	}
 	if r := got[401].Remarks; !reflect.DeepEqual(r, want) {
 		t.Errorf("#401 remarks:\n got %+v\nwant %+v", r, want)
@@ -582,8 +582,8 @@ func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
 	// a review with a body alone: neither answers a thread, only the first
 	// has inline comments.
 	want = []Remark{
-		{Review: true, At: at("2026-10-06T09:30:00Z"), Author: "rev-ann", Association: "MEMBER", AnswersKnown: true, Comments: 2},
-		{Review: true, At: at("2026-10-06T09:40:00Z"), Author: "rev-ann", Association: "MEMBER", AnswersKnown: true},
+		{ID: "PRR_5", Review: true, At: at("2026-10-06T09:30:00Z"), Author: "rev-ann", Association: "MEMBER", AnswersKnown: true, Comments: 2},
+		{ID: "PRR_6", Review: true, At: at("2026-10-06T09:40:00Z"), Author: "rev-ann", Association: "MEMBER", AnswersKnown: true},
 	}
 	if r := got[404].Remarks; !reflect.DeepEqual(r, want) {
 		t.Errorf("#404 remarks:\n got %+v\nwant %+v", r, want)

@@ -337,6 +337,7 @@ func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs [
 		return details, needed
 	}
 	e.changed("details:"+full, "")
+	e.resolveAnswers(ctx, gh, full, d, byNode) // replies.go
 	return d, needed
 }
 

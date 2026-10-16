@@ -2,6 +2,8 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -373,6 +375,110 @@ func TestAnAuthorsOwnInlineThreadsAreNotReplies(t *testing.T) {
 	reqPoll(h, prSpec{n: 2, head: "b1", remarks: append(own, threadReply(h, "alice"))})
 	if pr := h.wantState(2, store.PRRereviewPending); len(pr.PendingReplies()) != 1 {
 		t.Fatalf("pending replies = %+v, want the one in magnum's thread", pr.PendingReplies())
+	}
+}
+
+// The 12031 shape: eight author reviews in one minute, each starting a
+// thread, and Details resolves the threads of the last two reviews only
+// (AnswersKnown), so six kept counting under the old rule. The poll now asks
+// GitHub (ReviewAnswers, one call for the batch) what every review newer
+// than magnum's latest review that Details left unresolved answers, up to
+// ten per PR: the eight count no reply, and one of them answering in
+// magnum's thread counts one. A review older than magnum's review is not
+// asked about, a poll with nothing unresolved makes no call, and a failed
+// call leaves the reviews unresolved (the old rule) with a warning.
+func TestEightOwnThreadsInAMinuteCountNoReplies(t *testing.T) {
+	// eight are the author's reviews since magnum's review at reviewed,
+	// PRR_1 to PRR_8 ten seconds apart, the last two resolved by Details,
+	// and PRR_0, an older one Details did not resolve either.
+	eight := func(h *harness, reviewed time.Time) []github.Remark {
+		out := []github.Remark{{Review: true, ID: "PRR_0", At: reviewed.Add(-time.Hour), Author: "alice"}}
+		for i := 1; i <= 8; i++ {
+			r := github.Remark{Review: true, ID: fmt.Sprintf("PRR_%d", i), At: h.clock.Now().Add(-time.Duration(9-i) * 10 * time.Second), Author: "alice"}
+			if i > 6 {
+				r.Resolve(github.ReviewAnswer{Comments: 1})
+			}
+			out = append(out, r)
+		}
+		return out
+	}
+	asked := "answers:[PRR_1 PRR_2 PRR_3 PRR_4 PRR_5 PRR_6]"
+	for name, c := range map[string]struct {
+		answers map[string]github.ReviewAnswer
+		fail    bool
+		pending int
+		thread  bool
+	}{
+		"eight new threads": {answers: map[string]github.ReviewAnswer{"PRR_1": {Comments: 1}, "PRR_2": {Comments: 1}, "PRR_3": {Comments: 1},
+			"PRR_4": {Comments: 1}, "PRR_5": {Comments: 1}, "PRR_6": {Comments: 1}, "PRR_0": {}}},
+		"one in magnum's thread": {answers: map[string]github.ReviewAnswer{"PRR_1": {Comments: 1}, "PRR_2": {Comments: 1},
+			"PRR_3": {Answers: []string{magnumApp}, Comments: 1}, "PRR_4": {Comments: 1}, "PRR_5": {Comments: 1}, "PRR_6": {Comments: 1}},
+			pending: 1, thread: true},
+		"the call fails": {fail: true, pending: 6},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			reviewed := h.reviewedPR(2, "b1")
+			h.gh.mu.Lock()
+			h.gh.answers = c.answers
+			if c.fail {
+				h.gh.answersErr = errors.New("HTTP 502")
+			}
+			h.gh.mu.Unlock()
+			h.advance(10 * time.Minute)
+			before := h.gh.count("answers:")
+			reqPoll(h, prSpec{n: 2, head: "b1", remarks: eight(h, *reviewed.ReviewedAt)})
+			if n := h.gh.count("answers:"); n != before+1 {
+				t.Fatalf("ReviewAnswers calls = %d, want one", n-before)
+			}
+			if h.gh.count(asked) != 1 {
+				t.Fatalf("ReviewAnswers not asked for %q", asked)
+			}
+			pr := h.pr(2)
+			pending := pr.PendingReplies()
+			if len(pending) != c.pending || (c.pending == 1 && pending[0].Thread != c.thread) {
+				t.Fatalf("pending replies = %+v, want %d", pending, c.pending)
+			}
+			want := store.PRReviewed
+			if c.pending > 0 {
+				want = store.PRRereviewPending
+			}
+			h.wantState(2, want)
+			if warned := len(h.events("poll.answers_error")) > 0; warned != c.fail {
+				t.Fatalf("answers warning = %v, want %v", warned, c.fail)
+			}
+		})
+	}
+
+	// Nothing unresolved since the review: no call.
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	h.advance(10 * time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{threadReply(h, "alice")}})
+	if n := h.gh.count("answers:"); n != 0 {
+		t.Fatalf("ReviewAnswers calls = %d with nothing to resolve", n)
+	}
+
+	// Twelve unresolved reviews since the review: the newest ten are asked
+	// about; the two oldest stay unresolved and count as before.
+	h = newHarness(t)
+	h.reviewedPR(2, "b1")
+	h.advance(10 * time.Minute)
+	var twelve []github.Remark
+	h.gh.mu.Lock()
+	h.gh.answers = map[string]github.ReviewAnswer{}
+	for i := 1; i <= 12; i++ {
+		id := fmt.Sprintf("PRR_%d", i)
+		twelve = append(twelve, github.Remark{Review: true, ID: id, At: h.clock.Now().Add(-time.Duration(13-i) * time.Second), Author: "alice"})
+		h.gh.answers[id] = github.ReviewAnswer{Comments: 1}
+	}
+	h.gh.mu.Unlock()
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: twelve})
+	if h.gh.count("answers:[PRR_3 PRR_4 PRR_5 PRR_6 PRR_7 PRR_8 PRR_9 PRR_10 PRR_11 PRR_12]") != 1 {
+		t.Fatalf("ReviewAnswers not asked for the newest ten")
+	}
+	if pending := h.pr(2).PendingReplies(); len(pending) != 2 || !pending[1].At.Equal(twelve[1].At.UTC()) {
+		t.Fatalf("pending replies = %+v, want the two oldest", pending)
 	}
 }
 

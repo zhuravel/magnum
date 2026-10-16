@@ -8112,9 +8112,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   no own login in `Answers`) is the author's own finding. `github.Remark.Comments` is new: how many inline
   comments the review has (of its first ten), read from the replies connection the poll already fetches
   (no query change, no cost), since `Answers` alone holds nothing both for a review whose comments start
-  threads and for one with a body alone. The connection resolves the timeline's last two reviews only, so
-  an older review (`AnswersKnown` false) keeps the old rule; trusted repliers (owner, member,
-  collaborator) count only in magnum's threads, as before. post-review's replies mode no longer refuses
+  threads and for one with a body alone. That connection resolves the timeline's last two reviews only,
+  which on the 12031 shape left six of the eight unresolved, still counting under the old rule. So the
+  poll now asks GitHub what the inline comments of every other review newer than magnum's latest review
+  of the PR (`reviewed_at`, the review a reply round would answer) answer, up to ten per PR, the newest
+  (`resolveAnswers`, `github.Client.ReviewAnswers`: `nodes(ids:)` with each review's first ten comments
+  and their `replyTo` author, keyed by the review's node id, the new `Remark.ID`): one call for the poll's
+  batch, none when no PR needs it. GitHub's dry run (2026-10-16, against a public repository) priced it at
+  1 point for 1, 10, 40 and 100 reviews (a call asks about at most 100), while the Details query stays at
+  1, 1, 3 and 5 points for 1, 10, 20 and 40 PRs (1, 1, 2 and 4 without its replies connection). An older
+  review beyond the cap, or one a failed call (`poll.answers_error`, warn) left unresolved, keeps the old
+  rule (`AnswersKnown` false); trusted repliers (owner, member, collaborator) count only in magnum's
+  threads, as before. post-review's replies mode no longer refuses
   the whole file for a reply to a thread the reviewer login (or a former one) did not start: it skips
   that reply, lists it under `skipped` with the reason (who started the thread, no text), posts the rest
   and exits 0 with `replied` even when it posted nothing ("nothing posted; skipped 3 replies to threads

@@ -90,6 +90,7 @@ type PRDetails struct {
 // (PRDetails.Remarks): who wrote it and when, never what it says.
 type Remark struct {
 	Review bool      // a submitted review (a reply in a thread is one); false: an issue comment
+	ID     string    // a review's node id (ReviewAnswers); "" for an issue comment
 	At     time.Time // the review's submittedAt, the comment's createdAt
 	Author string    // Account form ("app[bot]" for a bot); "" for a ghost
 	Bot    bool      // the author is a bot
@@ -100,14 +101,57 @@ type Remark struct {
 	Association string
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
-	// They are read for the timeline's last two reviews only
-	// (AnswersKnown), with Comments, how many inline comments the review
-	// has (of its first ten): a comment that starts a thread answers none,
-	// so a review whose comments all start threads has Comments and no
-	// Answers, and one with a body alone has neither.
+	// Details reads them for the timeline's last two reviews only
+	// (AnswersKnown; ReviewAnswers reads them for others, Resolve), with
+	// Comments, how many inline comments the review has (of its first ten):
+	// a comment that starts a thread answers none, so a review whose
+	// comments all start threads has Comments and no Answers, and one with a
+	// body alone has neither.
 	Answers      []string
 	AnswersKnown bool
 	Comments     int
+}
+
+// ReviewAnswer is what a review's inline comments answer (Remark.Answers
+// and Remark.Comments), as Details and ReviewAnswers read it.
+type ReviewAnswer struct {
+	Answers  []string // the authors (Account form) of the threads they reply to, each once; nil: none
+	Comments int      // how many inline comments the review has (of its first ten)
+}
+
+// Resolve records what r's inline comments answer: AnswersKnown, Answers
+// and Comments.
+func (r *Remark) Resolve(a ReviewAnswer) {
+	r.AnswersKnown, r.Answers, r.Comments = true, a.Answers, a.Comments
+}
+
+// reviewCommentsFields selects a review's inline comments with the author
+// of the thread each replies to (reviewCommentsJSON): Details' replies
+// connection and ReviewAnswers.
+const reviewCommentsFields = `comments(first: 10) { nodes { replyTo { author { login __typename } } } }`
+
+// reviewCommentsJSON is a review's inline comments as reviewCommentsFields
+// reads them.
+type reviewCommentsJSON struct {
+	Nodes []struct {
+		ReplyTo *struct {
+			Author *actorJSON `json:"author"`
+		} `json:"replyTo"`
+	} `json:"nodes"`
+}
+
+// answer is what the comments answer: the threads' authors in Account form
+// (a ghost's left out, each once; nil when none) and their count.
+func (c reviewCommentsJSON) answer() ReviewAnswer {
+	var to []string
+	for _, n := range c.Nodes {
+		if n.ReplyTo != nil && n.ReplyTo.Author != nil && n.ReplyTo.Author.Login != "" {
+			if a := Account(n.ReplyTo.Author.Login, n.ReplyTo.Author.Typename); !slices.Contains(to, a) {
+				to = append(to, a)
+			}
+		}
+	}
+	return ReviewAnswer{Answers: to, Comments: len(c.Nodes)}
 }
 
 // ReviewGate is what GitHub's branch protection makes of a pull request's
@@ -224,7 +268,11 @@ type PRState struct {
 // and 5 points with them and 1, 1, 1, 2, 2, 3 and 4 without (2026-10-06), at
 // most one point more per batch, none for the few PRs a poll usually reads.
 // The nested connection on every timeline review instead doubled the price
-// (8 points for 40), and three reviews instead of two cost 6.
+// (8 points for 40), and three reviews instead of two cost 6. The poll asks
+// ReviewAnswers about the reviews it needs beyond those two: 1 point a call
+// of up to 100 reviews, where the last ten reviews here would price batches
+// of 10, 20 and 40 at 2, 4 and 8 points instead of 1, 3 and 5 (dry run,
+// 2026-10-16).
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
@@ -240,7 +288,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   latestOpinionatedReviews(first: 100, writersOnly: true) { totalCount pageInfo { hasNextPage } nodes { state author { login __typename } commit { oid } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
   activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { id submittedAt author { login __typename } authorAssociation } ... on IssueComment { createdAt author { login __typename } authorAssociation } ` + activityEvents + ` } }
-  replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }
+  replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id ` + reviewCommentsFields + ` } } }
   headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } ` + stateCountFields + ` ` + contextNodes + ` } } committedDate } } }
 }`
 
@@ -375,14 +423,8 @@ type detailsJSON struct {
 	// their inline comments reply to (Remark.Answers).
 	Replies *struct {
 		Nodes []struct {
-			ID       string `json:"id"`
-			Comments struct {
-				Nodes []struct {
-					ReplyTo *struct {
-						Author *actorJSON `json:"author"`
-					} `json:"replyTo"`
-				} `json:"nodes"`
-			} `json:"comments"`
+			ID       string             `json:"id"`
+			Comments reviewCommentsJSON `json:"comments"`
 		} `json:"nodes"`
 	} `json:"replies"`
 	HeadCommit struct {
@@ -547,22 +589,12 @@ func (d detailsJSON) remarks() []Remark {
 	if d.Activity == nil {
 		return nil
 	}
-	answers := map[string][]string{}
-	comments := map[string]int{}
+	answers := map[string]ReviewAnswer{}
 	if d.Replies != nil {
 		for _, n := range d.Replies.Nodes {
-			if n.ID == "" {
-				continue
+			if n.ID != "" {
+				answers[n.ID] = n.Comments.answer()
 			}
-			to := []string{}
-			for _, c := range n.Comments.Nodes {
-				if c.ReplyTo != nil && c.ReplyTo.Author != nil && c.ReplyTo.Author.Login != "" {
-					if a := Account(c.ReplyTo.Author.Login, c.ReplyTo.Author.Typename); !slices.Contains(to, a) {
-						to = append(to, a)
-					}
-				}
-			}
-			answers[n.ID], comments[n.ID] = to, len(n.Comments.Nodes)
 		}
 	}
 	out := []Remark{}
@@ -573,12 +605,9 @@ func (d detailsJSON) remarks() []Remark {
 			if n.SubmittedAt.IsZero() {
 				continue // pending
 			}
-			r = Remark{Review: true, At: n.SubmittedAt}
-			if to, ok := answers[n.ID]; ok && n.ID != "" {
-				r.AnswersKnown, r.Comments = true, comments[n.ID]
-				if len(to) > 0 {
-					r.Answers = to
-				}
+			r = Remark{Review: true, ID: n.ID, At: n.SubmittedAt}
+			if a, ok := answers[n.ID]; ok && n.ID != "" {
+				r.Resolve(a)
 			}
 		case "IssueComment":
 			r = Remark{At: n.CreatedAt}
