@@ -8097,6 +8097,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   names the exclusion (author-visible and needless); refusing inside `autoGateRefusal`, which a standing
   approval's later round runs too, so the next clean round of the head would withdraw the operator's own
   `A` approval.
+- **An author's own inline threads are not replies** (2026-10-16, spec 51, amends "Replies on magnum's
+  threads get an answer without a push"). On 2026-10-15 the author of a PR posted eight inline comments
+  on it, the findings of their own review tool, each a review that started a new thread, and pushed their
+  fixes a minute later. `repliesOf` counted every review or comment by the PR author as a reply to
+  magnum's review, so the eight read as "8 replies to the review" and started a reply round of the judge
+  alone on the old head; post-review refused each of its replies ("comment N does not start a thread of
+  …", the right guard), the judge wrote `blocked`, the PR went to needs_attention and the re-review of the
+  new head waited 15 hours for the operator's retry. An author's review now counts as a reply when it
+  answers in one of magnum's threads (`Remark.Answers` names an own login) or has no inline comments (a
+  body alone answers the review as a whole), and an issue comment counts as before; a review whose inline
+  comments start threads of the author's own or answer another reviewer's (`AnswersKnown`, `Comments` > 0,
+  no own login in `Answers`) is the author's own finding. `github.Remark.Comments` is new: how many inline
+  comments the review has (of its first ten), read from the replies connection the poll already fetches
+  (no query change, no cost), since `Answers` alone holds nothing both for a review whose comments start
+  threads and for one with a body alone. The connection resolves the timeline's last two reviews only, so
+  an older review (`AnswersKnown` false) keeps the old rule; trusted repliers (owner, member,
+  collaborator) count only in magnum's threads, as before. Rejected: counting no author review at all (a
+  review body "fixed, see the commit" is a reply).
 
 ## Learned rules
 

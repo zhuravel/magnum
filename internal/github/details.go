@@ -101,9 +101,13 @@ type Remark struct {
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
 	// They are read for the timeline's last two reviews only
-	// (AnswersKnown); a review that starts threads answers none.
+	// (AnswersKnown), with Comments, how many inline comments the review
+	// has (of its first ten): a comment that starts a thread answers none,
+	// so a review whose comments all start threads has Comments and no
+	// Answers, and one with a body alone has neither.
 	Answers      []string
 	AnswersKnown bool
+	Comments     int
 }
 
 // ReviewGate is what GitHub's branch protection makes of a pull request's
@@ -536,13 +540,15 @@ func (d detailsJSON) details() PRDetails {
 }
 
 // remarks is PRDetails.Remarks: the activity timeline's submitted reviews
-// and issue comments, each review's answered threads from the replies
-// connection when it lists the review; nil without a timeline.
+// and issue comments, each review's answered threads and inline comment
+// count from the replies connection when it lists the review; nil without a
+// timeline.
 func (d detailsJSON) remarks() []Remark {
 	if d.Activity == nil {
 		return nil
 	}
 	answers := map[string][]string{}
+	comments := map[string]int{}
 	if d.Replies != nil {
 		for _, n := range d.Replies.Nodes {
 			if n.ID == "" {
@@ -556,7 +562,7 @@ func (d detailsJSON) remarks() []Remark {
 					}
 				}
 			}
-			answers[n.ID] = to
+			answers[n.ID], comments[n.ID] = to, len(n.Comments.Nodes)
 		}
 	}
 	out := []Remark{}
@@ -569,7 +575,7 @@ func (d detailsJSON) remarks() []Remark {
 			}
 			r = Remark{Review: true, At: n.SubmittedAt}
 			if to, ok := answers[n.ID]; ok && n.ID != "" {
-				r.AnswersKnown = true
+				r.AnswersKnown, r.Comments = true, comments[n.ID]
 				if len(to) > 0 {
 					r.Answers = to
 				}

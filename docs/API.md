@@ -8792,9 +8792,13 @@ type Remark struct {
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
 	// They are read for the timeline's last two reviews only
-	// (AnswersKnown); a review that starts threads answers none.
+	// (AnswersKnown), with Comments, how many inline comments the review
+	// has (of its first ten): a comment that starts a thread answers none,
+	// so a review whose comments all start threads has Comments and no
+	// Answers, and one with a body alone has neither.
 	Answers      []string
 	AnswersKnown bool
+	Comments     int
 }
     Remark is a submitted review or an issue comment on a pull request
     (PRDetails.Remarks): who wrote it and when, never what it says.

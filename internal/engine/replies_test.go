@@ -16,7 +16,7 @@ const magnumApp = "talkable[bot]"
 
 // threadReply is a reply by by (a user) in one of magnum's threads now.
 func threadReply(h *harness, by string) github.Remark {
-	return github.Remark{Review: true, At: h.clock.Now(), Author: by, Answers: []string{magnumApp}, AnswersKnown: true}
+	return github.Remark{Review: true, At: h.clock.Now(), Author: by, Answers: []string{magnumApp}, AnswersKnown: true, Comments: 1}
 }
 
 // repliedRounds makes a reply round (pipeline.RoundInput.Replies) end
@@ -220,6 +220,74 @@ func TestOnlyRepliesThatMayAnswerMagnumStartARound(t *testing.T) {
 			}
 			h.wantState(2, want)
 		})
+	}
+}
+
+// The live case (2026-10-15): the author of a PR posted eight inline
+// comments on it, the findings of their own review tool, each a review that
+// started a new thread, and they counted as "8 replies to the review": a
+// reply round whose judge could answer none of them ended blocked and parked
+// the PR for 15 hours. An author's review whose inline comments start
+// threads (or answer another reviewer's) is the author's own, never a reply;
+// one that answers in magnum's thread is, and so is a review with a body
+// alone or an issue comment, which answer the review as a whole. A review
+// older than the last two the timeline resolves (AnswersKnown false) keeps
+// counting as before.
+func TestAnAuthorsOwnInlineThreadsAreNotReplies(t *testing.T) {
+	at := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	review := func(i int, answers []string, known bool, comments int) github.Remark {
+		return github.Remark{Review: true, At: at.Add(time.Duration(i) * time.Minute), Author: "alice", Association: "CONTRIBUTOR",
+			Answers: answers, AnswersKnown: known, Comments: comments}
+	}
+	var eight []github.Remark
+	for i := range 8 {
+		eight = append(eight, review(i, nil, true, 1))
+	}
+	for name, c := range map[string]struct {
+		remarks []github.Remark
+		want    []store.Reply
+	}{
+		"eight reviews starting threads": {eight, []store.Reply{}},
+		"a review starting two threads":  {[]github.Remark{review(0, nil, true, 2)}, []store.Reply{}},
+		"a review in another's thread":   {[]github.Remark{review(0, []string{"rev-ann"}, true, 1)}, []store.Reply{}},
+		"a review in magnum's thread": {[]github.Remark{review(0, []string{magnumApp}, true, 1)},
+			[]store.Reply{{At: at, By: "alice", Thread: true}}},
+		"magnum's and a new thread": {[]github.Remark{review(0, []string{magnumApp}, true, 2)},
+			[]store.Reply{{At: at, By: "alice", Thread: true}}},
+		"a review with a body alone":  {[]github.Remark{review(0, nil, true, 0)}, []store.Reply{{At: at, By: "alice"}}},
+		"an issue comment":            {[]github.Remark{{At: at, Author: "alice"}}, []store.Reply{{At: at, By: "alice"}}},
+		"an older, unresolved review": {[]github.Remark{review(0, nil, false, 0)}, []store.Reply{{At: at, By: "alice"}}},
+		"two unresolved, two own threads": {append([]github.Remark{review(0, nil, false, 0), review(1, nil, false, 0)}, review(2, nil, true, 1), review(3, nil, true, 1)),
+			[]store.Reply{{At: at, By: "alice"}, {At: at.Add(time.Minute), By: "alice"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := github.PRDetails{AuthorLogin: "alice", AuthorType: "User", Remarks: c.remarks}
+			if got := repliesOf(d, []string{magnumApp}); !slices.EqualFunc(got, c.want, store.Reply.Equal) {
+				t.Fatalf("replies = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+
+	// On the board's PR: the eight start no reply round, and a ninth that
+	// answers in magnum's thread does.
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	h.advance(10 * time.Minute)
+	var own []github.Remark
+	for range 8 {
+		r := threadReply(h, "alice")
+		r.Answers = nil
+		own = append(own, r)
+		h.advance(10 * time.Second)
+	}
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: own})
+	if pr := h.wantState(2, store.PRReviewed); len(pr.PendingReplies()) != 0 {
+		t.Fatalf("pending replies = %+v, want none", pr.PendingReplies())
+	}
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: append(own, threadReply(h, "alice"))})
+	if pr := h.wantState(2, store.PRRereviewPending); len(pr.PendingReplies()) != 1 {
+		t.Fatalf("pending replies = %+v, want the one in magnum's thread", pr.PendingReplies())
 	}
 }
 

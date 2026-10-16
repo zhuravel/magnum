@@ -519,10 +519,13 @@ last round `audit pass`.
 Replies get that round on their own, without a push. The poll reads, for a PR whose activity moved, its
 reviews and comments with their authors and their association with the repository (no text): a reply in
 one of Magnum's threads by the PR's author or by an owner, member or collaborator of the repository, or a
-review or comment by the PR's author (whose agent's "(Claude)" replies are the author's), never one by
-Magnum's own logins. Anyone else's reply in a thread (in a public repository anyone may reply), a bot's
-without that association, a teammate's review elsewhere or a bot's top-level comment starts nothing; the
-next round's judge reads them anyway. When such replies came on a head Magnum reviewed, the PR waits
+comment by the PR's author or a review of theirs with no inline comments (a body alone answers the review
+as a whole; the author's agent's "(Claude)" replies are the author's), never one by Magnum's own logins.
+A review of the author's whose inline comments start threads of their own (the findings of their own
+review tool, say) or answer another reviewer's is no reply: GitHub says which for the last two reviews,
+and an older review counts as before. Anyone else's reply in a thread (in a public repository anyone may
+reply), a bot's without that association, a teammate's review elsewhere or a bot's top-level comment
+starts nothing; the next round's judge reads them anyway. When such replies came on a head Magnum reviewed, the PR waits
 `[daemon] reply_debounce` (default `"3m"`, `"0"` turns it off) after the last one and at least
 `reply_min_interval` (default `"2h"`) after the last such round on that head, and then the judge alone
 re-decides the threads (`re-decision · 2 replies → 14:09` while it waits, `reply round (2 replies)` in

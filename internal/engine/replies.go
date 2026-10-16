@@ -6,9 +6,11 @@ package engine
 // a verdict; on another the operator forced a 17-minute round to have the
 // judge read a declined finding. Now the Details the poll reads for a PR
 // whose activity moved list its reviews and issue comments (github.Remark),
-// the replies among them are kept (store.Reply: the PR author's own, and
-// a reply in one of magnum's threads by the author or by an owner, member
-// or collaborator of the repository; magnum's own logins never count), and
+// the replies among them are kept (store.Reply: the PR author's own comments
+// and reviews, but for one whose inline comments start threads of the
+// author's own, and a reply in one of magnum's threads by the author or by
+// an owner, member or collaborator of the repository; magnum's own logins
+// never count), and
 // a reviewed PR whose head has not moved since gets a same-head
 // round of the judge alone [daemon] reply_debounce after the last reply, at
 // most once per head every reply_min_interval. Its judge answers in the
@@ -85,14 +87,20 @@ func (e *Engine) ownLogins(ctx context.Context, w config.Watch, pr store.PR) []s
 
 // repliesOf picks the replies to magnum's reviews from the Details'
 // remarks: by none of own (magnum's logins), either the PR author's own
-// review or comment (unless the author is a bot: a bot's remarks count only
-// in magnum's threads), or a review that replies in a thread one of own
+// issue comment or review (unless the author is a bot: a bot's remarks count
+// only in magnum's threads), or a review that replies in a thread one of own
 // started (Remark.Answers) by the PR author or by an owner, member or
 // collaborator of the repository (trustedReplier): in a public repository
 // anyone may reply, and a reply round's decision can become a standing one
-// in the notes. Other replies start nothing; the judge still reads them in
-// the threads file. "(Claude)" replies an author's agent posts as the
-// author are the author's. Nil when the Details carry no timeline.
+// in the notes. An author's review counts when it answers in one of own's
+// threads or has no inline comments (a body alone answers the review as a
+// whole); one whose inline comments only start threads or answer someone
+// else's (elsewhere) is the author's own finding, never a reply (DECISIONS
+// "An author's own inline threads are not replies"), and a review older than
+// the two the timeline resolves (AnswersKnown false) counts as before. Other
+// replies start nothing; the judge still reads them in the threads file.
+// "(Claude)" replies an author's agent posts as the author are the author's.
+// Nil when the Details carry no timeline.
 func repliesOf(d github.PRDetails, own []string) []store.Reply {
 	if d.Remarks == nil {
 		return nil
@@ -109,7 +117,8 @@ func repliesOf(d github.PRDetails, own []string) []store.Reply {
 		}
 		byAuthor := github.SameAccount(r.Author, author)
 		thread := r.Review && slices.ContainsFunc(r.Answers, isOwn)
-		if (thread && (byAuthor || trustedReplier(r.Association))) || (!authorBot && !r.Bot && byAuthor) {
+		elsewhere := r.Review && r.AnswersKnown && r.Comments > 0 && !thread
+		if (thread && (byAuthor || trustedReplier(r.Association))) || (!authorBot && !r.Bot && byAuthor && !elsewhere) {
 			out = append(out, store.Reply{At: r.At.UTC(), By: r.Author, Thread: thread})
 		}
 	}
