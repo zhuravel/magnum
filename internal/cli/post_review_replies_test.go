@@ -10,13 +10,18 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 )
 
-// threadsJSON is GraphQL's answer for one review thread: the judge's
-// comment 11 (an App, "talkable[bot]") and the author's reply 12.
+// threadsJSON is GraphQL's answer for two review threads: the judge's
+// comment 11 (an App, "talkable[bot]") and the author's reply 12, and the
+// author's own thread, comment 21.
 const threadsJSON = `{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[
 {"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"app/x.rb","line":12,"originalLine":12,"diffSide":"RIGHT",
 "comments":{"nodes":[
 {"databaseId":11,"body":"**[P2] wrong total**","url":"https://github.com/talkable/talkable/pull/5#discussion_r11","createdAt":"2026-10-06T12:00:00Z","author":{"login":"talkable","__typename":"Bot"},"pullRequestReview":{"databaseId":77}},
 {"databaseId":12,"body":"It is intended.","url":"https://github.com/talkable/talkable/pull/5#discussion_r12","createdAt":"2026-10-06T12:10:00Z","author":{"login":"alice","__typename":"User"},"pullRequestReview":null}]},
+"root":{"nodes":[{"originalCommit":{"oid":"d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"},"diffHunk":"@@ -1 +1 @@"}]}},
+{"id":"PRRT_2","isResolved":false,"isOutdated":false,"path":"app/y.rb","line":3,"originalLine":3,"diffSide":"RIGHT",
+"comments":{"nodes":[
+{"databaseId":21,"body":"**P2** my own tool's finding","url":"https://github.com/talkable/talkable/pull/5#discussion_r21","createdAt":"2026-10-06T12:20:00Z","author":{"login":"alice","__typename":"User"},"pullRequestReview":{"databaseId":78}}]},
 "root":{"nodes":[{"originalCommit":{"oid":"d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"},"diffHunk":"@@ -1 +1 @@"}]}}]}}}}}`
 
 // fakePostReplies routes post-review's gh calls to a fake GitHub with one
@@ -116,17 +121,51 @@ func TestPostReviewRepliesDryRunPostsNothing(t *testing.T) {
 	}
 }
 
-// A reply to a comment that does not start a thread of --login is the
+// A reply to a comment that starts no thread (a reply inside one) is the
 // judge's file to fix: exit 2, the problem named, nothing posted.
-func TestPostReviewRepliesRefusesAThreadOfSomeoneElse(t *testing.T) {
+func TestPostReviewRepliesRefusesACommentThatStartsNoThread(t *testing.T) {
 	f := fakePostReplies(t)
 	c, out, errb := bareContext(t)
 	file := writeReviewFile(t, `{"replies":[{"comment_id":12,"kind":"ack","body":"ok"}]}`)
 	if code := execute(c, postRepliesArgs(file)); code != 2 {
 		t.Fatalf("exit %d, want 2\nstdout: %s\nstderr: %s", code, out, errb)
 	}
-	if !strings.Contains(out.String(), `"status": "invalid"`) || !strings.Contains(out.String(), "replies[0]: comment 12 does not start a thread of talkable[bot]") {
+	if !strings.Contains(out.String(), `"status": "invalid"`) || !strings.Contains(out.String(), "replies[0]: comment 12 is no thread's first comment on this pull request") {
 		t.Errorf("stdout = %s", out)
+	}
+	if n := len(f.CallsWithPrefix("gh", "api", "-X", "POST")); n != 0 {
+		t.Errorf("posted %d times", n)
+	}
+}
+
+// A reply to a thread someone else started (the author's own, here) is
+// skipped, not refused: exit 0 and replied with nothing posted, the reply
+// under skipped with its reason, and the summary says so.
+func TestPostReviewRepliesSkipsAThreadOfSomeoneElse(t *testing.T) {
+	f := fakePostReplies(t)
+	c, out, errb := bareContext(t)
+	file := writeReviewFile(t, `{"replies":[{"comment_id":21,"kind":"ack","body":"Agreed."}]}`)
+	if code := execute(c, postRepliesArgs(file)); code != 0 {
+		t.Fatalf("exit %d, want 0\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	var got struct {
+		Status  string            `json:"status"`
+		Replies []json.RawMessage `json:"replies"`
+		Skipped []struct {
+			CommentID int64  `json:"comment_id"`
+			Kind      string `json:"kind"`
+			Reason    string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not one JSON object: %v\n%s", err, out)
+	}
+	if got.Status != "replied" || len(got.Replies) != 0 || len(got.Skipped) != 1 || got.Skipped[0].CommentID != 21 || got.Skipped[0].Kind != "ack" ||
+		got.Skipped[0].Reason != "alice started this thread, not talkable[bot]: theirs, never answered inline" {
+		t.Errorf("stdout = %s", out)
+	}
+	if want := "magnum post-review: nothing posted; skipped 1 reply to a thread someone else started"; strings.TrimSpace(errb.String()) != want {
+		t.Errorf("stderr = %q, want %q", errb, want)
 	}
 	if n := len(f.CallsWithPrefix("gh", "api", "-X", "POST")); n != 0 {
 		t.Errorf("posted %d times", n)
@@ -142,7 +181,8 @@ func TestPostReviewHelpDescribesReplies(t *testing.T) {
 	}
 	help := strings.Join(strings.Fields(out.String()), " ")
 	for _, want := range []string{"--replies FILE", `{"replies":[{"comment_id":123,"kind":"ack|rebuttal|answer","body":"…"}]}`,
-		"<!-- magnum:reply run=<run id> kind=<kind> -->", "rebutted twice", "status: posted, already_posted, replied,", "exactly one of --review and --replies"} {
+		"<!-- magnum:reply run=<run id> kind=<kind> -->", "rebutted twice", "status: posted, already_posted, replied,", "exactly one of --review and --replies",
+		"a reply to a thread another reviewer or the author started is skipped", "skipped lists each reply not posted"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}

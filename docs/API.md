@@ -13768,6 +13768,9 @@ type Outcome struct {
 	// Replies are the replies RunReplies posted (so far, after a failure),
 	// found already posted, or planned in a dry run, in the file's order.
 	Replies []PostedReply `json:"replies,omitempty"`
+	// Skipped are the replies RunReplies did not post because another
+	// reviewer or the author started their thread, in the file's order.
+	Skipped []SkippedReply `json:"skipped,omitempty"`
 }
     Outcome is what Run printed: a status and its details. ExitCode maps it to
     the command's exit status.
@@ -13780,13 +13783,15 @@ func Run(ctx context.Context, d Deps, o Options, data []byte) Outcome
 
 func RunReplies(ctx context.Context, d Deps, o Options, data []byte) Outcome
     RunReplies posts the judge's replies file data for the run o names (o's head
-    is only checked for form: a reply answers a thread, whatever its commit).
-    It checks the file, reads the review threads once, and checks that each
-    reply answers the first comment of a thread of the reviewer (or a former
-    login) and that magnum has not already rebutted twice there; a thread
-    that already holds a reply carrying the run's marker gets nothing more,
-    so the tool is safe to run again after a failure. Then it posts the replies
-    in file order (or, in a dry run, plans them) and stops at the first failure.
+    is only checked for form: a reply answers a thread, whatever its commit). It
+    checks the file, reads the review threads once, and checks that each reply
+    answers the first comment of a thread on the pull request and that magnum
+    has not already rebutted twice there; a reply to a thread someone other
+    than the reviewer (or a former login) started is skipped (Outcome.Skipped),
+    not refused; a thread that already holds a reply carrying the run's marker
+    gets nothing more, so the tool is safe to run again after a failure.
+    Then it posts the other replies in file order (or, in a dry run, plans them)
+    and stops at the first failure: replied even when it posted nothing.
 
 func (o Outcome) ExitCode() int
     ExitCode is 0 for posted, already posted, replied and a dry run, 2 when the
@@ -13831,6 +13836,16 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string)
     given) and a multi-line comment's start side filled in and the run's marker
     appended as the body's last line when the body lacks it (appended reports
     that), or the problems found, each naming its field.
+
+type SkippedReply struct {
+	CommentID int64  `json:"comment_id"`
+	Kind      string `json:"kind"`
+	Reason    string `json:"reason"` // who started the thread (no text)
+}
+    SkippedReply is a reply RunReplies did not post because its thread is not
+    the reviewer's: another reviewer or the author started it, so it is theirs
+    and never answered inline (DECISIONS "An author's own inline threads are not
+    replies").
 
 ```
 

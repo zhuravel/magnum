@@ -8113,8 +8113,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (no query change, no cost), since `Answers` alone holds nothing both for a review whose comments start
   threads and for one with a body alone. The connection resolves the timeline's last two reviews only, so
   an older review (`AnswersKnown` false) keeps the old rule; trusted repliers (owner, member,
-  collaborator) count only in magnum's threads, as before. Rejected: counting no author review at all (a
-  review body "fixed, see the commit" is a reply).
+  collaborator) count only in magnum's threads, as before. post-review's replies mode no longer refuses
+  the whole file for a reply to a thread the reviewer login (or a former one) did not start: it skips
+  that reply, lists it under `skipped` with the reason (who started the thread, no text), posts the rest
+  and exits 0 with `replied` even when it posted nothing ("nothing posted; skipped 3 replies to threads
+  someone else started"); a comment that is no thread's first comment on the PR (another PR's, a reply
+  inside a thread), a malformed reply, a duplicate and a third rebuttal still exit 2 with `invalid`. The
+  JSON gains `skipped` beside `replies`, which the prompts' "the `replies` it printed" reads unchanged.
+  SKILL.md section 8 and the reply-round clause of `judge-rereview.md` and `judge-recovery.md` say in one
+  sentence: "A thread another reviewer or the author started is theirs, never answered inline; a reply
+  round with nothing of yours to answer ends `replied` with no replies, never `blocked`." (177 bytes; the
+  skill's cap goes from 35,002 to 35,179.) Rejected: counting no author review at all (a review body
+  "fixed, see the commit" is a reply).
 
 ## Learned rules
 

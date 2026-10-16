@@ -350,6 +350,18 @@ func TestSkillPostsEveryThreadReplyThroughPostReplies(t *testing.T) {
 	}, []string{"gh api -X POST", "--input <file>", "the only other write is a reply-contract rebuttal"})
 }
 
+// The live case (2026-10-15): the author's own review tool started eight
+// threads on a PR, they counted as replies, the reply round's judge tried to
+// answer them, post-review refused each one, and the judge wrote blocked,
+// which parked the PR for 15 hours. A thread another reviewer or the author
+// started is theirs (post-review skips a reply there), and a reply round
+// with nothing of its own to answer ends replied with no replies.
+func TestSkillLeavesOthersThreadsAndEndsAnEmptyReplyRoundReplied(t *testing.T) {
+	skillSays(t, []string{
+		"A thread another reviewer or the author started is theirs, never answered inline; a reply round with nothing of yours to answer ends `replied` with no replies, never `blocked`.",
+	}, nil)
+}
+
 // Three rules contradicted each other: a missing report's Checks line even
 // when the machine caused it against machine failures kept out of Checks;
 // never anchoring on a test file against a flaky test the PR adds; and the
@@ -496,9 +508,11 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // by its reason (351)), less 114 of unpinned wording: section 4's reread
 // sentences (41), section 5's "the author cannot see your machine" (36) and
 // section 7's "Finish all analysis before you post." (37), then 35,002 for
-// section 0's `stakes` input line (154). Every rule added must replace or
-// shorten text.
-const skillMaxBytes = 35002
+// section 0's `stakes` input line (154), then 35,179 for section 8's
+// sentence that another's thread is theirs and a reply round with nothing to
+// answer ends `replied`, never `blocked` (2026-10-16: 177 bytes, spec 51).
+// Every rule added must replace or shorten text.
+const skillMaxBytes = 35179
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {

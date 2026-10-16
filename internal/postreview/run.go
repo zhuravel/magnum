@@ -122,6 +122,9 @@ type Outcome struct {
 	// Replies are the replies RunReplies posted (so far, after a failure),
 	// found already posted, or planned in a dry run, in the file's order.
 	Replies []PostedReply `json:"replies,omitempty"`
+	// Skipped are the replies RunReplies did not post because another
+	// reviewer or the author started their thread, in the file's order.
+	Skipped []SkippedReply `json:"skipped,omitempty"`
 }
 
 // ExitCode is 0 for posted, already posted, replied and a dry run, 2 when

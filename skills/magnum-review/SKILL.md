@@ -215,7 +215,7 @@ Do not post issue comments or another review; the only other writes are thread r
 
 ## 8. Write the result
 
-Post every thread reply through `post_replies`, one per thread, after `post_review` printed `posted` or `already_posted` (or alone where the prompt allows: then `"status":"replied"`): write `{"replies":[{"comment_id":…,"kind":"rebuttal|answer|ack","body":"…"}]}` to the file after its `--replies`, with the thread's `comment_id` from `threads_file` (else the id of the thread's first comment), and run it. With `dry_run: true` it posts none.
+Post every thread reply through `post_replies`, one per thread, after `post_review` printed `posted` or `already_posted` (or alone where the prompt allows: then `"status":"replied"`): write `{"replies":[{"comment_id":…,"kind":"rebuttal|answer|ack","body":"…"}]}` to the file after its `--replies`, with the thread's `comment_id` from `threads_file` (else the id of the thread's first comment), and run it. With `dry_run: true` it posts none. A thread another reviewer or the author started is theirs, never answered inline; a reply round with nothing of yours to answer ends `replied` with no replies, never `blocked`.
 
 At every exit, success or not, write `result_file` atomically (write `<result_file>.tmp`, then `mv`):
 

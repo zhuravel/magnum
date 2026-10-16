@@ -205,52 +205,132 @@ func TestRunRepliesAnEmptyListPostsNothing(t *testing.T) {
 	}
 }
 
-// A reply answers the first comment of a thread of the reviewer: a comment
-// nothing starts, a reply inside a thread, a human's thread and a User with
-// the reviewer's name (an App is "talkable[bot]", another account than the
-// user "talkable") are all refused, each named, and nothing is posted.
-func TestRunRepliesRefusesACommentThatDoesNotStartAnOwnThread(t *testing.T) {
+// A reply answers the first comment of a thread on the pull request: a
+// comment nothing starts (one of another pull request, say) and a reply
+// inside a thread are refused, each named, and nothing is posted, not even
+// the fine reply or the one skipped for its thread.
+func TestRunRepliesRefusesACommentThatStartsNoThreadOfThePR(t *testing.T) {
 	w := newWorld(t)
 	w.threads = []fakeThread{
 		thread(bot(11, "**[P2] mine**"), human(12, "reply")),
 		thread(human(31, "A human's own thread")),
-		thread(fakeComment{ID: 41, Author: "talkable", Body: "the user talkable, not the App"}),
 		thread(bot(51, "**[P2] fine**")),
 	}
 	out := w.runReplies(opts(), repliesFile(
 		rep(51, ReplyAck, "ok"), // fine: the others are not
 		rep(999, ReplyAck, "no such comment"),
 		rep(12, ReplyAck, "a reply, not a thread's first comment"),
-		rep(31, ReplyAck, "a human's thread"),
-		rep(41, ReplyAck, "another account"),
+		rep(31, ReplyAck, "a human's thread: skipped, not refused"),
 	))
 	if out.Status != StatusInvalid || out.ExitCode() != 2 {
 		t.Fatalf("outcome = %+v", out)
 	}
 	want := []string{
-		"replies[1]: comment 999 does not start a thread of talkable[bot]",
-		"replies[2]: comment 12 does not start a thread of talkable[bot]",
-		"replies[3]: comment 31 does not start a thread of talkable[bot]",
-		"replies[4]: comment 41 does not start a thread of talkable[bot]",
+		"replies[1]: comment 999 is no thread's first comment on this pull request",
+		"replies[2]: comment 12 is no thread's first comment on this pull request",
 	}
-	if !slices.Equal(out.Problems, want) {
-		t.Errorf("problems = %q", out.Problems)
+	if !slices.Equal(out.Problems, want) || len(out.Skipped) != 0 {
+		t.Errorf("problems = %q, skipped %+v", out.Problems, out.Skipped)
 	}
 	if w.postCount() != 0 || len(w.replies) != 0 {
 		t.Errorf("%d POSTs after a refused file", w.postCount())
 	}
 }
 
+// The live case (2026-10-15): the author's own review tool posted eight
+// inline comments, each starting a thread, a reply round's judge tried to
+// answer them, and post-review refused the whole file, so the judge wrote
+// blocked and the PR waited 15 hours. A thread another reviewer or the
+// author started (a human's, a bot's, the User "talkable" rather than the
+// App "talkable[bot]") is theirs: its reply is skipped, listed with the
+// reason, and the rest are posted; the tool exits 0 with replied even when
+// it posted nothing. A malformed reply still refuses the file.
+func TestPostReviewSkipsAReplyToAThreadItDidNotStart(t *testing.T) {
+	// threads are the PR's threads before anything is posted (a world's
+	// posts append to its own copy).
+	threads := func() []fakeThread {
+		return []fakeThread{
+			thread(bot(11, "**[P2] mine**"), human(12, "It is intended.")),
+			thread(human(31, "**P2** my own tool's finding")),
+			thread(fakeComment{ID: 41, Author: "coder", Bot: true, Body: "another reviewer's finding"}),
+			thread(fakeComment{ID: 51, Author: "talkable", Body: "the user talkable, not the App"}),
+			thread(bot(61, "**[P3] naming**"), human(62, "Why?")),
+		}
+	}
+
+	w := newWorld(t)
+	w.threads = threads()
+	out := w.runReplies(opts(), repliesFile(
+		rep(11, ReplyRebuttal, "The spec covers tax only."),
+		rep(31, ReplyAck, "Agreed."),
+		rep(61, ReplyAnswer, "Because it counts."),
+	))
+	if out.Status != StatusReplied || out.ExitCode() != 0 || len(out.Replies) != 2 || len(w.replies) != 2 {
+		t.Fatalf("one foreign of three: %+v, sent %v", out, w.replies)
+	}
+	if out.Replies[0].CommentID != 11 || out.Replies[1].CommentID != 61 {
+		t.Errorf("posted = %+v", out.Replies)
+	}
+	wantSkipped := []SkippedReply{{CommentID: 31, Kind: ReplyAck, Reason: "alice started this thread, not talkable[bot]: theirs, never answered inline"}}
+	if !slices.Equal(out.Skipped, wantSkipped) {
+		t.Errorf("skipped = %+v", out.Skipped)
+	}
+	if got, want := out.Summary(), "posted 2 replies (1 rebuttal, 1 answer); skipped 1 reply to a thread someone else started"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+	b, err := json.Marshal(out)
+	if err != nil || !strings.Contains(string(b), `"skipped":[{"comment_id":31,"kind":"ack","reason":"alice started this thread, not talkable[bot]: theirs, never answered inline"}]`) {
+		t.Errorf("JSON = %s, %v", b, err)
+	}
+
+	w = newWorld(t)
+	w.threads = threads()
+	out = w.runReplies(opts(), repliesFile(
+		rep(31, ReplyAck, "Agreed."),
+		rep(41, ReplyRebuttal, "Not a bug."),
+		rep(51, ReplyAnswer, "Yes."),
+	))
+	if out.Status != StatusReplied || out.ExitCode() != 0 || len(out.Replies) != 0 || len(out.Skipped) != 3 || w.postCount() != 0 {
+		t.Fatalf("three foreign: %+v, %d POSTs", out, w.postCount())
+	}
+	if out.Skipped[1].Reason != "coder[bot] started this thread, not talkable[bot]: theirs, never answered inline" ||
+		out.Skipped[2].Reason != "talkable started this thread, not talkable[bot]: theirs, never answered inline" {
+		t.Errorf("skipped = %+v", out.Skipped)
+	}
+	if got, want := out.Summary(), "nothing posted; skipped 3 replies to threads someone else started"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+
+	o := opts()
+	o.DryRun = true
+	w = newWorld(t)
+	w.threads = threads()
+	out = w.runReplies(o, repliesFile(rep(11, ReplyRebuttal, "No."), rep(31, ReplyAck, "Agreed.")))
+	if out.Status != StatusDryRun || out.ExitCode() != 0 || len(out.Replies) != 1 || len(out.Skipped) != 1 || w.postCount() != 0 {
+		t.Fatalf("a dry run: %+v", out)
+	}
+	if got, want := out.Summary(), "dry run: nothing posted; 1 reply planned (1 rebuttal); skipped 1 reply to a thread someone else started"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+
+	w = newWorld(t)
+	w.threads = threads()
+	out = w.runReplies(opts(), repliesFile(rep(31, ReplyAck, "Agreed."), rep(11, "thanks", "Bad kind.")))
+	if out.Status != StatusInvalid || out.ExitCode() != 2 || w.postCount() != 0 {
+		t.Fatalf("a malformed reply beside a foreign one: %+v", out)
+	}
+}
+
 // A thread started under a former identity (the PR's reviews moved to
 // another login) is the reviewer's: the reply is accepted with it listed,
-// refused without.
+// skipped without.
 func TestRunRepliesAcceptsAFormerLoginsThread(t *testing.T) {
 	file := repliesFile(rep(11, ReplyAck, "ok"))
 	threads := []fakeThread{thread(fakeComment{ID: 11, Author: "rev-ann", Body: "**[P2] old**"}, human(12, "fixed"))}
 
 	w := newWorld(t)
 	w.threads = threads
-	if out := w.runReplies(opts(), file); out.Status != StatusInvalid {
+	if out := w.runReplies(opts(), file); out.Status != StatusReplied || len(out.Skipped) != 1 || len(w.replies) != 0 {
 		t.Fatalf("without the former login: %+v", out)
 	}
 
@@ -417,9 +497,12 @@ func TestRunRepliesDryRunPostsNothingAndListsThePlan(t *testing.T) {
 	if got, wantSummary := out.Summary(), "dry run: nothing posted; 2 replies planned (1 rebuttal, 1 answer); 1 already posted"; got != wantSummary {
 		t.Errorf("summary = %q, want %q", got, wantSummary)
 	}
-	// A dry run still refuses what a real run would.
-	w.threads = []fakeThread{thread(human(1, "not magnum's"))}
-	if out := w.runReplies(o, repliesFile(rep(1, ReplyAck, "ok"))); out.Status != StatusInvalid {
+	// A dry run still refuses what a real run would, and skips it too.
+	w.threads = []fakeThread{thread(human(1, "not magnum's"), human(2, "a reply"))}
+	if out := w.runReplies(o, repliesFile(rep(2, ReplyAck, "ok"))); out.Status != StatusInvalid {
+		t.Errorf("dry run on a reply inside a thread: %+v", out)
+	}
+	if out := w.runReplies(o, repliesFile(rep(1, ReplyAck, "ok"))); out.Status != StatusDryRun || len(out.Replies) != 0 || len(out.Skipped) != 1 {
 		t.Errorf("dry run on a human's thread: %+v", out)
 	}
 }

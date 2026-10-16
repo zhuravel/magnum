@@ -52,17 +52,20 @@ func newPostReviewCmd(c *Context) *cobra.Command {
 			"comment_id is the thread's first comment (threads_file's comment_id); the kind is ack (a reason the judge accepts), "+
 			"rebuttal (it keeps the finding) or answer (to a question); one reply per thread. It checks the file (the kinds, "+
 			"non-empty bodies within GitHub's limit, one reply per comment_id, no magnum marker of your own), reads the review "+
-			"threads once and checks that each comment_id starts a thread of --login (or a --former-login) and that magnum has "+
+			"threads once and checks that each comment_id starts a thread on the pull request and that magnum has "+
 			"not already rebutted twice there (a rebuttal carrying the marker counts, and so does an own reply with no marker "+
-			"at all; after two it stops arguing in the thread and the operator takes over, so any new reply there is refused). "+
+			"at all; after two it stops arguing in the thread and the operator takes over, so any new reply there is refused); "+
+			"a reply to a thread another reviewer or the author started is skipped, since only threads of --login (or a "+
+			"--former-login) are magnum's to answer, and the rest still go out. "+
 			"Then it posts each reply on its thread as --login, in the file's order, its text followed by a blank line and the "+
 			"hidden marker <!-- magnum:reply run=<run id> kind=<kind> -->, which the daemon verifies; a thread that already "+
 			"holds a reply carrying this run's marker gets nothing more, so after an error run it again unchanged and only the "+
 			"replies still missing go out. --dry-run posts nothing and prints the plan; --local-base is for a review's dry run "+
 			"only and refused with --replies.\n\n"+
 			"It prints one JSON object on stdout (status: posted, already_posted, replied, dry_run, invalid, invalid_anchors, "+
-			"rejected, error or readback_mismatch, and its details; replies lists each reply posted, already posted or planned) "+
-			"and one line on stderr. Exit 0: posted, already posted, replied or a dry run; 2: fix the review or replies file "+
+			"rejected, error or readback_mismatch, and its details; replies lists each reply posted, already posted or planned, "+
+			"skipped lists each reply not posted because someone else started its thread, with the reason) "+
+			"and one line on stderr. Exit 0: posted, already posted, replied (even with every reply skipped) or a dry run; 2: fix the review or replies file "+
 			"(the comments off the diff list the file's valid line ranges) and run it again; 1: anything else. It reads no "+
 			"config and no registry, never talks to the daemon and writes no file.",
 		func(pos []string) int { return runPostReview(c, o, pos) })

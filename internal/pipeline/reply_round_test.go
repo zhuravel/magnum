@@ -115,7 +115,8 @@ func TestAReplyRoundThatAnswersInItsThreadsEndsRepliedWithoutAReview(t *testing.
 	}
 	prompt := e.ag.submitsFor(agents.RoleJudge)[0].Text
 	mustContain(t, "judge prompt", prompt, "2 replies came on your review since you last read the threads.",
-		"post no review: answer in the threads", "post_replies: ", " --replies ")
+		"post no review: answer in the threads", "post_replies: ", " --replies ",
+		"A thread another reviewer or the author started is theirs, never answered inline; a reply round with nothing of yours to answer ends `replied` with no replies, never `blocked`.")
 	judge := e.runOf(agents.RoleJudge, KindRereview)
 	if judge.State != store.RunVerified || store.Deref(judge.Outcome) != OutcomeReplied || judge.ReviewID != nil || judge.ResultJSON == nil {
 		t.Fatalf("judge run: state %s outcome %v review %v result %v", judge.State, judge.Outcome, judge.ReviewID, judge.ResultJSON)

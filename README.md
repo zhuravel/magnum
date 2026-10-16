@@ -536,7 +536,9 @@ no review: it answers in the threads through `magnum post-review --replies` (an 
 reason it accepts, since resolving the thread is the author's; one sentence with its evidence for a
 rebuttal; an answer as deep as asked; nothing where a reply needs none), and the round ends `replied`,
 verified by the replies carrying its run's marker (`pr.replied`; the review stands, findings and
-auto-approval are untouched). A changed verdict posts one short review, as any round does. A push
+auto-approval are untouched). A thread another reviewer or the author started is theirs: the judge never
+answers it inline, and `post-review` skips a reply there (listed under `skipped`) and posts the rest. A
+changed verdict posts one short review, as any round does. A push
 meanwhile wins: the re-review of the new head reads the replies too. After two of Magnum's rebuttals in
 a thread, an answer marks the thread `stop`: the judge replies there no more, `post-review` refuses to,
 and the board flags the PR for you (`pr.stalemate`; `reviewed · argued` in STATE) until you act on it
@@ -1757,10 +1759,14 @@ a reply round (replies with no push, see Re-reviews), the answers it posts inste
 writes `{"replies": [{"comment_id", "kind", "body"}]}` there
 (`kind`: `ack`, `rebuttal` or `answer`; `comment_id` the thread's first comment, from the threads file),
 and the command checks each entry (a known kind, a body without any `<!-- magnum:` marker, unique
-threads), checks each thread was started by the reviewer login (or a former login) and is not one where
-it already rebutted twice, then posts each reply once with `<!-- magnum:reply run=<run id> kind=<kind>
--->` appended (a reply of the same run already in the thread is reported, not posted again), and prints
-`replied` with the replies (a dry run prints them as planned). Exit 2 means the file needs fixing. A blind replay (`magnum eval`) passes `--local-base <base_sha>`: the
+threads), checks each names the first comment of a thread on the PR and is not one where it already
+rebutted twice, skips a reply to a thread someone other than the reviewer login (or a former login)
+started, since another reviewer's or the author's thread is theirs, then posts each other reply once with
+`<!-- magnum:reply run=<run id> kind=<kind> -->` appended (a reply of the same run already in the thread
+is reported, not posted again), and prints `replied` with the replies (a dry run prints them as planned)
+and `skipped` with each reply it skipped and why: `replied` even when it posted nothing, so a reply round
+whose replies were all skipped ends as one with nothing to answer. Exit 2 means the file needs fixing
+(an unknown comment, a reply inside a thread, a duplicate, a thread where it already rebutted twice). A blind replay (`magnum eval`) passes `--local-base <base_sha>`: the
 lines are checked against the local diff of the pinned range and nothing is read from GitHub. Magnum's
 own verification is unchanged: it still finds the review on GitHub by its marker.
 
@@ -2180,7 +2186,7 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
 | `magnum ignore <ref>` | Abort (a fix loop and a whiteboard job included), then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
 | `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines and the harness's files and size (`!` marks what is past a `[notes]` curation trigger), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, proposal N to review, or proposal N stale (the notes changed since it was made); a hint under the table says what to run for each (see Repository notes). |
 | `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while a round of the repository is in its judge stage or another learn job runs: a curation, the retro, a skill edit or gate), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version (see Repository notes). |
-| `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE \| --replies FILE)` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back; with `--replies` (a reply round's `post_replies`), post its answers in its own threads instead (see The judge skill). Exit 2 means the file needs fixing. |
+| `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE \| --replies FILE)` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back; with `--replies` (a reply round's `post_replies`), post its answers in its own threads instead, skipping a reply to a thread someone else started (see The judge skill). Exit 2 means the file needs fixing. |
 | `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] -- COMMAND [ARG]...` | For the review roles and the fixer, which run the `db_lock` line of their prompts: run COMMAND under the checkout's database lock, so the roles sharing a slot's databases take turns (see The judge skill). Exits with COMMAND's status; 75 means it waited `--timeout` and the command did not run, 125 that db-lock itself failed. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. On a terminal the plan opens in a review screen: space toggles an action, `a`/`n` select all or none, enter confirms (`y`, or the slug typed when another slug's databases would be dropped) and applies the selection, `q` cancels. With `--yes`, `--dry-run` or `--json`, or off a terminal, the plan is printed instead and it asks its y/N and typed-slug questions on stderr, only when stdin and stderr are both terminals; otherwise it applies nothing unless you pass `--yes`. `--wait` follows the daemon while it applies the plan, `--shrink --idle` removes only free slots idle longer than `pool.idle_remove_after`, `--slot <name> --remove` removes a managed slot instead of releasing it, and `--force` discards tracked changes, accepts unpushed commits on `--external` and releases inside the close grace. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
