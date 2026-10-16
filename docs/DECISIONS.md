@@ -8551,6 +8551,60 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the middle of a turn, where it loses the finding); a fresh fixer session every cycle (it loses what it
   changed, declined and ran); a fixed cycle count instead of the figure (blind to the real usage: a small
   PR would be compacted for nothing, a big one too late).
+- **A parked session's pane is closed at every park and at the restart** (2026-10-17, spec 58, amends "A
+  start clears a dead launch that holds its agent name, and a fresh start closes the panes it replaces").
+  Only a fresh start's park and a stop's hard park closed the panes they retired; the idle park, the
+  release of a Codex-flagged PR, an eviction, `magnum release` and a lost agent left theirs as shells
+  ("Resume this session with: …"). On 2026-10-17 talkable#11932's workspace held 21 panes (2 claude-fix, 3
+  codex-judge, 7 claude-review, 7 codex-review, 2 claude-whiteboard) for 4 live sessions, with 19 sessions
+  parked and 9 lost, because no fresh start had run on it since. Now every park that worked closes the
+  panes of the PR's retired sessions (engine `closeRetiredPanes`): the idle park, of a reviewed PR and of
+  one whose next round waits behind a pause, a drain, the cap or a far retry (a round's agents stay live
+  when it ends and are parked by that park; there is no park at a round's very end), the Codex-flag
+  release, an eviction, a failed `magnum open`'s release, `magnum abort` and `magnum ignore` on any of
+  their three tries (the hard one alone did), a fresh start as before, and the park of the cleanup
+  (`magnum release`, a closed PR's release, a slot's removal) through `agents.Manager.ParkClosingPanes`,
+  which the app wires as cleanup's `Park`. A session the tick marks lost queues the same close for its PR
+  (`closePanesJob`, on the heavy worker under the PR's slot-work reservation). The reconcile, at the start
+  and every `reconcile_interval`, closes what is left for every PR a session of which records a pane herdr
+  has (`closeLeftoverPanes`: one herdr snapshot, the new `store.PRsWithPanes`, then one sessions query per
+  such PR through the new `agents.Manager.CloseRetiredPanesIn`), each PR under its reservation, so the
+  leftovers of today close at the next restart; it records `pr.panes_closed` only when it closed something.
+  A round, an open, a fix or a whiteboard job holding the PR is never raced: the lost close and the
+  reconcile skip it, since its setup reuses a lost pane (`EnsureWorkspace`) and a close between its read
+  of the sessions and the role's start would take the pane the role is about to start in; the next
+  reconcile closes what the PR still has once it let go. The rules of `CloseRetiredPanes` change in three
+  ways: a lost session's pane closes like a parked or closed one's (spec 52 kept it for the next workspace
+  to reuse, which still happens while it survives; once closed, the next workspace splits a pane instead,
+  the same count); a pane counts only while it sits in the workspace its session recorded, so a stale id
+  herdr now shows in another workspace is never closed; and a workspace the closes leave with no pane,
+  which herdr still lists on a fresh snapshot, is closed too (`pr.panes_closed` names it under
+  `workspaces`), since a lost session there would make the next start reuse it with nothing to split
+  from. What stays is unchanged: the panes of starting and live sessions, panes no session records (the
+  operator's shell), panes whose foreground is anything but the shell, and panes where herdr lists an
+  agent working or blocked. A parked or lost conversation keeps its id and resumes in the pane the next
+  workspace lays out (a PR whose sessions are all parked gets a new workspace, and the old one keeps only
+  the operator's shell). `magnum open` and the board's `o` open what is live: when the role's session is
+  lost or closed with nothing parked to restore, or its session still reads live while herdr has no agent
+  there (a pane closed by hand before a tick saw it), they focus a live agent pane of the PR, the judge's
+  first, and say why ("the codex-judge session is lost and its pane gone; focused claude-review"), as a
+  shell role's pane already fell back to the judge's. A parked role is restored by the daemon as before,
+  its conversation resumed in a new pane. When every pane is gone but the operator's shell, nothing can be
+  focused: herdr 0.9.5 focuses agents only (`agent.focus`; its socket has no workspace or pane focus), so
+  `magnum open` names `magnum review <ref>`, as it did for a lost session, and the next round's panes are
+  what `o` opens then. New tests TestAnIdleParkClosesItsPane, TestARoundsEndParkClosesItsPane (the park
+  after a round whose next one waits behind `magnum pause`), TestTheRestartClosesTheLeftoverPanes (the
+  11932 layout: the restart's reconcile closes the 17 leftovers in one event, the 4 live panes and the
+  operator's shell remain, no session changes state, and a second reconcile records nothing),
+  TestThePeriodicReconcileClosesPanesButRecordsNothingWhenIdle, TestALostAgentsPaneIsClosedAtOnce and
+  TestEveryParkThatWorksClosesItsPanes in engine, TestALostSessionsPaneIsClosed and
+  TestTheReleaseParkClosesItsPanes in agents, TestPRsWithPanesNamesThePRsWhoseSessionsRecordThem in store
+  and TestOpenFocusesALivePaneWhenTheRolesPaneIsGone in cli; TestClosingRetiredPanesKeepsWhatIsStillInUse
+  keeps a starting session's pane where it kept a lost one's. Rejected: keeping the panes for a resume
+  (the resume needs none: it starts in the pane the workspace lays out, as spec 52's tests show); closing
+  only at a fresh start (the case above: 21 panes for 4 live sessions); closing a lost pane at once under a
+  round (the race above); a herdr snapshot per PR at the reconcile; closing the whole workspace (it holds
+  the operator's shell).
 
 ## Learned rules
 

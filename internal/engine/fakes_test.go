@@ -1097,6 +1097,13 @@ func (f *fakeAgents) CloseRetiredPanes(_ context.Context, pr store.PR) error {
 	return nil
 }
 
+// CloseRetiredPanesIn records the reconcile's close (under its own name, so
+// the closes after a park count alone).
+func (f *fakeAgents) CloseRetiredPanesIn(_ context.Context, pr store.PR, _ herdr.Snapshot) error {
+	f.record(fmt.Sprintf("close_panes_in:%d", pr.ID))
+	return nil
+}
+
 // ClearDeadLaunch records the clear and answers with clearLaunch (false
 // when unset: herdr lists no launch that never came up).
 func (f *fakeAgents) ClearDeadLaunch(_ context.Context, s store.Session) (bool, error) {

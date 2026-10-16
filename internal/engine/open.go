@@ -243,10 +243,13 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 }
 
 // releaseReserved hands back the slot a failed `magnum open` reserved: the
-// PR's sessions are parked and the slot released (free).
+// PR's sessions are parked (and the panes the park retired closed) and the
+// slot released (free).
 func (e *Engine) releaseReserved(ctx context.Context, pr store.PR, slot store.Slot, pool config.Pool, subject string) {
 	if err := e.d.Agents.Park(ctx, pr); err != nil {
 		e.log.Warn("magnum open failed: park", "subject", subject, "err", err)
+	} else {
+		e.closeRetiredPanes(ctx, pr) // retired_panes.go
 	}
 	if err := e.d.Slots.Release(ctx, slot, pool, "open failed"); err != nil {
 		e.event(ctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after a failed magnum open: "+err.Error(), nil)

@@ -121,6 +121,7 @@ func (e *Engine) onObservation(ctx context.Context, o agents.Observation) {
 		e.revealAttention(ctx, o.PRID, &sess, "", key)
 	case agents.ObsLost:
 		e.event(ctx, "warn", subject, "agent.lost", fmt.Sprintf("%s session lost (pane or agent gone)", o.Role.Label()), nil)
+		e.closeLostPanes(o.PRID) // retired_panes.go: its pane, a shell now, closes unless a round holds the PR
 	case agents.ObsHumanActive:
 		e.log.Info("someone is typing into a magnum pane; prompts wait", "subject", subject, "role", o.Role,
 			"cooldown", e.cfg.Daemon.HumanCooldown.Duration)

@@ -133,7 +133,7 @@ func (e *Engine) waitsLong(ctx context.Context, prID int64, now time.Time, after
 // checking again that they are still parkable (a round may have started, an
 // agent may have woken up). Park itself refuses a busy pane. A failure
 // counts as the tick's try at `at` (parkFailed); a park that works forgets
-// the earlier failures.
+// the earlier failures and closes the panes it retired (closeRetiredPanes).
 func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if !e.reserveSlotWork(prID, "its idle agents are being parked") {
@@ -160,6 +160,7 @@ func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) err
 		e.parkWorked(prID)
 		e.event(ctx, "info", subject, "pr.parked",
 			fmt.Sprintf("parked %d idle agents (idle since %s); the next round resumes them", len(sessions), idleSince.Local().Format("15:04")), nil)
+		e.closeRetiredPanes(ctx, pr) // retired_panes.go: the next round resumes them in new panes
 		return nil
 	}
 }
@@ -426,11 +427,12 @@ func slotReleasable(sl store.Slot) bool {
 	return sl.Kind == store.SlotKindPool && sl.State == store.SlotHeld
 }
 
-// flagReleaseJob parks the flagged PR's live sessions and then releases its
-// held pool slot, under its slot-work reservation, after checking again
-// that it is still flagged and releasable. Park refuses a busy pane, and a
-// failed park keeps the slot (the agents work in it): it is tried again once
-// the park's backoff has passed (parkFailed), as an idle park is.
+// flagReleaseJob parks the flagged PR's live sessions, closes the panes the
+// park retired (closeRetiredPanes) and then releases its held pool slot,
+// under its slot-work reservation, after checking again that it is still
+// flagged and releasable. Park refuses a busy pane, and a failed park keeps
+// the slot (the agents work in it): it is tried again once the park's
+// backoff has passed (parkFailed), as an idle park is.
 func (e *Engine) flagReleaseJob(prID int64, at time.Time) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if !e.reserveSlotWork(prID, "it is Codex-flagged: its agents are parked and its slot released") {
@@ -466,6 +468,7 @@ func (e *Engine) flagReleaseJob(prID int64, at time.Time) func(ctx context.Conte
 				return nil
 			}
 			e.parkWorked(prID)
+			e.closeRetiredPanes(ctx, pr)
 			did = append(did, fmt.Sprintf("parked its %d agents", n))
 		}
 		if has && slotReleasable(sl) {

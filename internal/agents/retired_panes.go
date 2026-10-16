@@ -1,12 +1,14 @@
 package agents
 
-// A fresh start closes the panes it replaces (DECISIONS "A start clears a
-// dead launch that holds its agent name, and a fresh start closes the panes
-// it replaces"): a fresh start parks the PR's sessions, which leaves their
-// panes as idle shells while the workspace's other panes (a shell the
-// operator opened) keep it open, and the next workspace splits a new pane
-// for every role; talkable#11932's workspace held 17 panes after a day of
-// retries.
+// A retired session's pane is closed (DECISIONS "A start clears a dead
+// launch that holds its agent name, and a fresh start closes the panes it
+// replaces" and "A parked session's pane is closed at every park and at the
+// restart"): a park, a hard park or a lost agent leaves the session's pane
+// as an idle shell ("Resume this session with: …") while the workspace's
+// other panes (a shell the operator opened) keep it open, and the next
+// workspace splits a new pane for every role. talkable#11932's workspace
+// held 17 panes after a day of fresh starts, then 21 for 4 live sessions
+// once only the fresh start closed them.
 
 import (
 	"cmp"
@@ -18,13 +20,15 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// retiredPanes are the panes of the PR's parked and closed sessions in
-// snap that no starting, live or lost session of the PR records (a lost
-// session's pane is the one the next workspace reuses), in session order.
+// retiredPanes are the panes of the PR's parked, closed and lost sessions
+// in snap that no starting or live session of the PR records, in session
+// order. A pane counts only while it sits in the workspace its session
+// recorded (when it recorded one): an id herdr shows in another workspace
+// is no longer that session's pane.
 func retiredPanes(snap herdr.Snapshot, sessions []store.Session) (panes []string, roles map[string]string) {
 	inUse := map[string]bool{}
 	for _, s := range sessions {
-		if isLive(s) || s.State == store.SessionLost {
+		if isLive(s) {
 			inUse[store.Deref(s.HerdrPaneID)] = true
 		}
 	}
@@ -32,10 +36,14 @@ func retiredPanes(snap herdr.Snapshot, sessions []store.Session) (panes []string
 	roles = map[string]string{}
 	for _, s := range sessions {
 		p := store.Deref(s.HerdrPaneID)
-		if p == "" || inUse[p] || (s.State != store.SessionParked && s.State != store.SessionClosed) {
+		if p == "" || inUse[p] || !retired(s) {
 			continue
 		}
-		if _, ok := have[p]; !ok {
+		pane, ok := have[p]
+		if !ok {
+			continue
+		}
+		if ws := store.Deref(s.HerdrWorkspaceID); ws != "" && pane.WorkspaceID != ws {
 			continue
 		}
 		if _, seen := roles[p]; !seen {
@@ -46,28 +54,48 @@ func retiredPanes(snap herdr.Snapshot, sessions []store.Session) (panes []string
 	return panes, roles
 }
 
+// retired reports whether session s no longer has an agent of its own in
+// its pane: parked, closed or lost.
+func retired(s store.Session) bool {
+	switch s.State {
+	case store.SessionParked, store.SessionClosed, store.SessionLost:
+		return true
+	}
+	return false
+}
+
 // EventPanesClosed is recorded (info) when CloseRetiredPanes closed panes:
 // how many, and which roles they served.
 const EventPanesClosed = "pr.panes_closed"
 
-// CloseRetiredPanes closes the panes of the PR's parked and closed sessions
-// that herdr still has (a fresh start's park, and a hard park, retire
-// sessions and leave their panes as idle shells, and the next workspace
+// CloseRetiredPanes closes the panes of the PR's parked, closed and lost
+// sessions that herdr still has (a park, a hard park or an agent that went
+// away leaves its session's pane as an idle shell, and the next workspace
 // splits a new pane for every role, so a PR's workspace grew by a pane per
-// role and fresh start: 17 on talkable#11932). A pane is closed only when
-// its foreground process is the shell and no agent herdr lists there works
-// or is blocked, and never when a starting, live or lost session of the PR
-// records it; a pane no session records (a shell the operator opened) is
-// never one. A parked session keeps its conversation: the role's next start
-// resumes it in a new pane. One EventPanesClosed names the count and the
-// roles; a pane herdr refuses to close is logged, and the first such
-// failure returned after the others were tried.
+// role and start: 21 for 4 live sessions on talkable#11932). A pane is
+// closed only when its foreground process is the shell and no agent herdr
+// lists there works or is blocked, and never when a starting or live
+// session of the PR records it; a pane no session records (a shell the
+// operator opened) is never one. A workspace the closes leave without a
+// pane is closed too. A parked or lost session keeps its conversation: the
+// role's next start resumes it in a new pane. One EventPanesClosed names
+// the count and the roles; a pane herdr refuses to close is logged, and the
+// first such failure returned after the others were tried.
 func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error {
-	sessions, err := m.d.Store.SessionsByPR(ctx, pr.ID)
+	snap, err := m.d.Herdr.Snapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("agents: close the retired panes of pr %d: %w", pr.Number, err)
 	}
-	snap, err := m.d.Herdr.Snapshot(ctx)
+	return m.CloseRetiredPanesIn(ctx, pr, snap)
+}
+
+// CloseRetiredPanesIn is CloseRetiredPanes over snap, a herdr snapshot the
+// caller took for several PRs (the engine's reconcile takes one for every
+// PR with a workspace). The PR's sessions are read now, and each pane's
+// foreground process is asked of herdr before it is closed, so a pane
+// snap is stale about is gone or left alone.
+func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap herdr.Snapshot) error {
+	sessions, err := m.d.Store.SessionsByPR(ctx, pr.ID)
 	if err != nil {
 		return fmt.Errorf("agents: close the retired panes of pr %d: %w", pr.Number, err)
 	}
@@ -94,11 +122,66 @@ func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error {
 			roles = append(roles, roleOf[p])
 		}
 	}
-	if len(closed) > 0 {
-		slices.Sort(roles)
-		m.event(ctx, m.prSubject(ctx, pr.ID), "info", EventPanesClosed,
-			fmt.Sprintf("closed %d panes of retired sessions (%s); the next start lays out one pane per role", len(closed), joinList(roles, "and")),
-			map[string]any{"count": len(closed), "roles": roles, "panes": closed})
+	if len(closed) == 0 {
+		return first
 	}
+	emptied := m.closeEmptied(ctx, snap, closed)
+	slices.Sort(roles)
+	data := map[string]any{"count": len(closed), "roles": roles, "panes": closed}
+	if len(emptied) > 0 {
+		data["workspaces"] = emptied
+	}
+	m.event(ctx, m.prSubject(ctx, pr.ID), "info", EventPanesClosed,
+		fmt.Sprintf("closed %d panes of retired sessions (%s); the next start lays out one pane per role", len(closed), joinList(roles, "and")),
+		data)
 	return first
+}
+
+// closeEmptied closes the workspaces whose every pane in snap was just
+// closed (closed) and that herdr, asked again, still lists without a pane:
+// herdr may keep an empty workspace, which the next start would reuse
+// (its session lost there) with no pane to split from. It returns the
+// workspaces it closed; a failure is logged.
+func (m *Manager) closeEmptied(ctx context.Context, snap herdr.Snapshot, closed []string) []string {
+	var candidates []string
+	for _, p := range snap.Panes {
+		if slices.Contains(closed, p.ID) && !slices.Contains(candidates, p.WorkspaceID) && p.WorkspaceID != "" &&
+			!slices.ContainsFunc(snap.Panes, func(o herdr.Pane) bool { return o.WorkspaceID == p.WorkspaceID && !slices.Contains(closed, o.ID) }) {
+			candidates = append(candidates, p.WorkspaceID)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	now, err := m.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		m.logErr(ctx, err, "agents: check the emptied workspaces %v: %v", candidates, err)
+		return nil
+	}
+	var out []string
+	for _, ws := range candidates {
+		if !hasWorkspace(now, ws) || slices.ContainsFunc(now.Panes, func(p herdr.Pane) bool { return p.WorkspaceID == ws }) {
+			continue // herdr dropped it with its last pane, or someone split a pane there since
+		}
+		if err := m.d.Herdr.WorkspaceClose(ctx, ws); err != nil && !isGone(err) {
+			m.logErr(ctx, err, "agents: close the emptied workspace %s: %v", ws, err)
+			continue
+		}
+		out = append(out, ws)
+	}
+	return out
+}
+
+// ParkClosingPanes is Park, then, once the park worked, CloseRetiredPanes:
+// the park of a release (cleanup's Park: `magnum release`, a closed PR's
+// cleanup, a slot's removal), which the engine's own parks do in two steps.
+// A close that fails is logged; the park held.
+func (m *Manager) ParkClosingPanes(ctx context.Context, pr store.PR) error {
+	if err := m.Park(ctx, pr); err != nil {
+		return err
+	}
+	if err := m.CloseRetiredPanes(ctx, pr); err != nil {
+		m.logErr(ctx, err, "agents: park pr %d: %v", pr.Number, err)
+	}
+	return nil
 }

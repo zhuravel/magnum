@@ -644,8 +644,9 @@ func (e *Engine) abandonRuns(ctx context.Context, prID int64, why string) int {
 // parkForStop parks the PR's sessions, retrying while Park reports an agent
 // still busy; the last try parks hard (agents.Manager.ParkHard), so an
 // agent that stays in its pane through ctrl+c and its exit keys has that
-// pane closed rather than holding the stop's slot; a hard park that worked
-// closes the panes of the sessions it retired too (closeRetiredPanes).
+// pane closed rather than holding the stop's slot; a park that worked, plain
+// or hard, closes the panes of the sessions it retired too
+// (closeRetiredPanes).
 func (e *Engine) parkForStop(ctx context.Context, pr store.PR) error {
 	if e.d.Agents == nil {
 		return nil
@@ -656,8 +657,8 @@ func (e *Engine) parkForStop(ctx context.Context, pr store.PR) error {
 		if try == abortParkTries {
 			park = e.d.Agents.ParkHard
 		}
-		if err = park(ctx, pr); err == nil && try == abortParkTries {
-			e.closeRetiredPanes(ctx, pr) // as after a fresh start's hard park
+		if err = park(ctx, pr); err == nil {
+			e.closeRetiredPanes(ctx, pr) // retired_panes.go, as after every park that worked
 		}
 		if err == nil || !errors.Is(err, agents.ErrBusy) || try == abortParkTries {
 			break

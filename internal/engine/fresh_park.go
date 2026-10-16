@@ -61,19 +61,6 @@ func (e *Engine) parkFresh(ctx context.Context, pr store.PR) error {
 	return err
 }
 
-// closeRetiredPanes closes, after a fresh start's park or a hard park, the
-// panes of the PR's sessions the park retired (agents.Manager.
-// CloseRetiredPanes: an idle shell no starting, live or lost session
-// records; a shell the operator opened is never one), since every fresh
-// start split a new pane per role beside the old ones (17 on talkable#11932).
-// A parked session keeps its conversation, resumed later in a new pane. A
-// failure is only logged: the park held.
-func (e *Engine) closeRetiredPanes(ctx context.Context, pr store.PR) {
-	if err := e.d.Agents.CloseRetiredPanes(ctx, pr); err != nil {
-		e.warnUnlessStopped(ctx, err, "close the panes of retired sessions", "pr", pr.ID)
-	}
-}
-
 // parkStuck reports whether a park failed because an agent did not quit:
 // its pane was no idle shell after ctrl+c (parkQuitTimeout).
 func parkStuck(err error) bool {

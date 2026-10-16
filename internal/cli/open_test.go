@@ -86,6 +86,63 @@ func TestOpenCodexPaneFallsBackToTheJudge(t *testing.T) {
 	actContains(t, h.out.String(), "focused codex-judge beside the codex-review pane", string(reveal.ActionLaunched))
 }
 
+// TestOpenFocusesALivePaneWhenTheRolesPaneIsGone: magnum closes a retired
+// session's pane (spec 58), and the operator can close a pane by hand.
+// `magnum open` then focuses a live pane of the PR (the judge first) and
+// says why: when the role's session is lost or closed with its pane gone,
+// and when its session still reads live but herdr no longer has its agent.
+// With no live pane left, it names the next round, which lays out new
+// panes: herdr focuses agents only, so a workspace holding nothing but the
+// operator's shell cannot be focused.
+func TestOpenFocusesALivePaneWhenTheRolesPaneIsGone(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.session(pr.ID, store.RoleJudge, store.SessionLost, "mg-talkable-5-judge", "p_1", "w_1")
+	claude := h.session(pr.ID, store.RoleClaude, store.SessionLive, "mg-talkable-5-claude", "p_2", "w_1")
+	if code := h.cmd("open", "5", "--no-reveal"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if got := strings.Join(h.hd.focused, ","); got != "mg-talkable-5-claude" {
+		t.Fatalf("focused %v, want claude-review's agent", h.hd.focused)
+	}
+	actContains(t, h.out.String(), "talkable#5 codex-judge: focused mg-talkable-5-claude",
+		"the codex-judge session is lost and its pane gone; focused claude-review", "magnum review talkable#5")
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("requests %+v: a lost session has nothing to restore", reqs)
+	}
+
+	// The session reads live, but its pane was closed by hand: herdr has no
+	// agent there any more.
+	h.hd.focused = nil
+	h.out.Reset()
+	h.hd.focusErr = map[string]error{"mg-talkable-5-claude": &herdr.Error{Method: "agent.focus", Code: herdr.CodeAgentNotFound, Message: "no agent"}}
+	h.session(pr.ID, store.RoleJudge, store.SessionLive, "mg-talkable-5-judge", "p_9", "w_1")
+	if code := h.cmd("open", "5", "--role", "claude", "--no-reveal"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if got := strings.Join(h.hd.focused, ","); got != "mg-talkable-5-judge" {
+		t.Fatalf("focused %v, want the judge's agent", h.hd.focused)
+	}
+	actContains(t, h.out.String(), "the claude-review pane is gone; focused codex-judge")
+
+	// Nothing live: the next round lays out the panes.
+	if err := h.st.TransitionSession(h.ctx, claude.ID, nil, store.SessionLost, nil); err != nil {
+		t.Fatal(err)
+	}
+	judge, err := h.st.LiveSessionByPRRole(h.ctx, pr.ID, store.RoleJudge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.TransitionSession(h.ctx, judge.ID, nil, store.SessionClosed, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.errb.Reset()
+	if code := h.cmd("open", "5", "--no-reveal"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	actContains(t, h.errb.String(), "the codex-judge session of talkable#5 is closed", "magnum review talkable#5")
+}
+
 func TestOpenParkedPRWithoutDaemonPrintsTheManualResume(t *testing.T) {
 	h := newActHarness(t)
 	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)

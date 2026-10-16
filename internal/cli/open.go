@@ -29,7 +29,9 @@ func newOpenCmd(c *Context) *cobra.Command {
 		"Focus a PR's agent pane (its watch's judge by default, the fixer's while a fix loop's fixer works, or any role of the watch with --role; "+
 			"`magnum roles` lists them) in herdr and bring the terminal to the front; without a herdr client a "+
 			"new terminal tab (or --new-window) is opened. A parked PR is restored by the daemon first: a slot "+
-			"is claimed, reviewed_sha checked out, the judge resumed, and the PR and slot pinned to you.",
+			"is claimed, reviewed_sha checked out, the judge resumed, and the PR and slot pinned to you. When the "+
+			"role's pane is gone (its session lost or closed, as magnum closes a retired session's pane), a live agent "+
+			"pane of the PR is focused instead, the judge's first; with none, `magnum review` lays out new panes.",
 		func(pos []string) int { return runOpen(c, o, pos) })
 	fs := cmd.Flags()
 	fs.StringVar(&o.role, "role", "", "pane to focus: "+roleFlagHelp)
@@ -92,24 +94,37 @@ func openMain(ctx context.Context, c *Context, d *actDeps, ref string, o openOpt
 	label := d.actLabel(t.full(), t.PR.Number)
 	res := actFocusResult{PR: label, URL: t.PR.URL, Role: role}
 
+	judge := actJudgeFor(d.Cfg, t.full())
 	sess, err := d.Store.LiveSessionByPRRole(ctx, t.PR.ID, role)
 	if err == nil && store.Deref(sess.HerdrPaneID) == "" && store.Deref(sess.AgentName) == "" {
 		err = store.ErrNotFound // still starting: wait for its pane like a restore
 	}
+	focused := false
 	if errors.Is(err, store.ErrNotFound) {
 		sess, err = openRestore(ctx, c, d, t, role, label, o)
+		if gone, ok := errors.AsType[*openGoneError](err); ok {
+			// The role's pane was closed with its session (lost, or closed):
+			// any live pane of the PR beats an error.
+			note := fmt.Sprintf("the %s session is %s and its pane gone; focused %%s (`magnum review %s` lays out new panes)",
+				actRoleName(role), gone.state, label)
+			if ok, ferr := d.focusLivePane(ctx, &res, t.PR.ID, judge, role, note, o); ok {
+				err, focused = ferr, true
+			}
+		}
 	}
-	if err != nil {
-		return openFail(c, o, res, err)
-	}
-
-	err = d.focus(ctx, &res, sess, o.noReveal, o.newWindow)
-	if judge := actJudgeFor(d.Cfg, t.full()); err != nil && spec.IsShell() && herdr.IsCode(err, herdr.CodeAgentNotFound) {
-		// herdr focuses agents only; a shell role's pane is a plain shell
-		// beside the judge, so focus the judge instead.
-		if j, jerr := d.Store.LiveSessionByPRRole(ctx, t.PR.ID, judge); jerr == nil {
-			res.Note = fmt.Sprintf("herdr focuses agents only; focused %s beside the %s pane", actRoleName(judge), actRoleName(role))
-			err = d.focus(ctx, &res, j, o.noReveal, o.newWindow)
+	if err == nil && !focused {
+		err = d.focus(ctx, &res, sess, o.noReveal, o.newWindow)
+		if err != nil && herdr.IsCode(err, herdr.CodeAgentNotFound) {
+			// herdr focuses agents only: a shell role's pane is a plain shell
+			// beside the judge, and an agent role's pane may be gone (closed
+			// by hand before a tick saw it), so focus a live agent of the PR.
+			note := fmt.Sprintf("the %s pane is gone; focused %%s", actRoleName(role))
+			if spec.IsShell() {
+				note = fmt.Sprintf("herdr focuses agents only; focused %%s beside the %s pane", actRoleName(role))
+			}
+			if ok, ferr := d.focusLivePane(ctx, &res, t.PR.ID, judge, role, note, o); ok {
+				err = ferr
+			}
 		}
 	}
 	if err != nil {
@@ -156,7 +171,8 @@ func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role,
 	starting := latest != nil && (latest.State == store.SessionStarting || latest.State == store.SessionLive)
 	if parked == nil && !starting {
 		if latest != nil {
-			return store.Session{}, fmt.Errorf("the %s session of %s is %s: `magnum review %s` starts a new round with fresh sessions", actRoleName(role), label, latest.State, label)
+			return store.Session{}, &openGoneError{state: latest.State,
+				msg: fmt.Sprintf("the %s session of %s is %s: `magnum review %s` starts a new round with fresh sessions", actRoleName(role), label, latest.State, label)}
 		}
 		return store.Session{}, fmt.Errorf("%s has no %s session yet (PR state %s): `magnum review %s` starts one", label, actRoleName(role), t.PR.State, label)
 	}
@@ -209,6 +225,51 @@ func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role,
 			return store.Session{}, err
 		}
 	}
+}
+
+// openGoneError is openRestore's answer for a role whose newest session is
+// lost or closed, with no parked conversation to restore: its pane is gone
+// (magnum closes a retired session's pane), and openMain focuses a live
+// pane of the PR instead when there is one.
+type openGoneError struct {
+	state string // the session's state: lost or closed
+	msg   string
+}
+
+func (e *openGoneError) Error() string { return e.msg }
+
+// focusLivePane focuses a live agent pane of the PR other than except's
+// (the judge's first, then the others in the order they started) when
+// except's own pane cannot be focused, with note, whose %s is the role
+// focused, in res.Note. herdr focuses agents only, so a pane without a live
+// agent (a workspace holding nothing but the operator's shell) cannot take
+// the focus. focused reports that herdr took it; err is then what the
+// reveal said (unfocused, why the sessions could not be read, if so).
+// Nothing focused leaves res as it was.
+func (d *actDeps) focusLivePane(ctx context.Context, res *actFocusResult, prID int64, judge, except, note string, o openOpts) (focused bool, err error) {
+	all, err := d.Store.SessionsByPR(ctx, prID)
+	if err != nil {
+		return false, err
+	}
+	var live []store.Session
+	for _, first := range []bool{true, false} {
+		for _, s := range all {
+			if s.State == store.SessionLive && s.Role != except && store.Deref(s.AgentName) != "" && (s.Role == judge) == first {
+				live = append(live, s)
+			}
+		}
+	}
+	for _, s := range live {
+		saved := *res
+		res.Note = fmt.Sprintf(note, actRoleName(s.Role))
+		err := d.focus(ctx, res, s, o.noReveal, o.newWindow)
+		if herdr.IsCode(err, herdr.CodeAgentNotFound) {
+			*res = saved
+			continue
+		}
+		return true, err
+	}
+	return false, nil
 }
 
 // openResumeHint is the manual resume command of a parked session.

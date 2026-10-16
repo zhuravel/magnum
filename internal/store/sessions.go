@@ -117,6 +117,26 @@ func (s *Store) LiveSessions(ctx context.Context) ([]Session, error) {
 	return collect(rows, scanSession)
 }
 
+// PRsWithPanes returns the ids of the PRs a session of which, in any
+// state, records one of panes (herdr pane ids), ascending and once each;
+// none for no panes. The engine's reconcile asks it for the panes herdr
+// has, to close the PRs' retired panes.
+func (s *Store) PRsWithPanes(ctx context.Context, panes []string) ([]int64, error) {
+	if len(panes) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT pr_id FROM sessions WHERE herdr_pane_id IN ("+placeholders(len(panes))+
+		") ORDER BY pr_id", anys(panes)...)
+	if err != nil {
+		return nil, fmt.Errorf("prs with panes: %w", err)
+	}
+	return collect(rows, func(r scanner) (int64, error) {
+		var id int64
+		err := r.Scan(&id)
+		return id, err
+	})
+}
+
 // CreateRun inserts a run and returns it. Role is any non-empty name. An
 // empty ID is generated as "r-<UTC yyyymmddThhmmss>-<n>"; CreatedAt defaults
 // to now.

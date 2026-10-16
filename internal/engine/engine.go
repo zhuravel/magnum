@@ -109,10 +109,14 @@ type Agents interface {
 	// that pane closed alone and its session closed (a fresh start's second
 	// try, parkFresh; a stop's last, parkForStop).
 	ParkHard(ctx context.Context, pr store.PR) error
-	// CloseRetiredPanes closes the idle panes of the PR's parked and closed
-	// sessions that no other session of the PR records, after a fresh
-	// start's park and a hard park (closeRetiredPanes).
+	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
+	// and lost sessions that no starting or live session of the PR
+	// records, after every park that worked and a session marked lost
+	// (closeRetiredPanes, closePanesJob).
 	CloseRetiredPanes(ctx context.Context, pr store.PR) error
+	// CloseRetiredPanesIn is CloseRetiredPanes over a snapshot the
+	// reconcile took once for every PR with a pane (closeLeftoverPanes).
+	CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap herdr.Snapshot) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
 	// rotateSessions; a session parkReloading takes out of the checkout's

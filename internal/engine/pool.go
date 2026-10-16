@@ -161,8 +161,9 @@ func (e *Engine) provisionJob(pool config.Pool) func(ctx context.Context) error 
 	}
 }
 
-// evictJob parks the sessions of a held slot's PR and releases the slot, or
-// resumes a release that stalled (releasing, dirty_schema). The PR is
+// evictJob parks the sessions of a held slot's PR (closing the panes the
+// park retired) and releases the slot, or resumes a release that stalled
+// (releasing, dirty_schema). The PR is
 // reserved first (reserveEviction), so no round or open starts in the slot
 // meanwhile, and one that holds the PR makes the eviction a no-op.
 func (e *Engine) evictJob(pool config.Pool, slotID int64) func(ctx context.Context) error {
@@ -196,6 +197,7 @@ func (e *Engine) evictJob(pool config.Pool, slotID int64) func(ctx context.Conte
 					e.event(ctx, "info", "slot:"+sl.Name, "slot.evict_failed", "park sessions: "+err.Error(), nil)
 					return err
 				}
+				e.closeRetiredPanes(ctx, pr) // retired_panes.go
 			}
 		}
 		if err := e.d.Slots.Release(ctx, sl, pool, "evicted"); err != nil {

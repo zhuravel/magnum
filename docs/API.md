@@ -1071,18 +1071,26 @@ func (m *Manager) ClearDeadLaunch(ctx context.Context, s store.Session) (bool, e
     its pane runs something, or the pane closed without a replacement.
 
 func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
-    CloseRetiredPanes closes the panes of the PR's parked and closed sessions
-    that herdr still has (a fresh start's park, and a hard park, retire sessions
-    and leave their panes as idle shells, and the next workspace splits a new
-    pane for every role, so a PR's workspace grew by a pane per role and fresh
-    start: 17 on talkable#11932). A pane is closed only when its foreground
-    process is the shell and no agent herdr lists there works or is blocked,
-    and never when a starting, live or lost session of the PR records it;
-    a pane no session records (a shell the operator opened) is never one.
-    A parked session keeps its conversation: the role's next start resumes it in
-    a new pane. One EventPanesClosed names the count and the roles; a pane herdr
+    CloseRetiredPanes closes the panes of the PR's parked, closed and lost
+    sessions that herdr still has (a park, a hard park or an agent that went
+    away leaves its session's pane as an idle shell, and the next workspace
+    splits a new pane for every role, so a PR's workspace grew by a pane per
+    role and start: 21 for 4 live sessions on talkable#11932). A pane is closed
+    only when its foreground process is the shell and no agent herdr lists there
+    works or is blocked, and never when a starting or live session of the PR
+    records it; a pane no session records (a shell the operator opened) is never
+    one. A workspace the closes leave without a pane is closed too. A parked or
+    lost session keeps its conversation: the role's next start resumes it in a
+    new pane. One EventPanesClosed names the count and the roles; a pane herdr
     refuses to close is logged, and the first such failure returned after the
     others were tried.
+
+func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap herdr.Snapshot) error
+    CloseRetiredPanesIn is CloseRetiredPanes over snap, a herdr snapshot the
+    caller took for several PRs (the engine's reconcile takes one for every
+    PR with a workspace). The PR's sessions are read now, and each pane's
+    foreground process is asked of herdr before it is closed, so a pane snap is
+    stale about is gone or left alone.
 
 func (m *Manager) Compact(ctx context.Context, s store.Session) error
     Compact compacts the conversation of session s: it types CompactCommand
@@ -1308,6 +1316,12 @@ func (m *Manager) Park(ctx context.Context, pr store.PR) error
     one with foreign panes (the user split it) stays, and only the PR's live
     agents are quit. Live sessions with a session_id become parked, the rest
     closed (see Quit); lost sessions stay lost. No live or lost sessions: no-op.
+
+func (m *Manager) ParkClosingPanes(ctx context.Context, pr store.PR) error
+    ParkClosingPanes is Park, then, once the park worked, CloseRetiredPanes:
+    the park of a release (cleanup's Park: `magnum release`, a closed PR's
+    cleanup, a slot's removal), which the engine's own parks do in two steps.
+    A close that fails is logged; the park held.
 
 func (m *Manager) ParkHard(ctx context.Context, pr store.PR) error
     ParkHard is Park for an agent that will not quit: the live agents it quits
@@ -2507,7 +2521,8 @@ type Planner struct {
 	// Clock defaults to time.Now.
 	Clock func() time.Time
 	// Park, when set, is called before the slot of a PR is released or
-	// removed (e.g. (*agents.Manager).Park); an error fails that action and
+	// removed (the app wires (*agents.Manager).ParkClosingPanes, which also
+	// closes the panes the park retired); an error fails that action and
 	// leaves the PR's state as it was.
 	Park func(ctx context.Context, pr store.PR) error
 	// Log receives one line per applied action (optional).
@@ -6044,10 +6059,14 @@ type Agents interface {
 	// that pane closed alone and its session closed (a fresh start's second
 	// try, parkFresh; a stop's last, parkForStop).
 	ParkHard(ctx context.Context, pr store.PR) error
-	// CloseRetiredPanes closes the idle panes of the PR's parked and closed
-	// sessions that no other session of the PR records, after a fresh
-	// start's park and a hard park (closeRetiredPanes).
+	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
+	// and lost sessions that no starting or live session of the PR
+	// records, after every park that worked and a session marked lost
+	// (closeRetiredPanes, closePanesJob).
 	CloseRetiredPanes(ctx context.Context, pr store.PR) error
+	// CloseRetiredPanesIn is CloseRetiredPanes over a snapshot the
+	// reconcile took once for every PR with a pane (closeLeftoverPanes).
+	CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap herdr.Snapshot) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
 	// rotateSessions; a session parkReloading takes out of the checkout's
@@ -17170,6 +17189,12 @@ func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSi
     are open (drafts included) with activity at or after activeSince (or none
     known), or were merged at or after mergedSince, except the PR except,
     by number.
+
+func (s *Store) PRsWithPanes(ctx context.Context, panes []string) ([]int64, error)
+    PRsWithPanes returns the ids of the PRs a session of which, in any state,
+    records one of panes (herdr pane ids), ascending and once each; none for no
+    panes. The engine's reconcile asks it for the panes herdr has, to close the
+    PRs' retired panes.
 
 func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, error)
     PendingRequests returns up to limit pending requests, oldest first (limit <=

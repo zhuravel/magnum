@@ -155,8 +155,9 @@ func (e *Engine) maybeReconcile(ctx context.Context) {
 
 // reconcile compares the registry with disk, MySQL and herdr: records the
 // MySQL listing, applies safe fixes (lost slots; allowlisted orphan
-// databases through cleanup), keeps each pool between min and max,
-// re-checks unhealthy identities and prunes old events and requests. The inventory is scanned once; the
+// databases through cleanup), keeps each pool between min and max, closes
+// the panes of retired sessions (closeLeftoverPanes), re-checks unhealthy
+// identities and prunes old events and requests. The inventory is scanned once; the
 // default cleanup and every pool's shrink plan over that scan (Apply
 // re-checks each action against the registry). After a failed scan the
 // cleanups are skipped until the next reconcile.
@@ -186,6 +187,7 @@ func (e *Engine) reconcile(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	e.closeLeftoverPanes(ctx) // retired_panes.go
 	e.warmIdentities(ctx, false)
 	e.syncNotes(ctx, false)
 	if err := e.prune(ctx); err != nil {

@@ -126,7 +126,8 @@ type Planner struct {
 	// Clock defaults to time.Now.
 	Clock func() time.Time
 	// Park, when set, is called before the slot of a PR is released or
-	// removed (e.g. (*agents.Manager).Park); an error fails that action and
+	// removed (the app wires (*agents.Manager).ParkClosingPanes, which also
+	// closes the panes the park retired); an error fails that action and
 	// leaves the PR's state as it was.
 	Park func(ctx context.Context, pr store.PR) error
 	// Log receives one line per applied action (optional).

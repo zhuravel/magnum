@@ -309,7 +309,7 @@ func (a *App) wire() {
 	}
 	a.Cleanup = &cleanup.Planner{
 		Store: a.Store, Slots: a.Slots, Inventory: a.Inventory, MySQL: cleanMy, Git: a.Git,
-		Runner: a.Runner, Config: cfg, Park: a.Agents.Park,
+		Runner: a.Runner, Config: cfg, Park: a.Agents.ParkClosingPanes,
 		Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "cleanup"},
 	}
 	a.Notify = &notify.Notifier{
