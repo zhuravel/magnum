@@ -438,7 +438,9 @@ func (e *Engine) skipBaseline(ctx context.Context) {
 // restoreBaseline undoes skipBaseline for a PR the configuration no longer
 // skips and nobody pushed to since: it goes back to baseline ("not
 // reviewed"), not in line for a review, so a configuration change never
-// starts reviews of old PRs. It reports whether it handled pr.
+// starts reviews of old PRs; one still skipped keeps its mark and gets the
+// reason of the rule that skips it now (reskip). It reports whether it
+// handled pr.
 func (e *Engine) restoreBaseline(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR) bool {
 	head, ok := e.getKV(ctx, KVPRSkippedBaseline(pr.ID))
 	if !ok {
@@ -448,8 +450,11 @@ func (e *Engine) restoreBaseline(ctx context.Context, repo store.Repo, w config.
 		e.delKV(ctx, KVPRSkippedBaseline(pr.ID))
 		return false
 	}
-	if !e.classify(ctx, w, pr, e.now()).Eligible {
-		return true // still skipped
+	if dec := e.classify(ctx, w, pr, e.now()); !dec.Eligible { // still skipped, maybe by another rule
+		if err := e.reskip(ctx, pr, dec.Reason, e.now()); err != nil {
+			e.log.Info("skipped baseline PR", "subject", prSubject(repo, pr.Number), "err", err)
+		}
+		return true
 	}
 	if err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRIneligible}, store.PRBaseline, func(u *store.PRUpdate) {
 		u.Set("skip_reason", nil)

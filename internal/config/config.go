@@ -313,7 +313,9 @@ type Watch struct {
 	// SkipDepartedAuthors (default true): a PR from a branch of the
 	// repository whose author is no longer an owner, member or collaborator
 	// of it (GitHub's authorAssociation) was opened by someone who left; it
-	// is not reviewed. Fork PRs are skip_cross_repository's business.
+	// is not reviewed. Fork PRs are skip_cross_repository's business, and a
+	// bot's PR the bot rule lets through is never read as departed (an
+	// App's association is NONE whatever its installation writes).
 	SkipDepartedAuthors *bool `toml:"skip_departed_authors"`
 	// AllowBotAuthors are the GitHub logins of bots whose PRs are reviewed
 	// although skip_bot_authors skips bots (any case, with or without

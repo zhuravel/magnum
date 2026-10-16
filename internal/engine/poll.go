@@ -745,6 +745,17 @@ func (e *Engine) markIneligible(ctx context.Context, pr store.PR, from []string,
 	return nil
 }
 
+// reskip records reason, the rule that rejects ineligible pr now, when pr
+// was skipped for another one (a configuration change lifted that rule):
+// "ineligible → ineligible: <reason>", so the board and the card name the
+// rule that applies. The same rule writes nothing.
+func (e *Engine) reskip(ctx context.Context, pr store.PR, reason string, now time.Time) error {
+	if reason == deref(pr.SkipReason) {
+		return nil
+	}
+	return e.markIneligible(ctx, pr, []string{store.PRIneligible}, reason, false, now)
+}
+
 // onNewPR finishes a PR inserted by this poll: queued PRs get their first
 // review quiet period, ineligible ones their skip reason.
 func (e *Engine) onNewPR(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, now time.Time) error {
@@ -817,6 +828,8 @@ func (e *Engine) onSeenPR(ctx context.Context, repo store.Repo, w config.Watch, 
 			func(u *store.PRUpdate) { u.Set("skip_reason", nil) })
 	case pr.State == store.PRIneligible && dec.Eligible:
 		return e.queue(ctx, pr, w, []string{store.PRIneligible}, false, now, e.eligibleWhy(ctx, w, pr))
+	case pr.State == store.PRIneligible:
+		return e.reskip(ctx, pr, dec.Reason, now)
 	case waiting && !dec.Eligible:
 		return e.markIneligible(ctx, pr, []string{pr.State}, dec.Reason, false, now)
 	case waiting && prev.IsDraft != pr.IsDraft:

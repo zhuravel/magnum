@@ -109,9 +109,11 @@ type Decision struct {
 // Classify applies the watch's filters to a PR. It looks at Muted, the
 // repository (manual_repos), the author (bots, skip_authors, own), Labels,
 // IsDraft (unless Requested), IsCrossRepo and the author's association
-// (skip_departed_authors), in that order, and reports the first rule that
-// rejects the PR. A bot allow_bot_authors lists (AllowedBot) passes the bot
-// rule and meets the others as a person would, skip_authors first.
+// (skip_departed_authors, a person's only), in that order, and reports the
+// first rule that rejects the PR. A bot allow_bot_authors lists
+// (AllowedBot) passes the bot rule and meets the others as a person would,
+// skip_authors first, except the association: an App's is NONE whatever its
+// installation may write, so it says nothing about a bot leaving.
 //
 // Forced is deliberately not consulted: the filters describe what the daemon
 // picks up on its own, and whether a manual request overrides them is the
@@ -139,7 +141,7 @@ func Classify(w config.Watch, f PRFacts) Decision {
 		return reject("own PR (include_own = false)")
 	case f.IsCrossRepo && w.CrossRepoSkipped():
 		return reject("cross-repository PR (skip_cross_repository = true)")
-	case !f.IsCrossRepo && w.DepartedAuthorsSkipped() && departed(f.AuthorAssociation):
+	case !f.IsCrossRepo && !isBot(f) && w.DepartedAuthorsSkipped() && departed(f.AuthorAssociation):
 		return reject(fmt.Sprintf("author %s left %s: no longer a member or collaborator (skip_departed_authors = true)",
 			cmpOr(f.AuthorLogin, "ghost"), cmpOr(w.Owner, "the repository")))
 	}
@@ -150,7 +152,8 @@ func Classify(w config.Watch, f PRFacts) Decision {
 // repository now. A branch of the repository needs write access, so its
 // author had it once: CONTRIBUTOR and the like mean they lost it (left the
 // organization, or were removed as a collaborator). "" (not fetched yet) is
-// never departed.
+// never departed. A bot's association is never read: an App is no owner,
+// member or collaborator (GitHub says NONE) while its installation writes.
 func departed(assoc string) bool {
 	switch strings.ToUpper(strings.TrimSpace(assoc)) {
 	case "", "OWNER", "MEMBER", "COLLABORATOR":

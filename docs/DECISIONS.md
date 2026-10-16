@@ -8298,6 +8298,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestSkipAuthorsWinsOverAllowBotAuthors (eligibility), TestAllowBotAuthorsRefusesAnEmptyOrSpacedLogin and
   TestAllowsBotAuthorMatchesTheListedBots (config). Rejected: `skip_bot_authors = false` per repository
   (every dependency bot's PR there would be reviewed too); a label on the PR (the bot would have to set it).
+  The gap the live daemon showed after it restarted on the list (2026-10-16): the App's PR stayed
+  ineligible with "bot author" and no event, because GitHub gives an App's PR the `authorAssociation`
+  NONE (an App is never an owner, member or collaborator, whatever its installation writes; the test fakes
+  said MEMBER), so once the list lifted the bot rule `skip_departed_authors` rejected it, and neither
+  `onSeenPR` nor `restoreBaseline` wrote the reason of a PR another rule still skips. Now the departed rule
+  reads only people's association (a bot's PR the bot rule lets through, listed or under
+  `skip_bot_authors = false`, where every one read as having left before, is never departed), and a PR
+  classified again that another rule now skips takes that rule's reason with a `pr.ineligible` event
+  "ineligible → ineligible: <reason>" (`reskip`; the same rule writes nothing), at the start and at a
+  poll. New tests TestAListedAppsPRLeavesIneligibleAtTheRestart (engine: the live configuration and row,
+  with and without the skipped-baseline mark), TestAReclassifiedPRNamesTheRuleThatSkipsItNow (engine) and
+  TestTheDepartedRuleNeverSkipsABot (eligibility).
 
 ## Learned rules
 

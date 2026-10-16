@@ -61,3 +61,39 @@ func TestSkipAuthorsWinsOverAllowBotAuthors(t *testing.T) {
 		}
 	}
 }
+
+// skip_departed_authors reads only people's association: an App's is NONE
+// (it is never an owner, a member or a collaborator, whatever its
+// installation writes), so a bot's PR the bot rule lets through, listed or
+// under skip_bot_authors = false, never "left" the organization, while a
+// person's with the same association still did.
+func TestTheDepartedRuleNeverSkipsABot(t *testing.T) {
+	tests := []struct {
+		name   string
+		watch  config.Watch
+		mutate func(*PRFacts)
+		reason string // "" = eligible
+	}{
+		{name: "a listed App", watch: config.Watch{Owner: "talkable"},
+			mutate: func(f *PRFacts) { helper(f); f.AuthorAssociation = "NONE" }},
+		{name: "a listed bot in the REST form", watch: config.Watch{Owner: "talkable"},
+			mutate: func(f *PRFacts) {
+				f.AuthorLogin, f.AllowedBot, f.AuthorAssociation = "helper[bot]", true, "CONTRIBUTOR"
+			}},
+		{name: "a bot under skip_bot_authors = false", watch: config.Watch{Owner: "talkable", SkipBotAuthors: new(false)},
+			mutate: func(f *PRFacts) { f.AuthorLogin, f.AuthorIsBot, f.AuthorAssociation = "other", true, "NONE" }},
+		{name: "a person who left", watch: config.Watch{Owner: "talkable"},
+			mutate: func(f *PRFacts) { f.AuthorAssociation = "NONE" },
+			reason: "author alice left talkable: no longer a member or collaborator (skip_departed_authors = true)"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := base()
+			tc.mutate(&f)
+			got := Classify(tc.watch, f)
+			if got.Eligible != (tc.reason == "") || got.Reason != tc.reason {
+				t.Fatalf("Classify = %+v, want reason %q", got, tc.reason)
+			}
+		})
+	}
+}

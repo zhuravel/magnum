@@ -708,7 +708,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # skip_labels = []
 # skip_paths = ["docs/**", "**/*.md"]   # skip a PR when every changed file matches ("**" spans directories, "*" stays in one)
 # skip_cross_repository = true
-# skip_departed_authors = true          # skip branch PRs whose author is no longer an owner, member or collaborator (left the org)
+# skip_departed_authors = true          # skip branch PRs whose author (not a bot) is no longer an owner, member or collaborator (left the org)
 # manual_repos = ["example"]            # repositories of the watch (names, no owner or glob) shown on the board but
 #                                       # reviewed only when you ask (magnum review, r/R, the picker); default: none
 # burst_pushes = 0                      # overrides [daemon] burst_quiet_period / burst_pushes / burst_window

@@ -4770,7 +4770,9 @@ type Watch struct {
 	// SkipDepartedAuthors (default true): a PR from a branch of the
 	// repository whose author is no longer an owner, member or collaborator
 	// of it (GitHub's authorAssociation) was opened by someone who left; it
-	// is not reviewed. Fork PRs are skip_cross_repository's business.
+	// is not reviewed. Fork PRs are skip_cross_repository's business, and a
+	// bot's PR the bot rule lets through is never read as departed (an
+	// App's association is NONE whatever its installation writes).
 	SkipDepartedAuthors *bool `toml:"skip_departed_authors"`
 	// AllowBotAuthors are the GitHub logins of bots whose PRs are reviewed
 	// although skip_bot_authors skips bots (any case, with or without
@@ -5052,9 +5054,11 @@ func Classify(w config.Watch, f PRFacts) Decision
     Classify applies the watch's filters to a PR. It looks at Muted,
     the repository (manual_repos), the author (bots, skip_authors, own),
     Labels, IsDraft (unless Requested), IsCrossRepo and the author's association
-    (skip_departed_authors), in that order, and reports the first rule that
-    rejects the PR. A bot allow_bot_authors lists (AllowedBot) passes the bot
-    rule and meets the others as a person would, skip_authors first.
+    (skip_departed_authors, a person's only), in that order, and reports the
+    first rule that rejects the PR. A bot allow_bot_authors lists (AllowedBot)
+    passes the bot rule and meets the others as a person would, skip_authors
+    first, except the association: an App's is NONE whatever its installation
+    may write, so it says nothing about a bot leaving.
 
     Forced is deliberately not consulted: the filters describe what the daemon
     picks up on its own, and whether a manual request overrides them is the

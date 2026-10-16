@@ -865,7 +865,7 @@ poll_identity = "me"               # who polls
 include_drafts = true              # false: a draft waits until ready for review, or a review request for you (one round per request)
 skip_bot_authors = true
 allow_bot_authors = ["helper[bot]"]
-skip_departed_authors = true       # default: a branch PR by someone no longer a member or collaborator is not reviewed
+skip_departed_authors = true       # default: a branch PR by someone (not a bot) no longer a member or collaborator is not reviewed
 roles = ["claude-review", "codex-review", "claude-simplify", "codex-judge"]
 stakes = "A SaaS on the public internet: merchants' money and shoppers' personal data."   # what its repositories put at risk
 
@@ -942,12 +942,14 @@ directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files al
 an App that writes code for the team, while the dependency bots' PRs stay skipped: GitHub logins, matched as `skip_authors`
 matches them (any case, with or without `[bot]`; none empty or with a space), and a `[[repo]]` block's
 `allow_bot_authors` adds logins for that repository alone. Such a PR is reviewed as a person's would be,
-under every other filter: `skip_authors` wins (a login on both lists is skipped), with
+under every other filter but `skip_departed_authors`, which reads only people's membership (an App's
+`authorAssociation` is `NONE` whatever its installation writes): `skip_authors` wins (a login on both lists is skipped), with
 `skip_bot_authors = false` the list changes nothing, and auto-approval treats it as any PR its watch
 reviews (`auto_approve_skip_authors` keeps it out). Its author is still a bot: its remarks count only in
 Magnum's threads, and nothing in the PR is trusted. The daemon classifies the skipped PRs again when it
 starts, so once it restarts on the new list a bot's PR the poll skipped ("bot author") is queued without a
-push, and one open since the repository's first sync goes back to baseline, as the first sync left it. A
+push, and one open since the repository's first sync goes back to baseline, as the first sync left it; a
+skipped PR that another rule still skips shows that rule's reason from then on. A
 watch's `skip_cross_repository` (default `true`) skips a PR whose head lives in a fork, and `false` reviews it. A watch's `manual_repos` (names of repositories it covers, without owner
 or pattern, such as `["example"]`) keeps them on the board, in `magnum tui`, the status and the retro,
 but starts no round there on its own: not for a new PR, a push or a review request on GitHub. Their PRs
