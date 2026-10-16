@@ -130,6 +130,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"kvPRStatusComment", kvPRStatusComment(id), "pr.7.status_comment"},
 		{"KVPRFix", KVPRFix(id), "pr.7.fix"},
 		{"KVPRFixOff", KVPRFixOff(id), "pr.7.fix_off"},
+		{"kvPRFixContextUnknown", kvPRFixContextUnknown(id), "pr.7.fix_context_unknown"},
 		{"KVPRWhiteboard", KVPRWhiteboard(id), "pr.7.whiteboard"},
 	}
 	byKey := map[string]string{}

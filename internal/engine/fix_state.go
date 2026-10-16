@@ -48,7 +48,12 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // that re-review ended and called for a next cycle a drain for a restart
 // refused: no round that ends afterwards is the loop's re-review, and the
 // restart's recovery, or the drain's end without one, starts that cycle
-// (recoverReviewingLoop).
+// (recoverReviewingLoop). Context is what the current cycle did to the
+// fixer's conversation it resumed before its prompt, in a few words
+// (fixCompact: "compacted 82% → 31%", "compacted from 82%" when the pane
+// shows no figure after it, "fresh session (82% after /compact)", "fresh
+// session (/compact failed)"); "" when it resumed it as it was or started a
+// fresh fixer anyway.
 type FixState struct {
 	Cycle     int       `json:"cycle"`
 	Cap       int       `json:"cap"`
@@ -62,6 +67,7 @@ type FixState struct {
 	Role      string    `json:"role,omitempty"`
 	ForcedAt  time.Time `json:"forced_at,omitzero"`
 	Held      bool      `json:"held,omitempty"`
+	Context   string    `json:"context,omitempty"`
 }
 
 // FixOff is a PR's opt-out of the fix job: when it was set and by whom

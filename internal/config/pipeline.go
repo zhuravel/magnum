@@ -121,6 +121,16 @@ type Pipeline struct {
 	// review with findings on a PR whose author is one of the operator's
 	// logins. A [[watch]] may override it; see Config.AutofixFor.
 	Autofix string `toml:"autofix"`
+	// FixCompactAt: before a fix cycle resumes the fixer's conversation (a
+	// live session, or a parked one ResumeID resumes; a fixer that starts
+	// fresh never), the fix job reads how full its context is from the
+	// pane's status lines (its kind's Kind.ContextPattern) and, at or above
+	// this percent, sends /compact first; a fixer still at or above it after
+	// the compaction, or whose compaction did not finish, is parked and the
+	// cycle starts it fresh, while a pane that shows no figure leaves it as
+	// it is (engine fix_compact.go). Default DefaultFixCompactAt; 0 = off; at
+	// most 99.
+	FixCompactAt int `toml:"fix_compact_at"`
 	// Whiteboard switches the whiteboard job on: after every review magnum
 	// posts on a new head, the whiteboard role writes a whiteboard of the
 	// PR (an interactive document in the dev.fast Whiteboard app) in the
@@ -274,6 +284,12 @@ const (
 // DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
 // followed by a re-review, before the PR is left to the operator.
 const DefaultFixCycles = 3
+
+// DefaultFixCompactAt is [pipeline] fix_compact_at's default: a fixer whose
+// context is 70% used or more compacts its conversation before its next
+// cycle, well before Claude Code compacts it by itself in the middle of a
+// turn.
+const DefaultFixCompactAt = 70
 
 // DefaultFullPassEvery is [pipeline] full_pass_every's default: every tenth
 // automatic re-review of a PR reviews the whole PR again.

@@ -214,6 +214,8 @@ type Manager struct {
 	liveAt map[int64]time.Time
 	// switching marks the sessions SwitchModel is switching right now.
 	switching map[int64]bool
+	// compacting marks the sessions Compact is compacting right now.
+	compacting map[int64]bool
 	// bg is what each claude session's transcript says about the
 	// background work of its run in flight (see backgroundWait).
 	bg map[int64]*bgWatch
@@ -233,7 +235,7 @@ func New(d Deps) *Manager {
 	}
 	return &Manager{d: d, sleep: sleep, wrapper: map[string]bool{}, health: map[string][]healthRule{},
 		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{},
-		switching: map[int64]bool{}, bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}}
+		switching: map[int64]bool{}, compacting: map[int64]bool{}, bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

@@ -746,6 +746,9 @@ func (c *Config) validatePipeline() []error {
 	}
 	fixRole("pipeline", c.Pipeline.FixRole)
 	fixCycles("pipeline", c.Pipeline.FixCycles)
+	if n := c.Pipeline.FixCompactAt; n < 0 || n > 99 {
+		errs = append(errs, fmt.Errorf("pipeline: fix_compact_at must be a percent from 0 (off) to 99, got %d", n))
+	}
 	autofix("pipeline", c.Pipeline.Autofix)
 	whiteboardRole("pipeline", c.Pipeline.WhiteboardRole)
 	errs = append(errs, c.validateSpend()...)
@@ -906,6 +909,9 @@ func validateKind(name string, k Kind) []error {
 	}
 	if k.SwitchModel != "" && !strings.Contains(k.SwitchModel, PlaceholderModel) {
 		bad("switch_model %q must contain %s", k.SwitchModel, PlaceholderModel)
+	}
+	if _, err := k.ContextRegexp(); err != nil {
+		bad("%v", err)
 	}
 
 	// Model names are typed into the pane: a space or control character

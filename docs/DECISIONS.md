@@ -8512,6 +8512,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
   whose forced round reviewed the operator's later push, and which a reply round on the same head passes
   anyway; a new phase for the hold, which every reader of the phase (the board, `magnum status`, the
   recovery, dispatch's fixing hold) would have to learn.
+- **The fixer compacts its conversation before a cycle when its context is nearly full** (2026-10-17,
+  spec 57). The fixer (claude-fix) is one Claude Code session resumed across every fix cycle of a PR
+  (`fixStart`), and nothing rotates it as `max_session_rounds` rotates the judge. On a long PR
+  (talkable#11483) the operator saw it near its full context; Claude Code then compacts by itself at the
+  limit, in the middle of a turn, and can lose the finding it was fixing. Now, before a cycle prompts a
+  fixer it resumed (its session was live, or `ensureAgent` resumed a parked one), the job reads the
+  context from the pane's last status lines, as the model switch reads the model
+  (`agents.Manager.ContextUsed`, the kind's new `context_pattern`: a Go regexp with a `used` or `left`
+  group, the newest match counting; claude's reads the operator's `418k/1m (41%)` and Claude Code's
+  "Context left until auto-compact: 8%" as 92%). At or above the new `[pipeline] fix_compact_at`
+  (default 70, 0 = off, at most 99) it types `/compact` into the idle pane as `/model` is typed
+  (`agents.Manager.Compact`: the turn ends once the agent was seen working and is idle on two polls, at
+  most 10 minutes; its `last_prompt_at` is set and the observer never takes that turn for a human's),
+  reads again and records `fix.compacted` ("from 82% to 31%"). A figure still at or above the key and a
+  compaction that did not finish (timed out, or the agent was busy) park the fixer (`quitToRenew`, as for
+  a cold judge) and start it fresh for the cycle with `fix.fresh_session`, saying why; the fix prompt
+  carries the findings, so the fresh fixer loses what it declined and ran, not what to fix. A pane with no
+  figure leaves the resumed session as it is, with no `/compact` and no fresh session, and warns
+  `fix.context_unknown` once per PR (kv `pr.<id>.fix_context_unknown`): a fresh session there would be
+  the rejected fresh-fixer-every-cycle below, and a figure missing right after a resume would cost a fresh
+  fixer each cycle. A compaction that ended with no figure after it keeps the session too, as
+  `fix.compacted` from the figure before it, and warns the same once. A fixer that starts fresh anyway is
+  never read, and a kind with `context_pattern = ""` (codex, droid, omp: Codex compacts by itself) never
+  is. The loop's row records the cycle's words (`FixState.Context`: "compacted 82% → 31%", "compacted from
+  82%", "fresh session (82% after /compact)", "fresh session (/compact failed)"), which the card's `fix:`
+  line in `magnum status <ref>` shows after the role and `--json` carries; the status comment says
+  nothing. The judge and the reviewers are unchanged. Not verified live: whether Claude Code's status line
+  shows the figure right after a `--resume` and right after `/compact`, before the next turn; a status line
+  that showed the old figure after `/compact` would start the fixer fresh each time, which the
+  `fix.fresh_session` events would show. New tests TestTheFixerCompactsBeforeACycleWhenItsContextIsHigh,
+  TestAFixerStillFullAfterCompactionStartsFresh, TestAFailedCompactionStartsTheFixerFresh,
+  TestAFigureMissingAfterCompactionKeepsTheSession, TestAFixerBelowTheKeyIsNotCompacted,
+  TestAFreshFixerIsNeverCompacted and TestNoContextFigureWarnsOncePerPR (engine), TestContextUsedReadsBothForms,
+  TestCompactTypesTheCommandAndWaitsForTheTurnToEnd and TestCompactWaitsQuietlyAndRefusesABusyAgent
+  (agents), TestFixCompactAtRefusesABadPercent and TestContextPatternMustCompileAndNameAGroup (config),
+  and TestTheStatusCardNamesTheFixersCompaction (cli). Rejected: letting Claude Code auto-compact (in
+  the middle of a turn, where it loses the finding); a fresh fixer session every cycle (it loses what it
+  changed, declined and ran); a fixed cycle count instead of the figure (blind to the real usage: a small
+  PR would be compacted for nothing, a big one too late).
 
 ## Learned rules
 

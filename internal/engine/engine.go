@@ -136,6 +136,12 @@ type Agents interface {
 	WhiteboardPrompt(pr store.PR, role agents.Role, run store.Run, in agents.WhiteboardPromptInput) (string, error)
 	Submit(ctx context.Context, run store.Run, text string) error
 	Tell(ctx context.Context, run store.Run, text string) error
+	// ContextUsed reads how full a session's context is from its pane's
+	// status lines (ok false: no figure), and Compact has its agent compact
+	// its conversation and waits for that turn to end: the fix job's
+	// compaction before a cycle that resumes the fixer (fix_compact.go).
+	ContextUsed(ctx context.Context, s store.Session) (int, bool)
+	Compact(ctx context.Context, s store.Session) error
 }
 
 // Rounds runs one review round (*pipeline.Runner, one per identity) and

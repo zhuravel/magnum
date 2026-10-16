@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -121,5 +122,55 @@ func TestBoardRowsAndTheStatusCardCarryTheFixLoop(t *testing.T) {
 	}
 	if !strings.Contains(js.String(), `"phase": "fixing"`) || !strings.Contains(js.String(), `"role": "claude-fix"`) {
 		t.Errorf("JSON lacks the loop:\n%s", js.String())
+	}
+}
+
+// The card's fix line names what the loop's last cycle did to the fixer's
+// conversation, after the role: a compaction with its figures, or a fresh
+// session with why, as the loop's row records it; `--json` carries it as
+// "context".
+func TestTheStatusCardNamesTheFixersCompaction(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := now.Add(-30 * time.Minute)
+	for _, tc := range []struct {
+		n, cycle      int
+		context, want string
+	}{
+		{11920, 2, "compacted 82% → 31%", "  fix:       cycle 2 of 3 · claude-fix · compacted 82% → 31% · started by magnum fix "},
+		{11931, 3, "fresh session (82% after /compact)", "  fix:       cycle 3 of 3 · claude-fix · fresh session (82% after /compact) · started by magnum fix "},
+	} {
+		pr, err := st.PRByRepoNumber(ctx, repo.ID, tc.n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(engine.FixState{Cycle: tc.cycle, Cap: 3, Phase: engine.FixPhaseReviewing, By: "magnum fix", StartedAt: started,
+			Role: "claude-fix", Context: tc.context})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetKV(ctx, engine.KVPRFix(pr.ID), string(b)); err != nil {
+			t.Fatal(err)
+		}
+		r, err := statusGather(ctx, d, statusOptions{Ref: strconv.Itoa(tc.n)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		statusRender(&out, r)
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("card of %d lacks %q:\n%s", tc.n, tc.want, out.String())
+		}
+		var js bytes.Buffer
+		if err := writeJSON(&js, r); err != nil {
+			t.Fatal(err)
+		}
+		if want, _ := json.Marshal(tc.context); !strings.Contains(js.String(), `"context": `+string(want)) {
+			t.Errorf("JSON of %d lacks the context %s:\n%s", tc.n, want, js.String())
+		}
 	}
 }

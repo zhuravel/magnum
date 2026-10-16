@@ -195,6 +195,44 @@ type Kind struct {
 	// "/exit" then enter, one key each (send-keys takes no word). Empty =
 	// the hard quit goes straight to the close.
 	ExitKeys []string `toml:"exit_keys"`
+	// ContextPattern reads how full a session's context is from its pane's
+	// status lines (agents.Manager.ContextUsed): a Go regexp with a capture
+	// group named "used" (the percent of the context used) or "left" (the
+	// percent left, read as 100 minus it), or both in alternatives; the
+	// newest match counts. claude: DefaultClaudeContextPattern, which reads
+	// a status line's "418k/1m (41%)" and Claude Code's own "Context left
+	// until auto-compact: 8%". "" = the kind's panes show no figure, so
+	// [pipeline] fix_compact_at never compacts its fixer.
+	ContextPattern string `toml:"context_pattern"`
+}
+
+// DefaultClaudeContextPattern is the claude kind's context_pattern: a
+// percent in parentheses, as a status line shows the context used
+// ("418k/1m (41%)"), or Claude Code's warning as the context fills up
+// ("Context left until auto-compact: 8%").
+const DefaultClaudeContextPattern = `(?:\((?P<used>\d{1,3})%\)|Context left until auto-compact: (?P<left>\d{1,3})%)`
+
+// Capture groups of Kind.ContextPattern.
+const (
+	ContextUsedGroup = "used" // the percent of the context used
+	ContextLeftGroup = "left" // the percent left
+)
+
+// ContextRegexp compiles ContextPattern: nil without one, an error naming
+// the key for a pattern that does not compile or names neither capture
+// group (ContextUsedGroup, ContextLeftGroup).
+func (k Kind) ContextRegexp() (*regexp.Regexp, error) {
+	if k.ContextPattern == "" {
+		return nil, nil
+	}
+	re, err := regexp.Compile(k.ContextPattern)
+	if err != nil {
+		return nil, fmt.Errorf("context_pattern %q: %w", k.ContextPattern, err)
+	}
+	if names := re.SubexpNames(); !slices.Contains(names, ContextUsedGroup) && !slices.Contains(names, ContextLeftGroup) {
+		return nil, fmt.Errorf("context_pattern %q names neither a (?P<%s>...) nor a (?P<%s>...) group", k.ContextPattern, ContextUsedGroup, ContextLeftGroup)
+	}
+	return re, nil
 }
 
 // RoleModel is the model a role's sessions are configured to run: the
@@ -399,7 +437,7 @@ func DefaultHealthPatterns() HealthPatterns {
 //     "/model {model}", fallback_models ["opus","sonnet"], reset_model
 //     "default", project_untrust ["--setting-sources","user"], mcp_off true
 //     with mcp_strict ["--strict-mcp-config"], exit_keys ["/","e","x","i",
-//     "t","enter"].
+//     "t","enter"], context_pattern DefaultClaudeContextPattern.
 //   - droid (0.232): resume ["--resume","{session}"]; no model, effort or
 //     name flag in interactive mode, no login check.
 //   - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
@@ -490,7 +528,8 @@ func DefaultKinds() map[string]Kind {
 			// Claude Code 2.1 exits on /exit; herdr's send-keys validates
 			// every key before it writes any and takes no word, so the
 			// command goes one key at a time.
-			ExitKeys: []string{"/", "e", "x", "i", "t", "enter"},
+			ExitKeys:       []string{"/", "e", "x", "i", "t", "enter"},
+			ContextPattern: DefaultClaudeContextPattern,
 		}),
 		KindDroid: base(Kind{Resume: []string{"--resume", PlaceholderSession}}),
 		KindOMP: base(Kind{

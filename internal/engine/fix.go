@@ -428,6 +428,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 		st.Cycle++
 	}
 	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseFixing, job.head, "", job.role.Name, nil, time.Time{}, false
+	st.Context = ""
 	job.state = st
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, fix: true}) {
@@ -612,10 +613,11 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 }
 
 // fixStart starts or resumes the fixer in the PR's workspace (its pane gets
-// the fix role's identity's env, agents.Manager.paneEnv), creates its run of
-// kind fix in the review's round and sends it the fix prompt. A run that
-// Submit refused before sending is abandoned; one whose prompt may have
-// arrived is waited for.
+// the fix role's identity's env, agents.Manager.paneEnv), compacts a resumed
+// fixer whose context is nearly full, or starts it fresh (fixCompact),
+// creates its run of kind fix in the review's round and sends it the fix
+// prompt. A run that Submit refused before sending is abandoned; one whose
+// prompt may have arrived is waited for.
 func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	pr := job.pr
 	src := e.d.Identities[pr.Identity]
@@ -643,8 +645,14 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			return fmt.Errorf("%s pane: %w", job.role.Name, err)
 		}
 	}
-	if _, err := e.ensureAgent(ctx, pr, job.role, ws, false, effortFull); err != nil {
+	fresh, err := e.ensureAgent(ctx, pr, job.role, ws, false, effortFull)
+	if err != nil {
 		return fmt.Errorf("start %s: %w", job.role.Name, err)
+	}
+	if !fresh { // a resumed conversation: compacted, or started fresh, when its context is nearly full
+		if err := e.fixCompact(ctx, job, ws); err != nil {
+			return err
+		}
 	}
 	run, err := e.d.Agents.NewRun(ctx, pr, agents.Role(job.role.Name), store.RunFix, job.round)
 	if err != nil {

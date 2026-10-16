@@ -1614,6 +1614,12 @@ Under a `managed-mcp.json` Claude Code refuses `--strict-mcp-config` and exits: 
 A session whose model hits its own limit switches to the kind's next `fallback_models` entry by
 itself (Claude: `["opus", "sonnet"]`) and back once the limit lifts.
 
+`context_pattern` reads how full a session's context is from the last status lines of its pane: a Go
+regexp with a group named `used` (the percent used) or `left` (the percent left). `[kinds.claude]` reads
+a status line's `418k/1m (41%)` and Claude Code's "Context left until auto-compact: 8%"; the fix job
+compacts a resumed fixer by it (`[pipeline] fix_compact_at`, see Fixing your own PRs). A pattern that does
+not compile or names neither group is refused; `""` turns the reading off for the kind.
+
 #### Triage: fewer reviewers for a small diff
 
 A one-line fix does not need every reviewer. With `[triage] enabled = true`, before a round starts its agents
@@ -1953,7 +1959,8 @@ One cycle of a loop has four steps.
    reviewer. Magnum holds the PR for the whole run, so no round, release or `magnum open` touches the checkout
    meanwhile. The PR stays `reviewed`. The fixer's conversation persists across cycles and loops until you
    park it, so it remembers what it declined and why. A fix role takes no `max_session_rounds`: a fix job is
-   no review round, and the configuration refuses the key there.
+   no review round, and the configuration refuses the key there. A conversation that is nearly full is
+   compacted first (see below).
 2. **Settle.** When the fixer's turn ends, Magnum reads its report. A push the report lists counts only once
    GitHub shows that commit as the PR's head (the poll identity's view of the PR, else `git ls-remote` of the
    branch). Magnum then puts the slot on the pushed head, or back on the reviewed head when nothing was
@@ -1962,6 +1969,23 @@ One cycle of a loop has four steps.
    cap, because the loop has its own cap. Unlike a `magnum review` you ask for, it is no act of yours, so
    the threads Magnum stopped arguing in stay flagged for you.
 4. **Decide.** When that review posts, the loop either starts the next cycle or ends (see below).
+
+**A conversation that fills up.** On a long PR the fixer's one conversation grows cycle after cycle, and
+Claude Code compacts a full one by itself in the middle of a turn, where it can lose the finding it was
+fixing. So before a cycle resumes the fixer (its session still in its pane, or a parked one resumed),
+Magnum reads how full its context is from the pane's status line, with the kind's `context_pattern`
+(`[kinds.claude]`: a status line's `418k/1m (41%)`, or Claude Code's own "Context left until
+auto-compact: 8%", read as 92%). At or above `[pipeline] fix_compact_at` (default 70) it types `/compact`,
+waits for that turn to end and reads again: a `fix.compacted` event says "from 82% to 31%", and the fix
+prompt follows in the same conversation. A fixer still at or above the key afterwards, or whose `/compact`
+did not finish (it timed out after 10 minutes, or the agent was busy), is parked (its conversation kept)
+and the cycle starts it fresh, with a `fix.fresh_session` event that says why. The fix prompt carries the
+findings, so a fresh fixer loses what it declined and ran before, not what to fix. A pane that shows no
+figure leaves the fixer as it is: no `/compact`, no fresh session (a figure missing right after a resume
+would otherwise cost a fresh fixer every cycle). It warns once per PR (`fix.context_unknown`): check that
+your status line shows the percent, or adjust `context_pattern`. A fixer started fresh anyway (no
+conversation to resume) is never compacted, `fix_compact_at = 0` switches this off, and a kind with
+`context_pattern = ""` is never read.
 
 **Who the fixer is.** The fixer's pane acts as one GitHub identity. The built-in `claude-fix` names none, so
 it acts as the watch's poll identity, which is your own gh login in the config `magnum init` writes. A
@@ -2055,14 +2079,18 @@ cycle that re-review called for. A loop that ended before this rule as "the re-r
 (replied)" stays in needs attention for you to decide, and its attention line says the loop took a
 reply round for its re-review, whose review stands.
 
-**Configuration.** Three `[pipeline]` keys set the job, and a `[[watch]]` may set its own of each.
+**Configuration.** Four `[pipeline]` keys set the job, and a `[[watch]]` may set its own of the first three.
 
 ```toml
 [pipeline]
 fix_role = "claude-fix"    # the role the fix job runs, "" = no fix job (on a watch: off for that watch)
 fix_cycles = 3             # fix runs one loop may take before the PR needs you (at least 1)
 autofix = "never"          # never | own: start a loop by itself after a review with findings on your own PR
+fix_compact_at = 70        # compact a resumed fixer whose context is this full (percent; 0 = off, at most 99)
 ```
+
+The figure `fix_compact_at` compares comes from `[kinds.claude] context_pattern` (see A conversation that
+fills up, above).
 
 `fix_cycles` bounds the loop, because two agents can disagree forever. A cycle is one fix run and the forced
 re-review of its push. The cap bounds one loop, and a loop you start by hand counts from cycle 1 again, so
@@ -2091,9 +2119,12 @@ out, as the board's does.
   cell), then the usual `reviewing` for the re-review. A PR taken out of autofix carries `fix off` in its
   flags and on its card. The dashboard shows the fixer's pane like any agent's.
 - `magnum status <pr>` prints a `fix:` line with the cycle, the cap, who started the loop and the report's
-  path, or `off since 12:30 (magnum fix --off)`. `magnum tui --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
-- `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.round_ignored`,
-  `fix.needs_you`, `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
+  path, or `off since 12:30 (magnum fix --off)`. When the cycle compacted the fixer or started it fresh, the
+  line says so after the role (`claude-fix · compacted 82% → 31%`, `claude-fix · fresh session (82% after
+  /compact)`), and `--json` has it as the loop's `context`. `magnum tui --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
+- `magnum logs <ref>` shows `fix.start`, `fix.compacted`, `fix.fresh_session`, `fix.context_unknown`,
+  `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.round_ignored`, `fix.needs_you`, `fix.capped`,
+  `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.
   `magnum doctor` checks that the fix skill and prompt resolve and that the identity the fix role acts as is
   a `gh` identity whose login works, one line per identity when watches poll as different ones.

@@ -112,6 +112,12 @@ const (
     Timeouts used against herdr and the CLIs.
 
 const (
+	// CompactTimeout bounds Compact's wait for the compaction turn to end.
+	CompactTimeout = 10 * time.Minute
+)
+    Compaction timing.
+
+const (
 	EventHooksTrusted  = "agents.hooks_trusted"
 	EventHooksDeclined = "agents.hooks_declined"
 )
@@ -215,6 +221,10 @@ const (
 const CodexCyberPolicy = "cyber_policy"
     CodexCyberPolicy is the codex_error_info of Codex's cybersecurity refusal
     ("This content was flagged for possible cybersecurity risk").
+
+const CompactCommand = "/compact"
+    CompactCommand is what Compact types into the agent's pane: Claude Code's
+    /compact, which replaces the conversation so far with its summary.
 
 const CompletionIdleTicks = 2
     CompletionIdleTicks is how many consecutive idle|done observations end a
@@ -1074,6 +1084,26 @@ func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
     refuses to close is logged, and the first such failure returned after the
     others were tried.
 
+func (m *Manager) Compact(ctx context.Context, s store.Session) error
+    Compact compacts the conversation of session s: it types CompactCommand
+    into the idle agent's pane, as SwitchModel types /model, and waits
+    for the compaction turn to end: the agent seen working, then idle on
+    CompletionIdleTicks polls in a row (compactQuietPolls when it was never seen
+    working). The turn is magnum's: the session's last_prompt_at and idle_ticks
+    are set as a prompt sets them, and the observer never takes the agent's work
+    for a human's while Compact waits (isCompacting). An agent that is not idle
+    is refused with ErrBusy before anything is typed; a turn that has not ended
+    within CompactTimeout is ErrTimeout (the agent may still be at it).
+
+func (m *Manager) ContextUsed(ctx context.Context, s store.Session) (percent int, ok bool)
+    ContextUsed reads how full session s's context is, in percent, from the
+    last status lines of its pane's visible screen (contextStatusLines), with
+    its kind's context_pattern (config.Kind.ContextRegexp): the newest match,
+    the bottom line's last first, gives the figure, its "used" group as written,
+    its "left" group as 100 minus it; a figure above 100 is no figure. ok is
+    false when the kind has no pattern, the pane cannot be read, or no line
+    shows a figure.
+
 func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slotPath string, env map[string]string, role config.Role) (Workspace, error)
     EnsurePane adds a pane for role to ws unless a live session of the role
     already has a pane in that workspace (e.g. claude-simplify, which runs on
@@ -1226,22 +1256,22 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
     capturedAt (read the clock before herdr's snapshot call), and returns one
     Observation per session:
 
-      - agent found (by name, else by pane): status/status_at stored;
-        idle|done increments idle_ticks, working|blocked resets it;
-        a newly reported agent_session.value becomes session_id;
-        a starting session becomes live. working + a submitted run -> run
-        working (working_seen_at). idle_ticks >= CompletionIdleTicks + a
-        submitted/working run -> run ended, ObsCompleted. working with no
-        pending/submitted/working run (outside a short grace after start/prompt)
-        -> ObsHumanActive (CooldownUntil set when it begins the PR's cooldown),
-        unless the agent is a claude agent whose transcript shows no prompt
-        typed into the pane after magnum's last prompt to it (magnum's turn
-        going on after esc cut it short, a turn a task notification began;
-        see humanTurn), or a judge still finishing the turn of a run the round
-        settled on its result file (see turnTail). blocked -> ObsBlocked,
-        or ObsPromptDenied when a pending/submitted/working run is in flight,
-        the kind's on_permission_prompt is "deny" and the screen shows a
-        permission prompt, which is answered No (see answerPermission;
+      - agent found (by name, else by pane): status/status_at stored; idle|done
+        increments idle_ticks, working|blocked resets it; a newly reported
+        agent_session.value becomes session_id; a starting session becomes live.
+        working + a submitted run -> run working (working_seen_at). idle_ticks
+        >= CompletionIdleTicks + a submitted/working run -> run ended,
+        ObsCompleted. working with no pending/submitted/working run (outside
+        a short grace after start/prompt) -> ObsHumanActive (CooldownUntil set
+        when it begins the PR's cooldown), unless the agent is a claude agent
+        whose transcript shows no prompt typed into the pane after magnum's
+        last prompt to it (magnum's turn going on after esc cut it short, a
+        turn a task notification began; see humanTurn), a judge still finishing
+        the turn of a run the round settled on its result file (see turnTail),
+        or a session compacting on magnum's /compact (see Compact). blocked ->
+        ObsBlocked, or ObsPromptDenied when a pending/submitted/working run is
+        in flight, the kind's on_permission_prompt is "deny" and the screen
+        shows a permission prompt, which is answered No (see answerPermission;
         never without a run in flight, where the human may be driving the agent,
         so an agent that resumes working after a deny is never human_active).
         idle after such a deny, with that run still in flight and the agent
@@ -2605,6 +2635,12 @@ Package config loads and validates config.toml (kept in the repository).
 CONSTANTS
 
 const (
+	ContextUsedGroup = "used" // the percent of the context used
+	ContextLeftGroup = "left" // the percent left
+)
+    Capture groups of Kind.ContextPattern.
+
+const (
 	// PermissionDeny: answer the prompt's No option, once per prompt and at
 	// most a bounded number of times per run, so a review agent that hits a
 	// prompt its CLI shows even in its no-approval mode (Claude Code's
@@ -2804,8 +2840,19 @@ const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` f
     DefaultAutoApproveBody is the body of an automatic approval when the watch
     sets no auto_approve_body.
 
+const DefaultClaudeContextPattern = `(?:\((?P<used>\d{1,3})%\)|Context left until auto-compact: (?P<left>\d{1,3})%)`
+    DefaultClaudeContextPattern is the claude kind's context_pattern: a percent
+    in parentheses, as a status line shows the context used ("418k/1m (41%)"),
+    or Claude Code's warning as the context fills up ("Context left until
+    auto-compact: 8%").
+
 const DefaultEditorPrompt = "skill-edit.md"
     DefaultEditorPrompt is the skill editor's prompt file.
+
+const DefaultFixCompactAt = 70
+    DefaultFixCompactAt is [pipeline] fix_compact_at's default: a fixer whose
+    context is 70% used or more compacts its conversation before its next cycle,
+    well before Claude Code compacts it by itself in the middle of a turn.
 
 const DefaultFixCycles = 3
     DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
@@ -2957,7 +3004,7 @@ func DefaultKinds() map[string]Kind
         {model}", fallback_models ["opus","sonnet"], reset_model "default",
         project_untrust ["--setting-sources","user"], mcp_off true with
         mcp_strict ["--strict-mcp-config"], exit_keys ["/","e","x","i",
-        "t","enter"].
+        "t","enter"], context_pattern DefaultClaudeContextPattern.
       - droid (0.232): resume ["--resume","{session}"]; no model, effort or name
         flag in interactive mode, no login check.
       - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
@@ -3853,6 +3900,15 @@ type Kind struct {
 	// "/exit" then enter, one key each (send-keys takes no word). Empty =
 	// the hard quit goes straight to the close.
 	ExitKeys []string `toml:"exit_keys"`
+	// ContextPattern reads how full a session's context is from its pane's
+	// status lines (agents.Manager.ContextUsed): a Go regexp with a capture
+	// group named "used" (the percent of the context used) or "left" (the
+	// percent left, read as 100 minus it), or both in alternatives; the
+	// newest match counts. claude: DefaultClaudeContextPattern, which reads
+	// a status line's "418k/1m (41%)" and Claude Code's own "Context left
+	// until auto-compact: 8%". "" = the kind's panes show no figure, so
+	// [pipeline] fix_compact_at never compacts its fixer.
+	ContextPattern string `toml:"context_pattern"`
 }
     Kind is a [kinds.<name>] block: how magnum drives one agent CLI that
     herdr knows by that name (`herdr agent start --kind <name>`). User blocks
@@ -3886,6 +3942,11 @@ func (k Kind) ConfigOffArgs(servers, plugins, project, untrusted []string, docsO
     them; none in MCPAllow, nothing without MCPDisable), PluginDisable
     once per plugin (PluginOffArgs), then ProjectDocsOff when docsOff and
     UntrustArgs(untrusted).
+
+func (k Kind) ContextRegexp() (*regexp.Regexp, error)
+    ContextRegexp compiles ContextPattern: nil without one, an error naming
+    the key for a pattern that does not compile or names neither capture group
+    (ContextUsedGroup, ContextLeftGroup).
 
 func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable bool)
     LoggedIn reads LoginCheck's output per LoginOK. exitOK is whether the
@@ -4177,6 +4238,16 @@ type Pipeline struct {
 	// review with findings on a PR whose author is one of the operator's
 	// logins. A [[watch]] may override it; see Config.AutofixFor.
 	Autofix string `toml:"autofix"`
+	// FixCompactAt: before a fix cycle resumes the fixer's conversation (a
+	// live session, or a parked one ResumeID resumes; a fixer that starts
+	// fresh never), the fix job reads how full its context is from the
+	// pane's status lines (its kind's Kind.ContextPattern) and, at or above
+	// this percent, sends /compact first; a fixer still at or above it after
+	// the compaction, or whose compaction did not finish, is parked and the
+	// cycle starts it fresh, while a pane that shows no figure leaves it as
+	// it is (engine fix_compact.go). Default DefaultFixCompactAt; 0 = off; at
+	// most 99.
+	FixCompactAt int `toml:"fix_compact_at"`
 	// Whiteboard switches the whiteboard job on: after every review magnum
 	// posts on a new head, the whiteboard role writes a whiteboard of the
 	// PR (an interactive document in the dev.fast Whiteboard app) in the
@@ -6000,6 +6071,12 @@ type Agents interface {
 	WhiteboardPrompt(pr store.PR, role agents.Role, run store.Run, in agents.WhiteboardPromptInput) (string, error)
 	Submit(ctx context.Context, run store.Run, text string) error
 	Tell(ctx context.Context, run store.Run, text string) error
+	// ContextUsed reads how full a session's context is from its pane's
+	// status lines (ok false: no figure), and Compact has its agent compact
+	// its conversation and waits for that turn to end: the fix job's
+	// compaction before a cycle that resumes the fixer (fix_compact.go).
+	ContextUsed(ctx context.Context, s store.Session) (int, bool)
+	Compact(ctx context.Context, s store.Session) error
 }
     Agents is the part of *agents.Manager the engine drives.
 
@@ -6631,6 +6708,7 @@ type FixState struct {
 	Role      string    `json:"role,omitempty"`
 	ForcedAt  time.Time `json:"forced_at,omitzero"`
 	Held      bool      `json:"held,omitempty"`
+	Context   string    `json:"context,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -6648,6 +6726,11 @@ type FixState struct {
     ended and called for a next cycle a drain for a restart refused: no round
     that ends afterwards is the loop's re-review, and the restart's recovery,
     or the drain's end without one, starts that cycle (recoverReviewingLoop).
+    Context is what the current cycle did to the fixer's conversation it resumed
+    before its prompt, in a few words (fixCompact: "compacted 82% → 31%",
+    "compacted from 82%" when the pane shows no figure after it, "fresh session
+    (82% after /compact)", "fresh session (/compact failed)"); "" when it
+    resumed it as it was or started a fresh fixer anyway.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix

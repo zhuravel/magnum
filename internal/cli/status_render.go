@@ -588,15 +588,21 @@ func inspDedupe(ss []string) []string {
 }
 
 // statusRenderFix prints the card's fix line: the PR's fix loop ("cycle 1
-// of 3 · claude-fix · started by magnum fix 12:30 · report <path>") and its
-// opt-out of autofix ("off since 12:30 (magnum fix --off)"), the second on a
-// line of its own when it has both; nothing when it has neither.
+// of 3 · claude-fix · started by magnum fix 12:30 · report <path>", with
+// what the cycle did to the fixer's conversation after the role when it
+// compacted it or started it fresh: "claude-fix · compacted 82% → 31%")
+// and its opt-out of autofix ("off since 12:30 (magnum fix --off)"), the
+// second on a line of its own when it has both; nothing when it has
+// neither.
 func statusRenderFix(w io.Writer, loop *engine.FixState, off *engine.FixOff, now time.Time) {
 	label := "  fix:       "
 	if f := loop; f != nil {
 		s := fmt.Sprintf("cycle %d of %d", f.Cycle, f.Cap)
 		if f.Role != "" {
 			s += " · " + f.Role
+		}
+		if f.Context != "" {
+			s += " · " + f.Context
 		}
 		if f.By != "" {
 			s += " · started by " + f.By

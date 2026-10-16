@@ -846,6 +846,13 @@ type fakeAgents struct {
 	onTell func(run store.Run, text string)
 	// fixPromptErr, when set, is what FixPrompt fails with.
 	fixPromptErr error
+	// contextUsed, when set, answers ContextUsed with the figure session
+	// s's pane shows (ok false: none); unset, every pane shows 0%.
+	// onCompact, when set, runs as Compact is called, with the session it
+	// compacts; compactErr is what Compact fails with after it.
+	contextUsed func(s store.Session) (int, bool)
+	onCompact   func(s store.Session)
+	compactErr  error
 }
 
 func (f *fakeAgents) record(s string) {
@@ -1162,6 +1169,32 @@ func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) err
 		hook(run, text)
 	}
 	return nil
+}
+
+// ContextUsed records the read ("context:<pr>:<role>") and answers with
+// contextUsed (0%, unset).
+func (f *fakeAgents) ContextUsed(_ context.Context, s store.Session) (int, bool) {
+	f.record(fmt.Sprintf("context:%d:%s", s.PRID, s.Role))
+	f.mu.Lock()
+	hook := f.contextUsed
+	f.mu.Unlock()
+	if hook == nil {
+		return 0, true
+	}
+	return hook(s)
+}
+
+// Compact records the compaction ("compact:<pr>:<role>"), runs onCompact
+// and fails with compactErr.
+func (f *fakeAgents) Compact(_ context.Context, s store.Session) error {
+	f.record(fmt.Sprintf("compact:%d:%s", s.PRID, s.Role))
+	f.mu.Lock()
+	hook, err := f.onCompact, f.compactErr
+	f.mu.Unlock()
+	if hook != nil {
+		hook(s)
+	}
+	return err
 }
 
 // Tell records the text typed into run's agent and runs onTell.

@@ -105,9 +105,10 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     when it begins the PR's cooldown), unless the agent is a claude agent
 //     whose transcript shows no prompt typed into the pane after magnum's
 //     last prompt to it (magnum's turn going on after esc cut it short, a
-//     turn a task notification began; see humanTurn), or a judge still
+//     turn a task notification began; see humanTurn), a judge still
 //     finishing the turn of a run the round settled on its result file (see
-//     turnTail). blocked -> ObsBlocked,
+//     turnTail), or a session compacting on magnum's /compact (see
+//     Compact). blocked -> ObsBlocked,
 //     or ObsPromptDenied when a pending/submitted/working run is in flight,
 //     the kind's on_permission_prompt is "deny" and the screen shows a
 //     permission prompt, which is answered No (see answerPermission; never
@@ -279,7 +280,7 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 			m.nameAgent(ctx, s, pane, terminalTitle(a, panes[pane]))
 		}
 		if len(runs) == 0 && !recent(s.StartedAt, now) && (s.LastPromptAt == nil || !recent(*s.LastPromptAt, now)) &&
-			m.humanTurn(s, sid) && !m.turnTail(ctx, s) {
+			!m.isCompacting(s.ID) && m.humanTurn(s, sid) && !m.turnTail(ctx, s) {
 			until, err := m.humanActive(ctx, s.PRID, now)
 			if err != nil {
 				return o, fmt.Errorf("agents: observe pr %d human activity: %w", s.PRID, err)

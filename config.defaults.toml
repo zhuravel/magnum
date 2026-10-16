@@ -314,6 +314,14 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
                                   # hand for a first week, then switch. Post the reviews as an App identity
                                   # with own: the fixer's replies must not look like the reviewer's.
                                   # [[watch]] may override
+fix_compact_at = 70               # before a fix cycle resumes the fixer's conversation, magnum reads how full its
+                                  # context is from the pane's status line (the kind's context_pattern) and, at
+                                  # or above this percent, sends /compact and waits for it to end, rather than
+                                  # let Claude Code compact it by itself in the middle of a fix. A fixer still at
+                                  # or above it afterwards, or whose /compact did not finish, is parked and the
+                                  # cycle starts it fresh (the fix prompt carries the findings); a pane that shows
+                                  # no figure leaves the fixer as it is and warns once per PR. A fresh fixer is
+                                  # never compacted. 0 = off; at most 99
 whiteboard = false                # true: writes a whiteboard (an interactive document in the dev.fast Whiteboard
                                   # app) of every PR after every review magnum posts on a new head, through
                                   # whiteboard_role, in the PR's slot. Needs dev.fast Whiteboard: Whiteboard
@@ -462,6 +470,13 @@ status_comment_note = ""          # a line of yours under the status comment whi
 #                                     # them when Claude is still its pane's foreground process after two ctrl+c,
 #                                     # waits 10s more, then closes that pane alone (never the workspace) and the
 #                                     # session; [] = the hard park closes the pane straight away
+# context_pattern = '(?:\((?P<used>\d{1,3})%\)|Context left until auto-compact: (?P<left>\d{1,3})%)'
+#                                     # how full a session's context is, read from the newest match in the last
+#                                     # status lines of its pane: a Go regexp with a group named used (percent
+#                                     # used) or left (percent left: 100 minus it), here a status line's
+#                                     # "418k/1m (41%)" and Claude Code's own warning; [pipeline] fix_compact_at
+#                                     # compacts the fixer by it. "" = nothing to read: the kind's fixer is
+#                                     # resumed as it is, never compacted nor started fresh for its context
 # project_untrust = ["--setting-sources", "user"]   # when the PR changes the checkout's .claude/ or .mcp.json,
 #                                     # or a CLAUDE.md, CLAUDE.local.md or AGENTS.md in any directory (against
 #                                     # its merge base, files a round left there included, or when git cannot
