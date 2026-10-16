@@ -685,6 +685,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and the rule is about time, not size. Rejected: a size floor as a key (two knobs for one wish), and a
   full pass on every push after a day (one a day is the floor, the churn rules add the rest).
 
+- **A forced fresh round runs a due full pass, and a same-head round is never the baseline** (2026-10-16,
+  amends "Every tenth re-review of a PR is a full pass" and "A full pass also follows churn and age").
+  talkable#11483's round 46 was a `magnum review --fresh` of its reviewed head after round 45's judge died
+  at the codex-cli bootstrap: the PR had 34 re-reviews since its first review and never a full pass, yet
+  `fullPassDue` excluded every forced and same-head round, so the round ran no full pass, and its judge
+  verified a kept-tiers fix on an empty delta right before a colleague found the third defect in that
+  restore's tier handling (Operations: "A fix is probed on the shapes its writers leave"). The same round
+  then became the PR's review baseline (`pr.<id>.review_baseline`, since the PR's first review came before
+  the churn rules), so the age rule counted from a round that read no new commit. Now a forced round with
+  the fresh flag (`magnum review --fresh`, `pr.<id>.fresh` = `1` on a forced PR) runs the full pass when any
+  rule makes one due (`full_pass_every`, `full_pass_lines`, `full_pass_files`, `full_pass_after`, in that
+  order), on a new head or the reviewed one, so it decides as an automatic re-review would, and the reason
+  names the rule as before and ends `, on magnum review --fresh` ("re-review 35 since the first review
+  (full_pass_every 10), on magnum review --fresh"). A forced round without `--fresh`, a plain same-head
+  re-review, a reply round and a CI check stay excluded. And `settleFullPass` keeps nothing from a round of
+  the reviewed head (`prev_reviewed_sha` = target, from the round's PR as it was at setup, no new field)
+  that is no full pass: the baseline moves only on a full pass, or, when none exists, on the first review
+  (of a PR reviewed before the churn rules, its first review of new commits since). New tests
+  TestAForcedFreshRoundRunsADueFullPass (the 11483 shape with `full_pass_every` 10: a full pass of the
+  reviewed head, its reason, the full pass record and no review baseline; `full_pass_lines` after 600 lines
+  of churn, the churn gone after the full pass; `full_pass_after` 13 hours after the first review; none due:
+  a fresh round of every role, no full pass), TestAForcedRoundWithoutFreshRunsNoFullPass (the same-head
+  round and a forced round of a new head, then the automatic full pass) and
+  TestASameHeadRoundNeverBecomesTheBaseline (without a baseline neither a fresh nor a same-head round makes
+  one and the next review of new commits does; with one it stays). Rejected: a full pass on every forced
+  round (a `magnum review` of a small head of that PR would re-read 24k lines); the count and the age alone
+  on a fresh round, leaving the churn rules to the next automatic re-review (a forced fresh round and an
+  automatic one should decide the same way).
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

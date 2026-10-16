@@ -51,7 +51,8 @@ func newReviewCmd(c *Context) *cobra.Command {
 			"merged gets a post-merge review: the commits magnum missed since its last review (the whole PR when "+
 			"it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR "+
 			"whose head was reviewed, and a PR closed without merging, are refused. --fresh parks "+
-			"the sessions and starts new conversations, --full makes the round a full pass (fresh sessions, every "+
+			"the sessions and starts new conversations (a full pass when a [pipeline] full-pass rule "+
+			"makes one due), --full makes the round a full pass (fresh sessions, every "+
 			"role reviews the whole PR again as a first review does, and the judge decides every earlier thread; "+
 			"[pipeline] full_pass_every schedules one), --role also runs an on-request role of the PR's watch "+
 			"this round (runs = \"first\" after its first completion, or \"manual\"; repeat it for several; "+

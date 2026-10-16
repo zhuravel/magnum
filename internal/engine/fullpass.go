@@ -23,7 +23,11 @@ package engine
 // reply round, a CI check and a round someone asked for (forced or
 // requested; those count, as the runs table cannot tell them apart) never
 // become one; `magnum review --full` asks for one by hand (store.KVPRFresh
-// = FreshFullPass).
+// = FreshFullPass). `magnum review --fresh` (KVPRFresh "1") runs one when
+// any rule makes one due (DECISIONS "A forced fresh round runs a due full
+// pass"): talkable#11483's round 46 was such a round of its
+// reviewed head after 34 re-reviews and never a full pass, and its judge
+// verified a fix on an empty delta.
 //
 // Rounds measure how often the whole-PR view was lost, not how much the code
 // changed (DECISIONS "A full pass also follows churn and age"): one round can
@@ -37,7 +41,9 @@ package engine
 // or once full_pass_after passed since the baseline (a day by default:
 // the operator wants a whole read at least daily). A due full pass overrides a
 // delta check (planFullPass), which small pushes would otherwise renew
-// without end.
+// without end. A round of the reviewed head that is no full pass never
+// becomes the baseline (settleFullPass): it read no new commit, and the
+// age rule would count from it as if the PR had been read whole.
 
 import (
 	"context"
@@ -148,26 +154,42 @@ func (e *Engine) planFullPass(ctx context.Context, job *roundJob) {
 // (rereviewsSinceFullPass); the churn since the baseline reached
 // full_pass_lines lines or full_pass_files files, or a quarter of the PR's
 // at the baseline when that is more; or the PR was large at the baseline
-// and full_pass_after passed since. A delta check may become one; a forced
-// or requested round, a post-merge review, a re-review of the same head, a
-// reply round and a CI check never do.
+// and full_pass_after passed since (scheduledFullPass). A delta check may
+// become one; so may a forced round with fresh sessions (`magnum review
+// --fresh`), by the same rules as an automatic re-review, its reason ending
+// ", on magnum review --fresh". A forced round without --fresh, a requested
+// round, a post-merge review, a re-review of the same head, a reply round
+// and a CI check never do.
 func (e *Engine) fullPassDue(ctx context.Context, job *roundJob) fullPassWhy {
 	pr := job.pr
 	if job.kind != pipeline.KindRereview || postMerge(pr) {
 		return fullPassWhy{}
 	}
-	if v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID)); v == store.FreshFullPass {
+	v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID))
+	if v == store.FreshFullPass {
 		if h, ok := e.heldReviewOf(ctx, pr.ID, deref(pr.LastReviewID)); ok { // approval_hold.go: the held review's full pass
 			return fullPassWhy{fullPassApproval, h.reason()}
 		}
 		return fullPassWhy{"requested", "requested by magnum review --full"}
 	}
-	if pr.Forced || job.requested || job.sameHead || job.replies > 0 || job.ciRed {
+	fresh := pr.Forced && v != "" // magnum review --fresh
+	if (pr.Forced && !fresh) || job.requested || job.sameHead || job.replies > 0 || job.ciRed {
 		return fullPassWhy{}
 	}
+	why := e.scheduledFullPass(ctx, pr.ID)
+	if fresh && why.text != "" {
+		why.text += ", on magnum review --fresh"
+	}
+	return why
+}
+
+// scheduledFullPass is the first rule that makes PR prID's next re-review a
+// full pass, in fullPassDue's order: full_pass_every, the churn rules, then
+// full_pass_after; the zero fullPassWhy when none does.
+func (e *Engine) scheduledFullPass(ctx context.Context, prID int64) fullPassWhy {
 	p := e.cfg.Pipeline
 	if every := p.FullPassEvery; every > 0 {
-		if n, last := e.rereviewsSinceFullPass(ctx, pr.ID); n+1 >= every {
+		if n, last := e.rereviewsSinceFullPass(ctx, prID); n+1 >= every {
 			since := "the first review"
 			if last.Round > 0 {
 				since = fmt.Sprintf("the full pass of round %d", last.Round)
@@ -175,11 +197,11 @@ func (e *Engine) fullPassDue(ctx context.Context, job *roundJob) fullPassWhy {
 			return fullPassWhy{"full_pass_every", fmt.Sprintf("re-review %d since %s (full_pass_every %d)", n+1, since, every)}
 		}
 	}
-	base, since, ok := e.fullPassBaseline(ctx, pr.ID)
+	base, since, ok := e.fullPassBaseline(ctx, prID)
 	if !ok {
 		return fullPassWhy{}
 	}
-	churn, _ := e.churnSince(ctx, pr.ID)
+	churn, _ := e.churnSince(ctx, prID)
 	if n := p.FullPassLines; n > 0 && churn.Lines >= max(n, base.Lines/fullPassShare) {
 		return fullPassWhy{"full_pass_lines", fmt.Sprintf("%d lines changed since %s (full_pass_lines %d; a quarter of its %d lines then: %d)",
 			churn.Lines, since, n, base.Lines, base.Lines/fullPassShare)}
@@ -287,20 +309,23 @@ func (e *Engine) noteFullPassRound(ctx context.Context, prID int64, on bool) {
 // settleFullPass keeps a review that posted (onPosted) for the full-pass
 // rules: a full pass becomes the PR's baseline, from which the next count
 // and churn start (kvPRFullPass); the review of a PR without a baseline (its
-// first review, or its first since the churn rules) becomes its review
-// baseline (kvPRReviewBaseline); any other review of new commits adds them
-// to the churn (addChurn). A post-merge review and an eval's replay keep
-// nothing.
+// first review, or its first of new commits since the churn rules) becomes
+// its review baseline (kvPRReviewBaseline); any other review of new commits
+// adds them to the churn (addChurn). A round of the reviewed head
+// (prev_reviewed_sha = target) that is no full pass keeps nothing: it read
+// no new commit, so it never becomes the baseline. A post-merge review and
+// an eval's replay keep nothing.
 func (e *Engine) settleFullPass(ctx context.Context, job *roundJob, in pipeline.RoundInput, res pipeline.RoundResult) {
 	if job.postMerge || job.evalHead != "" {
 		return
 	}
 	prID, prev := in.PR.ID, deref(in.PR.ReviewedSHA)
 	_, _, hasBase := e.fullPassBaseline(ctx, prID)
-	switch {
+	switch sameHead := prev != "" && prev == in.TargetSHA; {
 	case in.FullPass:
 		e.setBaseline(ctx, kvPRFullPass(prID), e.baselineOf(ctx, job, in, res))
 		e.delKV(ctx, kvPRReviewBaseline(prID), kvPRFullPassChurn(prID))
+	case sameHead: // no new commit read: neither a baseline nor churn
 	case !hasBase:
 		rec := e.baselineOf(ctx, job, in, res)
 		rec.Initial = prev == ""

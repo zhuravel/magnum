@@ -281,6 +281,170 @@ func TestAFullPassCanBeAskedFor(t *testing.T) {
 	}
 }
 
+// preChurnPR is PR #2 as talkable#11483 was before its round 46: reviewed
+// at b1 with n re-reviews on new commits since its first review, no full
+// pass, and no review baseline (its first review came before the churn
+// rules).
+func preChurnPR(t *testing.T, h *harness, n int) {
+	t.Helper()
+	h.reviewedPR(2, "b1")
+	seedRereviews(t, h, n)
+	h.e.delKV(h.ctx, kvPRReviewBaseline(h.pr(2).ID))
+}
+
+// reviewAgain asks for a review of PR #2 (`magnum review`, --fresh when
+// fresh) and runs it; it returns the round's input.
+func reviewAgain(t *testing.T, h *harness, fresh bool) pipeline.RoundInput {
+	t.Helper()
+	before := len(h.rd.all())
+	h.advance(time.Minute)
+	id := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}, Fresh: fresh})
+	h.tick()
+	if req := h.request(id); req.State != store.RequestDone {
+		t.Fatalf("request %s: %s", req.State, deref(req.Result))
+	}
+	if len(h.rd.all()) == before {
+		h.tick()
+	}
+	ins := h.rd.all()
+	if len(ins) != before+1 {
+		t.Fatalf("rounds = %d after the request, want %d", len(ins), before+1)
+	}
+	h.wantState(2, store.PRReviewed)
+	return ins[before]
+}
+
+// talkable#11483's round 46 was a `magnum review --fresh` of its reviewed
+// head after a judge died at its bootstrap: 34 re-reviews since its first
+// review and never a full pass, yet the forced round ran none, so its
+// judge verified a fix on an empty delta. A forced round with --fresh runs
+// the full pass any rule makes due (full_pass_every, the churn rules,
+// full_pass_after), as an automatic re-review would, its reason naming the
+// rule and --fresh, and becomes the PR's last full pass.
+func TestAForcedFreshRoundRunsADueFullPass(t *testing.T) {
+	t.Run("full_pass_every", func(t *testing.T) {
+		h := fullPassHarness(t, 10)
+		preChurnPR(t, h, 34)
+		in := reviewAgain(t, h, true)
+		wantFullPass(t, "the fresh round of the reviewed head", in)
+		if in.TargetSHA != "b1" {
+			t.Fatalf("target %s, want the reviewed b1", in.TargetSHA)
+		}
+		reason, rule, start := fullPassWhyOf(t, h, 2)
+		if want := "re-review 35 since the first review (full_pass_every 10), on magnum review --fresh"; reason != want || rule != "full_pass_every" || start != want {
+			t.Fatalf("full pass reason %q, rule %q, start %q: want %q", reason, rule, start, want)
+		}
+		if rec := lastFullPassOf(t, h, 2); rec.Target != "b1" || rec.Round != 36 {
+			t.Fatalf("full pass record %+v, want round 36 on b1", rec)
+		}
+		if _, ok := kvValue(h, kvPRReviewBaseline(h.pr(2).ID)); ok {
+			t.Fatal("the full pass left a review baseline")
+		}
+	})
+	t.Run("full_pass_after", func(t *testing.T) {
+		h := fullPassHarness(t, 0)
+		h.reviewedPR(2, "b1")
+		h.advance(13 * time.Hour)
+		wantFullPass(t, "the fresh round half a day after the baseline", reviewAgain(t, h, true))
+		reason, rule, _ := fullPassWhyOf(t, h, 2)
+		if want := "13h since the first review (full_pass_after 12h), on magnum review --fresh"; reason != want || rule != "full_pass_after" {
+			t.Fatalf("full pass reason %q, rule %q: want %q", reason, rule, want)
+		}
+	})
+	t.Run("full_pass_lines", func(t *testing.T) {
+		h := fullPassHarness(t, 0, sizedGit(map[string][2]int{"b1": {20, 1000}}))
+		h.reviewedPR(2, "b1")
+		id := h.pr(2).ID
+		churn := fullPassChurn{To: "b1"}
+		churn.add(600, []string{"app/models/coupon.rb"})
+		b, err := json.Marshal(churn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.e.setKV(h.ctx, kvPRFullPassChurn(id), string(b))
+		wantFullPass(t, "the fresh round after 600 lines of churn", reviewAgain(t, h, true))
+		reason, rule, _ := fullPassWhyOf(t, h, 2)
+		if want := "600 lines changed since the first review (full_pass_lines 500; a quarter of its 1000 lines then: 250), on magnum review --fresh"; reason != want || rule != "full_pass_lines" {
+			t.Fatalf("full pass reason %q, rule %q: want %q", reason, rule, want)
+		}
+		if _, ok := kvValue(h, kvPRFullPassChurn(id)); ok {
+			t.Fatal("the churn outlived the full pass")
+		}
+		if rec := lastFullPassOf(t, h, 2); rec.Target != "b1" || rec.Lines != 1000 {
+			t.Fatalf("full pass record %+v: want b1 with 1000 lines", rec)
+		}
+	})
+	t.Run("none due", func(t *testing.T) {
+		h := fullPassHarness(t, 50)
+		preChurnPR(t, h, 34)
+		if in := reviewAgain(t, h, true); in.FullPass || in.Kind != pipeline.KindRecovery || len(in.Roles) < 3 {
+			t.Fatalf("kind %s, full pass %v, roles %v: want a fresh round of every role, no full pass", in.Kind, in.FullPass, roleNames(in.Roles))
+		}
+		if evs := approvalEvents(t, h, 2, "round.full_pass"); len(evs) != 0 {
+			t.Fatalf("round.full_pass events: %+v", evs)
+		}
+	})
+}
+
+// `magnum review` without --fresh stays out of the full pass however many
+// re-reviews came before: on the reviewed head it is the judge's same-head
+// round, on a new head an ordinary re-review; the next automatic re-review
+// is the full pass.
+func TestAForcedRoundWithoutFreshRunsNoFullPass(t *testing.T) {
+	h := fullPassHarness(t, 10)
+	preChurnPR(t, h, 34)
+	if in := reviewAgain(t, h, false); in.FullPass || !in.SameHead {
+		t.Fatalf("full pass %v, same head %v: want the judge's same-head round", in.FullPass, in.SameHead)
+	}
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+	h.tick()
+	wantOrdinary(t, "magnum review of a new head", reviewAgain(t, h, false))
+	if evs := approvalEvents(t, h, 2, "round.full_pass"); len(evs) != 0 {
+		t.Fatalf("round.full_pass events: %+v", evs)
+	}
+	wantFullPass(t, "the automatic re-review after them", pushAndRereview(t, h, "b3"))
+}
+
+// Round 46 of talkable#11483 also became the PR's review baseline though it
+// read no new commit, so the age rule counted from a round that read no
+// line of the PR whole. A same-head round that is no full pass never
+// becomes the baseline: neither a fresh one nor the judge's same-head
+// round, with a baseline (it stays) or without one (none is made); the
+// next review of new commits becomes it, as for a PR reviewed before the
+// churn rules.
+func TestASameHeadRoundNeverBecomesTheBaseline(t *testing.T) {
+	t.Run("without a baseline", func(t *testing.T) {
+		h := fullPassHarness(t, 0)
+		preChurnPR(t, h, 34)
+		id := h.pr(2).ID
+		for _, fresh := range []bool{true, false} {
+			if in := reviewAgain(t, h, fresh); in.FullPass || in.TargetSHA != "b1" {
+				t.Fatalf("fresh %v: full pass %v on %s: want a round of the reviewed b1", fresh, in.FullPass, in.TargetSHA)
+			}
+			if v, ok := kvValue(h, kvPRReviewBaseline(id)); ok {
+				t.Fatalf("fresh %v: the same-head round became the review baseline: %s", fresh, v)
+			}
+		}
+		pushAndRereview(t, h, "b2")
+		base, ok := h.e.readBaseline(h.ctx, kvPRReviewBaseline(id))
+		if !ok || base.Target != "b2" || base.Initial || base.Round != 38 {
+			t.Fatalf("review baseline %+v (%v): want the review of b2 in round 38", base, ok)
+		}
+	})
+	t.Run("with a baseline", func(t *testing.T) {
+		h := fullPassHarness(t, 0)
+		h.reviewedPR(2, "b1")
+		id := h.pr(2).ID
+		before, _ := kvValue(h, kvPRReviewBaseline(id))
+		h.advance(2 * time.Hour)
+		reviewAgain(t, h, true)
+		reviewAgain(t, h, false)
+		if after, _ := kvValue(h, kvPRReviewBaseline(id)); after != before || before == "" {
+			t.Fatalf("review baseline %s, want the first review's %s", after, before)
+		}
+	})
+}
+
 // The status comment's in-progress line says when the round under way is a
 // full pass.
 func TestTheStatusCommentNamesAFullPassUnderWay(t *testing.T) {

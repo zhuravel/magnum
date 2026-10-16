@@ -61,7 +61,9 @@ type Pipeline struct {
 	// the full diff again through the recovery prompt (engine fullpass.go).
 	// A re-review of the same head, a reply round, a CI check and a round
 	// someone asked for never become one; a delta check does, when one is
-	// due. Default DefaultFullPassEvery; 0 = this rule off.
+	// due, and so does `magnum review --fresh` (by this rule, FullPassLines,
+	// FullPassFiles or FullPassAfter). Default DefaultFullPassEvery; 0 =
+	// this rule off.
 	FullPassEvery int `toml:"full_pass_every"`
 	// FullPassLines: an automatic re-review is also a full pass once the
 	// lines the PR's re-reviews changed since its baseline (its last full

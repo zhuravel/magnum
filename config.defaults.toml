@@ -272,7 +272,8 @@ full_pass_every = 10              # the Nth automatic re-review of a PR, counted
                                   # the earlier reviews), and the judge then re-decides the earlier threads.
                                   # Costs a first review's rounds of every role. A due one overrides a delta
                                   # check; a same-head or reply round and `magnum review` never become one
-                                  # (`magnum review --full` asks for one). 0 = this rule off
+                                  # (`magnum review --full` asks for one; `--fresh` runs one when this or a
+                                  # rule below makes one due). 0 = this rule off
 full_pass_lines = 500             # also a full pass once the PR's re-reviews since its baseline (its last full
                                   # pass, else its first review) changed this many lines (added plus deleted,
                                   # lockfiles and related_ignore left out, a push that merged the base branch
