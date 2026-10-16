@@ -819,6 +819,9 @@ type fakeAgents struct {
 	// onStart, when set, runs as StartAgent starts, with the role and the
 	// conversation it resumes.
 	onStart func(role config.Role, resume string)
+	// startErr, when set, is what StartAgent fails with after onStart (nil:
+	// it starts the agent).
+	startErr func(pr store.PR, role config.Role, paneID string) error
 
 	// layout and cfg give NewRun the report path agents.NewRun gives a run.
 	layout paths.Layout
@@ -959,6 +962,14 @@ func (f *fakeAgents) StartAgent(ctx context.Context, pr store.PR, role config.Ro
 	f.mu.Unlock()
 	if onStart != nil {
 		onStart(role, resume)
+	}
+	f.mu.Lock()
+	startErr := f.startErr
+	f.mu.Unlock()
+	if startErr != nil {
+		if err := startErr(pr, role, paneID); err != nil {
+			return err
+		}
 	}
 	if resume != "" && f.failResume {
 		return errors.New("resume failed")

@@ -2334,7 +2334,11 @@ check failed, or a review carrying the run's marker came from another login), `a
 loop left findings to you, reached its cap or failed: read the fixer's report), `attention · overload`
 (the agent's API stayed overloaded) or `attention · no review` (the judge posted nothing after a nudge, or
 an inconsistent result). A reason Magnum does not know keeps the bare `attention`; the card gives the
-cause, the next step and the end of the output, and a snooze's time gives way to the cause. A reviewed PR
+cause, the next step and the end of the output, and a snooze's time gives way to the cause. When a launch
+that never came up held a role's agent name (herdr's `agent_name_taken`), the card's line names it, its
+pane and the agent, for example `agents failed 3× on abc1234: a dead launch holds the codex-judge's pane
+w9J:p2 (agent mg-11932-codex-judge-5d01cf): closed on the next retry`, since the next start closes such a
+pane when it shows only a shell (`magnum open` shows a pane that runs something). A reviewed PR
 with threads where Magnum stopped arguing reads `reviewed · argued` (its title keeps the `!` a failed round
 shares): the card's NEEDS YOU lists the threads, and `r`, `A` or `C` decide them. A round in flight, a wait
 or a snooze keeps the cell, as do `✔ auto` and `✔ needs you`. Both words are dimmed like a wait's text and

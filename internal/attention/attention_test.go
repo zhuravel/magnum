@@ -163,3 +163,41 @@ func TestAFixReasonTooLongForTheSummaryDropsTheReportPathNotTheCounts(t *testing
 		t.Errorf("summary of a line that fits = %q, want it whole", r.Summary)
 	}
 }
+
+// On talkable#11932 a launch that never came up held the judge's agent name
+// for hours: every start failed with herdr's agent_name_taken (or, with the
+// launch in another pane, waited as busy), and the board said "setup". The
+// reason names the dead launch, the role, its pane and the agent, and says
+// the next retry closes it, for a PR in needs_attention and for one that
+// still retries alike; a chain without the signature reads as before.
+func TestExplainsADeadLaunchThatHoldsTheName(t *testing.T) {
+	want := "a dead launch holds the codex-judge's pane w9J:p2 (agent mg-11932-codex-judge-5d01cf): closed on the next retry"
+	for _, tc := range []struct {
+		name, kind, msg, summary string
+	}{
+		{"name taken, three attempts", KindFailed,
+			"3 attempts on 5d01cfa: start codex-judge: agents: start mg-11932-codex-judge-5d01cf in w9J:p2: herdr agent.start: agent_name_taken: agent name mg-11932-codex-judge-5d01cf is already in use",
+			"agents failed 3× on 5d01cfa: " + want},
+		{"name taken, retrying", "",
+			"start codex-judge: agents: start mg-11932-codex-judge-5d01cf in w9J:p2: herdr agent.start: agent_name_taken: agent name mg-11932-codex-judge-5d01cf is already in use",
+			"agents failed: " + want},
+		{"listed in another pane, retrying", "",
+			"start codex-judge: agents: start mg-11932-codex-judge-5d01cf: herdr still lists in pane w9J:p2 the agent of session 535, which magnum closed; the agent never came up and has no conversation: agent busy",
+			"agents failed: " + want},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Explain(tc.kind, tc.msg, "talkable#11932")
+			if r.Kind != KindFailed || r.Stage != StageAgents || r.Cause != want || r.Summary != tc.summary {
+				t.Fatalf("reason %+v", r)
+			}
+			if !strings.Contains(r.Fix, "next retry closes the pane") || !strings.Contains(r.Fix, "`magnum review talkable#11932`") ||
+				!strings.Contains(r.Fix, "`magnum open talkable#11932`") {
+				t.Fatalf("fix %q", r.Fix)
+			}
+		})
+	}
+	other := Explain(KindFailed, "3 attempts on 5d01cfa: start codex-judge: agents: start mg-11932-codex-judge-5d01cf in w9J:p2: herdr agent.start: timeout: no agent", "talkable#11932")
+	if strings.Contains(other.Summary, "dead launch") {
+		t.Fatalf("a start that timed out reads as a dead launch: %+v", other)
+	}
+}

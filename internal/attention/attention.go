@@ -97,7 +97,37 @@ var (
 	// fixReportRe finds the fixer's report in a fix job's message: an
 	// absolute path to a .md file.
 	fixReportRe = regexp.MustCompile(`/[^\s:;,]+\.md\b`)
+	// deadLaunchRes find a launch that never came up holding a role's agent
+	// name in a start's error (talkable#11932): herdr refusing the name
+	// (agents.StartAgent's "start <agent> in <pane>: herdr agent.start:
+	// agent_name_taken"), or the start finding it in another pane (the
+	// agents' endedAgentError, "herdr still lists in pane <pane> …; the agent
+	// never came up"), each after the engine's "start <role>: ". Groups:
+	// role (may be empty), agent, pane.
+	deadLaunchRes = []*regexp.Regexp{
+		regexp.MustCompile(`(?:start ([\w.-]+): )?agents: start ([a-z][a-z0-9_-]*) in (\S+): herdr agent\.start: agent_name_taken\b`),
+		regexp.MustCompile(`(?:start ([\w.-]+): )?agents: start ([a-z][a-z0-9_-]*): herdr still lists in pane (\S+) the agent of session \d+, which magnum [^;]*; the agent never came up`),
+	}
 )
+
+// deadLaunch is the cause of a start a launch that never came up refused
+// (deadLaunchRes), naming the role, its pane and the agent, and that the
+// next retry closes it (agents.StartAgent clears such a launch first); ok
+// is false for any other chain.
+func deadLaunch(chain string) (string, bool) {
+	for _, re := range deadLaunchRes {
+		m := re.FindStringSubmatch(chain)
+		if m == nil {
+			continue
+		}
+		whose := "the"
+		if m[1] != "" {
+			whose = "the " + m[1] + "'s"
+		}
+		return fmt.Sprintf("a dead launch holds %s pane %s (agent %s): closed on the next retry", whose, m[3], m[2]), true
+	}
+	return "", false
+}
 
 // Explain reads why a PR needs the user from the stored error msg (the PR's
 // last_error) and kind (the engine's why, "" when unknown: then inferred).
@@ -129,6 +159,9 @@ func Explain(kind, msg, ref string) Reason {
 		chain, output = text[:loc[0]], text[loc[1]:]
 	} else if i := strings.IndexByte(text, '\n'); i >= 0 {
 		chain, output = text[:i], text[i+1:]
+	}
+	if _, ok := deadLaunch(chain); ok && r.Kind == "" {
+		r.Kind = KindFailed // a setup's refusal, whatever herdr's message says
 	}
 	if r.Kind == "" {
 		r.Kind = inferKind(chain)
@@ -197,6 +230,10 @@ func stageOf(kind, chain string) string {
 func cause(r Reason, chain, output string, lines []string, ref string) (string, string) {
 	retry := fmt.Sprintf("`magnum review %s`", ref)
 	generic := "fix the cause, then " + retry + " (or `magnum ignore " + ref + "` to stop reviewing it)"
+	if c, ok := deadLaunch(chain); ok {
+		return c, "the next retry closes the pane when it shows only a shell and starts the agent in a new one; " + retry +
+			" retries now, and `magnum open " + ref + "` shows the pane when it runs something"
+	}
 	switch r.Kind {
 	case KindBlocked, KindNoReview, KindOverloaded:
 		c := strings.TrimSpace(strings.TrimPrefix(textx.FirstLine(chain), "judge blocked:"))

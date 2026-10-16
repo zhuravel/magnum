@@ -20,6 +20,23 @@ func attentionRow(n int, kind string) PRBoardRow {
 		LastError: "dependencies (bundle install) failed 3× on abc1234: could not find gem", AttentionKind: kind}
 }
 
+// A launch that never came up held the judge's agent name on
+// talkable#11932, and the card said only that the setup failed. The card of
+// a PR whose retries a dead launch spent says so in its NEEDS YOU line,
+// with the judge's pane and the agent, and that the next retry closes it.
+func TestTheCardSaysTheRetryClosesADeadLaunch(t *testing.T) {
+	why := attention.Explain(attention.KindFailed, "3 attempts on abc1234: start codex-judge: agents: start mg-12300-codex-judge-5d01cf in w9J:p2: "+
+		"herdr agent.start: agent_name_taken: agent name mg-12300-codex-judge-5d01cf is already in use", "talkable#12300")
+	row := attentionRow(12300, why.Kind)
+	row.LastError, row.ErrorFix = why.Summary, why.Fix
+	m, _, _ := newBoard(t, 240, 50, PRBoardOptions{})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{row}})
+	c, _ := send(t, m, keyMsg("enter"))
+	view := viewOf(c)
+	mustContain(t, view, "NEEDS YOU", "a dead launch holds the codex-judge's pane w9J:p2", "mg-12300-codex-judge-5d01cf", "closed on the next retry",
+		"the next retry closes the pane")
+}
+
 // attentionCases are the reason kinds the engine records with the word the
 // attention pill names each by; an unknown kind and none keep the bare pill.
 var attentionCases = []struct{ kind, word string }{

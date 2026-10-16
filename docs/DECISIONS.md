@@ -8151,10 +8151,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
 - **A start clears a dead launch that holds its agent name, and a fresh start closes the panes it
   replaces** (2026-10-16, amends "A judge that never comes up is started once more, and no start adopts
   the agent of a session magnum ended", "A cold judge is not lost to the agent it quit" and "A fresh start
-  heals an agent that will not quit"). On talkable#11932
-  codex-cli 0.163.0 died at its TUI bootstrap in every judge pane, and herdr kept each failed launch
-  listed as an agent with `launch_pending: true` and `agent_status: unknown` on a pane that showed only a
-  shell prompt (`mg-11932-codex-judge-5d01cf` on w9J:p2). Every later start of the judge under that name
+  heals an agent that will not quit"). On talkable#11932 codex-cli 0.163.0 died at its TUI bootstrap in
+  every judge pane, and herdr kept each failed launch listed as an agent with `launch_pending: true` and
+  `agent_status: unknown` on a pane that showed only a shell prompt (`mg-11932-codex-judge-5d01cf` on
+  w9J:p2). Every later start of the judge under that name
   failed with herdr's `agent_name_taken`, and the cold judge's quit refused the round because herdr still
   listed the agent it quit: three attempts, needs_attention, a retry after a restart, three more, and the
   board read "retry 3/3 setup" for hours until the operator closed the pane by hand. A launch that never
@@ -8197,10 +8197,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   magnum does not own. A parked session whose pane is closed keeps its conversation: `ResumeID` never
   looked at a pane, `Recover` leaves a parked session herdr shows nowhere alone, and the role's next start
   resumes it (`resume {session}`) in the pane the workspace lays out, as for a lost session. The idle park
-  and the Codex-flag release keep their panes as before. Rejected: a new
-  agent name per attempt (herdr would list the dead one for as long as its pane lives, and the workspace
-  would still grow by a pane per attempt); closing the whole workspace (it can hold the operator's own
-  shell); leaving the panes (17 slivers after a day of retries, and `o` opened a workspace of them).
+  and the Codex-flag release keep their panes as before. The retry loop says what blocked it: the stored
+  error keeps the start's own words, and `attention.Explain` (the card's line, `magnum attention`, `magnum
+  status`) reads a launch that never came up in them (herdr's `agent_name_taken` after the start's "start
+  <agent> in <pane>", or the start finding the name in another pane, "herdr still lists in pane <pane> …;
+  the agent never came up"): the cause becomes "a dead launch holds the codex-judge's pane w9J:p2 (agent
+  mg-11932-codex-judge-5d01cf): closed on the next retry", so the summary of a PR that spent its attempts
+  reads "agents failed 3× on <head>: a dead launch holds …" (one that still retries reads it too, kind
+  failed whatever herdr's message says), and the next step says the retry closes the pane when it shows
+  only a shell, `magnum review` retries now and `magnum open` shows a pane that runs something. Any other
+  chain reads as before. Rejected: a new agent name per attempt (herdr would list the dead one for as long
+  as its pane lives, and the workspace would still grow by a pane per attempt); closing the whole workspace
+  (it can hold the operator's own shell); leaving the panes (17 slivers after a day of retries, and `o`
+  opened a workspace of them).
 
 ## Learned rules
 
