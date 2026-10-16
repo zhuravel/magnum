@@ -8,10 +8,11 @@ package engine
 // gh identity) on the head it reviewed once its latest review of that head
 // left nothing to fix before merging, and withdraws it when a later review
 // finds something that must be fixed; new commits alone leave it to the next
-// review. It also holds back what autoapprove_gates.go names: a review that
-// did not hear every reviewer, a PR its watch would not review on its own,
-// one that changes the review agents' instructions, a head whose checks
-// fail or run; a later review of the head that those gates refuse
+// review. It also holds back what autoapprove_gates.go names: a PR whose
+// author auto_approve_skip_authors lists, a review that did not hear every
+// reviewer, a PR its watch would not review on its own, one that changes
+// the review agents' instructions, a head whose checks fail or run; a later
+// review of the head that those gates, the author's aside, refuse
 // withdraws the approval too, once that head's checks finished. The
 // operator's word wins: a review of theirs by hand, or a
 // dismissal of one of these approvals, stops it on that PR for good
@@ -414,9 +415,10 @@ func (e *Engine) autoClient(id *config.Identity) (GitHub, autoApproveGitHub) {
 // repository opts in, the registry allows it (autoApproveRefusal), no
 // approval followed its latest review yet (one whose post failed is tried
 // again after autoApproveRetry, autoApproveAttempts times), nothing holds
-// it back (autoGateRefusal: recorded for the card), and GitHub's reviews,
-// all of them, agree: none of the operator's by hand (else auto-approval of
-// the PR stops), none in progress, no approval of the head of theirs, and
+// it back (its author, authorRefusal, then autoGateRefusal: recorded for
+// the card), and GitHub's reviews, all of them, agree: none of the
+// operator's by hand (else auto-approval of the PR stops), none in
+// progress, no approval of the head of theirs, and
 // a verdict line that leaves nothing to fix when the result cannot tell. An
 // approval of magnum's GitHub has but the registry lost is recorded instead
 // of posted again. GitHub is asked again only when the PR's latest round or
@@ -438,8 +440,12 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	if hasPrior && (prior.State != store.AutoFailed || prior.Attempts >= autoApproveAttempts || e.now().Before(prior.UpdatedAt.Add(autoApproveRetry))) {
 		return
 	}
-	why, _ := e.autoGateRefusal(ctx, c, *sum)
-	e.noteAutoRefused(ctx, c, *sum, why)
+	why, run := e.authorRefusal(c), "" // the PR's, whatever round reviewed it: once per head
+	if why == "" {
+		why, _ = e.autoGateRefusal(ctx, c, *sum)
+		run = sum.RunID
+	}
+	e.noteAutoRefused(ctx, c, run, why)
 	if why != "" {
 		return
 	}

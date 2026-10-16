@@ -451,6 +451,7 @@ func (c *Config) validateRepos() []error {
 		if err := validateStakes(r.Stakes); err != nil {
 			errs = append(errs, fmt.Errorf("repo %s: stakes %w", r.Repo, err))
 		}
+		errs = append(errs, validateAutoApproveSkipAuthors("repo "+r.Repo+": ", r.AutoApproveSkipAuthors)...)
 		for k := range r.Env {
 			if !envKeyRe.MatchString(k) {
 				errs = append(errs, fmt.Errorf("repo %s: env key %q is not a valid variable name", r.Repo, k))

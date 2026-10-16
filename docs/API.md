@@ -3115,6 +3115,13 @@ func (c *Config) AutoApproveFor(fullName string) *Identity
     ("owner/name") PRs as: the covering watch's auto_approve_as when its
     auto_approve names the repository, or "*"; nil otherwise.
 
+func (c *Config) AutoApproveSkipsAuthor(fullName, login string) bool
+    AutoApproveSkipsAuthor reports whether auto_approve_skip_authors keeps
+    magnum from approving repository fullName's ("owner/name") PRs by login as
+    the operator: the covering watch's list or the repository's [[repo]] block's
+    names login, in any case, with or without "[bot]" (as skip_authors matches).
+    A blank login matches nothing.
+
 func (c *Config) AutoApproves() bool
     AutoApproves reports whether any watch auto-approves a repository.
 
@@ -4315,6 +4322,10 @@ type Repo struct {
 	// (see Config.StakesFor).
 	Stakes string `toml:"stakes"`
 
+	// AutoApproveSkipAuthors adds GitHub logins to the covering watch's
+	// auto_approve_skip_authors for this repository's PRs alone.
+	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
+
 	// RequiredChecks are the checks a PR must pass to be ready, replacing
 	// the ones GitHub requires on the default branch (rulesets or branch
 	// protection, which a private repository on a free plan does not
@@ -4801,6 +4812,12 @@ type Watch struct {
 	// AutoApproveData (nil = DefaultAutoApproveBody); magnum appends its
 	// marker.
 	AutoApproveBody *string `toml:"auto_approve_body"`
+	// AutoApproveSkipAuthors are GitHub logins whose PRs magnum never
+	// approves as AutoApproveAs on its own, however clean its review (any
+	// case, with or without "[bot]"; see Config.AutoApproveSkipsAuthor):
+	// someone whose PRs need a person's review. The board's A still
+	// approves them, and an approval standing from before stays.
+	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
 	// ManualRepos names repositories of the watch (names, any case, no
 	// owner or pattern) that are reviewed only when the operator asks
 	// (`magnum review`, the board, the picker): their PRs are polled and
@@ -5777,14 +5794,15 @@ func NotesRoot(l paths.Layout) string
     no place (paths.Layout.Valid).
 
 func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string) string
-    OperatorApprovalRefusal says why the operator's own approval of pr cannot
-    be posted as login (their auto_approve_as account) now, "" when it can:
-    auto-approval's preconditions (autoApproveRefusal), less the two that exist
-    only because auto-approval acts without asking. The operator's stop (their
-    changes request or review by hand, a dismissal, magnum unapprove) and a
-    manual verdict posted after magnum's round both keep auto-approval from
-    overriding the operator, who here is the one asking: A lifts their own ✗ on
-    purpose. What auto-approval holds a PR back for besides (autoGateRefusal:
+    OperatorApprovalRefusal says why the operator's own approval of
+    pr cannot be posted as login (their auto_approve_as account) now,
+    "" when it can: auto-approval's preconditions (autoApproveRefusal),
+    less the two that exist only because auto-approval acts without asking.
+    The operator's stop (their changes request or review by hand, a dismissal,
+    magnum unapprove) and a manual verdict posted after magnum's round both keep
+    auto-approval from overriding the operator, who here is the one asking: A
+    lifts their own ✗ on purpose. What auto-approval holds a PR back for besides
+    (authorRefusal: an author auto_approve_skip_authors lists; autoGateRefusal:
     a reviewer's missing report, a PR its watch would not review on its own,
     the agents' instructions, the head's checks) does not refuse it either:
     the operator decides by hand, the board shows those. sum is magnum's latest
@@ -5912,7 +5930,9 @@ type AutoApproveRefused struct {
 	At     time.Time `json:"at"`
 }
     AutoApproveRefused is why auto-approval holds a PR back (autoGateRefusal),
-    for the head (Head) and magnum's latest posted round (RunID) it decided on.
+    for the head (Head) and magnum's latest posted round (RunID) it decided
+    on; RunID is "" for a refusal of the PR whatever round reviewed it
+    (authorRefusal).
 
 func ParseAutoApproveRefused(v string) (AutoApproveRefused, bool)
     ParseAutoApproveRefused reads a KVPRAutoApproveRefused value.
@@ -18092,9 +18112,11 @@ type PRBoardRow struct {
 	AutoStopped string
 	// AutoRefused is why magnum does not approve the PR as the operator
 	// although its review of the head left nothing to fix
-	// (engine.AutoApproveRefused: a reviewer's missing report, a PR its
-	// watch would not review on its own, a change to the review agents'
-	// instructions, the head's checks); "" otherwise. The card says so.
+	// (engine.AutoApproveRefused: an author auto_approve_skip_authors
+	// lists, a reviewer's missing report, a PR its watch would not review on
+	// its own, a change to the review agents' instructions, the head's
+	// checks); "" otherwise. The card says so ("auto-approval: off for this
+	// author (auto_approve_skip_authors)" for the first).
 	AutoRefused string
 	// ApproveAs is whom A approves a NeedsMe row as: the watch's
 	// auto_approve_as, the operator's own account, whose approval GitHub

@@ -410,6 +410,12 @@ type Watch struct {
 	// AutoApproveData (nil = DefaultAutoApproveBody); magnum appends its
 	// marker.
 	AutoApproveBody *string `toml:"auto_approve_body"`
+	// AutoApproveSkipAuthors are GitHub logins whose PRs magnum never
+	// approves as AutoApproveAs on its own, however clean its review (any
+	// case, with or without "[bot]"; see Config.AutoApproveSkipsAuthor):
+	// someone whose PRs need a person's review. The board's A still
+	// approves them, and an approval standing from before stays.
+	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
 	// ManualRepos names repositories of the watch (names, any case, no
 	// owner or pattern) that are reviewed only when the operator asks
 	// (`magnum review`, the board, the picker): their PRs are polled and
@@ -620,6 +626,10 @@ type Repo struct {
 	// (see Config.StakesFor).
 	Stakes string `toml:"stakes"`
 
+	// AutoApproveSkipAuthors adds GitHub logins to the covering watch's
+	// auto_approve_skip_authors for this repository's PRs alone.
+	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
+
 	// RequiredChecks are the checks a PR must pass to be ready, replacing
 	// the ones GitHub requires on the default branch (rulesets or branch
 	// protection, which a private repository on a free plan does not
@@ -641,7 +651,7 @@ const RequiredWorkflowPrefix = "workflow:"
 
 // worktreeKeys reports whether the block sets any per-PR worktree key
 // (everything but repo, the verdicts, readiness, keep_approvals, stakes,
-// required_checks and trackers).
+// auto_approve_skip_authors, required_checks and trackers).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }

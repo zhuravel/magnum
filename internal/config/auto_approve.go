@@ -4,14 +4,18 @@ package config
 // branch's required approvals, so a PR magnum found clean still waits for
 // the operator. A [[watch]] may name repositories on whose PRs magnum posts
 // the operator's own approval (auto_approve, auto_approve_as) once its review
-// of the head found nothing that must be fixed before merging.
+// of the head found nothing that must be fixed before merging, except on the
+// PRs of the authors auto_approve_skip_authors lists.
 
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"text/template"
 	"unicode"
+
+	"github.com/zhuravel/magnum/internal/github"
 )
 
 // DefaultAutoApproveBody is the body of an automatic approval when the
@@ -57,6 +61,22 @@ func (c *Config) AutoApproveFor(fullName string) *Identity {
 	return nil
 }
 
+// AutoApproveSkipsAuthor reports whether auto_approve_skip_authors keeps
+// magnum from approving repository fullName's ("owner/name") PRs by login
+// as the operator: the covering watch's list or the repository's [[repo]]
+// block's names login, in any case, with or without "[bot]" (as
+// skip_authors matches). A blank login matches nothing.
+func (c *Config) AutoApproveSkipsAuthor(fullName, login string) bool {
+	listed := func(logins []string) bool {
+		return slices.ContainsFunc(logins, func(l string) bool { return github.SameLogin(l, login) })
+	}
+	if w := c.WatchFor(fullName); w != nil && listed(w.AutoApproveSkipAuthors) {
+		return true
+	}
+	r := c.RepoFor(fullName)
+	return r != nil && listed(r.AutoApproveSkipAuthors)
+}
+
 // AutoApproveBodyFor is the approval body template of repository
 // fullName's PRs: its watch's auto_approve_body, trimmed, else
 // DefaultAutoApproveBody.
@@ -87,7 +107,8 @@ func RenderAutoApproveBody(tmpl string, d AutoApproveData) (string, error) {
 // validateAutoApprove checks a watch's auto-approval keys: auto_approve
 // names repositories the watch covers (or "*") and needs auto_approve_as,
 // which names an identity of kind gh; auto_approve_body is one line that
-// renders. ids are the declared identities by name.
+// renders; auto_approve_skip_authors lists logins. ids are the declared
+// identities by name.
 func (w Watch) validateAutoApprove(ids map[string]Identity) []error {
 	var errs []error
 	where := "watch " + w.Owner + ": "
@@ -113,6 +134,20 @@ func (w Watch) validateAutoApprove(ids map[string]Identity) []error {
 	if w.AutoApproveBody != nil {
 		if err := validateAutoApproveBody(strings.TrimSpace(*w.AutoApproveBody)); err != nil {
 			errs = append(errs, fmt.Errorf("%sauto_approve_body %w", where, err))
+		}
+	}
+	return append(errs, validateAutoApproveSkipAuthors(where, w.AutoApproveSkipAuthors)...)
+}
+
+// validateAutoApproveSkipAuthors checks an auto_approve_skip_authors list of
+// a [[watch]] or [[repo]] block (where names it): GitHub logins, none empty
+// or with whitespace in it. Logins that differ only in case or "[bot]" match
+// as one (AutoApproveSkipsAuthor), so a duplicate is no error.
+func validateAutoApproveSkipAuthors(where string, logins []string) []error {
+	var errs []error
+	for _, l := range logins {
+		if l == "" || strings.ContainsFunc(l, unicode.IsSpace) {
+			errs = append(errs, fmt.Errorf("%sauto_approve_skip_authors entry %q must be a GitHub login (not empty, no whitespace)", where, l))
 		}
 	}
 	return errs

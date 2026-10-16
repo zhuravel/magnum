@@ -71,6 +71,7 @@ skip_authors = ["dependabot"]
 #                                       # once its review of the head found nothing to fix (default: none; README, Approving as you)
 # auto_approve_as = "zhuravel"          # the gh identity of your own account (GitHub does not count an App's approval)
 # auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA, .ReviewURL, .Repo, .Number
+# auto_approve_skip_authors = ["alice"] # logins whose PRs magnum never approves as you on its own (A still does)
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every round role, the first judge only
 # judge_own_pass = "after"              # [pipeline]'s "parallel" (the judge's own pass with the reviewers) or "after"
 # related_lookback = "30d"              # [pipeline]'s 14d: how long a merged PR on the same paths stays related ("0s": none)

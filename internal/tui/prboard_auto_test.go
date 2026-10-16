@@ -116,3 +116,26 @@ func TestTheCardSaysWhyMagnumDoesNotApproveAsYou(t *testing.T) {
 	c, _ = send(t, m, keyMsg("enter"))
 	mustNotContain(t, viewOf(c), "magnum does not approve it as you")
 }
+
+// A PR whose author auto_approve_skip_authors lists: the card's
+// auto-approval line says auto-approval is off for the author, in place of
+// the refusal's sentence, and the row shows no "✔ auto" pill (A still
+// approves it: the row needs you).
+func TestTheCardSaysAutoApprovalIsOffForAListedAuthor(t *testing.T) {
+	m, _, _ := newBoard(t, 170, 40, PRBoardOptions{})
+	listed := actPR(func(r *PRBoardRow) {
+		r.ActivityAt, r.AutoRefused, r.NeedsMe = ago(time.Hour), "the author is in auto_approve_skip_authors", NeedsMeApprove
+		r.ApproveAs = &ApproveAs{Identity: "zhuravel", Login: "zhuravel"}
+	})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{listed}})
+	mustNotContain(t, viewOf(m), "✔ auto")
+	c, _ := send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(c), "auto-approval: off for this author (auto_approve_skip_authors)")
+	mustNotContain(t, viewOf(c), "magnum does not approve it as you")
+	for _, mode := range []IconMode{IconsUnicode, IconsASCII, IconsNerd} {
+		p := needsMePainter(mode, []PRBoardRow{listed})
+		if cell := cellText(p.stateWaitCell(listed)); strings.Contains(cell, "auto") {
+			t.Errorf("%s: state cell %q", mode, cell)
+		}
+	}
+}

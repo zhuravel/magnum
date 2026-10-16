@@ -934,11 +934,13 @@ identity = "reviewer-app"
 auto_approve = ["talkable"]        # repository names of the watch, or ["*"]
 auto_approve_as = "me"             # an identity of kind gh: your own account
 # auto_approve_body = "Approved after Magnum's review of {{.Short}}."   # one line; magnum adds its marker
+# auto_approve_skip_authors = ["alice"]   # GitHub logins whose PRs Magnum never approves as you on its own
 ```
 
 Magnum approves as `auto_approve_as`, on the head it reviewed, as soon as the round that posted the review
 ends (each tick looks again, for a post to retry or a PR that changed), only when all of these hold:
 
+- its author is not in `auto_approve_skip_authors` (below);
 - its latest verified review is of the PR's current head and leaves nothing to fix before merging: no
   P0, P1 or P2 finding, still-open earlier ones included, by the priorities the judge's result gives them
   (P3 findings and simplifications are optional). Only a result written before it gave them leaves the
@@ -974,6 +976,18 @@ When the review, the watch, the agents' files or the checks hold a PR back, the 
 not approve it as you: its head's checks fail …"; `auto_approve_refused` in `magnum tui --json`) and a
 `review.auto_approve_refused` event records each reason once. They do not refuse the board's `A` (or
 `magnum approve --as`) on a row that needs you: there you decide by hand.
+
+`auto_approve_skip_authors` keeps some authors' PRs for a person's review, whatever Magnum's review says
+(a colleague whose PRs must get an explicit human approval): GitHub logins, matched as `skip_authors`
+matches them (any case, with or without `[bot]`; none empty or with a space). A `[[repo]]` block's
+`auto_approve_skip_authors` adds logins for that repository alone. On such a PR Magnum reviews as
+usual and never posts your approval: the refusal is recorded once per head, whatever round reviewed it
+(`auto_approve_refused` reads "the author is in auto_approve_skip_authors", the card "auto-approval: off
+for this author (auto_approve_skip_authors)", and the row shows no `✔ auto`). The board's `A` still
+approves it as you, since you are the person it waits for, and an approval standing from before the
+author was listed stays (a later review that finds something to fix withdraws it as any other). Nothing
+on GitHub names the author or the list: the PR's status comment reads as on a watch without
+auto-approval.
 
 The body is one line, `Auto-approved: magnum's review of `<sha7>` found no blocking problems ([review](<url>)).`
 (or `auto_approve_body`, a template of `.Short`, `.SHA`, `.ReviewURL`, `.Repo` and `.Number`), with a hidden

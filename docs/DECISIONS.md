@@ -8071,6 +8071,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   deriving the P-level from a net, which on real data gives no P1 and at most three P2s; an internal net in
   the result file as a measurement, since the blind experiment already measured it; and leaving P3s out,
   since colleagues fixed 27 of 33 answered P3s.
+- **Auto-approval leaves the PRs of listed authors to a person** (2026-10-16, spec 50). With `auto_approve`
+  and `auto_approve_as` magnum posts the operator's own approval on a head its review found nothing
+  blocking on, and the operator wants some authors kept out of that: a colleague whose PRs must get an
+  explicit human review before they merge, whatever magnum's review says. The only way was to stop
+  auto-approval per PR after the fact (`review.auto_approve_stopped`). A `[[watch]]` key
+  `auto_approve_skip_authors` lists GitHub logins, matched as `skip_authors` matches them (any case, with or
+  without `[bot]`; an empty entry or one with whitespace in it is refused, naming the block, and a duplicate
+  matches as one), and the same key on a `[[repo]]` block adds logins for that repository alone
+  (`Config.AutoApproveSkipsAuthor`; a field, two lines of matching and one of validation). On such a PR
+  the automatic approval never posts: `authorRefusal` refuses before the gates (`autoGateRefusal`) with
+  "the author is in auto_approve_skip_authors", recorded for the card and in one
+  `review.auto_approve_refused` event per head (its record names no round, `run_id` "", so a second clean
+  round of the head writes nothing; a round that finds something to fix clears it, as it clears the other
+  reasons). A standing approval is not held to it: `standingGateRefusal` runs `autoGateRefusal` alone, so
+  an approval posted before the author was listed, and the operator's own `A` (recorded like an automatic
+  approval), stand, and a later review that finds something to fix withdraws either as before. `A` and
+  `magnum approve --as` still approve (`OperatorApprovalRefusal` never asks the gates): the point is a
+  person's decision, and the operator is that person. The card says "auto-approval: off for this author (auto_approve_skip_authors)", dim, in place
+  of the refusal's yellow sentence (the board reads the key in the reason, as `skipWord` reads
+  `skip_authors`), `auto_approve_refused` in `magnum tui --json` carries the reason, and the row shows no
+  `✔ auto`. Nothing on GitHub names the author or the list: the status comment never spoke of
+  auto-approval and reads as on a watch without it. Rejected: a label on the PR (the author can remove it);
+  a `[[repo]]`-only key (the rule is about a person across repositories); posting a GitHub comment that
+  names the exclusion (author-visible and needless); refusing inside `autoGateRefusal`, which a standing
+  approval's later round runs too, so the next clean round of the head would withdraw the operator's own
+  `A` approval.
 
 ## Learned rules
 

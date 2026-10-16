@@ -250,6 +250,8 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.AutoStopped != "" {
 		add(p.st.Dim.Render(truncate("magnum no longer approves it as you: "+oneLine(r.AutoStopped)+" (magnum unapprove --resume)", inner)))
+	} else if autoOffForAuthor(r) {
+		add(p.st.Dim.Render(truncate(autoOffForAuthorLine, inner))) // the operator's own setting, not a hold to clear
 	} else if r.AutoRefused != "" && r.AutoApproved == nil {
 		add(p.pal.yellow.Render(truncate("magnum does not approve it as you: "+oneLine(r.AutoRefused), inner)))
 	}
@@ -552,6 +554,22 @@ func (p *prbPainter) repliesSentence(n int) string {
 // flagDismissedNote is what the card of a merged PR muted after it merged
 // unreviewed says in place of the merged-unreviewed sentence.
 const flagDismissedNote = "merged-unreviewed flag dismissed (M restores it)"
+
+// autoSkipAuthorsKey is the setting a refusal of auto-approval names when
+// the PR's author is on the list (engine's "the author is in
+// auto_approve_skip_authors"), and autoOffForAuthorLine the card's line
+// for it, in place of the refusal's sentence.
+const (
+	autoSkipAuthorsKey   = "auto_approve_skip_authors"
+	autoOffForAuthorLine = "auto-approval: off for this author (" + autoSkipAuthorsKey + ")"
+)
+
+// autoOffForAuthor reports whether magnum does not approve r as the
+// operator because auto_approve_skip_authors lists its author (A still
+// approves it: the operator is the person its PRs wait for).
+func autoOffForAuthor(r PRBoardRow) bool {
+	return r.AutoApproved == nil && strings.Contains(r.AutoRefused, autoSkipAuthorsKey)
+}
 
 // mergedUnreviewedSentence says that GitHub merged r before magnum reviewed
 // its last push: when, the commit magnum reviewed last and the merged head.

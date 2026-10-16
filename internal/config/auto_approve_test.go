@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -137,5 +138,72 @@ auto_approve_body = "Approved after magnum's review of {{.Short}}."
 	w := cfg.Watches[0]
 	if len(w.AutoApprove) != 1 || w.AutoApprove[0] != "*" || w.AutoApproveAs != "z" || w.AutoApproveBody == nil {
 		t.Fatalf("watch = %+v", w)
+	}
+}
+
+// auto_approve_skip_authors lists GitHub logins, on a [[watch]] and as an
+// addition on a [[repo]] block: an entry that is empty or has whitespace in
+// it is refused, naming the block; logins that differ only in case or a
+// "[bot]" suffix are one login, not an error.
+func TestAutoApproveSkipAuthorsRefusesAnEmptyOrSpacedLogin(t *testing.T) {
+	for _, bad := range []string{"", " ", "al ice", " alice", "alice\t"} {
+		cfg := autoApproveConfig()
+		cfg.Watches[0].AutoApprove, cfg.Watches[0].AutoApproveAs = []string{"app"}, "z"
+		cfg.Watches[0].AutoApproveSkipAuthors = []string{"alice", bad}
+		wantError(t, cfg.Validate(), fmt.Sprintf("watch acme: auto_approve_skip_authors entry %q must be a GitHub login", bad))
+
+		cfg = autoApproveConfig()
+		cfg.Repos = []Repo{{Repo: "acme/app", AutoApproveSkipAuthors: []string{bad}}}
+		wantError(t, cfg.Validate(), fmt.Sprintf("repo acme/app: auto_approve_skip_authors entry %q must be a GitHub login", bad))
+	}
+	cfg := autoApproveConfig()
+	cfg.Watches[0].AutoApprove, cfg.Watches[0].AutoApproveAs = []string{"*"}, "z"
+	cfg.Watches[0].AutoApproveSkipAuthors = []string{"alice", "Alice", "alice[bot]", "rev-ann"}
+	cfg.Repos = []Repo{{Repo: "acme/app", AutoApproveSkipAuthors: []string{"bob-rev", "BOB-REV"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("logins that differ in case or [bot]: %v", err)
+	}
+}
+
+// AutoApproveSkipsAuthor matches a PR's author against the watch's list and
+// its repository's [[repo]] addition the way skip_authors matches: any case,
+// with or without "[bot]". The repository's list adds to the watch's for
+// that repository alone; a blank login matches nothing.
+func TestAutoApproveSkipsAuthorMatchesTheListedLogins(t *testing.T) {
+	cfg := autoApproveConfig()
+	cfg.Watches[0].AutoApprove, cfg.Watches[0].AutoApproveAs = []string{"*"}, "z"
+	cfg.Watches[0].AutoApproveSkipAuthors = []string{"Alice"}
+	cfg.Repos = []Repo{{Repo: "acme/app", AutoApproveSkipAuthors: []string{"rev-ann"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		repo, login string
+		want        bool
+	}{
+		{"acme/app", "alice", true}, {"acme/web-site", "ALICE", true}, {"Acme/App", "alice[bot]", true},
+		{"acme/app", "rev-ann", true}, {"acme/web-site", "rev-ann", false},
+		{"acme/app", "bob-rev", false}, {"acme/app", "", false}, {"other/app", "alice", false},
+	} {
+		if got := cfg.AutoApproveSkipsAuthor(c.repo, c.login); got != c.want {
+			t.Errorf("AutoApproveSkipsAuthor(%q, %q) = %v, want %v", c.repo, c.login, got, c.want)
+		}
+	}
+}
+
+// The lists load from the user's config.toml, on a [[watch]] and a [[repo]].
+func TestAutoApproveSkipAuthorsLoads(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{"config.toml": minimalConfig + `auto_approve = ["*"]
+auto_approve_as = "z"
+auto_approve_skip_authors = ["alice"]
+[[repo]]
+repo = "acme/app"
+auto_approve_skip_authors = ["rev-ann"]
+`})
+	if got := cfg.Watches[0].AutoApproveSkipAuthors; len(got) != 1 || got[0] != "alice" {
+		t.Fatalf("watch auto_approve_skip_authors = %q", got)
+	}
+	if !cfg.AutoApproveSkipsAuthor("acme/app", "rev-ann") || !cfg.AutoApproveSkipsAuthor("acme/web", "alice") {
+		t.Fatal("the loaded lists match nobody")
 	}
 }

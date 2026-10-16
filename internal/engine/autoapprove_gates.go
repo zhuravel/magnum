@@ -12,7 +12,11 @@ package engine
 // review.auto_approve_refused event records it once per head, round and
 // reason. A later round of magnum's on the head of a PR it approved as the
 // operator is held to them too: one they refuse withdraws the approval
-// (standingGateRefusal).
+// (standingGateRefusal). Before them, a PR whose author
+// auto_approve_skip_authors lists is refused (authorRefusal), recorded once
+// per head whatever round reviewed it; a standing approval is not held to
+// that one, so an approval posted before the author was listed, and the
+// operator's own A, stand.
 
 import (
 	"context"
@@ -38,7 +42,9 @@ func KVPRAutoApproveRefused(prID int64) string {
 }
 
 // AutoApproveRefused is why auto-approval holds a PR back (autoGateRefusal),
-// for the head (Head) and magnum's latest posted round (RunID) it decided on.
+// for the head (Head) and magnum's latest posted round (RunID) it decided on;
+// RunID is "" for a refusal of the PR whatever round reviewed it
+// (authorRefusal).
 type AutoApproveRefused struct {
 	Head   string    `json:"head"`
 	RunID  string    `json:"run_id"`
@@ -60,6 +66,25 @@ func ParseAutoApproveRefused(v string) (AutoApproveRefused, bool) {
 // override, Claude Code's CLAUDE.md and its local file), matched by name in
 // any case.
 var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md"}
+
+// skipAuthorRefusal is why auto-approval refuses a PR whose author
+// auto_approve_skip_authors lists (authorRefusal; the card's words, which
+// name the key the board reads it by). It names nobody: the event and the
+// card read it, never GitHub.
+const skipAuthorRefusal = "the author is in auto_approve_skip_authors"
+
+// authorRefusal says why auto-approval refuses c for its author, "" when it
+// does not: the watch's auto_approve_skip_authors, or its repository's,
+// lists the PR's author (config.AutoApproveSkipsAuthor), whose PRs need a
+// person's review however clean magnum's. It holds back a new approval
+// only: a standing one is not held to it (standingGateRefusal runs
+// autoGateRefusal alone), nor is the operator's A (OperatorApprovalRefusal).
+func (e *Engine) authorRefusal(c store.RepoPR) string {
+	if e.cfg.AutoApproveSkipsAuthor(c.Repo, deref(c.PR.AuthorLogin)) {
+		return skipAuthorRefusal
+	}
+	return ""
+}
 
 // autoGateRefusal says why auto-approval holds c back after magnum's round
 // sum although the registry lets it approve (autoApproveRefusal); "" when
@@ -275,16 +300,18 @@ func (e *Engine) projectKinds() []string {
 	return kinds
 }
 
-// noteAutoRefused records why auto-approval holds c back after round sum
-// (reason; "" clears it) for the card, and writes a
+// noteAutoRefused records why auto-approval holds c back after magnum's
+// posted round run (reason; "" clears it) for the card, and writes a
 // review.auto_approve_refused event for a reason new to the PR's head and
-// round. e.autoRefused keeps what it recorded, so an unchanged answer costs
-// no registry write (after a restart, one read).
-func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, sum store.ReviewSummary, reason string) {
+// round. A run of "" is a refusal of the PR whatever round reviewed it
+// (authorRefusal): recorded once per head. e.autoRefused keeps what it
+// recorded, so an unchanged answer costs no registry write (after a
+// restart, one read).
+func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, run, reason string) {
 	pr := c.PR
 	fp := ""
 	if reason != "" {
-		fp = pr.HeadSHA + "|" + sum.RunID + "|" + reason
+		fp = pr.HeadSHA + "|" + run + "|" + reason
 	}
 	if prev, known := e.autoRefused[pr.ID]; known && prev == fp {
 		return
@@ -301,7 +328,7 @@ func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, sum store.
 		}
 		return
 	}
-	b, err := json.Marshal(AutoApproveRefused{Head: pr.HeadSHA, RunID: sum.RunID, Reason: reason, At: e.now()})
+	b, err := json.Marshal(AutoApproveRefused{Head: pr.HeadSHA, RunID: run, Reason: reason, At: e.now()})
 	if err != nil {
 		return
 	}
@@ -309,14 +336,15 @@ func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, sum store.
 	repo := repoOf(c.Repo)
 	e.event(ctx, "info", prSubject(repo, pr.Number), "review.auto_approve_refused",
 		fmt.Sprintf("magnum does not approve %s#%d as you: %s", repo.FullName(), pr.Number, reason),
-		map[string]any{"reason": reason, "head_sha": pr.HeadSHA, "run_id": sum.RunID})
+		map[string]any{"reason": reason, "head_sha": pr.HeadSHA, "run_id": run})
 }
 
 // forgetAutoRefused clears the card's reason (noteAutoRefused) when it
 // names a round other than sum, magnum's latest posted round of c, which
 // autoApproveRefusal holds back for its own reason (it found something to
-// fix): the reason was the review before it's. The reason recorded is read
-// once (e.autoRefused keeps it).
+// fix): the reason was the review before it's, or the PR's (no round:
+// authorRefusal), which speaks of a review that left nothing to fix. The
+// reason recorded is read once (e.autoRefused keeps it).
 func (e *Engine) forgetAutoRefused(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) {
 	fp, known := e.autoRefused[c.PR.ID]
 	if !known {
@@ -329,5 +357,5 @@ func (e *Engine) forgetAutoRefused(ctx context.Context, c store.RepoPR, sum stor
 	if _, rest, ok := strings.Cut(fp, "|"); !ok || strings.HasPrefix(rest, sum.RunID+"|") {
 		return // none recorded, or it names sum's round
 	}
-	e.noteAutoRefused(ctx, c, sum, "")
+	e.noteAutoRefused(ctx, c, sum.RunID, "")
 }
