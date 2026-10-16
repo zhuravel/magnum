@@ -2,6 +2,7 @@ package agents
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,7 +18,11 @@ import (
 // came up and carries no conversation while a session of that name magnum
 // closed (or marked lost to start the judge again) exists, is not adopted:
 // the start launches the agent anew in its pane, or, when that agent sits
-// in another pane, is busy. Anything else is adopted as before.
+// in another pane, is busy. Anything else is adopted as before. An agent at
+// status unknown over an idle shell is a launch that never came up, whose
+// pane the start closes first (clearDeadLaunch): it launches the agent in
+// the replacement of its own pane, or in its pane when the launch sat in
+// another, whatever session the name was of.
 func TestAStartDoesNotAdoptAnAgentOfAClosedSession(t *testing.T) {
 	name := AgentName("talkable/talkable", 11920, RoleJudge)
 	for label, tc := range map[string]struct {
@@ -28,16 +33,19 @@ func TestAStartDoesNotAdoptAnAgentOfAClosedSession(t *testing.T) {
 		elsewhere    bool          // the agent's pane is not the start's
 		otherName    bool          // the earlier session had another agent name
 		adopted      bool
+		cleared      bool // a launch that never came up: its pane closed first
 	}{
-		"closed a minute and a half ago":                {store.SessionClosed, 90 * time.Second, "", herdr.StatusUnknown, false, false, false},
-		"closed minutes ago, with a conversation":       {store.SessionClosed, 90 * time.Second, "01a0-uuid", herdr.StatusIdle, false, false, false},
-		"closed hours ago, never came up":               {store.SessionClosed, 3 * time.Hour, "", herdr.StatusUnknown, false, false, false},
-		"lost to the judge's restart, never came up":    {store.SessionLost, 0, "", herdr.StatusUnknown, false, false, false},
-		"closed minutes ago, in another pane":           {store.SessionClosed, 90 * time.Second, "", herdr.StatusUnknown, true, false, false},
-		"closed hours ago, with a conversation":         {store.SessionClosed, 3 * time.Hour, "01a0-uuid", herdr.StatusIdle, false, false, true},
-		"closed hours ago, up without a conversation":   {store.SessionClosed, 3 * time.Hour, "", herdr.StatusIdle, false, false, true},
-		"lost to the judge's restart, up with its turn": {store.SessionLost, 0, "01a0-uuid", herdr.StatusIdle, false, false, true},
-		"closed minutes ago under another name":         {store.SessionClosed, 90 * time.Second, "", herdr.StatusUnknown, false, true, true},
+		"closed a minute and a half ago":                {store.SessionClosed, 90 * time.Second, "", herdr.StatusUnknown, false, false, false, true},
+		"closed minutes ago, with a conversation":       {store.SessionClosed, 90 * time.Second, "01a0-uuid", herdr.StatusIdle, false, false, false, false},
+		"closed hours ago, never came up":               {store.SessionClosed, 3 * time.Hour, "", herdr.StatusUnknown, false, false, false, true},
+		"lost to the judge's restart, never came up":    {store.SessionLost, 0, "", herdr.StatusUnknown, false, false, false, true},
+		"closed minutes ago, in another pane":           {store.SessionClosed, 90 * time.Second, "", herdr.StatusUnknown, true, false, false, true},
+		"closed minutes ago, up in another pane":        {store.SessionClosed, 90 * time.Second, "", herdr.StatusIdle, true, false, false, false},
+		"closed hours ago, with a conversation":         {store.SessionClosed, 3 * time.Hour, "01a0-uuid", herdr.StatusIdle, false, false, true, false},
+		"closed hours ago, up without a conversation":   {store.SessionClosed, 3 * time.Hour, "", herdr.StatusIdle, false, false, true, false},
+		"lost to the judge's restart, up with its turn": {store.SessionLost, 0, "01a0-uuid", herdr.StatusIdle, false, false, true, false},
+		"closed minutes ago under another name":         {store.SessionClosed, 90 * time.Second, "", herdr.StatusUnknown, false, true, false, true},
+		"closed minutes ago under another name, up":     {store.SessionClosed, 90 * time.Second, "", herdr.StatusIdle, false, true, true, false},
 	} {
 		t.Run(label, func(t *testing.T) {
 			e := newEnv(t)
@@ -66,6 +74,17 @@ func TestAStartDoesNotAdoptAnAgentOfAClosedSession(t *testing.T) {
 
 			err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], "")
 			switch {
+			case tc.cleared:
+				launched := ws.Panes[RoleJudge]
+				if !tc.elsewhere {
+					launched = e.h.splits[len(e.h.splits)-1].New // the replacement of its pane
+				}
+				if err != nil || !slices.Equal(e.h.paneCloses, []string{pane}) || len(e.h.starts) != 1 || e.h.starts[0].PaneID != launched {
+					t.Fatalf("err %v, pane closes %v, starts %+v: want pane %s closed and the agent launched in %s", err, e.h.paneCloses, e.h.starts, pane, launched)
+				}
+				if s := e.session(RoleJudge); s.State != store.SessionLive || store.Deref(s.HerdrPaneID) != launched {
+					t.Fatalf("session = %+v, want live in %s", s, launched)
+				}
 			case tc.adopted:
 				if err != nil || len(e.h.starts) != 0 || store.Deref(e.session(RoleJudge).HerdrPaneID) != pane {
 					t.Fatalf("err %v, starts %+v: want the agent adopted", err, e.h.starts)

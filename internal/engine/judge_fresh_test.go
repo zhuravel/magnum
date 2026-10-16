@@ -227,6 +227,56 @@ func TestAColdJudgeHerdrKeepsListingIsNeitherResumedNorAdopted(t *testing.T) {
 	}
 }
 
+// On talkable#11932 herdr kept listing the judge's name for a launch that
+// never came up (launch_pending over an idle shell), so every cold judge's
+// quit waited for it in vain and failed the setup as busy. Once herdr still
+// lists the quit agent after the polls, the quit has the agents clear such a
+// launch (agents.Manager.ClearDeadLaunch: its pane closed, the judge's pane
+// replaced), and a cleared one lets the judge start fresh in this round;
+// one that is not cleared (it works, or its pane runs something) still
+// fails the setup as busy.
+func TestAColdJudgeClearsADeadLaunchThatKeepsItsName(t *testing.T) {
+	for _, cleared := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cleared %v", cleared), func(t *testing.T) {
+			h := newHarness(t)
+			h.ag.onQuit = func(s store.Session) { h.hd.linger(deref(s.AgentName), -1) }
+			h.ag.clearLaunch = func(s store.Session) bool {
+				if cleared {
+					h.hd.linger(deref(s.AgentName), 0)
+				}
+				return cleared
+			}
+			h.ag.mu.Lock()
+			h.ag.resumeIDs = map[agents.Role]string{agents.RoleJudge: "uuid-judge"} // the conversation Quit parked
+			h.ag.mu.Unlock()
+			h.reviewedPR(2, "b1")
+			h.ag.mu.Lock()
+			h.ag.efforts = nil
+			h.ag.mu.Unlock()
+			h.advance(30 * time.Minute)
+			judgeTurnEnded(h, 2, h.clock.Now().Add(-95*time.Minute))
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+			h.tick()
+			h.advance(5 * time.Minute)
+			h.tick()
+			if n := h.ag.count(fmt.Sprintf("clear_launch:%d:codex-judge", h.pr(2).ID)); n != 1 {
+				t.Fatalf("clears = %d, want one once the polls ran out: %v", n, h.ag.all())
+			}
+			ins, starts := h.rd.all(), agentStarts(h)
+			if !cleared {
+				if len(ins) != 1 || len(starts) != 0 {
+					t.Fatalf("rounds %d, starts %v: want the setup busy, no agent started", len(ins), starts)
+				}
+				h.wantState(2, store.PRRereviewPending)
+				return
+			}
+			if len(ins) != 2 || ins[1].Kind != pipeline.KindRecovery || !slices.Equal(starts, []string{"codex-judge:high:"}) {
+				t.Fatalf("rounds %d, starts %v: want the re-review now, its judge fresh", len(ins), starts)
+			}
+		})
+	}
+}
+
 // The round's RestartJudge (the pipeline calls it when the judge's session
 // is gone at its own pass's prompt) marks the gone session lost and starts
 // the judge again as the round started it: a cold judge fresh at its

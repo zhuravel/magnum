@@ -813,6 +813,9 @@ type fakeAgents struct {
 	onQuit func(store.Session)
 	// quitErr, when set, is what Quit returns after onQuit (the session stays live).
 	quitErr error
+	// clearLaunch, when set, is what ClearDeadLaunch does with the session
+	// whose quit agent herdr kept listing, and whether it cleared it.
+	clearLaunch func(store.Session) bool
 	// onStart, when set, runs as StartAgent starts, with the role and the
 	// conversation it resumes.
 	onStart func(role config.Role, resume string)
@@ -1065,6 +1068,16 @@ func (f *fakeAgents) Quit(ctx context.Context, s store.Session) error {
 		return quitErr
 	}
 	return f.st.TransitionSession(ctx, s.ID, []string{store.SessionStarting, store.SessionLive, store.SessionLost}, store.SessionParked, nil)
+}
+
+// ClearDeadLaunch records the clear and answers with clearLaunch (false
+// when unset: herdr lists no launch that never came up).
+func (f *fakeAgents) ClearDeadLaunch(_ context.Context, s store.Session) (bool, error) {
+	f.record(fmt.Sprintf("clear_launch:%d:%s", s.PRID, s.Role))
+	f.mu.Lock()
+	hook := f.clearLaunch
+	f.mu.Unlock()
+	return hook != nil && hook(s), nil
 }
 
 func (f *fakeAgents) Recover(_ context.Context, pr store.PR) ([]agents.Recovered, error) {

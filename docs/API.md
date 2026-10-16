@@ -247,6 +247,12 @@ const EventHumanActive = "agent.human_active"
     EventHumanActive is recorded on the PR when an ObsHumanActive begins its
     cooldown (Observation.CooldownUntil; data: role, until).
 
+const EventLaunchCleared = "pr.launch_cleared"
+    EventLaunchCleared is recorded (warn) when magnum closed the pane of a
+    launch that never came up which held a role's agent name (clearDeadLaunch);
+    it names the role, the agent, the pane, its replacement and the CLI's own
+    last error line there (paneError), never the TUI's text.
+
 const EventParkForced = "pr.park_forced"
     EventParkForced is recorded when a hard park (ParkHard) closed the pane
     of an agent that was still its pane's foreground process after ctrl+c and
@@ -1041,6 +1047,15 @@ func (m *Manager) CheckHealth(ctx context.Context, s store.Session) (Health, err
     patterns of its kind ([kinds.<kind>] health_patterns; a shell role's Tool,
     the defaults when it has none) and the manager's clock.
 
+func (m *Manager) ClearDeadLaunch(ctx context.Context, s store.Session) (bool, error)
+    ClearDeadLaunch is clearDeadLaunch for the quit that renews session s
+    (the engine's quitAgentGone, once herdr kept listing the agent it quit):
+    the name s's agent ran under, and s's pane as the one to keep, so the role's
+    start that follows, still holding that pane's id, starts in its replacement.
+    cleared reports that herdr no longer lists the name and the role keeps a
+    pane: false when herdr lists no launch that never came up under the name,
+    its pane runs something, or the pane closed without a replacement.
+
 func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slotPath string, env map[string]string, role config.Role) (Workspace, error)
     EnsurePane adds a pane for role to ws unless a live session of the role
     already has a pane in that workspace (e.g. claude-simplify, which runs on
@@ -1370,6 +1385,14 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
     marks its session live. The role's kind (role.AgentKind(), a declared
     [kinds.<name>]) says how:
 
+      - First, a launch that never came up which herdr lists under the role's
+        name over an idle shell (launch_pending or status unknown) has its
+        pane closed (clearDeadLaunch, EventLaunchCleared): herdr would refuse
+        the name with agent_name_taken for as long as that pane lives.
+        When that pane is paneID the agent starts in the replacement split
+        from it (ErrBusy when none could be made: the session is lost and the
+        next attempt's workspace lays a pane out); a paneID magnum replaced so
+        earlier forwards to its replacement.
       - An agent already carrying the role's name is adopted as is,
         when it is of the role's kind and its pane works in the PR's checkout
         (the session's cwd, else paneID's); otherwise StartAgent fails,
@@ -5910,6 +5933,11 @@ type Agents interface {
 	// ReloadsProject reports whether a session's agent reloads the
 	// checkout's project config it loaded while it runs (parkReloading).
 	ReloadsProject(ctx context.Context, s store.Session) bool
+	// ClearDeadLaunch closes the pane of a launch that never came up which
+	// herdr lists under the agent name of session s over an idle shell,
+	// replacing s's pane when it is that one, and reports whether the name
+	// is gone and the role keeps a pane (quitAgentGone).
+	ClearDeadLaunch(ctx context.Context, s store.Session) (bool, error)
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
 	// NewRun, FixPrompt and Submit start the fix job's run (fix.go); Tell
 	// gives a fixer whose time ran out its last call within the run.

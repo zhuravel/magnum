@@ -220,6 +220,9 @@ type Manager struct {
 	// settingsLock (capacity 1) serializes the Claude switches, which share
 	// one settings file (see holdDefaultModel).
 	settingsLock chan struct{}
+	// replaced maps a pane magnum closed to clear a launch that never came
+	// up to the pane that took its place (see replacement).
+	replaced map[string]string
 }
 
 // New returns a Manager.
@@ -230,7 +233,7 @@ func New(d Deps) *Manager {
 	}
 	return &Manager{d: d, sleep: sleep, wrapper: map[string]bool{}, health: map[string][]healthRule{},
 		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{},
-		switching: map[int64]bool{}, bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1)}
+		switching: map[int64]bool{}, bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

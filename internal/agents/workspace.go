@@ -389,11 +389,12 @@ func anchors(roles []Role, role Role) []anchor {
 }
 
 // split creates role's pane next to its first anchor (see anchors) that has
-// a pane, else down from any pane of the workspace.
+// a pane (its replacement when magnum replaced it, clearDeadLaunch), else
+// down from any pane of the workspace.
 func (m *Manager) split(ctx context.Context, snap herdr.Snapshot, ws Workspace, role Role, cwd string, env map[string]string) (string, error) {
 	from, dir := "", herdr.SplitDown
 	for _, a := range anchors(ws.Roles, role) {
-		if p := ws.Panes[a.role]; p != "" {
+		if p := m.replacement(ws.Panes[a.role]); p != "" { // a pane a dead launch's clearing replaced forwards
 			from, dir = p, a.dir
 			break
 		}

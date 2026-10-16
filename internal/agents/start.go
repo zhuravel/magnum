@@ -20,6 +20,14 @@ import (
 // marks its session live. The role's kind (role.AgentKind(), a declared
 // [kinds.<name>]) says how:
 //
+//   - First, a launch that never came up which herdr lists under the role's
+//     name over an idle shell (launch_pending or status unknown) has its
+//     pane closed (clearDeadLaunch, EventLaunchCleared): herdr would refuse
+//     the name with agent_name_taken for as long as that pane lives. When
+//     that pane is paneID the agent starts in the replacement split from it
+//     (ErrBusy when none could be made: the session is lost and the next
+//     attempt's workspace lays a pane out); a paneID magnum replaced so
+//     earlier forwards to its replacement.
 //   - An agent already carrying the role's name is adopted as is, when it
 //     is of the role's kind and its pane works in the PR's checkout (the
 //     session's cwd, else paneID's); otherwise StartAgent fails, since the
@@ -94,9 +102,24 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 		return fmt.Errorf("agents: repo of pr %d: %w", pr.Number, err)
 	}
 	name, title := TaggedAgentName(m.d.Tag, repo.Owner+"/"+repo.Name, pr.Number, r), TaggedTitle(m.d.Tag, repo.Name, pr.Number, r)
+	paneID = m.replacement(paneID)
 	snap, err := m.d.Herdr.Snapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("agents: start %s: %w", name, err)
+	}
+	switch closed, repl, err := m.clearDeadLaunch(ctx, pr, r, snap, name, paneID); {
+	case err != nil:
+		return fmt.Errorf("agents: start %s: %w", name, err)
+	case closed != "" && closed == paneID && repl == "":
+		return fmt.Errorf("agents: start %s: closed pane %s, where a launch that never came up held the name, and no session recorded "+
+			"the environment of a pane to take its place; the next attempt lays one out: %w", name, paneID, ErrBusy)
+	case closed != "":
+		if closed == paneID {
+			paneID = repl
+		}
+		if snap, err = m.d.Herdr.Snapshot(ctx); err != nil {
+			return fmt.Errorf("agents: start %s: %w", name, err)
+		}
 	}
 	sess, err := m.d.Store.LiveSessionByPRRole(ctx, pr.ID, role.Name)
 	if errors.Is(err, store.ErrNotFound) {

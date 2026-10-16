@@ -442,6 +442,14 @@ func (f *fakeHerdr) AgentStart(ctx context.Context, o herdr.AgentStartOptions) (
 		f.busyStarts--
 		return herdr.AgentStarted{}, &herdr.Error{Method: "agent.start", Code: "agent_pane_busy", Message: "agent target pane " + o.PaneID + " is not an available shell"}
 	}
+	// herdr keeps a name for as long as an agent holds it: one in another
+	// pane, or a launch that never came up (launch_pending) even in this
+	// pane, refuses the start (talkable#11932).
+	for _, x := range f.agents {
+		if x.Name == o.Name && (x.PaneID != o.PaneID || x.LaunchPending) {
+			return herdr.AgentStarted{}, &herdr.Error{Method: "agent.start", Code: "agent_name_taken", Message: "agent name " + o.Name + " is already in use"}
+		}
+	}
 	ws, tab := "", ""
 	for _, p := range f.panes {
 		if p.ID == o.PaneID {

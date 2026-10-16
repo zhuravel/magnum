@@ -88,8 +88,8 @@ func (e *Engine) quitToRenew(ctx context.Context, s store.Session, what string) 
 		e.log.Warn(what+": quit failed; resuming it", "pr", s.PRID, "role", s.Role, "err", err)
 		return false, nil
 	}
-	if name := deref(s.AgentName); !e.quitAgentGone(ctx, name) {
-		return false, fmt.Errorf("%s: herdr still lists the agent %s it quit, which a start would adopt: %w", what, name, agents.ErrBusy)
+	if !e.quitAgentGone(ctx, s) {
+		return false, fmt.Errorf("%s: herdr still lists the agent %s it quit, which a start would adopt: %w", what, deref(s.AgentName), agents.ErrBusy)
 	}
 	return true, nil
 }
@@ -101,15 +101,20 @@ const (
 	quitGoneChecks = 20
 )
 
-// quitAgentGone waits until herdr no longer lists the agent named name,
+// quitAgentGone waits until herdr no longer lists the agent of session s,
 // which Quit just stopped. herdr may still list a quitting agent for a
 // moment, and a fresh start under the same name adopts it
 // (agents.StartAgent): of the 3 cold judges that were live, 2 adopted the
-// quitting agent and lost it within a minute. It reports false when the
-// name is still listed after quitGoneChecks snapshots, or herdr could not
-// say: the caller fails the setup as busy, and the round's next attempt
-// finds the judge parked.
-func (e *Engine) quitAgentGone(ctx context.Context, name string) bool {
+// quitting agent and lost it within a minute. A name still listed after
+// quitGoneChecks snapshots may be held by a launch that never came up
+// (talkable#11932: launch_pending over an idle shell, for hours), which
+// herdr drops only with its pane: the agents clear it then
+// (agents.Manager.ClearDeadLaunch, which replaces s's pane when the launch
+// held it). It reports false when the name is still listed and nothing was
+// cleared, or herdr could not say: the caller fails the setup as busy, and
+// the round's next attempt finds the judge parked.
+func (e *Engine) quitAgentGone(ctx context.Context, s store.Session) bool {
+	name := deref(s.AgentName)
 	if name == "" || e.d.Herdr == nil {
 		return true
 	}
@@ -119,10 +124,18 @@ func (e *Engine) quitAgentGone(ctx context.Context, name string) bool {
 				return true
 			}
 		}
-		if i >= quitGoneChecks || e.d.Sleep(ctx, quitGonePoll) != nil {
+		if i >= quitGoneChecks {
+			break
+		}
+		if e.d.Sleep(ctx, quitGonePoll) != nil {
 			return false
 		}
 	}
+	cleared, err := e.d.Agents.ClearDeadLaunch(ctx, s)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "clear a launch that never came up", "pr", s.PRID, "role", s.Role)
+	}
+	return cleared
 }
 
 // judgeLastTurn is when the PR's last turn of judge ended (its run rows'

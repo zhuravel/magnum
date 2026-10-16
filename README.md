@@ -674,6 +674,15 @@ parked, and a `pr.park_forced` event names the role and the pane. A park that wa
 fixer or another round at work) is never forced, and `magnum abort` parks the same hard way on its last of
 three tries. The idle park and the release of a Codex-flagged PR keep the plain park and its backoff.
 
+An agent CLI that dies as it starts can leave herdr listing the launch under the role's agent name
+(`launch_pending`, status unknown) on a pane that shows only a shell prompt, and herdr refuses that name to
+every later start (`agent_name_taken`). Before a start, and when the quit that starts a role fresh finds the
+name still listed after its wait, magnum closes such a pane and records a `pr.launch_cleared` warning with
+the role, the pane and the CLI's own error line. A pane whose agent works or is blocked, or whose
+foreground is anything but the shell, is never touched. When the launch held the very pane the role was
+about to start in, magnum first splits a replacement from it, with the same environment and label, and the
+agent starts there.
+
 The judge is the exception to resuming. Codex's prompt cache lasts about an hour and a half, so a judge
 resumed later re-reads its whole conversation uncached on its first turn (25 of 39 resumed judge turns did,
 4.7M tokens in 2.3 days). A judge whose last turn on the PR ended longer than `[pipeline] judge_fresh_after`

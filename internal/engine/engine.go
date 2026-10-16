@@ -117,6 +117,11 @@ type Agents interface {
 	// ReloadsProject reports whether a session's agent reloads the
 	// checkout's project config it loaded while it runs (parkReloading).
 	ReloadsProject(ctx context.Context, s store.Session) bool
+	// ClearDeadLaunch closes the pane of a launch that never came up which
+	// herdr lists under the agent name of session s over an idle shell,
+	// replacing s's pane when it is that one, and reports whether the name
+	// is gone and the role keeps a pane (quitAgentGone).
+	ClearDeadLaunch(ctx context.Context, s store.Session) (bool, error)
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
 	// NewRun, FixPrompt and Submit start the fix job's run (fix.go); Tell
 	// gives a fixer whose time ran out its last call within the run.

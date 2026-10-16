@@ -8148,6 +8148,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a judge on the new skill, instead of a failed blocked run the engine overrides. Rejected: counting no
   author review at all (a review body "fixed, see the commit" is a reply); treating a refused reply as a
   judge failure (the guard is right, and the round is not wrong: it had nothing of its own to answer).
+- **A start clears a dead launch that holds its agent name** (2026-10-16, amends "A judge that never comes
+  up is started once more, and no start adopts the agent of a session magnum ended" and "A cold judge is
+  not lost to the agent it quit"). On talkable#11932
+  codex-cli 0.163.0 died at its TUI bootstrap in every judge pane, and herdr kept each failed launch
+  listed as an agent with `launch_pending: true` and `agent_status: unknown` on a pane that showed only a
+  shell prompt (`mg-11932-codex-judge-5d01cf` on w9J:p2). Every later start of the judge under that name
+  failed with herdr's `agent_name_taken`, and the cold judge's quit refused the round because herdr still
+  listed the agent it quit: three attempts, needs_attention, a retry after a restart, three more, and the
+  board read "retry 3/3 setup" for hours until the operator closed the pane by hand. A launch that never
+  came up is now cleared (`agents` `clearDeadLaunch`): when herdr lists the role's name on an agent that is
+  `launch_pending` or at status `unknown` (never one working or blocked) and the pane's foreground process
+  is its shell (`pane.process_info`, `herdr.IdleShell`; a pane that runs anything is left alone, as is one
+  herdr cannot answer for), magnum closes that pane (`pane.close`, as the hard park does) and records
+  `pr.launch_cleared` (warn: the role, the agent, the pane, its replacement, whether the launch was
+  pending, and the CLI's own last error line there as `paneError` reads it, never the TUI's text, which a
+  PR can steer). `StartAgent` does it before anything else. When the launch held the very pane the role
+  was given, a replacement is split from it first (down, so it takes the closed pane's place), with the cwd
+  and pane environment the PR's newest session that recorded that pane has (else the role's newest), and
+  named like it; the starting and live sessions that pointed at the closed pane point at the replacement,
+  and the closed pane's id forwards to it for the daemon's life (`Manager.replacement`), so a caller still
+  holding the old id (the round's judge restart, the resume after a checkout, a later role's split anchor)
+  lands in the new pane. With no environment recorded there is no replacement, since a pane without the
+  role's identity env would act as the wrong account: the pane is closed all the same, its sessions become
+  lost and the start fails busy, so the next attempt's workspace lays a pane out. The cold judge's quit
+  (and the session rotation's, both `quitToRenew`) keeps its ten-second wait for herdr to drop the quit
+  agent; a name still listed then goes through `agents.Manager.ClearDeadLaunch` with the session's pane as
+  the one to replace, and the judge starts fresh in this round when it was cleared, busy as before when it
+  was not. An agent at status unknown in the start's pane used to be launched anew there (herdr answered
+  `agent_name_taken` while the launch was pending) and one in another pane made the start busy; both are
+  now cleared when their pane is an idle shell. herdr 0.9.5 offers no cheaper drop: `agent.rename` would
+  keep the launch listed under another name, and `pane.release_agent` releases the lifecycle authority an
+  integration's hooks report (it takes their source and agent label), not a launch `agent.start`
+  registered, and its effect on one cannot be checked without the live socket. Rejected: a new agent name
+  per attempt (herdr would list the dead one for as long as its pane lives, and the workspace would still
+  grow by a pane per attempt); closing the whole workspace (it can hold the operator's own shell).
 
 ## Learned rules
 
