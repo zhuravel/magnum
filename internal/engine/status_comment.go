@@ -680,10 +680,11 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 
 // statusEarlier adds to a review to come or under way what the review
 // before it left: the earlier findings it recorded still open
-// (earlierOpen), and whether it reviews what a fix loop's fixer pushed.
+// (earlierOpen), and whether it reviews what a fix loop's fixer pushed (a
+// loop held for a restart had that re-review: the next round is another).
 func (e *Engine) statusEarlier(ctx context.Context, pr store.PR, v *statusView) {
 	v.open = e.earlierOpen(ctx, pr, *v)
-	if st, ok := e.statusFix(ctx, pr.ID); ok && st.Phase == FixPhaseReviewing && st.Head == pr.HeadSHA {
+	if st, ok := e.statusFix(ctx, pr.ID); ok && st.Phase == FixPhaseReviewing && st.Head == pr.HeadSHA && !st.Held {
 		v.fixes = true
 	}
 }

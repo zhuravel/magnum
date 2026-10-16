@@ -40,7 +40,15 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // StartedAt is when the loop started. NeedsYou are the findings a fixer that
 // pushed left to the author (its report's "## Needs you" entries, in its own
 // words, so never put in an event or a log): the push is re-reviewed first,
-// and the loop ends after that round as needs attention.
+// and the loop ends after that round as needs attention. ForcedAt is when
+// the loop forced the re-review of its push (phase reviewing): its
+// re-review is the forced round dispatched at or after it, and every other
+// round that ends while the loop waits is ignored (fixAfterRound; zero in a
+// row written before it was recorded, where any forced round is). Held says
+// that re-review ended and called for a next cycle a drain for a restart
+// refused: no round that ends afterwards is the loop's re-review, and the
+// restart's recovery, or the drain's end without one, starts that cycle
+// (recoverReviewingLoop).
 type FixState struct {
 	Cycle     int       `json:"cycle"`
 	Cap       int       `json:"cap"`
@@ -52,6 +60,8 @@ type FixState struct {
 	StartedAt time.Time `json:"started_at"`
 	NeedsYou  []string  `json:"needs_you,omitempty"`
 	Role      string    `json:"role,omitempty"`
+	ForcedAt  time.Time `json:"forced_at,omitzero"`
+	Held      bool      `json:"held,omitempty"`
 }
 
 // FixOff is a PR's opt-out of the fix job: when it was set and by whom

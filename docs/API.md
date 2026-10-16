@@ -6629,6 +6629,8 @@ type FixState struct {
 	StartedAt time.Time `json:"started_at"`
 	NeedsYou  []string  `json:"needs_you,omitempty"`
 	Role      string    `json:"role,omitempty"`
+	ForcedAt  time.Time `json:"forced_at,omitzero"`
+	Held      bool      `json:"held,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -6638,7 +6640,14 @@ type FixState struct {
     StartedAt is when the loop started. NeedsYou are the findings a fixer that
     pushed left to the author (its report's "## Needs you" entries, in its own
     words, so never put in an event or a log): the push is re-reviewed first,
-    and the loop ends after that round as needs attention.
+    and the loop ends after that round as needs attention. ForcedAt is when
+    the loop forced the re-review of its push (phase reviewing): its re-review
+    is the forced round dispatched at or after it, and every other round that
+    ends while the loop waits is ignored (fixAfterRound; zero in a row written
+    before it was recorded, where any forced round is). Held says that re-review
+    ended and called for a next cycle a drain for a restart refused: no round
+    that ends afterwards is the loop's re-review, and the restart's recovery,
+    or the drain's end without one, starts that cycle (recoverReviewingLoop).
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix

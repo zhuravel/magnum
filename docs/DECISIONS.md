@@ -8469,6 +8469,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   poll. New tests TestAListedAppsPRLeavesIneligibleAtTheRestart (engine: the live configuration and row,
   with and without the skipped-baseline mark), TestAReclassifiedPRNamesTheRuleThatSkipsItNow (engine) and
   TestTheDepartedRuleNeverSkipsABot (eligibility).
+- **The fix loop decides only on the re-review it forced** (2026-10-16, spec 56). On talkable#11932 a
+  loop's forced re-review (round 53, a recovery) posted with one optional P3 left at 22:25 while `magnum
+  daemon-restart --drain` held the daemon, so its next cycle waited for the restart in phase reviewing. A
+  reply came at 22:28 and queued a reply round; the restart at 22:31 found the PR waiting in line, and its
+  recovery (`recoverReviewingLoop`) kept the loop for what it took to be its re-review. The reply round
+  (round 54, the judge alone on the same head) ended `replied` with nothing to answer, and the hook
+  (`fixAfterRound`) handed it to `continueFixLoop`, whose first rule ends a loop whose re-review did not
+  post: "fix loop ended: the re-review did not post (replied)", the PR in needs attention under `fix`
+  although its review stood. The hook now gets the round's job as dispatch launched it and passes on only
+  the loop's re-review (`notLoopsReReview`): the forced round dispatched at or after the loop's force,
+  which the row now records (`FixState.ForcedAt`, set by `fixReReview`; the new `roundJob.dispatchedAt`;
+  a row written before takes any forced round), whatever its setup made of it (a re-review, a recovery, a
+  continued turn). Only the loop forces while its row exists, since `magnum review` and a second loop are
+  refused. Its head is not asked: the forced round reviews the PR's head at dispatch, which a push of the
+  operator's may have moved past the fixer's, and `continueFixLoop` already reads that move. A post-merge
+  review, a reply round, a CI check, an audit pass, a full pass the scheduler started, a round nobody
+  forced, a forced round dispatched before the loop's force and any round after the loop's re-review ended
+  are recorded at info as `fix.round_ignored` ("round 54 ended replied: a reply round, not the re-review the
+  fix loop forced on 76cd67b", with the round, its outcome and head and the loop's data), the row is left
+  as it is, and the loop goes on as the restart's recovery would. A next cycle a drain refuses now marks the
+  row held (`FixState.Held`, `holdNextCycle`, compare-and-set; the row is kv JSON, so no migration): no round
+  that ends afterwards is the loop's, and the recovery starts a held cycle at once on the last review posted
+  at the loop's head, also while the PR waits in line for a reply round or another round (the restart, a
+  drain lifted without one); with a round in flight or paused it waits for that round's end, which the hook
+  ignores before it goes on. The next cycle's row drops both fields. The status comment no longer says that
+  the next round of a held loop reviews the fixer's push. A row a loop left this way is not repaired in code
+  (the operator decides), but a forced re-review never ends replied, so the attention line of "fix loop
+  ended: the re-review did not post (replied)" names the round the loop mistook ("the loop took a reply
+  round for its re-review, which had posted: the review stands") with `magnum fix` and `magnum review` as
+  the remedies, while a re-review of the loop's own that did not post still reads as written. New tests
+  TestAReplyRoundNeverEndsTheFixLoop (the 10-16 layout: the re-review posts one P3 under a drain, a member
+  replies, the drain's command ends after the tick looked at the held loops and before its dispatch, the
+  reply round ends replied under a second drain, the loop stays held with `fix.round_ignored`, and the
+  restart starts cycle 2), TestAHeldNextCycleStartsAfterTheRestart (the 10-16 restart with the reply round
+  in line: cycle 2 starts at once, and the next round is the forced re-review of the fixer's push),
+  TestTheFixLoopActsOnItsOwnReReview (clean, next cycle, capped, with the force's time recorded) and
+  TestASchedulerRoundWhileTheLoopWaitsIsIgnored (seven rounds the loop did not force, each posting a clean
+  review, leave the row as it was, and the loop's own re-review then starts cycle 2) in engine, and
+  TestAMistakenReplyRoundIsNamedInTheAttentionLine in attention. Rejected: treating any round's end as the
+  loop's re-review (what happened); matching the re-review by the fixer's head, which would strand a loop
+  whose forced round reviewed the operator's later push, and which a reply round on the same head passes
+  anyway; a new phase for the hold, which every reader of the phase (the board, `magnum status`, the
+  recovery, dispatch's fixing hold) would have to learn.
 
 ## Learned rules
 

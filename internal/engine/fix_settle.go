@@ -133,7 +133,9 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 
 // fixReReview takes the loop to its re-review after a push: the row in
 // phase reviewing (the cycle counted, the pushed head, needs the findings
-// the fixer left to the author, none after a clean push), the push on the
+// the fixer left to the author, none after a clean push, and when the loop
+// forces its re-review, by which the hook tells that round from the
+// others: FixState.ForcedAt), the push on the
 // PR row as the poller records one (recordFixPush), and a forced review of
 // the PR on it (forceReview, as `magnum review` queues one: no throttle, no
 // daily cap, and the fixing hold does not apply to it). The PR is forced
@@ -152,7 +154,7 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, need
 		return false
 	}
 	st := job.state
-	st.Phase, st.Head, st.NeedsYou = FixPhaseReviewing, head, needs
+	st.Phase, st.Head, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseReviewing, head, needs, e.now().UTC(), false
 	if err == nil {
 		err = e.setFixState(ctx, pr.ID, st)
 	}

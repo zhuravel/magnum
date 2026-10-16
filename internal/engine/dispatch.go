@@ -85,6 +85,11 @@ type roundJob struct {
 	postMerge bool
 	mergeBase string
 
+	// dispatchedAt is when dispatch launched the round (startRound): a fix
+	// loop takes the forced round dispatched at or after its force for its
+	// re-review (FixState.ForcedAt, fixAfterRound).
+	dispatchedAt time.Time
+
 	// The round's start (enterReviewing, refund.go): whether it recorded
 	// last_round_started_at (started) and counted against the daily cap
 	// (counted), on which day, the start time it recorded and the one before.
@@ -487,7 +492,7 @@ func (e *Engine) slotOf(ctx context.Context, prID int64) (store.Slot, bool, erro
 func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, workingCodex int) (bool, int, gate) {
 	full := repo.FullName()
 	subject := prSubject(repo, pr.Number)
-	job := &roundJob{pr: pr, repo: repo, watch: *w, pool: e.cfg.PoolFor(full), kind: kindFor(pr), postMerge: postMerge(pr)}
+	job := &roundJob{pr: pr, repo: repo, watch: *w, pool: e.cfg.PoolFor(full), kind: kindFor(pr), postMerge: postMerge(pr), dispatchedAt: e.now()}
 	if !pr.Forced {
 		_, job.requested = e.pendingRequest(ctx, pr)
 	}

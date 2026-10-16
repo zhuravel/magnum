@@ -54,7 +54,7 @@ func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 		if stopped {
 			return
 		}
-		e.safely(ctx, "fix", subject, func() { e.fixAfterRound(ctx, job.pr, res) }, nil)
+		e.safely(ctx, "fix", subject, func() { e.fixAfterRound(ctx, job, res) }, nil)
 		e.safely(ctx, "whiteboard", subject, func() { e.whiteboardAfterRound(ctx, job.pr, res) }, nil)
 	})
 }

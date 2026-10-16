@@ -427,7 +427,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	} else {
 		st.Cycle++
 	}
-	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou = FixPhaseFixing, job.head, "", job.role.Name, nil
+	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseFixing, job.head, "", job.role.Name, nil, time.Time{}, false
 	job.state = st
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, fix: true}) {

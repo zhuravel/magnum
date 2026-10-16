@@ -8,14 +8,19 @@ package engine
 // otherwise: done when the review found nothing, as needs attention at the
 // cap, after findings the fixer left to the author, or when the re-review
 // did not post (a re-review whose judge turn a usage or login pause cut
-// short is continued later, and the loop waits for that continue). A PR
-// without a loop gets one by itself after a review with findings when its
-// watch says autofix = "own", the PR is the operator's and it was not
-// switched out of autofix (`magnum fix --off`).
+// short is continued later, and the loop waits for that continue). Only the
+// re-review the loop forced decides it: a reply round, a CI check or any
+// other round that ends while the loop waits is recorded as
+// fix.round_ignored and decides nothing, and a next cycle a drain held
+// waits, marked held, for the restart. A PR without a loop gets one by
+// itself after a review with findings when its watch says autofix = "own",
+// the PR is the operator's and it was not switched out of autofix (`magnum
+// fix --off`).
 
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -42,23 +47,31 @@ const autofixBy = "autofix"
 // it is never read.
 var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description)(?::|\s|$)`)
 
-// fixAfterRound decides what the end of a review round means for the PR's
-// fix loop: a loop waiting for this re-review goes on or ends
-// (continueFixLoop), and a PR without one may get one (autofix). launch
-// calls it on the round's goroutine once the round's reservation is gone,
-// with the daemon's context (startFix reserves the PR for the next cycle and
-// runs it on that context); res is the round's result, an error one for a
-// round whose setup failed or that panicked. A round an abort, an ignore or
-// a shutdown stopped never comes here: the stop ended the loop (stopPR,
-// endFixLoop), or the next start re-reviews and the loop goes on after it.
-// A row that cannot be read is logged and left alone: never a second loop
-// over it. The loop's ends and its next cycle act only on the row read here
-// (compare-and-set): a `magnum abort` that ended the loop meanwhile, with no
-// reservation to stop, leaves the hook nothing to do.
-func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.RoundResult) {
+// fixAfterRound decides what the end of a review round (rj, as dispatch
+// launched it) means for the PR's fix loop: a loop waiting for this
+// re-review goes on or ends (continueFixLoop), and a PR without one may get
+// one (autofix). A round that is not the re-review the loop forced
+// (notLoopsReReview: a reply round, a CI check, a full pass the scheduler
+// started, ...) decides nothing: it is recorded as fix.round_ignored, the
+// row stays as it is, and the loop goes on as the restart's recovery would
+// (recoverReviewingLoop): it keeps waiting for a re-review still to run,
+// starts a next cycle held for a restart once nothing holds it, or decides
+// on the posted re-review the hook never acted on. launch calls it on the
+// round's goroutine once the round's reservation is gone, with the daemon's
+// context (startFix reserves the PR for the next cycle and runs it on that
+// context); res is the round's result, an error one for a round whose setup
+// failed or that panicked. A round an abort, an ignore or a shutdown stopped
+// never comes here: the stop ended the loop (stopPR, endFixLoop), or the
+// next start re-reviews and the loop goes on after it. A row that cannot be
+// read is logged and left alone: never a second loop over it. The loop's
+// ends and its next cycle act only on the row read here (compare-and-set):
+// a `magnum abort` that ended the loop meanwhile, with no reservation to
+// stop, leaves the hook nothing to do.
+func (e *Engine) fixAfterRound(ctx context.Context, rj *roundJob, res pipeline.RoundResult) {
 	if ctx.Err() != nil || e.d.DryRun {
 		return
 	}
+	pr := rj.pr
 	cur, err := e.st.PRByID(ctx, pr.ID)
 	if err != nil {
 		e.log.Warn("fix: the PR after its round", "pr", pr.ID, "err", err)
@@ -76,8 +89,74 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 	case !ok:
 		e.autofix(ctx, repo, cur, res)
 	case st.Phase == FixPhaseReviewing:
-		e.continueFixLoop(ctx, e.loopJob(ctx, repo, cur, st), raw, res)
+		job := e.loopJob(ctx, repo, cur, st)
+		if why := notLoopsReReview(st, rj); why != "" {
+			e.roundIgnored(ctx, job, res, why)
+			e.recoverReviewingLoop(ctx, job, raw, "by the end of "+roundName(res))
+			return
+		}
+		e.continueFixLoop(ctx, job, raw, res)
 	}
+}
+
+// notLoopsReReview says what the round rj ran is when it is not the
+// re-review the loop st forced ("" = it is). That re-review is the forced
+// round dispatched at or after the loop's force (FixState.ForcedAt; any
+// forced round for a row written before it was recorded), whatever its
+// setup made of it: a re-review, a recovery, the continued turn of a pause.
+// Only the loop forces while its row exists (`magnum review` and a second
+// loop are refused). Its head is not asked: the forced round reviews the
+// PR's head at dispatch, which a push of the operator's may have moved past
+// the fixer's, and continueFixLoop reads that move. A post-merge review, a
+// reply round, a CI check, an audit pass, a full pass the scheduler
+// started, a round nobody forced and any round after the loop's re-review
+// ended (Held) are not the loop's.
+func notLoopsReReview(st FixState, rj *roundJob) string {
+	switch {
+	case rj.postMerge:
+		return "a post-merge review"
+	case rj.replies > 0:
+		return "a reply round"
+	case rj.ciRed:
+		return "a CI check"
+	case rj.audit != "":
+		return "an audit pass"
+	case !rj.pr.Forced && rj.fullPass != "":
+		return "a full pass (" + rj.fullPassRule + ")"
+	case !rj.pr.Forced && rj.requested:
+		return "a round a review request started"
+	case !rj.pr.Forced:
+		return "a round the loop did not force"
+	case st.Held:
+		return "a forced round after the loop's re-review ended"
+	case rj.dispatchedAt.Before(st.ForcedAt):
+		return "a forced round dispatched before the loop forced its re-review"
+	}
+	return ""
+}
+
+// roundName names the round of res: "round 54", or "a round" for a result
+// without a round (a setup that failed).
+func roundName(res pipeline.RoundResult) string {
+	if res.Round > 0 {
+		return fmt.Sprintf("round %d", res.Round)
+	}
+	return "a round"
+}
+
+// roundIgnored records, at info, that a round that ended (res) while the
+// job's loop waits in phase reviewing is not the loop's re-review (why:
+// what it is), as fix.round_ignored with the loop's data and the round, its
+// outcome and head.
+func (e *Engine) roundIgnored(ctx context.Context, job *fixJob, res pipeline.RoundResult, why string) {
+	outcome := cmp.Or(res.Outcome, pipeline.OutcomeError)
+	data := job.loopData()
+	data["round"], data["outcome"], data["why"] = res.Round, outcome, why
+	if res.TargetSHA != "" {
+		data["target_sha"] = res.TargetSHA
+	}
+	e.event(ctx, "info", job.subject(), "fix.round_ignored", fmt.Sprintf("%s ended %s: %s, not the re-review the fix loop forced on %s",
+		roundName(res), outcome, why, textx.ShortSHA(job.state.Head)), data)
 }
 
 // continueFixLoop takes a loop whose re-review ended (res) to its next
@@ -101,8 +180,8 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 // (endFixRowIf), and the next cycle replaces only that row (claimFixRow), so
 // a stop that ended the loop meanwhile wins quietly (errFixLoopGone). A
 // daemon that drains for a restart holds the next cycle: the row stays in
-// phase reviewing, and the restart's recovery goes on with it
-// (recoverReviewingLoop).
+// phase reviewing, marked held (holdNextCycle), and the restart's recovery
+// goes on with it (recoverReviewingLoop).
 func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, res pipeline.RoundResult) {
 	st := job.state
 	found := roundFindings(res)
@@ -140,9 +219,7 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 			e.log.Info("fix: the loop ended before its next cycle started", "subject", job.subject(), "why", err.Error())
 		case errors.Is(err, errFixDraining):
 			e.log.Info("fix: the daemon is draining; the next cycle waits for the restart", "subject", job.subject(), "cycle", st.Cycle+1)
-			e.mu.Lock()
-			e.drainHeld[job.pr.ID] = true // a drain lifted without a restart goes on with it
-			e.mu.Unlock()
+			e.holdNextCycle(ctx, job, raw)
 		default:
 			if why, moved := e.loopMovedOn(ctx, job.pr.ID, cmp.Or(res.TargetSHA, st.Head)); moved {
 				if e.endFixRowIf(ctx, job, raw) {
@@ -313,12 +390,44 @@ func (e *Engine) endFixRowIf(ctx context.Context, job *fixJob, raw string) bool 
 	return gone
 }
 
+// holdNextCycle keeps the job's loop, whose re-review called for a next
+// cycle that a drain for a restart refused (errFixDraining), in phase
+// reviewing with its row marked held (FixState.Held, compare-and-set
+// against raw, as read; a stop that ended the loop meanwhile wins), so that
+// no round that ends afterwards is taken for its re-review
+// (notLoopsReReview) and the restart's recovery starts the held cycle
+// (recoverReviewingLoop). The PR joins drainHeld: a drain lifted without a
+// restart goes on with it (continueDrainHeldLoops).
+func (e *Engine) holdNextCycle(ctx context.Context, job *fixJob, raw string) {
+	e.mu.Lock()
+	e.drainHeld[job.pr.ID] = true
+	e.mu.Unlock()
+	if job.state.Held {
+		return
+	}
+	st := job.state
+	st.Held = true
+	b, err := json.Marshal(st)
+	if err != nil {
+		e.log.Warn("fix: hold the next cycle", "subject", job.subject(), "err", err)
+		return
+	}
+	switch held, err := e.st.SetKVIf(ctx, KVPRFix(job.pr.ID), raw, string(b)); {
+	case err != nil:
+		e.log.Warn("fix: hold the next cycle", "subject", job.subject(), "err", err)
+	case !held:
+		e.log.Info("fix: the loop's row changed before its hold; nothing to hold", "subject", job.subject())
+	}
+}
+
 // continueDrainHeldLoops goes on with the loops a drain held before their
 // next cycle (drainHeld), once that drain ended without a restart
 // (continueAfterDrain): each gets the decision the restart's recovery would have made
 // (recoverReviewingLoop), so none is stranded in phase reviewing until the
 // next start. Only the loops the drain held are looked at: a loop whose
-// re-review is still running gets its decision from that round's hook.
+// re-review is still running gets its decision from that round's hook, and
+// so does a held loop whose PR has another round in flight, at that round's
+// end (fixAfterRound).
 func (e *Engine) continueDrainHeldLoops(ctx context.Context) {
 	e.mu.Lock()
 	held := slices.Sorted(maps.Keys(e.drainHeld))
@@ -342,20 +451,27 @@ func (e *Engine) continueDrainHeldLoops(ctx context.Context) {
 }
 
 // recoverReviewingLoop goes on with a loop left in phase reviewing (raw: its
-// row as read) by a stopped daemon (at startup) or by a drain lifted without
-// a restart (continueDrainHeldLoops); while says when ("while the daemon was
-// stopped"). A PR whose re-review still has to run (waiting, in flight or
-// paused) keeps the loop: the round's recovery re-reviews and the hook
-// decides after it. A PR reviewed at the loop's head had its re-review post
-// while a stop or a drain kept the hook from deciding: the hook's decision
-// is made now, on that review's result. Any other PR has moved on (a newer
-// head, closed, needing attention): the loop ends quietly with fix.ended.
+// row as read) by a stopped daemon (at startup), by a drain lifted without
+// a restart (continueDrainHeldLoops) or by a round that was not its
+// re-review (fixAfterRound); while says when ("while the daemon was
+// stopped"). A PR with a round in flight or paused keeps the loop: that
+// round's end comes back through the hook. A PR waiting in line keeps a
+// loop whose re-review still has to run: the round's recovery re-reviews
+// and the hook decides after it. A loop held for the restart (Held) waits
+// for no queued round: its re-review ended, the reply round or other round
+// in line is not it, and the held cycle starts now. A PR reviewed at the
+// loop's head (or waiting in line there, for a held loop) had its re-review
+// post while a stop or a drain kept the hook from deciding, or held what it
+// decided: the hook's decision is made now, on the last review posted at
+// that head. Any other PR has moved on (a newer head, closed, needing
+// attention): the loop ends quietly with fix.ended.
 func (e *Engine) recoverReviewingLoop(ctx context.Context, job *fixJob, raw, while string) {
 	pr, st := job.pr, job.state
+	waiting := slices.Contains(waitingStates, pr.State)
 	switch {
-	case slices.Contains(waitingStates, pr.State), slices.Contains(store.InFlightStates, pr.State), pr.State == store.PRPaused:
+	case slices.Contains(store.InFlightStates, pr.State), pr.State == store.PRPaused, waiting && !st.Held:
 		return
-	case pr.State == store.PRReviewed && pr.HeadSHA == st.Head && deref(pr.ReviewedSHA) == st.Head:
+	case (pr.State == store.PRReviewed || waiting) && pr.HeadSHA == st.Head && deref(pr.ReviewedSHA) == st.Head:
 		if res, ok := e.postedReReview(ctx, pr, st.Head); ok {
 			e.continueFixLoop(ctx, job, raw, res)
 			return

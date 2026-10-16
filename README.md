@@ -2045,6 +2045,16 @@ reviewing (a `fix.waiting` event, no toast), and the continued turn's review dec
 pause before the judge was prompted continues no turn: the loop ends with a `fix.failed` event ("the
 re-review did not post (usage_limit)"), and the round starts over once the pause lifts.
 
+Only the re-review the loop forced decides it: the forced round dispatched after the fixer's push,
+whatever head it reviews by then (a push of yours that came first is read as above). A reply round, a
+judge check of a red CI, a post-merge review, an audit pass, a full pass the schedule started, or any
+other round that ends while the loop waits decides nothing. `magnum logs` shows a `fix.round_ignored`
+event that names the round and what it is ("round 54 ended replied: a reply round, not the re-review
+the fix loop forced on 76cd67b"), and the loop goes on waiting for its re-review, or with the next
+cycle that re-review called for. A loop that ended before this rule as "the re-review did not post
+(replied)" stays in needs attention for you to decide, and its attention line says the loop took a
+reply round for its re-review, whose review stands.
+
 **Configuration.** Three `[pipeline]` keys set the job, and a `[[watch]]` may set its own of each.
 
 ```toml
@@ -2082,8 +2092,8 @@ out, as the board's does.
   flags and on its card. The dashboard shows the fixer's pane like any agent's.
 - `magnum status <pr>` prints a `fix:` line with the cycle, the cap, who started the loop and the report's
   path, or `off since 12:30 (magnum fix --off)`. `magnum tui --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
-- `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.needs_you`,
-  `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
+- `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.round_ignored`,
+  `fix.needs_you`, `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.
   `magnum doctor` checks that the fix skill and prompt resolve and that the identity the fix role acts as is
   a `gh` identity whose login works, one line per identity when watches poll as different ones.
@@ -2096,7 +2106,9 @@ out, as the board's does.
   `magnum review <pr>` refuses while the PR has a loop.
 - A fix job is no review round, so it does not count toward `[daemon] max_concurrent_reviews`.
 - `magnum daemon-restart` refuses while a fixer works. `--drain` waits for it and starts no new cycle
-  meanwhile, and the new daemon goes on with a loop that was waiting for its next cycle. A drain that ends
+  meanwhile: a re-review that calls for the next cycle during the drain leaves the loop held (its row says
+  so), no round that ends meanwhile can end it, and the new daemon starts that cycle at once, before a
+  reply round or any other round waiting in line. A drain that ends
   without a restart (its command interrupted, timed out or gone) goes on with that loop at the next tick. `--now` stops the
   daemon under the fixer, and the next start ends that loop as "fix run lost in a daemon restart". herdr
   keeps the fixer's pane, so that start first interrupts a fixer still at work and puts the slot back on
