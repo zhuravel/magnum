@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -165,8 +166,13 @@ func TestAFreshStartClosesAnAgentThatWillNotQuit(t *testing.T) {
 	if got := sh.keysTo(fixPane); !slices.Equal(got, want) {
 		t.Fatalf("keys to the fixer's pane = %q, want %q", got, want)
 	}
-	if got := sh.closedPanes(); !slices.Equal(got, []string{fixPane}) || len(sh.closedIDs()) != 0 {
-		t.Fatalf("closed panes %v, workspaces %v: want the fixer's pane alone", got, sh.closedIDs())
+	// The hard park closes the fixer's pane; the fresh start then closes the
+	// panes of the sessions the park retired, never the operator's shell.
+	if got := sh.closedPanes(); len(got) == 0 || got[0] != fixPane || len(sh.closedIDs()) != 0 {
+		t.Fatalf("closed panes %v, workspaces %v: want the fixer's pane first, no workspace", got, sh.closedIDs())
+	}
+	if !slices.ContainsFunc(sh.panesOf(deref(fixer.HerdrWorkspaceID)), func(p string) bool { return !recordedPane(h, 2, p) }) {
+		t.Fatalf("panes %v: the shell no session owns was closed", sh.panesOf(deref(fixer.HerdrWorkspaceID)))
 	}
 	got, err := h.st.SessionByID(h.ctx, fixer.ID)
 	if err != nil || got.State != store.SessionClosed || got.ClosedAt == nil {
@@ -190,6 +196,135 @@ func TestAFreshStartClosesAnAgentThatWillNotQuit(t *testing.T) {
 	}
 	if v := freshParkBusy(h, 2); v != "" {
 		t.Fatalf("busy count after the round started = %q, want none", v)
+	}
+}
+
+// recordedPane reports whether a session of PR #n records pane.
+func recordedPane(h *harness, n int, pane string) bool {
+	h.t.Helper()
+	sessions, err := h.st.SessionsByPR(h.ctx, h.pr(n).ID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return slices.ContainsFunc(sessions, func(s store.Session) bool { return deref(s.HerdrPaneID) == pane })
+}
+
+// panesOf are the ids of workspace ws's panes in h.
+func (h *stuckHerdr) panesOf(ws string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []string
+	for _, p := range h.panes {
+		if p.WorkspaceID == ws {
+			out = append(out, p.ID)
+		}
+	}
+	return out
+}
+
+// talkable#11932's workspace held 17 panes after a day of retries: a fresh
+// start parks the PR's sessions, which leaves their panes as idle shells
+// while the operator's shell keeps the workspace open (and a session the PR
+// lost there keeps the next start in it), and the start split a new pane
+// for every role beside them. A fresh start now closes the panes its park
+// retired, so after two of them the workspace holds one pane per role of
+// the round besides the operator's shell, each with one pr.panes_closed
+// event; the parked conversations, their panes closed, resume later in new
+// panes.
+func TestAFreshStartClosesThePanesItReplaces(t *testing.T) {
+	h, sh := newStuckHarness(t)
+	h.reviewedPR(2, "b1")
+	pr := h.pr(2)
+	judge, err := h.st.LiveSessionByPRRole(h.ctx, pr.ID, "codex-judge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, cwd := deref(judge.HerdrWorkspaceID), deref(judge.Cwd)
+	sh.mu.Lock()
+	operator := sh.newPaneLocked(ws, cwd).ID
+	sh.mu.Unlock()
+	board := agents.AgentName("talkable/talkable", 2, "claude-whiteboard")
+	if _, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: "claude-whiteboard", AgentName: &board, AgentKind: new("claude"),
+		HerdrPaneID: new(ws + ":p99"), HerdrWorkspaceID: &ws, Cwd: &cwd, State: store.SessionLost}); err != nil {
+		t.Fatal(err)
+	}
+	roles := []string{"codex-judge", "claude-review", "codex-review"}
+	var replaced []string
+	for i := range 2 {
+		replaced = append(replaced, sh.panesOf(ws)...)
+		h.advance(time.Minute)
+		h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}, Fresh: true})
+		h.tick()
+		if got := len(h.rd.all()); got != i+2 {
+			t.Fatalf("fresh start %d: rounds = %d, want it run", i+1, got)
+		}
+	}
+	want := []string{operator}
+	for _, role := range roles {
+		s, err := h.st.LiveSessionByPRRole(h.ctx, pr.ID, role)
+		if err != nil {
+			t.Fatalf("%s: %v", role, err)
+		}
+		if deref(s.HerdrWorkspaceID) != ws {
+			t.Fatalf("%s works in %s, want the reused workspace %s", role, deref(s.HerdrWorkspaceID), ws)
+		}
+		want = append(want, deref(s.HerdrPaneID))
+	}
+	if got := sh.panesOf(ws); !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+		t.Fatalf("workspace panes = %v, want one per role and the operator's shell %v", got, want)
+	}
+	evs := approvalEvents(t, h, 2, agents.EventPanesClosed)
+	if len(evs) != 2 {
+		t.Fatalf("%s events = %+v, want one per fresh start", agents.EventPanesClosed, evs)
+	}
+	for _, ev := range evs {
+		var data struct {
+			Count int      `json:"count"`
+			Roles []string `json:"roles"`
+		}
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Level != "info" || data.Count != len(data.Roles) {
+			t.Fatalf("event %s %+v: want one pane closed per role", ev.Level, data)
+		}
+		for _, r := range roles {
+			if !slices.Contains(data.Roles, r) {
+				t.Fatalf("event %+v: no pane of %s closed", data, r)
+			}
+		}
+	}
+
+	// The fresh sessions are parked and their panes closed in turn; the next
+	// re-review resumes their conversations, each in a new pane.
+	if err := h.d.Agents.Park(h.ctx, pr); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	replaced = append(replaced, sh.panesOf(ws)...)
+	if err := h.d.Agents.CloseRetiredPanes(h.ctx, pr); err != nil {
+		t.Fatalf("close retired panes: %v", err)
+	}
+	if got := sh.panesOf(ws); !slices.Equal(got, []string{operator}) {
+		t.Fatalf("workspace panes after the park = %v, want the operator's shell alone", got)
+	}
+	before := len(sh.startOpts())
+	h.advance(30 * time.Minute) // the minimum re-review interval
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	starts := sh.startOpts()[before:]
+	if len(starts) != 2 {
+		cur := h.pr(2)
+		t.Fatalf("starts = %+v, want the judge and claude-review resumed (rounds %d, state %s, last error %q, wait %+v)", starts, len(h.rd.all()), cur.State, deref(cur.LastError), waitOf(t, h, 2))
+	}
+	for _, o := range starts {
+		if !slices.Contains(o.Args, "resume") && !slices.Contains(o.Args, "--resume") {
+			t.Fatalf("%s started fresh (%q): want its parked conversation resumed", o.Name, o.Args)
+		}
+		if slices.Contains(replaced, o.PaneID) {
+			t.Fatalf("%s resumed in %s, a closed pane", o.Name, o.PaneID)
+		}
 	}
 }
 
@@ -246,6 +381,9 @@ func TestAbortForcesTheParkOnItsLastTry(t *testing.T) {
 	n := fmt.Sprint(pr.ID)
 	if want := []string{"park:" + n, "park:" + n, "park_hard:" + n}; !slices.Equal(parks, want) {
 		t.Fatalf("parks = %q, want %q", parks, want)
+	}
+	if got := h.ag.count("close_panes:" + n); got != 1 {
+		t.Fatalf("retired pane closes = %d, want one after the hard park", got)
 	}
 	if v := freshParkBusy(h, 7); v != "" {
 		t.Fatalf("busy count after the abort = %q, want none", v)

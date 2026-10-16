@@ -673,6 +673,11 @@ closes that pane alone, never the workspace, whose other panes may be yours. The
 parked, and a `pr.park_forced` event names the role and the pane. A park that waits for a run of the PR (a
 fixer or another round at work) is never forced, and `magnum abort` parks the same hard way on its last of
 three tries. The idle park and the release of a Codex-flagged PR keep the plain park and its backoff.
+Once a fresh start's park (or a hard park) worked, magnum closes the panes of the sessions it parked or
+closed, so the workspace keeps one pane per role of the round plus the panes magnum does not own: a pane is
+closed only when it shows an idle shell, and never when a live or lost session of the PR still uses it, so
+a shell you opened in the workspace stays. A `pr.panes_closed` event says how many and of which roles. A
+parked conversation is kept: the role's next start resumes it in a new pane.
 
 An agent CLI that dies as it starts can leave herdr listing the launch under the role's agent name
 (`launch_pending`, status unknown) on a pane that shows only a shell prompt, and herdr refuses that name to

@@ -41,7 +41,9 @@ var freshParkStates = []string{store.PRQueued, store.PRRereviewPending, store.PR
 // quit, the hard one after. Such a failure counts one more try. Any other
 // refusal (a run of the PR in flight, a fixer or a round at work, an agent
 // working or blocked) is a plain wait that counts nothing: that agent works,
-// it is not stuck. A park that works forgets the count.
+// it is not stuck. A park that works forgets the count and closes the panes
+// of the sessions it retired (closeRetiredPanes): the fresh start lays out
+// a new pane per role.
 func (e *Engine) parkFresh(ctx context.Context, pr store.PR) error {
 	tries := e.freshParkBusy(ctx, pr.ID)
 	park := e.d.Agents.Park
@@ -52,10 +54,24 @@ func (e *Engine) parkFresh(ctx context.Context, pr store.PR) error {
 	switch {
 	case err == nil:
 		e.delKV(ctx, kvPRFreshParkBusy(pr.ID))
+		e.closeRetiredPanes(ctx, pr)
 	case parkStuck(err):
 		e.setKV(ctx, kvPRFreshParkBusy(pr.ID), strconv.Itoa(tries+1))
 	}
 	return err
+}
+
+// closeRetiredPanes closes, after a fresh start's park or a hard park, the
+// panes of the PR's sessions the park retired (agents.Manager.
+// CloseRetiredPanes: an idle shell no starting, live or lost session
+// records; a shell the operator opened is never one), since every fresh
+// start split a new pane per role beside the old ones (17 on talkable#11932).
+// A parked session keeps its conversation, resumed later in a new pane. A
+// failure is only logged: the park held.
+func (e *Engine) closeRetiredPanes(ctx context.Context, pr store.PR) {
+	if err := e.d.Agents.CloseRetiredPanes(ctx, pr); err != nil {
+		e.warnUnlessStopped(ctx, err, "close the panes of retired sessions", "pr", pr.ID)
+	}
 }
 
 // parkStuck reports whether a park failed because an agent did not quit:

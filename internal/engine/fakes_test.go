@@ -1070,6 +1070,12 @@ func (f *fakeAgents) Quit(ctx context.Context, s store.Session) error {
 	return f.st.TransitionSession(ctx, s.ID, []string{store.SessionStarting, store.SessionLive, store.SessionLost}, store.SessionParked, nil)
 }
 
+// CloseRetiredPanes records the close; the fake's sessions have no panes.
+func (f *fakeAgents) CloseRetiredPanes(_ context.Context, pr store.PR) error {
+	f.record(fmt.Sprintf("close_panes:%d", pr.ID))
+	return nil
+}
+
 // ClearDeadLaunch records the clear and answers with clearLaunch (false
 // when unset: herdr lists no launch that never came up).
 func (f *fakeAgents) ClearDeadLaunch(_ context.Context, s store.Session) (bool, error) {

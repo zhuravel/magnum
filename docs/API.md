@@ -253,6 +253,10 @@ const EventLaunchCleared = "pr.launch_cleared"
     it names the role, the agent, the pane, its replacement and the CLI's own
     last error line there (paneError), never the TUI's text.
 
+const EventPanesClosed = "pr.panes_closed"
+    EventPanesClosed is recorded (info) when CloseRetiredPanes closed panes:
+    how many, and which roles they served.
+
 const EventParkForced = "pr.park_forced"
     EventParkForced is recorded when a hard park (ParkHard) closed the pane
     of an agent that was still its pane's foreground process after ctrl+c and
@@ -1055,6 +1059,20 @@ func (m *Manager) ClearDeadLaunch(ctx context.Context, s store.Session) (bool, e
     cleared reports that herdr no longer lists the name and the role keeps a
     pane: false when herdr lists no launch that never came up under the name,
     its pane runs something, or the pane closed without a replacement.
+
+func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
+    CloseRetiredPanes closes the panes of the PR's parked and closed sessions
+    that herdr still has (a fresh start's park, and a hard park, retire sessions
+    and leave their panes as idle shells, and the next workspace splits a new
+    pane for every role, so a PR's workspace grew by a pane per role and fresh
+    start: 17 on talkable#11932). A pane is closed only when its foreground
+    process is the shell and no agent herdr lists there works or is blocked,
+    and never when a starting, live or lost session of the PR records it;
+    a pane no session records (a shell the operator opened) is never one.
+    A parked session keeps its conversation: the role's next start resumes it in
+    a new pane. One EventPanesClosed names the count and the roles; a pane herdr
+    refuses to close is logged, and the first such failure returned after the
+    others were tried.
 
 func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slotPath string, env map[string]string, role config.Role) (Workspace, error)
     EnsurePane adds a pane for role to ws unless a live session of the role
@@ -5925,6 +5943,10 @@ type Agents interface {
 	// that pane closed alone and its session closed (a fresh start's second
 	// try, parkFresh; a stop's last, parkForStop).
 	ParkHard(ctx context.Context, pr store.PR) error
+	// CloseRetiredPanes closes the idle panes of the PR's parked and closed
+	// sessions that no other session of the PR records, after a fresh
+	// start's park and a hard park (closeRetiredPanes).
+	CloseRetiredPanes(ctx context.Context, pr store.PR) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
 	// rotateSessions; a session parkReloading takes out of the checkout's

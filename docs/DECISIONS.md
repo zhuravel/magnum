@@ -8148,9 +8148,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a judge on the new skill, instead of a failed blocked run the engine overrides. Rejected: counting no
   author review at all (a review body "fixed, see the commit" is a reply); treating a refused reply as a
   judge failure (the guard is right, and the round is not wrong: it had nothing of its own to answer).
-- **A start clears a dead launch that holds its agent name** (2026-10-16, amends "A judge that never comes
-  up is started once more, and no start adopts the agent of a session magnum ended" and "A cold judge is
-  not lost to the agent it quit"). On talkable#11932
+- **A start clears a dead launch that holds its agent name, and a fresh start closes the panes it
+  replaces** (2026-10-16, amends "A judge that never comes up is started once more, and no start adopts
+  the agent of a session magnum ended", "A cold judge is not lost to the agent it quit" and "A fresh start
+  heals an agent that will not quit"). On talkable#11932
   codex-cli 0.163.0 died at its TUI bootstrap in every judge pane, and herdr kept each failed launch
   listed as an agent with `launch_pending: true` and `agent_status: unknown` on a pane that showed only a
   shell prompt (`mg-11932-codex-judge-5d01cf` on w9J:p2). Every later start of the judge under that name
@@ -8180,9 +8181,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   now cleared when their pane is an idle shell. herdr 0.9.5 offers no cheaper drop: `agent.rename` would
   keep the launch listed under another name, and `pane.release_agent` releases the lifecycle authority an
   integration's hooks report (it takes their source and agent label), not a launch `agent.start`
-  registered, and its effect on one cannot be checked without the live socket. Rejected: a new agent name
-  per attempt (herdr would list the dead one for as long as its pane lives, and the workspace would still
-  grow by a pane per attempt); closing the whole workspace (it can hold the operator's own shell).
+  registered, and its effect on one cannot be checked without the live socket. The same PR's workspace
+  held 17 panes (one claude-fix, two claude-whiteboard, two codex-judge, six claude-review, six
+  codex-review): a fresh start parks the PR's sessions, which leaves their panes as idle shells while the
+  operator's shell keeps the workspace open (and a session the PR lost there keeps the next start in it),
+  `EnsureWorkspace` reuses a pane only for a lost session, and nothing closed the old ones but the hard
+  park's close of a stuck agent. Now a fresh start's park that worked (engine `parkFresh`, plain or hard)
+  and the hard park of `magnum abort`'s last try (`parkForStop`) close the panes of the sessions the park
+  retired (engine `closeRetiredPanes`, `agents.Manager.CloseRetiredPanes`): every pane of the PR's parked
+  and closed sessions that herdr still has, when its foreground process is the shell and no agent listed
+  there works or is blocked, and never one a starting, live or lost session of the PR records (a lost
+  session's pane is the one the next workspace reuses) nor one no session records (the operator's shell).
+  One `pr.panes_closed` (info) gives the count, the roles and the panes; a pane herdr refuses to close is
+  logged, and the park still holds. So the workspace keeps one pane per role of the round plus the panes
+  magnum does not own. A parked session whose pane is closed keeps its conversation: `ResumeID` never
+  looked at a pane, `Recover` leaves a parked session herdr shows nowhere alone, and the role's next start
+  resumes it (`resume {session}`) in the pane the workspace lays out, as for a lost session. The idle park
+  and the Codex-flag release keep their panes as before. Rejected: a new
+  agent name per attempt (herdr would list the dead one for as long as its pane lives, and the workspace
+  would still grow by a pane per attempt); closing the whole workspace (it can hold the operator's own
+  shell); leaving the panes (17 slivers after a day of retries, and `o` opened a workspace of them).
 
 ## Learned rules
 
