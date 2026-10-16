@@ -8097,8 +8097,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   names the exclusion (author-visible and needless); refusing inside `autoGateRefusal`, which a standing
   approval's later round runs too, so the next clean round of the head would withdraw the operator's own
   `A` approval.
-- **An author's own inline threads are not replies** (2026-10-16, spec 51, amends "Replies on magnum's
-  threads get an answer without a push"). On 2026-10-15 the author of a PR posted eight inline comments
+- **An author's own inline threads are not replies, and a reply round with nothing to answer ends
+  replied** (2026-10-16, spec 51, amends "Replies on magnum's threads get an answer without a push").
+  On 2026-10-15 the author of a PR posted eight inline comments
   on it, the findings of their own review tool, each a review that started a new thread, and pushed their
   fixes a minute later. `repliesOf` counted every review or comment by the PR author as a reply to
   magnum's review, so the eight read as "8 replies to the review" and started a reply round of the judge
@@ -8123,8 +8124,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   SKILL.md section 8 and the reply-round clause of `judge-rereview.md` and `judge-recovery.md` say in one
   sentence: "A thread another reviewer or the author started is theirs, never answered inline; a reply
   round with nothing of yours to answer ends `replied` with no replies, never `blocked`." (177 bytes; the
-  skill's cap goes from 35,002 to 35,179.) Rejected: counting no author review at all (a review body
-  "fixed, see the commit" is a reply).
+  skill's cap goes from 35,002 to 35,179.) A reply round whose judge result is `replied` with no replies
+  already ended `replied` (the pipeline's `repliedVerdict`) and left the PR reviewed with its replies read
+  (`replies_read_at`, so the same replies start no new round; `pr.<id>.reply_round` names the head); it
+  now also records `round.replies_none` (info: how many replies started it, how many of them are in
+  magnum's threads, and so why none was magnum's to answer: "none of them is in one of magnum's threads",
+  or "the 1 reply in magnum's threads needed no answer"). For one release, a `blocked` result in a reply
+  round whose blocker names post-review's refusal of replies to threads magnum did not start ("does not
+  start a thread", "reply validation", a foreign thread: `foreignThreadBlock`) ends the round `replied`
+  with nothing answered and a `round.warning` (warn), so a judge on the old skill during an upgrade does
+  not park the PR; any other blocker, and the same one in a round that asked for a review, stay blocked.
+  The shim sits in the pipeline's verdict, where a result file becomes an outcome, rather than in the
+  engine after it: the judge run is then verified `replied` and `engine.round_result` says `replied`, as for
+  a judge on the new skill, instead of a failed blocked run the engine overrides. Rejected: counting no
+  author review at all (a review body "fixed, see the commit" is a reply); treating a refused reply as a
+  judge failure (the guard is right, and the round is not wrong: it had nothing of its own to answer).
 
 ## Learned rules
 

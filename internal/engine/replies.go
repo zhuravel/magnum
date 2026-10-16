@@ -325,9 +325,10 @@ func replyWord(res pipeline.RoundResult) string {
 }
 
 // onReplied records a reply round whose judge answered in its threads (or
-// found nothing to answer) and posted no review: the review stands, so the
-// PR goes back to reviewed with the replies read up to the judge's prompt;
-// replies that came after it wait for their own round. A push that arrived
+// found nothing to answer: round.replies_none says why) and posted no
+// review: the review stands, so the PR goes back to reviewed with the
+// replies read up to the judge's prompt, never needing attention; replies
+// that came after it wait for their own round. A push that arrived
 // meanwhile is settled as after a review round (settleHead): a trivial one
 // leaves the review standing for the new head, any other is measured for
 // the re-review (a small one gets a delta check), which reads the replies
@@ -338,6 +339,7 @@ func replyWord(res pipeline.RoundResult) string {
 func (e *Engine) onReplied(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult, from []string) {
 	now := e.now()
 	readAt := repliesReadAt(in.Kind, res, pr.LastRoundStartedAt, now)
+	counted, inThreads := countedReplies(pr, in, readAt)
 	m := e.settleHead(ctx, job, pr, in.TargetSHA, now)
 	to, next, trivial := m.to, m.next, m.trivial
 	restore := job.started && pr.LastRoundStartedAt != nil && pr.LastRoundStartedAt.Equal(job.startedAt)
@@ -388,6 +390,10 @@ func (e *Engine) onReplied(ctx context.Context, job *roundJob, pr store.PR, in p
 	}
 	e.event(ctx, "info", subject, "pr.replied", msg,
 		map[string]any{"replies": len(res.Replies), "kinds": replyKindCounts(res.Replies), "target_sha": in.TargetSHA, "state": to})
+	if len(res.Replies) == 0 {
+		e.event(ctx, "info", subject, "round.replies_none", repliesNoneMessage(counted, inThreads, in.TargetSHA, deref(pr.LastReviewID)),
+			map[string]any{"replies": counted, "in_threads": inThreads, "target_sha": in.TargetSHA})
+	}
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	if k := e.judgeForPR(ctx, &job.watch, pr.ID).AgentKind(); k != "" {
@@ -401,6 +407,35 @@ func (e *Engine) onReplied(ctx context.Context, job *roundJob, pr store.PR, in p
 			e.log.Info("replies after the round", "pr", pr.ID, "err", err)
 		}
 	}
+}
+
+// countedReplies is how many replies a reply round on pr re-decided (the
+// pending ones its judge read by readAt; in.Replies when none is left, such
+// as after a deletion) and how many of them are in magnum's threads.
+func countedReplies(pr store.PR, in pipeline.RoundInput, readAt time.Time) (counted, inThreads int) {
+	for _, r := range pr.PendingReplies() {
+		if r.At.After(readAt) {
+			continue
+		}
+		counted++
+		if r.Thread {
+			inThreads++
+		}
+	}
+	return cmp.Or(counted, in.Replies), inThreads
+}
+
+// repliesNoneMessage is round.replies_none's sentence for a reply round
+// that answered nothing (DECISIONS "An author's own inline threads are not
+// replies"): how many replies started it and why none was magnum's to
+// answer: none in its threads (the author's comments and review bodies,
+// which no thread reply answers), or the ones there needed no answer.
+func repliesNoneMessage(counted, inThreads int, target string, reviewID int64) string {
+	why := "none of them is in one of magnum's threads, so none was its to answer"
+	if inThreads > 0 {
+		why = "the " + textx.Count(inThreads, "reply", "replies") + " in magnum's threads needed no answer"
+	}
+	return fmt.Sprintf("%s on %s answered nothing: %s; review %d stands", replyLabel(counted), textx.ShortSHA(target), why, reviewID)
 }
 
 // replyKindCounts counts replies by kind for an event's data.

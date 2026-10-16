@@ -538,7 +538,10 @@ rebuttal; an answer as deep as asked; nothing where a reply needs none), and the
 verified by the replies carrying its run's marker (`pr.replied`; the review stands, findings and
 auto-approval are untouched). A thread another reviewer or the author started is theirs: the judge never
 answers it inline, and `post-review` skips a reply there (listed under `skipped`) and posts the rest. A
-changed verdict posts one short review, as any round does. A push
+reply round with nothing of Magnum's to answer ends `replied` with no replies, never blocked: the PR
+stays reviewed with the replies read, so they start no new round, and `round.replies_none` says how many
+replies started it and why none was Magnum's to answer (none in its threads, or the ones there needed no
+answer); it never needs your attention. A changed verdict posts one short review, as any round does. A push
 meanwhile wins: the re-review of the new head reads the replies too. After two of Magnum's rebuttals in
 a thread, an answer marks the thread `stop`: the judge replies there no more, `post-review` refuses to,
 and the board flags the PR for you (`pr.stalemate`; `reviewed · argued` in STATE) until you act on it

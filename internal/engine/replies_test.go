@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -87,6 +88,90 @@ func TestRepliesOnTheReviewedHeadStartAReplyRoundAfterTheDebounce(t *testing.T) 
 	}
 	if rr := h.e.lastReplyRound(h.ctx, h.pr(2)); rr.Head != "b1" || rr.Replies != 2 || rr.At.IsZero() {
 		t.Fatalf("reply round record = %+v", rr)
+	}
+}
+
+// emptyRepliedRounds makes a reply round end replied with no replies,
+// prompted at its start (nothing of magnum's to answer); any other round
+// posts.
+func emptyRepliedRounds(h *harness) {
+	h.rd.mu.Lock()
+	defer h.rd.mu.Unlock()
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if in.Replies == 0 {
+			return h.rd.posted(h.ctx, in, 99)
+		}
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeReplied, Round: 2, TargetSHA: in.TargetSHA, JudgePromptedAt: h.clock.Now(), ThreadsRead: true}, nil
+	}
+}
+
+// The live case (2026-10-15): a reply round with nothing of its own to
+// answer ended blocked and parked the PR for 15 hours. A reply round whose
+// judge result is replied with no replies ends as a reply round that
+// answered nothing: the PR stays reviewed with its review standing, the
+// replies it counted are read (no new round for them, the reply-round
+// record names the head), round.replies_none says how many replies started
+// it and why none was magnum's to answer, and nothing needs attention.
+func TestAReplyRoundWithNothingToAnswerEndsReplied(t *testing.T) {
+	for name, c := range map[string]struct {
+		remarks func(h *harness) []github.Remark
+		want    string
+		threads int
+	}{
+		"none in magnum's threads": {func(h *harness) []github.Remark {
+			return []github.Remark{{At: h.clock.Now(), Author: "alice"}, {Review: true, At: h.clock.Now(), Author: "alice", AnswersKnown: true}}
+		}, "reply round (2 replies) on b1 answered nothing: none of them is in one of magnum's threads, so none was its to answer; review 101 stands", 0},
+		"one in magnum's thread": {func(h *harness) []github.Remark {
+			return []github.Remark{{At: h.clock.Now(), Author: "alice"}, threadReply(h, "alice")}
+		}, "reply round (2 replies) on b1 answered nothing: the 1 reply in magnum's threads needed no answer; review 101 stands", 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			reviewed := h.reviewedPR(2, "b1")
+			emptyRepliedRounds(h)
+			h.advance(10 * time.Minute)
+			remarks := c.remarks(h)
+			reqPoll(h, prSpec{n: 2, head: "b1", remarks: remarks})
+			h.wantState(2, store.PRRereviewPending)
+			h.advance(3 * time.Minute)
+			h.tick()
+			start := h.clock.Now()
+			if ins := h.rd.all(); len(ins) != 2 || ins[1].Replies != 2 {
+				t.Fatalf("rounds = %d, want the reply round", len(ins))
+			}
+			pr := h.wantState(2, store.PRReviewed)
+			if deref(pr.LastReviewID) != deref(reviewed.LastReviewID) || deref(pr.ReviewedSHA) != "b1" || pr.LastError != nil || pr.Attempts != 0 {
+				t.Fatalf("review %v at %v, error %v, attempts %d", pr.LastReviewID, pr.ReviewedSHA, pr.LastError, pr.Attempts)
+			}
+			if pr.RepliesReadAt == nil || !pr.RepliesReadAt.Equal(start) || len(pr.PendingReplies()) != 0 {
+				t.Fatalf("replies read at %v (want %v), pending %d", pr.RepliesReadAt, start, len(pr.PendingReplies()))
+			}
+			if rr := h.e.lastReplyRound(h.ctx, pr); rr.Head != "b1" || rr.Replies != 2 {
+				t.Fatalf("reply round record = %+v", rr)
+			}
+			evs := approvalEvents(t, h, 2, "round.replies_none")
+			if len(evs) != 1 || evs[0].Level != "info" || evs[0].Message != c.want {
+				t.Fatalf("round.replies_none events: %+v", evs)
+			}
+			var data struct {
+				Replies   int    `json:"replies"`
+				InThreads int    `json:"in_threads"`
+				Target    string `json:"target_sha"`
+			}
+			if err := json.Unmarshal(evs[0].Data, &data); err != nil || data.Replies != 2 || data.InThreads != c.threads || data.Target != "b1" {
+				t.Fatalf("data = %s (%v)", evs[0].Data, err)
+			}
+			if evs := approvalEvents(t, h, 2, "pr.needs_attention"); len(evs) != 0 {
+				t.Fatalf("needs attention: %+v", evs)
+			}
+			h.advance(5 * time.Minute)
+			reqPoll(h, prSpec{n: 2, head: "b1", remarks: remarks})
+			h.tick()
+			if n := len(h.rd.all()); n != 2 {
+				t.Fatalf("rounds = %d: the replies it read started another", n)
+			}
+			h.wantState(2, store.PRReviewed)
+		})
 	}
 }
 

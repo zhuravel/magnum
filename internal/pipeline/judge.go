@@ -340,6 +340,14 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 				v.err = fmt.Errorf("the judge reported review %d as posted, but GitHub shows no review by %s with the run's marker", res.ReviewID, rd.login)
 			}
 		case statusBlocked:
+			if rd.replyRound() && !rd.in.DryRun && foreignThreadBlock(blocker) {
+				// One release: a judge on the skill before 2026-10-16 wrote
+				// blocked when post-review refused its replies to threads
+				// magnum did not start; such a round answered nothing.
+				rd.warn(ctx, "the judge wrote blocked over replies to threads it did not start (a judge on the old skill): the reply round answered nothing")
+				v.outcome = OutcomeReplied
+				return v
+			}
 			v.outcome, v.err = OutcomeBlocked, reason("judge blocked", blocker)
 		case statusIdentityError:
 			v.outcome, v.err = OutcomeIdentityError, reason("judge identity check failed", blocker)

@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -116,6 +117,19 @@ func (rd *round) repliedVerdict(ctx context.Context, markers []string, res *judg
 	return verdict{final: true, outcome: OutcomeNeedsAttention, result: res,
 		err: fmt.Errorf("the judge reported %d replies, but GitHub shows none by %s with the run's marker", len(res.Replies), rd.login)}, true
 }
+
+// foreignThreadBlockRe reads a blocker about post-review refusing replies to
+// threads magnum did not start: its old problem ("comment N does not start a
+// thread of …") quoted or paraphrased (2026-10-15: "Reply validation
+// rejected all eight comments…").
+var foreignThreadBlockRe = regexp.MustCompile(`(?i)\b(?:does|do)(?: not|n't) start a thread|reply validation|foreign threads?|threads? (?:it|you|magnum|i) did(?: not|n't) start`)
+
+// foreignThreadBlock reports whether a reply round's blocked result is a
+// judge on the old skill giving up on replies to threads magnum did not
+// start (DECISIONS "An author's own inline threads are not replies"): for
+// one release such a round ends replied with nothing answered, since the
+// new skill ends it so and post-review now skips those replies.
+func foreignThreadBlock(blocker string) bool { return foreignThreadBlockRe.MatchString(blocker) }
 
 // replyKinds counts replies by kind for an event: "1 rebuttal, 2 answers".
 func replyKinds(replies []PostedReply) string {

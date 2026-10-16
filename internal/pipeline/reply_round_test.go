@@ -170,6 +170,66 @@ func TestARepliedResultIsVerifiedByTheRepliesOnGitHub(t *testing.T) {
 	}
 }
 
+// The live case (2026-10-15), for one release: a judge on the old skill
+// answered the author's own threads, post-review refused them, and it wrote
+// blocked, which parked the PR. A blocked result in a reply round whose
+// blocker names the refused replies to threads magnum did not start ends
+// the round replied with nothing answered (a warning says why), its run
+// verified; any other blocker, and the same blocker in a round that asked
+// for a review, stay blocked.
+func TestAnOldJudgesForeignThreadBlockIsNotAnAttention(t *testing.T) {
+	for name, c := range map[string]struct {
+		blocker string
+		reply   bool
+		want    string
+	}{
+		"the live blocker": {"Reply validation rejected all eight comments (comment 31 does not start a thread of talkable[bot]); nothing was posted.", true, OutcomeReplied},
+		"the tool's words": {"post_replies refused: comment 31 does not start a thread of talkable[bot].", true, OutcomeReplied},
+		"another blocker":  {"The checkout has no database for the specs.", true, OutcomeBlocked},
+		"a review round":   {"Reply validation rejected all eight comments; nothing was posted.", false, OutcomeBlocked},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			gh := &replyGitHub{fakeGitHub: e.gh, threads: prThreads()}
+			e.r.GitHub = gh
+			blocked := func(f *fakeAgents, run store.Run, text string) error {
+				if err := writeJudgeJSON(store.Deref(run.ReportPath), map[string]any{"status": "blocked", "run_id": markerRunID(t, text), "blocker": c.blocker}); err != nil {
+					return err
+				}
+				return f.end(run.ID)
+			}
+			e.ag.behaviors[agents.RoleJudge] = []behavior{blocked, blocked}
+			in := e.replyInput()
+			if !c.reply {
+				in.Replies = 0
+			}
+			res, _ := e.r.RunRound(e.ctx, in)
+			if res.Outcome != c.want {
+				t.Fatalf("outcome %s (error %q), want %s", res.Outcome, res.Error, c.want)
+			}
+			warned := slices.ContainsFunc(eventsOfKind(e.events(), "round.warning"), func(ev store.Event) bool {
+				return ev.Level == "warn" && strings.HasPrefix(ev.Message, "the judge wrote blocked over replies to threads it did not start")
+			})
+			if c.want == OutcomeBlocked {
+				if warned || !strings.Contains(res.Error, "judge blocked") {
+					t.Fatalf("warned %v, error %q", warned, res.Error)
+				}
+				return
+			}
+			if res.Error != "" || len(res.Replies) != 0 || res.ReviewID != 0 || !warned {
+				t.Fatalf("result: error %q replies %+v review %d, warned %v", res.Error, res.Replies, res.ReviewID, warned)
+			}
+			judge := e.runOf(agents.RoleJudge, KindRereview)
+			if judge.State != store.RunVerified || store.Deref(judge.Outcome) != OutcomeReplied {
+				t.Fatalf("judge run: state %s outcome %v", judge.State, judge.Outcome)
+			}
+			if evs := eventsOfKind(e.events(), "round.replied"); len(evs) != 1 || !strings.HasPrefix(evs[0].Message, "nothing to answer; no new review") {
+				t.Fatalf("round.replied events: %+v", evs)
+			}
+		})
+	}
+}
+
 // A reply round whose verdict or event changes posts a review as any round:
 // posted, the replies aside.
 func TestAReplyRoundWhoseVerdictChangesPostsAReview(t *testing.T) {
