@@ -699,6 +699,11 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # include_own = true                    # false: skip PRs authored by any of your logins (every gh identity and every
 #                                       # watch's posting identity, the board's "mine"), not only the poll login
 # skip_bot_authors = true
+# allow_bot_authors = ["helper[bot]"]   # bots (GitHub logins, any case, with or without [bot]) whose PRs are reviewed
+#                                       # although skip_bot_authors skips bots: an App that writes code for the team,
+#                                       # not every dependency bot; skip_authors wins over it, and with
+#                                       # skip_bot_authors = false it changes nothing (default: none; a [[repo]]
+#                                       # block's adds to it)
 # skip_authors = ["dependabot"]
 # skip_labels = []
 # skip_paths = ["docs/**", "**/*.md"]   # skip a PR when every changed file matches ("**" spans directories, "*" stays in one)
@@ -789,8 +794,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # clone's .config/wt.toml hooks run ([post-create]/[post-start] after creation, [pre-remove] before
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
-# block with only those, keep_approvals, stakes, auto_approve_skip_authors and the readiness keys
-# (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
+# block with only those, keep_approvals, stakes, auto_approve_skip_authors, allow_bot_authors and the
+# readiness keys (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -804,6 +809,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # prompts, a sentence in claude-review's), never against a stakes block
 #                                         # in the checkout; default: the watch's (also on [[watch]]), else none
 # auto_approve_skip_authors = ["alice"]   # added to the watch's list for this repository's PRs alone
+# allow_bot_authors = ["helper[bot]"]     # added to the watch's list for this repository's PRs alone
 # required_checks = ["Completion"]        # checks a PR must pass to be ready (name globs; "workflow:<glob>" = a whole
 #                                         # Actions workflow); replaces the list GitHub's rulesets declare, which
 #                                         # magnum reads by itself; needed where GitHub will not tell (private repos

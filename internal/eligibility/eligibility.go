@@ -26,6 +26,10 @@ type PRFacts struct {
 	Repo        string
 	AuthorLogin string // GraphQL or REST form; a trailing "[bot]" is understood
 	AuthorIsBot bool   // GraphQL __typename == "Bot"
+	// AllowedBot: the author is a bot allow_bot_authors lists (the
+	// watch's or its repository's [[repo]] block's; the engine sets it from
+	// config.AllowsBotAuthor), so skip_bot_authors lets its PR through.
+	AllowedBot  bool
 	IsDraft     bool
 	IsCrossRepo bool // opened from a fork
 	// AuthorAssociation is GitHub's authorAssociation of the author with the
@@ -106,7 +110,8 @@ type Decision struct {
 // repository (manual_repos), the author (bots, skip_authors, own), Labels,
 // IsDraft (unless Requested), IsCrossRepo and the author's association
 // (skip_departed_authors), in that order, and reports the first rule that
-// rejects the PR.
+// rejects the PR. A bot allow_bot_authors lists (AllowedBot) passes the bot
+// rule and meets the others as a person would, skip_authors first.
 //
 // Forced is deliberately not consulted: the filters describe what the daemon
 // picks up on its own, and whether a manual request overrides them is the
@@ -117,7 +122,7 @@ func Classify(w config.Watch, f PRFacts) Decision {
 		return reject("muted")
 	case w.ManualRepo(f.Repo):
 		return reject("manual repository (manual_repos)")
-	case w.BotsSkipped() && isBot(f):
+	case w.BotsSkipped() && isBot(f) && !f.AllowedBot:
 		return reject("bot author")
 	case authorSkipped(w.SkipAuthors, f.AuthorLogin):
 		return reject(fmt.Sprintf("author %q is in skip_authors", f.AuthorLogin))

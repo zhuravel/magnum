@@ -10,12 +10,9 @@ package config
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"text/template"
 	"unicode"
-
-	"github.com/zhuravel/magnum/internal/github"
 )
 
 // DefaultAutoApproveBody is the body of an automatic approval when the
@@ -67,14 +64,11 @@ func (c *Config) AutoApproveFor(fullName string) *Identity {
 // block's names login, in any case, with or without "[bot]" (as
 // skip_authors matches). A blank login matches nothing.
 func (c *Config) AutoApproveSkipsAuthor(fullName, login string) bool {
-	listed := func(logins []string) bool {
-		return slices.ContainsFunc(logins, func(l string) bool { return github.SameLogin(l, login) })
-	}
-	if w := c.WatchFor(fullName); w != nil && listed(w.AutoApproveSkipAuthors) {
+	if w := c.WatchFor(fullName); w != nil && listsLogin(w.AutoApproveSkipAuthors, login) {
 		return true
 	}
 	r := c.RepoFor(fullName)
-	return r != nil && listed(r.AutoApproveSkipAuthors)
+	return r != nil && listsLogin(r.AutoApproveSkipAuthors, login)
 }
 
 // AutoApproveBodyFor is the approval body template of repository
@@ -136,21 +130,7 @@ func (w Watch) validateAutoApprove(ids map[string]Identity) []error {
 			errs = append(errs, fmt.Errorf("%sauto_approve_body %w", where, err))
 		}
 	}
-	return append(errs, validateAutoApproveSkipAuthors(where, w.AutoApproveSkipAuthors)...)
-}
-
-// validateAutoApproveSkipAuthors checks an auto_approve_skip_authors list of
-// a [[watch]] or [[repo]] block (where names it): GitHub logins, none empty
-// or with whitespace in it. Logins that differ only in case or "[bot]" match
-// as one (AutoApproveSkipsAuthor), so a duplicate is no error.
-func validateAutoApproveSkipAuthors(where string, logins []string) []error {
-	var errs []error
-	for _, l := range logins {
-		if l == "" || strings.ContainsFunc(l, unicode.IsSpace) {
-			errs = append(errs, fmt.Errorf("%sauto_approve_skip_authors entry %q must be a GitHub login (not empty, no whitespace)", where, l))
-		}
-	}
-	return errs
+	return append(errs, validateLogins(where, "auto_approve_skip_authors", w.AutoApproveSkipAuthors)...)
 }
 
 // validateAutoApproveBody checks an auto_approve_body template: one line of

@@ -315,6 +315,13 @@ type Watch struct {
 	// of it (GitHub's authorAssociation) was opened by someone who left; it
 	// is not reviewed. Fork PRs are skip_cross_repository's business.
 	SkipDepartedAuthors *bool `toml:"skip_departed_authors"`
+	// AllowBotAuthors are the GitHub logins of bots whose PRs are reviewed
+	// although skip_bot_authors skips bots (any case, with or without
+	// "[bot]"; see Config.AllowsBotAuthor): an App that writes code for the
+	// team, not every dependency bot. skip_authors wins over it; with
+	// skip_bot_authors = false it changes nothing. A [[repo]] block's adds
+	// to it.
+	AllowBotAuthors []string `toml:"allow_bot_authors"`
 	// SkipPaths are path globs ("**" matches whole directories, "*" never
 	// crosses "/"; see MatchPath): a PR is not reviewed when every file it
 	// changes (a rename counts both names) matches one of them. A PR whose
@@ -630,6 +637,10 @@ type Repo struct {
 	// auto_approve_skip_authors for this repository's PRs alone.
 	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
 
+	// AllowBotAuthors adds bots' GitHub logins to the covering watch's
+	// allow_bot_authors for this repository's PRs alone.
+	AllowBotAuthors []string `toml:"allow_bot_authors"`
+
 	// RequiredChecks are the checks a PR must pass to be ready, replacing
 	// the ones GitHub requires on the default branch (rulesets or branch
 	// protection, which a private repository on a free plan does not
@@ -651,7 +662,8 @@ const RequiredWorkflowPrefix = "workflow:"
 
 // worktreeKeys reports whether the block sets any per-PR worktree key
 // (everything but repo, the verdicts, readiness, keep_approvals, stakes,
-// auto_approve_skip_authors, required_checks and trackers).
+// auto_approve_skip_authors, allow_bot_authors, required_checks and
+// trackers).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }

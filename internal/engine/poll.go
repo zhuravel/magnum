@@ -635,22 +635,25 @@ func prFromInput(in store.GitHubPR, now time.Time) store.PR {
 	return pr
 }
 
-// factsFor is the eligibility view of a PR. Its repository's name is read
-// only when the watch has manual_repos, and its pending review request
-// (Requested) only for a draft the watch skips: the one rule that needs
-// each.
+// factsFor is the eligibility view of a PR. Its repository is read only
+// when the watch has manual_repos or the PR is a bot's that skip_bot_authors
+// skips (allow_bot_authors, whose [[repo]] addition is the repository's),
+// and its pending review request (Requested) only for a draft the watch
+// skips: the rules that need each.
 func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now time.Time) eligibility.PRFacts {
 	rounds := pr.RoundsToday
 	if deref(pr.RoundsDay) != store.DayKey(now) {
 		rounds = 0
 	}
-	repo := ""
-	if len(w.ManualRepos) > 0 {
+	login := deref(pr.AuthorLogin)
+	skippedBot := github.IsBot(deref(pr.AuthorType), login) && w.BotsSkipped()
+	var repo store.Repo
+	if len(w.ManualRepos) > 0 || skippedBot {
 		r, err := e.st.RepoByID(ctx, pr.RepoID)
 		if err != nil {
 			e.warnUnlessStopped(ctx, err, "eligibility: repository", "pr", pr.ID)
 		}
-		repo = r.Name
+		repo = r
 	}
 	requested := false
 	if pr.IsDraft && !w.DraftsIncluded() {
@@ -658,9 +661,10 @@ func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now 
 		requested = ok && req.By != RequestReadyForReview
 	}
 	return eligibility.PRFacts{
-		Repo:   repo,
-		Number: pr.Number, AuthorLogin: deref(pr.AuthorLogin),
-		AuthorIsBot: github.IsBot(deref(pr.AuthorType), deref(pr.AuthorLogin)),
+		Repo:   repo.Name,
+		Number: pr.Number, AuthorLogin: login,
+		AuthorIsBot: github.IsBot(deref(pr.AuthorType), login),
+		AllowedBot:  skippedBot && e.cfg.AllowsBotAuthor(repo.FullName(), login),
 		IsDraft:     pr.IsDraft, Requested: requested, IsCrossRepo: pr.IsCrossRepo, Labels: pr.Labels,
 		AuthorAssociation: deref(pr.AuthorAssociation),
 		HeadSHA:           pr.HeadSHA, ReviewedSHA: deref(pr.ReviewedSHA), State: pr.State,

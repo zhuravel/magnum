@@ -49,6 +49,9 @@ type prSpec struct {
 	reviews   []github.LatestReview
 	// assoc is the author's authorAssociation ("" = MEMBER).
 	assoc string
+	// authorType is the author's GraphQL __typename ("" = User; "Bot" for
+	// an App, whose GraphQL login has no "[bot]").
+	authorType string
 	// labelsTruncated and reviewsTruncated make Details report a cut-off
 	// label or latestReviews page (LabelsComplete, LatestReviewsComplete).
 	labelsTruncated, reviewsTruncated bool
@@ -571,7 +574,7 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				assoc = "MEMBER"
 			}
 			d := github.PRDetails{NodeID: fmt.Sprintf("PR_%s_%d", full, n), Number: n, Title: fmt.Sprintf("PR %d", n), AuthorAssociation: assoc,
-				URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n), AuthorLogin: author, AuthorType: "User",
+				URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n), AuthorLogin: author, AuthorType: cmp.Or(p.authorType, "User"),
 				Labels: p.labels, LabelsComplete: !p.labelsTruncated, LatestReviewsComplete: !p.reviewsTruncated,
 				HeadRefName: "feature", BaseRefName: cmp.Or(p.base, "master"), State: "OPEN", IsDraft: p.draft,
 				HeadRefOid: p.head, BaseRefOid: fakeBaseOid, Assignees: append([]string{}, p.assignees...),

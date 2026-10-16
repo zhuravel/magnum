@@ -8267,6 +8267,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   dropped candidates in the judge's prompt (339 of claude-review's Rejected bullets in one run were
   re-judged and none became a posted finding: "Nine review rules from the 2026-10-14 run"); a judge prompt
   clause instead of the skill rule (the own pass and recovery rounds verify fixes too).
+- **A listed bot's PR is reviewed although bots are skipped** (2026-10-16, spec 54). `skip_bot_authors`
+  (default true) keeps every bot's PR out of review, so a PR a GitHub App that writes code for the team
+  opened sat ineligible with "bot author"; the operator wants such PRs reviewed, bot by bot, without
+  reviewing every dependency bot's. A `[[watch]]` key `allow_bot_authors` lists bots' GitHub logins, and the
+  same key on a `[[repo]]` block adds logins for that repository alone (`Config.AllowsBotAuthor`), matched
+  as `auto_approve_skip_authors` matches them (`github.SameLogin` of the lowercased logins: any case, with
+  or without `[bot]`, so the GraphQL author "helper" of `__typename` Bot is helper[bot]; the matcher,
+  `listsLogin`, now serves both lists, so an `auto_approve_skip_authors` entry with "[Bot]" in another case
+  matches as well) and validated as it is (`validateLogins`: no empty entry, no whitespace, the error naming
+  the block). The engine's `factsFor` sets `PRFacts.AllowedBot` for a bot's PR the watch's
+  `skip_bot_authors` skips when either list names its author (it reads the PR's repository for the
+  `[[repo]]` list only then, as for `manual_repos`), and `eligibility.Classify`'s bot rule lets that PR
+  through: it meets the other filters as a person's PR would, `skip_authors` first, so a login on both lists
+  is skipped with skip_authors' reason, and with `skip_bot_authors = false` the list changes nothing. Its
+  author is still a bot: its remarks count only in magnum's threads (`repliesOf`), nothing in the PR is
+  trusted, and auto-approval treats it as any PR its watch reviews (`auto_approve_skip_authors` keeps it
+  out). The PRs skipped before the list needed no new guard: the poll classifies a known PR again only when
+  GitHub reports a change, but the daemon's start runs `reclassifyIneligible` before its first poll, which
+  passes every open ineligible PR with Details through `onSeenPR` as changed, so a bot's PR first seen
+  ineligible is queued ("ineligible → queued (now eligible)") with no head change and the first poll's
+  dispatch starts its round, and one open since the repository's first sync that `skipBaseline` marked
+  goes back to baseline (`restoreBaseline`), as the first sync left it: each where a newly seen PR would be.
+  The board, the card and `magnum tui --json` name a skip rule only for a skipped PR, so nothing new shows
+  there. New tests TestAListedBotsPRIsReviewedAlthoughBotsAreSkipped (engine: "Helper" lets helper's PR,
+  in GraphQL's form, through under a `[[repo]]` block that adds nothing, and another bot's stays "bot
+  author"), TestAnIneligibleBotPRBecomesEligibleAtTheNextPoll (engine: after a restart on a `[[repo]]`
+  list, the skipped new PR is queued at the start and reviewed by the first poll, with no head change, and
+  the skipped baseline PR is back to baseline), TestAnAllowedBotPassesSkipBotAuthors and
+  TestSkipAuthorsWinsOverAllowBotAuthors (eligibility), TestAllowBotAuthorsRefusesAnEmptyOrSpacedLogin and
+  TestAllowsBotAuthorMatchesTheListedBots (config). Rejected: `skip_bot_authors = false` per repository
+  (every dependency bot's PR there would be reviewed too); a label on the PR (the bot would have to set it).
 
 ## Learned rules
 

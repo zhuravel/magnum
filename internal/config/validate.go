@@ -176,6 +176,7 @@ func (c *Config) Validate() error {
 			}
 		}
 		errs = append(errs, w.validateAutoApprove(ids)...)
+		errs = append(errs, validateLogins("watch "+w.Owner+": ", "allow_bot_authors", w.AllowBotAuthors)...)
 		if err := validateStakes(w.Stakes); err != nil {
 			errs = append(errs, fmt.Errorf("watch %s: stakes %w", w.Owner, err))
 		}
@@ -451,7 +452,8 @@ func (c *Config) validateRepos() []error {
 		if err := validateStakes(r.Stakes); err != nil {
 			errs = append(errs, fmt.Errorf("repo %s: stakes %w", r.Repo, err))
 		}
-		errs = append(errs, validateAutoApproveSkipAuthors("repo "+r.Repo+": ", r.AutoApproveSkipAuthors)...)
+		errs = append(errs, validateLogins("repo "+r.Repo+": ", "auto_approve_skip_authors", r.AutoApproveSkipAuthors)...)
+		errs = append(errs, validateLogins("repo "+r.Repo+": ", "allow_bot_authors", r.AllowBotAuthors)...)
 		for k := range r.Env {
 			if !envKeyRe.MatchString(k) {
 				errs = append(errs, fmt.Errorf("repo %s: env key %q is not a valid variable name", r.Repo, k))

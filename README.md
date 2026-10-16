@@ -864,6 +864,7 @@ identity = "reviewer-app"          # who posts
 poll_identity = "me"               # who polls
 include_drafts = true              # false: a draft waits until ready for review, or a review request for you (one round per request)
 skip_bot_authors = true
+allow_bot_authors = ["helper[bot]"]
 skip_departed_authors = true       # default: a branch PR by someone no longer a member or collaborator is not reviewed
 roles = ["claude-review", "codex-review", "claude-simplify", "codex-judge"]
 stakes = "A SaaS on the public internet: merchants' money and shoppers' personal data."   # what its repositories put at risk
@@ -936,7 +937,18 @@ PR's next round takes another slot (a slot pinned meanwhile keeps its PR, which 
 `magnum slots repair <slot>` provisions the slot again and puts it back in the pool. A free slot above a pool's `min` is removed once it has been idle for
 `idle_remove_after` (168h when unset or 0; a negative value is refused). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
-`magnum review` still runs it. A watch's `skip_cross_repository` (default `true`) skips a PR whose head lives in a fork, and `false` reviews it. A watch's `manual_repos` (names of repositories it covers, without owner
+`magnum review` still runs it. A watch's `skip_bot_authors` (default `true`) skips every bot's PR, and its
+`allow_bot_authors` names the bots whose PRs are reviewed all the same, such as `["helper[bot]"]` above for
+an App that writes code for the team, while the dependency bots' PRs stay skipped: GitHub logins, matched as `skip_authors`
+matches them (any case, with or without `[bot]`; none empty or with a space), and a `[[repo]]` block's
+`allow_bot_authors` adds logins for that repository alone. Such a PR is reviewed as a person's would be,
+under every other filter: `skip_authors` wins (a login on both lists is skipped), with
+`skip_bot_authors = false` the list changes nothing, and auto-approval treats it as any PR its watch
+reviews (`auto_approve_skip_authors` keeps it out). Its author is still a bot: its remarks count only in
+Magnum's threads, and nothing in the PR is trusted. The daemon classifies the skipped PRs again when it
+starts, so once it restarts on the new list a bot's PR the poll skipped ("bot author") is queued without a
+push, and one open since the repository's first sync goes back to baseline, as the first sync left it. A
+watch's `skip_cross_repository` (default `true`) skips a PR whose head lives in a fork, and `false` reviews it. A watch's `manual_repos` (names of repositories it covers, without owner
 or pattern, such as `["example"]`) keeps them on the board, in `magnum tui`, the status and the retro,
 but starts no round there on its own: not for a new PR, a push or a review request on GitHub. Their PRs
 read "skipped · manual"; `magnum review`, the board's `r`/`R` and the picker review one. A review request

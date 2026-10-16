@@ -3147,6 +3147,14 @@ func (c *Config) AllRoles() []Role
     out): what names a role on the command line, lists roles, or copies the
     configuration.
 
+func (c *Config) AllowsBotAuthor(fullName, login string) bool
+    AllowsBotAuthor reports whether allow_bot_authors lets repository fullName's
+    ("owner/name") PRs by login through skip_bot_authors: the covering watch's
+    list or the repository's [[repo]] block's names login, in any case, with
+    or without "[bot]" (github.SameLogin, so a bot's GraphQL login "helper" is
+    helper[bot]). A blank login matches nothing. Whether login is a bot is the
+    caller's business: the list only lifts the bot rule.
+
 func (c *Config) AutoApproveBodyFor(fullName string) string
     AutoApproveBodyFor is the approval body template of repository fullName's
     PRs: its watch's auto_approve_body, trimmed, else DefaultAutoApproveBody.
@@ -4369,6 +4377,10 @@ type Repo struct {
 	// auto_approve_skip_authors for this repository's PRs alone.
 	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
 
+	// AllowBotAuthors adds bots' GitHub logins to the covering watch's
+	// allow_bot_authors for this repository's PRs alone.
+	AllowBotAuthors []string `toml:"allow_bot_authors"`
+
 	// RequiredChecks are the checks a PR must pass to be ready, replacing
 	// the ones GitHub requires on the default branch (rulesets or branch
 	// protection, which a private repository on a free plan does not
@@ -4760,6 +4772,13 @@ type Watch struct {
 	// of it (GitHub's authorAssociation) was opened by someone who left; it
 	// is not reviewed. Fork PRs are skip_cross_repository's business.
 	SkipDepartedAuthors *bool `toml:"skip_departed_authors"`
+	// AllowBotAuthors are the GitHub logins of bots whose PRs are reviewed
+	// although skip_bot_authors skips bots (any case, with or without
+	// "[bot]"; see Config.AllowsBotAuthor): an App that writes code for the
+	// team, not every dependency bot. skip_authors wins over it; with
+	// skip_bot_authors = false it changes nothing. A [[repo]] block's adds
+	// to it.
+	AllowBotAuthors []string `toml:"allow_bot_authors"`
 	// SkipPaths are path globs ("**" matches whole directories, "*" never
 	// crosses "/"; see MatchPath): a PR is not reviewed when every file it
 	// changes (a rename counts both names) matches one of them. A PR whose
@@ -5034,7 +5053,8 @@ func Classify(w config.Watch, f PRFacts) Decision
     the repository (manual_repos), the author (bots, skip_authors, own),
     Labels, IsDraft (unless Requested), IsCrossRepo and the author's association
     (skip_departed_authors), in that order, and reports the first rule that
-    rejects the PR.
+    rejects the PR. A bot allow_bot_authors lists (AllowedBot) passes the bot
+    rule and meets the others as a person would, skip_authors first.
 
     Forced is deliberately not consulted: the filters describe what the daemon
     picks up on its own, and whether a manual request overrides them is the
@@ -5047,6 +5067,10 @@ type PRFacts struct {
 	Repo        string
 	AuthorLogin string // GraphQL or REST form; a trailing "[bot]" is understood
 	AuthorIsBot bool   // GraphQL __typename == "Bot"
+	// AllowedBot: the author is a bot allow_bot_authors lists (the
+	// watch's or its repository's [[repo]] block's; the engine sets it from
+	// config.AllowsBotAuthor), so skip_bot_authors lets its PR through.
+	AllowedBot  bool
 	IsDraft     bool
 	IsCrossRepo bool // opened from a fork
 	// AuthorAssociation is GitHub's authorAssociation of the author with the
