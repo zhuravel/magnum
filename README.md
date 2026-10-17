@@ -1251,10 +1251,13 @@ are ranked by shared paths, at most 10 with 20 paths each, and each has its numb
 time), last activity, head, the shared paths, whether Magnum reviewed it with its last review's URL and
 verdict, and how many findings Magnum posted on those paths; no titles, bodies or comments (the judge
 reads a PR itself with `gh` when it matters). Every judge prompt records its whole set in
-`related-all.json` beside it, and a later round's `related.json` names only the related PRs that the set
-recorded for the head the previous review covered lacked or named another way (open or merged, the
-shared paths), so a review does not repeat the Related line of the one before; with nothing new there is
-no file and no `related_prs`. The skill has the judge name an open PR
+`related-all.json` beside it, with what the PR's posted reviews named so far (each related PR's state
+when last named and every path it shared), and a later round's `related.json` leaves out a related PR an
+earlier posted review named unless its state changed since (merged, closed and reopened, made ready or
+turned back into a draft) or it now shares a path no earlier line of it listed; fewer shared paths, a
+new head or activity are no news, so a busy neighbour's pushes do not repeat the Related or Stacked
+line. The first review names them all; with nothing new there is no file and no `related_prs`. The
+skill has the judge name an open PR
 that changes the same behaviour (a duplicate or competing fix, conflicting edits, one needing the other)
 in one line of its review, raise a finding only when merging both provably breaks something, check that
 the PR does not undo what a recently merged one fixed, and record a flaky-test or recurring-bug pattern

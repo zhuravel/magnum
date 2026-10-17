@@ -9137,6 +9137,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Magnum too; the board and the refusal event show the same reasons. The README's and the example
   config's copies follow. `magnum` stays the command, the marker, and the name in the CLI, the logs, the
   events and the operator's toasts.
+- **A related PR is named again only after a state change or a new file** (2026-10-17, spec 79, amends "The
+  Related lines name only live PRs and say nothing twice"). 44 of 97 reviews in a week carried a Related or
+  Stacked line, and 19 of them named only PRs an earlier review of the same PR had named: one PR's reviews
+  named its stacked neighbour 7 times, another's 4. A round compared its set with the previous review's by
+  the count and the first 20 of the shared paths, so each push to a busy neighbour that moved the count (36,
+  37, 36, 42, 41, 40 and 38 shared paths in one PR's rounds) named it again, and a previous review on a
+  head no round recorded (a merge of the base moves `reviewed_sha` without a round) left nothing to compare
+  with, so that round named all eight related PRs again. Now `related-all.json` also records what the PR's
+  posted reviews named (`base` before the round, `told` after it: per related PR its state when last named,
+  `open` with its draft flag, `merged`, or `closed` once a round found it closed in the registry, and every
+  path it shared in any of them, not only the 20 shown), and `related.json` leaves out each related PR
+  named in its present state that shares no other path. A PR merged, closed and reopened, made ready or
+  turned back into a draft, or sharing a new path is named again; fewer shared paths, a new head, activity,
+  reviews and findings are no news. The registry finds the posted reviews: of the PR's runs of earlier
+  rounds verified as posted, the newest whose head has a record gives its `told`, or its `base` when a
+  later round replaced the record on that head (the round's own earlier prompt, a round that posted
+  nothing), so what only an unposted round named is named again, an initial round after posted reviews
+  names nothing they named, and the first review names them all. A record from before `told` counts its
+  whole set and the set it compared with as named (their entries read as the new ones). The judge still
+  gets the filtered list as `related_prs`; the prompts, the skill and the line's wording are unchanged, and
+  the `round.related` event's `told` counts the PRs left out. Rejected: naming them on every review (what
+  happened: 19 repeated lines in a week); comparing with the previous review's head alone (a merge of the
+  base leaves it without a record); reading which PRs the posted line named (posted text is data, and the
+  judge names a related PR only when it matters, so the list it was given is what counts as named).
 
 ## Learned rules
 

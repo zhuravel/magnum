@@ -14,12 +14,13 @@ package pipeline
 // Codex-flagged PR").
 //
 // The Related lines say nothing twice and name only live PRs (DECISIONS
-// "The Related lines name only live PRs and say nothing twice"): an open PR
-// without activity for relatedIdle is left out, and a later round's
-// related.json names only the related PRs that the set of the round before
-// (related-all.json in the report directory of the head the previous review
-// covered) lacked or named with another relation; with none left there is
-// no file.
+// "The Related lines name only live PRs and say nothing twice" and "A
+// related PR is named again only after a state change or a new file"): an
+// open PR without activity for relatedIdle is left out, and related.json
+// leaves out each related PR that the PR's earlier posted reviews named
+// (related-all.json in the report directory of the newest posted review's
+// head) in the same state and with every path it shares now; with none
+// left there is no file.
 
 import (
 	"cmp"
@@ -43,9 +44,9 @@ import (
 // RelatedFile is the related PRs' file in the round's report directory.
 const RelatedFile = "related.json"
 
-// relatedAllFile is the round's whole related set (relatedRecord) beside
-// related.json, which a later round may hold only part of: the next round
-// compares its set with it.
+// relatedAllFile is the round's whole related set and what the PR's posted
+// reviews named (relatedRecord) beside related.json, which holds only part
+// of the set: a later round reads what was named from it.
 const relatedAllFile = "related-all.json"
 
 // related.json's caps: the PRs sharing the most paths, and the paths of each.
@@ -196,15 +197,38 @@ func (rd *round) related(ctx context.Context) (RelatedPRs, error) {
 	return out, nil
 }
 
+// toldPR is one related PR as the PR's posted reviews named it: its state
+// when last named (open with its draft flag, or merged; closed once a
+// round found it closed) and every path it shared in any of them. Its JSON
+// is a part of RelatedPR's, so the RelatedPR entries of a record from
+// before toldPR read as toldPRs.
+type toldPR struct {
+	Number int      `json:"number"`
+	State  string   `json:"state"` // open | merged | closed
+	Draft  bool     `json:"draft,omitempty"`
+	Paths  []string `json:"paths"`
+}
+
+// stateClosed is a toldPR's state once a round found it closed: a closed
+// PR is never related, and one reopened is named again.
+const stateClosed = "closed"
+
 // relatedRecord is related-all.json: the whole related set of the round's
-// latest judge prompt, whatever its related.json named of it.
+// latest judge prompt, whatever its related.json named of it, and what the
+// PR's posted reviews named before and after it.
 type relatedRecord struct {
 	Round   int    `json:"round"`
 	HeadSHA string `json:"head_sha"`
-	// Base is the set the round compared its own with (the round before's):
-	// a later prompt of the same round, or the turn a continue finishes,
-	// compares with it again, not with the round's own set.
-	Base    []RelatedPR `json:"base"`
+	// Base is what the PR's posted reviews before the round named, which
+	// related.json leaves out when unchanged: a later round that finds the
+	// record replaced on its posted review's head (a later prompt of the
+	// round, a round that posted nothing) takes it again. A record from
+	// before toldPR held the round before's whole set here.
+	Base []toldPR `json:"base"`
+	// Told is Base with the round's whole set (each named now or before):
+	// what a later round counts as named once the round posted. Absent from
+	// a record from before it.
+	Told    []toldPR    `json:"told"`
 	Related []RelatedPR `json:"related"`
 }
 
@@ -236,54 +260,109 @@ func readRelatedSet(dir string) (rec relatedRecord, ok bool, err error) {
 	return relatedRecord{HeadSHA: old.HeadSHA, Related: old.Related}, true, nil
 }
 
-// relatedBase is the related set the round compares its own with: the Base
-// of the round's own record when an earlier prompt of the round (or the
-// paused turn a continue finishes) wrote one, in its report directory or in
-// the previous head's (before a restart); else, in any round but an initial
-// one, the set recorded for the head the previous review covered. nil
-// (every related PR is new) for an initial round and for a head without a
-// record.
-func (rd *round) relatedBase() ([]RelatedPR, error) {
-	rec, ok, err := readRelatedSet(rd.dir)
-	if err != nil || ok && rec.Round == rd.in.Round {
-		return rec.Base, err
+// relatedBase is what the PR's posted reviews before the round named: the
+// record on the head of the newest of them that has one, its Told, or its
+// Base when a later round replaced the record there (the round's own
+// earlier prompt, a round that posted nothing: that Base came from the
+// same posted reviews). The registry's runs find the posted reviews, not
+// the previous review's head, which a merge of the base moves without a
+// round. nil, every related PR new, before the PR's first posted review.
+func (rd *round) relatedBase(ctx context.Context) ([]toldPR, error) {
+	runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID)
+	if err != nil {
+		return nil, err
 	}
-	head := rd.previousHead()
-	if rd.in.Kind == KindInitial || head == "" {
-		return nil, nil
-	}
-	if dir := rd.r.Layout.ReviewDir(rd.owner, rd.name, rd.in.PR.Number, head); dir != rd.dir {
-		if rec, ok, err = readRelatedSet(dir); err != nil {
-			return nil, err
+	read := map[string]bool{}
+	for _, run := range slices.Backward(runs) {
+		if run.Round >= rd.in.Round || run.State != store.RunVerified || store.Deref(run.Outcome) != OutcomePosted || read[run.TargetSHA] {
+			continue
 		}
+		read[run.TargetSHA] = true
+		rec, ok, err := readRelatedSet(rd.r.Layout.ReviewDir(rd.owner, rd.name, rd.in.PR.Number, run.TargetSHA))
+		switch {
+		case err != nil:
+			return nil, err
+		case !ok:
+			continue
+		case rec.Round > run.Round:
+			return rec.Base, nil
+		case rec.Told == nil: // a record from before Told, or one with nothing related
+			return toldAfter(rec.Base, rec.Related), nil
+		}
+		return rec.Told, nil
 	}
-	switch {
-	case !ok:
-		return nil, nil
-	case rec.Round == rd.in.Round:
-		return rec.Base, nil
-	}
-	return rec.Related, nil
+	return nil, nil
 }
 
-// newRelated keeps the related PRs of rel that base lacks or names with
-// another relation (sameRelation); told counts the others.
-func newRelated(rel, base []RelatedPR) (out []RelatedPR, told int) {
+// markClosed records as closed each open PR of told that rel lacks and the
+// registry knows closed, so that it is named again once reopened.
+func (rd *round) markClosed(ctx context.Context, told []toldPR, rel []RelatedPR) ([]toldPR, error) {
+	out := slices.Clone(told)
+	for i, t := range out {
+		if t.State != "open" || slices.ContainsFunc(rel, func(r RelatedPR) bool { return r.Number == t.Number }) {
+			continue
+		}
+		pr, err := rd.r.Store.PRByRepoNumber(ctx, rd.in.PR.RepoID, t.Number)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil:
+			return nil, err
+		case pr.GHState == store.GHClosed:
+			out[i].State, out[i].Draft = stateClosed, false
+		}
+	}
+	return out, nil
+}
+
+// sharedPaths are the paths r shares: all of them for a PR the round
+// related, the first maxRelatedPaths for one read back from a file.
+func (r RelatedPR) sharedPaths() []string {
+	if r.shared != nil {
+		return r.shared
+	}
+	return r.Paths
+}
+
+// toldAfter is told with each PR of rel named: its state now, and its
+// paths added to those named before; sorted by number.
+func toldAfter(told []toldPR, rel []RelatedPR) []toldPR {
+	out := slices.Clone(told)
 	for _, r := range rel {
-		if slices.ContainsFunc(base, func(b RelatedPR) bool { return sameRelation(b, r) }) {
-			told++
+		i := slices.IndexFunc(out, func(t toldPR) bool { return t.Number == r.Number })
+		if i < 0 {
+			out = append(out, toldPR{Number: r.Number})
+			i = len(out) - 1
+		}
+		paths := slices.Concat(out[i].Paths, r.sharedPaths())
+		slices.Sort(paths)
+		out[i].State, out[i].Draft, out[i].Paths = r.State, r.Draft, slices.Compact(paths)
+	}
+	slices.SortFunc(out, func(a, b toldPR) int { return cmp.Compare(a.Number, b.Number) })
+	return out
+}
+
+// newRelated keeps the related PRs of rel that told does not name the same
+// way (namedAlike); n counts the others.
+func newRelated(rel []RelatedPR, told []toldPR) (out []RelatedPR, n int) {
+	for _, r := range rel {
+		if slices.ContainsFunc(told, func(t toldPR) bool { return namedAlike(t, r) }) {
+			n++
 			continue
 		}
 		out = append(out, r)
 	}
-	return out, told
+	return out, n
 }
 
-// sameRelation: a and b name one PR related the same way, in the same
-// state (open or merged) through the same shared paths. Its new head,
-// activity, draft flag, reviews and findings change no relation.
-func sameRelation(a, b RelatedPR) bool {
-	return a.Number == b.Number && a.State == b.State && a.Overlap == b.Overlap && slices.Equal(a.Paths, b.Paths)
+// namedAlike: t names r's PR in its state now (open or merged, the draft
+// flag) with every path it shares now. A PR merged, closed and reopened,
+// made ready or turned back into a draft, or sharing a path no earlier
+// review named, is named again; a new head, fewer shared paths, activity,
+// reviews and findings are not news.
+func namedAlike(t toldPR, r RelatedPR) bool {
+	return t.Number == r.Number && t.State == r.State && t.Draft == r.Draft &&
+		!slices.ContainsFunc(r.sharedPaths(), func(p string) bool { return !slices.Contains(t.Paths, p) })
 }
 
 // writeRelatedJSON writes v indented to path.
@@ -297,22 +376,25 @@ func writeRelatedJSON(path string, v any) error {
 
 // addRelated records the round's related set (related-all.json) for the
 // judge prompt about to go out, and writes related.json and names it in jd
-// when a related PR is left that the round before did not name the same
-// way (relatedBase); with none left, no related.json is there. A blind
-// replay gets none. A failure leaves the prompt without it (a warning): the
-// review goes on.
+// when a related PR is left that the PR's posted reviews did not name the
+// same way (relatedBase, namedAlike); with none left, no related.json is
+// there. A blind replay gets none. A failure leaves the prompt without it
+// (a warning): the review goes on.
 func (rd *round) addRelated(ctx context.Context, jd *agents.JudgeData) {
 	if rd.in.Blind || rd.r.Store == nil {
 		return
 	}
 	rel, err := rd.related(ctx)
-	var base []RelatedPR
+	var base []toldPR
 	if err == nil {
-		base, err = rd.relatedBase()
+		base, err = rd.relatedBase(ctx)
 	}
 	if err == nil {
-		err = writeRelatedJSON(filepath.Join(rd.dir, relatedAllFile),
-			relatedRecord{Round: rd.in.Round, HeadSHA: rd.in.TargetSHA, Base: base, Related: rel.Related})
+		base, err = rd.markClosed(ctx, base, rel.Related)
+	}
+	if err == nil {
+		err = writeRelatedJSON(filepath.Join(rd.dir, relatedAllFile), relatedRecord{Round: rd.in.Round, HeadSHA: rd.in.TargetSHA,
+			Base: base, Told: toldAfter(base, rel.Related), Related: rel.Related})
 	}
 	path := filepath.Join(rd.dir, RelatedFile)
 	told := 0
@@ -331,7 +413,7 @@ func (rd *round) addRelated(ctx context.Context, jd *agents.JudgeData) {
 	}
 	if len(rel.Related) == 0 {
 		if told > 0 {
-			rd.event(ctx, "info", "round.related", fmt.Sprintf("%d related PR(s) on the same paths, each named before the same way: no %s", told, RelatedFile),
+			rd.event(ctx, "info", "round.related", fmt.Sprintf("%d related PR(s) on the same paths, each named before in its state and paths: no %s", told, RelatedFile),
 				map[string]any{"related": 0, "told": told})
 		}
 		return
@@ -343,7 +425,7 @@ func (rd *round) addRelated(ctx context.Context, jd *agents.JudgeData) {
 	}
 	msg := fmt.Sprintf("%s: %d related PR(s) on the same paths: %s", RelatedFile, len(rel.Related)+rel.More, strings.Join(nums, ", "))
 	if told > 0 {
-		msg += fmt.Sprintf("; %d named before the same way left out", told)
+		msg += fmt.Sprintf("; %d named before in their state and paths left out", told)
 	}
 	rd.event(ctx, "info", "round.related", msg, map[string]any{"related": len(rel.Related), "more": rel.More, "told": told, "file": path})
 }

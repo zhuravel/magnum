@@ -96,12 +96,19 @@ func (e *env) active(pr store.PR, at time.Time) {
 // and returns the round's report directory and its judge prompts.
 func (e *env) relatedRound(n int, kind, head, prev string, own ...string) (string, []submitCall) {
 	e.t.Helper()
+	post := e.judgePosts(int64(900+n), "COMMENTED", "COMMENT")
+	post.commit = head
+	return e.relatedRoundWith(n, kind, head, prev, post, OutcomePosted, own...)
+}
+
+// relatedRoundWith is relatedRound with the judge's post and the round's
+// outcome given.
+func (e *env) relatedRoundWith(n int, kind, head, prev string, post judgePost, outcome string, own ...string) (string, []submitCall) {
+	e.t.Helper()
 	before := len(e.ag.submitsFor(agents.RoleJudge))
 	e.clock.Add(time.Hour)
 	e.ownFiles(head, own...)
 	e.git.head = head
-	post := e.judgePosts(int64(900+n), "COMMENTED", "COMMENT")
-	post.commit = head
 	e.ag.behaviors[agents.RoleJudge] = []behavior{post.behavior(e.t)}
 	in := e.input(kind)
 	in.Round, in.TargetSHA, in.Related, in.Roles = n, head, defaultRelated, judgeAlone(e)
@@ -111,8 +118,8 @@ func (e *env) relatedRound(n int, kind, head, prev string, own ...string) (strin
 		in.DeltaCheck = &DeltaCheck{Lines: 4, Files: []DeltaFile{{Path: own[0], Status: "modified"}}}
 	}
 	res, err := e.r.RunRound(e.ctx, in)
-	if err != nil || res.Outcome != OutcomePosted {
-		e.t.Fatalf("round %d: RunRound = %+v, %v", n, res, err)
+	if err != nil || res.Outcome != outcome {
+		e.t.Fatalf("round %d: RunRound = %+v, %v; want %s", n, res, err, outcome)
 	}
 	return res.ReportDir, e.ag.submitsFor(agents.RoleJudge)[before:]
 }
@@ -471,28 +478,220 @@ func TestASameHeadRereviewsPromptsNameTheSameNewRelatedPR(t *testing.T) {
 	}
 }
 
+// postedReview records the env's PR's judge run of round n on head as
+// posted, as the registry keeps a posted review.
+func (e *env) postedReview(n int, head string) {
+	e.t.Helper()
+	if _, err := e.st.CreateRun(e.ctx, store.Run{PRID: e.pr.ID, Round: n, Role: "codex-judge", Kind: store.RunInitial, State: store.RunVerified,
+		TargetSHA: head, Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "p", CreatedAt: e.clock.Now(),
+		Outcome: new(OutcomePosted)}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 // A round from before related-all.json left only its related.json, which
-// then held the whole set: the next re-review compares with it, so the line
-// its review already carried is not repeated.
+// then held the whole set, and one from before the record's told list left
+// the set and the set it compared with: the next re-review after its posted
+// review reads them as named, so the line its review already carried is
+// not repeated.
 func TestARereviewComparesWithAnEarlierRoundsRelatedFile(t *testing.T) {
-	e := newEnv(t)
-	e.otherPR(7, false, nil, "app/models/order.rb")
-	old := RelatedPRs{PR: "talkable/talkable#11920", HeadSHA: prevSHA, MergedSince: t0.Add(-14 * 24 * time.Hour),
-		Related: []RelatedPR{{Number: 7, URL: "https://github.com/talkable/talkable/pull/7", State: "open", HeadSHA: "head7",
-			Overlap: 1, Paths: []string{"app/models/order.rb"}}}}
-	prevDir := e.layout.ReviewDir("talkable", "talkable", 11920, prevSHA)
-	b, err := json.Marshal(old)
+	seven := RelatedPR{Number: 7, URL: "https://github.com/talkable/talkable/pull/7", State: "open", HeadSHA: "head7",
+		Overlap: 1, Paths: []string{"app/models/order.rb"}}
+	for name, file := range map[string]struct {
+		name string
+		v    any
+	}{
+		"related.json": {RelatedFile, RelatedPRs{PR: "talkable/talkable#11920", HeadSHA: prevSHA, MergedSince: t0.Add(-14 * 24 * time.Hour),
+			Related: []RelatedPR{seven}}},
+		"related-all.json without told": {relatedAllFile, map[string]any{"round": 1, "head_sha": prevSHA,
+			"base": []RelatedPR{}, "related": []RelatedPR{seven}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.otherPR(7, false, nil, "app/models/order.rb")
+			prevDir := e.layout.ReviewDir("talkable", "talkable", 11920, prevSHA)
+			b, err := json.Marshal(file.v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(prevDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(prevDir, file.name), b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			e.postedReview(1, prevSHA)
+			dir, prompts := e.relatedRound(2, KindRereview, target, prevSHA, "app/models/order.rb")
+			if got := relatedNumbers(t, dir, prompts); got != nil {
+				t.Fatalf("related = %v, want no file: #7 is as the earlier round's file named it", got)
+			}
+		})
+	}
+}
+
+// pushed moves PR number of the env's repository (recorded by otherPR) to
+// head, its file list then paths, ready for review.
+func (e *env) pushed(number int, head string, paths ...string) {
+	e.t.Helper()
+	n := fmt.Sprint(number)
+	if _, err := e.st.UpsertPRFromGitHub(e.ctx, store.GitHubPR{RepoID: e.repo.ID, NodeID: "PR_" + n, Number: number,
+		URL: "https://github.com/talkable/talkable/pull/" + n, HeadSHA: head, Title: new("Secret title " + n),
+		GHState: store.GHOpen, InitialState: store.PRQueued, Identity: "talkable-app",
+		Files: &store.PRFiles{HeadSHA: head, Paths: paths}}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// setGHState sets PR number's GitHub state (OPEN, CLOSED, MERGED), with
+// its merge time for MERGED.
+func (e *env) setGHState(number int, state string) {
+	e.t.Helper()
+	pr, err := e.st.PRByRepoNumber(e.ctx, e.repo.ID, number)
 	if err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
-	if err := os.MkdirAll(prevDir, 0o700); err != nil {
-		t.Fatal(err)
+	if err := e.st.UpdatePR(e.ctx, pr.ID, func(u *store.PRUpdate) {
+		u.Set("gh_state", state)
+		if state == store.GHMerged {
+			u.Set("merged_at", e.clock.Now())
+		}
+	}); err != nil {
+		e.t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(prevDir, RelatedFile), b, 0o600); err != nil {
-		t.Fatal(err)
+}
+
+// A related PR an earlier posted review of the PR named is not named again
+// while its state holds and it shares no path that review's line did not
+// list: one PR's reviews carried "Related: #752" seven times in a week, as
+// #752's pushes moved the count of shared paths (36, 37, 36, 42, 41, 40,
+// 38) without a new file. A smaller overlap, the twenty paths shown
+// shifting past the cap, a previous review on a head no round recorded (a
+// merge of the base moves the reviewed head without one) and an initial
+// round all name nothing again; a related PR named only by a round that
+// posted nothing is named again. The first review names every related PR.
+func TestARelatedPRNamedBeforeIsNotNamedAgain(t *testing.T) {
+	const (
+		h3, h4, h5, h6 = "3333333333333333333333333333333333333333", "4444444444444444444444444444444444444444",
+			"5555555555555555555555555555555555555555", "6666666666666666666666666666666666666666"
+		merged = "abababababababababababababababababababab" // the base merged in: no round reviewed it
+	)
+	var lib []string
+	for i := range 25 {
+		lib = append(lib, fmt.Sprintf("lib/f%02d.rb", i))
 	}
-	dir, prompts := e.relatedRound(2, KindRereview, target, prevSHA, "app/models/order.rb")
+	own := append([]string{"app/models/order.rb", "app/other.rb"}, lib...)
+	e := newEnv(t)
+	e.otherPR(7, false, nil, append([]string{"app/models/order.rb"}, lib...)...)
+	e.otherPR(8, false, nil, "app/other.rb", "app/unrelated.rb")
+	dir, prompts := e.relatedRound(1, KindInitial, prevSHA, "", own...)
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{7, 8}) {
+		t.Fatalf("round 1 related = %v, want #7 and #8: a first review names every related PR", got)
+	}
+
+	// #7 drops lib/f00.rb: 25 shared paths, and lib/f20.rb now among the
+	// twenty shown; #8's head moves with the same shared path.
+	e.pushed(7, "head7b", append([]string{"app/models/order.rb"}, lib[1:]...)...)
+	e.pushed(8, "head8b", "app/other.rb")
+	dir, prompts = e.relatedRound(2, KindRereview, target, prevSHA, own...)
 	if got := relatedNumbers(t, dir, prompts); got != nil {
-		t.Fatalf("related = %v, want no file: #7 is as the earlier round's file named it", got)
+		t.Fatalf("round 2 related = %v, want no file: #7 shares fewer paths and #8 the same one", got)
+	}
+
+	dir, prompts = e.relatedRound(3, KindRereview, h3, merged, own...)
+	if got := relatedNumbers(t, dir, prompts); got != nil {
+		t.Fatalf("round 3 related = %v, want no file after a previous review on a head no round recorded", got)
+	}
+
+	e.otherPR(9, false, nil, "app/models/order.rb")
+	blocked := judgePost{status: "blocked", extra: map[string]any{"blocker": "HEAD mismatch"}}
+	dir, prompts = e.relatedRoundWith(4, KindRereview, h4, h3, blocked, OutcomeBlocked, own...)
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{9}) {
+		t.Fatalf("round 4 related = %v, want the new #9 alone", got)
+	}
+	dir, prompts = e.relatedRound(5, KindRereview, h5, h3, own...)
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{9}) {
+		t.Fatalf("round 5 related = %v, want #9 again: round 4 posted nothing", got)
+	}
+
+	dir, prompts = e.relatedRound(6, KindInitial, h6, "", own...)
+	if got := relatedNumbers(t, dir, prompts); got != nil {
+		t.Fatalf("round 6 related = %v, want no file: an initial round after posted reviews names nothing they named", got)
+	}
+}
+
+// A related PR an earlier review named is named again once its state
+// changed: made ready from a draft, merged, and closed and then reopened
+// (a closed PR is never related, so the round that sees it closed names
+// nothing); with nothing changed the next review names nothing.
+func TestARelatedPRIsNamedAgainAfterAStateChange(t *testing.T) {
+	const h3, h4, h5 = "3333333333333333333333333333333333333333", "4444444444444444444444444444444444444444",
+		"5555555555555555555555555555555555555555"
+	e := newEnv(t)
+	e.otherPR(7, true, nil, "app/models/order.rb")
+	e.otherPR(8, false, nil, "app/models/order.rb")
+	e.otherPR(9, false, nil, "app/models/order.rb")
+	dir, prompts := e.relatedRound(1, KindInitial, prevSHA, "", "app/models/order.rb")
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{9, 8, 7}) {
+		t.Fatalf("round 1 related = %v, want #9, #8 and #7", got)
+	}
+
+	e.otherPR(7, false, nil, "app/models/order.rb") // ready for review
+	e.setGHState(8, store.GHMerged)
+	dir, prompts = e.relatedRound(2, KindRereview, target, prevSHA, "app/models/order.rb")
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{8, 7}) {
+		t.Fatalf("round 2 related = %v, want #8 (merged since) and #7 (ready since)", got)
+	}
+
+	e.setGHState(9, store.GHClosed)
+	dir, prompts = e.relatedRound(3, KindRereview, h3, target, "app/models/order.rb")
+	if got := relatedNumbers(t, dir, prompts); got != nil {
+		t.Fatalf("round 3 related = %v, want no file: the closed #9 is not related", got)
+	}
+
+	e.setGHState(9, store.GHOpen)
+	dir, prompts = e.relatedRound(4, KindRereview, h4, h3, "app/models/order.rb")
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{9}) {
+		t.Fatalf("round 4 related = %v, want #9, reopened since", got)
+	}
+
+	dir, prompts = e.relatedRound(5, KindRereview, h5, h4, "app/models/order.rb")
+	if got := relatedNumbers(t, dir, prompts); got != nil {
+		t.Fatalf("round 5 related = %v, want no file: nothing changed", got)
+	}
+}
+
+// A related PR an earlier review named is named again when it now shares a
+// path no earlier review's line of it listed, with every path it shares;
+// one that shares again a path an earlier line listed is not.
+func TestARelatedPRIsNamedAgainWhenItTouchesANewFile(t *testing.T) {
+	const h3, h4 = "3333333333333333333333333333333333333333", "4444444444444444444444444444444444444444"
+	own := []string{"app/a.rb", "app/b.rb", "app/models/order.rb"}
+	e := newEnv(t)
+	e.otherPR(7, false, nil, "app/a.rb", "app/models/order.rb")
+	dir, prompts := e.relatedRound(1, KindInitial, prevSHA, "", own...)
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{7}) {
+		t.Fatalf("round 1 related = %v, want #7", got)
+	}
+
+	e.pushed(7, "head7b", "app/models/order.rb")
+	dir, prompts = e.relatedRound(2, KindRereview, target, prevSHA, own...)
+	if got := relatedNumbers(t, dir, prompts); got != nil {
+		t.Fatalf("round 2 related = %v, want no file: #7 dropped a shared path", got)
+	}
+
+	e.pushed(7, "head7c", "app/b.rb", "app/models/order.rb", "app/unrelated.rb")
+	dir, prompts = e.relatedRound(3, KindRereview, h3, target, own...)
+	if got := relatedNumbers(t, dir, prompts); !slices.Equal(got, []int{7}) {
+		t.Fatalf("round 3 related = %v, want #7: it now changes app/b.rb", got)
+	}
+	got, _ := readRelated(t, filepath.Join(dir, RelatedFile))
+	if r := got.Related[0]; r.Overlap != 2 || !slices.Equal(r.Paths, []string{"app/b.rb", "app/models/order.rb"}) {
+		t.Errorf("round 3 #7 = %+v, want both shared paths", r)
+	}
+
+	e.pushed(7, "head7d", "app/a.rb", "app/models/order.rb")
+	dir, prompts = e.relatedRound(4, KindRereview, h4, h3, own...)
+	if got := relatedNumbers(t, dir, prompts); got != nil {
+		t.Fatalf("round 4 related = %v, want no file: round 1's line listed app/a.rb", got)
 	}
 }
