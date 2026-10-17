@@ -238,7 +238,7 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 		// The agent is gone: a CLI that died at its launch said why in the
 		// pane, which herdr's code does not carry.
 		if line := m.paneError(ctx, store.Deref(sess.HerdrPaneID)); line != "" {
-			perr = fmt.Errorf("%w; the pane shows: %s", perr, line)
+			perr = fmt.Errorf("%w"+paneShows+"%s", perr, line) // PaneErrorOf reads it back
 		}
 	}
 	// The prompt may have been delivered: record it whatever ctx does now.

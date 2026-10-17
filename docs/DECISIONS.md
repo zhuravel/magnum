@@ -9003,6 +9003,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   running loop: `magnum review`'s refusal, a second loop's, autofix, the board, `--wait`, the restart's
   recovery); and queueing the fix as a request left pending until the restart (the CLI's wait would time
   out, and the request would outlive its answer).
+- **The daemon records each agent CLI's version and names a launch failure shared across PRs** (2026-10-17,
+  spec 75). On 2026-10-16 mise's `codex = "latest"` installed codex-cli 0.163.0 at 11:24, which died at its
+  TUI bootstrap ("account/read failed during TUI bootstrap") in every judge pane: four PRs parked, 6 forced
+  reviews in 36 minutes, 9 round.judge_restarted, 7 agent.lost, and 79 minutes until the operator found the
+  new version and pinned 0.162.1. Each PR's attention line named its own failure, and only `magnum doctor`
+  printed CLI versions. Now the daemon reads the version of every agent kind its roles use (a shell role's
+  tool and the judge in reserve count, as in doctor) at its start and at every tick's health check, through
+  `Deps.LookPath` (exec.LookPath on the daemon's PATH; nil in tests and dry runs) and the runner, as doctor
+  reads it (`<kind> --version`, its first line): kv `kind.<name>.version` (`KindVersion`: version, the
+  binary's resolved path and mtime, when it was read, the version before the last change and when it
+  changed). The command runs again only once the binary's path or mtime differs from the recorded one (or
+  the one this run failed to read, which is tried again when it changes or at the next start). The
+  daemon's PATH finds codex as mise's shim, a link to mise itself whose file never changes when mise
+  installs another version, so a command that resolves to a file named mise is stamped by the binary
+  `mise which <kind>` names, which runs at every check (the version is still read through the shim). A first reading is only
+  logged; another version is `kind.version_changed` (warn, subject `tool:<kind>`) and one info toast
+  ("codex-cli 0.162.1 → 0.163.0 at 11:24", the words both versions share left out of the new one), and
+  `magnum status` has a `clis:` line ("codex codex-cli 0.163.0 (changed at 11:24), claude …"; `clis` in the
+  JSON). For `CLIChangeRecent` (24 h) a round setup that parks its PR because an agent role did not start
+  (`start <role>: …`, the dead launch's line among them) ends its stored error with
+  `attention.CLIChange` ("; the codex CLI changed at 11:24", with the date for an earlier day), which
+  `attention.Explain` takes only from such an error (a command's output ending the same way stays the
+  cause) and moves to the end of the reason's Cause and Summary, clipping them to keep it, so the board,
+  `magnum status`, `magnum attention` and the needs-attention toast all show it; the retry before the
+  third attempt is unchanged. Each health check also reads, for the last 30 minutes, the pane error lines
+  agents keeps (`pr.launch_cleared`'s last_line, a refused prompt's run error through the new
+  `agents.PaneErrorOf`, and `pr.panes_closed`'s last_lines, spec 69): two or more PRs with the same line are
+  `agents.shared_failure` (warn; the PRs, the roles, the line and a CLI change of the day) with one urgent
+  toast ("2 PRs' codex-judge launches end the same way"), once per line within 24 h (read back from the
+  events). Nothing is paused and nothing is pinned. Rejected: pausing a kind on a shared failure (the
+  operator decides, and a pause could hide a transient outage behind a wait nobody asked for); pinning CLI
+  versions from magnum (mise owns them, and a pin in magnum would drift from the operator's); a version key
+  in `[kinds.*]` (no kind needs another command than doctor's); running the version command at every check
+  (a stat is enough while the binary is the same); the binary's mtime as the change time (npm packs files
+  with a fixed mtime); and a new field on `attention.Reason` for the note (the JSON of the board and status
+  would grow a key for one sentence, and every caller of Explain would need the kinds' versions).
 
 ## Learned rules
 

@@ -58,6 +58,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 		return r, err
 	}
 	statusGatherAgents(ctx, d, &r)
+	statusGatherCLIs(d, kv, &r)
 	if err := statusGatherInventory(ctx, d, o, &r); err != nil {
 		return r, err
 	}
@@ -607,6 +608,23 @@ func statusGatherAgents(ctx context.Context, d statusDeps, r *statusReport) {
 		}
 	}
 	r.Agents = ag
+}
+
+// statusGatherCLIs reads the CLI version the daemon recorded of each agent
+// kind the configured roles use, in their order; a kind it never read is
+// left out.
+func statusGatherCLIs(d statusDeps, kv statusKV, r *statusReport) {
+	if d.Config == nil {
+		return
+	}
+	for _, kind := range rolesKindNames(d.Config) {
+		raw, ok := kv.get(engine.KVKindVersion(kind))
+		var v engine.KindVersion
+		if !ok || json.Unmarshal([]byte(raw), &v) != nil || v.Version == "" {
+			continue
+		}
+		r.CLIs = append(r.CLIs, statusCLI{Kind: kind, KindVersion: v})
+	}
 }
 
 // statusGatherInventory scans the slots, manual worktrees and databases and

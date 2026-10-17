@@ -61,7 +61,9 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 }
 
 // retryOrAttention charges one attempt (when charge) and moves the PR to to
-// with a backoff, or to needs_attention once the budget is spent.
+// with a backoff, or to needs_attention once the budget is spent; an agent
+// role's start that failed then names a recent change of its CLI
+// (cliChangeNote).
 func (e *Engine) retryOrAttention(ctx context.Context, job *roundJob, pr store.PR, from []string, to, msg string, charge bool, retryAt time.Time) {
 	now := e.now()
 	attempts := pr.Attempts
@@ -72,6 +74,9 @@ func (e *Engine) retryOrAttention(ctx context.Context, job *roundJob, pr store.P
 		retryAt = now.Add(backoff(attempts))
 	}
 	if attempts >= maxAttempts {
+		if note := e.cliChangeNote(ctx, msg); note != "" { // cli_version.go
+			msg = strings.TrimRight(msg, " \n") + note
+		}
 		e.needsAttention(ctx, job, pr, from, "failed", fmt.Sprintf("%d attempts on %s: %s", attempts, textx.ShortSHA(pr.HeadSHA), msg), func(u *store.PRUpdate) {
 			u.Set("attempts", attempts)
 		})

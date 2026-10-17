@@ -496,6 +496,11 @@ func NotesLockLine(lock string) string
 func NotesUnlockLine(lock string) string
     NotesUnlockLine is the shell line that releases the notes lock.
 
+func PaneErrorOf(msg string) string
+    PaneErrorOf is the pane's error line a refused prompt's error carries (a
+    run's error: Prompt appends paneError's line after "; the pane shows: "),
+    as pr.launch_cleared's last_line carries it; "" when it carries none.
+
 func PostRepliesLine(d JudgeData) string
     PostRepliesLine is the shell line the judge of a reply round runs to answer
     in its threads instead of posting a review (JudgeData.PostRepliesCommand,
@@ -2345,9 +2350,23 @@ const TailLines = 8
 
 FUNCTIONS
 
+func CLIChange(kind string, at, now time.Time) string
+    CLIChange is the note the engine ends a launch failure's stored error with
+    when the agent CLI of the role that did not start (kind) changed shortly
+    before, at at: "; the codex CLI changed at 11:24", with the date ("Oct 16
+    11:24") when at is of an earlier day than now. Explain moves it to the end
+    of the reason's Cause and Summary, and reads it only from an error of a
+    role's start ("start <role>: …"), so a command's output that ends the same
+    way says nothing of a CLI.
+
 func Kinds() []string
     Kinds are every kind above: Explain reads each as a message's leading
     "<kind>: ", and the PR board names each in its attention pill.
+
+func LaunchRole(msg string) (role string, ok bool)
+    LaunchRole is the agent role a round setup's error msg says did not start
+    (the engine's "start <role>: …"), whose CLI a CLIChange note may name;
+    ok is false for any other error.
 
 
 TYPES
@@ -5686,9 +5705,25 @@ const BudgetOverruledNote = "the Codex budget caps wait for Codex's next reading
     BudgetOverruledNote is what a resume of a budget-cap pause means (the CLI's
     offline resume says it too).
 
+const CLIChangeRecent = 24 * time.Hour
+    CLIChangeRecent is how long a change of a kind's CLI is news: `magnum
+    status` says "(changed at 11:24)", and a launch failure of one of the kind's
+    roles that parks a PR names it (attention.CLIChange).
+
 const EvPRMuted = "pr.muted"
     EvPRMuted is the event a mute records, its reason in the data's "reason"
     (requestMute); the board's card shows the latest one's next to the flag.
+
+const EventKindVersionChanged = "kind.version_changed"
+    EventKindVersionChanged is recorded (warn, subject tool:<kind>) when
+    an agent kind's CLI reports another version than the one recorded
+    (KVKindVersion): the kind, the versions and the binary.
+
+const EventSharedFailure = "agents.shared_failure"
+    EventSharedFailure is recorded (warn) when two or more PRs' agent launches
+    ended with the same pane line within sharedFailureWindow, once per line
+    within sharedFailureQuiet: the PRs, the roles and the line (data last_line,
+    prs, roles); its subject is tool:<kind> when the roles share one agent kind.
 
 const FormerDismissMessage = "magnum: superseded by the review of %s posted as %s (this PR's reviewer changed)"
     FormerDismissMessage is the reason a dismissed review of a former identity
@@ -5887,6 +5922,10 @@ func HeldReviewID(v string) (int64, bool)
     (heldReviewOf's rule, which the board's FINDINGS follows: a later review
     drops the record, and one left behind names an older review). ok is false
     for a value that names none.
+
+func KVKindVersion(kind string) string
+    KVKindVersion holds what the daemon last read of agent kind kind's CLI
+    version (KindVersion, JSON).
 
 func KVNotesMisses(fullName string) string
     KVNotesMisses marks a repository whose retro recorded misses for its notes:
@@ -6454,6 +6493,11 @@ type Deps struct {
 	// Runner runs the triage command ([triage]); nil = a round that would
 	// triage runs every role.
 	Runner execx.Runner
+	// LookPath finds an agent kind's CLI on the daemon's PATH (exec.LookPath,
+	// which FromApp sets for the daemon), whose version Runner reads at the
+	// start and at each health check (cli_version.go); nil = no version is
+	// read.
+	LookPath func(file string) (string, error)
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
@@ -6936,6 +6980,30 @@ type Inventory interface {
 	UpsertSlotDatabases(ctx context.Context, inv inventory.Inventory) (inventory.SyncResult, error)
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
+
+type KindVersion struct {
+	// Version is the first line the version command printed.
+	Version string `json:"version"`
+	// Path is the binary read, its links resolved: the file mise's shim
+	// runs (`mise which <kind>`) for a command that is one; MTime is its
+	// modification time then. The version command runs again only once
+	// either differs.
+	Path  string    `json:"path"`
+	MTime time.Time `json:"mtime"`
+	// SeenAt is when the version was read.
+	SeenAt time.Time `json:"seen_at"`
+	// Previous and ChangedAt are the version before the last change and
+	// when the daemon read the new one (EventKindVersionChanged); empty
+	// until a version changed.
+	Previous  string    `json:"previous,omitempty"`
+	ChangedAt time.Time `json:"changed_at,omitzero"`
+}
+    KindVersion is what the daemon read of an agent kind's CLI version, at its
+    start and at the health checks of every tick, through the kind's command on
+    its PATH as `magnum doctor` reads it (`<kind> --version`).
+
+func (v KindVersion) ChangedWithin(now time.Time, d time.Duration) bool
+    ChangedWithin reports whether the version changed within d before now.
 
 type LandDay struct {
 	Day    string `json:"day"`

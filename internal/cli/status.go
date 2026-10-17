@@ -185,6 +185,7 @@ type statusReport struct {
 	Machine      []statusMachine          `json:"machine,omitempty"`
 	Rounds       statusRounds             `json:"rounds"`
 	Agents       *statusAgents            `json:"agents,omitempty"`
+	CLIs         []statusCLI              `json:"clis,omitempty"`
 	Pauses       []statusPause            `json:"pauses"`
 	Pins         []statusPin              `json:"pins,omitempty"`
 	Disk         statusDisk               `json:"disk"`
@@ -367,6 +368,13 @@ type statusAgents struct {
 	// WorkingOther counts the other agent kinds the configured roles use
 	// (droid, omp, any [kinds.<name>]), in [[role]] order.
 	WorkingOther []statusKindCount `json:"working_other,omitempty"`
+}
+
+// statusCLI is the version of an agent kind's CLI the daemon recorded
+// (engine.KVKindVersion).
+type statusCLI struct {
+	Kind string `json:"kind"`
+	engine.KindVersion
 }
 
 // statusKindCount is the number of working panes of one agent kind.

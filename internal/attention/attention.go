@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -104,6 +106,12 @@ var (
 	// agents' endedAgentError, "herdr still lists in pane <pane> …; the agent
 	// never came up"), each after the engine's "start <role>: ". Groups:
 	// role (may be empty), agent, pane.
+	// launchRe is a round setup's error for an agent role that did not
+	// start (the engine's startRoles: "start <role>: …"), the only error
+	// cliChangeRe is read from. Group: the role.
+	launchRe = regexp.MustCompile(`^start ([\w.-]+): `)
+	// cliChangeRe is the note CLIChange writes at the end of an error.
+	cliChangeRe   = regexp.MustCompile(`; (the [\w.-]+ CLI changed at (?:[A-Z][a-z]{2} \d{1,2} )?\d{2}:\d{2})$`)
 	deadLaunchRes = []*regexp.Regexp{
 		regexp.MustCompile(`(?:start ([\w.-]+): )?agents: start ([a-z][a-z0-9_-]*) in (\S+): herdr agent\.start: agent_name_taken\b`),
 		regexp.MustCompile(`(?:start ([\w.-]+): )?agents: start ([a-z][a-z0-9_-]*): herdr still lists in pane (\S+) the agent of session \d+, which magnum [^;]*; the agent never came up`),
@@ -144,6 +152,10 @@ func Explain(kind, msg, ref string) Reason {
 			r.Kind = KindFailed
 		}
 	}
+	note := "" // a launch failure's CLIChange, without its "; "
+	if m := cliChangeRe.FindStringSubmatchIndex(text); m != nil && launchRe.MatchString(text) {
+		note, text = text[m[2]:m[3]], text[:m[0]]
+	}
 	// "identity_error: …": the engine's event form, and older rows, lead with the kind.
 	for _, k := range Kinds() {
 		if rest, ok := strings.CutPrefix(text, k+": "); ok {
@@ -175,7 +187,43 @@ func Explain(kind, msg, ref string) Reason {
 	r.Cause, r.Fix = cause(r, chain, output, lines, ref)
 	r.Cause = clip(r.Cause)
 	r.Summary = clip(summary(r))
+	if note != "" {
+		r.Cause, r.Summary = withNote(r.Cause, note), withNote(r.Summary, note)
+	}
 	return r
+}
+
+// CLIChange is the note the engine ends a launch failure's stored error
+// with when the agent CLI of the role that did not start (kind) changed
+// shortly before, at at: "; the codex CLI changed at 11:24", with the date
+// ("Oct 16 11:24") when at is of an earlier day than now. Explain moves it
+// to the end of the reason's Cause and Summary, and reads it only from an
+// error of a role's start ("start <role>: …"), so a command's output that
+// ends the same way says nothing of a CLI.
+func CLIChange(kind string, at, now time.Time) string {
+	at, now = at.Local(), now.Local()
+	layout := "15:04"
+	if y, m, d := at.Date(); y != now.Year() || m != now.Month() || d != now.Day() {
+		layout = "Jan 2 15:04"
+	}
+	return "; the " + kind + " CLI changed at " + at.Format(layout)
+}
+
+// LaunchRole is the agent role a round setup's error msg says did not
+// start (the engine's "start <role>: …"), whose CLI a CLIChange note may
+// name; ok is false for any other error.
+func LaunchRole(msg string) (role string, ok bool) {
+	m := launchRe.FindStringSubmatch(msg)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// withNote is s clipped to leave room for "; "+note within SummaryMax,
+// then the note.
+func withNote(s, note string) string {
+	return textx.Clip(s, max(0, SummaryMax-utf8.RuneCountInString(note)-2)) + "; " + note
 }
 
 // inferKind guesses the engine's why from the message of an older row.

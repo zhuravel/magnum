@@ -51,3 +51,18 @@ func (m *Manager) paneError(ctx context.Context, paneID string) string {
 	}
 	return textx.Clip(execx.Redact(last), paneErrorMax)
 }
+
+// paneShows joins a refused prompt's error and its pane's error line
+// (paneError), in the error Prompt returns and the run records.
+const paneShows = "; the pane shows: "
+
+// PaneErrorOf is the pane's error line a refused prompt's error carries (a
+// run's error: Prompt appends paneError's line after "; the pane shows: "),
+// as pr.launch_cleared's last_line carries it; "" when it carries none.
+func PaneErrorOf(msg string) string {
+	_, line, ok := strings.CutLast(msg, paneShows)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(line)
+}

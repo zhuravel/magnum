@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"sync"
@@ -266,6 +267,11 @@ type Deps struct {
 	// Runner runs the triage command ([triage]); nil = a round that would
 	// triage runs every role.
 	Runner execx.Runner
+	// LookPath finds an agent kind's CLI on the daemon's PATH (exec.LookPath,
+	// which FromApp sets for the daemon), whose version Runner reads at the
+	// start and at each health check (cli_version.go); nil = no version is
+	// read.
+	LookPath func(file string) (string, error)
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
@@ -427,6 +433,11 @@ type Engine struct {
 	// and when (environment.go). Tick goroutine only.
 	machineLast    int64
 	machineToasted map[string]time.Time
+	// cliRead is, by agent kind, the binary whose version this run read or
+	// failed to read, or found recorded (cli_version.go): the version
+	// command runs again only once the binary changed. Tick goroutine only
+	// (startup and health).
+	cliRead map[string]cliStamp
 	// autoSeen and autoFollow remember, by PR and by automatic approval,
 	// what auto-approval last read GitHub's reviews for (autoapprove.go): a
 	// PR whose latest round and updatedAt did not move since is not asked
@@ -552,6 +563,7 @@ func New(d Deps) *Engine {
 		cleanupTried:  map[int64]time.Time{},
 		curateTried:   map[int64]time.Time{},
 		netRuns:       map[string]netRun{},
+		cliRead:       map[string]cliStamp{},
 		kick:          make(chan struct{}, 1),
 		starts:        starter{codex: make(chan struct{}, maxCodexStarts)},
 	}
@@ -617,6 +629,9 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	}
 	if a.Git != nil {
 		d.Probe = gitProbe(a.Git)
+	}
+	if !a.DryRun && a.AgentTag == "" {
+		d.LookPath = exec.LookPath // the daemon's own agent CLIs (cli_version.go)
 	}
 	if a.Runner != nil && a.Config != nil {
 		terminal, herdrBin := a.Config.Terminal, os.Getenv("HERDR_BIN_PATH")
@@ -910,6 +925,7 @@ func (e *Engine) startup(ctx context.Context) {
 	}
 	e.recordBuild(ctx)
 	e.recordShellPATH(ctx)    // shell_path.go
+	e.checkCLIVersions(ctx)   // cli_version.go: on the PATH just recorded
 	e.loadBudgetOverrule(ctx) // budget.go: a resume the CLI recorded while no daemon ran
 	e.noteLearnRestarted(ctx) // learn_land.go: this start runs the landed skill version
 	e.expireRequests(ctx, lastTick)

@@ -112,6 +112,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 		fmt.Fprintf(w, "machine:  %s\n", statusMachineText(m, now))
 	}
 	fmt.Fprintf(w, "rounds:   %s\n", statusRoundsText(r))
+	if len(r.CLIs) > 0 {
+		fmt.Fprintf(w, "clis:     %s\n", statusCLIsText(r.CLIs, now))
+	}
 	fmt.Fprintf(w, "disk:     %s\n", statusDiskText(r.Disk))
 	for i, pin := range r.Pins {
 		label := "          "
@@ -349,6 +352,20 @@ func statusRoundsText(r statusReport) string {
 		}
 	}
 	return rounds
+}
+
+// statusCLIsText is the clis line's value: each agent kind's CLI version,
+// with when it changed for engine.CLIChangeRecent after a change.
+func statusCLIsText(clis []statusCLI, now time.Time) string {
+	parts := make([]string, 0, len(clis))
+	for _, c := range clis {
+		s := statusSafe(c.Kind, 0) + " " + statusSafe(c.Version, 0)
+		if c.ChangedWithin(now, engine.CLIChangeRecent) {
+			s += " (changed at " + inspClock(now, c.ChangedAt) + ")"
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // statusDiskText is the disk line's value: free space and the floor.

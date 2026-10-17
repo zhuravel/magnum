@@ -367,7 +367,9 @@ func (e *Engine) attentionRole(ctx context.Context, prID int64, kind string) str
 // first, and a login pause a run proved also needs its login file changed
 // (stampLogin), or loginStampHold passed on an unchanged one; usage limits
 // are lifted optimistically (the next round pauses again, with a doubled
-// fallback, if the limit still holds).
+// fallback, if the limit still holds). It also reads the agent CLIs'
+// versions (checkCLIVersions) and says when PRs' launches end the same way
+// (noteSharedFailures).
 func (e *Engine) health(ctx context.Context) {
 	now := e.now()
 	for _, tool := range e.kinds() {
@@ -416,6 +418,8 @@ func (e *Engine) health(ctx context.Context) {
 	e.continueAfterDrain(ctx)
 	e.probeInfra(ctx)
 	e.checkBudget(ctx)
+	e.checkCLIVersions(ctx)   // cli_version.go
+	e.noteSharedFailures(ctx) // shared_failure.go: after the versions it names
 }
 
 // userPause is `magnum pause` ("" = none): it holds automatic reviews,

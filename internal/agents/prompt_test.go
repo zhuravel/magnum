@@ -425,6 +425,11 @@ func TestARefusedPromptToAnAgentGoneCarriesThePanesError(t *testing.T) {
 			if r.State != store.RunFailed || strings.Contains(store.Deref(r.Error), want) != tc.wantLine {
 				t.Fatalf("run = %+v", r)
 			}
+			// The engine reads the line back from the run's error, to tell
+			// launches of several PRs that end the same way.
+			if got, line := PaneErrorOf(store.Deref(r.Error)), strings.TrimPrefix(want, "the pane shows: "); tc.wantLine && got != line || !tc.wantLine && got != "" {
+				t.Fatalf("the line read back from %q = %q", store.Deref(r.Error), got)
+			}
 			if got := e.h.callsWith("PaneRead " + pane); len(got) != 1 {
 				t.Fatalf("pane reads = %v, want one", got)
 			}
