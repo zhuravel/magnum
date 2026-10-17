@@ -1981,17 +1981,19 @@ Claude Code compacts a full one by itself in the middle of a turn, where it can 
 fixing. So before a cycle resumes the fixer (its session still in its pane, or a parked one resumed),
 Magnum reads how full its context is from the pane's status line, with the kind's `context_pattern`
 (`[kinds.claude]`: a status line's `418k/1m (41%)`, or Claude Code's own "Context left until
-auto-compact: 8%", read as 92%). At or above `[pipeline] fix_compact_at` (default 70) it types `/compact`,
+auto-compact: 8%", read as 92%). A parked fixer it resumes draws that status line only a moment after the
+resume, so Magnum reads its pane every 2 seconds until the figure shows, for up to a minute; a fixer still
+in its pane is read once. At or above `[pipeline] fix_compact_at` (default 70) it types `/compact`,
 waits for that turn to end and reads again: a `fix.compacted` event says "from 82% to 31%", and the fix
 prompt follows in the same conversation. A fixer still at or above the key afterwards, or whose `/compact`
 did not finish (it timed out after 10 minutes, or the agent was busy), is parked (its conversation kept)
 and the cycle starts it fresh, with a `fix.fresh_session` event that says why. The fix prompt carries the
 findings, so a fresh fixer loses what it declined and ran before, not what to fix. A pane that shows no
 figure leaves the fixer as it is: no `/compact`, no fresh session (a figure missing right after a resume
-would otherwise cost a fresh fixer every cycle). It warns once per PR (`fix.context_unknown`): check that
-your status line shows the percent, or adjust `context_pattern`. A fixer started fresh anyway (no
-conversation to resume) is never compacted, `fix_compact_at = 0` switches this off, and a kind with
-`context_pattern = ""` is never read.
+would otherwise cost a fresh fixer every cycle). It warns once per PR (`fix.context_unknown`, said again
+only after a figure was read in between): check that your status line shows the percent, or adjust
+`context_pattern`. A fixer started fresh anyway (no conversation to resume) is never compacted,
+`fix_compact_at = 0` switches this off, and a kind with `context_pattern = ""` is never read.
 
 **Who the fixer is.** The fixer's pane acts as one GitHub identity. The built-in `claude-fix` names none, so
 it acts as the watch's poll identity, which is your own gh login in the config `magnum init` writes. A

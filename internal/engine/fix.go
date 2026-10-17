@@ -614,7 +614,8 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 
 // fixStart starts or resumes the fixer in the PR's workspace (its pane gets
 // the fix role's identity's env, agents.Manager.paneEnv), compacts a resumed
-// fixer whose context is nearly full, or starts it fresh (fixCompact),
+// fixer whose context is nearly full, or starts it fresh (fixCompact, told
+// whether the fixer was parked before, so that it waits for the figure),
 // creates its run of kind fix in the review's round and sends it the fix
 // prompt. A run that Submit refused before sending is abandoned; one whose
 // prompt may have arrived is waited for.
@@ -645,12 +646,16 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			return fmt.Errorf("%s pane: %w", job.role.Name, err)
 		}
 	}
+	// Read before ensureAgent resumes a parked fixer, whose pane draws its
+	// status line only some time after the resume (fixCompact waits for it).
+	live, err := e.st.LiveSessionByPRRole(ctx, pr.ID, job.role.Name)
+	wasLive := err == nil && sessionUp(live, job.role)
 	fresh, err := e.ensureAgent(ctx, pr, job.role, ws, false, effortFull)
 	if err != nil {
 		return fmt.Errorf("start %s: %w", job.role.Name, err)
 	}
 	if !fresh { // a resumed conversation: compacted, or started fresh, when its context is nearly full
-		if err := e.fixCompact(ctx, job, ws); err != nil {
+		if err := e.fixCompact(ctx, job, ws, !wasLive); err != nil {
 			return err
 		}
 	}

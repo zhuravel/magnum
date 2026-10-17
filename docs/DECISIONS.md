@@ -8605,6 +8605,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   only at a fresh start (the case above: 21 panes for 4 live sessions); closing a lost pane at once under a
   round (the race above); a herdr snapshot per PR at the reconcile; closing the whole workspace (it holds
   the operator's shell).
+- **The fixer's context figure is awaited after a resume** (2026-10-17, spec 59, amends "The fixer
+  compacts its conversation before a cycle when its context is nearly full"). Spec 57 read the figure once,
+  right after `ensureAgent` resumed a parked fixer, before Claude Code had drawn its status line: both
+  `fix.context_unknown` warnings since its landing came 0.2 s after the resume (talkable#11483, session
+  983; talkable-integration#867, session 1014, parked as 938), while the same pane showed `205k/1m (20%)`
+  later, which the default `context_pattern` reads. So the compaction never ran on the case it was built
+  for, a fixer resumed from a park, and the once-per-PR warning hid the next misses. Now `fixStart` reads
+  whether the fixer's session was up before `ensureAgent` (`sessionUp` on `LiveSessionByPRRole`, the test
+  `ensureAgent` makes), and for a fixer it resumed from a park `fixCompact` reads the pane every 2 s until
+  a figure shows, for up to a minute (`readContext`, `fixContextPoll` and `fixContextAwait`, sleeping
+  through the engine's `Sleep`; at most 31 reads, so a clock that does not move still ends the wait). A
+  figure within the wait goes on as before (under the key nothing; at or above it `/compact`, then the
+  fresh session when needed); none warns `fix.context_unknown` once per PR as before, naming the wait
+  ("… context_pattern reads within 60s of its resume, …"). A fixer that was live before the cycle is read
+  once, as before, and a fixer started fresh is never read. Any figure read forgets the PR's warning (the
+  kv `pr.<id>.fix_context_unknown` is deleted when set), so a later miss warns again. `Compact`,
+  `ContextUsed`, the pattern, the status card's words and the events' names are unchanged. New tests
+  TestTheContextFigureIsAwaitedAfterAResume (three blank reads 2 s apart on the fake clock, then 82%,
+  compacted, no warning), TestNoFigureWithinTheWaitWarnsOnceAndKeepsTheSession (31 reads over a minute,
+  one warning naming the wait, the session kept; cycle 3 reads 30% and forgets it, cycle 4 warns again)
+  and TestALiveFixerIsReadOnce in engine; the spec 57 tests keep their read counts, since their fixers
+  were live. Rejected: reading once right after the resume (what happened: the status line is not drawn
+  yet); waiting for herdr's idle status alone (the status line can lag it); a fixed sleep after every
+  resume (it costs its whole length when the line is already drawn, and is still too short when Claude
+  Code is slow).
 
 ## Learned rules
 

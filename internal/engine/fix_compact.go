@@ -9,14 +9,17 @@ package engine
 // lines (the kind's context_pattern) and, at or above [pipeline]
 // fix_compact_at, has it compact between two turns. A fixer still that full
 // afterwards, or whose /compact did not finish, is parked and the cycle
-// starts it fresh: the fix prompt carries the findings anyway. A pane that
-// shows no figure leaves the fixer as it is and warns once per PR. A fixer
-// started fresh is never compacted.
+// starts it fresh: the fix prompt carries the findings anyway. A fixer
+// resumed from a park draws its status line only some time after the resume
+// (spec 59), so its pane is read until a figure shows, for a minute at most.
+// A pane that shows no figure leaves the fixer as it is and warns once per
+// PR. A fixer started fresh is never compacted.
 
 import (
 	"context"
 	"fmt"
 	"maps"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
@@ -24,13 +27,24 @@ import (
 
 // kvPRFixContextUnknown records when the PR's fixer pane first showed no
 // context figure although fix_compact_at is on (store.FormatTime): the
-// fix.context_unknown warning is said once per PR.
+// fix.context_unknown warning is said once per PR, until a figure is read.
 func kvPRFixContextUnknown(prID int64) string { return fmt.Sprintf("pr.%d.fix_context_unknown", prID) }
 
+// How long fixCompact waits for the context figure of a fixer the cycle
+// resumed from a park: Claude Code draws its status line some time after
+// the resume (the first two live warnings came 0.2 s after it, and the same
+// panes showed the figure later), so the pane is read every
+// fixContextPoll until a figure shows, for fixContextAwait at most.
+const (
+	fixContextPoll  = 2 * time.Second
+	fixContextAwait = time.Minute
+)
+
 // fixCompact runs before a fix cycle prompts a fixer it resumed (its
-// session was live, or ensureAgent resumed a parked one), when [pipeline]
-// fix_compact_at is on and the fixer's kind has a context_pattern: it reads
-// the fixer's context (agents.Manager.ContextUsed) and leaves a figure under
+// session was live, or ensureAgent resumed a parked one: resumed), when
+// [pipeline] fix_compact_at is on and the fixer's kind has a
+// context_pattern: it reads the fixer's context (readContext, which waits
+// for the figure of a fixer resumed from a park) and leaves a figure under
 // the key alone; at or above it, it sends /compact (agents.Manager.Compact),
 // reads again and records fix.compacted (from N% to M%) when the figure fell
 // under the key. A figure still at or above it and a compaction that did not
@@ -41,7 +55,7 @@ func kvPRFixContextUnknown(prID int64) string { return fmt.Sprintf("pr.%d.fix_co
 // otherwise cost a fresh fixer each cycle. The cycle's row says what
 // happened (FixState.Context). Only ctx's end and a fresh start that fails
 // fail the cycle.
-func (e *Engine) fixCompact(ctx context.Context, job *fixJob, ws agents.Workspace) error {
+func (e *Engine) fixCompact(ctx context.Context, job *fixJob, ws agents.Workspace, resumed bool) error {
 	at := e.cfg.Pipeline.FixCompactAt
 	if at <= 0 {
 		return nil
@@ -60,9 +74,12 @@ func (e *Engine) fixCompact(ctx context.Context, job *fixJob, ws agents.Workspac
 		maps.Copy(d, extra)
 		return d
 	}
-	from, ok := e.d.Agents.ContextUsed(ctx, s)
-	if !ok { // a figure missing (right after a resume, say) costs no fresh fixer
-		e.warnContextUnknown(ctx, job, kind, at)
+	from, ok, err := e.readContext(ctx, job, s, resumed)
+	if err != nil {
+		return err
+	}
+	if !ok { // a figure missing costs no fresh fixer
+		e.warnContextUnknown(ctx, job, kind, at, resumed)
 		return nil
 	}
 	if from < at {
@@ -78,7 +95,7 @@ func (e *Engine) fixCompact(ctx context.Context, job *fixJob, ws agents.Workspac
 		return e.fixFresh(ctx, job, ws, s, fmt.Sprintf("its context was at %d%% and /compact did not finish: %v (fix_compact_at %d)", from, cerr, at),
 			"/compact failed", data(map[string]any{"from": from}))
 	case !ok: // the compaction ended: the session goes on, and the missing figure warns once
-		e.warnContextUnknown(ctx, job, kind, at)
+		e.warnContextUnknown(ctx, job, kind, at, false)
 		job.state.Context = fmt.Sprintf("compacted from %d%%", from)
 		e.event(ctx, "info", job.subject(), "fix.compacted", fmt.Sprintf("%s compacted its conversation before cycle %d: its context was at %d%%, and its pane shows no figure after /compact (fix_compact_at %d)",
 			job.role.Name, job.state.Cycle, from, at), data(map[string]any{"from": from}))
@@ -91,6 +108,31 @@ func (e *Engine) fixCompact(ctx context.Context, job *fixJob, ws agents.Workspac
 	e.event(ctx, "info", job.subject(), "fix.compacted", fmt.Sprintf("%s compacted its conversation before cycle %d: its context went from %d%% to %d%% (fix_compact_at %d)",
 		job.role.Name, job.state.Cycle, from, to, at), data(map[string]any{"from": from, "to": to}))
 	return nil
+}
+
+// readContext reads the fixer's context figure from the pane of session s
+// (agents.Manager.ContextUsed). The pane of a fixer the cycle resumed from a
+// park (resumed) may not show its status line yet, so it is read again every
+// fixContextPoll until a figure shows, for fixContextAwait at most; a fixer
+// that was live is read once. A figure read forgets the PR's
+// fix.context_unknown warning (kvPRFixContextUnknown), so a later miss warns
+// again. Only ctx's end fails it.
+func (e *Engine) readContext(ctx context.Context, job *fixJob, s store.Session, resumed bool) (int, bool, error) {
+	for i := 1; ; i++ {
+		if used, ok := e.d.Agents.ContextUsed(ctx, s); ok {
+			key := kvPRFixContextUnknown(job.pr.ID)
+			if _, warned := e.getKV(ctx, key); warned {
+				e.delKV(ctx, key)
+			}
+			return used, true, nil
+		}
+		if !resumed || i > int(fixContextAwait/fixContextPoll) {
+			return 0, false, nil
+		}
+		if err := e.d.Sleep(ctx, fixContextPoll); err != nil {
+			return 0, false, err
+		}
+	}
 }
 
 // fixFresh parks the fixer of session s (quitToRenew: its conversation is
@@ -123,15 +165,21 @@ func (e *Engine) fixFresh(ctx context.Context, job *fixJob, ws agents.Workspace,
 }
 
 // warnContextUnknown records fix.context_unknown, a warning, the first time
-// the PR's fixer pane shows no context figure (kvPRFixContextUnknown); later
-// cycles say nothing more. The fixer goes on in its conversation either way.
-func (e *Engine) warnContextUnknown(ctx context.Context, job *fixJob, kind string, at int) {
+// the PR's fixer pane shows no context figure (kvPRFixContextUnknown),
+// naming the wait when the figure was awaited after a resume (awaited);
+// later cycles say nothing more until a figure is read (readContext). The
+// fixer goes on in its conversation either way.
+func (e *Engine) warnContextUnknown(ctx context.Context, job *fixJob, kind string, at int, awaited bool) {
 	key := kvPRFixContextUnknown(job.pr.ID)
 	if _, warned := e.getKV(ctx, key); warned {
 		return
 	}
+	within := ""
+	if awaited {
+		within = fmt.Sprintf(" within %ds of its resume", int(fixContextAwait/time.Second))
+	}
 	e.setKV(ctx, key, store.FormatTime(e.now()))
-	e.event(ctx, "warn", job.subject(), "fix.context_unknown", fmt.Sprintf("%s's pane shows no context figure that [kinds.%s] context_pattern reads, "+
+	e.event(ctx, "warn", job.subject(), "fix.context_unknown", fmt.Sprintf("%s's pane shows no context figure that [kinds.%s] context_pattern reads%s, "+
 		"so magnum cannot tell how full its conversation is and resumes it as it is (fix_compact_at %d; said once for this PR)",
-		job.role.Name, kind, at), map[string]any{"role": job.role.Name, "kind": kind, "at": at})
+		job.role.Name, kind, within, at), map[string]any{"role": job.role.Name, "kind": kind, "at": at})
 }
