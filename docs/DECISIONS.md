@@ -8610,3 +8610,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
 versions, newest last. People add their entries to the sections above, never here.
+
+- **The judge checks a version a change sets or bumps (API, runtime, SDK) with `date` against the
+  platform's support and deploy window (P1 when expired) and its packages and lockfile against the
+  release line (P2), and ranks a race with a window of seconds or less and a small loss on one record
+  P3, even when the loss stays** (2026-10-17, the skill editor's proposal for m193, m183, m182, m175,
+  m167, d196, d194, d164, d161, d157, d145, d128, d121, d120, d116, d115). An expired version and a new
+  API version over old packages pass the build and were missed; an earlier version rule in the
+  platform-rules paragraph did not move the replays, so the check now sits in section 2's Look-for list,
+  in the reviewers' prompts and in the own-pass prompt, with an explicit `date` step. Four declined
+  findings ranked a narrow race too high. The reviewers also check whose role an API key or token
+  carries when a new check reads the acting user's role, because a stand-in user answers for the wrong
+  identity; the skill already states the key case. To make room, the skill shortens the prepass,
+  readiness and evidence bullets (the prompts say the same), the machine-failure list, one verdict
+  sentence and a section 7 clause that section 5 repeats; no rule was dropped.
