@@ -33,6 +33,10 @@ migration numbers now taken.
 ## Restart
 
 The daemon reads prompts and the review skill when it starts, so landed work is live only after a restart.
+Restart once per wave, not once per landing: a drain holds every new round until the rounds in flight end (22 drains
+in the 2026-10-14 run held new rounds for 482 minutes, 11% of the window, and stopped the skill gate and the
+whiteboards each time). Land the wave, restart when its last daemon-side commit is in, and restart again only for a
+later landing the daemon loads (prompts, skills, engine, agents, pipeline); a docs-only or CLI-only landing needs none.
 
 - No new migration: `scripts/restart.sh` builds and runs `magnum daemon-restart --drain`: no new round starts
   (requested ones included), the rounds in flight end, and the daemon restarts. Waiting for an idle moment without
