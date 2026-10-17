@@ -8651,6 +8651,47 @@ skill versions); people add theirs to the sections before it, at the end of the 
   all-digit abbreviated commit is a real one; the older entry rejected the same), and reading "follow-up
   commit <sha>" or "follow-up in commit <sha>" (no reply seen takes that form, and "added in commit <sha>" is
   no `fixed` form either).
+- **An idle park whose agent did not quit goes hard on its next try, and one stuck agent no longer keeps the
+  others live** (2026-10-17, spec 64, amends "A park that fails backs off, and its cause is recorded once"
+  and "A fresh start heals an agent that will not quit"). The idle park (`parkJob`) called `Agents.Park`
+  and, when it failed, recorded `pr.park_failed` and backed off up to 12 hours; it never tried the hard
+  park. Since 2026-10-14 there were 21 `pr.park_failed` events, all on talkable#11932 ("quit_timeout: an
+  agent did not quit: its pane was no idle shell after ctrl+c"): session 535 twelve times, 792 three, 882
+  six, still failing on 10-17 with a foreground Claude in its pane. The agent counted as idle, ctrl+c did
+  not end it, and the plain park was retried for days while the session kept its pane. Now `parkJob` reads
+  the class of the PR's last failure from the backoff record (`parkFails[pr].cause`, the one `parkFailed`
+  keeps; `parkQuitFailed`), and after `quit_timeout` the try uses `Agents.ParkHard`, as a fresh start's park
+  does after one such try (`freshParkHardAfter`) and `parkForStop` on its last. So the second try after a
+  quit timeout, once its backoff has passed, is hard. A hard park that works records `pr.parked` with
+  "(hard: an agent did not quit at the plain park)" appended (the stuck agent's session is closed, not
+  parked, so the next round starts that role fresh) and forgets the failures as any park that
+  works (`parkWorked`), so the next failure is a plain try again; one that fails records `pr.park_failed`
+  as before (the cause is recorded once, the wait doubles) and is tried hard again while the class stays
+  `quit_timeout`. A failure of another class (an agent or a run at work, herdr, an error) keeps the plain
+  park, a hard try that fails for another class hands the next one back to it, and `ParkHard` refuses
+  everything `Park` refuses (a run in flight, an agent working or blocked), so a working agent is never
+  forced. The record lives in the daemon's memory (as the backoff does), so a restart forgets the class:
+  the first try after it is plain, and on the second a stuck agent is parked hard (15 of the 21 failures
+  came right after a restart). The Codex-flag release, `parkFresh` and `parkForStop` are unchanged; the
+  flag release and the idle park share the record, so a quit timeout of the release makes the idle park's
+  next try hard too. `agents.Manager.Park` (and so `ParkHard`) no longer stops at the first agent whose quit
+  fails: it goes on to the PR's other live agents of the workspace it keeps, which are parked as usual, and
+  returns the failures joined (`errors.Join`, so `ErrBusy` and herdr's timeout stay in the chain and the
+  class is the same), the stuck agent's session staying live for the next try; a stopped daemon's context
+  ends it at once. Before, one pane that ignored ctrl+c left the PR's claude-review, codex-review,
+  claude-fix and codex-judge sessions live and idle since 10-16 21:04. New tests
+  TestAnIdleParkGoesHardAfterAQuitTimeout (the second try is hard, `pr.parked` names it, the record is
+  forgotten and the next failure is plain), TestAnIdleParkStaysPlainAfterAnotherFailure (busy, another
+  error, and a hard try that fails busy) and TestAFailedHardIdleParkBacksOffAsAnyFailureDoes in engine, and
+  TestAParkThatCannotQuitOneAgentStillParksTheOthers in agents. The three backoff tests that need the failures
+  to go on after the first (`TestAFailedParkBacksOff`, `TestAFailedParkRecordsOneEventPerCause`,
+  `TestAParkThatSucceedsAfterFailuresClearsTheBackoff`) fail the hard park too (`failEveryPark`) and count
+  plain and hard tries (`parkTries`). Rejected: going hard at the first failure (ctrl+c is cheaper and quits
+  most agents, and a hard park closes the pane and the conversation with it); never going hard (what
+  happened: one session failed twelve times over days); keeping the failure class in the registry for the
+  restart case (one more plain try and event per restart, the cost the backoff entry already accepted);
+  making the Codex-flag release hard too (the spec names the idle park, and a flagged PR's release is
+  tried again on every backoff the same way, so it can follow later).
 
 ## Learned rules
 

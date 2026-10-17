@@ -8,7 +8,8 @@ package engine
 // the daily cap or a wait ending more than park_idle_after away is parked
 // the same way (under `magnum pause`, two re-reviews held 8 agents idle for
 // up to 2 hours). A park that fails is tried again only after twice the
-// last wait, and its cause is recorded once (parkBackoff).
+// last wait, and its cause is recorded once (parkBackoff); after one that
+// failed because an agent did not quit, the idle park tries the hard mode.
 
 import (
 	"context"
@@ -134,6 +135,13 @@ func (e *Engine) waitsLong(ctx context.Context, prID int64, now time.Time, after
 // agent may have woken up). Park itself refuses a busy pane. A failure
 // counts as the tick's try at `at` (parkFailed); a park that works forgets
 // the earlier failures and closes the panes it retired (closeRetiredPanes).
+// The try after a park that failed because an agent did not quit
+// (parkQuitTimeout) is the hard park (Agents.ParkHard, as a fresh start's
+// second try is): ctrl+c is the cheaper way and quits most agents, but one
+// that ignores it stays in its pane, and the plain park would be tried for
+// days (talkable#11932, 21 failures from 2026-10-14). A hard park that
+// fails is recorded like any failed park, and one that fails for another
+// cause hands the next try back to the plain park.
 func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if !e.reserveSlotWork(prID, "its idle agents are being parked") {
@@ -153,13 +161,20 @@ func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) err
 			return nil
 		}
 		subject := e.prLabelSubject(ctx, pr)
-		if err := e.d.Agents.Park(ctx, pr); err != nil {
+		park, hard := e.d.Agents.Park, e.parkQuitFailed(prID)
+		if hard {
+			park = e.d.Agents.ParkHard
+		}
+		if err := park(ctx, pr); err != nil {
 			e.parkFailed(ctx, pr, subject, at, err)
 			return nil
 		}
 		e.parkWorked(prID)
-		e.event(ctx, "info", subject, "pr.parked",
-			fmt.Sprintf("parked %d idle agents (idle since %s); the next round resumes them", len(sessions), idleSince.Local().Format("15:04")), nil)
+		msg := fmt.Sprintf("parked %d idle agents (idle since %s); the next round resumes them", len(sessions), idleSince.Local().Format("15:04"))
+		if hard {
+			msg += " (hard: an agent did not quit at the plain park)"
+		}
+		e.event(ctx, "info", subject, "pr.parked", msg, nil)
 		e.closeRetiredPanes(ctx, pr) // retired_panes.go: the next round resumes them in new panes
 		return nil
 	}
@@ -304,6 +319,17 @@ func (e *Engine) parkFailed(ctx context.Context, pr store.PR, subject string, at
 				class, what, err, humanDuration(b.wait), humanDuration(parkBackoffCap)),
 			map[string]any{"class": class, "backoff": humanDuration(b.wait), "failures": b.failures})
 	}
+}
+
+// parkQuitFailed reports whether the PR's last failed park (an idle park or
+// a Codex-flag release, which share the record) was an agent that did not
+// quit (parkQuitTimeout): the class parkFailed keeps in parkFails until a
+// park works. The record lives in the daemon's memory, so the first try
+// after a restart is a plain one again.
+func (e *Engine) parkQuitFailed(prID int64) bool {
+	e.parkMu.Lock()
+	defer e.parkMu.Unlock()
+	return e.parkFails[prID].cause == parkQuitTimeout
 }
 
 // parkWorked forgets the PR's failed parks: its park worked.

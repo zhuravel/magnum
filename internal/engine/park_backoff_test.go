@@ -26,15 +26,29 @@ func (h *harness) failParks(err error) {
 	h.ag.mu.Unlock()
 }
 
+// failEveryPark makes every park, plain or hard, return err (nil: they work
+// again). An idle park that failed because an agent did not quit goes hard
+// on its next try, so a test that wants the failures to go on fails both.
+func (h *harness) failEveryPark(err error) {
+	h.ag.mu.Lock()
+	h.ag.parkErr, h.ag.parkHardErr = err, err
+	h.ag.mu.Unlock()
+}
+
+// parkTries is how many times the PR's park was tried, plain or hard.
+func (h *harness) parkTries(prID int64) int {
+	return h.ag.count(fmt.Sprintf("park:%d", prID)) + h.ag.count(fmt.Sprintf("park_hard:%d", prID))
+}
+
 // nextParkAttempt ticks one poll interval at a time until the PR's next
-// park attempt and returns how many ticks it took.
+// park attempt, plain or hard, and returns how many ticks it took.
 func (h *harness) nextParkAttempt(prID int64) int {
 	h.t.Helper()
-	before := h.parks(prID)
+	before := h.parkTries(prID)
 	for n := 1; n <= 200; n++ {
 		h.advance(h.cfg.Daemon.PollInterval.Duration)
 		h.tick()
-		if h.parks(prID) > before {
+		if h.parkTries(prID) > before {
 			return n
 		}
 	}
@@ -51,11 +65,11 @@ func TestAFailedParkBacksOff(t *testing.T) {
 	h := newHarness(t)
 	h.cfg.Pipeline.FullPassAfter.Duration = 0 // 55 hours pass: the age rule would make the push's re-review a full pass, whose fresh start the failing park blocks
 	pr := h.reviewedPR(2, "b1")
-	h.failParks(quitTimedOut(2))
-	before := h.parks(pr.ID)
+	h.failEveryPark(quitTimedOut(2))
+	before := h.parkTries(pr.ID)
 	h.advance(2*time.Hour + time.Minute)
 	h.tick()
-	if got := h.parks(pr.ID); got != before+1 {
+	if got := h.parkTries(pr.ID); got != before+1 {
 		t.Fatalf("parks = %d, want the first try %d", got, before+1)
 	}
 	tick := h.cfg.Daemon.PollInterval.Duration
@@ -64,12 +78,12 @@ func TestAFailedParkBacksOff(t *testing.T) {
 		wait = min(2*wait, 12*time.Hour)
 		h.advance(wait - tick)
 		h.tick()
-		if got := h.parks(pr.ID); got != before+i-1 {
+		if got := h.parkTries(pr.ID); got != before+i-1 {
 			t.Fatalf("try %d came %s after the last one, before its wait of %s", i, wait-tick, wait)
 		}
 		h.advance(tick)
 		h.tick()
-		if got := h.parks(pr.ID); got != before+i {
+		if got := h.parkTries(pr.ID); got != before+i {
 			t.Fatalf("try %d did not come %s after the last one", i, wait)
 		}
 	}
@@ -92,11 +106,11 @@ func TestAFailedParkBacksOff(t *testing.T) {
 	close(h.rd.gate)
 	h.settle()
 	h.wantState(2, store.PRReviewed)
-	tries := h.parks(pr.ID)
+	tries := h.parkTries(pr.ID)
 	if n := h.nextParkAttempt(pr.ID); n != 1 {
 		t.Fatalf("the first try after the round came after %d ticks, want 1", n)
 	}
-	if got := h.parks(pr.ID); got != tries+1 {
+	if got := h.parkTries(pr.ID); got != tries+1 {
 		t.Fatalf("parks = %d, want %d", got, tries+1)
 	}
 	if n := h.nextParkAttempt(pr.ID); n != 2 {
@@ -110,7 +124,7 @@ func TestAFailedParkBacksOff(t *testing.T) {
 func TestAFailedParkRecordsOneEventPerCause(t *testing.T) {
 	h := newHarness(t)
 	pr := h.reviewedPR(2, "b1")
-	h.failParks(quitTimedOut(2))
+	h.failEveryPark(quitTimedOut(2))
 	h.advance(2*time.Hour + time.Minute)
 	h.tick() // failure 1, next try in 1m
 	evs := h.events("pr.park_failed")
@@ -131,7 +145,7 @@ func TestAFailedParkRecordsOneEventPerCause(t *testing.T) {
 		t.Fatalf("the same cause recorded %d events, want 1: %v", len(evs), evs)
 	}
 
-	h.failParks(fmt.Errorf("agents: park pr 2: run r-7 is working: %w", agents.ErrBusy))
+	h.failEveryPark(fmt.Errorf("agents: park pr 2: run r-7 is working: %w", agents.ErrBusy))
 	h.nextParkAttempt(pr.ID) // failure 4, next try in 8m
 	h.nextParkAttempt(pr.ID) // failure 5
 	evs = h.events("pr.park_failed")
@@ -139,7 +153,7 @@ func TestAFailedParkRecordsOneEventPerCause(t *testing.T) {
 		t.Fatalf("events after the cause changed = %v, want a second one naming busy and 8m", evs)
 	}
 
-	h.failParks(quitTimedOut(2))
+	h.failEveryPark(quitTimedOut(2))
 	h.nextParkAttempt(pr.ID) // failure 6: the first cause again is a change
 	if evs := h.events("pr.park_failed"); len(evs) != 3 {
 		t.Fatalf("events after the cause changed back = %d, want 3", len(evs))
@@ -153,11 +167,11 @@ func TestAFailedParkRecordsOneEventPerCause(t *testing.T) {
 func TestAParkThatSucceedsAfterFailuresClearsTheBackoff(t *testing.T) {
 	h := newHarness(t)
 	pr := h.reviewedPR(2, "b1")
-	h.failParks(quitTimedOut(2))
+	h.failEveryPark(quitTimedOut(2))
 	h.advance(2*time.Hour + time.Minute)
 	h.tick()                 // failure 1
 	h.nextParkAttempt(pr.ID) // failure 2, next try in 2m
-	h.failParks(nil)
+	h.failEveryPark(nil)
 	if n := h.nextParkAttempt(pr.ID); n != 4 {
 		t.Fatalf("the try after two failures came after %d ticks, want 4", n)
 	}
@@ -185,11 +199,11 @@ func TestAParkThatSucceedsAfterFailuresClearsTheBackoff(t *testing.T) {
 	h.advance(5 * time.Minute)
 	h.tick()
 	h.wantState(2, store.PRReviewed)
-	h.failParks(quitTimedOut(2))
+	h.failEveryPark(quitTimedOut(2))
 	h.advance(2*time.Hour + time.Minute)
-	tries := h.parks(pr.ID)
+	tries := h.parkTries(pr.ID)
 	h.tick()
-	if got := h.parks(pr.ID); got != tries+1 {
+	if got := h.parkTries(pr.ID); got != tries+1 {
 		t.Fatalf("parks = %d, want %d", got, tries+1)
 	}
 	if evs := h.events("pr.park_failed"); len(evs) != 2 {
@@ -224,5 +238,155 @@ func TestTheIdleParkTakesAnIdleFixerToo(t *testing.T) {
 	i := slices.IndexFunc(ss, func(s store.Session) bool { return s.ID == fixer.ID })
 	if i < 0 || ss[i].State != store.SessionParked {
 		t.Fatalf("the fixer's session = %+v, want parked", ss)
+	}
+}
+
+// idleParks counts the PR's plain and hard park tries.
+func (h *harness) idleParks(prID int64) (plain, hard int) {
+	return h.ag.count(fmt.Sprintf("park:%d", prID)), h.ag.count(fmt.Sprintf("park_hard:%d", prID))
+}
+
+// TestAnIdleParkGoesHardAfterAQuitTimeout: an idle park that failed because
+// an agent did not quit (the quit_timeout class) is tried hard when its
+// backoff has passed, as a fresh start's park is after one such try: on
+// talkable#11932 a session whose pane held a foreground Claude failed the
+// plain park twelve times over days, and the PR's workspace could not be laid
+// out afresh. The hard park that works records pr.parked with its words and
+// forgets the failure, so a later failure is a plain try again.
+func TestAnIdleParkGoesHardAfterAQuitTimeout(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	h.failParks(quitTimedOut(2)) // every plain park fails; the hard one works
+	h.advance(2*time.Hour + time.Minute)
+	h.tick()
+	if plain, hard := h.idleParks(pr.ID); plain != 1 || hard != 0 {
+		t.Fatalf("first try: plain %d, hard %d, want one plain park: %v", plain, hard, h.ag.all())
+	}
+	if evs := h.events("pr.park_failed"); len(evs) != 1 {
+		t.Fatalf("pr.park_failed events = %d, want 1", len(evs))
+	}
+	if n := h.nextParkAttempt(pr.ID); n != 2 {
+		t.Fatalf("the second try came after %d ticks, want the backoff's 2", n)
+	}
+	if plain, hard := h.idleParks(pr.ID); plain != 1 || hard != 1 {
+		t.Fatalf("second try: plain %d, hard %d, want the plain park once and then the hard one: %v", plain, hard, h.ag.all())
+	}
+	parked := h.events("pr.parked")
+	if len(parked) != 1 || parked[0].Level != "info" ||
+		!strings.Contains(parked[0].Message, "the next round resumes them") ||
+		!strings.HasSuffix(parked[0].Message, "(hard: an agent did not quit at the plain park)") {
+		t.Fatalf("pr.parked = %v, want one naming the hard park", parked)
+	}
+	live, err := h.st.LiveSessions(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(live, func(s store.Session) bool { return s.PRID == pr.ID }) {
+		t.Fatal("sessions still live after the hard park")
+	}
+	h.e.parkMu.Lock()
+	_, kept := h.e.parkFails[pr.ID]
+	h.e.parkMu.Unlock()
+	if kept {
+		t.Fatal("the failure record outlived the hard park that worked")
+	}
+
+	// The next round resumes the agents. Their park fails again, and being
+	// the first failure since the park that worked it is a plain try.
+	h.push(2, "b2")
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.wantState(2, store.PRReviewed)
+	h.advance(2*time.Hour + time.Minute)
+	h.tick()
+	if plain, hard := h.idleParks(pr.ID); plain != 2 || hard != 1 {
+		t.Fatalf("after the next round: plain %d, hard %d, want a second plain try and no new hard one: %v", plain, hard, h.ag.all())
+	}
+	if evs := h.events("pr.park_failed"); len(evs) != 2 {
+		t.Fatalf("pr.park_failed events = %d, want the cause recorded again after the park that worked", len(evs))
+	}
+	if n := h.nextParkAttempt(pr.ID); n != 2 {
+		t.Fatalf("the try after the new failure came after %d ticks, want 2", n)
+	}
+	if plain, hard := h.idleParks(pr.ID); plain != 2 || hard != 2 {
+		t.Fatalf("plain %d, hard %d, want the new failure's second try hard", plain, hard)
+	}
+}
+
+// TestAnIdleParkStaysPlainAfterAnotherFailure: only an agent that did not
+// quit makes the next try hard. A park refused because an agent or a run of
+// the PR is at work (the busy class), and one that failed with any other
+// cause, retries the plain park, since that agent works and is not stuck.
+// A hard try that fails with another cause hands the next one back to the
+// plain park.
+func TestAnIdleParkStaysPlainAfterAnotherFailure(t *testing.T) {
+	t.Run("busy", func(t *testing.T) {
+		h := newHarness(t)
+		pr := h.reviewedPR(2, "b1")
+		h.failParks(fmt.Errorf("agents: park pr 2: run r-7 is working: %w", agents.ErrBusy))
+		h.advance(2*time.Hour + time.Minute)
+		h.tick()
+		for range 3 {
+			h.nextParkAttempt(pr.ID)
+		}
+		if plain, hard := h.idleParks(pr.ID); plain != 4 || hard != 0 {
+			t.Fatalf("plain %d, hard %d, want four plain tries: %v", plain, hard, h.ag.all())
+		}
+	})
+	t.Run("another error", func(t *testing.T) {
+		h := newHarness(t)
+		pr := h.reviewedPR(2, "b1")
+		h.failParks(fmt.Errorf("agents: park pr 2: sessions: database is locked"))
+		h.advance(2*time.Hour + time.Minute)
+		h.tick()
+		h.nextParkAttempt(pr.ID)
+		if plain, hard := h.idleParks(pr.ID); plain != 2 || hard != 0 {
+			t.Fatalf("plain %d, hard %d, want two plain tries: %v", plain, hard, h.ag.all())
+		}
+	})
+	t.Run("a hard try that fails for another cause", func(t *testing.T) {
+		h := newHarness(t)
+		pr := h.reviewedPR(2, "b1")
+		h.failParks(quitTimedOut(2))
+		h.ag.mu.Lock()
+		h.ag.parkHardErr = fmt.Errorf("agents: park pr 2: agent codex-judge is working: %w", agents.ErrBusy)
+		h.ag.mu.Unlock()
+		h.advance(2*time.Hour + time.Minute)
+		h.tick()                 // plain, quit_timeout
+		h.nextParkAttempt(pr.ID) // hard, busy
+		h.nextParkAttempt(pr.ID) // plain again
+		if plain, hard := h.idleParks(pr.ID); plain != 2 || hard != 1 {
+			t.Fatalf("plain %d, hard %d, want plain, hard, plain: %v", plain, hard, h.ag.all())
+		}
+		if evs := h.events("pr.park_failed"); len(evs) != 3 || !strings.Contains(evs[1].Message, "busy") || !strings.Contains(evs[2].Message, "quit_timeout") {
+			t.Fatalf("pr.park_failed = %v, want the quit timeout, the busy cause and the quit timeout again", evs)
+		}
+	})
+}
+
+// TestAFailedHardIdleParkBacksOffAsAnyFailureDoes: a hard park that fails
+// because the agent still did not quit (herdr refused to close its pane)
+// records nothing new, doubles the wait as every failure does and is tried
+// hard again.
+func TestAFailedHardIdleParkBacksOffAsAnyFailureDoes(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	h.failEveryPark(quitTimedOut(2))
+	h.advance(2*time.Hour + time.Minute)
+	h.tick() // plain, failure 1: next try in 2 ticks
+	for i, want := range []int{2, 4, 8} {
+		if n := h.nextParkAttempt(pr.ID); n != want {
+			t.Fatalf("try %d came after %d ticks, want %d", i+2, n, want)
+		}
+	}
+	if plain, hard := h.idleParks(pr.ID); plain != 1 || hard != 3 {
+		t.Fatalf("plain %d, hard %d, want the plain try and then hard ones: %v", plain, hard, h.ag.all())
+	}
+	if evs := h.events("pr.park_failed"); len(evs) != 1 {
+		t.Fatalf("pr.park_failed events = %d, want the one cause recorded once", len(evs))
+	}
+	if evs := h.events("pr.parked"); len(evs) != 0 {
+		t.Fatalf("pr.parked = %v, want none", evs)
 	}
 }

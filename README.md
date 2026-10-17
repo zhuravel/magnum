@@ -671,7 +671,11 @@ twice as long as the last wait: two ticks after the first failure, then four, ei
 hours. A new round of the PR or a change in its sessions starts the wait over. The first failure of each
 cause records a `pr.park_failed` warning with the cause's class (`quit_timeout`, `busy`, `herdr` or
 `error`) and the wait. Later failures of the same cause record nothing, and a park that works records
-`pr.parked` as usual.
+`pr.parked` as usual. A park that cannot quit one agent still quits the PR's others and reports the
+failures together. When the failure was an agent that did not quit (`quit_timeout`), the idle park's next
+try, once the wait has passed, parks in the hard mode described below, and its `pr.parked` event says
+"(hard: an agent did not quit at the plain park)". A failure of another class keeps the plain park, and a
+restart forgets the record, so the first try after it is plain again.
 
 A fresh start (`magnum review --fresh`, a full or audit pass, a new identity) parks every agent of the PR
 first. When an agent stays in its pane through ctrl+c, that park waits like any busy agent: a minute at a
@@ -680,7 +684,7 @@ try parks in the hard mode. Magnum sends the kind's `exit_keys` (Claude: `/exit`
 closes that pane alone, never the workspace, whose other panes may be yours. The session is closed, not
 parked, and a `pr.park_forced` event names the role and the pane. A park that waits for a run of the PR (a
 fixer or another round at work) is never forced, and `magnum abort` parks the same hard way on its last of
-three tries. The idle park and the release of a Codex-flagged PR keep the plain park and its backoff.
+three tries. The release of a Codex-flagged PR keeps the plain park and its backoff.
 Once any park worked (the idle park, a fresh start's, a hard one, `magnum abort`, `magnum release`, the
 release of a Codex-flagged PR, an eviction), magnum closes the panes of the sessions it parked or closed, so
 the workspace keeps one pane per role of the round plus the panes magnum does not own. The pane of a session

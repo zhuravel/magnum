@@ -1,8 +1,10 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -253,6 +255,85 @@ func TestAHardParkClosesThePaneOfAnAgentThatWillNotQuit(t *testing.T) {
 	if strings.Contains(evs[0].Message+string(evs[0].Data), "SECRET-PANE-TEXT") {
 		t.Fatalf("the event carries the pane's text: %+v", evs[0])
 	}
+}
+
+// A park whose quit of one agent fails (it stays in its pane's foreground
+// after two ctrl+c) goes on to quit the PR's other agents and returns the
+// failures joined, rather than stopping at the first: on talkable#11932 four
+// idle sessions stayed live for a day because one Claude pane ignored
+// ctrl+c. The stuck agent stays live for the next try, which the hard park
+// settles; both agents stuck fail with both quits named.
+func TestAParkThatCannotQuitOneAgentStillParksTheOthers(t *testing.T) {
+	setup := func(t *testing.T) (*env, Workspace) {
+		t.Helper()
+		e := newEnv(t)
+		ws := e.started()
+		e.h.addPane(herdr.Pane{ID: ws.WorkspaceID + ":p99", WorkspaceID: ws.WorkspaceID}) // a shell no session owns: the workspace stays open
+		e.h.setAgentSession("mg-11920-codex-judge-5d01cf", "judge-uuid")
+		e.h.setAgentSession("mg-11920-claude-review-5d01cf", "claude-id")
+		e.observe()
+		return e, ws
+	}
+	t.Run("the first agent is stuck", func(t *testing.T) {
+		e, ws := setup(t)
+		stuck := ws.Panes[RoleJudge] // the first session the park tries
+		e.h.busy[stuck] = true
+		judge, claude := e.session(RoleJudge), e.session(RoleClaude)
+
+		err := e.m.Park(e.ctx, e.pr)
+		if !errors.Is(err, ErrBusy) || !herdr.IsTimeout(err) || !strings.Contains(err.Error(), "quit session") {
+			t.Fatalf("park: err = %v, want the stuck agent's quit failure, ErrBusy with the herdr timeout", err)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionParked || store.Deref(got.SessionID) != "claude-id" {
+			t.Fatalf("claude session = %+v, want parked with its id after the judge's quit failed", got)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, judge.ID); got.State != store.SessionLive {
+			t.Fatalf("judge session = %s, want live for the next try", got.State)
+		}
+		if got := e.keysTo(ws.Panes[RoleClaude]); len(got) != 2 {
+			t.Fatalf("keys to the claude pane = %q, want its two ctrl+c", got)
+		}
+		if err := e.m.ParkHard(e.ctx, e.pr); err != nil {
+			t.Fatalf("hard park: %v", err)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, judge.ID); got.State != store.SessionClosed {
+			t.Fatalf("judge session after the hard park = %s, want closed", got.State)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionParked {
+			t.Fatalf("claude session after the hard park = %s, want it still parked", got.State)
+		}
+	})
+	t.Run("both agents are stuck", func(t *testing.T) {
+		e, ws := setup(t)
+		e.h.busy[ws.Panes[RoleJudge]] = true
+		e.h.busy[ws.Panes[RoleClaude]] = true
+		judge, claude := e.session(RoleJudge), e.session(RoleClaude)
+		err := e.m.Park(e.ctx, e.pr)
+		if !errors.Is(err, ErrBusy) || !herdr.IsTimeout(err) {
+			t.Fatalf("park: err = %v, want ErrBusy with the herdr timeout", err)
+		}
+		for _, s := range []store.Session{judge, claude} {
+			if !strings.Contains(err.Error(), fmt.Sprintf("quit session %d", s.ID)) {
+				t.Fatalf("park: err = %v, want it to name the quit of session %d", err, s.ID)
+			}
+			if got, _ := e.st.SessionByID(e.ctx, s.ID); got.State != store.SessionLive {
+				t.Fatalf("%s session = %s, want live", s.Role, got.State)
+			}
+		}
+	})
+	t.Run("a stop ends the park at once", func(t *testing.T) {
+		e, ws := setup(t)
+		e.h.busy[ws.Panes[RoleJudge]] = true
+		ctx, cancel := context.WithCancel(e.ctx)
+		e.h.onKeys = func(_ *fakeHerdr, _ string, _ []string) { cancel() }
+		err := e.m.Park(ctx, e.pr)
+		if err == nil {
+			t.Fatal("park: want the stop's error")
+		}
+		if got := e.keysTo(ws.Panes[RoleClaude]); len(got) != 0 {
+			t.Fatalf("keys to the claude pane = %q, want none after the stop", got)
+		}
+	})
 }
 
 // The hard park closes a pane only when the agent still runs after its exit

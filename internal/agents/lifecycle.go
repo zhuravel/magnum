@@ -162,8 +162,11 @@ func (m *Manager) ParkHard(ctx context.Context, pr store.PR) error {
 // of the PR's live or lost sessions that holds only the PR's own panes is
 // closed; one with foreign panes (the user split it) stays, and only the
 // PR's live agents are quit. Live sessions with a session_id become parked,
-// the rest closed (see Quit); lost sessions stay lost. No live or lost
-// sessions: no-op.
+// the rest closed (see Quit); lost sessions stay lost. A quit that fails
+// does not stop the others: the PR's other live agents are still quit and
+// the failures come back joined (the stuck agent's session stays live, so
+// ErrBusy and herdr's timeout are in the chain as for one failure). No
+// live or lost sessions: no-op.
 func (m *Manager) Park(ctx context.Context, pr store.PR) error {
 	return m.park(ctx, pr, false)
 }
@@ -227,6 +230,7 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 			}
 		}
 	}
+	var quitErrs []error
 	for _, ws := range wsIDs {
 		if closing[ws] {
 			if err := m.d.Herdr.WorkspaceClose(ctx, ws); err != nil && !isGone(err) {
@@ -237,10 +241,18 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 		for _, s := range byWS[ws] {
 			if _, ok := findAgent(snap, s); ok && isLive(s) && m.isAgentSession(s) {
 				if err := m.quit(ctx, s, hard); err != nil {
-					return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
+					// One agent that will not quit leaves the others' quits to go on:
+					// the failures come back joined, the sessions that quit parked.
+					quitErrs = append(quitErrs, err)
+					if ctx.Err() != nil {
+						return fmt.Errorf("agents: park pr %d: %w", pr.Number, errors.Join(quitErrs...))
+					}
 				}
 			}
 		}
+	}
+	if len(quitErrs) > 0 {
+		return fmt.Errorf("agents: park pr %d: %w", pr.Number, errors.Join(quitErrs...))
 	}
 	for _, s := range live {
 		if err := m.retire(ctx, s); err != nil {

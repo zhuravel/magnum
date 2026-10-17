@@ -1315,7 +1315,11 @@ func (m *Manager) Park(ctx context.Context, pr store.PR) error
     PR's live or lost sessions that holds only the PR's own panes is closed;
     one with foreign panes (the user split it) stays, and only the PR's live
     agents are quit. Live sessions with a session_id become parked, the rest
-    closed (see Quit); lost sessions stay lost. No live or lost sessions: no-op.
+    closed (see Quit); lost sessions stay lost. A quit that fails does not stop
+    the others: the PR's other live agents are still quit and the failures come
+    back joined (the stuck agent's session stays live, so ErrBusy and herdr's
+    timeout are in the chain as for one failure). No live or lost sessions:
+    no-op.
 
 func (m *Manager) ParkClosingPanes(ctx context.Context, pr store.PR) error
     ParkClosingPanes is Park, then, once the park worked, CloseRetiredPanes:
