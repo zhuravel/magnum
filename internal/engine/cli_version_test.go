@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,13 +30,14 @@ type fakeCLIs struct {
 	run *execx.Fake
 
 	mu    sync.Mutex
-	out   map[string]string // a command's path → what its --version prints
-	which map[string]string // kind → the binary `mise which <kind>` names
+	out   map[string]string  // a command's path → what its --version prints
+	which map[string]string  // kind → the binary `mise which <kind>` names
+	fails map[string][]error // a command's path → the errors its next --version reads fail with, in order
 }
 
 func newFakeCLIs(t *testing.T) *fakeCLIs {
 	t.Helper()
-	c := &fakeCLIs{t: t, dir: t.TempDir(), out: map[string]string{}, which: map[string]string{}}
+	c := &fakeCLIs{t: t, dir: t.TempDir(), out: map[string]string{}, which: map[string]string{}, fails: map[string][]error{}}
 	c.run = &execx.Fake{Rules: []execx.Rule{{Fn: c.answer}}}
 	return c
 }
@@ -57,6 +60,10 @@ func (c *fakeCLIs) answer(cmd execx.Cmd) (execx.Result, error) {
 	defer c.mu.Unlock()
 	switch {
 	case slices.Equal(cmd.Args, []string{"--version"}):
+		if errs := c.fails[cmd.Name]; len(errs) > 0 {
+			c.fails[cmd.Name] = errs[1:]
+			return execx.Result{Code: -1}, &execx.RunError{Cmd: cmd, Err: errs[0]}
+		}
 		if out, ok := c.out[cmd.Name]; ok {
 			return execx.Result{Stdout: []byte(out)}, nil
 		}
@@ -91,6 +98,14 @@ func (c *fakeCLIs) prints(path, out string) {
 	c.out[path] = out
 }
 
+// failsWith makes the next len(errs) --version reads of the command at path
+// fail with errs, in order; the reads after them answer what prints says.
+func (c *fakeCLIs) failsWith(path string, errs ...error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fails[path] = append(c.fails[path], errs...)
+}
+
 // names makes `mise which kind` name path.
 func (c *fakeCLIs) names(kind, path string) {
 	c.mu.Lock()
@@ -103,6 +118,34 @@ func (c *fakeCLIs) versionReads() int {
 	n := 0
 	for _, cmd := range c.run.CallsWithPrefix() {
 		if slices.Equal(cmd.Args, []string{"--version"}) {
+			n++
+		}
+	}
+	return n
+}
+
+// versionReadsOf counts the --version commands the engine ran for the
+// command at path, and reports whether every one had the health check's
+// timeout (a read at the start included).
+func (c *fakeCLIs) versionReadsOf(path string) (n int, timeouts bool) {
+	timeouts = true
+	for _, cmd := range c.run.CallsWithPrefix(path, "--version") {
+		n++
+		timeouts = timeouts && cmd.Timeout == cliVersionTimeout
+	}
+	return n, timeouts
+}
+
+// repeated is err n times.
+func repeated(err error, n int) []error {
+	return slices.Repeat([]error{err}, n)
+}
+
+// logLines counts the lines of logs at level that contain msg.
+func logLines(logs *syncBuffer, level, msg string) int {
+	n := 0
+	for line := range strings.SplitSeq(logs.String(), "\n") {
+		if strings.Contains(line, "level="+level+" ") && strings.Contains(line, msg) {
 			n++
 		}
 	}
@@ -287,5 +330,138 @@ func TestAParkedLaunchFailureNamesTheRecentCLIChange(t *testing.T) {
 				t.Fatalf("toasts naming the change %q", got)
 			}
 		})
+	}
+}
+
+// versionUnreadable is the first words of the warning a failed version read
+// logs.
+const versionUnreadable = "cannot read the agent CLI's version"
+
+// At the daemon start of 2026-10-18 01:27 the read of codex's version failed
+// ("shims/codex --version: context canceled"), and the stamp of the binary
+// was kept as if it had been read, so the version was not read again until
+// the shim's mtime changed, which a mise shim's never does: `magnum status`
+// stayed without codex's version. A read that failed stores no stamp: the
+// next health check runs the command again, with the same timeout as the
+// start's, and the version is recorded once it works, with one warning for
+// the failure.
+func TestAFailedVersionReadIsTriedAgainAtTheNextHealthCheck(t *testing.T) {
+	cli := newFakeCLIs(t)
+	logs := &syncBuffer{}
+	h := newHarness(t, cli.install, func(h *harness) { h.d.Logger = newTeeLogger(h.t, logs) })
+	installed := time.Date(2026, 10, 9, 21, 20, 0, 0, time.Local)
+	codex := cli.binary("codex", installed)
+	cli.prints(codex, "codex-cli 0.162.1\n")
+	cli.failsWith(codex, context.Canceled)
+	claude := cli.binary("claude", installed)
+	cli.prints(claude, "2.1.290 (Claude Code)\n")
+
+	h.startup()
+	if _, ok, _ := readKVJSON[KindVersion](h.ctx, h.e, KVKindVersion("codex"), "kind version"); ok {
+		t.Fatal("a version was recorded for codex after a read that failed")
+	}
+	if v := kindVersion(h, "claude"); v.Version != "2.1.290 (Claude Code)" {
+		t.Fatalf("claude at the start: %+v", v)
+	}
+	if n := logLines(logs, "WARN", versionUnreadable); n != 1 {
+		t.Fatalf("warnings after the failed read = %d, want 1\n%s", n, logs.String())
+	}
+
+	h.advance(time.Minute)
+	h.tick()
+	v := kindVersion(h, "codex")
+	if v.Version != "codex-cli 0.162.1" || v.Path != resolved(t, codex) || !v.MTime.Equal(installed) || !v.SeenAt.Equal(h.clock.Now()) {
+		t.Fatalf("codex after the next health check: %+v", v)
+	}
+	if n, timeouts := cli.versionReadsOf(codex); n != 2 || !timeouts {
+		t.Fatalf("codex reads = %d (every one with the health check's timeout: %v), want 2 and true", n, timeouts)
+	}
+	if n := logLines(logs, "INFO", "agent CLI version"); n != 2 { // claude's at the start, codex's now
+		t.Fatalf("version lines at info = %d, want one per kind\n%s", n, logs.String())
+	}
+	h.advance(time.Minute)
+	h.tick()
+	if n, _ := cli.versionReadsOf(codex); n != 2 {
+		t.Fatalf("codex reads after it was read = %d: the stamp keeps the command from running at every check", n)
+	}
+	if n, evs := logLines(logs, "WARN", versionUnreadable), h.events(EventKindVersionUnknown); n != 1 || len(evs) != 0 {
+		t.Fatalf("warnings = %d, %d kind.version_unknown events; want 1 and none", n, len(evs))
+	}
+}
+
+// A binary whose version command keeps failing is tried at every health
+// check, and says so once: one warning for the cause, and one
+// kind.version_unknown event at the third failed check in a row (the
+// start's read counts as the first); the read that works at last records the
+// version.
+func TestAVersionReadThatKeepsFailingWarnsOnce(t *testing.T) {
+	cli := newFakeCLIs(t)
+	logs := &syncBuffer{}
+	h := newHarness(t, cli.install, func(h *harness) { h.d.Logger = newTeeLogger(h.t, logs) })
+	codex := cli.binary("codex", time.Date(2026, 10, 9, 21, 20, 0, 0, time.Local))
+	cli.prints(codex, "codex-cli 0.162.1\n")
+	cli.failsWith(codex, repeated(context.DeadlineExceeded, 6)...)
+
+	h.startup()
+	h.advance(time.Minute)
+	h.tick()
+	if n, evs := logLines(logs, "WARN", versionUnreadable), h.events(EventKindVersionUnknown); n != 1 || len(evs) != 0 {
+		t.Fatalf("after 2 failed checks: %d warnings, %d kind.version_unknown events; want 1 and none", n, len(evs))
+	}
+	for range 4 {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	if n, _ := cli.versionReadsOf(codex); n != 6 {
+		t.Fatalf("reads = %d, want one at the start and one at each of the 5 checks", n)
+	}
+	if n := logLines(logs, "WARN", versionUnreadable); n != 1 {
+		t.Fatalf("warnings = %d, want 1 for one cause\n%s", n, logs.String())
+	}
+	evs := h.events(EventKindVersionUnknown)
+	if len(evs) != 1 || evs[0].Level != "warn" ||
+		!strings.Contains(evs[0].Message, "the codex CLI's version cannot be read") || !strings.Contains(evs[0].Message, "3 health checks in a row") {
+		t.Fatalf("kind.version_unknown events %+v, want one warning for codex naming 3 checks", evs)
+	}
+	var subject string
+	if err := h.st.DB().QueryRowContext(h.ctx, "SELECT subject FROM events WHERE kind = ?", EventKindVersionUnknown).Scan(&subject); err != nil || subject != "tool:codex" {
+		t.Fatalf("kind.version_unknown subject = %q, %v; want tool:codex", subject, err)
+	}
+	if _, ok, _ := readKVJSON[KindVersion](h.ctx, h.e, KVKindVersion("codex"), "kind version"); ok {
+		t.Fatal("a version was recorded for codex while its reads failed")
+	}
+
+	h.advance(time.Minute)
+	h.tick() // the seventh read works
+	if v := kindVersion(h, "codex"); v.Version != "codex-cli 0.162.1" {
+		t.Fatalf("codex after its read worked: %+v", v)
+	}
+	h.advance(time.Minute)
+	h.tick()
+	if n, evs := cli.versionReads(), h.events(EventKindVersionUnknown); n != 7 || len(evs) != 1 {
+		t.Fatalf("reads = %d, kind.version_unknown events = %d; want 7 and 1", n, len(evs))
+	}
+}
+
+// A read that fails for another cause than the one warned about is another
+// warning, and the causes do not restart the count of failed checks.
+func TestAVersionReadFailingForAnotherCauseWarnsAgain(t *testing.T) {
+	cli := newFakeCLIs(t)
+	logs := &syncBuffer{}
+	h := newHarness(t, cli.install, func(h *harness) { h.d.Logger = newTeeLogger(h.t, logs) })
+	codex := cli.binary("codex", time.Date(2026, 10, 9, 21, 20, 0, 0, time.Local))
+	cli.prints(codex, "codex-cli 0.162.1\n")
+	cli.failsWith(codex, context.DeadlineExceeded, context.DeadlineExceeded, errors.New("exit status 2"), errors.New("exit status 2"))
+
+	h.startup()
+	for range 3 {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	if n := logLines(logs, "WARN", versionUnreadable); n != 2 {
+		t.Fatalf("warnings = %d, want one per cause (a timeout, an exit)\n%s", n, logs.String())
+	}
+	if evs := h.events(EventKindVersionUnknown); len(evs) != 1 {
+		t.Fatalf("kind.version_unknown events = %d, want 1: the causes do not restart the count", len(evs))
 	}
 }

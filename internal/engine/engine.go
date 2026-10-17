@@ -434,10 +434,12 @@ type Engine struct {
 	machineLast    int64
 	machineToasted map[string]time.Time
 	// cliRead is, by agent kind, the binary whose version this run read or
-	// failed to read, or found recorded (cli_version.go): the version
-	// command runs again only once the binary changed. Tick goroutine only
-	// (startup and health).
-	cliRead map[string]cliStamp
+	// found recorded (cli_version.go): the version command runs again only
+	// once the binary changed; cliFails, by agent kind, the reads that
+	// failed and left no stamp, tried again at every health check. Tick
+	// goroutine only (startup and health).
+	cliRead  map[string]cliStamp
+	cliFails map[string]*cliReadFailures
 	// autoSeen and autoFollow remember, by PR and by automatic approval,
 	// what auto-approval last read GitHub's reviews for (autoapprove.go): a
 	// PR whose latest round and updatedAt did not move since is not asked
@@ -564,6 +566,7 @@ func New(d Deps) *Engine {
 		curateTried:   map[int64]time.Time{},
 		netRuns:       map[string]netRun{},
 		cliRead:       map[string]cliStamp{},
+		cliFails:      map[string]*cliReadFailures{},
 		kick:          make(chan struct{}, 1),
 		starts:        starter{codex: make(chan struct{}, maxCodexStarts)},
 	}

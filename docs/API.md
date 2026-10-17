@@ -5782,6 +5782,13 @@ const EventKindVersionChanged = "kind.version_changed"
     an agent kind's CLI reports another version than the one recorded
     (KVKindVersion): the kind, the versions and the binary.
 
+const EventKindVersionUnknown = "kind.version_unknown"
+    EventKindVersionUnknown is recorded (warn, subject tool:<kind>) once when
+    reading an agent kind's CLI version failed at cliVersionUnknownAfter health
+    checks in a row (the one at the daemon's start counts): the kind, the number
+    of failed checks, the binary and the last failure. The reads go on at every
+    check.
+
 const EventSharedFailure = "agents.shared_failure"
     EventSharedFailure is recorded (warn) when two or more PRs' agent launches
     ended with the same pane line within sharedFailureWindow, once per line

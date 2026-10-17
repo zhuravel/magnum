@@ -9,6 +9,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,16 +31,26 @@ func KVKindVersion(kind string) string { return "kind." + kind + ".version" }
 // (KVKindVersion): the kind, the versions and the binary.
 const EventKindVersionChanged = "kind.version_changed"
 
+// EventKindVersionUnknown is recorded (warn, subject tool:<kind>) once when
+// reading an agent kind's CLI version failed at cliVersionUnknownAfter
+// health checks in a row (the one at the daemon's start counts): the kind,
+// the number of failed checks, the binary and the last failure. The reads go
+// on at every check.
+const EventKindVersionUnknown = "kind.version_unknown"
+
 // CLIChangeRecent is how long a change of a kind's CLI is news: `magnum
 // status` says "(changed at 11:24)", and a launch failure of one of the
 // kind's roles that parks a PR names it (attention.CLIChange).
 const CLIChangeRecent = 24 * time.Hour
 
-// cliVersionTimeout bounds `<cli> --version` and `mise which <cli>`;
-// cliVersionRunes bounds the version kept.
+// cliVersionTimeout bounds `<cli> --version` and `mise which <cli>`, at the
+// daemon's start and at the health checks alike; cliVersionRunes bounds the
+// version kept; cliVersionUnknownAfter is how many health checks in a row
+// may fail to read a kind's version before EventKindVersionUnknown.
 const (
-	cliVersionTimeout = 15 * time.Second
-	cliVersionRunes   = 80
+	cliVersionTimeout      = 15 * time.Second
+	cliVersionRunes        = 80
+	cliVersionUnknownAfter = 3
 )
 
 // kindCLIChanged counts the CLI changes in a batch summary.
@@ -77,6 +88,20 @@ type cliStamp struct {
 	mtime time.Time
 }
 
+// cliReadFailures is what the daemon knows of a kind's failed version reads
+// (Engine.cliFails): none of them leaves a stamp, so the next health check
+// runs the command again.
+type cliReadFailures struct {
+	// run is the failed reads in a row, the one at the start included; a
+	// read that works ends it. unknown says that EventKindVersionUnknown was
+	// recorded for this run.
+	run     int
+	unknown bool
+	// warned holds the failure causes logged at warn since the daemon
+	// started (cliFailureCause): one cause is said once, whatever the run.
+	warned map[string]bool
+}
+
 // checkCLIVersions reads the CLI version of every agent kind the
 // configured roles use (a shell role's tool counts, the judge in reserve
 // too), the kinds `magnum doctor` checks. Nothing is read in a dry run or
@@ -91,12 +116,12 @@ func (e *Engine) checkCLIVersions(ctx context.Context) {
 }
 
 // checkCLIVersion reads kind's version when its binary differs from the
-// one recorded (KVKindVersion), or from the one this run last read or
-// failed to read (cliRead): a binary whose version cannot be read is tried
-// again once it changes, or at the next start. The first version recorded
-// is only logged; another one than the recorded is
-// EventKindVersionChanged with one toast ("codex-cli 0.162.1 → 0.163.0 at
-// 11:24").
+// one recorded (KVKindVersion), or from the one this run last read
+// (cliRead): a read that failed leaves no stamp, so a binary whose version
+// cannot be read is tried again at the next health check (cliReadFailed).
+// The first version recorded is only logged; another one than the recorded
+// is EventKindVersionChanged with one toast ("codex-cli 0.162.1 → 0.163.0
+// at 11:24").
 func (e *Engine) checkCLIVersion(ctx context.Context, kind string) {
 	cmd, err := e.d.LookPath(kind)
 	if err == nil {
@@ -127,10 +152,15 @@ func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cli
 		return
 	}
 	version, err := e.cliVersion(ctx, kind, cmd)
-	e.cliRead[kind] = stamp
 	if err != nil {
-		e.log.Warn("cannot read the agent CLI's version; tried again when its binary changes", "kind", kind, "path", stamp.path, "err", err)
+		e.cliReadFailed(ctx, kind, stamp, err)
 		return
+	}
+	e.cliRead[kind] = stamp
+	failed := 0
+	if f := e.cliFails[kind]; f != nil {
+		failed = f.run
+		f.run, f.unknown = 0, false
 	}
 	now := e.now()
 	v := KindVersion{Version: version, Path: stamp.path, MTime: stamp.mtime, SeenAt: now, Previous: prev.Previous, ChangedAt: prev.ChangedAt}
@@ -144,7 +174,11 @@ func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cli
 		return
 	}
 	if !changed {
-		e.log.Info("agent CLI version", "kind", kind, "version", version, "path", stamp.path)
+		attrs := []any{"kind", kind, "version", version, "path", stamp.path}
+		if failed > 0 {
+			attrs = append(attrs, "failed_reads", failed)
+		}
+		e.log.Info("agent CLI version", attrs...)
 		return
 	}
 	what := versionChange(prev.Version, version) + " at " + now.Local().Format("15:04")
@@ -153,6 +187,53 @@ func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cli
 	e.info(notify.Item{Key: "cli-changed:" + kind + ":" + version, Title: "magnum: " + what,
 		Body: fmt.Sprintf("The %s CLI magnum's agents start changed. If their launches fail from now on, suspect the new version first; `magnum status` shows the versions.", kind),
 		Line: what, Kind: kindCLIChanged, Window: CLIChangeRecent})
+}
+
+// cliReadFailed handles a failed read of kind's version (an error, its
+// timeout, a context that ended): no stamp is kept, so the command runs
+// again at the next health check. ctx itself ending is the daemon stopping,
+// no failure. The failure is warned about once per cause since the daemon
+// started (later ones are debug lines), and the cliVersionUnknownAfter-th
+// failed read in a row is one EventKindVersionUnknown; the reads go on at
+// every check.
+func (e *Engine) cliReadFailed(ctx context.Context, kind string, stamp cliStamp, err error) {
+	if ctx.Err() != nil {
+		e.log.Debug("cannot read the agent CLI's version; the daemon is stopping", "kind", kind, "path", stamp.path, "err", err)
+		return
+	}
+	f := e.cliFails[kind]
+	if f == nil {
+		f = &cliReadFailures{warned: map[string]bool{}}
+		e.cliFails[kind] = f
+	}
+	f.run++
+	cause := cliFailureCause(err)
+	if f.warned[cause] {
+		e.log.Debug("cannot read the agent CLI's version; trying again at the next health check", "kind", kind, "path", stamp.path, "failed_reads", f.run, "err", err)
+	} else {
+		f.warned[cause] = true
+		e.log.Warn("cannot read the agent CLI's version; trying again at the next health check", "kind", kind, "path", stamp.path, "err", err)
+	}
+	if f.run < cliVersionUnknownAfter || f.unknown {
+		return
+	}
+	f.unknown = true
+	e.event(ctx, "warn", "tool:"+kind, EventKindVersionUnknown,
+		fmt.Sprintf("the %s CLI's version cannot be read: %d health checks in a row failed (%s); tried again at each check", kind, f.run, textx.Clip(execx.Redact(err.Error()), 200)),
+		map[string]any{"kind": kind, "reads": f.run, "path": stamp.path})
+}
+
+// cliFailureCause is what a failed version read is warned about once: a
+// timeout and a context that ended are one cause each, whatever command
+// line the error names, any other failure its text.
+func cliFailureCause(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	return err.Error()
 }
 
 // cliStamp is the binary kind's command cmd (on the daemon's PATH) runs:

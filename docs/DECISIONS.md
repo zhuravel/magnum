@@ -9320,6 +9320,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   path-filtered workflows by heuristics (a check does not say whether its workflow is path-filtered, and a
   guess would also pass a required workflow that skipped); keeping every check (what happened: a flake in an
   unrequired self-check held a reviewed PR for a day, until someone re-ran the job or pressed `A`).
+- **A CLI version read that failed is tried again at the next health check** (2026-10-18, spec 85). Spec
+  75 (above) kept a stamp (`Engine.cliRead`) for a binary whose version command failed, so it ran again only
+  once the binary's path or mtime changed. At the daemon start of 2026-10-18 01:27 the codex read failed
+  ("shims/codex --version: context canceled"); a mise shim's file never changes (the stamp follows `mise
+  which codex`, which names the same binary until mise installs another), so the version stayed unread, and
+  `magnum status`'s `clis:` line and the shared-failure note went on without codex's. Now a read that fails
+  (an error, `cliVersionTimeout`, a context that ended) leaves no stamp and records nothing, so the next
+  health check runs the command again, and so on at every check. The failure is one warning per cause since
+  the daemon started (`cliFailureCause`: a timeout, a canceled context or the error's text; the others are
+  debug lines), the read that works at last logs "agent CLI version" at info with `failed_reads`, and the
+  third failed read in a row (the one at the start counts as the first, and `cliVersionUnknownAfter` is the
+  number) is one `kind.version_unknown` event (warn, subject `tool:<kind>`: the kind, the count, the binary
+  and the last failure), once per run of failures, without a toast (`magnum status` leaves the kind out of its `clis:` line
+  meanwhile, and the event is what the operator looks for). The daemon's own context ending is no failure (debug, nothing
+  counted): it is stopping. The start's read already ran under the engine's own `Run` context with the
+  health check's timeout (`startup` calls `checkCLIVersions` with it, and both reach `cliVersion`), so
+  nothing changed there; the new test pins the timeout on every read. Rejected: retrying a failed read
+  inside one check (a second 15 s wait inside a tick for a failure the next check retries anyway); a
+  backoff (the stat and `mise which` already run at every check, and a failing version command is the case
+  to look at); a toast at the third failure (no one can act on it before the CLI itself fails); and keeping
+  the stamp for a failed read with a time limit (a second clock beside the health check's).
 
 ## Learned rules
 

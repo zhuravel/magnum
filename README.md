@@ -737,7 +737,10 @@ A new CLI version is the first suspect when launches start failing, so the daemo
 agent kind its roles use, as `magnum doctor` does (`<kind> --version` through its PATH), when it starts and
 at every tick's health check, and keeps it in the registry with the binary (the kind's command with its
 links resolved; for a mise shim, which links to mise itself, the binary `mise which <kind>` names) and its
-modification time. The version command runs again only once the binary changes. Another version than the
+modification time. The version command runs again only once the binary changes, except that a read that
+failed (an error, its 15-second timeout, a context that ended) leaves nothing recorded and is tried again at
+the next health check: one warning per cause since the daemon started, and a `kind.version_unknown` warning
+when three checks in a row failed (the start's read is the first; the reads go on). Another version than the
 one recorded is a `kind.version_changed` warning and one toast ("codex-cli 0.162.1 → 0.163.0 at 11:24"),
 and `magnum status` shows the versions on its `clis:` line, with "(changed at 11:24)" for a day after a
 change. For that day a PR that goes to needs attention because a role of that kind did not start (the
