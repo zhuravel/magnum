@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -292,6 +293,9 @@ type fakeEval struct {
 	entered, block chan struct{}
 	// after runs once a replay ended, on the gate's goroutine.
 	after func(evalCall)
+	// onInputs runs when the inputs of a tree are read, on the gate's
+	// goroutine, before any replay.
+	onInputs func(dir string)
 }
 
 type evalCall struct {
@@ -383,6 +387,12 @@ func (f *fakeEval) replay(ctx context.Context, c eval.Case, o EvalGateOptions) e
 }
 
 func (f *fakeEval) inputsOf(candidate string) (string, string, error) {
+	f.mu.Lock()
+	hook := f.onInputs
+	f.mu.Unlock()
+	if hook != nil {
+		hook(candidate)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	in, ok := f.inputs[candidate]
@@ -1040,6 +1050,63 @@ func TestAGateThatKeepsStoppingIsHeldForTheOperator(t *testing.T) {
 	}
 	if toasts := f.toasts(); !strings.Contains(toasts, "waits for review") {
 		t.Fatalf("toasts = %q", toasts)
+	}
+}
+
+// A drain (or a pause) says nothing about the proposal: the gate it stops
+// records learn.gate_waiting but does not count toward the hold limit, and
+// does not reset the count of the error stops before it. On 2026-10-14 four
+// of the six stops that held skill proposal 2 were the operator's own
+// restarts. Six drain stops and five error stops leave the proposal gating;
+// the sixth error stop holds it, naming that error.
+func TestADrainStopNeverCountsTowardTheGateHold(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.fail(f.wt, f.target.Name, eval.OutcomeBudget)
+	var draining atomic.Bool
+	f.ev.onInputs = func(dir string) { // a drain begins while the gate prepares its first replay
+		if dir == f.wt && draining.Load() {
+			if err := f.h.st.SetKV(context.WithoutCancel(f.h.ctx), KVDaemonDraining, "1"); err != nil {
+				t.Errorf("drain: %v", err)
+			}
+		}
+	}
+	gate := func(byDrain bool) {
+		t.Helper()
+		draining.Store(byDrain)
+		f.h.tick()
+		if err := f.h.st.DeleteKV(f.h.ctx, KVDaemonDraining); err != nil { // the restart is done
+			t.Fatal(err)
+		}
+		f.h.advance(gateRetryAfter + time.Minute)
+	}
+	drains, errs := 0, 0
+	for range 5 { // a drain between each two error stops, one after
+		gate(true)
+		drains++
+		gate(false)
+		errs++
+	}
+	gate(true)
+	drains++
+	if p := f.proposal(); p.State != store.LearnGating || len(f.h.events("learn.held")) != 0 {
+		t.Fatalf("proposal = %s %q after %d drain and %d error stops, want gating", p.State, p.Reason, drains, errs)
+	}
+	if n := len(f.h.events("learn.gate_waiting")); n != drains+errs {
+		t.Fatalf("%d learn.gate_waiting events, want %d", n, drains+errs)
+	}
+	if n := len(f.ev.callsFor(f.wt)); n != errs { // a drain stops the gate before its first replay
+		t.Fatalf("%d candidate replays, want %d (the error stops)", n, errs)
+	}
+	gate(false) // the sixth error stop
+	p := f.proposal()
+	if p.State != store.LearnHeld || !strings.Contains(p.Reason, fmt.Sprintf("%d gates", gateAttemptLimit)) ||
+		!strings.Contains(p.Reason, "budget") || strings.Contains(p.Reason, "draining") {
+		t.Fatalf("proposal = %s %q, want held after %d error stops, naming the error", p.State, p.Reason, gateAttemptLimit)
+	}
+	if evs := f.h.events("learn.held"); len(evs) != 1 {
+		t.Fatalf("learn.held events = %+v", evs)
 	}
 }
 

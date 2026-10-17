@@ -2784,9 +2784,10 @@ and only the third gate of it that stops so holds it for you, naming the replay.
 flagged replays the gate cannot read stops it the same way, before any replay. A gate that stops short
 keeps what it replayed: the next one takes the candidate's stored replays of the cases (and a lost case's
 second replay) instead of replaying them again. Every gate of a proposal that stops short, whatever
-stopped it (the budget, a usage limit, a drain, a pause, a replay without a score; a shutdown does not
-count), is counted, and the sixth holds it for you naming the last stop; a proposal still `gating` 3 days
-after the editor made it is held too, whether or not a gate could start. Until then `magnum learn
+stopped it (the budget, a usage limit, a replay without a score, an error), is counted, and the sixth
+holds it for you naming the last stop; a shutdown, a drain or a pause stop does not count, and leaves the
+count of the earlier stops as it is, since it says nothing about the proposal. A proposal still `gating`
+3 days after the editor made it is held too, whether or not a gate could start. Until then `magnum learn
 --review` shows the oldest `gating` proposal when none is held, and its `y` rejects it (the daemon stops a
 gate that runs for it first).
 

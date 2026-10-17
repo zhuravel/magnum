@@ -33,7 +33,9 @@ package engine
 // shutdown, a drain or a pause (checked before each replay), and a replay
 // that ended without a score where the verdict needs one leave the
 // proposal gating for a later tick; the third gate in a row that stops on
-// a replay without a score holds it (gateStopLimit).
+// a replay without a score holds it (gateStopLimit), and the sixth stop
+// short of a verdict holds it too (gateAttemptLimit), a drain or a pause
+// not counting (waitsHeld).
 
 import (
 	"cmp"
@@ -71,8 +73,9 @@ const (
 	// for good.
 	gateStopLimit = 3
 	// gateAttemptLimit is how many gates of a proposal may stop short for
-	// any reason but a shutdown (the Codex budget, a usage limit, a drain,
-	// a pause, a replay without a score, an error) before the next such
+	// any reason but a shutdown or the daemon's own hold (the Codex budget,
+	// a usage limit, a replay without a score, an error; not a drain or a
+	// pause, which say nothing about the proposal) before the next such
 	// stop holds it for the operator: a gate that never fits under the
 	// budget would keep the loop waiting for good.
 	gateAttemptLimit = 6
@@ -336,12 +339,16 @@ func (e *Engine) stopGateOf(id int64) <-chan struct{} {
 // without a score: herdr away, a GitHub read, a judge's timeout, a judge
 // that read other reviewer reports than the gate chose) or stop (the gate
 // must stop now: something holds it, gateHold, the budget, a usage limit,
-// a login, a shutdown); the eval run it is stored in and, judge-only, the
-// full replay whose reviewer reports its judge read.
+// a login, a shutdown); held says the stop is the daemon's own hold
+// (gateHold: a drain, a stop or a pause), which says nothing about the
+// proposal and so does not count toward gateAttemptLimit (waitsHeld); the
+// eval run it is stored in and, judge-only, the full replay whose reviewer
+// reports its judge read.
 type gateReplay struct {
 	score               *eval.Score
 	run, reports        string
 	skip, missing, stop string
+	held                bool
 }
 
 // gateRun is an eval run the gate stores, made on its first replay.
@@ -444,10 +451,27 @@ type gateWork struct {
 
 // waits ends the gate short with why, p staying gating: a
 // learn.gate_waiting event and the error runGate returns. Every such stop
-// but a shutdown's (or a rejection's) counts (countGateAttempt), and the
-// gateAttemptLimit-th holds p for the operator instead, naming why.
+// but a shutdown's (or a rejection's) and the daemon's own hold's
+// (waitsHeld) counts (countGateAttempt), and the gateAttemptLimit-th holds
+// p for the operator instead, naming why.
 func (g *gateWork) waits(why string) error {
-	if g.ctx.Err() == nil {
+	return g.stops(why, true)
+}
+
+// waitsHeld ends the gate short as waits does, for a stop that is the
+// daemon's own hold (gateHold: a drain for a restart, a stop or a pause of
+// the daemon or of a CLI): it neither counts toward gateAttemptLimit nor
+// resets the count of the earlier stops, since a restart or a pause says
+// nothing about the proposal and the operator's own restarts (the improve
+// loop lands several commits a day) would hold it; gateMaxAge still bounds
+// the proposal.
+func (g *gateWork) waitsHeld(why string) error {
+	return g.stops(why, false)
+}
+
+// stops is waits and waitsHeld: counted says whether the stop counts.
+func (g *gateWork) stops(why string, counted bool) error {
+	if counted && g.ctx.Err() == nil {
 		if n := g.e.countGateAttempt(g.octx, g.p.ID, why); n >= gateAttemptLimit {
 			g.res.State, g.res.Rule = learn.GateHeld, fmt.Sprintf("%d gates in a row stopped short without a verdict, the last: %s", n, why)
 			g.res.Mode = cmp.Or(g.res.Mode, learn.Mode(g.p.Files))
@@ -501,7 +525,7 @@ func (g *gateWork) finishRuns() {
 func (g *gateWork) replay(slot **gateRun, label, dir string, judgeOnly bool, in, rev string, c eval.Case, want string) gateReplay {
 	e, ctx := g.e, g.ctx
 	if why := e.gateHold(ctx); why != "" {
-		return gateReplay{stop: why}
+		return gateReplay{stop: why, held: true}
 	}
 	r, err := g.mkRun(slot, label, dir, judgeOnly, in, rev)
 	if err != nil {
@@ -553,6 +577,8 @@ func (g *gateWork) noScore(why string) error {
 // without a score where the verdict needs one (need).
 func (g *gateWork) halt(rp gateReplay, need bool) (bool, error) {
 	switch {
+	case rp.stop != "" && rp.held:
+		return true, g.waitsHeld(rp.stop)
 	case rp.stop != "":
 		return true, g.waits(rp.stop)
 	case rp.missing != "" && need:

@@ -8693,6 +8693,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   making the Codex-flag release hard too (the spec names the idle park, and a flagged PR's release is
   tried again on every backoff the same way, so it can follow later).
 
+- **A drain or a pause stop of the skill gate does not count toward its hold limit** (2026-10-17, spec 61,
+  amends "A gating proposal always ends"). The gate counted every stop short of a verdict and held the
+  proposal for the operator at `gateAttemptLimit` (6), and a drain for a restart stops the gate before its
+  next replay like any other stop: skill proposal 2 on 2026-10-14 had six `learn.gate_waiting` events
+  (15:34 an error, 16:31 a drain, 17:09 an error, 18:42, 19:13 and 20:11 drains) and `learn.held` at 20:11,
+  "6 gates in a row stopped short without a verdict, the last: draining for a restart", four of the six
+  being the operator's own restarts (the improve loop lands several commits a day); it sat held 12.7 h and
+  was rejected stale, and proposal 5 on 10-17 took a drain stop (09:30) the same way. A drain says nothing
+  about the proposal. Now a replay the daemon's own hold stops (`gateHold`: a drain or stop, an
+  infrastructure pause, `magnum pause`, a paused reviewing CLI, checked before each replay) comes back with
+  `gateReplay.held`, a typed flag set where the check is made and not read from the stop's words, and `halt`
+  ends such a gate through `waitsHeld`: the `learn.gate_waiting` event and the retry wait are as before, but
+  `countGateAttempt` is not called, so the stop neither counts nor resets the count of the earlier ones
+  (`learn.gate_stops`' `attempts` and its last reason stay as the last counted stop left them), and the held
+  message of a real stop is unchanged. A budget stop, a usage limit, a login, a replay without a score and
+  an error still count, and `gateMaxAge` (3 days) still bounds a proposal that a restart-heavy week keeps
+  from a verdict. New test TestADrainStopNeverCountsTowardTheGateHold in engine (six drain stops between
+  five error stops leave the proposal gating with eleven `learn.gate_waiting` events and no
+  `learn.held`; the sixth error stop holds it, naming the budget); TestAGateThatKeepsStoppingIsHeldForTheOperator
+  stays as it was. Rejected: resetting the count on a drain (an error streak a drain interrupts would never
+  reach the limit, and the daily restarts would keep a gate that never fits under the budget alive for
+  the whole `gateMaxAge`), and reading the stop's English for "draining" (the words are the check's, not
+  a contract).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
