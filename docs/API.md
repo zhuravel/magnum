@@ -2368,6 +2368,14 @@ func LaunchRole(msg string) (role string, ok bool)
     (the engine's "start <role>: …"), whose CLI a CLIChange note may name;
     ok is false for any other error.
 
+func OnMagnumsSide(kind string) bool
+    OnMagnumsSide reports whether kind (a Reason's Kind) is a failure on
+    magnum's side rather than in the PR: a setup or round that failed,
+    the agent API overloaded, the judge blocked or stopped without a review,
+    or magnum's own identity. The PR status comment tells its author so.
+    The fix job's attention (KindFix) asks the author for a call on the findings
+    its fixer left, on the operator's own PR, and is not one.
+
 
 TYPES
 
@@ -16750,6 +16758,16 @@ func (s ReviewSummary) OpenProblems() int
     verdict counts as problems to fix before merging: the P0, P1 and P2 of
     OpenCounts (an open P3 stays optional), or all of Open when the result gave
     only their number.
+
+func (s ReviewSummary) VerdictWords() string
+    VerdictWords is the review's verdict line in a few words, rebuilt from the
+    summary as the review skill writes it (section 7), without its period,
+    its LGTM or a re-review's lead: "Blocking: 2 problems must be fixed before
+    merging" (a P0 or P1, new or still open), "Fix 1 problem before merging"
+    (P2), "No blocking problems" (optional ones only) or "No problems found",
+    the optional ones (P3s, new or still open, and simplifications) counted
+    after a comma ("Fix 1 problem before merging, 4 optional"). The PR status
+    comment's posted line carries it; it names no score and no event.
 
 type RoundRun struct {
 	Run

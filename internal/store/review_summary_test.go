@@ -93,3 +93,34 @@ func TestParseReviewResultReadsTheConclusion(t *testing.T) {
 		t.Fatal("a result without findings parsed")
 	}
 }
+
+// A review's verdict line in a few words, rebuilt from its result as the
+// skill writes it (section 7): the problems to fix (P0 to P2, new or still
+// open) lead, a P0 or P1 among them blocks, and the optional ones (P3s and
+// simplifications) are counted after; a review that found nothing says so.
+// No score and no event name.
+func TestVerdictWordsFollowTheSkillsVerdictLine(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sum  ReviewSummary
+		want string
+	}{
+		{name: "a new P1", sum: ReviewSummary{Counts: [4]int{0, 1, 1, 1}, Simplifications: 1, Verdict: VerdictBlocking},
+			want: "Blocking: 2 problems must be fixed before merging, 2 optional"},
+		{name: "an earlier P0 still open", sum: ReviewSummary{Open: 1, OpenCounts: &[4]int{1, 0, 0, 0}, Verdict: VerdictBlocking},
+			want: "Blocking: 1 problem must be fixed before merging"},
+		{name: "a P2 and optional ones", sum: ReviewSummary{Counts: [4]int{0, 0, 1, 3}, Simplifications: 1, Verdict: VerdictNonBlocking},
+			want: "Fix 1 problem before merging, 4 optional"},
+		{name: "an older result's open number", sum: ReviewSummary{Open: 2, Verdict: VerdictNonBlocking},
+			want: "Fix 2 problems before merging"},
+		{name: "P3s only, one of them still open", sum: ReviewSummary{Counts: [4]int{0, 0, 0, 1}, Open: 1, OpenCounts: &[4]int{0, 0, 0, 1}, Verdict: VerdictNonBlocking},
+			want: "No blocking problems, 2 optional"},
+		{name: "simplifications only", sum: ReviewSummary{Simplifications: 2, Verdict: VerdictClean},
+			want: "No blocking problems, 2 optional"},
+		{name: "nothing", sum: ReviewSummary{Verdict: VerdictClean}, want: "No problems found"},
+	} {
+		if got := tc.sum.VerdictWords(); got != tc.want {
+			t.Errorf("%s: VerdictWords = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

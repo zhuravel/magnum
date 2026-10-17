@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -55,6 +56,48 @@ func (s ReviewSummary) OpenProblems() int {
 		return s.Open
 	}
 	return s.OpenCounts[0] + s.OpenCounts[1] + s.OpenCounts[2]
+}
+
+// VerdictWords is the review's verdict line in a few words, rebuilt from
+// the summary as the review skill writes it (section 7), without its
+// period, its LGTM or a re-review's lead: "Blocking: 2 problems must be
+// fixed before merging" (a P0 or P1, new or still open), "Fix 1 problem
+// before merging" (P2), "No blocking problems" (optional ones only) or "No
+// problems found", the optional ones (P3s, new or still open, and
+// simplifications) counted after a comma ("Fix 1 problem before merging, 4
+// optional"). The PR status comment's posted line carries it; it names no
+// score and no event.
+func (s ReviewSummary) VerdictWords() string {
+	problems := s.Counts[0] + s.Counts[1] + s.Counts[2] + s.OpenProblems()
+	optional := s.Counts[3] + s.Simplifications
+	severe := s.Counts[0] + s.Counts[1]
+	if s.OpenCounts != nil {
+		optional += s.OpenCounts[3]
+		severe += s.OpenCounts[0] + s.OpenCounts[1]
+	}
+	plural := func(n int) string {
+		if n == 1 {
+			return "1 problem"
+		}
+		return strconv.Itoa(n) + " problems"
+	}
+	var words string
+	switch {
+	case (severe > 0 || s.Verdict == VerdictBlocking) && problems > 0:
+		words = "Blocking: " + plural(problems) + " must be fixed before merging"
+	case s.Verdict == VerdictBlocking:
+		words = "Blocking: problems must be fixed before merging"
+	case problems > 0:
+		words = "Fix " + plural(problems) + " before merging"
+	case optional > 0 || s.Verdict == VerdictNonBlocking:
+		words = "No blocking problems"
+	default:
+		return "No problems found"
+	}
+	if optional > 0 {
+		words += ", " + strconv.Itoa(optional) + " optional"
+	}
+	return words
 }
 
 // LastReviewSummaries returns the ReviewSummary of each PR's latest posted

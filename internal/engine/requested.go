@@ -30,6 +30,13 @@ import (
 func KVPRRequestAt(prID int64) string { return fmt.Sprintf("pr.%d.request_at", prID) }
 func KVPRRequestBy(prID int64) string { return fmt.Sprintf("pr.%d.request_by", prID) }
 
+// kvPRRequestDeclined holds the time of a review request onRequest
+// declined because the PR's mute or the watch's filters kept it out of
+// review (declineRequest): the status comment answers it while it is the
+// PR's newest request and unanswered (requestDeclined). A mute or an unmute
+// drops it, since the request is then older than the PR's state.
+func kvPRRequestDeclined(prID int64) string { return fmt.Sprintf("pr.%d.request_declined", prID) }
+
 // kvRequestsSince is when this daemon first tracked review requests:
 // requests older than it never count, so an upgrade does not turn every
 // request ever made into a round.
@@ -186,25 +193,61 @@ func (e *Engine) recordRequest(ctx context.Context, repo store.Repo, pr store.PR
 }
 
 // manualRequestWindow dedupes the toast of a review request on a manual
-// repository (its key names the PR and the request's time).
+// repository, or one declineRequest declined (its key names the PR and the
+// request's time).
 const manualRequestWindow = 30 * 24 * time.Hour
 
-// kindManualRequest counts those toasts in a batch summary.
-var kindManualRequest = notify.Kind{One: "review request on a manual repository", Many: "review requests on manual repositories"}
+// kindManualRequest and kindDeclinedRequest count those toasts in a batch
+// summary.
+var (
+	kindManualRequest   = notify.Kind{One: "review request on a manual repository", Many: "review requests on manual repositories"}
+	kindDeclinedRequest = notify.Kind{One: "review request on a PR left out", Many: "review requests on PRs left out"}
+)
 
 // toastManualRequest tells the operator about a review request no round
 // will answer by itself (a manual repository): who asked, and the command
 // that runs the review. One toast per PR and request.
 func (e *Engine) toastManualRequest(repo store.Repo, pr store.PR, req Request) {
+	e.toastUnservedRequest(repo, pr, req, "request-manual", "manual repository",
+		"no round starts by itself on a manual repository", kindManualRequest)
+}
+
+// toastUnservedRequest tells the operator about a review request no round
+// answers by itself: the PR, who asked and why (in the title's
+// parentheses), what keeps the round from starting (sentence) and the
+// command that runs one. One toast per PR and request (key names the
+// cause).
+func (e *Engine) toastUnservedRequest(repo store.Repo, pr store.PR, req Request, key, why, sentence string, kind notify.Kind) {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	asked := req.Phrase()
 	if !strings.HasPrefix(asked, "review ") {
 		asked = "review " + asked
 	}
-	title := "magnum: " + label + ": " + asked + " (manual repository)"
-	e.info(notify.Item{Key: fmt.Sprintf("request-manual:%d:%d", pr.ID, req.At.Unix()), Title: title,
-		Body: pr.URL + "\nno round starts by itself on a manual repository; `magnum review " + label + "` runs one",
-		Line: strings.TrimPrefix(title, "magnum: ") + " " + pr.URL, Kind: kindManualRequest, Window: manualRequestWindow})
+	title := "magnum: " + label + ": " + asked + " (" + why + ")"
+	e.info(notify.Item{Key: fmt.Sprintf("%s:%d:%d", key, pr.ID, req.At.Unix()), Title: title,
+		Body: pr.URL + "\n" + sentence + "; `magnum review " + label + "` runs one",
+		Line: strings.TrimPrefix(title, "magnum: ") + " " + pr.URL, Kind: kind, Window: manualRequestWindow})
+}
+
+// declineRequest records a person's review request that onRequest does not
+// answer, because the PR is muted or the watch's filters leave it out
+// (why: "muted", or the filters' reason), so that the PR's status comment
+// answers it (kvPRRequestDeclined, requestDeclined) with one line that
+// names no reason, and tells the operator with an info toast that does:
+// the line says the operator was told. A request on a manual repository
+// was toasted already (recordRequest). A draft marked ready for review is
+// no person's request: it keeps the comment as it stands.
+func (e *Engine) declineRequest(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, req Request, why string) {
+	if req.By == RequestReadyForReview {
+		return
+	}
+	e.setKV(ctx, kvPRRequestDeclined(pr.ID), store.FormatTime(req.At))
+	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.request_declined", req.Phrase()+": not reviewed ("+why+")",
+		map[string]any{"at": req.At, "by": req.By, "why": why})
+	if !w.ManualRepo(repo.Name) {
+		e.toastUnservedRequest(repo, pr, req, "request-declined", "not reviewed: "+why,
+			"magnum does not review it: "+why, kindDeclinedRequest)
+	}
 }
 
 // pendingRequest is the PR's request no round has served yet: one newer
@@ -231,7 +274,9 @@ func (e *Engine) pendingRequest(ctx context.Context, pr store.PR) (Request, bool
 // needs-attention, baseline or ineligible PR the watch's filters accept (a
 // draft include_drafts = false skips, for the request) is queued. A PR in a round keeps it for later: the round's review answers
 // it when it covers the head, else the re-review it leaves runs as
-// requested. A muted PR stays muted.
+// requested. A muted PR stays muted, and one the filters leave out stays
+// out: declineRequest records the request, which the PR's status comment
+// answers.
 func (e *Engine) onRequest(ctx context.Context, repo store.Repo, w config.Watch, prID int64, req Request, now time.Time) error {
 	pr, err := e.st.PRByID(ctx, prID)
 	if err != nil {
@@ -261,10 +306,15 @@ func (e *Engine) onRequest(ctx context.Context, repo store.Repo, w config.Watch,
 			fmt.Sprintf("%s: eligible at %s", why, td.NextEligibleAt.Local().Format("15:04:05")), nil)
 		return nil
 	case store.PRReviewed, store.PRNeedsAttention, store.PRBaseline, store.PRIneligible:
-		if pr.Muted || pr.DetailsAt == nil {
+		if pr.DetailsAt == nil {
+			return nil
+		}
+		if pr.Muted {
+			e.declineRequest(ctx, repo, w, pr, req, skipMuted)
 			return nil
 		}
 		if dec := e.classify(ctx, w, pr, now); !dec.Eligible {
+			e.declineRequest(ctx, repo, w, pr, req, dec.Reason)
 			return nil
 		}
 		// A new ask: the wait, the retry budget and the backoff start over.

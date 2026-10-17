@@ -90,9 +90,10 @@ release cannot keep) is a finding, or one `Description: ✗ <claim>: <why>` line
 [The judge skill](#the-judge-skill) has the full format.
 
 With `[pipeline] status_comment = true` the PR also gets one comment, edited in place, that says whether
-its review is queued (and why it waits), in progress or posted, and ends on a true line when the PR is
-closed, merged or turned into a draft first, so nobody merges before it by accident (see [Review status
-comment](#review-status-comment)).
+its review is queued (and why it waits), in progress or posted (with its verdict in a few words), says when
+Magnum's own failure stopped it, answers a review request on a PR Magnum leaves out, and ends on a true
+line when the PR is closed, merged or turned into a draft first, so nobody merges before it by accident
+(see [Review status comment](#review-status-comment)).
 
 ## How it works
 
@@ -794,19 +795,37 @@ link that turned up, your note) leaves it. The first line says where the review 
   result recorded earlier findings it kept open, "The last review recorded 2 earlier findings still open."
   (that review's count, not a live one).
 - **In progress since 18:47 UTC** once the round started.
-- **Posted**: the list collapses to one line, "Review of `54fc258` posted 18:52 UTC: <link>", without the
-  sentences or your note. The comment stays, and the next review of the PR starts the list again in it. A
-  round on the reviewed head that nobody asked for (a reply round, a judge check of red CI, a re-decision of
-  the replies) leaves the posted line. A review that held its approval (`approve_after_full_pass`, under
-  Re-reviews) reads "Review of `54fc258` posted 18:52 UTC: <link>. A full pass follows before approval."
-  while its full pass waits; the full pass then shows as "Full pass before approval of `54fc258`" with
-  "In progress (full pass) since 18:53 UTC", and its posted line replaces it.
+- **Posted**: the list collapses to one line, "Review of `54fc258` posted 18:52 UTC: Fix 1 problem before
+  merging, 4 optional. <link>", without the sentences or your note. The words before the link are the
+  review's verdict line, rebuilt from the result its round stored: "Blocking: 2 problems must be fixed
+  before merging" (a P0 or P1, new or still open), "Fix 1 problem before merging" (P2), "No blocking
+  problems" (optional ones only) or "No problems found", the optional ones (P3s and simplifications)
+  counted after it, never a score; a review no round of Magnum's posted (a manual verdict) has only the
+  link. The comment stays, and the next review of the PR starts the list again in it. A round on the
+  reviewed head that nobody asked for (a reply round, a judge check of red CI, a re-decision of the
+  replies) leaves the posted line. A review that held its approval (`approve_after_full_pass`, under
+  Re-reviews) reads "Review of `54fc258` posted 18:52 UTC: No problems found. <link>. A full pass follows
+  before approval." while its full pass waits; the full pass then shows as "Full pass before approval of
+  `54fc258`" with "In progress (full pass) since 18:53 UTC", and its posted line replaces it.
 - A [fix loop](#fixing-your-own-prs) shows as its own line: "Applying automatic fixes, cycle 1 of 3"
   under the posted line while the fixer works, and "Reviewing the fixes in `b2c3d4e`" for its re-review of
   what the fixer pushed, from the loop's state (never the fixer's words).
 - One line replaces the list when Magnum will not review the head: "Magnum will not review this head. The
-  operator was told." for a PR muted, ignored, flagged by Codex (with no fallback judge) or parked for you
-  (needs_attention), with no word of the cause.
+  operator was told." for a PR muted, ignored, flagged by Codex (with no fallback judge) or parked by a
+  fix loop for your call, with no word of the cause. A PR Magnum's own failure parked for you
+  (needs_attention: a setup or round that failed on every attempt, the agent API overloaded, a judge that
+  reported a blocker or stopped without a review, an identity problem) reads "Magnum failed to finish the
+  review of `54fc258`. The fault is on its side, not in your PR. The operator was told. A new push starts
+  a new review." (a push queues it again); muted, it reads as muted.
+- A review request that comes while the PR is muted or the watch's filters leave it out (a baseline PR
+  included) gets "Magnum is not reviewing this PR. The operator was told.": it opens the comment where none
+  stands, or turns the one there, and names no reason (the repositories are public, and a mute's reason or a
+  filter could tell who is reviewed). The request is someone's, yours included; a draft marked ready is
+  not one. You get one info toast per request that names the reason ("magnum: talkable/example#12: review
+  requested by alice (not reviewed: muted)"; a manual repository's own toast stands for it) and a
+  `pr.request_declined` event. The line holds while that request is the newest and no round served it; an
+  unmute, or a filter change that queues the PR, hands the comment back to its review, and a mute or unmute
+  drops the request (kv `pr.<id>.request_declined`).
 
 Every comment ends on a true line, written at once (the 2-minute spacing below does not hold it) and only
 once: "Closed before the review of `54fc258` posted." for a PR closed without a merge, "Merged before the
@@ -816,11 +835,13 @@ false`) while its review was queued. A tick writes it whatever the PR's state, a
 PRs of the last 24 hours are read for it). After it nothing is written until a new head, a new review
 request, `magnum review`, a reopen or, for a draft, ready for review.
 
-A draft, a post-merge review, an eval replay, a dry run (`magnum daemon --dry-run`, `magnum review
---no-post`) and a watch with the key off get none (a draft only keeps one it had), and a PR of a manual
-repository gets one once a review request queues it. The daemon brings the comment in line with the
-registry at every tick, after it recorded the waits, and edits only a changed text, at most once per PR
-every 2 minutes and 10 comments a tick, so In progress and Posted can follow the round by a tick or two. The
+A post-merge review, an eval replay, a dry run (`magnum daemon --dry-run`, `magnum review --no-post`) and a
+watch with the key off get none. A draft gets one only for a review someone asked for (a review request, or
+`magnum review`), which opens it as on a ready PR, and otherwise only keeps one it had; a PR of a manual
+repository gets one once `magnum review` queues it, or the not-reviewing line for a review request. The
+daemon brings the comment in line with the registry at every tick, after it recorded the waits, and edits
+only a changed text, at most once per PR every 2 minutes and 10 comments a tick, so In progress and Posted
+can follow the round by a tick or two. The
 comment never holds a round: a write GitHub refuses records a `pr.status_comment_failed` warning (at most
 one per PR an hour) and a later tick tries again, and each comment posted or edited records a
 `pr.status_comment` event with its stage. A comment someone deleted is posted once more at its next change

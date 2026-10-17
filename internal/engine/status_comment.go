@@ -11,9 +11,14 @@ package engine
 // refused is tried again by a later tick, and a restart goes on from the
 // registry. A comment ends truthfully: a PR closed, merged or turned into a
 // draft before its review posted gets one last edit that says so, and
-// nothing more until a new head or a new review request. The text is
-// magnum's own: a head's short sha, times in UTC and fixed words for the
-// waits, never a PR's text nor an error's.
+// nothing more until a new head or a new review request. A review request
+// gets an answer even where no review comes: a draft someone asked to
+// review opens the comment as a ready PR does, and a request that came
+// while the PR's mute or the watch's filters kept it out of review opens or
+// turns it to the line that magnum is not reviewing the PR. The text is
+// magnum's own: a head's short sha, times in UTC, the posted review's
+// verdict in a few words and fixed words for the waits, never a PR's text
+// nor an error's, and never why a PR is left out.
 
 import (
 	"cmp"
@@ -23,10 +28,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -70,6 +77,15 @@ const (
 	statusClosed       = "closed" // closed without a merge before its review posted
 	statusDraft        = "draft"  // the PR turned into a draft before its review posted
 	statusFixing       = "fixing" // a fix loop's fixer works on the posted review's findings
+
+	// statusFailed: magnum's own failure parked the PR (needs_attention
+	// with a cause on its side, attention.OnMagnumsSide), where
+	// statusNotReviewing is a PR muted, ignored, Codex-flagged or parked by
+	// a fix job.
+	statusFailed = "failed"
+	// statusRequestDeclined: a review request came while the PR's mute or
+	// the watch's filters kept it out of review (requestDeclined).
+	statusRequestDeclined = "request_declined"
 )
 
 // The reviews a status comment follows (statusView.kind): the head's first
@@ -138,6 +154,13 @@ type statusView struct {
 	since time.Time // statusInProgress: when the round started (zero = not known)
 	link  string    // statusPosted: the review's link ("" = not known)
 	at    time.Time // statusPosted: when the review posted (zero = not known)
+	// verdict is statusPosted's review's verdict in a few words
+	// (store.ReviewSummary.VerdictWords; "" = not known).
+	verdict string
+	// asked: someone asked for the review (a review request, `magnum
+	// review`). Only a draft's review to come or under way, which opens a
+	// comment only when asked, and a declined request read it.
+	asked bool
 	// earlier and earlierLink are the latest earlier review's head and link
 	// a re-review shows ("" = none known), open the earlier findings that
 	// review recorded still open (0 = none or not known).
@@ -159,8 +182,11 @@ type statusView struct {
 }
 
 // opens reports whether the stage posts a comment where none stands: a
-// review to come or under way. The others only edit one.
-func (v statusView) opens() bool { return v.stage == statusScheduled || v.stage == statusInProgress }
+// review to come or under way (a draft's only when someone asked for it),
+// and the answer to a declined review request. The others only edit one.
+func (v statusView) opens() bool {
+	return v.stage == statusScheduled || v.stage == statusInProgress || v.stage == statusRequestDeclined
+}
 
 // what is the view's subject for an event: "review of a1b2c3d".
 func (v statusView) what() string { return v.kind + " of " + textx.ShortSHA(v.head) }
@@ -187,17 +213,25 @@ func (v statusView) label() string {
 }
 
 // postedLine is the posted review in one line: "Review of `a1b2c3d` posted
-// 18:52 UTC: <link>", and for a review that held its approval ". A full
-// pass follows before approval." after it.
+// 18:52 UTC: Fix 1 problem before merging, 4 optional. <link>" (the verdict
+// words left out when not known), and for a review that held its approval
+// ". A full pass follows before approval." after it.
 func (v statusView) postedLine(now time.Time) string {
 	line := "Review of `" + textx.ShortSHA(v.head) + "` posted"
 	if !v.at.IsZero() {
 		line += " " + statusClock(v.at, now)
 	}
-	if v.link == "" {
+	var parts []string
+	if v.verdict != "" {
+		parts = append(parts, v.verdict+".")
+	}
+	if v.link != "" {
+		parts = append(parts, v.link)
+	}
+	if len(parts) == 0 {
 		line += "."
 	} else {
-		line += ": " + v.link
+		line += ": " + strings.Join(parts, " ")
 	}
 	if v.held {
 		if v.link != "" {
@@ -212,13 +246,21 @@ func (v statusView) postedLine(now time.Time) string {
 // stage) for a review to come or under way, with the earlier review a
 // re-review follows, the two fixed sentences and the operator's note; one
 // line for a posted review and for a last edit; one line and the note when
-// magnum will not review the head.
+// magnum will not review the head, failed to, or answers a review request
+// it declines (no reason named: a mute's or a filter's would tell a public
+// repository who is reviewed).
 func (v statusView) body(note string, now time.Time) string {
 	sha := "`" + textx.ShortSHA(v.head) + "`"
 	var lines, tail []string
 	switch v.stage {
 	case statusNotReviewing:
 		lines, tail = []string{"Magnum will not review this head. The operator was told."}, []string{note}
+	case statusFailed:
+		lines = []string{"Magnum failed to finish the review of " + sha + ". The fault is on its side, not in your PR. " +
+			"The operator was told. A new push starts a new review."}
+		tail = []string{note}
+	case statusRequestDeclined:
+		lines, tail = []string{"Magnum is not reviewing this PR. The operator was told."}, []string{note}
 	case statusMerged:
 		lines = []string{"Merged before the review of " + sha + " posted."}
 	case statusClosed:
@@ -370,7 +412,8 @@ func (e *Engine) statusCommentsOn() bool {
 // at most once every statusEvery (a last edit at once), and a tick writes
 // at most statusWritesPerTick. Never in a dry run nor on a scratch registry
 // (an eval replay). A failure is the PR's alone: the tick and the rounds go
-// on.
+// on. A baseline PR is read only when a review request on it was declined
+// (declinedRequests): that comment answers the request.
 func (e *Engine) noteStatusComments(ctx context.Context) {
 	if e.d.DryRun || e.d.Layout.Scratch != "" || !e.statusCommentsOn() {
 		return
@@ -392,6 +435,23 @@ func (e *Engine) noteStatusComments(ctx context.Context) {
 		e.warnUnlessStopped(ctx, err, "status comments: Codex flags")
 		return
 	}
+	declined, err := e.declinedRequests(ctx)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "status comments: declined requests")
+		return
+	}
+	prs = e.withDeclinedBaselines(ctx, prs, declined)
+	var reviewed []int64
+	for _, pr := range prs {
+		if deref(pr.LastReviewID) != 0 {
+			reviewed = append(reviewed, pr.ID)
+		}
+	}
+	sums, err := e.st.LastReviewSummaries(ctx, reviewed)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "status comments: review summaries")
+		return
+	}
 	repos := map[int64]store.Repo{}
 	writes := 0
 	for _, pr := range prs {
@@ -410,10 +470,70 @@ func (e *Engine) noteStatusComments(ctx context.Context) {
 			continue
 		}
 		_, unwritten := e.unwrittenFlag(pr.ID)
-		if e.writeStatus(ctx, repo, pr, flagged[pr.ID] || unwritten, now) {
+		reads := statusReads{flagged: flagged[pr.ID] || unwritten, last: sums[pr.ID], declined: declined[pr.ID]}
+		if e.writeStatus(ctx, repo, pr, reads, now) {
 			writes++
 		}
 	}
+}
+
+// statusReads is what noteStatusComments reads once a tick for all PRs and
+// hands each PR's comment: whether the PR holds a Codex flag, the summary
+// of its last posted review (store.LastReviewSummaries; zero = none), and
+// the time of the review request on it its mute or the filters declined
+// (kvPRRequestDeclined; zero = none).
+type statusReads struct {
+	flagged  bool
+	last     store.ReviewSummary
+	declined time.Time
+}
+
+// declinedRequests reads every PR's declined review request
+// (kvPRRequestDeclined) in one query: the PR's id and the request's time.
+func (e *Engine) declinedRequests(ctx context.Context) (map[int64]time.Time, error) {
+	rows, err := e.st.KVValues(ctx, "pr.*.request_declined")
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64]time.Time{}
+	for key, v := range rows {
+		var id int64
+		if _, err := fmt.Sscanf(key, "pr.%d.request_declined", &id); err != nil || kvPRRequestDeclined(id) != key {
+			continue
+		}
+		if at, err := store.ParseTime(v); err == nil {
+			out[id] = at
+		}
+	}
+	return out, nil
+}
+
+// withDeclinedBaselines adds to prs the baseline PRs a declined review
+// request names (statusStates leaves baseline PRs out: they are every PR
+// open at a repository's first sync), and drops the declined request of a
+// PR released since, which no comment answers any more.
+func (e *Engine) withDeclinedBaselines(ctx context.Context, prs []store.PR, declined map[int64]time.Time) []store.PR {
+	listed := map[int64]bool{}
+	for _, pr := range prs {
+		listed[pr.ID] = true
+	}
+	for _, id := range slices.Sorted(maps.Keys(declined)) {
+		if listed[id] {
+			continue
+		}
+		pr, err := e.st.PRByID(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			e.delKV(ctx, kvPRRequestDeclined(id))
+		case err != nil:
+			e.warnUnlessStopped(ctx, err, "status comments: PR of a declined request", "pr", id)
+		case pr.State == store.PRBaseline:
+			prs = append(prs, pr)
+		case pr.State == store.PRReleased:
+			e.delKV(ctx, kvPRRequestDeclined(id))
+		}
+	}
+	return prs
 }
 
 // statusRecordOf is the PR's statusRecord (zero: no comment yet).
@@ -455,14 +575,15 @@ func (e *Engine) statusResumes(ctx context.Context, pr store.PR, rec statusRecor
 	return ok && at.After(rec.EndAt)
 }
 
-// writeStatus posts or edits pr's status comment (flagged: the PR holds a
-// Codex flag) when what it says changed and its last write is statusEvery
-// old (a last edit goes at once, unless its attempt just failed), and
-// reports whether it called GitHub. A comment that ended is left alone
-// until statusResumes. An edit that finds the comment gone posts it once
-// more, the first time a person deleted it (a last edit posts nothing);
-// after a second deletion the PR gets no comment until another head.
-func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, flagged bool, now time.Time) bool {
+// writeStatus posts or edits pr's status comment (reads: what the tick read
+// for it) when what it says changed and its last write is statusEvery old
+// (a last edit goes at once, unless its attempt just failed), and reports
+// whether it called GitHub. A comment that ended is left alone until
+// statusResumes. A draft's comment opens only for a review someone asked
+// for. An edit that finds the comment gone posts it once more, the first
+// time a person deleted it (a last edit posts nothing); after a second
+// deletion the PR gets no comment until another head.
+func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, reads statusReads, now time.Time) bool {
 	rec := e.statusRecordOf(ctx, pr.ID)
 	if rec.End != "" {
 		if !e.statusResumes(ctx, pr, rec) {
@@ -470,7 +591,7 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 		}
 		rec.End, rec.EndAt, rec.EndForced = "", time.Time{}, false
 	}
-	v, ok := e.statusFor(ctx, pr, rec, flagged, now)
+	v, ok := e.statusFor(ctx, pr, rec, reads, now)
 	if !ok {
 		return false
 	}
@@ -480,7 +601,7 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 		}
 		rec.Off = "" // a new head: someone may want it now
 	}
-	if rec.ID == 0 && (!v.opens() || pr.IsDraft) {
+	if rec.ID == 0 && (!v.opens() || (pr.IsDraft && !v.asked)) {
 		return false
 	}
 	if v.stage == statusPosted && rec.Head == v.head && rec.Kind != "" {
@@ -596,20 +717,22 @@ func (e *Engine) statusFailed(ctx context.Context, repo store.Repo, pr store.PR,
 }
 
 // statusFor is what pr's status comment says now (rec: what it said last;
-// flagged: the PR holds a Codex flag); ok is false when it has nothing to
-// say of the PR: a post-merge review, a dry run, a claimed round not started
+// reads: what the tick read for it); ok is false when it has nothing to say
+// of the PR: a post-merge review, a dry run, a claimed round not started
 // yet, a draft that never had one, and a PR left out of review for a reason
-// of its filters. A PR GitHub closed or merged gets its last edit (the
-// review posted, or "closed" or "merged before the review"), a draft whose
-// comment promised a review gets "not reviewing", and a round on the
-// reviewed head leaves it posted unless someone asked for it
-// (anotherReview), and so does a held review's full pass while it waits
-// (approvalPassDue: the posted line says that it follows). It reads the
-// registry only for a forced PR's dry run, a waiting PR's wait, a
-// re-review's earlier findings, whether a round under way is a full pass, a
-// round on the reviewed head and a held review: the tick asks it of every
-// PR.
-func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, flagged bool, now time.Time) (statusView, bool) {
+// of its filters that nobody asked to review. A PR GitHub closed or merged
+// gets its last edit (the review posted, or "closed" or "merged before the
+// review"), a review request its mute or its filters declined gets the line
+// that magnum is not reviewing the PR, a draft whose comment promised a
+// review gets "not reviewing", and a round on the reviewed head leaves it
+// posted unless someone asked for it (anotherReview), and so does a held
+// review's full pass while it waits (approvalPassDue: the posted line says
+// that it follows). A park whose cause is on magnum's side says that magnum
+// failed (parkedOnOurSide). It reads the registry only for a forced PR's dry
+// run, a declined request, a parked PR's cause, a waiting PR's wait, a
+// draft's request, whether a round under way is a full pass, a round on the
+// reviewed head and a held review: the tick asks it of every PR.
+func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, reads statusReads, now time.Time) (statusView, bool) {
 	reviewed := deref(pr.ReviewedSHA)
 	v := statusView{kind: statusReview, head: pr.HeadSHA}
 	if reviewed != "" {
@@ -619,11 +742,18 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 	case pr.HeadSHA == "":
 		return v, false
 	case slices.Contains(statusEndStates, pr.State) && pr.GHState != store.GHOpen:
-		return statusEnding(pr, rec, v), true
+		v = statusEnding(pr, rec, v)
+		if v.stage == statusPosted {
+			v.verdict = postedVerdict(pr, reads.last)
+		}
+		return v, true
 	case postMerge(pr) || pr.GHState == store.GHClosed:
 		return v, false // a post-merge review, or a round GitHub closed the PR under: its close ends it
 	case pr.Forced && e.hasDryRun(ctx, pr.ID):
 		return v, false
+	case e.requestDeclined(ctx, pr, reads.declined):
+		v.stage, v.asked = statusRequestDeclined, true
+		return v, true
 	case pr.IsDraft && !pr.Forced && pr.HeadSHA != reviewed && !slices.Contains(statusRoundStates, pr.State) &&
 		pr.State != store.PRQueued && pr.State != store.PRRereviewPending:
 		if !rec.promised() {
@@ -637,7 +767,7 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 		held := e.approvalPassDue(ctx, pr)
 		if (held && !slices.Contains(statusRoundStates, pr.State)) || !e.anotherReview(ctx, pr, rec) {
 			v.stage, v.kind, v.link = statusPosted, statusReview, reviewLink(pr)
-			v.at, v.held = deref(pr.ReviewedAt), held
+			v.at, v.held, v.verdict = deref(pr.ReviewedAt), held, postedVerdict(pr, reads.last)
 			if st, ok := e.statusFix(ctx, pr.ID); ok && st.Phase == FixPhaseFixing {
 				v.stage, v.cycle, v.cycles = statusFixing, st.Cycle, st.Cap
 			}
@@ -648,9 +778,12 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 	switch {
 	case pr.State == store.PRNeedsAttention:
 		v.stage = statusNotReviewing
+		if !pr.Muted && e.parkedOnOurSide(ctx, pr) {
+			v.stage = statusFailed
+		}
 		return v, true
 	case pr.State == store.PRIneligible:
-		if pr.Muted || flagged {
+		if pr.Muted || reads.flagged {
 			v.stage = statusNotReviewing
 			return v, true
 		}
@@ -664,7 +797,8 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 		if w, ok := ParseWait(raw); ok {
 			v.wait = statusWaitWords(w, now)
 		}
-		e.statusEarlier(ctx, pr, &v)
+		e.statusEarlier(ctx, pr, &v, reads.last)
+		v.asked = pr.IsDraft && e.reviewAsked(ctx, pr)
 		return v, true
 	case slices.Contains(statusRoundStates, pr.State):
 		v.stage = statusInProgress
@@ -672,18 +806,20 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, f
 			v.since = *pr.LastRoundStartedAt
 		}
 		v.fullPass = e.fullPassRunning(ctx, pr.ID)
-		e.statusEarlier(ctx, pr, &v)
+		e.statusEarlier(ctx, pr, &v, reads.last)
+		v.asked = pr.IsDraft && e.reviewAsked(ctx, pr)
 		return v, true
 	}
 	return v, false
 }
 
 // statusEarlier adds to a review to come or under way what the review
-// before it left: the earlier findings it recorded still open
-// (earlierOpen), and whether it reviews what a fix loop's fixer pushed (a
-// loop held for a restart had that re-review: the next round is another).
-func (e *Engine) statusEarlier(ctx context.Context, pr store.PR, v *statusView) {
-	v.open = e.earlierOpen(ctx, pr, *v)
+// before it left (last: the PR's last review's summary): the earlier
+// findings it recorded still open (earlierOpen), and whether it reviews
+// what a fix loop's fixer pushed (a loop held for a restart had that
+// re-review: the next round is another).
+func (e *Engine) statusEarlier(ctx context.Context, pr store.PR, v *statusView, last store.ReviewSummary) {
+	v.open = earlierOpen(pr, *v, last)
 	if st, ok := e.statusFix(ctx, pr.ID); ok && st.Phase == FixPhaseReviewing && st.Head == pr.HeadSHA && !st.Held {
 		v.fixes = true
 	}
@@ -702,20 +838,75 @@ func (e *Engine) statusFix(ctx context.Context, prID int64) (FixState, bool) {
 
 // statusEnding is the last edit of the comment of pr, which GitHub closed
 // or merged: the review of its head posted, the line magnum will not review
-// it (still true), else "merged" or "closed before the review".
+// it or is not reviewing the PR (still true), else "merged" or "closed
+// before the review" (also after magnum's own failure, whose new push will
+// not come).
 func statusEnding(pr store.PR, rec statusRecord, v statusView) statusView {
 	v.ends, v.earlierLink = true, ""
 	switch {
 	case pr.HeadSHA == deref(pr.ReviewedSHA):
 		v.stage, v.kind, v.link, v.at = statusPosted, statusReview, reviewLink(pr), deref(pr.ReviewedAt)
-	case rec.Stage == statusNotReviewing:
-		v.stage = statusNotReviewing
+	case rec.Stage == statusNotReviewing, rec.Stage == statusRequestDeclined:
+		v.stage = rec.Stage
 	case postMerge(pr):
 		v.stage = statusMerged
 	default:
 		v.stage = statusClosed
 	}
 	return v
+}
+
+// postedVerdict is the verdict words of pr's last review
+// (store.ReviewSummary.VerdictWords) when last is that review's summary;
+// "" when they are not known: a review no round of magnum's posted (a
+// manual verdict), or a result that did not parse.
+func postedVerdict(pr store.PR, last store.ReviewSummary) string {
+	if id := deref(pr.LastReviewID); id == 0 || last.ReviewID != id {
+		return ""
+	}
+	return last.VerdictWords()
+}
+
+// parkedOnOurSide reports whether the cause that parked pr in
+// needs_attention is on magnum's side, not in the PR
+// (attention.OnMagnumsSide): the kind the engine recorded with the park
+// (KVPRAttention), else, for an older row, the one attention.Explain reads
+// from the stored error.
+func (e *Engine) parkedOnOurSide(ctx context.Context, pr store.PR) bool {
+	kind, _ := e.getKV(ctx, KVPRAttention(pr.ID))
+	if kind == "" {
+		kind = attention.Explain("", deref(pr.LastError), "").Kind
+	}
+	return attention.OnMagnumsSide(kind)
+}
+
+// requestDeclined reports whether the review request onRequest declined at
+// at (kvPRRequestDeclined: it came while the PR's mute or the watch's
+// filters kept it out of review; zero = none) is still the PR's newest one
+// and unanswered (pendingRequest), and nothing reviews the PR yet: it is
+// not forced and neither waits for a round nor runs one, so an unmute or a
+// change of the filters that queued it hands the comment back to its
+// review.
+func (e *Engine) requestDeclined(ctx context.Context, pr store.PR, at time.Time) bool {
+	if at.IsZero() || pr.Forced || pr.State == store.PRClaiming || slices.Contains(waitingStates, pr.State) ||
+		slices.Contains(statusRoundStates, pr.State) {
+		return false
+	}
+	req, ok := e.pendingRequest(ctx, pr)
+	return ok && req.At.Equal(at)
+}
+
+// reviewAsked reports whether someone asked for pr's review to come or
+// under way: `magnum review` (forced), a review request no round served
+// yet, or the running round one of them started (roundAsked).
+func (e *Engine) reviewAsked(ctx context.Context, pr store.PR) bool {
+	if pr.Forced {
+		return true
+	}
+	if _, ok := e.pendingRequest(ctx, pr); ok {
+		return true
+	}
+	return slices.Contains(statusRoundStates, pr.State) && e.roundAsked(pr.ID)
 }
 
 // reviewLink is the link of pr's last review ("" = not known).
@@ -760,21 +951,14 @@ func (e *Engine) roundAsked(prID int64) bool {
 
 // earlierOpen is how many earlier findings the latest earlier review a
 // re-review shows recorded still open (ReviewSummary.Open), as that review
-// recorded them, never a live count; 0 when there is no such review, its
-// summary is not the PR's last review, or none were open.
-func (e *Engine) earlierOpen(ctx context.Context, pr store.PR, v statusView) int {
-	if v.earlierLink == "" {
+// recorded them (last: the PR's last review's summary), never a live
+// count; 0 when there is no such review, last is not its summary, or none
+// were open.
+func earlierOpen(pr store.PR, v statusView, last store.ReviewSummary) int {
+	if v.earlierLink == "" || last.ReviewID == 0 || last.ReviewID != deref(pr.LastReviewID) || last.SHA != v.earlier {
 		return 0
 	}
-	sums, err := e.st.LastReviewSummaries(ctx, []int64{pr.ID})
-	if err != nil {
-		e.warnUnlessStopped(ctx, err, "status comment: review summary", "pr", pr.ID)
-		return 0
-	}
-	if s, ok := sums[pr.ID]; ok && s.ReviewID == deref(pr.LastReviewID) && s.SHA == v.earlier {
-		return s.Open
-	}
-	return 0
+	return last.Open
 }
 
 // hasDryRun reports whether a dry-run round is asked for the PR

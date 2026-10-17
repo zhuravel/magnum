@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -681,8 +682,10 @@ func TestAFixLoopShowsInTheStatusComment(t *testing.T) {
 	}
 }
 
-// A PR Codex flagged, which magnum never reviews again, and one parked for
-// the operator (needs_attention) say the same one line as a muted one.
+// A PR Codex flagged, which magnum never reviews again, says the same one
+// line as a muted one; one its judge parked for the operator
+// (needs_attention) says that magnum failed, as
+// TestTheStatusCommentNamesMagnumsOwnFailure shows for every such park.
 func TestAFlaggedOrParkedPRsStatusCommentSaysNotReviewing(t *testing.T) {
 	h := newHarness(t, statusOn)
 	h.open(prSpec{n: 1, head: "base1"})
@@ -709,5 +712,236 @@ func TestAFlaggedOrParkedPRsStatusCommentSaysNotReviewing(t *testing.T) {
 	h.wantState(8, store.PRNeedsAttention)
 	h.advance(2 * time.Minute)
 	h.tick()
-	h.wantStatus(h.statusComment(8), "Magnum will not review this head. The operator was told.")
+	h.wantStatus(h.statusComment(8), "Magnum failed to finish the review of `b2c3d4e`. The fault is on its side, not in your PR. "+
+		"The operator was told. A new push starts a new review.")
+}
+
+// statusFailedLine is the line of a PR magnum's own failure parked, at
+// statusHead.
+const statusFailedLine = "Magnum failed to finish the review of `a1b2c3d`. The fault is on its side, not in your PR. " +
+	"The operator was told. A new push starts a new review."
+
+// When magnum's own failure parked a PR (a round that failed on every
+// attempt, a judge that reported a blocker or stopped without a review),
+// its status comment says that magnum failed, not the PR, and that a new
+// push starts a new review, which it does. A PR muted while parked and one
+// Codex refused keep the line that magnum will not review the head.
+func TestTheStatusCommentNamesMagnumsOwnFailure(t *testing.T) {
+	notReviewing := "Magnum will not review this head. The operator was told."
+	// parked runs PR #7's rounds to res until needs_attention (attempts
+	// rounds, a retry's backoff apart) and ticks its comment up to date.
+	parked := func(t *testing.T, h *harness, res pipeline.RoundResult, attempts int) store.PR {
+		t.Helper()
+		h.rd.mu.Lock()
+		h.rd.script = func(pipeline.RoundInput) (pipeline.RoundResult, error) { return res, nil }
+		h.rd.mu.Unlock()
+		h.queuedPR(7, statusHead)
+		h.advance(5 * time.Minute)
+		h.tick()
+		for i := 1; i < attempts; i++ {
+			h.advance(backoff(i))
+			h.tick()
+		}
+		pr := h.wantState(7, store.PRNeedsAttention)
+		h.advance(2 * time.Minute)
+		h.tick()
+		return pr
+	}
+	for _, c := range []struct {
+		name     string
+		res      pipeline.RoundResult
+		attempts int
+		kind     string
+	}{
+		{"a round that failed", pipeline.RoundResult{Outcome: pipeline.OutcomeTimeout, Error: "judge_timeout passed without a result"},
+			maxAttempts, attention.KindFailed},
+		{"a blocked judge", pipeline.RoundResult{Outcome: pipeline.OutcomeBlocked, Error: "judge blocked: the checkout has no database"},
+			1, attention.KindBlocked},
+		{"a judge that stopped", pipeline.RoundResult{Outcome: pipeline.OutcomeNeedsAttention, Error: "the judge posted nothing after a nudge"},
+			1, attention.KindNoReview},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, statusOn)
+			pr := parked(t, h, c.res, c.attempts)
+			if kind, _ := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); kind != c.kind {
+				t.Fatalf("parked as %q, want %q", kind, c.kind)
+			}
+			if got := h.statusComment(7); !strings.HasSuffix(got.body, ")\n"+statusFailedLine) {
+				t.Fatalf("parked:\n%s", got.body)
+			}
+
+			h.advance(2 * time.Minute)
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 7, head: statusPush})
+			h.tick()
+			h.wantState(7, store.PRQueued)
+			if got := h.statusComment(7); !strings.Contains(got.body, ")\n- [x] Review queued for `b2c3d4e`: ") {
+				t.Fatalf("after the push:\n%s", got.body)
+			}
+		})
+	}
+
+	t.Run("muted while parked", func(t *testing.T) {
+		h := newHarness(t, statusOn)
+		parked(t, h, pipeline.RoundResult{Outcome: pipeline.OutcomeBlocked, Error: "judge blocked: the checkout has no database"}, 1)
+		h.advance(2 * time.Minute)
+		h.muteRequest(ReqMute, 7)
+		h.wantStatus(h.statusComment(7), notReviewing)
+	})
+
+	t.Run("refused by Codex", func(t *testing.T) {
+		h := newHarness(t, statusOn)
+		h.queuedPR(7, statusHead)
+		h.advance(2 * time.Minute)
+		h.setFlag(7, "Codex warned about cyber abuse")
+		h.tick()
+		h.wantState(7, store.PRIneligible)
+		h.wantStatus(h.statusComment(7), notReviewing)
+	})
+}
+
+// A review someone asks for on a draft opens the status comment as on a
+// ready PR, whether the watch skips drafts (the request makes the draft
+// eligible) or reviews them; a draft nobody asked about still gets none.
+func TestARequestedReviewOnADraftOpensTheStatusComment(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		mods []func(*harness)
+	}{
+		{"drafts skipped", []func(*harness){statusOn, withoutDrafts}},
+		{"drafts included", []func(*harness){statusOn}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := draftSynced(t, c.mods...)
+			reqPoll(h, prSpec{n: 7, head: statusHead, draft: true})
+			h.advance(time.Minute)
+			h.tick()
+			if cs := h.gh.commentsOn(7); len(cs) != 0 {
+				t.Fatalf("a draft nobody asked about (state %s) got %+v", h.pr(7).State, cs)
+			}
+
+			h.advance(time.Minute)
+			ask := reqAsk(h, "alice", askedPoll)
+			reqPoll(h, prSpec{n: 7, head: statusHead, draft: true, request: true, requests: []github.ReviewRequestEvent{ask}})
+			h.wantState(7, store.PRQueued)
+			h.wantStatus(h.statusComment(7), "- [x] Review queued for `a1b2c3d`: not before "+utcClock(ask.CreatedAt.Add(time.Minute))+
+				" (a short delay after the review request)\n- [ ] In progress\n- [ ] Posted\n\n"+statusSelf+"\n"+statusMerge)
+
+			h.advance(time.Minute)
+			h.tick() // the requested round runs and posts
+			pr := h.wantState(7, store.PRReviewed)
+			h.advance(2 * time.Minute)
+			h.tick()
+			h.wantStatus(h.statusComment(7), "Review of `a1b2c3d` posted "+utcClock(*pr.ReviewedAt)+": "+reviewURL(7, *pr.LastReviewID))
+		})
+	}
+}
+
+// A review request that comes while the PR is muted, or while the watch's
+// filters leave it out, gets an answer on the PR: its status comment opens,
+// or turns, to one line that names no reason (the repositories are
+// public), and the operator gets a toast; the operator's own request is
+// one like any other. The unmute queues the review the request asked for,
+// and the comment follows it again. A mute alone keeps the line that
+// magnum will not review the head.
+func TestARequestOnAMutedOrIneligiblePRGetsTheGenericLine(t *testing.T) {
+	generic := "Magnum is not reviewing this PR. The operator was told."
+	t.Run("muted", func(t *testing.T) {
+		h := newHarness(t, statusOn)
+		h.queuedPR(7, statusHead)
+		h.advance(2 * time.Minute)
+		h.muteRequest(ReqMute, 7)
+		h.wantState(7, store.PRIneligible)
+		h.wantStatus(h.statusComment(7), "Magnum will not review this head. The operator was told.")
+		h.flush()
+
+		h.advance(2 * time.Minute)
+		ask := reqAsk(h, "alice", askedPoll)
+		reqPoll(h, prSpec{n: 7, head: statusHead, request: true, requests: []github.ReviewRequestEvent{ask}})
+		h.wantState(7, store.PRIneligible)
+		h.wantStatus(h.statusComment(7), generic)
+		h.flush()
+		if got := toastsWith(h, "magnum: talkable/talkable#7: review requested by alice (not reviewed: muted)"); len(got) != 1 {
+			t.Fatalf("toasts = %q, want one for the request", h.nh.shown())
+		}
+		reqWantRounds(t, h, 0)
+
+		h.advance(2 * time.Minute)
+		h.muteRequest(ReqUnmute, 7) // queues the requested review, which runs at once
+		pr := h.wantState(7, store.PRReviewed)
+		h.advance(2 * time.Minute)
+		h.tick()
+		if got := h.statusComment(7); !strings.HasSuffix(got.body, ")\nReview of `a1b2c3d` posted "+utcClock(*pr.ReviewedAt)+": "+reviewURL(7, *pr.LastReviewID)) {
+			t.Fatalf("after the unmute:\n%s", got.body)
+		}
+	})
+
+	t.Run("left out by the filters", func(t *testing.T) {
+		h := newHarness(t, statusOn)
+		h.cfg.Watches[0].SkipLabels = []string{"wip"}
+		h.open(prSpec{n: 1, head: "base1"})
+		h.startup()
+		h.tick() // first sync: #1 baseline
+		reqPoll(h, prSpec{n: 7, head: statusHead, labels: []string{"wip"}})
+		h.wantState(7, store.PRIneligible)
+		h.advance(time.Minute)
+		h.tick()
+		if cs := h.gh.commentsOn(7); len(cs) != 0 {
+			t.Fatalf("a skipped PR nobody asked about got %+v", cs)
+		}
+
+		h.advance(time.Minute)
+		ask := reqAsk(h, "zhuravel", askedBot) // the operator's own request
+		reqPoll(h, prSpec{n: 7, head: statusHead, labels: []string{"wip"}, requests: []github.ReviewRequestEvent{ask}})
+		h.wantState(7, store.PRIneligible)
+		h.wantStatus(h.statusComment(7), generic)
+		reqWantRounds(t, h, 0)
+	})
+
+	t.Run("a baseline PR left out by the filters", func(t *testing.T) {
+		h := newHarness(t, statusOn)
+		h.cfg.Watches[0].SkipLabels = []string{"wip"}
+		old := prSpec{n: 1, head: "base1", labels: []string{"wip"}}
+		h.open(old)
+		h.startup()
+		h.tick() // first sync: #1 baseline
+		h.advance(time.Minute)
+		old.requests, old.updated = []github.ReviewRequestEvent{reqAsk(h, "alice", askedPoll)}, h.clock.Now()
+		h.open(old)
+		h.tick()
+		h.wantState(1, store.PRBaseline)
+		h.wantStatus(h.statusComment(1), generic)
+		reqWantRounds(t, h, 0)
+	})
+}
+
+// The posted line carries the review's verdict in a few words before its
+// link, rebuilt from the result its round stored (ReviewSummary): a
+// blocking review, one with a problem to fix, one with optional findings
+// only and a clean one alike, with no score and no event name.
+func TestThePostedLineCarriesTheVerdictWords(t *testing.T) {
+	for _, c := range []struct{ name, result, words string }{
+		{"blocking", `{"event":"REQUEST_CHANGES","verdict":"blocking","findings":{"P1":1,"P2":1,"P3":1}}`,
+			"Blocking: 2 problems must be fixed before merging, 1 optional"},
+		{"a problem to fix", `{"event":"COMMENT","verdict":"non_blocking","findings":{"P2":1,"P3":3},"candidates":{"claude-simplify":{"suggested":1}}}`,
+			"Fix 1 problem before merging, 4 optional"},
+		{"optional only", `{"event":"COMMENT","verdict":"non_blocking","findings":{"P3":2}}`, "No blocking problems, 2 optional"},
+		{"clean", `{"event":"APPROVE","verdict":"clean","findings":{}}`, "No problems found"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, statusOn)
+			pr := h.statusReviewed()
+			if _, err := h.st.DB().ExecContext(h.ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login,
+  state, outcome, review_id, review_url, prompt_text, result_json, created_at)
+  VALUES ('run-verdict-1', ?, 1, 'codex-judge', 'initial', ?, 'talkable-app', 'talkable[bot]', 'verified', 'posted', ?, ?, 'p', ?, ?)`,
+				pr.ID, statusHead, *pr.LastReviewID, reviewURL(7, *pr.LastReviewID), c.result, store.FormatTime(h.clock.Now())); err != nil {
+				t.Fatal(err)
+			}
+			h.advance(2 * time.Minute)
+			h.tick()
+			line := "Review of `a1b2c3d` posted " + utcClock(*pr.ReviewedAt) + ": " + c.words + ". " + reviewURL(7, *pr.LastReviewID)
+			if got := h.statusComment(7); !strings.HasSuffix(got.body, ")\n"+line) {
+				t.Fatalf("posted line:\n%s\nwant it to end with:\n%s", got.body, line)
+			}
+		})
+	}
 }

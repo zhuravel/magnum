@@ -684,6 +684,10 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 	}); err != nil {
 		return "", err
 	}
+	// A request declined before is older than the mute, or than the unmute
+	// that hands the PR back to its filters: the status comment goes by the
+	// PR's state again.
+	e.delKV(ctx, kvPRRequestDeclined(pr.ID))
 	dismissed := false
 	if mute && pr.Forced && pr.GHState != store.GHOpen && !slices.Contains(postMergeRoundStates, pr.State) {
 		switch err := e.st.TransitionPR(ctx, pr.ID, []string{pr.State}, "", func(u *store.PRUpdate) {

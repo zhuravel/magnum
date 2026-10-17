@@ -298,7 +298,7 @@ func TestAHeldReviewSaysSoInTheStatusComment(t *testing.T) {
 	h.advance(statusEvery)
 	h.e.noteStatusComments(h.ctx) // before the next dispatch starts the full pass
 	link := reviewURL(7, deref(pr.LastReviewID))
-	if c := h.statusComment(7); !strings.HasSuffix(c.body, "\nReview of `c3d4e5f` posted "+utcClock(*pr.ReviewedAt)+": "+link+
+	if c := h.statusComment(7); !strings.HasSuffix(c.body, "\nReview of `c3d4e5f` posted "+utcClock(*pr.ReviewedAt)+": No problems found. "+link+
 		". A full pass follows before approval.") {
 		t.Fatalf("the held review:\n%s", c.body)
 	}
@@ -328,7 +328,7 @@ func TestAHeldReviewSaysSoInTheStatusComment(t *testing.T) {
 	h.advance(statusEvery)
 	h.tick()
 	c := h.statusComment(7)
-	if !strings.HasSuffix(c.body, "\nReview of `c3d4e5f` posted "+utcClock(*pr.ReviewedAt)+": "+reviewURL(7, deref(pr.LastReviewID))) {
+	if !strings.HasSuffix(c.body, "\nReview of `c3d4e5f` posted "+utcClock(*pr.ReviewedAt)+": No problems found. "+reviewURL(7, deref(pr.LastReviewID))) {
 		t.Fatalf("after the full pass:\n%s", c.body)
 	}
 }

@@ -201,3 +201,22 @@ func TestExplainsADeadLaunchThatHoldsTheName(t *testing.T) {
 		t.Fatalf("a start that timed out reads as a dead launch: %+v", other)
 	}
 }
+
+// A park whose cause is on magnum's side (a setup or round that failed, the
+// agent API overloaded, the judge blocked or stopped without a review,
+// magnum's own identity) is told apart from one that asks the PR's author
+// (the fix job's), by the kind alone: the status comment says the first is
+// magnum's fault, never the second.
+func TestOnlyTheFixJobsParkIsNotOnMagnumsSide(t *testing.T) {
+	for _, k := range Kinds() {
+		if got, want := OnMagnumsSide(k), k != KindFix; got != want {
+			t.Errorf("OnMagnumsSide(%q) = %v, want %v", k, got, want)
+		}
+	}
+	if OnMagnumsSide("") || OnMagnumsSide("muted") {
+		t.Error("an unknown kind is on magnum's side")
+	}
+	if k := Explain("", "7 attempts on abc1234def: fetch: exit 128", "").Kind; !OnMagnumsSide(k) {
+		t.Errorf("an older row's inferred kind %q is not on magnum's side", k)
+	}
+}

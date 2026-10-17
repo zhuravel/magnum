@@ -355,10 +355,12 @@ spend = "medium"                  # the spend level: how hard, and on which mode
 status_comment = false            # true: one comment on each PR magnum means to review, posted as the PR's
                                   # posting identity (the one the reviews use) and edited in place: a checklist
                                   # (Review queued for the head and why it waits, In progress, Posted) that
-                                  # collapses to one line with the review's link once it posts, one line when
-                                  # magnum will not review the head, and a last line when the PR is closed,
-                                  # merged or turned into a draft before its review posted. Never posted on
-                                  # drafts, post-merge reviews or dry runs; edited at most once every 2 minutes
+                                  # collapses to one line with the review's verdict and link once it posts,
+                                  # one line when magnum will not review the head or its own failure stopped
+                                  # the review, one that answers a review request on a muted or filtered-out
+                                  # PR, and a last line when the PR is closed, merged or turned into a draft
+                                  # before its review posted. Never posted on post-merge reviews or dry runs,
+                                  # nor on a draft nobody asked to review; edited at most once every 2 minutes
                                   # (a last line at once). [[watch]] may override (status_comment = false there
                                   # keeps a watch quiet)
 status_comment_note = ""          # a line of yours under the status comment while a review is queued, under way

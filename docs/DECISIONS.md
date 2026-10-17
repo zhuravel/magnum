@@ -9161,6 +9161,47 @@ skill versions); people add theirs to the sections before it, at the end of the 
   happened: 19 repeated lines in a week); comparing with the previous review's head alone (a merge of the
   base leaves it without a record); reading which PRs the posted line named (posted text is data, and the
   judge names a related PR only when it matters, so the list it was given is what counts as named).
+- **The status comment names magnum's own failure, answers review requests on drafts and on PRs left out,
+  and carries the verdict** (2026-10-17, extends "A status comment on the PR says where its review stands"
+  and "The status comment ends truthfully"; the operator approved the three author-visible changes). In a
+  week of 99 posted reviews, 36 status comments showed three gaps. A PR magnum's own failure parked read
+  "Magnum will not review this head. The operator was told.", which reads as a decision: talkable#12031
+  showed it for 16 hours (a reply-detection block) and talkable#12030 for 8.5 (a stalled judge prompt),
+  though a push re-queues a parked PR. A review requested on a draft never opened the comment (a requested
+  round of talkable#12026 ran with no status line), and a request on a muted or filtered-out PR got no
+  answer at all (an author asked three times after a mute; a colleague asked on a departed author's PR). And
+  the posted line gave only a link, so a reader opened the review to tell blocking from optional. Now a
+  park whose cause is on magnum's side, by the kind the engine recorded (`KVPRAttention`, else the one
+  `attention.Explain` reads from an older row's error) and the new `attention.OnMagnumsSide` (failed,
+  overloaded, blocked, needs_attention, identity_error, identity_leak; not a fix job's, which asks the
+  author), is the new stage `failed`: "Magnum failed to finish the review of `<sha7>`. The fault is on its
+  side, not in your PR. The operator was told. A new push starts a new review." (the operator's note
+  under it); a muted, ignored or Codex-flagged PR and a fix job's park keep the old line, and at a close the
+  failed line gives way to "Closed/Merged before the review", since no push will come. A draft's comment
+  opens for a review someone asked for (a pending request, `magnum review`, or the running round one
+  started: `reviewAsked`) as a ready PR's does; a draft nobody asked about still gets none. A person's
+  review request that `onRequest` does not answer, because the PR is muted or the filters leave it out,
+  records its time in kv `pr.<id>.request_declined` (`declineRequest`, with a `pr.request_declined` event
+  and an info toast that names the reason, "review requested by alice (not reviewed: muted)", unless a
+  manual repository's toast told already), and while that request is the PR's newest and unanswered and
+  the PR neither waits for nor runs a round, the comment is the new stage `request_declined`, "Magnum is
+  not reviewing this PR. The operator was told.", posted where none stood; the tick reads those rows in one
+  query and adds the baseline PRs they name, which `statusStates` leaves out. The request is a request
+  whoever asked, the operator included; a draft marked ready is not one. A mute or an unmute drops the row
+  (the request is then older than the PR's state), and an unmute or a filter change that queues the PR
+  hands the comment back to its review; the line survives a close, as the old one does. The posted line
+  reads "Review of `<sha7>` posted 18:52 UTC: Fix 1 problem before merging, 4 optional. <link>": the
+  judge's verdict line is not stored, so the new `store.ReviewSummary.VerdictWords` rebuilds it from the
+  result's counts and verdict as the skill's section 7 writes it ("Blocking: N problems must be fixed
+  before merging", "Fix N problems before merging", "No blocking problems", "No problems found", the P3s and
+  simplifications counted as optional), one place for the words, which a review no round of magnum's posted
+  leaves out. The tick reads the last review summaries of all its PRs in one query, which `earlierOpen`
+  now uses too instead of one query per PR. Rejected: naming the mute's reason or the filter (a public
+  repository would show a membership rule or the operator's note); keeping drafts silent (a request is a
+  request); a mute timestamp column to compare requests with (a migration for what the request's own
+  handling knows when it declines it); matching the error text for magnum's side (the kinds already say
+  it); and storing the verdict line's text with the run (the counts rebuild it, and the result file has no
+  such field).
 
 ## Learned rules
 

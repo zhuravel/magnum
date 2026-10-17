@@ -42,6 +42,20 @@ func Kinds() []string {
 	return []string{KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak, KindFix}
 }
 
+// OnMagnumsSide reports whether kind (a Reason's Kind) is a failure on
+// magnum's side rather than in the PR: a setup or round that failed, the
+// agent API overloaded, the judge blocked or stopped without a review, or
+// magnum's own identity. The PR status comment tells its author so. The
+// fix job's attention (KindFix) asks the author for a call on the
+// findings its fixer left, on the operator's own PR, and is not one.
+func OnMagnumsSide(kind string) bool {
+	switch kind {
+	case KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak:
+		return true
+	}
+	return false
+}
+
 // Stages: where the failure happened.
 const (
 	StageFetch        = "fetch"

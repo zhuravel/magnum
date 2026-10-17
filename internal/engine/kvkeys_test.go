@@ -118,6 +118,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"kvPRRedecide", kvPRRedecide(id), "pr.7.redecide"},
 		{"KVPRRequestAt", KVPRRequestAt(id), "pr.7.request_at"},
 		{"KVPRRequestBy", KVPRRequestBy(id), "pr.7.request_by"},
+		{"kvPRRequestDeclined", kvPRRequestDeclined(id), "pr.7.request_declined"},
 		{"KVPRSnooze", KVPRSnooze(id), "pr.7.snooze"},
 		{"kvPRFiles", kvPRFiles(id), "pr.7.files"},
 		{"KVPRStalemate", KVPRStalemate(id), "pr.7.stalemate"},
