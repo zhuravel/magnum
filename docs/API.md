@@ -265,7 +265,10 @@ const EventLaunchCleared = "pr.launch_cleared"
 
 const EventPanesClosed = "pr.panes_closed"
     EventPanesClosed is recorded (info) when CloseRetiredPanes closed panes:
-    how many, and which roles they served.
+    how many, and which roles they served. Of a lost session's pane the close
+    reads the CLI's own last error line first (paneError), which the agent.lost
+    event does not carry and the pane takes with it: the event's last_lines maps
+    each such role to its line, and the message repeats them.
 
 const EventParkForced = "pr.park_forced"
     EventParkForced is recorded when a hard park (ParkHard) closed the pane
@@ -1117,11 +1120,13 @@ func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
     only when its foreground process is the shell and no agent herdr lists there
     works or is blocked, and never when a starting or live session of the PR
     records it; a pane no session records (a shell the operator opened) is never
-    one. A workspace the closes leave without a pane is closed too. A parked or
-    lost session keeps its conversation: the role's next start resumes it in a
-    new pane. One EventPanesClosed names the count and the roles; a pane herdr
-    refuses to close is logged, and the first such failure returned after the
-    others were tried.
+    one. A workspace the closes leave without a pane is closed too. A parked
+    or lost session keeps its conversation: the role's next start resumes it
+    in a new pane. One EventPanesClosed names the count and the roles, and,
+    of a lost session's pane that showed one, the CLI's last error line by role
+    (last_lines; when two closed panes of a role show one, the newer session's);
+    a pane herdr refuses to close is logged, and the first such failure returned
+    after the others were tried.
 
 func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap herdr.Snapshot) error
     CloseRetiredPanesIn is CloseRetiredPanes over snap, a herdr snapshot the

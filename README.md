@@ -704,7 +704,9 @@ reconcile closes what is left for every PR, at the daemon's start and every `rec
 closed only when a parked, closed or lost session of the PR recorded it, it shows an idle shell and no
 starting or live session of the PR still uses it, so a shell you opened in the workspace, which no session
 recorded, stays, and a workspace left with no pane at all is closed. A
-`pr.panes_closed` event says how many and of which roles; a reconcile with nothing to close records nothing.
+`pr.panes_closed` event says how many and of which roles, and, of a lost session's pane, the error line the
+CLI printed before it died (`last_lines`, by role; a line that starts at column 0 with error, fatal or panic,
+redacted), read before the pane closes; a reconcile with nothing to close records nothing.
 A parked or lost conversation is kept: the role's next start resumes it in a new pane.
 
 An agent CLI that dies as it starts can leave herdr listing the launch under the role's agent name

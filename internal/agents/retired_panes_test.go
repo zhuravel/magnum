@@ -3,7 +3,9 @@ package agents
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,5 +197,80 @@ func TestTheReleaseParkClosesItsPanes(t *testing.T) {
 	}
 	if s := e.sessions()[0]; s.State != store.SessionParked {
 		t.Fatalf("judge session = %+v, want parked", s)
+	}
+}
+
+// The agent.lost event carries no cause, and the pane that showed it (the
+// line the CLI printed before it died) went with the pane once spec 58 closed
+// a lost session's pane: the 79 minutes the codex 0.163.0 outage took to
+// name were spent without it. The close reads the pane's error line first
+// (paneError: column 0, redacted, cut) and records it by role in last_lines
+// and in the message; a lost pane that shows none adds nothing, and a parked
+// session's pane, which no failure ended, is not read at all.
+func TestALostPanesErrorLineIsKeptBeforeItCloses(t *testing.T) {
+	e := newEnv(t)
+	ws := e.started()
+	judge, claude, parked := ws.Panes[RoleJudge], ws.Panes[RoleClaude], ws.Panes[RoleCodexReview]
+	e.h.reads[judge] = "$ codex\n    Error: indented tool output\nError: model unavailable ghp_abcdefghij0123456789 for this account\n$ "
+	e.h.reads[claude] = "$ claude\n  Error: indented only\nResume this session with: claude --resume abc\n$ "
+	e.h.reads[parked] = "error: left by a parked session\n$ "
+	for _, s := range e.sessions() {
+		if s.Role == string(RoleCodexReview) {
+			if err := e.st.TransitionSession(e.ctx, s.ID, nil, store.SessionParked, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	e.h.removeAgent("mg-11920-codex-judge-5d01cf")
+	e.h.removeAgent("mg-11920-claude-review-5d01cf")
+	e.clock.Add(LostGrace + time.Second)
+	if obs := e.observe(); obs[RoleJudge].Kind != ObsLost || obs[RoleClaude].Kind != ObsLost {
+		t.Fatalf("observations = %+v, want the judge and the claude review lost", obs)
+	}
+	if err := e.m.CloseRetiredPanes(e.ctx, e.pr); err != nil {
+		t.Fatalf("close retired panes: %v", err)
+	}
+	if got := slices.Sorted(slices.Values(e.h.paneCloses)); !slices.Equal(got, slices.Sorted(slices.Values([]string{judge, claude, parked}))) {
+		t.Fatalf("pane closes %v, want the three retired panes", got)
+	}
+	if reads := e.h.callsWith("PaneRead " + parked); len(reads) != 0 {
+		t.Fatalf("the parked session's pane was read: %v", reads)
+	}
+	evs := e.eventsOf(EventPanesClosed)
+	if len(evs) != 1 {
+		t.Fatalf("%s events = %+v, want one", EventPanesClosed, evs)
+	}
+	var data struct {
+		Count     int               `json:"count"`
+		LastLines map[string]string `json:"last_lines"`
+	}
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	const line = "Error: model unavailable <redacted> for this account"
+	if want := map[string]string{string(RoleJudge): line}; data.Count != 3 || !maps.Equal(data.LastLines, want) {
+		t.Fatalf("event data = %+v, want 3 panes and last_lines %v (the claude review's pane shows no error line, the parked one is not read)", data, want)
+	}
+	if want := "(codex-judge: " + line + ")"; !strings.Contains(evs[0].Message, want) || strings.Contains(evs[0].Message, "claude-review:") || strings.Contains(evs[0].Message, "ghp_") {
+		t.Fatalf("message = %q, want it to carry %q for the judge alone", evs[0].Message, want)
+	}
+
+	// No pane shows a line: the event keeps its old shape.
+	e2 := newEnv(t)
+	ws2 := e2.started()
+	e2.h.removeAgent("mg-11920-codex-judge-5d01cf")
+	e2.clock.Add(LostGrace + time.Second)
+	if obs := e2.observe(); obs[RoleJudge].Kind != ObsLost {
+		t.Fatalf("judge = %+v, want lost", obs[RoleJudge])
+	}
+	if err := e2.m.CloseRetiredPanes(e2.ctx, e2.pr); err != nil {
+		t.Fatalf("close retired panes: %v", err)
+	}
+	evs = e2.eventsOf(EventPanesClosed)
+	if len(evs) != 1 || strings.Contains(string(evs[0].Data), "last_lines") || strings.Contains(evs[0].Message, "(codex-judge:") {
+		t.Fatalf("%s events = %+v, want one with no last_lines", EventPanesClosed, evs)
+	}
+	if !slices.Equal(e2.h.paneCloses, []string{ws2.Panes[RoleJudge]}) {
+		t.Fatalf("pane closes %v, want the lost judge's pane alone", e2.h.paneCloses)
 	}
 }

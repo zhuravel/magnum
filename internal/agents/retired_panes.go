@@ -14,6 +14,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -24,8 +25,10 @@ import (
 // in snap that no starting or live session of the PR records, in session
 // order. A pane counts only while it sits in the workspace its session
 // recorded (when it recorded one): an id herdr shows in another workspace
-// is no longer that session's pane.
-func retiredPanes(snap herdr.Snapshot, sessions []store.Session) (panes []string, roles map[string]string) {
+// is no longer that session's pane. roles names the role of the newest such
+// session of each pane, and lost the panes whose newest such session is lost
+// (its agent went away, as against one magnum parked or closed).
+func retiredPanes(snap herdr.Snapshot, sessions []store.Session) (panes []string, roles map[string]string, lost map[string]bool) {
 	inUse := map[string]bool{}
 	for _, s := range sessions {
 		if isLive(s) {
@@ -34,6 +37,7 @@ func retiredPanes(snap herdr.Snapshot, sessions []store.Session) (panes []string
 	}
 	have := paneIndex(snap)
 	roles = map[string]string{}
+	lost = map[string]bool{}
 	for _, s := range sessions {
 		p := store.Deref(s.HerdrPaneID)
 		if p == "" || inUse[p] || !retired(s) {
@@ -50,8 +54,9 @@ func retiredPanes(snap herdr.Snapshot, sessions []store.Session) (panes []string
 			panes = append(panes, p)
 		}
 		roles[p] = s.Role
+		lost[p] = s.State == store.SessionLost
 	}
-	return panes, roles
+	return panes, roles, lost
 }
 
 // retired reports whether session s no longer has an agent of its own in
@@ -65,7 +70,10 @@ func retired(s store.Session) bool {
 }
 
 // EventPanesClosed is recorded (info) when CloseRetiredPanes closed panes:
-// how many, and which roles they served.
+// how many, and which roles they served. Of a lost session's pane the close
+// reads the CLI's own last error line first (paneError), which the
+// agent.lost event does not carry and the pane takes with it: the event's
+// last_lines maps each such role to its line, and the message repeats them.
 const EventPanesClosed = "pr.panes_closed"
 
 // CloseRetiredPanes closes the panes of the PR's parked, closed and lost
@@ -79,8 +87,10 @@ const EventPanesClosed = "pr.panes_closed"
 // operator opened) is never one. A workspace the closes leave without a
 // pane is closed too. A parked or lost session keeps its conversation: the
 // role's next start resumes it in a new pane. One EventPanesClosed names
-// the count and the roles; a pane herdr refuses to close is logged, and the
-// first such failure returned after the others were tried.
+// the count and the roles, and, of a lost session's pane that showed one,
+// the CLI's last error line by role (last_lines; when two closed panes of a
+// role show one, the newer session's); a pane herdr refuses to close is
+// logged, and the first such failure returned after the others were tried.
 func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error {
 	snap, err := m.d.Herdr.Snapshot(ctx)
 	if err != nil {
@@ -99,8 +109,9 @@ func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap her
 	if err != nil {
 		return fmt.Errorf("agents: close the retired panes of pr %d: %w", pr.Number, err)
 	}
-	panes, roleOf := retiredPanes(snap, sessions)
+	panes, roleOf, lostPane := retiredPanes(snap, sessions)
 	var closed, roles []string
+	lastLines := map[string]string{}
 	var first error
 	for _, p := range panes {
 		if slices.ContainsFunc(snap.Agents, func(a herdr.AgentInfo) bool {
@@ -112,6 +123,10 @@ func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap her
 		if err != nil || !herdr.IdleShell(pi) {
 			continue // gone, unknown or running something: left alone
 		}
+		var line string
+		if lostPane[p] {
+			line = m.paneError(ctx, p) // before the close: why the agent went away, if the CLI said
+		}
 		if err := m.d.Herdr.PaneClose(ctx, p); err != nil && !isGone(err) {
 			m.logErr(ctx, err, "agents: close pane %s of a retired %s session: %v", p, roleOf[p], err)
 			first = cmp.Or(first, fmt.Errorf("agents: close pane %s of pr %d: %w", p, pr.Number, err))
@@ -120,6 +135,9 @@ func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap her
 		closed = append(closed, p)
 		if !slices.Contains(roles, roleOf[p]) {
 			roles = append(roles, roleOf[p])
+		}
+		if line != "" {
+			lastLines[roleOf[p]] = line
 		}
 	}
 	if len(closed) == 0 {
@@ -131,9 +149,14 @@ func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap her
 	if len(emptied) > 0 {
 		data["workspaces"] = emptied
 	}
-	m.event(ctx, m.prSubject(ctx, pr.ID), "info", EventPanesClosed,
-		fmt.Sprintf("closed %d panes of retired sessions (%s); the next start lays out one pane per role", len(closed), joinList(roles, "and")),
-		data)
+	msg := fmt.Sprintf("closed %d panes of retired sessions (%s); the next start lays out one pane per role", len(closed), joinList(roles, "and"))
+	if len(lastLines) > 0 {
+		data["last_lines"] = lastLines
+		for _, role := range slices.Sorted(maps.Keys(lastLines)) {
+			msg += fmt.Sprintf(" (%s: %s)", role, lastLines[role])
+		}
+	}
+	m.event(ctx, m.prSubject(ctx, pr.ID), "info", EventPanesClosed, msg, data)
 	return first
 }
 

@@ -8922,6 +8922,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   its result file before the observer sees it idle, so the judge, the case at hand, would never warn);
   warning at any working-to-idle change (a session's startup output can read as working before its first
   prompt, when no id exists yet).
+- **A lost agent's pane error line is kept before its pane closes** (2026-10-17, spec 69, amends "A parked
+  session's pane is closed at every park and at the restart"). The `agent.lost` event carries no cause, so
+  the line the CLI printed before it died (a Codex flag it rejects, a model it refuses) went with the pane
+  once spec 58 closed a lost session's pane; before that the pane stayed until the next start reused it and
+  the operator could read it. There were 17 losses on 2026-10-12 and 7 on 2026-10-16, the outage of codex
+  0.163.0, whose cause took 79 minutes to find. Now `CloseRetiredPanesIn` reads the pane with `paneError`
+  (what `clearDeadLaunch` already does before its own close) for each pane whose newest retired session is
+  lost, after the idle-shell check and before the close (a pane left alone is not read; a parked or closed
+  session's pane is not read either, since nothing failed there), and `pr.panes_closed` gains `last_lines`,
+  a map from the role to the line, of the closed panes that showed one (the newer session's when two closed
+  panes of a role do); the message gains "(<role>: <line>)" for each role, in role order. `paneError` is
+  unchanged, so the line is what it keeps: a line that starts at column 0 with error, fatal or panic,
+  redacted and cut to 200 runes, never an indented or boxed line a tool printed, which the PR's code can
+  steer; a pane that shows none adds nothing, and the event keeps its old shape. The close and the engine
+  (`closePanesJob`, the reconcile) are otherwise unchanged. New test
+  TestALostPanesErrorLineIsKeptBeforeItCloses (agents). Rejected: keeping a lost pane open until the
+  operator reads it (what spec 58 stopped: 21 panes on one PR).
 
 ## Learned rules
 
