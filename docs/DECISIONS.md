@@ -8736,6 +8736,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   reach the limit, and the daily restarts would keep a gate that never fits under the budget alive for
   the whole `gateMaxAge`), and reading the stop's English for "draining" (the words are the check's, not
   a contract).
+- **The skill editor's format gate names the failing test, not only the end of its output** (2026-10-17,
+  spec 65). `formatGateProblems` handed the editor's nudge the last 40 lines of a failing command's
+  output, and a failing prompt or format test prints a whole rendered prompt after its `--- FAIL:` line,
+  so the 40 lines held the end of a prompt and no test name: learn proposal 3 (2026-10-15 12:08) ended
+  `invalid`, "still invalid after a nudge (1 problem)", with a stored reason that began with "..." and
+  the tail of a rendered claude-review prompt, and one of the week's five proposals was lost for it.
+  `gateOutput` (internal/engine/learn_edit.go) now keeps, within the same `editGateLines` (40): every
+  `--- FAIL:` line of the output (a subtest's too), the first `editGateMessages` (3) lines of the
+  `x_test.go:12:` form that follow each (the test's own messages, as `go test` prints them indented
+  after the FAIL line, up to the next line that is not indented or the next FAIL line), each clipped to
+  `editGateLineRunes` (300) since a message can hold a whole prompt on one line, then as much of the end
+  of the output as the budget leaves, apart from the lines already kept, behind a `...` line. Whole
+  failures are kept in order as far as they fit, and the count of the rest is a line, "… and N more
+  failures". An output within the budget is handed over whole, as before, and one with no failing test
+  (a build error) is its end, as before; the stored reason, which clips the problems to their first
+  2000 runes, now starts with the failing test. New tests
+  TestTheFormatGateNamesTheFailingTestWhenItsOutputIsLong, TestAShortFailingGateOutputIsHandedOverWhole
+  and TestGateOutputKeepsEveryFailureThenTheTail. Rejected: a larger line budget (the rendered prompt is
+  longer than any budget, and the nudge and the stored reason would grow with it).
 
 ## Learned rules
 

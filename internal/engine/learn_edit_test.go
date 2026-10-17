@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -599,6 +600,157 @@ func TestTheFormatGateRunsGoldensThenTheTestsThenCheckPrivate(t *testing.T) {
 	if calls := f2.gt.all(); len(calls) != 6 {
 		t.Fatalf("the gate ran %d commands over two turns, want 6: %q", len(calls), calls)
 	}
+}
+
+// longGateOutput is what `go test` prints for a test that fails with a
+// rendered prompt in its message: the FAIL line, two messages, then the
+// prompt (a long run of lines the test printed), then the package's result.
+func longGateOutput(prompt int) string {
+	var b strings.Builder
+	b.WriteString("--- FAIL: TestRenderGolden (0.01s)\n")
+	b.WriteString("    render_test.go:12: the prompt lost its judge section\n")
+	b.WriteString("    render_test.go:31: rendered prompt:\n")
+	for i := range prompt {
+		fmt.Fprintf(&b, "    rendered prompt line %03d: review the pull request at the URL and the head SHA\n", i)
+	}
+	b.WriteString("FAIL\nFAIL\texample.test/magnum/internal/agents\t0.421s\n")
+	return b.String()
+}
+
+// A failing prompt test prints a whole rendered prompt after its FAIL line, so
+// the end of the output held the end of a prompt and no test name: learn
+// proposal 3 (2026-10-15) ended invalid and its editor could not see what to
+// fix. The problem names the failing test and its messages, within the same
+// 40 lines.
+func TestTheFormatGateNamesTheFailingTestWhenItsOutputIsLong(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	f.gt.fail = map[string]string{"./internal/config": longGateOutput(300)}
+	p := f.edit()
+	if p.State != store.LearnInvalid || len(f.ed.nudges) != 1 {
+		t.Fatalf("proposal = %+v, %d nudges", p, len(f.ed.nudges))
+	}
+	for _, text := range []string{f.ed.nudges[0], p.Reason} {
+		for _, want := range []string{
+			"--- FAIL: TestRenderGolden",
+			"render_test.go:12: the prompt lost its judge section",
+			"render_test.go:31: rendered prompt:",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("the problem lacks %q:\n%s", want, text)
+			}
+		}
+	}
+	_, out, ok := strings.Cut(f.ed.nudges[0], "exit status 1):\n")
+	if !ok {
+		t.Fatalf("the nudge has no gate output:\n%s", f.ed.nudges[0])
+	}
+	out, _, _ = strings.Cut(out, "\nFix it as")
+	if n := len(strings.Split(strings.TrimSpace(out), "\n")); n > editGateLines {
+		t.Errorf("the gate output is %d lines, the budget is %d:\n%s", n, editGateLines, out)
+	}
+	if !strings.Contains(out, "FAIL\texample.test/magnum/internal/agents") {
+		t.Errorf("the tail of the output is gone:\n%s", out)
+	}
+}
+
+// A failing output that fits the budget is handed over whole, as it was.
+func TestAShortFailingGateOutputIsHandedOverWhole(t *testing.T) {
+	short := longGateOutput(10)
+	f := newEditFixture(t, goodTurn)
+	f.gt.fail = map[string]string{"./internal/config": short}
+	if p := f.edit(); p.State != store.LearnInvalid || len(f.ed.nudges) != 1 {
+		t.Fatalf("proposal = %+v, %d nudges", p, len(f.ed.nudges))
+	}
+	// The nudge indents a problem's continuation lines under its bullet.
+	if !strings.Contains(f.ed.nudges[0], strings.ReplaceAll(strings.TrimRight(short, "\n"), "\n", "\n  ")) {
+		t.Errorf("the nudge cuts a short output:\n%s", f.ed.nudges[0])
+	}
+}
+
+// The unit under the gate's problems: the failures first, then the tail.
+func TestGateOutputKeepsEveryFailureThenTheTail(t *testing.T) {
+	lineCount := func(s string) int { return len(strings.Split(s, "\n")) }
+
+	t.Run("a failure far above the tail", func(t *testing.T) {
+		got := gateOutput(longGateOutput(300), 40)
+		lines := strings.Split(got, "\n")
+		want := []string{
+			"--- FAIL: TestRenderGolden (0.01s)",
+			"    render_test.go:12: the prompt lost its judge section",
+			"    render_test.go:31: rendered prompt:",
+			"...",
+		}
+		if len(lines) != 40 || !slices.Equal(lines[:4], want) {
+			t.Fatalf("%d lines, want 40, starting %q:\n%s", len(lines), want, got)
+		}
+		if tail := lines[len(lines)-2:]; tail[0] != "FAIL" || !strings.HasPrefix(tail[1], "FAIL\texample.test/") {
+			t.Errorf("the output ends %q", tail)
+		}
+	})
+
+	t.Run("more failures than fit keep the first ones", func(t *testing.T) {
+		var b strings.Builder
+		for i := range 30 {
+			fmt.Fprintf(&b, "--- FAIL: TestCase%02d (0.00s)\n    x_test.go:%d: first\n    x_test.go:%d: second\n    x_test.go:%d: third\n    x_test.go:%d: fourth\n    not a message\n", i, i, i, i, i)
+		}
+		b.WriteString("FAIL\nFAIL\texample.test/x\t0.1s\n")
+		got := gateOutput(b.String(), 40)
+		if n := lineCount(got); n > 40 {
+			t.Fatalf("%d lines:\n%s", n, got)
+		}
+		for _, want := range []string{"--- FAIL: TestCase00", "x_test.go:0: first", "x_test.go:0: third", "--- FAIL: TestCase08"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("lost %q:\n%s", want, got)
+			}
+		}
+		if strings.Contains(got, "fourth") || strings.Contains(got, "not a message") {
+			t.Errorf("more than the messages a failure keeps:\n%s", got)
+		}
+		if strings.Contains(got, "TestCase09") || !strings.Contains(got, "… and 21 more failures") {
+			t.Errorf("the failures left out are not counted:\n%s", got)
+		}
+	})
+
+	t.Run("a failure inside the tail is not shown twice", func(t *testing.T) {
+		var b strings.Builder
+		b.WriteString("    noise before\n")
+		for i := range 100 {
+			fmt.Fprintf(&b, "stdout line %03d\n", i)
+		}
+		b.WriteString("--- FAIL: TestLast (0.00s)\n    last_test.go:7: boom\nFAIL\nFAIL\texample.test/x\t0.1s\n")
+		got := gateOutput(b.String(), 40)
+		if n := lineCount(got); n > 40 || strings.Count(got, "--- FAIL: TestLast") != 1 || strings.Count(got, "last_test.go:7: boom") != 1 {
+			t.Fatalf("%d lines:\n%s", n, got)
+		}
+		if !strings.HasSuffix(got, "FAIL\texample.test/x\t0.1s") || !strings.Contains(got, "stdout line 099") {
+			t.Errorf("the tail is gone:\n%s", got)
+		}
+	})
+
+	t.Run("a long message is clipped", func(t *testing.T) {
+		out := "--- FAIL: TestX (0.00s)\n    x_test.go:3: " + strings.Repeat("é", 5000) + "\n" + strings.Repeat("more\n", 100)
+		got := gateOutput(out, 40)
+		if utf8.RuneCountInString(got) > 40*editGateLineRunes || !strings.Contains(got, "--- FAIL: TestX") {
+			t.Errorf("%d runes:\n%.400s", utf8.RuneCountInString(got), got)
+		}
+	})
+
+	t.Run("no failing test is the tail, as before", func(t *testing.T) {
+		var b strings.Builder
+		for i := range 100 {
+			fmt.Fprintf(&b, "internal/agents/x.go:%d:3: undefined: y%d\n", i, i)
+		}
+		if got, want := gateOutput(b.String(), 40), lastLines(b.String(), 40); got != want {
+			t.Errorf("got:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("a short output is whole", func(t *testing.T) {
+		out := "--- FAIL: TestX (0.00s)\n    x_test.go:3: no\nFAIL\n"
+		if got := gateOutput(out, 40); got != strings.TrimRight(out, "\n") {
+			t.Errorf("got %q", got)
+		}
+	})
 }
 
 // The design log's entry is in the tree the format gate checks: magnum

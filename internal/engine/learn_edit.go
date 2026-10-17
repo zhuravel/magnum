@@ -69,8 +69,15 @@ const (
 	// editVersions is how many landed versions' measures the editor reads.
 	editVersions = 3
 	// editGateLines is how much of a failing format gate command's output
-	// a problem carries.
+	// a problem carries: the failing tests first (gateOutput), then the
+	// tail.
 	editGateLines = 40
+	// editGateMessages is how many of a failing test's own messages
+	// (`x_test.go:12: ...`) a problem keeps.
+	editGateMessages = 3
+	// editGateLineRunes clips a failing test's line in a problem: a message
+	// can hold a whole rendered prompt on one line.
+	editGateLineRunes = 300
 	// FormatGateTimeout bounds one command of the format gate.
 	FormatGateTimeout = 20 * time.Minute
 )
@@ -902,7 +909,7 @@ func (e *Engine) formatGateProblems(ctx context.Context, wt string) []string {
 	for _, args := range formatGate {
 		if out, err := e.d.GoTest(ctx, wt, args...); err != nil {
 			return []string{fmt.Sprintf("the format gate's `%s` failed (%s):\n%s", strings.Join(args, " "),
-				oneLine(err.Error(), retroWhyRunes), lastLines(execx.Redact(out), editGateLines))}
+				oneLine(err.Error(), retroWhyRunes), gateOutput(execx.Redact(out), editGateLines))}
 		}
 	}
 	return nil
@@ -963,6 +970,92 @@ func lastLines(s string, n int) string {
 		lines = append([]string{"..."}, lines[len(lines)-n:]...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// gateTestMessage matches a line a test logged: `x_test.go:12: ...`, indented
+// as testing prints it.
+var gateTestMessage = regexp.MustCompile(`^\s+\S*_test\.go:\d+:`)
+
+// gateOutput is a failing gate command's output within n lines. An output
+// that fits is whole. A longer one holds what a person reads first: every
+// `--- FAIL:` line of `go test` with the (up to editGateMessages) messages
+// the test logged after it, as many failures as fit (the first ones, and
+// "… and N more failures" for the rest), then as much of the end of the
+// output as the budget leaves, apart from the lines already kept. A failing
+// test prints its whole rendered prompt after its messages, so the end alone
+// held the end of a prompt and no test name. An output without a failing test
+// (a build error) is its end.
+func gateOutput(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	failures := gateFailures(lines)
+	if len(failures) == 0 {
+		return lastLines(s, n)
+	}
+	kept, size := failures, 0
+	for _, f := range failures {
+		size += len(f)
+	}
+	if size > n {
+		// Keep whole failures, and a line for the count of those left out.
+		kept, size = nil, 0
+		for _, f := range failures {
+			if size+len(f) > n-1 {
+				break
+			}
+			kept, size = append(kept, f), size+len(f)
+		}
+	}
+	shown := map[int]bool{}
+	var out []string
+	for _, f := range kept {
+		for _, i := range f {
+			shown[i] = true
+			out = append(out, textx.Clip(lines[i], editGateLineRunes))
+		}
+	}
+	if left := len(failures) - len(kept); left > 0 {
+		out = append(out, fmt.Sprintf("… and %d more %s", left, textx.Plural(left, "failure", "failures")))
+	}
+	var tail []string
+	for i := len(lines) - 1; i >= 0 && len(out)+len(tail)+2 <= n; i-- {
+		if !shown[i] {
+			tail = append(tail, lines[i])
+		}
+	}
+	if len(tail) == 0 {
+		return strings.Join(out, "\n")
+	}
+	slices.Reverse(tail)
+	return strings.Join(slices.Concat(out, []string{"..."}, tail), "\n")
+}
+
+// gateFailures lists the failing tests of the output lines: the index of each
+// `--- FAIL:` line (a subtest's as well as its parent's), then the indexes of
+// the messages the test logged after it, which go test prints indented, up
+// to the next line that is not.
+func gateFailures(lines []string) [][]int {
+	var failures [][]int
+	isFail := func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "--- FAIL:") }
+	for i, l := range lines {
+		if !isFail(l) {
+			continue
+		}
+		f := []int{i}
+		for j := i + 1; j < len(lines) && len(f) <= editGateMessages; j++ {
+			next := lines[j]
+			if (next != "" && next[0] != ' ' && next[0] != '\t') || isFail(next) {
+				break
+			}
+			if gateTestMessage.MatchString(next) {
+				f = append(f, j)
+			}
+		}
+		failures = append(failures, f)
+	}
+	return failures
 }
 
 // commitEdit keeps the changes.json the last check read in the run

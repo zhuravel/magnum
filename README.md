@@ -2735,7 +2735,9 @@ must pass in the worktree: the golden files regenerated from the prompts by ever
 ./internal/agents ./internal/pipeline ./internal/config`, and `make
 check-private` with the checkout's `mise` environment (its `mise.local.toml` holds the private patterns,
 and the login check reads your registry), which so checks the entry and the commit's headline too.
-Whatever fails gets one nudge with the problems. The agent edits the existing files in place (none
+Whatever fails gets one nudge with the problems; a failing gate command's output is cut to 40 lines
+that name the failing tests first (each `--- FAIL:` line and up to three of its `x_test.go:12:`
+messages, "… and N more failures" for those that do not fit), then the end of the output. The agent edits the existing files in place (none
 created or deleted), keeps every `{{...}}` action of a prompt, adds no login, repository or link, and
 commits nothing: a worktree whose HEAD moved is refused. The agent is closed when its turns end, and a
 worktree that changed after its last check (the design log included) is not committed. A valid edit is
