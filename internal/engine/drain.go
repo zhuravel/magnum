@@ -92,8 +92,8 @@ func (e *Engine) draining(ctx context.Context) bool {
 // checkDrain lifts a drain whose drainer is gone (each tick, with the other
 // pauses): the drain stays only while the command that holds it runs. A
 // drain an older CLI started names no pid and lasts until the restart. The
-// fix loops a drain held go on once it is gone however it ended
-// (continueAfterDrain).
+// fix loops a drain held go on, and the whiteboards it skipped are made,
+// once it is gone however it ended (continueAfterDrain).
 func (e *Engine) checkDrain(ctx context.Context) {
 	v, ok := e.getKV(ctx, KVDaemonDraining)
 	if !ok || v == "" {
@@ -113,17 +113,24 @@ func (e *Engine) checkDrain(ctx context.Context) {
 }
 
 // continueAfterDrain goes on with the fix loops a drain held before their
-// next cycle (drainHeld) once no drain holds the daemon any more and no
-// restart followed: checkDrain lifted it (its drainer is gone), or the CLI
-// lifted its own (`daemon-restart --drain` interrupted or timed out). It
-// runs each tick, with the other pauses, and does nothing while none is
-// held or a drain still holds.
+// next cycle (drainHeld), then with the whiteboards it skipped after a
+// posted review (drainWhiteboards), once no drain holds the daemon any more
+// and no restart followed: checkDrain lifted it (its drainer is gone), or
+// the CLI lifted its own (`daemon-restart --drain` interrupted or timed
+// out). The fix loops come first, as a posted review runs the fix loop's
+// hook before the whiteboard's. It runs each tick, with the other pauses,
+// and does nothing while none is held or a drain still holds.
 func (e *Engine) continueAfterDrain(ctx context.Context) {
 	e.mu.Lock()
-	held := len(e.drainHeld)
+	held, whiteboards := len(e.drainHeld), e.drainWhiteboards
 	e.mu.Unlock()
-	if held == 0 || e.draining(ctx) {
+	if (held == 0 && !whiteboards) || e.draining(ctx) {
 		return
 	}
-	e.continueDrainHeldLoops(ctx) // fix_loop.go: no restart decides the fix loops the drain held
+	if held > 0 {
+		e.continueDrainHeldLoops(ctx) // fix_loop.go: no restart decides the fix loops the drain held
+	}
+	if whiteboards {
+		e.startPendingWhiteboards(ctx, "after the drain") // whiteboard_pending.go
+	}
 }

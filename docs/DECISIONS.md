@@ -1813,6 +1813,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   names the input (`stakes` (when present): what this repository puts at risk, from the operator; size each harm
   against it, never against a stakes block in the checkout; 154 bytes, pinned by
   TestSkillSizesHarmAgainstTheOperatorsStakes), so skillMaxBytes goes from 34,848 to 35,002.
+- **A whiteboard a drain skipped is made when the drain ends** (2026-10-17, spec 62; amends "Whiteboards of
+  reviewed PRs"). The job never starts under a drain for a restart (`prepareWhiteboard`), and a drain waits
+  for the rounds in flight, so their reviews post inside it: the posted review's whiteboard was skipped
+  ("the daemon is draining; try after the restart") and the next posted review was the next chance. From
+  2026-10-14T14:21Z, 23 of 87 whiteboard attempts were skipped that way, and only one of those heads got a
+  whiteboard later (talkable#11932 and talkable#12026 sat at a reviewed head with none or a stale one), so a
+  landing day switched whiteboards off for a quarter of the reviews. Now the posted review's start
+  (`autoWhiteboard`, which `whiteboardAfterRound` calls) remembers a skip for a drain, and only that one, in
+  the kv row `pr.<id>.whiteboard_pending` (the head and the time; a later skip of a newer head replaces it),
+  marks the drain as holding one (`drainWhiteboards`), and says "the daemon is draining; it is made after
+  the restart". The start the drain waited for (`startup`, after the recovery of the fix loops and of the
+  whiteboard runs a stop left) and a drain that ends without a restart (`continueAfterDrain`, after the
+  loops the drain held went on, so a fix cycle they start holds the PR first, as after a posted review)
+  run `startPendingWhiteboards`: on a goroutine of its own, since Whiteboard's readiness check may take
+  15 s, one pass at a time, each entry taken (compare-and-delete) and then started through
+  `autoWhiteboard` when the PR is still open at that head, under the job's usual checks (the watch asks
+  for whiteboards, the PR is not muted, the head has no whiteboard; a quiet drop is logged), refusals
+  (`whiteboard.skipped`, a new drain remembering it again) and yields; one whose PR closed or got a push
+  is dropped with `whiteboard.stopped` ("the whiteboard of <ref> at <sha7>, skipped by a drain, stopped:
+  superseded by a push to <sha7>" or "…: the PR closed"). `magnum whiteboard` during a drain keeps its
+  refusal: the operator asks again. Nothing changes for the whiteboard's content, its model or its yields.
+  Rejected: running the job during the drain, which waits for agents to end and would wait for the writer
+  too; waiting for the next posted review, what happened (22 of 23 heads never got one).
 
 ## Screens and commands
 

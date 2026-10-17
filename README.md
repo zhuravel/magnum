@@ -2190,7 +2190,13 @@ be a `gh` one. The role takes part in no round: a watch's `roles` may not name i
 and still at the reviewed head, and the head must have no whiteboard yet. Magnum first asks Whiteboard
 whether it runs (`whiteboard api whiteboard_status`). When it does not, the whiteboard is skipped, not waited
 for: a `whiteboard.skipped` event says "Whiteboard is not running (start Whiteboard Desktop or `whiteboard
-server start`)", and the next posted review is the next chance. The job holds the PR as the fix job does, in
+server start`)", and the next posted review is the next chance. A drain for a restart (`magnum daemon-restart
+--drain`) starts no whiteboard either, but it waits for the rounds in flight, so their reviews post inside it:
+such a whiteboard is skipped with "the daemon is draining; it is made after the restart", and Magnum remembers
+the PR and the reviewed head (kv `pr.<id>.whiteboard_pending`). The restart makes it, as the posted review
+would have, when the PR is still open at that head and its watch still asks for whiteboards; a drain that ends
+without a restart makes it then. One whose PR got a push or closed meanwhile is dropped with
+`whiteboard.stopped` ("superseded by a push to <sha7>", "the PR closed"). The job holds the PR as the fix job does, in
 the PR's own slot, so no round or release touches the checkout meanwhile, and a round that waits for it
 reads `whiteboard in progress · claude-whiteboard` (`magnum abort` stops the writer). Your own request wins
 over it: `magnum review` and the board's `r`, `magnum fix` and `f`, and `magnum open` and `o` stop the writer

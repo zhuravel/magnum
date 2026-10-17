@@ -18,9 +18,10 @@ package engine
 // the whiteboard in the PR's KVPRWhiteboard row, so the next head's
 // whiteboard moves the same one. Whiteboard down, the PR busy or a failure
 // asks nothing of the operator: an event says so, and the next posted
-// review is the next chance. The job is no round: the daily cap, the
-// interval and quiet hours do not apply, and max_concurrent_reviews does not
-// count it.
+// review is the next chance. A drain for a restart is the exception: its
+// skip is remembered, and the drain's end makes it (whiteboard_pending.go).
+// The job is no round: the daily cap, the interval and quiet hours do not
+// apply, and max_concurrent_reviews does not count it.
 
 import (
 	"cmp"
@@ -231,13 +232,9 @@ func (e *Engine) requestWhiteboard(ctx context.Context, p WhiteboardPayload) (st
 }
 
 // whiteboardAfterRound starts the whiteboard job after a round that posted
-// a review on the PR's head, when its watch asks for whiteboards and has a
-// whiteboard role, the PR is still open, not muted and at that head, and
-// the head has no whiteboard yet. launch calls it on the round's goroutine
-// once the round's reservation is gone and the fix loop's hook ran, with
-// the daemon's context. Whiteboard down, or the PR held (a fix loop the
-// hook started, a round), records whiteboard.skipped and nothing else: the
-// next posted review is the next chance.
+// a review on the PR's head (autoWhiteboard). launch calls it on the
+// round's goroutine once the round's reservation is gone and the fix loop's
+// hook ran, with the daemon's context.
 func (e *Engine) whiteboardAfterRound(ctx context.Context, pr store.PR, res pipeline.RoundResult) {
 	if ctx.Err() != nil || e.d.DryRun || res.Outcome != pipeline.OutcomePosted {
 		return
@@ -252,28 +249,54 @@ func (e *Engine) whiteboardAfterRound(ctx context.Context, pr store.PR, res pipe
 		e.log.Warn("whiteboard: the PR's repository", "pr", pr.ID, "err", err)
 		return
 	}
+	e.autoWhiteboard(ctx, repo, cur, cmp.Or(res.TargetSHA, res.ReviewCommit))
+}
+
+// autoWhiteboard starts the whiteboard job on cur's head target, a head
+// magnum posted a review on, when its watch asks for whiteboards and has a
+// whiteboard role, the PR is still open, not muted and at that head, and
+// the head has no whiteboard yet; otherwise it starts none and says why
+// (none, for a log line; "" when it started the job or recorded a skip).
+// Whiteboard down, or the PR held (a fix loop the hook started, a round),
+// records whiteboard.skipped and nothing else: the next posted review is
+// the next chance. A drain for a restart records the skip too, but
+// remembers the head (rememberWhiteboard), which the drain's end makes
+// (startPendingWhiteboards): a drain waits for the rounds in flight, so
+// their reviews post inside it. ctx is the daemon's.
+func (e *Engine) autoWhiteboard(ctx context.Context, repo store.Repo, cur store.PR, target string) (none string) {
 	w := e.cfg.WatchFor(repo.FullName())
 	if w == nil || !e.cfg.WhiteboardFor(w) {
-		return
+		return "the watch asks for no whiteboards"
 	}
 	if _, ok := e.cfg.WhiteboardRoleFor(w); !ok {
-		return
+		return "the watch has no whiteboard role"
 	}
-	target := cmp.Or(res.TargetSHA, res.ReviewCommit)
-	if cur.GHState != store.GHOpen || cur.Muted || target == "" || cur.HeadSHA != target || deref(cur.ReviewedSHA) != target {
-		return
+	switch {
+	case cur.GHState != store.GHOpen:
+		return "the PR is not open"
+	case cur.Muted:
+		return "the PR is muted"
+	case target == "" || cur.HeadSHA != target || deref(cur.ReviewedSHA) != target:
+		return "the PR is no longer at the reviewed head"
 	}
 	subject := prSubject(repo, cur.Number)
 	switch rec, ok, err := e.whiteboardRecord(ctx, cur.ID); {
 	case err != nil:
 		e.log.Warn("whiteboard: the PR's whiteboard cannot be read; none starts", "subject", subject, "err", err)
-		return
+		return "the PR's whiteboard cannot be read"
 	case ok && rec.Head == target:
-		return
+		return "the head has its whiteboard"
 	}
-	if _, err := e.startWhiteboard(ctx, cur, whiteboardAuto); err != nil {
-		e.event(ctx, "info", subject, "whiteboard.skipped", err.Error(), map[string]any{"head": target})
+	_, err := e.startWhiteboard(ctx, cur, whiteboardAuto)
+	if err == nil {
+		return ""
 	}
+	msg := err.Error()
+	if errors.Is(err, errFixDraining) && e.rememberWhiteboard(ctx, subject, cur.ID, target) {
+		msg = whiteboardDrainText
+	}
+	e.event(ctx, "info", subject, "whiteboard.skipped", msg, map[string]any{"head": target})
+	return ""
 }
 
 // busyRefusal is the refusal of a PR that held is why held: the hook's

@@ -361,6 +361,14 @@ type Engine struct {
 	// cycle (guarded by mu): a drain that ends without a restart continues
 	// them (continueAfterDrain), as the restart's recovery would.
 	drainHeld map[int64]bool
+	// drainWhiteboards is set (guarded by mu) when a drain skipped a
+	// whiteboard after a posted review and remembered it
+	// (kvPRWhiteboardPending): a drain that ends without a restart makes the
+	// pending whiteboards (continueAfterDrain), as the restart's start would.
+	drainWhiteboards bool
+	// pendingWhiteboardsMu keeps two passes over the pending whiteboards
+	// (startPendingWhiteboards) from taking the same entry.
+	pendingWhiteboardsMu sync.Mutex
 	// inflight are the requests answered asynchronously, which handleRequests
 	// skips until they complete: those handed to the heavy worker
 	// (heavyRequest), an open's (open.go) and an abort's or an ignore's
@@ -918,6 +926,8 @@ func (e *Engine) startup(ctx context.Context) {
 	e.retryParked(ctx)  // retry_parked.go: what failed rounds parked under another build, config or prompts
 	e.reclassifyIneligible(ctx)
 	e.recoverWhiteboards(ctx)
+	// whiteboard_pending.go: the whiteboards the drain this start ended skipped.
+	e.startPendingWhiteboards(ctx, "after the restart")
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
 	// No curation, retro, skill edit or gate runs yet: a mark left behind
 	// is a crashed daemon's (a gating proposal keeps its state and its gate
