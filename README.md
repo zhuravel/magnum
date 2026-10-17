@@ -1767,7 +1767,15 @@ report's own list of rejected candidates is context, not claims (the claude revi
 one). The rule of 2026-10-17 has the judge and the claude reviewers check a version the PR sets or bumps
 (an API version in a manifest, a runtime, an SDK) with `date` against the platform's support and deploy
 window, a version past it being a broken deploy (P1), and its packages and lockfile against the release
-line, those off it being P2. An optional or keep-current branch the PR adds (a skip, a retain, a force flag) gets the state it
+line, those off it being P2. The rules the operator approved on 2026-10-17 add a switch from an older
+setup some customers already run (what still triggers it and which rollout step turns it off, a second
+payment, credit, charge or message it never stops being P1), the money guards a PR adds broken one at a
+time against their spec file, a third party's answer the review machine cannot get posted at P3 naming
+it when a check before the call removes the doubt, the claims in code comments and doc sentences the PR
+adds, a compatibility, upgrade or old-data finding dropped unless it names the release that shipped the
+old state (a table, command or config the branch adds never shipped), the edge classes (empty, whitespace, control characters, each range's ends)
+of a predicate a fix changes run against the base, and a clean line that names a suite the review
+machine skipped (`No problems found. <suite> not run on the review machine.`) instead of LGTM. An optional or keep-current branch the PR adds (a skip, a retain, a force flag) gets the state it
 keeps checked against every later step of its flow that assumes the skipped thing was created or
 replaced, with each reachable combination probed end to end. Before the verdict the own pass lists under
 `## Notes applied` each line of the repository notes that applies to the PR, with the probe or argument
@@ -1797,7 +1805,8 @@ answer's line in the body says `(also covers <title>)`; and a verdict that block
 findings names each of them in the body with its thread link, not only their count.
 The result records every finding the judge weighed with a short title, its sources (`judge` only when
 its own pass found it, not when it confirmed a report) and, for a rejection, a reason code
-(`outside_diff` only for a problem neither in nor caused by the lines the PR changes), marking
+(`outside_diff` only for a problem neither in nor caused by the lines the PR changes) and, on a
+rejected P0 to P2 that is no `duplicate`, a one-sentence `reason` naming the fact that decided it, marking
 `nearby` a pre-existing P1 or P2 it proved in or near the code the PR changes (the claude reviewers
 report such a problem marked `nearby` instead of leaving it out); `magnum stats` reports
 them per role and `magnum debt` lists the nearby ones across PRs. Its finding counts and posted entries

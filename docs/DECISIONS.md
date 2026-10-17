@@ -9039,6 +9039,58 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (a stat is enough while the binary is the same); the binary's mtime as the change time (npm packs files
   with a fixed mtime); and a new field on `attention.Reason` for the note (the JSON of the board and status
   would grow a key for one sentence, and every caller of Explain would need the kinds' versions).
+- **Seven review rules and two judge-only lines the operator approved on 2026-10-17, the skill's cap
+  raised by the minimum** (2026-10-17, spec 76). Two misses of the week and six declines share causes the
+  skill did not name. On talkable#12030 at 6098b99d, which a colleague reviewed on the head magnum's first
+  review covered, the rollout kept an older store-credit setup running, so every reward was credited twice
+  (P1; nobody raised it, though the PR's ADR named both paths); three money guards had no example (a
+  mutation run left the spec green); a malformed stored customer ID failed the credit for good
+  (claude-review raised it, the judge rejected it `not_reproducible`, the author fixed it with the
+  proposed regex); and three code comments and two wiki sentences the PR added were false. On
+  talkable-integration#867 at f6565a6 a fix changed a predicate (`/^[ -~]*$/` before base64), rounds 2 and
+  3 checked typical values and said LGTM, and ASCII values with a tab, LF, CR or NUL went raw (a phone
+  number with a trailing newline reached the server truncated). Six declines on five repositories answered
+  findings whose trigger needed a state that never shipped (a table the PR adds, a never-released command,
+  a config no install has, a throwaway harness). 4 of 19 clean reviews of the week had an unrun main suite
+  under a bare LGTM (talkable#12025 round 4 skipped the Rails specs, #12036 the Terraform plan, #12037 the
+  header Jest suite, talkable-docs#442 three Docker builds). Rejected P0 to P2 ledger rows carried a
+  `reason_code` in only 70% of cases, so the misses analyst could not audit the rest, and the skill
+  editor's e97d1a2 trimmed the evidence line's "`unknown` and `stale` areas are leads", the audit pass's
+  lead, to fit its own rule. SKILL.md now says: in section 2, when the PR, its ADR or docs say some
+  customers already get the behaviour another way (a custom integration, a webhook consumer, a hand-run
+  setup), check the switch, what still triggers the old way and which step turns it off, a second payment,
+  credit, charge or message the rollout never stops being P1; and each code comment or doc sentence the PR
+  adds about what its code does is a claim like the description's (a false one without impact stays one
+  `Description: ✗` line). In section 3, in code that moves money or makes a call that cannot safely run
+  twice, each guard the PR adds is broken one at a time and its spec file run through `db_lock`; a guard
+  that leaves it green is a missing test. In section 4, a finding that turns on a third party's answer to
+  an input the review machine cannot send is settled by its docs or a recorded payload, and when neither
+  settles it and a check before the call removes the doubt it is posted at P3 naming the unverified
+  answer; a compatibility, upgrade or old-data finding needs that old state outside the branch (a table,
+  format, command, config or caller the PR or its branch adds has no released rows or users, and a file
+  that never ships harms no one), so it names the release that shipped it or is dropped. In section 6, a
+  fix that changes a predicate, regex, encoder or range check that routes values runs with the base over
+  its edge classes (empty, whitespace, control characters, the first and last member of each range), and a
+  class it routes differently than intended is a finding in the fix. In section 7, when the suite that
+  covers the changed code was `skipped (machine)` and nothing ran in its place, the clean line reads `No
+  problems found. <suite> not run on the review machine.` (a re-review's ends the same way); magnum's
+  auto-approval still reads that line as clean by its prefix, as it reads a red head's. In section 8, a
+  rejected P0 to P2 entry that is not `duplicate` carries `reason`, one sentence naming the fact that
+  decided it (the example's nearby entry has one; the result parser ignores the key, the misses analyst
+  reads the result files). Section 0's `evidence` line has its leads back. SKILL.md grows by 1,782 bytes,
+  from 35,364 to 37,146, and `skillMaxBytes` goes from 35,372 to 37,146, the new size. Each rule's
+  sentence is a pin (nine new tests: TestSkillChecksTheSwitchFromAnOlderSetup,
+  TestSkillChecksTheClaimsOfAddedCommentsAndDocSentences, TestSkillBreaksMoneyGuardsOneByOne,
+  TestSkillPostsAThirdPartysUnverifiableAnswerAtP3,
+  TestSkillDropsAnOldStateFindingOnAStateThatNeverShipped,
+  TestSkillRunsAChangedPredicateOverItsEdgeClasses, TestSkillNamesAnUnrunSuiteInTheCleanLine,
+  TestSkillGivesARejectedP0ToP2AReason and TestSkillReadsUnknownAndStaleEvidenceAsLeads;
+  TestSkillStatesTheCleanVerdictLines pins the new clean line and TestSkillKeepsTheExampleResultOfSection8
+  the example's changed line), so the skill editor cannot trim one silently. The prompts and their goldens
+  are unchanged. Rejected: trims instead of the raise (the skill is at its tightest: the last raises took
+  their room from unpinned wording, and the editor's e97d1a2 cut a lead to fit its own rule); an "Also
+  probed" line under P1 fixes (the operator declined it as padding); one entry here per rule (one
+  approval, one change).
 
 ## Learned rules
 

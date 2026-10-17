@@ -45,10 +45,13 @@ func TestJudgePromptsAndSkillLeaveTheFooterToMagnum(t *testing.T) {
 // A review with nothing to fix says so warmly instead of "No blocking
 // problems.": the first review, a re-review with nothing new and nothing
 // still open, and a post-merge review each have their line; "No blocking
-// problems." stays for a review with only optional findings.
+// problems." stays for a review with only optional findings. A clean review
+// whose suite the review machine skipped names it instead of LGTM
+// (2026-10-17, TestSkillNamesAnUnrunSuiteInTheCleanLine).
 func TestSkillStatesTheCleanVerdictLines(t *testing.T) {
 	skillSays(t, []string{
 		"`No problems found. LGTM :shipit:`",
+		"`No problems found. <suite> not run on the review machine.`",
 		"`No new problems since <previous_head_sha, 7 chars>. LGTM :shipit:`",
 		"`No problems found in the merged commits. :shipit:`",
 		"`No blocking problems.`",
@@ -516,8 +519,16 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // less 47 of unpinned wording: section 2's "existing" review comments (9),
 // section 6's "that" before the new commits (5), its rebuttal sentence (14)
 // and "repository" before its notes (11), and section 7's "if any" (8).
+// Then 37,146 for the seven review rules the operator approved on 2026-10-17
+// and two judge-only lines (spec 76: 1,782 bytes over the editor's 35,364 of
+// e97d1a2; the operator chose the raise over trims): the switch from an
+// older setup (303), claims in added comments and doc sentences (78), money
+// guards broken one by one (201), a third party's unverifiable answer at P3
+// (240), a state that never shipped (280), the edge classes of a changed
+// predicate (274), an unrun suite in the clean line (214), the ledger's
+// `reason` with its example (153) and the evidence's leads (39).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 35372
+const skillMaxBytes = 37146
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -1842,5 +1853,97 @@ func TestSkillDecidesAScoredDeclineByItsReason(t *testing.T) {
 		"A reply that scores the fix (`Low priority, net -6. <reason>`) is decided by its reason, never by the number: " +
 			"rebut only a fact in it you disprove at `head_sha`, or a consequence your comment sized that the reply leaves out, " +
 			"with the evidence and no score of your own; honour a product decision, data only the author holds, and every decline of a P3.",
+	}, nil)
+}
+
+// The review rules the operator approved on 2026-10-17 follow, one test per
+// rule, from two misses of the week, six declines on five repositories and
+// the clean reviews over an unrun suite.
+
+// talkable#12030's rollout kept an older store-credit setup running beside
+// the new one, so every reward was credited twice; the PR's ADR named both
+// paths and no round asked which step turns the old one off.
+func TestSkillChecksTheSwitchFromAnOlderSetup(t *testing.T) {
+	skillSays(t, []string{
+		"When the PR, its ADR or docs say some customers already get this behaviour another way (a custom integration, a webhook consumer, " +
+			"a hand-run setup), check the switch: what still triggers the old way and which step turns it off; " +
+			"a second payment, credit, charge or message the rollout never stops is P1.",
+	}, nil)
+}
+
+// The same PR added three code comments and two wiki sentences that were
+// false; the claim check read only the description.
+func TestSkillChecksTheClaimsOfAddedCommentsAndDocSentences(t *testing.T) {
+	skillSays(t, []string{
+		"check it against the code, the infrastructure files and the PR's other pages. " +
+			"So is each code comment or doc sentence the PR adds about what its code does.",
+	}, nil)
+}
+
+// Its three money guards had no example: a mutation run left the spec green.
+func TestSkillBreaksMoneyGuardsOneByOne(t *testing.T) {
+	skillSays(t, []string{
+		"In code that moves money or makes a call that cannot safely run twice, break each guard the PR adds, one at a time, " +
+			"and run its spec file through `db_lock`; a guard that leaves it green is such a gap.",
+	}, nil)
+}
+
+// A malformed stored customer ID failed its credit for good: claude-review
+// raised it, the judge rejected it as not reproducible, since the review
+// machine cannot send the third party that input, and the author fixed it
+// with the proposed regex.
+func TestSkillPostsAThirdPartysUnverifiableAnswerAtP3(t *testing.T) {
+	skillSays(t, []string{
+		"When a finding turns on a third party's answer to an input you cannot send it from here, its docs or a recorded payload settle it; " +
+			"when neither does and a check before the call removes the doubt, post it at P3 naming the unverified answer.",
+	}, nil)
+}
+
+// Six declines answered findings whose trigger needed a state that never
+// shipped: a table the PR adds, a never-released command, a config no install
+// has, a throwaway harness.
+func TestSkillDropsAnOldStateFindingOnAStateThatNeverShipped(t *testing.T) {
+	skillSays(t, []string{
+		"A compatibility, upgrade or old-data finding needs that old state outside the branch: a table, format, command, config or caller " +
+			"this PR or its branch adds has no released rows or users; a file that never ships harms no one. " +
+			"Name the release that shipped it, or drop the finding.",
+	}, nil)
+}
+
+// talkable-integration#867's fix changed the predicate before base64
+// (`/^[ -~]*$/`); two re-reviews checked typical values and said LGTM, and
+// ASCII values with a tab, LF, CR or NUL went raw (a phone number with a
+// trailing newline reached the server truncated).
+func TestSkillRunsAChangedPredicateOverItsEdgeClasses(t *testing.T) {
+	skillSays(t, []string{
+		"When a fix changes a predicate, regex, encoder or range check that routes values, run it and the base over its edge classes: " +
+			"empty, whitespace, control characters, the first and last member of each range; " +
+			"a class it routes differently than intended is a finding in the fix.",
+	}, nil)
+}
+
+// 4 of 19 clean reviews of the week posted a bare LGTM over an unrun main
+// suite (the Rails specs, a Terraform plan, a Jest suite, three Docker
+// builds). TestSkillStatesTheCleanVerdictLines pins the line too.
+func TestSkillNamesAnUnrunSuiteInTheCleanLine(t *testing.T) {
+	skillSays(t, []string{
+		"When the suite that covers the changed code was `skipped (machine)` and nothing ran in its place, the clean line reads " +
+			"`No problems found. <suite> not run on the review machine.` (a re-review's ends the same way).",
+	}, nil)
+}
+
+// 30% of the rejected P0 to P2 ledger rows carried no reason the misses
+// analyst could audit.
+func TestSkillGivesARejectedP0ToP2AReason(t *testing.T) {
+	skillSays(t, []string{
+		"A rejected P0 to P2 entry that is not `duplicate` also carries `reason`: one sentence naming the fact that decided it.",
+	}, nil)
+}
+
+// The skill editor's e97d1a2 trimmed the audit pass's lead from the evidence
+// line to fit its rule.
+func TestSkillReadsUnknownAndStaleEvidenceAsLeads(t *testing.T) {
+	skillSays(t, []string{
+		"`evidence` (when present): what earlier rounds examined, by path and behaviour; `unknown` and `stale` areas are leads.",
 	}, nil)
 }
