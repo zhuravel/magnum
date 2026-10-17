@@ -56,7 +56,7 @@ func prsRichRow() store.BoardRow {
 			Commits: 2, Files: 3, Additions: 40, Deletions: 5, ComputedAt: prsNow},
 		State: store.PRVerifying, GHState: "OPEN", UpdatedAt: prsNow.Add(-30 * time.Minute), ActivityAt: prsNow.Add(-3 * time.Hour), HeadSHA: prsHead,
 		ReviewedSHA: "reviewed", LastReviewEvent: "COMMENTED", LastReviewAt: prsNow.Add(-time.Hour), LastReviewLogin: "talkable",
-		Identity: "talkable-app", Slot: "review1", SlotPath: "/w/talkable.review1", Pinned: true, Muted: true,
+		Identity: "talkable-app", Slot: "review1", SlotPath: "/w/talkable.review1", SlotHold: "head_drift", Pinned: true, Muted: true,
 		NextEligibleAt: prsNow.Add(time.Hour), LastError: "judge failed", RoundsToday: 2,
 	}
 }
@@ -82,7 +82,7 @@ func TestPRsBoardRowMapsEveryField(t *testing.T) {
 			{Login: "team:core", Verdict: "pending", Requested: true},
 		},
 		SinceReview: &tui.ReviewDelta{Base: "reviewed", BaseSHA: "reviewed", Commits: 2, Files: 3, Additions: 40, Deletions: 5},
-		Slot:        "review1", Pinned: true, Muted: true, NextEligibleAt: prsNow.Add(time.Hour),
+		Slot:        "review1", SlotHold: "head_drift", Pinned: true, Muted: true, NextEligibleAt: prsNow.Add(time.Hour),
 		LastError: "judge failed", RoundsToday: 2,
 		// The latest request to each reviewer, newest first; zhuravel is me.
 		RequestedToMe: &tui.RequestInfo{To: "zhuravel", By: "ann", At: prsNow.Add(-2 * time.Hour), Mine: true},

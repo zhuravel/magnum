@@ -56,6 +56,7 @@ type BoardRow struct {
 	Identity           string         `json:"identity"`
 	Slot               string         `json:"slot"` // name of the slot holding the PR
 	SlotPath           string         `json:"slot_path"`
+	SlotHold           string         `json:"slot_hold"` // the hold a guard persisted on that slot (slots.hold_reason); "" when none
 	Pinned             bool           `json:"pinned"`
 	Muted              bool           `json:"muted"`
 	NextEligibleAt     time.Time      `json:"next_eligible_at"`
@@ -168,7 +169,7 @@ func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error) {
   CASE WHEN p.author_type = 'Bot' AND p.author_login NOT LIKE '%[bot]' THEN p.author_login || '[bot]' ELSE p.author_login END, p.url, p.is_draft, p.labels_json,
   p.assignees_json, p.requested_reviewers_json, p.review_requested, p.latest_reviews_json, p.since_review_json,
   p.state, p.skip_reason, p.gh_state, p.gh_updated_at, p.head_sha, p.reviewed_sha, p.last_review_event,
-  p.reviewed_at, p.last_review_login, p.identity, sl.name, sl.path, p.pinned, p.muted, p.next_eligible_at,
+  p.reviewed_at, p.last_review_login, p.identity, sl.name, sl.path, sl.hold_reason, p.pinned, p.muted, p.next_eligible_at,
   p.last_error, p.rounds_today, p.rounds_day, p.ci_state, p.ci_json, p.review_requests_json,
   p.prev_state, p.merged_at, p.closed_at, p.forced, COALESCE(p.activity_at, p.gh_updated_at), p.review_gate_json,
   p.replies_json, p.replies_read_at, p.release_after
@@ -199,7 +200,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	var (
 		b                                                              BoardRow
 		title, author, skip, reviewed, event, login, slot, path, lastE *string
-		roundsDay, ciState, prev                                       *string
+		hold, roundsDay, ciState, prev                                 *string
 		updated, reviewedAt, nextAt, mergedAt, closedAt, activity      *time.Time
 		readAt, releaseAfter                                           *time.Time
 		replies                                                        []Reply
@@ -208,7 +209,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	err := sc.Scan(&b.PRID, &b.Owner, &b.Name, &b.Number, &title, &author, &b.URL, &b.Draft, jsonCol(&b.Labels),
 		jsonCol(&b.Assignees), jsonCol(&b.RequestedReviewers), &b.ReviewRequested, jsonCol(&b.LatestReviews),
 		jsonCol(&b.SinceReview), &b.State, &skip, &b.GHState, nullTime(&updated), &b.HeadSHA, &reviewed, &event,
-		nullTime(&reviewedAt), &login, &b.Identity, &slot, &path, &b.Pinned, &b.Muted, nullTime(&nextAt),
+		nullTime(&reviewedAt), &login, &b.Identity, &slot, &path, &hold, &b.Pinned, &b.Muted, nullTime(&nextAt),
 		&lastE, &b.RoundsToday, &roundsDay, &ciState, jsonCol(&b.CI), jsonCol(&b.ReviewRequests),
 		&prev, nullTime(&mergedAt), nullTime(&closedAt), &forced, nullTime(&activity), jsonCol(&b.ReviewGate),
 		jsonCol(&replies), nullTime(&readAt), nullTime(&releaseAfter))
@@ -219,7 +220,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	b.Ref = fmt.Sprintf("%s/%s#%d", b.Owner, b.Name, b.Number)
 	b.Title, b.Author, b.SkipReason = Deref(title), Deref(author), Deref(skip)
 	b.ReviewedSHA, b.LastReviewEvent, b.LastReviewLogin = Deref(reviewed), Deref(event), Deref(login)
-	b.Slot, b.SlotPath, b.LastError = Deref(slot), Deref(path), Deref(lastE)
+	b.Slot, b.SlotPath, b.SlotHold, b.LastError = Deref(slot), Deref(path), Deref(hold), Deref(lastE)
 	b.UpdatedAt, b.ActivityAt, b.LastReviewAt, b.NextEligibleAt = Deref(updated), Deref(activity), Deref(reviewedAt), Deref(nextAt)
 	b.CIState = Deref(ciState)
 	b.PrevState, b.MergedAt, b.ClosedAt, b.ReleaseAfter = Deref(prev), Deref(mergedAt), Deref(closedAt), Deref(releaseAfter)

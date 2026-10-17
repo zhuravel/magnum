@@ -133,7 +133,12 @@ type PRBoardRow struct {
 	Reviewers   []ReviewerInfo // everyone who reviewed or was asked to
 	SinceReview *ReviewDelta   // what changed since the last review; nil when unknown
 	Slot        string         // folder of the review slot holding the PR, if any
-	Pinned      bool
+	// SlotHold is the hold a slot guard persisted on that slot (slots.hold_reason:
+	// head_drift, unpushed_commits, dirty_worktree, ...); "" when the PR holds no
+	// slot or the slot holds nothing. u acknowledges a head_drift or
+	// unpushed_commits hold, and x says so instead of skipping the slot.
+	SlotHold string
+	Pinned   bool
 	// Starred: the operator starred the PR (`magnum star`, the board's *;
 	// store.KVPRStar), so it leads its section, the open PRs or the
 	// recently closed ones, whatever the sort; StarredAt is when (zero when
@@ -716,7 +721,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Title, r.Author, r.URL = cleanText(r.Title), cleanText(r.Author), cleanText(r.URL)
 	r.Issue, r.IssueURL = cleanText(r.Issue), cleanText(r.IssueURL)
 	r.State, r.GHState, r.Slot, r.LastError = cleanText(r.State), cleanText(r.GHState), cleanText(r.Slot), cleanText(r.LastError)
-	r.HeadSHA = cleanText(r.HeadSHA)
+	r.HeadSHA, r.SlotHold = cleanText(r.HeadSHA), cleanText(r.SlotHold)
 	r.Wait, r.WaitDetail, r.SnoozedBy = cleanText(r.Wait), cleanText(r.WaitDetail), cleanText(r.SnoozedBy)
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)

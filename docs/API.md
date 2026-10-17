@@ -15880,6 +15880,7 @@ type BoardRow struct {
 	Identity           string         `json:"identity"`
 	Slot               string         `json:"slot"` // name of the slot holding the PR
 	SlotPath           string         `json:"slot_path"`
+	SlotHold           string         `json:"slot_hold"` // the hold a guard persisted on that slot (slots.hold_reason); "" when none
 	Pinned             bool           `json:"pinned"`
 	Muted              bool           `json:"muted"`
 	NextEligibleAt     time.Time      `json:"next_eligible_at"`
@@ -18463,7 +18464,12 @@ type PRBoardRow struct {
 	Reviewers   []ReviewerInfo // everyone who reviewed or was asked to
 	SinceReview *ReviewDelta   // what changed since the last review; nil when unknown
 	Slot        string         // folder of the review slot holding the PR, if any
-	Pinned      bool
+	// SlotHold is the hold a slot guard persisted on that slot (slots.hold_reason:
+	// head_drift, unpushed_commits, dirty_worktree, ...); "" when the PR holds no
+	// slot or the slot holds nothing. u acknowledges a head_drift or
+	// unpushed_commits hold, and x says so instead of skipping the slot.
+	SlotHold string
+	Pinned   bool
 	// Starred: the operator starred the PR (`magnum star`, the board's *;
 	// store.KVPRStar), so it leads its section, the open PRs or the
 	// recently closed ones, whatever the sort; StarredAt is when (zero when

@@ -9268,6 +9268,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   board's `u` taking a hold for a pin (left for its own decision: it refuses before any request, and the hint
   now names the command to type).
 
+- **The board's `u` acknowledges a held slot and `x` says why it will not release it** (2026-10-18, spec 83's
+  follow-up: the operator's first try at the way back from a `head_drift` hold on talkable-integration#867
+  was the board's `u`, which answered "is not pinned" before any request existed, as the entry on spec 83
+  found; `x` on the same row asked to release and the plan skipped the slot with no word). `store.BoardRow`
+  now carries the hold of the slot holding the PR (`SlotHold`, the join's `slots.hold_reason`), through
+  `tui.PRBoardRow.SlotHold` (also `slot_hold` in `tui --json`) to the row actions. For a slot held
+  `head_drift` or `unpushed_commits` (the holds `magnum unpin` acknowledges by taking the folder's HEAD) `u`
+  is no longer refused for an unpinned row: it asks "Acknowledge the head_drift hold of slot review3 (takes
+  its HEAD as the checkout)?" ("Unpin <PR> and acknowledge ..." when the row is pinned too, since the unpin
+  takes the HEAD as well) and sends the same unpin request, whose answer says it acknowledged the hold. A row
+  that is neither pinned nor held so, `dirty_worktree` included (it returns at the next guard while the
+  changes are there), keeps "is not pinned". `x` on a slot held that way says "talkable#5: slot review3 is
+  held: head_drift, acknowledge it with u" instead of asking and letting the plan skip it; a pinned row still
+  says to unpin first. The card's ACTIONS name the key "unpin / acknowledge a hold" on such a row ("unpin"
+  elsewhere), and the board's `?` help lists "pin / unpin / acknowledge a hold". The dashboard and the picker do
+  not know a slot's hold and are unchanged (the dashboard's `u` already sends the request, which acknowledges;
+  the picker's key toggles by the PR's pin). Rejected: acknowledging without asking (the key takes a HEAD
+  magnum did not check out, so it asks as `magnum unpin` does by name); `x` acknowledging the hold itself (a
+  release never takes a HEAD it did not check out); and refusing `x` for every hold (a `dirty_worktree` hold
+  has no key that hands it back, so the refusal would name none).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

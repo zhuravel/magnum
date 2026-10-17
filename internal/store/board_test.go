@@ -300,3 +300,48 @@ func TestBoard(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// The board row of a PR whose slot a guard holds says which hold (the slot's
+// hold_reason), which the board's u and x read; a slot that holds nothing, and
+// a PR with no slot, say "".
+func TestBoardRowCarriesTheSlotsHold(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	upsert := func(n int) PR {
+		t.Helper()
+		res, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_" + itoa(int64(n)), Number: n, URL: "u" + itoa(int64(n)),
+			HeadSHA: "head" + itoa(int64(n)), GHState: GHOpen, GHUpdatedAt: new(t0), InitialState: PRReviewed, Identity: "talkable-app"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.PR
+	}
+	held, plain, bare := upsert(1), upsert(2), upsert(3)
+	for name, hold := range map[string]struct {
+		pr   PR
+		hold string
+	}{"review1": {held, "head_drift"}, "review2": {plain, ""}} {
+		sl := mustSlot(t, st, name, SlotFree)
+		if _, err := st.AssignSlot(ctx, hold.pr.ID, sl.ID); err != nil {
+			t.Fatal(err)
+		}
+		if hold.hold != "" {
+			if err := st.UpdateSlotFields(ctx, sl.ID, func(u *SlotUpdate) { u.Set("hold_reason", hold.hold) }); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rows, err := st.Board(ctx, BoardFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]string{}
+	slotOf := map[int]string{}
+	for _, r := range rows {
+		got[r.Number], slotOf[r.Number] = r.SlotHold, r.Slot
+	}
+	if got[1] != "head_drift" || got[2] != "" || got[3] != "" || slotOf[1] != "review1" || slotOf[3] != "" || bare.ID == 0 {
+		t.Fatalf("slot holds by PR = %v (slots %v), want head_drift for #1 only", got, slotOf)
+	}
+}

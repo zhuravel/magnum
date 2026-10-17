@@ -156,6 +156,12 @@ type actRow struct {
 	inSlot, slotKnown               bool // the PR holds a slot
 	mergedUnreviewed, flagDismissed bool
 
+	// hold is the hold a slot guard persisted on the PR's slot, holdSlot the
+	// slot's name (PRBoardRow.SlotHold and Slot; "" when the slot holds
+	// nothing or the screen does not know: only the board does). u hands the
+	// slot back when the hold is one a HEAD acknowledges (ackHold), and x says so.
+	hold, holdSlot string
+
 	// snoozedUntil is when the PR's snooze ends (zero: not snoozed, or the
 	// screen does not know: only the board offers z); now is the screen's
 	// clock when it built the row, which z's question counts from.
@@ -198,6 +204,24 @@ func (r actRow) key(a rowAct) string {
 // registry, so a head that moved meanwhile gets an ordinary round.
 func (r actRow) repliesNow() bool {
 	return r.replies > 0 && sameSHA(r.head, r.reviewed) && !r.merged() && !r.closed() && !r.running() && !r.ended()
+}
+
+// The holds `magnum unpin` acknowledges by taking the slot folder's HEAD as
+// the checkout magnum expects (slots.HoldHeadDrift, slots.HoldUnpushed): the
+// screens cannot import the slots package.
+const (
+	holdHeadDrift = "head_drift"
+	holdUnpushed  = "unpushed_commits"
+)
+
+// ackHold is the hold of the row's slot that u acknowledges, "" when the slot
+// holds none or a hold no HEAD acknowledges (a person's changes come back at
+// the next guard).
+func (r actRow) ackHold() string {
+	if r.holdSlot != "" && (r.hold == holdHeadDrift || r.hold == holdUnpushed) {
+		return r.hold
+	}
+	return ""
 }
 
 // target is what the action receives: the PR, else the empty slot.
@@ -350,8 +374,8 @@ func actionRefusal(a rowAct, r actRow) string {
 		if r.pinKnown && r.pinned {
 			return l + " is already pinned"
 		}
-	case actUnpin:
-		if r.pinKnown && !r.pinned {
+	case actUnpin: // a hold the HEAD acknowledges is a reason to unpin too
+		if r.pinKnown && !r.pinned && r.ackHold() == "" {
 			return l + " is not pinned"
 		}
 	case actRelease: // the release skips what cleanup's plan skips: a round in flight or paused, a close grace
@@ -360,6 +384,8 @@ func actionRefusal(a rowAct, r actRow) string {
 			return l + " is pinned: unpin first" + r.orKey(actUnpin, " (%k)")
 		case r.ref != "" && r.slotKnown && !r.inSlot:
 			return l + " holds no slot: nothing to release"
+		case r.ackHold() != "": // the plan skips a held slot with no word
+			return l + ": slot " + r.holdSlot + " is held: " + r.hold + r.orKey(actUnpin, ", acknowledge it with %k")
 		case r.running():
 			return l + ": round in progress (" + stateLabel(r.state) + "): no slot is released under a round" + r.orKey(actAbort, "; %k kills it")
 		case r.paused():
@@ -395,7 +421,8 @@ func actionRefusal(a rowAct, r actRow) string {
 
 // actionQuestion is the y/N question before a runs on r, saying what y
 // will do; "" for the actions that run at once (open, browser, tracker, pin,
-// unpin, and the star, which only the board reads and the same key undoes).
+// unpin of a pin, and the star, which only the board reads and the same key
+// undoes). Unpin of a slot a guard holds asks: it takes the slot's HEAD.
 func actionQuestion(a rowAct, r actRow) string {
 	l := r.label
 	switch a {
@@ -424,6 +451,14 @@ func actionQuestion(a rowAct, r actRow) string {
 		return verdictQuestion(l, a == actApprove, r.findings, as, as != "" && r.needsMe == NeedsMeLift)
 	case actUnapprove:
 		return unapproveQuestion(l, r.auto)
+	case actUnpin: // a pin goes at once; a hold takes the slot's HEAD as the checkout, so it asks
+		if h := r.ackHold(); h != "" {
+			what := "the " + h + " hold of slot " + r.holdSlot + " (takes its HEAD as the checkout)?"
+			if r.pinKnown && r.pinned {
+				return "Unpin " + l + " and acknowledge " + what
+			}
+			return "Acknowledge " + what
+		}
 	case actRelease:
 		return releaseQuestion(strings.TrimPrefix(l, "slot "))
 	case actMute:
@@ -519,6 +554,10 @@ func actionLabel(a rowAct, r actRow) string {
 	case actUnmute:
 		if r.ignored() {
 			return "unmute (stop ignoring)"
+		}
+	case actUnpin:
+		if r.ackHold() != "" {
+			return "unpin / acknowledge a hold"
 		}
 	case actSnooze:
 		if r.snoozed() {
@@ -780,7 +819,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		state: normState(r.State), ghState: strings.ToUpper(strings.TrimSpace(r.GHState)), head: r.HeadSHA,
 		findings: r.Findings, verdicts: true, url: prURL(r), issue: r.Issue, issueURL: r.IssueURL,
 		pinned: r.Pinned, pinKnown: true, starred: r.Starred, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
-		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
+		hold: r.SlotHold, holdSlot: r.Slot, inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
 		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != ""}
 	if r.LastReview != nil {

@@ -44,7 +44,7 @@ func (p *prbPainter) helpContent(width int) []string {
 		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix findings as you / fix off or on (asks y/N)"},
 		{"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"w", "open the PR's whiteboard (asks y/N)"},
-		{"p / u", "pin / unpin"}, {"*", "star or unstar: starred PRs lead their section"},
+		{"p / u", "pin / unpin / acknowledge a hold"}, {"*", "star or unstar: starred PRs lead their section"},
 		{"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
 		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"},

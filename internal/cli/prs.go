@@ -596,7 +596,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		Title: b.Title, Author: b.Author, URL: b.URL, Draft: b.Draft,
 		Labels: b.Labels, Assignees: b.Assignees,
 		State: prsRowState(b), GHState: b.GHState, ActivityAt: b.ActivityAt, GitHubUpdatedAt: b.UpdatedAt, HeadSHA: b.HeadSHA,
-		Slot: b.Slot, Pinned: b.Pinned, Muted: b.Muted, NextEligibleAt: b.NextEligibleAt,
+		Slot: b.Slot, SlotHold: b.SlotHold, Pinned: b.Pinned, Muted: b.Muted, NextEligibleAt: b.NextEligibleAt,
 		LastError: b.LastError, RoundsToday: b.RoundsToday, SkipReason: b.SkipReason,
 		ClosedAt: cmp.Or(b.MergedAt, b.ClosedAt), MergedUnreviewed: b.MergedUnreviewed, FlagDismissed: b.FlagDismissed,
 		Replies: b.PendingReplies, ReleaseAfter: b.ReleaseAfter,

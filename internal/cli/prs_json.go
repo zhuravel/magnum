@@ -44,6 +44,7 @@ type prsJSONRow struct {
 	Reviewers        []prsJSONReviewer `json:"reviewers"`
 	SinceReview      *prsJSONDelta     `json:"since_review"`
 	Slot             string            `json:"slot"`
+	SlotHold         string            `json:"slot_hold"` // the hold a guard persisted on that slot (head_drift, unpushed_commits, dirty_worktree, ...); "" when none
 	Pinned           bool              `json:"pinned"`
 	Starred          bool              `json:"starred"`             // you starred it (magnum star, the board's *): it leads its section
 	StarredAt        time.Time         `json:"starred_at,omitzero"` // when; left out while not starred
@@ -306,7 +307,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		PendingReplies: r.Replies, StalemateThreads: listOf(r.Stalemate),
 		Findings: mapPtr(r.Findings, prsJSONFindingsOf), CI: mapPtr(r.CI, prsJSONCIOf),
 		Reviewers: mapList(r.Reviewers, prsJSONReviewerOf), SinceReview: mapPtr(r.SinceReview, prsJSONDeltaOf),
-		Slot: r.Slot, Pinned: r.Pinned, Starred: r.Starred, StarredAt: r.StarredAt, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
+		Slot: r.Slot, SlotHold: r.SlotHold, Pinned: r.Pinned, Starred: r.Starred, StarredAt: r.StarredAt, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), AttentionKind: r.AttentionKind, RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail,
