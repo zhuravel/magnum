@@ -97,7 +97,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/slots`, `cleanup`, `inventory` | pool slots, per-PR worktrees, guards, orphan detection |
 | `internal/notes` | repository notes: limits, states and snapshots, the lock, curation proposals and their checks |
 | `internal/store` | SQLite registry, migrations under `migrations/`, compare-and-set transitions |
-| `internal/config`, `prompts/`, `skills/` | configuration (roles, kinds), prompt files, the judge skill |
+| `internal/config`, `prompts/`, `skills/` | configuration (roles, kinds), prompt files, the judge and fix skills |
 | `internal/learn`, `eval`, `evalrun` | the daily retro's candidates and answers and the learned corpus; scoring replays of seeded PRs; one case's replay, which the CLI and the daemon run |
 | `internal/mergecheck` | `magnum merge-check`: a PR's specs on the tree another PR's merge leaves (an experiment, CLI only) |
 | `internal/cli`, `internal/tui` | cobra commands, Bubble Tea v2 screens |

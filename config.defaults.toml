@@ -317,11 +317,13 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
 fix_compact_at = 70               # before a fix cycle resumes the fixer's conversation, magnum reads how full its
                                   # context is from the pane's status line (the kind's context_pattern) and, at
                                   # or above this percent, sends /compact and waits for it to end, rather than
-                                  # let Claude Code compact it by itself in the middle of a fix. A fixer still at
-                                  # or above it afterwards, or whose /compact did not finish, is parked and the
-                                  # cycle starts it fresh (the fix prompt carries the findings); a pane that shows
-                                  # no figure leaves the fixer as it is and warns once per PR. A fresh fixer is
-                                  # never compacted. 0 = off; at most 99
+                                  # let Claude Code compact it by itself in the middle of a fix. A fixer resumed
+                                  # from a park is read every 2 s for up to a minute, until its status line shows
+                                  # a figure; a live one is read once. A fixer still at or above it afterwards, or
+                                  # whose /compact did not finish, is parked and the cycle starts it fresh (the fix
+                                  # prompt carries the findings); a pane that shows no figure leaves the fixer as
+                                  # it is and warns once per PR, said again only after a figure was read in
+                                  # between. A fresh fixer is never compacted. 0 = off; at most 99
 whiteboard = false                # true: writes a whiteboard (an interactive document in the dev.fast Whiteboard
                                   # app) of every PR after every review magnum posts on a new head, through
                                   # whiteboard_role, in the PR's slot. Needs dev.fast Whiteboard: Whiteboard
@@ -809,8 +811,9 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # clone's .config/wt.toml hooks run ([post-create]/[post-start] after creation, [pre-remove] before
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
-# block with only those, keep_approvals, stakes, auto_approve_skip_authors, allow_bot_authors and the
-# readiness keys (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
+# block with only those, keep_approvals, stakes, auto_approve_skip_authors, allow_bot_authors,
+# required_checks, trackers and the readiness keys (prepare, ready, ready_timeout; each replaces the
+# pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"

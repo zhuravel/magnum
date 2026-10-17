@@ -30,10 +30,12 @@ func newDoctorCmd(c *Context) *cobra.Command {
 	var asJSON bool
 	cmd := newCommand(groupInspect, "doctor "+doctorUsage, "check herdr, the agent CLIs, prompts, gh, MySQL, clones, SSH, disk, launchd and the registry",
 		"Check everything magnum depends on: config, herdr (version and socket methods), every agent CLI the "+
-			"configured roles use (on PATH in zsh, logged in, shell wrapper), the judge skill, the fix role, the Whiteboard "+
+			"configured roles use (on PATH in zsh, logged in, shell wrapper), the judge skill, the fix role, the skill editor "+
+			"(whether [learn] editor can run, and why it is off), the Whiteboard "+
 			"CLI and server (when a watch has whiteboards on), the role prompts and "+
 			"prompts_dir, gh and each identity, MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
-			"origins, a pool's reset_db when it names schema_paths, mise (when a pool, the LaunchAgent or your PATH uses it), free disk, codex staging, the launchd agent "+
+			"origins, a pool's reset_db when it names schema_paths, mise (when a pool, the LaunchAgent or your PATH uses it), the login shell "+
+			"(whether the `zsh -lc` shell the agents run their tools in sees mise's shims), free disk, codex staging, the launchd agent "+
 			"and the mise it starts the daemon through, the terminal's Automation permission on macOS (named, never probed: "+
 			"doctor opens no window), the herdr plugin link and the registry. "+
 			"Each check prints PASS, WARN, FAIL or SKIP with the exact fix. Read-only; exits 1 when a check fails.",

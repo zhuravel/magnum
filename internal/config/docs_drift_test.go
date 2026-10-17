@@ -3,7 +3,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -76,5 +78,111 @@ func TestTheDocsCountTheBuiltInRoles(t *testing.T) {
 	}
 	if seen < 4 { // the pattern must find the phrases, not silently skip them
 		t.Fatalf("found only %d counts of the built-in roles in the docs; the pattern is broken", seen)
+	}
+}
+
+// repoKeyGroups sorts a [[repo]] block's keys by Repo.worktreeKeys: the keys a
+// block for a pooled repository may set, and the per-PR worktree keys it may
+// not. Each key is set alone on an empty Repo, so a key the method counts is
+// banned and any other (but repo, which names the block) is allowed; a field
+// added to Repo or to worktreeKeys moves the lists with it.
+func repoKeyGroups(t *testing.T) (allowed, banned []string) {
+	t.Helper()
+	typ := reflect.TypeFor[Repo]()
+	for i := range typ.NumField() {
+		key, _, _ := strings.Cut(typ.Field(i).Tag.Get("toml"), ",")
+		if key == "" || key == "repo" {
+			continue
+		}
+		var r Repo
+		f := reflect.ValueOf(&r).Elem().Field(i)
+		switch f.Kind() {
+		case reflect.String:
+			f.SetString("x")
+		case reflect.Slice:
+			f.Set(reflect.MakeSlice(f.Type(), 1, 1))
+		case reflect.Pointer:
+			f.Set(reflect.New(f.Type().Elem()))
+		case reflect.Map:
+			f.Set(reflect.MakeMap(f.Type()))
+			f.SetMapIndex(reflect.ValueOf("k"), reflect.ValueOf("v"))
+		case reflect.Struct: // Duration
+			f.Field(0).SetInt(1)
+		default:
+			t.Fatalf("Repo.%s (%s) has a kind this test cannot set", typ.Field(i).Name, f.Kind())
+		}
+		if r.worktreeKeys() {
+			banned = append(banned, key)
+		} else {
+			allowed = append(allowed, key)
+		}
+	}
+	slices.Sort(allowed)
+	slices.Sort(banned)
+	if len(allowed) < 11 || len(banned) < 6 { // the derivation must find the keys, not silently skip them
+		t.Fatalf("derived allowed %v and banned %v", allowed, banned)
+	}
+	return allowed, banned
+}
+
+var keyName = regexp.MustCompile(`[a-z][a-z_]*[a-z]`)
+
+// keysNamed returns the sorted key names a list of prose names ("a, b and c").
+func keysNamed(list string) []string {
+	var out []string
+	for _, w := range keyName.FindAllString(list, -1) {
+		if w != "and" {
+			out = append(out, w)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A [[repo]] block for a repository with a [[pool]] may set every key but the
+// per-PR worktree ones (Repo.worktreeKeys). Three texts list them: the error
+// that refuses a worktree key there, and the comments of config.defaults.toml
+// and config.full.example.toml; the error omitted three allowed keys and the
+// comments two and five. They must name exactly the keys the code allows.
+func TestTheTextsOnAPooledReposKeysNameEveryKeyTheCodeAllows(t *testing.T) {
+	allowed, banned := repoKeyGroups(t)
+
+	cfg := validPipelineConfig()
+	cfg.Watches = []Watch{{Owner: "example", Include: []string{"*"}, Identity: "z", PollIdentity: "z"}}
+	cfg.Pools = []Pool{{Repo: "example/big", MainClone: "/p/big", SlotName: "r{n}", SlotPath: "/p/big.r{n}", Max: 1}}
+	cfg.Repos = []Repo{{Repo: "example/big", Setup: []string{"bin/setup"}}}
+	err := cfg.Validate()
+	wantError(t, err, "repo example/big", "has a [[pool]]")
+	m := regexp.MustCompile(`only (.+?) apply to it \((.+?) configure per-PR worktrees`).FindStringSubmatch(err.Error())
+	if m == nil {
+		t.Fatalf("the error does not list the keys that apply and the ones that do not: %v", err)
+	}
+	if got := keysNamed(m[1]); !slices.Equal(got, allowed) {
+		t.Errorf("the error names %v as the keys that apply to a pooled repository, but the code allows %v", got, allowed)
+	}
+	if got := keysNamed(m[2]); !slices.Equal(got, banned) {
+		t.Errorf("the error names %v as per-PR worktree keys, but the code bans %v", got, banned)
+	}
+
+	// The comments of both files carry the sentence from "Its no_findings_event"
+	// to "[[pool]] repo too."; a comment wraps lines, so read it joined.
+	for _, doc := range []string{"config.defaults.toml", "config.full.example.toml"} {
+		text := strings.Join(strings.Fields(strings.ReplaceAll(readDoc(t, doc), "\n#", "\n")), " ")
+		i := strings.Index(text, "Its no_findings_event")
+		j := strings.Index(text, "[[pool]] repo too.")
+		if i < 0 || j < i {
+			t.Fatalf("%s: the sentence on the keys a pooled repository may set is gone", doc)
+		}
+		sentence := text[i : j+len("[[pool]] repo too.")]
+		for _, key := range allowed {
+			if !regexp.MustCompile(`\b` + key + `\b`).MatchString(sentence) {
+				t.Errorf("%s: the sentence omits %s, which a [[repo]] block for a pooled repository may set: %s", doc, key, sentence)
+			}
+		}
+		for _, key := range banned {
+			if regexp.MustCompile(`\b` + key + `\b`).MatchString(sentence) {
+				t.Errorf("%s: the sentence names %s, which a [[repo]] block for a pooled repository may not set: %s", doc, key, sentence)
+			}
+		}
 	}
 }

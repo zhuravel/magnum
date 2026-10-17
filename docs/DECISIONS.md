@@ -8818,6 +8818,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAnAppPrefixedLoginIsRefused (config). Rejected: reading `app/helper` as `helper[bot]` (a second spelling
   for every list, and the README and the lists' comments say GitHub logins); running all of `validateLogins`
   on `skip_authors` (a new refusal of blank and padded entries the check never minded).
+- **The texts on a pooled repository's `[[repo]]` keys and `magnum eval`'s usage line are pinned to the
+  code** (2026-10-17, spec 74). `Repo.worktreeKeys` bans six keys for a repository with a `[[pool]]`
+  (setup, teardown, wt_hooks, copy_files, strip_env and env) and lets the other eleven stand, but the
+  error that refuses them named eight of the eleven (not auto_approve_skip_authors, allow_bot_authors
+  and trackers), the comment of `config.defaults.toml` nine (not required_checks and trackers) and
+  that of `config.full.example.toml` six (not stakes, auto_approve_skip_authors, allow_bot_authors,
+  required_checks and trackers). All three now name the eleven. New test
+  TestTheTextsOnAPooledReposKeysNameEveryKeyTheCodeAllows (internal/config/docs_drift_test.go) sets
+  each `Repo` key alone on an empty block and asks `worktreeKeys`, so the allowed and the banned lists
+  come from the code and a key added to `Repo` moves them; it checks that the error's "only … apply to
+  it" list and its "( … configure per-PR worktrees" list are exactly those two, and that the sentence
+  "Its no_findings_event … [[pool]] repo too." of both example files names every allowed key and no
+  banned one. `evalUsage` (`run|score|list|show`) likewise left out `baseline`; it is now
+  `run|score|list|show|baseline`, and TestEvalUsageNamesEveryRegisteredSubcommand compares it with the
+  subcommands `newEvalCmd` registers. Rejected: a list of the allowed keys in config.go for the error
+  to print (a third copy beside `worktreeKeys`, which the test would still have to check against the
+  comments) and a list kept in the test (it would drift as the texts did).
 
 ## Learned rules
 

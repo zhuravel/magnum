@@ -37,7 +37,7 @@ import (
 )
 
 const (
-	evalUsage    = "run|score|list|show"
+	evalUsage    = "run|score|list|show|baseline"
 	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--candidate DIR] [--judge-only] [--no-notes] [--keep] [--force]"
 	// evalCorpusFile is the default corpus, in the user config's directory
 	// (~/.config/magnum); evalLegacyCorpusFile its old place in a checkout.

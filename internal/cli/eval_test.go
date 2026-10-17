@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -315,5 +316,28 @@ func TestEvalRunRefusesWhileASkillGateRuns(t *testing.T) {
 	}
 	if runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout)); err != nil || len(runs) != 1 {
 		t.Fatalf("runs = %+v, %v, want the run", runs, err)
+	}
+}
+
+// `magnum eval`'s usage line names every subcommand the command registers and
+// no other: it listed run|score|list|show and left out baseline.
+func TestEvalUsageNamesEveryRegisteredSubcommand(t *testing.T) {
+	c, _, _ := bareContext(t)
+	cmd := newEvalCmd(c)
+	var registered []string
+	for _, sub := range cmd.Commands() {
+		registered = append(registered, sub.Name())
+	}
+	named := strings.Split(evalUsage, "|")
+	slices.Sort(registered)
+	slices.Sort(named)
+	if len(registered) < 5 { // the walk must find the subcommands, not silently skip them
+		t.Fatalf("eval registers %v", registered)
+	}
+	if !slices.Equal(named, registered) {
+		t.Errorf("evalUsage names %v, but eval registers %v", named, registered)
+	}
+	if !strings.Contains(cmd.Use, evalUsage) {
+		t.Errorf("eval's Use %q lacks evalUsage %q", cmd.Use, evalUsage)
 	}
 }
