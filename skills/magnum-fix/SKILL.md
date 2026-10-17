@@ -78,7 +78,7 @@ Give each finding one verdict:
 - `not a bug`: the finding's analysis is wrong. Give the reason: the line, the caller or the spec that proves it.
 - `won't fix`: the finding is right, but fixing it here is not worth it. The project does not face what it guards against, or the code is pre-existing and outside the PR's purpose.
 
-Give each `fix` a net score: its pros minus its cons. Weigh each pro and each con by what it is worth to this project, on an open scale with these anchors:
+Give each `fix` a net score, except a simplification (below): its pros minus its cons. Weigh each pro and each con by what it is worth to this project, on an open scale with these anchors:
 
 - 1: nobody notices.
 - 3: the next person who touches this code feels it.
@@ -89,14 +89,16 @@ The cons include the risk of the change and the time it costs to review and test
 
 These are always `fix`, whatever the score: a regression (behaviour that works at the base and breaks at the head), a broken reference, a failing test and a crash.
 
+A simplification (section 2) keeps behaviour by definition, so it would net 1 and never clear the bar of 3. A simplification the review posted is `fix` when it keeps behaviour, stays in the PR's own lines and the specs that cover the changed code pass; it is `won't fix` only with a concrete risk: it drops a guard, changes behaviour or reaches outside the PR. Do not score it. A defect keeps its scoring.
+
 ## 4. The policy
 
 The findings of this run are this review's: its comments, its `Description: ✗` line and the threads its body names as still open. A finding you remember from an earlier run that this review does not name is not this run's: leave it, and do not report it; the re-review checks again.
 
 Apply it to each finding, in this order:
 
-1. `fix` with a net score of 3 or more, and each finding that section 3 always makes `fix`: fix it (section 5), then reply (section 6).
-2. `fix` with a net score below 3: make it `won't fix`, with the score as the reason. Then apply step 4 or 5.
+1. `fix` with a net score of 3 or more, a simplification that is `fix`, and each finding that section 3 always makes `fix`: fix it (section 5), then reply (section 6).
+2. `fix` with a net score below 3 that is no simplification: make it `won't fix`, with the score as the reason. Then apply step 4 or 5.
 3. `already fixed`: reply.
 4. `not a bug` or `won't fix` on an optional finding (a P3, a simplification, a nit): reply.
 5. `not a bug` or `won't fix` on a blocking finding (P0, P1, P2): do not reply. Put it under `## Needs you` in the report, with the reason.

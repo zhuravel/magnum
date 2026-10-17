@@ -9106,6 +9106,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestASecondRebuttalNamesTheClassNotAThirdInstance` still holds, since the new sentence follows the one it
   pins. Rejected: posting the planned own-pass sentence as it stood (it names the probes too, "both
   page-scope probes still hide the warning", a name the author never saw).
+- **The fixer applies a simplification that keeps behaviour, without a net score** (2026-10-17, carves out
+  "The fix loop: magnum fixes its own findings on your PRs" and the 2026-10-15 decision that
+  `skills/magnum-fix/SKILL.md` keeps its own scoring, for simplifications only). The fix skill made a
+  `fix` clear a net of 3, and a simplification keeps behaviour by definition, so it nets 1 by
+  construction. In one week the fixer applied 1 of 5 simplifications of the review ("Won't fix: net score
+  1 ... saves a few lines only"), while people applied 22 of 22. Now a simplification the review posted is
+  `fix` when it keeps behaviour, stays in the PR's own lines and the specs that cover the changed code pass,
+  and `won't fix` only with a concrete risk: it drops a guard, changes behaviour or reaches outside the PR
+  (one of the five declines was right for such a risk: the flag kept a missing lockfile loud in a job with
+  secrets). The skill gives it no score (section 3), and section 4 sends it to step 1 when it is `fix` and
+  keeps it out of step 2. A defect keeps its scoring, a regression is still always `fix`, and the reply forms
+  and the report are unchanged. The sentences are pinned in
+  `TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies`. Rejected: lowering the net bar for
+  everything (a defect that nets 1 or 2 is rightly left, and nothing shows the fixer's declines of defects
+  were wrong); scoring a simplification on a scale of its own (the fixer would still weigh a few lines
+  against the cost of a push, the call that went wrong); and a byte cap and a pins file for the fix skill
+  (a new mechanism for one sentence, and the skill editor never edits this skill).
 
 ## Learned rules
 

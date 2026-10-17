@@ -369,9 +369,12 @@ func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
 
 // The fixer proves each guard its fix adds with a spec that fails without
 // it, always fixes a regression (not every finding of the PR's diff, which
-// is every finding the review reports), and ends every reply with the
-// fixer's marker, by which the retro tells its replies from the author's
-// (learn.OwnThreads): the reply command carries it after the text.
+// is every finding the review reports), applies a simplification that keeps
+// behaviour without scoring it (a simplification nets 1 by construction, so
+// the bar of 3 declined four of five in a week) while a defect keeps its
+// scoring, and ends every reply with the fixer's marker, by which the retro
+// tells its replies from the author's (learn.OwnThreads): the reply command
+// carries it after the text.
 func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
@@ -379,6 +382,10 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 		"add `; <spec> fails without it` for each",
 		"These are always `fix`, whatever the score: a regression (behaviour that works at the base and breaks at the head), " +
 			"a broken reference, a failing test and a crash.",
+		"A simplification the review posted is `fix` when it keeps behaviour, stays in the PR's own lines and the specs that cover the changed code pass; " +
+			"it is `won't fix` only with a concrete risk: it drops a guard, changes behaviour or reaches outside the PR. Do not score it. A defect keeps its scoring.",
+		"`fix` with a net score of 3 or more, a simplification that is `fix`, and each finding that section 3 always makes `fix`",
+		"`fix` with a net score below 3 that is no simplification: make it `won't fix`",
 		"<<'REPLY'\n<reply>\n\n" + postreview.FixReplyMarker + "\nREPLY\n",
 		"End every reply with a blank line and the line `" + postreview.FixReplyMarker + "`",
 	} {

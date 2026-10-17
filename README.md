@@ -2075,11 +2075,14 @@ works wherever `gh` works. The binary embeds it and the daemon copies it at star
 directory, as it does the judge skill, so an edit reaches the fixer after `magnum daemon-restart` and
 `magnum status` counts the file changed on disk since. The skill editor of the self-improving loop never
 edits it. The fixer is skeptical. A finding is wrong until the code proves it right. It gives each finding one
-verdict (`fix`, `already fixed`, `not a bug` or `won't fix`) and each `fix` a net score, the pros minus the
+verdict (`fix`, `already fixed`, `not a bug` or `won't fix`) and each `fix` but a simplification a net score, the pros minus the
 cons, on an open scale with four anchors: 1 (nobody notices), 3 (the next person to touch the code feels
 it), 10 (real money or a day of work) and 30 (not safe to ship). It fixes a finding that nets 3 or more. It always fixes a
 regression (behaviour that works at the base and breaks at the head), a broken reference, a failing test and
-a crash; every other finding, whatever part of the diff it is on, has to earn its score. It commits each fix,
+a crash; every other defect, whatever part of the diff it is on, has to earn its score. A simplification of the
+review keeps behaviour by definition and would net 1, so it is not scored: the fixer applies it when it keeps
+behaviour, stays in the PR's own lines and the specs that cover the changed code pass, and declines it ("Won't
+fix: <reason>") only with a concrete risk: it drops a guard, changes behaviour or reaches outside the PR. It commits each fix,
 runs the specs the fix touches, pushes to the PR's branch, and replies in Magnum's thread with "Fixed in
 <sha>", "Already fixed", "Not a bug: <reason>" or "Won't fix: <reason>", the words the re-review already
 reads. It proves each guard, scope, permission or flag a fix adds, because the review counts a guard that no
