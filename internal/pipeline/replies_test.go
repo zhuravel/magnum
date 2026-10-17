@@ -300,6 +300,43 @@ func TestClassifyReplyReadsAddedRemovedClosedByCommitAndNotAdding(t *testing.T) 
 	}
 }
 
+// A reply that names the commit of its follow-up ("Follow-up in 9aed21f: the pin is gone", talkable-proxies#250,
+// 2026-10-14) is a fix, as "added in <sha>" is; a follow-up without a commit stays a deferral.
+func TestClassifyReplyReadsFollowUpInACommitAsFixed(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		// A follow-up in a commit: fixed.
+		{"Follow-up in 9aed21f: the pin is gone", ReplyFixed},
+		{"Follow-up in 9aed21f: the `< 1.9` pin is gone, and the probe from this comment prints `200`.", ReplyFixed},
+		{"Follow-up in `9aed21f`.", ReplyFixed},
+		{"Follow up 9aed21f", ReplyFixed},
+		{"Follow-up 9aed21f", ReplyFixed},
+		{"Follow up in 9aed21f.", ReplyFixed},
+		{"Followed up in 9aed21f.", ReplyFixed},
+		{"followed up in `9aed21fb04`: the pin is gone", ReplyFixed},
+		{"FOLLOW-UP IN 9AED21F", ReplyFixed},
+		{"(Claude) Good catch, follow-up in 9aed21f.", ReplyFixed},
+		{"Valid. Follow-up in 9aed21f: the pin is gone.", ReplyFixed},
+		{"Follow-up in 9aed21f; not adding the larger rewrite.", ReplyFixed},
+		// A follow-up without a commit: a deferral, as before.
+		{"Follow-up.", ReplyWontFix},
+		{"Follow-up PR", ReplyWontFix},
+		{"Follow-up later.", ReplyWontFix},
+		{"Follow-up ticket: ENG-12", ReplyWontFix},
+		{"Follow up in a later PR.", ReplyWontFix},
+		{"Follow-up in 12 places.", ReplyWontFix},
+		{"Follow-up in 9aed21 (six digits are no commit)", ReplyWontFix},
+		{"Deferred to a follow-up", ReplyWontFix},
+		{"Good catch, out of scope: follow-up in 9aed21f", ReplyWontFix},
+		// Followed up without a commit is no verdict, as "added in the next PR" is none.
+		{"Followed up in the next PR.", ReplyOther},
+		{"Followed up with the author.", ReplyOther},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestExcerpt(t *testing.T) {
 	if s, cut := excerpt("  short  ", 600); s != "short" || cut {
 		t.Fatalf("short = %q, %v", s, cut)

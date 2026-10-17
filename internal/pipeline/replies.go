@@ -84,7 +84,8 @@ var (
 	}{
 		{ReplyFixed, regexp.MustCompile("(?i)^(?:(?:already\\s+)?(?:fixed|done|addressed|applied)\\b|" +
 			"(?:|.*\\b(?:is|are|was|were|been)\\s+)(?:already\\s+|now\\s+)?(?:covered\\s+in|resolved\\s+(?:by|in)|(?:added|removed)\\s+in|(?:closed|resolved)\\s+by\\s+.+?\\s+in)\\s+`?[0-9a-f]{7,40}\\b|" +
-			"(?:|.*\\b(?:is|are|was|were|been|now|also|landed)\\s+)on\\s+this\\s+branch\\s+as\\s+`?[0-9a-f]{7,40}\\b)")},
+			"(?:|.*\\b(?:is|are|was|were|been|now|also|landed)\\s+)on\\s+this\\s+branch\\s+as\\s+`?[0-9a-f]{7,40}\\b|" +
+			"follow(?:ed)?[- ]?up\\s+(?:in\\s+)?`?[0-9a-f]{7,40}\\b)")},
 		{ReplyNotABug, regexp.MustCompile(`(?i)^(?:(?:not\s+a\s+bug|by\s+design|(?:as\s+)?intended|intentional(?:ly)?)\b|` +
 			`(?:incorrect|moot(?:\s+point)?|not\s+applicable)$|(?:(?:this|the)\s+(?:concern|finding|comment|issue)\s+)?does(?:\s+not|n't)\s+apply\b)`)},
 		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:(?:won't\s+fix|wont\s+fix|will\s+not\s+fix|wontfix|out\s+of\s+scope|follow[- ]?up|declined|deprioriti[sz]ed|` +
@@ -113,12 +114,15 @@ var (
 // "done", "addressed", "applied", "already addressed", "<it> is covered in
 // <sha>", "(already) resolved by <sha>" (or "in"), "<it> is now on this branch
 // as <sha>", "added in <sha>", "removed in <sha>", "closed (or resolved) by
-// <what> in <sha>" or a commit and a verb ("84c0b1e adds …") (ReplyFixed);
+// <what> in <sha>", "follow-up in <sha>" (or "follow up <sha>", "followed up in
+// <sha>") or a commit and a verb ("84c0b1e adds …") (ReplyFixed);
 // "not a bug", "incorrect", "moot", "by design", "intended", "intentional"
 // (ReplyNotABug); "won't fix", "declined", "out of scope", "follow-up", "kept
 // as is", "<it> stays as is", "left open", "deferred", "not fixed in this
 // PR" (or push, round; or "not changed"), "No guard for now", "not adding
-// it", "won't add" (ReplyWontFix).
+// it", "won't add" (ReplyWontFix). A "follow-up" with no commit after it
+// ("follow-up PR", "follow-up later", "deferred to a follow-up") is a
+// deferral; "followed up" with no commit is no verdict.
 // An acknowledgement ("Good catch", "Valid", "Analyzed", "Noted", "Low
 // priority", "Low priority (Net 0)", "Correction", "You're right") passes the
 // verdict on to a later clause of the first paragraph ("Good catch, fixed in

@@ -8631,6 +8631,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   resume (it costs its whole length when the line is already drawn, and is still too short when Claude
   Code is slow).
 
+- **A reply "Follow-up in <sha>" is a fix, not a won't-fix** (2026-10-17, spec 60; amends "The reply classifier
+  reads "added in", "removed in", "closed by … in" and "not adding it""). On talkable-proxies#250 the author
+  answered a magnum thread (2026-10-14) with "Follow-up in 9aed21f: the `< 1.9` pin is gone … the probe from
+  this comment prints `200`": a fix that names its commit, as "added in <sha>" does. `classifyReply` read
+  "follow-up" in the first clause as the deferral it usually is, so the evidence table of the run classed it
+  `won't fix` while the retro and a person read it as fixed; one case in 425 answered threads since 10-14,
+  but the class reaches the judge's reply contract (a deferral is honoured without a re-check, a fix is
+  verified) and the evidence tables. Now a clause "follow-up in <sha>", "follow-up <sha>", "follow up in
+  <sha>" or "followed up in <sha>" (a commit of 7 to 40 hex characters, in backticks or not, as the older
+  forms take it) is `fixed`: one more alternative of the `fixed` pattern, which `replyClasses` tries before
+  `won't fix`, so the deferral pattern is unchanged and "followed up" gained a verdict only with a commit. A
+  bare "follow-up" or "follow-up later", "follow-up PR", "follow-up ticket", "Deferred to a follow-up" and
+  "follow-up in 12 places" stay `won't fix`, and "followed up in the next PR" stays `other`. The clause
+  splitter ends "Follow-up in 9aed21f: the pin is gone" at the colon, after the commit, so the verdict
+  clause is "Follow-up in 9aed21f". Precedence is unchanged (an acknowledgement passes the verdict on, the
+  first clause that names a class wins: "Good catch, out of scope: follow-up in 9aed21f" stays `won't fix`).
+  New test TestClassifyReplyReadsFollowUpInACommitAsFixed. Rejected: a letter and a digit in the commit (an
+  all-digit abbreviated commit is a real one; the older entry rejected the same), and reading "follow-up
+  commit <sha>" or "follow-up in commit <sha>" (no reply seen takes that form, and "added in commit <sha>" is
+  no `fixed` form either).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

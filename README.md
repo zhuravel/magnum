@@ -1729,7 +1729,7 @@ first. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
 risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it"
-and "No guard for now"; "added in", "removed in" and "closed by … in" with a commit are `fixed`); the
+and "No guard for now"; "added in", "removed in", "closed by … in" and "follow-up in" with a commit are `fixed`); the
 judge decides a reply by what it does, not by that hint, accepts a fix
 only when the code shows it (a defect that is an end state only when every write that reaches it is
 covered, with a probe of one the fix left untouched; a fix that rests on what another part writes, such as
