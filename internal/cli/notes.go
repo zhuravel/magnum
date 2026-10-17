@@ -68,9 +68,10 @@ func newNotesCmd(c *Context) *cobra.Command {
 			"size, harness changes), --diff [N] shows what changed between the version N back (default 1) and the notes "+
 			"now, and --restore <version> proposes an earlier version, reviewed like a curation.\n\n"+
 			"--curate asks the daemon for a curation now: an agent proposes new notes and harness in a scratch copy, "+
-			"keeping what helps future reviews of the repository; the live notes do not change. While a round of the "+
-			"repository is in its judge stage (which may rewrite the notes), or another curation runs, the curation is "+
-			"queued and starts once that ended. --review shows a waiting proposal (the notes as a diff, the harness "+
+			"keeping what helps future reviews of the repository; the live notes do not change. While the daemon drains "+
+			"for a restart, a round of the repository is in its judge stage (which may rewrite the notes), or another "+
+			"curation runs, the curation is queued and starts once that ended (after the restart, for a drain); an "+
+			"infrastructure pause or a pause of the curator's CLI refuses it. --review shows a waiting proposal (the notes as a diff, the harness "+
 			"changes with the curator's reasons, the sizes before and after) and asks y/N: y applies it under the notes "+
 			"lock, n rejects it (--reason says why, and the next curation reads it), anything else leaves it for later. "+
 			"A stale proposal (the notes changed since it was made) says so first: when its changes and the notes' merge, "+

@@ -538,11 +538,16 @@ func (e *Engine) stopFix(ctx context.Context, job *fixJob, orders []stopOrder) {
 // goes only while it is the one read here (Store.DeleteKVIf; claimFixRow is
 // the other side), and an abort without the reservation goes through
 // abortFixLoop, which hands a fix job that claimed the PR meanwhile the
-// stop instead. It returns what it did for the stop's answer ("" = the PR
-// had no loop, or a cycle took it on meanwhile).
+// stop instead. A PR without a loop has the fix a drain held for the
+// restart taken back instead (dropHeldFix). It returns what it did for the
+// stop's answer ("" = the PR had neither, or a cycle took the loop on
+// meanwhile).
 func (e *Engine) endFixLoop(ctx context.Context, repo store.Repo, pr store.PR, by string) string {
 	st, raw, _, err := e.fixRow(ctx, pr.ID)
-	return e.endFixLoopRow(ctx, repo, pr, st, raw, err, by)
+	if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, by); note != "" {
+		return note
+	}
+	return e.dropHeldFix(ctx, repo, pr, by) // fix_held.go: a `magnum fix` a drain held, which no loop runs yet
 }
 
 // endFixLoopRow is endFixLoop for the row the caller read: st, raw as stored
@@ -578,13 +583,18 @@ const abortFixLoopTries = 3
 // loop ended quietly by stopFix), never a bare delete of the row the job
 // works under; with no reservation, the row read goes (endFixLoopRow, a
 // compare-and-set), and a row that changed since it was read (a cycle took
-// the loop on) is looked at again. It reports whether it answered the
-// request (false: the PR has no loop).
+// the loop on) is looked at again. A PR without a loop has the fix a drain
+// held for the restart taken back (dropHeldFix). It reports whether it
+// answered the request (false: the PR has neither).
 func (e *Engine) abortFixLoop(ctx context.Context, id int64, repo store.Repo, pr store.PR) bool {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	for range abortFixLoopTries {
 		st, raw, _, err := e.fixRow(ctx, pr.ID)
 		if raw == "" {
+			if note := e.dropHeldFix(ctx, repo, pr, "magnum abort"); note != "" {
+				e.complete(ctx, id, nil, "aborted "+label+": "+note)
+				return true
+			}
 			return false
 		}
 		if e.stopHeld(ctx, id, repo, pr, false) {

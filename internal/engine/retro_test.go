@@ -571,10 +571,11 @@ func TestDailyRetroRunsDuringAUserPause(t *testing.T) {
 	}
 }
 
-// TestRetroRequestRefusedWhileDrainingOrRunning: `magnum retro` passes a
-// user pause but not a drain, and a second one while a retro runs only
-// says so.
-func TestRetroRequestRefusedWhileDrainingOrRunning(t *testing.T) {
+// TestRetroRequestRefusedUnderAnInfraPauseOrAStop: `magnum retro` passes a
+// user pause but not an infrastructure pause or a stop (a drain queues it,
+// TestARetroAskedDuringADrainStartsAfterTheRestart), and a second one while
+// a retro runs only says so.
+func TestRetroRequestRefusedUnderAnInfraPauseOrAStop(t *testing.T) {
 	gate := make(chan struct{})
 	fc := &fakeClassifier{}
 	h := newHarness(t, withClassifier(fc))
@@ -585,11 +586,20 @@ func TestRetroRequestRefusedWhileDrainingOrRunning(t *testing.T) {
 	retroPR(h, 7, 24*time.Hour)
 	seedRetroGitHub(h, 7)
 
-	_ = h.st.SetKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
-	if req := h.requestRetro(RetroPayload{}); req.State != store.RequestFailed || !strings.Contains(deref(req.Result), "draining") {
-		t.Fatalf("while draining: %s %q", req.State, deref(req.Result))
+	h.e.setKV(h.ctx, KVInfraPausedUntil, store.FormatTime(h.clock.Now().Add(4*time.Minute)))
+	h.e.setKV(h.ctx, KVInfraPausedReason, "ssh")
+	if req := h.requestRetro(RetroPayload{}); req.State != store.RequestFailed || !strings.Contains(deref(req.Result), "no retro now: infrastructure paused (ssh)") {
+		t.Fatalf("under an infrastructure pause: %s %q", req.State, deref(req.Result))
 	}
-	_ = h.st.DeleteKV(h.ctx, KVDaemonDraining)
+	h.e.delKV(h.ctx, KVInfraPausedUntil, KVInfraPausedReason)
+	stopped, cancel := context.WithCancel(h.ctx)
+	cancel()
+	if _, err := h.e.requestRetro(stopped, RetroPayload{}); err == nil || err.Error() != "no retro now: the daemon is stopping" {
+		t.Fatalf("a stopping daemon: %v", err)
+	}
+	if _, ok := h.e.queuedRetro(h.ctx); ok {
+		t.Fatal("a refused request queued the retro")
+	}
 	_ = h.st.SetKV(h.ctx, store.KVDaemonPaused, "1")
 
 	first, _ := h.st.EnqueueRequest(h.ctx, ReqRetro, RetroPayload{})

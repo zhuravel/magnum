@@ -8961,6 +8961,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   cycle (what spec 59 left for such a PR); a flag a figure cannot clear (a pane that starts to show a
   figure, after the pattern was fixed, would never be awaited again); a shorter wait on later resumes
   (the same cost, smaller).
+- **`magnum retro`, `magnum notes --curate` and `magnum fix` are held through a drain instead of refused**
+  (2026-10-17, spec 63; amends "`magnum retro` queues behind a running learn job"). Since 2026-10-14T14:21Z,
+  14 of the 18 failed operator requests were refusals during a drain for a restart: 11 retros ("no retro
+  now: draining for a restart", the improve loop asking every 90 s on 10-14 14:40-14:55), 2 fixes ("the
+  daemon is draining; try after the restart": talkable#11932 on 10-14, whose next fix came two days later,
+  and talkable#11483 on 10-16, next four hours later) and 1 curation. A `magnum review` during a drain was
+  already queued, and a queued retro already survived one. The earlier entry's line "a queue cannot wait
+  them out" no longer holds for a drain: it ends with the restart, and the improve loop restarts the daemon
+  several times a day. Now `refusingHold` is `holdReason` less the drain (a stop or an infrastructure
+  pause, which still refuse with their words, as does a pause of the agent's CLI), and under a drain:
+  `magnum retro` is queued as behind a learn job (`queueRetro`, kv `learn.retro_queued`, "queued: starts
+  after the restart (the daemon is draining)"; a second request says one is queued already and when it
+  starts), and `startQueuedRetro` starts it once nothing holds it, after the restart or once the drain is
+  lifted; a curation request is queued (`queueCurate`, kv `notes.curate_queue`, the new why `drain`,
+  "starts after the restart", which `magnum notes` lists as "waits for the restart after the drain") after
+  the supersede of a stale proposal it names, which still happens at once, so the queued curation starts
+  from the notes now and reads it; and `magnum fix` runs every refusal of `prepareFix` (the drain's moved
+  to `startFix`), so a request refused after the restart is refused now, and is otherwise held
+  in a row of its own, kv `pr.<id>.fix_held` (when it was asked, the PR's head then, who asked), answered
+  "held; the fix of <pr> starts after the restart if the review on <sha> still stands (the daemon is
+  draining)", with a `fix.held` event. The restart (`startHeldFixes`, right after `recoverFixes`) and a
+  drain lifted without one (`continueDrainHeldLoops`, through `drainHeld` as for the loops a drain held)
+  start cycle 1 through `startFix` as the request would have (by `magnum fix`, so a pinned PR is unpinned)
+  while the PR sits at the head it was asked on and `prepareFix` passes; otherwise the request is dropped
+  with `fix.dropped` at warn naming why (the head moved, the PR closed, nothing left to fix) and an info
+  toast. `magnum abort` and the other stops of the PR (`endFixLoop`) take a held fix back, and `magnum fix
+  --wait` on one says there is nothing to follow before the restart instead of reading the missing loop as
+  one gone without an end. A dry run under a drain says it would hold the fix. No migration and no new PR
+  phase. New tests TestARetroAskedDuringADrainStartsAfterTheRestart (restart and lifted drain),
+  TestRetroRequestRefusedUnderAnInfraPauseOrAStop (formerly ...WhileDrainingOrRunning),
+  TestACurationAskedDuringADrainStartsAfterTheRestart (the supersede case under a second drain, lifted),
+  TestACurationRequestIsRefusedUnderAnInfraPauseOrAStop,
+  TestAFixAskedDuringADrainStartsAfterTheRestartWhenTheReviewStands (restart and lifted drain),
+  TestAFixAskedDuringADrainIsDroppedWhenTheHeadMoved and TestAbortDropsAFixHeldForTheRestart in engine,
+  TestFixWaitOnAFixHeldForTheRestartDoesNotFollow and
+  TestNotesListSaysACurationQueuedDuringADrainWaitsForTheRestart in cli; TestAQueuedRetroWaitsOutADrain
+  and TestADrainStartsNoFixCycle now expect the queue's answer and the running loop's refusal. Rejected:
+  refusing and asking the operator to retry (what happened: 14 refusals, two fixes delayed by days); a
+  loop row at cycle 0 marked held for the fix (every reader of `pr.<id>.fix` would have to tell it from a
+  running loop: `magnum review`'s refusal, a second loop's, autofix, the board, `--wait`, the restart's
+  recovery); and queueing the fix as a request left pending until the restart (the CLI's wait would time
+  out, and the request would outlive its answer).
 
 ## Learned rules
 

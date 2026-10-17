@@ -76,7 +76,8 @@ var errFixLoopGone = errors.New("the fix loop is no longer waiting for its re-re
 
 // errFixDraining refuses a fix cycle while the daemon drains for a restart,
 // which would end its fixer ("fix run lost in a daemon restart"); a loop
-// waiting for its next cycle keeps its row for the restart's recovery.
+// waiting for its next cycle keeps its row for the restart's recovery, and
+// `magnum fix` never sees it: requestFix holds the request (holdFix).
 var errFixDraining = errors.New("the daemon is draining; try after the restart")
 
 // fixJob is one cycle of a fix loop: the PR, its watch and slot, the fix
@@ -156,10 +157,11 @@ func fixRunningSentence(st FixState) string {
 // requestFix handles `magnum fix`: --off and --on set and clear the PR's
 // opt-out of autofix; otherwise a fix loop starts (startFix) unless one of
 // prepareFix's refusals applies, and the answer says what runs, with the
-// notes that concern it. A dry run (the request's or the daemon's) answers
-// what would start. A whiteboard job holding the PR is refused with
-// whiteboardHeld once every other refusal passed: it yields to the request
-// (answerYielding).
+// notes that concern it. While the daemon drains for a restart the request
+// is held for it instead (holdFix). A dry run (the request's or the
+// daemon's) answers what would start. A whiteboard job holding the PR is
+// refused with whiteboardHeld once every other refusal passed: it yields to
+// the request (answerYielding).
 func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -195,6 +197,8 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	var job *fixJob
 	dry := p.DryRun || e.d.DryRun
 	switch {
+	case e.draining(ctx): // held for the restart (fix_held.go), which would end a fixer started now
+		return e.holdFix(ctx, pr, dry)
 	case dry:
 		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin)
 	case e.whiteboardHolds(pr.ID): // the job yields to the request once every other refusal passed (answerYielding)
@@ -205,7 +209,10 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	default:
 		job, err = e.startFix(ctx, pr, fixBy, FixState{})
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, errFixDraining): // a drain began since draining was asked
+		return e.holdFix(ctx, pr, false)
+	case err != nil:
 		return "", err
 	}
 	if dry && e.whiteboardHolds(pr.ID) {
@@ -232,7 +239,10 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 // is the loop a next cycle continues (zero for a new loop, which a loop
 // already running refuses). pin says what a pinned PR or slot does: it
 // refuses, or, for `magnum fix`, once every other refusal passed, its pin
-// goes as for `magnum review` (the job's notes say so for the answer).
+// goes as for `magnum review` (the job's notes say so for the answer). A
+// drain for a restart is startFix's refusal (errFixDraining), not this one:
+// holdFix asks it under a drain, so a request it would refuse after the
+// restart is refused at once, not held.
 func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
@@ -240,9 +250,6 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	}
 	full := repo.FullName()
 	label := fmt.Sprintf("%s#%d", full, pr.Number)
-	if e.draining(ctx) {
-		return nil, errFixDraining
-	}
 	w := e.cfg.WatchFor(full)
 	if w == nil {
 		return nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", full)
@@ -399,7 +406,8 @@ func (e *Engine) reviewStood(ctx context.Context, pr store.PR, sum store.ReviewS
 	return true, nil
 }
 
-// startFix starts a fix cycle on pr under prepareFix's refusals: a new loop
+// startFix starts a fix cycle on pr under prepareFix's refusals and a
+// drain's (errFixDraining): a new loop
 // (prev zero, started by by: "magnum fix", "autofix") at cycle 1 of the
 // watch's fix_cycles, or the next cycle of the loop prev waits in. A new
 // loop `magnum fix` asks for unpins a pinned PR (fixPinUnpins); autofix and
@@ -413,6 +421,9 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	pin := fixPinRefuses
 	if by == fixBy && prev.Cycle == 0 {
 		pin = fixPinUnpins
+	}
+	if e.draining(ctx) {
+		return nil, errFixDraining
 	}
 	job, err := e.prepareFix(ctx, pr, prev, pin)
 	if err != nil {

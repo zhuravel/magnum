@@ -358,8 +358,9 @@ type Engine struct {
 	// each (fix_loop.go).
 	autofixNoRole map[int64]bool
 	// drainHeld are the PRs whose fix loop a drain held before its next
-	// cycle (guarded by mu): a drain that ends without a restart continues
-	// them (continueAfterDrain), as the restart's recovery would.
+	// cycle, or whose `magnum fix` it held (holdFix), guarded by mu: a drain
+	// that ends without a restart continues them (continueAfterDrain), as
+	// the restart's recovery would.
 	drainHeld map[int64]bool
 	// drainWhiteboards is set (guarded by mu) when a drain skipped a
 	// whiteboard after a posted review and remembered it
@@ -922,8 +923,9 @@ func (e *Engine) startup(ctx context.Context) {
 	e.noteRepliesSince(ctx)
 	e.warmIdentities(ctx, true)
 	e.recoverRows(ctx)
-	e.recoverFixes(ctx) // fix.go: a fixer at work never survives a restart
-	e.retryParked(ctx)  // retry_parked.go: what failed rounds parked under another build, config or prompts
+	e.recoverFixes(ctx)   // fix.go: a fixer at work never survives a restart
+	e.startHeldFixes(ctx) // fix_held.go: the `magnum fix` requests a drain held for this start
+	e.retryParked(ctx)    // retry_parked.go: what failed rounds parked under another build, config or prompts
 	e.reclassifyIneligible(ctx)
 	e.recoverWhiteboards(ctx)
 	// whiteboard_pending.go: the whiteboards the drain this start ended skipped.

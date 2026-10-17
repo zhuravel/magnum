@@ -53,6 +53,9 @@ func newFixCmd(c *Context) *cobra.Command {
 			"current head, a review that found nothing and left nothing open, a PR that is not yours or lives in a fork, a round in "+
 			"flight, a snooze, a loop already running and a watch without a fix role. A pinned PR (magnum open, magnum pin) is unpinned by the fix, as "+
 			"by a review; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. "+
+			"While the daemon drains for a restart (daemon-restart --drain) a fix it would start is held instead: it "+
+			"starts after the restart, or once the drain is lifted without one, if the review still stands at the same "+
+			"head, and is dropped otherwise (the fix.dropped event and a toast say why; `magnum abort` takes it back). "+
 			"A terminal asks y/N first (--yes does not; there --json needs "+
 			"--yes), and a review agent's pane is refused. --wait follows the loop until its end and says how it ended "+
 			"(clean after N fix cycles, needs you, pushed nothing, aborted or ended); --timeout (default 2h, 0 = no limit) "+
@@ -182,7 +185,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	if !o.json {
 		res.print(c.Stdout, c.Stderr)
 	}
-	if !o.wait || o.dryRun || o.off || o.on { // no loop was started
+	if !o.wait || o.dryRun || o.off || o.on || fixHeldForRestart(ctx, c, d, t, label, o) { // no loop was started (yet)
 		if o.json {
 			if pr, err := d.Store.PRByID(ctx, t.PR.ID); err == nil {
 				out.State = pr.State
@@ -192,6 +195,17 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		return 0
 	}
 	return fixFollow(ctx, c, d, t, label, res, start, o, out)
+}
+
+// fixHeldForRestart reports whether the daemon held the fix through a drain
+// for a restart (engine.KVPRFixHeld): no loop runs before the restart, so
+// --wait has nothing to follow yet, and it says so.
+func fixHeldForRestart(ctx context.Context, c *Context, d *actDeps, t actTarget, label string, o fixOpts) bool {
+	if _, held, err := d.Store.GetKV(ctx, engine.KVPRFixHeld(t.PR.ID)); err != nil || !held {
+		return false
+	}
+	fmt.Fprintf(fixProgress(c, o), "%s: nothing to follow yet: the fix starts after the restart (`magnum status %s` shows it then)\n", label, label)
+	return true
 }
 
 // fixConfirm asks y/N on an interactive terminal, naming what is about to

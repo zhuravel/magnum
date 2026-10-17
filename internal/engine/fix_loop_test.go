@@ -1048,7 +1048,8 @@ func TestAnAbortThatReadsAClaimedCycleStopsItsFixer(t *testing.T) {
 
 // A drain for a restart starts no fixer: the loop whose re-review posts
 // during it waits in phase reviewing (the restart's recovery goes on with
-// it), and `magnum fix` is refused until the restart.
+// it), and `magnum fix` on its PR is refused as for any running loop, with
+// nothing held: the restart goes on with the loop itself.
 func TestADrainStartsNoFixCycle(t *testing.T) {
 	logs := &syncBuffer{}
 	h, git := fixHarness(t, func(h *harness) { h.d.Logger = newTeeLogger(h.t, logs) })
@@ -1077,8 +1078,11 @@ func TestADrainStartsNoFixCycle(t *testing.T) {
 
 	id := h.fix(FixPayload{})
 	h.handle()
-	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the daemon is draining; try after the restart") {
+	if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != "fixing, cycle 1 of 3; `magnum abort` stops it" {
 		t.Errorf("magnum fix during the drain: %s %q", r.State, deref(r.Result))
+	}
+	if v, ok := kvValue(h, KVPRFixHeld(pr.ID)); ok {
+		t.Errorf("a refused request was held: %q", v)
 	}
 
 	// The restart's recovery goes on with the loop where the hook left it.

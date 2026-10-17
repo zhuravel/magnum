@@ -738,6 +738,30 @@ func TestFixWaitJSONCarriesTheEnding(t *testing.T) {
 	}
 }
 
+// A fix the daemon held through a drain starts no loop until the restart,
+// so --wait says there is nothing to follow yet and exits 0, rather than
+// reading the missing loop as one gone without an end.
+func TestFixWaitOnAFixHeldForTheRestartDoesNotFollow(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 1
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	const held = "held; the fix of talkable/talkable#5 starts after the restart if the review on abc1234 still stands (the daemon is draining)"
+	h.onSleep = func(h *actHarness) {
+		if err := h.st.SetKV(h.ctx, engine.KVPRFixHeld(pr.ID), `{"at":"2026-10-17T18:00:00Z","head":"abc1234","by":"magnum fix"}`); err != nil {
+			h.t.Error(err)
+		}
+		h.completePending(store.RequestDone, held)
+	}
+	if code := h.cmd("fix", "5", "--wait", "--yes"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), held)
+	actContains(t, h.out.String()+h.errb.String(), "talkable#5: nothing to follow yet: the fix starts after the restart (`magnum status talkable#5` shows it then)")
+	if h.sleeps > 3 {
+		t.Errorf("slept %d times: it followed a held fix", h.sleeps)
+	}
+}
+
 // A dry run starts no loop, so --wait has nothing to follow.
 func TestFixDryRunDoesNotFollow(t *testing.T) {
 	h := newActHarness(t)

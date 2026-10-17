@@ -303,6 +303,17 @@ func TestNotesWithoutARepositoryListsThemAll(t *testing.T) {
 	}
 }
 
+// A curation asked for while the daemon drained for a restart is queued, and
+// the list says it waits for that restart, not for a judge stage.
+func TestNotesListSaysACurationQueuedDuringADrainWaitsForTheRestart(t *testing.T) {
+	now := time.Date(2026, 10, 17, 18, 0, 0, 0, time.UTC)
+	r := notesRow{State: notesQueued, Waits: engine.QueuedDrain,
+		Curation: &engine.CurateMark{Repo: "example/api", Trigger: engine.CurateTriggerRequest, Started: now.Add(-time.Minute)}}
+	if got, want := notesStateText(r, now), "curation queued (request, waits for the restart after the drain)"; got != want {
+		t.Errorf("state = %q, want %q", got, want)
+	}
+}
+
 // --json prints the same rows; no repository with notes is a note on
 // stderr and an empty list.
 func TestNotesListJSONAndNoRepositories(t *testing.T) {

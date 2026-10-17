@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,6 +204,95 @@ func TestRequestCurateSupersedesAStaleProposalAndTheCuratorReadsIt(t *testing.T)
 	}
 	if len(notesEvents(t, h, "notes.proposal_superseded")) != 1 {
 		t.Error("no notes.proposal_superseded event")
+	}
+}
+
+// `magnum notes <repo> --curate` asked while the daemon drains for a restart
+// is queued, not refused (one of the 18 failed requests from 2026-10-14 on
+// was such a refusal): the answer says it starts after the restart, the
+// queue says why it waits, nothing starts during the drain, and the
+// curation runs once after the restart. With Supersede naming a stale
+// proposal, that proposal is superseded at once, as without a drain, and
+// the curation queued behind the drain starts from the notes now, reading
+// it, once the drain is lifted without a restart.
+func TestACurationAskedDuringADrainStartsAfterTheRestart(t *testing.T) {
+	var sawNotes string
+	h, cur, nr := curationHarness(t, func(s notes.Scratch) {
+		if b, err := os.ReadFile(filepath.Join(s.Superseded(), "notes.md")); err == nil {
+			sawNotes = string(b)
+		}
+		goodProposal(s)
+	}, func(h *harness) { h.cfg.Notes.Curate = config.CurateTriggers{} })
+	const review = "; a toast says when its proposal is ready for `magnum notes talkable/talkable --review`"
+	h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+	msg, err := h.e.requestCurate(h.ctx, NotesCuratePayload{Repo: "talkable/talkable"})
+	if want := "queued: starts after the restart (the daemon is draining)" + review; err != nil || msg != want {
+		t.Fatalf("requestCurate during the drain = %q, %v; want %q", msg, err, want)
+	}
+	if q := queued(t, h); len(q) != 1 || q[0].Repo != "talkable/talkable" || q[0].Trigger != CurateTriggerRequest || q[0].Why != QueuedDrain {
+		t.Fatalf("queue = %+v", q)
+	}
+	if evs := notesEvents(t, h, "notes.curate_queued"); len(evs) != 1 || !strings.Contains(evs[0].Message, "starts after the restart") {
+		t.Fatalf("notes.curate_queued events = %+v", evs)
+	}
+	h.tick()
+	if n := len(proposals(t, h)); n != 0 || len(queued(t, h)) != 1 {
+		t.Fatalf("started during the drain: %d proposals, queue %+v", n, queued(t, h))
+	}
+	h.startup() // the restart the drain waited for
+	h.tick()
+	ps := proposals(t, h)
+	if len(ps) != 1 || ps[0].State != store.ProposalPending || ps[0].Trigger != CurateTriggerRequest || len(queued(t, h)) != 0 {
+		t.Fatalf("after the restart: proposals %+v, queue %+v", ps, queued(t, h))
+	}
+
+	old := ps[0]
+	writeNotes(t, nr, staleNotes, nil)
+	h.advance(time.Minute) // the next curation's scratch directory is named by the second
+	h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+	msg, err = h.e.requestCurate(h.ctx, NotesCuratePayload{Repo: "talkable/talkable", Supersede: old.ID})
+	if want := "proposal " + itoa(old.ID) + " superseded; queued: starts after the restart (the daemon is draining)" + review; err != nil || msg != want {
+		t.Fatalf("requestCurate superseding during the drain = %q, %v; want %q", msg, err, want)
+	}
+	if ps := proposals(t, h); len(ps) != 1 || ps[0].State != store.ProposalSuperseded {
+		t.Fatalf("proposals during the drain = %+v, want the stale one superseded at once", ps)
+	}
+	h.tick()
+	if n := len(proposals(t, h)); n != 1 {
+		t.Fatalf("%d proposals: a curation started during the drain", n)
+	}
+	if err := h.st.DeleteKV(h.ctx, KVDaemonDraining); err != nil { // the drain lifted without a restart
+		t.Fatal(err)
+	}
+	h.tick()
+	ps = proposals(t, h)
+	if len(ps) != 2 || ps[0].State != store.ProposalPending || ps[1].ID != old.ID || len(queued(t, h)) != 0 {
+		t.Fatalf("after the drain: proposals %+v, queue %+v", ps, queued(t, h))
+	}
+	if sawNotes != curatedNotes || len(cur.prompts) != 2 || !strings.Contains(cur.prompts[1], "superseded/`: proposal "+itoa(old.ID)) {
+		t.Errorf("the queued curation did not read the superseded proposal: %q", sawNotes)
+	}
+}
+
+// A stop and an infrastructure pause still refuse `magnum notes --curate`:
+// neither is waited out in the queue.
+func TestACurationRequestIsRefusedUnderAnInfraPauseOrAStop(t *testing.T) {
+	h, _, _ := curationHarness(t, goodProposal, func(h *harness) { h.cfg.Notes.Curate = config.CurateTriggers{} })
+	h.e.setKV(h.ctx, KVInfraPausedUntil, store.FormatTime(h.clock.Now().Add(4*time.Minute)))
+	h.e.setKV(h.ctx, KVInfraPausedReason, "ssh")
+	if _, err := h.e.requestCurate(h.ctx, NotesCuratePayload{Repo: "talkable/talkable"}); err == nil ||
+		!strings.Contains(err.Error(), "no curation now: infrastructure paused (ssh)") {
+		t.Fatalf("under an infrastructure pause: %v", err)
+	}
+	h.e.delKV(h.ctx, KVInfraPausedUntil, KVInfraPausedReason)
+	h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+	stopped, cancel := context.WithCancel(h.ctx)
+	cancel()
+	if _, err := h.e.requestCurate(stopped, NotesCuratePayload{Repo: "talkable/talkable"}); err == nil {
+		t.Fatal("a stopping daemon took the request")
+	}
+	if q := queued(t, h); len(q) != 0 {
+		t.Fatalf("a refused request queued: %+v", q)
 	}
 }
 

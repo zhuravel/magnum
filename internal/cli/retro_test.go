@@ -136,12 +136,12 @@ func TestRetroFailedRequestExitsOne(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242
 	h.onSleep = func(h *actHarness) {
-		h.completePending(store.RequestFailed, "no retro now: draining for a restart (magnum daemon-restart --drain)")
+		h.completePending(store.RequestFailed, "no retro now: infrastructure paused (ssh), next probe 10:05")
 	}
 	if code := h.cmd("retro"); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
-	actContains(t, h.errb.String(), "no retro now: draining for a restart")
+	actContains(t, h.errb.String(), "no retro now: infrastructure paused (ssh)")
 	if h.out.Len() != 0 {
 		t.Errorf("stdout = %q", h.out.String())
 	}
@@ -219,12 +219,12 @@ func TestRetroJSONCarriesPayloadAndRequest(t *testing.T) {
 func TestRetroJSONReportsFailuresAndAMissingDaemon(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242
-	h.onSleep = func(h *actHarness) { h.completePending(store.RequestFailed, "no retro now: draining") }
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestFailed, "no retro now: the daemon is stopping") }
 	if code := h.cmd("retro", "--json"); code != 1 {
 		t.Fatalf("failed request: exit %d", code)
 	}
 	var got retroJSON
-	if err := json.Unmarshal(h.out.Bytes(), &got); err != nil || got.Error != "no retro now: draining" || got.Request == nil || got.Request.State != store.RequestFailed {
+	if err := json.Unmarshal(h.out.Bytes(), &got); err != nil || got.Error != "no retro now: the daemon is stopping" || got.Request == nil || got.Request.State != store.RequestFailed {
 		t.Fatalf("failed request: %v\n%s", err, h.out.String())
 	}
 

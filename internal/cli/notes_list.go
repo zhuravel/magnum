@@ -312,8 +312,11 @@ func notesStateText(r notesRow, now time.Time) string {
 		return fmt.Sprintf("curation running (%s, %s)", r.Curation.Trigger, actAgo(now, r.Curation.Started))
 	case notesQueued:
 		what := "a judge stage"
-		if r.Waits == engine.QueuedBusy {
+		switch r.Waits {
+		case engine.QueuedBusy:
 			what = "the learn job running (a curation, the retro, a skill edit or gate)"
+		case engine.QueuedDrain:
+			what = "the restart after the drain"
 		}
 		return fmt.Sprintf("curation queued (%s, waits for %s)", r.Curation.Trigger, what)
 	case notesStale, notesProposal:

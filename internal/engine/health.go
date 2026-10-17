@@ -450,11 +450,32 @@ func (e *Engine) holdReason(ctx context.Context) string {
 	if why := e.stopping(ctx); why != "" {
 		return why
 	}
+	return e.infraHold(ctx)
+}
+
+// refusingHold is holdReason less the drain ("" = none): a shutdown or an
+// infrastructure pause, which `magnum retro` and `magnum notes --curate`
+// refuse, since nobody can say when either ends. A drain for a restart ends
+// with the restart, so those requests wait it out in their queues
+// (drainStarts), as `magnum fix` waits it out held (holdFix).
+func (e *Engine) refusingHold(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return "the daemon is stopping"
+	}
+	return e.infraHold(ctx)
+}
+
+// infraHold is the infrastructure pause as a hold ("" = none).
+func (e *Engine) infraHold(ctx context.Context) string {
 	if p, ok := e.infraPause(ctx); ok {
 		return fmt.Sprintf("infrastructure paused (%s), next probe %s", p.Reason, p.Until.Local().Format("15:04"))
 	}
 	return ""
 }
+
+// drainStarts is when a request queued or held behind a drain for a
+// restart starts, for its answer and its event.
+const drainStarts = "starts after the restart (the daemon is draining)"
 
 // configDirEnsurer is implemented by *identity.App.
 type configDirEnsurer interface {

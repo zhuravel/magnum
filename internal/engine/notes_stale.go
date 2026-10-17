@@ -11,7 +11,9 @@ package engine
 // old whose changes no longer merge. A curation asked for, or due, while a
 // round of the repository is in its judge stage (which may rewrite the
 // notes) waits in a queue (KVNotesCurateQueue) and starts once that stage
-// ended, one curation at a time; the one running is KVNotesCurating.
+// ended, one curation at a time; the one running is KVNotesCurating. So
+// does one asked for while the daemon drains for a restart (QueuedDrain):
+// the queue survives the restart, which starts it.
 
 import (
 	"context"
@@ -47,6 +49,10 @@ const (
 	// learn job runs: a curation, the retro, a skill edit or revert, or a
 	// skill gate.
 	QueuedBusy = "busy"
+	// QueuedDrain is why a curation waits (CurateQueued.Why) while the
+	// daemon drains for a restart: asked for during the drain, it starts
+	// after the restart (or once the drain is lifted without one).
+	QueuedDrain = "drain"
 )
 
 // CurateMark is the curation running now (KVNotesCurating).
@@ -60,7 +66,7 @@ type CurateMark struct {
 type CurateQueued struct {
 	Repo    string    `json:"repo"`
 	Trigger string    `json:"trigger"`
-	Why     string    `json:"why"` // QueuedJudge | QueuedBusy
+	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain
 	At      time.Time `json:"at"`
 }
 
@@ -216,8 +222,11 @@ func (e *Engine) writeCurateQueue(ctx context.Context, q []CurateQueued) {
 
 // queuedText says what a queued curation waits for.
 func queuedText(why string) string {
-	if why == QueuedBusy {
+	switch why {
+	case QueuedBusy:
 		return "starts when the learn job running now (a curation, the retro, a skill edit or gate) ends"
+	case QueuedDrain:
+		return drainStarts
 	}
 	return "starts when the current round's judge stage ends"
 }

@@ -171,10 +171,10 @@ func TestASecondRetroRequestWhileOneIsQueuedSaysSo(t *testing.T) {
 	}
 }
 
-// A queued retro whose job ends during a drain stays queued (a request
-// during the drain is refused, as before), is kept across the restart the
-// drain ends in, waits out a pause of its agent's CLI and starts once
-// nothing holds it.
+// A queued retro whose job ends during a drain stays queued (a second
+// request during the drain says so), is kept across the restart the drain
+// ends in, waits out a pause of its agent's CLI and starts once nothing
+// holds it.
 func TestAQueuedRetroWaitsOutADrain(t *testing.T) {
 	fc := &fakeClassifier{}
 	h := newHarness(t, withClassifier(fc))
@@ -190,7 +190,8 @@ func TestAQueuedRetroWaitsOutADrain(t *testing.T) {
 	if _, ok := h.e.queuedRetro(h.ctx); !ok || len(h.events("retro.start")) != 0 {
 		t.Fatal("the queued retro started, or left the queue, during the drain")
 	}
-	if req := h.requestRetro(RetroPayload{}); req.State != store.RequestFailed || !strings.Contains(deref(req.Result), "no retro now: draining") {
+	if req := h.requestRetro(RetroPayload{}); req.State != store.RequestDone || !strings.Contains(deref(req.Result), "a retro is queued already") ||
+		!strings.Contains(deref(req.Result), "starts after the restart (the daemon is draining)") {
 		t.Fatalf("a request during the drain = %s %q", req.State, deref(req.Result))
 	}
 
@@ -213,5 +214,59 @@ func TestAQueuedRetroWaitsOutADrain(t *testing.T) {
 	}
 	if _, ok := h.e.queuedRetro(h.ctx); ok {
 		t.Fatal("the retro stayed queued once it started")
+	}
+}
+
+// `magnum retro` asked while the daemon drains for a restart is queued, not
+// refused: from 2026-10-14 on, 11 of the 18 failed requests were retros the
+// improve loop asked during a drain ("no retro now: draining for a
+// restart"). The answer says it starts after the restart, nothing starts
+// during the drain, a second request says one is queued already, and the
+// retro runs once, after the restart or once the drain is lifted without
+// one (its command interrupted: the CLI's endDrain).
+func TestARetroAskedDuringADrainStartsAfterTheRestart(t *testing.T) {
+	for _, end := range []string{"restart", "lifted"} {
+		t.Run(end, func(t *testing.T) {
+			fc := &fakeClassifier{}
+			h := newHarness(t, withClassifier(fc))
+			retroPR(h, 7, 25*time.Hour)
+			seedRetroGitHub(h, 7)
+			h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+
+			req := h.requestRetro(RetroPayload{Lookback: "3d"})
+			const want = "queued: starts after the restart (the daemon is draining); `magnum logs` follows it"
+			if req.State != store.RequestDone || deref(req.Result) != want {
+				t.Fatalf("a retro request during the drain = %s %q, want %q", req.State, deref(req.Result), want)
+			}
+			if q, ok := h.e.queuedRetro(h.ctx); !ok || q.Lookback != "72h0m0s" {
+				t.Fatalf("queued retro = %+v, %v", q, ok)
+			}
+			if evs := h.events("retro.queued"); len(evs) != 1 || !strings.Contains(evs[0].Message, "starts after the restart") {
+				t.Fatalf("retro.queued events = %+v", evs)
+			}
+			again := h.requestRetro(RetroPayload{})
+			if again.State != store.RequestDone || !strings.Contains(deref(again.Result), "a retro is queued already") ||
+				!strings.Contains(deref(again.Result), "starts after the restart (the daemon is draining)") {
+				t.Fatalf("a second request during the drain = %s %q", again.State, deref(again.Result))
+			}
+			h.tick()
+			if h.e.retroBusy() || len(h.events("retro.start")) != 0 {
+				t.Fatal("the queued retro started during the drain")
+			}
+
+			if end == "restart" {
+				h.startup()
+			} else if err := h.st.DeleteKV(h.ctx, KVDaemonDraining); err != nil {
+				t.Fatal(err)
+			}
+			h.tick()
+			h.tick()
+			if starts := h.events("retro.start"); len(starts) != 1 || !strings.Contains(starts[0].Message, "within 72h0m0s") {
+				t.Fatalf("retro.start events after the drain = %+v", starts)
+			}
+			if _, ok := h.e.queuedRetro(h.ctx); ok {
+				t.Fatal("the retro stayed queued once it started")
+			}
+		})
 	}
 }

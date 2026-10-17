@@ -427,13 +427,17 @@ func (e *Engine) holdNextCycle(ctx context.Context, job *fixJob, raw string) {
 // next start. Only the loops the drain held are looked at: a loop whose
 // re-review is still running gets its decision from that round's hook, and
 // so does a held loop whose PR has another round in flight, at that round's
-// end (fixAfterRound).
+// end (fixAfterRound). A `magnum fix` the drain held (holdFix) starts as the
+// restart would have started it (startHeldFix).
 func (e *Engine) continueDrainHeldLoops(ctx context.Context) {
 	e.mu.Lock()
 	held := slices.Sorted(maps.Keys(e.drainHeld))
 	clear(e.drainHeld)
 	e.mu.Unlock()
 	for _, id := range held {
+		if e.startHeldFix(ctx, id, "after the drain") { // fix_held.go
+			continue
+		}
 		st, raw, ok, err := e.fixRow(ctx, id)
 		if err != nil || !ok || st.Phase != FixPhaseReviewing {
 			continue

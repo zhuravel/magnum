@@ -113,13 +113,16 @@ func (e *Engine) checkDrain(ctx context.Context) {
 }
 
 // continueAfterDrain goes on with the fix loops a drain held before their
-// next cycle (drainHeld), then with the whiteboards it skipped after a
-// posted review (drainWhiteboards), once no drain holds the daemon any more
-// and no restart followed: checkDrain lifted it (its drainer is gone), or
-// the CLI lifted its own (`daemon-restart --drain` interrupted or timed
-// out). The fix loops come first, as a posted review runs the fix loop's
-// hook before the whiteboard's. It runs each tick, with the other pauses,
-// and does nothing while none is held or a drain still holds.
+// next cycle and the `magnum fix` requests it held (drainHeld), then with
+// the whiteboards it skipped after a posted review (drainWhiteboards), once
+// no drain holds the daemon any more and no restart followed: checkDrain
+// lifted it (its drainer is gone), or the CLI lifted its own
+// (`daemon-restart --drain` interrupted or timed out). The fix loops come
+// first, as a posted review runs the fix loop's hook before the
+// whiteboard's. It runs each tick, with the other pauses, and does nothing
+// while none is held or a drain still holds. The retro and the curations a
+// drain queued need nothing here: their queues start them once nothing
+// holds them.
 func (e *Engine) continueAfterDrain(ctx context.Context) {
 	e.mu.Lock()
 	held, whiteboards := len(e.drainHeld), e.drainWhiteboards

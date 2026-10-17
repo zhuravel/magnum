@@ -5499,6 +5499,10 @@ const (
 	// learn job runs: a curation, the retro, a skill edit or revert, or a
 	// skill gate.
 	QueuedBusy = "busy"
+	// QueuedDrain is why a curation waits (CurateQueued.Why) while the
+	// daemon drains for a restart: asked for during the drain, it starts
+	// after the restart (or once the drain is lifted without one).
+	QueuedDrain = "drain"
 )
 const (
 	KVDaemonPausedAt   = "daemon.paused_at"
@@ -5921,6 +5925,10 @@ func KVPRDeltaCheck(prID int64) string
 func KVPRFix(prID int64) string
     KVPRFix holds a PR's fix loop (FixState as JSON).
 
+func KVPRFixHeld(prID int64) string
+    KVPRFixHeld holds a `magnum fix` a drain for a restart held (heldFix as
+    JSON) until the restart, or the drain's end without one, starts it.
+
 func KVPRFixOff(prID int64) string
     KVPRFixOff holds a PR's opt-out of the fix job (FixOff as JSON).
 
@@ -6327,7 +6335,7 @@ func ReadCurating(ctx context.Context, st *store.Store) *CurateMark
 type CurateQueued struct {
 	Repo    string    `json:"repo"`
 	Trigger string    `json:"trigger"`
-	Why     string    `json:"why"` // QueuedJudge | QueuedBusy
+	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain
 	At      time.Time `json:"at"`
 }
     CurateQueued is a curation waiting for a start (KVNotesCurateQueue).

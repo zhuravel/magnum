@@ -412,14 +412,15 @@ func (e *Engine) curateTriedRecently(repoID int64, now time.Time) bool {
 }
 
 // requestCurate serves `magnum notes <repo> --curate`: a curation now,
-// whatever [notes] curate says, unless a drain, an infrastructure pause or a
+// whatever [notes] curate says, unless a stop, an infrastructure pause or a
 // pause of the curator's CLI holds it or a proposal of the repository waits
 // for review. With Supersede naming that proposal (a stale one the operator
-// gave up on) it is superseded first and the new curation reads it. While a
-// round of the repository is in its judge stage, another learn job runs
-// (a curation, the retro, a skill edit or gate) or a queued retro waits for
-// its turn, the curation is queued and starts once that ended
-// (startQueuedCuration).
+// gave up on) it is superseded first and the new curation reads it. While
+// the daemon drains for a restart (QueuedDrain), a round of the repository
+// is in its judge stage, another learn job runs (a curation, the retro, a
+// skill edit or gate) or a queued retro waits for its turn, the curation is
+// queued and starts once that ended (startQueuedCuration: after the
+// restart, or once the drain is lifted without one).
 func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (string, error) {
 	repo, err := e.st.RepoByFullName(ctx, p.Repo)
 	if errors.Is(err, store.ErrNotFound) {
@@ -432,7 +433,7 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	if _, ok := notesRepo(e.d.Layout, repo.Owner, repo.Name); !ok {
 		return "", fmt.Errorf("%s has no notes path", full)
 	}
-	if reason := cmp.Or(e.holdReason(ctx), e.curateToolPause(ctx)); reason != "" {
+	if reason := cmp.Or(e.refusingHold(ctx), e.curateToolPause(ctx)); reason != "" {
 		return "", fmt.Errorf("no curation now: %s", reason)
 	}
 	pending, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: []string{store.ProposalPending}, Limit: 1})
@@ -462,9 +463,17 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 		}
 		prefix = fmt.Sprintf("proposal %d superseded; ", stale.ID)
 	}
-	if e.notesJudging(ctx, repo.ID) {
-		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedJudge)
-		return prefix + "queued: " + queuedText(QueuedJudge) + "; a toast says when its proposal is ready for `magnum notes " + full + " --review`", nil
+	ready := "; a toast says when its proposal is ready for `magnum notes " + full + " --review`"
+	why := ""
+	switch {
+	case e.draining(ctx): // the queue waits out the drain (maybeCurate starts nothing under it)
+		why = QueuedDrain
+	case e.notesJudging(ctx, repo.ID):
+		why = QueuedJudge
+	}
+	if why != "" {
+		e.queueCurate(ctx, full, CurateTriggerRequest, why)
+		return prefix + "queued: " + queuedText(why) + ready, nil
 	}
 	if job, since := e.learnRunning(); job != "" && !e.curateBusy() { // learn jobs run one at a time
 		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedBusy)
@@ -477,14 +486,18 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 		return fmt.Sprintf("%squeued: starts after the retro queued at %s; `magnum logs` follows it", prefix, q.At.Local().Format("15:04")), nil
 	}
 	if started, since, other := e.startCurate(ctx, repo, CurateTriggerRequest); !started {
-		if other == "" { // the daemon began stopping or draining since holdReason
+		switch {
+		case other == "" && ctx.Err() == nil && e.draining(ctx): // a drain began since
+			e.queueCurate(ctx, full, CurateTriggerRequest, QueuedDrain)
+			return prefix + "queued: " + queuedText(QueuedDrain) + ready, nil
+		case other == "": // the daemon began stopping since refusingHold
 			return "", fmt.Errorf("no curation now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
 		}
 		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedBusy)
 		return fmt.Sprintf("%squeued: starts when the running curation (of %s, started %s) ends; `magnum logs` follows it", prefix, other,
 			since.Local().Format("15:04")), nil
 	}
-	return prefix + "notes curation of " + full + " started; a toast says when its proposal is ready for `magnum notes " + full + " --review`", nil
+	return prefix + "notes curation of " + full + " started" + ready, nil
 }
 
 func notesSubjectOf(full string) string { return "notes:" + strings.ToLower(full) }
