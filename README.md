@@ -1390,7 +1390,14 @@ see what Magnum will type.
 effort, checked for login and classified for usage limits (`codex`, `claude`, `droid` and `omp` ship
 with defaults; any herdr-supported kind can be added). A resumed Codex session runs in the slot it was
 restored into (`-c tui.resume_cwd=current`): Codex 0.162 would otherwise ask which directory to use when
-the slot changed, and Magnum does not answer that dialog. Prompts are files under `[pipeline]
+the slot changed, and Magnum does not answer that dialog. A conversation resumes by the session id herdr
+reports (`session_source = "herdr"`), which herdr learns from its agent integration's hook, for Codex the
+SessionStart hook in `$CODEX_HOME/hooks.json` (`herdr-agent-state.sh`). Codex keeps your trust in each hook in
+`config.toml`'s `[hooks.state]`, and an entry with `enabled = false` (a hooks dialog answered that way) leaves
+every Codex session without an id: no judge is resumed, and a helper's Codex refusal is not seen. `magnum
+doctor` warns about it, the daemon records an `agents.session_id_missing` warning once per kind and start when
+a session's first turn ends without an id, and Magnum never turns the hook back on itself (set `enabled =
+true` in that entry). Prompts are files under `[pipeline]
 prompts_dir` (default `prompts/`, falling back to copies built into the binary), so a prompt change is
 a file edit, not a rebuild. The daemon loads the prompts and copies the judge skill and the fix skill when it starts,
 right after checking that its build renders them, so an edit takes effect at the next
@@ -3192,7 +3199,10 @@ build with a new migration under a running daemon is a failed `registry` check w
 daemon-restart --drain`). It checks what the config uses and says how to fix each problem: the config,
 prompts, the judge and fix skills and the fix role, Whiteboard when a watch asks for whiteboards (SKIP while
 whiteboards are off; FAIL when the `whiteboard` CLI is not on PATH; WARN when Whiteboard is not running, since
-the job then skips whiteboards), herdr and the plugin, the agent CLIs (logins, wrappers or autonomy flags), gh and
+the job then skips whiteboards), herdr and the plugin, the agent CLIs (logins, wrappers or autonomy flags),
+herdr's Codex session hook (a `codex session hook` WARN when no SessionStart hook in `$CODEX_HOME/hooks.json`
+names `herdr-agent-state.sh`, or when its `[hooks.state]` entry in `config.toml` has `enabled = false`, naming
+the entry: no session id, so judges are never resumed and a helper's Codex refusal is not seen), gh and
 the identities, MySQL, the main clones and pools' schema reset, mise and the LaunchAgent, free disk, the
 size of Codex's marketplace staging directory and the registry. It also checks login shells that do not
 see mise: Codex and Claude run their tool commands as `zsh -lc`, which skips `.zshrc` and lets macOS put

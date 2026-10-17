@@ -8867,6 +8867,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
   settle, and TestAPushTellsACutReviewerToStopItsBackgroundTasks reads the info event. Rejected: a shorter
   `InterruptWait` (a reviewer finishing a tool call needs it); messaging at once (an agent that is going idle
   anyway would get a useless prompt).
+- **`magnum doctor` and the daemon say when herdr's Codex session hook is off** (2026-10-17, spec 68).
+  herdr learns a Codex session's id from the SessionStart hook it installs in `$CODEX_HOME/hooks.json`
+  (`bash ~/.codex/herdr-agent-state.sh session`), and Codex keeps each hook's trust in `config.toml`'s
+  `[hooks.state]` (`"<hooks.json path>:session_start:<group>:<index>"`, with `trusted_hash` and
+  `enabled`). On 2026-10-16 the operator answered a hooks dialog, the entry of herdr's hook became
+  `enabled = false`, and since 11:36Z 33 of 34 codex-judge sessions had no session id (the one was a
+  resume of an older parked session; before, 45 of 59 had one). Without an id `resumable` never resumes a
+  judge (29 sessions ended `closed`, never `parked`), `TurnError` cannot read the rollout (107 WARN lines
+  "no Codex rollout to read the turn's error from: session id \"\" is no file name"), and
+  `helperRefusal`, the only check for a Codex helper's cybersecurity refusal, is blind; nothing in magnum
+  said so. Now `magnum doctor` has a `codex session hook` check when the codex kind's `session_source` is
+  `herdr` and a session role starts it (a shell role's `codex review` needs no id), one line per Codex
+  home those roles read (`agents.Manager.CodexHome`, `codexHomeFor` of the role's env, as every reader of
+  a Codex home): `agents.ReadCodexSessionHook` reads hooks.json and `[hooks.state]`, and the check warns
+  when no SessionStart hook names `herdr-agent-state.sh` ("missing", fix: reinstall herdr's Codex
+  integration) and when every such hook's entry has `enabled = false`, naming the entry and what goes
+  blind ("no session id: judges are never resumed, and a helper's Codex refusal is not seen", fix: set
+  `enabled = true` in that entry). A hook with `enabled = true` or no entry passes; a home without
+  hooks.json is skipped (herdr not installed is the herdr check's), and a missing `config.toml` or
+  `[hooks.state]` disables nothing. It only reads. The observer records `agents.session_id_missing`
+  (warn, subject `tool:<kind>`) once per kind and Manager, a daemon start, when a session of a kind whose
+  `session_source` is `herdr` ends a turn magnum prompted (stored status working, set no earlier than its
+  `last_prompt_at`, then idle or done) while neither the row nor herdr has a session id; for codex the
+  message says what the Codex home shows of the hook (missing, or the disabled entry by its
+  `session_start:<group>:<index>` without the path, since CODEX_HOME may be a pane env value) and what
+  goes blind; `magnum status` is unchanged. The rollout warning of `TurnError` is logged once per session
+  (the new `rolloutWarned`, kept as `compacting` is), not at every turn. New tests
+  TestDoctorWarnsWhenHerdrsCodexSessionHookIsDisabled in cli, TestACodexAgentWithoutASessionIDWarnsOncePerStart
+  and TestTheRolloutWarningIsSaidOncePerSession in agents. Rejected: magnum turning the hook back on
+  itself (Codex's hooks state is the operator's trust decision, as magnum answers hooks dialogs only
+  under `on_hooks_review`); reading the rollout by `session_meta` without an id (more work, and not
+  needed once the hook is on); warning at the run's completion (the pipeline settles a judge's run from
+  its result file before the observer sees it idle, so the judge, the case at hand, would never warn);
+  warning at any working-to-idle change (a session's startup output can read as working before its first
+  prompt, when no id exists yet).
 
 ## Learned rules
 

@@ -46,12 +46,15 @@ func (f *fakeDoctorHerdr) Call(_ context.Context, method string, _, out any) err
 }
 
 type fakeDoctorAgents struct {
-	wrapper map[string]bool
+	wrapper   map[string]bool
+	codexHome string // every role's Codex home
 }
 
 func (f *fakeDoctorAgents) Wrapper(_ context.Context, kind string) (bool, error) {
 	return f.wrapper[kind], nil
 }
+
+func (f *fakeDoctorAgents) CodexHome(config.Role) string { return f.codexHome }
 
 type fakeDoctorMySQL struct {
 	pingErr error

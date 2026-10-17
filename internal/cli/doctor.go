@@ -30,7 +30,8 @@ func newDoctorCmd(c *Context) *cobra.Command {
 	var asJSON bool
 	cmd := newCommand(groupInspect, "doctor "+doctorUsage, "check herdr, the agent CLIs, prompts, gh, MySQL, clones, SSH, disk, launchd and the registry",
 		"Check everything magnum depends on: config, herdr (version and socket methods), every agent CLI the "+
-			"configured roles use (on PATH in zsh, logged in, shell wrapper), the judge skill, the fix role, the skill editor "+
+			"configured roles use (on PATH in zsh, logged in, shell wrapper), herdr's Codex session hook (the SessionStart hook in "+
+			"$CODEX_HOME/hooks.json herdr learns session ids from: missing, or disabled in config.toml's [hooks.state]), the judge skill, the fix role, the skill editor "+
 			"(whether [learn] editor can run, and why it is off), the Whiteboard "+
 			"CLI and server (when a watch has whiteboards on), the role prompts and "+
 			"prompts_dir, gh and each identity, MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
@@ -69,6 +70,7 @@ type doctorHerdr interface {
 // doctorAgents is the part of *agents.Manager doctor uses.
 type doctorAgents interface {
 	Wrapper(ctx context.Context, kind string) (bool, error)
+	CodexHome(role config.Role) string
 }
 
 // doctorMySQL is the part of *mysqlx.Client doctor uses.
@@ -166,7 +168,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 // a fixed order.
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
-		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
+		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
 		doctorClones, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
 		doctorLearnEditor, doctorRegistry,
 	}

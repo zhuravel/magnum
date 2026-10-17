@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,5 +205,66 @@ func TestTurnErrorReadsTheRefusalOfAHelperAgent(t *testing.T) {
 		taskComplete(now.Add(4*time.Minute), refusal, CodexCyberPolicy))
 	if te, ok := e.m.TurnError(e.ctx, run); !ok || te.Helper != earlier || te.Info != CodexCyberPolicy {
 		t.Fatalf("TurnError = %+v, %v: want the refusal of helper %s, started before the run", te, ok, earlier)
+	}
+}
+
+// codexRunWithoutID is a run of role in a live codex session herdr reported
+// no Codex session id for (its SessionStart hook off).
+func (e *env) codexRunWithoutID(role Role) store.Run {
+	e.t.Helper()
+	s, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(role), AgentName: new("magnum-" + string(role)),
+		AgentKind: new(KindCodex), HerdrPaneID: new("p1"), State: store.SessionLive, StartedAt: e.clock.Now().Add(-time.Hour)})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return e.runIn(role, s)
+}
+
+// runIn is a submitted run of role in session s.
+func (e *env) runIn(role Role, s store.Session) store.Run {
+	e.t.Helper()
+	run, err := e.m.NewRun(e.ctx, e.pr, role, store.RunInitial, 1)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := e.st.TransitionRun(e.ctx, run.ID, []string{store.RunPending}, store.RunSubmitted, func(u *store.RunUpdate) {
+		u.Set("session_id", s.ID)
+	}); err != nil {
+		e.t.Fatal(err)
+	}
+	run, err = e.st.RunByID(e.ctx, run.ID)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return run
+}
+
+// A session without a Codex session id has no rollout to read, and every
+// turn of it asked again: the warning is said once per session, not per
+// turn (107 lines in a day while herdr's hook was off).
+func TestTheRolloutWarningIsSaidOncePerSession(t *testing.T) {
+	e := newEnv(t)
+	e.m.d.CodexHome = t.TempDir()
+	const warning = "no Codex rollout to read the turn's error from"
+	judge := e.codexRunWithoutID(RoleJudge)
+	s, err := e.st.SessionByID(e.ctx, *judge.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []store.Run{judge, e.runIn(RoleJudge, s), judge} {
+		if te, ok := e.m.TurnError(e.ctx, run); ok {
+			t.Fatalf("TurnError = %+v without a rollout", te)
+		}
+	}
+	recs := e.logs.records(warning)
+	if len(recs) != 1 || recs[0].level != slog.LevelWarn || !strings.Contains(recs[0].line, "codex-judge") {
+		t.Fatalf("warnings after three turns of one session = %+v, want one", recs)
+	}
+
+	if _, ok := e.m.TurnError(e.ctx, e.codexRunWithoutID(RoleClaude)); ok {
+		t.Fatal("TurnError without a rollout")
+	}
+	if recs := e.logs.records(warning); len(recs) != 2 {
+		t.Fatalf("warnings after another session's turn = %d, want two (one per session)", len(recs))
 	}
 }

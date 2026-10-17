@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
@@ -181,6 +182,72 @@ func doctorLogin(ctx context.Context, d doctorDeps, kind string, k config.Kind, 
 		return doctorFailed(name, fmt.Sprintf("%s is logged out (`%s`)", kind, check), "run `"+rolesLoginCommand(kind)+"` (reviews pause until it passes)")
 	}
 	return doctorOK(name, fmt.Sprintf("%s is logged in (`%s`)", kind, check))
+}
+
+// doctorSessionHooks checks herdr's Codex session hook for the codex kind
+// when its session ids come from herdr (session_source "herdr") and a
+// session role starts it (a shell role's `codex review` needs no id): one
+// "codex session hook" line per Codex home those roles read
+// (agents.Manager.CodexHome). herdr learns a session's id from its
+// SessionStart hook in the home's hooks.json, which a [hooks.state] entry of
+// config.toml with enabled = false turns off (agents.ReadCodexSessionHook).
+// It warns when no SessionStart hook names herdr's script and when every
+// such hook is disabled, naming the entry and what goes blind; a home
+// without hooks.json is skipped (herdr not installed is the herdr check's).
+// It only reads: the hook's trust is the operator's to change.
+func doctorSessionHooks(_ context.Context, d doctorDeps) []doctorCheck {
+	const kind = config.KindCodex
+	name := kind + " session hook"
+	if k, ok := d.Config.KindSpec(kind); !ok || k.SessionSource != config.SessionHerdr {
+		return nil
+	}
+	var homes []string
+	users := map[string][]string{} // Codex home -> the session roles that read it
+	for _, r := range d.Config.AllRoles() {
+		if !r.IsAgent() || r.Kind != kind {
+			continue
+		}
+		home := d.Agents.CodexHome(r)
+		if _, seen := users[home]; !seen {
+			homes = append(homes, home)
+		}
+		users[home] = append(users[home], r.Name)
+	}
+	var out []doctorCheck
+	for _, home := range homes {
+		used := "used by " + strings.Join(users[home], ", ")
+		h, ok, err := agents.ReadCodexSessionHook(home)
+		switch {
+		case home == "":
+			out = append(out, doctorSkipped(name, fmt.Sprintf("herdr's Codex session hook not checked: the Codex home of %s is unknown", strings.Join(users[home], ", "))))
+		case err != nil:
+			out = append(out, doctorWarned(name, fmt.Sprintf("cannot tell whether herdr's Codex session hook is on (%s): %s", used, inspTildeIn(err.Error(), home)),
+				"fix the file: Codex reads it at every start"))
+		case !ok:
+			out = append(out, doctorSkipped(name, fmt.Sprintf("herdr's Codex session hook not checked: %s does not exist (herdr's Codex integration writes it)", inspTilde(h.HooksFile))))
+		case !h.Found:
+			out = append(out, doctorWarned(name, fmt.Sprintf("herdr's Codex session hook is missing: no SessionStart hook in %s names %s (%s): %s",
+				inspTilde(h.HooksFile), agents.HerdrSessionHook, used, agents.SessionIDBlind),
+				"reinstall herdr's Codex integration (`herdr integration` lists its commands)"))
+		case len(h.Disabled) > 0:
+			entries := make([]string, len(h.Disabled))
+			for i, key := range h.Disabled {
+				entries[i] = fmt.Sprintf("[hooks.state.%q]", key)
+			}
+			out = append(out, doctorWarned(name, fmt.Sprintf("herdr's Codex session hook is disabled: %s in %s has enabled = false (%s): %s",
+				strings.Join(entries, ", "), inspTilde(h.ConfigFile), used, agents.SessionIDBlind),
+				fmt.Sprintf("set enabled = true in that entry of %s (Codex keeps your hook trust there; magnum never changes it)", inspTilde(h.ConfigFile))))
+		default:
+			out = append(out, doctorOK(name, fmt.Sprintf("herdr's Codex session hook is on (SessionStart %s in %s; %s): Codex sessions report their ids, so judges resume",
+				agents.HerdrSessionHook, inspTilde(h.HooksFile), used)))
+		}
+	}
+	return out
+}
+
+// inspTildeIn shortens the Codex home home to ~ where s names it.
+func inspTildeIn(s, home string) string {
+	return strings.ReplaceAll(s, home, inspTilde(home))
 }
 
 // doctorLearnEditor says whether the skill editor can run, and why it is

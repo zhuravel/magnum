@@ -133,6 +133,9 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     submitted/working run, whose terminal title lacks Title gets that
 //     command (`/rename <Title>`) typed into its pane (at most once per call,
 //     TitleAttempts per session row; see nameAgent).
+//     An agent that ends a turn magnum prompted (working, then idle) while
+//     herdr still reports no session id records EventSessionIDMissing, once
+//     per kind and Manager (see sessionIDMissing).
 //   - live agent session without its agent, or any session whose pane is gone
 //     -> session lost, ObsLost. A starting session (agent not started yet)
 //     with its pane still present is left alone, and so is a session that
@@ -217,6 +220,7 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	if idle && o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
 		o.Background, held = m.backgroundWait(ctx, s, sid, *o.Run)
 	}
+	prev, prevAt := herdr.Status(store.Deref(s.AgentStatus)), s.AgentStatusAt // before this tick
 	err := m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLive, func(u *store.SessionUpdate) {
 		if a.AgentStatus != "" && string(a.AgentStatus) != store.Deref(s.AgentStatus) {
 			u.Set("agent_status", string(a.AgentStatus))
@@ -243,6 +247,9 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	}
 	if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
 		s, o.Session = fresh, fresh
+	}
+	if sid == "" && promptedTurnEnded(s, prev, prevAt, idle) {
+		m.sessionIDMissing(ctx, s)
 	}
 
 	ref := paneRef{name: store.Deref(s.AgentName), pane: a.PaneID}

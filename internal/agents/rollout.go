@@ -76,7 +76,9 @@ type TurnError struct {
 // else Deps.CodexHome, else $CODEX_HOME, else ~/.codex (a test binary never
 // falls back to those). ok is false for a session of another kind or
 // without a Codex session id, a rollout it cannot find or read, and a turn
-// that ended without an error, its helpers' turns too.
+// that ended without an error, its helpers' turns too. A session without a
+// rollout to read (no session id: herdr's session hook off) is logged once,
+// not at each of its turns.
 func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool) {
 	if run.SessionID == nil {
 		return TurnError{}, false
@@ -88,7 +90,9 @@ func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool
 	sid := store.Deref(s.SessionID)
 	path, err := m.rolloutPath(s, sid)
 	if err != nil {
-		m.logAt(slog.LevelWarn, "agents: %s: no Codex rollout to read the turn's error from: %v", s.Role, err)
+		if firstFor(m, m.rolloutWarned, s.ID) { // every turn of the session would say it again
+			m.logAt(slog.LevelWarn, "agents: %s: no Codex rollout to read the turn's error from: %v", s.Role, err)
+		}
 		return TurnError{}, false
 	}
 	since := run.CreatedAt.Add(-transcriptSkew)

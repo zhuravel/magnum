@@ -273,6 +273,11 @@ const EventParkForced = "pr.park_forced"
     its kind's exit keys; it names the role, the pane and the cause, never the
     pane's text.
 
+const EventSessionIDMissing = "agents.session_id_missing"
+    EventSessionIDMissing is recorded (warn, subject tool:<kind>) once per kind
+    and Manager when a session's first turn ends without a session id from herdr
+    (see sessionIDMissing).
+
 const EventTrustDialogAnswered = "agents.trust_dialog_answered"
     EventTrustDialogAnswered is the event kind recorded (subject
     "pr:<owner>/<name>#<N>") each time a trust dialog is answered.
@@ -289,6 +294,10 @@ const FallbackPromptName = "model-fallback.md"
 
 const HealthLines = 80
     HealthLines is how much pane output CheckHealth classifies.
+
+const HerdrSessionHook = "herdr-agent-state.sh"
+    HerdrSessionHook is the script herdr's Codex SessionStart hook runs;
+    a hook whose command names it is herdr's.
 
 const LostGrace = 15 * time.Second
     LostGrace keeps an observe tick from judging a session lost from a snapshot
@@ -321,6 +330,11 @@ const PostReviewFile = "review.json"
     PostReviewFile is the file the judge writes its review to for
     `magnum post-review`, in the report directory next to its result file
     (JudgeData.ReviewFile).
+
+const SessionIDBlind = "no session id: judges are never resumed, and a helper's Codex refusal is not seen"
+    SessionIDBlind says what goes blind without a Codex session id: resumable
+    never resumes the judge and TurnError cannot read the rollout, which the
+    pipeline's check for a helper's refusal reads.
 
 const ShellStatusUnknown = -1
     ShellStatusUnknown is RunShell's status when the done marker carried no exit
@@ -610,6 +624,30 @@ func Title(repo string, number int, role Role) string
 
 
 TYPES
+
+type CodexSessionHook struct {
+	HooksFile  string // <home>/hooks.json
+	ConfigFile string // <home>/config.toml
+	// Found: a SessionStart hook of HooksFile names HerdrSessionHook.
+	Found bool
+	// Disabled are the keys of the [hooks.state] entries that set enabled =
+	// false on each such hook, when every one of them has such an entry;
+	// nil when one of them runs (its entry enables it, or it has none).
+	Disabled []string
+}
+    CodexSessionHook is what a Codex home says of herdr's SessionStart hook
+    (ReadCodexSessionHook).
+
+func ReadCodexSessionHook(home string) (h CodexSessionHook, ok bool, err error)
+    ReadCodexSessionHook reads herdr's SessionStart hook in the Codex home home:
+    whether a SessionStart hook of its hooks.json names HerdrSessionHook,
+    and whether config.toml's [hooks.state] entry of each such hook (keyed
+    by the hooks.json path, as written or with its symlinks resolved)
+    sets enabled = false. ok is false when there is nothing to judge:
+    home unknown or no hooks.json there (herdr not installed is another check).
+    A missing config.toml, [hooks.state] table or entry disables nothing. err
+    names a file that cannot be read or decoded, without the decoder's message,
+    which may quote the file. It only reads.
 
 type Deps struct {
 	Herdr  Herdr
@@ -1092,6 +1130,11 @@ func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap her
     foreground process is asked of herdr before it is closed, so a pane snap is
     stale about is gone or left alone.
 
+func (m *Manager) CodexHome(role config.Role) string
+    CodexHome is the Codex home a session of role reads (codexHomeFor of its
+    pane env: its CODEX_HOME, else the daemon's $CODEX_HOME, else ~/.codex;
+    "" in a test binary without Deps.CodexConfig).
+
 func (m *Manager) Compact(ctx context.Context, s store.Session) error
     Compact compacts the conversation of session s: it types CompactCommand
     into the idle agent's pane, as SwitchModel types /model, and waits
@@ -1293,13 +1336,15 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         any other kind, and a claude agent without a transcript to read,
         carried on by itself. A claude agent idle with a submitted/working run
         whose transcript shows background work started during the run still
-        running, or a task notification not answered yet, counts as working
-        for completion (idle_ticks 0, Background set; see backgroundWait),
-        until the pipeline tells it (Tell) to stop waiting for that work.
-        An agent of a kind named by a rename command (codex), working on a
-        submitted/working run, whose terminal title lacks Title gets that
-        command (`/rename <Title>`) typed into its pane (at most once per call,
-        TitleAttempts per session row; see nameAgent).
+        running, or a task notification not answered yet, counts as working for
+        completion (idle_ticks 0, Background set; see backgroundWait), until the
+        pipeline tells it (Tell) to stop waiting for that work. An agent of a
+        kind named by a rename command (codex), working on a submitted/working
+        run, whose terminal title lacks Title gets that command (`/rename
+        <Title>`) typed into its pane (at most once per call, TitleAttempts per
+        session row; see nameAgent). An agent that ends a turn magnum prompted
+        (working, then idle) while herdr still reports no session id records
+        EventSessionIDMissing, once per kind and Manager (see sessionIDMissing).
       - live agent session without its agent, or any session whose pane is gone
         -> session lost, ObsLost. A starting session (agent not started yet)
         with its pane still present is left alone, and so is a session that
@@ -1605,7 +1650,9 @@ func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool
     else Deps.CodexHome, else $CODEX_HOME, else ~/.codex (a test binary never
     falls back to those). ok is false for a session of another kind or without
     a Codex session id, a rollout it cannot find or read, and a turn that ended
-    without an error, its helpers' turns too.
+    without an error, its helpers' turns too. A session without a rollout to
+    read (no session id: herdr's session hook off) is logged once, not at each
+    of its turns.
 
 func (m *Manager) WhiteboardPrompt(pr store.PR, role Role, run store.Run, in WhiteboardPromptInput) (string, error)
     WhiteboardPrompt renders the whiteboard role's prompt (its initial prompt,
