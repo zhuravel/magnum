@@ -39,8 +39,9 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // current cycle, Report is the path of the report the fixer writes, and
 // StartedAt is when the loop started. NeedsYou are the findings a fixer that
 // pushed left to the author (its report's "## Needs you" entries, in its own
-// words, so never put in an event or a log): the push is re-reviewed first,
-// and the loop ends after that round as needs attention. ForcedAt is when
+// words, so never put in an event or a log; FixCalls reads what each asks):
+// the push is re-reviewed first, and the loop ends after that round as
+// needs attention. ForcedAt is when
 // the loop forced the re-review of its push (phase reviewing): its
 // re-review is the forced round dispatched at or after it, and every other
 // round that ends while the loop waits is ignored (fixAfterRound; zero in a

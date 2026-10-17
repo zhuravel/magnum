@@ -2323,7 +2323,10 @@ const (
 	// operator's PR) needs the author: findings it left to them, or a fix
 	// run that failed. Its message is the job's sentence ("fix: 2 findings
 	// need your call: <report>", "fix run failed: …", "fix guard failed: …",
-	// "fix settle failed: …"), with the fixer's report path when it has one.
+	// "fix settle failed: …"), with the fixer's report path when it has one,
+	// or a call per finding with its thread's link and the report last
+	// ("fix: reply fixed in <sha7> in … and resolve it: <url>; …; details:
+	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry.
 	KindFix = "fix"
 )
     Kinds: why the engine parked the PR (engine needsAttention's why).
@@ -2359,6 +2362,12 @@ func CLIChange(kind string, at, now time.Time) string
     role's start ("start <role>: …"), so a command's output that ends the same
     way says nothing of a CLI.
 
+func FixCallsText(calls []FixCall, more, report string) string
+    FixCallsText is the part of a fix job's message that names its calls,
+    joined by "; ": each call's sentence, then more (the findings named in the
+    older words, "1 more finding needs your call (…)"; "" for none), then the
+    report ("details: <report>"). Explain reads it back.
+
 func Kinds() []string
     Kinds are every kind above: Explain reads each as a message's leading
     "<kind>: ", and the PR board names each in its attention pill.
@@ -2379,6 +2388,29 @@ func OnMagnumsSide(kind string) bool
 
 TYPES
 
+type FixCall struct {
+	Thread string `json:"thread"`
+	URL    string `json:"url"`
+	Action string `json:"action"`
+}
+    FixCall is one finding a fix job's fixer left to the author that its message
+    names with what to do (Reason.NeedsYou): the id of the comment that starts
+    the finding's thread, the thread's link, and the sentence that says what to
+    do there (FixedCall, DeclinedCall).
+
+func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCall
+    DeclinedCall is the call of a finding the fixer did not fix and left to the
+    author to decide: "decide magnum's P2 on <place>: the fixer declined it;
+    reply won't fix at <url>, or `magnum fix <ref>` sends it back" ("a human's"
+    in a thread a human started; "finding" for one without a priority).
+
+func FixedCall(thread, url, sha string, magnums bool) FixCall
+    FixedCall is the call of a finding the fixer fixed in commit sha but did
+    not answer, because its thread is one a human started, where the fixer never
+    writes, or, when magnums, one of magnum's whose reply failed: the author
+    replies there and resolves it. "reply fixed in <sha7> in the thread a human
+    started and resolve it: <url>" ("in magnum's thread").
+
 type Reason struct {
 	Kind     string `json:"kind,omitempty"`
 	Stage    string `json:"stage"`
@@ -2393,6 +2425,15 @@ type Reason struct {
 	Summary string `json:"summary"`
 	// Fix is the next step, with the PR's reference filled in.
 	Fix string `json:"fix"`
+	// Steps are Fix's parts, one per line for a detail view, when it has
+	// several: a fix job's call per finding its fixer left to the author,
+	// then the report ("details: <path>"); Fix joins them with "; ". Empty
+	// for a one-part step.
+	Steps []string `json:"steps,omitempty"`
+	// NeedsYou are the calls of a fix job's message (KindFix): each finding
+	// its fixer left to the author with its thread and what to do there.
+	// Empty for every other reason, and for a message in the older words.
+	NeedsYou []FixCall `json:"needs_you,omitempty"`
 	// Tail is the end of the failing command's output, cleaned (at most
 	// TailLines lines), for a detail view; empty when there was none.
 	Tail []string `json:"tail,omitempty"`
@@ -5924,6 +5965,13 @@ func EditNext(editor bool, evidence, editDay string, now time.Time) string
 func FileModTime(path string) (time.Time, bool)
     FileModTime is SkewNote's reader of a binary's mtime on disk.
 
+func FixCalls(st FixState, prURL, ref string) []attention.FixCall
+    FixCalls are the calls of the findings the fixer of the loop st left to the
+    author when it pushed (FixState.NeedsYou, kept while the loop waits for the
+    re-review of its push), as the loop's end names them: the files beside its
+    report place their threads, prURL is the PR's page and ref how `magnum fix`
+    names it. None for entries magnum cannot read so.
+
 func HeldReviewID(v string) (int64, bool)
     HeldReviewID is the review a KVPRApprovalHold value names: the one whose
     approval waits for the full pass after it, while it is the PR's latest
@@ -6852,20 +6900,20 @@ type FixState struct {
     the current cycle, Report is the path of the report the fixer writes, and
     StartedAt is when the loop started. NeedsYou are the findings a fixer that
     pushed left to the author (its report's "## Needs you" entries, in its own
-    words, so never put in an event or a log): the push is re-reviewed first,
-    and the loop ends after that round as needs attention. ForcedAt is when
-    the loop forced the re-review of its push (phase reviewing): its re-review
-    is the forced round dispatched at or after it, and every other round that
-    ends while the loop waits is ignored (fixAfterRound; zero in a row written
-    before it was recorded, where any forced round is). Held says that re-review
-    ended and called for a next cycle a drain for a restart refused: no round
-    that ends afterwards is the loop's re-review, and the restart's recovery,
-    or the drain's end without one, starts that cycle (recoverReviewingLoop).
-    Context is what the current cycle did to the fixer's conversation it resumed
-    before its prompt, in a few words (fixCompact: "compacted 82% → 31%",
-    "compacted from 82%" when the pane shows no figure after it, "fresh session
-    (82% after /compact)", "fresh session (/compact failed)"); "" when it
-    resumed it as it was or started a fresh fixer anyway.
+    words, so never put in an event or a log; FixCalls reads what each asks):
+    the push is re-reviewed first, and the loop ends after that round as needs
+    attention. ForcedAt is when the loop forced the re-review of its push (phase
+    reviewing): its re-review is the forced round dispatched at or after it, and
+    every other round that ends while the loop waits is ignored (fixAfterRound;
+    zero in a row written before it was recorded, where any forced round is).
+    Held says that re-review ended and called for a next cycle a drain for a
+    restart refused: no round that ends afterwards is the loop's re-review, and
+    the restart's recovery, or the drain's end without one, starts that cycle
+    (recoverReviewingLoop). Context is what the current cycle did to the fixer's
+    conversation it resumed before its prompt, in a few words (fixCompact:
+    "compacted 82% → 31%", "compacted from 82%" when the pane shows no figure
+    after it, "fresh session (82% after /compact)", "fresh session (/compact
+    failed)"); "" when it resumed it as it was or started a fresh fixer anyway.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix

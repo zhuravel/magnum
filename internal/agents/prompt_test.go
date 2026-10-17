@@ -388,6 +388,10 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 		"`fix` with a net score below 3 that is no simplification: make it `won't fix`",
 		"<<'REPLY'\n<reply>\n\n" + postreview.FixReplyMarker + "\nREPLY\n",
 		"End every reply with a blank line and the line `" + postreview.FixReplyMarker + "`",
+		// The engine reads these words to say what each finding left to the author asks of them.
+		"- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why it needs you>\n- <comment id> <priority> <path>:<line>: not fixed. <reason>\n",
+		"then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (a thread a human started, or a reply that failed) " +
+			"or `not fixed.` for one you did not fix, and then the reason",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("the fix skill lacks %q", want)

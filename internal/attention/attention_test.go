@@ -2,6 +2,7 @@ package attention
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -218,5 +219,76 @@ func TestOnlyTheFixJobsParkIsNotOnMagnumsSide(t *testing.T) {
 	}
 	if k := Explain("", "7 attempts on abc1234def: fetch: exit 128", "").Kind; !OnMagnumsSide(k) {
 		t.Errorf("an older row's inferred kind %q is not on magnum's side", k)
+	}
+}
+
+// A fix job whose fixer left findings it could not close says what to do
+// about each, where (talkable-integration#867: one finding fixed in a thread
+// a colleague started, where the fixer never writes, and one P2 of magnum's
+// it declined; "2 findings need your call" told the operator neither): the
+// message is a sentence per finding with its thread's link and the report
+// last, the summary counts the calls, the next step is the calls one by one
+// (Steps, which `magnum status` prints one per line, joined in Fix), and
+// NeedsYou carries each call's thread, link and sentence. Findings named in
+// the older words follow the calls, and the loop's end after a re-review
+// that did not post keeps its own words before them.
+func TestTheFixRemedySaysWhatToDoPerThread(t *testing.T) {
+	const (
+		report   = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+		human    = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
+		magnums  = "https://github.com/talkable/talkable/pull/2#discussion_r4302866759"
+		fixedIn  = "reply fixed in b2b2b2b in the thread a human started and resolve it: " + human
+		declined = "decide magnum's P2 on src/integration.js:1706: the fixer declined it; reply won't fix at " + magnums +
+			", or `magnum fix talkable/talkable#2` sends it back"
+	)
+	calls := []FixCall{
+		FixedCall("4302616576", human, "b2b2b2b2b2b2b2b2b2b2", false),
+		DeclinedCall("4302866759", magnums, "P2", "src/integration.js:1706", "talkable/talkable#2", true),
+	}
+	if calls[0].Action != fixedIn || calls[1].Action != declined {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if got, want := FixedCall("2101", magnums, "b2b2b2b", true).Action,
+		"reply fixed in b2b2b2b in magnum's thread and resolve it: "+magnums; got != want {
+		t.Errorf("a fixed finding whose reply failed in magnum's thread = %q, want %q", got, want)
+	}
+	if got := DeclinedCall("4302616576", human, "P1", "app/a.rb:3", "talkable/talkable#2", false).Action; !strings.HasPrefix(got, "decide a human's P1 on app/a.rb:3: ") {
+		t.Errorf("a declined finding in a human's thread = %q", got)
+	}
+	msg := "fix: " + FixCallsText(calls, "", report)
+	if want := "fix: " + fixedIn + "; " + declined + "; details: " + report; msg != want {
+		t.Fatalf("message = %q, want %q", msg, want)
+	}
+
+	r := Explain(KindFix, msg, "talkable#2")
+	if r.Kind != KindFix || r.Stage != StageFix || r.Summary != "fix: reply in 1 thread, decide 1 finding" {
+		t.Errorf("reason kind %q stage %q summary %q", r.Kind, r.Stage, r.Summary)
+	}
+	steps := []string{fixedIn, declined, "details: " + report}
+	if !slices.Equal(r.Steps, steps) || r.Fix != strings.Join(steps, "; ") {
+		t.Errorf("steps %q\nfix %q", r.Steps, r.Fix)
+	}
+	if !slices.Equal(r.NeedsYou, calls) {
+		t.Errorf("needs you = %+v, want %+v", r.NeedsYou, calls)
+	}
+	if r := Explain("", msg, "talkable#2"); r.Kind != KindFix || len(r.NeedsYou) != 2 {
+		t.Errorf("a row stored without its kind: kind %q, needs you %+v", r.Kind, r.NeedsYou)
+	}
+
+	more := "1 more finding needs your call (2101 P1 app/models/offer.rb:42)"
+	r = Explain(KindFix, "fix: "+FixCallsText(calls[1:], more, report), "talkable#2")
+	if r.Summary != "fix: decide 1 finding, 1 more needs your call" || !slices.Equal(r.Steps, []string{declined, more, "details: " + report}) {
+		t.Errorf("with older words: summary %q, steps %q", r.Summary, r.Steps)
+	}
+
+	ended := "fix loop ended: the re-review did not post (error); " + FixCallsText(calls[:1], "", report)
+	r = Explain(KindFix, ended, "talkable#2")
+	if r.Summary != "fix loop ended: the re-review did not post (error); reply in 1 thread" || len(r.NeedsYou) != 1 ||
+		!slices.Equal(r.Steps, []string{fixedIn, "details: " + report}) {
+		t.Errorf("after a re-review that did not post: summary %q, steps %q, needs you %+v", r.Summary, r.Steps, r.NeedsYou)
+	}
+
+	if r := Explain(KindFix, "fix: 2 findings need your call: "+report, "talkable#2"); len(r.NeedsYou) != 0 || len(r.Steps) != 0 {
+		t.Errorf("the older words name calls: %+v", r)
 	}
 }

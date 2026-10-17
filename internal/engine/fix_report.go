@@ -13,7 +13,10 @@ package engine
 //	## Replied
 //	N threads (a fixed, b already fixed, c not a bug, d won't fix)
 //	## Needs you
-//	- <comment id> <priority> <path>:<line>: <reason>      or "none"
+//	- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why>   or "none";
+//	- <comment id> <priority> <path>:<line>: not fixed. <reason>      the words
+//	                              after the place say what the fixer did
+//	                              (fix_calls.go reads them)
 //
 // ParseFixReport reads it the way reportProblem reads a reviewer's report:
 // strict about the marker and the headings, lenient about whitespace.

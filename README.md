@@ -2115,7 +2115,9 @@ its "Fixed in" reply names that spec ("`<spec>` fails without it"). Every reply 
 `<!-- magnum:fix -->`: the fixer replies as you, and the marker is how the retro tells its choices from yours
 (Learning from other reviewers, below). It resolves the threads it fixed. It answers an optional finding (a P3 or a simplification) that it
 declines. It does not answer a blocking finding (P0 to P2) that it declines, nor any finding it cannot decide
-from the code. Those go under `Needs you` in its report, so the call stays yours. It never touches a thread
+from the code. Those go under `Needs you` in its report, so the call stays yours, and so does a finding it
+fixed and pushed but could not answer (its thread is one a human started, or its reply failed); each entry
+says `fixed in <sha7>.` or `not fixed.` after the finding's place. It never touches a thread
 a human started, never force-pushes or rebases, never touches another branch, and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
 
 The report is `claude-fix.md` in the head's report directory. Its first line is the run's marker. Then come
@@ -2148,7 +2150,16 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   while the fixer worked, the PR keeps waiting for the re-review of your head: the urgent toast tells you
   about the fixer, and the PR does not go to needs attention. An urgent toast names the reason and the
   report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list the
-  PR. When the fixer pushed and also left findings, the push still gets its re-review first, and the loop ends
+  PR. Findings left to you are named one by one, with what to do and where, in the toast, the events, the
+  board's card and `magnum status`: "reply fixed in <sha7> in the thread a human started and resolve it:
+  <link>" for a fix the fixer could not answer (it never writes in a person's thread; "in magnum's thread"
+  when its reply failed there), and "decide magnum's P2 on <path>:<line>: the fixer declined it; reply won't
+  fix at <link>, or `magnum fix <ref>` sends it back" for one it did not fix, the link being the finding's
+  thread; then "details: <report>", where the fixer's reasons stay. `magnum status <ref>` prints them one per
+  line under the fix line, also while the loop waits for the re-review of the fixer's push, and `--json` gives
+  them as `fix.needs_you` (`thread`, `url`, `action`). A finding whose entry does not say `fixed in` or `not
+  fixed`, the description finding, and one whose thread Magnum cannot place keep the older words ("1 more
+  finding needs your call (2101 P1 app/models/offer.rb:42)"). When the fixer pushed and also left findings, the push still gets its re-review first, and the loop ends
   after it. The urgent toast comes at once, with the fixer's push, not after the re-review (which can wait
   or run for an hour): you can act on the findings meanwhile. The loop's end after the re-review asks for the
   same call and toasts it no second time (one toast per loop cycle); the PR goes to needs attention then.
@@ -2517,7 +2528,9 @@ parked the PR (never from the error's text), since each asks something else of y
 (its setup failed three times on one head: fix the cause, then `r`), `attention · blocked` (the judge
 reported a blocker or waits on a dialog: `o` opens its pane), `attention · identity` (the judge's identity
 check failed, or a review carrying the run's marker came from another login), `attention · fix` (a fix
-loop left findings to you, reached its cap or failed: read the fixer's report), `attention · overload`
+loop left findings to you, reached its cap or failed: the card's next step says what each finding the fixer
+left asks of you and links its thread, "reply in 1 thread, decide 1 finding" in the line, else read the
+fixer's report), `attention · overload`
 (the agent's API stayed overloaded) or `attention · no review` (the judge posted nothing after a nudge, or
 an inconsistent result). A reason Magnum does not know keeps the bare `attention`; the card gives the
 cause, the next step and the end of the output, and a snooze's time gives way to the cause. When a launch

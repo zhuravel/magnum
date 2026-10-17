@@ -32,7 +32,10 @@ const (
 	// operator's PR) needs the author: findings it left to them, or a fix
 	// run that failed. Its message is the job's sentence ("fix: 2 findings
 	// need your call: <report>", "fix run failed: …", "fix guard failed: …",
-	// "fix settle failed: …"), with the fixer's report path when it has one.
+	// "fix settle failed: …"), with the fixer's report path when it has one,
+	// or a call per finding with its thread's link and the report last
+	// ("fix: reply fixed in <sha7> in … and resolve it: <url>; …; details:
+	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry.
 	KindFix = "fix"
 )
 
@@ -87,6 +90,15 @@ type Reason struct {
 	Summary string `json:"summary"`
 	// Fix is the next step, with the PR's reference filled in.
 	Fix string `json:"fix"`
+	// Steps are Fix's parts, one per line for a detail view, when it has
+	// several: a fix job's call per finding its fixer left to the author,
+	// then the report ("details: <path>"); Fix joins them with "; ". Empty
+	// for a one-part step.
+	Steps []string `json:"steps,omitempty"`
+	// NeedsYou are the calls of a fix job's message (KindFix): each finding
+	// its fixer left to the author with its thread and what to do there.
+	// Empty for every other reason, and for a message in the older words.
+	NeedsYou []FixCall `json:"needs_you,omitempty"`
 	// Tail is the end of the failing command's output, cleaned (at most
 	// TailLines lines), for a detail view; empty when there was none.
 	Tail []string `json:"tail,omitempty"`
@@ -198,7 +210,12 @@ func Explain(kind, msg, ref string) Reason {
 	}
 	lines := cleanLines(output)
 	r.Tail = lines[max(0, len(lines)-TailLines):]
-	r.Cause, r.Fix = cause(r, chain, output, lines, ref)
+	if prefix, calls, steps, ok := fixCalls(textx.FirstLine(chain)); ok && r.Kind == KindFix {
+		r.NeedsYou, r.Steps = calls, steps
+		r.Cause, r.Fix = fixCallsCause(prefix, calls, steps), strings.Join(steps, "; ")
+	} else {
+		r.Cause, r.Fix = cause(r, chain, output, lines, ref)
+	}
 	r.Cause = clip(r.Cause)
 	r.Summary = clip(summary(r))
 	if note != "" {

@@ -9202,6 +9202,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   handling knows when it declines it); matching the error text for magnum's side (the kinds already say
   it); and storing the verdict line's text with the run (the counts rebuild it, and the result file has no
   such field).
+- **A fix loop that needs you says what to do per finding, with the thread's link** (2026-10-17, amends
+  "The fix loop: magnum fixes its own findings on your PRs" and "A fixer's "needs your call" after a push
+  toasts at once"; the operator asked for it). On talkable-integration#867 a loop ended with "fix: 2
+  findings need your call (4302616576 P2 src/integration.js:135, 4302866759 P2 src/integration.js:1706):
+  <report>". One finding was fixed and pushed, but its thread was a colleague's, where the fixer never
+  writes, so the author's "fixed" reply was missing; the other was magnum's own P2, which the fixer declined
+  because its proof needs a committed TLS key. Only the report's prose said so. Now the fix skill starts
+  each `Needs you` entry's reason with `fixed in <sha7>.` (fixed and pushed but not answered: a thread a
+  human started, or a reply that failed) or `not fixed.`, and the engine reads those words with the id,
+  priority and place (`needsYouEntryRe`, still one parser). Whose thread it is comes from the files beside
+  the report: the round's `review-threads.json` lists magnum's threads (the reviewer login's, former logins
+  included) as the round that posted the fixed review found them, and `review.json` that review's own
+  comments, which the threads file predates (matched by path, line and priority); a thread in neither is
+  one a human started, once the threads file was read. Each entry read so is a call (`attention.FixCall`):
+  "reply fixed in <sha7> in the thread a human started and resolve it: <link>" ("in magnum's thread" when
+  its reply failed), or "decide magnum's P2 on <path>:<line>: the fixer declined it; reply won't fix at
+  <link>, or `magnum fix <ref>` sends it back" ("a human's" in a person's thread), the link being
+  `<PR>#discussion_r<id>`. The message joins the calls with "; " and ends with "details: <report>"
+  (`attention.FixCallsText`). It is the text of the `fix.needs_you` events, the PR's `last_error` and
+  `pr.needs_attention`, and the toast (the summary "fix: reply in 1 thread, decide 1 finding", then a call
+  per line); through `attention.Explain` (the new `Reason.Steps` and `Reason.NeedsYou`) it is the next step
+  of the card and the board. `magnum status <ref>` prints the calls one per line under the fix line, also
+  while the loop waits for the re-review of the push (`engine.FixCalls` reads the row's entries); `--json`
+  gives them as `fix.needs_you` (`thread`, `url`, `action`) in place of the row's raw entries; and `magnum
+  fix --wait` counts them on its end line with the calls below. An entry without those words, the
+  description finding (no thread), and one whose thread the files cannot place keep the older words ("1
+  more finding needs your call (…)"), and a report with no call keeps today's message whole. The fixer's
+  reasons are still never read: they stay in the report, which "details:" names. The board's pill keeps
+  `attention · fix`, one word per kind, while its line counts the calls. Rejected: the fixer replying in a
+  human's thread as the author (the operator's conversations stay the operator's, and the skill keeps
+  "never reply to a thread that a human started"); reading the thread's author from GitHub at the loop's
+  end to name the colleague (a new call on the loop's end for a name the link shows); putting the first
+  clause of the fixer's reason into the sentence and the JSON (the fixer's words about the PR never reach
+  events, attention, toasts or logs, as `needsYouEntryRe` states); and taking every thread missing from
+  the threads file for a human's (the fixed review's own comments are not in it yet, and its declined
+  findings are the common case).
 
 ## Learned rules
 

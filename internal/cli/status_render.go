@@ -607,13 +607,16 @@ func inspDedupe(ss []string) []string {
 // statusRenderFix prints the card's fix line: the PR's fix loop ("cycle 1
 // of 3 · claude-fix · started by magnum fix 12:30 · report <path>", with
 // what the cycle did to the fixer's conversation after the role when it
-// compacted it or started it fresh: "claude-fix · compacted 82% → 31%")
-// and its opt-out of autofix ("off since 12:30 (magnum fix --off)"), the
-// second on a line of its own when it has both; nothing when it has
-// neither.
-func statusRenderFix(w io.Writer, loop *engine.FixState, off *engine.FixOff, now time.Time) {
+// compacted it or started it fresh: "claude-fix · compacted 82% → 31%"),
+// under it the calls of the findings its fixer left to the author when it
+// pushed, one per line, and its opt-out of autofix ("off since 12:30
+// (magnum fix --off)"), the opt-out on a line of its own when it has a loop
+// too; nothing when it has neither. The calls of a loop that ended are the
+// attention's, which its own fix line prints.
+func statusRenderFix(w io.Writer, view *statusFixLoop, off *engine.FixOff, now time.Time) {
 	label := "  fix:       "
-	if f := loop; f != nil {
+	if view != nil && view.FixState != nil {
+		f := view.FixState
 		s := fmt.Sprintf("cycle %d of %d", f.Cycle, f.Cap)
 		if f.Role != "" {
 			s += " · " + f.Role
@@ -632,6 +635,9 @@ func statusRenderFix(w io.Writer, loop *engine.FixState, off *engine.FixOff, now
 		}
 		fmt.Fprintf(w, "%s%s\n", label, statusSafe(s, 0))
 		label = "             "
+		for _, c := range view.NeedsYou {
+			fmt.Fprintf(w, "%s%s\n", label, statusSafe(c.Action, 0))
+		}
 	}
 	if o := off; o != nil {
 		s := "off"
@@ -683,7 +689,17 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 		if a.Step != "" {
 			fmt.Fprintf(w, "  step:      %s\n", statusSafe(a.Step, 0))
 		}
-		fmt.Fprintf(w, "  fix:       %s\n", statusSafe(a.Fix, 0))
+		steps := a.Steps // a fix job's call per finding, then its report
+		if len(steps) == 0 {
+			steps = []string{a.Fix}
+		}
+		for i, s := range steps {
+			label := "             "
+			if i == 0 {
+				label = "  fix:       "
+			}
+			fmt.Fprintf(w, "%s%s\n", label, statusSafe(s, 0))
+		}
 		for i, l := range a.Tail {
 			label := "             "
 			if i == 0 {

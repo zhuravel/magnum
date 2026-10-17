@@ -43,9 +43,12 @@ const autofixBy = "autofix"
 // description: <reason>" for the review body's "Description: ✗" finding,
 // which has the review's id and no priority), the place in plain path
 // characters only, so no control character or other text of the fixer's
-// reaches a message. The reason is the fixer's own words about the PR, so
-// it is never read.
-var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description)(?::|\s|$)`)
+// reaches a message, and the words the fix skill starts the reason with:
+// "fixed in <sha>." (group 4: the commit) or "not fixed." (group 5), as
+// fix_calls.go reads them (readNeedsYouEntry). The reason is the fixer's own
+// words about the PR, so it is never read.
+var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description)(?::|\s|$)` +
+	`(?:\s*(?i:fixed in ([0-9a-f]{7,40})|(not fixed))(?:[.,;:]|\s|$))?`)
 
 // fixAfterRound decides what the end of a review round (rj, as dispatch
 // launched it) means for the PR's fix loop: a loop waiting for this
@@ -202,11 +205,11 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	case res.Outcome != pipeline.OutcomePosted:
 		msg := fmt.Sprintf("fix loop ended: the re-review did not post (%s)", cmp.Or(res.Outcome, pipeline.OutcomeError))
 		if len(st.NeedsYou) > 0 {
-			msg += "; " + needsYourCall(st.NeedsYou, st.Report)
+			msg += "; " + needsYouText(st.NeedsYou, st.Report, job.pr.URL, job.label(), true)
 		}
 		e.endLoopForAttention(ctx, job, raw, "fix.failed", msg)
 	case len(st.NeedsYou) > 0:
-		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+needsYourCall(st.NeedsYou, st.Report))
+		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+needsYouText(st.NeedsYou, st.Report, job.pr.URL, job.label(), true))
 	case !fixRemains(res):
 		e.fixLoopDone(ctx, job, raw, cmp.Or(res.TargetSHA, st.Head))
 	case st.Cycle >= st.Cap:
@@ -623,27 +626,30 @@ func roundFindings(res pipeline.RoundResult) int {
 // and place alone (needsYouEntryRe); an entry magnum cannot read so is only
 // counted ("1 entry magnum could not read").
 func needsYourCall(entries []string, report string) string {
-	var named []string
+	n := len(entries)
+	s := textx.Count(n, "finding", "findings") + " " + textx.Plural(n, "needs", "need") + " your call"
+	if names := needsYouNames(entries); len(names) > 0 {
+		s += " (" + strings.Join(names, ", ") + ")"
+	}
+	return s + ": " + report
+}
+
+// needsYouNames names the entries by what magnum can read of them (their
+// id, priority and place), and counts the others ("1 entry magnum could not
+// read").
+func needsYouNames(entries []string) []string {
+	var names []string
 	other := 0
 	for _, entry := range entries {
-		m := needsYouEntryRe.FindStringSubmatch(strings.TrimSpace(entry))
-		if m == nil {
+		n, ok := readNeedsYouEntry(entry)
+		if !ok {
 			other++
 			continue
 		}
-		name := m[1] + " " + m[3]
-		if m[2] != "" {
-			name = m[1] + " " + m[2] + " " + m[3]
-		}
-		named = append(named, name)
+		names = append(names, n.name())
 	}
 	if other > 0 {
-		named = append(named, textx.Count(other, "entry", "entries")+" magnum could not read")
+		names = append(names, textx.Count(other, "entry", "entries")+" magnum could not read")
 	}
-	n := len(entries)
-	s := textx.Count(n, "finding", "findings") + " " + textx.Plural(n, "needs", "need") + " your call"
-	if len(named) > 0 {
-		s += " (" + strings.Join(named, ", ") + ")"
-	}
-	return s + ": " + report
+	return names
 }

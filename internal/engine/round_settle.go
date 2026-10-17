@@ -138,7 +138,7 @@ func (e *Engine) needsAttentionKeyed(ctx context.Context, job *roundJob, pr stor
 	reason := attention.Explain(why, msg, label)
 	e.event(ctx, "warn", prSubject(job.repo, pr.Number), "pr.needs_attention", why+": "+msg,
 		map[string]any{"stage": reason.Stage, "cause": reason.Cause, "fix": reason.Fix})
-	e.urgent(key, "magnum: "+label+" needs attention", reason.Summary, window)
+	e.urgent(key, "magnum: "+label+" needs attention", attentionToast(reason), window)
 	e.revealAttention(ctx, pr.ID, nil, why, key)
 }
 

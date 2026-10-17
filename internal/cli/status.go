@@ -469,12 +469,24 @@ type statusDetail struct {
 	Evidence *engine.EvidenceCounts `json:"evidence,omitempty"`
 	// Snooze is the PR's snooze while it holds (magnum snooze, the board's z).
 	Snooze *engine.Snooze `json:"snooze,omitempty"`
-	// Fix is the PR's fix loop while it runs (magnum fix, autofix), and
-	// FixOff its opt-out of autofix (magnum fix --off); nil when it has none.
-	Fix    *engine.FixState `json:"fix,omitempty"`
-	FixOff *engine.FixOff   `json:"fix_off,omitempty"`
+	// Fix is the PR's fix loop while it runs (magnum fix, autofix) and the
+	// findings its fixer left to the author, and FixOff its opt-out of
+	// autofix (magnum fix --off); nil when it has none.
+	Fix    *statusFixLoop `json:"fix,omitempty"`
+	FixOff *engine.FixOff `json:"fix_off,omitempty"`
 
 	isJudge func(role string) bool // a configured judge's role name (actIsJudge)
+}
+
+// statusFixLoop is the card's fix loop: its row while it runs (nil once it
+// ended), and NeedsYou, the calls of the findings its fixer left to the
+// author that magnum can read (engine.FixCalls while the loop waits for the
+// re-review of its push, the attention reason's once the loop ended needing
+// you). --json prints NeedsYou as fix.needs_you in place of the row's
+// entries, which are the fixer's own words.
+type statusFixLoop struct {
+	*engine.FixState
+	NeedsYou []attention.FixCall `json:"needs_you,omitempty"`
 }
 
 type statusSession struct {

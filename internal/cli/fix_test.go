@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -498,6 +499,16 @@ func TestFixWaitSaysHowTheLoopEnded(t *testing.T) {
 		{name: "the fixer left findings to the author", code: 1,
 			err: []string{"talkable#5: needs you: 2 findings need your call (2101 P1 app/models/offer.rb:42): " + report, "fix: read claude-fix's report " + report}, end: func(h *actHarness, pr store.PR) {
 				msg := "fix: 2 findings need your call (2101 P1 app/models/offer.rb:42): " + report
+				h.fixEvent("fix.needs_you", msg, map[string]any{"cycle": 1})
+				needsAttention(h, pr, msg)
+			}},
+		// A call per finding: the counts on the end's line, then each call and the report on a line of its own.
+		{name: "the fixer said what each finding left to the author asks", code: 1,
+			err: []string{"talkable#5: needs you: reply in 1 thread\nfix: reply fixed in b2b2b2b in the thread a human started and resolve it: " +
+				"https://github.com/talkable/talkable/pull/5#discussion_r2101\n     details: " + report + "\n"},
+			end: func(h *actHarness, pr store.PR) {
+				msg := "fix: " + attention.FixCallsText([]attention.FixCall{
+					attention.FixedCall("2101", "https://github.com/talkable/talkable/pull/5#discussion_r2101", "b2b2b2b", false)}, "", report)
 				h.fixEvent("fix.needs_you", msg, map[string]any{"cycle": 1})
 				needsAttention(h, pr, msg)
 			}},

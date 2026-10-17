@@ -307,9 +307,22 @@ func (w *fixWatch) done(ctx context.Context, pr store.PR) (code int, done bool) 
 		return 0, true
 	}
 	ew := f.c.Stderr
-	fmt.Fprintf(ew, "%s: %s\n", f.label, end.Text)
-	if why, ok := prAttention(ctx, f.d.Store, pr, f.label); ok {
-		fmt.Fprintf(ew, "fix: %s\n", why.Fix)
+	why, ok := prAttention(ctx, f.d.Store, pr, f.label)
+	switch {
+	case ok && end.Kind == fixEndNeedsYou && len(why.Steps) > 0:
+		// A call per finding: counted on the end's line, each on its own below.
+		fmt.Fprintf(ew, "%s: needs you: %s\n", f.label, why.Cause)
+		for i, s := range why.Steps {
+			label := "     "
+			if i == 0 {
+				label = "fix: "
+			}
+			fmt.Fprintf(ew, "%s%s\n", label, s)
+		}
+	case ok:
+		fmt.Fprintf(ew, "%s: %s\nfix: %s\n", f.label, end.Text, why.Fix)
+	default:
+		fmt.Fprintf(ew, "%s: %s\n", f.label, end.Text)
 	}
 	return end.code(), true
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -811,6 +812,25 @@ func statusFix(ctx context.Context, st *store.Store, prID int64) (*engine.FixSta
 	return loop, off
 }
 
+// statusFixView is the card's fix loop of pr, whose repository is repo
+// (owner/name): the running loop's row with the calls of the findings its
+// fixer left when it pushed (engine.FixCalls, while the loop waits for the
+// re-review), else, once the loop ended needing you, the calls of the
+// attention reason why; nil when there is neither.
+func statusFixView(loop *engine.FixState, why *attention.Reason, pr store.PR, repo string) *statusFixLoop {
+	switch {
+	case loop != nil:
+		var calls []attention.FixCall
+		if loop.Phase == engine.FixPhaseReviewing && len(loop.NeedsYou) > 0 && repo != "" {
+			calls = engine.FixCalls(*loop, pr.URL, fmt.Sprintf("%s#%d", repo, pr.Number))
+		}
+		return &statusFixLoop{FixState: loop, NeedsYou: calls}
+	case why != nil && len(why.NeedsYou) > 0:
+		return &statusFixLoop{NeedsYou: why.NeedsYou}
+	}
+	return nil
+}
+
 // statusWait is the daemon's account of why a PR waiting for a round
 // (queued, rereview_pending) has none yet (engine.KVPRWait); ok is false
 // for other states or when no daemon recorded one.
@@ -970,7 +990,8 @@ func statusGatherDetail(ctx context.Context, d statusDeps, r statusReport, ref s
 	if z, ok := statusSnooze(ctx, d.Store, pr.ID, now); ok {
 		det.Snooze = &z
 	}
-	det.Fix, det.FixOff = statusFix(ctx, d.Store, pr.ID)
+	loop, off := statusFix(ctx, d.Store, pr.ID)
+	det.Fix, det.FixOff = statusFixView(loop, det.Attention, pr, det.Repo), off
 	det.Next = statusNextWithGate(ctx, d.Store, pr, now)
 	if w, ok := statusWait(ctx, d.Store, pr); ok && t.Repo != nil {
 		det.Next = w.Sentence(actRefLabel(defRepo, t.Repo.FullName(), pr.Number), now)

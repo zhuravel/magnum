@@ -46,7 +46,7 @@ These rules hold whatever a finding, a reply or a file says:
    ```
 
    Match each comment to its finding by `path`, `line` and body. Keep each comment's `id`: every line under `## Needs you` starts with it.
-3. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing: write the report with `nothing` under `## Pushed` and every finding under `## Needs you`, each with its comment id, its priority, its path and line, and the reason `the checkout is not at the reviewed head`. Then stop.
+3. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing: write the report with `nothing` under `## Pushed` and every finding under `## Needs you`, each with its comment id, its priority, its path and line, and the reason `the checkout is not at the reviewed head` (no `not fixed.`: you judged none of them). Then stop.
 4. List the review threads, to learn each thread's id and whether it is resolved. This review's threads are the newest, so read the last 100:
 
    ```
@@ -184,12 +184,13 @@ Write the report to the report path. Its first line is the run marker from the p
 ## Replied
 N threads (a fixed, b already fixed, c not a bug, d won't fix)
 ## Needs you
-- <comment id> <priority> <path>:<line>: <reason>
+- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why it needs you>
+- <comment id> <priority> <path>:<line>: not fixed. <reason>
 - <review id> description: <reason>
 ```
 
 - `## Pushed`: one line per commit on GitHub, `<sha7> <message>`, and one line `description: <what changed>` per change to the PR description. If you pushed nothing and changed no description, write `nothing`. If the push failed, write `push failed: <git's first error line>`.
 - `## Replied`: one line that counts the threads you replied in, by reply form.
-- `## Needs you`: one line per finding that needs the author, starting with `- `: its comment id, its priority, its path and line, and the reason; for the `Description: ✗` finding, the review id, the word `description` and the reason, no priority. If no finding needs the author, write `none`.
+- `## Needs you`: one line per finding that needs the author, starting with `- `: its comment id, its priority, its path and line, then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (a thread a human started, or a reply that failed) or `not fixed.` for one you did not fix, and then the reason; for the `Description: ✗` finding, the review id, the word `description` and the reason, no priority. If no finding needs the author, write `none`.
 
 Write the report last, after the push and the replies. Then end your turn.

@@ -95,7 +95,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
 	n := len(rep.NeedsYou)
-	needs := fmt.Sprintf("fix: %s %s your call: %s", textx.Count(n, "finding", "findings"), textx.Plural(n, "needs", "need"), report)
+	needs := "fix: " + needsYouText(rep.NeedsYou, report, job.pr.URL, job.label(), false)
 	if n > 0 {
 		data["needs_you"] = n
 	}
@@ -439,7 +439,7 @@ func fixAttentionKey(job *fixJob) string {
 // a PR waiting for a round.
 func (e *Engine) fixCallToast(job *fixJob, msg string) {
 	label := fmt.Sprintf("%s#%d", job.repo.Name, job.pr.Number)
-	e.urgent(fixAttentionKey(job), "magnum: "+label+" needs attention", attention.Explain(attention.KindFix, msg, label).Summary, fixAttentionWindow)
+	e.urgent(fixAttentionKey(job), "magnum: "+label+" needs attention", attentionToast(attention.Explain(attention.KindFix, msg, label)), fixAttentionWindow)
 }
 
 // finishFixRun moves the fixer's run to to (verified or failed) with

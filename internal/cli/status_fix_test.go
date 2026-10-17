@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -172,5 +176,105 @@ func TestTheStatusCardNamesTheFixersCompaction(t *testing.T) {
 		if want, _ := json.Marshal(tc.context); !strings.Contains(js.String(), `"context": `+string(want)) {
 			t.Errorf("JSON of %d lacks the context %s:\n%s", tc.n, want, js.String())
 		}
+	}
+}
+
+// A fix loop that ended needing you because its fixer left findings says on
+// the card what to do about each, one per line under the fix line with its
+// thread's link, and the report last ("details: <path>"); `--json` gives the
+// calls as fix.needs_you (thread, url, action). A loop still waiting for the
+// re-review of its push names the same calls under its own fix line, read
+// from the entries its row keeps, whose words (the fixer's) never reach the
+// card or the JSON.
+func TestTheStatusCardSaysWhatToDoPerThread(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prOf := func(n int) store.PR {
+		pr, err := st.PRByRepoNumber(ctx, repo.ID, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pr
+	}
+	const report = "/state/reviews/talkable/talkable/11950/abcdef012345/claude-fix.md"
+	human, magnums := "https://github.com/talkable/talkable/pull/11950#discussion_r4302616576", "https://github.com/talkable/talkable/pull/11950#discussion_r4302866759"
+	calls := []attention.FixCall{
+		attention.FixedCall("4302616576", human, "b2b2b2b", false),
+		attention.DeclinedCall("4302866759", magnums, "P2", "src/integration.js:1706", "talkable/talkable#11950", true),
+	}
+	parked := prOf(11950)
+	if err := st.TransitionPR(ctx, parked.ID, []string{store.PRNeedsAttention}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+		u.Set("last_error", "fix: "+attention.FixCallsText(calls, "", report))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKV(ctx, engine.KVPRAttention(parked.ID), attention.KindFix); err != nil {
+		t.Fatal(err)
+	}
+	r, err := statusGather(ctx, d, statusOptions{Ref: "11950"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	statusRender(&out, r)
+	want := "  fix:       " + calls[0].Action + "\n             " + calls[1].Action + "\n             details: " + report + "\n"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("card lacks\n%s\n%s", want, out.String())
+	}
+	var doc struct {
+		Detail struct {
+			Fix struct {
+				NeedsYou []attention.FixCall `json:"needs_you"`
+			} `json:"fix"`
+		} `json:"detail"`
+	}
+	var js bytes.Buffer
+	if err := writeJSON(&js, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(js.Bytes(), &doc); err != nil || !slices.Equal(doc.Detail.Fix.NeedsYou, calls) {
+		t.Errorf("fix.needs_you = %+v (%v), want %+v:\n%s", doc.Detail.Fix.NeedsYou, err, calls, js.String())
+	}
+
+	reviewing := prOf(11931)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "review-threads.json"), []byte(`[{"id":"PRRT_x","comment_id":4302866759}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loopReport := filepath.Join(dir, "claude-fix.md")
+	b, err := json.Marshal(engine.FixState{Cycle: 1, Cap: 3, Phase: engine.FixPhaseReviewing, By: "magnum fix", Report: loopReport,
+		StartedAt: now.Add(-time.Hour), Role: "claude-fix",
+		NeedsYou: []string{"4302616576 P2 src/integration.js:135: fixed in b2b2b2b. A human started this thread."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKV(ctx, engine.KVPRFix(reviewing.ID), string(b)); err != nil {
+		t.Fatal(err)
+	}
+	r, err = statusGather(ctx, d, statusOptions{Ref: "11931"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	statusRender(&out, r)
+	call := attention.FixedCall("4302616576", "https://github.com/talkable/talkable/pull/11931#discussion_r4302616576", "b2b2b2b", false)
+	if want := " · report " + loopReport + "\n             " + call.Action + "\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("card of the loop waiting for its re-review lacks\n%s\n%s", want, out.String())
+	}
+	js.Reset()
+	if err := writeJSON(&js, r); err != nil {
+		t.Fatal(err)
+	}
+	doc.Detail.Fix.NeedsYou = nil
+	if err := json.Unmarshal(js.Bytes(), &doc); err != nil || !slices.Equal(doc.Detail.Fix.NeedsYou, []attention.FixCall{call}) ||
+		!strings.Contains(js.String(), `"phase": "reviewing"`) {
+		t.Errorf("JSON of the loop waiting for its re-review:\n%s", js.String())
+	}
+	if strings.Contains(out.String()+js.String(), "A human started") {
+		t.Errorf("the fixer's words reach the card or the JSON:\n%s\n%s", out.String(), js.String())
 	}
 }
