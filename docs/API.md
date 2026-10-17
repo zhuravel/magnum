@@ -7549,14 +7549,14 @@ type Baseline struct {
     not repeat.
 
 func Baselines(runs []Run, inputs string, c Case) []Baseline
-    Baselines lists, newest run first, the stored replays of c that a run
-    with inputs (Run.Inputs: the judge skill, the roles' prompts and the role
-    config) may reuse instead of replaying c: runs that recorded the same
-    inputs from a clean checkout, whose case of c's name reviewed c's head with
-    every role (not a judge-only replay, CaseRun.JudgeOnly) and has a score.
-    Unknown inputs ("") reuse nothing. The inputs leave magnum's code out,
-    so the caller decides whether the code of Commit reviews as its own does
-    (eval-at.sh compares the Go files of the two commits).
+    Baselines lists, newest run first, the stored replays of c that a run with
+    inputs (Run.Inputs: the judge skill, the roles' prompts, the role config
+    and the stakes lines) may reuse instead of replaying c: runs that recorded
+    the same inputs from a clean checkout, whose case of c's name reviewed c's
+    head with every role (not a judge-only replay, CaseRun.JudgeOnly) and has
+    a score. Unknown inputs ("") reuse nothing. The inputs leave magnum's code
+    out, so the caller decides whether the code of Commit reviews as its own
+    does (eval-at.sh compares the Go files of the two commits).
 
 func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baseline
     JudgeBaselines lists, newest run first, the stored replays of c whose
@@ -7733,12 +7733,13 @@ type Run struct {
 	Finished time.Time         `json:"finished,omitzero"`
 	Cases    []CaseRun         `json:"cases"`
 	// Inputs identifies what the review read besides the PR and the notes: a hash of the judge
-	// skill, the roles' prompts and the role config ("" in runs before it was recorded). Baselines
-	// matches on it.
+	// skill, the roles' prompts, the role config and the stakes lines ("" in runs before it was
+	// recorded). Baselines matches on it.
 	Inputs string `json:"inputs,omitempty"`
-	// ReviewerInputs is the part of Inputs the reviewer roles read: their prompts and role config,
-	// the judges' left out ("" in runs before it was recorded). A judge-only replay takes the reports
-	// of a full replay whose reviewers read what its own would (FullReplayFor).
+	// ReviewerInputs is the part of Inputs the reviewer roles read: their prompts, role config and
+	// the stakes lines, the judges' left out ("" in runs before it was recorded). A judge-only
+	// replay takes the reports of a full replay whose reviewers read what its own would
+	// (FullReplayFor).
 	ReviewerInputs string `json:"reviewer_inputs,omitempty"`
 	NoNotes        bool   `json:"no_notes,omitempty"` // no role was given the notes (--no-notes)
 	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
@@ -7888,11 +7889,13 @@ func Inputs(cfg *config.Config) string
     Inputs is a hash (12 hex) of what a replay's review reads besides the PR and
     the notes (eval.Run.Inputs): every role's config with the model it resolves
     to and its kind's config, the prompt files the roles name as they resolve
-    now (the checkout's prompts_dir, else the embedded ones), and each judge's
-    skill file. The texts count, not where they are: a judge's skill path is
-    left out of its role config, so a candidate directory with the same texts
-    as the checkout has its inputs (a landed candidate's replays are the next
-    baseline). magnum's own code is not part of it. "" without a config.
+    now (the checkout's prompts_dir, else the embedded ones), each judge's
+    skill file, and the stakes lines of the [[watch]] and [[repo]] blocks
+    (what the judge and the reviewers size a harm against). The texts count,
+    not where they are: a judge's skill path is left out of its role config,
+    so a candidate directory with the same texts as the checkout has its inputs
+    (a landed candidate's replays are the next baseline). magnum's own code is
+    not part of it. "" without a config.
 
 func Refused(ctx context.Context, d Deps, ec eval.Case) string
     Refused says why case ec is not replayed ("" = it may be): an earlier
@@ -7903,9 +7906,10 @@ func Refused(ctx context.Context, d Deps, ec eval.Case) string
 func ReviewerInputs(cfg *config.Config) string
     ReviewerInputs is the part of Inputs the reviewer roles read
     (eval.Run.ReviewerInputs): the same hash over the roles that are not judges,
-    so a change to a judge's prompts or skill leaves it alone and a judge-only
-    replay can take the reports of a full replay whose reviewers read what its
-    own would (eval.FullReplayFor). "" without a config.
+    with the stakes lines the reviewers read too, so a change to a judge's
+    prompts or skill leaves it alone and a judge-only replay can take
+    the reports of a full replay whose reviewers read what its own would
+    (eval.FullReplayFor). "" without a config.
 
 func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun)
     RunCase replays case ec and scores it. Every failure becomes the case's

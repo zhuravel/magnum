@@ -143,7 +143,7 @@ type Baseline struct {
 }
 
 // Baselines lists, newest run first, the stored replays of c that a run with inputs (Run.Inputs:
-// the judge skill, the roles' prompts and the role config) may reuse instead of replaying c: runs
+// the judge skill, the roles' prompts, the role config and the stakes lines) may reuse instead of replaying c: runs
 // that recorded the same inputs from a clean checkout, whose case of c's name reviewed c's head
 // with every role (not a judge-only replay, CaseRun.JudgeOnly) and has a score. Unknown inputs ("")
 // reuse nothing. The inputs leave magnum's code out, so the

@@ -714,12 +714,12 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # include_own = true                    # false: skip PRs authored by any of your logins (every gh identity and every
 #                                       # watch's posting identity, the board's "mine"), not only the poll login
 # skip_bot_authors = true
-# allow_bot_authors = ["helper[bot]"]   # bots (GitHub logins, any case, with or without [bot]) whose PRs are reviewed
-#                                       # although skip_bot_authors skips bots: an App that writes code for the team,
-#                                       # not every dependency bot; skip_authors wins over it, and with
-#                                       # skip_bot_authors = false it changes nothing (default: none; a [[repo]]
-#                                       # block's adds to it)
-# skip_authors = ["dependabot"]
+# allow_bot_authors = ["helper[bot]"]   # bots (GitHub logins, any case, with or without [bot]; app/helper is
+#                                       # refused) whose PRs are reviewed although skip_bot_authors skips bots:
+#                                       # an App that writes code for the team, not every dependency bot;
+#                                       # skip_authors wins over it, and with skip_bot_authors = false it
+#                                       # changes nothing (default: none; a [[repo]] block's adds to it)
+# skip_authors = ["dependabot"]         # GitHub logins (any case, with or without [bot]; app/<name> is refused) whose PRs are skipped
 # skip_labels = []
 # skip_paths = ["docs/**", "**/*.md"]   # skip a PR when every changed file matches ("**" spans directories, "*" stays in one)
 # skip_cross_repository = true
@@ -742,7 +742,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # auto_approve_body = "Approved after Magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA,
 #                                       # .ReviewURL, .Repo, .Number (unset: a default line linking the review);
 #                                       # magnum adds its marker
-# auto_approve_skip_authors = ["alice"] # GitHub logins (any case, with or without [bot]) whose PRs magnum never
+# auto_approve_skip_authors = ["alice"] # GitHub logins (any case, with or without [bot]; app/<name> is refused) whose PRs magnum never
 #                                       # approves as you on its own, however clean; A still approves them, an
 #                                       # approval standing from before stays, GitHub never sees the list
 #                                       # (default: none; a [[repo]] block's adds to it)

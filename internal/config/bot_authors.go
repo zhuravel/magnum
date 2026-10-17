@@ -38,14 +38,42 @@ func listsLogin(logins []string, login string) bool {
 
 // validateLogins checks a list of GitHub logins under key (allow_bot_authors,
 // auto_approve_skip_authors) of a [[watch]] or [[repo]] block (where names
-// it): none empty or with whitespace in it. Logins that differ only in case
-// or "[bot]" match as one, so a duplicate is no error.
+// it): none empty, with whitespace or a "/" in it (validateNoAppForm). Logins
+// that differ only in case or "[bot]" match as one, so a duplicate is no
+// error.
 func validateLogins(where, key string, logins []string) []error {
 	var errs []error
 	for _, l := range logins {
 		if l == "" || strings.ContainsFunc(l, unicode.IsSpace) {
 			errs = append(errs, fmt.Errorf("%s%s entry %q must be a GitHub login (not empty, no whitespace)", where, key, l))
+			continue
 		}
+		errs = append(errs, validateNoAppForm(where, key, []string{l})...)
+	}
+	return errs
+}
+
+// validateNoAppForm refuses the entries of a login list under key that have a
+// "/" in them: "app/helper" is how GitHub's URLs write an App, but a login
+// has none, and github.NormalizeLogin trims only "[bot]", so such an entry
+// matches no author and the list would do nothing with no word of why. The
+// message names the entry as written and the login after its last "/", as the
+// list reads it ("helper" or "helper[bot]"). skip_authors calls it alone: the
+// eligibility check has always trimmed an entry's padding and skipped a blank
+// one, so those stay accepted there.
+func validateNoAppForm(where, key string, logins []string) []error {
+	var errs []error
+	for _, l := range logins {
+		_, after, found := strings.CutLast(l, "/")
+		if !found {
+			continue
+		}
+		name := strings.TrimSpace(after)
+		if name == "" || strings.ContainsFunc(name, unicode.IsSpace) {
+			errs = append(errs, fmt.Errorf(`%s%s entry %q must be a GitHub login (no "/")`, where, key, l))
+			continue
+		}
+		errs = append(errs, fmt.Errorf("%s%s entry %q must be a GitHub login: write %s or %s[bot], not %s", where, key, l, name, name, l))
 	}
 	return errs
 }

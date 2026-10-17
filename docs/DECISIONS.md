@@ -8778,6 +8778,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFormatGateNamesTheFailingTestWhenItsOutputIsLong, TestAShortFailingGateOutputIsHandedOverWhole
   and TestGateOutputKeepsEveryFailureThenTheTail. Rejected: a larger line budget (the rendered prompt is
   longer than any budget, and the nudge and the stored reason would grow with it).
+- **An eval run's inputs cover the stakes lines** (2026-10-17, spec 72, amends "An eval run records its
+  inputs, the notes each judge read and the Codex points each case used" and "The operator tells the judge
+  what a repository puts at risk"). The judge and the reviewers read the repository's stakes line
+  (`Config.StakesFor`, in `judge.go` and `reviewers.go`), but `evalrun.Inputs` hashed only the roles, their
+  kinds, the prompts and the judge skill, and `eval.Baselines`, `eval.JudgeBaselines` and
+  `eval.FullReplayFor` reuse a stored replay whose `inputs` or `reviewer_inputs` match: after a stakes edit a
+  gate would have compared a candidate that read the new line with a baseline that read the old one and
+  credited the difference to the skill proposal. No harm yet (proposal 5's baseline postdates the lines).
+  Now `inputsOf` ends with every set stakes line of the config's `[[watch]]` blocks (by owner) and
+  `[[repo]]` blocks (by `owner/name`), each with its block's kind and lower-cased name and sorted by that
+  key, so the order in the file is not an input; it is written after the roles whatever role filter the
+  hash takes, so both `inputs` and `reviewer_inputs` change with a stakes edit (the reviewers read the line
+  too, and a judge-only replay takes a full replay's reports only when its reviewers read what its own
+  would). Only lines that are set count, which is all `StakesFor` reads: a config with no stakes line hashes
+  as it did before, and adding a block without one replays nothing. The operator's config sets them, so the
+  first baseline after the daemon restarts on this build is replayed once, which is what the spec asks for.
+  The hash is the run's, not a case's: an edit to one repository's line replays the baselines of every
+  case, and a line moved from a watch to a repository of it is another input although `StakesFor` gives the
+  same text; a watch's `include` and `exclude`, which decide which repositories a watch's line reaches, are
+  not hashed. `ReviewedOtherwise`'s words for a reviewer-inputs mismatch now say "other prompts or stakes
+  lines, or ran with another role config". New tests TestAStakesChangeChangesTheInputs and
+  TestTheStakesLinesCountInTheOrderOfTheirKeys (evalrun). Rejected: hashing the effective `StakesFor` of
+  each case's repository (the hash is made from the config alone, once per run, before any case); hashing
+  every block's line even when empty (a watch added without stakes would replay every baseline); hashing the
+  rendered prompts (they need a case).
+- **An `app/<name>` entry in a login list is refused** (2026-10-17, spec 72, amends "A listed bot's PR is
+  reviewed although bots are skipped"). `allow_bot_authors`, `skip_authors` and `auto_approve_skip_authors`
+  match logins with `github.SameLogin`, which trims only a trailing "[bot]", so an entry written as GitHub's
+  URLs write an App, `app/helper`, matched no author: the list did nothing and said nothing. `validateLogins`
+  (the two lists that already refused an empty or spaced entry) and the new `validateNoAppForm` (called for
+  `skip_authors` of a `[[watch]]` alone, which no check covered) now refuse an entry with a "/" in it, in the
+  loader as the other login refusals are made, naming the block and the entry as written: `watch acme:
+  allow_bot_authors entry "app/helper" must be a GitHub login: write helper or helper[bot], not app/helper`
+  (the login is what follows the last "/"; an entry with nothing after it, such as `app/`, is told to have no
+  "/"). `skip_authors` is refused for the "/" only: the eligibility check has always trimmed an entry's
+  padding and skipped a blank one, so a config with ` dependabot ` or `""` there keeps loading. A config that
+  carries such an entry stops loading until it is written `helper` or `helper[bot]`. New test
+  TestAnAppPrefixedLoginIsRefused (config). Rejected: reading `app/helper` as `helper[bot]` (a second spelling
+  for every list, and the README and the lists' comments say GitHub logins); running all of `validateLogins`
+  on `skip_authors` (a new refusal of blank and padded entries the check never minded).
 
 ## Learned rules
 

@@ -2,6 +2,7 @@ package evalrun
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -51,5 +52,62 @@ func TestInputsChangeWithTheSkillAPromptOrARoleAndReviewerInputsWithTheReviewers
 	changed("changing a reviewer's effort", true)
 	if Inputs(nil) != "" || ReviewerInputs(nil) != "" {
 		t.Error("a nil config has inputs")
+	}
+}
+
+// The judge and the reviewers read the repository's stakes line (config.StakesFor), so a replay's inputs
+// cover it: a stakes edit on a [[watch]] or a [[repo]] block is another baseline, in the round's inputs and
+// in the reviewers', and the same config gives the same hashes. A config with no stakes line hashes as it
+// did before the lines counted, so only the configs that set one replay their baseline once.
+func TestAStakesChangeChangesTheInputs(t *testing.T) {
+	cfg := testConfig(t)
+	none, noneRev := Inputs(cfg), ReviewerInputs(cfg)
+	cfg.Watches = []config.Watch{{Owner: "example", Stakes: "a billing service"}}
+	cfg.Repos = []config.Repo{{Repo: "example/widgets", Stakes: "money moves here"}}
+	all, rev := Inputs(cfg), ReviewerInputs(cfg)
+	if Inputs(cfg) != all || ReviewerInputs(cfg) != rev {
+		t.Fatalf("the same config gave inputs %q then %q: want them stable", all, Inputs(cfg))
+	}
+	if all == none || rev == noneRev {
+		t.Errorf("a config with stakes lines has the inputs %s/%s of one without (%s/%s)", all, rev, none, noneRev)
+	}
+	seen := map[string]string{all: "the start"}
+	changed := func(what string) {
+		t.Helper()
+		got, r := Inputs(cfg), ReviewerInputs(cfg)
+		if prev, ok := seen[got]; ok {
+			t.Errorf("after %s the inputs are %s, as after %s", what, got, prev)
+		}
+		seen[got] = what
+		if r == rev {
+			t.Errorf("after %s the reviewer inputs are still %s", what, r)
+		}
+		rev = r
+	}
+	cfg.Watches[0].Stakes = "a billing service, and the ledger"
+	changed("editing the watch's stakes")
+	cfg.Repos[0].Stakes = "money moves here, and PII"
+	changed("editing the repository's stakes")
+	cfg.Repos[0].Stakes = ""
+	changed("removing the repository's stakes")
+	cfg.Repos = append(cfg.Repos, config.Repo{Repo: "example/gadgets", Stakes: "a billing service, and the ledger"})
+	changed("adding another repository's stakes")
+	cfg.Repos, cfg.Watches = nil, nil
+	if got, r := Inputs(cfg), ReviewerInputs(cfg); got != none || r != noneRev {
+		t.Errorf("with no stakes line the inputs are %s/%s, want the %s/%s of a config without blocks", got, r, none, noneRev)
+	}
+}
+
+// The blocks' order in the file is not an input: two watches or repositories listed the other way round
+// read the same stakes.
+func TestTheStakesLinesCountInTheOrderOfTheirKeys(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Watches = []config.Watch{{Owner: "example", Stakes: "one"}, {Owner: "acme", Stakes: "two"}}
+	cfg.Repos = []config.Repo{{Repo: "example/widgets", Stakes: "three"}, {Repo: "acme/app", Stakes: "four"}}
+	all, rev := Inputs(cfg), ReviewerInputs(cfg)
+	slices.Reverse(cfg.Watches)
+	slices.Reverse(cfg.Repos)
+	if got, r := Inputs(cfg), ReviewerInputs(cfg); got != all || r != rev {
+		t.Errorf("listed the other way round the inputs are %s/%s, want %s/%s", got, r, all, rev)
 	}
 }

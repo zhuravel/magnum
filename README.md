@@ -950,7 +950,9 @@ directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files al
 `magnum review` still runs it. A watch's `skip_bot_authors` (default `true`) skips every bot's PR, and its
 `allow_bot_authors` names the bots whose PRs are reviewed all the same, such as `["helper[bot]"]` above for
 an App that writes code for the team, while the dependency bots' PRs stay skipped: GitHub logins, matched as `skip_authors`
-matches them (any case, with or without `[bot]`; none empty or with a space), and a `[[repo]]` block's
+matches them (any case, with or without `[bot]`; none empty or with a space; `helper` or `helper[bot]`, never
+`app/helper`, which the config refuses in this list, in `skip_authors` and in `auto_approve_skip_authors`
+because it would match no author), and a `[[repo]]` block's
 `allow_bot_authors` adds logins for that repository alone. Such a PR is reviewed as a person's would be,
 under every other filter but `skip_departed_authors`, which reads only people's membership (an App's
 `authorAssociation` is `NONE` whatever its installation writes): `skip_authors` wins (a login on both lists is skipped), with
@@ -1033,7 +1035,7 @@ not approve it as you: its head's checks fail …"; `auto_approve_refused` in `m
 
 `auto_approve_skip_authors` keeps some authors' PRs for a person's review, whatever Magnum's review says
 (a colleague whose PRs must get an explicit human approval): GitHub logins, matched as `skip_authors`
-matches them (any case, with or without `[bot]`; none empty or with a space). A `[[repo]]` block's
+matches them (any case, with or without `[bot]`; none empty or with a space; `app/<name>` is refused). A `[[repo]]` block's
 `auto_approve_skip_authors` adds logins for that repository alone. On such a PR Magnum reviews as
 usual and never posts your approval: the refusal is recorded once per head, whatever round reviewed it
 (`auto_approve_refused` reads "the author is in auto_approve_skip_authors", the card "auto-approval: off
@@ -3145,7 +3147,9 @@ its total (`absent defects: 1 of 2 hit`), never noise nor recall; with a `severi
 severity or stronger is a hit, so a point that was right but ranked too high counts as fixed once the review
 ranks it lower. A case costs a whole review round, so `run` waits for real reviews: it refuses to start a case
 past `[usage] codex_soft` unless `--force`. Each run's `run.json` records `inputs`, a hash of the judge skill, the
-roles' prompts and the role config, `reviewer_inputs`, the same hash over the roles that are not judges, and per
+roles' prompts, the role config and the `stakes` lines of the `[[watch]]` and `[[repo]]` blocks (the judge and the
+reviewers size a harm against them, so editing one makes the next run replay its baseline once),
+`reviewer_inputs`, the same hash over the roles that are not judges (the stakes lines included), and per
 case the hash of each notes file its judge read and the Codex gauge
 before and after it: the report prints the points the cases used (`codex: +2 points (geo +1, copy +1)`) and,
 next to the previous run, `notes differ from <run>: <case> (<file> changed)` when the judge read other notes, so a

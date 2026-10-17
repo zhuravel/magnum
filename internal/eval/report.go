@@ -83,7 +83,7 @@ func (r Run) ReviewedOtherwise(like Run) string {
 	case r.ReviewerInputs == "":
 		return "it recorded no reviewer inputs"
 	case r.ReviewerInputs != like.ReviewerInputs:
-		return "its reviewers read other prompts or ran with another role config"
+		return "its reviewers read other prompts or stakes lines, or ran with another role config"
 	case r.NoNotes && !like.NoNotes:
 		return "its reviewers were given no notes (--no-notes)"
 	case !r.NoNotes && like.NoNotes:
@@ -113,12 +113,13 @@ type Run struct {
 	Finished time.Time         `json:"finished,omitzero"`
 	Cases    []CaseRun         `json:"cases"`
 	// Inputs identifies what the review read besides the PR and the notes: a hash of the judge
-	// skill, the roles' prompts and the role config ("" in runs before it was recorded). Baselines
-	// matches on it.
+	// skill, the roles' prompts, the role config and the stakes lines ("" in runs before it was
+	// recorded). Baselines matches on it.
 	Inputs string `json:"inputs,omitempty"`
-	// ReviewerInputs is the part of Inputs the reviewer roles read: their prompts and role config,
-	// the judges' left out ("" in runs before it was recorded). A judge-only replay takes the reports
-	// of a full replay whose reviewers read what its own would (FullReplayFor).
+	// ReviewerInputs is the part of Inputs the reviewer roles read: their prompts, role config and
+	// the stakes lines, the judges' left out ("" in runs before it was recorded). A judge-only
+	// replay takes the reports of a full replay whose reviewers read what its own would
+	// (FullReplayFor).
 	ReviewerInputs string `json:"reviewer_inputs,omitempty"`
 	NoNotes        bool   `json:"no_notes,omitempty"` // no role was given the notes (--no-notes)
 	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,

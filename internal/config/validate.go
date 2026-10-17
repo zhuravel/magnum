@@ -177,6 +177,7 @@ func (c *Config) Validate() error {
 		}
 		errs = append(errs, w.validateAutoApprove(ids)...)
 		errs = append(errs, validateLogins("watch "+w.Owner+": ", "allow_bot_authors", w.AllowBotAuthors)...)
+		errs = append(errs, validateNoAppForm("watch "+w.Owner+": ", "skip_authors", w.SkipAuthors)...)
 		if err := validateStakes(w.Stakes); err != nil {
 			errs = append(errs, fmt.Errorf("watch %s: stakes %w", w.Owner, err))
 		}
