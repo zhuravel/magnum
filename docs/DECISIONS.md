@@ -9288,6 +9288,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   magnum did not check out, so it asks as `magnum unpin` does by name); `x` acknowledging the hold itself (a
   release never takes a HEAD it did not check out); and refusing `x` for every hold (a `dirty_worktree` hold
   has no key that hands it back, so the refusal would name none).
+- **The approval's CI gate counts only the checks required_checks names** (2026-10-18, spec 84, asked for by
+  the operator on talkable/talkable#12036; amends "A check that fails on the base too does not hold an
+  auto-approval"). Magnum's judge approved a colleague's terraform change at f2f867c on 10-16, and the
+  automatic approval as the operator was refused with "its head's checks fail (magnum approves it once they
+  pass)", the board reading `✔ needs you` since: the failing check was `Terraform scripts / lint`, a job of a
+  path-filtered workflow whose last step is the PR's own self-check script, failed on a broken-pipe flake,
+  while the CI workflow (64 checks, Completion included) passed. The repository's `required_checks =
+  ["workflow:CI"]` names what GitHub requires to merge, but the gate read GitHub's combined rollup, FAILURE
+  for any failing check, and lifted it only for failures the base tip shares, which a path-filtered workflow
+  never runs there. Now, where the PR's `[[repo]]` block sets `required_checks`, the head's stored checks
+  (only when they are the head's and list every one) decide by the runs each entry names, through the
+  matcher the board reads (`store.RequiredRuns` and `store.RequiredNames`, moved out of the board's
+  `requiredCheck`; `store.RequiredWorkflowPrefix` is pinned to the configuration's), and the combined rollup
+  no longer decides: every required run passed or skipped lets the approval through whatever the rollup
+  says, a required run that fails goes to the base tip's comparison for the required failures alone
+  (`failsLikeTheBase`, split out of `failingCIRefusal`, which waits for a required run still running), and a
+  required run still running answers "its head's checks have not finished"; a check outside the list
+  neither refuses nor is waited for. The refusal texts are unchanged. The approval's
+  `review.auto_approve_begin` and `review.auto_approved` end with "; ignored 1 failing check outside
+  required_checks: Terraform scripts / lint", and the daemon logs "auto approval: ignored ..." at info, once
+  per post; the posted body is unchanged. A check is named as the board names it (workflow, " / ", name)
+  only when that is plain text (ASCII letters, digits, spaces and `._-/+@:()[],#`, at most 120 bytes; at
+  most five, the rest counted "and 2 more"), since a workflow a PR adds names its own checks; unlike
+  `pr.ci_red` and `review.auto_approve_ci_base`, which name none, this note names them because the operator
+  asked to see what was ignored. Where the stored checks cannot say (none for the head, a list GitHub cut at
+  100, an entry that names no check on the head: one that never ran there or has not started) every check
+  counts through the rollup as before, as it does without the key; the list GitHub's rulesets declare,
+  which the board falls back to, does not change the gate (the spec's scope is the operator's key). A
+  standing approval held to the gates after a later round follows the same rule. Rejected: ignoring
+  path-filtered workflows by heuristics (a check does not say whether its workflow is path-filtered, and a
+  guess would also pass a required workflow that skipped); keeping every check (what happened: a flake in an
+  unrequired self-check held a reviewed PR for a day, until someone re-ran the job or pressed `A`).
 
 ## Learned rules
 

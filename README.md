@@ -1088,7 +1088,15 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   hold it: once the head's other checks finished, a head whose every failing check also fails there is
   approved, and a `review.auto_approve_ci_base` event says so once per head and review (it names no
   check). The base tip's checks are read once per tip and ten minutes; a failure Magnum cannot match
-  (another check, another workflow, no known tip, a read that fails) still holds the PR;
+  (another check, another workflow, no known tip, a read that fails) still holds the PR. Where the
+  repository's `[[repo]] required_checks` lists checks, only the checks it names count (matched as the
+  board matches them) and the rollup no longer decides: a failing check outside the list never holds the
+  approval, whose `review.auto_approved` event and the daemon's log name it ("ignored 1 failing check
+  outside required_checks: Terraform scripts / lint"; the posted approval does not), one outside it that
+  still runs is not waited for, and a required one that fails or runs holds the PR as above, the base
+  tip's comparison included. When the head's stored checks cannot say (none read for the head, more than
+  GitHub lists, an entry that names no check on the head) every check counts, as without the key; the
+  list GitHub's rulesets declare does not change the gate;
 - on GitHub (read just before posting) you have not approved that head, have no review in progress, and
   have not reviewed the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
 
@@ -2562,7 +2570,8 @@ as it does for a wait.
 CI shows the head's checks: the repository's required checks when it has some (read from GitHub's
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the
 head, `⊘ Completion skipped`), else the counts (`✓ 65/65`, `✗ 2 failed`, `◌ 40/65`); the card lists the
-checks per workflow and names every failed job. Rows the configuration skips read "skipped" with the
+checks per workflow and names every failed job. `[[repo]] required_checks` also sets what the automatic
+approval waits for: only the checks it names hold it (see "Approving as you"). Rows the configuration skips read "skipped" with the
 reason in a word: "skipped · bot", "· author" (`skip_authors`), "· label", "· draft", "· left org" (an
 author who left) or "· manual" (`manual_repos`); any other reason (a fork's PR, `skip_paths`,
 `include_own`, a base branch name Magnum does not pass to a shell) reads a plain "skipped", and the card

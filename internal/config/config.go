@@ -649,7 +649,8 @@ type Repo struct {
 	// expose): globs (path.Match, case-sensitive) over check run names and
 	// commit status contexts, or RequiredWorkflowPrefix and a glob over
 	// GitHub Actions workflow names (every check of the workflow). The board
-	// shows their state (see Config.RequiredChecks).
+	// shows their state, and the automatic approval's CI gate counts only
+	// the checks they name (see Config.RequiredChecks).
 	RequiredChecks []string `toml:"required_checks"`
 
 	// Trackers are [board] trackers templates for this repository's PRs; an
@@ -659,7 +660,8 @@ type Repo struct {
 }
 
 // RequiredWorkflowPrefix marks a required_checks entry naming a whole
-// GitHub Actions workflow ("workflow:CI").
+// GitHub Actions workflow ("workflow:CI"); store.RequiredWorkflowPrefix,
+// which the matcher reads, spells it too.
 const RequiredWorkflowPrefix = "workflow:"
 
 // worktreeKeys reports whether the block sets any per-PR worktree key
@@ -1117,7 +1119,8 @@ func (c *Config) TrackersFor(fullName string) []Tracker {
 // RequiredChecks returns the [[repo]] block's required_checks for
 // repository fullName (nil when none): check-name globs and
 // "workflow:<glob>" entries that replace GitHub's list
-// (store.Store.RequiredChecks).
+// (store.Store.RequiredChecks). The automatic approval's CI gate counts
+// only the checks they name; GitHub's list does not change it.
 func (c *Config) RequiredChecks(fullName string) []string {
 	if r := c.RepoFor(fullName); r != nil {
 		return r.RequiredChecks

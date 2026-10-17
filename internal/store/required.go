@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 )
@@ -87,4 +88,68 @@ func (s *Store) RequiredChecks(ctx context.Context, fullName string, configured 
 		checks = []string{}
 	}
 	return RequiredChecks{Checks: checks, Source: RequiredFromGitHub, FetchedAt: g.FetchedAt}, nil
+}
+
+// RequiredWorkflowPrefix marks a required check naming a whole GitHub
+// Actions workflow ("workflow:CI"), as config.RequiredWorkflowPrefix does
+// for [[repo]] required_checks.
+const RequiredWorkflowPrefix = "workflow:"
+
+// RequiredNames reports whether entry, a required check (a check-name glob,
+// or RequiredWorkflowPrefix and a glob over GitHub Actions workflow names),
+// names c: a name glob matches c's name whatever its workflow, a workflow
+// entry every check of a matching workflow (never a status or another
+// app's check, which have none). A malformed glob names nothing.
+func RequiredNames(entry string, c CheckResult) bool {
+	if glob, ok := strings.CutPrefix(entry, RequiredWorkflowPrefix); ok {
+		m, _ := path.Match(glob, c.Workflow)
+		return m && c.Workflow != ""
+	}
+	m, _ := path.Match(entry, c.Name)
+	return m
+}
+
+// RequiredRuns are the runs of checks that count for entry, a required
+// check (RequiredNames), in checks' order: every check of a workflow
+// entry's workflows; for a name glob the latest run of each matching name
+// across workflows (a check posted through the API lands in another
+// workflow's suite, next to an older run). None when entry names no check.
+// The board's required checks and the auto-approval's CI gate read them.
+func RequiredRuns(checks []CheckResult, entry string) []CheckResult {
+	var out []CheckResult
+	if strings.HasPrefix(entry, RequiredWorkflowPrefix) {
+		for _, c := range checks {
+			if RequiredNames(entry, c) {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	at := map[string]int{} // name -> its run's index in out
+	for _, c := range checks {
+		if !RequiredNames(entry, c) {
+			continue
+		}
+		i, seen := at[c.Name]
+		switch {
+		case !seen:
+			at[c.Name] = len(out)
+			out = append(out, c)
+		case newerRun(c, out[i]):
+			out[i] = c
+		}
+	}
+	return out
+}
+
+// newerRun reports whether run a is newer than b: a run not started yet
+// (zero At) is the newest.
+func newerRun(a, b CheckResult) bool {
+	switch {
+	case a.At.IsZero():
+		return true
+	case b.At.IsZero():
+		return false
+	}
+	return a.At.After(b.At)
 }

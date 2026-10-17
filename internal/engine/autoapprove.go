@@ -530,8 +530,13 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 	}
 	data := map[string]any{"approval_id": a.ID, "head_sha": pr.HeadSHA, "identity": id.Name, "run_id": sum.RunID,
 		"source_review_id": sum.ReviewID, "attempt": a.Attempts}
-	e.event(ctx, "info", subject, "review.auto_approve_begin", fmt.Sprintf("approving %s as %s: magnum's review %d found nothing to fix (attempt %d)",
-		textx.ShortSHA(pr.HeadSHA), id.Login, sum.ReviewID, a.Attempts), data)
+	ignored := e.ignoredChecksNote(full, pr) // autoapprove_required.go; the body does not say it
+	if ignored != "" {
+		e.log.Info("auto approval: "+ignored, "pr", pr.ID, "head", textx.ShortSHA(pr.HeadSHA))
+		ignored = "; " + ignored
+	}
+	e.event(ctx, "info", subject, "review.auto_approve_begin", fmt.Sprintf("approving %s as %s: magnum's review %d found nothing to fix (attempt %d)%s",
+		textx.ShortSHA(pr.HeadSHA), id.Login, sum.ReviewID, a.Attempts, ignored), data)
 	rev, err := gh.CreateReview(ctx, repo.Owner, repo.Name, pr.Number, pr.HeadSHA, "APPROVE", body)
 	if err != nil && ctx.Err() != nil {
 		// The daemon is stopping, and the post may or may not have reached
@@ -560,14 +565,15 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 			textx.ShortSHA(pr.HeadSHA), id.Login, err, again), data)
 		return
 	}
-	e.autoPosted(ctx, repo, pr, a, rev.ID, rev.HTMLURL, e.now(), data, "")
+	e.autoPosted(ctx, repo, pr, a, rev.ID, rev.HTMLURL, e.now(), data, "", ignored)
 }
 
 // autoPosted records approval a posted as GitHub's review reviewID (url) at
 // at, with review.auto_approved and a toast; how says how it was found
-// ("" = its post answered).
+// ("" = its post answered), and note ends the event's message ("; ignored
+// 1 failing check outside required_checks: ...", or "").
 func (e *Engine) autoPosted(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, reviewID int64, url string, at time.Time,
-	data map[string]any, how string) {
+	data map[string]any, how, note string) {
 	if err := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoStanding, func(u *store.AutoApprovalUpdate) {
 		u.Set("review_id", reviewID)
 		u.Set("review_url", url)
@@ -578,8 +584,8 @@ func (e *Engine) autoPosted(ctx context.Context, repo store.Repo, pr store.PR, a
 		return
 	}
 	data["review_id"] = reviewID
-	e.event(ctx, "info", prSubject(repo, pr.Number), "review.auto_approved", fmt.Sprintf("approved %s as %s (review %d)%s: %s",
-		textx.ShortSHA(a.HeadSHA), a.Login, reviewID, how, url), data)
+	e.event(ctx, "info", prSubject(repo, pr.Number), "review.auto_approved", fmt.Sprintf("approved %s as %s (review %d)%s: %s%s",
+		textx.ShortSHA(a.HeadSHA), a.Login, reviewID, how, url, note), data)
 	label := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
 	e.info(notify.Item{Key: fmt.Sprintf("auto-approved:%d", a.ID), Title: "magnum: approved as you: " + label,
 		Body: fmt.Sprintf("%s\nmagnum's review of %s found nothing to fix (`magnum unapprove %s` withdraws it).", pr.URL,
@@ -611,7 +617,7 @@ func (e *Engine) adoptAutoApproval(ctx context.Context, repo store.Repo, pr stor
 		at = e.now()
 	}
 	data := map[string]any{"approval_id": a.ID, "head_sha": pr.HeadSHA, "identity": id.Name, "run_id": sum.RunID, "source_review_id": sum.ReviewID}
-	e.autoPosted(ctx, repo, pr, a, r.DatabaseID, r.URL, at, data, " (found on GitHub: the answer to its post was lost)")
+	e.autoPosted(ctx, repo, pr, a, r.DatabaseID, r.URL, at, data, " (found on GitHub: the answer to its post was lost)", "")
 }
 
 // stopAutoApproval stops auto-approval of pr for good (until `magnum
@@ -687,7 +693,7 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 	if w.approved != nil && w.approvedByMagnum {
 		data := map[string]any{"approval_id": a.ID, "head_sha": a.HeadSHA, "identity": a.Identity, "run_id": a.RunID}
 		e.autoPosted(ctx, repo, a.PR, a.AutoApproval, w.approved.DatabaseID, w.approved.URL, w.approved.SubmittedAt,
-			data, " (found on GitHub after a restart)")
+			data, " (found on GitHub after a restart)", "")
 		return
 	}
 	if !complete {

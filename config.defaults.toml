@@ -834,7 +834,9 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # required_checks = ["Completion"]        # checks a PR must pass to be ready (name globs; "workflow:<glob>" = a whole
 #                                         # Actions workflow); replaces the list GitHub's rulesets declare, which
 #                                         # magnum reads by itself; needed where GitHub will not tell (private repos
-#                                         # on a free plan); the board shows their state
+#                                         # on a free plan); the board shows their state, and the automatic
+#                                         # approval counts only these checks (a failing check outside the list
+#                                         # never holds it; without the key every check counts)
 # trackers = ["https://your-org.atlassian.net/browse/APP-{num}"]   # [board] trackers for this repository's PRs;
 #                                         # its key prefixes win over the watch's and [board]'s
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]

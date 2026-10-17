@@ -7,7 +7,6 @@ package cli
 
 import (
 	"cmp"
-	"path"
 	"slices"
 	"strings"
 	"unicode"
@@ -86,32 +85,12 @@ func ciState(failed, pending int, allSkipped bool, checks int) string {
 
 // requiredCheck is one required check on the head: a name glob
 // ("Completion", "rspec*") matched across workflows, the latest run of each
-// matching name counting (a check posted through the API lands in another
-// workflow's suite, next to an older run), or "workflow:<glob>" for every
-// check of the matching workflows. State "missing" when nothing matched.
+// matching name counting, or "workflow:<glob>" for every check of the
+// matching workflows (store.RequiredRuns). State "missing" when nothing
+// matched.
 func requiredCheck(checks []store.CheckResult, pattern string) tui.CheckState {
 	out := tui.CheckState{Name: pattern, Label: checkLabel(pattern)}
-	var matched []store.CheckResult
-	if glob, ok := strings.CutPrefix(pattern, config.RequiredWorkflowPrefix); ok {
-		for _, c := range checks {
-			if ok, _ := path.Match(glob, c.Workflow); ok && c.Workflow != "" {
-				matched = append(matched, c)
-			}
-		}
-	} else {
-		latest := map[string]store.CheckResult{}
-		for _, c := range checks {
-			if ok, _ := path.Match(pattern, c.Name); !ok {
-				continue
-			}
-			if prev, seen := latest[c.Name]; !seen || newer(c, prev) {
-				latest[c.Name] = c
-			}
-		}
-		for _, c := range latest {
-			matched = append(matched, c)
-		}
-	}
+	matched := store.RequiredRuns(checks, pattern)
 	out.Total = len(matched)
 	if out.Total == 0 {
 		out.State = "missing"
@@ -155,18 +134,6 @@ func checkLabel(pattern string) string {
 		return pattern
 	}
 	return s
-}
-
-// newer reports whether run a is newer than b: a run not started yet (zero
-// At) is the newest.
-func newer(a, b store.CheckResult) bool {
-	switch {
-	case a.At.IsZero():
-		return true
-	case b.At.IsZero():
-		return false
-	}
-	return a.At.After(b.At)
 }
 
 // prsBadges are the configured badges ([board] badges) a PR's labels carry,

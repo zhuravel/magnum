@@ -7,8 +7,9 @@ package engine
 // (DECISIONS "Auto-approval hears every reviewer"), a PR its watch would not
 // review on its own (a forced round on it), one that changes what steers
 // the review agents, and a head whose checks fail (other than the way the
-// base branch's tip fails them, autoapprove_ci_base.go) or still run are
-// not approved; the card says why (KVPRAutoApproveRefused) and a
+// base branch's tip fails them, autoapprove_ci_base.go) or still run (only
+// the checks required_checks names, where it is set:
+// autoapprove_required.go) are not approved; the card says why (KVPRAutoApproveRefused) and a
 // review.auto_approve_refused event records it once per head, round and
 // reason. A later round of magnum's on the head of a PR it approved as the
 // operator is held to them too: one they refuse withdraws the approval
@@ -97,10 +98,12 @@ func (e *Engine) authorRefusal(c store.RepoPR) string {
 // review agents (agentConfigRefusal), and its head's check rollup fails or
 // runs (wait for green: the judge's result says nothing of the failures it
 // found unrelated), unless every failing check fails the same way on the
-// base branch's tip (failingCIRefusal). waits says the refusal is only
-// checks that still run, which a standing approval waits out
-// (standingGateRefusal). A reason never carries an error's text: a
-// withdrawal posts it on GitHub.
+// base branch's tip (failingCIRefusal); where the repository sets
+// required_checks, the checks it names decide in place of the rollup
+// (requiredCIRefusal: one outside the list neither fails nor runs). waits
+// says the refusal is only checks that still run, which a standing approval
+// waits out (standingGateRefusal). A reason never carries an error's text:
+// a withdrawal posts it on GitHub.
 func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
 	pr := c.PR
 	if _, held := e.heldReviewOf(ctx, pr.ID, sum.ReviewID); held {
@@ -116,6 +119,9 @@ func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.
 	}
 	if why := e.agentConfigRefusal(ctx, pr); why != "" {
 		return why, false
+	}
+	if r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(c.Repo)); ok {
+		return e.requiredCIRefusal(ctx, c, sum, r) // autoapprove_required.go: the rollup does not decide
 	}
 	switch strings.ToUpper(deref(pr.CIState)) {
 	case "FAILURE", "ERROR":

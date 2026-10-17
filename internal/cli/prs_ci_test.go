@@ -75,6 +75,15 @@ func TestCheckLabel(t *testing.T) {
 	}
 }
 
+// The matcher the board and the auto-approval's CI gate share
+// (store.RequiredRuns) reads a whole workflow by the prefix the
+// configuration validates required_checks with.
+func TestTheRequiredWorkflowPrefixIsTheConfigs(t *testing.T) {
+	if store.RequiredWorkflowPrefix != config.RequiredWorkflowPrefix {
+		t.Fatalf("store.RequiredWorkflowPrefix = %q, config.RequiredWorkflowPrefix = %q", store.RequiredWorkflowPrefix, config.RequiredWorkflowPrefix)
+	}
+}
+
 // Badges match labels whatever the case and leading emoji or symbols.
 func TestPRsBadges(t *testing.T) {
 	badges := map[string]config.BadgeSpec{"Flagged": {Text: "🚩"}, "schema migration": {Text: "\uf1c0", Color: "yellow"}}

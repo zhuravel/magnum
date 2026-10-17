@@ -51,18 +51,14 @@ type baseTipRead struct {
 func kvAutoApproveCIBase(prID int64) string { return fmt.Sprintf("pr.%d.auto_approve_ci_base", prID) }
 
 // failingCIRefusal is autoGateRefusal's answer for c, whose head's rollup
-// fails, after magnum's round sum: "" when every check the head's stored
-// checks (pr.CI, read on the head, every one listed) fail failed on the base
-// tip (pr.BaseSHA) too, the same workflow and name, and the head's other
-// checks finished; ciRunsRefusal, which waits, when they match but another
-// check still runs (GitHub's rollup fails as soon as one check fails);
-// ciFailsRefusal otherwise, and when it cannot tell (no failed check stored
-// for a failing rollup, no base tip, a read that failed).
+// fails, after magnum's round sum: failsLikeTheBase for every check the
+// head's stored checks (pr.CI, read on the head, every one listed) fail and
+// whether any of them still runs (GitHub's rollup fails as soon as one
+// check fails); ciFailsRefusal when it cannot tell (no checks stored for
+// the head, or not every one).
 func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
-	pr := c.PR
-	ci := pr.CI
-	base := deref(pr.BaseSHA)
-	if ci == nil || ci.SHA != pr.HeadSHA || !ci.Complete || base == "" {
+	ci := c.PR.CI
+	if ci == nil || ci.SHA != c.PR.HeadSHA || !ci.Complete {
 		return ciFailsRefusal, false
 	}
 	var failed []store.CheckResult
@@ -75,7 +71,20 @@ func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR, sum store
 			running = true
 		}
 	}
-	if len(failed) == 0 {
+	return e.failsLikeTheBase(ctx, c, sum, failed, running)
+}
+
+// failsLikeTheBase is the CI gate's answer for failed, the failing checks
+// of c's head that count (every one, or those required_checks names:
+// requiredCIRefusal), after magnum's round sum: "" when each failed on the
+// base tip (pr.BaseSHA) too, the same workflow and name, and no check that
+// counts still runs (running); ciRunsRefusal, which waits, when they match
+// but one still runs; ciFailsRefusal otherwise, and when it cannot tell (no
+// failed check, no base tip, a read that failed).
+func (e *Engine) failsLikeTheBase(ctx context.Context, c store.RepoPR, sum store.ReviewSummary, failed []store.CheckResult,
+	running bool) (why string, waits bool) {
+	base := deref(c.PR.BaseSHA)
+	if len(failed) == 0 || base == "" {
 		return ciFailsRefusal, false
 	}
 	checks, ok := e.baseTipChecks(ctx, c, base)

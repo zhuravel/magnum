@@ -3098,7 +3098,8 @@ const PlaceholderNum = "{num}"
 
 const RequiredWorkflowPrefix = "workflow:"
     RequiredWorkflowPrefix marks a required_checks entry naming a whole GitHub
-    Actions workflow ("workflow:CI").
+    Actions workflow ("workflow:CI"); store.RequiredWorkflowPrefix, which the
+    matcher reads, spells it too.
 
 const ReviewFooterMax = 2000
     ReviewFooterMax bounds review_footer, in characters.
@@ -3483,7 +3484,9 @@ func (c *Config) RepoFor(fullName string) *Repo
 func (c *Config) RequiredChecks(fullName string) []string
     RequiredChecks returns the [[repo]] block's required_checks for repository
     fullName (nil when none): check-name globs and "workflow:<glob>" entries
-    that replace GitHub's list (store.Store.RequiredChecks).
+    that replace GitHub's list (store.Store.RequiredChecks). The automatic
+    approval's CI gate counts only the checks they name; GitHub's list does not
+    change it.
 
 func (c *Config) ResolvePrompt(name string) (Prompt, error)
     ResolvePrompt reads a prompt by name: <pipeline.prompts_dir>/<name> when
@@ -4607,7 +4610,8 @@ type Repo struct {
 	// expose): globs (path.Match, case-sensitive) over check run names and
 	// commit status contexts, or RequiredWorkflowPrefix and a glob over
 	// GitHub Actions workflow names (every check of the workflow). The board
-	// shows their state (see Config.RequiredChecks).
+	// shows their state, and the automatic approval's CI gate counts only
+	// the checks they name (see Config.RequiredChecks).
 	RequiredChecks []string `toml:"required_checks"`
 
 	// Trackers are [board] trackers templates for this repository's PRs; an
@@ -15568,6 +15572,11 @@ const NotesUnusedRounds = 20
     NotesUnusedRounds is how many judge rounds a harness file must have existed
     for, with no recorded use, to be a curation candidate.
 
+const RequiredWorkflowPrefix = "workflow:"
+    RequiredWorkflowPrefix marks a required check naming a whole GitHub Actions
+    workflow ("workflow:CI"), as config.RequiredWorkflowPrefix does for [[repo]]
+    required_checks.
+
 const RetroMaxAttempts = 3
     RetroMaxAttempts is how many retros in a row may fail on a PR before the
     retro gives it up (RetroDue; `magnum retro --again` still takes it).
@@ -15765,6 +15774,13 @@ func ParseReviewResult(data []byte, sum *ReviewSummary) bool
 func ParseTime(s string) (time.Time, error)
     ParseTime parses any RFC3339 timestamp (with or without a fraction) and
     returns it in UTC.
+
+func RequiredNames(entry string, c CheckResult) bool
+    RequiredNames reports whether entry, a required check (a check-name glob,
+    or RequiredWorkflowPrefix and a glob over GitHub Actions workflow names),
+    names c: a name glob matches c's name whatever its workflow, a workflow
+    entry every check of a matching workflow (never a status or another app's
+    check, which have none). A malformed glob names nothing.
 
 
 TYPES
@@ -15994,6 +16010,14 @@ type CheckResult struct {
 	At time.Time `json:"at,omitzero"`
 }
     CheckResult is one check run or commit status of a CIStatus.
+
+func RequiredRuns(checks []CheckResult, entry string) []CheckResult
+    RequiredRuns are the runs of checks that count for entry, a required
+    check (RequiredNames), in checks' order: every check of a workflow entry's
+    workflows; for a name glob the latest run of each matching name across
+    workflows (a check posted through the API lands in another workflow's suite,
+    next to an older run). None when entry names no check. The board's required
+    checks and the auto-approval's CI gate read them.
 
 type Decline struct {
 	ID        int64  `json:"id"`
