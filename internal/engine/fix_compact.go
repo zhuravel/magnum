@@ -11,9 +11,10 @@ package engine
 // afterwards, or whose /compact did not finish, is parked and the cycle
 // starts it fresh: the fix prompt carries the findings anyway. A fixer
 // resumed from a park draws its status line only some time after the resume
-// (spec 59), so its pane is read until a figure shows, for a minute at most.
-// A pane that shows no figure leaves the fixer as it is and warns once per
-// PR. A fixer started fresh is never compacted.
+// (spec 59), so its pane is read until a figure shows, for a minute at most,
+// once per PR until a figure is read (spec 71). A pane that shows no figure
+// leaves the fixer as it is and warns once per PR. A fixer started fresh is
+// never compacted.
 
 import (
 	"context"
@@ -114,13 +115,19 @@ func (e *Engine) fixCompact(ctx context.Context, job *fixJob, ws agents.Workspac
 // (agents.Manager.ContextUsed). The pane of a fixer the cycle resumed from a
 // park (resumed) may not show its status line yet, so it is read again every
 // fixContextPoll until a figure shows, for fixContextAwait at most; a fixer
-// that was live is read once. A figure read forgets the PR's
-// fix.context_unknown warning (kvPRFixContextUnknown), so a later miss warns
-// again. Only ctx's end fails it.
+// that was live is read once, and so is one resumed while the PR's
+// fix.context_unknown warning (kvPRFixContextUnknown) is remembered: that
+// minute was waited already and no figure came, and a pane whose status line
+// never matches the context_pattern would cost it on every resumed cycle
+// (spec 71). A figure read forgets the warning, so a later miss waits again
+// and warns again. Only ctx's end fails it.
 func (e *Engine) readContext(ctx context.Context, job *fixJob, s store.Session, resumed bool) (int, bool, error) {
+	key := kvPRFixContextUnknown(job.pr.ID)
+	if _, waited := e.getKV(ctx, key); waited {
+		resumed = false // the minute was waited for this PR already: read once
+	}
 	for i := 1; ; i++ {
 		if used, ok := e.d.Agents.ContextUsed(ctx, s); ok {
-			key := kvPRFixContextUnknown(job.pr.ID)
 			if _, warned := e.getKV(ctx, key); warned {
 				e.delKV(ctx, key)
 			}

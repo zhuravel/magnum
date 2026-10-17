@@ -2014,7 +2014,8 @@ fixing. So before a cycle resumes the fixer (its session still in its pane, or a
 Magnum reads how full its context is from the pane's status line, with the kind's `context_pattern`
 (`[kinds.claude]`: a status line's `418k/1m (41%)`, or Claude Code's own "Context left until
 auto-compact: 8%", read as 92%). A parked fixer it resumes draws that status line only a moment after the
-resume, so Magnum reads its pane every 2 seconds until the figure shows, for up to a minute; a fixer still
+resume, so Magnum reads its pane every 2 seconds until the figure shows, for up to a minute, once per PR
+until a figure is read (a pane that never shows one is not waited for on every resumed cycle); a fixer still
 in its pane is read once. At or above `[pipeline] fix_compact_at` (default 70) it types `/compact`,
 waits for that turn to end and reads again: a `fix.compacted` event says "from 82% to 31%", and the fix
 prompt follows in the same conversation. A fixer still at or above the key afterwards, or whose `/compact`

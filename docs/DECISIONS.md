@@ -8939,6 +8939,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (`closePanesJob`, the reconcile) are otherwise unchanged. New test
   TestALostPanesErrorLineIsKeptBeforeItCloses (agents). Rejected: keeping a lost pane open until the
   operator reads it (what spec 58 stopped: 21 panes on one PR).
+- **A fixer whose pane never shows a figure is waited for once per PR, not on every resumed cycle**
+  (2026-10-17, spec 71, amends "The fixer's context figure is awaited after a resume"). Spec 59 made
+  `readContext` read a resumed fixer's pane every 2 s for up to a minute until a context figure shows. A
+  pane whose status line never matches `[kinds.claude] context_pattern` (a status line without the
+  percent; a stock Claude Code status line shows a figure only near full) never shows one, so every
+  resumed cycle of such a PR would wait the whole minute before its prompt, and `fix.context_unknown`
+  speaks once per PR, so the later stalls would be silent. Now `readContext` (internal/engine/fix_compact.go)
+  reads the PR's kv `pr.<id>.fix_context_unknown` first: while it is set (the minute was waited once and no
+  figure came) a fixer resumed from a park is read once, with no sleep and no second warning, as a fixer
+  that was live is; the first miss still waits the minute and sets the kv through `warnContextUnknown`,
+  and a figure read at any cycle deletes it as before, so the next miss waits the minute again and warns
+  again. The warning's text, `Compact`, `ContextUsed`, the pattern and the events' names are unchanged.
+  The kv is also set by a miss after a `/compact` (a figure was read before it), so the cycle after that
+  one reads a resumed fixer once too: a late status line there costs one skipped check, not a fresh
+  fixer. The existing TestNoFigureWithinTheWaitWarnsOnceAndKeepsTheSession needs no change: its cycles 3
+  and 4 run on a live fixer, which was read once already. New test
+  TestASecondResumeWithoutAFigureDoesNotWait in engine (cycle 2 waits 31 reads and warns; cycle 3, resumed
+  from a park again with no figure, adds one read and no warning; a figure at cycle 4 clears the kv;
+  cycle 5 without one waits the minute and warns again). Rejected: waiting the minute on every resumed
+  cycle (what spec 59 left for such a PR); a flag a figure cannot clear (a pane that starts to show a
+  figure, after the pattern was fixed, would never be awaited again); a shorter wait on later resumes
+  (the same cost, smaller).
 
 ## Learned rules
 

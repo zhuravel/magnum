@@ -368,12 +368,11 @@ func (p *paneReads) answer(show func(n int) (int, bool)) {
 // noFigure is a pane that never shows a context figure.
 func noFigure(int) (int, bool) { return 0, false }
 
-// toResumedCycle2 is toCycle2 whose fixer an idle park parked after cycle 1
-// with its conversation kept: cycle 2 resumes it (ensureAgent), and its pane
-// has not drawn the status line yet. Its fixer pushes fixPushed4 in cycle 4.
-func toResumedCycle2(t *testing.T, h *harness, git *fixGit) store.PR {
+// parkFixer parks PR pr's live fixer the way an idle park does, its
+// conversation kept: the next cycle resumes it (ensureAgent), and its pane
+// has not drawn the status line yet.
+func parkFixer(t *testing.T, h *harness, pr store.PR) {
 	t.Helper()
-	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2, fixPushed3, fixPushed4)
 	s, err := h.st.LiveSessionByPRRole(h.ctx, pr.ID, "claude-fix")
 	if err != nil {
 		t.Fatal(err)
@@ -384,6 +383,16 @@ func toResumedCycle2(t *testing.T, h *harness, git *fixGit) store.PR {
 	h.ag.mu.Lock()
 	h.ag.resumeIDs = map[agents.Role]string{"claude-fix": "fix-conversation"}
 	h.ag.mu.Unlock()
+}
+
+// toResumedCycle2 is toCycle2 whose fixer an idle park parked after cycle 1
+// with its conversation kept: cycle 2 resumes it (ensureAgent), and its pane
+// has not drawn the status line yet. Its fixer pushes fixPushed4 in cycle 4
+// and later (the heads in more after it, for a longer loop).
+func toResumedCycle2(t *testing.T, h *harness, git *fixGit, more ...string) store.PR {
+	t.Helper()
+	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), append([]string{fixPushed2, fixPushed3, fixPushed4}, more...)...)
+	parkFixer(t, h, pr)
 	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
 	if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 {
 		t.Fatalf("fix state after the re-review = %+v, %v", st, ok)
@@ -506,6 +515,89 @@ func TestNoFigureWithinTheWaitWarnsOnceAndKeepsTheSession(t *testing.T) {
 	warns = h.fixEvents("fix.context_unknown")
 	if len(warns) != 2 || strings.Contains(warns[1].Message, "within") {
 		t.Errorf("fix.context_unknown = %+v, want a second warning for cycle 4's live fixer, as today", warns)
+	}
+}
+
+// fixPushed5 is the head the fixer pushes in its fifth cycle.
+const fixPushed5 = "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6"
+
+// A pane that never shows a figure is waited for once per PR (spec 71): the
+// first resumed cycle reads it every 2 s for a minute and warns; while that
+// warning is remembered (the kv pr.<id>.fix_context_unknown), a fixer resumed
+// from a park again is read once, with no wait and no second warning. A
+// figure read forgets the warning, so the next resumed cycle without one
+// waits the minute again and warns again.
+func TestASecondResumeWithoutAFigureDoesNotWait(t *testing.T) {
+	h, git := fixHarness(t, clockSleep, func(h *harness) { h.cfg.Pipeline.FixCycles = 5 })
+	p := logReads(h, noFigure)
+	pr := toResumedCycle2(t, h, git, fixPushed5) // cycle 2: resumed, the minute is waited
+	resumes := func() int { return h.ag.count(fmt.Sprintf("start:%d:claude-fix:fix-conversation", pr.ID)) }
+	remembered := func() bool {
+		_, ok, err := h.st.GetKV(h.ctx, kvPRFixContextUnknown(pr.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	// nextCycle parks the fixer, so the cycle resumes it, and runs the cycle
+	// the re-review of head starts.
+	nextCycle := func(head string, cycle int) {
+		t.Helper()
+		parkFixer(t, h, pr)
+		h.advance(time.Minute)
+		reqPoll(h, prSpec{n: 2, head: head, author: "zhuravel"})
+		if st, ok := h.fixStateOf(2); !ok || st.Cycle != cycle {
+			t.Fatalf("fix state after the re-review of %s = %+v, %v, want cycle %d", head[:7], st, ok, cycle)
+		}
+		if n := resumes(); n != cycle-1 {
+			t.Fatalf("cycle %d: the parked fixer was resumed %d times in all, want %d: %v", cycle, n, cycle-1, h.ag.all())
+		}
+	}
+
+	if n := len(p.times()); n != 31 {
+		t.Fatalf("cycle 2: context reads = %d, want 31 (the minute, waited once)", n)
+	}
+	if warns := h.fixEvents("fix.context_unknown"); len(warns) != 1 || !strings.Contains(warns[0].Message, "within 60s of its resume") {
+		t.Fatalf("cycle 2: fix.context_unknown = %+v, want one warning naming the wait", warns)
+	}
+	if !remembered() {
+		t.Fatal("cycle 2: the warning is not remembered for the PR")
+	}
+
+	nextCycle(fixPushed2, 3) // resumed again, still no figure: read once
+	if n := len(p.times()); n != 32 {
+		t.Errorf("cycle 3: context reads = %d in all, want one more (31 + 1), with no wait", n)
+	}
+	if n := len(h.fixEvents("fix.context_unknown")); n != 1 {
+		t.Errorf("cycle 3: fix.context_unknown %d times, want still 1", n)
+	}
+	if !remembered() {
+		t.Error("cycle 3: a miss without a wait forgot the warning")
+	}
+
+	p.answer(func(int) (int, bool) { return 30, true })
+	nextCycle(fixPushed3, 4) // resumed, a figure under the key: read once, the warning forgotten
+	if n := len(p.times()); n != 33 {
+		t.Errorf("cycle 4: context reads = %d in all, want one more (33)", n)
+	}
+	if remembered() {
+		t.Error("cycle 4: a figure read left the warning remembered")
+	}
+	if n := len(h.fixEvents("fix.context_unknown")); n != 1 {
+		t.Errorf("cycle 4: fix.context_unknown %d times, want still 1", n)
+	}
+
+	p.answer(noFigure)
+	nextCycle(fixPushed4, 5) // resumed, no figure, nothing remembered: the minute again
+	if n := len(p.times()); n != 33+31 {
+		t.Errorf("cycle 5: context reads = %d in all, want 31 more (64): the minute waited again", n)
+	}
+	warns := h.fixEvents("fix.context_unknown")
+	if len(warns) != 2 || !strings.Contains(warns[1].Message, "within 60s of its resume") {
+		t.Errorf("cycle 5: fix.context_unknown = %+v, want a second warning naming the wait", warns)
+	}
+	if h.ag.count("compact:") != 0 || h.ag.count("quit:") != 0 {
+		t.Errorf("the fixer was compacted or parked by the check: %v", h.ag.all())
 	}
 }
 
