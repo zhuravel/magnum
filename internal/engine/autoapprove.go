@@ -783,7 +783,7 @@ func standingWithdrawal(sum store.ReviewSummary, body, gate string) string {
 	default:
 		return ""
 	}
-	return fmt.Sprintf("magnum's review of %s %s; this automatic approval is withdrawn ([review](%s)).", textx.ShortSHA(sum.SHA), what, sum.URL)
+	return fmt.Sprintf("Magnum's review of %s %s; this automatic approval is withdrawn ([review](%s)).", textx.ShortSHA(sum.SHA), what, sum.URL)
 }
 
 // dismissedOnGitHub records standing approval a, which GitHub lists as

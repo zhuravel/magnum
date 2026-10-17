@@ -17,7 +17,7 @@ import (
 
 // DefaultAutoApproveBody is the body of an automatic approval when the
 // watch sets no auto_approve_body.
-const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
+const DefaultAutoApproveBody = "Auto-approved: Magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
 
 // AutoApproveBodyMax bounds auto_approve_body, in characters.
 const AutoApproveBodyMax = 500

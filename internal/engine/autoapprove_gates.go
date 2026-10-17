@@ -167,12 +167,12 @@ func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR
 // reports it went without, by the pipeline's record of the review's round
 // (pipeline.ReadRoundMissingReports): the reports its judge went without,
 // and those a round of the judge alone carried from the round its review
-// builds on ("magnum's review did not hear every reviewer: codex-review
+// builds on ("Magnum's review did not hear every reviewer: codex-review
 // (login_required)"). A round magnum has no record of (one before the
 // records, or a run that cannot be read) is refused too: nothing says it
 // heard every reviewer. "" when it heard every one.
 func (e *Engine) missingReports(ctx context.Context, prID int64, sum store.ReviewSummary) string {
-	const unknown = "magnum cannot tell whether its review heard every reviewer: "
+	const unknown = "Magnum cannot tell whether its review heard every reviewer: "
 	run, err := e.st.RunByID(ctx, sum.RunID)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "auto approval: the review's run", "pr", prID, "run", sum.RunID)
@@ -183,7 +183,7 @@ func (e *Engine) missingReports(ctx context.Context, prID int64, sum store.Revie
 	case !ok:
 		return fmt.Sprintf("%sit has no record of round %d's reports", unknown, run.Round)
 	case len(rec.Unheard()) > 0:
-		return "magnum's review did not hear every reviewer: " + rec.String()
+		return "Magnum's review did not hear every reviewer: " + rec.String()
 	}
 	return ""
 }
@@ -202,7 +202,7 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "auto approval: the PR's files", "pr", pr.ID)
-		return "magnum cannot read the files it changes"
+		return "Magnum cannot read the files it changes"
 	}
 	kinds := e.projectKinds()
 	listed := ok && f.HeadSHA == pr.HeadSHA
@@ -224,9 +224,9 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
 	}
 	switch {
 	case !listed:
-		return "magnum cannot tell whether it changes " + what + ": it has no list of the head's files"
+		return "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files"
 	case f.Truncated:
-		return fmt.Sprintf("magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths))
+		return fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths))
 	}
 	return ""
 }

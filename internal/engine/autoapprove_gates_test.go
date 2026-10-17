@@ -68,7 +68,7 @@ func TestAReviewThatDidNotHearEveryReviewerIsNotAutoApproved(t *testing.T) {
 	h.reviewedPR(2, "b1")
 	h.flush()
 	h.flush()
-	h.wantRefused(2, "magnum's review did not hear every reviewer: codex-review (login_required)")
+	h.wantRefused(2, "Magnum's review did not hear every reviewer: codex-review (login_required)")
 
 	h.push(2, "b2")
 	h.reviewTo(2, "b2")
@@ -87,7 +87,7 @@ func TestAReviewThatDidNotHearEveryReviewerIsNotAutoApproved(t *testing.T) {
 var (
 	withoutCodexReview = autoRound{findings: map[string]int{}, verdict: store.VerdictClean, line: "No problems found. LGTM :shipit:",
 		missing: []pipeline.MissingReport{{Role: "codex-review", Status: "login_required"}}}
-	heardNothingReason = "magnum's review did not hear every reviewer: codex-review (login_required)"
+	heardNothingReason = "Magnum's review did not hear every reviewer: codex-review (login_required)"
 )
 
 // The live case (the 2026-10-08 probe approved b1): a clean round that did
@@ -144,7 +144,7 @@ func TestAJudgeAloneRoundAfterOneThatDidNotHearEveryReviewerIsRefused(t *testing
 			if got := h.created(); len(got) != 0 {
 				t.Fatalf("posted = %q", got)
 			}
-			if got := h.autoRefused(2); !strings.Contains(got, "magnum's review did not hear every reviewer: codex-review (login_required") {
+			if got := h.autoRefused(2); !strings.Contains(got, "Magnum's review did not hear every reviewer: codex-review (login_required") {
 				t.Fatalf("held back for %q", got)
 			}
 			if r, _ := ParseAutoApproveRefused(mustKV(t, h, KVPRAutoApproveRefused(h.pr(2).ID))); r.RunID != "run-2" {
@@ -299,7 +299,7 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 			want: "(.claude/)"},
 		{name: "an older declined record", files: []string{"app/x.rb"}, declined: agents.KindCodex, want: "(.codex/"},
 		{name: "a cut file list", files: []string{"app/x.rb"}, truncated: true,
-			want: "magnum cannot tell whether it changes the review agents' instructions or hooks"},
+			want: "Magnum cannot tell whether it changes the review agents' instructions or hooks"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := newAutoHarness(t)
@@ -405,7 +405,7 @@ func approvedThenReviewedOn(t *testing.T, next prSpec, r autoRound, mods ...func
 func (h *harness) wantGateWithdrawal(want string) {
 	h.t.Helper()
 	d := h.ghCalls("dismiss:")
-	if len(d) != 1 || !strings.HasPrefix(d[0], "dismiss:talkable/talkable#2:9001:magnum's review of b2 found nothing to fix, but ") ||
+	if len(d) != 1 || !strings.HasPrefix(d[0], "dismiss:talkable/talkable#2:9001:Magnum's review of b2 found nothing to fix, but ") ||
 		!strings.Contains(d[0], want) || !strings.HasSuffix(d[0], "; this automatic approval is withdrawn ([review]("+prURL2+"#pullrequestreview-502)).") {
 		h.t.Fatalf("dismissals = %q, want one for %q", d, want)
 	}

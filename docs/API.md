@@ -2926,7 +2926,7 @@ const DefaultAuditEvery = 5
     DefaultAuditEvery is [pipeline] audit_every's default: every fifth automatic
     re-review of a PR probes what no round probed.
 
-const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
+const DefaultAutoApproveBody = "Auto-approved: Magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
     DefaultAutoApproveBody is the body of an automatic approval when the watch
     sets no auto_approve_body.
 

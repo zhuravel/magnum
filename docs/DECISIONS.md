@@ -9124,6 +9124,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   against the cost of a push, the call that went wrong); and a byte cap and a pins file for the fix skill
   (a new mechanism for one sentence, and the skill editor never edits this skill).
 
+- **The auto-approval body and the two dismissal texts say Magnum too** (2026-10-17, completes "The
+  product is Magnum in everything it posts"). Three texts a person reads on GitHub were left in lower
+  case: the default auto-approval body (`config.DefaultAutoApproveBody`, "Auto-approved: Magnum's review
+  of `<sha7>` found no blocking problems"), the withdrawal of a standing approval ("Magnum's review of
+  <sha7> found …; this automatic approval is withdrawn", `standingWithdrawal`) and the dismissal of the
+  identity's own stale change request ("Superseded by the newer Magnum review of <sha7>",
+  `dismissStale`, both of its forms). The reasons the withdrawal carries after "found nothing to fix,
+  but" are the same text on GitHub, so the five that named the product ("Magnum's review did not hear
+  every reviewer", "Magnum cannot tell whether its review heard every reviewer", "Magnum cannot read the
+  files it changes", "Magnum cannot tell whether it changes …", twice, in `autoapprove_gates.go`) say
+  Magnum too; the board and the refusal event show the same reasons. The README's and the example
+  config's copies follow. `magnum` stays the command, the marker, and the name in the CLI, the logs, the
+  events and the operator's toasts.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -866,7 +866,7 @@ and says so in a `review.former_dismiss_failed` warning. `magnum review --as <id
 identity, and a pinned PR never migrates.
 
 `dismiss_own_stale_change_requests` says what happens to an identity's own earlier REQUEST_CHANGES review
-once a newer review of the PR has nothing blocking: `true` dismisses it ("Superseded by the newer magnum
+once a newer review of the PR has nothing blocking: `true` dismisses it ("Superseded by the newer Magnum
 review"), `false` leaves it standing, and a standing change request keeps blocking the author's merge until
 a human dismisses it. The default follows the kind: `true` for an `app`, `false` for `gh`, because a `gh`
 identity is your own account and its reviews are yours to withdraw; set it to `true` on a `gh` identity to
@@ -1074,7 +1074,7 @@ author was listed stays (a later review that finds something to fix withdraws it
 on GitHub names the author or the list: the PR's status comment reads as on a watch without
 auto-approval.
 
-The body is one line, `Auto-approved: magnum's review of `<sha7>` found no blocking problems ([review](<url>)).`
+The body is one line, `Auto-approved: Magnum's review of `<sha7>` found no blocking problems ([review](<url>)).`
 (or `auto_approve_body`, a template of `.Short`, `.SHA`, `.ReviewURL`, `.Repo` and `.Number`), with a hidden
 `<!-- magnum:auto-approval head=<sha7> -->` marker Magnum knows its approvals by. One approval per review:
 a post GitHub refuses (403, 422) is not tried again for that review, another failure is tried again after
@@ -1082,9 +1082,9 @@ a post GitHub refuses (403, 422) is not tried again for that review, another fai
 
 New commits alone leave the approval standing (the repository decides about stale approvals): the next
 review decides. One that leaves something to fix, on any head, withdraws it (Magnum dismisses it as you:
-"magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn ([review](<url>))."),
+"Magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn ([review](<url>))."),
 and a clean one of the PR's head is held to the reviewers, watch, agents' files and checks conditions above
-as a new approval is: one they refuse withdraws it too ("magnum's review of <sha7> found nothing to fix, but
+as a new approval is: one they refuse withdraws it too ("Magnum's review of <sha7> found nothing to fix, but
 it changes the review agents' instructions or hooks (AGENTS.md); this automatic approval is withdrawn
 ([review](<url>)).") with the same event and toast, while the head's checks still run Magnum waits, and a
 head it has not reviewed yet changes nothing. A clean review they let through leaves the approval standing

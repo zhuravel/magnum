@@ -205,7 +205,7 @@ func (h *harness) push(n int, head string) {
 }
 
 func autoBody(sha, reviewURL string) string {
-	return "Auto-approved: magnum's review of `" + sha + "` found no blocking problems ([review](" + reviewURL + ")).\n\n" +
+	return "Auto-approved: Magnum's review of `" + sha + "` found no blocking problems ([review](" + reviewURL + ")).\n\n" +
 		"<!-- magnum:auto-approval head=" + sha + " -->"
 }
 
@@ -439,7 +439,7 @@ func TestABlockingRoundWithdrawsTheAutoApprovalAndACleanOneApprovesAgain(t *test
 	h.push(2, "b2")
 	h.reviewTo(2, "b2")
 	h.tick()
-	want := "dismiss:talkable/talkable#2:9001:magnum's review of b2 found blocking problems; this automatic approval is withdrawn ([review](" +
+	want := "dismiss:talkable/talkable#2:9001:Magnum's review of b2 found blocking problems; this automatic approval is withdrawn ([review](" +
 		prURL2 + "#pullrequestreview-502))."
 	if d := h.ghCalls("dismiss:"); !slices.Equal(d, []string{want}) {
 		t.Fatalf("dismissals = %q\nwant %q", d, want)

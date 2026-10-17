@@ -659,7 +659,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # login = "your-login"
 # no_findings_event = "APPROVE"           # APPROVE | COMMENT when the judge finds nothing
 # dismiss_own_stale_change_requests = true  # a re-review with no blocking finding dismisses this identity's own earlier
-#                                         # CHANGES_REQUESTED review of the PR ("Superseded by the newer magnum review"),
+#                                         # CHANGES_REQUESTED review of the PR ("Superseded by the newer Magnum review"),
 #                                         # which would otherwise stay and keep blocking the author's merge. The default
 #                                         # depends on the kind: true for an app, false for gh, whose reviews are your
 #                                         # own account's, so set true to let magnum withdraw them. A change request you

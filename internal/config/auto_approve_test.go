@@ -103,7 +103,7 @@ func TestAutoApproveForPicksTheNamedRepositories(t *testing.T) {
 }
 
 // The approval's body is one line: the default names the reviewed commit
-// in seven characters and links magnum's review; auto_approve_body replaces
+// in seven characters and links Magnum's review; auto_approve_body replaces
 // it with a template of the same data. The marker magnum recognises its
 // approvals by is not part of it.
 func TestAutoApproveBodyRendersTheTemplate(t *testing.T) {
@@ -112,12 +112,12 @@ func TestAutoApproveBodyRendersTheTemplate(t *testing.T) {
 	cfg := autoApproveConfig()
 	cfg.Watches[0].AutoApprove, cfg.Watches[0].AutoApproveAs = []string{"app"}, "z"
 	got, err := RenderAutoApproveBody(cfg.AutoApproveBodyFor("acme/app"), d)
-	want := "Auto-approved: magnum's review of `0123456` found no blocking problems ([review](https://github.com/acme/app/pull/7#pullrequestreview-9))."
+	want := "Auto-approved: Magnum's review of `0123456` found no blocking problems ([review](https://github.com/acme/app/pull/7#pullrequestreview-9))."
 	if err != nil || got != want {
 		t.Fatalf("default body = %q, %v\nwant %q", got, err, want)
 	}
 	d.ReviewURL = ""
-	if got, _ := RenderAutoApproveBody(DefaultAutoApproveBody, d); got != "Auto-approved: magnum's review of `0123456` found no blocking problems." {
+	if got, _ := RenderAutoApproveBody(DefaultAutoApproveBody, d); got != "Auto-approved: Magnum's review of `0123456` found no blocking problems." {
 		t.Errorf("without a review URL: %q", got)
 	}
 	cfg.Watches[0].AutoApproveBody = new("LGTM per magnum ({{.Repo}}#{{.Number}} at {{.Short}})")
@@ -133,7 +133,7 @@ func TestAutoApproveBodyRendersTheTemplate(t *testing.T) {
 func TestAutoApproveKeysLoad(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{"config.toml": minimalConfig + `auto_approve = ["*"]
 auto_approve_as = "z"
-auto_approve_body = "Approved after magnum's review of {{.Short}}."
+auto_approve_body = "Approved after Magnum's review of {{.Short}}."
 `})
 	w := cfg.Watches[0]
 	if len(w.AutoApprove) != 1 || w.AutoApprove[0] != "*" || w.AutoApproveAs != "z" || w.AutoApproveBody == nil {

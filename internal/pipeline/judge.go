@@ -816,9 +816,9 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 		prev.Manual { // the reviewer's own verdict stands until they change it
 		return
 	}
-	msg := fmt.Sprintf("Superseded by the newer magnum review of %s: %s", textx.ShortSHA(rd.in.TargetSHA), newURL)
+	msg := fmt.Sprintf("Superseded by the newer Magnum review of %s: %s", textx.ShortSHA(rd.in.TargetSHA), newURL)
 	if newURL == "" {
-		msg = fmt.Sprintf("Superseded by the newer magnum review %d of %s.", newID, textx.ShortSHA(rd.in.TargetSHA))
+		msg = fmt.Sprintf("Superseded by the newer Magnum review %d of %s.", newID, textx.ShortSHA(rd.in.TargetSHA))
 	}
 	err := rd.r.GitHub.DismissReview(ctx, rd.owner, rd.name, rd.in.PR.Number, prev.ID, msg)
 	if err != nil {

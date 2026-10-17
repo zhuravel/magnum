@@ -338,6 +338,10 @@ func TestRereviewDismissesStaleChangesRequested(t *testing.T) {
 		if len(e.gh.dismissed) != 1 || e.gh.dismissed[0].ID != 900 || !strings.Contains(e.gh.dismissed[0].Message, "pullrequestreview-506") {
 			t.Errorf("dismissed = %+v", e.gh.dismissed)
 		}
+		// The dismissal reads on GitHub, where the product is Magnum (2026-10-15).
+		if len(e.gh.dismissed) == 1 && !strings.HasPrefix(e.gh.dismissed[0].Message, "Superseded by the newer Magnum review of ") {
+			t.Errorf("dismissal message = %q, want it to open with \"Superseded by the newer Magnum review of \"", e.gh.dismissed[0].Message)
+		}
 		mustContain(t, "claude prompt", e.ag.submitsFor(agents.RoleClaude)[0].Text, prevSHA+"` → `"+target)
 		mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "mode: rereview",
 			"previous_review_id: 900", "previous_head_sha: "+prevSHA, "since: 2026-10-03T09:00:00Z", "force_pushed: false")
