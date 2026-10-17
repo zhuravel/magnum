@@ -319,7 +319,8 @@ fix_compact_at = 70               # before a fix cycle resumes the fixer's conve
                                   # or above this percent, sends /compact and waits for it to end, rather than
                                   # let Claude Code compact it by itself in the middle of a fix. A fixer resumed
                                   # from a park is read every 2 s for up to a minute, until its status line shows
-                                  # a figure; a live one is read once. A fixer still at or above it afterwards, or
+                                  # a figure (once per PR: after a miss, later resumes read once, until a figure
+                                  # was read); a live one is read once. A fixer still at or above it afterwards, or
                                   # whose /compact did not finish, is parked and the cycle starts it fresh (the fix
                                   # prompt carries the findings); a pane that shows no figure leaves the fixer as
                                   # it is and warns once per PR, said again only after a figure was read in
