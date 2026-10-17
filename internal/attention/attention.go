@@ -97,11 +97,6 @@ var (
 	// fixReportRe finds the fixer's report in a fix job's message: an
 	// absolute path to a .md file.
 	fixReportRe = regexp.MustCompile(`/[^\s:;,]+\.md\b`)
-	// mistakenReplyRoundRe is the end a fix loop wrote before it told its
-	// own re-review from other rounds (2026-10-16): a re-review the loop
-	// forces never ends replied, so the round that ended it was a reply
-	// round the loop mistook for it, and the re-review had posted.
-	mistakenReplyRoundRe = regexp.MustCompile(`^fix loop ended: the re-review did not post \(replied\)`)
 	// deadLaunchRes find a launch that never came up holding a role's agent
 	// name in a start's error (talkable#11932): herdr refusing the name
 	// (agents.StartAgent's "start <agent> in <pane>: herdr agent.start:
@@ -253,10 +248,6 @@ func cause(r Reason, chain, output string, lines []string, ref string) (string, 
 	case KindIdentityLeak:
 		return textx.FirstLine(chain), "check that review on GitHub and the identity's token; automation for the watch is paused until `magnum resume`"
 	case KindFix:
-		if mistakenReplyRoundRe.MatchString(textx.FirstLine(chain)) {
-			return "the loop took a reply round for its re-review, which had posted: the review stands",
-				"nothing failed: `magnum fix " + ref + "` fixes that review in a new loop, or " + retry + " reviews the head again"
-		}
 		return fixCause(textx.FirstLine(chain)), fixRemedy(chain, ref)
 	}
 

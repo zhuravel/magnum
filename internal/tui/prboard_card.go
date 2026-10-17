@@ -788,8 +788,9 @@ const notReviewedSentence = "Open before magnum began watching this repository, 
 	"A push, a review request for you or a posting identity, or R (fresh review) starts one."
 
 // findingsLines say what the latest review concluded: the decision (and
-// what was posted instead, when the repository only lets it comment), the
-// findings by priority with the simplifications, and the earlier findings.
+// what was posted instead, when the repository only lets it comment, or that
+// the approval is held for a full pass), the findings by priority with the
+// simplifications, and the earlier findings.
 // The nerd mode marks the decision with its verdict and each priority.
 func (p *prbPainter) findingsLines(f FindingsInfo) []string {
 	decision := map[string]string{
@@ -807,8 +808,14 @@ func (p *prbPainter) findingsLines(f FindingsInfo) []string {
 		line = st.Render(glyph) + " " + line
 	}
 	// Posted is a review state (COMMENTED), want a request's event (COMMENT):
-	// normVerdict folds both, as the pipeline's normalizeEvent does.
-	if f.Posted != "" && want != "" && normVerdict(f.Posted) != normVerdict(want) {
+	// normVerdict folds both, as the pipeline's normalizeEvent does. A review
+	// that held its approval posts its clean verdict as a comment by design,
+	// so it says so and offers no A, which would approve what the hold
+	// postpones.
+	switch {
+	case f.Held:
+		line += "; held: posted as a comment, the approval waits for the full pass"
+	case f.Posted != "" && want != "" && normVerdict(f.Posted) != normVerdict(want):
 		line += "; posted as " + strings.ToLower(strings.ReplaceAll(f.Posted, "_", " ")) +
 			" (A approves, C requests changes)"
 	}

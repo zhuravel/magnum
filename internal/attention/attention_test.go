@@ -164,32 +164,6 @@ func TestAFixReasonTooLongForTheSummaryDropsTheReportPathNotTheCounts(t *testing
 	}
 }
 
-// On 2026-10-16 a fix loop took a reply round for its re-review and ended as
-// "the re-review did not post (replied)", although its re-review had posted.
-// The loop no longer does, and the row it left is not repaired in code: the
-// operator decides. A re-review the loop forces never ends replied, so that
-// line names the round the loop mistook and says the review stands, with
-// what to run; a re-review of the loop's own that did not post still reads
-// as written.
-func TestAMistakenReplyRoundIsNamedInTheAttentionLine(t *testing.T) {
-	for _, msg := range []string{
-		"fix loop ended: the re-review did not post (replied)",
-		"fix: fix loop ended: the re-review did not post (replied)", // the pr.needs_attention event's form
-	} {
-		r := Explain(KindFix, msg, "talkable#11932")
-		if want := "fix: the loop took a reply round for its re-review, which had posted: the review stands"; r.Kind != KindFix || r.Stage != StageFix || r.Summary != want {
-			t.Errorf("%q: kind %q stage %q summary %q, want %q", msg, r.Kind, r.Stage, r.Summary, want)
-		}
-		if want := "nothing failed: `magnum fix talkable#11932` fixes that review in a new loop, or `magnum review talkable#11932` reviews the head again"; r.Fix != want {
-			t.Errorf("%q: fix %q, want %q", msg, r.Fix, want)
-		}
-	}
-	own := "fix loop ended: the re-review did not post (error)"
-	if r := Explain(KindFix, own, "talkable#2"); r.Summary != own || !strings.Contains(r.Fix, "`magnum fix talkable#2`") {
-		t.Errorf("the loop's own re-review: summary %q, fix %q", r.Summary, r.Fix)
-	}
-}
-
 // On talkable#11932 a launch that never came up held the judge's agent name
 // for hours: every start failed with herdr's agent_name_taken (or, with the
 // launch in another pane, waited as busy), and the board said "setup". The

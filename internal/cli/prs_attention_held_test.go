@@ -138,4 +138,36 @@ func TestFindingsReadHeldOnlyForTheHeldReview(t *testing.T) {
 			t.Errorf("#%v: findings.held = %v, want %v", r["number"], got, want)
 		}
 	}
+	// The printed table is the third reading of the same fact: `held` in STATE.
+	var printed strings.Builder
+	prsRender(&printed, []tui.PRBoardRow{rows[12601], rows[12602], rows[12603]}, "talkable/talkable", h.now)
+	for l := range strings.SplitSeq(printed.String(), "\n") {
+		for n, want := range map[int]bool{12601: true, 12602: false, 12603: false} {
+			if strings.Contains(l, "#"+strconv.Itoa(n)+" ") && strings.Contains(l, ",held") != want {
+				t.Errorf("#%d: printed line %q, held in STATE = %v, want %v", n, l, !want, want)
+			}
+		}
+	}
+}
+
+// The printed table's STATE flags a review that held its approval
+// (approve_after_full_pass) as the board's FINDINGS reads it, in the order
+// of the other flags, and a clean verdict posted as a comment with no hold,
+// like a PR with no review, carries none.
+func TestThePrintedStateFlagsAHeldReview(t *testing.T) {
+	held := &tui.FindingsInfo{Verdict: "clean", Posted: "COMMENTED", Held: true}
+	for _, tc := range []struct {
+		name string
+		row  tui.PRBoardRow
+		want string
+	}{
+		{"held", tui.PRBoardRow{State: "reviewed", Findings: held}, "reviewed,held"},
+		{"held, starred and pinned", tui.PRBoardRow{State: "reviewed", Starred: true, Pinned: true, Findings: held}, "reviewed,starred,pinned,held"},
+		{"a comment-only repository", tui.PRBoardRow{State: "reviewed", Findings: &tui.FindingsInfo{Verdict: "clean", Posted: "COMMENTED"}}, "reviewed"},
+		{"no review", tui.PRBoardRow{State: "reviewed"}, "reviewed"},
+	} {
+		if got := prsStateCell(tc.row, prsNow); got != tc.want {
+			t.Errorf("%s: STATE = %q, want %q", tc.name, got, tc.want)
+		}
+	}
 }

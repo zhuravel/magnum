@@ -1122,6 +1122,46 @@ func TestTheCardComparesPostedStatesWithRequestEvents(t *testing.T) {
 	}
 }
 
+// A review that held its approval (approve_after_full_pass) posts its clean
+// verdict as a comment by design, and a full pass of the whole PR decides
+// the approval: the card's decision says so and offers no A, which would
+// approve what the hold postpones. A clean review posted as a comment with
+// no hold (a comment-only repository) keeps the posting and the hint, the
+// card shows the line whole at 100 and 140 columns, and the held PR's
+// other lines are unchanged.
+func TestAHeldReviewsCardOffersNoApproveHint(t *testing.T) {
+	held := "Decision: approve; held: posted as a comment, the approval waits for the full pass"
+	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{})
+	p := m.painter()
+	for _, posted := range []string{"COMMENTED", "COMMENT"} {
+		line := ansi.Strip(p.findingsLines(FindingsInfo{Verdict: "clean", Posted: posted, Held: true})[0])
+		if line != held {
+			t.Errorf("held clean review posted as %s: %q, want %q", posted, line, held)
+		}
+	}
+	plain := ansi.Strip(p.findingsLines(FindingsInfo{Verdict: "clean", Posted: "COMMENTED"})[0])
+	if want := "Decision: approve; posted as commented (A approves, C requests changes)"; plain != want {
+		t.Errorf("clean comment with no hold: %q, want %q", plain, want)
+	}
+
+	row := PRBoardRow{Ref: "talkable/talkable#9", Owner: "talkable", Repo: "talkable", Number: 9, Title: "Copy fix",
+		State: "reviewed", GHState: "OPEN", ActivityAt: ago(time.Hour), HeadSHA: "abcdef1234",
+		LastReview: &ReviewInfo{Login: "talkable[bot]", Event: "COMMENTED", SubmittedAt: ago(time.Hour), CommitSHA: "abcdef1234"},
+		Findings:   &FindingsInfo{Verdict: "clean", Posted: "COMMENTED", Held: true, Simplifications: 2, SHA: "abcdef1234"}}
+	for _, w := range []int{100, 140} {
+		c, _, _ := newBoard(t, w, 70, PRBoardOptions{})
+		c, _ = send(t, c, prbDataMsg{rows: []PRBoardRow{row}})
+		c, _ = send(t, c, keyMsg("enter"))
+		v := strings.Join(strings.Fields(viewOf(c)), " ")
+		if !strings.Contains(v, strings.TrimPrefix(held, "Decision: ")) {
+			t.Errorf("card at %d columns lacks the held line:\n%s", w, viewOf(c))
+		}
+		if strings.Contains(v, "A approves") || strings.Contains(v, "posted as commented") {
+			t.Errorf("card at %d columns offers the A the hold postpones:\n%s", w, viewOf(c))
+		}
+	}
+}
+
 // A PR open before magnum watched its repository reads "not reviewed", and
 // its card says what starts a review; A has nothing to approve on it.
 func TestPRBoardNotReviewedRows(t *testing.T) {

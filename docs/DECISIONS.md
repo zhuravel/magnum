@@ -2317,6 +2317,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The chosen sort inside the starred group. The operator asked for the newest update first.
   - A star as a queue priority. A star is what the operator tracks, not a request for review capacity. A
     board key that changes usage and scheduling is a risk.
+- **A held review's card, the printed table's `held`, and a dead attention branch** (2026-10-17, spec 70).
+  Three leftovers of the held-review, printed-board and fix-loop work. (1) A clean review that held its
+  approval (`approve_after_full_pass`) posts COMMENTED by design, and the card compared the posted event
+  with the verdict only, so its decision read "posted as commented (A approves, C requests changes)" and
+  invited the A that the hold postpones, although `FindingsInfo.Held` reached the card. Now `findingsLines`
+  reads it first: the line is "Decision: approve; held: posted as a comment, the approval waits for the full
+  pass", with no key hint; a clean comment with no hold (a comment-only repository) keeps its "posted as"
+  words and its hint, and the card's ACTIONS footer, which lists A for every PR, is unchanged (A still
+  approves by hand, which the operator may choose). (2) The printed `magnum tui` STATE listed the other
+  board flags but not the hold, which the live board shows as `✔ held`; `prsStateCell` now adds `held`
+  after `stalemate` when the row's findings are held (`tui --json` already had `findings.held`), so the
+  three readings agree. (3) `attention.Explain` carried a reading for the end the pre-87fa4f0 fix hook
+  wrote ("fix loop ended: the re-review did not post (replied)"): a re-review the loop forces never ends
+  replied since the loop decides only on the round it forced, no row carries the text (0 rows) and the
+  code cannot write it again, so the regexp, its branch and its test are gone and every other fix reading
+  stays. Tests: TestAHeldReviewsCardOffersNoApproveHint (tui, with the card at 100 and 140 columns),
+  TestThePrintedStateFlagsAHeldReview and the printed line in TestFindingsReadHeldOnlyForTheHeldReview
+  (cli). Rejected: keeping the dead branch for rows an older daemon wrote (none exist, and a row that did
+  would read as the loop's own end, which says what happened); hiding A on a held card (the operator may
+  approve by hand, so the key stays and only the line stops inviting it).
 
 ## Operations
 

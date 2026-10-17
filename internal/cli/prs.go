@@ -797,7 +797,8 @@ func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
 // prsStateCell is the magnum state with the flags that matter
 // ("reviewed,starred,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
 // merged before magnum reviewed its last push; "reviewed,fixing" while its
-// fixer works, "fix-off" when it was switched out of autofix), and a snooze
+// fixer works, "fix-off" when it was switched out of autofix, "held" when
+// its latest review held its approval for a full pass), and a snooze
 // that holds at now while no round runs ("reviewed,snoozed→18:00", as the
 // board's cell).
 func prsStateCell(r tui.PRBoardRow, now time.Time) string {
@@ -821,7 +822,8 @@ func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 		on   bool
 		name string
 	}{{r.Fixing != "", "fixing"}, {r.Draft, "draft"}, {r.Starred, "starred"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.FixOff, "fix-off"},
-		{r.CodexFlag != "", "codex-flagged"}, {r.LastError != "", "error"}, {len(r.Stalemate) > 0, "stalemate"}} {
+		{r.CodexFlag != "", "codex-flagged"}, {r.LastError != "", "error"}, {len(r.Stalemate) > 0, "stalemate"},
+		{r.Findings != nil && r.Findings.Held, "held"}} {
 		if f.on {
 			s += "," + f.name
 		}
