@@ -8180,6 +8180,9 @@ type Real struct {
 	// Log, when set, receives a redacted one-line transcript per command:
 	// at debug level for a success and at warn level for a failure when it
 	// is a LevelLogger (a command the caller's cancellation ended: debug).
+	// A failed command's line ends with " stderr=" and the first non-blank
+	// line of its stderr, redacted and cut to 200 runes; no Cmd flag
+	// withholds it.
 	Log Logger
 	// BaseEnv, when non-empty, replaces os.Environ() as the parent environment.
 	BaseEnv []string

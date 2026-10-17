@@ -8692,6 +8692,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   restart case (one more plain try and event per restart, the cost the backoff entry already accepted);
   making the Codex-flag release hard too (the spec names the idle park, and a flagged PR's release is
   tried again on every backoff the same way, so it can follow later).
+- **A failed command's log line carries the first line of its stderr** (2026-10-17, spec 67, amends
+  "Subprocess transcripts log at debug, failures at warn"). The line of a failed command read
+  `exec <cmd> dir=… code=1 dur=… err=exit status 1` and nothing more. Since 2026-10-14 the daemon log held
+  112 such warnings for `gh api graphql`, 84 of them at about 11 s, and only 16 surfaced as `poll.error` or
+  `poll.ci_error`: the other 96 could not be told apart (a 502, a rate limit, a bad query) or attributed to a
+  caller. Now the line of a command that failed (an error, or a code other than 0, at any level, so a probe's
+  answer at debug has it too) ends with ` stderr=<line>`: the first line of stderr that is not blank, a
+  carriage return ending a line as a newline does, redacted, with control characters turned into spaces and
+  invalid UTF-8 replaced, at most 200 runes (a longer line is its first 199 and an ellipsis). A command that
+  succeeds or leaves stderr empty or blank gets no such part. Only that one line is redacted and cut, not the
+  stream (up to 8 MiB): a token or a key block that starts in it is masked to its end, and the lines after it
+  are not shown. Real.Run captures stderr on this path (`Result.Stderr`, which `exitError` already reads), so
+  nothing is read again. `Cmd` has no flag that marks a command's output as PR-controlled or sensitive, so
+  none is honoured: the checkout's hooks, tests and the agents' commands take the same path, bounded and
+  redacted. A command whose first stderr line is PR text (a test's failure message) therefore logs up to 200
+  runes of it; the spec accepts that bound. New test TestAFailedCommandLogsItsFirstStderrLine. Rejected:
+  logging the whole stderr (up to 8 MiB per failure, and PR output among it; `ExitError.Stderr` already
+  carries 64 KiB for the callers that need more); logging the last line instead (gh prints its API error
+  message first and usage text after it); an `err=` that wraps the `ExitError` (the line would then carry
+  up to 64 KiB).
 
 - **A drain or a pause stop of the skill gate does not count toward its hold limit** (2026-10-17, spec 61,
   amends "A gating proposal always ends"). The gate counted every stop short of a verdict and held the

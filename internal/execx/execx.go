@@ -24,7 +24,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Cmd describes one subprocess.
@@ -276,6 +279,9 @@ type Real struct {
 	// Log, when set, receives a redacted one-line transcript per command:
 	// at debug level for a success and at warn level for a failure when it
 	// is a LevelLogger (a command the caller's cancellation ended: debug).
+	// A failed command's line ends with " stderr=" and the first non-blank
+	// line of its stderr, redacted and cut to 200 runes; no Cmd flag
+	// withholds it.
 	Log Logger
 	// BaseEnv, when non-empty, replaces os.Environ() as the parent environment.
 	BaseEnv []string
@@ -369,7 +375,11 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		if err != nil && !stopped && !answer {
 			level = slog.LevelWarn
 		}
-		LogAt(r.Log, level, "exec %s dir=%s code=%d dur=%s%s err=%v", Redact(c.String()), c.Dir, res.Code, res.Duration.Round(time.Millisecond), trunc, err)
+		why := ""
+		if err != nil || res.Code != 0 {
+			why = failureStderr(res.Stderr)
+		}
+		LogAt(r.Log, level, "exec %s dir=%s code=%d dur=%s%s err=%v%s", Redact(c.String()), c.Dir, res.Code, res.Duration.Round(time.Millisecond), trunc, err, why)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -381,6 +391,49 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		return res, &RunError{Cmd: c, Err: err}
 	}
 	return res, nil
+}
+
+// stderrLogRunes is how many runes of a failed command's first stderr line
+// its log line keeps, the ellipsis of a cut line included.
+const stderrLogRunes = 200
+
+// failureStderr is the " stderr=<line>" a failed command's log line ends
+// with: the first line of stderr that is not blank (a carriage return ends a
+// line as a newline does), redacted, control characters turned into spaces,
+// at most stderrLogRunes runes. It is "" when stderr has no such line. Only
+// that one line is redacted and cut, not the whole stream (up to MaxOutput):
+// a token or a key block that starts in it is masked to its end, and the
+// lines after it are not shown at all.
+func failureStderr(stderr []byte) string {
+	var line []byte
+	for part := range bytes.FieldsFuncSeq(stderr, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		if line = bytes.TrimSpace(part); len(line) > 0 {
+			break
+		}
+	}
+	if len(line) == 0 {
+		return ""
+	}
+	s := Redact(string(line))
+	// Cut to one rune past the limit before the rest: the line can be
+	// megabytes, and textx.Clip decides between a whole line and a cut one.
+	runes := 0
+	for i := range s {
+		if runes++; runes > stderrLogRunes+1 {
+			s = s[:i]
+			break
+		}
+	}
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(s, "�"))
+	if s = textx.Clip(strings.TrimSpace(s), stderrLogRunes); s == "" {
+		return ""
+	}
+	return " stderr=" + s
 }
 
 // reapGroup finishes off the process group of a command that has returned.
