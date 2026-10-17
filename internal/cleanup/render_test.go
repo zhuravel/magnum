@@ -2,10 +2,12 @@ package cleanup
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -124,5 +126,46 @@ func TestPlanJSON(t *testing.T) {
 	rep, err := f.p.Apply(f.ctx, back, false)
 	if err != nil || rep.Done != 1 {
 		t.Fatalf("rep = %+v err = %v", rep, err)
+	}
+}
+
+// The skipped line of a slot a guard holds says what hand-back works, with
+// the slot in quotes, as `magnum release` printed "hold_reason (head_drift)"
+// and left the operator of talkable-integration#867 to find `magnum unpin
+// "<slot>"` by trial. The slot is a pool slot's name or a per-PR worktree's
+// (owner/name#N); the skip's own reason and detail, which the JSON carries,
+// stay as they were.
+func TestAHoldHintNamesTheUnpinCommandWithTheSlot(t *testing.T) {
+	f := newFixture(t)
+	pooled := f.closedPR(f.talkable, 11702, store.GHMerged, -time.Minute)
+	f.poolSlot("review2", store.SlotHeld, pooled.ID, true, func(s *store.Slot) { s.HoldReason = new("head_drift") })
+	perPR := f.closedPR(f.foo, 3, store.GHClosed, -time.Minute)
+	worktree := f.createSlot(store.Slot{
+		Name: slots.PRSlotName(f.foo.FullName(), perPR.Number), RepoID: &f.foo.ID, RepoFullName: f.foo.FullName(),
+		Kind: store.SlotKindPerPR, Path: filepath.Join(f.root, "foo__worktrees", "pr-3"), MainClone: filepath.Join(f.root, "foo"),
+		State: store.SlotHeld, PRID: &perPR.ID, HoldReason: new("unpushed_commits"),
+	}, true)
+
+	plan := f.plan(Options{})
+	s := mustSkip(t, plan, "talkable/talkable#11702", SkipHoldReason)
+	if s.Detail != "head_drift" || s.Slot != "review2" {
+		t.Fatalf("pool skip = %+v, want detail head_drift and slot review2", s)
+	}
+	out := Render(plan)
+	for _, want := range []string{
+		`talkable#11702`,
+		`held: head_drift (acknowledge it with magnum unpin "review2")`,
+		`held: unpushed_commits (acknowledge it with magnum unpin "` + worktree.Name + `")`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "hold_reason") {
+		t.Errorf("render still says hold_reason:\n%s", out)
+	}
+	j, err := json.Marshal(s)
+	if err != nil || !strings.Contains(string(j), `"reason":"hold_reason"`) || !strings.Contains(string(j), `"slot":"review2"`) {
+		t.Errorf("skip JSON = %s (%v), want the reason kept and the slot added", j, err)
 	}
 }

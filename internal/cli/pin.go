@@ -24,8 +24,12 @@ var targetKinds = []targetKind{
 	{"pin", engine.ReqPin, "keep a PR's slot and sessions for you (automation leaves them alone)", true,
 		"Keep a PR's slot and agent sessions for you: automation does not claim, check out, release or remove " +
 			"them until `magnum unpin`. A slot name pins that slot."},
-	{"unpin", engine.ReqUnpin, "hand a pinned PR's slot back to automation", true,
-		"Hand a pinned PR's slot (or a pinned slot) back to automation."},
+	{"unpin", engine.ReqUnpin, "hand a pinned or held PR's slot back to automation", true,
+		"Hand a pinned PR's slot (or a pinned slot) back to automation. A head_drift or unpushed_commits hold on " +
+			"the slot (a commit made in it, a moved HEAD) is acknowledged by it too, pinned or not: it takes the " +
+			"folder's current HEAD as the checkout magnum expects, so the next release resets the slot, and the " +
+			"answer says so. A PR reference or the slot's name (a worktree's is owner/repo#N, a pool slot's is " +
+			"review3) does it. A dirty_worktree hold comes back at the next guard while the changes are there."},
 	{"release", engine.ReqRelease, "hand back a PR's slot now (sessions parked, worktree reset)", true,
 		"Hand back a PR's slot now: its sessions are parked and the worktree reset, so the slot is free for the " +
 			"next round. The daemon does it; without one the release runs here under the lock. --force discards " +

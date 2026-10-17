@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -201,6 +202,24 @@ type Skip struct {
 	Subject string `json:"subject"`
 	Reason  string `json:"reason"`
 	Detail  string `json:"detail,omitempty"`
+	// Slot is the slot a hold_reason skip is about (its name is what `magnum
+	// unpin` takes); empty for the other reasons.
+	Slot string `json:"slot,omitempty"`
+}
+
+// Text is the skip's reason as a plan prints it: "<reason> (<detail>)", and
+// for a slot a guard holds "held: <hold> (acknowledge it with magnum unpin
+// "<slot>")", the command that hands the slot back (a moved HEAD or commits on
+// no remote are acknowledged by it; the other holds come back at the guard
+// while their cause is there). The JSON keeps the reason and the detail.
+func (s Skip) Text() string {
+	if s.Reason == SkipHoldReason && s.Slot != "" {
+		return "held: " + s.Detail + " (acknowledge it with magnum unpin " + strconv.Quote(s.Slot) + ")"
+	}
+	if s.Detail != "" {
+		return s.Reason + " (" + s.Detail + ")"
+	}
+	return s.Reason
 }
 
 // Totals sums a plan's estimates.

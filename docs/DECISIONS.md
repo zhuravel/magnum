@@ -9239,6 +9239,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the threads file for a human's (the fixed review's own comments are not in it yet, and its declined
   findings are the common case).
 
+- **`magnum unpin` acknowledges a hold and every hold sentence names the command** (2026-10-18, spec 83, after
+  talkable-integration#867: a commit the fixer's pane made after its loop ended moved the per-PR worktree's
+  HEAD, the guard held the slot `head_drift`, and a review the operator asked for answered "waiting: slot
+  talkable/talkable-integration#867 is held: head_drift (magnum unpin)"; his first try at the way back was
+  refused as "not pinned", `magnum release` skipped the slot ("hold_reason (head_drift)") and did nothing,
+  and `magnum unpin "talkable/talkable-integration#867"` finally took the new HEAD and let the review run).
+  The daemon's log shows that no unpin request came before the last one: `requestPin` already takes the slot
+  of a PR reference through `slots.Manager.Unpin` whether or not a pin is set, and that clears a
+  `head_drift` or `unpushed_commits` hold by taking the folder's HEAD, so the "not pinned" came from the
+  client (the board's `u` answers it for an unpinned PR before any request exists, and a bare number names
+  the default repository's PR, which the registry may not hold: "nothing to unpin: a PR magnum has not
+  recorded is not pinned"), not from the command's daemon path. What that path lacked was words: its answer
+  was "unpinned <PR> (slot <name>)" whether it took a pin off or handed back a hold. Now an
+  unpin of a PR that was not pinned, whose slot carried `head_drift` or `unpushed_commits`, answers
+  "acknowledged the head_drift hold of slot <name>: HEAD 3e8c5b6 is now the checkout magnum expects; the next
+  release resets it" (also the text of its `pr.unpinned` event, `acknowledgedHold`); a PR with no such hold,
+  one holding `dirty_worktree` (which returns at the next guard while the changes are there) and a pinned PR
+  keep today's answer. Every sentence that says a guard holds a slot now names the command with the slot in
+  quotes, since a per-PR worktree's name (owner/name#N) is also a PR reference: `slotHeldReason` ("slot X is
+  held: head_drift (magnum unpin "X")": the review request's waiting line, the PR's wait on the board and the
+  card, the refusals of `magnum fix` and a whiteboard job), the attention line of `magnum status` ("check the
+  folder, then `magnum unpin "X"`", for `magnum slots unpin X`), and a release plan's skipped line, now
+  `Skip.Text()` ("held: head_drift (acknowledge it with magnum unpin "X")", the JSON keeping `reason` and
+  `detail` and adding `slot`); `magnum unpin --help` says what it acknowledges. Rejected: `magnum release`
+  acknowledging the hold (a release must never take a HEAD it did not check out: only the person who looks at
+  the commits says they are expected), the pinned and slot-name paths changing (they already worked), and the
+  board's `u` taking a hold for a pin (left for its own decision: it refuses before any request, and the hint
+  now names the command to type).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

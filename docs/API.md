@@ -2703,8 +2703,18 @@ type Skip struct {
 	Subject string `json:"subject"`
 	Reason  string `json:"reason"`
 	Detail  string `json:"detail,omitempty"`
+	// Slot is the slot a hold_reason skip is about (its name is what `magnum
+	// unpin` takes); empty for the other reasons.
+	Slot string `json:"slot,omitempty"`
 }
     Skip is something the options selected that the plan leaves alone.
+
+func (s Skip) Text() string
+    Text is the skip's reason as a plan prints it: "<reason> (<detail>)",
+    and for a slot a guard holds "held: <hold> (acknowledge it with magnum unpin
+    "<slot>")", the command that hands the slot back (a moved HEAD or commits
+    on no remote are acknowledged by it; the other holds come back at the guard
+    while their cause is there). The JSON keeps the reason and the detail.
 
 type Slots interface {
 	Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error

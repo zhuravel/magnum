@@ -188,3 +188,18 @@ func TestTargetsKeepAnExplicitSlot(t *testing.T) {
 		t.Fatalf("release opts %+v", h.cleaner.opts)
 	}
 }
+
+// `magnum unpin --help` says that a PR or a slot the guard holds for a moved
+// HEAD or for commits on no remote is handed back by it too, pinned or not.
+func TestUnpinHelpSaysItAcknowledgesAHold(t *testing.T) {
+	c, out, _ := bareContext(t)
+	if code := execute(c, []string{"unpin", "--help"}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	help := strings.Join(strings.Fields(out.String()), " ") // the help is wrapped
+	for _, want := range []string{"head_drift or unpushed_commits hold", "pinned or not", "the next release resets the slot"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("unpin --help lacks %q:\n%s", want, out)
+		}
+	}
+}

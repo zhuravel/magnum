@@ -1440,6 +1440,10 @@ type fakeSlots struct {
 	ensureNote string
 	// resyncErr is what Resync fails with, after recording the call.
 	resyncErr error
+	// heads is the HEAD of each slot's folder by slot name: Unpin takes it as
+	// the checked-out commit of a slot held for head_drift or
+	// unpushed_commits, as slots.Manager.Unpin does.
+	heads map[string]string
 }
 
 func (f *fakeSlots) record(s string) {
@@ -1733,8 +1737,14 @@ func (f *fakeSlots) Adopt(ctx context.Context, pool config.Pool, path string) (s
 
 func (f *fakeSlots) Unpin(ctx context.Context, slot store.Slot) error {
 	f.record("unpin:" + slot.Name)
+	f.mu.Lock()
+	head := f.heads[slot.Name]
+	f.mu.Unlock()
 	return f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) {
 		u.Set("pinned", false)
+		if r := deref(slot.HoldReason); head != "" && (r == slots.HoldHeadDrift || r == slots.HoldUnpushed) {
+			u.Set("checked_out_sha", head)
+		}
 		u.Set("hold_reason", nil)
 	})
 }

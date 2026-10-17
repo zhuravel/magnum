@@ -330,11 +330,7 @@ func cleanupScreenPlan(p cleanup.Plan) tui.CleanupPlan {
 		out.Actions = append(out.Actions, ta)
 	}
 	for _, s := range p.Skipped {
-		reason := s.Reason
-		if s.Detail != "" {
-			reason += " (" + s.Detail + ")"
-		}
-		out.Skipped = append(out.Skipped, tui.CleanupSkip{Subject: s.Subject, Reason: reason})
+		out.Skipped = append(out.Skipped, tui.CleanupSkip{Subject: s.Subject, Reason: s.Text()})
 	}
 	return out
 }

@@ -15,10 +15,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Event kinds of a pin: magnum open pins the PR it restores (pr.opened),
@@ -134,9 +136,33 @@ func (e *Engine) unpinnedSlotHold(ctx context.Context, slot store.Slot) string {
 	return ""
 }
 
-// slotHeldReason is slotGate's sentence for a slot with a persisted hold.
+// slotHeldReason is slotGate's sentence for a slot with a persisted hold. It
+// names the command that hands the slot back, with the slot in quotes ("slot
+// review1 is held: head_drift (magnum unpin "review1")"): a per-PR
+// worktree's name, owner/name#N, is also a PR reference, and the command takes
+// either.
 func slotHeldReason(slot store.Slot) string {
-	return "slot " + slot.Name + " is held: " + deref(slot.HoldReason) + " (magnum unpin)"
+	return "slot " + slot.Name + " is held: " + deref(slot.HoldReason) + " (magnum unpin " + strconv.Quote(slot.Name) + ")"
+}
+
+// acknowledgedHold is the answer of an unpin that took no pin off but handed
+// back a slot its guard held for a moved HEAD (head_drift) or for commits on
+// no remote (unpushed_commits): slots.Manager.Unpin took the folder's HEAD as
+// the checkout magnum expects and cleared the hold, so the next release
+// resets the slot. before is the slot as it was before the unpin; "" when it
+// held nothing of the kind, or when the unpin left it held (the caller keeps
+// its own answer).
+func (e *Engine) acknowledgedHold(ctx context.Context, before store.Slot) string {
+	hold := deref(before.HoldReason)
+	if hold != slots.HoldHeadDrift && hold != slots.HoldUnpushed {
+		return ""
+	}
+	cur, err := e.st.SlotByID(ctx, before.ID)
+	if err != nil || cur.HoldReason != nil || deref(cur.CheckedOutSHA) == "" {
+		return ""
+	}
+	return fmt.Sprintf("acknowledged the %s hold of slot %s: HEAD %s is now the checkout magnum expects; the next release resets it",
+		hold, before.Name, textx.ShortSHA(deref(cur.CheckedOutSHA)))
 }
 
 // pinEvent records a pin or unpin request (magnum pin|unpin, magnum slots

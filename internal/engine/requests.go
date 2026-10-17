@@ -607,7 +607,7 @@ func (e *Engine) resolveRequested(repo store.Repo, asked []string) ([]string, er
 func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (string, error) {
 	verb := map[bool]string{true: "pinned", false: "unpinned"}[pin]
 	var slot store.Slot
-	hasSlot := false
+	hasSlot, wasPinned := false, false
 	label, subject := p.Slot, ""
 	if p.Slot != "" {
 		sl, err := e.st.SlotByName(ctx, p.Slot)
@@ -634,7 +634,9 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 		if slot, hasSlot, err = e.slotOf(ctx, pr.ID); err != nil {
 			return "", err
 		}
+		wasPinned = pr.Pinned || slot.Pinned
 	}
+	answer := ""
 	if hasSlot && e.d.Slots != nil {
 		var err error
 		if pin {
@@ -646,9 +648,17 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 			return "", fmt.Errorf("%s %s: %w", verb, slot.Name, err)
 		}
 		label += " (slot " + slot.Name + ")"
+		// A PR that was not pinned, unpinned to hand back its slot's hold: the
+		// answer says which hold, since no pin went.
+		if !pin && p.Slot == "" && !wasPinned {
+			answer = e.acknowledgedHold(ctx, slot) // review_unpin.go
+		}
 	}
-	e.pinEvent(ctx, subject, slot, p.Slot != "", pin, verb+" "+label) // review_unpin.go
-	return verb + " " + label, nil
+	if answer == "" {
+		answer = verb + " " + label
+	}
+	e.pinEvent(ctx, subject, slot, p.Slot != "", pin, answer) // review_unpin.go
+	return answer, nil
 }
 
 // requestMute mutes or unmutes a PR. Muting a PR GitHub no longer lists as

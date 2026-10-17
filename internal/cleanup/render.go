@@ -40,11 +40,7 @@ func Render(p Plan) string {
 		b.WriteString("Skipped:\n")
 		w = tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 		for _, s := range p.Skipped {
-			reason := s.Reason
-			if s.Detail != "" {
-				reason += " (" + s.Detail + ")"
-			}
-			fmt.Fprintf(w, "  %s\t%s\n", shortSubject(s.Subject), reason)
+			fmt.Fprintf(w, "  %s\t%s\n", shortSubject(s.Subject), s.Text())
 		}
 		w.Flush()
 	}

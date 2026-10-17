@@ -649,7 +649,7 @@ func statusGatherInventory(ctx context.Context, d statusDeps, o statusOptions, r
 		switch {
 		case sv.Slot.HoldReason != nil:
 			r.Attention = append(r.Attention, statusAttention{Subject: "slot " + sv.Slot.Name,
-				Message: "held: " + *sv.Slot.HoldReason, Fix: "check the folder, then `magnum slots unpin " + sv.Slot.Name + "`"})
+				Message: "held: " + *sv.Slot.HoldReason, Fix: "check the folder, then `magnum unpin " + strconv.Quote(sv.Slot.Name) + "`"})
 		case sv.Slot.State == store.SlotBroken:
 			msg := "broken"
 			if e := store.Deref(sv.Slot.LastError); e != "" {

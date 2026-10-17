@@ -203,13 +203,16 @@ func (b *builder) add(a Action) {
 	b.actions = append(b.actions, a)
 }
 
-func (b *builder) skip(subject, reason, detail string) {
+func (b *builder) skip(subject, reason, detail string) { b.skipSlot(subject, reason, detail, "") }
+
+// skipSlot is skip for a reason about a slot, which the skip names.
+func (b *builder) skipSlot(subject, reason, detail, slot string) {
 	key := subject + "\x00" + reason
 	if b.seenSkip[key] {
 		return
 	}
 	b.seenSkip[key] = true
-	b.skipped = append(b.skipped, Skip{Subject: subject, Reason: reason, Detail: detail})
+	b.skipped = append(b.skipped, Skip{Subject: subject, Reason: reason, Detail: detail, Slot: slot})
 }
 
 // closedPRs plans the default release of closed PRs: past their grace and
@@ -478,7 +481,7 @@ func (b *builder) slotAction(ctx context.Context, subject string, sl store.Slot,
 		return false
 	}
 	if sl.HoldReason != nil {
-		b.skip(subject, SkipHoldReason, *sl.HoldReason)
+		b.skipSlot(subject, SkipHoldReason, *sl.HoldReason, sl.Name)
 		return false
 	}
 	view := b.views[sl.ID]

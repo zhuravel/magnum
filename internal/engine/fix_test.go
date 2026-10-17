@@ -529,7 +529,7 @@ func TestAFixOnAPinnedSlotUnpinsIt(t *testing.T) {
 		}
 		id := h.fix(FixPayload{})
 		h.handle()
-		want := "talkable/talkable#2: slot review1 is held: dirty_worktree (magnum unpin)"
+		want := `talkable/talkable#2: slot review1 is held: dirty_worktree (magnum unpin "review1")`
 		if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
 			t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
 		}
