@@ -309,10 +309,17 @@ A push that lands while a round's reviewers still run restarts them on the new h
 short are interrupted and their roles prompted again on the new head: an agent reviewer with esc, a shell
 role's command with ctrl+c, and the judge's own pass with one ctrl+c, which aborts Codex's turn and keeps
 the session with its context (two quit Codex, as for a judge that timed out). All of them get their keys
-at once, before Magnum waits for any of them; a shell role's command that still runs 10 seconds after its
-ctrl+c gets another, three in all, and a warning names the role when it runs on, since the restart's line
-would find its pane busy. When a refusal or a lost judge ends the round instead, the turns still at work
-are stopped the same way.
+at once, before Magnum waits for any of them, and then Magnum waits for all of them side by side, so the
+restart waits for the slowest turn, not for each in turn. A shell role's command that still runs 10 seconds
+after its ctrl+c gets another, three in all, and a warning names the role when it runs on, since the
+restart's line would find its pane busy. An agent gets up to a minute after its interrupt to go idle, and a
+warning names it when it does not. A claude reviewer still at work 10 seconds after its esc whose
+transcript shows background work it started still running (a test run in the background keeps it at work
+after an interrupt) is told then to stop that work, which is what ends it, rather than at the end of the
+minute; one idle within the 10 seconds gets no message then, only the one about work its transcript still
+shows once it is idle. A stop that worked is an info event (`round.cut_settled`, with the seconds the agent
+took to go idle), not a warning. When a refusal or a lost judge ends the round instead, the turns still at
+work are stopped the same way.
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the
 posted review and queues the re-review without waiting for `min_rereview_interval`. A PR whose head changed `burst_pushes` times (default 3) within `burst_window`
@@ -1348,7 +1355,8 @@ tasks (TaskStop), write its report with what it found and list the checks it sto
 or the end of the round cuts short. An interrupt does not stop a claude agent's background work, so an
 agent whose transcript still shows some is told once more to stop it with TaskStop and do nothing else
 (after a push, that the head moved and the next message restarts the review on it), and the warning says
-whether it did within 2 minutes; work that
+whether it did within 2 minutes (for a turn a push or the round's end cut short, a stop that worked is
+said in a `round.cut_settled` info event instead); work that
 finishes later anyway resumes the agent, and that turn is not taken for someone typing into the pane. If
 its transcript shows a prompt typed after Magnum's last prompt to it, a claude agent at work with no Magnum
 prompt in flight counts as someone typing into its pane (prompts to the PR wait `human_cooldown`, and an

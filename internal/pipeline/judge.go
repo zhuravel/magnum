@@ -443,7 +443,7 @@ func (rd *round) loggedOutReport(kind string) (RoleReport, bool) {
 // presses with the other cut turns (cut).
 func (rd *round) stopJudge(ctx context.Context, run store.Run) {
 	rd.interrupt(ctx, rd.judge, run, false)
-	if !rd.waitIdle(ctx, rd.judge, run) {
+	if !rd.waitIdle(ctx, rd.judge, run, rd.r.now().Add(InterruptWait)) {
 		rd.warn(ctx, "%s still works %s after it was interrupted", rd.judge.Name, InterruptWait)
 	}
 }

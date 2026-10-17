@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,5 +95,30 @@ func TestAHistoryThatPanicsOnlyWarns(t *testing.T) {
 	evs := e.eventsOf("round.history")
 	if len(evs) != 1 || evs[0].Level != "warn" || !strings.Contains(evs[0].Message, "panicked") || strings.Contains(evs[0].Message, "order.rb") {
 		t.Fatalf("round.history events = %+v", evs)
+	}
+}
+
+// A cut turn whose settle panics on its goroutine only warns: its run is
+// abandoned as any cut run, and the round restarts and posts.
+func TestACutSettleThatPanicsOnlyWarns(t *testing.T) {
+	e := newEnv(t)
+	in := e.cutClaude(true)
+	e.ag.background = map[agents.Role]int{agents.RoleClaude: 1}
+	e.ag.onTell = panics("nil map in the stop")
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if res.Outcome != OutcomePosted || res.Restarts != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if want := "settling claude-review for the restart panicked"; !slices.Contains(res.Warnings, want) {
+		t.Errorf("warnings = %q, want %q", res.Warnings, want)
+	}
+	for _, r := range e.runsOf(agents.RoleClaude, store.RunInitial) {
+		if r.TargetSHA == target {
+			wantRun(t, r, store.RunAbandoned, ReportHeadMoved)
+		}
 	}
 }

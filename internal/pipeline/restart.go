@@ -5,10 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
@@ -402,16 +406,18 @@ type cutBy struct {
 // First every turn still in flight gets its interrupt keys (interrupt: esc
 // to an agent, ctrl+c to a shell role's pane, and to the judge's own pass
 // one ctrl+c, or two, which quit Codex, when the round is over), all within
-// seconds of the cut. Then each of them is settled (settle), shell roles
-// first (a command that goes on gets its next ctrl+c without waiting for an
-// agent's waits), and every cut run ended: abandoned with c.status and
-// c.why, an own pass the round's end cut failed. A finished run keeps its
-// state. It returns the names of the turns it ended.
+// seconds of the cut. Then the interrupted turns are settled side by side,
+// one goroutine each (settleSafely), so the cut takes as long as its
+// longest settle, not their sum. Once all are, what each settle says is
+// recorded and every cut run ended in the turns' order, shell roles first,
+// as before: abandoned with c.status and c.why, an own pass the round's
+// end cut failed. A finished run keeps its state. It returns the names of
+// the turns it ended.
 func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) []string {
 	type cutting struct {
 		cutTurn
 		cur         store.Run
-		interrupted bool
+		interrupted time.Time // when it got its interrupt keys (zero: none, no turn in flight)
 	}
 	var cuts []cutting
 	names := []string{}
@@ -424,9 +430,9 @@ func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) []string {
 		switch cur.State {
 		case store.RunSubmitted, store.RunWorking:
 			rd.interrupt(ctx, t.role, cur, c.keep)
-			cuts = append(cuts, cutting{t, cur, true})
+			cuts = append(cuts, cutting{t, cur, rd.r.now()})
 		case store.RunPending, store.RunEnded:
-			cuts = append(cuts, cutting{t, cur, false})
+			cuts = append(cuts, cutting{cutTurn: t, cur: cur})
 		default:
 			continue
 		}
@@ -439,9 +445,21 @@ func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) []string {
 		return 1
 	}
 	slices.SortStableFunc(cuts, func(a, b cutting) int { return cmp.Compare(agent(a), agent(b)) })
-	for _, t := range cuts {
-		if t.interrupted {
-			rd.settle(ctx, t.role, t.cur, c)
+	said := make([]settled, len(cuts))
+	var wg sync.WaitGroup
+	for i, t := range cuts {
+		if !t.interrupted.IsZero() {
+			wg.Go(func() { said[i] = rd.settleSafely(ctx, t.role, t.cur, c, t.interrupted) })
+		}
+	}
+	wg.Wait()
+	for i, t := range cuts {
+		switch s := said[i]; {
+		case s.warn != "":
+			rd.warn(ctx, "%s", s.warn)
+		case s.info != "":
+			rd.event(ctx, "info", "round.cut_settled", s.info,
+				map[string]any{"run": t.cur.ID, "role": t.role.Name, "seconds": int(s.took / time.Second)})
 		}
 		to, why := store.RunAbandoned, c.why
 		if t.own && !c.keep && t.cur.State != store.RunPending {
@@ -452,27 +470,79 @@ func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) []string {
 	return names
 }
 
-// settle waits for role's turn on run, which cut (by c) interrupted, to
-// stop: an agent until it is seen idle (waitIdle), then told to stop the
-// background work it left running (stopBackground, c.stop); a shell role's
-// command until it stopped (stopShell). A warning says when it did not, and
-// what the agent was told.
-func (rd *round) settle(ctx context.Context, role config.Role, run store.Run, c cutBy) {
-	msg := ""
-	switch {
-	case role.IsShell():
+// settled is what settle says about a cut turn: a warning (warn), or a
+// line for an info event (info, round.cut_settled) with the time its agent
+// took to be seen idle after the interrupt (took, whole seconds); neither
+// when there is nothing to say.
+type settled struct {
+	warn, info string
+	took       time.Duration
+}
+
+// settleSafely is settle on the cut's goroutine for the turn, whose panic
+// would take the daemon down with every round in flight: a settle that
+// panics is logged with its stack and said in a warning, and the cut ends
+// its run as any other.
+func (rd *round) settleSafely(ctx context.Context, role config.Role, run store.Run, c cutBy, since time.Time) (s settled) {
+	defer func() {
+		if r := recover(); r != nil {
+			rd.logAt(slog.LevelError, "pipeline: %s settling %s (run %s) panicked: %v\n%s", rd.subject, role.Name, run.ID, r, debug.Stack())
+			s = settled{warn: fmt.Sprintf("settling %s for %s panicked", role.Name, c.what)}
+		}
+	}()
+	return rd.settle(ctx, role, run, c, since)
+}
+
+// settle waits for role's turn on run, which cut (by c) interrupted at
+// since, to stop. A shell role's command, until it stopped (stopShell). An
+// agent, until it is seen idle (waitIdle) up to InterruptWait after since,
+// and it is told to stop the background work its transcript shows still
+// running (askStop, c.stop): at cutGrace after since when it still works
+// then, since that work keeps a claude agent at work after its interrupt
+// and the message is what ends it, else once it is idle, as before. What
+// is left of that work is read after the wait for idle (backgroundStopped).
+// A warning says when the agent still works InterruptWait after since, or
+// some of its work still runs, with what it was told; a stop that worked
+// is said at info, with the time the agent took to be seen idle. A codex
+// agent and a shell role, whose transcript shows no background work, are
+// never told.
+func (rd *round) settle(ctx context.Context, role config.Role, run store.Run, c cutBy, since time.Time) settled {
+	if role.IsShell() {
+		msg := ""
 		if !rd.stopShell(ctx, run) {
 			msg = fmt.Sprintf("%s still runs %s after %d ctrl+c for %s", role.Name, shellStopWait, shellStopPresses, c.what)
 		}
-	case !rd.waitIdle(ctx, role, run):
-		msg = fmt.Sprintf("%s still works %s after it was interrupted for %s", role.Name, InterruptWait, c.what)
+		if bg := rd.stopBackground(ctx, role, run, c.stop, false); bg.note != "" {
+			msg = cmp.Or(msg, fmt.Sprintf("interrupted %s for %s", role.Name, c.what)) + "; " + bg.note
+		}
+		return settled{warn: msg}
 	}
-	if bg := rd.stopBackground(ctx, role, run, c.stop, false); bg != "" {
-		msg = cmp.Or(msg, fmt.Sprintf("interrupted %s for %s", role.Name, c.what)) + "; " + bg
+	n, bg := 0, bgStop{}
+	idle := rd.waitIdle(ctx, role, run, since.Add(cutGrace))
+	if !idle {
+		n, bg = rd.askStop(ctx, role, run, c.stop, false)
+		idle = rd.waitIdle(ctx, role, run, since.Add(InterruptWait))
 	}
-	if msg != "" {
-		rd.warn(ctx, "%s", msg)
+	took := rd.r.now().Sub(since).Round(time.Second)
+	switch {
+	case n > 0:
+		bg = rd.backgroundStopped(ctx, run, n)
+	case bg.note == "":
+		bg = rd.stopBackground(ctx, role, run, c.stop, false)
 	}
+	switch {
+	case !idle:
+		msg := fmt.Sprintf("%s still works %s after it was interrupted for %s", role.Name, InterruptWait, c.what)
+		if bg.note != "" {
+			msg += "; " + bg.note
+		}
+		return settled{warn: msg}
+	case bg.failed:
+		return settled{warn: fmt.Sprintf("interrupted %s for %s; %s", role.Name, c.what, bg.note)}
+	case bg.note != "":
+		return settled{info: fmt.Sprintf("%s settled %s after it was interrupted for %s; %s", role.Name, took, c.what, bg.note), took: took}
+	}
+	return settled{}
 }
 
 // AppendToReview adds text as the last paragraph of review reviewID, which

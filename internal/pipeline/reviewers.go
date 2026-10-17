@@ -377,45 +377,73 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 func (rd *round) stopReviewer(ctx context.Context, role config.Role, run store.Run) string {
 	rd.interrupt(ctx, role, run, false)
 	note := "interrupted " + role.Name
-	if bg := rd.stopBackground(ctx, role, run, stopBackgroundText, true); bg != "" {
-		note += "; " + bg
+	if bg := rd.stopBackground(ctx, role, run, stopBackgroundText, true); bg.note != "" {
+		note += "; " + bg.note
 	}
 	return note
 }
 
+// bgStop is what was done about the background work an interrupted agent
+// left running: note says it ("" = nothing: none runs, or its transcript
+// cannot be read), and failed is set when some of it still runs (the agent
+// could not be told, or work was left after StopGrace).
+type bgStop struct {
+	note   string
+	failed bool
+}
+
 // stopBackground stops the background work that role's agent, whose turn
 // on run was interrupted, started during the run and left running, and
-// says what it did ("" = none runs, or its transcript cannot be read: a
-// codex agent, a shell role). An interrupt does not stop a claude agent's
-// background work, whose notifications would resume it: the agent is told
-// once, within the run, to stop it with TaskStop and do nothing else (text),
-// and the transcript is read again until none is left or StopGrace passed.
-// settle first waits for the interrupted turn to end (waitIdle), so the
-// message does not land in it; a caller that waited already passes false.
-// The note counts what is left; magnum kills no process it did not start.
-func (rd *round) stopBackground(ctx context.Context, role config.Role, run store.Run, text string, settle bool) string {
+// says what it did (bgStop; nothing when none runs or its transcript cannot
+// be read: a codex agent, a shell role). An interrupt does not stop a
+// claude agent's background work, whose notifications would resume it: the
+// agent is told once, within the run, to stop it with TaskStop and do
+// nothing else (text, askStop), and the transcript is read again until
+// none is left or StopGrace passed (backgroundStopped). settle first waits
+// for the interrupted turn to end (waitIdle), so the message does not land
+// in it; a caller that waited already passes false. The note counts what
+// is left; magnum kills no process it did not start.
+func (rd *round) stopBackground(ctx context.Context, role config.Role, run store.Run, text string, settle bool) bgStop {
+	n, bg := rd.askStop(ctx, role, run, text, settle)
+	if n == 0 {
+		return bg
+	}
+	return rd.backgroundStopped(ctx, run, n)
+}
+
+// askStop is stopBackground's message: it tells role's agent, when its
+// transcript shows background work of the run still running, to stop it
+// (text), and returns how many tasks it was told to stop (0 = it was not
+// told, and bg says why when that is worth saying: the work runs on).
+func (rd *round) askStop(ctx context.Context, role config.Role, run store.Run, text string, settle bool) (int, bgStop) {
 	bg := context.WithoutCancel(ctx)
 	n, ok := rd.r.Agents.BackgroundTasks(bg, run)
 	if !ok || n == 0 {
-		return ""
+		return 0, bgStop{}
 	}
 	if !role.IsAgent() || ctx.Err() != nil {
-		return fmt.Sprintf("%s it started still %s", backgroundTasks(n), runVerb(n))
+		return 0, bgStop{note: fmt.Sprintf("%s it started still %s", backgroundTasks(n), runVerb(n)), failed: true}
 	}
 	if settle {
-		rd.waitIdle(ctx, role, run)
+		rd.waitIdle(ctx, role, run, rd.r.now().Add(InterruptWait))
 	}
 	if err := rd.r.Agents.Tell(bg, run, text); err != nil {
-		return fmt.Sprintf("%s it started still %s (could not ask it to stop: %v)", backgroundTasks(n), runVerb(n), err)
+		return 0, bgStop{note: fmt.Sprintf("%s it started still %s (could not ask it to stop: %v)", backgroundTasks(n), runVerb(n), err), failed: true}
 	}
+	return n, bgStop{}
+}
+
+// backgroundStopped reads what is left of the n background tasks run's
+// agent was told to stop (backgroundLeft) and says so.
+func (rd *round) backgroundStopped(ctx context.Context, run store.Run, n int) bgStop {
 	note := fmt.Sprintf("asked it to stop the %s it started", backgroundTasks(n))
 	switch left, ok := rd.backgroundLeft(ctx, run); {
 	case !ok:
-		return note
+		return bgStop{note: note}
 	case left == 0:
-		return note + ": it did"
+		return bgStop{note: note + ": it did"}
 	default:
-		return note + fmt.Sprintf(": %d still %s after %s", left, runVerb(left), durationWords(StopGrace))
+		return bgStop{note: note + fmt.Sprintf(": %d still %s after %s", left, runVerb(left), durationWords(StopGrace)), failed: true}
 	}
 }
 

@@ -122,6 +122,12 @@ const (
 	// the background tasks it left running (round.stopBackground), until its
 	// transcript shows none.
 	StopGrace = 2 * time.Minute
+	// cutGrace is how long an agent a cut interrupted has to be seen idle
+	// before it is told to stop the background work it left running
+	// (round.settle): such work keeps a claude agent at work after the
+	// interrupt, and the message is what ends it. The wait for idle goes on
+	// to InterruptWait after the interrupt.
+	cutGrace = 10 * time.Second
 	// shellStopWait bounds the wait for a cut shell role's pane to be an
 	// idle shell after each ctrl+c, and shellStopPresses is how many ctrl+c
 	// its command gets at most, the interrupt's included (round.stopShell).

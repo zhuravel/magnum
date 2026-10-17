@@ -199,8 +199,9 @@ func (e *env) stopsWhenTold(text string) *[]string {
 // A push that cuts claude-review short while work it started in the
 // background still runs: once its turn is interrupted (esc), it is told
 // within the cut run to stop that work, in words that leave the review to
-// the restart prompt that follows; the run is abandoned after, and the
-// warning says what happened.
+// the restart prompt that follows; the run is abandoned after, and an info
+// event (round.cut_settled) says what happened: the stop worked, so it is
+// no warning.
 func TestAPushTellsACutReviewerToStopItsBackgroundTasks(t *testing.T) {
 	e := newEnv(t)
 	in := e.cutClaude(true)
@@ -238,9 +239,12 @@ func TestAPushTellsACutReviewerToStopItsBackgroundTasks(t *testing.T) {
 			wantRun(t, r, store.RunAbandoned, ReportHeadMoved)
 		}
 	}
-	want := "interrupted claude-review for the restart; asked it to stop the 2 background tasks it started: it did"
-	if !slices.Contains(res.Warnings, want) {
-		t.Errorf("warnings = %q, want %q", res.Warnings, want)
+	if len(res.Warnings) != 0 {
+		t.Errorf("warnings = %q, want none: the stop worked", res.Warnings)
+	}
+	want := "claude-review settled 0s after it was interrupted for the restart; asked it to stop the 2 background tasks it started: it did"
+	if evs := e.eventsOf("round.cut_settled"); len(evs) != 1 || evs[0].Level != "info" || evs[0].Message != want {
+		t.Errorf("round.cut_settled events = %+v, want one at info: %q", evs, want)
 	}
 }
 

@@ -8835,6 +8835,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   subcommands `newEvalCmd` registers. Rejected: a list of the allowed keys in config.go for the error
   to print (a third copy beside `worktreeKeys`, which the test would still have to check against the
   comments) and a list kept in the test (it would drift as the texts did).
+- **A cut settles its turns side by side, and a reviewer still at work is told to stop its background tasks
+  after a 10-second grace** (2026-10-17, spec 66, amends "A cut interrupts every turn before it waits for
+  any", "A cut shell command is pressed until it stops" and "A reviewer a push or the round's end cuts short
+  is told to stop its background tasks"). `cut` settled its turns one after another, and each claude reviewer
+  waited the whole `InterruptWait` (60 s) for its agent to go idle before it was told to stop its background
+  work: since 2026-10-14T14:21Z 18 of the 24 `round.warning` events said a claude reviewer "still works 1m0s
+  after it was interrupted" (11 at the 9 restarts on a moved head, 7 at round ends), and each then stopped its
+  background tasks when asked; with two claude reviewers a restart waited two minutes before the new round
+  started, four times. A claude reviewer whose background tasks run does not go idle at its interrupt; the
+  stop message is what ends them. Now `cut` settles every interrupted turn on a goroutine of its own
+  (`settleSafely`, which turns a panic into a warning) and, once all are settled, records what each said and
+  ends the runs in the turns' order, shell roles first, as before, so the messages and the result's warnings
+  read as they did and a cut takes as long as its longest settle. Each turn's waits count from its own
+  interrupt (`waitIdle` takes a deadline), so the waits of one settle on a shared clock never stretch
+  another's. `settle` waits `cutGrace` (10 s, a constant beside `InterruptWait`) for an agent to be seen idle;
+  one still at work then whose transcript shows background work still running is told then (`askStop`, with
+  the same words as before: `headMovedStopText` on a push, `stopBackgroundText` at the round's end), the wait
+  for idle goes on to `InterruptWait` after the interrupt, and what is left is read after it, up to
+  `StopGrace` (`backgroundStopped`). An agent idle within the grace gets no message then; work its transcript
+  still shows once it is idle is stopped as before. A `round.warning` is recorded when the agent still works
+  `InterruptWait` after its interrupt, as before, and when work it was told to stop still runs or it could not
+  be told; a stop that worked is now the info event `round.cut_settled` ("claude-review settled 10s after it
+  was interrupted for the restart; asked it to stop the 2 background tasks it started: it did", data `run`,
+  `role` and `seconds`, from the interrupt to idle) where it was a warning. Codex reviewers (whose background
+  work `BackgroundTasks` cannot read) and shell roles are never messaged, as before; a shell role's presses
+  are unchanged, and they now run beside the agents' waits instead of before them. New tests
+  TestCutSettlesItsTurnsInParallel, TestACutReviewerWithBackgroundTasksIsToldToStopAfterAGrace,
+  TestACutReviewerIdleWithinTheGraceIsNotMessaged and TestACutSettleThatPanicsOnlyWarns;
+  TestACutShellCommandIsPressedUntilItStops now checks that the presses do not wait for claude-review's
+  settle, and TestAPushTellsACutReviewerToStopItsBackgroundTasks reads the info event. Rejected: a shorter
+  `InterruptWait` (a reviewer finishing a tool call needs it); messaging at once (an agent that is going idle
+  anyway would get a useless prompt).
 
 ## Learned rules
 

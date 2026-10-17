@@ -249,16 +249,16 @@ func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run,
 	}
 }
 
-// waitIdle waits up to InterruptWait for the agent of run's session to be
-// seen idle or done (the engine's Observe records agent statuses), or the
-// session to be no longer live. It reports whether it was; a shell role's
-// pane (no agent status) and a run without a session report true.
-func (rd *round) waitIdle(ctx context.Context, role config.Role, run store.Run) bool {
+// waitIdle waits until deadline (InterruptWait after the interrupt, for
+// most callers) for the agent of run's session to be seen idle or done (the
+// engine's Observe records agent statuses), or the session to be no longer
+// live. It reports whether it was; a shell role's pane (no agent status)
+// and a run without a session report true.
+func (rd *round) waitIdle(ctx context.Context, role config.Role, run store.Run, deadline time.Time) bool {
 	if !role.IsAgent() {
 		return true
 	}
 	ctx = context.WithoutCancel(ctx)
-	deadline := rd.r.now().Add(InterruptWait)
 	for {
 		s, ok := rd.session(ctx, run)
 		if !ok || (s.State != store.SessionLive && s.State != store.SessionStarting) {
