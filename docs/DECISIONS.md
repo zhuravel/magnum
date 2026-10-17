@@ -9091,6 +9091,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   their room from unpinned wording, and the editor's e97d1a2 cut a lead to fit its own rule); an "Also
   probed" line under P1 fixes (the operator declined it as padding); one entry here per rule (one
   approval, one change).
+- **A rebuttal that answers a decline names the fact it disproved and the probe's steps in the author's terms**
+  (2026-10-17, spec 78, adds to "(k) A second rebuttal in a thread that holds one of the judge's names the
+  class both counterexamples share"). That rule suits a fix that missed a case, where two counterexamples
+  share a class, but not a rebuttal that answers an author's decline. An author declined a P2 with a claim
+  about when the state recovers (the next sweep, 30 minutes at most); the judge's own pass disproved it (full,
+  partial, full and full checks 31 minutes apart, the warning still hidden, in two of two probes) and planned
+  a sentence that said so, but the rebuttal it posted named what its two probes lost, in probe jargon
+  the author cannot check, and the thread stayed unanswered. Now
+  `judge-rereview.md` and `judge-recovery.md` add, right after the second-rebuttal sentence, "A rebuttal that
+  answers a decline names the fact of the author's reason you disproved and what your probe showed, as steps
+  and a result in the author's terms, never a probe's name." The sentence for a fix that missed a case is
+  unchanged. The 38 goldens of the two prompts were regenerated (one line each); the skill is unchanged, and
+  `TestASecondRebuttalNamesTheClassNotAThirdInstance` still holds, since the new sentence follows the one it
+  pins. Rejected: posting the planned own-pass sentence as it stood (it names the probes too, "both
+  page-scope probes still hide the warning", a name the author never saw).
 
 ## Learned rules
 
