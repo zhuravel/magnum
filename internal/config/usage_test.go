@@ -1,18 +1,32 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/paths"
 )
 
+// park_idle_after is 15m by default (2h until 2026-10-19: a Claude role
+// resumes in seconds, and the judge keeps judge_fresh_after), in Defaults()
+// and in config.defaults.toml loaded alone.
 func TestUsageAndParkIdleDefaults(t *testing.T) {
 	cfg := Defaults()
 	if cfg.Usage.CodexSoft != 80 || cfg.Usage.CodexHard != 95 || cfg.Usage.CodexHome != "" {
 		t.Fatalf("usage defaults: %+v", cfg.Usage)
 	}
-	if cfg.Daemon.ParkIdleAfter.Duration != 2*time.Hour {
-		t.Fatalf("park_idle_after default: %v", cfg.Daemon.ParkIdleAfter)
+	if cfg.Daemon.ParkIdleAfter.Duration != 15*time.Minute {
+		t.Fatalf("park_idle_after default: %v, want 15m", cfg.Daemon.ParkIdleAfter)
+	}
+	root := repoRoot(t)
+	standalone, err := LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.defaults.toml"), LoadOptions{NoOverlay: true})
+	if err != nil {
+		t.Fatalf("config.defaults.toml does not load standalone: %v", err)
+	}
+	if got := standalone.Daemon.ParkIdleAfter.Duration; got != 15*time.Minute {
+		t.Fatalf("config.defaults.toml alone parks after %v, want 15m", got)
 	}
 }
 
@@ -23,7 +37,7 @@ func TestValidateUsageAndParkIdle(t *testing.T) {
 		park       time.Duration
 		want       string
 	}{
-		{name: "defaults", soft: 80, hard: 95, park: 2 * time.Hour},
+		{name: "defaults", soft: 80, hard: 95, park: 15 * time.Minute},
 		{name: "both off", soft: 0, hard: 0, park: 0},
 		{name: "only hard", soft: 0, hard: 90, park: time.Minute},
 		{name: "only soft", soft: 70, hard: 0, park: time.Hour},

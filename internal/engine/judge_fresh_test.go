@@ -119,9 +119,10 @@ func TestAColdJudgeStartsFreshThroughTheRecovery(t *testing.T) {
 	}
 }
 
-// A judge still live in its pane (sessions park only after
-// park_idle_after, 2h) is quit first, which parks its conversation; the
-// reviewers' live sessions are left alone.
+// A judge still live in its pane (the idle park counts from the session's
+// own activity and the round's end, recent here, while the cold-judge rule
+// reads its last turn's end) is quit first, which parks its conversation;
+// the reviewers' live sessions are left alone.
 func TestAColdLiveJudgeIsQuitAndStartsFresh(t *testing.T) {
 	h := newHarness(t)
 	in := coldRereview(t, h, 100*time.Minute, false)

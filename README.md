@@ -686,16 +686,35 @@ apply again if it is still at the cap. `magnum status` says so on its codex line
 11:20: the caps wait for Codex's next reading`; `overruled_at` in the JSON), and a round's wait names the
 command (`magnum resume --tool codex` lifts the pause).
 
-Once every agent of a reviewed PR has been idle for `[daemon] park_idle_after` (default `"2h"`, `"0"`
-never) its sessions are parked to free memory; the next round resumes them. The same goes for a PR whose
-review or re-review waits behind `magnum pause`, a drain, the daily cap, or anything else that ends more than
-`park_idle_after` from now. Pinned PRs and PRs you typed into within `human_cooldown` keep their agents.
+An idle agent is parked to free memory once it has idled for `[daemon] park_idle_after` (default `"15m"`,
+`"0"` never); the next round resumes its conversation, which costs a Claude role a few seconds. Its idle time
+counts from its own last turn or from the end of the PR's last round, fix job or whiteboard job, whichever is
+later, so a reviewer that waited while the judge worked is not parked during the round or right after it,
+and a fix cycle or a whiteboard that starts after the round finds the agents where they were. The judge
+waits `[pipeline] judge_fresh_after` (`"90m"`) instead when that is longer: within it the next round reuses
+the live judge rather than launch Codex again, and after it the judge would start fresh anyway (see below);
+with `judge_fresh_after = "0"` it parks at `park_idle_after` like the others. So 15 minutes after a round
+the reviewers park alone, their panes closed and the workspace kept, and `pr.parked` names their roles, each
+with the threshold it idled past, with `"partial": true`, and says which agent stays until when; at
+`judge_fresh_after` the PR's park takes the judge, the `codex-review` shell and the workspace. Only an agent
+whose conversation can be resumed (herdr reported its session id) parks early: one without waits for the
+PR's park. An early park ends as the PR's park does: the agent is quit until its pane is an idle shell, its
+pane is closed and only then is the session parked, a pane that runs something by then being left for a
+later close; each session's park records `pr.session_park_begin`, then `pr.session_parked` or
+`pr.session_park_failed`. This
+covers a reviewed PR, an ineligible one (a draft, a mute or a skip after its review), and a PR whose review
+or re-review waits behind `magnum pause`, a drain, the daily cap, or anything else that ends more than
+`park_idle_after` from now. A PR that needs attention keeps its agents, since its pane shows what went
+wrong, and so do pinned or held slots and PRs you typed into within `human_cooldown`; nothing parks while a
+round, a fix job or a whiteboard job holds the PR, or while one of its agents works or is blocked.
 The fixer's session is parked with the others; the next fix job resumes its conversation. A park closes the
 panes it parked (see below), and a resume starts the conversation in a new pane; `o` and `magnum open` open
 what is live, so a role whose pane is gone focuses a live agent pane of the PR, the judge's first. A park that
 fails, for example because an agent does not quit on ctrl+c, is not tried on every tick. The next try waits
 twice as long as the last wait: two ticks after the first failure, then four, eight and so on, up to 12
-hours. A new round of the PR or a change in its sessions starts the wait over. The first failure of each
+hours. A new round of the PR or a change in its sessions starts the wait over, and so does the PR's park
+after an early park failed, so a reviewer that will not quit does not hold the judge's park. An early park
+never uses the hard mode: an agent that ignores its ctrl+c waits for the PR's park. The first failure of each
 cause records a `pr.park_failed` warning with the cause's class (`quit_timeout`, `busy`, `herdr` or
 `error`) and the wait. Later failures of the same cause record nothing, and a park that works records
 `pr.parked` as usual. A park that cannot quit one agent still quits the PR's others and reports the

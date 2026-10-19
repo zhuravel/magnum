@@ -163,6 +163,16 @@ const (
     and taken over when older than ten (its judge died holding it).
 
 const (
+	EventSessionParkBegin  = "pr.session_park_begin"
+	EventSessionParked     = "pr.session_parked"
+	EventSessionParkFailed = "pr.session_park_failed"
+)
+    The events of one session's early park (ParkSessions), info each, with the
+    role, the session, its pane and agent: its begin, its end as parked (ok) and
+    its failure (fail, with the cause). The engine's pr.parked sums the park up,
+    and its pr.park_failed warns once per cause.
+
+const (
 	// EventPromptDenied: magnum answered No to an agent's permission prompt.
 	EventPromptDenied = "agent.prompt_denied"
 	// EventPromptDeniedLimit: a run reached MaxPromptDenies; magnum stopped
@@ -1396,6 +1406,29 @@ func (m *Manager) ParkHard(ctx context.Context, pr store.PR) error
     process after ctrl+c and its kind's exit keys has that pane closed and its
     session closed. Every refusal of Park (a run in flight, an agent working or
     blocked, a busy pane of a workspace it closes) stands.
+
+func (m *Manager) ParkSessions(ctx context.Context, pr store.PR, ids []int64) (parked []store.Session, err error)
+    ParkSessions parks the live sessions of pr that ids names, and only them:
+    the idle park's early park of the agents past their threshold while another
+    agent of the PR stays live (the engine's parkEarly, which runs it under the
+    PR's reservation). It keeps Park's guards over a fresh snapshot (ErrBusy
+    while a run of the PR is pending, submitted or working, or a selected
+    agent works or is blocked; the session ids herdr shows recorded first) and
+    refuses, before it quits any, a selected session with no conversation to
+    resume (resumable): only a conversation the next round resumes is worth an
+    early park. A selected session whose agent herdr no longer lists is parked
+    without a key when its pane is an idle shell (ErrBusy, before any key, when
+    the pane runs something). Each selected agent herdr lists is quit as Quit
+    does (ctrl+c, 1 s, ctrl+c, the wait for an idle shell; never the hard mode:
+    one that does not quit stays live with ErrBusy and waits for the PR's park).
+    Once its pane is an idle shell, that pane is closed and then the session
+    is parked (parkOne); a pane the close refuses or herdr fails to close
+    is left for a later CloseRetiredPanes, the session parked all the same.
+    The workspace stays while other panes live. Ids of sessions no longer
+    live are skipped. Each session's park records its begin, ok and fail
+    (EventSessionParkBegin ...), and a failure does not stop the other sessions:
+    parked are the sessions it parked, and the failures come back joined beside
+    them.
 
 func (m *Manager) Preflight(ctx context.Context, kind string) error
     Preflight checks that the agent CLI of kind is logged in before a start or
@@ -3734,11 +3767,18 @@ type Daemon struct {
 	// (health pattern model_limit) counts as limited when the pane text
 	// names no reset time; sessions use the kind's fallback_models meanwhile.
 	ModelLimitCooldown Duration `toml:"model_limit_cooldown"`
-	// ParkIdleAfter parks the live agents of a reviewed PR once all of them
-	// have been idle this long (they resume on the PR's next round); 0 = never.
-	// A PR waiting for a round is parked the same way when its wait is a
-	// pause, a drain, the daily cap or ends more than this far away.
-	// Pinned PRs and PRs with human activity within HumanCooldown are left alone.
+	// ParkIdleAfter parks a live agent of a reviewed or ineligible PR (a
+	// draft, a mute or a skip after its review) once it has been idle this
+	// long since its own last activity and the end of the PR's last round,
+	// fix job or whiteboard job, whichever is later (it resumes on the PR's
+	// next round); 0 = never; 15m by default. A judge role waits
+	// Pipeline.JudgeFreshAfter instead when that is longer. While some agent
+	// of the PR is not past its threshold, the ones past theirs that have a
+	// conversation to resume are parked alone; once all are, the PR's park
+	// takes them with the workspace. A PR waiting for a round is parked the
+	// same way when its wait is a pause, a drain, the daily cap or ends more
+	// than this far away. Pinned or held slots, PRs that need attention and
+	// PRs with human activity within HumanCooldown are left alone.
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
 	// without a re-review (TrivialDeltaClasses: comments, whitespace,
@@ -6305,6 +6345,13 @@ type Agents interface {
 	// that pane closed alone and its session closed (a fresh start's second
 	// try, parkFresh; a stop's last, parkForStop).
 	ParkHard(ctx context.Context, pr store.PR) error
+	// ParkSessions parks the PR's live sessions ids names and only them,
+	// with Park's guards, each once its quit reached an idle shell and its
+	// own pane was closed: the idle park's early park of the agents past
+	// their threshold while another agent of the PR stays (parkEarly). It
+	// never parks hard, and returns the sessions it parked beside the
+	// failures of the others.
+	ParkSessions(ctx context.Context, pr store.PR, ids []int64) ([]store.Session, error)
 	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
 	// and lost sessions that no starting or live session of the PR
 	// records, after every park that worked and a session marked lost

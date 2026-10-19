@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -31,6 +32,9 @@ func draftSynced(t *testing.T, mods ...func(*harness)) *harness {
 // only a newer request runs another round.
 func TestReviewRequestOnASkippedDraftRunsOneRound(t *testing.T) {
 	h := draftSynced(t, withoutDrafts)
+	h.ag.mu.Lock()
+	h.ag.resumeIDs = map[agents.Role]string{"codex-judge": "judge-1"} // the skipped draft's agents park; the judge resumes
+	h.ag.mu.Unlock()
 	reqPoll(h, prSpec{n: 2, head: "d1", draft: true})
 	h.wantState(2, store.PRIneligible)
 	h.advance(10 * time.Minute)

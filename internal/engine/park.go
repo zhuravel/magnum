@@ -1,15 +1,26 @@
 package engine
 
 // Parking idle agents: a reviewed PR's agents sit idle until its next push,
-// often for hours (21 processes, about 2.8 GB, idle 10.8 hours on average).
-// Once every live agent of a reviewed PR has been idle for [daemon]
-// park_idle_after the PR's sessions are parked; the next round resumes them
-// as after any park. A PR that waits for its round behind a pause, a drain,
-// the daily cap or a wait ending more than park_idle_after away is parked
-// the same way (under `magnum pause`, two re-reviews held 8 agents idle for
-// up to 2 hours). A park that fails is tried again only after twice the
-// last wait, and its cause is recorded once (parkBackoff); after one that
-// failed because an agent did not quit, the idle park tries the hard mode.
+// often for hours (on 2026-10-19 47 idle agents of PRs no round used held
+// 9.2 GB on a machine that swapped). A live agent is worth keeping only
+// while its warmth pays: a Claude role resumes in seconds, so its session
+// parks [daemon] park_idle_after (15m) after the PR's last round, fix job
+// or whiteboard job ended (kvPRWorkEnded) or its own last activity,
+// whichever is later; a judge keeps [pipeline] judge_fresh_after (90m)
+// when that is longer, within which the next round reuses a live judge
+// instead of a Codex launch, after which the cold-judge rule would start
+// it fresh anyway (judge_fresh.go). While some session of the PR is not
+// past its threshold, the sessions past theirs that have a conversation to
+// resume park alone (an early park, Agents.ParkSessions); once every live
+// session is past its own, the PR's park takes them all with the workspace,
+// as before. A reviewed PR and an ineligible one (a draft, a mute or a skip
+// after its review) are parked; a PR that waits for its round behind a
+// pause, a drain, the daily cap or a wait ending more than park_idle_after
+// away is parked the same way (under `magnum pause`, two re-reviews held 8
+// agents idle for up to 2 hours). A park that fails is tried again only
+// after twice the last wait, and its cause is recorded once (parkBackoff);
+// after one that failed because an agent did not quit, the PR's park tries
+// the hard mode.
 
 import (
 	"context"
@@ -21,19 +32,55 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// parkIdle queues a park for every reviewed PR, and every PR whose round is
-// far off (waitsLong), whose live agents have all been idle longer than
-// park_idle_after (0 = never) and whose last failed park, if any, has
-// waited out its backoff (parkHeld). It runs right after noteWaits recorded
-// the waits. The park runs on the heavy worker (parkJob), which checks again
-// under the PR's reservation.
+// kvPRWorkEnded is when the PR's last round, fix job or whiteboard job
+// ended (store.FormatTime), written before its reservation drops
+// (workEnded): the idle park counts a session's idle time from there at
+// the earliest (idleClock), so a reviewer idle while the judge works is
+// not idle until the round ends, and the fix cycle or the whiteboard that
+// starts right after a round never meets a park in between.
+func kvPRWorkEnded(prID int64) string { return fmt.Sprintf("pr.%d.work_ended", prID) }
+
+// workEnded records that a round, a fix job or a whiteboard job of the PR
+// ends now (kvPRWorkEnded, and its copy in workEndedAt that
+// reserveParkWork reads). It runs before the job drops its reservation,
+// whose context ctx may be, ended or not: the record is written either way.
+func (e *Engine) workEnded(ctx context.Context, prID int64) {
+	now := e.now()
+	e.mu.Lock()
+	e.workEndedAt[prID] = now
+	e.mu.Unlock()
+	e.setKV(context.WithoutCancel(ctx), kvPRWorkEnded(prID), store.FormatTime(now))
+}
+
+// reserveParkWork is reserveSlotWork for the idle park planned at `at`,
+// refused as well when a round, fix job or whiteboard job of the PR ended
+// after `at` (workEndedAt): that plan predates the work, and a park job that
+// took the PR in the gap between a round's end and the fix cycle or the
+// whiteboard that follows it would refuse their start ("its idle agents are
+// being parked"; the fix loop then ends needing attention). The check and
+// the reservation share e.mu, so no work can end between them.
+func (e *Engine) reserveParkWork(prID int64, at time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.rounds[prID]; ok || e.evicting[prID] != "" || e.workEndedAt[prID].After(at) {
+		return false
+	}
+	e.evicting[prID] = "its idle agents are being parked"
+	return true
+}
+
+// parkIdle queues a park for every PR whose idle agents the idle park may
+// take now (planPark; park_idle_after 0 = never) and whose last failed
+// park, if any, has waited out its backoff (parkHeld). It runs right after
+// noteWaits recorded the waits. The park runs on the heavy worker
+// (parkJob), which plans again under the PR's reservation.
 func (e *Engine) parkIdle(ctx context.Context, ts tickState) {
-	after := e.cfg.Daemon.ParkIdleAfter.Duration
-	if after <= 0 || e.d.Agents == nil || !ts.herdrUp {
+	if e.cfg.Daemon.ParkIdleAfter.Duration <= 0 || e.d.Agents == nil || !ts.herdrUp {
 		return
 	}
 	live, err := e.st.LiveSessions(ctx)
@@ -51,64 +98,198 @@ func (e *Engine) parkIdle(ctx context.Context, ts tickState) {
 		if ts.busyPR[prID] || e.roundActive(prID) {
 			continue
 		}
-		pr, idleSince, ok := e.parkable(ctx, prID, byPR[prID], now, after)
-		if !ok || e.parkHeld(pr, byPR[prID], now) {
+		plan, ok := e.planPark(ctx, prID, byPR[prID], now)
+		if !ok || e.parkHeld(plan.pr, byPR[prID], now, plan.whole) {
 			continue
 		}
 		if e.d.DryRun {
-			e.rec.Record(ctx, e.prLabelSubject(ctx, pr), "park", fmt.Sprintf("%d agents idle since %s", len(byPR[prID]), idleSince.Local().Format("15:04")))
+			e.rec.Record(ctx, e.prLabelSubject(ctx, plan.pr), "park", e.parkPlanned(plan))
 			continue
 		}
 		e.enqueueHeavy(fmt.Sprintf("park:%d", prID), e.parkJob(prID, now))
 	}
 }
 
-// parkable reports whether the PR's live sessions may be parked now: the PR
-// is reviewed, or waits for a round that is far off (waitsLong), no human
-// typed into its panes within human_cooldown, its slot is neither pinned
-// nor held for a human (whatever the PR waits for), and every session is
-// idle (not working or blocked) since before now - after. It returns the PR
-// and when its last session went idle.
-func (e *Engine) parkable(ctx context.Context, prID int64, sessions []store.Session, now time.Time, after time.Duration) (store.PR, time.Time, bool) {
-	pr, err := e.st.PRByID(ctx, prID)
-	if err != nil {
-		return pr, time.Time{}, false
+// parkPlan is what the idle park takes of a PR's live sessions now
+// (planPark): with whole, take is all of them, which the PR's park takes
+// with its workspace (Agents.Park); else take is the sessions past their
+// threshold that have a conversation to resume, which an early park takes
+// alone (Agents.ParkSessions), and the others stay live: wait those not
+// past their threshold yet, keep those past it without a conversation to
+// resume. idle is when the last session the plan takes went idle
+// (idleClock).
+type parkPlan struct {
+	pr    store.PR
+	whole bool
+	take  []store.Session
+	wait  []store.Session
+	keep  []store.Session
+	idle  time.Time
+}
+
+// planPark is what the idle park may take of the PR's live sessions at now,
+// the one rule parkIdle and parkJob share; ok is false when it takes
+// nothing. The PR must be parkable (parkablePR) and no session's agent at
+// work or blocked. A session is past its threshold when it has idled its
+// role's parkAfter since its idleClock (its own last activity, or the end
+// of the PR's last round, fix job or whiteboard job if later). Every live
+// session past its own: the whole PR. Else the sessions past theirs that
+// have a conversation the next round resumes (resumableSession) are parked
+// early; any other waits for the whole park, and none resumable takes
+// nothing.
+func (e *Engine) planPark(ctx context.Context, prID int64, sessions []store.Session, now time.Time) (parkPlan, bool) {
+	after := e.cfg.Daemon.ParkIdleAfter.Duration
+	if after <= 0 || len(sessions) == 0 {
+		return parkPlan{}, false
 	}
-	switch pr.State {
-	case store.PRReviewed:
-	case store.PRQueued, store.PRRereviewPending:
-		if !e.waitsLong(ctx, prID, now, after) {
-			return pr, time.Time{}, false
-		}
-	default:
-		return pr, time.Time{}, false
+	pr, ok := e.parkablePR(ctx, prID, now, after)
+	plan := parkPlan{pr: pr}
+	if !ok {
+		return plan, false
 	}
-	if now.Before(e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
-		return pr, time.Time{}, false
-	}
-	if sl, has, err := e.slotOf(ctx, prID); err != nil || (has && (sl.Pinned || sl.HoldReason != nil)) {
-		return pr, time.Time{}, false
-	}
-	var last time.Time
+	ended := e.lastWorkEnd(ctx, pr)
+	var past []store.Session
 	for _, s := range sessions {
 		switch herdr.Status(deref(s.AgentStatus)) {
 		case herdr.StatusWorking, herdr.StatusBlocked:
-			return pr, time.Time{}, false
+			return plan, false
 		}
-		since := s.StartedAt
-		for _, t := range []*time.Time{s.AgentStatusAt, s.LastPromptAt} {
-			if t != nil && t.After(since) {
-				since = *t
-			}
-		}
-		if since.After(last) {
-			last = since
+		if now.Sub(idleClock(s, ended)) < e.parkAfter(s.Role) {
+			plan.wait = append(plan.wait, s)
+		} else {
+			past = append(past, s)
 		}
 	}
-	if last.IsZero() || now.Sub(last) < after {
-		return pr, last, false
+	plan.whole = len(plan.wait) == 0
+	for _, s := range past {
+		if !plan.whole && !e.resumableSession(s) {
+			plan.keep = append(plan.keep, s)
+			continue
+		}
+		plan.take = append(plan.take, s)
+		if since := idleClock(s, ended); since.After(plan.idle) {
+			plan.idle = since
+		}
 	}
-	return pr, last, true
+	return plan, len(plan.take) > 0
+}
+
+// lastWorkEnd is when the PR's last round, fix job or whiteboard job ended
+// (kvPRWorkEnded). A PR with no record yet (none of its jobs ended since
+// the daemon wrote it first) falls back to the latest end of a run of its
+// last round, or that round's start: its reviewers, idle since their own
+// turns, then do not park from a status change earlier than the round's
+// end. Zero when nothing is known.
+func (e *Engine) lastWorkEnd(ctx context.Context, pr store.PR) time.Time {
+	if ended, ok := e.kvTime(ctx, kvPRWorkEnded(pr.ID)); ok {
+		return ended
+	}
+	ended := roundStarted(pr)
+	runs, err := e.st.LatestRoundRuns(ctx, pr.ID)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "idle park: the last round's runs", "pr", pr.ID)
+	}
+	for _, r := range runs[pr.ID] {
+		if r.EndedAt != nil && r.EndedAt.After(ended) {
+			ended = *r.EndedAt
+		}
+	}
+	return ended
+}
+
+// idleClock is when session s went idle for the idle park: the latest of
+// its start, its agent's last status change and its last prompt (its own
+// activity), and ended, the end of the PR's last round, fix job or
+// whiteboard job (zero: none recorded).
+func idleClock(s store.Session, ended time.Time) time.Time {
+	since := s.StartedAt
+	for _, t := range []*time.Time{s.AgentStatusAt, s.LastPromptAt, &ended} {
+		if t != nil && t.After(since) {
+			since = *t
+		}
+	}
+	return since
+}
+
+// parkAfter is how long a session of role idles before the idle park takes
+// it (parkThreshold).
+func (e *Engine) parkAfter(role string) time.Duration {
+	_, after := e.parkThreshold(role)
+	return after
+}
+
+// parkThreshold is the key and the time a session of role idles before the
+// idle park takes it: [daemon] park_idle_after, or for a judge role
+// [pipeline] judge_fresh_after when that is longer (a live judge is reused
+// up to it, and the cold-judge rule starts the judge fresh after it; "0",
+// always resume, leaves the judge park_idle_after).
+func (e *Engine) parkThreshold(role string) (key string, after time.Duration) {
+	after = e.cfg.Daemon.ParkIdleAfter.Duration
+	if fresh := e.cfg.Pipeline.JudgeFreshAfter.Duration; fresh > after && e.judgeRole(role) {
+		return "judge_fresh_after", fresh
+	}
+	return "park_idle_after", after
+}
+
+// judgeRole reports whether role names a judge role of the config.
+func (e *Engine) judgeRole(role string) bool {
+	r, ok := e.cfg.RoleByNameOrAlias(nil, role)
+	return ok && r.Judge
+}
+
+// shellRole reports whether role names a shell role of the config (a
+// pane, no agent).
+func (e *Engine) shellRole(role string) bool {
+	r, ok := e.cfg.RoleByNameOrAlias(nil, role)
+	return ok && r.IsShell()
+}
+
+// resumableSession reports whether session s has a conversation the next
+// round resumes, as the agents' retire decides (agents.Manager.ParkSessions
+// refuses any other): a session id recorded, a role that runs an agent,
+// and a kind that reports session ids (session_source "none" always starts
+// fresh, though herdr may still show an id).
+func (e *Engine) resumableSession(s store.Session) bool {
+	if deref(s.SessionID) == "" || e.shellRole(s.Role) {
+		return false
+	}
+	kind := deref(s.AgentKind)
+	if r, ok := e.cfg.RoleByNameOrAlias(nil, s.Role); kind == "" && ok {
+		kind = r.Kind
+	}
+	k, ok := e.cfg.KindSpec(kind)
+	return !ok || k.SessionSource != config.SessionNone
+}
+
+// parkablePR reports whether the idle park may take the PR's agents at
+// now: the PR is reviewed or ineligible (a draft, a mute or a skip after
+// its review; its next round resumes them), or waits for a round that is
+// far off (waitsLong), no human typed into its panes within
+// human_cooldown, and its slot is neither pinned nor held for a human
+// (whatever the PR waits for). A PR that needs attention keeps its agents:
+// its remedies send the operator to read the pane. after is
+// park_idle_after.
+func (e *Engine) parkablePR(ctx context.Context, prID int64, now time.Time, after time.Duration) (store.PR, bool) {
+	pr, err := e.st.PRByID(ctx, prID)
+	if err != nil {
+		return pr, false
+	}
+	switch pr.State {
+	case store.PRReviewed, store.PRIneligible:
+	case store.PRQueued, store.PRRereviewPending:
+		if !e.waitsLong(ctx, prID, now, after) {
+			return pr, false
+		}
+	default:
+		return pr, false
+	}
+	if now.Before(e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
+		return pr, false
+	}
+	if sl, has, err := e.slotOf(ctx, prID); err != nil || (has && (sl.Pinned || sl.HoldReason != nil)) {
+		return pr, false
+	}
+	return pr, true
 }
 
 // waitsLong reports whether a PR waiting for a round (queued,
@@ -130,21 +311,26 @@ func (e *Engine) waitsLong(ctx context.Context, prID int64, now time.Time, after
 	return w.Until.Sub(now) > after
 }
 
-// parkJob parks the PR's sessions under its slot-work reservation, after
-// checking again that they are still parkable (a round may have started, an
-// agent may have woken up). Park itself refuses a busy pane. A failure
-// counts as the tick's try at `at` (parkFailed); a park that works forgets
-// the earlier failures and closes the panes it retired (closeRetiredPanes).
-// The try after a park that failed because an agent did not quit
-// (parkQuitTimeout) is the hard park (Agents.ParkHard, as a fresh start's
-// second try is): ctrl+c is the cheaper way and quits most agents, but one
-// that ignores it stays in its pane, and the plain park would be tried for
-// days (talkable#11932, 21 failures from 2026-10-14). A hard park that
-// fails is recorded like any failed park, and one that fails for another
-// cause hands the next try back to the plain park.
+// parkJob parks what planPark gives for the PR under its slot-work
+// reservation, planned again there (a round may have started, an agent may
+// have woken up, the plan may have grown to the whole PR): an early plan
+// goes to parkEarly, a whole one to the PR's park. A job planned at `at`
+// never takes the PR once a round, fix job or whiteboard job of the PR
+// ended after `at` (reserveParkWork): it would hold the PR in the gap
+// before the fix cycle or the whiteboard that follows. Park itself refuses a
+// busy pane. A failure counts as the tick's try at `at` (parkFailed); a
+// park that works forgets the earlier failures and closes the panes it
+// retired (closeRetiredPanes). The PR's park after a park that failed
+// because an agent did not quit (parkQuitTimeout) is the hard park
+// (Agents.ParkHard, as a fresh start's second try is): ctrl+c is the
+// cheaper way and quits most agents, but one that ignores it stays in its
+// pane, and the plain park would be tried for days (talkable#11932, 21
+// failures from 2026-10-14). A hard park that fails is recorded like any
+// failed park, and one that fails for another cause hands the next try
+// back to the plain park.
 func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
-		if !e.reserveSlotWork(prID, "its idle agents are being parked") {
+		if !e.reserveParkWork(prID, at) {
 			return nil
 		}
 		defer e.endEviction(prID)
@@ -152,25 +338,26 @@ func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) err
 		if err != nil {
 			return err
 		}
-		sessions := sessionsOf(live, prID)
-		if len(sessions) == 0 {
-			return nil
-		}
-		pr, idleSince, ok := e.parkable(ctx, prID, sessions, e.now(), e.cfg.Daemon.ParkIdleAfter.Duration)
+		plan, ok := e.planPark(ctx, prID, sessionsOf(live, prID), e.now())
 		if !ok {
 			return nil
 		}
+		if !plan.whole {
+			e.parkEarly(ctx, plan, at)
+			return nil
+		}
+		pr := plan.pr
 		subject := e.prLabelSubject(ctx, pr)
 		park, hard := e.d.Agents.Park, e.parkQuitFailed(prID)
 		if hard {
 			park = e.d.Agents.ParkHard
 		}
 		if err := park(ctx, pr); err != nil {
-			e.parkFailed(ctx, pr, subject, at, err)
+			e.parkFailed(ctx, pr, subject, at, err, false)
 			return nil
 		}
 		e.parkWorked(prID)
-		msg := fmt.Sprintf("parked %d idle agents (idle since %s); the next round resumes them", len(sessions), idleSince.Local().Format("15:04"))
+		msg := fmt.Sprintf("parked %d idle agents (idle since %s); the next round resumes them", len(plan.take), plan.idle.Local().Format("15:04"))
 		if hard {
 			msg += " (hard: an agent did not quit at the plain park)"
 		}
@@ -178,6 +365,106 @@ func (e *Engine) parkJob(prID int64, at time.Time) func(ctx context.Context) err
 		e.closeRetiredPanes(ctx, pr) // retired_panes.go: the next round resumes them in new panes
 		return nil
 	}
+}
+
+// parkEarly parks the sessions of an early plan alone
+// (Agents.ParkSessions: never the hard mode, whatever the last failure
+// was, since an agent that does not quit waits for the PR's park; it
+// closes each session's pane before it parks the session, and records each
+// session's begin, ok and fail). The sessions it parked, even beside one
+// that failed, get pr.parked with their roles and "partial": true, and a
+// pane it had to leave is tried again (closeRetiredPanes); a failure counts
+// as the tick's try at `at` (parkFailed), and a park without one forgets
+// the earlier failures.
+func (e *Engine) parkEarly(ctx context.Context, plan parkPlan, at time.Time) {
+	subject := e.prLabelSubject(ctx, plan.pr)
+	ids := make([]int64, len(plan.take))
+	for i, s := range plan.take {
+		ids[i] = s.ID
+	}
+	parked, err := e.d.Agents.ParkSessions(ctx, plan.pr, ids)
+	if len(parked) > 0 {
+		if err == nil {
+			e.parkWorked(plan.pr.ID)
+		}
+		roles := sessionRoles(parked)
+		msg := fmt.Sprintf("parked %s, idle since %s", e.parkedThresholds(parked), plan.idle.Local().Format("15:04"))
+		if stays := e.parkStays(plan); len(stays) > 0 {
+			msg += "; " + strings.Join(stays, "; ")
+		}
+		e.event(ctx, "info", subject, "pr.parked", msg+"; the next round resumes them", map[string]any{"roles": roles, "partial": true})
+		e.closeRetiredPanes(ctx, plan.pr) // retired_panes.go: a pane the early park had to leave, the workspace stays
+	}
+	if err != nil {
+		e.parkFailed(ctx, plan.pr, subject, at, err, true)
+	}
+}
+
+// parkedThresholds names the roles of sessions, each group with the
+// threshold its sessions idled past (parkThreshold): "claude-review,
+// claude-simplify (park_idle_after 15m)", " and codex-judge
+// (judge_fresh_after 1h30m)" after it when a judge is among them.
+func (e *Engine) parkedThresholds(sessions []store.Session) string {
+	var labels []string
+	roles := map[string][]string{}
+	for _, s := range sessions {
+		key, after := e.parkThreshold(s.Role)
+		label := key + " " + humanDuration(after)
+		if _, ok := roles[label]; !ok {
+			labels = append(labels, label)
+		}
+		roles[label] = append(roles[label], s.Role)
+	}
+	groups := make([]string, len(labels))
+	for i, label := range labels {
+		groups[i] = fmt.Sprintf("%s (%s)", strings.Join(roles[label], ", "), label)
+	}
+	return strings.Join(groups, " and ")
+}
+
+// parkPlanned is what a dry run records of plan: how many agents the PR's
+// park takes and since when they idle, or the roles an early park takes
+// and the agents that stay.
+func (e *Engine) parkPlanned(plan parkPlan) string {
+	since := plan.idle.Local().Format("15:04")
+	if plan.whole {
+		return fmt.Sprintf("%d agents idle since %s", len(plan.take), since)
+	}
+	msg := fmt.Sprintf("%s idle since %s", strings.Join(sessionRoles(plan.take), ", "), since)
+	if stays := e.parkStays(plan); len(stays) > 0 {
+		msg += " (" + strings.Join(stays, "; ") + ")"
+	}
+	return msg
+}
+
+// parkStays says why each agent session an early plan leaves live stays:
+// one not past its threshold until that threshold (parkThreshold: a judge
+// until judge_fresh_after when that is longer), and one past it without a
+// conversation to resume until the PR's park. A shell role's pane is left
+// out: it runs no agent.
+func (e *Engine) parkStays(plan parkPlan) []string {
+	var out []string
+	for _, s := range plan.wait {
+		if !e.shellRole(s.Role) {
+			key, after := e.parkThreshold(s.Role)
+			out = append(out, fmt.Sprintf("%s stays until %s (%s)", s.Role, key, humanDuration(after)))
+		}
+	}
+	for _, s := range plan.keep {
+		if !e.shellRole(s.Role) {
+			out = append(out, s.Role+" stays until the PR's park (no conversation to resume)")
+		}
+	}
+	return out
+}
+
+// sessionRoles are the roles of sessions, in order.
+func sessionRoles(sessions []store.Session) []string {
+	out := make([]string, len(sessions))
+	for i, s := range sessions {
+		out[i] = s.Role
+	}
+	return out
 }
 
 // parkBackoffCap is the longest wait between two tries of a park that
@@ -201,7 +488,11 @@ const (
 // failure, and round and sessions what the PR had at the last failure
 // (its last round's start; its live sessions, by parkFingerprint). A round
 // started or a change of the live sessions since resets the wait and keeps
-// the cause, so the cause is recorded again only when it changes.
+// the cause, so the cause is recorded again only when it changes. early is
+// whether the last failure was an early park's (parkEarly): the PR's park,
+// once every session is past its threshold, resets the wait too, so a
+// reviewer that will not quit does not hold the judge's park and its hard
+// mode past judge_fresh_after.
 type parkBackoff struct {
 	cause    string
 	wait     time.Duration
@@ -209,6 +500,7 @@ type parkBackoff struct {
 	round    time.Time
 	sessions string
 	failures int
+	early    bool
 }
 
 // parkClass is a failed park's class (parkQuitTimeout ...) and its words
@@ -262,30 +554,32 @@ func sessionsOf(live []store.Session, prID int64) []store.Session {
 }
 
 // parkHeld reports whether the PR's park waits out the backoff of its last
-// failure at now (sessions: its live sessions). A round started or a change
-// of the live sessions since that failure resets the wait: the next try
-// goes ahead.
-func (e *Engine) parkHeld(pr store.PR, sessions []store.Session, now time.Time) bool {
+// failure at now (sessions: its live sessions; whole: the park would take
+// them all, the PR's park or a release). A round started or a change of the
+// live sessions since that failure resets the wait, as does a whole park
+// after an early park's failure: the next try goes ahead.
+func (e *Engine) parkHeld(pr store.PR, sessions []store.Session, now time.Time, whole bool) bool {
 	e.parkMu.Lock()
 	defer e.parkMu.Unlock()
 	b, ok := e.parkFails[pr.ID]
 	if !ok {
 		return false
 	}
-	if round, fp := roundStarted(pr), parkFingerprint(sessions); !round.Equal(b.round) || fp != b.sessions {
-		b.wait, b.next, b.round, b.sessions = 0, time.Time{}, round, fp
+	if round, fp := roundStarted(pr), parkFingerprint(sessions); !round.Equal(b.round) || fp != b.sessions || (b.early && whole) {
+		b.wait, b.next, b.round, b.sessions, b.early = 0, time.Time{}, round, fp, false
 		e.parkFails[pr.ID] = b
 		return false
 	}
 	return now.Before(b.next)
 }
 
-// parkFailed records the failed park of pr tried at `at`: the next try
-// waits twice the last wait (two ticks after a first failure, up to
-// parkBackoffCap), and a failure whose class differs from the last one's
-// (the first one included) records pr.park_failed. Every failure is
-// logged. A park the daemon's stop cut short counts no failure.
-func (e *Engine) parkFailed(ctx context.Context, pr store.PR, subject string, at time.Time, err error) {
+// parkFailed records the failed park of pr tried at `at` (early: an early
+// park's, parkEarly): the next try waits twice the last wait (two ticks
+// after a first failure, up to parkBackoffCap), and a failure whose class
+// differs from the last one's (the first one included) records
+// pr.park_failed. Every failure is logged. A park the daemon's stop cut
+// short counts no failure.
+func (e *Engine) parkFailed(ctx context.Context, pr store.PR, subject string, at time.Time, err error, early bool) {
 	if ctx.Err() != nil {
 		e.log.Info("park agents", "subject", subject, "err", err)
 		return
@@ -306,7 +600,7 @@ func (e *Engine) parkFailed(ctx context.Context, pr store.PR, subject string, at
 	}
 	b.wait = min(2*last, parkBackoffCap)
 	b.next = at.Add(b.wait)
-	b.round, b.sessions = roundStarted(pr), parkFingerprint(sessions)
+	b.round, b.sessions, b.early = roundStarted(pr), parkFingerprint(sessions), early
 	b.failures++
 	changed := b.cause != class
 	b.cause = class
@@ -414,7 +708,7 @@ func (e *Engine) releaseFlagged(ctx context.Context, ts tickState) {
 		if !ok {
 			continue
 		}
-		if sessions := sessionsOf(live, prID); len(sessions) > 0 && e.parkHeld(pr, sessions, now) {
+		if sessions := sessionsOf(live, prID); len(sessions) > 0 && e.parkHeld(pr, sessions, now, true) {
 			continue
 		}
 		if e.d.DryRun {
@@ -490,7 +784,7 @@ func (e *Engine) flagReleaseJob(prID int64, at time.Time) func(ctx context.Conte
 		var did []string
 		if n > 0 {
 			if err := e.d.Agents.Park(ctx, pr); err != nil {
-				e.parkFailed(ctx, pr, subject, at, err)
+				e.parkFailed(ctx, pr, subject, at, err, false)
 				return nil
 			}
 			e.parkWorked(prID)

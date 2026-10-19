@@ -714,6 +714,79 @@ skill versions); people add theirs to the sections before it, at the end of the 
   on a fresh round, leaving the churn rules to the next automatic re-review (a forced fresh round and an
   automatic one should decide the same way).
 
+- **An idle agent parks once keeping it live stops paying: 15 minutes after the round, the judge at
+  `judge_fresh_after`, drafts too** (2026-10-19, asked for by the operator: "stop and resume agents as
+  needed"; amends "Idle agents of reviewed PRs are parked" and "Idle agents of PRs that wait long are parked
+  too"). The machine swapped (155 GB of footprint on 48 GB, swap 50.3 of 51.2 GB, pressure level warn), and
+  magnum's panes held 13.4 GB, 9.2 GB of it in 47 idle agents of PRs no round used: reviewed PRs idling
+  under the 2-hour park (4.9 GB), drafts after their review (1.8 GB, `ineligible`, which never parked),
+  PRs that need attention (1.0 GB) and pinned PRs (1.5 GB); over 7 days idle agents were live 1,617
+  agent-hours. Warmth is worth little to a Claude role: a resume adds 3-11 s (p50) to a round's first prompt,
+  about 150 Claude round resumes in 14 days lost 1, and 54 of 57 claude-review reuses came after the
+  5-minute prompt cache had expired anyway. A live Codex judge is worth more: all 57 of its live reuses came
+  within 90 minutes, a fresh Codex launch dies at its first prompt 7-10% of the time, and the cold-judge
+  rule starts it fresh after `judge_fresh_after` anyway. The next round of a PR comes within 15 minutes 21%
+  of the time, within an hour 39%. Now a session's threshold is `[daemon] park_idle_after`, whose default
+  drops from 2h to 15m, and for a judge role `[pipeline] judge_fresh_after` when that is longer (read from
+  the key, never a second constant; `"0"`, always resume, leaves the judge `park_idle_after`). Its idle
+  clock starts at the later of its own last activity (start, last status change, last prompt) and the end
+  of the PR's last round, fix job or whiteboard job, which a new key records before the job drops its
+  reservation (`pr.<id>.work_ended`, written by `reservedRound`, the fix job and the whiteboard job; no
+  migration): a reviewer idle while the judge works is not idle until the round ends, and the fix cycle or
+  the whiteboard that `launch` starts after the round's reservation is gone never meets a park in that
+  gap. A PR with no record yet (the first run after this change) counts from the latest end of a run of its
+  last round, else that round's start. A park job is planned at a tick and runs on the heavy worker, so it
+  never takes the PR once a round, fix job or whiteboard job of the PR ended after its plan
+  (`reserveParkWork`, which checks the end under the reservation's lock): taking it in that gap would
+  refuse the fix cycle's start and end the loop needing attention. The park is two steps. While some live
+  session of the PR is not past its threshold, the sessions past theirs that have a conversation to resume
+  park alone, through the new `agents.Manager.ParkSessions`: Park's guards (no active run of the PR, a
+  fresh snapshot, an agent working or blocked refused, and the pane of a selected session whose agent
+  herdr no longer lists refused when it runs something), a refusal of a session without a conversation to
+  resume (the engine selects by the same test: a session id, an agent role, a kind whose `session_source`
+  is not `"none"`), then Quit's ctrl+c and wait until the pane is an idle shell. It ends as the PR's park
+  ends, which closes the workspace before it retires the sessions: the session's own pane is closed first
+  (a fresh check that only the shell is in its foreground; never another pane, and a workspace the close
+  empties goes too), herdr dropping the agent with it, and only then is the session parked. A parked row
+  whose pane herdr still showed with the quit conversation would be restored as live by the next start's
+  `Recover`, which runs before the startup reconcile closes leftover panes, and the next round would reuse
+  that row without a launch. The close and the retire run on a context a stop cannot cut, bounded at
+  10 s, so a stop never lands between them; a crash after the close leaves a live row without a pane,
+  which the observer turns into an ordinary lost session, still resumable. There is no polling barrier
+  like the cold judge's (`quitAgentGone`): that one exists because a start follows its quit in the same
+  reservation, which an early park never does. A pane the check refuses (something runs there) or herdr
+  fails to close leaves the session parked with its pane for a later `closeRetiredPanes` (the next tick's
+  or the reconcile's): the only window left, the same as the PR's park's, accepted for the same reason,
+  since the agent had already exited when its pane became an idle shell. There is no hard mode: an agent that
+  does not quit stays live and waits for the PR's park. Each session's early park writes its begin, ok and
+  fail (`pr.session_park_begin`, `pr.session_parked`, `pr.session_park_failed`, info), and a batch where
+  one session fails still returns, records and closes the panes of those it parked. A failure goes through
+  the park's backoff, but the PR's park after an early park's failure starts the wait over
+  (`parkBackoff.early`), so a reviewer that will not quit does not hold the judge's park and its hard mode
+  past `judge_fresh_after`. The early park records `pr.parked` with the roles and `"partial":
+  true`, names each role with the threshold it idled past, and says why each agent that stays stays
+  ("parked claude-review, claude-simplify (park_idle_after 15m), idle since 14:05; codex-judge stays until
+  judge_fresh_after (1h30m); ..."). Once every live session
+  is past its own threshold, the PR's park runs as before (the `codex-review` shell retired, the workspace
+  closed, the backoff and the hard park after a quit timeout), its event unchanged; `parkIdle` and the
+  heavy worker's `parkJob` plan through one function (`planPark`), the job again under the PR's
+  reservation. The PRs are those that parked before plus `ineligible` ones (a draft, a mute or a skip after
+  its review; the next round resumes the sessions through `ensureAgent`); a session without a session id is
+  never parked early and waits for the PR's park. The 2026-10-04 rejection of a short threshold ("too short
+  for agents that keep a conversation for the next push") no longer holds: a park keeps the conversation,
+  and the measured cost of resuming it is 3-11 s. `needs_attention` stays out (Codex's review of the draft):
+  a session without a resumable id would be closed rather than parked, and the attention remedies send the
+  operator to read that pane, so the fix-loop entry's "which the idle park never touches" stands; pinned
+  and held slots keep their agents as before. Rejected: parking per session for every role with `Quit`
+  alone, which lacks Park's guards and the pane close under the reservation; a polling barrier after the
+  quit with a fallback that recorded the session lost when its pane would not close (tried in review: it
+  changed how every start and recovery treat lost rows, and a restored or later lost row kept the
+  marker that refused its legitimate agent); parking the reviewers as soon as the round
+  ends (21% of next rounds come within 15 minutes, and a fix cycle or whiteboard often follows the round
+  at once); a per-role `park_idle_after` key (the judge's threshold is the cold-judge rule's, which already
+  has its key, and no other role has a case for its own); parking during a round (a push before the
+  judge's candidates prompt re-prompts every running role on the same session).
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

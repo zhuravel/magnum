@@ -110,6 +110,13 @@ type Agents interface {
 	// that pane closed alone and its session closed (a fresh start's second
 	// try, parkFresh; a stop's last, parkForStop).
 	ParkHard(ctx context.Context, pr store.PR) error
+	// ParkSessions parks the PR's live sessions ids names and only them,
+	// with Park's guards, each once its quit reached an idle shell and its
+	// own pane was closed: the idle park's early park of the agents past
+	// their threshold while another agent of the PR stays (parkEarly). It
+	// never parks hard, and returns the sessions it parked beside the
+	// failures of the others.
+	ParkSessions(ctx context.Context, pr store.PR, ids []int64) ([]store.Session, error)
 	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
 	// and lost sessions that no starting or live session of the PR
 	// records, after every park that worked and a session marked lost
@@ -365,6 +372,10 @@ type Engine struct {
 	mu       sync.Mutex
 	rounds   map[int64]*roundHandle // PRs reserved by a round or an open (reserve)
 	evicting map[int64]string       // PRs under slot work (an eviction, a park) and why (reserveSlotWork)
+	// workEndedAt is when each PR's last round, fix job or whiteboard job
+	// ended in this daemon (workEnded, kvPRWorkEnded's copy): a park planned
+	// before it never takes the PR (reserveParkWork, park.go).
+	workEndedAt map[int64]time.Time
 	// autofixNoRole are the PRs autofix found no fix role for, logged once
 	// each (fix_loop.go).
 	autofixNoRole map[int64]bool
@@ -565,6 +576,7 @@ func New(d Deps) *Engine {
 		d: d, cfg: d.Config, st: d.Store, log: d.Logger,
 		rounds:        map[int64]*roundHandle{},
 		evicting:      map[int64]string{},
+		workEndedAt:   map[int64]time.Time{},
 		autofixNoRole: map[int64]bool{},
 		drainHeld:     map[int64]bool{},
 		heavy:         make(chan heavyJob, 64),

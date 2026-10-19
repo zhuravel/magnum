@@ -453,6 +453,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	started := *job
 	e.roundWG.Go(func() {
 		defer e.unreserve(pr.ID)
+		defer e.workEnded(rctx, pr.ID) // the idle park's clock (park.go), before the reservation drops
 		e.safely(rctx, "fix", job.subject(), func() { e.runFix(rctx, job) },
 			func(ctx context.Context, msg string) { e.fixPanicked(ctx, job, msg) })
 	})

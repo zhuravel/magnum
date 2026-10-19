@@ -60,6 +60,8 @@ type fakeHerdr struct {
 	waitLine string
 	// onPrompt runs (with f.mu held) inside every AgentPrompt call.
 	onPrompt func()
+	// onPaneClose runs (with f.mu held) as every PaneClose call starts.
+	onPaneClose func(pane string)
 
 	calls    []string
 	creates  []herdr.WorkspaceCreateOptions
@@ -292,6 +294,9 @@ func (f *fakeHerdr) PaneClose(ctx context.Context, paneID string) error {
 	defer f.mu.Unlock()
 	f.record("PaneClose %s", paneID)
 	f.paneCloses = append(f.paneCloses, paneID)
+	if f.onPaneClose != nil {
+		f.onPaneClose(paneID)
+	}
 	if err := f.err("PaneClose"); err != nil {
 		return err
 	}

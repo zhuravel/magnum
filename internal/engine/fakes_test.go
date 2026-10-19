@@ -812,6 +812,11 @@ type fakeAgents struct {
 	// parkHardErr, when set, is what ParkHard returns (else it parks as
 	// Park does without an error).
 	parkHardErr error
+	// parkSessionsErr, when set, is what ParkSessions returns (the
+	// sessions stay live, but for the roles parkSessionsOK names, which
+	// park beside the failure).
+	parkSessionsErr error
+	parkSessionsOK  []string
 	// onQuit, when set, runs as Quit starts, with the session it quits.
 	onQuit func(store.Session)
 	// quitErr, when set, is what Quit returns after onQuit (the session stays live).
@@ -1067,6 +1072,38 @@ func (f *fakeAgents) ParkHard(ctx context.Context, pr store.PR) error {
 		return err
 	}
 	return f.parkSessions(ctx, pr)
+}
+
+// ParkSessions records the early park as park_sessions:<pr>:<its roles,
+// sorted> and parks the PR's live sessions ids names, as
+// agents.Manager.ParkSessions does once herdr dropped their agents; with
+// parkSessionsErr set it fails with it, and parks only the roles in
+// parkSessionsOK (none when that is empty).
+func (f *fakeAgents) ParkSessions(ctx context.Context, pr store.PR, ids []int64) ([]store.Session, error) {
+	ss, err := f.st.SessionsByPR(ctx, pr.ID)
+	if err != nil {
+		return nil, err
+	}
+	ss = slices.DeleteFunc(ss, func(s store.Session) bool {
+		return !slices.Contains(ids, s.ID) || (s.State != store.SessionLive && s.State != store.SessionStarting)
+	})
+	roles := make([]string, 0, len(ss))
+	for _, s := range ss {
+		roles = append(roles, s.Role)
+	}
+	slices.Sort(roles)
+	f.record(fmt.Sprintf("park_sessions:%d:%s", pr.ID, strings.Join(roles, ",")))
+	f.mu.Lock()
+	err, ok := f.parkSessionsErr, f.parkSessionsOK
+	f.mu.Unlock()
+	var parked []store.Session
+	for _, s := range ss {
+		if err == nil || slices.Contains(ok, s.Role) {
+			_ = f.st.TransitionSession(ctx, s.ID, []string{s.State}, store.SessionParked, nil)
+			parked = append(parked, s)
+		}
+	}
+	return parked, err
 }
 
 // Quit parks one session, as agents.Manager.Quit does with a resumable

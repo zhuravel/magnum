@@ -431,6 +431,7 @@ func (e *Engine) startWhiteboard(ctx context.Context, pr store.PR, by string) (*
 	started := *job
 	e.roundWG.Go(func() {
 		defer e.unreserveWhiteboard(pr.ID)
+		defer e.workEnded(rctx, pr.ID) // the idle park's clock (park.go), before the reservation drops
 		e.safely(rctx, "whiteboard", job.subject(), func() { e.runWhiteboard(rctx, job) },
 			func(ctx context.Context, msg string) { e.whiteboardPanicked(ctx, job, msg) })
 	})

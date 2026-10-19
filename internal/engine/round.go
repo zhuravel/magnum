@@ -61,11 +61,13 @@ func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 
 // reservedRound runs the round and the stops it was given (afterRound)
 // under the PR's reservation, whose context ctx is, and drops the
-// reservation at the end. It returns the round's result and whether the
-// round's context was cancelled before (stopped: an abort, an ignore or a
+// reservation at the end, once the round's end is recorded for the idle
+// park (workEnded). It returns the round's result and whether the round's
+// context was cancelled before (stopped: an abort, an ignore or a
 // shutdown).
 func (e *Engine) reservedRound(ctx context.Context, job *roundJob, subject string) (res pipeline.RoundResult, stopped bool) {
 	defer e.unreserve(job.pr.ID)
+	defer e.workEnded(ctx, job.pr.ID)
 	e.safely(ctx, "round", subject, func() { res = e.runRound(ctx, job) },
 		func(ctx context.Context, msg string) { e.roundPanicked(ctx, job, msg) })
 	e.safely(ctx, "round", subject, func() { e.afterRound(ctx, job.pr.ID) }, // magnum abort / ignore (abort.go)

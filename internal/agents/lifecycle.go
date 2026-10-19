@@ -36,7 +36,26 @@ func (m *Manager) Quit(ctx context.Context, s store.Session) error {
 
 // quit is Quit; hard goes on where Quit waits (forceQuit).
 func (m *Manager) quit(ctx context.Context, s store.Session, hard bool) error {
-	if sid, err := m.RecordSessionID(ctx, s); err == nil && sid != "" {
+	waited, err := m.interrupt(ctx, &s)
+	switch {
+	case err != nil:
+		return err
+	case waited != nil && hard:
+		return m.forceQuit(ctx, s, store.Deref(s.HerdrPaneID), waited)
+	case waited != nil:
+		return quitBusy(s, waited)
+	}
+	return m.retire(ctx, s)
+}
+
+// interrupt is a quit up to its retire: the session id is recorded first
+// (s.SessionID too), then ctrl+c, 1 s, ctrl+c and a wait of up to
+// QuitIdleTimeout for the pane to be an idle shell again. waited is herdr's
+// timeout when the pane was still no idle shell then (quitBusy says so,
+// forceQuit goes on from there); a pane or agent already gone counts as
+// quit.
+func (m *Manager) interrupt(ctx context.Context, s *store.Session) (waited, err error) {
+	if sid, err := m.RecordSessionID(ctx, *s); err == nil && sid != "" {
 		s.SessionID = &sid
 	}
 	pane := store.Deref(s.HerdrPaneID)
@@ -44,34 +63,37 @@ func (m *Manager) quit(ctx context.Context, s store.Session, hard bool) error {
 		if pane != "" {
 			return m.d.Herdr.PaneSendKeys(ctx, pane, "ctrl+c")
 		}
-		return m.d.Herdr.AgentSendKeys(ctx, target(s), "ctrl+c")
+		return m.d.Herdr.AgentSendKeys(ctx, target(*s), "ctrl+c")
 	}
 	gone := false
 	for i := 0; i < 2 && !gone; i++ {
 		if i > 0 {
 			if err := m.sleep(ctx, time.Second); err != nil {
-				return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+				return nil, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
 			}
 		}
 		if err := send(); err != nil {
 			if !isGone(err) {
-				return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+				return nil, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
 			}
 			gone = true
 		}
 	}
 	if !gone && pane != "" {
 		if _, err := m.d.Herdr.WaitIdleShell(ctx, pane, QuitIdleTimeout); err != nil && !isGone(err) {
-			switch {
-			case !herdr.IsTimeout(err):
-				return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
-			case hard:
-				return m.forceQuit(ctx, s, pane, err)
+			if !herdr.IsTimeout(err) {
+				return nil, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
 			}
-			return fmt.Errorf("agents: quit session %d: %w: %w", s.ID, ErrBusy, err)
+			return err, nil
 		}
 	}
-	return m.retire(ctx, s)
+	return nil, nil
+}
+
+// quitBusy is the failure of a quit whose pane was still no idle shell
+// (waited: herdr's timeout): ErrBusy, with the timeout in the chain.
+func quitBusy(s store.Session, waited error) error {
+	return fmt.Errorf("agents: quit session %d: %w: %w", s.ID, ErrBusy, waited)
 }
 
 // forceQuit goes on with the quit of session s, whose pane was no idle shell
@@ -193,14 +215,8 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 	if len(live) == 0 && len(lost) == 0 {
 		return nil
 	}
-	runs, err := m.d.Store.ActiveRuns(ctx)
-	if err != nil {
-		return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
-	}
-	for _, r := range runs {
-		if r.PRID == pr.ID && r.State != store.RunEnded {
-			return fmt.Errorf("agents: park pr %d: run %s is %s: %w", pr.Number, r.ID, r.State, ErrBusy)
-		}
+	if err := m.parkCheckRuns(ctx, pr); err != nil {
+		return err
 	}
 	snap, err := m.d.Herdr.Snapshot(ctx)
 	if err != nil {
@@ -257,6 +273,21 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 	for _, s := range live {
 		if err := m.retire(ctx, s); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// parkCheckRuns refuses (ErrBusy) while a run of the PR is pending,
+// submitted or working.
+func (m *Manager) parkCheckRuns(ctx context.Context, pr store.PR) error {
+	runs, err := m.d.Store.ActiveRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
+	}
+	for _, r := range runs {
+		if r.PRID == pr.ID && r.State != store.RunEnded {
+			return fmt.Errorf("agents: park pr %d: run %s is %s: %w", pr.Number, r.ID, r.State, ErrBusy)
 		}
 	}
 	return nil

@@ -103,7 +103,7 @@ func TestAnIdleParkClosesItsPane(t *testing.T) {
 	h.reviewedPR(2, "b1")
 	ws, operator, ours := operatorShell(t, h, sh, 2)
 
-	h.advance(2*time.Hour + time.Minute) // park_idle_after
+	h.advance(2*time.Hour + time.Minute) // past every agent's threshold, the judge's judge_fresh_after included: the PR's park
 	h.tick()
 	if got := sh.panesOf(ws); !slices.Equal(got, []string{operator}) {
 		t.Fatalf("workspace panes after the idle park = %v, want the operator's shell %s alone", got, operator)
@@ -302,6 +302,7 @@ func mapsEqual(a, b map[string]int) bool {
 // until it lets go, and the live panes and the operator's shell stay.
 func TestThePeriodicReconcileClosesPanesButRecordsNothingWhenIdle(t *testing.T) {
 	h, sh := newStuckHarness(t)
+	h.cfg.Daemon.ParkIdleAfter.Duration = 0 // the reviewers would park 15 minutes after the round: this is the reconcile's test
 	h.reviewedPR(2, "b1")
 	pr := h.pr(2)
 	ws, operator, live := operatorShell(t, h, sh, 2)

@@ -65,10 +65,13 @@ delta_check = true                # such a small delta (more than 0 code lines; 
                                   #   (false = wait and re-review in full; [[watch]] may override)
 model_limit_cooldown = "5h"       # a model capped on its own (health pattern model_limit) without a reset time
                                   # counts as limited this long; sessions use the kind's fallback_models meanwhile
-# park_idle_after = "2h"          # park a reviewed PR's agents once all of them idled this long ("0" = never),
-                                  # and a waiting PR's when its round is held by a pause, a drain or the daily
-                                  # cap, or is more than this far off; the next round resumes them; pinned PRs
-                                  # and recent human activity keep them
+# park_idle_after = "15m"         # park an agent of a reviewed or ineligible PR (a draft, a mute, a skip) once it
+                                  # idled this long since its last turn and the end of the PR's last round, fix or
+                                  # whiteboard job ("0" = never; a judge waits [pipeline] judge_fresh_after when that
+                                  # is longer, and the agents past theirs park alone while another stays), and a
+                                  # waiting PR's when its round is held by a pause, a drain or the daily cap, or is
+                                  # more than this far off; the next round resumes them; pinned or held slots,
+                                  # needs_attention and recent human activity keep them
 # skip_trivial_deltas = ["comments", "whitespace", "docs", "base"]   # a push that changes only these since
                                   # the review is not re-reviewed: the review stands for the new head; "base" is a
                                   # push that merges the base branch (or rebases onto it) and leaves the PR's own

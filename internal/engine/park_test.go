@@ -15,19 +15,20 @@ func (h *harness) parks(prID int64) int {
 }
 
 // TestIdleAgentsOfReviewedPRsAreParked: once every live agent of a reviewed
-// PR has been idle for park_idle_after (2h by default) its sessions are
-// parked, once; before that, nothing happens.
+// PR is past its threshold (park_idle_after, 15m by default; the judge's
+// judge_fresh_after, 90m) its sessions are parked, once; before that,
+// nothing happens (the fake's sessions have no conversation to park early).
 func TestIdleAgentsOfReviewedPRsAreParked(t *testing.T) {
 	h := newHarness(t)
 	pr := h.reviewedPR(2, "b1")
 	before := h.parks(pr.ID)
 
-	h.advance(time.Hour)
+	h.advance(89 * time.Minute)
 	h.tick()
 	if h.parks(pr.ID) != before {
-		t.Fatal("parked before park_idle_after")
+		t.Fatal("parked before the judge's judge_fresh_after")
 	}
-	h.advance(61 * time.Minute)
+	h.advance(2 * time.Minute)
 	h.tick()
 	if h.parks(pr.ID) != before+1 {
 		t.Fatalf("parks = %d, want %d: %v", h.parks(pr.ID), before+1, h.ag.all())
@@ -79,9 +80,9 @@ func TestIdleAgentsOfAPRThatWaitsLongAreParked(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, WaitRetry, true},
-		{"a retry half an hour away", func(h *harness, pr store.PR) {
+		{"a retry ten minutes away", func(h *harness, pr store.PR) {
 			if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) {
-				u.Set("next_attempt_at", h.clock.Now().Add(3*time.Hour+30*time.Minute))
+				u.Set("next_attempt_at", h.clock.Now().Add(3*time.Hour+10*time.Minute))
 				u.Set("last_error", "boom")
 			}); err != nil {
 				t.Fatal(err)

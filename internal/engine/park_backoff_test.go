@@ -91,9 +91,10 @@ func TestAFailedParkBacksOff(t *testing.T) {
 		t.Fatalf("the test never reached the cap: last wait %s", wait)
 	}
 
-	// A new round resets the wait: the next try comes once the PR is
-	// reviewed again, not 12 hours after the last one, and the one after it
-	// two ticks later.
+	// A new round resets the wait: the next try comes once the PR's agents
+	// idled their thresholds after the round (the judge's judge_fresh_after:
+	// the fake's sessions have no conversation to park early), not 12 hours
+	// after the last one, and the one after it two ticks later.
 	h.push(2, "b2")
 	h.tick() // rereview_pending: the push's quiet period
 	h.advance(5 * time.Minute)
@@ -107,8 +108,8 @@ func TestAFailedParkBacksOff(t *testing.T) {
 	h.settle()
 	h.wantState(2, store.PRReviewed)
 	tries := h.parkTries(pr.ID)
-	if n := h.nextParkAttempt(pr.ID); n != 1 {
-		t.Fatalf("the first try after the round came after %d ticks, want 1", n)
+	if n, want := h.nextParkAttempt(pr.ID), int(h.cfg.Pipeline.JudgeFreshAfter.Duration/tick); n != want {
+		t.Fatalf("the first try after the round came after %d ticks, want %d (judge_fresh_after)", n, want)
 	}
 	if got := h.parkTries(pr.ID); got != tries+1 {
 		t.Fatalf("parks = %d, want %d", got, tries+1)

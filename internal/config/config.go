@@ -145,11 +145,18 @@ type Daemon struct {
 	// (health pattern model_limit) counts as limited when the pane text
 	// names no reset time; sessions use the kind's fallback_models meanwhile.
 	ModelLimitCooldown Duration `toml:"model_limit_cooldown"`
-	// ParkIdleAfter parks the live agents of a reviewed PR once all of them
-	// have been idle this long (they resume on the PR's next round); 0 = never.
-	// A PR waiting for a round is parked the same way when its wait is a
-	// pause, a drain, the daily cap or ends more than this far away.
-	// Pinned PRs and PRs with human activity within HumanCooldown are left alone.
+	// ParkIdleAfter parks a live agent of a reviewed or ineligible PR (a
+	// draft, a mute or a skip after its review) once it has been idle this
+	// long since its own last activity and the end of the PR's last round,
+	// fix job or whiteboard job, whichever is later (it resumes on the PR's
+	// next round); 0 = never; 15m by default. A judge role waits
+	// Pipeline.JudgeFreshAfter instead when that is longer. While some agent
+	// of the PR is not past its threshold, the ones past theirs that have a
+	// conversation to resume are parked alone; once all are, the PR's park
+	// takes them with the workspace. A PR waiting for a round is parked the
+	// same way when its wait is a pause, a drain, the daily cap or ends more
+	// than this far away. Pinned or held slots, PRs that need attention and
+	// PRs with human activity within HumanCooldown are left alone.
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
 	// without a re-review (TrivialDeltaClasses: comments, whitespace,
@@ -863,7 +870,7 @@ func Defaults() *Config {
 			BurstPushes:              3,
 			BurstWindow:              Duration{30 * time.Minute},
 			ModelLimitCooldown:       Duration{5 * time.Hour},
-			ParkIdleAfter:            Duration{2 * time.Hour},
+			ParkIdleAfter:            Duration{15 * time.Minute},
 			SkipTrivialDeltas:        slices.Clone(TrivialDeltaClasses),
 			RequestDebounce:          Duration{time.Minute},
 			ReplyDebounce:            Duration{3 * time.Minute},

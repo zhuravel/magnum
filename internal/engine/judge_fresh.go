@@ -2,15 +2,16 @@ package engine
 
 // A judge whose prompt cache has gone cold starts fresh (DECISIONS "A cold
 // judge starts in a fresh session"): Codex's prompt cache lasts about 1.5
-// hours and sessions park after 2, so 25 of 39 resumed judge turns started
-// cold, their first turn re-reading the whole conversation uncached (4.7M
-// tokens in 2.3 days). A judge whose last turn on the PR ended longer than
-// [pipeline] judge_fresh_after ago starts the next round in a fresh session
-// instead, through the path a lost session takes: a re-review becomes a
-// recovery, whose prompt reads the earlier reviews and threads from GitHub,
-// and a delta check or a same-head re-review runs with a fresh judge
-// (checkFresh). Only the judge; the reviewers keep their conversations, and
-// a continue finishes its paused turn where it was.
+// hours and sessions parked after 2 then, so 25 of 39 resumed judge turns
+// started cold, their first turn re-reading the whole conversation uncached
+// (4.7M tokens in 2.3 days); the idle park now takes a live judge at
+// judge_fresh_after (park.go). A judge whose last turn on the PR ended
+// longer than [pipeline] judge_fresh_after ago starts the next round in a
+// fresh session instead, through the path a lost session takes: a
+// re-review becomes a recovery, whose prompt reads the earlier reviews and
+// threads from GitHub, and a delta check or a same-head re-review runs with
+// a fresh judge (checkFresh). Only the judge; the reviewers keep their
+// conversations, and a continue finishes its paused turn where it was.
 
 import (
 	"context"
