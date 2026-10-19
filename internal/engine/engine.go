@@ -272,6 +272,11 @@ type Deps struct {
 	// start and at each health check (cli_version.go); nil = no version is
 	// read.
 	LookPath func(file string) (string, error)
+	// MemoryRunner runs the memory probe's two sysctl commands at the health
+	// checks (memory.go); FromApp sets the App's runner, which Runner is too.
+	// A port of its own keeps the probe out of the commands a test scripts
+	// for Runner. nil = no memory sample.
+	MemoryRunner execx.Runner
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
@@ -440,6 +445,11 @@ type Engine struct {
 	// goroutine only (startup and health).
 	cliRead  map[string]cliStamp
 	cliFails map[string]*cliReadFailures
+	// mem is the machine's memory as the health checks sampled it
+	// (memory.go), tick goroutine only; memWG waits for the sample in
+	// flight, which runs on a goroutine of its own.
+	mem   memoryWatch
+	memWG sync.WaitGroup
 	// autoSeen and autoFollow remember, by PR and by automatic approval,
 	// what auto-approval last read GitHub's reviews for (autoapprove.go): a
 	// PR whose latest round and updatedAt did not move since is not asked
@@ -587,6 +597,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		Config: a.Config, Layout: a.Layout, Store: a.Store, Logger: a.Logger, DryRun: a.DryRun,
 		Herdr: a.Herdr, Agents: a.Agents, Slots: a.Slots, Git: a.Git, Inventory: a.Inventory,
 		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex, UsageAt: usage.CodexAt, Runner: a.Runner,
+		MemoryRunner: a.Runner,
 	}
 	d.GitHub = func(id string) GitHub {
 		if c := a.GitHub(id); c != nil {
@@ -806,9 +817,10 @@ func (e *Engine) lockHeld() error {
 }
 
 // shutdown stops rounds (their runs stay observed, never re-sent), a
-// running retro, notes curation, skill edit and gate, waits for them briefly,
-// flushes pending toasts and gives urgent toasts still retrying a bounded
-// time before cancelling them.
+// running retro, notes curation, skill edit and gate, waits for them and a
+// memory sample in flight (which Run's context ends, or its timeouts)
+// briefly, flushes pending toasts and gives urgent toasts still retrying a
+// bounded time before cancelling them.
 func (e *Engine) shutdown() {
 	e.mu.Lock()
 	for _, h := range e.rounds {
@@ -826,12 +838,13 @@ func (e *Engine) shutdown() {
 		e.curateWG.Wait()
 		e.editWG.Wait()
 		e.gateWG.Wait()
+		e.memWG.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
-		e.log.Warn("rounds, the retro, the notes curation, the skill edit or the skill gate did not stop within 30s")
+		e.log.Warn("rounds, the retro, the notes curation, the skill edit, the skill gate or the memory sample did not stop within 30s")
 	}
 	e.noteRetroRunning(context.Background()) // a retro that stopped no longer holds the CLI
 	if e.batch != nil {

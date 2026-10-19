@@ -5583,6 +5583,15 @@ const (
 	KVLearnEditDay = "learn.edit_day"
 )
 const (
+	MemoryUnknown  = 0
+	MemoryNormal   = 1
+	MemoryWarn     = 2
+	MemoryCritical = 4
+)
+    The kernel's memory pressure levels (kern.memorystatus_vm_pressure_level);
+    MemoryUnknown is a sample without one.
+
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -5827,6 +5836,12 @@ const EventKindVersionUnknown = "kind.version_unknown"
     of failed checks, the binary and the last failure. The reads go on at every
     check.
 
+const EventMemoryPressure = "machine.memory_pressure"
+    EventMemoryPressure is recorded at each change of the machine's memory
+    pressure level: the first known level since the daemon started (info),
+    a return to normal (info), warn (warn) and critical (error, with one urgent
+    toast per run of critical). A sample whose level is unknown changes nothing.
+
 const EventSharedFailure = "agents.shared_failure"
     EventSharedFailure is recorded (warn) when two or more PRs' agent launches
     ended with the same pane line within sharedFailureWindow, once per line
@@ -5857,6 +5872,10 @@ const KVLearnGating = "learn.gating"
 const KVLearnRegression = "learn.regression"
     KVLearnRegression is the newest version a regression revert was proposed for
     (its id): the scan proposes one revert per version, never two.
+
+const KVMachineMemory = "machine.memory"
+    KVMachineMemory holds the daemon's newest memory sample (MemorySample,
+    JSON), which `magnum status` shows on its memory line.
 
 const KVRetroRunning = "learn.retro_running"
     KVRetroRunning holds the start of the retro running now (store.FormatTime),
@@ -6141,6 +6160,11 @@ func KickDaemon(layout paths.Layout) (int, error)
     that does not handle it: the pid is signalled only after ps shows a magnum
     daemon, as `magnum daemon stop` checks.
 
+func LiveAgents(live []store.Session) (n, working int)
+    LiveAgents counts the registry's live sessions (starting or live,
+    as Store.LiveSessions lists them) and those of them herdr last saw working;
+    the others are idle.
+
 func LooksLikeDaemon(comm, args string) bool
     LooksLikeDaemon reports whether a process is a magnum daemon from what
     ProcessCommand read: the executable (comm) is named magnum, the command
@@ -6189,6 +6213,10 @@ func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, er
     `magnum pin` or `magnum slots pin` (pr.opened, pr.pinned), "slot:<name>" for
     a slot pinned without a PR (slot.pinned); an unpin forgets the subject. A
     pin older than the events kept (store.Prune), or set by hand, has no entry.
+
+func PressureName(level int) string
+    PressureName names a pressure level: "normal", "warn", "critical",
+    or "unknown" for any other.
 
 func ProcessCommand(ctx context.Context, run execx.Runner, pid int) (comm, args string, err error)
     ProcessCommand reads what ps knows about pid: comm (`ps -o comm=`, the
@@ -6613,6 +6641,11 @@ type Deps struct {
 	// start and at each health check (cli_version.go); nil = no version is
 	// read.
 	LookPath func(file string) (string, error)
+	// MemoryRunner runs the memory probe's two sysctl commands at the health
+	// checks (memory.go); FromApp sets the App's runner, which Runner is too.
+	// A port of its own keeps the probe out of the commands a test scripts
+	// for Runner. nil = no memory sample.
+	MemoryRunner execx.Runner
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
@@ -7198,6 +7231,37 @@ func MachineGroups(evs []store.Event) []MachineGroup
     An event counts once per group however often it lists the command; an event
     whose failures cannot be read counts as one failure without a command,
     its message the error. Most rounds come first, then the newest.
+
+type MemorySample struct {
+	// Level is kern.memorystatus_vm_pressure_level (MemoryNormal,
+	// MemoryWarn, MemoryCritical), MemoryUnknown when it could not be read;
+	// Pressure names it ("normal", "warn", "critical", "unknown").
+	Level    int    `json:"level"`
+	Pressure string `json:"pressure"`
+	// Swap is vm.swapusage; nil when it could not be read.
+	Swap      *MemorySwap `json:"swap,omitempty"`
+	SampledAt time.Time   `json:"sampled_at"`
+	// Cause says why the level, the swap or both are unknown ("" when both
+	// were read).
+	Cause string `json:"cause,omitempty"`
+}
+    MemorySample is one reading of the machine's memory.
+
+func ReadMemory(ctx context.Context, r execx.Runner, now time.Time) MemorySample
+    ReadMemory takes a memory sample at now through r: the pressure level and
+    the swap, each read and parsed on its own, so one that fails leaves the
+    other's reading in the sample (`magnum doctor` reads it so).
+
+func (s MemorySample) SwapText() string
+    SwapText is the swap as the status line, the doctor, the events and the
+    toast say it: "swap 49.1 of 50.0 GB used" (GB of 2³⁰ bytes, as the disk line
+    and Activity Monitor count them), or "swap unknown".
+
+type MemorySwap struct {
+	UsedBytes  int64 `json:"used_bytes"`
+	TotalBytes int64 `json:"total_bytes"`
+}
+    MemorySwap is the swap in use and the swap files' size, in bytes.
 
 type NotesCuratePayload struct {
 	Repo      string `json:"repo"` // owner/name
@@ -8361,6 +8425,10 @@ type Cmd struct {
 	// terminal from a background process group, where shell startup that
 	// touches the terminal stops it until the timeout.
 	NoTTY bool
+	// Quiet marks a command whose caller reports every failure itself (the
+	// memory probe warns once per cause): Real logs its line at Debug
+	// whatever the outcome, a timeout and a failed start included.
+	Quiet bool
 }
     Cmd describes one subprocess.
 
@@ -8418,9 +8486,9 @@ type LevelLogger interface {
     LevelLogger is a Logger that also takes a level per line. Real logs a
     command that succeeded at slog.LevelDebug and one that failed (a non-zero
     exit, a failed start, a timeout) at slog.LevelWarn when its Log implements
-    it, except one the caller's context cancellation ended (the daemon
-    stopping), which is logged at slog.LevelDebug; a plain Logger gets every
-    line through Printf.
+    it, except one the caller's context cancellation ended (the daemon stopping)
+    and a Quiet command, which are logged at slog.LevelDebug; a plain Logger
+    gets every line through Printf.
 
 type Logger interface {
 	Printf(format string, args ...any)

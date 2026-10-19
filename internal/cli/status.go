@@ -189,6 +189,7 @@ type statusReport struct {
 	Pauses       []statusPause            `json:"pauses"`
 	Pins         []statusPin              `json:"pins,omitempty"`
 	Disk         statusDisk               `json:"disk"`
+	Memory       *statusMemory            `json:"memory,omitempty"`
 	Slots        []inventory.SlotView     `json:"slots"`
 	External     []inventory.ExternalView `json:"external,omitempty"`
 	Databases    bool                     `json:"databases_listed"`
@@ -419,6 +420,17 @@ type statusDisk struct {
 	FreeBytes uint64 `json:"free_bytes"`
 	MinGB     int    `json:"min_gb"`
 	Error     string `json:"error,omitempty"`
+}
+
+// statusMemory is the memory line: the machine's memory as the daemon last
+// sampled it (engine.KVMachineMemory; the report's Memory is nil before a
+// first sample), with magnum's agents from the registry's live sessions:
+// AgentsLive counts them and AgentsWorking those herdr last saw working, the
+// rest idle (both nil when the registry could not say).
+type statusMemory struct {
+	engine.MemorySample
+	AgentsLive    *int `json:"agents_live,omitempty"`
+	AgentsWorking *int `json:"agents_working,omitempty"`
 }
 
 // statusPRLine is one PR in the QUEUE or CLOSED-pending list.

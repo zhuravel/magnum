@@ -64,6 +64,10 @@ type Cmd struct {
 	// terminal from a background process group, where shell startup that
 	// touches the terminal stops it until the timeout.
 	NoTTY bool
+	// Quiet marks a command whose caller reports every failure itself (the
+	// memory probe warns once per cause): Real logs its line at Debug
+	// whatever the outcome, a timeout and a failed start included.
+	Quiet bool
 }
 
 // Result is the outcome of a finished subprocess.
@@ -204,8 +208,8 @@ type Logger interface {
 // command that succeeded at slog.LevelDebug and one that failed (a non-zero
 // exit, a failed start, a timeout) at slog.LevelWarn when its Log
 // implements it, except one the caller's context cancellation ended (the
-// daemon stopping), which is logged at slog.LevelDebug; a plain Logger gets
-// every line through Printf.
+// daemon stopping) and a Quiet command, which are logged at
+// slog.LevelDebug; a plain Logger gets every line through Printf.
 type LevelLogger interface {
 	Logger
 	Logf(level slog.Level, format string, args ...any)
@@ -320,7 +324,11 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		if _, err := os.Stat(c.Dir); err != nil {
 			rerr := &RunError{Cmd: c, Err: fmt.Errorf("working directory: %w", err)}
 			if r.Log != nil {
-				LogAt(r.Log, slog.LevelWarn, "exec %s dir=%s code=-1 dur=0s err=%v", Redact(c.String()), c.Dir, rerr.Err)
+				level := slog.LevelWarn
+				if c.Quiet {
+					level = slog.LevelDebug
+				}
+				LogAt(r.Log, level, "exec %s dir=%s code=-1 dur=0s err=%v", Redact(c.String()), c.Dir, rerr.Err)
 			}
 			return Result{Code: -1}, rerr
 		}
@@ -369,10 +377,11 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		}
 		level := slog.LevelDebug
 		// A command the caller's cancellation ended (the daemon stopping) is
-		// routine; its own timeout or the caller's deadline still warns.
+		// routine; its own timeout or the caller's deadline still warns,
+		// unless the command is Quiet (its caller says it).
 		stopped := errors.Is(caller.Err(), context.Canceled)
 		answer := res.Code > 0 && ctx.Err() == nil && (c.Probe || c.Expected != nil && c.Expected(res))
-		if err != nil && !stopped && !answer {
+		if err != nil && !stopped && !answer && !c.Quiet {
 			level = slog.LevelWarn
 		}
 		why := ""

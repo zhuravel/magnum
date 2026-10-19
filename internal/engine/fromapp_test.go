@@ -70,6 +70,9 @@ func TestFromAppDryRunOnce(t *testing.T) {
 	if e.d.Runner != a.Runner {
 		t.Fatal("FromApp does not hand the app's command runner to the engine: the triage command would never run")
 	}
+	if e.d.MemoryRunner != a.Runner {
+		t.Fatal("FromApp does not hand the app's command runner to the memory probe: the daemon would never sample the memory")
+	}
 	if err := e.Run(context.Background(), Options{Once: true, NoSignals: true}); err != nil {
 		t.Fatal(err)
 	}

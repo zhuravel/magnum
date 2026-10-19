@@ -2085,12 +2085,13 @@ func (h *harness) stop() {
 		e.editWG.Wait()
 		e.gateWG.Wait()
 		h.runs.Wait()
+		e.memWG.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(leakWait):
-		h.t.Errorf("rounds, a retro, a notes curation, a skill edit, a skill gate or a Run loop still ran %s after the test ended", leakWait)
+		h.t.Errorf("rounds, a retro, a notes curation, a skill edit, a skill gate, a Run loop or a memory sample still ran %s after the test ended", leakWait)
 		return
 	}
 	e.stopToasts()
@@ -2148,6 +2149,7 @@ func (h *harness) settle() {
 	h.e.editWG.Wait()
 	h.e.gateWG.Wait()
 	h.e.drainHeavy(h.ctx)
+	h.e.memWG.Wait()   // a memory sample the health check started
 	h.e.toastWG.Wait() // urgent toasts run in goroutines
 }
 

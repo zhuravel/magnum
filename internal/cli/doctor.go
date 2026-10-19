@@ -169,7 +169,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
 		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
-		doctorClones, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
+		doctorClones, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorMemory, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
 		doctorLearnEditor, doctorRegistry,
 	}
 	out := make([][]doctorCheck, len(groups))

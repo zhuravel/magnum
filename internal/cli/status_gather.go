@@ -55,6 +55,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	statusGatherMachine(ctx, d, &r)
 	statusGatherPauses(d, kv, &r)
 	statusGatherDisk(d, &r)
+	statusGatherMemory(ctx, d, kv, &r)
 	if err := statusGatherPRs(ctx, d, now, &r); err != nil {
 		return r, err
 	}
@@ -457,6 +458,26 @@ func statusGatherDisk(d statusDeps, r *statusReport) {
 			r.Disk.Error = err.Error()
 		}
 	}
+}
+
+// statusGatherMemory reads the daemon's newest memory sample
+// (engine.KVMachineMemory) and counts magnum's agents from the registry's
+// live sessions (engine.LiveAgents), without asking herdr or ps; no sample,
+// no memory line.
+func statusGatherMemory(ctx context.Context, d statusDeps, kv statusKV, r *statusReport) {
+	raw, ok := kv.get(engine.KVMachineMemory)
+	var s engine.MemorySample
+	if !ok || json.Unmarshal([]byte(raw), &s) != nil || s.SampledAt.IsZero() {
+		return
+	}
+	m := &statusMemory{MemorySample: s}
+	if live, err := d.Store.LiveSessions(ctx); err == nil {
+		n, working := engine.LiveAgents(live)
+		m.AgentsLive, m.AgentsWorking = &n, &working
+	} else {
+		r.Warnings = append(r.Warnings, "live sessions: "+err.Error())
+	}
+	r.Memory = m
 }
 
 // statusGatherPRs buckets the registry's PRs into rounds in flight, the

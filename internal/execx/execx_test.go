@@ -260,3 +260,36 @@ type levelRecorder func(slog.Level)
 
 func (f levelRecorder) Printf(string, ...any)                 { f(slog.LevelInfo) }
 func (f levelRecorder) Logf(l slog.Level, _ string, _ ...any) { f(l) }
+
+// A Quiet command's caller reports its failures itself (the memory probe
+// warns once per cause): Real logs every outcome of it at Debug, a timeout
+// and a failed start included, which Probe alone still warns about.
+func TestAQuietCommandLogsEveryFailureAtDebug(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, tc := range []struct {
+		name string
+		cmd  Cmd
+	}{
+		{"exit", Cmd{Name: "sh", Args: []string{"-c", "echo nope >&2; exit 1"}}},
+		{"timeout", Cmd{Name: "sh", Args: []string{"-c", "sleep 5"}, Timeout: 50 * time.Millisecond}},
+		{"start", Cmd{Name: missing}},
+		{"dir", Cmd{Name: "sh", Args: []string{"-c", "true"}, Dir: missing}},
+	} {
+		for _, quiet := range []bool{true, false} {
+			var got []slog.Level
+			r := &Real{Log: levelRecorder(func(l slog.Level) { got = append(got, l) })}
+			c := tc.cmd
+			c.Probe, c.Quiet = true, quiet
+			if _, err := r.Run(context.Background(), c); err == nil {
+				t.Fatalf("%s must fail", tc.name)
+			}
+			want := slog.LevelDebug
+			if !quiet && tc.name != "exit" {
+				want = slog.LevelWarn // Probe demotes a non-zero exit only
+			}
+			if len(got) != 1 || got[0] != want {
+				t.Errorf("%s quiet=%v: levels %v, want [%v]", tc.name, quiet, got, want)
+			}
+		}
+	}
+}

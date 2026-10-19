@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/reveal"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -94,6 +95,32 @@ func doctorLoginShell(ctx context.Context, d doctorDeps) []doctorCheck {
 		return []doctorCheck{doctorFailed(name, "`zsh -lc` lists "+inspTilde(shims)+" after /usr/bin: agents' tool commands see the system Ruby/Node", fix)}
 	}
 	return []doctorCheck{doctorOK(name, "`zsh -lc` resolves mise shims before /usr/bin")}
+}
+
+// doctorMemory reads the machine's memory pressure level and swap now, as
+// the daemon samples them (engine.ReadMemory, two sysctl commands): a WARN
+// at critical pressure, which slows every agent, and a SKIP when the level
+// cannot be read (no such sysctl off macOS). Nothing in magnum acts on it.
+func doctorMemory(ctx context.Context, d doctorDeps) []doctorCheck {
+	const name = "memory"
+	if d.Run == nil {
+		return nil
+	}
+	s := engine.ReadMemory(ctx, d.Run, time.Now())
+	pressure := "memory pressure " + engine.PressureName(s.Level)
+	swap := s.SwapText()
+	switch {
+	case s.Level == engine.MemoryUnknown:
+		return []doctorCheck{doctorSkipped(name, pressure+" ("+s.Cause+"), "+swap)}
+	case s.Swap == nil:
+		swap += " (" + s.Cause + ")"
+	}
+	detail := pressure + ", " + swap
+	if s.Level == engine.MemoryCritical {
+		return []doctorCheck{doctorWarned(name, detail,
+			"quit what the machine does not need: it swaps, and every agent and test runs slower; `magnum status` counts magnum's live agents (idle ones park after [daemon] park_idle_after)")}
+	}
+	return []doctorCheck{doctorOK(name, detail)}
 }
 
 func doctorDisk(_ context.Context, d doctorDeps) []doctorCheck {

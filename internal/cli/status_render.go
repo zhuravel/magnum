@@ -48,8 +48,8 @@ func statusRender(w io.Writer, r statusReport) {
 	}
 }
 
-// statusRenderHeader prints the daemon, activity, GitHub, rounds, disk and
-// pauses lines.
+// statusRenderHeader prints the daemon, activity, GitHub, rounds, disk,
+// memory and pauses lines.
 func statusRenderHeader(w io.Writer, r statusReport) {
 	now := r.GeneratedAt
 	dm := r.Daemon
@@ -116,6 +116,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 		fmt.Fprintf(w, "clis:     %s\n", statusCLIsText(r.CLIs, now))
 	}
 	fmt.Fprintf(w, "disk:     %s\n", statusDiskText(r.Disk))
+	if r.Memory != nil {
+		fmt.Fprintf(w, "memory:   %s\n", statusMemoryText(*r.Memory, now))
+	}
 	for i, pin := range r.Pins {
 		label := "          "
 		if i == 0 {
@@ -381,6 +384,34 @@ func statusDiskText(d statusDisk) string {
 		return disk
 	}
 	return "unknown"
+}
+
+// statusMemoryText is the memory line's value: "pressure warn, swap 49.1 of
+// 50.0 GB used, 44 agents live (6 working), sampled 20s ago"; a part the
+// daemon could not read says so with the sample's cause ("pressure unknown
+// (…)", "swap unknown (…)", or "unknown (…)" for both).
+func statusMemoryText(m statusMemory, now time.Time) string {
+	why := func(s string) string {
+		if c := statusSafe(m.Cause, 240); c != "" {
+			return s + " (" + c + ")"
+		}
+		return s
+	}
+	var parts []string
+	switch {
+	case m.Level == engine.MemoryUnknown && m.Swap == nil:
+		parts = append(parts, why("unknown"))
+	case m.Level == engine.MemoryUnknown:
+		parts = append(parts, why("pressure unknown"), m.SwapText())
+	case m.Swap == nil:
+		parts = append(parts, "pressure "+engine.PressureName(m.Level), why("swap unknown"))
+	default:
+		parts = append(parts, "pressure "+engine.PressureName(m.Level), m.SwapText())
+	}
+	if m.AgentsLive != nil && m.AgentsWorking != nil {
+		parts = append(parts, fmt.Sprintf("%s live (%d working)", textx.Count(*m.AgentsLive, "agent", "agents"), *m.AgentsWorking))
+	}
+	return strings.Join(append(parts, "sampled "+inspAgo(now, &m.SampledAt)), ", ")
 }
 
 // statusRenderSlots prints the SLOTS table.

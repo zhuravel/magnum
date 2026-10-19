@@ -119,6 +119,8 @@ func doctorFixture(t *testing.T) (*inspFixture, doctorDeps, *fakeDoctorHerdr, *f
 		{Prefix: []string{"zsh", "-lc", "print -r -- $PATH"}, Result: execx.Result{Stdout: []byte(f.Home + "/user/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin\n")}},
 		{Prefix: []string{"whiteboard", "version", "--json"}, Result: execx.Result{Stdout: []byte(`{"event":"version","version":"0.2.4"}` + "\n")}},
 		{Prefix: []string{"whiteboard", "api", "whiteboard_status"}, Result: execx.Result{Stdout: []byte(`{"event":"whiteboard_status","running":true}` + "\n")}},
+		{Prefix: []string{"/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"}, Result: execx.Result{Stdout: []byte("1\n")}},
+		{Prefix: []string{"/usr/sbin/sysctl", "-n", "vm.swapusage"}, Result: execx.Result{Stdout: []byte("total = 2048.00M  used = 0.00M  free = 2048.00M  (encrypted)\n")}},
 	}
 	h := &fakeDoctorHerdr{info: herdr.ServerInfo{Version: "0.9.1", Protocol: 22}, plugins: []string{"other.plugin", "zhuravel.magnum"}}
 	ag := &fakeDoctorAgents{wrapper: map[string]bool{"codex": true, "claude": true}}
@@ -186,6 +188,7 @@ func TestDoctorHealthy(t *testing.T) {
 		"skill": "PASS", "prompts": "PASS", "gh": "PASS", "identity zhuravel": "PASS", "identity talkable-app": "WARN",
 		"mysql": "PASS", "clone talkable/talkable": "PASS", "origin talkable/talkable": "PASS",
 		"mise exec": "PASS", "login shell": "PASS", "disk": "PASS", "codex staging": "PASS", "launchd": "PASS", "plugin": "PASS", "registry": "PASS",
+		"memory": "PASS",
 	}
 	for name, status := range want {
 		c, ok := m[name]

@@ -368,8 +368,8 @@ func (e *Engine) attentionRole(ctx context.Context, prID int64, kind string) str
 // (stampLogin), or loginStampHold passed on an unchanged one; usage limits
 // are lifted optimistically (the next round pauses again, with a doubled
 // fallback, if the limit still holds). It also reads the agent CLIs'
-// versions (checkCLIVersions) and says when PRs' launches end the same way
-// (noteSharedFailures).
+// versions (checkCLIVersions), says when PRs' launches end the same way
+// (noteSharedFailures) and samples the machine's memory (checkMemory).
 func (e *Engine) health(ctx context.Context) {
 	now := e.now()
 	for _, tool := range e.kinds() {
@@ -420,6 +420,7 @@ func (e *Engine) health(ctx context.Context) {
 	e.checkBudget(ctx)
 	e.checkCLIVersions(ctx)   // cli_version.go
 	e.noteSharedFailures(ctx) // shared_failure.go: after the versions it names
+	e.checkMemory(ctx)        // memory.go: at most once a minute
 }
 
 // userPause is `magnum pause` ("" = none): it holds automatic reviews,

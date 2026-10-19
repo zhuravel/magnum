@@ -9365,6 +9365,53 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a judge-only replay of a cap change still takes a full replay's reports. Rejected: a `[[watch]]`-level
   key (not asked; a repository block is enough); no cap (the 2026-10-05 evidence: one PR got 20
   simplifications next to 5 findings); keeping three as the default (the operator asked for five).
+- **The daemon records the machine's memory pressure and swap** (2026-10-19, spec 88, asked for by the
+  operator while the machine was slow). Evidence: swap 50.3 of 51.2 GB used,
+  `kern.memorystatus_vm_pressure_level` 2 (warn), about 6 GB compressed and decompressed every 5 s, and 69 of
+  herdr's 111 panes were magnum's sessions. magnum guarded the disk (`min_free_disk_gb`, the `disk:` line) but
+  knew nothing of memory, so neither the operator nor a later improvement run could tell how often pressure is
+  critical, which a decision to hold automatic rounds under it needs first. Now the health check starts a
+  sample at most once a minute (`memoryEvery`, throttled as the Codex budget read is) when none is in flight:
+  `sysctl -n kern.memorystatus_vm_pressure_level` (1 normal, 2 warn, 4 critical) and `sysctl -n vm.swapusage`,
+  fixed argv at the absolute `/usr/sbin/sysctl` (as notify's osascript and reveal's commands are), a 3 s
+  timeout each (`memoryTimeout`). The sample runs on a goroutine of its own (`Engine.memWG`) under the tick's
+  context: health runs on the tick's path before dispatch, and a spawn that hangs on a thrashing machine would
+  cost the tick up to the two timeouts and the runner's kill grace, so the tick never waits for it; the next
+  health check records the finished sample (kv, events, toast), and a stop mid-sample records nothing (the
+  goroutine ends with `Run`'s context, which `shutdown` waits for). Each value is parsed on its own, so one
+  that fails, prints a level the kernel does not define or a line that is no swap reading keeps the other's
+  value in the sample. The newest sample is kv `machine.memory` (`engine.MemorySample`: `level` and
+  `pressure`, `swap` with `used_bytes` and `total_bytes`, `sampled_at`, and `cause` for a part that is
+  unknown). Each change of a known level is one `machine.memory_pressure` event: the first known level since
+  the daemon started is info ("(the first reading since the daemon started)", also when unknown samples came
+  first), a return to normal is info, warn a warning, critical an error. A run of critical, from a critical
+  sample to the next normal one (a level flapping between critical and warn stays one run), shows one urgent
+  toast keyed `memory:critical` with an hour's window, so a flap through normal, or a restart, does not toast
+  again within the hour. A sample whose level is unknown changes nothing and is never a return to normal. A
+  part that cannot be read (Linux has neither oid) is "unknown" with its cause, warned about once per oid and
+  kind of failure (a non-zero exit, a timeout, a failed start, an answer that does not parse) since the daemon
+  started, the full text in the line and debug lines after; the key leaves out what sysctl printed, which can
+  vary and would grow the map. The commands are `Quiet`, a new `execx.Cmd` option that has the runner log
+  every outcome at debug (`Probe` demotes only a non-zero exit, so a timeout or a failed start was a runner
+  warning every minute), so that warning is the only one. No sysctl at the path (`exec.ErrNotFound`,
+  `fs.ErrNotExist`, as on some Linux systems) stops the sampling for the daemon's life, and the unknown sample
+  stays recorded with that cause. `magnum status` shows the sample on a `memory:` line after `disk:`
+  ("pressure warn, swap 49.1 of 50.0 GB used, 44 agents live (6 working), sampled 20s ago"; GB of 2³⁰ bytes,
+  as the disk line and Activity Monitor count them), counting magnum's agents from the registry's live
+  sessions (`engine.LiveAgents`; not working = idle) without ps or herdr, and `--json` has `memory` with the
+  same fields; there is no line before a first sample. `magnum doctor` reads the two values at once
+  (`engine.ReadMemory`): one `memory` line, a WARN at critical, a SKIP when the level cannot be read. The
+  probe has a port of its own, `Deps.MemoryRunner`, which `FromApp` sets to the App's runner (the one `Runner`
+  is), so the engine tests that script `Runner`'s triage model and count its calls do not script sysctl too; a
+  dry run samples nothing, as it reads no CLI version. Why the runner and not a syscall (`sysctlbyname`
+  through `golang.org/x/sys/unix`, a Mach call through cgo): the runner is portable without build tags, its
+  fake keeps the tests hermetic, and two short processes a minute cost nothing next to a review. Why nothing
+  is held yet: the spec only measures, and a hold under critical pressure needs to know how often and how long
+  it is critical, which these events now record. Rejected: one sysctl call for both values (an oid that fails
+  makes the call exit 1 with a partial answer whose lines no longer say which value they are); sampling on the
+  tick's path (the hung spawn above); a toast at warn (the machine sat at warn for hours, and no one
+  acts on a toast that repeats); a config key (nothing but the operator reads the sample yet); counting agents
+  with ps (it would count the operator's own sessions too, and the registry knows magnum's).
 
 ## Learned rules
 
