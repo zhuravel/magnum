@@ -98,6 +98,53 @@ func TestAStakesChangeChangesTheInputs(t *testing.T) {
 	}
 }
 
+// Only the judge reads how many simplifications it may post (config.MaxSimplificationsFor), so a cap edit
+// on [pipeline] or a [[repo]] block is another baseline in the round's inputs and leaves the reviewers'
+// alone: a judge-only replay of it still takes a full replay's reports. The cap in effect counts, not how
+// it is written (a [pipeline] 0 is the default), and the blocks' order is not an input.
+func TestASimplificationCapChangeChangesTheInputsButNotTheReviewers(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Repos = []config.Repo{{Repo: "example/widgets"}}
+	all, rev := Inputs(cfg), ReviewerInputs(cfg)
+	seen := map[string]string{all: "the start"}
+	changed := func(what string, want bool) {
+		t.Helper()
+		got := Inputs(cfg)
+		if prev, ok := seen[got]; ok == want {
+			if want {
+				t.Errorf("after %s the inputs are %s, as after %s", what, got, prev)
+			} else {
+				t.Errorf("after %s the inputs are %s, want them unchanged", what, got)
+			}
+		}
+		seen[got] = what
+		if r := ReviewerInputs(cfg); r != rev {
+			t.Errorf("after %s the reviewer inputs are %s, want %s: the reviewers do not read the cap", what, r, rev)
+		}
+	}
+	cfg.Repos[0].MaxSimplifications = 2
+	changed("setting the repository's cap", true)
+	cfg.Repos[0].MaxSimplifications = 3
+	changed("editing the repository's cap", true)
+	cfg.Repos = append(cfg.Repos, config.Repo{Repo: "example/gadgets", MaxSimplifications: 4})
+	changed("adding another repository's cap", true)
+	cfg.Pipeline.MaxSimplifications = 7
+	changed("editing [pipeline]'s cap", true)
+	ordered := Inputs(cfg)
+	slices.Reverse(cfg.Repos)
+	if got := Inputs(cfg); got != ordered {
+		t.Errorf("listed the other way round the inputs are %s, want %s", got, ordered)
+	}
+
+	cfg = testConfig(t)
+	cfg.Pipeline.MaxSimplifications = config.DefaultMaxSimplifications
+	all = Inputs(cfg)
+	cfg.Pipeline.MaxSimplifications = 0 // as a config built in code: the default is in effect
+	if got := Inputs(cfg); got != all {
+		t.Errorf("a [pipeline] cap of 0, which is the default in effect, changed the inputs to %s from %s", got, all)
+	}
+}
+
 // The blocks' order in the file is not an input: two watches or repositories listed the other way round
 // read the same stakes.
 func TestTheStakesLinesCountInTheOrderOfTheirKeys(t *testing.T) {

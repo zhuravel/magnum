@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/zhuravel/magnum"
@@ -17,29 +18,33 @@ import (
 // and the notes (eval.Run.Inputs): every role's config with the model it
 // resolves to and its kind's config, the prompt files the roles name as they
 // resolve now (the checkout's prompts_dir, else the embedded ones), each
-// judge's skill file, and the stakes lines of the [[watch]] and [[repo]]
-// blocks (what the judge and the reviewers size a harm against). The texts
-// count, not where they are: a judge's skill path is left out of its role
-// config, so a candidate directory with the same texts as the checkout has
-// its inputs (a landed candidate's replays are the next baseline). magnum's
-// own code is not part of it. "" without a config.
+// judge's skill file, the stakes lines of the [[watch]] and [[repo]] blocks
+// (what the judge and the reviewers size a harm against), and the
+// simplification caps the judge posts by: the pipeline table's
+// max_simplifications in effect and each [[repo]] block's that is set
+// (config.Config.MaxSimplificationsFor). The texts count, not where they
+// are: a judge's skill path is left out of its role config, so a candidate
+// directory with the same texts as the checkout has its inputs (a landed
+// candidate's replays are the next baseline). magnum's own code is not part
+// of it. "" without a config.
 func Inputs(cfg *config.Config) string {
-	return inputsOf(cfg, func(config.Role) bool { return true })
+	return inputsOf(cfg, func(config.Role) bool { return true }, true)
 }
 
 // ReviewerInputs is the part of Inputs the reviewer roles read
 // (eval.Run.ReviewerInputs): the same hash over the roles that are not
-// judges, with the stakes lines the reviewers read too, so a change to a
-// judge's prompts or skill leaves it alone and a judge-only replay can take
+// judges, with the stakes lines the reviewers read too and without the
+// simplification caps, which only the judges read, so a change to a judge's
+// prompts, skill or caps leaves it alone and a judge-only replay can take
 // the reports of a full replay whose reviewers read what its own would
 // (eval.FullReplayFor). "" without a config.
 func ReviewerInputs(cfg *config.Config) string {
-	return inputsOf(cfg, func(r config.Role) bool { return !r.Judge })
+	return inputsOf(cfg, func(r config.Role) bool { return !r.Judge }, false)
 }
 
 // inputsOf hashes the inputs of the roles of cfg that of takes, then the
-// stakes lines.
-func inputsOf(cfg *config.Config, of func(config.Role) bool) string {
+// stakes lines, then, with judges, the simplification caps.
+func inputsOf(cfg *config.Config, of func(config.Role) bool, judges bool) string {
 	if cfg == nil {
 		return ""
 	}
@@ -76,32 +81,57 @@ func inputsOf(cfg *config.Config, of func(config.Role) bool) string {
 	for _, l := range stakesLines(cfg) {
 		write("stakes", l.key, l.line)
 	}
+	if judges {
+		// A repository without a block of its own posts by the pipeline table's cap.
+		write("max_simplifications", "pipeline", strconv.Itoa(cfg.MaxSimplificationsFor("")))
+		for _, l := range simplificationCaps(cfg) {
+			write("max_simplifications", l.key, l.line)
+		}
+	}
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
-// stakesLine is a stakes line with the block it comes from.
-type stakesLine struct{ key, line string }
+// blockLine is a value of a config block with the block it comes from.
+type blockLine struct{ key, line string }
 
 // stakesLines are the stakes lines of cfg's [[watch]] and [[repo]] blocks
 // that are set (config.StakesFor reads only those), each with the block's
 // kind and name in lower case, the way the blocks are looked up, sorted by
-// that key so the order in the file is not an input. Two blocks with one key
-// (two watches of an owner) keep their order in the file. A config that sets
-// none has none, so its hash is what it was before the lines counted.
-func stakesLines(cfg *config.Config) []stakesLine {
-	var out []stakesLine
+// that key so the order in the file is not an input (byKey). A config that
+// sets none has none, so its hash is what it was before the lines counted.
+func stakesLines(cfg *config.Config) []blockLine {
+	var out []blockLine
 	for _, w := range cfg.Watches {
 		if w.Stakes != "" {
-			out = append(out, stakesLine{"watch " + strings.ToLower(w.Owner), w.Stakes})
+			out = append(out, blockLine{"watch " + strings.ToLower(w.Owner), w.Stakes})
 		}
 	}
 	for _, r := range cfg.Repos {
 		if r.Stakes != "" {
-			out = append(out, stakesLine{"repo " + strings.ToLower(r.Repo), r.Stakes})
+			out = append(out, blockLine{"repo " + strings.ToLower(r.Repo), r.Stakes})
 		}
 	}
-	slices.SortStableFunc(out, func(a, b stakesLine) int { return strings.Compare(a.key, b.key) })
-	return out
+	return byKey(out)
+}
+
+// simplificationCaps are the max_simplifications of cfg's [[repo]] blocks
+// that set one (0 is the pipeline table's, which inputsOf hashes on its
+// own), keyed and sorted as stakesLines are.
+func simplificationCaps(cfg *config.Config) []blockLine {
+	var out []blockLine
+	for _, r := range cfg.Repos {
+		if r.MaxSimplifications > 0 {
+			out = append(out, blockLine{"repo " + strings.ToLower(r.Repo), strconv.Itoa(r.MaxSimplifications)})
+		}
+	}
+	return byKey(out)
+}
+
+// byKey sorts lines by their key; two blocks with one key (two watches of
+// an owner) keep their order in the file.
+func byKey(lines []blockLine) []blockLine {
+	slices.SortStableFunc(lines, func(a, b blockLine) int { return strings.Compare(a.key, b.key) })
+	return lines
 }
 
 // skillText is the text of the judge skill at src (config.SkillPath).

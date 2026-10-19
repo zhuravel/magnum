@@ -131,9 +131,9 @@ databases = [
 # clone's .config/wt.toml hooks run ([post-create]/[post-start] after creation, [pre-remove] before
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
-# block with only those, keep_approvals, stakes, auto_approve_skip_authors, allow_bot_authors,
-# required_checks, trackers and the readiness keys (prepare, ready, ready_timeout; each replaces the
-# pool's) is valid for a [[pool]] repo too.
+# block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
+# allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready, ready_timeout; each
+# replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"

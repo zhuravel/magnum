@@ -2,9 +2,9 @@ package cli
 
 // What a replay records besides its score, so that runs can be compared and
 // reused: the inputs it reviewed with (evalrun.Inputs: the judge skill, the
-// roles' prompts and the role config, as one hash, and evalrun.ReviewerInputs,
-// the reviewers' part of it; a candidate's, evalrun.WithCandidate, when it
-// replays one). The notes its judge read and the Codex points it used are
+// roles' prompts, the role config, the stakes lines and the simplification
+// caps, as one hash, and evalrun.ReviewerInputs, the reviewers' part of it; a
+// candidate's, evalrun.WithCandidate, when it replays one). The notes its judge read and the Codex points it used are
 // recorded per case (internal/evalrun). `magnum eval baseline` lists the
 // stored replays a new run with the same inputs would repeat; it reads, it
 // never replays.
@@ -26,9 +26,9 @@ func newEvalBaselineCmd(c *Context) *cobra.Command {
 	cmd := newCommand("", "baseline "+evalBaselineUsage, "the stored replays a run of these cases would repeat",
 		"For each case of the corpus (or each --case), list the stored runs that replayed it at the head the corpus "+
 			"pins, from a clean checkout, with the inputs this binary and config give a review now (the judge skill, "+
-			"the roles' prompts and the role config; run.json's inputs), newest first. A new replay of such a case "+
-			"repeats one of them unless magnum's code changed since its commit (eval-at.sh compares the Go files). "+
-			"It only reads: no replay starts.\n\n"+
+			"the roles' prompts, the role config, the stakes lines and the simplification caps; run.json's inputs), "+
+			"newest first. A new replay of such a case repeats one of them unless magnum's code changed since its "+
+			"commit (eval-at.sh compares the Go files). It only reads: no replay starts.\n\n"+
 			"Output, tab-separated: `inputs <hash>`, then per case one `reuse <case> <run> <commit> <found>/<total>` "+
 			"line per stored run, or `run <case>` when there is none.",
 		func(pos []string) int {

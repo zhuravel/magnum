@@ -434,7 +434,7 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: no [[watch]] covers it", r.Repo))
 		}
 		if c.PoolFor(r.Repo) != nil && r.worktreeKeys() {
-			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, auto_approve_skip_authors, allow_bot_authors, required_checks and trackers apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, allow_bot_authors, required_checks and trackers apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
 		}
 		for _, g := range r.RequiredChecks {
 			// A malformed glob would match no check; Match reports it even for "".
@@ -452,6 +452,9 @@ func (c *Config) validateRepos() []error {
 		errs = append(errs, validateVerdicts("repo "+r.Repo, r.NoFindingsEvent, r.BlockingEvent)...)
 		if err := validateStakes(r.Stakes); err != nil {
 			errs = append(errs, fmt.Errorf("repo %s: stakes %w", r.Repo, err))
+		}
+		if n := r.MaxSimplifications; n < 0 || n > MaxSimplificationsMax {
+			errs = append(errs, fmt.Errorf("repo %s: max_simplifications must be from 0 ([pipeline]'s) to %d, got %d", r.Repo, MaxSimplificationsMax, n))
 		}
 		errs = append(errs, validateLogins("repo "+r.Repo+": ", "auto_approve_skip_authors", r.AutoApproveSkipAuthors)...)
 		errs = append(errs, validateLogins("repo "+r.Repo+": ", "allow_bot_authors", r.AllowBotAuthors)...)
@@ -749,6 +752,9 @@ func (c *Config) validatePipeline() []error {
 	fixCycles("pipeline", c.Pipeline.FixCycles)
 	if n := c.Pipeline.FixCompactAt; n < 0 || n > 99 {
 		errs = append(errs, fmt.Errorf("pipeline: fix_compact_at must be a percent from 0 (off) to 99, got %d", n))
+	}
+	if n := c.Pipeline.MaxSimplifications; n < 1 || n > MaxSimplificationsMax {
+		errs = append(errs, fmt.Errorf("pipeline: max_simplifications must be from 1 to %d, got %d", MaxSimplificationsMax, n))
 	}
 	autofix("pipeline", c.Pipeline.Autofix)
 	whiteboardRole("pipeline", c.Pipeline.WhiteboardRole)

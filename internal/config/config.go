@@ -635,6 +635,12 @@ type Repo struct {
 	// (see Config.StakesFor).
 	Stakes string `toml:"stakes"`
 
+	// MaxSimplifications is how many simplifications the judge posts at
+	// most on this repository's PRs, overriding [pipeline]
+	// max_simplifications (0 = [pipeline]'s; at most MaxSimplificationsMax;
+	// see Config.MaxSimplificationsFor).
+	MaxSimplifications int `toml:"max_simplifications"`
+
 	// AutoApproveSkipAuthors adds GitHub logins to the covering watch's
 	// auto_approve_skip_authors for this repository's PRs alone.
 	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
@@ -666,8 +672,8 @@ const RequiredWorkflowPrefix = "workflow:"
 
 // worktreeKeys reports whether the block sets any per-PR worktree key
 // (everything but repo, the verdicts, readiness, keep_approvals, stakes,
-// auto_approve_skip_authors, allow_bot_authors, required_checks and
-// trackers).
+// max_simplifications, auto_approve_skip_authors, allow_bot_authors,
+// required_checks and trackers).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }
@@ -869,7 +875,7 @@ func Defaults() *Config {
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
 		GitHub:   GitHub{Transport: "gh"},
-		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FullPassEvery: DefaultFullPassEvery, AuditEvery: DefaultAuditEvery, ApproveAfterFullPass: DefaultApproveAfterFullPass, FullPassLines: DefaultFullPassLines, FullPassFiles: DefaultFullPassFiles, FullPassAfter: Duration{DefaultFullPassAfter}, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever, FixCompactAt: DefaultFixCompactAt, WhiteboardRole: RoleClaudeWhiteboard, Spend: SpendMedium},
+		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FullPassEvery: DefaultFullPassEvery, AuditEvery: DefaultAuditEvery, ApproveAfterFullPass: DefaultApproveAfterFullPass, MaxSimplifications: DefaultMaxSimplifications, FullPassLines: DefaultFullPassLines, FullPassFiles: DefaultFullPassFiles, FullPassAfter: Duration{DefaultFullPassAfter}, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever, FixCompactAt: DefaultFixCompactAt, WhiteboardRole: RoleClaudeWhiteboard, Spend: SpendMedium},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),

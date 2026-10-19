@@ -99,6 +99,8 @@ func repoKeyGroups(t *testing.T) (allowed, banned []string) {
 		switch f.Kind() {
 		case reflect.String:
 			f.SetString("x")
+		case reflect.Int:
+			f.SetInt(1)
 		case reflect.Slice:
 			f.Set(reflect.MakeSlice(f.Type(), 1, 1))
 		case reflect.Pointer:

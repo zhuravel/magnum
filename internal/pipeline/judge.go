@@ -909,6 +909,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), CIRed: rd.ciRed(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile,
 		PrepassFile: rd.prepassFile, ColdJudge: cold, FullPass: in.FullPass && in.Kind == KindRecovery, HoldApproval: in.HoldApproval,
 		EvidenceMap: rd.evidenceMap(), Stakes: rd.r.Config.StakesFor(rd.owner + "/" + rd.name),
+		MaxSimplifications: rd.r.Config.MaxSimplificationsFor(rd.owner + "/" + rd.name),
 	}
 	jd.EvidenceFile = filepath.Join(filepath.Dir(jd.ResultFile), EvidenceFile)
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)

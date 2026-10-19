@@ -97,6 +97,13 @@ type Pipeline struct {
 	// post-merge review, a reply round, a CI check and a dry run never hold.
 	// Default DefaultApproveAfterFullPass; 0 = off.
 	ApproveAfterFullPass int `toml:"approve_after_full_pass"`
+	// MaxSimplifications is how many of claude-simplify's proposals the
+	// judge posts at most, the most substantial first: the initial,
+	// rereview and recovery prompts render it (as
+	// agents.JudgeData.MaxSimplifications). A [[repo]] block's own wins
+	// (Repo.MaxSimplifications); see Config.MaxSimplificationsFor. Default
+	// DefaultMaxSimplifications; 1 to MaxSimplificationsMax.
+	MaxSimplifications int `toml:"max_simplifications"`
 	// JudgeFallback names a judge role of another kind that takes over a
 	// PR's rounds after the judge's kind refused one of them (Codex's
 	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
@@ -317,6 +324,34 @@ const DefaultAuditEvery = 5
 // default: the first two re-reviews after a PR's baseline approve on their
 // delta, so one round of fixes after the first review approves at once.
 const DefaultApproveAfterFullPass = 2
+
+// DefaultMaxSimplifications is [pipeline] max_simplifications' default: the
+// judge posts at most five simplifications, the most substantial first (three
+// from 2026-10-05 until the operator asked for five on 2026-10-19).
+const DefaultMaxSimplifications = 5
+
+// MaxSimplificationsMax bounds max_simplifications ([pipeline] and [[repo]]):
+// one PR got 20 simplifications, next to 5 findings, before the cap of
+// 2026-10-05.
+const MaxSimplificationsMax = 10
+
+// MaxSimplificationsFor is how many simplifications the judge posts at most
+// on a PR of repository fullName ("owner/name"): the [[repo]] block's
+// max_simplifications when set (above 0), else [pipeline]'s, else
+// DefaultMaxSimplifications (a nil config, or one built in code without the
+// key).
+func (c *Config) MaxSimplificationsFor(fullName string) int {
+	if c == nil {
+		return DefaultMaxSimplifications
+	}
+	if r := c.RepoFor(fullName); r != nil && r.MaxSimplifications > 0 {
+		return r.MaxSimplifications
+	}
+	if n := c.Pipeline.MaxSimplifications; n > 0 {
+		return n
+	}
+	return DefaultMaxSimplifications
+}
 
 // FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
 // sets one, else [pipeline]'s, else DefaultFixCycles. A nil w is

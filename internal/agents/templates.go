@@ -489,6 +489,14 @@ type JudgeData struct {
 	// Rendered as `stakes` after `prepass` by the own pass and the initial,
 	// rereview and recovery prompts; "" = unsaid, and they leave it out.
 	Stakes string
+	// MaxSimplifications is how many of claude-simplify's proposals the
+	// judge posts at most, the most substantial first, as the operator's
+	// config states it ([[repo]] or [pipeline] max_simplifications;
+	// config.Config.MaxSimplificationsFor). Rendered in the simplification
+	// rules of the initial, rereview and recovery prompts, which carry them
+	// only with a usable claude-simplify report; 0 renders
+	// config.DefaultMaxSimplifications (completed), never "at most 0".
+	MaxSimplifications int
 	// EvidenceFile is where the judge writes what it examined in the round
 	// (EvidenceFile in the report directory, beside ResultFile): one entry
 	// per behaviour it read or probed and one unknown entry per file of the
@@ -554,11 +562,15 @@ const OwnFindingsFile = "judge-own.md"
 // (JudgeData.EvidenceMap).
 const EvidenceFile = "evidence.json"
 
-// completed is d with its Reports, notes fields, PreviousHeadShort and
-// post-review line completed (a copy; d is not modified).
+// completed is d with its Reports, notes fields, PreviousHeadShort,
+// post-review line and simplification cap (MaxSimplifications) completed (a
+// copy; d is not modified).
 func (d *JudgeData) completed() JudgeData {
 	out := *d
 	out.PreviousHeadShort = textx.ShortSHA(d.PreviousHeadSHA)
+	if out.MaxSimplifications < 1 {
+		out.MaxSimplifications = config.DefaultMaxSimplifications
+	}
 	if out.ReviewFile == "" && out.ResultFile != "" {
 		out.ReviewFile = filepath.Join(filepath.Dir(out.ResultFile), PostReviewFile)
 	}

@@ -9341,6 +9341,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   backoff (the stat and `mise which` already run at every check, and a failing version command is the case
   to look at); a toast at the third failure (no one can act on it before the CLI itself fails); and keeping
   the stamp for a failed read with a time limit (a second clock beside the health check's).
+- **The judge posts at most `max_simplifications` simplifications, 5 by default, and a `[[repo]]` block's
+  own wins** (2026-10-19, spec 86, asked for by the operator: "per-repo settings it is, and change default
+  to 5"). Amends "At most three simplifications, each removing something" (2026-10-05), whose cap was prompt
+  text alone ("Post at most three, the most substantial, ..." in the initial, rereview and recovery judge
+  prompts; no Go check counts simplifications against a limit, then or now). Its other rules are unchanged:
+  a proposal removes something a reader must hold, stays out of authorization, sandboxing, money or usage
+  recording and concurrency code unless it removes a defect-prone construct, is proven by the judge's own
+  equivalence probe, and is one comment per idea. Evidence: on talkable#12040 (round 1, 81d9ea6)
+  claude-simplify proposed 5 and the judge posted 2. Now `[pipeline] max_simplifications` (default
+  `DefaultMaxSimplifications`, 5; 1 to `MaxSimplificationsMax`, 10) and `[[repo]] max_simplifications` (0
+  or unset = `[pipeline]`'s; 0 to 10; not a per-PR worktree key, so a pooled repository's block may set it)
+  resolve through `Config.MaxSimplificationsFor`; the pipeline sets `agents.JudgeData.MaxSimplifications`
+  from it where it sets `Stakes`, and the three prompts say "Post at most {{$.MaxSimplifications}}, the
+  most substantial, ...". A JudgeData without it (0, as in a config built in code) renders 5, never "at
+  most 0" (`JudgeData.completed`). claude-simplify's own prompt said "(the judge proves them and posts at
+  most 3)"; it now says "(the judge proves them and posts only the most substantial)", with no number,
+  since its data does not carry the repository's cap and it lists every qualifying proposal anyway. That
+  edit changes the reviewers' prompt text, so `evalrun.ReviewerInputs` changes once with it, and every
+  replay's `inputs` change once with the judge prompts. `evalrun.Inputs` also hashes the `[pipeline]` cap in
+  effect and each `[[repo]]` cap that is set (keyed and sorted by block as the stakes lines are), so a cap
+  change replays its baseline once; `ReviewerInputs` leaves them out, since only the judge reads them, and
+  a judge-only replay of a cap change still takes a full replay's reports. Rejected: a `[[watch]]`-level
+  key (not asked; a repository block is enough); no cap (the 2026-10-05 evidence: one PR got 20
+  simplifications next to 5 findings); keeping three as the default (the operator asked for five).
 
 ## Learned rules
 

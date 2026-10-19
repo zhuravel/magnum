@@ -296,6 +296,9 @@ approve_after_full_pass = 2       # a re-review of a PR with this many re-review
                                   # full pass of every role on the same head follows at once, which approves when
                                   # it finds nothing. A full pass, a post-merge review, a reply round and a CI
                                   # check never hold. 2 lets one round of fixes approve on its delta. 0 = off
+max_simplifications = 5           # how many of claude-simplify's proposals the judge posts at most, the most
+                                  # substantial first, each proven by its own equivalence probe; 1 to 10. A
+                                  # [[repo]] block's own wins
 judge_fallback = ""               # a judge role of another kind that takes over a PR's rounds once the judge's
                                   # kind refused one (Codex's cybersecurity classifier): the PR is flagged for
                                   # that kind, its roles of that kind are dropped, and this role judges from
@@ -592,7 +595,8 @@ rerun_min_lines = 150                 # runs again once this many code lines cha
                                       # base branch do not count); 0 = never
 prompt = "claude-simplify.md"           # read-only: four parallel angle reviews (reuse, simplification,
                                       # efficiency, altitude), then every qualifying proposal, ranked (the
-                                      # judge posts at most 3); edits none
+                                      # judge posts at most [pipeline] max_simplifications, 5 by default,
+                                      # or the [[repo]]'s); edits none
 output = "claude-simplify.md"         # the proposals; no `after`, so it runs alongside the reviewers
 timeout = "40m"
 aliases = ["simplify"]
@@ -814,9 +818,9 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # clone's .config/wt.toml hooks run ([post-create]/[post-start] after creation, [pre-remove] before
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
-# block with only those, keep_approvals, stakes, auto_approve_skip_authors, allow_bot_authors,
-# required_checks, trackers and the readiness keys (prepare, ready, ready_timeout; each replaces the
-# pool's) is valid for a [[pool]] repo too.
+# block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
+# allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready, ready_timeout; each
+# replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -829,6 +833,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # personal data."; the judge sizes each harm against it (`stakes` in its
 #                                         # prompts, a sentence in claude-review's), never against a stakes block
 #                                         # in the checkout; default: the watch's (also on [[watch]]), else none
+# max_simplifications = 0                 # how many simplifications the judge posts at most on this repository's
+#                                         # PRs, 0 to 10; 0 = [pipeline]'s (5 by default)
 # auto_approve_skip_authors = ["alice"]   # added to the watch's list for this repository's PRs alone
 # allow_bot_authors = ["helper[bot]"]     # added to the watch's list for this repository's PRs alone
 # required_checks = ["Completion"]        # checks a PR must pass to be ready (name globs; "workflow:<glob>" = a whole
