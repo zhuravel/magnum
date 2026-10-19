@@ -62,6 +62,11 @@ type fakeHerdr struct {
 	onPrompt func()
 	// onPaneClose runs (with f.mu held) as every PaneClose call starts.
 	onPaneClose func(pane string)
+	// onIdleShell runs (with f.mu held) when WaitIdleShell answers that the
+	// pane is an idle shell.
+	onIdleShell func(pane string)
+	// onPaneGet runs (with f.mu held) as every PaneGet call starts.
+	onPaneGet func(f *fakeHerdr, pane string)
 
 	calls    []string
 	creates  []herdr.WorkspaceCreateOptions
@@ -378,6 +383,9 @@ func (f *fakeHerdr) PaneGet(ctx context.Context, paneID string) (herdr.Pane, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("PaneGet %s", paneID)
+	if f.onPaneGet != nil {
+		f.onPaneGet(f, paneID)
+	}
 	if err := f.err("PaneGet"); err != nil {
 		return herdr.Pane{}, err
 	}
@@ -431,6 +439,9 @@ func (f *fakeHerdr) WaitIdleShell(ctx context.Context, paneID string, timeout ti
 	if f.busy[paneID] {
 		return herdr.ProcessInfo{PaneID: paneID, ShellPID: 10, ForegroundPGID: 20},
 			fmt.Errorf("herdr pane %s: shell not idle: %w", paneID, herdr.ErrTimeout)
+	}
+	if f.onIdleShell != nil {
+		f.onIdleShell(paneID)
 	}
 	return herdr.ProcessInfo{PaneID: paneID, ShellPID: 10, ForegroundPGID: 10}, nil
 }
@@ -553,6 +564,9 @@ type env struct {
 	repo  store.Repo
 	pr    store.PR
 	slept []time.Duration
+	// onSleep runs inside every sleep of the manager, which then ends with
+	// its context's error, as the real one does.
+	onSleep func()
 
 	// codexConfig and claudeConfig are the temp CLI configs EnsureTrust
 	// edits (claudeConfig does not exist until a test writes it).
@@ -603,7 +617,10 @@ func newEnv(t *testing.T) *env {
 		CodexConfig: e.codexConfig, ClaudeConfig: e.claudeConfig, Log: e.logs})
 	e.m.sleep = func(ctx context.Context, d time.Duration) error {
 		e.slept = append(e.slept, d)
-		return nil
+		if e.onSleep != nil {
+			e.onSleep()
+		}
+		return ctx.Err()
 	}
 	return e
 }

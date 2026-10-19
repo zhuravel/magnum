@@ -787,6 +787,84 @@ skill versions); people add theirs to the sections before it, at the end of the 
   has its key, and no other role has a case for its own); parking during a round (a push before the
   judge's candidates prompt re-prompts every running role on the same session).
 
+- **An early park quits an agent with its kind's exit keys, so Claude agents park** (2026-10-19, amends "An
+  idle agent parks once keeping it live stops paying"). On the first sweep after that change went live, every
+  early park failed on Claude 2.1.303. On talkable#12051, claude-review, claude-simplify and claude-whiteboard
+  each ended "agent busy: herdr pane …: shell not idle after 10s (foreground: 2.1.303)" at 20:43 and again at
+  20:45 UTC. Their panes showed Claude's idle prompt (`❯`, "done 8:36 PM"). This was not new. Two ctrl+c did
+  not quit Claude 2.1.301 on talkable#11932 from 10-16 12:44 to 10-17 16:15 (eight `pr.park_failed`,
+  `quit_timeout`). The hard park sends the kind's `exit_keys` (`/exit` and enter), and it parked that agent at
+  once at 10-17 16:16. The PR's park rarely needs ctrl+c, because it closes the PR's own workspace. So nobody
+  saw the flaw. Every early-park candidate is a Claude agent, because Codex judges wait for the PR's park. So
+  the early park freed nothing, and each failed try took about 10 s per session of the heavy worker. A test in
+  a throwaway tmux session (not magnum's panes) settled the keys. Claude 2.1.303 showed a background agent in
+  its status line ("← 1 agent"). Two ctrl+c 1 s apart did not quit it, even after 60 s, and ctrl+d did not
+  either. One ctrl+c and then `/exit` with enter quit it every time. A draft typed before that ctrl+c ("say
+  only the word banana") was cleared and never submitted. Now the early park (`ParkSessions`) sends one
+  ctrl+c, and a second later the kind's exit keys. Before each of these keys, magnum takes the same look at
+  the pane (`idlePrompt`). An idle shell means that the agent quit, and magnum sends nothing more. Otherwise
+  herdr must show the session's own conversation in that pane, idle or done. The agent kind is the one that
+  the park's snapshot listed. The `agent_session` value is the one that magnum took before the ctrl+c: the
+  snapshot's value, else the id that the session's row recorded. The id after the ctrl+c does not count,
+  because the ctrl+c first refreshes the recorded id from herdr. When herdr gave a terminal, it is the same.
+  Last, right before the key, magnum reads the pane's visible screen. The screen must show no dialog that
+  magnum knows: a trust dialog, a permission prompt, the hooks review or the model switch. The screen must
+  also show a bare composer (`bareComposer`). Anything else gets no key, and the park fails busy. It never
+  fails with a timeout, so the PR's next park stays plain. A screen that is not bare before the ctrl+c gets no
+  key at all. A screen that changes during the pause gets the ctrl+c alone. Magnum reads the bare composer
+  from the screen's structure alone. It splits the screen at LF and trims only the trailing whitespace of each
+  line. So a CRLF ending does not matter, and any other CR stays in the line. The bottom rule is the last
+  plain composer rule: a run of rule characters from column 0, without a label, at least 20 characters long.
+  Under it, magnum skips at most 6 status lines, and none of them can start with a prompt mark. The top rule
+  is the next composer rule above it. It can carry a label, such as the session's name, and a closing run
+  (`──── PR #12051 claude-review - talkable ─`). Its whole line, label included, is at least 20 characters
+  long, so a short typed `───` is content. The region between the two rules must hold exactly one line. That
+  line must be a prompt mark alone (`❯`, `>` or `›`, maybe between spaces). A session that magnum prompted
+  shows a bare `❯` after its turn, as the panes of talkable#12051 did. Two real idle panes of Claude 2.1.303,
+  read from the screen, are test fixtures that must send. One is 113 columns wide: its top rule is 74 rule
+  characters, the label and one closing rule character, its bottom rule is 113 characters, and two status
+  lines follow. The other is the 53-column pane of talkable#12051: its top rule starts with only 16 rule
+  characters, and three status lines and a trailing blank line follow. If a later layout differs, the early
+  park fails busy and sends nothing. This check is stricter than `composerEmpty`, which the permission code
+  keeps. That check accepts Claude's dimmed placeholder (`Try "…"`), and a screen read cannot tell the
+  placeholder from typed text. It looks at the prompt line alone, so it misses a draft of several lines and a
+  pasted block on a continuation line. Its trimming of box characters also removes typed ones, so `❯ ─` reads
+  as `❯`. Review found false accepts in two earlier strict versions. The first scanned up to the last prompt
+  line and then down to the next rule. It accepted a draft whose continuation line was a prompt mark, a stale
+  prompt above a second rule, and typed box or rule characters. The second took any rule as the bottom rule,
+  skipped any status line and removed every CR. It accepted a labelled rule as the bottom rule above a draft
+  line, and a CR before the prompt mark. Then magnum sends the kind's exit keys and waits up to 10 s for an
+  idle shell. The send and the wait are the hard quit's own (`sendExitKeys`, split out of `forceQuit`).
+  Nothing is forced. An agent that the exit keys do not quit stays live with `ErrBusy` and herdr's timeout.
+  Nothing is closed, and the agent waits for the PR's park as before. A kind without `exit_keys` (Codex by
+  default, or Claude set to `[]`) keeps the two ctrl+c. A session that records no pane keeps them too. When
+  the exit keys quit the agent, its `pr.session_parked` says "quit with its exit keys". Two residual risks
+  stay, and they are accepted. The check reads only the screen, and herdr's send-keys has no conditional
+  delivery. First, the pane can change between the last screen read and a key, which is one herdr round trip.
+  If the agent exited in that gap, zsh gets `/exit` and answers "no such file or directory", which does no
+  harm. If the agent started a turn in that gap, the keys queue, and Claude exits after the turn. The observer
+  then records the session lost, and its conversation stays resumable. A dialog that appears in that gap takes
+  the keys, and its default option can take the enter. Second, someone can type text during the one-second
+  pause. Text shaped like the CLI's own borders (a long run from column 0, or a labelled run) can make the
+  composer look bare. Every claude role in `config.defaults.toml` (claude-review, claude-simplify,
+  claude-judge, claude-fix and claude-whiteboard) runs the claude kind. For a plain binary, the kind's
+  built-in args carry `--dangerously-skip-permissions`. No role sets a permission mode, and the own args of
+  claude-whiteboard add only `--mcp-config`. `magnum doctor` fails a plain binary whose claude roles lack the
+  flag. A zsh wrapper replaces those args with its own flags, which the doctor does not read. With that flag,
+  Claude asks only in the few cases where it asks anyway. An example is the dangerous `rm` that blocked a
+  round (`claudeRmPrompt` in the permission tests). Such a dialog needs a tool call inside that gap, from a
+  turn of the agent or of a background agent. The hard park (`forceQuit`) has the same exposure without any of
+  these checks. It types the exit keys at a fresh start's second try and at an abort's last try (since
+  2026-10-15). It also types them at the idle park's hard mode (since 2026-10-17). Why exit keys and not
+  another gap between two ctrl+c: the gap that Claude takes as a double ctrl+c is not documented, and it
+  changed between versions. `/exit` is the CLI's own command, and it parked #11932 at once. `Quit` (the
+  cold-judge rule's quit), the PR's `Park` and `ParkHard` do not change. The same flaw probably affects `Quit`
+  for a Claude judge. That is left for a follow-up with measurements. Rejected alternatives follow. Exit keys
+  without the ctrl+c: the tested sequence is one ctrl+c and then `/exit`, and the ctrl+c also clears a line
+  typed after the first look. Exit keys without the look: they can go into the shell that an agent left, into
+  a command, into a draft or into another conversation. A close of the pane after exit keys that did not quit
+  the agent: the early park forces nothing, and the PR's park and its hard mode stay.
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and

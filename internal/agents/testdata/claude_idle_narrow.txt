@@ -1,0 +1,7 @@
+
+──────────────── PR #12051 claude-review - talkable ─
+❯
+─────────────────────────────────────────────────────
+  Opus 5.5 | talkable.review6@HEAD | 196k/1m (19%)…
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · …
+             new task? /clear to save 196.7k tokens

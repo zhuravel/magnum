@@ -1417,18 +1417,18 @@ func (m *Manager) ParkSessions(ctx context.Context, pr store.PR, ids []int64) (p
     refuses, before it quits any, a selected session with no conversation to
     resume (resumable): only a conversation the next round resumes is worth an
     early park. A selected session whose agent herdr no longer lists is parked
-    without a key when its pane is an idle shell (ErrBusy, before any key, when
-    the pane runs something). Each selected agent herdr lists is quit as Quit
-    does (ctrl+c, 1 s, ctrl+c, the wait for an idle shell; never the hard mode:
-    one that does not quit stays live with ErrBusy and waits for the PR's park).
-    Once its pane is an idle shell, that pane is closed and then the session
-    is parked (parkOne); a pane the close refuses or herdr fails to close
-    is left for a later CloseRetiredPanes, the session parked all the same.
-    The workspace stays while other panes live. Ids of sessions no longer
-    live are skipped. Each session's park records its begin, ok and fail
-    (EventSessionParkBegin ...), and a failure does not stop the other sessions:
-    parked are the sessions it parked, and the failures come back joined beside
-    them.
+    without a key when its pane is an idle shell (ErrBusy, before any key,
+    when the pane runs something). Each selected agent herdr lists is quit by
+    earlyQuit (one ctrl+c and its kind's exit keys, a kind without them two
+    ctrl+c, then the wait for an idle shell; never the hard mode: one that does
+    not quit stays live with ErrBusy and waits for the PR's park). Once its
+    pane is an idle shell, that pane is closed and then the session is parked
+    (parkOne); a pane the close refuses or herdr fails to close is left for a
+    later CloseRetiredPanes, the session parked all the same. The workspace
+    stays while other panes live. Ids of sessions no longer live are skipped.
+    Each session's park records its begin, ok and fail (EventSessionParkBegin
+    ...), and a failure does not stop the other sessions: parked are the
+    sessions it parked, and the failures come back joined beside them.
 
 func (m *Manager) Preflight(ctx context.Context, kind string) error
     Preflight checks that the agent CLI of kind is logged in before a start or
@@ -4113,9 +4113,13 @@ type Kind struct {
 	// them (key combos: a printable key, "enter", "esc", "ctrl+d"), when
 	// the agent is still the pane's foreground process two ctrl+c after
 	// magnum asked it to quit; the pane is closed alone when it is still
-	// not an idle shell after them (agents.Manager.ParkHard). claude:
-	// "/exit" then enter, one key each (send-keys takes no word). Empty =
-	// the hard quit goes straight to the close.
+	// not an idle shell after them (agents.Manager.ParkHard). The idle
+	// park's early park (agents.Manager.ParkSessions) sends them a second
+	// after one ctrl+c, only when herdr shows the session's own
+	// conversation idle in the pane and its screen a bare prompt and no
+	// dialog, and closes nothing they leave running. claude: "/exit" then
+	// enter, one key each (send-keys takes no word). Empty = the hard quit
+	// goes straight to the close, and the early park sends two ctrl+c.
 	ExitKeys []string `toml:"exit_keys"`
 	// ContextPattern reads how full a session's context is from its pane's
 	// status lines (agents.Manager.ContextUsed): a Go regexp with a capture

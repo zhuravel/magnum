@@ -55,31 +55,10 @@ func (m *Manager) quit(ctx context.Context, s store.Session, hard bool) error {
 // forceQuit goes on from there); a pane or agent already gone counts as
 // quit.
 func (m *Manager) interrupt(ctx context.Context, s *store.Session) (waited, err error) {
-	if sid, err := m.RecordSessionID(ctx, *s); err == nil && sid != "" {
-		s.SessionID = &sid
+	if gone, err := m.ctrlC(ctx, s, 2); err != nil || gone {
+		return nil, err
 	}
-	pane := store.Deref(s.HerdrPaneID)
-	send := func() error {
-		if pane != "" {
-			return m.d.Herdr.PaneSendKeys(ctx, pane, "ctrl+c")
-		}
-		return m.d.Herdr.AgentSendKeys(ctx, target(*s), "ctrl+c")
-	}
-	gone := false
-	for i := 0; i < 2 && !gone; i++ {
-		if i > 0 {
-			if err := m.sleep(ctx, time.Second); err != nil {
-				return nil, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
-			}
-		}
-		if err := send(); err != nil {
-			if !isGone(err) {
-				return nil, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
-			}
-			gone = true
-		}
-	}
-	if !gone && pane != "" {
+	if pane := store.Deref(s.HerdrPaneID); pane != "" {
 		if _, err := m.d.Herdr.WaitIdleShell(ctx, pane, QuitIdleTimeout); err != nil && !isGone(err) {
 			if !herdr.IsTimeout(err) {
 				return nil, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
@@ -88,6 +67,37 @@ func (m *Manager) interrupt(ctx context.Context, s *store.Session) (waited, err 
 		}
 	}
 	return nil, nil
+}
+
+// ctrlC records the session id of s first (s.SessionID too), then sends n
+// ctrl+c 1 s apart to its pane, or to its agent when it records no pane
+// (interrupt, the early park's earlyQuit). gone: herdr no longer has the
+// pane or the agent, which counts as quit.
+func (m *Manager) ctrlC(ctx context.Context, s *store.Session, n int) (gone bool, err error) {
+	if sid, err := m.RecordSessionID(ctx, *s); err == nil && sid != "" {
+		s.SessionID = &sid
+	}
+	pane := store.Deref(s.HerdrPaneID)
+	for i := range n {
+		if i > 0 {
+			if err := m.sleep(ctx, time.Second); err != nil {
+				return false, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+			}
+		}
+		var err error
+		if pane != "" {
+			err = m.d.Herdr.PaneSendKeys(ctx, pane, "ctrl+c")
+		} else {
+			err = m.d.Herdr.AgentSendKeys(ctx, target(*s), "ctrl+c")
+		}
+		switch {
+		case isGone(err):
+			return true, nil
+		case err != nil:
+			return false, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+		}
+	}
+	return false, nil
 }
 
 // quitBusy is the failure of a quit whose pane was still no idle shell
@@ -108,23 +118,16 @@ func quitBusy(s store.Session, waited error) error {
 // does.
 func (m *Manager) forceQuit(ctx context.Context, s store.Session, pane string, waited error) error {
 	if k, ok := m.kindSpec(m.sessionKind(s)); ok && len(k.ExitKeys) > 0 {
-		err := m.d.Herdr.PaneSendKeys(ctx, pane, k.ExitKeys...)
+		sent, timedOut, err := m.sendExitKeys(ctx, pane, k.ExitKeys)
 		switch {
-		case isGone(err):
+		case err == nil && timedOut == nil:
 			return m.retire(ctx, s)
-		case err != nil && ctx.Err() != nil:
+		case err != nil && (sent || ctx.Err() != nil):
 			return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
 		case err != nil: // keys herdr refused (invalid_key, say): the close is all that is left
 			m.logErr(ctx, err, "agents: exit keys to %s pane %s of session %d: %v", s.Role, pane, s.ID, err)
 		default:
-			_, err := m.d.Herdr.WaitIdleShell(ctx, pane, QuitIdleTimeout)
-			switch {
-			case err == nil, isGone(err):
-				return m.retire(ctx, s)
-			case !herdr.IsTimeout(err):
-				return fmt.Errorf("agents: quit session %d: %w", s.ID, err)
-			}
-			waited = err
+			waited = timedOut
 		}
 	}
 	if err := m.d.Herdr.PaneClose(ctx, pane); err != nil && !isGone(err) {
@@ -137,6 +140,28 @@ func (m *Manager) forceQuit(ctx context.Context, s store.Session, pane string, w
 		fmt.Sprintf("%s did not quit: %s (pane %s)", s.Role, parkForcedCause, pane),
 		map[string]any{"role": s.Role, "pane": pane, "cause": parkForcedCause})
 	return nil
+}
+
+// sendExitKeys sends keys, the exit keys of a session's kind, to pane and
+// waits up to QuitIdleTimeout for it to be an idle shell again (forceQuit,
+// the early park's earlyQuit): waited is herdr's timeout when it is still
+// none, and a pane gone counts as quit. err is herdr's refusal of the keys
+// (sent false: the wait never ran) or a wait that failed otherwise (sent).
+func (m *Manager) sendExitKeys(ctx context.Context, pane string, keys []string) (sent bool, waited, err error) {
+	if err := m.d.Herdr.PaneSendKeys(ctx, pane, keys...); err != nil {
+		if isGone(err) {
+			return true, nil, nil
+		}
+		return false, nil, err
+	}
+	_, err = m.d.Herdr.WaitIdleShell(ctx, pane, QuitIdleTimeout)
+	switch {
+	case err == nil, isGone(err):
+		return true, nil, nil
+	case herdr.IsTimeout(err):
+		return true, err, nil
+	}
+	return true, nil, err
 }
 
 // retire parks a resumable agent session (see resumable) and closes

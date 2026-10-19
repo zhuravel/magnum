@@ -698,10 +698,15 @@ the reviewers park alone, their panes closed and the workspace kept, and `pr.par
 with the threshold it idled past, with `"partial": true`, and says which agent stays until when; at
 `judge_fresh_after` the PR's park takes the judge, the `codex-review` shell and the workspace. Only an agent
 whose conversation can be resumed (herdr reported its session id) parks early: one without waits for the
-PR's park. An early park ends as the PR's park does: the agent is quit until its pane is an idle shell, its
-pane is closed and only then is the session parked, a pane that runs something by then being left for a
-later close; each session's park records `pr.session_park_begin`, then `pr.session_parked` or
-`pr.session_park_failed`. This
+PR's park. An early park quits the agent with one ctrl+c and a second later its kind's `exit_keys`
+(Claude: `/exit`). Before each of these keys, herdr must still show the session's own conversation idle in
+that pane, and a read of the screen right before the key must show no dialog and the composer, the one line
+between its two rules, as a bare prompt mark (nothing typed, no placeholder, no draft). Otherwise nothing
+more is sent (a screen that is not bare at the start gets no key at all), the park fails busy and the
+session waits for the PR's park. A kind without `exit_keys` gets two ctrl+c. It ends as the PR's park
+does: once the pane is an idle shell, the pane is closed and only then is the session parked, a pane that
+runs something by then being left for a later close; each session's park records `pr.session_park_begin`,
+then `pr.session_parked` ("quit with its exit keys" when they quit it) or `pr.session_park_failed`. This
 covers a reviewed PR, an ineligible one (a draft, a mute or a skip after its review), and a PR whose review
 or re-review waits behind `magnum pause`, a drain, the daily cap, or anything else that ends more than
 `park_idle_after` from now. A PR that needs attention keeps its agents, since its pane shows what went
@@ -714,10 +719,11 @@ fails, for example because an agent does not quit on ctrl+c, is not tried on eve
 twice as long as the last wait: two ticks after the first failure, then four, eight and so on, up to 12
 hours. A new round of the PR or a change in its sessions starts the wait over, and so does the PR's park
 after an early park failed, so a reviewer that will not quit does not hold the judge's park. An early park
-never uses the hard mode: an agent that ignores its ctrl+c waits for the PR's park. The first failure of each
-cause records a `pr.park_failed` warning with the cause's class (`quit_timeout`, `busy`, `herdr` or
-`error`) and the wait. Later failures of the same cause record nothing, and a park that works records
-`pr.parked` as usual. A park that cannot quit one agent still quits the PR's others and reports the
+never uses the hard mode: an agent that ignores its exit keys too stays live, nothing closed, and waits for
+the PR's park. The first failure of each cause records a `pr.park_failed` warning with the cause's class
+(`quit_timeout`, `busy`, `herdr` or `error`) and the wait. Later failures of the same cause record
+nothing, and a park that works records `pr.parked` as usual. A park that cannot quit one agent still quits
+the PR's others and reports the
 failures together. When the failure was an agent that did not quit (`quit_timeout`), the idle park's next
 try, once the wait has passed, parks in the hard mode described below, and its `pr.parked` event says
 "(hard: an agent did not quit at the plain park)". A failure of another class keeps the plain park, and a
