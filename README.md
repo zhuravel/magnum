@@ -2020,8 +2020,11 @@ What an author gets, every review alike:
   (`This PR introduced it: on master, <result>; with this PR, <result>.`); **Fix** with the code cause, one
   smallest safe change, the behaviour it must keep and what it costs (the lines it touches, what it could
   break; the cost never lowers the priority), any code in it run with the reproduction before it is posted
-  (a `suggestion` is only ever the code fix). A P3's title ends "(optional, no reply needed)"; a
-  re-review's finding in code written to fix an earlier one ends "(in the fix for <earlier title>)".
+  (a `suggestion` is only ever the code fix). When that change would restore what the PR or a merged
+  related PR removed or replaced on purpose, or two plausible fixes differ in what users get, **Fix** names
+  the options, each with what it keeps and costs, and ends "This is the author's call.", at the same
+  priority. A P3's title ends "(optional, no reply needed)"; a re-review's finding in code written to fix an
+  earlier one ends "(in the fix for <earlier title>)".
 - **The description's claims checked**: a false claim that bears on risk (a ticked "Can be reverted
   easily" whose previous release cannot run on the new schema or the jobs queued meanwhile) is a finding
   at its priority; one without impact is one body line, `Description: ✗ <claim>: <why>`; a true claim
@@ -2189,8 +2192,9 @@ its "Fixed in" reply names that spec ("`<spec>` fails without it"). Every reply 
 `<!-- magnum:fix -->`: the fixer replies as you, and the marker is how the retro tells its choices from yours
 (Learning from other reviewers, below). It resolves the threads it fixed. It answers an optional finding (a P3 or a simplification) that it
 declines. It does not answer a blocking finding (P0 to P2) that it declines, nor any finding it cannot decide
-from the code. Those go under `Needs you` in its report, so the call stays yours, and so does a finding it
-fixed and pushed but could not answer (its thread is one a human started, or its reply failed); each entry
+from the code, which a finding whose **Fix** ends "This is the author's call." always is: the fixer never
+picks one of its options, and its entry asks which to take. Those go under `Needs you` in its report, so
+the call stays yours, and so does a finding it fixed and pushed but could not answer (its thread is one a human started, or its reply failed); each entry
 says `fixed in <sha7>.` or `not fixed.` after the finding's place. It never touches a thread
 a human started, never force-pushes or rebases, never touches another branch, and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
 

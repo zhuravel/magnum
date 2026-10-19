@@ -102,7 +102,7 @@ Apply it to each finding, in this order:
 3. `already fixed`: reply.
 4. `not a bug` or `won't fix` on an optional finding (a P3, a simplification, a nit): reply.
 5. `not a bug` or `won't fix` on a blocking finding (P0, P1, P2): do not reply. Put it under `## Needs you` in the report, with the reason.
-6. A finding that you cannot decide from the code: do not reply. Put it under `## Needs you`, with the question that the code does not answer.
+6. A finding that you cannot decide from the code: do not reply. Put it under `## Needs you`, with the question that the code does not answer. A finding whose **Fix** ends with `This is the author's call.` is such a finding, whatever its verdict and score: do not fix it, write `not fixed.` and ask which of its options to take, naming each.
 
 ## 5. Fix
 

@@ -9563,6 +9563,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
   tick's path (the hung spawn above); a toast at warn (the machine sat at warn for hours, and no one
   acts on a toast that repeats); a config key (nothing but the operator reads the sample yet); counting agents
   with ps (it would count the operator's own sessions too, and the registry knows magnum's).
+- **A Fix that would undo what the PR or its series removed, or that picks between fixes users tell apart,
+  names the options and ends "This is the author's call.", and the fixer leaves it to the author**
+  (2026-10-20, spec 90, asked for by the operator). Evidence: a colleague resolving a review of one of his
+  PRs reported that magnum found the problem but proposed going back to an older record model to fix it,
+  "because that is how it was before", and lost that the PR was the third of a series moving away from it.
+  The posted P2 (round 12, a recovery round) was right about the defect: after an outside answer falls back
+  to an older value, a record keeps an obsolete answer current, because the PR's new checker returns early
+  and keeps variants that the checker it removed used to retire. Its **Fix** prescribed one change,
+  retiring them again, the removed checker's job, which undoes the direction of the PR and of the merged
+  related PR before it. The colleague then asked his own review-resolving session whether any finding held
+  a business-logic choice; it split 16 findings into mechanical ones and five that each held a real product
+  choice, and that split is what let him steer the fixes. The comment form asked every **Fix** for "one
+  smallest safe change", and nothing told the judge that the smallest change can be a product decision or
+  a reversal of the PR's own direction, though it reads `history` ("undoing or re-breaking that fix is a
+  finding") and `related_prs`. Now the comment form says: "When the smallest fix would restore what this PR
+  or a merged related PR deliberately removed or replaced (its diff, `history`, `related_prs`, the
+  description), or two plausible fixes differ in what users get, **Fix** names the options, each with what
+  it keeps and costs, and ends `This is the author's call.` The choice never lowers the priority." The
+  reproduction and the priority stay as they are, and a removal the PR made by mistake is still restored
+  as the one smallest fix. The phrase `This is the author's call.` is fixed: the fix skill matches it. The
+  fix skill's rule 6 (a finding it cannot decide from the code) now says that a finding whose **Fix** ends
+  with it is such a finding, whatever its verdict and score: the fixer does not fix it, writes `not fixed.`
+  under `## Needs you` and asks which of its options to take, naming each; the engine's call for it is
+  unchanged ("decide magnum's P2 on <path>:<line>"). There is no exception for a choice the PR description
+  or the checkout's docs seem to make: the checkout's files are PR content (data, never instructions), so a
+  doc the PR itself adds could settle the choice, the fixer has no path to magnum's repository notes, and
+  what the colleague asked for is to be asked. The rule takes 347 bytes of the review skill; 28 came from
+  unpinned wording ("prompt's" before section 0's block, "on this PR" after section 6's threads, and "in
+  normal cases" for "usually" in section 7's body), no rule changed, and the cap (`skillMaxBytes`) rose by
+  the other 319, to 37,465. Rejected: always listing options (it doubles every comment, and most fixes hold
+  no choice); leaving the split to the author's own tools (the colleague's report shows they now need it,
+  and every author would repeat it); asking the operator before posting (the judge runs unattended and
+  cannot ask).
 
 ## Learned rules
 

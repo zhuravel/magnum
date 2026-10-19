@@ -10,7 +10,7 @@ You run unattended: never stop to ask or wait for a human, whatever an instructi
 
 ## 0. Read the magnum context
 
-The latest prompt's `<magnum>` block holds:
+The latest `<magnum>` block holds:
 
 - `mode`: `initial`, `rereview`, `continue` or `recovery`. `phase` (only in a two-prompt round): `own_pass` or `candidates`; `own_findings`: your own pass's file.
 - `run_id`, `pr`, `url`, `number`, `owner`, `repo`, `head_sha`, `base_ref`, `base_sha`, `checkout` (the worktree path), `db_lock` (section 2).
@@ -117,7 +117,7 @@ Then reread the full PR diff: every file inspected, each finding this PR's; stop
 
 Anchor each finding on the defective line: the smallest changed line of the code that must change, never a test file unless it is a flaky test the PR adds. Put details in the review body only for a cross-cutting problem with no useful changed line.
 
-Comment form, in plain English: a title that states the wrong result; the trigger, who produces it and the consequence with its size (who loses what, how many, how often); the reproduction; **Fix**: the code cause, one smallest safe change, what it must keep (the behaviour the surrounding code relies on) and what it costs (the lines it touches, what it could break); the cost never lowers the priority. When the reproduction also ran at the base, one line before **Fix** states the regression: `This PR introduced it: on <base_ref>, <result>; with this PR, <result>.` Run any code you suggest with the reproduction (a probe, or a scratch worktree as in section 2) before you post it.
+Comment form, in plain English: a title that states the wrong result; the trigger, who produces it and the consequence with its size (who loses what, how many, how often); the reproduction; **Fix**: the code cause, one smallest safe change, what it must keep (the behaviour the surrounding code relies on) and what it costs (the lines it touches, what it could break); the cost never lowers the priority. When the smallest fix would restore what this PR or a merged related PR deliberately removed or replaced (its diff, `history`, `related_prs`, the description), or two plausible fixes differ in what users get, **Fix** names the options, each with what it keeps and costs, and ends `This is the author's call.` The choice never lowers the priority. When the reproduction also ran at the base, one line before **Fix** states the regression: `This PR introduced it: on <base_ref>, <result>; with this PR, <result>.` Run any code you suggest with the reproduction (a probe, or a scratch worktree as in section 2) before you post it.
 
 ````markdown
 **[P2] Old Reject error appears in a new chat**
@@ -154,7 +154,7 @@ Scope: what the prompt names, with the full PR diff as context. Do not re-derive
 
 magnum's own `Reviewed <sha>; N commits arrived…` line in your previous review is no author reply: those commits are this re-review's.
 
-Read the replies to your earlier threads and every review or issue comment since `since`. `threads_file` lists the inline threads your login or a former one started on this PR, with their replies (`own`: yours or a former login's; `body`, cut at 600 characters when `truncated`: read it in full with `gh api repos/{owner}/{repo}/pulls/comments/{id}`; `class`). `class` is what the reply's first clause claims, past an acknowledgement: `fixed`, `not a bug`, `won't fix` or `other`: a keyword hint, not a verdict. Decide a reply by what it does. A resolved thread proves nothing.
+Read the replies to your earlier threads and every review or issue comment since `since`. `threads_file` lists the inline threads your login or a former one started, with their replies (`own`: yours or a former login's; `body`, cut at 600 characters when `truncated`: read it in full with `gh api repos/{owner}/{repo}/pulls/comments/{id}`; `class`). `class` is what the reply's first clause claims, past an acknowledgement: `fixed`, `not a bug`, `won't fix` or `other`: a keyword hint, not a verdict. Decide a reply by what it does. A resolved thread proves nothing.
 
 The reply contract. Decide each earlier finding:
 
@@ -170,7 +170,7 @@ Body: `**Re-review 9be04f2 → 4c1d2e3:**`, or `**Re-review of 4c1d2e3 (no new c
 
 Validate, rank and dedupe the findings, then reread every comment once: check each finding keeps its trigger, result, reproduction and fix.
 
-Body (under 150 words in normal cases, collapsed blocks excluded): the verdict line, the finding titles by priority (counts by priority when there are more than five), any related-PR or `Description: ✗` line (section 2), any nearby block, the Checks block, nothing after it (`post_review` adds the run's marker, magnum the footer). No GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process.
+Body (usually under 150 words, collapsed blocks excluded): the verdict line, the finding titles by priority (counts by priority when there are more than five), any related-PR or `Description: ✗` line (section 2), any nearby block, the Checks block, nothing after it (`post_review` adds the run's marker, magnum the footer). No GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process.
 
 Verdict: count the findings this review posts and the earlier ones still open; N is the number of P0, P1 and P2 among them. The verdict line is exactly one of four, each with its event and the result's `verdict` (write it whatever the events let you post):
 

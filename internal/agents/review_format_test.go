@@ -527,8 +527,14 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // (240), a state that never shipped (280), the edge classes of a changed
 // predicate (274), an unrun suite in the clean line (214), the ledger's
 // `reason` with its example (153) and the evidence's leads (39).
+// Then 37,465 for a Fix that would restore what the PR or a merged related
+// PR removed on purpose, or that picks between fixes users tell apart: it
+// names the options and ends with the author's call (2026-10-20: 347
+// bytes), less 28 of unpinned wording: "prompt's" before section 0's block
+// (9), "on this PR" after section 6's threads (11) and section 7's "in
+// normal cases" for "usually" (8).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 37146
+const skillMaxBytes = 37465
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -1862,6 +1868,22 @@ func TestSkillStatesARegressionAgainstTheBase(t *testing.T) {
 	skillSays(t, []string{
 		"When the reproduction also ran at the base, one line before **Fix** states the regression: " +
 			"`This PR introduced it: on <base_ref>, <result>; with this PR, <result>.`",
+	}, nil)
+}
+
+// On a colleague's PR the judge's Fix restored what the PR and a merged
+// related PR before it had removed (an older record model), and the author
+// had to ask his own tools which fixes held a product choice: a Fix that
+// would undo what the PR or its series removed or replaced on purpose, or
+// that picks between fixes users would tell apart, names the options and
+// leaves the choice to the author, at the same priority (2026-10-20). The
+// fix skill matches the closing phrase.
+func TestSkillLeavesAFixThatUndoesThePRsDirectionToTheAuthor(t *testing.T) {
+	skillSays(t, []string{
+		"When the smallest fix would restore what this PR or a merged related PR deliberately removed or replaced " +
+			"(its diff, `history`, `related_prs`, the description), or two plausible fixes differ in what users get, " +
+			"**Fix** names the options, each with what it keeps and costs, and ends `This is the author's call.`",
+		"The choice never lowers the priority.",
 	}, nil)
 }
 

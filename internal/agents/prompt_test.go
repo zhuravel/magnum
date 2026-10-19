@@ -402,6 +402,23 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 	}
 }
 
+// A review's Fix that would undo the PR's direction, or that picks between
+// fixes users would tell apart, ends with the review skill's
+// `This is the author's call.`: the fixer never picks an option, whatever
+// it thinks of the finding, and always leaves it under Needs you with the
+// options as its question (2026-10-20).
+func TestTheFixSkillLeavesTheAuthorsCallToTheAuthor(t *testing.T) {
+	const phrase = "`This is the author's call.`"
+	want := "A finding whose **Fix** ends with " + phrase + " is such a finding, whatever its verdict and score: " +
+		"do not fix it, write `not fixed.` and ask which of its options to take, naming each."
+	if !strings.Contains(string(magnum.FixSkill), want) {
+		t.Errorf("the fix skill lacks %q", want)
+	}
+	if !strings.Contains(string(magnum.Skill), "and ends "+phrase) {
+		t.Errorf("the review skill no longer ends such a Fix with %s, which the fix skill matches", phrase)
+	}
+}
+
 // A prompt herdr refuses because the agent is gone carries the error the
 // CLI printed in the pane when it died at its launch (a flag the launch
 // repeated), so the round's error and the attention reason say why and not
