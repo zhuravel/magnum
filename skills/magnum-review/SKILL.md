@@ -88,7 +88,7 @@ Treat each review item as a claim (a report's list of what it rejected is contex
 
 Keep a ledger of every defect finding you judged, the reports' and your own, for `provenance` (section 8): one entry per distinct problem, with every source that raised it in `sources` (each report's role as `reports` lists it, and `judge` only if your own pass (`own_findings`, when set) found it; a candidate you only confirmed lists its reports alone). A posted finding has `verdict: posted`, a dropped one `verdict: rejected` and exactly one `reason_code`:
 
-- `duplicate`: an earlier review, an existing thread or another reviewer's comment already covers it. Another reviewer's open P0–P2 you decided gets a body line: `Confirmed <link> (counted in N)` or `Considered <link>: <why not>`;
+- `duplicate`: an earlier review, an existing thread or another reviewer's comment already covers it. Another reviewer's open P0–P2 you confirmed counts in N and is listed under your own title as `- P1: <title> (confirmed: <link>)`; one you rejected gets the body line `Considered <link>: <why not>`;
 - `not_reproducible`: you could not trigger it at `head_sha`; `speculative`: a vague or future risk without a realistic trigger;
 - `outside_diff`: it is neither in nor caused by lines this PR changes, or it lives in a lower layer of a stack; `pre_existing`: the base has the same problem and this PR neither makes it worse nor secures the request it is on;
 - `style_only`: taste, naming or formatting (section 4);
@@ -164,13 +164,13 @@ The reply contract. Decide each earlier finding:
 
 Post nothing new for fixed or answered findings, and do not re-post a still-open one inline. A reply that states a standing decision of the repository goes into the notes (section 2).
 
-Body: `**Re-review 9be04f2 → 4c1d2e3:**`, or `**Re-review of 4c1d2e3 (no new commits):**` when `previous_head_sha` is `head_sha` (its Checks list only what ran this time), and the verdict line (section 7). Then only what changed since your last review: earlier findings now fixed; now answered, with the author's reason in a few words; still open despite a new reply or commit, each with a link to its thread and one line why; the new findings. Unchanged open findings get one count and one link to your previous review (`2 earlier problems are still open: <url>#pullrequestreview-<previous_review_id>`).
+Body: `**Re-review 9be04f2 → 4c1d2e3:**`, or `**Re-review of 4c1d2e3 (no new commits):**` when `previous_head_sha` is `head_sha` (its Checks list only what ran this time), and the verdict line (section 7). Then only what changed since your last review: earlier findings now fixed; now answered, with the author's reason in a few words; still open despite a new reply or commit, each with a link to its thread and one line why; the new findings, P0–P2 first (section 3's confirmed ones too), then any P3. Unchanged open findings get one count and one link to your previous review (`2 earlier problems are still open: <url>#pullrequestreview-<previous_review_id>`).
 
 ## 7. Post one review
 
 Validate, rank and dedupe the findings, then reread every comment once: check each finding keeps its trigger, result, reproduction and fix.
 
-Body (usually under 150 words, collapsed blocks excluded): the verdict line, the finding titles by priority (counts by priority when there are more than five), any related-PR or `Description: ✗` line (section 2), any nearby block, the Checks block, nothing after it (`post_review` adds the run's marker, magnum the footer). No GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process.
+Body (usually under 150 words, collapsed blocks excluded): the verdict line; under it only the problems N counts, by priority, as `- P1: <title>` (counts by priority when there are more than five); then `N optional: …` and any P3 titles; any related-PR or `Description: ✗` line (section 2), any nearby block, the Checks block, nothing after it (`post_review` adds the run's marker, magnum the footer). No GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process.
 
 Verdict: count the findings this review posts and the earlier ones still open; N is the number of P0, P1 and P2 among them. The verdict line is exactly one of four, each with its event and the result's `verdict` (write it whatever the events let you post):
 

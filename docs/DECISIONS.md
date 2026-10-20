@@ -9596,6 +9596,43 @@ skill versions); people add theirs to the sections before it, at the end of the 
   no choice); leaving the split to the author's own tools (the colleague's report shows they now need it,
   and every author would repeat it); asking the operator before posting (the judge runs unattended and
   cannot ask).
+- **Under the verdict line the review body lists only the problems the verdict counts, each with its
+  priority, and another reviewer's thread the judge confirmed is one of them** (2026-10-20, spec 91, asked
+  for by the operator). Evidence: on talkable#12048 (head 403b9c2, round 1, posted with changes requested
+  at 18:02 UTC) the reviewers and the judge's own pass all found the blocking defect (`member.campaign ||=
+  last_campaign` is saved by `collect_points`, so a member the campaign refresh removed can earn in the old
+  campaign again). The judge confirmed it at P1, but a code-review bot had posted it at 17:21, so it
+  followed section 3's duplicate rule ("Another reviewer's open P0–P2 you decided gets a body line:
+  `Confirmed <link> (counted in N)`") and posted no comment. The body read "Blocking: 2 problems must be
+  fixed before merging." over "- P2: Corrections during a campaign launch grant an unearned tier." and "-
+  P3: No-campaign refusals change status and message.", then "5 optional: 2 P3, 3 simplifications." and
+  "Confirmed [the existing campaign-eligibility finding](…) (counted in 2).": the list under "Blocking: 2
+  problems" showed a P2 and a P3, and the P1 that made the review blocking was an unnamed link three lines
+  below. The operator read it as magnum missing the defect, and another reviewer's tool posted it a third
+  time at 18:31. Section 7 asked for "the finding titles by priority", which put every posted title, P3
+  included, under the verdict line. Now section 7's body reads "the verdict line; under it only the
+  problems N counts, by priority, as `- P1: <title>` (counts by priority when there are more than five);
+  then `N optional: …` and any P3 titles; ...", and section 3's duplicate rule "Another reviewer's open
+  P0–P2 you confirmed counts in N and is listed under your own title as `- P1: <title> (confirmed:
+  <link>)`; one you rejected gets the body line `Considered <link>: <why not>`": the `Confirmed <link>
+  (counted in N)` form is gone, and `Considered` stays a line of its own. A re-review keeps section 6's
+  order (earlier findings now fixed, now answered, still open despite a new reply or commit, then the new
+  findings; unchanged open ones as one count and one link to the previous review), since it reports what
+  changed since that review and listing every unchanged open finding again would repeat it; but its new
+  findings now put the counted ones first, a newly confirmed thread among them ("the new findings, P0–P2
+  first (section 3's confirmed ones too), then any P3."), so a confirmed thread cannot hide in a re-review
+  either. No Go code parses the title list or the Confirmed line, so none changed: the auto-approval reads
+  only the verdict line (`reviewVerdictLine`, the first line past a re-review's lead), the status comment
+  rebuilds its line from the result's counts (`store.ReviewSummary.VerdictWords`), post-review checks the
+  body only for the footer, local paths, its size and the run's marker, the retro reads threads and inline
+  comments, `magnum eval` scores the body as one text, and the fix skill reads it only for its
+  `Description: ✗` line and the threads it names as still open (a Confirmed line named the other
+  reviewer's thread as the new form does). The three changes take 211 bytes (80 for the body, 70 for the
+  duplicate rule, 61 for the re-review); spec 90 had already taken the unpinned wording that could go
+  without changing a rule, so the cap (`skillMaxBytes`) rose by all of it, from 37,465 to 37,676.
+  Rejected: posting a duplicate inline comment on the other reviewer's thread line (two threads for one
+  defect double the author's work); keeping the link line and adding a priority to it (the list under the
+  verdict line would still show a problem it does not count and miss the one that blocks).
 
 ## Learned rules
 

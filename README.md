@@ -55,7 +55,8 @@ subscriptions you already have, and every agent works in a herdr pane you can wa
 ### What the author sees
 
 One review per round: a verdict line first (`Fix 1 problem before merging.`, or `No problems found.
-LGTM :shipit:`), then each finding as an inline comment on the line that must change, like this one:
+LGTM :shipit:`) with the problems it counts listed under it, then each finding as an inline comment on the
+line that must change, like this one:
 
 > **[P2] Old Reject error appears in a new chat**
 >
@@ -1854,8 +1855,9 @@ and how often the competing writer runs (seconds against a daily or rarer writer
 a loss that stays and matters beyond one record P2, and a failure a plain rerun clears is no broken
 migration or deploy); a recorded payload of an external system (the PR's QA evidence, fixtures, logs)
 outranks its docs, and a test double that produces a value the real component never sends proves
-nothing; another reviewer's open P0–P2 the judge decided gets a body line, `Confirmed <link> (counted in
-N)` or `Considered <link>: <why not>`; a caller the PR refuses that the base passes (an API key acting as
+nothing; another reviewer's open P0–P2 the judge confirmed is counted and listed in the body under the
+judge's own title, `- P1: <title> (confirmed: <link>)`, and one it rejected gets the line `Considered
+<link>: <why not>`; a caller the PR refuses that the base passes (an API key acting as
 a user included) is an authorization problem; the sinks of a value in a URL or header (analytics, error
 trackers, app logs, parameter filters, access logs, log shippers) are swept as one set; a probe only the
 review machine has gets a Checks line that says what it exercised, never its file name, and
@@ -2013,6 +2015,11 @@ What an author gets, every review alike:
   reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,
   and Checks names the missing reviewer. A PR the posting login (or the human behind it) opened gets
   `COMMENT` both ways, as a post-merge review does.
+- **Only the counted problems under it**, by priority, each as `- P1: <title>`; another reviewer's open
+  thread the judge confirmed is one of them, `- P1: <title> (confirmed: <link>)` under the judge's own
+  title. The optional count (`2 optional: 1 P3, 1 simplification.`) and any P3 titles come after them. A
+  re-review keeps its own order (fixed, answered, still open, new; unchanged open ones as one count and one
+  link), with the new ones' P0 to P2 before any P3.
 - **Each finding on the defective line**, the code that must change: a title that states the wrong result;
   the trigger, who can produce it and the concrete consequence with its size (who loses what, how many,
   how often); a test that proves it as a fenced block naming its spec file and line (the test the judge
@@ -2067,12 +2074,15 @@ Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-
 </details>
 ```
 
-One with findings starts with the verdict and the finding titles, and ends the same way:
+One with findings starts with the verdict and the problems it counts, then the optional ones, and ends the
+same way:
 
 ```markdown
-Fix 1 problem before merging. 1 optional: 1 simplification.
+Fix 1 problem before merging.
 
-- [P2] A retry sends the confirmation email twice
+- P2: A retry sends the confirmation email twice
+
+1 optional: 1 simplification.
 
 <details><summary>Checks (2 run)</summary>
 

@@ -532,9 +532,15 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // names the options and ends with the author's call (2026-10-20: 347
 // bytes), less 28 of unpinned wording: "prompt's" before section 0's block
 // (9), "on this PR" after section 6's threads (11) and section 7's "in
-// normal cases" for "usually" (8).
+// normal cases" for "usually" (8). Then 37,676 for the body's list of
+// counted problems (2026-10-20: 211 bytes, no unpinned wording left to
+// shorten without changing a rule): only the problems N counts under the
+// verdict line, each as `- P1: <title>`, then the optional count and any
+// P3 titles (80), another reviewer's confirmed one listed among them under
+// the judge's own title instead of a `Confirmed <link>` line (70), and a
+// re-review's new findings with the counted ones first (61).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 37465
+const skillMaxBytes = 37676
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -1688,10 +1694,30 @@ func TestSkillTakesARecordedPayloadOverAnExternalSystemsDocs(t *testing.T) {
 // A round proved a colleague's P1 with a spec, rejected it as a duplicate of
 // her thread and posted "Fix 1 problem"; the next round said LGTM. Another
 // PR's first round did the same with a P1 from the platform's changelog.
+// On talkable#12048 the judge confirmed a bot's P1 as the line `Confirmed
+// <link> (counted in 2)` three lines under "Blocking: 2 problems", whose list
+// showed a P2 and a P3 (2026-10-20): the confirmed one is now listed among
+// the counted problems, under the judge's own title.
 func TestSkillGivesAnotherReviewersFindingItDecidedABodyLine(t *testing.T) {
 	skillSays(t, []string{
-		"already covers it. Another reviewer's open P0–P2 you decided gets a body line: `Confirmed <link> (counted in N)` or `Considered <link>: <why not>`;",
-	}, nil)
+		"already covers it. Another reviewer's open P0–P2 you confirmed counts in N and is listed under your own title as " +
+			"`- P1: <title> (confirmed: <link>)`; one you rejected gets the body line `Considered <link>: <why not>`;",
+	}, []string{"`Confirmed <link> (counted in N)`"})
+}
+
+// On talkable#12048 the body listed every posted title under "Blocking: 2
+// problems", a P2 and a P3, while the P1 that made it blocking was only an
+// unnamed link three lines below, and the operator read it as a miss: under
+// the verdict line go only the problems the verdict counts, each with its
+// priority, and the optional count and the P3 titles after them
+// (2026-10-20). A re-review keeps section 6's order, but its new findings
+// list the counted ones, a newly confirmed thread among them, before any P3.
+func TestSkillListsOnlyTheCountedProblemsUnderTheVerdictLine(t *testing.T) {
+	skillSays(t, []string{
+		"the verdict line; under it only the problems N counts, by priority, as `- P1: <title>` (counts by priority when there are more than five); " +
+			"then `N optional: …` and any P3 titles;",
+		"each with a link to its thread and one line why; the new findings, P0–P2 first (section 3's confirmed ones too), then any P3.",
+	}, []string{"the finding titles by priority"})
 }
 
 // A PR was approved, and a colleague then found its new write gate refusing
