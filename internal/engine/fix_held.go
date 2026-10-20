@@ -54,7 +54,7 @@ var kindFixDropped = notify.Kind{One: "held fix dropped", Many: "held fixes drop
 // it is held already. A dry run (the request's or the daemon's) says it
 // would hold it and holds nothing.
 func (e *Engine) holdFix(ctx context.Context, pr store.PR, dry bool) (string, error) {
-	job, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin)
+	job, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, nil)
 	if err != nil {
 		return "", err
 	}
@@ -74,7 +74,7 @@ func (e *Engine) holdFix(ctx context.Context, pr store.PR, dry bool) (string, er
 	e.mu.Lock()
 	e.drainHeld[pr.ID] = true
 	e.mu.Unlock()
-	e.event(ctx, "info", job.subject(), "fix.held", fmt.Sprintf("magnum fix held: the daemon drains for a restart; after the restart, %s fixes %s if the review still stands",
+	e.event(ctx, "info", job.subject(), "fix.held", fmt.Sprintf("magnum fix held: the daemon drains for a restart; after the restart, %s %s if the review still stands",
 		job.role.Name, job.fixes()), map[string]any{"head": job.head, "by": fixBy})
 	return "held; " + stands + " (the daemon is draining)", nil
 }
@@ -141,7 +141,7 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 	case pr.HeadSHA != h.Head:
 		why = fmt.Sprintf("the head moved to %s since it was asked on %s", textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(h.Head))
 	default:
-		job, err := e.startFix(ctx, pr, cmp.Or(h.By, fixBy), FixState{})
+		job, err := e.startFix(ctx, pr, cmp.Or(h.By, fixBy), FixState{}, nil)
 		switch {
 		case err == nil:
 			e.log.Info("fix: the fix a drain held starts "+after, "subject", subject, "role", job.role.Name, "cycles", job.state.Cap)

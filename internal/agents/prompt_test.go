@@ -472,6 +472,64 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 	}
 }
 
+// A fix starts on a review that found nothing when another reviewer's
+// thread or comment waits for an answer (spec 96): its prompt says the
+// review found nothing and hands the fixer the external file's unanswered
+// items alone, with no "Fix the findings" to run, and the skill takes the
+// external items as the run's whole work, a checkout at the wrong head
+// leaving them to the author.
+func TestTheFixPromptOfAReviewThatFoundNothingHandsOverTheOtherReviewersAlone(t *testing.T) {
+	e := newEnv(t)
+	role := Role(config.RoleClaudeFix)
+	run, err := e.m.NewRun(e.ctx, e.pr, role, store.RunFix, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := FixPromptInput{
+		HeadRef:       "feature/coupon-expiry",
+		ReviewURL:     "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
+		ReviewFile:    "/state/reviews/talkable/talkable/11920/abc1234/review.json",
+		ExternalFile:  "/state/reviews/talkable/talkable/11920/abc1234/external-threads.json",
+		ReviewerLogin: "talkable[bot]",
+		DBLockCommand: "/opt/magnum/bin/magnum db-lock --checkout /p/talkable.review3 --role claude-fix --",
+		NoFindings:    true,
+	}
+	got, err := e.m.FixPrompt(e.pr, role, run, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"The review " + in.ReviewURL + ", which `" + in.ReviewerLogin + "` posted on " + e.pr.URL + ", found nothing to fix. " +
+			"Its event, body and comments are in " + in.ReviewFile + ".",
+		"The other reviewers' open threads, review bodies and comments on the PR are in " + in.ExternalFile +
+			": handle each of its items that nobody answered.",
+		"HEAD:" + in.HeadRef, ReportMarker(run.ID),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the fix prompt of a review that found nothing lacks %q:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{"Fix the findings", "after the review's findings"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("the fix prompt of a review that found nothing says %q:\n%s", gone, got)
+		}
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("the fix prompt is not one paragraph:\n%s", got)
+	}
+
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"When the prompt says that the review found nothing to fix, the external items are this run's whole work: judge, fix and answer them alone.",
+		"When the review found nothing to fix, list every unanswered item of the external file (step 6) under `## Needs you` instead, " +
+			"each as section 7 writes its entry, with that reason.",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+}
+
 // A review's Fix that would undo the PR's direction, or that picks between
 // fixes users would tell apart, ends with the review skill's
 // `This is the author's call.`: the fixer never picks an option, whatever

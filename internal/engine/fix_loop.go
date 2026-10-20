@@ -217,7 +217,7 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	case st.Cycle >= st.Cap:
 		e.endLoopForAttention(ctx, job, raw, "fix.capped", e.capMessage(ctx, job, res, found, left))
 	default:
-		_, err := e.startFix(ctx, job.pr, st.By, st)
+		_, err := e.startFix(ctx, job.pr, st.By, st, nil)
 		switch {
 		case err == nil:
 		case errors.Is(err, errFixLoopGone):
@@ -551,7 +551,7 @@ func (e *Engine) autofix(ctx context.Context, repo store.Repo, pr store.PR, res 
 		}
 		return
 	}
-	job, err := e.startFix(ctx, pr, autofixBy, FixState{})
+	job, err := e.startFix(ctx, pr, autofixBy, FixState{}, nil)
 	if err != nil {
 		e.log.Info("autofix: no fix loop started", "subject", subject, "why", err.Error())
 		return

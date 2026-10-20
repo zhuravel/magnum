@@ -380,7 +380,7 @@ func TestFixRefusals(t *testing.T) {
 		want     string
 	}{
 		{name: "no review", author: "zhuravel", want: "nothing to fix: no review on a1a1a1a"},
-		{name: "found nothing", author: "zhuravel", findings: map[string]int{}, want: "nothing to fix: the review on a1a1a1a found nothing and left nothing open"},
+		{name: "found nothing", author: "zhuravel", findings: map[string]int{}, want: othersOnly},
 		{name: "another author", author: "alice", findings: map[string]int{"P1": 1},
 			want: "PR #2 is alice's, not yours; the fixer pushes and replies as you"},
 		{name: "fork", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, pr store.PR) {
@@ -450,7 +450,7 @@ func TestAFixStartsOnAReviewThatKeepsAnEarlierFindingOpen(t *testing.T) {
 		fixablePROpen(h, "zhuravel", map[string]int{}, map[string]int{"P3": 1})
 		id := h.fix(FixPayload{})
 		h.handle()
-		if r, want := h.request(id), "nothing to fix: the review on a1a1a1a found nothing and left nothing open"; r.State != store.RequestFailed || deref(r.Result) != want {
+		if r, want := h.request(id), othersOnly; r.State != store.RequestFailed || deref(r.Result) != want {
 			t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
 		}
 		if h.ag.count("submit:") != 0 {

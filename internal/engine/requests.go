@@ -224,7 +224,9 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 	case ReqKick:
 		e.complete(ctx, req.ID, nil, "ok")
 	case ReqReview: // a whiteboard job yields to it (whiteboard.go)
-		answerYielding(e, ctx, req, "magnum review", e.requestReview)
+		answerYielding(e, ctx, req, "magnum review", func(ctx context.Context, p ReviewPayload, _ any) (string, error) {
+			return e.requestReview(ctx, p)
+		})
 	case ReqPin, ReqUnpin:
 		answer(e, ctx, req, func(ctx context.Context, p TargetPayload) (string, error) {
 			return e.requestPin(ctx, p, req.Kind == ReqPin)
@@ -238,7 +240,10 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 	case ReqCodexFlag: // codex_flag.go
 		answer(e, ctx, req, e.requestCodexFlag)
 	case ReqFix: // fix.go; a whiteboard job yields to it
-		answerYielding(e, ctx, req, fixBy, e.requestFix)
+		answerYielding(e, ctx, req, fixBy, func(ctx context.Context, p FixPayload, carry any) (string, error) {
+			read, _ := carry.(*externalRead) // the other reviewers' items it read before the yield
+			return e.requestFix(ctx, p, read)
+		})
 	case ReqWhiteboard: // whiteboard.go
 		if p, ok := payload[WhiteboardPayload](e, ctx, req); ok {
 			e.requestWhiteboardAsync(ctx, req.ID, p)
@@ -437,7 +442,7 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 		return "", fmt.Errorf("%s: %w", label, err)
 	}
 	if e.whiteboardHolds(pr.ID) { // every other refusal passed: the job stops for the request (answerYielding)
-		return "", heldByWhiteboard(repo, pr)
+		return "", heldByWhiteboard(repo, pr, nil)
 	}
 	to, err := e.forceReview(ctx, repo, pr, p, requested, "magnum review")
 	if err != nil {

@@ -925,18 +925,22 @@ type whiteboardYield struct {
 // whiteboardHeld is the refusal of a review or fix request whose PR a
 // whiteboard job holds, once every other refusal passed: answerYielding
 // stops the job for the request (yieldWhiteboard) instead of answering with
-// it. Its text is the refusal the request had before.
+// it. Its text is the refusal the request had before. carry is what the
+// request read on its way to the refusal (nil = nothing), which it is handed
+// when it is answered after the yield, so it reads only once.
 type whiteboardHeld struct {
 	prID    int64
 	refusal error
+	carry   any
 }
 
 func (w *whiteboardHeld) Error() string { return w.refusal.Error() }
 
 // heldByWhiteboard is the whiteboardHeld refusal of a request on pr:
-// "<label>: a round is already in progress (<state>)".
-func heldByWhiteboard(repo store.Repo, pr store.PR) error {
-	return &whiteboardHeld{prID: pr.ID, refusal: fmt.Errorf("%s#%d: a round is already in progress (%s)", repo.FullName(), pr.Number, pr.State)}
+// "<label>: a round is already in progress (<state>)", carrying carry.
+func heldByWhiteboard(repo store.Repo, pr store.PR, carry any) error {
+	return &whiteboardHeld{prID: pr.ID, carry: carry,
+		refusal: fmt.Errorf("%s#%d: a round is already in progress (%s)", repo.FullName(), pr.Number, pr.State)}
 }
 
 // roundActiveBesidesWhiteboard is roundActive for a request a whiteboard
@@ -965,14 +969,25 @@ func (e *Engine) fixHeld(prID int64, pin fixPin) bool {
 // a job holds the PR (whiteboardHeld), the job is stopped and the request
 // is answered once it let go of the PR (yieldWhiteboard), by the request
 // dispatch, as if the job had never been; a job that let go meanwhile
-// leaves the request pending for the next pass.
-func answerYielding[T any](e *Engine, ctx context.Context, req store.Request, by string, fn func(context.Context, T) (string, error)) {
+// leaves the request pending for the next pass. What the refusal carries
+// (whiteboardHeld.carry) is kept for the request and handed to fn on its
+// next pass (nil on the first).
+func answerYielding[T any](e *Engine, ctx context.Context, req store.Request, by string, fn func(context.Context, T, any) (string, error)) {
 	p, ok := payload[T](e, ctx, req)
 	if !ok {
 		return
 	}
-	res, err := fn(ctx, p)
+	e.mu.Lock()
+	carry := e.yieldCarry[req.ID]
+	delete(e.yieldCarry, req.ID)
+	e.mu.Unlock()
+	res, err := fn(ctx, p, carry)
 	if held, ok := errors.AsType[*whiteboardHeld](err); ok {
+		if held.carry != nil {
+			e.mu.Lock()
+			e.yieldCarry[req.ID] = held.carry
+			e.mu.Unlock()
+		}
 		if !e.yieldWhiteboard(held.prID, req.ID, by) {
 			e.Kick()
 		}

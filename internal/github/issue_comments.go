@@ -92,6 +92,10 @@ const (
 	issueCommentsMaxPages = 10
 )
 
+// MaxIssueComments is how many conversation comments IssueComments reads at
+// most (issueCommentsMaxPages pages of issueCommentsPage).
+const MaxIssueComments = issueCommentsPage * issueCommentsMaxPages
+
 var issueCommentsQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   `+rateLimitFields+`
   repository(owner: $owner, name: $name) {

@@ -730,14 +730,17 @@ type FallbackData struct {
 
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand string
+	NoFindings                                                                 bool
 }
     FixPromptInput is what the fix job knows beyond the PR, the role and the
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
     (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
     posted it), the file of the other reviewers' open items (ExternalFile,
     external-threads.json beside the report; "" = none, the prompt then names
-    no such file) and the line the fixer runs its database commands through
-    (DBLockCommand, DBLockLine; "" = derived without a checkout).
+    no such file), the line the fixer runs its database commands through
+    (DBLockCommand, DBLockLine; "" = derived without a checkout) and whether
+    the review found nothing, leaving the fixer the external file's items alone
+    (NoFindings).
 
 type Health struct {
 	Kind    HealthKind
@@ -2009,6 +2012,10 @@ type RoleData struct {
 	// them); ReviewerLogin the login that posted the review, whose threads
 	// the fixer answers; SkillPath the fix skill's startup copy, absolute.
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, SkillPath string
+	// NoFindings is the fix prompt's too: the review found nothing and left
+	// nothing open, so the fixer handles ExternalFile's unanswered items
+	// alone (the fix job starts on such a review only when one waits).
+	NoFindings bool
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -9049,6 +9056,18 @@ const ComparePushCommits = 100
 const FileAtLimit = 512 << 10
     FileAtLimit caps FileAt: a larger file is not returned.
 
+const MaxIssueComments = issueCommentsPage * issueCommentsMaxPages
+    MaxIssueComments is how many conversation comments IssueComments reads at
+    most (issueCommentsMaxPages pages of issueCommentsPage).
+
+const MaxReviewThreads = threadsPageSize * threadsMaxPages
+    MaxReviewThreads is how many review threads ReviewThreads and
+    AllReviewThreads read at most (threadsMaxPages pages of threadsPageSize).
+
+const MaxReviews = reviewsPageSize * reviewsMaxPages
+    MaxReviews is how many reviews AllReviews reads at most (reviewsMaxPages
+    pages of reviewsPageSize).
+
 const PullFilesMaxPages = 30
     PullFilesMaxPages is how many pages of 100 PullFiles reads: GitHub's own cap
     for the endpoint, 3000 files.
@@ -9220,6 +9239,12 @@ type Client struct {
 	// Has unexported fields.
 }
     Client runs gh as one identity. The zero value is unusable; set Run.
+
+func (c *Client) AllReviewThreads(ctx context.Context, owner, repo string, number int) ([]Thread, bool, error)
+    AllReviewThreads is ReviewThreads that also reports whether the list is
+    complete: false when the pull request has more than MaxReviewThreads
+    threads, the later ones left out. A caller that acts on what the list lacks
+    (no open thread of another reviewer) reads it.
 
 func (c *Client) AllReviews(ctx context.Context, owner, repo string, number int) ([]Review, bool, error)
     AllReviews lists every review of a pull request, oldest first:

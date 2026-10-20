@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -85,6 +86,38 @@ func TestReviewThreads(t *testing.T) {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
 		}
+	}
+}
+
+// AllReviewThreads says whether it read every thread: a list cut at
+// threadsMaxPages pages (MaxReviewThreads threads) is incomplete, one whose
+// last page says so is complete, however many pages it took. A reader that
+// finds nothing open in a cut list cannot say that nothing is open.
+func TestAllReviewThreadsSaysWhetherTheListIsComplete(t *testing.T) {
+	pages := func(last int) *execx.Fake {
+		calls := 0
+		return &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+			calls++
+			return okResult(compact(t, fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":%v,"endCursor":"c%d"},"nodes":[
+			 {"id":"PRRT_%d","isResolved":true,"isOutdated":false,"path":"a.rb","line":1,"originalLine":1,"comments":{"totalCount":1,"nodes":[
+			  {"databaseId":%d,"body":"x","url":"u","createdAt":"2026-10-03T09:00:00Z","author":null}]}}]}}}}}`, calls < last, calls, calls, calls)))
+		})}}
+	}
+	for _, tc := range []struct {
+		pages    int
+		complete bool
+	}{{1, true}, {threadsMaxPages, true}, {threadsMaxPages + 1, false}} {
+		f := pages(tc.pages)
+		got, complete, err := (&Client{Run: f}).AllReviewThreads(context.Background(), "talkable", "talkable", 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if complete != tc.complete || len(got) != min(tc.pages, threadsMaxPages) || len(f.Calls) != min(tc.pages, threadsMaxPages) {
+			t.Errorf("%d pages: %d threads in %d calls, complete %v, want %v", tc.pages, len(got), len(f.Calls), complete, tc.complete)
+		}
+	}
+	if MaxReviewThreads != threadsPageSize*threadsMaxPages {
+		t.Errorf("MaxReviewThreads = %d", MaxReviewThreads)
 	}
 }
 

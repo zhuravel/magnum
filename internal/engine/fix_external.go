@@ -22,7 +22,10 @@ package engine
 // these threads is looked at on GitHub (dropFixerAnswered): one it did
 // reply in during the run asks nothing of the operator. A failed read
 // leaves the file out: the fixer then works on magnum's findings alone, and
-// a fix.external event says so.
+// a fix.external event says so. A review of magnum's that found nothing and
+// left nothing open starts a fix only when one of these items waits for an
+// answer (spec 96): prepareFix reads them then (othersWaiting), refusing
+// the fix when none waits or the read fails, and the job writes that read.
 
 import (
 	"cmp"
@@ -122,9 +125,10 @@ const (
 )
 
 // externalReader is what writeExternal reads beyond the engine's GitHub
-// (*github.Client): the PR's review threads and conversation comments.
+// (*github.Client): the PR's review threads, saying whether GitHub listed
+// them all, and its conversation comments.
 type externalReader interface {
-	ReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, error)
+	AllReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, bool, error)
 	IssueComments(ctx context.Context, owner, repo string, number int, stop func(github.PRComment) bool) ([]github.PRComment, bool, error)
 }
 
@@ -332,42 +336,102 @@ func (e *Engine) fixReader(job *fixJob) (GitHub, externalReader, bool) {
 	return gh, rd, gh != nil && ok
 }
 
+// externalRead is readExternal's result: the file's content, the count of
+// items an outsider wrote, what GitHub cut short (cut: "over 1000 review
+// threads", "over 500 reviews", "over 1000 comments since the author's
+// last"; none when every list is whole) and the PR head it was read at.
+type externalRead struct {
+	items   externalItems
+	outside int
+	cut     []string
+	head    string
+}
+
 // readExternal reads the job's PR from GitHub and makes the file's content
-// (externalOf), with the count of items an outsider wrote.
-func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalItems, int, error) {
+// (externalOf), with the count of items an outsider wrote and which of the
+// three lists GitHub cut short.
+func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, error) {
 	gh, rd, ok := e.fixReader(job)
 	if !ok {
-		return externalItems{}, 0, fmt.Errorf("no GitHub client that reads review threads for poll identity %q", job.watch.PollIdentity)
+		return externalRead{}, fmt.Errorf("no GitHub client that reads review threads for poll identity %q", job.watch.PollIdentity)
 	}
 	owner, name, number := job.repo.Owner, job.repo.Name, job.pr.Number
-	threads, err := rd.ReviewThreads(ctx, owner, name, number)
+	threads, threadsComplete, err := rd.AllReviewThreads(ctx, owner, name, number)
 	if err != nil {
-		return externalItems{}, 0, err
+		return externalRead{}, err
 	}
-	reviews, _, err := gh.AllReviews(ctx, owner, name, number)
+	reviews, reviewsComplete, err := gh.AllReviews(ctx, owner, name, number)
 	if err != nil {
-		return externalItems{}, 0, err
+		return externalRead{}, err
 	}
 	author := github.Account(deref(job.pr.AuthorLogin), deref(job.pr.AuthorType))
 	comments, complete, err := rd.IssueComments(ctx, owner, name, number, func(c github.PRComment) bool {
 		return github.SameAccount(github.Account(c.AuthorLogin, c.AuthorType), author) && ownWord(c.Body) // back to the author's last own word
 	})
 	if err != nil {
-		return externalItems{}, 0, err
+		return externalRead{}, err
 	}
 	x, outside := externalOf(externalInput{Threads: threads, Reviews: reviews, Comments: comments, CommentsComplete: complete,
 		Author: author, Own: e.fixLogins(ctx, job)})
-	return x, outside, nil
+	read := externalRead{items: x, outside: outside, head: job.pr.HeadSHA}
+	if !threadsComplete {
+		read.cut = append(read.cut, fmt.Sprintf("over %d review threads", github.MaxReviewThreads))
+	}
+	if !reviewsComplete {
+		read.cut = append(read.cut, fmt.Sprintf("over %d reviews", github.MaxReviews))
+	}
+	if !complete {
+		read.cut = append(read.cut, fmt.Sprintf("over %d comments since the author's last", github.MaxIssueComments))
+	}
+	return read, nil
+}
+
+// othersWaiting reads the other reviewers' items of probe's PR (its repo,
+// watch, pr and login) for a fix on a review that found nothing and left
+// nothing open, on, its short sha (spec 96), or takes carried, the read the
+// same request made at the same head before a whiteboard job yielded to it
+// (requestFix). It returns the read when at least one item waits for an
+// answer, which the job then writes to its external file (writeExternal),
+// else the refusal: nothing to fix when GitHub listed every item, and a
+// word to answer them by hand when it cut a list short, which can hide one
+// (1,000 resolved threads, then an open one). A read that fails refuses
+// with its cause, since the job would have nothing to answer.
+func (e *Engine) othersWaiting(ctx context.Context, probe *fixJob, on string, carried *externalRead) (*externalRead, error) {
+	read := carried
+	if read == nil || read.head != probe.pr.HeadSHA {
+		r, err := e.readExternal(ctx, probe)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not be read: %w", probe.label(), on, err)
+		}
+		read = &r
+	}
+	switch threads, conversation := read.items.unanswered(); {
+	case threads+conversation > 0:
+		return read, nil
+	case len(read.cut) > 0:
+		return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not all be read (%s); answer them by hand",
+			probe.label(), on, strings.Join(read.cut, ", "))
+	}
+	return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and no other reviewer's thread or comment waits for an answer", on)
 }
 
 // writeExternal writes the other reviewers' open items of the job's PR to
 // externalFile in dir, the fixer's report's directory, and returns its
 // path, recording a fix.external event with the counts; "" when they cannot
 // be read or written, which the event says (the fixer then answers
-// magnum's findings alone), and a file an earlier run of the review left
-// there is removed, so that nothing reads it for this run.
+// magnum's findings alone, and a job of the others alone fails), and a
+// file an earlier run of the review left there is removed, so that nothing
+// reads it for this run. A job whose request read them already (others)
+// writes that read. The event names the lists GitHub cut short.
 func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) string {
-	x, outside, err := e.readExternal(ctx, job)
+	var read externalRead
+	var err error
+	if job.others != nil {
+		read = *job.others
+	} else {
+		read, err = e.readExternal(ctx, job)
+	}
+	x, outside := read.items, read.outside
 	path := filepath.Join(dir, externalFile)
 	if err == nil {
 		err = writeExternalFile(path, x)
@@ -377,8 +441,12 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) str
 			e.log.Warn("fix: remove an earlier external file", "subject", job.subject(), "err", rerr)
 		}
 		if ctx.Err() == nil {
+			then := job.role.Name + " answers magnum's findings alone"
+			if job.others != nil {
+				then = "the review found nothing, so " + job.role.Name + " has nothing to answer"
+			}
 			e.event(ctx, "warn", job.subject(), "fix.external", fmt.Sprintf("could not list the other reviewers' open threads and comments; "+
-				"%s answers magnum's findings alone: %v", job.role.Name, err), map[string]any{"run": job.run.ID})
+				"%s: %v", then, err), map[string]any{"run": job.run.ID})
 		}
 		return ""
 	}
@@ -389,9 +457,12 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) str
 	if outside > 0 {
 		msg += fmt.Sprintf("; %s by people outside the repository left out", textx.Count(outside, "comment", "comments"))
 	}
+	if len(read.cut) > 0 {
+		msg += "; not all read: " + strings.Join(read.cut, ", ")
+	}
 	e.event(ctx, "info", job.subject(), "fix.external", msg,
 		map[string]any{"run": job.run.ID, "file": path, "threads": len(x.Threads), "unanswered_threads": threads,
-			"conversation": len(x.Conversation), "unanswered_conversation": conversation, "outside": outside})
+			"conversation": len(x.Conversation), "unanswered_conversation": conversation, "outside": outside, "cut": len(read.cut)})
 	return path
 }
 
@@ -448,7 +519,7 @@ func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []s
 	if !ok {
 		return entries
 	}
-	threads, err := rd.ReviewThreads(ctx, job.repo.Owner, job.repo.Name, job.pr.Number)
+	threads, _, err := rd.AllReviewThreads(ctx, job.repo.Owner, job.repo.Name, job.pr.Number) // a thread past the list keeps its entry
 	if err != nil {
 		e.log.Warn("fix: the threads the fixer may have answered", "subject", job.subject(), "err", err)
 		return entries

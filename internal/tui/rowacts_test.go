@@ -46,9 +46,6 @@ func TestActionRefusalSaysWhyBeforeAsking(t *testing.T) {
 		{"fix closed", actFix, func(r *PRBoardRow) { r.GHState, r.State = "CLOSED", "released" }, "talkable#5 is closed: nothing to fix"},
 		{"fix after the head moved", actFix, func(r *PRBoardRow) { r.HeadSHA = "9999999aaa" },
 			"talkable#5: the head moved since magnum reviewed abcdef1: review again first (r)"},
-		{"fix a review without findings", actFix, func(r *PRBoardRow) {
-			r.Findings = &FindingsInfo{Verdict: "clean", Posted: "APPROVE", SHA: "abcdef1234"}
-		}, "talkable#5: magnum's review of abcdef1 found nothing to fix"},
 		{"fix while a round runs", actFix, func(r *PRBoardRow) { r.State = "reviewing" }, "talkable#5: round in progress (reviewing); K kills it"},
 		{"review while a round runs", actReview, func(r *PRBoardRow) { r.State = "reviewing" }, "talkable#5: round in progress (reviewing); K kills it"},
 		{"fresh review while claiming", actFresh, func(r *PRBoardRow) { r.State = "claiming" }, "talkable#5: round in progress (claiming); K kills it"},

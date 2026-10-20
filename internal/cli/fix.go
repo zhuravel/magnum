@@ -47,10 +47,13 @@ func newFixCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupAct, fixUsage, "fix magnum's findings on your own PR now (--wait follows the loop to its end)",
 		"Fix magnum's findings on your own PR now. A fixer agent (the fix role, claude-fix by default) fixes the findings "+
 			"of magnum's review on the PR's current head, in the PR's slot and as you: it pushes, answers the review threads "+
-			"and writes a report. Magnum then reviews what it pushed and, while findings are left, starts the next cycle, up "+
+			"and what other reviewers wrote that nobody answered, and writes a report. A review that found nothing and left "+
+			"nothing open starts a fix only when another reviewer's open thread, review body or comment waits for an answer: "+
+			"the fixer then answers those alone. Magnum then reviews what it pushed and, while findings are left, starts the next cycle, up "+
 			"to [pipeline] fix_cycles. A loop ends clean, or needing you when the fixer leaves findings to you, the cap is "+
 			"reached or a run fails. The daemon refuses, with the reason as its answer, a PR magnum has not reviewed at its "+
-			"current head, a review that found nothing and left nothing open, a PR that is not yours or lives in a fork, a round in "+
+			"current head, a review that found nothing while no other reviewer waits for an answer (or whose other reviewers "+
+			"GitHub cannot list), a PR that is not yours or lives in a fork, a round in "+
 			"flight, a snooze, a loop already running and a watch without a fix role. A pinned PR (magnum open, magnum pin) is unpinned by the fix, as "+
 			"by a review; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. "+
 			"While the daemon drains for a restart (daemon-restart --drain) a fix it would start is held instead: it "+

@@ -81,6 +81,10 @@ const (
 	threadTailBatch = 50
 )
 
+// MaxReviewThreads is how many review threads ReviewThreads and
+// AllReviewThreads read at most (threadsMaxPages pages of threadsPageSize).
+const MaxReviewThreads = threadsPageSize * threadsMaxPages
+
 // threadCommentFields selects one comment of a review thread
 // (threadCommentJSON).
 const threadCommentFields = "databaseId body url createdAt authorAssociation author { login __typename } pullRequestReview { databaseId }"
@@ -146,14 +150,24 @@ var threadTailsQuery = fmt.Sprintf(`query($ids: [ID!]!) {
 // replies cost no hunk. A missing repository or pull request is an error
 // matching ErrNotFound.
 func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number int) ([]Thread, error) {
+	out, _, err := c.AllReviewThreads(ctx, owner, repo, number)
+	return out, err
+}
+
+// AllReviewThreads is ReviewThreads that also reports whether the list is
+// complete: false when the pull request has more than MaxReviewThreads
+// threads, the later ones left out. A caller that acts on what the list
+// lacks (no open thread of another reviewer) reads it.
+func (c *Client) AllReviewThreads(ctx context.Context, owner, repo string, number int) ([]Thread, bool, error) {
 	if err := checkRepo(owner, repo); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if number <= 0 {
-		return nil, fmt.Errorf("github: invalid pull request number %d", number)
+		return nil, false, fmt.Errorf("github: invalid pull request number %d", number)
 	}
 	op := fmt.Sprintf("review threads %s/%s#%d", owner, repo, number)
 	out := []Thread{}
+	complete := false
 	var cursor any // nil: the first page
 	for range threadsMaxPages {
 		var data struct {
@@ -196,10 +210,10 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
 		vars := map[string]any{"owner": owner, "name": repo, "number": number, "cursor": cursor}
 		_, notFound, err := c.graphql(ctx, op, threadsQuery, vars, &data)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(notFound) > 0 || data.Repository == nil || data.Repository.PullRequest == nil {
-			return nil, &APIError{Op: op, Errors: notFoundOr(notFound, op)}
+			return nil, false, &APIError{Op: op, Errors: notFoundOr(notFound, op)}
 		}
 		rt := data.Repository.PullRequest.ReviewThreads
 		for _, n := range rt.Nodes {
@@ -229,15 +243,16 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
 			}
 			out = append(out, t)
 		}
-		if !rt.PageInfo.HasNextPage || rt.PageInfo.EndCursor == "" {
+		if !rt.PageInfo.HasNextPage || rt.PageInfo.EndCursor == "" { // more pages without a cursor: no way to ask for them
+			complete = !rt.PageInfo.HasNextPage
 			break
 		}
 		cursor = rt.PageInfo.EndCursor
 	}
 	if err := c.readTails(ctx, op, out); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return out, nil
+	return out, complete, nil
 }
 
 // readTails sets the Tail of each thread of ts that has more comments than

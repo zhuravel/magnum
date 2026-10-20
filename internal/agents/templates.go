@@ -683,6 +683,10 @@ type RoleData struct {
 	// them); ReviewerLogin the login that posted the review, whose threads
 	// the fixer answers; SkillPath the fix skill's startup copy, absolute.
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, SkillPath string
+	// NoFindings is the fix prompt's too: the review found nothing and left
+	// nothing open, so the fixer handles ExternalFile's unanswered items
+	// alone (the fix job starts on such a review only when one waits).
+	NoFindings bool
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -701,10 +705,13 @@ func (d RoleData) completed() RoleData {
 // (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
 // posted it), the file of the other reviewers' open items (ExternalFile,
 // external-threads.json beside the report; "" = none, the prompt then
-// names no such file) and the line the fixer runs its database commands
-// through (DBLockCommand, DBLockLine; "" = derived without a checkout).
+// names no such file), the line the fixer runs its database commands
+// through (DBLockCommand, DBLockLine; "" = derived without a checkout) and
+// whether the review found nothing, leaving the fixer the external file's
+// items alone (NoFindings).
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand string
+	NoFindings                                                                 bool
 }
 
 // FixPrompt renders the fix role's prompt (its initial prompt, fix.md by
@@ -726,7 +733,7 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 	return m.RolePrompt(spec, config.PromptInitial, RoleData{
 		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
-		DBLockCommand: in.DBLockCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
+		DBLockCommand: in.DBLockCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)), NoFindings: in.NoFindings,
 	})
 }
 

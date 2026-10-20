@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -86,27 +87,44 @@ func TestFAsksBeforeFixing(t *testing.T) {
 // f says, before asking anything, why there is nothing to fix; the daemon's
 // refusal is not the first the user sees.
 func TestFRefusesBeforeAsking(t *testing.T) {
+	m, act := fixBoard(t, func(r *PRBoardRow) { r.Findings = nil })
+	m, _ = send(t, m, keyMsg("f"))
+	if m.confirm != nil || len(act.calls) != 0 {
+		t.Errorf("f asked %+v, ran %v", m.confirm, act.calls)
+	}
+	mustContain(t, viewOf(m), "magnum has not reviewed this PR: nothing to fix")
+}
+
+// A review of magnum's that found nothing may still leave the fixer work:
+// another reviewer's thread or comment that waits for an answer (spec 96,
+// talkable#12054). Only the daemon can tell, so f asks, says what the fixer
+// would do, and sends the request; the daemon's refusal, when nothing
+// waits, shows in the footer as any other.
+func TestFOnAReviewThatFoundNothingAsksTheDaemon(t *testing.T) {
+	const want = "Answer the other reviewers' open threads and comments on talkable#5 as you (magnum's review of abcdef1 found nothing to fix)?"
+	const refusal = "nothing to fix: the review on abcdef1 found nothing and no other reviewer's thread or comment waits for an answer"
 	for _, c := range []struct {
 		name string
 		edit func(r *PRBoardRow)
-		want string
 	}{
-		{"unreviewed", func(r *PRBoardRow) { r.Findings = nil }, "magnum has not reviewed this PR: nothing to fix"},
 		{"no findings", func(r *PRBoardRow) {
 			r.Findings = &FindingsInfo{Verdict: "clean", Posted: "APPROVE", SHA: "abcdef1234"}
-		},
-			"talkable#5: magnum's review of abcdef1 found nothing to fix"},
+		}},
 		{"only an earlier P3 still open", func(r *PRBoardRow) {
 			r.Findings = &FindingsInfo{Verdict: "non_blocking", Posted: "COMMENT", SHA: "abcdef1234", Open: 1}
-		},
-			"talkable#5: magnum's review of abcdef1 found nothing to fix"},
+		}},
 	} {
 		m, act := fixBoard(t, c.edit)
 		m, _ = send(t, m, keyMsg("f"))
-		if m.confirm != nil || len(act.calls) != 0 {
-			t.Errorf("%s: f asked %+v, ran %v", c.name, m.confirm, act.calls)
+		if m.confirm == nil || m.confirm.question != want || len(act.calls) != 0 {
+			t.Fatalf("%s: f asked %+v, ran %v; want the question", c.name, m.confirm, act.calls)
 		}
-		mustContain(t, viewOf(m), c.want)
+		act.err = errors.New(refusal)
+		m, _ = boardAct(t, m, "y")
+		if !slices.Equal(act.calls, []string{"fix talkable/talkable#5"}) {
+			t.Errorf("%s: y called %v, want the fix of the row's ref", c.name, act.calls)
+		}
+		mustContain(t, viewOf(m), "fix talkable/talkable#5: "+refusal)
 	}
 }
 

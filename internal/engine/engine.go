@@ -385,6 +385,10 @@ type Engine struct {
 	// that ends without a restart continues them (continueAfterDrain), as
 	// the restart's recovery would.
 	drainHeld map[int64]bool
+	// yieldCarry is, by request id, what a request read before a whiteboard
+	// job yielded the PR to it (whiteboardHeld.carry), handed to the request
+	// when it is answered after the yield (answerYielding), guarded by mu.
+	yieldCarry map[int64]any
 	// drainWhiteboards is set (guarded by mu) when a drain skipped a
 	// whiteboard after a posted review and remembered it
 	// (kvPRWhiteboardPending): a drain that ends without a restart makes the
@@ -590,6 +594,7 @@ func New(d Deps) *Engine {
 		workEndedAt:   map[int64]time.Time{},
 		autofixNoRole: map[int64]bool{},
 		drainHeld:     map[int64]bool{},
+		yieldCarry:    map[int64]any{},
 		heavy:         make(chan heavyJob, 64),
 		heavyKeys:     map[string]bool{},
 		inflight:      map[int64]bool{},

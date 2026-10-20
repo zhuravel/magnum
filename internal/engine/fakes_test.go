@@ -118,8 +118,10 @@ type fakeGH struct {
 	threads  map[int][]github.Thread
 	contents map[string][]byte
 	statuses map[string]string
-	// threadsErr fails ReviewThreads.
+	// threadsErr fails ReviewThreads; threadsCut marks by number the lists
+	// AllReviewThreads reports incomplete (more threads than GitHub lists).
 	threadsErr error
+	threadsCut map[int]bool
 	// prComments answers IssueComments by number (the conversation
 	// comments people and bots wrote, oldest first; the comments
 	// CreateIssueComment posts are not among them), read as GitHub pages
@@ -278,6 +280,13 @@ func (g *fakeGH) ReviewThreads(_ context.Context, owner, repo string, number int
 		return nil, g.threadsErr
 	}
 	return slices.Clone(g.threads[number]), nil
+}
+
+func (g *fakeGH) AllReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, bool, error) {
+	ts, err := g.ReviewThreads(ctx, owner, repo, number)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return ts, !g.threadsCut[number], err
 }
 
 func (g *fakeGH) IssueComments(_ context.Context, owner, repo string, number int, stop func(github.PRComment) bool) ([]github.PRComment, bool, error) {
@@ -1287,13 +1296,14 @@ func (f *fakeAgents) Tell(_ context.Context, run store.Run, text string) error {
 }
 
 // FixPrompt records what the fix job gave it ("fix_prompt:<role>:<run>|<head
-// ref>|<review url>|<review file>|<login>|<db-lock line>|<external file>")
-// and renders a prompt that names the run's report and marker; an empty
-// input but the external file is an error, as the real prompt would render
-// a broken push or review line.
+// ref>|<review url>|<review file>|<login>|<db-lock line>|<external file>",
+// then "|no findings" for a review that found nothing) and renders a prompt
+// that names the run's report and marker; an empty input but the external
+// file is an error, as the real prompt would render a broken push or review
+// line.
 func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error) {
 	f.record(fmt.Sprintf("fix_prompt:%s:%s|%s|%s|%s|%s|%s|%s", role, run.ID, in.HeadRef, in.ReviewURL, in.ReviewFile, in.ReviewerLogin, in.DBLockCommand,
-		in.ExternalFile))
+		in.ExternalFile) + map[bool]string{true: "|no findings"}[in.NoFindings])
 	f.mu.Lock()
 	ferr := f.fixPromptErr
 	f.mu.Unlock()

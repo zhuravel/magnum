@@ -321,7 +321,10 @@ func actionRefusal(a rowAct, r actRow) string {
 		case r.merged() && !r.running() && !r.queued() && !r.paused():
 			return l + " is merged: nothing to ignore"
 		}
-	case actFix: // the daemon decides the rest: whose PR it is, a loop already running, the slot
+	// The daemon decides the rest: whose PR it is, a loop already running,
+	// the slot, and, for a review that found nothing, whether another
+	// reviewer's thread or comment waits for an answer (spec 96).
+	case actFix:
 		switch f := r.findings; {
 		case !r.verdicts:
 		case f == nil:
@@ -333,8 +336,6 @@ func actionRefusal(a rowAct, r actRow) string {
 		// decides whether the review stood.
 		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA) && !sameSHA(r.head, r.reviewed):
 			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
-		case f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3]+f.OpenProblems == 0: // an earlier finding the review keeps open is one to fix
-			return l + ": magnum's review of " + textx.ShortSHA(f.SHA) + " found nothing to fix"
 		case r.running():
 			return l + ": round in progress (" + stateLabel(r.state) + ")" + r.orKey(actAbort, "; %k kills it")
 		}
@@ -478,10 +479,20 @@ func actionQuestion(a rowAct, r actRow) string {
 		}
 		return muteQuestion(l, false)
 	case actFix:
-		if r.pinKnown && r.pinned { // the daemon unpins it, as for a review (its slot's guards still hold a person's changes)
-			return "Fix the findings of " + l + " as you (pinned: the fix unpins it)?"
+		q, notes := "Fix the findings of "+l+" as you", []string(nil)
+		// A review that found nothing leaves the fixer the other reviewers'
+		// items alone, when one waits for an answer (the daemon looks).
+		if f := r.findings; f != nil && f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3]+f.OpenProblems == 0 {
+			q = "Answer the other reviewers' open threads and comments on " + l + " as you"
+			notes = append(notes, "magnum's review of "+textx.ShortSHA(f.SHA)+" found nothing to fix")
 		}
-		return "Fix the findings of " + l + " as you?"
+		if r.pinKnown && r.pinned { // the daemon unpins it, as for a review (its slot's guards still hold a person's changes)
+			notes = append(notes, "pinned: the fix unpins it")
+		}
+		if len(notes) > 0 {
+			q += " (" + strings.Join(notes, "; ") + ")"
+		}
+		return q + "?"
 	case actFixOff:
 		if r.fixOff {
 			return "Autofix " + l + " again?"

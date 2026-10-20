@@ -99,6 +99,11 @@ type fixJob struct {
 	// started is when fixStart created the run: a reply of the fixer's on
 	// GitHub since then is this run's (noteFixerReplies).
 	started time.Time
+	// others is what the other reviewers wrote, as prepareFix read it for a
+	// review that found nothing and left nothing open (nil otherwise): the
+	// job then answers their unanswered items alone, and writeExternal
+	// writes these without reading GitHub again.
+	others *externalRead
 	// touched: the fixer may have changed the slot (its prompt was sent), so
 	// the settle and a stop put the slot back in order.
 	touched bool
@@ -113,27 +118,40 @@ func (j *fixJob) asRound() *roundJob {
 	return &roundJob{pr: j.pr, repo: j.repo, watch: j.watch, pool: j.pool, slot: j.slot, hasSlot: j.slot.ID != 0}
 }
 
-// fixes is what the job fixes where, in words: "the 2 findings of the
-// review on b2b2b2b in review1", counting the new ones and the earlier P0
-// to P2 it keeps open (ReviewSummary.OpenProblems), with ", 1 of them open
-// from earlier reviews," when it keeps some; "the open earlier findings of
-// the review on b2b2b2b in review1" for a next cycle's review that requests
+// fixes is what the job does where, in words, after its role's name:
+// "fixes the 2 findings of the review on b2b2b2b in review1", counting the
+// new ones and the earlier P0 to P2 it keeps open
+// (ReviewSummary.OpenProblems), with ", 1 of them open from earlier
+// reviews," when it keeps some; "fixes the open earlier findings of the
+// review on b2b2b2b in review1" for a next cycle's review that requests
 // changes with neither (fixRemains). A review on an older commit than the
-// head the fixer starts from adds "(the head c3c3c3c kept its verdict)".
+// head the fixer starts from adds "(the head c3c3c3c kept its verdict)". A
+// job on a review that found nothing (others) "answers the other
+// reviewers' 2 unanswered threads and comments in review1 (magnum's review
+// of b2b2b2b found nothing)".
 func (j *fixJob) fixes() string {
-	sha := textx.ShortSHA(j.review.SHA)
+	sha, kept := textx.ShortSHA(j.review.SHA), ""
 	if j.head != "" && j.head != j.review.SHA {
-		sha += fmt.Sprintf(" (the head %s kept its verdict)", textx.ShortSHA(j.head))
+		kept = fmt.Sprintf("the head %s kept its verdict", textx.ShortSHA(j.head))
+		sha += " (" + kept + ")"
 	}
 	open := j.review.OpenProblems()
 	n := j.review.Findings() + open
 	switch {
+	case n == 0 && j.others != nil:
+		threads, conversation := j.others.items.unanswered()
+		note := "magnum's review of " + textx.ShortSHA(j.review.SHA) + " found nothing"
+		if kept != "" {
+			note += "; " + kept
+		}
+		return fmt.Sprintf("answers the other reviewers' %s in %s (%s)",
+			textx.Count(threads+conversation, "unanswered thread or comment", "unanswered threads and comments"), j.slot.Name, note)
 	case n == 0:
-		return fmt.Sprintf("the open earlier findings of the review on %s in %s", sha, j.slot.Name)
+		return fmt.Sprintf("fixes the open earlier findings of the review on %s in %s", sha, j.slot.Name)
 	case open == 0:
-		return fmt.Sprintf("the %s of the review on %s in %s", textx.Count(n, "finding", "findings"), sha, j.slot.Name)
+		return fmt.Sprintf("fixes the %s of the review on %s in %s", textx.Count(n, "finding", "findings"), sha, j.slot.Name)
 	}
-	return fmt.Sprintf("the %s of the review on %s, %d of them open from earlier reviews, in %s",
+	return fmt.Sprintf("fixes the %s of the review on %s, %d of them open from earlier reviews, in %s",
 		textx.Count(n, "finding", "findings"), sha, open, j.slot.Name)
 }
 
@@ -164,8 +182,11 @@ func fixRunningSentence(st FixState) string {
 // is held for it instead (holdFix). A dry run (the request's or the
 // daemon's) answers what would start. A whiteboard job holding the PR is
 // refused with whiteboardHeld once every other refusal passed: it yields to
-// the request (answerYielding).
-func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
+// the request (answerYielding). That refusal carries the other reviewers'
+// items prepareFix read for a review that found nothing, and the request's
+// pass after the yield gets them back as carried: it runs every refusal
+// again but reads GitHub no second time.
+func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *externalRead) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
 		return "", err
@@ -203,14 +224,19 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	case e.draining(ctx): // held for the restart (fix_held.go), which would end a fixer started now
 		return e.holdFix(ctx, pr, dry)
 	case dry:
-		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin)
+		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried)
 	case e.whiteboardHolds(pr.ID): // the job yields to the request once every other refusal passed (answerYielding)
-		if _, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin); err != nil {
+		pre, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried)
+		if err != nil {
 			return "", err
 		}
-		return "", heldByWhiteboard(repo, pr)
+		var carry any
+		if pre.others != nil {
+			carry = pre.others
+		}
+		return "", heldByWhiteboard(repo, pr, carry)
 	default:
-		job, err = e.startFix(ctx, pr, fixBy, FixState{})
+		job, err = e.startFix(ctx, pr, fixBy, FixState{}, carried)
 	}
 	switch {
 	case errors.Is(err, errFixDraining): // a drain began since draining was asked
@@ -221,7 +247,7 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 	if dry && e.whiteboardHolds(pr.ID) {
 		job.notes = append(job.notes, "would stop the whiteboard writer first")
 	}
-	what := fmt.Sprintf("%s fixes %s, cycle %d of %d", job.role.Name, job.fixes(), max(job.state.Cycle, 1), job.state.Cap)
+	what := fmt.Sprintf("%s %s, cycle %d of %d", job.role.Name, job.fixes(), max(job.state.Cycle, 1), job.state.Cap)
 	res := fmt.Sprintf("fixing %s: %s; `magnum abort %s` stops it", job.label(), what, job.label())
 	if dry {
 		e.rec.Record(ctx, subject, "fix", what)
@@ -245,8 +271,11 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload) (string, error) {
 // goes as for `magnum review` (the job's notes say so for the answer). A
 // drain for a restart is startFix's refusal (errFixDraining), not this one:
 // holdFix asks it under a drain, so a request it would refuse after the
-// restart is refused at once, not held.
-func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin) (*fixJob, error) {
+// restart is refused at once, not held. carried is the other reviewers'
+// items the same request read before (nil = none): a review that found
+// nothing then decides on them instead of reading GitHub again
+// (othersWaiting).
+func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin, carried *externalRead) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
 		return nil, err
@@ -308,8 +337,6 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	switch {
 	case !ok || deref(pr.ReviewedSHA) != pr.HeadSHA || (sum.SHA != pr.HeadSHA && !stood):
 		return nil, fmt.Errorf("nothing to fix: no review on %s", head)
-	case sum.Findings()+sum.OpenProblems() == 0 && prev.Cycle == 0: // a next cycle's changes request may keep earlier findings open with neither (fixRemains)
-		return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and left nothing open", on)
 	case sum.URL == "":
 		return nil, fmt.Errorf("%s: the review on %s has no URL to fix from", label, on)
 	case deref(pr.HeadRef) == "":
@@ -319,27 +346,26 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	if src == nil || src.Login() == "" {
 		return nil, fmt.Errorf("identity %q is not configured", pr.Identity)
 	}
+	// A review that found nothing and left nothing open leaves the fixer
+	// what the other reviewers wrote that waits for an answer (spec 96); a
+	// next cycle's changes request may keep earlier findings open with
+	// neither (fixRemains).
+	var others *externalRead
+	if sum.Findings()+sum.OpenProblems() == 0 && prev.Cycle == 0 {
+		if others, err = e.othersWaiting(ctx, &fixJob{repo: repo, watch: *w, pr: pr, login: src.Login()}, on, carried); err != nil {
+			return nil, err
+		}
+	}
 	reviewRun, err := e.st.RunByID(ctx, sum.RunID)
 	if err != nil {
 		return nil, fmt.Errorf("%s: the review's run %s: %w", label, sum.RunID, err)
 	}
 	slot, has, err := e.slotOf(ctx, pr.ID)
-	switch {
-	case err != nil:
+	if err != nil {
 		return nil, err
-	case !has:
-		return nil, fmt.Errorf("%s has no checkout of its reviewed head: its slot was handed back", label)
-	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
-		return nil, fmt.Errorf("%s: %s", label, unusableSlotSentence(slot))
-	case slot.State != store.SlotClaimed && slot.State != store.SlotHeld:
-		return nil, fmt.Errorf("%s: slot %s is %s", label, slot.Name, slot.State)
-	case slot.Pinned && pin == fixPinRefuses:
-		return nil, fmt.Errorf("%s: slot %s is pinned (magnum unpin)", label, slot.Name)
-	case slot.HoldReason != nil:
-		return nil, fmt.Errorf("%s: %s", label, slotHeldReason(slot))
-	case stood && deref(slot.CheckedOutSHA) != pr.HeadSHA: // a push that only merged the base moves no checkout
-		return nil, fmt.Errorf("%s: slot %s holds %s, not its head %s, which kept the verdict of the review on %s; `magnum review %s` reviews it first",
-			label, slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), head, on, label)
+	}
+	if err := fixSlotRefusal(label, slot, has, pin, stood, pr.HeadSHA, on); err != nil {
+		return nil, err
 	}
 	now := e.now()
 	if s, ok := e.snoozeOf(ctx, pr.ID, now); ok {
@@ -369,7 +395,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		notes = append(notes, note)
 	}
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
-		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev}
+		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others}
 	if job.state.Cap == 0 {
 		job.state.Cap = e.cfg.FixCyclesFor(w)
 	}
@@ -377,6 +403,30 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		job.notes = append(job.notes, "this watch posts as you: the re-review will not read the fixer's replies as yours")
 	}
 	return job, nil
+}
+
+// fixSlotRefusal is prepareFix's refusal of the PR's slot (has false: it
+// has none), nil when the fixer may work in it: one handed back, broken,
+// lost or in another state, pinned where pin refuses, held by a guard, or
+// one whose checkout is not the head that kept the verdict of the review on
+// on (stood; head is the PR's).
+func fixSlotRefusal(label string, slot store.Slot, has bool, pin fixPin, stood bool, head, on string) error {
+	switch {
+	case !has:
+		return fmt.Errorf("%s has no checkout of its reviewed head: its slot was handed back", label)
+	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
+		return fmt.Errorf("%s: %s", label, unusableSlotSentence(slot))
+	case slot.State != store.SlotClaimed && slot.State != store.SlotHeld:
+		return fmt.Errorf("%s: slot %s is %s", label, slot.Name, slot.State)
+	case slot.Pinned && pin == fixPinRefuses:
+		return fmt.Errorf("%s: slot %s is pinned (magnum unpin)", label, slot.Name)
+	case slot.HoldReason != nil:
+		return fmt.Errorf("%s: %s", label, slotHeldReason(slot))
+	case stood && deref(slot.CheckedOutSHA) != head: // a push that only merged the base moves no checkout
+		return fmt.Errorf("%s: slot %s holds %s, not its head %s, which kept the verdict of the review on %s; `magnum review %s` reviews it first",
+			label, slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), textx.ShortSHA(head), on, label)
+	}
+	return nil
 }
 
 // reviewStood reports whether the PR's head kept the verdict of sum, its
@@ -418,9 +468,11 @@ func (e *Engine) reviewStood(ctx context.Context, pr store.PR, sum store.ReviewS
 // (roundHandle.fix), writes the loop's row in phase fixing and runs on a
 // goroutine of its own under the reservation (runFix), whose context
 // derives from ctx: pass the daemon's, never a round's (its reservation's
-// end cancels it). It returns a copy of the job as it started, for the
-// caller's answer (the job's own goes on changing).
-func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixState) (*fixJob, error) {
+// end cancels it). carried is prepareFix's (nil but for a `magnum fix`
+// answered after a whiteboard job yielded to it). It returns a copy of the
+// job as it started, for the caller's answer (the job's own goes on
+// changing).
+func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixState, carried *externalRead) (*fixJob, error) {
 	pin := fixPinRefuses
 	if by == fixBy && prev.Cycle == 0 {
 		pin = fixPinUnpins
@@ -428,7 +480,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	if e.draining(ctx) {
 		return nil, errFixDraining
 	}
-	job, err := e.prepareFix(ctx, pr, prev, pin)
+	job, err := e.prepareFix(ctx, pr, prev, pin, carried)
 	if err != nil {
 		return nil, err
 	}
@@ -633,9 +685,11 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 // whether the fixer was parked before, so that it waits for the figure),
 // creates its run of kind fix in the review's round, writes the other
 // reviewers' open items beside the run's report (writeExternal, which the
-// prompt names when it could) and sends it the fix prompt. A run that
-// Submit refused before sending is abandoned; one whose prompt may have
-// arrived is waited for.
+// prompt names when it could) and sends it the fix prompt, which says so
+// when the review found nothing (NoFindings: a job of the others alone,
+// whose run is abandoned and fails when that file could not be written).
+// A run that Submit refused before sending is abandoned; one whose prompt
+// may have arrived is waited for.
 func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	pr := job.pr
 	src := e.d.Identities[pr.Identity]
@@ -691,6 +745,11 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	if job.state.Report != "" {
 		external = e.writeExternal(ctx, job, filepath.Dir(job.state.Report)) // fix_external.go
 	}
+	if external == "" && job.others != nil { // the other reviewers' items are the job's whole work
+		err := errors.New("the review found nothing, and the file of the other reviewers' threads and comments, all the fixer would answer, could not be written beside the report")
+		e.abandonFixRun(ctx, run, err.Error())
+		return err
+	}
 	text, err := e.d.Agents.FixPrompt(pr, agents.Role(job.role.Name), run, agents.FixPromptInput{
 		HeadRef:       deref(pr.HeadRef),
 		ReviewURL:     job.review.URL,
@@ -698,6 +757,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		ExternalFile:  external,
 		ReviewerLogin: job.login,
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
+		NoFindings:    job.others != nil,
 	})
 	if err != nil {
 		e.abandonFixRun(ctx, run, err.Error())
@@ -720,7 +780,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		// in the agent, so the run is observed, never sent again.
 		e.log.Warn("fix: prompt not acknowledged as working; waiting for the run", "subject", job.subject(), "run", run.ID, "err", serr)
 	}
-	e.event(ctx, "info", job.subject(), "fix.start", fmt.Sprintf("%s fixes %s (run %s, cycle %d of %d)",
+	e.event(ctx, "info", job.subject(), "fix.start", fmt.Sprintf("%s %s (run %s, cycle %d of %d)",
 		job.role.Name, job.fixes(), run.ID, job.state.Cycle, job.state.Cap),
 		map[string]any{"run": run.ID, "role": job.role.Name, "slot": job.slot.Name, "report": job.state.Report,
 			"cycle": job.state.Cycle, "cap": job.state.Cap, "by": job.state.By})

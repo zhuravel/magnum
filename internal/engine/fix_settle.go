@@ -123,7 +123,12 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
 		answered := "the findings"
-		if counted {
+		switch {
+		case job.others != nil && counted: // a review that found nothing: the fixer answered the other reviewers alone
+			answered = textx.Count(threads, "thread or comment", "threads and comments") + " of other reviewers"
+		case job.others != nil:
+			answered = "the other reviewers"
+		case counted:
 			answered = textx.Count(threads, "finding", "findings")
 		}
 		did := "pushed nothing"

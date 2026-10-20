@@ -55,6 +55,10 @@ const (
 	reviewsMaxPages = 5
 )
 
+// MaxReviews is how many reviews AllReviews reads at most (reviewsMaxPages
+// pages of reviewsPageSize).
+const MaxReviews = reviewsPageSize * reviewsMaxPages
+
 var reviewsPagedQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   `+rateLimitFields+`
   repository(owner: $owner, name: $name) {

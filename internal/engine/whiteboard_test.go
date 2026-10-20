@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -785,6 +786,48 @@ func TestAFixRequestStopsTheWhiteboardJob(t *testing.T) {
 	}
 	if runs := w.fixRuns(w.pr(2).ID); len(runs) != 1 {
 		t.Errorf("fix runs = %+v, want the requested cycle's", runs)
+	}
+}
+
+// A fix request on a review that found nothing reads the other reviewers'
+// items before the whiteboard job yields (every other refusal must pass
+// first), and the same request, answered after the yield, runs its other
+// refusals again but starts on that read: one request reads GitHub once.
+func TestAFixRequestThatAWhiteboardYieldsToReadsTheOtherReviewersOnce(t *testing.T) {
+	var kh *keyHerdr
+	w := wbHarness(t, false, withKeys(&kh))
+	pr := w.wbReviewedBy("zhuravel")
+	if _, err := w.st.DB().ExecContext(w.ctx, `UPDATE runs SET result_json = '{"event":"COMMENTED","findings":{}}' WHERE pr_id = ? AND kind = 'initial'`,
+		pr.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.gh.mu.Lock()
+	w.gh.threads = map[int][]github.Thread{2: {
+		extThread(4322458360, "lib/sandbox.rb", 185, w.clock.Now().Add(-time.Hour), "MINOR: `run` drops stderr", "rev-ann"),
+	}}
+	w.gh.mu.Unlock()
+	w.wbAtWork()
+	w.ag.mu.Lock()
+	w.ag.onSubmit = func(run store.Run, _ string) { // the fixer ends its run at once, with no report
+		if run.Kind != store.RunFix {
+			return
+		}
+		if err := w.st.TransitionRun(w.ctx, run.ID, []string{store.RunWorking}, store.RunEnded, nil); err != nil {
+			t.Error(err)
+		}
+	}
+	w.ag.mu.Unlock()
+
+	id := w.fix(FixPayload{})
+	w.wbYielded(id)
+	if res := w.wbWantSuperseded(kh, id, "magnum fix"); !strings.HasPrefix(res, "fixing talkable/talkable#2: claude-fix answers the other reviewers' 1 unanswered thread or comment") {
+		t.Errorf("answer = %q, want the fix of the other reviewers' thread", res)
+	}
+	if runs := w.fixRuns(pr.ID); len(runs) != 1 {
+		t.Errorf("fix runs = %+v, want the requested cycle's", runs)
+	}
+	if n := w.gh.count("issue_comments:talkable/talkable#2"); n != 1 {
+		t.Errorf("the conversation was read %d times for one request, want once", n)
 	}
 }
 

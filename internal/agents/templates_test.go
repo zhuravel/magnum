@@ -522,6 +522,10 @@ func TestRenderGolden(t *testing.T) {
 		d.ProjectChecks = "Codex ran without the PR's .codex/ and AGENTS.md changes; Claude ran without the PR's CLAUDE.md changes"
 		return d
 	}
+	// A fix of a review that found nothing: the fixer handles the other
+	// reviewers' unanswered items alone (spec 96).
+	fixNoFindings := fixFixture()
+	fixNoFindings.NoFindings = true
 
 	cases := []struct {
 		golden, name string
@@ -619,6 +623,7 @@ func TestRenderGolden(t *testing.T) {
 		{"claude_rereview_no_base", "claude-rereview.md", noBase},
 		{"simplify", "claude-simplify.md", simplifyData(roleFixture())},
 		{"fix", "fix.md", fixFixture()},
+		{"fix_no_findings", "fix.md", fixNoFindings},
 		{"whiteboard", "whiteboard.md", whiteboardFixture("")},
 		{"whiteboard_update", "whiteboard.md", whiteboardFixture("6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b")},
 		{"model_fallback", FallbackPromptName, FallbackData{Model: "opus", Previous: "fable", Role: "claude-review",

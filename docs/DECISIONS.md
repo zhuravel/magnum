@@ -10039,6 +10039,68 @@ skill versions); people add theirs to the sections before it, at the end of the 
       operator's spelling and key order; the in-place edits keep them, and the comment keeps its column.
     - A screen that runs `daemon-restart --when-idle` itself: it blocks the terminal and cannot run from
       inside the dashboard.
+- **A review that found nothing starts a fix when another reviewer waits for an answer** (2026-10-20, spec
+  96. It amends "A fix job also answers what other reviewers wrote that nobody answered", spec 93). After
+  spec 93 landed, the operator pressed `f` on talkable#12054 and the board answered "found nothing to fix",
+  while another reviewer's MINOR follow-up on stderr (`discussion_r4322458360`) still had no reply. Spec 93
+  changed what a fix job does once it starts, but two gates still refused the start when magnum's own
+  review was clean: the board's `actFix` refusal (internal/tui/rowacts.go), decided before any request, and
+  the engine's `prepareFix` ("nothing to fix: the review on <sha> found nothing and left nothing open").
+  - **The engine.** For a new loop on a review with no findings and no earlier P0 to P2 left open,
+    `prepareFix` now reads the PR's other reviewers' items as the job would (`othersWaiting`, through
+    `readExternal` and `externalOf`: the same reads, the same trusted-author filter, the same answered
+    rules). The read comes after the cheap refusals and before the review's run, the slot and the pin, so
+    no pin goes before a refusal. The job starts when at least one thread, review body or comment is
+    unanswered. Otherwise the request is refused with "nothing to fix: the review on <sha> found nothing and
+    no other reviewer's thread or comment waits for an answer". A read that fails refuses with its cause
+    ("<pr>: the review on <sha> found nothing, and the other reviewers' threads and comments could not be
+    read: <err>"): such a job would have nothing to do, so it never starts blind. GitHub lists at most
+    1,000 review threads (`github.MaxReviewThreads`; the new `Client.AllReviewThreads` says whether it
+    listed them all, and `ReviewThreads` is it without the flag), 500 reviews (`MaxReviews`, `AllReviews`)
+    and 1,000 conversation comments back to the author's last (`MaxIssueComments`, `IssueComments`). A read
+    that one of them cuts short and that shows nothing waiting cannot say that nothing waits: a PR with
+    1,000 resolved threads and then an open one would be refused as clean. So it is refused with what was
+    cut ("<pr>: the review on <sha> found nothing, and the other reviewers' threads and comments could not
+    all be read (over 1000 review threads); answer them by hand"), and a cut read that shows an item
+    waiting starts the job; the `fix.external` event of any job names the lists cut short. The read rides
+    on the job (`fixJob.others`), and `writeExternal` writes it to `external-threads.json` without a second
+    fetch. A request a whiteboard job yields to runs prepareFix before the yield; its refusal
+    (`whiteboardHeld.carry`) keeps that read for the request (`Engine.yieldCarry`, by request id), and the
+    pass after the yield runs every refusal again but decides on the kept read when the head is the same,
+    so one request reads GitHub once. An item written between the request and the fixer's start waits for
+    the next cycle, as one written while the fixer works does; the skill's look right before each reply
+    still catches an answer. If the file cannot be written, the run is abandoned and the job fails. The
+    answer, `fix.start` and `fix.held` say
+    "answers the other reviewers' 1 unanswered thread or comment in review1 (magnum's review of <sha> found
+    nothing)". Only `magnum fix`, its dry run and a fix held for a restart reach this path: autofix starts
+    only after a round that posted findings.
+  - **The prompt and the skill.** The new `.NoFindings` (`agents.FixPromptInput`, `RoleData`) makes
+    `fix.md` say that the review found nothing to fix and to handle the external file's unanswered items, in
+    place of "Fix the findings of the review" and the file's "after the review's findings" sentence. The fix
+    skill's section 4 says: "When the prompt says that the review found nothing to fix, the external items
+    are this run's whole work: judge, fix and answer them alone." In section 2, a checkout at the wrong head
+    then lists every unanswered external item under `## Needs you`, so that stop ends the loop needing the
+    author instead of clean.
+  - **The loop.** It ends as any loop does. A push goes to its forced re-review, whose result decides.
+    Replies alone end the loop clean, with the info toast "pushed nothing, replied to 1 thread or comment of
+    other reviewers". This settles the spec's stop condition: nothing in the end condition depends on the
+    first review's findings.
+  - **The board.** The client-side "found nothing to fix" refusal is gone; the daemon decides, and its
+    refusal shows in the footer as any other. On such a review `f` asks "Answer the other reviewers' open
+    threads and comments on <pr> as you (magnum's review of <sha> found nothing to fix)?". The other
+    client-side refusals stay: not reviewed, merged or closed, the head moved, a round running.
+  - **Residuals.** A bot's status or CI comment after the author's last word counts as unanswered, as it
+    does in the file. So `f` can start a job that replies nowhere ("asks for nothing") and ends clean. A
+    request on a clean review costs one GitHub read, refusals included.
+  - **Rejected:**
+    - Deciding on the board: the board reads no GitHub, and the daemon reads as the watch's poll identity.
+    - Starting the job without the read and letting the fixer find nothing: a session and a slot for
+      nothing, and the operator would learn it only from the report.
+    - Counting only threads: a review body or a comment that waits is as much an item as a thread.
+    - Reading GitHub again at `fixStart`, or after a whiteboard job's yield: a second fetch for one request.
+    - Excluding bots' comments from what starts a job: a code-review bot's finding is as much an item as a
+      person's, and the fixer already gives a status comment no reply.
+    - Starting a job on a cut-short read that shows nothing waiting: it would have nothing to answer.
 
 ## Learned rules
 
