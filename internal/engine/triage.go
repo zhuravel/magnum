@@ -193,6 +193,7 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 // is. A post-merge round compares with its merge base instead: the base
 // branch holds the merged head after a merge-commit merge.
 func (e *Engine) triageFiles(ctx context.Context, job *roundJob, kind, target string) (files []github.FileDelta, own bool, err error) {
+	ctx = github.WithOp(ctx, opRoundTriage) // github_cost.go
 	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
 		return nil, false, errors.New("no GitHub client")

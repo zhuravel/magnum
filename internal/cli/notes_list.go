@@ -317,6 +317,8 @@ func notesStateText(r notesRow, now time.Time) string {
 			what = "the learn job running (a curation, the retro, a skill edit or gate)"
 		case engine.QueuedDrain:
 			what = "the restart after the drain"
+		case engine.QueuedGitHub:
+			what = "the GitHub budget's reset"
 		}
 		return fmt.Sprintf("curation queued (%s, waits for %s)", r.Curation.Trigger, what)
 	case notesStale, notesProposal:

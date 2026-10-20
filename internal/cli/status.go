@@ -372,6 +372,38 @@ type statusGitHub struct {
 	Limit           *int       `json:"limit,omitempty"`
 	ResetAt         *time.Time `json:"reset_at,omitempty"`
 	PollPausedUntil *time.Time `json:"poll_paused_until,omitempty"`
+	// Identities is the daemon's meter per identity (engine.KVGitHubCost),
+	// sorted by name: the budget left, the calls of the current window by op
+	// and the hours as stored. Empty before the daemon wrote a record, and
+	// the text then keeps the radar's line.
+	Identities []statusGitHubIdentity `json:"identities,omitempty"`
+}
+
+// statusGitHubIdentity is one identity's GitHub budget and what its calls
+// cost since WindowStart (statusGitHubWindow).
+type statusGitHubIdentity struct {
+	Identity  string     `json:"identity"`
+	Remaining *int       `json:"remaining,omitempty"`
+	Limit     *int       `json:"limit,omitempty"`
+	ResetAt   *time.Time `json:"reset_at,omitempty"`
+	SeenAt    *time.Time `json:"seen_at,omitempty"` // when the call that told the budget returned
+	// Low is the run of low budget the floor holds new work for (nil: none).
+	Low             *engine.GitHubLow   `json:"low,omitempty"`
+	WindowStart     time.Time           `json:"window_start"`
+	WindowPoints    int                 `json:"window_points"`
+	WindowCalls     int                 `json:"window_calls"`
+	WindowRESTCalls int                 `json:"window_rest_calls"`
+	WindowOps       []statusGitHubOp    `json:"window_ops"` // costliest first
+	Hours           []engine.GitHubHour `json:"hours"`      // the stored hours, ops included
+}
+
+// statusGitHubOp is one op's cost in the window.
+type statusGitHubOp struct {
+	Op        string `json:"op"`
+	Words     string `json:"words"` // engine.GitHubOpWords
+	Points    int    `json:"points"`
+	Calls     int    `json:"calls"`
+	RESTCalls int    `json:"rest_calls"`
 }
 
 type statusRounds struct {
@@ -406,7 +438,7 @@ type statusKindCount struct {
 
 // statusPause is one reason automation (or part of it) is held back.
 type statusPause struct {
-	Scope  string     `json:"scope"` // daemon, infra, codex, claude, watch:<owner>, identity:<name>, github
+	Scope  string     `json:"scope"` // daemon, infra, codex, claude, watch:<owner>, identity:<name>, github, github:<identity>
 	Reason string     `json:"reason"`
 	Detail string     `json:"detail,omitempty"`
 	Until  *time.Time `json:"until,omitempty"`

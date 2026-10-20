@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -107,5 +108,59 @@ func TestFromAppDryRunOnce(t *testing.T) {
 	e.usageMu.Unlock()
 	if snap == nil || snap.Window.UsedPercent != 37 || !strings.HasPrefix(snap.Path, cfg.Usage.CodexHome) {
 		t.Fatalf("the tick did not read the Codex budget from the test's Codex home %s: %+v", cfg.Usage.CodexHome, snap)
+	}
+}
+
+// FromApp installs the cost meter on the GitHub client of every identity
+// the App built (github_cost.go), before any call: a call a client makes is
+// counted under its identity and its op.
+func TestFromAppMetersEveryIdentitysGitHubClient(t *testing.T) {
+	home := t.TempDir()
+	cfgText := strings.ReplaceAll(testConfigTOML, "HOME", home)
+	cfgText = strings.Replace(cfgText, "[herdr]\n", "[herdr]\nsocket = \""+filepath.Join(home, "no.sock")+"\"\n", 1)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfgText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := paths.Layout{Home: home}
+	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := store.Open(layout.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Close()
+	answer := `{"data":{"rateLimit":{"limit":5000,"cost":3,"remaining":4997,"used":3,"resetAt":"2026-10-05T11:00:00Z"},` +
+		`"repository":{"pullRequest":{"reviews":{"nodes":[]}}}}}`
+	fake := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: []byte(answer)}}}}
+	a, err := app.New(cfg, layout, app.Options{DryRun: true, Runner: fake, Stderr: &bytes.Buffer{},
+		MySQLDSN: "root:@tcp(127.0.0.1:1)/?timeout=1s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	e := FromApp(a)
+	for _, id := range cfg.Identities {
+		if c := a.GitHub(id.Name); c == nil || c.Meter == nil {
+			t.Fatalf("identity %s's GitHub client has no meter", id.Name)
+		}
+	}
+	if _, err := a.GitHub("zhuravel").ReviewsWithMarker(github.WithOp(context.Background(), opRoundSettle), "talkable", "talkable", 7, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.ghMeter.mu.Lock()
+	c := e.ghMeter.ids["zhuravel"]
+	var got GitHubOpCost
+	if c != nil && len(c.Hours) == 1 {
+		got = c.Hours[0].Ops[opRoundSettle]
+	}
+	_, other := e.ghMeter.ids["talkable-app"]
+	e.ghMeter.mu.Unlock()
+	if got != (GitHubOpCost{Points: 3, Calls: 1}) || other {
+		t.Fatalf("the meter after one call of zhuravel's client: %+v (talkable-app counted: %v)", got, other)
 	}
 }

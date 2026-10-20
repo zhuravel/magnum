@@ -257,13 +257,27 @@ type Usage struct {
 	CodexHome string `toml:"codex_home"`
 }
 
+// DefaultBudgetFloor is [github] budget_floor's default: about a tenth of a
+// user's hourly GraphQL budget of 5,000 points.
+const DefaultBudgetFloor = 500
+
+// MaxBudgetFloor is the highest budget_floor: a user's whole hourly budget.
+const MaxBudgetFloor = 5000
+
 // GitHub tunes how magnum reaches the GitHub REST API itself (App JWT and
-// installation-token calls; everything else already runs through gh).
+// installation-token calls; everything else already runs through gh), and
+// how much of an identity's GraphQL budget new work leaves (budget_floor).
 type GitHub struct {
 	// Transport is "gh" (default: requests run as `gh api --include`, so only
 	// the signed gh binary talks to GitHub, which outbound firewalls such as
 	// Little Snitch already allow) or "direct" (Go net/http).
 	Transport string `toml:"transport"`
+	// BudgetFloor is the GraphQL budget (points left of the hour's) below
+	// which the daemon starts no new work that reads GitHub as an identity:
+	// rounds, fix jobs, whiteboards, the retro and notes curations wait for
+	// that identity's budget to recover, while running rounds finish and the
+	// poll keeps its own floor of 50. 0 = off; at most 5000.
+	BudgetFloor int `toml:"budget_floor"`
 }
 
 type Herdr struct {
@@ -936,7 +950,7 @@ func Defaults() *Config {
 		},
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
-		GitHub:   GitHub{Transport: "gh"},
+		GitHub:   GitHub{Transport: "gh", BudgetFloor: DefaultBudgetFloor},
 		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FullPassEvery: DefaultFullPassEvery, AuditEvery: DefaultAuditEvery, ApproveAfterFullPass: DefaultApproveAfterFullPass, MaxSimplifications: DefaultMaxSimplifications, FullPassLines: DefaultFullPassLines, FullPassFiles: DefaultFullPassFiles, FullPassAfter: Duration{DefaultFullPassAfter}, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever, FixCompactAt: DefaultFixCompactAt, WhiteboardRole: RoleClaudeWhiteboard, Spend: SpendMedium},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),

@@ -59,6 +59,12 @@ type Client struct {
 	// If Reauth fails the call returns the unauthorized error together with
 	// Reauth's error. It may be called from several goroutines at once.
 	Reauth func(ctx context.Context) error
+	// Meter, when set, hears of every gh api command the client runs, right
+	// after it returned, on the caller's goroutine: a GraphQL call with the
+	// rate limit GitHub answered (its cost), a REST call as one request
+	// (meter.go). It must return at once and never call GitHub; a Meter that
+	// panics fails no call. Set it before the client's first call.
+	Meter func(Call)
 
 	// last is the most conservative rate-limit snapshot any GraphQL call of
 	// this client saw (latest reset window, lowest remaining; observe).
@@ -311,6 +317,8 @@ func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[str
 	args := append([]string{"api", "graphql"}, ghHost...)
 	args = append(args, "--input", "-")
 	res, runErr := c.gh(ctx, op, args, body, false, nil)
+	var rate RateLimit // what the meter hears: the answer's rate limit, when it carried one
+	defer func() { c.meter(ctx, op, true, rate) }()
 	var exitErr *execx.ExitError
 	if runErr != nil && !errors.As(runErr, &exitErr) {
 		return RateLimit{}, nil, fmt.Errorf("github %s: %w", op, runErr)
@@ -338,18 +346,24 @@ func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[str
 			fatal = true
 		}
 	}
-	if fatal {
-		return RateLimit{}, nil, &APIError{Op: op, Status: httpStatus(res.Stderr), Errors: env.Errors}
-	}
+	// A query GitHub ran carries its rate limit beside a partial error too:
+	// it cost what it cost.
 	var rl struct {
 		RateLimit *rateLimitJSON `json:"rateLimit"`
 	}
-	if err := json.Unmarshal(env.Data, &rl); err != nil {
-		return RateLimit{}, nil, fmt.Errorf("github %s: decode rateLimit: %w", op, err)
+	var rlErr error
+	if !isNull(env.Data) {
+		if rlErr = json.Unmarshal(env.Data, &rl); rlErr == nil && rl.RateLimit != nil {
+			rate = RateLimit(*rl.RateLimit)
+		}
 	}
-	var rate RateLimit
+	if fatal {
+		return RateLimit{}, nil, &APIError{Op: op, Status: httpStatus(res.Stderr), Errors: env.Errors}
+	}
+	if rlErr != nil {
+		return RateLimit{}, nil, fmt.Errorf("github %s: decode rateLimit: %w", op, rlErr)
+	}
 	if rl.RateLimit != nil {
-		rate = RateLimit(*rl.RateLimit)
 		c.observe(rate)
 	}
 	if err := json.Unmarshal(env.Data, out); err != nil {
@@ -415,6 +429,7 @@ func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [
 		args = append(args, "--input", "-")
 	}
 	res, err := c.gh(ctx, op, args, stdin, mutates, expected)
+	c.meter(ctx, op, false, RateLimit{})
 	if err != nil {
 		if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
 			return ghFailure(op, res, exitErr)
@@ -452,6 +467,7 @@ func (c *Client) restRawOnce(ctx context.Context, op, path, accept string) ([]by
 	args := append([]string{"api", path}, ghHost...)
 	args = append(args, "-H", "Accept: "+accept)
 	res, err := c.gh(ctx, op, args, nil, false, nil)
+	c.meter(ctx, op, false, RateLimit{})
 	if err != nil {
 		if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
 			return nil, ghFailure(op, res, exitErr)

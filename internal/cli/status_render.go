@@ -95,7 +95,7 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 		fmt.Fprintf(w, ", last reconcile %s", inspAgo(now, dm.LastReconcile))
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "github:   %s\n", statusGitHubText(r.GitHub, now))
+	statusRenderGitHub(w, r.GitHub, now)
 	if r.Codex != nil {
 		fmt.Fprintf(w, "codex:    %s\n", statusCodexText(*r.Codex, now))
 	}
@@ -232,6 +232,92 @@ func statusConfigText(c statusConfig, now time.Time) string {
 		return s + "the daemon restarts on it when nothing is in flight"
 	}
 	return s + "applies after a restart: `magnum daemon-restart --when-idle`"
+}
+
+// statusGitHubTop is how many ops a GitHub line names; the rest are "…".
+const statusGitHubTop = 3
+
+// statusRenderGitHub prints the GitHub line: one line per identity the
+// daemon meters, each indented under the first, or the radar's rate budget
+// (statusGitHubText) while no record exists.
+func statusRenderGitHub(w io.Writer, g statusGitHub, now time.Time) {
+	if len(g.Identities) == 0 {
+		fmt.Fprintf(w, "github:   %s\n", statusGitHubText(g, now))
+		return
+	}
+	for i, id := range g.Identities {
+		label := "          "
+		if i == 0 {
+			label = "github:   "
+		}
+		fmt.Fprintf(w, "%s%s\n", label, statusGitHubIdentityText(id, now))
+	}
+}
+
+// statusGitHubIdentityText is one identity's line: the budget the last call
+// told, a run below the floor, and what the calls since the window's start
+// cost, the costliest ops first:
+//
+//	zhuravel 4692/5000, resets 15:00 · since 14:00 1,470 points: round setup 620, settle 300, radar 180, …
+//
+// A budget whose window has ended is not shown as left (no call has updated
+// it since). Times are local, as the other lines write them.
+func statusGitHubIdentityText(id statusGitHubIdentity, now time.Time) string {
+	clock := func(t time.Time) string { return t.Local().Format("15:04") }
+	s := statusSafe(id.Identity, 40)
+	switch {
+	case id.Remaining == nil:
+		s += " budget unknown"
+	case id.ResetAt != nil && !now.Before(*id.ResetAt):
+		s += " reset at " + clock(*id.ResetAt) + " (no call since)"
+	default:
+		s += " " + strconv.Itoa(*id.Remaining)
+		if id.Limit != nil {
+			s += "/" + strconv.Itoa(*id.Limit)
+		}
+		if id.ResetAt != nil {
+			s += ", resets " + clock(*id.ResetAt)
+		}
+	}
+	if low := id.Low; low != nil {
+		s += fmt.Sprintf(" · below the floor of %d: new work waits until %s", low.Floor, clock(low.Until))
+	}
+	since := clock(id.WindowStart)
+	if id.WindowCalls == 0 && id.WindowPoints == 0 {
+		return s + " · no calls since " + since
+	}
+	s += " · since " + since + " " + statusThousands(id.WindowPoints) + " " + textx.Plural(id.WindowPoints, "point", "points")
+	if id.WindowRESTCalls > 0 {
+		s += ", " + textx.Count(id.WindowRESTCalls, "REST call", "REST calls")
+	}
+	var ops []string
+	for _, op := range id.WindowOps[:min(len(id.WindowOps), statusGitHubTop)] {
+		cost := statusThousands(op.Points)
+		if op.Points == 0 && op.RESTCalls > 0 {
+			cost = statusThousands(op.RESTCalls) + " REST" // REST calls spend no points
+		}
+		ops = append(ops, statusSafe(op.Words, 40)+" "+cost)
+	}
+	if len(ops) == 0 {
+		return s
+	}
+	s += ": " + strings.Join(ops, ", ")
+	if len(id.WindowOps) > statusGitHubTop {
+		s += ", …"
+	}
+	return s
+}
+
+// statusThousands writes n with a comma between each three digits: 1,470.
+func statusThousands(n int) string {
+	s := strconv.Itoa(max(n, -n))
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if n < 0 {
+		s = "-" + s
+	}
+	return s
 }
 
 // statusGitHubText is the GitHub line's value: the rate budget left.

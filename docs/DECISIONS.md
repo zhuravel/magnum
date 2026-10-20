@@ -10101,6 +10101,94 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - Excluding bots' comments from what starts a job: a code-review bot's finding is as much an item as a
       person's, and the fixer already gives a status comment no reply.
     - Starting a job on a cut-short read that shows nothing waiting: it would have nothing to answer.
+- **A GitHub cost meter per call and identity, and a shared floor that holds new work before the budget
+  runs out** (2026-10-20, spec 97). From 16:43 to 16:56 local the operator's gh login ran out of its
+  GraphQL budget (5,000 points an hour, shared by every tool on that login): the daemon log has 61 "gh: API
+  rate limit already exceeded for user ID <n>" lines and the radar poll failed (`poll.error`). The radar is
+  cheap by design (scalars only, about one point per owner), so the spend was elsewhere: about 20 call sites
+  read as the watch's poll identity (a round's setup and settle, triage, delta checks, the full pass, the
+  post-merge base, the push's delta, reruns, the fix job's settle and its read of the other reviewers, the
+  retro, auto-approval's base checks, whiteboards), plus whatever else the operator runs. Magnum kept only
+  the last radar's rate limit and could not say who spent it, and only the poll held back below a floor
+  (`rateFloor`, 50), so rounds and jobs spent the budget to zero and the poll then failed.
+  - **The meter.** `github.Client.Meter` hears every `gh api` command right after it returns: a GraphQL call
+    with the rate limit its answer carried (its cost; beside a partial error too; zero when gh failed before
+    GraphQL answered), a REST call as one request against the core budget, a retry after a 401 as a second
+    call. Every GraphQL query already asked for `rateLimit`; a test scans the package's query declarations
+    and its `c.graphql` calls, so a new query cannot leave it out. The caller labels what it reads GitHub
+    for with `github.WithOp` in the call's context (the innermost label wins); a call without one counts
+    under its own kind, read from the start of its error label (`callKinds`; a test scans every label the
+    package builds). FromApp sets the Meter of each identity's client. The hook takes one lock, adds and
+    returns: it never touches the store, and a Meter that panics fails no call.
+  - **What it keeps.** Per identity, per op and per clock hour, the last 24 hours, and each identity's latest
+    rate limit (a later reset window, or the same window with no more left: calls in flight return in any
+    order), which the radar's own reading feeds too. A call counts in the clock hour it returned in, so a
+    clock that stepped back adds to an earlier hour, made in its place when missing. The tick writes
+    `github.cost.<identity>` at most once a minute and the stop writes the last calls; every flush first drops
+    every record's hours older than the last 24, an idle identity's too, and a write that fails (a store
+    error, the stop's cancelled context) leaves its record to be written by the next flush. The start reads
+    the records back.
+    The ops: `round` (the pipeline's threads file, posting and verification), `round.setup`,
+    `round.settle`, `round.triage`, `round.delta_check`, `round.full_pass`, `round.post_merge`,
+    `round.rerun`, `poll.delta`, `poll.since_review`, `auto_approve`, `approval`, `status_comment`, `fix`,
+    `fix.external`, `fix.settle`, `whiteboard`, `retro` and `verdict`; `GitHubOpWords` gives each its plain
+    words. One comparison serves a tick (`compareMemo`), so it counts as its first caller's.
+  - **Status.** `magnum status` shows one line per metered identity: "github:   zhuravel 4692/5000, resets
+    17:13 · since 16:00 1,470 points: round setup 620, settle 300, radar 180, …". The window is the current
+    clock hour, or reaches back to the hour before while the current one is under 30 minutes old. A run of
+    low budget adds "below the floor of 500: new work waits until 17:13" and a `github:<identity>` pause.
+    `--json` carries the window by op and the 24 hours (`github.identities`). Without a record the radar's
+    old line stays.
+  - **The floor.** `[github] budget_floor` (default 500 points, 0 = off, at most 5000) is checked only where
+    work starts, never on a read:
+    - **A round:** dispatch holds it while its watch's poll identity or its posting identity is below the
+      floor (`WaitGitHub`: "github budget: zhuravel at 312 points until 17:13", `review · github budget →
+      17:13` on the board, not overridable). A paused round's continuation passes: it finishes a round that
+      ran. `magnum review` still forces the round, which waits too, and its answer says why.
+    - **A fix cycle:** `prepareFix` looks at the floor before anything it reads from GitHub: below it,
+      a review that found nothing does not read the other reviewers' threads, reviews and comments (spec
+      96's read: it would spend the very budget the floor keeps, and a read GitHub refuses at exhaustion
+      would drop the request), and a `magnum fix` takes no pin off; the job carries the low budget, and
+      `startFix` refuses with `githubBudgetError`, which keeps the job it prepared. `magnum fix` and autofix
+      become held fixes (`KVPRFixHeld` with why `github_budget`, as a drain holds them; the answer says it
+      starts once the budget recovers), and a loop's next cycle is held in phase reviewing (`fix.waiting`).
+      The tick that finds the poll identity's budget recovered goes on with them (`continueBudgetHeld`)
+      before dispatch, so a round queued meanwhile for the same PR (a reply round, a forced review) waits
+      for the fixer instead of taking the PR and having the held fix dropped as a round in flight; the
+      restart's recovery does the same, and holds them again while the budget is still low. A held start
+      whose read GitHub refuses for its rate limit stays held. A held autofix runs autofix's own checks
+      again before it starts (`autofixGone`: the watch still asks for it, the PR is the operator's, no
+      `magnum fix --off`, a fix role) and is dropped otherwise.
+    - **A whiteboard:** a posted review's whiteboard is remembered as pending, as a drain's skip is, under
+      the identity its job reads as, and made once that identity recovered: a pass of the pending
+      whiteboards leaves pending those whose own identity is still low. `magnum whiteboard` is refused
+      with the budget and its reset.
+    - **The retro and a notes curation:** the day's retro waits, and `magnum retro` and a requested curation
+      are queued ("starts when the GitHub budget of zhuravel recovers"; `QueuedGitHub`). The curation reads
+      nothing through the daemon's clients; it waits because its agent's pane runs with the operator's own
+      environment, whose gh login is this budget, and a learn job is the easiest work to put off.
+    - **What goes on:** a running round finishes (its settle and posting reads are the round's), a fix job
+      or a whiteboard that started runs to its end, and the poll keeps `rateFloor`, so new pushes and
+      requests are still seen.
+    - **Announced once per run:** the first tick of a run below the floor writes `github.budget_low` (warn)
+      and toasts once ("GitHub budget of zhuravel at 312 points: new rounds wait until 17:13"). The run is
+      written at once in a row of its own (`github.low.<identity>`, with its budget), apart from the cost
+      records, which stay at once a minute; the start reads it back, its budget included, so a restart
+      neither announces the run twice nor forgets the low budget a minute's flush had not written yet. The
+      tick that finds the budget recovered (above the floor, or past its reset) removes it with
+      `github.budget_recovered` and lets the next run toast again.
+  - **Residuals.** The ops count the daemon's calls only: agents' `gh` calls in their panes (the reviewers,
+    the judge's post-review, the fixer, the whiteboard writer) spend the same budget unseen, as does every
+    other tool on the login; the remaining the line shows is GitHub's, so their spend is in it. An
+    identity's budget is known only from the daemon's last call as it, so after the reset nothing is held
+    until a call shows the new window. A held fix whose PR moved on is dropped as after a drain
+    (`fix.dropped`; an autofix's without a toast).
+  - **Rejected:**
+    - Webhooks first: they would replace the radar's polling, not the per-round reads that spend.
+    - Moving the reads to the App's token: a later step, once the meter shows which reads dominate.
+    - A floor only on the poll: today's state, which let rounds and jobs spend the budget to zero.
+    - Checking the floor on each read: a half-read round would fail where it should finish.
+    - Writing the store on each call: the hook runs on every read path, rounds' goroutines included.
 
 ## Learned rules
 

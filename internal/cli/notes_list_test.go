@@ -314,6 +314,17 @@ func TestNotesListSaysACurationQueuedDuringADrainWaitsForTheRestart(t *testing.T
 	}
 }
 
+// A curation held while a watch's GitHub budget is below the floor says it
+// waits for the budget's reset, not for a judge stage.
+func TestNotesListSaysACurationQueuedForTheGitHubBudgetWaitsForItsReset(t *testing.T) {
+	now := time.Date(2026, 10, 20, 18, 0, 0, 0, time.UTC)
+	r := notesRow{State: notesQueued, Waits: engine.QueuedGitHub,
+		Curation: &engine.CurateMark{Repo: "example/api", Trigger: engine.CurateTriggerRequest, Started: now.Add(-time.Minute)}}
+	if got, want := notesStateText(r, now), "curation queued (request, waits for the GitHub budget's reset)"; got != want {
+		t.Errorf("state = %q, want %q", got, want)
+	}
+}
+
 // --json prints the same rows; no repository with notes is a note on
 // stderr and an empty list.
 func TestNotesListJSONAndNoRepositories(t *testing.T) {

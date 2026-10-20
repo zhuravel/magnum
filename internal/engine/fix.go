@@ -104,6 +104,13 @@ type fixJob struct {
 	// job then answers their unanswered items alone, and writeExternal
 	// writes these without reading GitHub again.
 	others *externalRead
+	// budget is set when prepareFix found the GitHub budget of the identity
+	// the job reads as below the floor (github_floor.go): it read nothing
+	// and took no pin off, and the job is held (startFix refuses with
+	// githubBudgetError). othersDeferred: such a job of a review that found
+	// nothing reads the other reviewers' items when the held fix starts.
+	budget         *githubLowBudget
+	othersDeferred bool
 	// touched: the fixer may have changed the slot (its prompt was sent), so
 	// the settle and a stop put the slot back in order.
 	touched bool
@@ -138,6 +145,9 @@ func (j *fixJob) fixes() string {
 	open := j.review.OpenProblems()
 	n := j.review.Findings() + open
 	switch {
+	case n == 0 && j.othersDeferred:
+		return fmt.Sprintf("answers what the other reviewers left unanswered, read once the GitHub budget recovers, in %s (magnum's review of %s found nothing)",
+			j.slot.Name, textx.ShortSHA(j.review.SHA))
 	case n == 0 && j.others != nil:
 		threads, conversation := j.others.items.unanswered()
 		note := "magnum's review of " + textx.ShortSHA(j.review.SHA) + " found nothing"
@@ -222,9 +232,12 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	dry := p.DryRun || e.d.DryRun
 	switch {
 	case e.draining(ctx): // held for the restart (fix_held.go), which would end a fixer started now
-		return e.holdFix(ctx, pr, dry)
+		return e.holdFix(ctx, pr, dry, fixBy, fixHold{})
 	case dry:
 		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried)
+		if err == nil && job.budget != nil { // github_floor.go: it would be held
+			return e.holdFix(ctx, pr, true, fixBy, fixHold{low: job.budget, job: job})
+		}
 	case e.whiteboardHolds(pr.ID): // the job yields to the request once every other refusal passed (answerYielding)
 		pre, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried)
 		if err != nil {
@@ -238,9 +251,12 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	default:
 		job, err = e.startFix(ctx, pr, fixBy, FixState{}, carried)
 	}
+	var budget *githubBudgetError
 	switch {
 	case errors.Is(err, errFixDraining): // a drain began since draining was asked
-		return e.holdFix(ctx, pr, false)
+		return e.holdFix(ctx, pr, false, fixBy, fixHold{})
+	case errors.As(err, &budget): // github_floor.go: held until the budget recovers
+		return e.holdFix(ctx, pr, false, fixBy, fixHold{low: &budget.low, job: budget.job})
 	case err != nil:
 		return "", err
 	}
@@ -274,7 +290,11 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 // restart is refused at once, not held. carried is the other reviewers'
 // items the same request read before (nil = none): a review that found
 // nothing then decides on them instead of reading GitHub again
-// (othersWaiting).
+// (othersWaiting). Below the GitHub floor of the identity the job reads as
+// (github_floor.go) it reads nothing from GitHub and takes no pin off: the
+// job carries the low budget (fixJob.budget) for startFix to hold it, and a
+// review that found nothing has the other reviewers' items read when the
+// held fix starts (othersDeferred).
 func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin, carried *externalRead) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
@@ -286,6 +306,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	if w == nil {
 		return nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", full)
 	}
+	// github_floor.go: below the floor of the identity the job reads as, the
+	// job is prepared without reading GitHub or taking a pin off, and held.
+	low, isLow := e.githubLow(w.PollIdentity)
 	role, ok := e.cfg.FixRoleFor(w)
 	if !ok {
 		return nil, fmt.Errorf("no fix role for %s", full)
@@ -351,7 +374,12 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// next cycle's changes request may keep earlier findings open with
 	// neither (fixRemains).
 	var others *externalRead
-	if sum.Findings()+sum.OpenProblems() == 0 && prev.Cycle == 0 {
+	deferred := false
+	switch {
+	case sum.Findings()+sum.OpenProblems() != 0 || prev.Cycle != 0:
+	case isLow: // read once the budget recovered, when the held fix starts
+		deferred = true
+	default:
 		if others, err = e.othersWaiting(ctx, &fixJob{repo: repo, watch: *w, pr: pr, login: src.Login()}, on, carried); err != nil {
 			return nil, err
 		}
@@ -383,6 +411,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	case pin == fixPinWouldUnpin:
 		what, origin := e.pinnedWhat(ctx, repo, pr, slot, true)
 		notes = append(notes, "would unpin "+what+origin+" to fix it")
+	case isLow: // the pin goes when the held fix starts
+		what, origin := e.pinnedWhat(ctx, repo, pr, slot, true)
+		notes = append(notes, "unpins "+what+origin+" once it starts")
 	default:
 		note, held, err := e.unpinFor(ctx, repo, pr, slot, true, fixBy, "fix") // review_unpin.go
 		switch {
@@ -395,7 +426,10 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		notes = append(notes, note)
 	}
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
-		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others}
+		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, othersDeferred: deferred}
+	if isLow {
+		job.budget = &low
+	}
 	if job.state.Cap == 0 {
 		job.state.Cap = e.cfg.FixCyclesFor(w)
 	}
@@ -459,8 +493,10 @@ func (e *Engine) reviewStood(ctx context.Context, pr store.PR, sum store.ReviewS
 	return true, nil
 }
 
-// startFix starts a fix cycle on pr under prepareFix's refusals and a
-// drain's (errFixDraining): a new loop
+// startFix starts a fix cycle on pr under prepareFix's refusals, a
+// drain's (errFixDraining) and the GitHub floor's (githubBudgetError:
+// below it prepareFix reads nothing from GitHub and takes no pin off, and
+// the hold keeps the job it prepared): a new loop
 // (prev zero, started by by: "magnum fix", "autofix") at cycle 1 of the
 // watch's fix_cycles, or the next cycle of the loop prev waits in. A new
 // loop `magnum fix` asks for unpins a pinned PR (fixPinUnpins); autofix and
@@ -483,6 +519,9 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	job, err := e.prepareFix(ctx, pr, prev, pin, carried)
 	if err != nil {
 		return nil, err
+	}
+	if job.budget != nil { // github_floor.go: prepared without reads; held until the budget recovers
+		return nil, &githubBudgetError{low: *job.budget, job: job}
 	}
 	if e.d.Agents == nil || e.d.Slots == nil {
 		return nil, errors.New("the daemon has no agents or slots manager")
@@ -562,6 +601,7 @@ func sameWaitingLoop(cur, prev FixState) bool {
 // loop's row stays in phase fixing, which the next start ends
 // (recoverFixes).
 func (e *Engine) runFix(ctx context.Context, job *fixJob) {
+	ctx = github.WithOp(ctx, opFix) // github_cost.go
 	subject := job.subject()
 	if err := steps.ResetSubject(ctx, e.st, subject); err != nil {
 		e.log.Warn("fix: new step generation", "subject", subject, "err", err)

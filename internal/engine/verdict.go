@@ -53,6 +53,7 @@ func KVPRManualVerdict(prID int64) string { return fmt.Sprintf("pr.%d.manual_ver
 // standing automatic approval first (withdrawForChanges): it would still
 // count for merging; auto-approval waits until it is recorded.
 func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event string) (string, error) {
+	ctx = github.WithOp(ctx, opVerdict) // github_cost.go
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
 		return "", err

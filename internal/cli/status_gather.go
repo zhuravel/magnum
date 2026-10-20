@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"slices"
@@ -407,7 +408,11 @@ func statusGatherMachine(ctx context.Context, d statusDeps, r *statusReport) {
 }
 
 // statusGatherGitHub fills the GitHub rate budget and, while polling waits
-// for the reset, the "rate budget low" pause.
+// for the reset, the "rate budget low" pause; then the daemon's cost record
+// of each identity (engine.KVGitHubCost) with its run of low budget
+// (engine.KVGitHubLow, written apart from the record and at once, so an
+// identity can have a run before its first record) and, for each identity
+// in such a run, the pause the floor makes.
 func statusGatherGitHub(kv statusKV, now time.Time, r *statusReport) {
 	r.GitHub = statusGitHub{Remaining: kv.getInt(store.KVGHRemaining), Limit: kv.getInt(store.KVGHLimit), ResetAt: kv.getTime(store.KVGHReset)}
 	if t := kv.getTime(store.KVGHPollPausedUntil); t != nil && t.After(now) {
@@ -415,6 +420,84 @@ func statusGatherGitHub(kv statusKV, now time.Time, r *statusReport) {
 		r.Pauses = append(r.Pauses, statusPause{Scope: "github", Reason: "rate budget low", Until: t,
 			Detail: "polling waits for the GitHub rate-limit reset"})
 	}
+	rows, err := kv.st.KVValues(kv.ctx, engine.KVGitHubCost("*"))
+	if err != nil {
+		return // as any unreadable row: absent
+	}
+	lowRows, err := kv.st.KVValues(kv.ctx, engine.KVGitHubLow("*"))
+	if err != nil {
+		lowRows = nil
+	}
+	costs := map[string]engine.GitHubCost{}
+	for key, v := range rows {
+		if c, ok := engine.ParseGitHubCost(v); ok && engine.KVGitHubCost(c.Identity) == key {
+			costs[c.Identity] = c
+		}
+	}
+	lows := map[string]engine.GitHubLow{}
+	for key, v := range lowRows {
+		id, _ := strings.CutPrefix(key, engine.KVGitHubLow(""))
+		if l, ok := engine.ParseGitHubLow(v); ok && id != "" {
+			lows[id] = l
+			if _, ok := costs[id]; !ok {
+				costs[id] = engine.GitHubCost{Identity: id}
+			}
+		}
+	}
+	window := statusGitHubWindow(now)
+	for _, id := range slices.Sorted(maps.Keys(costs)) {
+		var low *engine.GitHubLow
+		if l, ok := lows[id]; ok {
+			low = &l
+		}
+		r.GitHub.Identities = append(r.GitHub.Identities, statusGitHubOf(costs[id], low, window, now))
+	}
+	for _, id := range r.GitHub.Identities {
+		if low := id.Low; low != nil {
+			until := low.Until
+			r.Pauses = append(r.Pauses, statusPause{Scope: "github:" + id.Identity, Reason: "budget floor", Until: &until,
+				Detail: "new rounds, fix jobs, whiteboards, the retro and notes curations wait; running rounds finish"})
+		}
+	}
+}
+
+// statusGitHubWindow is where the window of the cost shown on the GitHub
+// line starts: the current clock hour (GitHub's rate limit resets on its own
+// schedule, but the meter counts by clock hour), or the hour before while
+// the current one began less than half an hour ago, when it alone would
+// show almost nothing.
+func statusGitHubWindow(now time.Time) time.Time {
+	start := now.UTC().Truncate(time.Hour)
+	if now.Sub(start) < 30*time.Minute {
+		start = start.Add(-time.Hour)
+	}
+	return start
+}
+
+// statusGitHubOf is one cost record as the report holds it, with its run of
+// low budget (nil: none): the budget as the last call told it and the cost
+// of the hours from window on. A run whose reset passed is over (a daemon
+// that stopped during it never cleared it).
+func statusGitHubOf(c engine.GitHubCost, low *engine.GitHubLow, window, now time.Time) statusGitHubIdentity {
+	id := statusGitHubIdentity{Identity: c.Identity, Low: low, WindowStart: window, WindowOps: []statusGitHubOp{},
+		Hours: append([]engine.GitHubHour{}, c.Hours...)}
+	if id.Low != nil && !now.Before(id.Low.Until) {
+		id.Low = nil
+	}
+	if rate := c.Rate; rate != nil {
+		remaining, limit, resetAt, seenAt := rate.Remaining, rate.Limit, rate.ResetAt, rate.SeenAt
+		id.Remaining, id.Limit, id.ResetAt = &remaining, &limit, &resetAt
+		if !seenAt.IsZero() {
+			id.SeenAt = &seenAt
+		}
+	}
+	total, ops := c.Since(window)
+	id.WindowPoints, id.WindowCalls, id.WindowRESTCalls = total.Points, total.Calls, total.RESTCalls
+	for _, op := range ops {
+		id.WindowOps = append(id.WindowOps, statusGitHubOp{Op: op.Op, Words: engine.GitHubOpWords(op.Op),
+			Points: op.Points, Calls: op.Calls, RESTCalls: op.RESTCalls})
+	}
+	return id
 }
 
 // statusGatherPauses lists what holds automation back: the daemon pause,

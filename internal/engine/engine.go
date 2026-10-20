@@ -385,6 +385,13 @@ type Engine struct {
 	// that ends without a restart continues them (continueAfterDrain), as
 	// the restart's recovery would.
 	drainHeld map[int64]bool
+	// budgetHeld are the PRs whose fix loop's next cycle, `magnum fix` or
+	// autofix a GitHub budget below the floor held (githubBudgetError),
+	// guarded by mu: the tick that finds the budget recovered goes on with
+	// them (continueBudgetHeld, github_floor.go). budgetWhiteboards are the
+	// identities whose low budget left a whiteboard pending (guarded by mu).
+	budgetHeld        map[int64]bool
+	budgetWhiteboards map[string]bool
 	// yieldCarry is, by request id, what a request read before a whiteboard
 	// job yielded the PR to it (whiteboardHeld.carry), handed to the request
 	// when it is answered after the yield (answerYielding), guarded by mu.
@@ -426,6 +433,10 @@ type Engine struct {
 	logged map[string]time.Time
 	// compares are this tick's GitHub comparisons (compare.go).
 	compares compareMemo
+	// ghMeter is the GitHub cost meter: what every identity's calls cost,
+	// and each identity's latest rate limit, which the floor reads
+	// (github_cost.go).
+	ghMeter githubMeter
 
 	// Urgent toasts run in their own goroutines on toastCtx (surface.go).
 	toastMu      sync.Mutex
@@ -589,24 +600,26 @@ func New(d Deps) *Engine {
 	}
 	e := &Engine{
 		d: d, cfg: d.Config, st: d.Store, log: d.Logger,
-		rounds:        map[int64]*roundHandle{},
-		evicting:      map[int64]string{},
-		workEndedAt:   map[int64]time.Time{},
-		autofixNoRole: map[int64]bool{},
-		drainHeld:     map[int64]bool{},
-		yieldCarry:    map[int64]any{},
-		heavy:         make(chan heavyJob, 64),
-		heavyKeys:     map[string]bool{},
-		inflight:      map[int64]bool{},
-		lastSeen:      map[string]string{},
-		logged:        map[string]time.Time{},
-		cleanupTried:  map[int64]time.Time{},
-		curateTried:   map[int64]time.Time{},
-		netRuns:       map[string]netRun{},
-		cliRead:       map[string]cliStamp{},
-		cliFails:      map[string]*cliReadFailures{},
-		kick:          make(chan struct{}, 1),
-		starts:        starter{codex: make(chan struct{}, maxCodexStarts)},
+		rounds:            map[int64]*roundHandle{},
+		evicting:          map[int64]string{},
+		workEndedAt:       map[int64]time.Time{},
+		autofixNoRole:     map[int64]bool{},
+		drainHeld:         map[int64]bool{},
+		budgetHeld:        map[int64]bool{},
+		budgetWhiteboards: map[string]bool{},
+		yieldCarry:        map[int64]any{},
+		heavy:             make(chan heavyJob, 64),
+		heavyKeys:         map[string]bool{},
+		inflight:          map[int64]bool{},
+		lastSeen:          map[string]string{},
+		logged:            map[string]time.Time{},
+		cleanupTried:      map[int64]time.Time{},
+		curateTried:       map[int64]time.Time{},
+		netRuns:           map[string]netRun{},
+		cliRead:           map[string]cliStamp{},
+		cliFails:          map[string]*cliReadFailures{},
+		kick:              make(chan struct{}, 1),
+		starts:            starter{codex: make(chan struct{}, maxCodexStarts)},
 	}
 	e.rec = &Recorder{log: d.Logger, st: d.Store, now: d.Now}
 	e.toastCtx, e.toastStop = context.WithCancel(context.Background())
@@ -686,6 +699,13 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		m(&d)
 	}
 	e := New(d)
+	if a.Config != nil && a.GitHub != nil {
+		for _, id := range a.Config.Identities {
+			if c := a.GitHub(id.Name); c != nil {
+				c.Meter = e.meterGitHub(id.Name) // github_cost.go: before the clients' first call
+			}
+		}
+	}
 	for _, r := range a.Pipeline {
 		if r != nil {
 			r.OnPause = e.PauseTool // a run that proves a kind logged out pauses it before the round ends
@@ -876,6 +896,7 @@ func (e *Engine) shutdown() {
 		e.log.Warn("rounds, the retro, the notes curation, the skill edit, the skill gate or the memory sample did not stop within 30s")
 	}
 	e.noteRetroRunning(context.Background()) // a retro that stopped no longer holds the CLI
+	e.flushGitHubCost(context.Background(), true)
 	if e.batch != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -938,6 +959,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.health(ctx)
 	e.handleRequests(ctx)
 	e.closeGrace(ctx)
+	// github_floor.go: the work the GitHub budget held, once it recovered,
+	// before dispatch gives the PR to another round.
+	e.continueBudgetHeld(ctx)
 	e.dispatch(ctx, ts)
 	e.noteWaits(ctx, ts)
 	e.noteStatusComments(ctx) // status_comment.go: after the waits it names
@@ -953,6 +977,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.autoApprove(ctx)    // before noteNeedsMe: a PR approved as the operator no longer needs them
 	e.noteNeedsMe(ctx)
 	e.noteMachine(ctx)
+	e.noteGitHubBudget(ctx) // github_cost.go: a run of low budget begins or ends
+	e.flushGitHubCost(ctx, false)
 	e.surface(ctx)
 	return errors.Join(errs...)
 }
@@ -974,6 +1000,7 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recordShellPATH(ctx)    // shell_path.go
 	e.checkCLIVersions(ctx)   // cli_version.go: on the PATH just recorded
 	e.loadBudgetOverrule(ctx) // budget.go: a resume the CLI recorded while no daemon ran
+	e.loadGitHubCost(ctx)     // github_cost.go: the hours and rate limits an earlier daemon metered
 	e.noteLearnRestarted(ctx) // learn_land.go: this start runs the landed skill version
 	e.expireRequests(ctx, lastTick)
 	// A drain (daemon-restart --drain) ends with the restart: this daemon

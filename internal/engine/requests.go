@@ -486,6 +486,9 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	} else if reason := e.kindPauseReason(ctx, agentKinds(e.cfg.RolesFor(w))); reason != "" {
 		res += "; waiting: " + reason
 	}
+	if low, ok := e.githubLow(w.PollIdentity, posting); ok { // github_floor.go: a forced round waits for the budget too
+		res += "; waiting: " + low.text()
+	}
 	if unpinned != "" {
 		res += "; " + unpinned
 	}

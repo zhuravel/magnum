@@ -264,6 +264,9 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("github.transport must be gh or direct, got %q", c.GitHub.Transport))
 	}
+	if f := c.GitHub.BudgetFloor; f < 0 || f > MaxBudgetFloor {
+		errs = append(errs, fmt.Errorf("github.budget_floor must be between 0 (off) and %d points, got %d", MaxBudgetFloor, f))
+	}
 	switch c.Terminal.Icons {
 	case "", "unicode", "nerd", "ascii":
 	default:

@@ -224,7 +224,11 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 			e.log.Info("fix: the loop ended before its next cycle started", "subject", job.subject(), "why", err.Error())
 		case errors.Is(err, errFixDraining):
 			e.log.Info("fix: the daemon is draining; the next cycle waits for the restart", "subject", job.subject(), "cycle", st.Cycle+1)
-			e.holdNextCycle(ctx, job, raw)
+			e.holdNextCycle(ctx, job, raw, false)
+		case errors.Is(err, errGitHubBudget): // github_floor.go
+			e.event(ctx, "info", job.subject(), "fix.waiting",
+				fmt.Sprintf("the fix loop waits: %s; cycle %d starts once it recovers", err.Error(), st.Cycle+1), job.loopData())
+			e.holdNextCycle(ctx, job, raw, true)
 		default:
 			if why, moved := e.loopMovedOn(ctx, job.pr.ID, cmp.Or(res.TargetSHA, st.Head)); moved {
 				if e.endFixRowIf(ctx, job, raw) {
@@ -402,10 +406,17 @@ func (e *Engine) endFixRowIf(ctx context.Context, job *fixJob, raw string) bool 
 // no round that ends afterwards is taken for its re-review
 // (notLoopsReReview) and the restart's recovery starts the held cycle
 // (recoverReviewingLoop). The PR joins drainHeld: a drain lifted without a
-// restart goes on with it (continueDrainHeldLoops).
-func (e *Engine) holdNextCycle(ctx context.Context, job *fixJob, raw string) {
+// restart goes on with it (continueDrainHeldLoops). budget: the GitHub
+// floor refused the cycle (githubBudgetError) instead: the PR joins
+// budgetHeld, and the tick that finds the budget recovered goes on with it
+// (continueBudgetHeld).
+func (e *Engine) holdNextCycle(ctx context.Context, job *fixJob, raw string, budget bool) {
 	e.mu.Lock()
-	e.drainHeld[job.pr.ID] = true
+	if budget {
+		e.budgetHeld[job.pr.ID] = true
+	} else {
+		e.drainHeld[job.pr.ID] = true
+	}
 	e.mu.Unlock()
 	if job.state.Held {
 		return
@@ -440,23 +451,32 @@ func (e *Engine) continueDrainHeldLoops(ctx context.Context) {
 	clear(e.drainHeld)
 	e.mu.Unlock()
 	for _, id := range held {
-		if e.startHeldFix(ctx, id, "after the drain") { // fix_held.go
-			continue
-		}
-		st, raw, ok, err := e.fixRow(ctx, id)
-		if err != nil || !ok || st.Phase != FixPhaseReviewing {
-			continue
-		}
-		pr, err := e.st.PRByID(ctx, id)
-		if err != nil {
-			continue
-		}
-		repo, err := e.st.RepoByID(ctx, pr.RepoID)
-		if err != nil {
-			continue
-		}
-		e.recoverReviewingLoop(ctx, e.loopJob(ctx, repo, pr, st), raw, "while a drain held it")
+		e.continueHeldLoop(ctx, id, "after the drain", "while a drain held it")
 	}
+}
+
+// continueHeldLoop goes on with what a hold kept on the PR id once the hold
+// ended (after: "after the drain", "after the GitHub budget recovered"): a
+// held fix starts (startHeldFix), else a loop held before its next cycle
+// gets the decision the restart's recovery would have made
+// (recoverReviewingLoop; while: "while a drain held it", for its event).
+func (e *Engine) continueHeldLoop(ctx context.Context, id int64, after, while string) {
+	if e.startHeldFix(ctx, id, after) { // fix_held.go
+		return
+	}
+	st, raw, ok, err := e.fixRow(ctx, id)
+	if err != nil || !ok || st.Phase != FixPhaseReviewing {
+		return
+	}
+	pr, err := e.st.PRByID(ctx, id)
+	if err != nil {
+		return
+	}
+	repo, err := e.st.RepoByID(ctx, pr.RepoID)
+	if err != nil {
+		return
+	}
+	e.recoverReviewingLoop(ctx, e.loopJob(ctx, repo, pr, st), raw, while)
 }
 
 // recoverReviewingLoop goes on with a loop left in phase reviewing (raw: its
@@ -552,11 +572,43 @@ func (e *Engine) autofix(ctx context.Context, repo store.Repo, pr store.PR, res 
 		return
 	}
 	job, err := e.startFix(ctx, pr, autofixBy, FixState{}, nil)
-	if err != nil {
+	var budget *githubBudgetError
+	switch {
+	case errors.As(err, &budget): // github_floor.go: held until the budget recovers
+		res, herr := e.holdFix(ctx, pr, false, autofixBy, fixHold{low: &budget.low, job: budget.job})
+		e.log.Info("autofix: the fix loop waits for the GitHub budget", "subject", subject, "why", err.Error(), "held", res, "err", herr)
+		return
+	case err != nil:
 		e.log.Info("autofix: no fix loop started", "subject", subject, "why", err.Error())
 		return
 	}
 	e.log.Info("autofix: fix loop started", "subject", subject, "role", job.role.Name, "cycles", job.state.Cap)
+}
+
+// autofixGone is why an autofix the GitHub floor held starts no more ("" =
+// it starts): autofix's own checks of the PR again, now that it would
+// start (a watch that no longer asks for it, a PR that is not yours, fix
+// switched off with `magnum fix --off`, no fix role).
+func (e *Engine) autofixGone(ctx context.Context, repo store.Repo, pr store.PR) string {
+	w := e.cfg.WatchFor(repo.FullName())
+	switch {
+	case w == nil:
+		return repo.FullName() + " is no longer watched"
+	case e.cfg.AutofixFor(w) != config.AutofixOwn:
+		return "autofix is no longer on for its watch"
+	case !e.ownPR(pr):
+		return "the PR is not yours"
+	}
+	switch _, off, err := e.fixOff(ctx, pr.ID); {
+	case err != nil:
+		return "its opt-out cannot be read: " + err.Error()
+	case off:
+		return "fix is off for the PR (magnum fix --off)"
+	}
+	if _, ok := e.cfg.FixRoleFor(w); !ok {
+		return "its watch has no fix role"
+	}
+	return ""
 }
 
 // firstAutofixWithoutRole reports whether autofix found no fix role for the

@@ -28,6 +28,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -80,6 +81,7 @@ func (e *Engine) deltaCheckDue(ctx context.Context, w config.Watch, pr store.PR,
 // longer make a delta check (the checkout found a newer head that grew past
 // it) or cannot be measured: the round then runs in full.
 func (e *Engine) confirmDeltaCheck(ctx context.Context, job *roundJob, target string) *pipeline.DeltaCheck {
+	ctx = github.WithOp(ctx, opDeltaCheck) // github_cost.go
 	reviewed := deref(job.pr.ReviewedSHA)
 	subject := prSubject(job.repo, job.pr.Number)
 	drop := func(why string) *pipeline.DeltaCheck {
@@ -130,6 +132,7 @@ type roundDeltaSize struct {
 // itself), a client or a comparison, it reports false and the event records
 // no delta size.
 func (e *Engine) roundDelta(ctx context.Context, job *roundJob, rs *roundSetup) (roundDeltaSize, bool) {
+	ctx = github.WithOp(ctx, opDeltaCheck) // github_cost.go
 	reviewed := deref(job.pr.ReviewedSHA)
 	if !sinceReview(rs.kind) || job.evalHead != "" || reviewed == "" || reviewed == rs.target {
 		return roundDeltaSize{}, false

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
@@ -51,6 +52,7 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // replies alone end the loop with an info toast. The events name counts,
 // SHAs, the role and the report, never what the fixer wrote.
 func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
+	ctx = github.WithOp(ctx, opFixSettle) // github_cost.go
 	subject, report := job.subject(), deref(job.run.ReportPath)
 	rep, rerr := e.readFixReport(job)
 	pushed := rerr == nil && len(rep.Pushed) > 0 && !rep.PushFailed

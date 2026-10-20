@@ -17,6 +17,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -131,6 +132,7 @@ func (dc deltaCheck) change() string {
 // commit and no file to measure, while the review discusses code the push
 // dropped): the PR gets its re-review.
 func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch, base, from, to string) deltaCheck {
+	ctx = github.WithOp(ctx, opPushDelta) // github_cost.go
 	allowed := e.cfg.TrivialDeltas(&w)
 	if len(allowed) == 0 && e.cfg.ThrottleFor(&w).RereviewMinLines <= 0 {
 		return deltaCheck{}

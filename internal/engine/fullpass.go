@@ -407,6 +407,7 @@ func (e *Engine) addChurn(ctx context.Context, job *roundJob, prID int64, prev, 
 // paths those files, lockfiles and related_ignore's paths left out. ok is
 // false without a client or a comparison.
 func (e *Engine) churnOf(ctx context.Context, job *roundJob, prev, target string) (lines int, paths []string, ok bool) {
+	ctx = github.WithOp(ctx, opFullPass) // github_cost.go
 	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
 		return 0, nil, false

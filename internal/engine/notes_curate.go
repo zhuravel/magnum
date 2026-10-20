@@ -277,7 +277,8 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 	if e.d.DryRun || e.once {
 		return
 	}
-	if e.d.Curator != nil && e.learnBusy() == "" && e.holdReason(ctx) == "" && e.curateToolPause(ctx) == "" {
+	_, low := e.githubLowAny() // github_floor.go: a curation waits for the GitHub budget's reset
+	if e.d.Curator != nil && e.learnBusy() == "" && e.holdReason(ctx) == "" && e.curateToolPause(ctx) == "" && !low {
 		e.startQueuedCuration(ctx)
 	}
 	now := e.now()
@@ -287,7 +288,7 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 	e.curateChecked = now
 	e.expireProposals(ctx)
 	if e.d.Curator == nil || len(e.cfg.Notes.Curate) == 0 || e.learnBusy() != "" || e.userPause(ctx) != "" || e.holdReason(ctx) != "" ||
-		e.curateToolPause(ctx) != "" {
+		e.curateToolPause(ctx) != "" || low {
 		return
 	}
 	for _, due := range e.dueCurations(ctx, now) {
@@ -465,9 +466,12 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	}
 	ready := "; a toast says when its proposal is ready for `magnum notes " + full + " --review`"
 	why := ""
+	_, low := e.githubLowAny()
 	switch {
 	case e.draining(ctx): // the queue waits out the drain (maybeCurate starts nothing under it)
 		why = QueuedDrain
+	case low: // and the GitHub budget's reset (github_floor.go)
+		why = QueuedGitHub
 	case e.notesJudging(ctx, repo.ID):
 		why = QueuedJudge
 	}

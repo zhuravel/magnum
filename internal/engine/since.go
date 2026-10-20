@@ -49,6 +49,7 @@ func (e *Engine) sinceBase(pr store.PR) (source, base string) {
 // size measured by an older rule (store.SinceReviewVersion) is measured
 // again once.
 func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.Repo, pr store.PR, d *github.PRDetails, budget *int) {
+	ctx = github.WithOp(ctx, opSinceReview) // github_cost.go
 	source, base := e.sinceBase(pr)
 	if source == store.SinceFromBase && d != nil && !d.LatestReviewsComplete {
 		// The identity's own review may be past the latestReviews page.

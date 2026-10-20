@@ -131,6 +131,11 @@ shimmer = true                    # a PR magnum approved that GitHub still block
 [github]
 transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,
                                   # which Little Snitch blocks for a rebuilt, unsigned magnum binary
+budget_floor = 500                # GraphQL points left of an identity's hourly budget below which no new round,
+                                  # fix job, whiteboard, retro or notes curation that reads as it starts: they wait
+                                  # for the budget's reset (shown as "github budget" on the board and in `magnum
+                                  # status`). Running rounds finish; the poll keeps its own floor of 50. 0 = off
+                                  # (0 to 5000). `magnum status` shows each identity's budget and its spenders.
 
 # [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
 # codex_soft = 80                 # at this % used, full re-reviews wait (first reviews, delta checks, replies,

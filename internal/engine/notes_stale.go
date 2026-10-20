@@ -53,6 +53,10 @@ const (
 	// daemon drains for a restart: asked for during the drain, it starts
 	// after the restart (or once the drain is lifted without one).
 	QueuedDrain = "drain"
+	// QueuedGitHub is why a curation waits (CurateQueued.Why) while a
+	// watch's poll identity's GitHub budget is below [github] budget_floor:
+	// it starts once the budget recovered (github_floor.go).
+	QueuedGitHub = "github"
 )
 
 // CurateMark is the curation running now (KVNotesCurating).
@@ -66,7 +70,7 @@ type CurateMark struct {
 type CurateQueued struct {
 	Repo    string    `json:"repo"`
 	Trigger string    `json:"trigger"`
-	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain
+	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain | QueuedGitHub
 	At      time.Time `json:"at"`
 }
 
@@ -227,6 +231,8 @@ func queuedText(why string) string {
 		return "starts when the learn job running now (a curation, the retro, a skill edit or gate) ends"
 	case QueuedDrain:
 		return drainStarts
+	case QueuedGitHub:
+		return "starts when the GitHub budget recovers"
 	}
 	return "starts when the current round's judge stage ends"
 }

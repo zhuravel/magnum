@@ -13,6 +13,7 @@ package engine
 // have (autoWhiteboard), and drop one whose PR moved on (whiteboard.stopped).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,16 +54,23 @@ func parseWhiteboardPending(s string) (whiteboardPending, bool) {
 // rememberWhiteboard records that a drain skipped the whiteboard of the
 // PR's reviewed head (a later skip of the PR's newer head replaces it) and
 // marks the drain as holding one (drainWhiteboards), so that a drain that
-// ends without a restart makes it. It reports whether it did: a write that
-// failed leaves the skip final, as it was.
-func (e *Engine) rememberWhiteboard(ctx context.Context, subject string, prID int64, head string) bool {
+// ends without a restart makes it. budget: the GitHub floor skipped it
+// (github_floor.go) instead, and the tick that finds the budget recovered
+// makes it (budgetWhiteboards, continueBudgetHeld): budget names the
+// identity whose budget is low ("" for a drain). It reports whether it did:
+// a write that failed leaves the skip final, as it was.
+func (e *Engine) rememberWhiteboard(ctx context.Context, subject string, prID int64, head, budget string) bool {
 	p := whiteboardPending{Head: head, At: e.now().UTC()}
 	if err := writeKVJSON(ctx, e, kvPRWhiteboardPending(prID), "pending whiteboard", p); err != nil {
-		e.log.Warn("whiteboard: the drain's skip cannot be remembered; the next posted review is the next chance", "subject", subject, "err", err)
+		e.log.Warn("whiteboard: the skip cannot be remembered; the next posted review is the next chance", "subject", subject, "err", err)
 		return false
 	}
 	e.mu.Lock()
-	e.drainWhiteboards = true
+	if budget != "" {
+		e.budgetWhiteboards[budget] = true
+	} else {
+		e.drainWhiteboards = true
+	}
 	e.mu.Unlock()
 	return true
 }
@@ -134,6 +142,14 @@ func (e *Engine) pendingWhiteboard(ctx context.Context, prID int64, raw, when st
 		return
 	}
 	subject := prSubject(repo, pr.Number)
+	if w := e.cfg.WatchFor(repo.FullName()); w != nil {
+		if low, ok := e.githubLow(cmp.Or(w.PollIdentity, w.Identity)); ok { // github_floor.go: it waits for that budget
+			e.mu.Lock()
+			e.budgetWhiteboards[low.identity] = true
+			e.mu.Unlock()
+			return
+		}
+	}
 	switch taken, err := e.st.DeleteKVIf(ctx, key, raw); {
 	case err != nil:
 		e.warnUnlessStopped(ctx, err, "pending whiteboard: take the entry", "subject", subject)

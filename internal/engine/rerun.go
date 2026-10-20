@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -18,6 +19,7 @@ import (
 // poll identity. A role that never completed a run is runs = "first"'s
 // business; any failure skips the rerun (the role stays on request).
 func (e *Engine) rerunRoles(ctx context.Context, job *roundJob, roles []config.Role, target string) []string {
+	ctx = github.WithOp(ctx, opRerun) // github_cost.go
 	if target == "" {
 		return nil
 	}

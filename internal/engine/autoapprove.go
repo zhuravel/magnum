@@ -320,6 +320,7 @@ func (e *Engine) autoApproveRound(ctx context.Context, prID int64) { e.autoAppro
 // autoApproveFor is autoApprove for PR only, or for every PR when only is 0,
 // under autoMu.
 func (e *Engine) autoApproveFor(ctx context.Context, only int64) {
+	ctx = github.WithOp(ctx, opAutoApprove) // github_cost.go
 	if e.d.DryRun || e.d.GitHub == nil {
 		return
 	}

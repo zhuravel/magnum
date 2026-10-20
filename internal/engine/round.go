@@ -123,8 +123,11 @@ func (s *setupError) Error() string { return s.err.Error() }
 // auto-approval (autoApproveRound). It returns the round's result: an error
 // one when the setup failed, a stopped one when it was interrupted.
 func (e *Engine) runRound(ctx context.Context, job *roundJob) pipeline.RoundResult {
-	fctx := context.WithoutCancel(ctx)
-	in, ws, serr := e.prepare(ctx, job)
+	// github_cost.go: the round's reads count under its phases, the
+	// pipeline's (threads, posting, verification) under the round itself.
+	ctx = github.WithOp(ctx, opRound)
+	fctx := github.WithOp(context.WithoutCancel(ctx), opRoundSettle)
+	in, ws, serr := e.prepare(github.WithOp(ctx, opRoundSetup), job)
 	if serr != nil {
 		if ctx.Err() != nil {
 			e.log.Info("round setup interrupted", "pr", job.pr.ID)

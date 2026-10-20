@@ -166,6 +166,9 @@ type fakeGH struct {
 	// GitHub does not know); answersErr fails it.
 	answers    map[string]github.ReviewAnswer
 	answersErr error
+	// rate is the rate limit Radar answers when set (zero: 4900 of 5000
+	// points with no reset time, which the meter ignores).
+	rate github.RateLimit
 }
 
 func (g *fakeGH) ReviewAnswers(ctx context.Context, ids []string) (map[string]github.ReviewAnswer, error) {
@@ -513,6 +516,7 @@ func (g *fakeGH) Radar(ctx context.Context, org string) ([]github.RepoRadar, git
 	if err := g.radarErrs[org]; err != nil {
 		return nil, github.RateLimit{}, err
 	}
+	rate := g.rate
 	var out []github.RepoRadar
 	names := make([]string, 0, len(g.repos))
 	for full := range g.repos {
@@ -529,6 +533,9 @@ func (g *fakeGH) Radar(ctx context.Context, org string) ([]github.RepoRadar, git
 				IsDraft: p.draft, UpdatedAt: p.updated, HeadRefOid: p.head, BaseRefName: cmp.Or(p.base, "master")})
 		}
 		out = append(out, rr)
+	}
+	if rate != (github.RateLimit{}) {
+		return out, rate, nil
 	}
 	return out, github.RateLimit{Limit: 5000, Remaining: 4900, Cost: 1}, nil
 }

@@ -40,6 +40,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
@@ -209,8 +210,10 @@ func (e *Engine) requestWhiteboardAsync(ctx context.Context, id int64, p Whitebo
 
 // requestWhiteboard handles `magnum whiteboard` (requestWhiteboardAsync's
 // goroutine): the job starts on the PR's reviewed head unless one of
-// prepareWhiteboard's refusals applies, or Whiteboard is down, and the
-// answer says where it writes. A dry run answers what would start.
+// prepareWhiteboard's refusals applies, Whiteboard is down or the GitHub
+// budget of the identity it reads as is below the floor (refused with the
+// budget and its reset), and the answer says where it writes. A dry run
+// answers what would start.
 func (e *Engine) requestWhiteboard(ctx context.Context, p WhiteboardPayload) (string, error) {
 	_, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -225,6 +228,9 @@ func (e *Engine) requestWhiteboard(ctx context.Context, p WhiteboardPayload) (st
 		return fmt.Sprintf("dry run: would write the whiteboard of %s in %s", textx.ShortSHA(job.head), job.slot.Name), nil
 	}
 	job, err := e.startWhiteboard(ctx, pr, whiteboardBy)
+	if errors.Is(err, errGitHubBudget) { // github_floor.go: no writer starts; the request names when it can
+		return "", fmt.Errorf("no whiteboard now: %w; ask again after the reset", err)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -292,8 +298,12 @@ func (e *Engine) autoWhiteboard(ctx context.Context, repo store.Repo, cur store.
 		return ""
 	}
 	msg := err.Error()
-	if errors.Is(err, errFixDraining) && e.rememberWhiteboard(ctx, subject, cur.ID, target) {
+	var budget *githubBudgetError
+	switch {
+	case errors.Is(err, errFixDraining) && e.rememberWhiteboard(ctx, subject, cur.ID, target, ""):
 		msg = whiteboardDrainText
+	case errors.As(err, &budget) && e.rememberWhiteboard(ctx, subject, cur.ID, target, budget.low.identity): // github_floor.go
+		msg += "; it is made once the budget recovers"
 	}
 	e.event(ctx, "info", subject, "whiteboard.skipped", msg, map[string]any{"head": target})
 	return ""
@@ -416,6 +426,9 @@ func (e *Engine) startWhiteboard(ctx context.Context, pr store.PR, by string) (*
 	if err != nil {
 		return nil, err
 	}
+	if low, ok := e.githubLow(cmp.Or(job.watch.PollIdentity, job.watch.Identity)); ok { // github_floor.go: the writer reads the PR as it
+		return nil, &githubBudgetError{low: low}
+	}
 	if e.d.Agents == nil || e.d.Slots == nil {
 		return nil, errors.New("the daemon has no agents or slots manager")
 	}
@@ -453,6 +466,7 @@ func (s *whiteboardStopped) Error() string { return s.why }
 // stopped it is settled. A daemon shutdown cancels ctx with none of them:
 // the run stays for the next start (recoverWhiteboards).
 func (e *Engine) runWhiteboard(ctx context.Context, job *whiteboardJob) {
+	ctx = github.WithOp(ctx, opWhiteboard) // github_cost.go
 	subject := job.subject()
 	if err := steps.ResetSubject(ctx, e.st, subject); err != nil {
 		e.log.Warn("whiteboard: new step generation", "subject", subject, "err", err)

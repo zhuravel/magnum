@@ -87,6 +87,7 @@ func (e *Engine) approvalIdentity(pr store.PR) *config.Identity {
 // is recorded as DISMISSED with a review.approval_dismissed event; any other
 // failure is retried at the next poll. Dry runs change nothing.
 func (e *Engine) followApproval(ctx context.Context, repo store.Repo, pr store.PR) {
+	ctx = github.WithOp(ctx, opApproval) // github_cost.go
 	if p, ok := e.pendingApproval(ctx, pr.ID); ok && p.Dismiss != "" {
 		e.dismissKept(ctx, repo, pr, p, p.Dismiss) // a dismissal a round's end asked for and GitHub did not answer
 		if p.ReviewID == deref(pr.LastReviewID) {
@@ -331,6 +332,7 @@ func (e *Engine) keptApprovalFailed(ctx context.Context, repo store.Repo, pr sto
 // with the reason it goes (why); a dismissal GitHub does not answer stays
 // recorded for the next poll (pendingApproval.Dismiss).
 func (e *Engine) dismissKept(ctx context.Context, repo store.Repo, pr store.PR, p pendingApproval, why string) {
+	ctx = github.WithOp(ctx, opApproval) // github_cost.go
 	id := e.cfg.IdentityByName(p.Identity)
 	var gh GitHub
 	if id != nil {

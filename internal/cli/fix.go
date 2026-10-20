@@ -59,6 +59,8 @@ func newFixCmd(c *Context) *cobra.Command {
 			"While the daemon drains for a restart (daemon-restart --drain) a fix it would start is held instead: it "+
 			"starts after the restart, or once the drain is lifted without one, if the review still stands at the same "+
 			"head, and is dropped otherwise (the fix.dropped event and a toast say why; `magnum abort` takes it back). "+
+			"While the GitHub budget of the identity the fix reads as is below [github] budget_floor, the fix is held the "+
+			"same way and starts once the budget recovers, if the review still stands. "+
 			"A terminal asks y/N first (--yes does not; there --json needs "+
 			"--yes), and a review agent's pane is refused. --wait follows the loop until its end and says how it ended "+
 			"(clean after N fix cycles, needs you, pushed nothing, aborted or ended); --timeout (default 2h, 0 = no limit) "+
@@ -200,14 +202,17 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	return fixFollow(ctx, c, d, t, label, res, start, o, out)
 }
 
-// fixHeldForRestart reports whether the daemon held the fix through a drain
-// for a restart (engine.KVPRFixHeld): no loop runs before the restart, so
-// --wait has nothing to follow yet, and it says so.
+// fixHeldForRestart reports whether the daemon held the fix, through a drain
+// for a restart or while the GitHub budget is below the floor
+// (engine.KVPRFixHeld): no loop runs before the restart or the budget's
+// recovery, so --wait has nothing to follow yet, and it says when the fix
+// starts.
 func fixHeldForRestart(ctx context.Context, c *Context, d *actDeps, t actTarget, label string, o fixOpts) bool {
-	if _, held, err := d.Store.GetKV(ctx, engine.KVPRFixHeld(t.PR.ID)); err != nil || !held {
+	raw, held, err := d.Store.GetKV(ctx, engine.KVPRFixHeld(t.PR.ID))
+	if err != nil || !held {
 		return false
 	}
-	fmt.Fprintf(fixProgress(c, o), "%s: nothing to follow yet: the fix starts after the restart (`magnum status %s` shows it then)\n", label, label)
+	fmt.Fprintf(fixProgress(c, o), "%s: nothing to follow yet: the fix starts %s (`magnum status %s` shows it then)\n", label, engine.HeldFixStarts(raw), label)
 	return true
 }
 

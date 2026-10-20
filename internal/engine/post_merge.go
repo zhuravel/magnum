@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -112,6 +113,7 @@ func (e *Engine) postMergeBase(ctx context.Context, job *roundJob, target string
 // as the watch's poll identity ("" when it cannot say, or the answer is not
 // a full commit id).
 func (e *Engine) mergeCommit(ctx context.Context, job *roundJob) string {
+	ctx = github.WithOp(ctx, opPostMerge) // github_cost.go
 	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
 		return ""

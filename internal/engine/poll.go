@@ -67,7 +67,7 @@ func (e *Engine) poll(ctx context.Context) error {
 			continue
 		}
 		repos, rl, err := gh.Radar(e.betweenCalls(ctx), w.Owner)
-		e.recordRateLimit(ctx, rl, now)
+		e.recordRateLimit(ctx, w.PollIdentity, rl, now)
 		radar.add(w.Owner, err)
 		if err != nil {
 			// A failure right after a sleep is the Mac's network (sleptBefore);
@@ -117,10 +117,15 @@ func (e *Engine) betweenCalls(ctx context.Context) context.Context {
 	return github.WithBetweenCalls(ctx, func() { e.requestsMidPoll(ctx) })
 }
 
-func (e *Engine) recordRateLimit(ctx context.Context, rl github.RateLimit, now time.Time) {
+// recordRateLimit keeps the poll's rate limit as the radar's (store.KVGHRemaining
+// and its kin, which `magnum status` showed before the meter) and as the
+// poll identity's latest (the meter's, github_cost.go), and pauses the poll
+// below rateFloor until the reset.
+func (e *Engine) recordRateLimit(ctx context.Context, identity string, rl github.RateLimit, now time.Time) {
 	if rl.Limit == 0 && rl.Remaining == 0 {
 		return
 	}
+	e.ghMeter.sawRate(identity, rl, e.now())
 	e.setKV(ctx, store.KVGHRemaining, strconv.Itoa(rl.Remaining))
 	e.setKV(ctx, store.KVGHLimit, strconv.Itoa(rl.Limit))
 	if !rl.ResetAt.IsZero() {
@@ -184,7 +189,7 @@ func (e *Engine) readCI(ctx context.Context, w config.Watch, gh GitHub, repos []
 		return
 	}
 	states, rl, err := gh.CIStates(ctx, prs)
-	e.recordRateLimit(ctx, rl, now)
+	e.recordRateLimit(ctx, w.PollIdentity, rl, now)
 	switch {
 	case err != nil && isStop(ctx, err): // the daemon is stopping: no poll failure
 		e.log.Debug("CI read cut short", "owner", w.Owner, "err", err)

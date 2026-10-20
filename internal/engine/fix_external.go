@@ -351,6 +351,7 @@ type externalRead struct {
 // (externalOf), with the count of items an outsider wrote and which of the
 // three lists GitHub cut short.
 func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, error) {
+	ctx = github.WithOp(ctx, opFixExternal) // github_cost.go
 	gh, rd, ok := e.fixReader(job)
 	if !ok {
 		return externalRead{}, fmt.Errorf("no GitHub client that reads review threads for poll identity %q", job.watch.PollIdentity)

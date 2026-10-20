@@ -55,6 +55,7 @@ const (
 	WaitHerdr         = "herdr"          // herdr is unreachable
 	WaitKind          = "kind"           // an agent kind the round needs is paused
 	WaitBudget        = "budget"         // the Codex budget's soft cap holds full re-reviews
+	WaitGitHub        = "github"         // an identity's GitHub budget is below [github] budget_floor: no round starts until its reset
 	WaitIdentity      = "identity"       // the posting identity is unhealthy
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
@@ -74,8 +75,8 @@ type Wait struct {
 	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come; WaitFixing: the fix cycle
 	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed; WaitFixing: fix_cycles
 	// Subject is WaitKind's paused kind, WaitRequested's Request.Phrase,
-	// WaitRetry's cause in a word or two (retryCause) and WaitPinned's pin
-	// origin ("magnum open"; "" when unknown).
+	// WaitRetry's cause in a word or two (retryCause), WaitPinned's pin
+	// origin ("magnum open"; "" when unknown) and WaitGitHub's identity.
 	Subject string `json:"subject,omitempty"`
 	// Detail is the reason in words, without the round's kind or the time
 	// ("the push quiet period (5m)").
@@ -211,6 +212,8 @@ func (w Wait) short(now time.Time, cause bool) string {
 		what = strings.TrimSpace(w.Subject + " paused")
 	case WaitBudget:
 		what = "Codex soft cap"
+	case WaitGitHub:
+		what = "github budget"
 	case WaitIdentity:
 		what = "identity"
 	case WaitSlot:
@@ -460,7 +463,7 @@ func (e *Engine) throttleWait(ctx context.Context, pr store.PR, w config.Watch, 
 // (gateWait): Detail is its sentence, not a phrase after "waits for".
 func (w Wait) fromGate() bool {
 	switch w.Reason {
-	case WaitKind, WaitBudget, WaitIdentity, WaitSlot, WaitPinned, WaitCapacity, WaitOther:
+	case WaitKind, WaitBudget, WaitGitHub, WaitIdentity, WaitSlot, WaitPinned, WaitCapacity, WaitOther:
 		return true
 	}
 	return false
@@ -469,15 +472,18 @@ func (w Wait) fromGate() bool {
 // gate is why the dispatcher skips a PR (prGate, startRound and the capacity
 // check return it, noteGate records it): the sentence `magnum status` shows
 // (store.KVPRGate), the Wait reason it becomes (WaitIdentity, WaitBudget,
-// WaitCapacity, WaitSlot, WaitPinned, WaitKind or WaitOther), for WaitKind
-// the paused agent kind and for WaitPinned who pinned the slot ("" when
-// unknown). The zero gate lets the round start.
+// WaitGitHub, WaitCapacity, WaitSlot, WaitPinned, WaitKind or WaitOther),
+// for WaitKind the paused agent kind, for WaitPinned who pinned the slot
+// ("" when unknown) and for WaitGitHub the identity whose budget is low and
+// when it resets. The zero gate lets the round start.
 type gate struct {
-	reason string
-	text   string
-	kind   string
-	by     string
-	at     time.Time // WaitPinned: when the slot was pinned (zero when unknown)
+	reason   string
+	text     string
+	kind     string
+	by       string
+	at       time.Time // WaitPinned: when the slot was pinned (zero when unknown)
+	identity string    // WaitGitHub: the identity whose GitHub budget is below the floor
+	until    time.Time // WaitGitHub: when its budget resets
 }
 
 // otherGate is a gate of no reason of its own (WaitOther).
@@ -485,10 +491,12 @@ func otherGate(text string) gate { return gate{reason: WaitOther, text: text} }
 
 // gateCode is what kvPRGateReason keeps of a gate.
 type gateCode struct {
-	Reason string    `json:"reason"`
-	Kind   string    `json:"kind,omitempty"`
-	By     string    `json:"by,omitempty"` // WaitPinned: who pinned the slot
-	At     time.Time `json:"at,omitzero"`  // WaitPinned: when
+	Reason   string    `json:"reason"`
+	Kind     string    `json:"kind,omitempty"`
+	By       string    `json:"by,omitempty"`       // WaitPinned: who pinned the slot
+	At       time.Time `json:"at,omitzero"`        // WaitPinned: when
+	Identity string    `json:"identity,omitempty"` // WaitGitHub: whose budget is low
+	Until    time.Time `json:"until,omitzero"`     // WaitGitHub: when it resets
 }
 
 // gateWait is the wait of the reason the last dispatch gave for skipping
@@ -508,6 +516,8 @@ func (e *Engine) gateWait(ctx context.Context, prID int64, text string) Wait {
 		w.Reason = c.Reason
 	case WaitPinned:
 		w.Reason, w.Subject, w.Since = c.Reason, c.By, c.At
+	case WaitGitHub:
+		w.Reason, w.Subject, w.Until = c.Reason, c.Identity, c.Until
 	case WaitKind:
 		if p, ok := e.toolPause(ctx, c.Kind); ok {
 			w.Reason, w.Subject, w.Until = WaitKind, c.Kind, p.Until

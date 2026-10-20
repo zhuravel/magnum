@@ -375,7 +375,7 @@ func (e *Engine) noteGate(ctx context.Context, prID int64, g gate) {
 	if prev, _ := e.getKV(ctx, store.KVPRGate(prID)); prev != g.text {
 		e.setKV(ctx, store.KVPRGate(prID), g.text)
 	}
-	b, err := json.Marshal(gateCode{Reason: g.reason, Kind: g.kind, By: g.by, At: g.at})
+	b, err := json.Marshal(gateCode{Reason: g.reason, Kind: g.kind, By: g.by, At: g.at, Identity: g.identity, Until: g.until})
 	if err != nil {
 		return
 	}
@@ -516,6 +516,11 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	}
 	if g := e.quietHoursGate(job); g.text != "" {
 		return false, 0, g
+	}
+	if job.kind != kindContinue { // github_floor.go: a continued round finishes the judge turn of a round that ran
+		if g := e.githubGate(job); g.text != "" {
+			return false, 0, g
+		}
 	}
 
 	rctx, cancel := context.WithCancel(ctx)

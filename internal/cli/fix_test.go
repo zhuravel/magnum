@@ -773,6 +773,33 @@ func TestFixWaitOnAFixHeldForTheRestartDoesNotFollow(t *testing.T) {
 	}
 }
 
+// A fix the GitHub floor held waits for the budget, not for a restart, and
+// --wait says which: the sentence a drain's hold gets would send the operator
+// to restart a daemon that is only waiting for the budget's reset.
+func TestFixWaitOnAFixHeldForTheGitHubBudgetSaysItWaitsForTheBudget(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 1
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	const held = "held; the fix of talkable/talkable#5 starts once the GitHub budget of zhuravel recovers if the review on abc1234 still stands"
+	h.onSleep = func(h *actHarness) {
+		if err := h.st.SetKV(h.ctx, engine.KVPRFixHeld(pr.ID), `{"at":"2026-10-17T18:00:00Z","head":"abc1234","by":"magnum fix","why":"github_budget"}`); err != nil {
+			h.t.Error(err)
+		}
+		h.completePending(store.RequestDone, held)
+	}
+	if code := h.cmd("fix", "5", "--wait", "--yes"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	out := h.out.String() + h.errb.String()
+	actContains(t, out, "talkable#5: nothing to follow yet: the fix starts when the GitHub budget recovers (`magnum status talkable#5` shows it then)")
+	if strings.Contains(out, "after the restart (`magnum status") {
+		t.Errorf("a budget hold is said to wait for the restart:\n%s", out)
+	}
+	if h.sleeps > 3 {
+		t.Errorf("slept %d times: it followed a held fix", h.sleeps)
+	}
+}
+
 // A dry run starts no loop, so --wait has nothing to follow.
 func TestFixDryRunDoesNotFollow(t *testing.T) {
 	h := newActHarness(t)

@@ -193,7 +193,8 @@ type retroSpec struct {
 // daily_at, not run today, no learn job running (learnBusy: a retro, a
 // notes curation, a skill edit or gate), none waiting after GitHub stopped
 // it, no drain or infrastructure pause, the agent's CLI not paused at a
-// usage limit or a logout). `magnum pause` holds automatic
+// usage limit or a logout, no watch's poll identity's GitHub budget below
+// the floor, github_floor.go). `magnum pause` holds automatic
 // reviews only: the retro reviews nothing, and a pause kept overnight
 // started it hours late. A dry run and `magnum daemon --once` never start
 // one.
@@ -215,6 +216,9 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 	if e.learnBusy() != "" || now.Before(e.retryRetroAt()) || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
 		return
 	}
+	if _, low := e.githubLowAny(); low { // github_floor.go: the retro reads the PRs of every watch
+		return
+	}
 	e.startRetro(ctx, retroSpec{daily: true, lookback: lc.Lookback.Duration, settle: lc.Settle.Duration})
 }
 
@@ -224,8 +228,9 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 // for a restart it is queued (queueRetro, "starts after the restart") and
 // starts once the restart came or the drain was lifted (startQueuedRetro);
 // while another learn job runs it is queued too (the answer names the job)
-// and starts once that job ended, before any curation; one retro waits at a
-// time.
+// and starts once that job ended, before any curation, and so it is while a
+// watch's poll identity's GitHub budget is below the floor (until it
+// recovers, github_floor.go); one retro waits at a time.
 func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, error) {
 	lookback := e.cfg.Learn.Lookback.Duration
 	if p.Lookback != "" {
@@ -251,6 +256,9 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 	spec := retroSpec{prs: p.PRs, again: p.Again || len(p.PRs) > 0, lookback: lookback, settle: settle}
 	if e.draining(ctx) { // the queue waits out the drain (startQueuedRetro)
 		return e.queueRetro(ctx, spec, drainStarts)
+	}
+	if low, ok := e.githubLowAny(); ok { // github_floor.go: and the GitHub budget's reset
+		return e.queueRetro(ctx, spec, githubStarts(low))
 	}
 	if job, since := e.learnRunning(); job != "" && job != retroJob { // learn jobs run one at a time
 		return e.queueRetro(ctx, spec, learnJobEnds(job, since))
@@ -317,10 +325,15 @@ func (e *Engine) queuedRetro(ctx context.Context) (retroQueued, bool) {
 // next tick.
 func (e *Engine) queuedRetroStarts(ctx context.Context) string {
 	starts := "starts at the next tick"
-	if job, since := e.learnRunning(); e.draining(ctx) {
+	job, since := e.learnRunning()
+	low, isLow := e.githubLowAny()
+	switch {
+	case e.draining(ctx):
 		starts = drainStarts
-	} else if job != "" {
+	case job != "":
 		starts = learnJobEnds(job, since)
+	case isLow:
+		starts = githubStarts(low)
 	}
 	return starts + "; `magnum logs` follows it"
 }
@@ -348,6 +361,9 @@ func (e *Engine) startQueuedRetro(ctx context.Context) bool {
 		return false
 	}
 	if e.learnBusy() != "" || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
+		return true
+	}
+	if _, low := e.githubLowAny(); low { // github_floor.go
 		return true
 	}
 	if started, _, _ := e.startRetro(ctx, retroSpec{prs: q.PRs, again: q.Again, lookback: lookback, settle: e.cfg.Learn.Settle.Duration}); started {
@@ -453,6 +469,7 @@ func (e *Engine) stopRetro() {
 // interrupted (it got no retro_prs row) and the failed ones until their
 // third attempt; the rest are skipped.
 func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
+	ctx = github.WithOp(ctx, opRetro) // github_cost.go
 	start := e.now()
 	run := RetroRun{ID: start.Local().Format(retroRunFormat)}
 	run.Dir = filepath.Join(e.d.Layout.Learn(), "retro", run.ID)

@@ -3228,6 +3228,10 @@ const DefaultAutoApproveBody = "Auto-approved: Magnum's review of `{{.Short}}` f
     DefaultAutoApproveBody is the body of an automatic approval when the watch
     sets no auto_approve_body.
 
+const DefaultBudgetFloor = 500
+    DefaultBudgetFloor is github budget_floor's default: about a tenth of a
+    user's hourly GraphQL budget of 5,000 points.
+
 const DefaultClaudeContextPattern = `(?:\((?P<used>\d{1,3})%\)|Context left until auto-compact: (?P<left>\d{1,3})%)`
     DefaultClaudeContextPattern is the claude kind's context_pattern: a percent
     in parentheses, as a status line shows the context used ("418k/1m (41%)"),
@@ -3333,6 +3337,9 @@ const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
 const LearnRoleName = "retro"
     LearnRoleName is the name of the role the retro's classifying agent runs as
     (LearnRole).
+
+const MaxBudgetFloor = 5000
+    MaxBudgetFloor is the highest budget_floor: a user's whole hourly budget.
 
 const MaxSimplificationsMax = 10
     MaxSimplificationsMax bounds max_simplifications ([pipeline] and [[repo]]):
@@ -4126,9 +4133,16 @@ type GitHub struct {
 	// the signed gh binary talks to GitHub, which outbound firewalls such as
 	// Little Snitch already allow) or "direct" (Go net/http).
 	Transport string `toml:"transport"`
+	// BudgetFloor is the GraphQL budget (points left of the hour's) below
+	// which the daemon starts no new work that reads GitHub as an identity:
+	// rounds, fix jobs, whiteboards, the retro and notes curations wait for
+	// that identity's budget to recover, while running rounds finish and the
+	// poll keeps its own floor of 50. 0 = off; at most 5000.
+	BudgetFloor int `toml:"budget_floor"`
 }
     GitHub tunes how magnum reaches the GitHub REST API itself (App JWT and
-    installation-token calls; everything else already runs through gh).
+    installation-token calls; everything else already runs through gh), and how
+    much of an identity's GraphQL budget new work leaves (budget_floor).
 
 type HealthPatterns struct {
 	Refused       []string `toml:"refused"`        // end the round and flag the PR: never reviewed again
@@ -5957,6 +5971,10 @@ const (
 	// daemon drains for a restart: asked for during the drain, it starts
 	// after the restart (or once the drain is lifted without one).
 	QueuedDrain = "drain"
+	// QueuedGitHub is why a curation waits (CurateQueued.Why) while a
+	// watch's poll identity's GitHub budget is below [github] budget_floor:
+	// it starts once the budget recovered (github_floor.go).
+	QueuedGitHub = "github"
 )
 const (
 	KVDaemonPausedAt   = "daemon.paused_at"
@@ -6122,6 +6140,7 @@ const (
 	WaitHerdr         = "herdr"          // herdr is unreachable
 	WaitKind          = "kind"           // an agent kind the round needs is paused
 	WaitBudget        = "budget"         // the Codex budget's soft cap holds full re-reviews
+	WaitGitHub        = "github"         // an identity's GitHub budget is below [github] budget_floor: no round starts until its reset
 	WaitIdentity      = "identity"       // the posting identity is unhealthy
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
@@ -6380,12 +6399,32 @@ func FixCalls(st FixState, prURL, ref string) []attention.FixCall
     report place their threads, prURL is the PR's page and ref how `magnum fix`
     names it. None for entries magnum cannot read so.
 
+func GitHubOpWords(op string) string
+    GitHubOpWords is op in the words `magnum status` shows: an engine label
+    in plain words ("round.setup": "round setup"), a call's own kind as it is
+    ("radar", "details").
+
+func HeldFixStarts(raw string) string
+    HeldFixStarts is when the held fix raw (a KVPRFixHeld value) starts,
+    for `magnum fix --wait`: "after the restart" for a drain's, "when the GitHub
+    budget recovers" for the GitHub floor's.
+
 func HeldReviewID(v string) (int64, bool)
     HeldReviewID is the review a KVPRApprovalHold value names: the one whose
     approval waits for the full pass after it, while it is the PR's latest
     (heldReviewOf's rule, which the board's FINDINGS follows: a later review
     drops the record, and one left behind names an older review). ok is false
     for a value that names none.
+
+func KVGitHubCost(identity string) string
+    KVGitHubCost holds the cost record of one identity's GitHub calls
+    (GitHubCost as JSON).
+
+func KVGitHubLow(identity string) string
+    KVGitHubLow holds identity's run of low budget (GitHubLow as JSON), from
+    the tick that found its budget below github budget_floor until the one that
+    finds it recovered (noteGitHubBudget), written at once, apart from the cost
+    record the flush writes once a minute.
 
 func KVKindVersion(kind string) string
     KVKindVersion holds what the daemon last read of agent kind kind's CLI
@@ -6885,7 +6924,7 @@ func ReadCurating(ctx context.Context, st *store.Store) *CurateMark
 type CurateQueued struct {
 	Repo    string    `json:"repo"`
 	Trigger string    `json:"trigger"`
-	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain
+	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain | QueuedGitHub
 	At      time.Time `json:"at"`
 }
     CurateQueued is a curation waiting for a start (KVNotesCurateQueue).
@@ -7478,6 +7517,74 @@ type GitHub interface {
     identity): the poller's reads, and the dismissal of an App approval the head
     left behind (followApproval), made as the App identity.
 
+type GitHubCost struct {
+	Identity string `json:"identity"`
+	// Rate is the identity's latest GraphQL rate limit as any call of the
+	// daemon answered it (nil before the first).
+	Rate *GitHubRate `json:"rate,omitempty"`
+	// Hours are the clock hours with calls among the last 24, oldest first.
+	Hours []GitHubHour `json:"hours"`
+}
+    GitHubCost is the meter's record of one identity (KVGitHubCost).
+
+func ParseGitHubCost(s string) (GitHubCost, bool)
+    ParseGitHubCost reads a KVGitHubCost value (ok false for one that does not
+    read).
+
+func (c GitHubCost) Since(from time.Time) (GitHubOpCost, []GitHubOpSum)
+    Since sums the hours that started at or after from: the total points,
+    calls and REST calls, and the ops by points, the costliest first (by calls,
+    then by name, among equal points).
+
+type GitHubHour struct {
+	Hour      time.Time `json:"hour"`       // the hour's start, UTC
+	Points    int       `json:"points"`     // GraphQL points
+	Calls     int       `json:"calls"`      // every call, GraphQL and REST
+	RESTCalls int       `json:"rest_calls"` // REST calls, against the core budget
+	// Ops splits the hour by op (an engine label, GitHubOpWords, or a call's
+	// own kind).
+	Ops map[string]GitHubOpCost `json:"ops"`
+}
+    GitHubHour is one clock hour of an identity's calls.
+
+type GitHubLow struct {
+	Since     time.Time `json:"since"`
+	Remaining int       `json:"remaining"`
+	Limit     int       `json:"limit,omitempty"`
+	Floor     int       `json:"floor"`
+	Until     time.Time `json:"until"`
+}
+    GitHubLow is a run of low budget (KVGitHubLow): since when, the budget when
+    it began or its reset last moved (what was left, of what limit) and the
+    floor then, and when the budget resets. The start reads its budget back into
+    the meter (loadGitHubCost), so a daemon that stopped before the minute's
+    flush still holds the work the run held.
+
+func ParseGitHubLow(s string) (GitHubLow, bool)
+    ParseGitHubLow reads a KVGitHubLow value (ok false for one that does not
+    read).
+
+type GitHubOpCost struct {
+	Points    int `json:"points"`
+	Calls     int `json:"calls"`
+	RESTCalls int `json:"rest_calls,omitempty"`
+}
+    GitHubOpCost is what one op cost in an hour.
+
+type GitHubOpSum struct {
+	Op string `json:"op"`
+	GitHubOpCost
+}
+    GitHubOpSum is one op's cost over several hours.
+
+type GitHubRate struct {
+	Remaining int       `json:"remaining"`
+	Limit     int       `json:"limit"`
+	ResetAt   time.Time `json:"reset_at"`
+	SeenAt    time.Time `json:"seen_at"` // when the call that answered it returned
+}
+    GitHubRate is a GraphQL rate limit as a call answered it.
+
 type Herdr interface {
 	Snapshot(ctx context.Context) (herdr.Snapshot, error)
 }
@@ -8014,8 +8121,8 @@ type Wait struct {
 	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come; WaitFixing: the fix cycle
 	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed; WaitFixing: fix_cycles
 	// Subject is WaitKind's paused kind, WaitRequested's Request.Phrase,
-	// WaitRetry's cause in a word or two (retryCause) and WaitPinned's pin
-	// origin ("magnum open"; "" when unknown).
+	// WaitRetry's cause in a word or two (retryCause), WaitPinned's pin
+	// origin ("magnum open"; "" when unknown) and WaitGitHub's identity.
 	Subject string `json:"subject,omitempty"`
 	// Detail is the reason in words, without the round's kind or the time
 	// ("the push quiet period (5m)").
@@ -9127,6 +9234,9 @@ func NormalizeLogin(s string) string
     NormalizeLogin strips a trailing "[bot]" so REST logins ("talkable[bot]")
     compare equal to GraphQL logins ("talkable").
 
+func OpOf(ctx context.Context) string
+    OpOf is the label WithOp put into ctx ("" for none).
+
 func ParseRef(s, defaultRepo string) (owner, repo string, number int, err error)
     ParseRef resolves a pull request reference: a URL
     https://github.com/o/r/pull/N[/...], "o/r#N", "r#N" (owner from
@@ -9148,6 +9258,12 @@ func WithBetweenCalls(ctx context.Context, fn func()) context.Context
     goroutine: the daemon's poll answers the requests a CLI queued meanwhile, so
     one waits for a single GitHub call, not the whole poll. fn gets no context:
     it must not make its calls with this one.
+
+func WithOp(ctx context.Context, op string) context.Context
+    WithOp returns ctx labelled with what the calls made with it read GitHub
+    for, which each call hands its client's Meter (Call.Op). A label set deeper
+    in the call chain wins: a round's setup reads under "round.setup" though the
+    round's context says "round".
 
 
 TYPES
@@ -9209,6 +9325,21 @@ type CIState struct {
     its State (SUCCESS, FAILURE, PENDING, ERROR, EXPECTED; "" when the head has
     no checks) and its Counts by state (a zero Total when GitHub gave none).
 
+type Call struct {
+	// Op is what the caller read GitHub for: the label WithOp put into the
+	// call's context ("" when it carries none).
+	Op string
+	// Kind is the call's own name ("details", "review threads", "compare").
+	Kind string
+	// GraphQL: a GraphQL call, whose Rate is the rateLimit block GitHub
+	// answered (Cost: the points it charged); zero when no answer carried
+	// one (a call that failed before GraphQL answered). Otherwise a REST
+	// call: one request against the core budget, with a zero Rate.
+	GraphQL bool
+	Rate    RateLimit
+}
+    Call is one gh api command a Client ran, as its Meter hears of it.
+
 type Check struct {
 	Name  string // the check run's name or the status's context
 	State string // CheckPassed | CheckFailed | CheckPending | CheckSkipped
@@ -9235,6 +9366,12 @@ type Client struct {
 	// If Reauth fails the call returns the unauthorized error together with
 	// Reauth's error. It may be called from several goroutines at once.
 	Reauth func(ctx context.Context) error
+	// Meter, when set, hears of every gh api command the client runs, right
+	// after it returned, on the caller's goroutine: a GraphQL call with the
+	// rate limit GitHub answered (its cost), a REST call as one request
+	// (meter.go). It must return at once and never call GitHub; a Meter that
+	// panics fails no call. Set it before the client's first call.
+	Meter func(Call)
 
 	// Has unexported fields.
 }

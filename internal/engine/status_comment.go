@@ -584,6 +584,7 @@ func (e *Engine) statusResumes(ctx context.Context, pr store.PR, rec statusRecor
 // time a person deleted it (a last edit posts nothing); after a second
 // deletion the PR gets no comment until another head.
 func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, reads statusReads, now time.Time) bool {
+	ctx = github.WithOp(ctx, opStatusComment) // github_cost.go
 	rec := e.statusRecordOf(ctx, pr.ID)
 	if rec.End != "" {
 		if !e.statusResumes(ctx, pr, rec) {
