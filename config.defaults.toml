@@ -762,6 +762,11 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                       # approves as you on its own, however clean; A still approves them, an
 #                                       # approval standing from before stays, GitHub never sees the list
 #                                       # (default: none; a [[repo]] block's adds to it)
+# auto_approve_authors = ["rev-ann"]    # when set, the only GitHub logins (matched as above) whose PRs magnum
+#                                       # approves as you on its own, on every repository auto_approve names;
+#                                       # auto_approve_skip_authors still wins; A still approves anyone's PR, an
+#                                       # approval standing from before stays (default: none = every author;
+#                                       # a [[repo]] block's replaces it for that repository)
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every round role, the first judge only
 # trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key
 #                                       # prefix named here wins over [board]'s (another org's PR- in another tracker)
@@ -826,8 +831,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
 # block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
-# allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready, ready_timeout; each
-# replaces the pool's) is valid for a [[pool]] repo too.
+# auto_approve_authors, allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready,
+# ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -843,6 +848,9 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # max_simplifications = 0                 # how many simplifications the judge posts at most on this repository's
 #                                         # PRs, 0 to 10; 0 = [pipeline]'s (5 by default)
 # auto_approve_skip_authors = ["alice"]   # added to the watch's list for this repository's PRs alone
+# auto_approve_authors = ["rev-ann"]      # replaces the watch's list for this repository's PRs alone: only
+#                                         # these authors' PRs are approved as you on their own (unset or []:
+#                                         # the watch's)
 # allow_bot_authors = ["helper[bot]"]     # added to the watch's list for this repository's PRs alone
 # required_checks = ["Completion"]        # checks a PR must pass to be ready (name globs; "workflow:<glob>" = a whole
 #                                         # Actions workflow); replaces the list GitHub's rulesets declare, which

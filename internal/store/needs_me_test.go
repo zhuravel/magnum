@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -186,7 +187,9 @@ func TestUpsertKeepsTheReviewGate(t *testing.T) {
 
 // NeedsMePRs lists the open PRs that need the operator with their
 // repository, reading magnum's latest round's verdict for a clean comment
-// of an identity that comments when clean.
+// of an identity that comments when clean, which it asks with the PR's
+// author (an identity that approves comments on the PR of an author the
+// auto-approval lists refuse).
 func TestNeedsMePRsListsThePRsWaitingForTheOperator(t *testing.T) {
 	st, _ := newStore(t)
 	ctx := context.Background()
@@ -214,15 +217,19 @@ func TestNeedsMePRsListsThePRsWaitingForTheOperator(t *testing.T) {
 	add(3, "zhuravel", "APPROVED", required, "talkable-app") // the operator's own
 	add(4, "alice", "APPROVED", nil, "talkable-app")         // the gate not read yet
 	clean := add(5, "alice", "COMMENTED", required, "commenter")
-	add(6, "alice", "COMMENTED", required, "commenter") // its round was not clean
-	for id, verdict := range map[int64]string{clean: VerdictClean, clean + 1: VerdictNonBlocking} {
+	add(6, "alice", "COMMENTED", required, "commenter")                 // its round was not clean
+	refused := add(7, "bob-rev", "COMMENTED", required, "talkable-app") // the lists refuse bob-rev: the App comments
+	add(8, "alice", "COMMENTED", required, "talkable-app")              // the App approves alice's clean PRs
+	for id, verdict := range map[int64]string{clean: VerdictClean, clean + 1: VerdictNonBlocking, refused: VerdictClean, refused + 1: VerdictClean} {
 		if _, err := st.DB().ExecContext(ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login, state, outcome, review_id, prompt_text, result_json, created_at)
 			VALUES (?, ?, 1, 'codex-judge', 'initial', 'h', 'commenter', 'talkable[bot]', 'verified', 'posted', 1, 'p', ?, ?)`,
-			"r-"+verdict, id, `{"event":"COMMENT","verdict":"`+verdict+`","findings":{}}`, FormatTime(t0)); err != nil {
+			"r-"+strconv.FormatInt(id, 10), id, `{"event":"COMMENT","verdict":"`+verdict+`","findings":{}}`, FormatTime(t0)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	comments := func(repo, identity string) bool { return repo == "talkable/talkable" && identity == "commenter" }
+	comments := func(repo, identity, author string) bool {
+		return repo == "talkable/talkable" && (identity == "commenter" || author == "bob-rev")
+	}
 	got, err := st.NeedsMePRs(ctx, comments, mineZhuravel)
 	if err != nil {
 		t.Fatal(err)
@@ -234,11 +241,11 @@ func TestNeedsMePRsListsThePRsWaitingForTheOperator(t *testing.T) {
 		}
 		have = append(have, n.NeedsMe+":"+n.PR.HeadSHA)
 	}
-	want := []string{NeedsMeApprove + ":h1", NeedsMeLift + ":h2", NeedsMeApprove + ":h5"}
+	want := []string{NeedsMeApprove + ":h1", NeedsMeLift + ":h2", NeedsMeApprove + ":h5", NeedsMeApprove + ":h7"}
 	if !reflect.DeepEqual(have, want) {
 		t.Fatalf("NeedsMePRs = %v, want %v", have, want)
 	}
-	if got[0].PR.ID != approved || got[1].PR.ID != lift || got[2].PR.ID != clean {
-		t.Fatalf("ids %d %d %d", got[0].PR.ID, got[1].PR.ID, got[2].PR.ID)
+	if got[0].PR.ID != approved || got[1].PR.ID != lift || got[2].PR.ID != clean || got[3].PR.ID != refused {
+		t.Fatalf("ids %d %d %d %d", got[0].PR.ID, got[1].PR.ID, got[2].PR.ID, got[3].PR.ID)
 	}
 }

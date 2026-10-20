@@ -33,7 +33,7 @@ func TestJudgeEventsGiveNoApproveWhileAReviewerReportIsMissing(t *testing.T) {
 		"a report without a path":      {[]agents.Report{ok[0], {Role: "codex-review", Status: ReportBusy}}, false, "COMMENT", "REQUEST_CHANGES"},
 		"post-merge":                   {[]agents.Report{{Role: "claude-review", Status: "usage_limit", Missing: true}}, true, "COMMENT", "COMMENT"},
 	} {
-		if nf, be := JudgeEvents(cfg, "talkable/talkable", id, tc.postMerge, tc.reports...); nf != tc.wantNF || be != tc.want {
+		if nf, be := JudgeEvents(cfg, "talkable/talkable", id, "alice", tc.postMerge, tc.reports...); nf != tc.wantNF || be != tc.want {
 			t.Errorf("%s: events %s/%s, want %s/%s", name, nf, be, tc.wantNF, tc.want)
 		}
 	}

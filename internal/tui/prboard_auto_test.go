@@ -139,3 +139,28 @@ func TestTheCardSaysAutoApprovalIsOffForAListedAuthor(t *testing.T) {
 		}
 	}
 }
+
+// A PR whose author the auto_approve_authors that applies does not list:
+// the card says auto-approval is off for the author and names the list,
+// in place of the refusal's sentence, and the row shows no "✔ auto" pill
+// (A still approves it: the row needs you). The skip list's line stays its
+// own.
+func TestTheCardSaysAutoApprovalIsOffForAnAuthorOutsideTheAllowlist(t *testing.T) {
+	m, _, _ := newBoard(t, 170, 40, PRBoardOptions{})
+	outside := actPR(func(r *PRBoardRow) {
+		r.ActivityAt, r.AutoRefused, r.NeedsMe = ago(time.Hour), "the author is not in auto_approve_authors", NeedsMeApprove
+		r.ApproveAs = &ApproveAs{Identity: "zhuravel", Login: "zhuravel"}
+	})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{outside}})
+	mustNotContain(t, viewOf(m), "✔ auto")
+	c, _ := send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(c), "auto-approval: off for this author (not in auto_approve_authors)")
+	mustNotContain(t, viewOf(c), "magnum does not approve it as you")
+	mustNotContain(t, viewOf(c), "auto_approve_skip_authors")
+	for _, mode := range []IconMode{IconsUnicode, IconsASCII, IconsNerd} {
+		p := needsMePainter(mode, []PRBoardRow{outside})
+		if cell := cellText(p.stateWaitCell(outside)); strings.Contains(cell, "auto") {
+			t.Errorf("%s: state cell %q", mode, cell)
+		}
+	}
+}

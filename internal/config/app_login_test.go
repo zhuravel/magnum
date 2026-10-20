@@ -5,8 +5,9 @@ import "testing"
 // A login list entry written as an App's URL form ("app/helper") never matched anything:
 // github.NormalizeLogin trims only "[bot]", so the entry sat in allow_bot_authors, skip_authors or
 // auto_approve_skip_authors and did nothing, with no word of why. A "/" has no place in a login, so the
-// config refuses it in the three lists, on a [[watch]] and on a [[repo]] block, saying how to write the
-// login; the plain login and its "[bot]" form pass, and so does a TOML file that loads.
+// config refuses it in those lists and in auto_approve_authors, on a [[watch]] and on a [[repo]] block,
+// saying how to write the login; the plain login and its "[bot]" form pass, and so does a TOML file that
+// loads.
 func TestAnAppPrefixedLoginIsRefused(t *testing.T) {
 	const hint = `entry "app/helper" must be a GitHub login: write helper or helper[bot], not app/helper`
 	autoApprove := func(w *Watch) { w.AutoApprove, w.AutoApproveAs = []string{"*"}, "z" }
@@ -19,6 +20,8 @@ func TestAnAppPrefixedLoginIsRefused(t *testing.T) {
 		{"skip_authors", func(w *Watch, l []string) { w.SkipAuthors = l }, nil},
 		{"auto_approve_skip_authors", func(w *Watch, l []string) { autoApprove(w); w.AutoApproveSkipAuthors = l },
 			func(r *Repo, l []string) { r.AutoApproveSkipAuthors = l }},
+		{"auto_approve_authors", func(w *Watch, l []string) { autoApprove(w); w.AutoApproveAuthors = l },
+			func(r *Repo, l []string) { r.AutoApproveAuthors = l }},
 	} {
 		cfg := autoApproveConfig()
 		c.watch(&cfg.Watches[0], []string{"helper", "app/helper"})

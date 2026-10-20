@@ -9,7 +9,8 @@ package engine
 // left nothing to fix before merging, and withdraws it when a later review
 // finds something that must be fixed; new commits alone leave it to the next
 // review. It also holds back what autoapprove_gates.go names: a PR whose
-// author auto_approve_skip_authors lists, a review that did not hear every
+// author auto_approve_skip_authors lists or an auto_approve_authors that
+// applies does not, a review that did not hear every
 // reviewer, a PR its watch would not review on its own, one that changes
 // the review agents' instructions, a head whose checks fail or run; a later
 // review of the head that those gates, the author's aside, refuse

@@ -432,6 +432,15 @@ type Watch struct {
 	// someone whose PRs need a person's review. The board's A still
 	// approves them, and an approval standing from before stays.
 	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
+	// AutoApproveAuthors, when set, are the only GitHub logins whose PRs
+	// magnum approves as AutoApproveAs on its own, on every repository the
+	// watch auto-approves (any case, with or without "[bot]"; see
+	// Config.AutoApproveAllowsAuthor); a repository's [[repo]] list
+	// replaces it there. Empty = no allowlist: every author not skipped.
+	// A login AutoApproveSkipAuthors names is skipped all the same. The
+	// board's A still approves anyone's PR, and an approval standing from
+	// before stays.
+	AutoApproveAuthors []string `toml:"auto_approve_authors"`
 	// ManualRepos names repositories of the watch (names, any case, no
 	// owner or pattern) that are reviewed only when the operator asks
 	// (`magnum review`, the board, the picker): their PRs are polled and
@@ -652,6 +661,11 @@ type Repo struct {
 	// auto_approve_skip_authors for this repository's PRs alone.
 	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
 
+	// AutoApproveAuthors, when set (non-empty), replaces the covering
+	// watch's auto_approve_authors for this repository's PRs alone: only
+	// these logins' PRs are approved as the operator on their own there.
+	AutoApproveAuthors []string `toml:"auto_approve_authors"`
+
 	// AllowBotAuthors adds bots' GitHub logins to the covering watch's
 	// allow_bot_authors for this repository's PRs alone.
 	AllowBotAuthors []string `toml:"allow_bot_authors"`
@@ -679,8 +693,8 @@ const RequiredWorkflowPrefix = "workflow:"
 
 // worktreeKeys reports whether the block sets any per-PR worktree key
 // (everything but repo, the verdicts, readiness, keep_approvals, stakes,
-// max_simplifications, auto_approve_skip_authors, allow_bot_authors,
-// required_checks and trackers).
+// max_simplifications, auto_approve_skip_authors, auto_approve_authors,
+// allow_bot_authors, required_checks and trackers).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }

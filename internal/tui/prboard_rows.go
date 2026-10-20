@@ -275,10 +275,11 @@ type PRBoardRow struct {
 	// AutoRefused is why magnum does not approve the PR as the operator
 	// although its review of the head left nothing to fix
 	// (engine.AutoApproveRefused: an author auto_approve_skip_authors
-	// lists, a reviewer's missing report, a PR its watch would not review on
-	// its own, a change to the review agents' instructions, the head's
-	// checks); "" otherwise. The card says so ("auto-approval: off for this
-	// author (auto_approve_skip_authors)" for the first).
+	// lists or auto_approve_authors leaves out, a reviewer's missing report,
+	// a PR its watch would not review on its own, a change to the review
+	// agents' instructions, the head's checks); "" otherwise. The card says
+	// so ("auto-approval: off for this author (auto_approve_skip_authors)"
+	// or "(not in auto_approve_authors)" for the first).
 	AutoRefused string
 	// ApproveAs is whom A approves a NeedsMe row as: the watch's
 	// auto_approve_as, the operator's own account, whose approval GitHub

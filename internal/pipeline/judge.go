@@ -101,12 +101,17 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 			msg = fmt.Sprintf("prompting %s for the candidates (run %s, %s); its own pass left no %s: it does the pass now", rd.judge.Name, run.ID, in.Kind, agents.OwnFindingsFile)
 		}
 	}
-	if usual, _ := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge || jd.SelfAuthored); usual != jd.NoFindingsEvent {
+	full, commentOnly := rd.owner+"/"+rd.name, in.PostMerge || jd.SelfAuthored
+	usual, _ := JudgeEvents(rd.r.Config, full, &rd.idCfg, rd.author(), commentOnly)
+	if usual != jd.NoFindingsEvent {
 		if missing := missingReports(jd.Reports); len(missing) > 0 || !in.HoldApproval {
 			msg += fmt.Sprintf("; no %s this round, a report is missing: %s", usual, strings.Join(missing, ", "))
 		} else {
 			msg += fmt.Sprintf("; no %s this round: a full pass of the whole PR follows before approval (approve_after_full_pass)", usual)
 		}
+	}
+	if policy, _ := rd.r.Config.VerdictsFor(full, &rd.idCfg); !commentOnly && policy != usual {
+		msg += fmt.Sprintf("; no %s: the auto-approval author lists (auto_approve_skip_authors, auto_approve_authors) keep this author's PRs from an approval", policy)
 	}
 	rd.event(ctx, "info", "round.judge", msg,
 		map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports, "no_findings_event": jd.NoFindingsEvent, "phase": jd.Phase})
@@ -841,25 +846,33 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 const PostMergeEvent = "COMMENT"
 
 // noApproveEvent is the no-findings event of a round that lacks a reviewer's
-// report (JudgeEvents), or that holds its approval for a full pass
+// report or whose author the auto-approval author lists refuse
+// (JudgeEvents), or that holds its approval for a full pass
 // (RoundInput.HoldApproval).
 const noApproveEvent = "COMMENT"
 
 // JudgeEvents are the review events the judge's prompt names for a round of
-// repository fullName ("owner/name") posted as identity id: the
-// repository's or the identity's (config.Config.VerdictsFor); COMMENT both
-// ways when commentOnly: in a post-merge round, where a verdict blocks
-// nothing, and on a PR the reviewer login or the human behind it opened (the
-// prompt's self_authored), where a verdict of one's own counts for nothing;
-// and COMMENT for no findings when one of the round's reports is missing (an
-// APPROVE once went out while claude-review had hit a usage limit: a review
-// that did not hear every reviewer approves nothing).
-func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, commentOnly bool, reports ...agents.Report) (noFindings, blocking string) {
+// repository fullName ("owner/name") posted as identity id on a PR by
+// author (its login, "" when unknown): the repository's or the identity's
+// (config.Config.VerdictsFor); COMMENT both ways when commentOnly: in a
+// post-merge round, where a verdict blocks nothing, and on a PR the
+// reviewer login or the human behind it opened (the prompt's
+// self_authored), where a verdict of one's own counts for nothing; COMMENT
+// for no findings when one of the round's reports is missing (an APPROVE
+// once went out while claude-review had hit a usage limit: a review that
+// did not hear every reviewer approves nothing); and COMMENT for no
+// findings, whatever the identity, when the auto-approval author lists
+// refuse author (config.Config.AutoApproveRefusesAuthor:
+// auto_approve_skip_authors names it, or an auto_approve_authors that
+// applies does not): a clean review as a gh identity that approves is an
+// approval of the operator's account, which the lists keep from the author
+// as they keep the automatic one (the engine's authorRefusal).
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, author string, commentOnly bool, reports ...agents.Report) (noFindings, blocking string) {
 	if commentOnly {
 		return PostMergeEvent, PostMergeEvent
 	}
 	noFindings, blocking = cfg.VerdictsFor(fullName, id)
-	if len(missingReports(reports)) > 0 {
+	if len(missingReports(reports)) > 0 || cfg.AutoApproveRefusesAuthor(fullName, author) {
 		noFindings = noApproveEvent
 	}
 	return noFindings, blocking
@@ -882,7 +895,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	in := rd.in
 	reports := rd.judgeReports()
 	self := rd.selfAuthored()
-	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge || self, reports...)
+	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, rd.author(), in.PostMerge || self, reports...)
 	if in.HoldApproval {
 		nf = noApproveEvent // the approval waits for a full pass of the whole PR (RoundInput.HoldApproval)
 	}
@@ -939,6 +952,10 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	jd.Readiness = rd.readinessData()
 	return jd
 }
+
+// author is the PR's author's login ("" when GitHub names none), which
+// JudgeEvents matches against the auto-approval author lists.
+func (rd *round) author() string { return store.Deref(rd.in.PR.AuthorLogin) }
 
 // selfAuthored: the PR's author is the user or the reviewer login itself
 // (Account form: the user's PR is self-authored for the user's App too,

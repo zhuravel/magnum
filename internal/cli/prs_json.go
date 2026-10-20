@@ -100,7 +100,8 @@ type prsJSONRow struct {
 	AutoApproveStopped string               `json:"auto_approve_stopped"`
 	// AutoApproveRefused is why magnum does not approve the PR as you
 	// although its review of the head left nothing to fix ("the author is in
-	// auto_approve_skip_authors", a reviewer's missing report, a PR its watch
+	// auto_approve_skip_authors", "the author is not in
+	// auto_approve_authors", a reviewer's missing report, a PR its watch
 	// would not review on its own, a change to the review agents'
 	// instructions, the head's checks); "" otherwise.
 	AutoApproveRefused string `json:"auto_approve_refused"`

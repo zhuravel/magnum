@@ -178,7 +178,8 @@ func ApproveAsFor(cfg *config.Config, fullName string) *config.Identity {
 // and a manual verdict posted after magnum's round both keep auto-approval
 // from overriding the operator, who here is the one asking: A lifts their
 // own ✗ on purpose. What auto-approval holds a PR back for besides
-// (authorRefusal: an author auto_approve_skip_authors lists; autoGateRefusal:
+// (authorRefusal: an author auto_approve_skip_authors lists or
+// auto_approve_authors leaves out; autoGateRefusal:
 // a reviewer's missing report, a PR its watch would not review on its own,
 // the agents' instructions, the head's checks) does not refuse it either:
 // the operator decides by hand, the board shows those.

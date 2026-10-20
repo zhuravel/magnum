@@ -264,8 +264,9 @@ type JudgeData struct {
 	ReviewerLogin string // REST form, e.g. talkable[bot]
 	GhConfigDir   string // "" for the gh identity
 	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
-	// of the round left no usable report (pipeline.JudgeEvents), or the
-	// round holds its approval for a full pass (HoldApproval).
+	// of the round left no usable report or the auto-approval author lists
+	// refuse the PR's author (pipeline.JudgeEvents), or the round holds its
+	// approval for a full pass (HoldApproval).
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool

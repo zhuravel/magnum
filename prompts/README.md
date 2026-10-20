@@ -89,7 +89,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.IdentityKind` | `gh` or `app` |
 | `.ReviewerLogin` | the login the review is posted as (REST form, e.g. `talkable[bot]`) |
 | `.GhConfigDir` | `GH_CONFIG_DIR` of the identity; empty for the `gh` identity |
-| `.NoFindingsEvent`, `.BlockingEvent` | review events from the `[[repo]]` or the `[[identity]]`; `.NoFindingsEvent` is `COMMENT` whenever a reviewer of the round left no usable report (anything in `.Reports` that is missing): a review that did not hear every reviewer never approves; and in a round that holds its approval for a full pass (`.HoldApproval`) |
+| `.NoFindingsEvent`, `.BlockingEvent` | review events from the `[[repo]]` or the `[[identity]]`; `.NoFindingsEvent` is `COMMENT` whenever a reviewer of the round left no usable report (anything in `.Reports` that is missing): a review that did not hear every reviewer never approves; when the PR's author is on `auto_approve_skip_authors` or outside an `auto_approve_authors` that applies, whatever the identity; and in a round that holds its approval for a full pass (`.HoldApproval`) |
 | `.SelfAuthored` | the PR's author is the reviewing identity (its login or the human behind it); `.NoFindingsEvent` and `.BlockingEvent` are then both `COMMENT` |
 | `.Reports` | one entry per other role of the round, in pipeline order (see below). With a usable `claude-simplify` report, the initial, rereview and recovery prompts carry the rules for its proposals (which to keep, the equivalence probe, at most `.MaxSimplifications`, the `**Simplification**` title, `candidates` in the result), which the skill leaves to them |
 | `.ResultFile` | where the judge writes its JSON result (the role's `output`) |

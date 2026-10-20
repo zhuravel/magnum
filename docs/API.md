@@ -821,8 +821,9 @@ type JudgeData struct {
 	ReviewerLogin string // REST form, e.g. talkable[bot]
 	GhConfigDir   string // "" for the gh identity
 	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
-	// of the round left no usable report (pipeline.JudgeEvents), or the
-	// round holds its approval for a full pass (HoldApproval).
+	// of the round left no usable report or the auto-approval author lists
+	// refuse the PR's author (pipeline.JudgeEvents), or the round holds its
+	// approval for a full pass (HoldApproval).
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
@@ -3403,6 +3404,16 @@ func (c *Config) AllowsBotAuthor(fullName, login string) bool
     helper[bot]). A blank login matches nothing. Whether login is a bot is the
     caller's business: the list only lifts the bot rule.
 
+func (c *Config) AutoApproveAllowsAuthor(fullName, login string) bool
+    AutoApproveAllowsAuthor reports whether auto_approve_authors lets magnum
+    approve repository fullName's ("owner/name") PRs by login as the operator:
+    the repository's [[repo]] list when it is set (non-empty), which replaces
+    the watch's there, else the covering watch's when it is set, names login
+    in any case, with or without "[bot]" (as AutoApproveSkipsAuthor matches).
+    With neither list set there is no allowlist: true for every login.
+    A blank login is on no list. It does not ask the skip list, which wins:
+    the engine asks AutoApproveSkipsAuthor first.
+
 func (c *Config) AutoApproveBodyFor(fullName string) string
     AutoApproveBodyFor is the approval body template of repository fullName's
     PRs: its watch's auto_approve_body, trimmed, else DefaultAutoApproveBody.
@@ -3411,6 +3422,15 @@ func (c *Config) AutoApproveFor(fullName string) *Identity
     AutoApproveFor is the identity magnum auto-approves repository fullName's
     ("owner/name") PRs as: the covering watch's auto_approve_as when its
     auto_approve names the repository, or "*"; nil otherwise.
+
+func (c *Config) AutoApproveRefusesAuthor(fullName, login string) bool
+    AutoApproveRefusesAuthor reports whether the author lists keep
+    magnum from approving repository fullName's PRs by login on its own:
+    auto_approve_skip_authors names login (AutoApproveSkipsAuthor), or an
+    auto_approve_authors that applies does not (AutoApproveAllowsAuthor). The
+    automatic approval asks each list to say why (the engine's authorRefusal);
+    the judge's no-findings event asks this (pipeline.JudgeEvents), so a clean
+    review of such an author is no approval either. A nil c refuses nobody.
 
 func (c *Config) AutoApproveSkipsAuthor(fullName, login string) bool
     AutoApproveSkipsAuthor reports whether auto_approve_skip_authors keeps
@@ -3426,10 +3446,13 @@ func (c *Config) AutofixFor(w *Watch) string
     AutofixFor is the autofix that applies to w's PRs: the watch's when it sets
     one, else [pipeline]'s, else AutofixNever. A nil w is [pipeline]'s.
 
-func (c *Config) CommentsWhenClean(repo, identity string) bool
+func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     CommentsWhenClean reports whether the identity named identity posts
-    a comment, not an approval, for a clean verdict on repository repo
-    ("owner/name"): VerdictsFor's no-findings event is COMMENT.
+    a comment, not an approval, for a clean verdict on repository
+    repo ("owner/name") on a PR by author: VerdictsFor's no-findings
+    event is COMMENT, or the auto-approval author lists refuse author
+    (AutoApproveRefusesAuthor), which turns the judge's APPROVE into COMMENT
+    (pipeline.JudgeEvents).
 
 func (c *Config) EditorRole() Role
     EditorRole is the role the skill editor runs as: EditorRoleName, the
@@ -4682,6 +4705,11 @@ type Repo struct {
 	// auto_approve_skip_authors for this repository's PRs alone.
 	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
 
+	// AutoApproveAuthors, when set (non-empty), replaces the covering
+	// watch's auto_approve_authors for this repository's PRs alone: only
+	// these logins' PRs are approved as the operator on their own there.
+	AutoApproveAuthors []string `toml:"auto_approve_authors"`
+
 	// AllowBotAuthors adds bots' GitHub logins to the covering watch's
 	// allow_bot_authors for this repository's PRs alone.
 	AllowBotAuthors []string `toml:"allow_bot_authors"`
@@ -5188,6 +5216,15 @@ type Watch struct {
 	// someone whose PRs need a person's review. The board's A still
 	// approves them, and an approval standing from before stays.
 	AutoApproveSkipAuthors []string `toml:"auto_approve_skip_authors"`
+	// AutoApproveAuthors, when set, are the only GitHub logins whose PRs
+	// magnum approves as AutoApproveAs on its own, on every repository the
+	// watch auto-approves (any case, with or without "[bot]"; see
+	// Config.AutoApproveAllowsAuthor); a repository's [[repo]] list
+	// replaces it there. Empty = no allowlist: every author not skipped.
+	// A login AutoApproveSkipAuthors names is skipped all the same. The
+	// board's A still approves anyone's PR, and an approval standing from
+	// before stays.
+	AutoApproveAuthors []string `toml:"auto_approve_authors"`
 	// ManualRepos names repositories of the watch (names, any case, no
 	// owner or pattern) that are reviewed only when the operator asks
 	// (`magnum review`, the board, the picker): their PRs are polled and
@@ -6237,19 +6274,19 @@ func NotesRoot(l paths.Layout) string
     no place (paths.Layout.Valid).
 
 func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string) string
-    OperatorApprovalRefusal says why the operator's own approval of
-    pr cannot be posted as login (their auto_approve_as account) now,
-    "" when it can: auto-approval's preconditions (autoApproveRefusal),
-    less the two that exist only because auto-approval acts without asking.
-    The operator's stop (their changes request or review by hand, a dismissal,
-    magnum unapprove) and a manual verdict posted after magnum's round both keep
-    auto-approval from overriding the operator, who here is the one asking: A
-    lifts their own ✗ on purpose. What auto-approval holds a PR back for besides
-    (authorRefusal: an author auto_approve_skip_authors lists; autoGateRefusal:
-    a reviewer's missing report, a PR its watch would not review on its own,
-    the agents' instructions, the head's checks) does not refuse it either:
-    the operator decides by hand, the board shows those. sum is magnum's latest
-    posted round of pr (nil: none).
+    OperatorApprovalRefusal says why the operator's own approval of pr cannot
+    be posted as login (their auto_approve_as account) now, "" when it can:
+    auto-approval's preconditions (autoApproveRefusal), less the two that exist
+    only because auto-approval acts without asking. The operator's stop (their
+    changes request or review by hand, a dismissal, magnum unapprove) and a
+    manual verdict posted after magnum's round both keep auto-approval from
+    overriding the operator, who here is the one asking: A lifts their own ✗
+    on purpose. What auto-approval holds a PR back for besides (authorRefusal:
+    an author auto_approve_skip_authors lists or auto_approve_authors leaves
+    out; autoGateRefusal: a reviewer's missing report, a PR its watch would
+    not review on its own, the agents' instructions, the head's checks) does
+    not refuse it either: the operator decides by hand, the board shows those.
+    sum is magnum's latest posted round of pr (nil: none).
 
 func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, error)
     PinnedSince is when each subject that is pinned now was pinned, by the
@@ -13398,16 +13435,23 @@ func EvidenceMapPath(l paths.Layout, owner, repo string, number int) string
     EvidenceMapPath is PR owner/repo#number's evidence map: EvidenceFile in the
     root of its review reports, above the per-head directories.
 
-func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, commentOnly bool, reports ...agents.Report) (noFindings, blocking string)
-    JudgeEvents are the review events the judge's prompt names for a round of
-    repository fullName ("owner/name") posted as identity id: the repository's
-    or the identity's (config.Config.VerdictsFor); COMMENT both ways when
-    commentOnly: in a post-merge round, where a verdict blocks nothing,
-    and on a PR the reviewer login or the human behind it opened (the prompt's
-    self_authored), where a verdict of one's own counts for nothing; and COMMENT
-    for no findings when one of the round's reports is missing (an APPROVE once
-    went out while claude-review had hit a usage limit: a review that did not
-    hear every reviewer approves nothing).
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, author string, commentOnly bool, reports ...agents.Report) (noFindings, blocking string)
+    JudgeEvents are the review events the judge's prompt names for a round
+    of repository fullName ("owner/name") posted as identity id on a PR by
+    author (its login, "" when unknown): the repository's or the identity's
+    (config.Config.VerdictsFor); COMMENT both ways when commentOnly:
+    in a post-merge round, where a verdict blocks nothing, and on a PR the
+    reviewer login or the human behind it opened (the prompt's self_authored),
+    where a verdict of one's own counts for nothing; COMMENT for no findings
+    when one of the round's reports is missing (an APPROVE once went out
+    while claude-review had hit a usage limit: a review that did not
+    hear every reviewer approves nothing); and COMMENT for no findings,
+    whatever the identity, when the auto-approval author lists refuse author
+    (config.Config.AutoApproveRefusesAuthor: auto_approve_skip_authors names it,
+    or an auto_approve_authors that applies does not): a clean review as a gh
+    identity that approves is an approval of the operator's account, which the
+    lists keep from the author as they keep the automatic one (the engine's
+    authorRefusal).
 
 func KVMissingReports(prID int64) string
     KVMissingReports is the kv key of the PR's record of missing reports:
@@ -16547,7 +16591,9 @@ type NeedsMeFacts struct {
 	LastReviewEvent string
 	// CommentWhenClean: the PR's identity posts a comment, not an approval,
 	// for a clean verdict on its repository ([[identity]] or [[repo]]
-	// no_findings_event = "COMMENT"), so a clean comment is its approval.
+	// no_findings_event = "COMMENT", or the auto-approval author lists
+	// refuse its author: config.Config.CommentsWhenClean), so a clean
+	// comment is its approval.
 	CommentWhenClean bool
 	// Verdict is the verdict of magnum's latest posted round
 	// (ReviewSummary.Verdict); only a comment reads it.
@@ -17549,12 +17595,13 @@ func (s *Store) Misses(ctx context.Context, f MissFilter) ([]Miss, error)
     Misses returns the misses f selects, newest first, each with its PR's
     repository and number and the latest proposal it was given to.
 
-func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, identity string) bool, mine func(login string) bool) ([]NeedsMePR, error)
+func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, identity, author string) bool, mine func(login string) bool) ([]NeedsMePR, error)
     NeedsMePRs lists the open PRs that need the operator (NeedsMe),
     by repository and number. commentsWhenClean tells whether an identity posts
-    a comment for a clean verdict on a repository (owner/name); mine whether a
-    login is one of the operator's. It reads magnum's latest round only for a PR
-    whose last review is such a comment.
+    a comment for a clean verdict on a repository (owner/name) on a PR by an
+    author (its login, "" when unknown); mine whether a login is one of the
+    operator's. It reads magnum's latest round only for a PR whose last review
+    is such a comment.
 
 func (s *Store) NotesFileUses(ctx context.Context, repoID int64) ([]NotesFileUse, error)
     NotesFileUses lists repoID's harness files with their rounds and the uses
@@ -18798,10 +18845,11 @@ type PRBoardRow struct {
 	// AutoRefused is why magnum does not approve the PR as the operator
 	// although its review of the head left nothing to fix
 	// (engine.AutoApproveRefused: an author auto_approve_skip_authors
-	// lists, a reviewer's missing report, a PR its watch would not review on
-	// its own, a change to the review agents' instructions, the head's
-	// checks); "" otherwise. The card says so ("auto-approval: off for this
-	// author (auto_approve_skip_authors)" for the first).
+	// lists or auto_approve_authors leaves out, a reviewer's missing report,
+	// a PR its watch would not review on its own, a change to the review
+	// agents' instructions, the head's checks); "" otherwise. The card says
+	// so ("auto-approval: off for this author (auto_approve_skip_authors)"
+	// or "(not in auto_approve_authors)" for the first).
 	AutoRefused string
 	// ApproveAs is whom A approves a NeedsMe row as: the watch's
 	// auto_approve_as, the operator's own account, whose approval GitHub

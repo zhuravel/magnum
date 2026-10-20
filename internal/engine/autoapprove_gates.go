@@ -14,10 +14,11 @@ package engine
 // reason. A later round of magnum's on the head of a PR it approved as the
 // operator is held to them too: one they refuse withdraws the approval
 // (standingGateRefusal). Before them, a PR whose author
-// auto_approve_skip_authors lists is refused (authorRefusal), recorded once
-// per head whatever round reviewed it; a standing approval is not held to
-// that one, so an approval posted before the author was listed, and the
-// operator's own A, stand.
+// auto_approve_skip_authors lists, or the auto_approve_authors that applies
+// does not, is refused (authorRefusal), recorded once per head whatever
+// round reviewed it; a standing approval is not held to that one, so an
+// approval posted before the lists left the author out, and the operator's
+// own A, stand.
 
 import (
 	"context"
@@ -69,20 +70,34 @@ func ParseAutoApproveRefused(v string) (AutoApproveRefused, bool) {
 var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md"}
 
 // skipAuthorRefusal is why auto-approval refuses a PR whose author
-// auto_approve_skip_authors lists (authorRefusal; the card's words, which
-// name the key the board reads it by). It names nobody: the event and the
-// card read it, never GitHub.
-const skipAuthorRefusal = "the author is in auto_approve_skip_authors"
+// auto_approve_skip_authors lists, and notAllowedAuthorRefusal one whose
+// author the auto_approve_authors that applies does not list
+// (authorRefusal; the card's words, which name the key the board reads
+// them by). They name nobody: the event and the card read them, never
+// GitHub.
+const (
+	skipAuthorRefusal       = "the author is in auto_approve_skip_authors"
+	notAllowedAuthorRefusal = "the author is not in auto_approve_authors"
+)
 
 // authorRefusal says why auto-approval refuses c for its author, "" when it
 // does not: the watch's auto_approve_skip_authors, or its repository's,
 // lists the PR's author (config.AutoApproveSkipsAuthor), whose PRs need a
-// person's review however clean magnum's. It holds back a new approval
-// only: a standing one is not held to it (standingGateRefusal runs
-// autoGateRefusal alone), nor is the operator's A (OperatorApprovalRefusal).
+// person's review however clean magnum's; else an auto_approve_authors
+// applies (the repository's, or the watch's) and does not list it
+// (config.AutoApproveAllowsAuthor): only the authors it names are trusted
+// that far, and an author magnum does not know is none of them. The skip
+// list is asked first, so a login on both lists is skipped. It holds back
+// a new approval only: a standing one is not held to it
+// (standingGateRefusal runs autoGateRefusal alone), nor is the operator's
+// A (OperatorApprovalRefusal).
 func (e *Engine) authorRefusal(c store.RepoPR) string {
-	if e.cfg.AutoApproveSkipsAuthor(c.Repo, deref(c.PR.AuthorLogin)) {
+	login := deref(c.PR.AuthorLogin)
+	switch {
+	case e.cfg.AutoApproveSkipsAuthor(c.Repo, login):
 		return skipAuthorRefusal
+	case !e.cfg.AutoApproveAllowsAuthor(c.Repo, login):
+		return notAllowedAuthorRefusal
 	}
 	return ""
 }

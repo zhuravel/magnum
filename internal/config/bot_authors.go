@@ -2,8 +2,8 @@ package config
 
 // Login lists: skip_bot_authors skips every bot's PR, and allow_bot_authors
 // on a [[watch]] (a [[repo]] block's adds to it) names the bots whose PRs
-// are reviewed all the same. The lists here and auto_approve_skip_authors
-// match logins as github.SameLogin does.
+// are reviewed all the same. The lists here, auto_approve_skip_authors and
+// auto_approve_authors match logins as github.SameLogin does.
 
 import (
 	"fmt"
@@ -37,7 +37,7 @@ func listsLogin(logins []string, login string) bool {
 }
 
 // validateLogins checks a list of GitHub logins under key (allow_bot_authors,
-// auto_approve_skip_authors) of a [[watch]] or [[repo]] block (where names
+// auto_approve_skip_authors, auto_approve_authors) of a [[watch]] or [[repo]] block (where names
 // it): none empty, with whitespace or a "/" in it (validateNoAppForm). Logins
 // that differ only in case or "[bot]" match as one, so a duplicate is no
 // error.

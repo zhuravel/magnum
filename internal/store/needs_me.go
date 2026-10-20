@@ -58,7 +58,9 @@ type NeedsMeFacts struct {
 	LastReviewEvent string
 	// CommentWhenClean: the PR's identity posts a comment, not an approval,
 	// for a clean verdict on its repository ([[identity]] or [[repo]]
-	// no_findings_event = "COMMENT"), so a clean comment is its approval.
+	// no_findings_event = "COMMENT", or the auto-approval author lists
+	// refuse its author: config.Config.CommentsWhenClean), so a clean
+	// comment is its approval.
 	CommentWhenClean bool
 	// Verdict is the verdict of magnum's latest posted round
 	// (ReviewSummary.Verdict); only a comment reads it.
@@ -159,10 +161,11 @@ type NeedsMePR struct {
 
 // NeedsMePRs lists the open PRs that need the operator (NeedsMe), by
 // repository and number. commentsWhenClean tells whether an identity posts
-// a comment for a clean verdict on a repository (owner/name); mine whether a
-// login is one of the operator's. It reads magnum's latest round only for a
-// PR whose last review is such a comment.
-func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, identity string) bool, mine func(login string) bool) ([]NeedsMePR, error) {
+// a comment for a clean verdict on a repository (owner/name) on a PR by an
+// author (its login, "" when unknown); mine whether a login is one of the
+// operator's. It reads magnum's latest round only for a PR whose last
+// review is such a comment.
+func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, identity, author string) bool, mine func(login string) bool) ([]NeedsMePR, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("p", prColumns)+`, r.owner || '/' || r.name
 FROM prs p JOIN repos r ON r.id = p.repo_id
 WHERE p.gh_state = ? AND p.is_draft = 0 AND p.review_gate_json IS NOT NULL AND p.reviewed_sha = p.head_sha
@@ -189,7 +192,7 @@ ORDER BY r.owner, r.name, p.number`, GHOpen)
 	for i := range list {
 		c := &list[i]
 		c.facts = c.pr.NeedsMeFacts()
-		c.facts.CommentWhenClean = commentsWhenClean != nil && commentsWhenClean(c.repo, c.pr.Identity)
+		c.facts.CommentWhenClean = commentsWhenClean != nil && commentsWhenClean(c.repo, c.pr.Identity, Deref(c.pr.AuthorLogin))
 		if c.facts.WantsVerdict() {
 			ids = append(ids, c.pr.ID)
 		}

@@ -72,6 +72,8 @@ skip_authors = ["dependabot"]
 # auto_approve_as = "zhuravel"          # the gh identity of your own account (GitHub does not count an App's approval)
 # auto_approve_body = "Approved after Magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA, .ReviewURL, .Repo, .Number
 # auto_approve_skip_authors = ["alice"] # logins whose PRs magnum never approves as you on its own (A still does)
+# auto_approve_authors = ["rev-ann"]    # when set, the only logins whose PRs magnum approves as you on its own
+#                                       # (the skip list still wins; a [[repo]] block's replaces it there)
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every round role, the first judge only
 # judge_own_pass = "after"              # [pipeline]'s "parallel" (the judge's own pass with the reviewers) or "after"
 # related_lookback = "30d"              # [pipeline]'s 14d: how long a merged PR on the same paths stays related ("0s": none)
@@ -132,8 +134,8 @@ databases = [
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
 # block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
-# allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready, ready_timeout; each
-# replaces the pool's) is valid for a [[pool]] repo too.
+# auto_approve_authors, allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready,
+# ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"

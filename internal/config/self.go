@@ -36,11 +36,14 @@ func (c *Config) SelfMatch() func(login string) bool { return textx.MatchLogins(
 
 // CommentsWhenClean reports whether the identity named identity posts a
 // comment, not an approval, for a clean verdict on repository repo
-// ("owner/name"): VerdictsFor's no-findings event is COMMENT.
-func (c *Config) CommentsWhenClean(repo, identity string) bool {
+// ("owner/name") on a PR by author: VerdictsFor's no-findings event is
+// COMMENT, or the auto-approval author lists refuse author
+// (AutoApproveRefusesAuthor), which turns the judge's APPROVE into COMMENT
+// (pipeline.JudgeEvents).
+func (c *Config) CommentsWhenClean(repo, identity, author string) bool {
 	if c == nil {
 		return false
 	}
 	noFindings, _ := c.VerdictsFor(repo, c.IdentityByName(identity))
-	return noFindings == "COMMENT"
+	return noFindings == "COMMENT" || c.AutoApproveRefusesAuthor(repo, author)
 }

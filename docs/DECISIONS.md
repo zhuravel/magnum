@@ -9633,6 +9633,60 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Rejected: posting a duplicate inline comment on the other reviewer's thread line (two threads for one
   defect double the author's work); keeping the link line and adding a priority to it (the list under the
   verdict line would still show a problem it does not count and miss the one that blocks).
+- **Auto-approval can trust only some authors: `auto_approve_authors` on a watch, replaced per
+  repository** (2026-10-20, spec 92, asked for by the operator: "currently there is a blocklist of people
+  who are not auto-approved, but I would benefit from an allowlist as well: in some repos I only trust
+  certain people's code quality to auto approve it"). Until now only `auto_approve_skip_authors` (spec 50)
+  kept authors out, so trusting three people in a repository meant listing everyone else, and a new
+  colleague was approved as the operator until someone remembered to add them. `auto_approve_authors` on
+  a `[[watch]]` and on a `[[repo]]` block lists GitHub logins, matched and validated as the skip list is
+  (`listsLogin`, `validateLogins`: any case, with or without `[bot]`; an empty entry, one with whitespace
+  or an App's `app/<name>` form refused, naming the block). The repository's list, when set (not empty),
+  decides for that repository and replaces the watch's; else the watch's, when set, decides for every
+  repository the watch auto-approves; with neither there is no allowlist, today's behaviour
+  (`Config.AutoApproveAllowsAuthor`, true when no list applies or the login is on it; a blank login, an
+  author magnum does not know, is on no list). `authorRefusal` asks the skip list first, so a login on
+  both lists is skipped, then refuses an author the list leaves out with the fixed text "the author is not
+  in auto_approve_authors" (it names nobody), exactly as it refuses a skipped one: a new approval only,
+  recorded once per head with no round (`run_id` ""), in one `review.auto_approve_refused` event, in
+  `auto_approve_refused` of `magnum tui --json` and on the card, which reads it by its words as it reads
+  the skip list's key and says "auto-approval: off for this author (not in auto_approve_authors)", dim, in
+  place of the refusal's yellow sentence; the row shows no `✔ auto`. A standing approval is not held to
+  it (`standingGateRefusal` runs `autoGateRefusal` alone), so one posted before the list left its author
+  out stays, and the board's `A` and `magnum approve --as` still approve (`OperatorApprovalRefusal` never
+  asks about the author). Nothing on GitHub names the list: the status comment never speaks of
+  auto-approval. It is not a per-PR worktree key, so a pooled repository's `[[repo]]` block may set it
+  (`worktreeKeys`' comment, the pooled-repository refusal's list and the sentences of
+  `config.defaults.toml` and `config.full.example.toml`, which the drift test checks). The `magnum status`
+  report and the attention causes never read the refusal, and triage's rule (every role runs where magnum
+  auto-approves) is the repository's, not the author's, so none of them changed. The auto-approval path
+  has no other author check it could contradict: "it is your own" refuses the operator's own PRs whatever
+  the list says, and a bot author still needs its watch to review it on its own (`allow_bot_authors`).
+  The review found a hole the skip list had had since spec 50: `authorRefusal` stops only the separate
+  automatic approval, but where a watch posts its reviews as an identity that approves when clean (the
+  operator's own gh account, whose default `no_findings_event` is APPROVE, or any identity or `[[repo]]`
+  set to APPROVE), the judge's clean review is itself an approval, as the operator's account in the gh case,
+  so a skipped author's clean PR was approved all the same (`judgeData` took `JudgeEvents`, which took
+  `VerdictsFor`'s APPROVE, and post-review submitted the event the prompt named); the engine tests missed
+  it because their harness posts clean reviews as COMMENTED. Now `pipeline.JudgeEvents` takes the PR's
+  author and turns the no-findings event into COMMENT, for every identity, when
+  `Config.AutoApproveRefusesAuthor` (the skip list names the author, or an allowlist that applies leaves it
+  out) says so, as it does for a missing report; every round's prompt gets its events there (`judgeData`:
+  the first review, a re-review, a recovery, a delta check, a continued round, the judge's own pass, a reply
+  round that changes its verdict, and the fallback judge, which is another judge role of the same pipeline), and
+  the round's `round.judge` event says "no APPROVE: the auto-approval author lists ... keep this author's PRs
+  from an approval". The automatic approval (gated by `authorRefusal`) and the operator's own verdicts (`A`,
+  `magnum approve`) are the only other reviews magnum creates, and nothing re-posts a standing approval.
+  `Config.CommentsWhenClean` takes the author too, so such a clean comment counts as magnum's approval for
+  the PRs that need the operator (`✔ needs you`, A as `auto_approve_as`), as an App's clean comment does;
+  without it an App set to APPROVE would have lost the `✔ needs you` it showed after its approval. The
+  guard is the prompt's, as the missing-report and held-approval guards are: post-review reads no config,
+  so a judge that wrote APPROVE against its prompt would still post it.
+  Rejected: a repository list that adds to the watch's, as the skip list's does (an allowlist that only
+  grows cannot narrow trust in one repository, which is the point of setting it there); one global list
+  (trust differs per repository and per owner); an empty `[[repo]]` list meaning "nobody" (a list that
+  trusts no one is auto-approval turned off for the repository, which is leaving it out of
+  `auto_approve`; an empty list keeps the watch's, as an unset one does).
 
 ## Learned rules
 

@@ -98,10 +98,10 @@ func TestPostMergeReviewOfAPRMergedBeforeItsReReview(t *testing.T) {
 	// skill reads them there): COMMENT both ways, though the repository says
 	// APPROVE and REQUEST_CHANGES.
 	id := h.cfg.IdentityByName(in.PR.Identity)
-	if nf, be := pipeline.JudgeEvents(h.cfg, in.Repo.FullName(), id, in.PostMerge); nf != "COMMENT" || be != "COMMENT" {
+	if nf, be := pipeline.JudgeEvents(h.cfg, in.Repo.FullName(), id, deref(in.PR.AuthorLogin), in.PostMerge); nf != "COMMENT" || be != "COMMENT" {
 		t.Fatalf("judge events %s/%s, want COMMENT/COMMENT", nf, be)
 	}
-	if nf, be := pipeline.JudgeEvents(h.cfg, in.Repo.FullName(), id, false); nf != "APPROVE" || be != "REQUEST_CHANGES" {
+	if nf, be := pipeline.JudgeEvents(h.cfg, in.Repo.FullName(), id, deref(in.PR.AuthorLogin), false); nf != "APPROVE" || be != "REQUEST_CHANGES" {
 		t.Fatalf("control: an open PR's judge events %s/%s, want the repository's APPROVE/REQUEST_CHANGES", nf, be)
 	}
 

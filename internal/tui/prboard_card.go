@@ -256,8 +256,8 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.AutoStopped != "" {
 		add(p.st.Dim.Render(truncate("magnum no longer approves it as you: "+oneLine(r.AutoStopped)+" (magnum unapprove --resume)", inner)))
-	} else if autoOffForAuthor(r) {
-		add(p.st.Dim.Render(truncate(autoOffForAuthorLine, inner))) // the operator's own setting, not a hold to clear
+	} else if line := autoOffForAuthorLine(r); line != "" {
+		add(p.st.Dim.Render(truncate(line, inner))) // the operator's own setting, not a hold to clear
 	} else if r.AutoRefused != "" && r.AutoApproved == nil {
 		add(p.pal.yellow.Render(truncate("magnum does not approve it as you: "+oneLine(r.AutoRefused), inner)))
 	}
@@ -577,18 +577,29 @@ const flagDismissedNote = "merged-unreviewed flag dismissed (M restores it)"
 
 // autoSkipAuthorsKey is the setting a refusal of auto-approval names when
 // the PR's author is on the list (engine's "the author is in
-// auto_approve_skip_authors"), and autoOffForAuthorLine the card's line
-// for it, in place of the refusal's sentence.
+// auto_approve_skip_authors"), and autoNotAllowedAuthor the words of one
+// whose author the allowlist that applies leaves out (engine's "the author
+// is not in auto_approve_authors").
 const (
 	autoSkipAuthorsKey   = "auto_approve_skip_authors"
-	autoOffForAuthorLine = "auto-approval: off for this author (" + autoSkipAuthorsKey + ")"
+	autoNotAllowedAuthor = "not in auto_approve_authors"
 )
 
-// autoOffForAuthor reports whether magnum does not approve r as the
-// operator because auto_approve_skip_authors lists its author (A still
-// approves it: the operator is the person its PRs wait for).
-func autoOffForAuthor(r PRBoardRow) bool {
-	return r.AutoApproved == nil && strings.Contains(r.AutoRefused, autoSkipAuthorsKey)
+// autoOffForAuthorLine is the card's line, in place of the refusal's
+// sentence, when magnum does not approve r as the operator for its author:
+// auto_approve_skip_authors lists it, or the auto_approve_authors that
+// applies does not (A still approves it: the operator is the person its PRs
+// wait for); "" otherwise.
+func autoOffForAuthorLine(r PRBoardRow) string {
+	switch {
+	case r.AutoApproved != nil:
+		return ""
+	case strings.Contains(r.AutoRefused, autoSkipAuthorsKey):
+		return "auto-approval: off for this author (" + autoSkipAuthorsKey + ")"
+	case strings.Contains(r.AutoRefused, autoNotAllowedAuthor):
+		return "auto-approval: off for this author (" + autoNotAllowedAuthor + ")"
+	}
+	return ""
 }
 
 // mergedUnreviewedSentence says that GitHub merged r before magnum reviewed

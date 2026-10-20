@@ -1032,6 +1032,9 @@ harm against it, never against a stakes block in the checkout, which is PR conte
 none. Unset, nothing renders. `max_simplifications` on the `[[repo]]` (0 to 10) is how many
 simplifications the judge posts at most on the repository's PRs, the most substantial first; 0 or unset
 keeps `[pipeline] max_simplifications` (1 to 10, default 5), and a pooled repository may set it too.
+`auto_approve_skip_authors` on the `[[repo]]` adds logins to the watch's for that repository, and
+`auto_approve_authors` there replaces the watch's allowlist for it (Approving as you); a pooled
+repository may set both.
 `prepare` (such as `["bin/rails db:test:prepare"]`) and
 `ready` (probes, exit 0 = ready) on a `[[pool]]` or `[[repo]]` run in the checkout before the
 reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) together, followed by a
@@ -1065,13 +1068,13 @@ directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files al
 `allow_bot_authors` names the bots whose PRs are reviewed all the same, such as `["helper[bot]"]` above for
 an App that writes code for the team, while the dependency bots' PRs stay skipped: GitHub logins, matched as `skip_authors`
 matches them (any case, with or without `[bot]`; none empty or with a space; `helper` or `helper[bot]`, never
-`app/helper`, which the config refuses in this list, in `skip_authors` and in `auto_approve_skip_authors`
-because it would match no author), and a `[[repo]]` block's
+`app/helper`, which the config refuses in this list, in `skip_authors`, in `auto_approve_skip_authors` and
+in `auto_approve_authors` because it would match no author), and a `[[repo]]` block's
 `allow_bot_authors` adds logins for that repository alone. Such a PR is reviewed as a person's would be,
 under every other filter but `skip_departed_authors`, which reads only people's membership (an App's
 `authorAssociation` is `NONE` whatever its installation writes): `skip_authors` wins (a login on both lists is skipped), with
 `skip_bot_authors = false` the list changes nothing, and auto-approval treats it as any PR its watch
-reviews (`auto_approve_skip_authors` keeps it out). Its author is still a bot: its remarks count only in
+reviews (`auto_approve_skip_authors` keeps it out, as does an `auto_approve_authors` that does not list it). Its author is still a bot: its remarks count only in
 Magnum's threads, and nothing in the PR is trusted. The daemon classifies the skipped PRs again when it
 starts, so once it restarts on the new list a bot's PR the poll skipped ("bot author") is queued without a
 push, and one open since the repository's first sync goes back to baseline, as the first sync left it; a
@@ -1105,12 +1108,14 @@ auto_approve = ["talkable"]        # repository names of the watch, or ["*"]
 auto_approve_as = "me"             # an identity of kind gh: your own account
 # auto_approve_body = "Approved after Magnum's review of {{.Short}}."   # one line; magnum adds its marker
 # auto_approve_skip_authors = ["alice"]   # GitHub logins whose PRs Magnum never approves as you on its own
+# auto_approve_authors = ["rev-ann"]      # when set, the only GitHub logins whose PRs Magnum approves as you on its own
 ```
 
 Magnum approves as `auto_approve_as`, on the head it reviewed, as soon as the round that posted the review
 ends (each tick looks again, for a post to retry or a PR that changed), only when all of these hold:
 
-- its author is not in `auto_approve_skip_authors` (below);
+- its author is not in `auto_approve_skip_authors` and, where an `auto_approve_authors` applies, is in
+  it (below);
 - its latest verified review is of the PR's current head and leaves nothing to fix before merging: no
   P0, P1 or P2 finding, still-open earlier ones included, by the priorities the judge's result gives them
   (P3 findings and simplifications are optional). Only a result written before it gave them leaves the
@@ -1159,13 +1164,29 @@ not approve it as you: its head's checks fail …"; `auto_approve_refused` in `m
 (a colleague whose PRs must get an explicit human approval): GitHub logins, matched as `skip_authors`
 matches them (any case, with or without `[bot]`; none empty or with a space; `app/<name>` is refused). A `[[repo]]` block's
 `auto_approve_skip_authors` adds logins for that repository alone. On such a PR Magnum reviews as
-usual and never posts your approval: the refusal is recorded once per head, whatever round reviewed it
+usual and never posts your approval, neither as the automatic approval nor as the review itself: where the
+posting identity approves when clean (your own gh account, or any identity whose `no_findings_event` is
+`APPROVE`), its clean review of such a PR is a `COMMENT`. The refusal is recorded once per head, whatever round reviewed it
 (`auto_approve_refused` reads "the author is in auto_approve_skip_authors", the card "auto-approval: off
 for this author (auto_approve_skip_authors)", and the row shows no `✔ auto`). The board's `A` still
 approves it as you, since you are the person it waits for, and an approval standing from before the
 author was listed stays (a later review that finds something to fix withdraws it as any other). Nothing
 on GitHub names the author or the list: the PR's status comment reads as on a watch without
 auto-approval.
+
+`auto_approve_authors` is the other way round: when set, only the authors it lists get your approval
+from Magnum on its own, for repositories where you trust only some people's code that far. GitHub
+logins, matched and checked as `auto_approve_skip_authors` is. The watch's list decides on every
+repository the watch auto-approves; a `[[repo]]` block's `auto_approve_authors`, when set (not empty),
+replaces it for that repository alone (it does not add to it, so a repository can trust fewer people
+than the watch); with neither set every author not skipped is approved, as before. A login on both
+lists is skipped (`auto_approve_skip_authors` wins), and a PR whose author Magnum does not know is on no
+list. Any other author's PR is reviewed as usual and never approved as you, neither by the automatic
+approval nor by a clean review an approving identity posts (it comments, as on a skipped author's PR): the
+refusal is recorded once per head (`auto_approve_refused` reads "the author is not in auto_approve_authors", the card
+"auto-approval: off for this author (not in auto_approve_authors)", and the row shows no `✔ auto`). As
+with the skip list, the board's `A` still approves it as you, an approval standing from before the list
+left the author out stays, and nothing on GitHub names the author or the list.
 
 The body is one line, `Auto-approved: Magnum's review of `<sha7>` found no blocking problems ([review](<url>)).`
 (or `auto_approve_body`, a template of `.Short`, `.SHA`, `.ReviewURL`, `.Repo` and `.Number`), with a hidden
@@ -2013,8 +2034,10 @@ What an author gets, every review alike:
   A re-review puts `Re-review a1b2c3d → d4e5f6a:` before it. No GitHub event names, no notes on
   the process. The event follows `no_findings_event` and `blocking_event`, except that a round where a
   reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,
-  and Checks names the missing reviewer. A PR the posting login (or the human behind it) opened gets
-  `COMMENT` both ways, as a post-merge review does.
+  and Checks names the missing reviewer. Nor does a review of a PR whose author `auto_approve_skip_authors`
+  lists or an `auto_approve_authors` that applies leaves out, whatever the identity (Approving as you). A
+  PR the posting login (or the human behind it) opened gets `COMMENT` both ways, as a post-merge review
+  does.
 - **Only the counted problems under it**, by priority, each as `- P1: <title>`; another reviewer's open
   thread the judge confirmed is one of them, `- P1: <title> (confirmed: <link>)` under the judge's own
   title. The optional count (`2 optional: 1 P3, 1 simplification.`) and any P3 titles come after them. A
@@ -2579,7 +2602,7 @@ counts a GitHub App's approval toward a branch's required approvals, so while it
 `REVIEW_REQUIRED` yours is the approval that counts. `✔ lift your ✗` marks one whose only outstanding changes
 request is yours (an old one counts until you approve or dismiss it). Both need Magnum's latest review to
 approve the PR's current head (or, for an identity that comments when clean, `no_findings_event = "COMMENT"`,
-to comment with a clean verdict), an open PR that is not a draft and not yours, and no changes request of
+or on a PR whose author the auto-approval author lists refuse, to comment with a clean verdict), an open PR that is not a draft and not yours, and no changes request of
 anyone else's; yours are the logins the board marks ★ (every watch's posting identity and every gh identity),
 and only reviewers with write access count, as for GitHub's decision. Magnum reads the decision
 (`reviewDecision`, `latestOpinionatedReviews`) with the PR's details, at no extra GitHub point. While such

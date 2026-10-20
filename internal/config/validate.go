@@ -434,7 +434,7 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: no [[watch]] covers it", r.Repo))
 		}
 		if c.PoolFor(r.Repo) != nil && r.worktreeKeys() {
-			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, allow_bot_authors, required_checks and trackers apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, auto_approve_authors, allow_bot_authors, required_checks and trackers apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
 		}
 		for _, g := range r.RequiredChecks {
 			// A malformed glob would match no check; Match reports it even for "".
@@ -457,6 +457,7 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: max_simplifications must be from 0 ([pipeline]'s) to %d, got %d", r.Repo, MaxSimplificationsMax, n))
 		}
 		errs = append(errs, validateLogins("repo "+r.Repo+": ", "auto_approve_skip_authors", r.AutoApproveSkipAuthors)...)
+		errs = append(errs, validateLogins("repo "+r.Repo+": ", "auto_approve_authors", r.AutoApproveAuthors)...)
 		errs = append(errs, validateLogins("repo "+r.Repo+": ", "allow_bot_authors", r.AllowBotAuthors)...)
 		for k := range r.Env {
 			if !envKeyRe.MatchString(k) {

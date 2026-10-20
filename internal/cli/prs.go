@@ -412,7 +412,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				out[i].ReviewDecision = r.ReviewGate.Decision
 			}
 			nf := r.NeedsMeFacts()
-			nf.CommentWhenClean = cfg.CommentsWhenClean(r.Owner+"/"+r.Name, r.Identity)
+			nf.CommentWhenClean = cfg.CommentsWhenClean(r.Owner+"/"+r.Name, r.Identity, r.Author)
 			nf.Verdict = sums[r.PRID].Verdict
 			out[i].NeedsMe = store.NeedsMe(nf, mine)
 		}

@@ -194,43 +194,47 @@ func TestTheBoardSaysWhyMagnumDoesNotApproveAsYou(t *testing.T) {
 	}
 }
 
-// The refusal of a PR whose author auto_approve_skip_authors lists is the
-// PR's, not a round's (the engine records it with no run, once per head):
-// the row and `magnum tui --json` carry its reason for the head, and the
-// row has no standing approval, so no "✔ auto".
+// The refusal of a PR for its author (auto_approve_skip_authors lists it,
+// or the auto_approve_authors that applies does not) is the PR's, not a
+// round's (the engine records it with no run, once per head): the row and
+// `magnum tui --json` carry its reason for the head, and the row has no
+// standing approval, so no "✔ auto".
 func TestTheBoardCarriesAListedAuthorsRefusal(t *testing.T) {
-	_, st, d, now := statusFixture(t)
-	seedAutoApprovals(t, st, now)
-	ctx := context.Background()
-	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pr, err := st.PRByRepoNumber(ctx, repo.ID, 11973)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const reason = "the author is in auto_approve_skip_authors"
-	b, _ := json.Marshal(engine.AutoApproveRefused{Head: nmHead, Reason: reason, At: now})
-	if err := st.SetKV(ctx, engine.KVPRAutoApproveRefused(pr.ID), string(b)); err != nil {
-		t.Fatal(err)
-	}
-	out, err := prsSource(st, d.Config, store.BoardFilter{}, prsSelfLogins(d.Config), d.Layout)(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var row *tui.PRBoardRow
-	for i := range out {
-		if out[i].Number == 11973 {
-			row = &out[i]
-		}
-	}
-	if row == nil || row.AutoRefused != reason || row.AutoApproved != nil {
-		t.Fatalf("#11973 row %+v, want refused for %q with no approval", row, reason)
-	}
-	js := prsJSONOf(*row)
-	if js.AutoApproveRefused != reason || js.AutoApproved != nil {
-		t.Fatalf("json auto_approve_refused %q, auto_approved %+v", js.AutoApproveRefused, js.AutoApproved)
+	for _, reason := range []string{"the author is in auto_approve_skip_authors", "the author is not in auto_approve_authors"} {
+		t.Run(reason, func(t *testing.T) {
+			_, st, d, now := statusFixture(t)
+			seedAutoApprovals(t, st, now)
+			ctx := context.Background()
+			repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pr, err := st.PRByRepoNumber(ctx, repo.ID, 11973)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(engine.AutoApproveRefused{Head: nmHead, Reason: reason, At: now})
+			if err := st.SetKV(ctx, engine.KVPRAutoApproveRefused(pr.ID), string(b)); err != nil {
+				t.Fatal(err)
+			}
+			out, err := prsSource(st, d.Config, store.BoardFilter{}, prsSelfLogins(d.Config), d.Layout)(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var row *tui.PRBoardRow
+			for i := range out {
+				if out[i].Number == 11973 {
+					row = &out[i]
+				}
+			}
+			if row == nil || row.AutoRefused != reason || row.AutoApproved != nil {
+				t.Fatalf("#11973 row %+v, want refused for %q with no approval", row, reason)
+			}
+			js := prsJSONOf(*row)
+			if js.AutoApproveRefused != reason || js.AutoApproved != nil {
+				t.Fatalf("json auto_approve_refused %q, auto_approved %+v", js.AutoApproveRefused, js.AutoApproved)
+			}
+		})
 	}
 }
 
