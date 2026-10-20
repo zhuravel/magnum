@@ -16,7 +16,15 @@ package engine
 //	- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why>   or "none";
 //	- <comment id> <priority> <path>:<line>: not fixed. <reason>      the words
 //	                              after the place say what the fixer did
-//	                              (fix_calls.go reads them)
+//	                              (fix_calls.go reads them); another
+//	                              reviewer's item has no priority, and a
+//	                              review body's or comment's place is
+//	                              "review" or "comment"
+//
+// A fourth section, "## Other reviewers", follows: one line per item of the
+// external file (fix_external.go) and what the fixer did with it, for the
+// operator. Magnum does not read it, and a report without it (one from
+// before the external file) is still whole.
 //
 // ParseFixReport reads it the way reportProblem reads a reviewer's report:
 // strict about the marker and the headings, lenient about whitespace.

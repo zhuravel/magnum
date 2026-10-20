@@ -9687,6 +9687,107 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (trust differs per repository and per owner); an empty `[[repo]]` list meaning "nobody" (a list that
   trusts no one is auto-approval turned off for the repository, which is leaving it out of
   `auto_approve`; an empty list keeps the watch's, as an unset one does).
+- **A fix job also answers what other reviewers wrote that nobody answered** (2026-10-20, spec 93. It amends
+  "A fix loop that needs you says what to do per finding, with the thread's link". The operator asked for
+  it: "I started fix on PR 12054 and it fixed only magnum's finding, but I expect it to check all comments
+  and reviews and reply to unreplied ones"). On talkable#12054, the operator's own PR, a colleague's review
+  tool left a MINOR follow-up at 07:24 UTC on `pi_sandbox.rb:185`: `run_in_jail` drops stderr. The fix job
+  started at 08:31 on magnum's review of 797e78a. It pushed 6 commits and replied in 7 threads, but it never
+  saw that thread. The reason: `prompts/fix.md` named only magnum's review file, and the fix skill said "Act
+  only in the reviewer login's threads. Never reply to, resolve or minimize a thread that a human started."
+  Spec 82 rejected a reply in a human's thread, because "the operator's conversations stay the operator's".
+  The operator now asks for the opposite, so this decision reverses that rejection on his word. When the fix
+  job starts (`fixStart`, after the run exists), the engine writes `external-threads.json`. The file goes
+  beside the fixer's report, in the review's directory (`writeExternal`, internal/engine/fix_external.go).
+  The engine reads the PR as the watch's poll identity, with `ReviewThreads`, `AllReviews` and the new
+  `github.Client.IssueComments`. That read pages back through the conversation over GraphQL, 100 comments at
+  a time, until it finds the author's last own word, or the first comment, at most 10 pages. If it stops at
+  the page limit, only items after the oldest comment it listed count, so an older review body from before
+  the author's word does not come back. It needs no new GitHub permission. The file holds the PR author's
+  login, magnum's logins (`author` and `fixer_logins`, the only ones whose comments answer an item) and two
+  lists. The first list holds every unresolved review thread that another reviewer started: neither one of
+  magnum's logins (`fixLogins`: `ownLogins` and the posting login) nor the PR author. The spec said both
+  "every unresolved review thread of the PR that magnum's posting login did not start" and "the unanswered
+  threads of other reviewers". A thread the author started is the author's own note, so the file leaves it
+  out even when a collaborator replied in it last. People and bots count the same, but only reviewers count:
+  GitHub Apps and the repository's owners, members and collaborators (`trustedReplier`, as for a reply
+  round, read from the new `authorAssociation` of thread comments, reviews and comments). In a public
+  repository anyone may comment, and the fixer acts on these items as the author, so the file leaves out
+  what an outsider wrote, and the event counts it. Each thread has the id and link of its first comment, its
+  path and line, and the outdated flag. It also has its comments: id and link, author, body, time, and the
+  fix marker or not. The id lets the fixer read a cut body whole with `gh`. If the latest comment of a
+  thread is the author's or the fixer's, the thread is "answered". `ReviewThreads` reads the first 50
+  comments of a thread, so for a longer one it reads the newest 50 too, in one more query
+  (`github.Thread.Tail` and `AllComments`). Thus the latest comment is the real one, here and in the
+  settle's look. The file lists both ends of a long thread and counts the middle (`omitted`). The
+  re-review's threads file and the retro still read only the first 50; they pay the extra query only for a
+  thread longer than that. The second list holds the review bodies and conversation comments of other people
+  since the author's own last comment. An own comment is one by the author without a `<!-- magnum:` marker.
+  Thus the fixer's replies, a status comment and a review posted as the author's gh login do not count. The
+  list leaves out magnum's review bodies and status comment, the author's items, reviews without a body, and
+  pending or dismissed reviews. A later comment can carry the fix marker and name the URL of an item on the
+  line under its quote, its target line (`replyTarget`). If the author or a magnum login wrote that comment,
+  the item is "answered". A link to another item in the quote or in the reply text answers nothing. The file
+  cuts each body at 600 characters, as the threads file cuts a reply, and sets `truncated`. Bodies are PR
+  text. They reach the fixer only through the file (`.ExternalFile`, which `fix.md` names in one `{{if}}`
+  sentence). They never go into the prompt, an event or a log. A `fix.external` event counts the items. If
+  the read fails, the engine writes no file and the prompt names none. The fixer then works on magnum's
+  findings alone, and `fix.external` is a warning. The re-review's threads file degrades the same way. The
+  skill's rule now reads: act only in magnum's threads and in the unanswered threads of other reviewers that
+  the external file lists. Never resolve or minimize a thread someone else started: its reviewer resolves
+  it. If the author's comment is the last one in another reviewer's thread, never reply there. Reply at most
+  once to each item. Never edit, hide or delete anyone else's comment. The file is a snapshot from the job's
+  start, so right before each reply the fixer reads the item again with `gh`: the thread's comments, or the
+  comments after a review body or a comment. Only `author` and `fixer_logins` answer: a marker or a reply by
+  anyone else answers nothing, and an outsider's comment is ignored, as in the file (its
+  `author_association` is read too). It skips a thread when the latest of the remaining comments is the
+  author's, or a fix-marked one of `fixer_logins`. It skips a review body or a comment when a later comment
+  or review is the author's own word, a review body included (the snapshot's cutoff counts one too), or when
+  a later comment by `author` or `fixer_logins` is a fixer reply whose target line is the item's URL. The
+  fixer judges each external item after magnum's findings, with the same verdicts and the same policy. Its
+  reviewer can mark an item as blocking: with a changes request, or with a tag such as P0 to P2, blocker,
+  critical or major. Such an item is blocking. Any other item is optional. These items go under `## Needs
+  you` with no reply: a declined blocking item, a question only the author can answer, an author's call, and
+  any choice of business logic or product behaviour. A question that the code answers gets `Answer:
+  <answer>`. An item that asks for nothing gets no reply: a bot's status, CI or summary comment, a thanks,
+  an approval. Every other item gets one reply with the fix marker. The reply goes into the item's thread.
+  For a review body or a comment, the reply is one issue comment that quotes the item's first line and links
+  it. That link marks the item answered in the next cycle. The review's body can name another reviewer's
+  thread as still open, as a problem that the judge counts. Such a thread is a finding of that review, and
+  the fixer handles it once. The report gets a fourth section, `## Other reviewers`, with one line for each
+  item and what the fixer did. `ParseFixReport` stops at it, as at any heading after `## Needs you`, so a
+  report without it is still whole. A `## Needs you` entry of an external item has no priority. The place of
+  a review body or a comment is `review` or `comment`. `needsYouEntryRe` reads both. They keep the older
+  words, because they have no thread. Spec 82's call "reply fixed in <sha7> in the thread a human started
+  and resolve it" no longer comes. The external file places another reviewer's thread
+  (`threadOwners.others`). The engine looks at it before the places of the review file. An external entry
+  has no priority, so the priority cannot tell it from a magnum comment on the same line. If the reply
+  failed, or if the author's answer was the last comment, the fixer did not answer. Then the call says
+  "reply fixed in <sha7> in another reviewer's thread: <link>". The call has no "and resolve it", because
+  that reviewer resolves the thread. A declined item says "decide another reviewer's ...". When the fixer
+  leaves such a fix under `Needs you`, the settle looks at GitHub once (`dropFixerAnswered`). The thread can
+  have a comment with the fix marker, by the author or a magnum login, made after the job started
+  (`fixJob.started`). Then the entry asks nothing of the operator: the settle drops it before it counts the
+  findings left to the author, and a `fix.external` event says so. The skill lists such a fix only for its
+  missing reply, so nothing else is lost. Thus a reply that `gh` reported as failed, but that GitHub took,
+  is not asked for twice. A thread answered in an earlier run still gets its call. When the read of GitHub
+  fails at the job's start, the engine also removes a file that an earlier fix of the same review left, so
+  that nothing reads it for this run. The `attention` parser still reads spec 82's words, so a row stored
+  before this change keeps its calls. The loop still ends with magnum's re-review. Each cycle lists what is
+  unanswered at its start. Residual risks: the poll cannot tell the fixer's issue comments from the author's
+  own, because a remark carries no body. Thus a cycle that pushed nothing, and that answered a review body
+  or a comment of another reviewer, can start a reply round. That round finds nothing of the judge's to
+  decide again. An inline reply in another reviewer's thread is no reply to magnum's review (`repliesOf`,
+  `elsewhere`). An item that someone writes while the fixer works waits for the next cycle or the operator.
+  "Since the author's last comment" takes the operator's own comment as the answer to all items before it.
+  That is the operator's word, and it keeps old conversations out. The retro does not change: its candidates
+  are the first comments of threads and the review bodies, never replies, and its own threads are magnum's.
+  Rejected: the fixer resolves other reviewers' threads after a fix (the reviewer decides that a thread is
+  done, as magnum's re-review does for its own threads). The fixer answers every comment, bots' status and
+  CI comments too (a reply to a coverage bot is noise in the operator's name). The operator answers other
+  reviewers, as before (the operator asked to stop that). The prompt carries the external items (that puts
+  PR text in the prompt). The file also lists what outsiders wrote (in a public repository a stranger would
+  steer what the fixer pushes in the operator's name).
 
 ## Learned rules
 

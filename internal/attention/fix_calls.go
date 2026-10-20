@@ -29,25 +29,30 @@ type FixCall struct {
 }
 
 // FixedCall is the call of a finding the fixer fixed in commit sha but did
-// not answer, because its thread is one a human started, where the fixer
-// never writes, or, when magnums, one of magnum's whose reply failed: the
-// author replies there and resolves it. "reply fixed in <sha7> in the
-// thread a human started and resolve it: <url>" ("in magnum's thread").
+// not answer: when magnums, in one of magnum's threads whose reply failed,
+// where the author replies and resolves it ("reply fixed in <sha7> in
+// magnum's thread and resolve it: <url>"); else in a thread another
+// reviewer started (its reply failed, or the author had answered there
+// before, where the fixer does not write), where the author replies and
+// that reviewer resolves it ("reply fixed in <sha7> in another reviewer's
+// thread: <url>"). The words of the time when the fixer never wrote in a
+// thread a human started, "in the thread a human started and resolve it",
+// are still read.
 func FixedCall(thread, url, sha string, magnums bool) FixCall {
-	where := "the thread a human started"
+	where := "another reviewer's thread"
 	if magnums {
-		where = "magnum's thread"
+		where = "magnum's thread and resolve it"
 	}
-	return FixCall{Thread: thread, URL: url, Action: "reply fixed in " + textx.ShortSHA(sha) + " in " + where + " and resolve it: " + url}
+	return FixCall{Thread: thread, URL: url, Action: "reply fixed in " + textx.ShortSHA(sha) + " in " + where + ": " + url}
 }
 
 // DeclinedCall is the call of a finding the fixer did not fix and left to
 // the author to decide: "decide magnum's P2 on <place>: the fixer declined
-// it; reply won't fix at <url>, or `magnum fix <ref>` sends it back" ("a
-// human's" in a thread a human started; "finding" for one without a
-// priority).
+// it; reply won't fix at <url>, or `magnum fix <ref>` sends it back"
+// ("another reviewer's" in a thread another reviewer started, "a human's"
+// in the older words; "finding" for one without a priority).
 func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCall {
-	whose := "a human's"
+	whose := "another reviewer's"
 	if magnums {
 		whose = "magnum's"
 	}
@@ -75,12 +80,13 @@ func FixCallsText(calls []FixCall, more, report string) string {
 }
 
 var (
-	// fixCallRe finds a call FixedCall or DeclinedCall wrote. Groups: the
-	// link and its comment id, of a fixed call (1, 2) or a declined one (3,
-	// 4).
-	fixCallRe = regexp.MustCompile("reply fixed in [0-9a-f]{7} in (?:the thread a human started|magnum's thread) and resolve it: " +
+	// fixCallRe finds a call FixedCall or DeclinedCall wrote, in today's
+	// words or the older ones ("the thread a human started", "a human's").
+	// Groups: the link and its comment id, of a fixed call (1, 2) or a
+	// declined one (3, 4).
+	fixCallRe = regexp.MustCompile("reply fixed in [0-9a-f]{7} in (?:(?:the thread a human started|magnum's thread) and resolve it|another reviewer's thread): " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
-		"|decide (?:magnum's|a human's) (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the fixer declined it; reply won't fix at " +
+		"|decide (?:magnum's|a human's|another reviewer's) (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the fixer declined it; reply won't fix at " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or `magnum fix [^`\\s]+` sends it back")
 	// fixMoreRe reads how many findings the older words after the calls name.
 	fixMoreRe = regexp.MustCompile(`^(\d+) more findings? needs? your call\b`)

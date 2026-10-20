@@ -120,6 +120,16 @@ type fakeGH struct {
 	statuses map[string]string
 	// threadsErr fails ReviewThreads.
 	threadsErr error
+	// prComments answers IssueComments by number (the conversation
+	// comments people and bots wrote, oldest first; the comments
+	// CreateIssueComment posts are not among them), read as GitHub pages
+	// them: prCommentsPage at a time from the newest (0: all at once) until
+	// a page holds the caller's stop, at most prCommentsPages pages (0: no
+	// limit); prCommentsErr fails it.
+	prComments      map[int][]github.PRComment
+	prCommentsPage  int
+	prCommentsPages int
+	prCommentsErr   error
 	// mergeCommits answers ConfirmStates' MergeCommitOid of a merged PR by
 	// number.
 	mergeCommits map[int]string
@@ -268,6 +278,29 @@ func (g *fakeGH) ReviewThreads(_ context.Context, owner, repo string, number int
 		return nil, g.threadsErr
 	}
 	return slices.Clone(g.threads[number]), nil
+}
+
+func (g *fakeGH) IssueComments(_ context.Context, owner, repo string, number int, stop func(github.PRComment) bool) ([]github.PRComment, bool, error) {
+	g.record(fmt.Sprintf("issue_comments:%s/%s#%d", owner, repo, number))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.prCommentsErr != nil {
+		return nil, false, g.prCommentsErr
+	}
+	all := g.prComments[number]
+	size := cmp.Or(g.prCommentsPage, max(len(all), 1))
+	from := len(all)
+	for pages := 0; from > 0; pages++ {
+		if g.prCommentsPages > 0 && pages == g.prCommentsPages {
+			return slices.Clone(all[from:]), false, nil
+		}
+		page := all[max(from-size, 0):from]
+		from -= len(page)
+		if stop != nil && slices.ContainsFunc(page, stop) {
+			break
+		}
+	}
+	return slices.Clone(all[from:]), true, nil
 }
 
 func (g *fakeGH) Reviews(_ context.Context, owner, repo string, number int) ([]github.Review, error) {
@@ -1253,11 +1286,14 @@ func (f *fakeAgents) Tell(_ context.Context, run store.Run, text string) error {
 	return nil
 }
 
-// FixPrompt records what the fix job gave it and renders a prompt that
-// names the run's report and marker; an empty input is an error, as the
-// real prompt would render a broken push or review line.
+// FixPrompt records what the fix job gave it ("fix_prompt:<role>:<run>|<head
+// ref>|<review url>|<review file>|<login>|<db-lock line>|<external file>")
+// and renders a prompt that names the run's report and marker; an empty
+// input but the external file is an error, as the real prompt would render
+// a broken push or review line.
 func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error) {
-	f.record(fmt.Sprintf("fix_prompt:%s:%s|%s|%s|%s|%s|%s", role, run.ID, in.HeadRef, in.ReviewURL, in.ReviewFile, in.ReviewerLogin, in.DBLockCommand))
+	f.record(fmt.Sprintf("fix_prompt:%s:%s|%s|%s|%s|%s|%s|%s", role, run.ID, in.HeadRef, in.ReviewURL, in.ReviewFile, in.ReviewerLogin, in.DBLockCommand,
+		in.ExternalFile))
 	f.mu.Lock()
 	ferr := f.fixPromptErr
 	f.mu.Unlock()

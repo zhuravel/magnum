@@ -677,10 +677,12 @@ type RoleData struct {
 	// The fix prompt's (Manager.FixPrompt; empty for every other role):
 	// HeadRef is the PR's branch, which the fixer pushes to; ReviewURL the
 	// review it fixes and ReviewFile that review's review.json (its event,
-	// body and comments, as the judge posted it); ReviewerLogin the login
-	// that posted it, whose threads the fixer answers; SkillPath the fix
-	// skill's startup copy, absolute.
-	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, SkillPath string
+	// body and comments, as the judge posted it); ExternalFile the other
+	// reviewers' open threads, review bodies and comments, which the fixer
+	// handles after the review's findings ("" = magnum could not list
+	// them); ReviewerLogin the login that posted the review, whose threads
+	// the fixer answers; SkillPath the fix skill's startup copy, absolute.
+	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, SkillPath string
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -697,10 +699,12 @@ func (d RoleData) completed() RoleData {
 // FixPromptInput is what the fix job knows beyond the PR, the role and the
 // run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
 // (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
-// posted it) and the line the fixer runs its database commands through
-// (DBLockCommand, DBLockLine; "" = derived without a checkout).
+// posted it), the file of the other reviewers' open items (ExternalFile,
+// external-threads.json beside the report; "" = none, the prompt then
+// names no such file) and the line the fixer runs its database commands
+// through (DBLockCommand, DBLockLine; "" = derived without a checkout).
 type FixPromptInput struct {
-	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, DBLockCommand string
+	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand string
 }
 
 // FixPrompt renders the fix role's prompt (its initial prompt, fix.md by
@@ -721,7 +725,7 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 	}
 	return m.RolePrompt(spec, config.PromptInitial, RoleData{
 		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
-		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ReviewerLogin: in.ReviewerLogin,
+		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
 	})
 }

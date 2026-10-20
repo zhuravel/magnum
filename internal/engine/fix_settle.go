@@ -46,8 +46,10 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // on to the re-review (fixReReview), with the findings left to the author
 // kept for that round's end (spec: the push deserves its re-review);
 // findings left to the author without a push end the loop as needs
-// attention; replies alone end the loop with an info toast. The events name
-// counts, SHAs, the role and the report, never what the fixer wrote.
+// attention (a fix the fixer left as unanswered in another reviewer's
+// thread that GitHub shows its reply in is none: dropFixerAnswered);
+// replies alone end the loop with an info toast. The events name counts,
+// SHAs, the role and the report, never what the fixer wrote.
 func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	subject, report := job.subject(), deref(job.run.ReportPath)
 	rep, rerr := e.readFixReport(job)
@@ -94,6 +96,9 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		replied, data["threads"] = "replied in "+textx.Count(threads, "thread", "threads"), threads
 	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
+	if len(rep.NeedsYou) > 0 {
+		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou) // fix_external.go
+	}
 	n := len(rep.NeedsYou)
 	needs := "fix: " + needsYouText(rep.NeedsYou, report, job.pr.URL, job.label(), false)
 	if n > 0 {

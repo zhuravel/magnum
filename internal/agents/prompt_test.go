@@ -306,6 +306,7 @@ func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 		HeadRef:       "feature/coupon-expiry",
 		ReviewURL:     "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
 		ReviewFile:    "/state/reviews/talkable/talkable/11920/abc1234/review.json",
+		ExternalFile:  "/state/reviews/talkable/talkable/11920/abc1234/external-threads.json",
 		ReviewerLogin: "talkable[bot]",
 		DBLockCommand: "/opt/magnum/bin/magnum db-lock --checkout /p/talkable.review3 --role claude-fix --",
 	}
@@ -317,10 +318,18 @@ func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 		t.Errorf("the fix prompt does not start with %q:\n%s", want, got)
 	}
 	for _, want := range []string{e.pr.URL, "`" + e.pr.HeadSHA + "`", "HEAD:" + in.HeadRef, in.ReviewURL, in.ReviewFile,
-		"`" + in.ReviewerLogin + "`", store.Deref(run.ReportPath), ReportMarker(run.ID), "`" + in.DBLockCommand + " <command>`"} {
+		"`" + in.ReviewerLogin + "`", store.Deref(run.ReportPath), ReportMarker(run.ID), "`" + in.DBLockCommand + " <command>`",
+		"The other reviewers' open threads, review bodies and comments on the PR are in " + in.ExternalFile +
+			": after the review's findings, handle each of its items that nobody answered."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the fix prompt lacks %q:\n%s", want, got)
 		}
+	}
+	// Without the file (magnum could not list them) the prompt names none.
+	noExternal := in
+	noExternal.ExternalFile = ""
+	if got, err := e.m.FixPrompt(e.pr, role, run, noExternal); err != nil || strings.Contains(got, "other reviewers") {
+		t.Errorf("the fix prompt without an external file = %q, %v", got, err)
 	}
 	if strings.Contains(got, store.Deref(e.pr.Title)) {
 		t.Errorf("the fix prompt carries the PR title:\n%s", got)
@@ -390,7 +399,7 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 		"End every reply with a blank line and the line `" + postreview.FixReplyMarker + "`",
 		// The engine reads these words to say what each finding left to the author asks of them.
 		"- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why it needs you>\n- <comment id> <priority> <path>:<line>: not fixed. <reason>\n",
-		"then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (a thread a human started, or a reply that failed) " +
+		"then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (its thread is answered already, or the reply failed) " +
 			"or `not fixed.` for one you did not fix, and then the reason",
 	} {
 		if !strings.Contains(skill, want) {
@@ -399,6 +408,67 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 	}
 	if strings.Contains(skill, "a defect that the PR's diff introduced") {
 		t.Error("the fix skill still makes every finding of the PR's diff a fix whatever its score")
+	}
+}
+
+// On talkable#12054 the fixer fixed magnum's four findings and never saw
+// another reviewer's open follow-up an hour older, since the skill had it
+// act only in the reviewer login's threads and never in one a human started
+// (2026-10-20, spec 93). It now acts in magnum's threads and in the
+// unanswered threads of other reviewers that the external file lists,
+// judges each external item by the same policy, replies once to each that
+// asks for an answer, in its thread or for a review body or comment in one
+// issue comment that quotes and links it, every reply signed with the fix
+// marker, and never resolves or minimizes a thread someone else started,
+// replies where the author already has, or edits anyone else's comment.
+// Right before each reply it reads the item's thread, or the comments and
+// reviews after it, again, and skips one the author answered while it
+// worked, counting only the author's and magnum's logins (the file names
+// them) and ignoring outsiders as the file does. The report lists every
+// external item.
+func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"- Act only in magnum's threads (the reviewer login's), in the unanswered threads of other reviewers that the external file lists, " +
+			"and in one issue comment for each unanswered review body or comment it lists. " +
+			"Never resolve or minimize a thread someone else started: its reviewer resolves it. " +
+			"Never reply in another reviewer's thread whose last comment is already the author's. " +
+			"Reply at most once to each item, and never edit, hide or delete anyone else's comment.",
+		"6. Read the external file, if the prompt names one.",
+		"An item with `answered` set has its answer already: leave it. Every other item is an external item.",
+		"Then judge each external item as a finding (section 3) and apply the same policy to it",
+		"A choice of business logic or product behaviour is step 6, as an author's call is: do not fix it, and do not reply.",
+		"An item that asks for nothing gets no verdict and no reply: a bot's status, CI or summary comment, a thanks, an approval.",
+		"Each external item that gets a reply gets exactly one, in its own thread, or for a review body or a comment one issue comment (section 6).",
+		"the threads of the external file that are not `answered`. Post the reply to the thread's first comment: the review comment, or an external thread's `comment_id`.",
+		"repos/{owner}/{repo}/issues/{number}/comments -F body=@- <<'REPLY'\n> <the item's first line>\n<the item's url>\n\n<reply>\n\n" + postreview.FixReplyMarker + "\nREPLY\n",
+		"Never resolve or minimize a thread someone else started, even one you fixed: its reviewer resolves it.",
+		"\n## Other reviewers\n",
+		// The author may answer while the fixer works: it looks again right before each reply.
+		"Right before each reply to an external item, look again: the author may have answered it while you worked.",
+		// Only the author and magnum's logins answer an item, an outsider's comment is ignored as in the file,
+		// and a review body the author posts while the fixer works answers a review body or a comment.
+		"`author` is the PR author's login, which you post as, and `fixer_logins` are magnum's logins: only these two answer an item.",
+		"Only `author` and `fixer_logins` (section 2) answer an item; a marker or a reply from anyone else answers nothing.",
+		"--jq '.[] | select(.id == <comment_id> or .in_reply_to_id == <comment_id>) | [.user.login, .user.type, .author_association, .body]'",
+		"Ignore an outsider's comment, as the file does: one whose `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` and whose author is no `Bot`, not `author` and none of `fixer_logins`.",
+		"Skip the thread when the latest of the others is by `author`, or is by one of `fixer_logins` and carries the fix marker.",
+		"--jq '.[] | select(.created_at > \"<created_at>\") | [.user.login, .body]'",
+		"gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --jq '.[] | select(.submitted_at > \"<created_at>\") | [.user.login, .body]'",
+		"Skip the item when one of them is the author's own word: by `author`, with a body and no `<!-- magnum:` marker in it, a review body included.",
+		"Skip it too when a comment by `author` or one of `fixer_logins` carries the fix marker and its line under the quote is the item's `url`.",
+		"read it whole with `gh api` by its `id` (`repos/{owner}/{repo}/pulls/comments/<id>` for a thread's comment",
+		"`## Other reviewers`: one line per item of the external file, answered ones included",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"Act only in the reviewer login's threads", "Never reply to, resolve or minimize a thread that a human started",
+		"Reply nowhere else: no issue comment,", "a thread a human started"} {
+		if strings.Contains(skill, gone) {
+			t.Errorf("the fix skill still says %q", gone)
+		}
 	}
 }
 

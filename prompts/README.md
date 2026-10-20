@@ -163,12 +163,12 @@ The prompts of claude-review, claude-simplify and any other non-judge session ro
 reviewer, ...), initial, rereview and restart alike, and the fix role's `fix.md`. The fix job renders
 `fix.md` with only some of these variables: `.URL`, `.Number`, `.Role`, `.HeadSHA` (the reviewed head the
 fixer starts from), `.ReportPath`, `.RunID` and `.DBLockCommand`, plus the fix rows at the end of the
-table (`.HeadRef`, `.ReviewURL`, `.ReviewFile`, `.ReviewerLogin` and `.SkillPath`). Every other variable,
+table (`.HeadRef`, `.ReviewURL`, `.ReviewFile`, `.ExternalFile`, `.ReviewerLogin` and `.SkillPath`). Every other variable,
 `.Owner`, `.Repo`, `.BaseSHA`, `.BaseRef`, `.Budget`, `.Effort` and `.NotesPath` among them, renders empty
 in `fix.md`. The whiteboard job renders the whiteboard role's `whiteboard.md` with `.URL`, `.Owner`, `.Repo`,
 `.Number`, `.HeadSHA` (the reviewed head), `.BaseRef`, `.Checkout` (the slot's checkout, whose code the
 whiteboard's views read), `.ReportPath`, `.RunID`, `.Role`, `.ReviewURL`, `.ReviewFile` and
-`.WhiteboardSession`; `.BaseSHA`, `.HeadRef`, `.ReviewerLogin`, `.SkillPath`, `.Budget`, `.Effort` and
+`.WhiteboardSession`; `.BaseSHA`, `.HeadRef`, `.ExternalFile`, `.ReviewerLogin`, `.SkillPath`, `.Budget`, `.Effort` and
 `.NotesPath` render empty in it. The prompt carries URLs, SHAs and paths, never PR text: the writer reads
 the PR's title with `gh` in its pane.
 
@@ -202,6 +202,7 @@ the PR's title with `gh` in its pane.
 | `.HeadRef` | the fix prompt only: the PR's branch, which the fixer pushes to (`git push origin HEAD:{{.HeadRef}}`); refused at render, like `.BaseRef`, when a shell would read it |
 | `.ReviewURL`, `.ReviewFile` | the fix and whiteboard prompts only: the review the fixer fixes, or the one the whiteboard's last section quotes, and its `review.json` (the review's event, body and comments with path, line, side and body, as the judge posted it) |
 | `.ReviewerLogin` | the fix prompt only: the login that posted the review, whose threads the fixer answers |
+| `.ExternalFile` | the fix prompt only: `external-threads.json` beside the fixer's report, the other reviewers' open items the fix job lists at its start (the PR author's login and magnum's, `author` and `fixer_logins`, the only ones whose comments answer an item; the unresolved review threads other reviewers started (neither magnum's logins nor the author), people's and bots' alike (only the repository's owners, members and collaborators and GitHub Apps count, as for a reply round), each with its first comment's `comment_id` and `url`, `path`, `line`, `outdated`, `answered` (its latest comment, read past the first 50, is the author's or a fix-marked one of magnum's logins), `omitted` (the middle of a long thread) and comments with `id`, `url`, `author`, `body`, `created_at` and `fix`; the review bodies and conversation comments of others since the author's own last comment, each with `kind`, `id`, `url`, `author`, `state`, `created_at`, `body` and `answered`, a later fixer comment naming it on the line under its quote), bodies cut at 600 characters with `truncated`. `fix.md` names it in one sentence, `{{if .ExternalFile}}`, and says to handle its unanswered items after the review's findings; empty, and the sentence gone, when magnum could not list them (a `fix.external` warning) |
 | `.SkillPath` | the fix prompt only: the fix role's `skill` (`skills/magnum-fix/SKILL.md`; without a checkout, the copy built into the binary), absolute; in the daemon, the copy it took at startup. `fix.md` starts with its link and "Read <path> first, unless this session already read that file, and follow it; load no other skill." |
 | `.WhiteboardSession` | the whiteboard prompt only: the Whiteboard session of an earlier head of the PR (the registry's `pr.<id>.whiteboard` record), which the writer moves to `.HeadSHA` with `session_set_target` and updates; `""` for a PR's first whiteboard, which the writer creates with `session_create` |
 

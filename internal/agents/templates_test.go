@@ -105,6 +105,7 @@ func fixFixture() RoleData {
 	d.HeadRef = "feature/coupon-expiry"
 	d.ReviewURL = "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001"
 	d.ReviewFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review.json"
+	d.ExternalFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/external-threads.json"
 	d.ReviewerLogin = "talkable[bot]"
 	return d
 }

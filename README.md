@@ -42,7 +42,8 @@ subscriptions you already have, and every agent works in a herdr pane you can wa
   reviewing, and GitHub calls go through `gh`. Quiet periods, minimum intervals and daily caps keep a
   burst of pushes from burning your subscription, and a model at its limit can hand over to a fallback.
 - **Fixes what it finds.** On a PR you wrote, one key starts a fixer agent that fixes the findings worth
-  fixing, answers the threads and pushes as you. Magnum then reviews the push again, up to a cap of
+  fixing, answers the threads, also those of other reviewers that nobody answered, and pushes as you.
+  Magnum then reviews the push again, up to a cap of
   cycles ([Fixing your own PRs](#fixing-your-own-prs)).
 - **Learns the repository.** The judge keeps notes per repository (how to test it, known pitfalls), and
   an optional daily retro collects what human reviewers caught that Magnum missed.
@@ -2223,16 +2224,45 @@ reads. It proves each guard, scope, permission or flag a fix adds, because the r
 spec needs as untested: it deletes the guard once, runs the new spec, sees it fail, restores the guard, and
 its "Fixed in" reply names that spec ("`<spec>` fails without it"). Every reply ends with a hidden line,
 `<!-- magnum:fix -->`: the fixer replies as you, and the marker is how the retro tells its choices from yours
-(Learning from other reviewers, below). It resolves the threads it fixed. It answers an optional finding (a P3 or a simplification) that it
+(Learning from other reviewers, below). It resolves Magnum's threads it fixed. It answers an optional finding (a P3 or a simplification) that it
 declines. It does not answer a blocking finding (P0 to P2) that it declines, nor any finding it cannot decide
 from the code, which a finding whose **Fix** ends "This is the author's call." always is: the fixer never
 picks one of its options, and its entry asks which to take. Those go under `Needs you` in its report, so
-the call stays yours, and so does a finding it fixed and pushed but could not answer (its thread is one a human started, or its reply failed); each entry
-says `fixed in <sha7>.` or `not fixed.` after the finding's place. It never touches a thread
-a human started, never force-pushes or rebases, never touches another branch, and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
+the call stays yours, and so does a finding it fixed and pushed but could not answer (its thread is answered already, or its reply failed); each entry
+says `fixed in <sha7>.` or `not fixed.` after the finding's place. It never resolves or minimizes a thread
+someone else started, never force-pushes or rebases, never touches another branch, and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
+
+**What other reviewers wrote.** Each cycle the fixer also answers what other reviewers wrote on the PR that
+nobody answered yet, people and bots alike: a colleague, another review tool, a code-review bot. Before it
+starts, Magnum writes `external-threads.json` beside its report and names the file in the prompt: every
+unresolved review thread that another reviewer started (neither one of Magnum's logins nor you), with each
+comment's id and link, marked answered when its latest comment is yours or the fixer's (for a thread longer
+than the 50 comments GitHub lists first, Magnum reads its newest ones too, so the latest is the real one), and
+the review bodies and conversation comments of others since your own last comment (one without a Magnum
+marker; Magnum pages back through the conversation until it finds it), each marked answered once a later reply
+of the fixer names it on the line under its quote. Magnum's own review bodies, its status comment and the
+fixer's replies are not in it, and neither is what someone outside the repository wrote: only its owners,
+members and collaborators and GitHub Apps count, as for a reply round, since in a public repository anyone may
+comment and the fixer acts on these items as you. The bodies are cut at 600 characters, as in a re-review's
+threads file, and reach the fixer only through the file, never the prompt, an event or a log; a `fix.external`
+event counts the items and what it left out. The fixer judges each unanswered item as it judges Magnum's
+findings (an item is blocking when its reviewer marks it so: a changes request, or a tag such as P0 to P2,
+blocker, critical or major) and replies once to each that asks for an answer: in its thread, or, for a review
+body or a comment, with one issue comment that quotes the item's first line and gives its link on the next
+line, each reply signed with `<!-- magnum:fix -->`. Right before each reply it reads the thread, or the
+comments and reviews after the item, again with `gh`, and skips an item answered while it worked: only your
+login and Magnum's, which the file names (`author`, `fixer_logins`), answer an item, a review body of yours
+included, and an outsider's comment is ignored as in the file. A question the code answers gets "Answer: …"; a
+status or CI comment, a thanks or an approval gets no reply; a question only you can answer, a business-logic
+or product choice and a blocking item it declines go under `Needs you`, with no reply. It never resolves or
+minimizes a thread someone else started (that reviewer resolves it), never replies in another reviewer's
+thread where your answer is the last comment, and never edits, hides or deletes anyone else's comment. Its
+report lists every item of the file and what it did with it. When GitHub cannot list them, the fixer works on
+Magnum's findings alone and the `fix.external` event says so (a warning).
 
 The report is `claude-fix.md` in the head's report directory. Its first line is the run's marker. Then come
-three sections: `Pushed`, `Replied` and `Needs you`. To use another policy, point the role's `skill` at your
+four sections: `Pushed`, `Replied`, `Needs you` and `Other reviewers` (one line per item of
+`external-threads.json`; Magnum does not read it). To use another policy, point the role's `skill` at your
 own file with an absolute path. The block inherits every key it does not set, so model, effort and timeout
 (60m) stay the built-in's.
 
@@ -2262,15 +2292,20 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   about the fixer, and the PR does not go to needs attention. An urgent toast names the reason and the
   report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list the
   PR. Findings left to you are named one by one, with what to do and where, in the toast, the events, the
-  board's card and `magnum status`: "reply fixed in <sha7> in the thread a human started and resolve it:
-  <link>" for a fix the fixer could not answer (it never writes in a person's thread; "in magnum's thread"
-  when its reply failed there), and "decide magnum's P2 on <path>:<line>: the fixer declined it; reply won't
-  fix at <link>, or `magnum fix <ref>` sends it back" for one it did not fix, the link being the finding's
-  thread; then "details: <report>", where the fixer's reasons stay. `magnum status <ref>` prints them one per
-  line under the fix line, also while the loop waits for the re-review of the fixer's push, and `--json` gives
-  them as `fix.needs_you` (`thread`, `url`, `action`). A finding whose entry does not say `fixed in` or `not
-  fixed`, the description finding, and one whose thread Magnum cannot place keep the older words ("1 more
-  finding needs your call (2101 P1 app/models/offer.rb:42)"). When the fixer pushed and also left findings, the push still gets its re-review first, and the loop ends
+  board's card and `magnum status`: "reply fixed in <sha7> in magnum's thread and resolve it: <link>" for a
+  fix whose reply failed there, "reply fixed in <sha7> in another reviewer's thread: <link>" for one in a
+  thread another reviewer started that the fixer could not answer (its reply failed, or your answer was the
+  last comment there; that reviewer resolves it), and "decide magnum's P2 on <path>:<line>: the fixer
+  declined it; reply won't fix at <link>, or `magnum fix <ref>` sends it back" ("another reviewer's" in such
+  a thread) for one it did not fix, the link being the finding's thread; then "details: <report>", where
+  the fixer's reasons stay. A fix in another reviewer's thread that GitHub shows the fixer's reply in after
+  all (the reply took though the fixer saw it fail) asks nothing of you and is not counted: Magnum looks
+  once when the run ends, and a `fix.external` event says so.
+  `magnum status <ref>` prints them one per line under the fix line, also while the loop waits for the
+  re-review of the fixer's push, and `--json` gives them as `fix.needs_you` (`thread`, `url`, `action`). A
+  finding whose entry does not say `fixed in` or `not fixed`, the description finding, another reviewer's
+  review body or comment (`<id> review`, `<id> comment`), and one whose thread Magnum cannot place keep the
+  older words ("1 more finding needs your call (2101 P1 app/models/offer.rb:42)"). When the fixer pushed and also left findings, the push still gets its re-review first, and the loop ends
   after it. The urgent toast comes at once, with the fixer's push, not after the re-review (which can wait
   or run for an hour): you can act on the findings meanwhile. The loop's end after the re-review asks for the
   same call and toasts it no second time (one toast per loop cycle); the PR goes to needs attention then.
@@ -2481,7 +2516,7 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
 | `magnum learn [--review [--reason …] \| --propose \| --revert <version> [--reason …]] [--json]` | The self-improving loop (see Self-improving loop): the landed skill versions with what their reviews did (and how many `origin/master` does not hold yet), the proposals that wait for the gate, the landing or you, the last failed and invalid ones and when the editor runs next. `--propose` asks the daemon for a skill edit now (refused while one runs or a proposal waits, naming it); `--review` shows the oldest held proposal (its inputs, the diff of each file, its design-log entry, the gate's table) and lands (y) or rejects (n, `--reason` says why) it; `--revert` proposes restoring the files a landed version changed as they were before it, held for `--review`. |
 | `magnum debt [<repo>] [--json]` | Bugs found next door: the P1 and P2 problems the judge proved at a PR's head in or near its changes but did not post because the PR did not bring them, across PRs, newest first and once per path and title, with the PR and day it was found (security ones appear only here). Rows recorded before findings had titles show the path and reason only. |
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--full] [--role <role>] [--simplify] [--replies] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--replies` has the judge alone re-decide the replies on Magnum's review now, answering in the threads unless its verdict changes (a head Magnum reviewed; see the replies under Re-reviews). `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a head Magnum already reviewed (no new commits) only the judge runs, to re-decide its earlier findings from the replies; `--role`, `--simplify` and `--fresh` keep the full round. `--full` makes the round a full pass: fresh sessions, every role reviews the whole PR again and the judge decides every earlier thread (see `full_pass_every` under Re-reviews); `--fresh` starts every role in a new conversation and runs that full pass when a full-pass rule (`full_pass_every`, `full_pass_lines`, `full_pass_files`, `full_pass_after`) makes one due. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. `--focus` focuses the judge pane once its session starts, and `--dry-run` prints the resolution and the request without queuing anything. |
-| `magnum fix <url\|owner/repo#N\|repo#N\|N> [--off \| --on] [--wait] [--timeout 2h] [--dry-run] [--json] [--yes]` | Fix Magnum's findings on your own PR now (see Fixing your own PRs). The fixer, the fix role (`claude-fix` by default), works in the PR's slot as you. It fixes the findings of Magnum's review on the current head, answers the review's threads, pushes and writes a report. Magnum then reviews the push and goes on while findings remain, up to `[pipeline] fix_cycles` cycles. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a PR Magnum has not reviewed at its current head, a review without findings that keeps no earlier one open, a PR that is not yours or lives in a fork, a round in flight, a snooze, a loop that already runs and a watch without a fix role. During a drain for a restart a fix it would start is held instead ("held; the fix of … starts after the restart if the review on … still stands"): the new daemon starts it if the review still stands at the same head and drops it otherwise, with a `fix.dropped` event and a toast that say why; `magnum abort` takes it back. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it, as for `magnum review`; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. A review agent's pane is refused. `--wait` follows the loop and says how it ended: exit 0 for "clean after N fix cycles" and "pushed nothing", exit 1 for "needs you", "aborted" and "ended". `--timeout` (default `2h`, `0` = no limit) stops following after that long while the loop goes on. `--off` takes the PR out of autofix and `--on` puts it back (both ask y/N, start no loop and exclude `--wait`). `--dry-run` only asks what would happen. `magnum abort` ends a loop. Board keys `f` and `F`. |
+| `magnum fix <url\|owner/repo#N\|repo#N\|N> [--off \| --on] [--wait] [--timeout 2h] [--dry-run] [--json] [--yes]` | Fix Magnum's findings on your own PR now (see Fixing your own PRs). The fixer, the fix role (`claude-fix` by default), works in the PR's slot as you. It fixes the findings of Magnum's review on the current head, answers the review's threads and what other reviewers wrote that nobody answered (their open threads, review bodies and comments, from `external-threads.json`), pushes and writes a report. Magnum then reviews the push and goes on while findings remain, up to `[pipeline] fix_cycles` cycles. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a PR Magnum has not reviewed at its current head, a review without findings that keeps no earlier one open, a PR that is not yours or lives in a fork, a round in flight, a snooze, a loop that already runs and a watch without a fix role. During a drain for a restart a fix it would start is held instead ("held; the fix of … starts after the restart if the review on … still stands"): the new daemon starts it if the review still stands at the same head and drops it otherwise, with a `fix.dropped` event and a toast that say why; `magnum abort` takes it back. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it, as for `magnum review`; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. A review agent's pane is refused. `--wait` follows the loop and says how it ended: exit 0 for "clean after N fix cycles" and "pushed nothing", exit 1 for "needs you", "aborted" and "ended". `--timeout` (default `2h`, `0` = no limit) stops following after that long while the loop goes on. `--off` takes the PR out of autofix and `--on` puts it back (both ask y/N, start no loop and exclude `--wait`). `--dry-run` only asks what would happen. `magnum abort` ends a loop. Board keys `f` and `F`. |
 | `magnum whiteboard <url\|owner/repo#N\|repo#N\|N> [--open] [--wait] [--timeout <duration>] [--json] [--yes]` | Write the PR's whiteboard now (see Whiteboards of reviewed PRs): the whiteboard role (`claude-whiteboard` by default) writes a dev.fast Whiteboard of the head Magnum reviewed, in the PR's slot, with Magnum's review as its last section. It runs whatever `[pipeline] whiteboard` says, as long as a whiteboard role is set. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a watch without a whiteboard role, a PR Magnum has not reviewed at its current head, a round or a fix loop that holds the PR, a Whiteboard that is not running, a slot not at the head, a pinned PR (`magnum open`, `magnum pin`) and a head that has its whiteboard. The command refuses inside a review agent's pane too. `--wait` follows the job and says how it ended: exit 0 when the whiteboard was written (`whiteboard.done`), exit 1 when the run failed or a push, a close or `magnum abort` stopped it (`whiteboard.failed`, `whiteboard.stopped`). `--timeout` (default `2h`, `0` = no limit) stops following after that long while the job goes on. `--open` asks the daemon nothing: it opens the recorded whiteboard in Whiteboard Desktop (`whiteboard app pick --session <id> --focus`) and refuses a PR without one. `magnum abort` ends a job. Board key `w`. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr (its judge's; the fixer's while a fix loop's fixer works; any role's with `--role`; a live agent pane of the PR, the judge's first, when that role's pane is gone with its lost or closed session) and reveal the herdr client of `[terminal] session` (default `default`) in `[terminal] app` (Terminal, iTerm2, Ghostty, WezTerm, `custom` with a `launcher` template, or any other app name, which is only brought to the front with `open -a`): focus the tab that runs it, or open a new one. When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. With `[terminal] reveal_on_attention = true` the daemon does the same by itself for a PR that needs you (an agent waiting on a dialog, a round that needs attention), at most once in 30 minutes for the same agent or cause. `--no-reveal` only focuses inside herdr and leaves the terminal where it is, and `--new-window` opens a new terminal window instead of a tab when no herdr client is found. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. `--ansi` keeps the pane's colors and text styles only: links, clipboard writes, cursor moves and screen erases are dropped, and both modes show a control character as a space. `--interval` sets the redraw interval (default `2s`) and `--lines` the lines shown (default: the terminal's height). |

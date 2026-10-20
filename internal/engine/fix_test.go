@@ -308,8 +308,9 @@ func TestAFixRequestStartsTheJobAndHoldsThePR(t *testing.T) {
 		t.Errorf("fix run = %+v (report %s), state report %s", run, deref(run.ReportPath), st.Report)
 	}
 	reviewFile := filepath.Join(h.layout.ReviewDir("talkable", "talkable", 2, fixHead), "review.json")
-	wantPrompt := fmt.Sprintf("fix_prompt:claude-fix:%s|feature|%s|%s|talkable[bot]|%s", run.ID, fixReviewURL, reviewFile,
-		agents.DBLockLine(h.layout.Binary(), slot.Path, "claude-fix"))
+	external := filepath.Join(h.layout.ReviewDir("talkable", "talkable", 2, fixHead), "external-threads.json")
+	wantPrompt := fmt.Sprintf("fix_prompt:claude-fix:%s|feature|%s|%s|talkable[bot]|%s|%s", run.ID, fixReviewURL, reviewFile,
+		agents.DBLockLine(h.layout.Binary(), slot.Path, "claude-fix"), external)
 	if !slices.Contains(h.ag.all(), wantPrompt) {
 		t.Errorf("no %q in %v", wantPrompt, h.ag.all())
 	}

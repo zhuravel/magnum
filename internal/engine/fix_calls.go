@@ -6,15 +6,20 @@ package engine
 // for one it did not fix (skills/magnum-fix/SKILL.md, section 7); the files
 // beside its report say whose thread the finding is in: the round's threads
 // file lists magnum's threads as the round that posted the review found
-// them, and the review file that review's own comments. A fixed finding in
-// a thread a human started (the fixer never writes there) or in magnum's
-// thread (its reply failed) asks the author to reply and resolve it; a
+// them, the review file that review's own comments, and the external file
+// (fix_external.go) the open threads other reviewers started. A fixed
+// finding in magnum's thread (its reply failed) asks the author to reply
+// and resolve it; one in another reviewer's thread (its reply failed, or
+// the thread was answered before, where the fixer does not write) asks for
+// the reply alone, since that reviewer resolves it (one GitHub shows the
+// fixer's reply in after all is no entry by then: dropFixerAnswered); a
 // finding the fixer did not fix asks for the author's decision. Each is a
 // call with the thread's link (attention.FixCall), and the message names the
 // calls one by one with the report last (needsYouText). An entry magnum
-// cannot read so (no such words, the description finding, a thread the
-// files cannot place) keeps the older words. The fixer's reasons are never
-// read: they stay in the report.
+// cannot read so (no such words, the description finding, another
+// reviewer's review body or comment, a thread the files cannot place) keeps
+// the older words. The fixer's reasons are never read: they stay in the
+// report.
 
 import (
 	"encoding/json"
@@ -64,13 +69,15 @@ func (n needsYouEntry) name() string {
 // threadOwners says whose the threads of the review a fix report answers
 // are, from the files beside the report: magnums are the first comments of
 // magnum's threads (the threads file), listed whether that file was read
-// (then a thread neither in it nor of the review's own comments is one a
-// human started), and comments the review's own comments (the review file),
-// whose threads the threads file predates.
+// (then a thread neither in it nor of the review's own comments is another
+// reviewer's), comments the review's own comments (the review file), whose
+// threads the threads file predates, and others the first comments of the
+// open threads other reviewers started (the external file).
 type threadOwners struct {
 	magnums  map[int64]bool
 	listed   bool
 	comments []ownComment
+	others   map[int64]bool
 }
 
 // ownComment is a comment of the review file: a finding of magnum's review.
@@ -83,7 +90,12 @@ type ownComment struct {
 // readThreadOwners reads the threads file and the review file in dir; a
 // file that is missing or cannot be read says nothing.
 func readThreadOwners(dir string) threadOwners {
-	o := threadOwners{magnums: map[int64]bool{}}
+	o := threadOwners{magnums: map[int64]bool{}, others: map[int64]bool{}}
+	if x, ok := readExternalFile(dir); ok {
+		for _, t := range x.Threads {
+			o.others[t.CommentID] = true
+		}
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, pipeline.ThreadsFile)); err == nil {
 		var threads []agents.ReviewThread
 		if json.Unmarshal(b, &threads) == nil {
@@ -105,11 +117,16 @@ func readThreadOwners(dir string) threadOwners {
 }
 
 // owner says whether n's finding is in magnum's thread (magnums) and whether
-// the files can tell (known): a thread the threads file lists, or a comment
-// of the review at n's place whose priority is n's, is magnum's; any other
-// is a human's once the threads file was read, and unknown without it.
+// the files can tell (known): a thread the external file lists is another
+// reviewer's; a thread the threads file lists, or a comment of the review
+// at n's place whose priority is n's, is magnum's; any other is another
+// reviewer's once the threads file was read, and unknown without it.
 func (o threadOwners) owner(n needsYouEntry) (magnums, known bool) {
-	if id, err := strconv.ParseInt(n.id, 10, 64); err == nil && o.magnums[id] {
+	id, err := strconv.ParseInt(n.id, 10, 64)
+	if err == nil && o.others[id] {
+		return false, true
+	}
+	if err == nil && o.magnums[id] {
 		return true, true
 	}
 	if i := strings.LastIndexByte(n.place, ':'); i > 0 {
@@ -124,11 +141,16 @@ func (o threadOwners) owner(n needsYouEntry) (magnums, known bool) {
 }
 
 // call is n's call (ok false when magnum cannot read one: the entry does
-// not say what the fixer did, names the description, which has no thread,
-// or its thread cannot be placed): the thread's link on the PR's page
-// prURL, and `magnum fix ref` to send a declined finding back to the fixer.
+// not say what the fixer did, names the description or another reviewer's
+// review body or comment, which have no thread, or its thread cannot be
+// placed): the thread's link on the PR's page prURL, and `magnum fix ref`
+// to send a declined finding back to the fixer.
 func (n needsYouEntry) call(o threadOwners, prURL, ref string) (attention.FixCall, bool) {
-	if n.place == "description" || (n.fixedIn == "" && !n.notFixed) || prURL == "" {
+	switch n.place {
+	case "description", remarkReview, remarkComment:
+		return attention.FixCall{}, false
+	}
+	if (n.fixedIn == "" && !n.notFixed) || prURL == "" {
 		return attention.FixCall{}, false
 	}
 	magnums, known := o.owner(n)

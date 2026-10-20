@@ -55,15 +55,17 @@ func writeFixReviewFiles(t *testing.T, report string, threads []int64, comments 
 }
 
 // On talkable-integration#867 the fixer pushed the fix of a finding whose
-// thread a colleague started, where it never writes, and declined a P2 of
-// magnum's whose proof needed a committed TLS key; the loop then said "2
-// findings need your call (…)" and the operator had to read the report to
-// learn what the call was. Each finding the fixer says it fixed ("fixed in
-// <sha>.") or did not ("not fixed.") is now a sentence with the action and
-// the thread's link, the report last: in the toast at the push, the
+// thread a colleague started, where it did not write then, and declined a
+// P2 of magnum's whose proof needed a committed TLS key; the loop then said
+// "2 findings need your call (…)" and the operator had to read the report
+// to learn what the call was. Each finding the fixer says it fixed ("fixed
+// in <sha>.") or did not ("not fixed.") is now a sentence with the action
+// and the thread's link, the report last: in the toast at the push, the
 // fix.needs_you events, the PR's last_error and pr.needs_attention, and the
-// attention reason the card and `magnum status --json` show. The fixer's
-// reasons stay in the report.
+// attention reason the card and `magnum status --json` show. A fix in
+// another reviewer's thread that the fixer did not answer asks for the
+// reply alone: that reviewer resolves the thread. The fixer's reasons stay
+// in the report.
 func TestANeedsYouLoopSaysWhatToDoPerThread(t *testing.T) {
 	h, git := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
@@ -77,9 +79,9 @@ func TestANeedsYouLoopSaysWhatToDoPerThread(t *testing.T) {
 	h.handle()
 	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
 	const (
-		human   = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
+		other   = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
 		magnums = "https://github.com/talkable/talkable/pull/2#discussion_r4302866759"
-		fixed   = "reply fixed in b2b2b2b in the thread a human started and resolve it: " + human
+		fixed   = "reply fixed in b2b2b2b in another reviewer's thread: " + other
 		decline = "decide magnum's P2 on src/integration.js:1706: the fixer declined it; reply won't fix at " + magnums +
 			", or `magnum fix talkable/talkable#2` sends it back"
 	)
@@ -107,7 +109,7 @@ func TestANeedsYouLoopSaysWhatToDoPerThread(t *testing.T) {
 		t.Errorf("pr.needs_attention = %q", ev.Message)
 	}
 	why := attention.Explain(attention.KindFix, deref(cur.LastError), "talkable#2")
-	calls := []attention.FixCall{{Thread: "4302616576", URL: human, Action: fixed}, {Thread: "4302866759", URL: magnums, Action: decline}}
+	calls := []attention.FixCall{{Thread: "4302616576", URL: other, Action: fixed}, {Thread: "4302866759", URL: magnums, Action: decline}}
 	if !slices.Equal(why.NeedsYou, calls) || !slices.Equal(why.Steps, []string{fixed, decline, "details: " + report}) {
 		t.Errorf("the attention reason: needs you %+v, steps %q", why.NeedsYou, why.Steps)
 	}
@@ -140,7 +142,7 @@ func TestANeedsYouLoopSaysWhatToDoPerThread(t *testing.T) {
 // thread to answer in), is named by its id, priority and place after the
 // calls, one with anything else there is only counted, and a fixed one whose
 // thread magnum cannot place (no threads file beside the report) is named
-// alike rather than called a human's. A report magnum can read no call of
+// alike rather than called another reviewer's. A report magnum can read no call of
 // keeps today's message whole: named after a re-review, counted at the
 // settle.
 func TestAnUnreadableNeedsYouBulletKeepsTheOldWords(t *testing.T) {
@@ -178,8 +180,8 @@ func TestAnUnreadableNeedsYouBulletKeepsTheOldWords(t *testing.T) {
 // when the round that posted the fixed review began, so that review's own
 // comments are not in it: an entry whose place and priority match a comment
 // of the review file is magnum's thread too (a failed reply there is not
-// taken for a human's thread), and one at the same place with another
-// priority is not.
+// taken for another reviewer's thread), and one at the same place with
+// another priority is not.
 func TestTheFixedReviewsOwnCommentsAreMagnumsThreads(t *testing.T) {
 	const prURL, ref = "https://github.com/talkable/talkable/pull/2", "talkable/talkable#2"
 	report := filepath.Join(t.TempDir(), "claude-fix.md")
@@ -189,7 +191,7 @@ func TestTheFixedReviewsOwnCommentsAreMagnumsThreads(t *testing.T) {
 		"2103 P1 app/lib/x.rb:7: not fixed. Out of scope.",
 	}, report, prURL, ref, true)
 	want := "reply fixed in b2b2b2b in magnum's thread and resolve it: " + prURL + "#discussion_r2102; " +
-		"decide a human's P1 on app/lib/x.rb:7: the fixer declined it; reply won't fix at " + prURL + "#discussion_r2103, or `magnum fix " + ref +
+		"decide another reviewer's P1 on app/lib/x.rb:7: the fixer declined it; reply won't fix at " + prURL + "#discussion_r2103, or `magnum fix " + ref +
 		"` sends it back; details: " + report
 	if got != want {
 		t.Errorf("needsYouText =\n %q\nwant\n %q", got, want)

@@ -727,12 +727,14 @@ type FallbackData struct {
     FallbackData feeds the model-fallback prompt.
 
 type FixPromptInput struct {
-	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, DBLockCommand string
+	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand string
 }
     FixPromptInput is what the fix job knows beyond the PR, the role and the
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
     (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
-    posted it) and the line the fixer runs its database commands through
+    posted it), the file of the other reviewers' open items (ExternalFile,
+    external-threads.json beside the report; "" = none, the prompt then names
+    no such file) and the line the fixer runs its database commands through
     (DBLockCommand, DBLockLine; "" = derived without a checkout).
 
 type Health struct {
@@ -1999,10 +2001,12 @@ type RoleData struct {
 	// The fix prompt's (Manager.FixPrompt; empty for every other role):
 	// HeadRef is the PR's branch, which the fixer pushes to; ReviewURL the
 	// review it fixes and ReviewFile that review's review.json (its event,
-	// body and comments, as the judge posted it); ReviewerLogin the login
-	// that posted it, whose threads the fixer answers; SkillPath the fix
-	// skill's startup copy, absolute.
-	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, SkillPath string
+	// body and comments, as the judge posted it); ExternalFile the other
+	// reviewers' open threads, review bodies and comments, which the fixer
+	// handles after the review's findings ("" = magnum could not list
+	// them); ReviewerLogin the login that posted the review, whose threads
+	// the fixer answers; SkillPath the fix skill's startup copy, absolute.
+	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, SkillPath string
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -2443,15 +2447,20 @@ type FixCall struct {
 func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCall
     DeclinedCall is the call of a finding the fixer did not fix and left to the
     author to decide: "decide magnum's P2 on <place>: the fixer declined it;
-    reply won't fix at <url>, or `magnum fix <ref>` sends it back" ("a human's"
-    in a thread a human started; "finding" for one without a priority).
+    reply won't fix at <url>, or `magnum fix <ref>` sends it back" ("another
+    reviewer's" in a thread another reviewer started, "a human's" in the older
+    words; "finding" for one without a priority).
 
 func FixedCall(thread, url, sha string, magnums bool) FixCall
     FixedCall is the call of a finding the fixer fixed in commit sha but did
-    not answer, because its thread is one a human started, where the fixer never
-    writes, or, when magnums, one of magnum's whose reply failed: the author
-    replies there and resolves it. "reply fixed in <sha7> in the thread a human
-    started and resolve it: <url>" ("in magnum's thread").
+    not answer: when magnums, in one of magnum's threads whose reply failed,
+    where the author replies and resolves it ("reply fixed in <sha7> in magnum's
+    thread and resolve it: <url>"); else in a thread another reviewer started
+    (its reply failed, or the author had answered there before, where the fixer
+    does not write), where the author replies and that reviewer resolves it
+    ("reply fixed in <sha7> in another reviewer's thread: <url>"). The words
+    of the time when the fixer never wrote in a thread a human started, "in the
+    thread a human started and resolve it", are still read.
 
 type Reason struct {
 	Kind     string `json:"kind,omitempty"`
@@ -9064,6 +9073,17 @@ func (c *Client) FileAt(ctx context.Context, owner, repo, path, ref string) ([]b
     a file above FileAtLimit an error matching ErrFileTooLarge (checked on the
     bytes received).
 
+func (c *Client) IssueComments(ctx context.Context, owner, repo string, number int, stop func(PRComment) bool) (comments []PRComment, complete bool, err error)
+    IssueComments lists the comments on the conversation of pull request number
+    (review bodies and inline comments are not among them: AllReviews and
+    ReviewThreads read those), oldest first. It reads issueCommentsPage at a
+    time from the newest back, until a page holds a comment that stop (nil:
+    none) reports true for, or it reached the first comment, and then
+    returns every comment it read; complete is false when it stopped at
+    issueCommentsMaxPages pages with older comments, none of which stop was
+    asked about, left unread. A missing repository or pull request is an error
+    matching ErrNotFound.
+
 func (c *Client) ListFiles(ctx context.Context, owner, repo string, number int) (files []string, complete bool, err error)
     ListFiles reads the files a pull request changes: GET
     /repos/{o}/{r}/pulls/{n}/files, up to three pages of 100. A rename
@@ -9146,10 +9166,12 @@ func (c *Client) ReviewREST(ctx context.Context, owner, repo string, number int,
 func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number int) ([]Thread, error)
     ReviewThreads lists the inline review threads of a pull request with
     their comments, oldest thread first (at most threadsMaxPages pages of
-    threadsPageSize threads, threadCommentsMax comments each). The diff hunk
-    and the original commit are read once per thread, for its first comment only
-    (see ThreadComment), so replies cost no hunk. A missing repository or pull
-    request is an error matching ErrNotFound.
+    threadsPageSize threads, threadCommentsMax comments each, and the newest
+    threadTailMax of a longer thread as its Tail, read in one more query per
+    threadTailBatch such threads). The diff hunk and the original commit are
+    read once per thread, for its first comment only (see ThreadComment),
+    so replies cost no hunk. A missing repository or pull request is an error
+    matching ErrNotFound.
 
 func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([]Review, error)
     Reviews is AllReviews without saying whether the list is complete: for a
@@ -9249,6 +9271,22 @@ type LatestReview struct {
 	CommitOid   string // "" when the commit is gone
 }
     LatestReview is one entry of a pull request's latestReviews.
+
+type PRComment struct {
+	ID          int64  // REST comment id
+	URL         string // its link: <pull request>#issuecomment-<id>
+	Body        string
+	CreatedAt   time.Time
+	AuthorLogin string // "" for a ghost
+	AuthorType  string // GraphQL __typename: User | Bot | ...
+	// AuthorAssociation is the author's authorAssociation with the
+	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...), as
+	// the reading identity sees it; "" when GitHub did not say.
+	AuthorAssociation string
+}
+    PRComment is a comment on a pull request's conversation (an issue comment)
+    as GraphQL reports it. AuthorLogin is the GraphQL login (no "[bot]" suffix);
+    compare it with Account and SameAccount.
 
 type PRDetails struct {
 	NodeID      string
@@ -9449,6 +9487,10 @@ type Review struct {
 	CommitOid   string // "" when the commit is gone
 	AuthorLogin string // "" for a ghost
 	AuthorType  string // GraphQL __typename
+	// AuthorAssociation is the author's authorAssociation with the
+	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...), as
+	// the reading identity sees it; "" when GitHub did not say.
+	AuthorAssociation string
 }
     Review is a pull request review as GraphQL reports it. AuthorLogin is the
     GraphQL login (no "[bot]" suffix); ReviewREST has the REST login.
@@ -9549,10 +9591,22 @@ type Thread struct {
 	Resolved bool
 	Outdated bool
 	// Comments are oldest first; Comments[0] started the thread and the rest
-	// are its replies. At most threadCommentsMax per thread.
+	// are its replies. At most threadCommentsMax per thread: the first ones.
 	Comments []ThreadComment
+	// CommentCount is how many comments the thread has, Comments' and
+	// beyond. Tail is set only when it has more than Comments holds: its
+	// newest comments (at most threadTailMax) that Comments does not hold,
+	// oldest first, so that the thread's latest comment is Tail's last;
+	// CommentCount minus both is the middle neither holds. Callers that
+	// read only Comments see the first threadCommentsMax as before.
+	CommentCount int
+	Tail         []ThreadComment
 }
     Thread is an inline review thread of a pull request as GraphQL reports it.
+
+func (t Thread) AllComments() []ThreadComment
+    AllComments are t's comments as ReviewThreads read them, oldest first:
+    Comments, then Tail; its last is the thread's latest comment.
 
 type ThreadComment struct {
 	ID          int64  // REST comment id (in_reply_to for a reply)
@@ -9562,6 +9616,10 @@ type ThreadComment struct {
 	URL         string
 	CreatedAt   time.Time
 	ReviewID    int64 // the review the comment belongs to; 0 when unknown
+	// AuthorAssociation is the author's authorAssociation with the
+	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...), as
+	// the reading identity sees it; "" when GitHub did not say.
+	AuthorAssociation string
 	// OriginalCommitOid is the commit the comment was made on, and DiffHunk
 	// the diff hunk it was made on (the lines around the commented one, as
 	// they were then). Both are set on a thread's first comment (Comments[0])

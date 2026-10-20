@@ -23,7 +23,7 @@ const threadsPage1 = `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":49
   "root":{"nodes":[{"originalCommit":{"oid":"1111111111111111111111111111111111111111"},"diffHunk":"@@ -38,3 +38,5 @@ def retry\n   ctx\n+  deliver\n+  deliver"}]},
   "comments":{"nodes":[
    {"databaseId":101,"body":"**[P2] Retry sends the email twice**\n\nDetails.","url":"https://github.com/talkable/talkable/pull/5#discussion_r101","createdAt":"2026-10-03T09:00:00Z","author":{"login":"talkable","__typename":"Bot"},"pullRequestReview":{"databaseId":9001}},
-   {"databaseId":102,"body":"(Claude) Fixed in 1a2b3c4.","url":"https://github.com/talkable/talkable/pull/5#discussion_r102","createdAt":"2026-10-03T10:00:00Z","author":{"login":"octocat","__typename":"User"},"pullRequestReview":{"databaseId":9002}}]}},
+   {"databaseId":102,"body":"(Claude) Fixed in 1a2b3c4.","url":"https://github.com/talkable/talkable/pull/5#discussion_r102","createdAt":"2026-10-03T10:00:00Z","author":{"login":"octocat","__typename":"User"},"authorAssociation":"MEMBER","pullRequestReview":{"databaseId":9002}}]}},
  {"id":"PRRT_2","isResolved":false,"isOutdated":true,"path":"app/x.rb","line":null,"originalLine":7,"startLine":null,"originalStartLine":null,"diffSide":"LEFT",
   "root":{"nodes":[{"originalCommit":null,"diffHunk":"@@ -7 +7 @@\n-old\n+new"}]},
   "comments":{"nodes":[
@@ -54,19 +54,19 @@ func TestReviewThreads(t *testing.T) {
 	}
 	at := func(h int) time.Time { return time.Date(2026, 10, 3, h, 0, 0, 0, time.UTC) }
 	want := []Thread{
-		{ID: "PRRT_1", Path: "app/models/order.rb", Line: 42, OriginalLine: 40, StartLine: 41, OriginalStartLine: 39, DiffSide: "RIGHT", Resolved: true, Comments: []ThreadComment{
+		{ID: "PRRT_1", Path: "app/models/order.rb", Line: 42, OriginalLine: 40, StartLine: 41, OriginalStartLine: 39, DiffSide: "RIGHT", Resolved: true, CommentCount: 2, Comments: []ThreadComment{
 			{ID: 101, AuthorLogin: "talkable", AuthorType: "Bot", Body: "**[P2] Retry sends the email twice**\n\nDetails.",
 				URL: "https://github.com/talkable/talkable/pull/5#discussion_r101", CreatedAt: at(9), ReviewID: 9001,
 				OriginalCommitOid: "1111111111111111111111111111111111111111", DiffHunk: "@@ -38,3 +38,5 @@ def retry\n   ctx\n+  deliver\n+  deliver"},
 			{ID: 102, AuthorLogin: "octocat", AuthorType: "User", Body: "(Claude) Fixed in 1a2b3c4.",
-				URL: "https://github.com/talkable/talkable/pull/5#discussion_r102", CreatedAt: at(10), ReviewID: 9002},
+				URL: "https://github.com/talkable/talkable/pull/5#discussion_r102", CreatedAt: at(10), ReviewID: 9002, AuthorAssociation: "MEMBER"},
 		}},
-		{ID: "PRRT_2", Path: "app/x.rb", OriginalLine: 7, DiffSide: "LEFT", Outdated: true, Comments: []ThreadComment{
+		{ID: "PRRT_2", Path: "app/x.rb", OriginalLine: 7, DiffSide: "LEFT", Outdated: true, CommentCount: 2, Comments: []ThreadComment{
 			{ID: 103, AuthorLogin: "talkable", AuthorType: "Bot", Body: "**[P3] Wrong field name**", URL: "u103", CreatedAt: at(9), ReviewID: 9001,
 				DiffHunk: "@@ -7 +7 @@\n-old\n+new"},
 			{ID: 104, Body: "by design", URL: "u104", CreatedAt: at(11), ReviewID: 9003},
 		}},
-		{ID: "PRRT_3", Path: "lib/y.go", Line: 3, OriginalLine: 3, Comments: []ThreadComment{
+		{ID: "PRRT_3", Path: "lib/y.go", Line: 3, OriginalLine: 3, CommentCount: 1, Comments: []ThreadComment{
 			{ID: 105, AuthorLogin: "octocat", AuthorType: "User", Body: "a question", URL: "u105", CreatedAt: at(12),
 				OriginalCommitOid: "2222222222222222222222222222222222222222", DiffHunk: "@@ -3 +3 @@\n-a\n+b"},
 		}},
@@ -80,7 +80,7 @@ func TestReviewThreads(t *testing.T) {
 	}
 	q := oneLine(decodeReq(t, call).Query)
 	for _, want := range []string{"reviewThreads(first: 100, after: $cursor)", "id isResolved isOutdated path line originalLine startLine originalStartLine",
-		"comments(first: 50)", "author { login __typename } pullRequestReview { databaseId }",
+		"comments(first: 50)", "authorAssociation author { login __typename } pullRequestReview { databaseId }",
 		"root: comments(first: 1) { nodes { originalCommit { oid } diffHunk } }"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
@@ -144,5 +144,50 @@ func TestReviewThreadsCopiesRootFieldsOntoTheFirstCommentOnly(t *testing.T) {
 	}
 	if len(got[2].Comments) != 0 {
 		t.Errorf("thread without comments = %+v", got[2])
+	}
+}
+
+// A thread with more comments than the first page holds gets its newest
+// ones as its Tail, read by node id in one more query, so its latest
+// comment (AllComments' last) is the real one; a thread the first page
+// holds whole asks for none.
+func TestReviewThreadsReadTheNewestCommentsOfALongThread(t *testing.T) {
+	page := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+	 {"id":"PRRT_long","isResolved":false,"isOutdated":false,"path":"a.go","line":1,"originalLine":1,
+	  "comments":{"totalCount":53,"nodes":[
+	   {"databaseId":1,"body":"first","url":"u1","createdAt":"2026-10-03T09:00:00Z","author":{"login":"rev-ann","__typename":"User"},"authorAssociation":"MEMBER"},
+	   {"databaseId":2,"body":"second","url":"u2","createdAt":"2026-10-03T09:01:00Z","author":{"login":"rev-ann","__typename":"User"},"authorAssociation":"MEMBER"}]}},
+	 {"id":"PRRT_short","isResolved":false,"isOutdated":false,"path":"b.go","line":2,"originalLine":2,
+	  "comments":{"totalCount":1,"nodes":[{"databaseId":9,"body":"only","url":"u9","createdAt":"2026-10-03T09:00:00Z","author":null}]}}]}}}}}`
+	tails := `{"data":{"nodes":[{"id":"PRRT_long","comments":{"nodes":[
+	 {"databaseId":2,"body":"second","url":"u2","createdAt":"2026-10-03T09:01:00Z","author":{"login":"rev-ann","__typename":"User"}},
+	 {"databaseId":53,"body":"the author's answer","url":"u53","createdAt":"2026-10-03T12:00:00Z","author":{"login":"zhuravel","__typename":"User"},"authorAssociation":"OWNER"}]}}]}}`
+	var asked []any
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		if strings.Contains(req.Query, "nodes(ids: $ids)") {
+			asked = append(asked, req.Variables["ids"])
+			if q := oneLine(req.Query); !strings.Contains(q, "... on PullRequestReviewThread { id comments(last: 50) { nodes { databaseId body url createdAt authorAssociation") {
+				t.Errorf("tails query = %s", q)
+			}
+			return okResult(compact(t, tails))
+		}
+		return okResult(compact(t, page))
+	})}}
+	got, err := (&Client{Run: f}).ReviewThreads(context.Background(), "talkable", "talkable", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(asked, []any{[]any{"PRRT_long"}}) {
+		t.Fatalf("tails asked for %v, want the long thread alone", asked)
+	}
+	long := got[0]
+	if long.CommentCount != 53 || len(long.Comments) != 2 || len(long.Tail) != 1 || long.Tail[0].ID != 53 || long.Tail[0].AuthorAssociation != "OWNER" {
+		t.Fatalf("long thread = %+v", long)
+	}
+	if all := long.AllComments(); len(all) != 3 || all[2].AuthorLogin != "zhuravel" {
+		t.Errorf("AllComments = %+v", all)
+	}
+	if short := got[1]; short.CommentCount != 1 || short.Tail != nil || len(short.AllComments()) != 1 {
+		t.Errorf("short thread = %+v", short)
 	}
 }

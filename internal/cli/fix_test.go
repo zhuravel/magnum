@@ -504,7 +504,7 @@ func TestFixWaitSaysHowTheLoopEnded(t *testing.T) {
 			}},
 		// A call per finding: the counts on the end's line, then each call and the report on a line of its own.
 		{name: "the fixer said what each finding left to the author asks", code: 1,
-			err: []string{"talkable#5: needs you: reply in 1 thread\nfix: reply fixed in b2b2b2b in the thread a human started and resolve it: " +
+			err: []string{"talkable#5: needs you: reply in 1 thread\nfix: reply fixed in b2b2b2b in another reviewer's thread: " +
 				"https://github.com/talkable/talkable/pull/5#discussion_r2101\n     details: " + report + "\n"},
 			end: func(h *actHarness, pr store.PR) {
 				msg := "fix: " + attention.FixCallsText([]attention.FixCall{

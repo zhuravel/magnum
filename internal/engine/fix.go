@@ -96,6 +96,9 @@ type fixJob struct {
 	notes  []string            // what the request's answer adds ("this watch posts as you: ...")
 	state  FixState            // the loop's row as the job writes it
 	run    store.Run           // the fixer's run, once fixStart created it
+	// started is when fixStart created the run: a reply of the fixer's on
+	// GitHub since then is this run's (noteFixerReplies).
+	started time.Time
 	// touched: the fixer may have changed the slot (its prompt was sent), so
 	// the settle and a stop put the slot back in order.
 	touched bool
@@ -628,9 +631,11 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 // the fix role's identity's env, agents.Manager.paneEnv), compacts a resumed
 // fixer whose context is nearly full, or starts it fresh (fixCompact, told
 // whether the fixer was parked before, so that it waits for the figure),
-// creates its run of kind fix in the review's round and sends it the fix
-// prompt. A run that Submit refused before sending is abandoned; one whose
-// prompt may have arrived is waited for.
+// creates its run of kind fix in the review's round, writes the other
+// reviewers' open items beside the run's report (writeExternal, which the
+// prompt names when it could) and sends it the fix prompt. A run that
+// Submit refused before sending is abandoned; one whose prompt may have
+// arrived is waited for.
 func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	pr := job.pr
 	src := e.d.Identities[pr.Identity]
@@ -671,6 +676,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			return err
 		}
 	}
+	job.started = e.now()
 	run, err := e.d.Agents.NewRun(ctx, pr, agents.Role(job.role.Name), store.RunFix, job.round)
 	if err != nil {
 		return err
@@ -681,10 +687,15 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		e.abandonFixRun(ctx, run, err.Error())
 		return err
 	}
+	external := ""
+	if job.state.Report != "" {
+		external = e.writeExternal(ctx, job, filepath.Dir(job.state.Report)) // fix_external.go
+	}
 	text, err := e.d.Agents.FixPrompt(pr, agents.Role(job.role.Name), run, agents.FixPromptInput{
 		HeadRef:       deref(pr.HeadRef),
 		ReviewURL:     job.review.URL,
 		ReviewFile:    filepath.Join(e.d.Layout.ReviewDir(job.repo.Owner, job.repo.Name, pr.Number, job.review.SHA), agents.PostReviewFile),
+		ExternalFile:  external,
 		ReviewerLogin: job.login,
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
 	})

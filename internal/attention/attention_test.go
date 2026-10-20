@@ -224,25 +224,27 @@ func TestOnlyTheFixJobsParkIsNotOnMagnumsSide(t *testing.T) {
 
 // A fix job whose fixer left findings it could not close says what to do
 // about each, where (talkable-integration#867: one finding fixed in a thread
-// a colleague started, where the fixer never writes, and one P2 of magnum's
-// it declined; "2 findings need your call" told the operator neither): the
-// message is a sentence per finding with its thread's link and the report
-// last, the summary counts the calls, the next step is the calls one by one
-// (Steps, which `magnum status` prints one per line, joined in Fix), and
-// NeedsYou carries each call's thread, link and sentence. Findings named in
-// the older words follow the calls, and the loop's end after a re-review
-// that did not post keeps its own words before them.
+// a colleague started, where the fixer did not write then, and one P2 of
+// magnum's it declined; "2 findings need your call" told the operator
+// neither): the message is a sentence per finding with its thread's link
+// and the report last, the summary counts the calls, the next step is the
+// calls one by one (Steps, which `magnum status` prints one per line,
+// joined in Fix), and NeedsYou carries each call's thread, link and
+// sentence. A fix in another reviewer's thread asks for the reply alone
+// (that reviewer resolves it). Findings named in the older words follow the
+// calls, and the loop's end after a re-review that did not post keeps its
+// own words before them.
 func TestTheFixRemedySaysWhatToDoPerThread(t *testing.T) {
 	const (
 		report   = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
-		human    = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
+		other    = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
 		magnums  = "https://github.com/talkable/talkable/pull/2#discussion_r4302866759"
-		fixedIn  = "reply fixed in b2b2b2b in the thread a human started and resolve it: " + human
+		fixedIn  = "reply fixed in b2b2b2b in another reviewer's thread: " + other
 		declined = "decide magnum's P2 on src/integration.js:1706: the fixer declined it; reply won't fix at " + magnums +
 			", or `magnum fix talkable/talkable#2` sends it back"
 	)
 	calls := []FixCall{
-		FixedCall("4302616576", human, "b2b2b2b2b2b2b2b2b2b2", false),
+		FixedCall("4302616576", other, "b2b2b2b2b2b2b2b2b2b2", false),
 		DeclinedCall("4302866759", magnums, "P2", "src/integration.js:1706", "talkable/talkable#2", true),
 	}
 	if calls[0].Action != fixedIn || calls[1].Action != declined {
@@ -252,8 +254,8 @@ func TestTheFixRemedySaysWhatToDoPerThread(t *testing.T) {
 		"reply fixed in b2b2b2b in magnum's thread and resolve it: "+magnums; got != want {
 		t.Errorf("a fixed finding whose reply failed in magnum's thread = %q, want %q", got, want)
 	}
-	if got := DeclinedCall("4302616576", human, "P1", "app/a.rb:3", "talkable/talkable#2", false).Action; !strings.HasPrefix(got, "decide a human's P1 on app/a.rb:3: ") {
-		t.Errorf("a declined finding in a human's thread = %q", got)
+	if got := DeclinedCall("4302616576", other, "P1", "app/a.rb:3", "talkable/talkable#2", false).Action; !strings.HasPrefix(got, "decide another reviewer's P1 on app/a.rb:3: ") {
+		t.Errorf("a declined finding in another reviewer's thread = %q", got)
 	}
 	msg := "fix: " + FixCallsText(calls, "", report)
 	if want := "fix: " + fixedIn + "; " + declined + "; details: " + report; msg != want {
@@ -290,5 +292,23 @@ func TestTheFixRemedySaysWhatToDoPerThread(t *testing.T) {
 
 	if r := Explain(KindFix, "fix: 2 findings need your call: "+report, "talkable#2"); len(r.NeedsYou) != 0 || len(r.Steps) != 0 {
 		t.Errorf("the older words name calls: %+v", r)
+	}
+}
+
+// A message stored before the fixer replied in other reviewers' threads
+// (spec 82's words: "in the thread a human started and resolve it", "a
+// human's") still reads as its calls, so a PR that needed attention then
+// keeps its card and `magnum status` lines after the upgrade.
+func TestAFixCallInTheOlderWordsStillReads(t *testing.T) {
+	const (
+		report = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+		human  = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
+		fixed  = "reply fixed in b2b2b2b in the thread a human started and resolve it: " + human
+		decide = "decide a human's P1 on app/a.rb:3: the fixer declined it; reply won't fix at " + human + ", or `magnum fix talkable/talkable#2` sends it back"
+	)
+	r := Explain(KindFix, "fix: "+fixed+"; "+decide+"; details: "+report, "talkable#2")
+	want := []FixCall{{Thread: "4302616576", URL: human, Action: fixed}, {Thread: "4302616576", URL: human, Action: decide}}
+	if !slices.Equal(r.NeedsYou, want) || r.Summary != "fix: reply in 1 thread, decide 1 finding" {
+		t.Errorf("needs you %+v, summary %q", r.NeedsYou, r.Summary)
 	}
 }

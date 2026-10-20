@@ -41,13 +41,15 @@ const autofixBy = "autofix"
 // needsYouEntryRe reads a "## Needs you" entry's comment id, priority and
 // place ("2101 P1 app/models/offer.rb:42: <reason>"; "5485002407
 // description: <reason>" for the review body's "Description: ✗" finding,
-// which has the review's id and no priority), the place in plain path
-// characters only, so no control character or other text of the fixer's
-// reaches a message, and the words the fix skill starts the reason with:
-// "fixed in <sha>." (group 4: the commit) or "not fixed." (group 5), as
-// fix_calls.go reads them (readNeedsYouEntry). The reason is the fixer's own
-// words about the PR, so it is never read.
-var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description)(?::|\s|$)` +
+// which has the review's id and no priority; "4100 review: <reason>" and
+// "4100 comment: <reason>" for another reviewer's review body or comment of
+// the external file, fix_external.go), the place in plain path characters
+// only, so no control character or other text of the fixer's reaches a
+// message, and the words the fix skill starts the reason with: "fixed in
+// <sha>." (group 4: the commit) or "not fixed." (group 5), as fix_calls.go
+// reads them (readNeedsYouEntry). The reason is the fixer's own words about
+// the PR, so it is never read.
+var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description|review|comment)(?::|\s|$)` +
 	`(?:\s*(?i:fixed in ([0-9a-f]{7,40})|(not fixed))(?:[.,;:]|\s|$))?`)
 
 // fixAfterRound decides what the end of a review round (rj, as dispatch

@@ -18,6 +18,10 @@ type Review struct {
 	CommitOid   string // "" when the commit is gone
 	AuthorLogin string // "" for a ghost
 	AuthorType  string // GraphQL __typename
+	// AuthorAssociation is the author's authorAssociation with the
+	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...), as
+	// the reading identity sees it; "" when GitHub did not say.
+	AuthorAssociation string
 }
 
 // RESTReview is a review as REST reports it; UserLogin keeps the "[bot]"
@@ -35,7 +39,7 @@ type RESTReview struct {
 }
 
 // reviewNodeFields selects one review; reviewNodeJSON decodes it.
-const reviewNodeFields = "databaseId state body url submittedAt commit { oid } author { login __typename }"
+const reviewNodeFields = "databaseId state body url submittedAt commit { oid } author { login __typename } authorAssociation"
 
 const reviewsQuery = `query($owner: String!, $name: String!, $number: Int!) {
   ` + rateLimitFields + `
@@ -71,13 +75,14 @@ type reviewNodeJSON struct {
 	URL         string     `json:"url"`
 	SubmittedAt time.Time  `json:"submittedAt"`
 	Author      *actorJSON `json:"author"`
+	Association string     `json:"authorAssociation"`
 	Commit      *struct {
 		Oid string `json:"oid"`
 	} `json:"commit"`
 }
 
 func (n reviewNodeJSON) review() Review {
-	r := Review{DatabaseID: n.DatabaseID, State: n.State, Body: n.Body, URL: n.URL, SubmittedAt: n.SubmittedAt}
+	r := Review{DatabaseID: n.DatabaseID, State: n.State, Body: n.Body, URL: n.URL, SubmittedAt: n.SubmittedAt, AuthorAssociation: n.Association}
 	if n.Author != nil {
 		r.AuthorLogin, r.AuthorType = n.Author.Login, n.Author.Typename
 	}
