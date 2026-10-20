@@ -250,6 +250,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	if err != nil {
 		return fmt.Errorf("poll %s: %w", full, err)
 	}
+	e.webhooksSaw(ctx, w, full, rr.PRs, stored, firstSync) // webhooks.go: shadow mode compares, changing nothing
 	byNode := map[string]store.PR{}
 	for _, p := range stored {
 		byNode[p.NodeID] = p

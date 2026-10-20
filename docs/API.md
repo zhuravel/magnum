@@ -69,6 +69,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals and login folding. |
 | [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch) and the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
+| [webhooks](#webhooks) | Package webhooks reads the events magnum-relay keeps of the GitHub App's webhook deliveries: GET <url>/v1/events, a long poll by cursor, with curl through execx. |
 
 ## agents
 
@@ -3196,6 +3197,17 @@ const (
     DefaultFixSkill is a fix role's default skill path, as DefaultSkill is the
     judge's; DefaultFixPrompt is its default prompt.
 
+const (
+	WebhooksOff    = "off"
+	WebhooksShadow = "shadow"
+	WebhooksActive = "active"
+)
+    The webhooks modes. Off reads nothing. Shadow reads the relay's events
+    (magnum-relay, which receives the GitHub App's webhook deliveries) and
+    compares what each would refresh with what the poll finds, changing nothing
+    the daemon does. Active, acting on the events, is a later phase: Validate
+    refuses it.
+
 const AutoApproveBodyMax = 500
     AutoApproveBodyMax bounds auto_approve_body, in characters.
 
@@ -3546,6 +3558,7 @@ type Config struct {
 	Learn      Learn      `toml:"learn"`
 	Notes      Notes      `toml:"notes"`
 	Board      Board      `toml:"board"`
+	Webhooks   Webhooks   `toml:"webhooks"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -5505,6 +5518,34 @@ func (w Watch) PathsSkipped(files []string) bool
     one skip_paths glob. It is false without globs and without files: a PR whose
     changes are unknown is never skipped.
 
+type Webhooks struct {
+	// Mode is off ("" too) or shadow (WebhooksOff, WebhooksShadow).
+	Mode string `toml:"mode"`
+	// URL is the relay's base URL, https only; the events are read from
+	// <url>/v1/events.
+	URL string `toml:"url"`
+	// TokenFile holds the relay's bearer token: a regular file of mode 0600
+	// (~ and a path relative to the user config's directory resolved). The
+	// token goes to curl on stdin, never in argv, a log or an error.
+	TokenFile string `toml:"token_file"`
+	// Owners are the watch owners the App is installed on, whose polls are
+	// compared with the events; the others are never compared.
+	Owners []string `toml:"owners"`
+	// Wait is how long a page waits for an event (the relay's long poll).
+	Wait Duration `toml:"wait"`
+	// StaleAfter is how long the stream may go without a page before it is
+	// unhealthy.
+	StaleAfter Duration `toml:"stale_after"`
+}
+    Webhooks is the webhooks table: the daemon's reader of the relay.
+
+func (w Webhooks) Covers(owner string) bool
+    Covers reports whether the App's events cover the watch owner (Owners,
+    in any case).
+
+func (w Webhooks) Shadow() bool
+    Shadow reports whether the daemon reads the relay in shadow mode.
+
 ```
 
 ## dblock
@@ -6153,6 +6194,19 @@ const (
 )
     Wait reasons (Wait.Reason).
 
+const (
+	KVWebhooksCursor = "webhooks.cursor"
+	KVWebhooksHealth = "webhooks.health"
+	KVWebhooksHours  = "webhooks.hours"
+)
+    The consumer's kv keys: the cursor it reads after (webhooksCursor),
+    the stream's health (WebhooksHealth) and the hourly totals (WebhooksHour).
+
+const (
+
+	// WebhooksKeepHours is how many hourly totals are kept.
+	WebhooksKeepHours = 24
+)
 const ApprovalDismissMessage = "magnum: new commits since this approval; a re-review follows"
     ApprovalDismissMessage is the reason a dismissed approval shows on GitHub.
 
@@ -6607,6 +6661,10 @@ func ReadDaemonConfigSum(ctx context.Context, st *store.Store) (string, bool)
     ReadDaemonConfigSum reads KVDaemonConfigSum: the hex SHA-256 of the user
     config the running daemon loaded, "" when it read none; false when no daemon
     recorded one (one older than the record, or none ever ran).
+
+func ReadWebhooks(ctx context.Context, st *store.Store) (WebhooksHealth, []WebhooksHour)
+    ReadWebhooks reads what the consumer recorded: the stream's health and the
+    hourly totals, oldest first (zero and nil when nothing was).
 
 func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.Time, bool)) string
     SkewNote says when the running daemon is older than what is built: the CLI's
@@ -7102,6 +7160,10 @@ type Deps struct {
 	// PR needs attention or an agent is blocked; nil skips them.
 	Focus  func(ctx context.Context, target string) error
 	Reveal func(ctx context.Context) error
+
+	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
+	// (webhooks.go, which FromApp sets); nil = no consumer.
+	Webhooks WebhookSource
 }
     Deps are the engine's collaborators. Config, Store and Logger are required;
     a nil port disables the steps that need it.
@@ -8187,6 +8249,48 @@ func (p WatchPoll) Failing(now time.Time) time.Duration
 
 func (p WatchPoll) Value() string
     Value is p as store.KVWatchPoll stores it (times in UTC).
+
+type WebhookSource interface {
+	Events(ctx context.Context, after string, limit int, wait time.Duration) (webhooks.Page, error)
+}
+    WebhookSource reads the relay's events (*webhooks.Client): the page of
+    at most limit events after the cursor after ("" = from the oldest kept),
+    waiting up to wait for one.
+
+type WebhooksHealth struct {
+	PageAt  *time.Time `json:"page_at,omitempty"`
+	Error   string     `json:"error,omitempty"`
+	ErrorAt *time.Time `json:"error_at,omitempty"`
+	// GapAt is the last gap (the relay no longer held the events after the
+	// cursor, which then restarted at its newest event); GapOpen holds the
+	// stream unhealthy until every repository of a covered owner was
+	// compared after it, as each one's next poll is what resyncs it.
+	GapAt   *time.Time `json:"gap_at,omitempty"`
+	GapOpen bool       `json:"gap_open,omitempty"`
+}
+    WebhooksHealth is the stream's state as the consumer recorded it
+    (KVWebhooksHealth): when the relay last answered a page, the last failure
+    and its cause while no page answered since, and a gap the polls have not
+    compared after yet.
+
+func (h WebhooksHealth) State(now time.Time, staleAfter time.Duration) (healthy bool, cause string)
+    State is whether the stream is healthy at now and, when not, why: a page
+    that failed since the last answered one, a gap the polls have not resynced
+    yet, or no page within staleAfter.
+
+type WebhooksHour struct {
+	Hour      time.Time `json:"hour"`
+	Events    int       `json:"events"`
+	Changes   int       `json:"changes"`
+	Announced int       `json:"announced"`
+	Missed    int       `json:"missed"`
+	Early     int       `json:"early"`
+	Gaps      int       `json:"gaps"`
+}
+    WebhooksHour is one hour's totals (KVWebhooksHours keeps the last
+    WebhooksKeepHours, oldest first): the events read, the poll changes compared
+    and how they came out (announced + missed = changes), the events no change
+    followed and the gaps. A change counts in the hour it was decided.
 
 type WhiteboardPayload struct {
 	PRTarget
@@ -20794,5 +20898,164 @@ type Window struct {
 	ResetsAt time.Time
 }
     Window is one rate-limit window as Codex reported it.
+
+```
+
+## webhooks
+
+```text
+package webhooks // import "github.com/zhuravel/magnum/internal/webhooks"
+
+Package webhooks reads the events magnum-relay keeps of the GitHub App's webhook
+deliveries: GET <url>/v1/events, a long poll by cursor, with curl through execx.
+The operator's outbound firewall blocks Go's own HTTP client in a rebuilt,
+unsigned magnum binary, and gh reaches only GitHub, so curl, which the firewall
+lets through, makes the request.
+
+The relay's bearer token is read from a file only its owner can open
+(CheckTokenFile) and goes to curl on stdin, in the config curl reads with
+--config -, never in argv, a log or an error; --disable, the first argument,
+keeps a ~/.curlrc out (one that turns on verbose would print the header).
+An event carries ids and routing only: no title, body, comment, patch, user name
+or URL.
+
+CONSTANTS
+
+const (
+	MinToken = 32
+	MaxToken = 512
+)
+    MinToken and MaxToken bound a token's length, as the relay's
+    relay.CheckToken does (MinTokenLength, MaxTokenLength).
+
+const MaxLimit = 500
+    MaxLimit is the most events the relay lists in one page.
+
+const MaxWait = 30 * time.Second
+    MaxWait is the longest long poll the relay serves (wait=).
+
+const PageSlack = 10 * time.Second
+    PageSlack is how much longer than its wait curl gives a page (its
+    --max-time): a page answers within wait + PageSlack or fails.
+
+
+VARIABLES
+
+var ErrBusy = errors.New("the relay is busy (HTTP 429: too many long polls wait)")
+    ErrBusy is the relay's HTTP 429: as many long polls wait as it lets wait at
+    once; it asks for another try a second later (Retry-After: 1), which says
+    nothing of the stream's health.
+
+var ErrUnauthorized = errors.New("the relay refused the token (HTTP 401): check webhooks.token_file against the relay's tokens")
+    ErrUnauthorized is the relay refusing the token (HTTP 401).
+
+
+FUNCTIONS
+
+func CheckTokenFile(path string) error
+    CheckTokenFile checks the file holding the relay's token: a regular file,
+    symlinks followed, that neither its group nor others may read or write (0600
+    or narrower). A missing file is fs.ErrNotExist.
+
+func ReadToken(path string) (string, error)
+    ReadToken reads the relay's bearer token from path: a file CheckTokenFile
+    accepts, holding one token the relay can accept (relay.CheckToken: one word
+    of MinToken to MaxToken printable ASCII characters), trimmed of surrounding
+    white space. Its errors never quote the token.
+
+
+TYPES
+
+type Check struct {
+	Name       string `json:"name"`
+	Conclusion string `json:"conclusion"`
+}
+    Check is a CI event's name and conclusion (names are data).
+
+type Client struct {
+	Runner execx.Runner
+	// URL is the relay's base URL (https; config.Webhooks validates it).
+	URL string
+	// TokenFile holds the relay's bearer token (CheckTokenFile).
+	TokenFile string
+}
+    Client reads the relay's events.
+
+func (c *Client) Events(ctx context.Context, after string, limit int, wait time.Duration) (Page, error)
+    Events reads the page of at most limit events after the cursor after ("" =
+    from the oldest kept event; limit 0 = the relay's default), waiting up to
+    wait for one when there is none yet. curl gets wait + PageSlack.
+
+type Event struct {
+	// Seq is the event's place in the relay's journal.
+	Seq int64 `json:"seq"`
+	// DeliveryID is the delivery's X-GitHub-Delivery GUID, which a
+	// redelivery keeps.
+	DeliveryID string `json:"delivery_id"`
+	// Event is the X-GitHub-Event name ("pull_request", "check_run") and
+	// Action the payload's action ("" when it has none).
+	Event  string `json:"event"`
+	Action string `json:"action"`
+	// InstallationID and RepositoryID are 0 when the payload has none.
+	InstallationID int64 `json:"installation_id"`
+	RepositoryID   int64 `json:"repository_id"`
+	// Repository is "owner/name" ("" when the payload has none).
+	Repository string `json:"repository"`
+	// PRNumbers are the pull requests the event names: a pull_request*
+	// event's, an issue_comment's on a pull request, a check's (none for a
+	// fork's, or a status).
+	PRNumbers []int `json:"pr_numbers"`
+	// HeadSHA is the pull request's head, or the check's or status's commit
+	// (40 hex or "").
+	HeadSHA string `json:"head_sha"`
+	// BaseRef is a pull_request* event's base branch, else "".
+	BaseRef string `json:"base_ref"`
+	// Check is set only for check_run, check_suite and status.
+	Check *Check `json:"check,omitempty"`
+	// ReceivedAt is when the relay stored the delivery.
+	ReceivedAt time.Time `json:"received_at"`
+}
+    Event is one delivery as the relay keeps it (relay-api: ids and routing
+    only).
+
+func (e Event) Name() string
+    Name is the event's name with its action: "pull_request.synchronize",
+    "status".
+
+type GapError struct {
+	// Epoch and Oldest are the relay's journal and the cursor before its
+	// oldest kept event.
+	Epoch, Oldest string
+}
+    GapError is the relay's HTTP 410: the cursor is another journal's, or older
+    than the oldest event it keeps, so the events after it are lost.
+
+func (e *GapError) Error() string
+
+type Page struct {
+	// Epoch is the journal's id: a journal created again has another, and
+	// every cursor of the old one is a gap.
+	Epoch  string  `json:"epoch"`
+	Events []Event `json:"events"`
+	// Next is the cursor to ask after next.
+	Next string `json:"next"`
+	// HighWater is the cursor of the newest event the journal stored.
+	HighWater string `json:"high_water"`
+	// Oldest is the cursor before the oldest event the journal keeps.
+	Oldest     string    `json:"oldest"`
+	ServerTime time.Time `json:"server_time"`
+}
+    Page is one answer of GET /v1/events: the events after the cursor
+    asked for, in journal order, and the cursors to go on from. A cursor is
+    "<epoch>:<seq>".
+
+type StatusError struct{ Code int }
+    StatusError is an answer of the relay that is neither a page nor a 401 or
+    410: a 5xx (Server) or another code.
+
+func (e *StatusError) Error() string
+
+func (e *StatusError) Server() bool
+    Server reports whether the relay itself failed (5xx).
 
 ```

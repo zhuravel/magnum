@@ -2650,6 +2650,74 @@ board's `w` opens it the same way, after y/N, and refuses a row without a record
   `whiteboard` CLI is not on PATH, WARN when it is but Whiteboard is not running (the job skips whiteboards
   until it does).
 
+### Webhooks: the GitHub App's events in shadow mode
+
+Magnum learns what changed on GitHub by polling: a radar of each watch owner every 30 seconds, then the
+details of each PR that moved. A GitHub App can also send a webhook for each change, and magnum-relay, a
+small service you host where GitHub can reach it, receives the App's deliveries and keeps a journal of
+them: ids and routing only (the event and its action, the repository, the PR numbers, the head SHA, a
+check's name and conclusion), never a title, a body, a comment or a patch. The daemon, behind NAT on a Mac
+that sleeps, reads that journal by cursor. [Webhooks relay](#webhooks-relay) says how to deploy the relay.
+
+This is the first phase, shadow mode: the daemon reads the events and compares them with what the poll
+finds, and changes nothing it does. It writes no PR row, starts no round or job and makes no GitHub read
+for an event; the poll runs as before. The numbers say whether a later phase may let the events stand in
+for most of the radar of the owners the App covers.
+
+```toml
+[webhooks]
+mode = "shadow"                      # off (the default) | shadow; "active" is refused for now
+url = "https://relay.example"        # the relay's base URL, https only
+token_file = "keys/relay.token"      # the relay's bearer token, mode 0600; relative = beside this config
+owners = ["talkable"]                # the watch owners the App is installed on; others are never compared
+# wait = "25s"                       # how long a page waits for an event (the relay's long poll, at most 30s)
+# stale_after = "90s"                # no page for this long makes the stream unhealthy (longer than wait + 10s)
+```
+
+- **Reading.** A goroutine beside the daemon's loop asks the relay for the events after its cursor
+  (`GET <url>/v1/events`, a long poll of `wait`), with `curl`: a rebuilt magnum binary's own HTTP client is
+  what an outbound firewall such as Little Snitch blocks, and gh reaches only GitHub. The token goes to curl
+  on stdin, in the config it reads with `--config -`, never in argv or a log; `--disable` keeps your
+  `~/.curlrc` out. The cursor is kept in the registry (`webhooks.cursor`, with the relay's journal id), so
+  a restart reads on where it stopped; the first start begins at the relay's newest event, and so does a
+  gap (the relay no longer holds the events after the cursor), after a wait that grows while gaps come in
+  a row. A relay busy with other long polls (HTTP 429) is asked again a second later, then longer, which
+  is no failure. Each delivery counts once. The token is one word of 32 to 512 printable ASCII characters,
+  as the relay's are; a token file that is missing, not a regular file or open to its group or others is
+  never read (the stream says why and `magnum config` warns), and it never keeps the daemon from starting.
+- **Hints.** An event of a covered owner's watched repository names what changed: its PR (a
+  `pull_request*`, review or comment event), or a head (a check or a status, for a fork's check too). An
+  event of any other repository or owner is only counted, and so is one the relay received more than 5
+  minutes before the page that lists it (a backlog read after a sleep or an outage): it could not have
+  announced what a poll sees now.
+- **The comparison.** Each poll of a covered owner compares what it saw change on each PR (a push, draft
+  or ready, a newer `updatedAt`, a reopen, a new PR, a close GitHub confirmed) with the hints. A change
+  some event named in the 5 minutes before it (or since the repository's previous poll, when the poll
+  paused longer) is **announced**, and so is one whose event comes within a minute after the poll saw it;
+  a change with none is **missed**, and leaves a `webhooks.missed` event at debug level that names the PR,
+  what changed and the last event read for it, on the watch's subject (`magnum logs watch:talkable`), so
+  it never crowds the PR's own events. One event that names several PRs (a check run of two, a status on
+  a head two PRs share) announces each of them. An event no change followed within 5 minutes is **early
+  or noise**: a check run, a review thread resolved, a comment that moves nothing the radar reads. A poll
+  while the stream is unhealthy compares nothing, and neither does each repository's first poll after a
+  gap: what changed during an outage or a gap (a close GitHub confirms later included) is the health
+  line's, not a miss. The comparison writes nothing itself: a writer goroutine of the consumer's does, so
+  a slow registry never holds the poll.
+- **Reading the line.** `magnum status` shows, in shadow mode:
+
+  ```
+  webhooks: shadow · last page 8s ago · since 16:00 140 events (9 early or noise) · poll changes 23: 22 announced, 1 missed · healthy
+  ```
+
+  The totals are those of the last 24 hours, kept by the hour in the registry; the line and `--json`
+  (under `webhooks`) give their sums. The relay's pages are read with curl, not through the GitHub
+  client: they spend no GitHub budget, and the `github:` lines' meter does not count them. Missed changes
+  are what a later phase would have to catch by a slower radar; many early or noise events cost nothing
+  but a read. The stream is **unhealthy** with its cause when the last page failed (the relay refused the
+  token, a 5xx, curl could not connect), after a gap until each repository's next poll, or when no page
+  came within `stale_after`; the daemon writes a `webhooks.unhealthy` event when a kind of failure starts
+  and `webhooks.healthy` when the pages come again.
+
 ## Daily use
 
 `magnum` alone opens the PR board, `magnum tui` (the printed rows when the output is not a terminal, so
@@ -3563,6 +3631,7 @@ the GitHub App's webhooks, which the sleeping Mac behind NAT cannot.
 | `internal/tui`, `internal/cli` | Bubble Tea v2 screens and the cobra CLI. |
 | `internal/herdr`, `internal/reveal`, `internal/notify` | herdr socket client, terminal reveal (iTerm2, Terminal, Ghostty, WezTerm), toasts. |
 | `internal/relay`, `cmd/magnum-relay` | The webhook relay, a separate service: the signed receiver, the SQLite journal of routing envelopes, the long-polled listing. |
+| `internal/webhooks` | The daemon's reader of the relay's listing (`[webhooks]` shadow mode): curl through execx, the token on stdin. |
 
 The full exported API is in [docs/API.md](docs/API.md); live probe notes that shaped the design are in
 [docs/spikes.md](docs/spikes.md); every behavioural decision and the alternative it rejected is in

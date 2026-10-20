@@ -333,6 +333,10 @@ type Deps struct {
 	// PR needs attention or an agent is blocked; nil skips them.
 	Focus  func(ctx context.Context, target string) error
 	Reveal func(ctx context.Context) error
+
+	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
+	// (webhooks.go, which FromApp sets); nil = no consumer.
+	Webhooks WebhookSource
 }
 
 // Options tune Run.
@@ -585,6 +589,9 @@ type Engine struct {
 	// usagePaceRecorded is what recordRecentPace last wrote to kv ("none":
 	// deleted).
 	usagePaceRecorded string
+
+	// hooks is the webhooks consumer's memory in shadow mode (webhooks.go).
+	hooks webhookState
 }
 
 // New returns an engine over d.
@@ -685,6 +692,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	if a.Git != nil {
 		d.Probe = gitProbe(a.Git)
 	}
+	d.Webhooks = webhookSource(a)
 	if !a.DryRun && a.AgentTag == "" {
 		d.LookPath = exec.LookPath // the daemon's own agent CLIs (cli_version.go)
 	}
@@ -822,7 +830,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		defer close(worker)
 		e.heavyWorker(ctx)
 	}()
-	defer func() { cancel(); <-worker }()
+	hooks := e.goWebhooks(ctx) // webhooks.go: shadow mode's consumer
+	defer func() { cancel(); <-worker; <-hooks }()
 
 	interval := e.cfg.Daemon.PollInterval.Duration // Config.Validate keeps it positive
 	timer := time.NewTimer(0)

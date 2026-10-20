@@ -137,6 +137,22 @@ budget_floor = 500                # GraphQL points left of an identity's hourly 
                                   # status`). Running rounds finish; the poll keeps its own floor of 50. 0 = off
                                   # (0 to 5000). `magnum status` shows each identity's budget and its spenders.
 
+# Webhooks: magnum-relay receives the GitHub App's webhook deliveries and keeps their ids and routing (repository,
+# PR numbers, head SHA, never a title, body or comment). In shadow mode the daemon reads them, notes which PR or
+# head each one hints at, and compares that with what the poll finds changed (head, state, draft, updatedAt) on
+# the owners listed below: a change some event hinted at in the 5 minutes before it (or since the repository's
+# previous poll) is announced, one with none is missed, and an event no change followed is early or noise. It
+# changes nothing the daemon does: no PR row, no round, no GitHub read. `magnum status` shows the numbers.
+
+[webhooks]
+mode = "off"                      # off | shadow ("active", acting on the events, is not available yet)
+# url = ""                        # the relay's base URL, https only; the events come from <url>/v1/events
+# token_file = ""                 # the relay's bearer token, in a file of mode 0600 (relative: beside this config);
+                                  # it goes to curl on stdin, never in argv or a log
+# owners = []                     # the watch owners the App is installed on; others are never compared
+wait = "25s"                      # how long a page waits for an event (the relay's long poll, at most 30s)
+stale_after = "90s"               # no page for this long makes the stream unhealthy (longer than wait + 10s)
+
 # [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
 # codex_soft = 80                 # at this % used, full re-reviews wait (first reviews, delta checks, replies,
                                   # review requests and `magnum review` still run; 0 = off)

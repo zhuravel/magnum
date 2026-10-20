@@ -174,6 +174,7 @@ type statusReport struct {
 	GeneratedAt time.Time         `json:"generated_at"`
 	Daemon      statusDaemon      `json:"daemon"`
 	GitHub      statusGitHub      `json:"github"`
+	Webhooks    *statusWebhooks   `json:"webhooks,omitempty"` // [webhooks] shadow mode only (status_webhooks.go)
 	Codex       *statusCodexUsage `json:"codex_usage,omitempty"`
 	Retro       *statusRetro      `json:"retro,omitempty"`
 	Learn       *statusLearn      `json:"learn,omitempty"`

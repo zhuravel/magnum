@@ -10291,6 +10291,77 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - An allowlist of GitHub's hook IP ranges: GitHub advises against it, and the HMAC is the guard.
     - A secret read from the environment or argv, which `ps`, `docker inspect` and crash dumps show.
 
+- **The daemon reads the GitHub App's webhook events in shadow mode and compares them with the poll,
+  changing nothing** (2026-10-20, spec 99, phase 1 of webhooks; magnum-relay, spec 98, receives the
+  deliveries). The operator decided on 2026-10-20 to have GitHub App webhooks through a self-hosted relay,
+  after the account's 5,000-point GraphQL hour ran out twice that day while the radar of each watch owner
+  costs a point or more every 30 s. The daemon is behind NAT on a Mac that sleeps, so it cannot receive a
+  delivery itself: the relay keeps a journal of them (ids and routing only) and the daemon reads it by
+  cursor (`[webhooks]`: `mode`, `url`, `token_file`, `owners`, `wait`, `stale_after`).
+  - **Events are hints, GitHub reads stay authoritative.** An event says which PR or head changed, never
+    what it now is: GitHub does not keep deliveries in order and can send one twice, a broken relay would
+    then cost reads and never a decision, and one writer of the GitHub columns stays (the poll). The
+    consumer turns each event of a covered owner's watched repository into hints: (repository, PR number)
+    for the PR events, (repository, head SHA) for a check run, a check suite (a fork's names no PR) and a
+    status.
+  - **Shadow first.** Phase 1 acts on nothing. The consumer is a goroutine beside the heavy worker that
+    ends with `Run` (never with `--once` or a dry run); it writes no PR, slot or request row, starts no
+    round or job, and reads nothing from GitHub. Its rows are three kv keys (`webhooks.cursor` with the
+    relay's epoch, `webhooks.health`, `webhooks.hours`) and `webhooks.*` events, none on a PR's subject:
+    the CLI reads a PR's latest events by window (a fix's or a whiteboard's wait, `review --dry-run`),
+    which `webhooks.missed` events would crowd, so they go on the watch's (`watch:<owner>`). The poll's
+    only hook, `webhooksSaw` in `pollRepo`, reads the rows the poll already read before it applies the
+    radar, writes nothing (a writer goroutine of the consumer's writes its kv rows and events once told,
+    so a slow registry never holds the poll or a page; the last write at the stop is bounded to 5 s), and
+    runs under `safely`, so a panic in it is recorded and never the poll's. Whether a later
+    phase may let the events stand in for most of a covered owner's radar is decided on these numbers, not
+    guessed: TestShadowModeChangesNothingTheDaemonDoes runs the same PRs with webhooks off and in shadow
+    mode and finds the registry, the GitHub reads, the rounds and the agents' calls identical.
+  - **The comparison.** Each poll of an owner in `owners` lists what it saw change on each PR since the
+    comparison last counted it (head, draft, a newer `updatedAt`, a reopen, a new PR, and a close once
+    GitHub confirmed it, so a PR the radar's list skipped once counts nothing), against the stored row
+    after a restart. A change is announced when a hint for it came within 5 minutes before (or since the
+    repository's previous poll, when the poll paused longer, as on a rate pause), or within a minute
+    after: a delivery a second or two behind the radar's read is no miss (an estimate: without that
+    minute, a change in the last 2 s of a 30 s tick, about one in fifteen, would count as missed). A
+    change with neither is missed and leaves one `webhooks.missed` event at debug level (the PR, what
+    changed, the last event read for it). A hint no change followed within 5 minutes is early or noise.
+    One event announces each PR it names once (a check run of two PRs, a status on a head two PRs share),
+    before the poll and after alike; whether it was early or noise is the event's alone. A
+    hint is timed by when the consumer read it, and an event the relay received more than 5 minutes
+    before the page that lists it (by the relay's own clock: a backlog after a sleep or an outage) is
+    counted but hints at nothing. A poll while the stream is unhealthy compares nothing, and neither does
+    each repository's first poll after a gap, so an outage or a gap is the health line's and not a miss;
+    a PR such a poll saw leave the open list stays uncounted when GitHub confirms its close at a later
+    poll (the poll runs its comparison before it confirms closes).
+    Totals are kept by the hour for 24 hours; `magnum status` shows their sums on a `webhooks:` line, with
+    the stream's health.
+  - **The cursor.** A first start, and a gap (410: the relay's journal is another, or no longer holds the
+    events after the cursor), put the cursor at the relay's newest event: what came before is what the
+    polls already saw. Gaps in a row wait 1 s, then longer, up to 2 minutes, and so does a relay busy with
+    long polls (429), which is no failure. A restart reads on from the kept cursor, a kv value counts as
+    written only once its write took, and each delivery id counts once.
+  - **Why curl.** Little Snitch blocks Go's own HTTP client in a rebuilt, unsigned magnum binary (the
+    reason GitHub calls go through gh), and gh reaches only GitHub. curl runs through execx with a fixed
+    argv (`curl --disable --config -`): `--disable` keeps a `~/.curlrc` out (one with `verbose` would print
+    the header), and the URL, the time bound (the wait and 10 s) and the `Authorization` header (quoted for
+    curl's config) go on stdin, so the token never reaches argv, a log or an error. The token is what the
+    relay accepts (`relay.CheckToken`: one word of 32 to 512 printable ASCII characters). The token file
+    must be a regular file only its owner can open: the consumer reads no other, and `magnum config`
+    warns; a missing file is a warning too. The pages are no GitHub call: they spend no GitHub budget, and
+    spec 97's meter does not count them.
+  - **Rejected:**
+    - Acting on the events now: without the numbers, a missed delivery would be a missed review.
+    - The App's deliveries log through gh as the source: it lists no PR number and spends the App's REST
+      budget per payload read; it stays a candidate backstop for a later phase.
+    - Go's net/http to the relay: blocked by the firewall for a rebuilt binary.
+    - Timing a hint by the relay's `received_at`: after a sleep the catch-up reads hours-old deliveries for
+      the changes the first poll after the wake finds, which would all count as missed; `received_at` only
+      leaves the backlog out.
+    - Comparing while the stream is unhealthy: an outage's changes would read as the events' misses.
+    - Refusing the config over the token file's mode: shadow mode would then keep the daemon from
+      starting, and the consumer refuses the file itself.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

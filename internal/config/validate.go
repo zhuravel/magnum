@@ -38,6 +38,7 @@ func (c *Config) Warnings() []string {
 		out = append(out, w)
 	}
 	out = append(out, c.fixRoleWarnings()...)
+	out = append(out, c.webhooksWarnings()...)
 	return out
 }
 
@@ -259,6 +260,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateTriage()...)
 	errs = append(errs, c.validateLearn()...)
 	errs = append(errs, c.validateNotes()...)
+	errs = append(errs, c.validateWebhooks()...)
 	switch c.GitHub.Transport {
 	case "gh", "direct":
 	default:

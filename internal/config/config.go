@@ -71,6 +71,7 @@ type Config struct {
 	Learn      Learn      `toml:"learn"`
 	Notes      Notes      `toml:"notes"`
 	Board      Board      `toml:"board"`
+	Webhooks   Webhooks   `toml:"webhooks"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -839,7 +840,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 
 // applyOverlay merges the user config: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [github], [pipeline], [usage], [triage], [learn] and [notes] override the committed values key by key,
+// [github], [pipeline], [usage], [triage], [learn], [notes], [board] and [webhooks] override the committed values key by key,
 // and [spend.<level>] tables merge into the base's by level, role and key (mergeSpendLevels).
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
@@ -870,6 +871,7 @@ func (c *Config) applyOverlay(path string, data []byte) (*layer, error) {
 	overlaySection(md, "notes", &c.Notes, &o.Notes)
 	c.notesModelFollowsKind(md)
 	overlaySection(md, "board", &c.Board, &o.Board)
+	overlaySection(md, "webhooks", &c.Webhooks, &o.Webhooks)
 	l, err := readLayerData(path, data, false, md, o.Kinds, o.Roles)
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
@@ -957,6 +959,7 @@ func Defaults() *Config {
 		Learn:    DefaultLearn(),
 		Notes:    DefaultNotes(),
 		Board:    Board{RecentClosed: Duration{24 * time.Hour}, Shimmer: true},
+		Webhooks: Webhooks{Mode: WebhooksOff, Wait: Duration{25 * time.Second}, StaleAfter: Duration{90 * time.Second}},
 	}
 	c.Normalize()
 	return c
@@ -985,12 +988,9 @@ func (c *Config) expand() {
 		c.Pipeline.PromptsDir = filepath.Join(c.Layout.Home, d)
 	}
 	for i := range c.Identities {
-		if f := paths.Expand(c.Identities[i].PrivateKeyFile); f != "" && !filepath.IsAbs(f) && c.Layout.ConfigDir() != "" {
-			c.Identities[i].PrivateKeyFile = filepath.Join(c.Layout.ConfigDir(), f)
-		} else {
-			c.Identities[i].PrivateKeyFile = f
-		}
+		c.Identities[i].PrivateKeyFile = c.configPath(c.Identities[i].PrivateKeyFile)
 	}
+	c.Webhooks.TokenFile = c.configPath(c.Webhooks.TokenFile)
 	for i := range c.Watches {
 		c.Watches[i].CloneRoot = paths.Expand(c.Watches[i].CloneRoot)
 		if c.Watches[i].CloneRoot == "" {
@@ -1012,6 +1012,17 @@ func (c *Config) expand() {
 			c.Pools[i].IdleRemoveAfter.Duration = DefaultIdleRemoveAfter
 		}
 	}
+}
+
+// configPath expands ~ in a file the user config names and resolves a
+// relative one against the user config's directory: an identity's private
+// key file, the relay's token file.
+func (c *Config) configPath(p string) string {
+	f := paths.Expand(p)
+	if f != "" && !filepath.IsAbs(f) && c.Layout.ConfigDir() != "" {
+		return filepath.Join(c.Layout.ConfigDir(), f)
+	}
+	return f
 }
 
 // DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or

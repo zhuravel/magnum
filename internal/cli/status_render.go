@@ -96,6 +96,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	}
 	fmt.Fprintln(w)
 	statusRenderGitHub(w, r.GitHub, now)
+	if r.Webhooks != nil {
+		fmt.Fprintf(w, "webhooks: %s\n", statusWebhooksText(*r.Webhooks, now))
+	}
 	if r.Codex != nil {
 		fmt.Fprintf(w, "codex:    %s\n", statusCodexText(*r.Codex, now))
 	}

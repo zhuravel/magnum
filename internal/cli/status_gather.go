@@ -55,6 +55,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	statusGatherDaemon(ctx, d, kv, &r)
 	statusGatherConfig(ctx, d, &r)  // after the daemon: it needs the daemon's pid and launchd's
 	statusGatherGitHub(kv, now, &r) // before the pauses: the budget pause comes first
+	statusGatherWebhooks(ctx, d, &r)
 	statusGatherUsage(d, kv, &r)
 	statusGatherRetro(ctx, d, kv, &r)
 	statusGatherLearn(ctx, d, kv, &r)
