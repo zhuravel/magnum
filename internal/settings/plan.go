@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -60,7 +59,7 @@ type Plan struct {
 }
 
 // historyDir is where saves keep the files they replace.
-func (s *Snapshot) historyDir() string { return filepath.Join(s.layout.Data(), "config-history") }
+func (s *Snapshot) historyDir() string { return historyDirOf(s.layout) }
 
 // edit is a draft entry that changes the file.
 type edit struct {

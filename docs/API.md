@@ -15054,6 +15054,11 @@ type HistoryEntry struct {
     HistoryEntry is an earlier version of the config: a file of the history
     directory, when it was replaced, the hash and size of its content.
 
+func History(layout paths.Layout) ([]HistoryEntry, error)
+    History lists the earlier versions of layout's user config the saves kept,
+    newest first: Snapshot.History without loading the current file, which a
+    hand edit may have broken.
+
 type Hunk struct {
 	Table          string
 	Line           int
@@ -15081,6 +15086,13 @@ type Plan struct {
     of the file it was built on (Commit refuses another), the diff, the loader's
     warnings about the new file, how many settings it changes and the key paths
     it changes (for logs: never values).
+
+func RestoreFile(layout paths.Layout, base string, e HistoryEntry) (*Plan, error)
+    RestoreFile is the save that puts e back over layout's user config as it is
+    on disk, whether or not it loads: Snapshot.Restore for a file that no longer
+    loads (a hand edit broke it). The version must load over base and render, as
+    any save's file must; Commit writes it, refusing a file that changed since,
+    and keeps the replaced file in the history.
 
 type RepoInfo struct {
 	Name     string // owner/name
