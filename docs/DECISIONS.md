@@ -10190,6 +10190,107 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - Checking the floor on each read: a half-read round would fail where it should finish.
     - Writing the store on each call: the hook runs on every read path, rounds' goroutines included.
 
+- **Webhooks reach magnum through a relay of its own, `magnum-relay`** (2026-10-20, spec 98). The poll
+  identity ran out of its GraphQL hour twice that day. The operator then decided to receive the App's
+  webhooks instead of polling, through a Go relay self-hosted on his own server. The daemon's consumer is spec 99,
+  and the deploy guide is `deploy/relay/README.md`.
+  - **Why a relay.**
+    - GitHub posts a delivery once ("GitHub does not automatically redeliver failed deliveries") and wants
+      a 2xx within 10 s.
+    - The daemon runs on a Mac that sleeps behind NAT. Something always on must receive the deliveries and
+      keep them until the daemon asks.
+    - GitHub's 3-day deliveries log is the backstop for what the relay misses.
+  - **Why Go, on the operator's server.**
+    - PocketBase: a pre-1.0 framework, with a public admin UI to lock down and to upgrade, for one table
+      and two endpoints.
+    - Appwrite: 17 containers and the Docker socket for one HTTP function.
+    - A Cloudflare Worker with D1 (the research's first choice): nothing to host, but the events' metadata
+      would rest at Cloudflare, and the code would be JavaScript outside magnum's gate. The operator chose
+      his own server.
+    - A tunnel straight to the daemon: it puts an internet-facing listener inside the process that holds
+      the tokens, and it is dead while the Mac sleeps.
+    - Go with `modernc.org/sqlite` instead: it is the SQLite module magnum already uses, so there is no new
+      dependency. The relay goes through the same gate (tests, vet, lint, govulncheck), and it ships as a
+      static image of about 11 MB, built from scratch.
+  - **The envelope.** The relay keeps only routing fields: the delivery GUID, the event, the action, the
+    installation and repository ids, `owner/name`, `pr_numbers`, the head SHA, the base ref, a check's name
+    and conclusion, and `received_at`.
+    - It never keeps a body: no titles, comments, user names or URLs. All that rests on the server is
+      repository names, numbers and SHAs.
+    - An event is a doorbell. The daemon reads what changed from GitHub, as it does today, so a forged or
+      replayed event costs at most a read, never an action.
+    - A value that is not well formed is left empty. A check name is cleaned of controls and format
+      characters and cut to 120 runes.
+    - An `issue_comment` names its issue only when the issue is a pull request. Check events name their
+      `pull_requests`, which is empty for a fork's, whose head SHA is then the key. A `status` names none.
+  - **The auth.**
+    - **The webhook.** The relay checks the HMAC-SHA256 of the exact bytes with `hmac.Equal`, under the
+      current or the previous secret (a rotation), before anything is parsed. The secrets are read from
+      files, never from the environment or argv.
+    - **The listing.** It takes a bearer token whose SHA-256 is compared in constant time with the
+      accepted hashes (`MAGNUM_RELAY_TOKEN_HASHES`), so the server holds no token.
+    - **`/healthz`.** It has no auth and carries no event data. The image's `HEALTHCHECK` runs
+      `magnum-relay healthcheck`, since an image built from scratch has no curl.
+  - **The journal and the cursor.**
+    - `seq` is `AUTOINCREMENT`, so a number is never reused. A cursor is `<epoch>:<seq>`, and the epoch is
+      random for each journal: a lost volume brings a new epoch, then a 410 and a resync.
+    - Retention deletes a prefix: every event up to the newest one received before the cutoff. It records
+      that number as `pruned_through`, so `oldest` only moves forward and names exactly the cursors that
+      would miss events. A cursor below `oldest`, one of another epoch, or one ahead of the high water
+      answers 410.
+    - `oldest` is the cursor just before the oldest kept event, so `after=<oldest>` lists every kept event,
+      as `after=` does. Read that way, the contract's two rules agree: a consumer that read up to the last
+      pruned event is not told of a gap. Read as the oldest kept event's own cursor, they would not.
+    - A listing reads its events and its bounds in one WAL read transaction, so `next` never skips an event
+      inserted meanwhile.
+  - **Bounds.** A security review of the first version (Codex's) found that requests without a signature
+    could send their headers, withhold their bodies and hold every turn for the server's 20 s read
+    timeout, so real deliveries got 503. These bounds answer it:
+    - **Before a turn.** A request whose `X-Hub-Signature-256`, `X-GitHub-Event` or `X-GitHub-Delivery`
+      header is missing or malformed is refused before its body is read or a turn taken. The answer
+      says `Connection: close`, and the read deadline passes at once, so net/http reads nothing more of
+      the connection.
+    - **The body.** A body is read up to 26 MiB (413 above). Four bodies are read at once.
+    - **One deadline.** The wait for a turn (at most 2 s, then 503) and the body share one deadline,
+      7 s after the headers (`DefaultBodyTimeout`). A body that stalls is cut with 408, which frees its
+      turn.
+    - **The insert** has 2 s, and it finishes even when the client hangs up. A delivery is therefore
+      answered within 9 s of its headers (`WebhookDeadline`), and a shutdown waits that long plus 5 s
+      before it closes what is left.
+    - **The server.** It has header (5 s), read (9 s), write and idle timeouts. A long poll sets its own
+      write deadline.
+    - **The listing.** A listing takes `limit` 1 to 500 and `wait` up to 30 s. Whole seconds are
+      bounded before they become a Duration, so `wait=18446744074`, which wraps to 0.29 s, answers 400.
+      At most 16 polls wait at once, and one more answers 429.
+    - **Formats.** A delivery id must match `[A-Za-z0-9-]{1,64}` and an event name `[a-z_]{1,64}`. A
+      token is 32 to 512 printable ASCII characters, in `hash-token` and in the listing alike
+      (`CheckToken`).
+    - **Health.** `/healthz` reads two counters that the insert and the prune keep in `meta` (the
+      prune counts them again), never a scan of the events. It answers from a snapshot read again at
+      most every 2 s, by one check at a time, so a flood of checks neither loads the journal nor fails
+      the container's `HEALTHCHECK`.
+  - **Content type.** An App's settings page has no content type. The hook config holds one
+    (`content_type`, form by default per the REST docs). So the relay reads a JSON body, and a
+    form-encoded `payload` field too. A body that starts as a JSON object is read as JSON, whatever its
+    header says.
+  - **Permissions.** GitHub's event docs name Issues read for `issue_comment`. The deploy guide lists it
+    beside Pull requests, Checks and Commit statuses, which the spec named.
+  - **Residuals.**
+    - A sender that forges well-formed headers (a signature of the right shape) can still hold the four
+      turns, for 7 s per request. GitHub's deliveries then answer 503 meanwhile, and the backstop reads
+      them from the deliveries log. The HMAC cannot be checked before the body it covers has arrived.
+    - Events from every installation of the App are stored. The daemon filters them by installation and
+      repository.
+    - `check_run` also arrives for other apps' runs, so CI makes most of the volume.
+  - **Rejected:**
+    - Storing payloads: private text at rest, and their size.
+    - Dropping `check_run` actions or other installations at the relay: the daemon decides, and the relay
+      stays a journal.
+    - SSE or WebSocket push: no replay, and no fit for a `curl` client.
+    - A timestamp cursor: timestamps tie, and commit order can differ from them.
+    - An allowlist of GitHub's hook IP ranges: GitHub advises against it, and the HMAC is the guard.
+    - A secret read from the environment or argv, which `ps`, `docker inspect` and crash dumps show.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

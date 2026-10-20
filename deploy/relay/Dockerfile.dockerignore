@@ -1,0 +1,7 @@
+# The relay's build context is the repository root; send only what deploy/relay/Dockerfile copies.
+*
+!go.mod
+!go.sum
+!cmd/magnum-relay/
+!internal/relay/
+**/*_test.go

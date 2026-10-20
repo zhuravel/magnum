@@ -3532,6 +3532,22 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
   your login shell's `PATH`, see [Configuration](#configuration)); through `mise exec` only while an App
   identity reads its key from an environment variable (`private_key_env` without `private_key_file`).
 
+## Webhooks relay
+
+`magnum-relay` (`cmd/magnum-relay`) is a small Go service for a server that is always on. It receives
+the GitHub App's webhooks, which the sleeping Mac behind NAT cannot.
+
+- **What it keeps.** It checks each delivery's signature over the exact bytes. It keeps only the
+  routing envelope in SQLite: the delivery id, the event and action, the installation, repository and
+  pull request numbers, the head SHA, the base branch, and a check's name and conclusion. It never
+  keeps a body, a title, a comment or a user name.
+- **How the daemon reads it.** The daemon pulls the events with a bearer token, through a long-polled
+  listing with a cursor. A cursor the relay can no longer continue answers 410, and the daemon then
+  resyncs by polling.
+- **Deploying it.** [deploy/relay/README.md](deploy/relay/README.md) covers the deploy on a self-hosted
+  container platform (`deploy/relay/Dockerfile`), the webhook secret and the token, and the GitHub App settings you set by
+  hand: the webhook URL, the secret, the events and the permissions.
+
 ## Under the hood
 
 | Package | Role |
@@ -3546,6 +3562,7 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
 | `internal/github`, `internal/identity` | GraphQL/REST through `gh api`; user and GitHub App identities with token refresh. |
 | `internal/tui`, `internal/cli` | Bubble Tea v2 screens and the cobra CLI. |
 | `internal/herdr`, `internal/reveal`, `internal/notify` | herdr socket client, terminal reveal (iTerm2, Terminal, Ghostty, WezTerm), toasts. |
+| `internal/relay`, `cmd/magnum-relay` | The webhook relay, a separate service: the signed receiver, the SQLite journal of routing envelopes, the long-polled listing. |
 
 The full exported API is in [docs/API.md](docs/API.md); live probe notes that shaped the design are in
 [docs/spikes.md](docs/spikes.md); every behavioural decision and the alternative it rejected is in

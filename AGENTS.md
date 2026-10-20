@@ -106,6 +106,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/github`, `identity`, `herdr`, `gitx`, `mysqlx`, `execx` | the outside world, each behind a fake |
 | `internal/launchd`, `reveal` | the LaunchAgent; bringing the herdr client to the front of the terminal |
 | `internal/paths`, `fsx`, `textx` | the on-disk layout; the shared file (atomic write) and text helpers, leaves on the stdlib |
+| `internal/relay`, `cmd/magnum-relay`, `deploy/relay` | the webhook relay, a separate internet-facing service (stdlib and SQLite only): signed receiver, journal, listing; its Dockerfile and deploy guide |
 | `docs/` | API doc (generated), decisions, probe notes (`spikes.md`), gh-dash keys |
 | `.claude/skills/magnum-improve` | the operator's improvement loop (`/magnum-improve` in Claude Code): evidence, analysts, specs, landing |
 

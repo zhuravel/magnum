@@ -59,6 +59,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
 | [postreview](#postreview) | Package postreview is `magnum post-review`, the judge's posting tool. |
+| [relay](#relay) | Package relay is magnum-relay, the small service that receives a GitHub App's webhook deliveries and keeps them for magnum's daemon, which sleeps behind NAT and cannot receive them itself. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
@@ -14972,6 +14973,215 @@ type SkippedReply struct {
     the reviewer's: another reviewer or the author started it, so it is theirs
     and never answered inline (DECISIONS "An author's own inline threads are not
     replies").
+
+```
+
+## relay
+
+```text
+package relay // import "github.com/zhuravel/magnum/internal/relay"
+
+Package relay is magnum-relay, the small service that receives a GitHub App's
+webhook deliveries and keeps them for magnum's daemon, which sleeps behind NAT
+and cannot receive them itself.
+
+POST /github/webhook refuses, before it reads the body or takes a turn,
+a request whose X-Hub-Signature-256, X-GitHub-Event or X-GitHub-Delivery header
+is missing or malformed (401, 400), and closes its connection. Then it waits
+for one of a few turns and reads the body whole (at most 26 MiB, 413 above),
+both within DefaultBodyTimeout of the headers (408 for a body that stalls, which
+frees its turn; 503 when no turn came), checks the signature as the HMAC-SHA256
+of those exact bytes with the current or the previous secret (401 when neither
+matches, and nothing is stored or parsed), then reads only the routing fields
+of the payload (Envelope) and inserts them under the delivery's GUID: 202 when
+stored, 200 for a delivery already stored, 503 when the journal refuses. A
+delivery is answered within WebhookDeadline of its headers, under GitHub's 10 s.
+The body itself is never stored or logged.
+
+GET /v1/events lists the journal after a cursor ("<epoch>:<seq>") in journal
+order, for a bearer token (CheckToken's bounds) whose SHA-256 is among the
+accepted hashes, and waits up to `wait` for a first event when there is none
+(a long poll woken by the next insert; at most MaxWaiting wait at once, and one
+more answers 429). A cursor of another journal (epoch), or one older than the
+journal's oldest cursor (its events were pruned) or ahead of its high water,
+answers 410 "gap", and the daemon then resyncs by polling GitHub. GET /healthz
+answers without auth and without event data, from counters the journal keeps and
+a snapshot read again at most every 2 s.
+
+Retention deletes the events older than Options.Retention (30 days by default),
+as a prefix of the journal, so the oldest cursor only moves forward. Logs carry
+delivery ids, event names, sequence numbers and error classes, never a body,
+a secret, a token or an error's text.
+
+CONSTANTS
+
+const (
+	// MaxCheckName is the longest check name kept, in runes.
+	MaxCheckName = 120
+)
+const (
+	// DefaultMaxBody is the largest delivery read (GitHub caps payloads at 25 MB).
+	DefaultMaxBody = 26 << 20
+	// DefaultRetention is how long the journal keeps an event.
+	DefaultRetention = 30 * 24 * time.Hour
+	// MinRetention is the shortest retention Open accepts.
+	MinRetention = time.Hour
+	// MaxWait is the longest long poll a listing may ask for.
+	MaxWait = 30 * time.Second
+	// DefaultLimit is the events of a listing that asks for no limit.
+	DefaultLimit = 200
+	// MaxLimit is the most events one listing returns.
+	MaxLimit = 500
+	// DefaultMaxWaiting is how many long polls may wait at once; one more answers 429.
+	DefaultMaxWaiting = 16
+
+	// DefaultBodyTimeout is how long a delivery has, from its headers, to wait for its turn and send its
+	// whole body (BodyTimeout may only shorten it). A body still arriving then is cut (408), which frees
+	// its turn.
+	DefaultBodyTimeout = 7 * time.Second
+	// WebhookDeadline is the longest a delivery takes from its headers to its answer: the body timeout
+	// and the journal's write. It stays under GitHub's 10 s.
+	WebhookDeadline = DefaultBodyTimeout + insertTimeout
+
+	// MinTokenLength is the shortest bearer token, in `magnum-relay hash-token` and in the listing alike
+	// (CheckToken).
+	MinTokenLength = 32
+	// MaxTokenLength is the longest bearer token, in `magnum-relay hash-token` and in the listing alike.
+	MaxTokenLength = 512
+)
+
+VARIABLES
+
+var ErrPayload = errors.New("payload is not JSON")
+    ErrPayload is a delivery whose payload is not a JSON document.
+
+
+FUNCTIONS
+
+func CheckToken(token string) error
+    CheckToken says whether token can be one of the relay's bearer tokens:
+    one word of MinTokenLength to MaxTokenLength printable ASCII characters.
+    `magnum-relay hash-token` and the listing apply it alike, so a token setup
+    accepts is one the listing accepts. Its errors never quote the token.
+
+
+TYPES
+
+type Check struct {
+	Name       string `json:"name"`
+	Conclusion string `json:"conclusion"`
+}
+    Check is a CI event's name and conclusion: a check run's name and
+    conclusion, a check suite's app name and conclusion, a status's context and
+    state. Names are data, at most MaxCheckName runes; a conclusion is "" until
+    there is one.
+
+type Event struct {
+	// Seq is the event's place in the journal (its cursor is "<epoch>:<seq>").
+	Seq int64 `json:"seq"`
+	// DeliveryID is the delivery's X-GitHub-Delivery GUID, which a redelivery keeps.
+	DeliveryID string `json:"delivery_id"`
+	// Event is the X-GitHub-Event name and Action the payload's action ("" when it has none).
+	Event  string `json:"event"`
+	Action string `json:"action"`
+	// InstallationID and RepositoryID are 0 when the payload has none.
+	InstallationID int64 `json:"installation_id"`
+	RepositoryID   int64 `json:"repository_id"`
+	// Repository is "owner/name", "" when the payload has none.
+	Repository string `json:"repository"`
+	// PRNumbers are the pull requests the event names, ascending: the pull request of a pull_request*
+	// event, the issue of an issue_comment on a pull request, a check's pull_requests (empty for a fork's,
+	// whose HeadSHA is then the key), and none for a status.
+	PRNumbers []int `json:"pr_numbers"`
+	// HeadSHA is the pull request's head, the check's or the status's commit: 40 hex or "".
+	HeadSHA string `json:"head_sha"`
+	// BaseRef is a pull_request* event's base branch, else "".
+	BaseRef string `json:"base_ref"`
+	// Check is set only for check_run, check_suite and status.
+	Check *Check `json:"check,omitempty"`
+	// ReceivedAt is when the relay stored the event (UTC, whole seconds).
+	ReceivedAt time.Time `json:"received_at"`
+}
+    Event is the routing envelope of one delivery, what the journal keeps and
+    the listing answers: ids and routing only, never a title, a body, a comment,
+    a patch, a user name or a URL.
+
+func Envelope(event string, body []byte) (Event, error)
+    Envelope reads the routing fields of a delivery's payload for its event
+    name. A field of an unexpected shape, or a value that is not well formed (an
+    id below 0, a SHA that is not 40 hex, a repository that is not owner/name),
+    is left empty rather than refusing the delivery; a payload that is not JSON
+    is ErrPayload. Seq, DeliveryID and ReceivedAt are the caller's.
+
+type Options struct {
+	// DB is the journal's SQLite file; its directory is created 0700 and the file 0600.
+	DB string
+	// Secrets are the webhook secrets a signature may match: the current one, then the previous one
+	// during a rotation.
+	Secrets [][]byte
+	// TokenHashes are the SHA-256 digests of the bearer tokens the listing accepts.
+	TokenHashes [][sha256.Size]byte
+	// Retention is how long an event is kept (DefaultRetention when zero, at least MinRetention).
+	Retention time.Duration
+	// MaxBody is the largest delivery read (DefaultMaxBody when zero).
+	MaxBody int64
+	// BodyTimeout is how long a delivery has to wait for its turn and send its body (DefaultBodyTimeout
+	// when zero, at most DefaultBodyTimeout).
+	BodyTimeout time.Duration
+	// MaxWaiting is how many long polls may wait at once (DefaultMaxWaiting when zero).
+	MaxWaiting int
+	// Logger receives the relay's logs (discarded when nil).
+	Logger *slog.Logger
+	// Now is the relay's clock (time.Now when nil).
+	Now func() time.Time
+}
+    Options configures a Relay.
+
+type Page struct {
+	// Epoch is the journal's random id; a journal created again has another, and every cursor of the old
+	// one answers 410.
+	Epoch string `json:"epoch"`
+	// Events are the events after the cursor, in journal order (never null).
+	Events []Event `json:"events"`
+	// Next is the cursor to pass as `after` next: the last event's, or the request's when none came.
+	Next string `json:"next"`
+	// HighWater is the cursor of the newest event the journal ever stored.
+	HighWater string `json:"high_water"`
+	// Oldest is the cursor just before the oldest kept event: `after=<oldest>` lists every kept event, as
+	// `after=` does, and a cursor below it answers 410 (its next events were pruned).
+	Oldest string `json:"oldest"`
+	// ServerTime is the relay's clock (UTC).
+	ServerTime time.Time `json:"server_time"`
+}
+    Page is the answer of GET /v1/events.
+
+type Relay struct {
+	// Has unexported fields.
+}
+    Relay is the receiver, the journal and the listing.
+
+func Open(ctx context.Context, opts Options) (*Relay, error)
+    Open checks the options and opens (or creates) the journal.
+
+func (r *Relay) Close() error
+    Close closes the journal.
+
+func (r *Relay) Epoch() string
+    Epoch is the journal's random id, the first part of every cursor.
+
+func (r *Relay) Handler() http.Handler
+    Handler serves the webhook, the listing and the health check.
+
+func (r *Relay) Prune(ctx context.Context) (int64, error)
+    Prune deletes the events older than the retention and returns how many it
+    deleted.
+
+func (r *Relay) RunRetention(ctx context.Context, every time.Duration)
+    RunRetention prunes at once and then every interval, until ctx ends.
+
+func (r *Relay) StopWaiting()
+    StopWaiting answers every long poll at once and keeps later ones from
+    waiting, before a shutdown.
 
 ```
 
