@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -398,6 +399,11 @@ type Engine struct {
 	// (abort.go).
 	inflight map[int64]bool
 	roundWG  sync.WaitGroup
+	// roundTails counts the round goroutines that have not ended: from
+	// before a round drops its reservation until its post-round fix cycle
+	// and whiteboard have reserved the PR (or found nothing to do), so an
+	// idle restart never falls into the gap between the two (restartBusy).
+	roundTails atomic.Int32
 
 	heavy     chan heavyJob
 	heavyMu   sync.Mutex
@@ -503,6 +509,11 @@ type Engine struct {
 	checkBuild func(ctx context.Context, path string) (string, error)
 	supervised bool
 	builds     buildWatch
+	// restartRefused is the user config on disk and binary an idle restart
+	// was last refused on (restartSafe's key; zero for none) and when, so
+	// later ticks check them again only after restartRefuseRetry and never
+	// say so again (config_restart.go).
+	restartRefused restartRefusal
 	// shellPATH is Options.ShellPATH (shell_path.go).
 	shellPATH *ShellPATH
 	// run is what this daemon runs (its build, config and prompts), taken
@@ -799,7 +810,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		case <-e.kick:
 			timer.Stop()
 		}
-		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) || errors.Is(err, ErrRestartForLearn) {
+		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) || errors.Is(err, ErrRestartForLearn) ||
+			errors.Is(err, ErrRestartForConfig) {
 			return err
 		} else if err != nil && ctx.Err() == nil {
 			e.warnTick(err)
@@ -887,8 +899,9 @@ func (e *Engine) observeUntilIdle(ctx context.Context) {
 // Tick runs one iteration of the daemon loop. Steps log their own failures;
 // the returned error joins them for the caller's information. A registry
 // migrated by another binary stops the tick before any step
-// (ErrSchemaChanged), and so does a new build the daemon restarts on
-// (ErrRestartForBuild, restart_on_new_build).
+// (ErrSchemaChanged), and so does an idle restart (restartForBuild): on a
+// new build (ErrRestartForBuild, restart_on_new_build), a landed skill
+// version (ErrRestartForLearn) or a saved config (ErrRestartForConfig).
 func (e *Engine) Tick(ctx context.Context) error {
 	if changed, err := e.st.SchemaChanged(ctx); err != nil {
 		e.warnUnlessStopped(ctx, err, "read schema version")
@@ -952,6 +965,7 @@ func (e *Engine) startup(ctx context.Context) {
 		e.setKV(ctx, store.KVDaemonPid, strconv.Itoa(os.Getpid()))
 	}
 	e.recordBuild(ctx)
+	e.recordConfig(ctx)       // config_restart.go: the user config this start runs; a saved config's restart is done
 	e.recordShellPATH(ctx)    // shell_path.go
 	e.checkCLIVersions(ctx)   // cli_version.go: on the PATH just recorded
 	e.loadBudgetOverrule(ctx) // budget.go: a resume the CLI recorded while no daemon ran

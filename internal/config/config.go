@@ -2,6 +2,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path"
@@ -103,6 +104,15 @@ type Config struct {
 	// a loaded file sets although every role they are the fallback of sets
 	// its own timeout (Load; Warnings names them).
 	idleFallbacks []string
+	// userSum is the SHA-256 of the user layer Load read, userRead whether
+	// it read one (UserSum).
+	userSum  [32]byte
+	userRead bool
+	// unspent are the roles as the layers set them, before any spend level
+	// (BaseRole), and spendSet the keys the operator's [[role]] blocks set,
+	// with which RolesAtLevel applies another level (buildPipeline).
+	unspent  []Role
+	spendSet map[string]map[string]bool
 }
 
 type Daemon struct {
@@ -723,6 +733,12 @@ type LoadOptions struct {
 	// NoOverlay skips the user layer (the user config) even when it exists,
 	// so the result depends on the base alone.
 	NoOverlay bool
+	// UserData, when non-nil, is the user layer's content, read from here
+	// instead of the layout's UserConfig, which still names it in messages
+	// and Sources (whether or not that file exists): a candidate checked
+	// before it is written (the settings screen's save), exactly as Load
+	// would read it from the file. An empty non-nil slice is an empty layer.
+	UserData []byte
 }
 
 // BuiltinDefaults names the embedded base in messages and Sources.
@@ -777,17 +793,24 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	}
 	cfg.learnModelFollowsKind(md)
 	cfg.notesModelFollowsKind(md)
-	base, err := readLayerData(name, data, md, cfg.Kinds, cfg.Roles)
+	base, err := readLayerData(name, data, data != nil, md, cfg.Kinds, cfg.Roles)
 	if err != nil {
 		return nil, err
 	}
 	cfg.Sources = []string{name}
 	var over *layer
-	if user := layout.UserConfig; user != "" && fsx.Exists(user) && !opts.NoOverlay {
-		if over, err = cfg.applyOverlay(user); err != nil {
+	if user := layout.UserConfig; user != "" && (opts.UserData != nil || fsx.Exists(user)) && !opts.NoOverlay {
+		data := opts.UserData
+		if data == nil {
+			if data, err = os.ReadFile(user); err != nil {
+				return nil, fmt.Errorf("config overlay %s: %w", user, err)
+			}
+		}
+		if over, err = cfg.applyOverlay(user, data); err != nil {
 			return nil, err
 		}
 		cfg.Sources = append(cfg.Sources, user)
+		cfg.userSum, cfg.userRead = sha256.Sum256(data), true
 	}
 	cfg.buildPipeline(base, over)
 	cfg.idleFallbacks = cfg.idleTimeoutFallbacks(base, over)
@@ -807,9 +830,9 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
 // overrides the keys it sets, any other [[role]] is appended.
-func (c *Config) applyOverlay(path string) (*layer, error) {
+func (c *Config) applyOverlay(path string, data []byte) (*layer, error) {
 	var o Config
-	md, err := toml.DecodeFile(path, &o)
+	md, err := toml.Decode(string(data), &o)
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
 	}
@@ -833,11 +856,29 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	overlaySection(md, "notes", &c.Notes, &o.Notes)
 	c.notesModelFollowsKind(md)
 	overlaySection(md, "board", &c.Board, &o.Board)
-	l, err := readLayer(path, md, o.Kinds, o.Roles)
+	l, err := readLayerData(path, data, false, md, o.Kinds, o.Roles)
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
 	}
 	return l, nil
+}
+
+// UserSum is the SHA-256 of the user layer's bytes as Load read them (the
+// file, or LoadOptions.UserData); false when Load read no user layer (no
+// file, or LoadOptions.NoOverlay). The daemon records it at startup
+// (engine.KVDaemonConfigSum), so a saved config it does not run yet is told
+// apart from the one it runs by content, not by a modification time.
+func (c *Config) UserSum() ([32]byte, bool) { return c.userSum, c.userRead }
+
+// BaseFile is the base configuration Load read in place of the built-in
+// defaults (its file argument, $MAGNUM_CONFIG or a checkout's config.toml);
+// "" when it read the built-in defaults. Loading again with it and the same
+// layout reads the same layers.
+func (c *Config) BaseFile() string {
+	if len(c.Sources) == 0 || c.Sources[0] == BuiltinDefaults {
+		return ""
+	}
+	return c.Sources[0]
 }
 
 // overlaySection copies every field of src whose toml key is defined in the

@@ -76,6 +76,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if line := statusPromptsText(dm); line != "" {
 		fmt.Fprintf(w, "prompts:  %s\n", statusSafe(line, 0))
 	}
+	if c := dm.Config; c != nil {
+		fmt.Fprintf(w, "config:   %s\n", statusSafe(statusConfigText(*c, now), 0))
+	}
 	poll := "never"
 	if dm.LastPoll != nil {
 		poll = inspAgo(now, dm.LastPoll)
@@ -207,6 +210,28 @@ func statusPromptsText(dm statusDaemon) string {
 		s += " (" + strings.Join(dm.PromptsChangedFiles, ", ") + ")"
 	}
 	return s + "; they take effect at the next restart"
+}
+
+// statusConfigText is the config line's value: the user config changed
+// since the daemon started (modified 10:14, or removed), and how the change
+// applies: not at all while the daemon refused this very file (it does not
+// load: fix it, never restart onto it), the daemon's idle restart a save
+// asked for when launchd runs the daemon, else a restart by hand.
+func statusConfigText(c statusConfig, now time.Time) string {
+	when := "removed"
+	if c.ModTime != nil {
+		when = "modified " + inspClock(now, *c.ModTime)
+	}
+	s := inspTilde(c.Path) + " changed since the daemon started (" + when + "); "
+	switch {
+	case c.Refused != nil:
+		return s + "the daemon will not restart on it: it does not load with the build on disk; fix it (`magnum config` shows why)"
+	case c.Restart != nil && c.Supervised == nil:
+		return s + "the daemon restarts on it when idle (if launchd runs it)"
+	case c.Restart != nil && *c.Supervised:
+		return s + "the daemon restarts on it when nothing is in flight"
+	}
+	return s + "applies after a restart: `magnum daemon-restart --when-idle`"
 }
 
 // statusGitHubText is the GitHub line's value: the rate budget left.

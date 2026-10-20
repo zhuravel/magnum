@@ -186,20 +186,43 @@ func (e *Engine) noteBuild(ctx context.Context) {
 }
 
 // restartForBuild reports ErrRestartForBuild when a checked new build waits
-// (noteBuild), or ErrRestartForLearn when a landed skill version waits for
-// an idle restart (learnRestartDue, KVLearnRestart), and nothing is in
-// flight: no round is claiming, reviewing or verifying, in the registry or
-// in this process, and no notes curation, retro, skill edit or gate runs
-// (backgroundBusy). The binary must still be the one checked: a newer one
-// is checked again on the next reconcile. One restart serves both: the
-// next start marks the version restarted either way.
+// (noteBuild), ErrRestartForLearn when a landed skill version waits for an
+// idle restart (learnRestartDue, KVLearnRestart), or ErrRestartForConfig
+// when a saved config waits for one (configRestartDue, KVConfigRestart),
+// and nothing is in flight: no round is claiming, reviewing or verifying, in
+// the registry or in this process, and no notes curation, retro, skill edit
+// or gate runs (backgroundBusy). The binary must still be the one checked: a
+// newer one is checked again on the next reconcile. Whatever the reason,
+// what launchd would start must pass its check first (restartSafe: a binary
+// rebuilt since the start, else a changed user config); a failure holds
+// every restart, says so once per file and binary (refuseRestart) and drops
+// the config's mark. One restart serves every reason: the next start marks
+// the version restarted and settles the config's mark either way.
 func (e *Engine) restartForBuild(ctx context.Context) error {
 	build := e.buildPending()
 	version, learn := e.learnRestartDue(ctx)
-	if !build && !learn {
+	saved, raw, cfgDue := e.configRestartDue(ctx)
+	if !build && !learn && !cfgDue {
 		return nil
 	}
-	if e.activeRounds() > 0 || e.backgroundBusy() != "" || e.roundsInFlight(ctx) {
+	if e.restartBusy(ctx) {
+		return nil
+	}
+	chk, err := e.restartSafe(ctx, cfgDue)
+	if errors.Is(err, errRefusedBefore) {
+		return nil
+	}
+	if err != nil {
+		announce := chk.key != e.restartRefused.key
+		e.restartRefused = restartRefusal{key: chk.key, checked: e.now()}
+		e.refuseRestart(ctx, chk, restartReasons(build, learn, cfgDue), raw, err, announce)
+		return nil
+	}
+	e.restartRefused = restartRefusal{}
+	// The check can take seconds (the binary's own runs it): a round drops
+	// its reservation before its fix cycle or whiteboard takes the PR again,
+	// so a job may have started meanwhile. The next idle tick restarts.
+	if e.restartBusy(ctx) {
 		return nil
 	}
 	e.noteRetroRunning(ctx) // a retro that ran has ended: no CLI waits for it
@@ -208,8 +231,22 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 		e.log.Info(ErrRestartForBuild.Error(), "from", e.build.Label(), "to", e.builds.version, "path", e.build.Path)
 		return ErrRestartForBuild
 	}
-	e.log.Info(ErrRestartForLearn.Error(), "version", version.Version, "proposal", version.Proposal)
-	return ErrRestartForLearn
+	if learn {
+		e.log.Info(ErrRestartForLearn.Error(), "version", version.Version, "proposal", version.Proposal)
+		return ErrRestartForLearn
+	}
+	e.log.Info(ErrRestartForConfig.Error(), "sha256", shortSum(saved.SHA256), "saved_at", saved.SavedAt)
+	return ErrRestartForConfig
+}
+
+// restartBusy reports whether anything an idle restart waits for is in
+// flight: a round, fix job, whiteboard job or open in this process (their
+// reservations), a round goroutine between its reservation and its
+// post-round fix cycle or whiteboard (roundTails), a notes curation, retro,
+// skill edit or gate (backgroundBusy), or a round the registry holds as
+// claiming, reviewing or verifying.
+func (e *Engine) restartBusy(ctx context.Context) bool {
+	return e.activeRounds() > 0 || e.roundTails.Load() > 0 || e.backgroundBusy() != "" || e.roundsInFlight(ctx)
 }
 
 // roundsInFlight reports whether the registry holds a PR whose round is

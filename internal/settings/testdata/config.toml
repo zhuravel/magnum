@@ -1,0 +1,53 @@
+# A synthetic user config for the settings tests: the shapes of an
+# operator's file (dated comments, aligned columns, tables after the arrays
+# of tables, inline tables in [spend.*]) with placeholder names only.
+
+[daemon]
+max_concurrent_reviews = 5        # 2026-10-01: was 3
+push_quiet_period = "15m"         # 2026-10-06: a replay of three days of pushes:
+                                  # fewer rounds for ten more minutes
+quiet_hours = "03:00-10:00"       # local time
+
+[[identity]]
+name = "zhuravel"
+kind = "gh"
+login = "zhuravel"
+
+# The main watch.
+[[watch]]
+owner = "talkable"
+include = ["web", "api", "docs"]
+identity = "zhuravel"
+roles = ["codex-judge", "claude-review", "codex-review"]   # 2026-10-17
+include_drafts = false            # 2026-10-06: drafts wait until ready
+auto_approve = ["docs"]
+auto_approve_as = "zhuravel"
+auto_approve_skip_authors = ["bob-rev"]
+stakes = "referral emails and rewards reach real customers"
+
+[[watch]]
+owner = "example"
+include = ["*"]
+identity = "zhuravel"
+
+[[repo]]
+repo = "talkable/web"
+stakes = "payments and rewards"   # 2026-10-15
+
+[[role]]
+name = "claude-review"
+model = "opus"                    # 2026-10-20: fable -> opus
+
+[pipeline]
+spend = "high"                    # 2026-10-14: medium -> high
+fix_cycles = 5
+
+[usage]
+codex_soft = 90                   # 2026-10-16: 80 -> 90
+codex_hard = 98
+
+[spend.high]
+claude-review = { model = "opus" }   # 2026-10-20: fable -> opus
+
+[spend.burn]
+codex-judge = { model = "gpt-astra", effort = "xhigh" }

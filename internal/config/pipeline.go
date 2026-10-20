@@ -639,13 +639,10 @@ type layer struct {
 	builtin bool
 }
 
-func readLayer(file string, md toml.MetaData, kinds map[string]Kind, roles []Role) (*layer, error) {
-	return readLayerData(file, nil, md, kinds, roles)
-}
-
-// readLayerData is readLayer for a layer given as data (the built-in
-// defaults); nil data reads file.
-func readLayerData(file string, data []byte, md toml.MetaData, kinds map[string]Kind, roles []Role) (*layer, error) {
+// readLayerData reads a decoded layer's [[role]] tables as written: from
+// data, or from file when data is nil. builtin says the layer is the
+// embedded config.defaults.toml.
+func readLayerData(file string, data []byte, builtin bool, md toml.MetaData, kinds map[string]Kind, roles []Role) (*layer, error) {
 	var raw struct {
 		Role []map[string]any `toml:"role"`
 	}
@@ -658,7 +655,7 @@ func readLayerData(file string, data []byte, md toml.MetaData, kinds map[string]
 	if err != nil {
 		return nil, fmt.Errorf("config %s: %w", file, err)
 	}
-	return &layer{md: md, kinds: kinds, roles: roles, raw: raw.Role, builtin: data != nil}, nil
+	return &layer{md: md, kinds: kinds, roles: roles, raw: raw.Role, builtin: builtin}, nil
 }
 
 // buildPipeline computes Kinds and Roles from the built-in defaults, the
@@ -716,7 +713,33 @@ func (c *Config) buildPipeline(base, over *layer) {
 		}
 	}
 	c.Kinds = kinds
+	c.unspent, c.spendSet = slices.Clone(roles), set
 	c.Roles = applySpend(c.SpendLevel, c.SpendLevels, roles, builtins, set)
+}
+
+// BaseRole is the role named name as the layers set it (the built-in role,
+// the base configuration's and the user config's [[role]] blocks), before
+// any spend level: its model is the one a level whose table does not name
+// the role runs. False for a name no role has, or a configuration Load did
+// not build.
+func (c *Config) BaseRole(name string) (Role, bool) {
+	for _, r := range c.unspent {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return Role{}, false
+}
+
+// RolesAtLevel is every role as it resolves when its spend level is level,
+// whatever the kinds' and [pipeline] spend name: the level's notch mapping
+// and its [spend.<level>] table applied to the roles as the layers set them
+// (applySpend). nil for a configuration Load did not build.
+func (c *Config) RolesAtLevel(level string) []Role {
+	if c.unspent == nil {
+		return nil
+	}
+	return applySpend(func(string) string { return level }, c.SpendLevels, slices.Clone(c.unspent), DefaultRoles(), c.spendSet)
 }
 
 // SpendLevel is the spend level of the roles whose agent kind

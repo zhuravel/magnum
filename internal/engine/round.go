@@ -49,7 +49,9 @@ func backoff(attempts int) time.Duration {
 // the PR too), unless an abort, an ignore or a shutdown stopped the round.
 func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 	subject := prSubject(job.repo, job.pr.Number)
+	e.roundTails.Add(1) // while the reservation is still held: no gap for restartBusy
 	e.roundWG.Go(func() {
+		defer e.roundTails.Add(-1)
 		res, stopped := e.reservedRound(rctx, job, subject)
 		if stopped {
 			return

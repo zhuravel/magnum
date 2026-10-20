@@ -1,0 +1,118 @@
+# A synthetic config with the shapes of an operator's file: dated comments,
+# aligned columns, tables in any order, inline tables in [spend.*], multi-line
+# arrays with comments, [pool.env] after [[pool]], literal strings holding #.
+# Placeholder names only.
+
+[daemon]
+max_concurrent_reviews = 5        # 2026-10-01: was 3
+max_total_working_codex = 8
+push_quiet_period = "15m"         # 2026-10-06: a replay of three days of pushes:
+                                  # fewer rounds for ten more minutes
+quiet_hours = "03:00-10:00"       # local time
+own_min_rereview_interval = "2h"  # 2026-10-07: was 0
+# request_debounce = "5m"         # tried, then left at the default
+
+[terminal]
+app = "Terminal"
+icons = 'nerd'
+
+[[identity]]
+name = "alice-gh"
+kind = "gh"
+login = "alice"
+
+[[identity]]
+name = "example-app"
+kind = "app"
+app_id = 12345
+private_key_file = "~/.config/magnum/keys/example-app.pem"
+
+# The main watch.
+[[watch]]
+owner = "talkable"
+include = [
+  "web",
+  "api",
+  "docs",
+]
+identity = "example-app"
+roles = ["codex-judge", "claude-review", "codex-review"]   # 2026-10-17: simplify back on
+include_drafts = false            # 2026-10-06: drafts wait until ready
+auto_approve = ["docs"]
+auto_approve_skip_authors = ["bob-rev"]
+stakes = "referral emails and rewards reach real customers"
+
+[[watch]]
+owner = "example"
+include = ["*"]
+manual_repos = ["sandbox"]
+trackers = [
+  "JIRA-",           # the main tracker
+  'ops#',            # literal: '#' is not a comment
+  '''multi
+line''',
+]                    # closing comment
+
+[[pool]]
+repo = "talkable/web"
+min = 1
+max = 2
+strip_env = ["SECRET_TOKEN"]
+
+  [pool.env]
+  RAILS_ENV = "test"
+  DATABASE_HOST = "127.0.0.1"   # the local server
+
+[[pool]]
+repo = "talkable/api"
+max = 1
+
+  [pool.env]
+  NODE_ENV = "test"
+
+[[repo]]
+repo = "talkable/web"
+stakes = "payments and rewards"   # 2026-10-15
+
+[[repo]]
+repo = "talkable/api"
+stakes = 'the "public" API {v2}'
+allow_bot_authors = ["renovate[bot]"]   # 2026-10-16
+
+[[role]]
+name = "claude-review"
+model = "opus"                    # 2026-10-20: fable -> opus
+
+[[role]]
+name = "claude-simplify"
+model = "sonnet"
+summary = ""
+
+[pipeline]
+spend = "high"                    # 2026-10-14: medium -> high
+judge_fallback = "claude-judge"   # 2026-10-10
+fix_cycles = 5
+whiteboard = true
+
+[usage]
+codex_soft = 95                   # 2026-10-16: 80 -> 95
+codex_hard = 98
+
+[spend.low]
+claude-review = { model = "sonnet", effort = "medium" }
+codex-judge = { effort = "high" }
+
+[spend.high]
+claude-review = { model = "opus" }   # 2026-10-20: fable -> opus
+claude-judge = { model = "opus", effort = "xhigh", rereview_effort = "xhigh" }
+
+[spend.burn]
+codex-judge = { model = "gpt-astra", effort = "xhigh" }
+claude-review = {}
+
+[kinds.codex]
+project_mcp = "off"               # 2026-10-07
+start = ["--search"]
+
+[board]
+badges = { "ops" = "red", "docs" = { text = "D", color = "blue" } }

@@ -36,6 +36,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [attention](#attention) | Package attention explains why a PR needs the user. |
 | [cleanup](#cleanup) | Package cleanup builds and applies storage cleanup plans: releasing the slots of closed PRs, removing per-PR worktrees and surplus pool slots, dropping orphan per-worktree databases and resetting a manual worktree (talkable.repoN). |
 | [cli](#cli) | Package cli wires the subcommands into a cobra command tree built per call. |
+| [confedit](#confedit) | Package confedit edits a TOML config file in place: a value replaced, a key or a table added, a key removed, and every other byte (comments, alignment, blank lines, line endings) kept as it was. |
 | [config](#config) | Package config loads and validates config.toml (kept in the repository). |
 | [dblock](#dblock) | Package dblock is the lock behind `magnum db-lock`: the roles of a review round (the judge's own pass and the reviewers run at the same time) take turns on a checkout's databases. |
 | [eligibility](#eligibility) | Package eligibility is magnum's pure decision logic: which pull requests a watch picks up (Classify), when a picked-up PR may start its next review round (Throttle), whether the daemon is inside its quiet hours (QuietHours) and which rounds they hold (QuietHoursHold). |
@@ -59,6 +60,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
 | [postreview](#postreview) | Package postreview is `magnum post-review`, the judge's posting tool. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
+| [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
@@ -2825,6 +2827,185 @@ func (c *Context) LoadConfig() error
 
 ```
 
+## confedit
+
+```text
+package confedit // import "github.com/zhuravel/magnum/internal/confedit"
+
+Package confedit edits a TOML config file in place: a value replaced, a key
+or a table added, a key removed, and every other byte (comments, alignment,
+blank lines, line endings) kept as it was. magnum's config files carry a dated
+comment on most lines that explains a choice, which a TOML encoder would drop,
+so this package never re-encodes a file: a small scanner (scan.go) records
+where each key, value and trailing comment is, Parse cross-checks it against
+BurntSushi's own reading of the file (MetaData.Keys, in document order),
+and Apply splices only the bytes an edit needs, then Verify decodes the old and
+the new file and requires them to differ in exactly the edited leaves. Whatever
+it does not model fails with ErrUnsupported: the file is then edited by hand.
+
+The rules (DECISIONS "The settings screen edits config.toml in place"):
+  - A replaced value keeps its trailing comment at its column (the gap before
+    it takes up a length change, at least one space) and the line ending. A
+    value over several lines is replaced only as a whole array without comments
+    inside, one element per line, and keeps that shape.
+  - A missing key goes after the last key of its table (and the indented comment
+    lines that continue that key's comment), so before any subtable of it:
+    inserting into a [[pool]] element puts the key above its [pool.env].
+    A key of an inline table goes inside its braces.
+  - A missing table goes after the last table of its family (the same first
+    name: the last [spend.*], the last [[repo]] element with its subtables),
+    else before the first array of tables ([[watch]], [[repo]], ...) so a plain
+    table stays above them, else at the end of the file; in each case before the
+    comment lines that introduce the header after it, with a blank line on each
+    side.
+  - A removed key (back to its default) loses its line or lines; its trailing
+    comment stays as a comment line of its own, with the lines that continue it.
+  - A note (Change.Note) becomes the trailing comment "# YYYY-MM-DD: note" on a
+    line without one, and goes first on a line with one: "# YYYY-MM-DD: note;
+    <the old comment>".
+  - A key only dotted keys or subtables define (an implicit table), a table
+    inside a nested array of tables, a multi-line inline table and anything else
+    ambiguous fail with ErrUnsupported.
+
+VARIABLES
+
+var ErrEditor = errors.New("confedit: the edit failed the editor's own check (a bug in the editor); nothing was written")
+    ErrEditor is the error of an edit whose result fails the editor's own
+    checks: it does not read back, it changes a line outside the edited key's,
+    or it decodes to another change than the one asked for (Verify). It is a bug
+    in the editor, never a shape it refuses; nothing is returned.
+
+var ErrUnsupported = errors.New("confedit: construct not supported; edit the file by hand")
+    ErrUnsupported is the error of a file, or an edit, the editor does not
+    model: nothing is written and the file is edited by hand.
+
+
+FUNCTIONS
+
+func Changed(before, after []byte) ([]string, error)
+    Changed lists the leaves where before and after differ, as dotted key paths
+    with array elements by index ("pipeline.spend", "watch[1].roles[2]"),
+    in key order: what a save changed, named without its values.
+
+func Literal(v any) (string, error)
+    Literal is v as a one-line TOML value: BurntSushi's encoder for strings (a
+    basic string, escaped), booleans, integers, floats and arrays of them, and
+    "{ k = v, ... }" for a map (an inline table, its keys in config.SpendRole's
+    order, then by name).
+
+func Verify(before, after []byte, changes []Change) error
+    Verify decodes before and after and reports an error unless they differ
+    in exactly the leaves the changes name (array elements by index): every
+    leaf that differs lies at or under a change's key, and the changes' final
+    effect holds in after, in their order: each key holds the value its last
+    change wrote, a removed key is absent, and a change that a later one on
+    the same key (or one holding it, or one under it) overrides is not checked
+    on its own. It is the check that catches an editor mistake that would
+    change another key; nothing is written when it fails. Its errors name keys,
+    never values.
+
+
+TYPES
+
+type Change struct {
+	Key   Key
+	Value any    // string, bool, int, int64, float64, []string, []any of scalars, map[string]any (an inline table)
+	Note  string // non-empty: a dated note on the key's line (see the package comment)
+}
+    Change sets a key (Value non-nil) or removes it (nil: back to the default).
+
+type Doc struct {
+	// Has unexported fields.
+}
+    Doc is a scanned file: every table header and key/value with its byte spans,
+    checked against BurntSushi's MetaData.Keys() order.
+
+func Parse(src []byte) (*Doc, error)
+    Parse scans src and cross-checks it with toml.Decode: a file BurntSushi
+    refuses is that error, and a file whose keys the scanner reads in another
+    order or number than MetaData.Keys() (or with a construct it does not model)
+    is ErrUnsupported.
+
+func (d *Doc) Apply(now time.Time, changes ...Change) ([]byte, error)
+    Apply returns the new file text; d is not modified. The changes apply in
+    order, each to the text the one before it left (so a [[repo]] element one
+    change creates takes the next change's key), and the result passes Verify
+    against d. It fails when a change cannot be placed (an implicit table,
+    a shape the editor refuses: ErrUnsupported) or names an element that does
+    not exist; nothing is returned then. Removing a key the file does not set
+    changes nothing.
+
+func (d *Doc) Bytes() []byte
+    Bytes is the file's text.
+
+func (d *Doc) Elements(path ...string) int
+    Elements is how many [path] elements the file has (an array of tables at the
+    top level).
+
+func (d *Doc) Get(k Key) (Value, bool)
+    Get reads k; false when the file does not set it (the default applies).
+
+func (d *Doc) HeaderLine(t Table) (int, bool)
+    HeaderLine is the 1-based line of t's header; false when the file has no
+    header of t (0 and true for the top of the file).
+
+func (d *Doc) Repo(name string) (Table, bool)
+    Repo is the [[repo]] whose repo is name, compared as validateRepos does (any
+    case); config refuses a repository configured twice, so it is unique.
+
+func (d *Doc) Role(name string) (Table, bool)
+    Role is the [[role]] whose name is name.
+
+func (d *Doc) Sum() [32]byte
+    Sum is the SHA-256 of the file's text.
+
+func (d *Doc) TableAt(line int) Table
+    TableAt is the table a 1-based line lies in: the one whose header is the
+    last at or above it (the top of the file above the first header).
+
+func (d *Doc) Watch(i int) (Table, bool)
+    Watch is the i-th [[watch]] (0-based).
+
+type Key struct {
+	Table Table
+	Path  []string
+}
+    Key is a key inside a table; Path has more than one element for a key in an
+    inline table ({"claude-review", "model"} in [spend.burn]) or a dotted key.
+
+func (k Key) String() string
+
+type Table struct {
+	Path []string // {"pipeline"}, {"spend", "burn"}, {"kinds", "codex"}, {"repo"}; nil = the keys above the first header
+	// Index is the element of the array of tables in Path ({"watch"} 1 =
+	// the second [[watch]]; {"pool", "env"} 1 = the [pool.env] of the
+	// second [[pool]]); -1 for a plain table.
+	Index int
+}
+    Table names a table: a [section], an element of an [[array]], or a subtable
+    of one.
+
+func Section(path ...string) Table
+    Section is the plain table at path.
+
+func (t Table) String() string
+
+type Value struct {
+	Raw string // the value's text as written
+	// Comment is the trailing comment of the key's line (for a key inside an
+	// inline table, of the line holding it) with its continuation lines; ""
+	// if none.
+	Comment   string
+	Line      int // 1-based line of the key
+	Multiline bool
+	// Data is the value as BurntSushi decodes it: string, int64, float64,
+	// bool, a date, []any or map[string]any.
+	Data any
+}
+    Value is what the file says for a key.
+
+```
+
 ## config
 
 ```text
@@ -3455,6 +3636,18 @@ func (c *Config) AutofixFor(w *Watch) string
     AutofixFor is the autofix that applies to w's PRs: the watch's when it sets
     one, else [pipeline]'s, else AutofixNever. A nil w is [pipeline]'s.
 
+func (c *Config) BaseFile() string
+    BaseFile is the base configuration Load read in place of the built-in
+    defaults (its file argument, $MAGNUM_CONFIG or a checkout's config.toml);
+    "" when it read the built-in defaults. Loading again with it and the same
+    layout reads the same layers.
+
+func (c *Config) BaseRole(name string) (Role, bool)
+    BaseRole is the role named name as the layers set it (the built-in role,
+    the base configuration's and the user config's [[role]] blocks), before any
+    spend level: its model is the one a level whose table does not name the role
+    runs. False for a name no role has, or a configuration Load did not build.
+
 func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     CommentsWhenClean reports whether the identity named identity posts
     a comment, not an approval, for a clean verdict on repository
@@ -3604,6 +3797,12 @@ func (c *Config) RolePrompt(r Role, kind string) (Prompt, error)
     RolePrompt resolves the role's prompt of a prompt kind (see PromptFile);
     a role without one wraps ErrPromptNotFound.
 
+func (c *Config) RolesAtLevel(level string) []Role
+    RolesAtLevel is every role as it resolves when its spend level is level,
+    whatever the kinds' and [pipeline] spend name: the level's notch mapping
+    and its [spend.<level>] table applied to the roles as the layers set them
+    (applySpend). nil for a configuration Load did not build.
+
 func (c *Config) RolesFor(w *Watch) []Role
     RolesFor returns the roles a watch runs, in [[role]] order: every role
     when w is nil or w.Roles is empty, else the ones w.Roles names (names or
@@ -3675,6 +3874,13 @@ func (c *Config) TrivialDeltas(w *Watch) []string
     TrivialDeltas is the skip_trivial_deltas that applies to w's PRs:
     the watch's when it sets one, else the daemon's. Empty = every push is
     re-reviewed.
+
+func (c *Config) UserSum() ([32]byte, bool)
+    UserSum is the SHA-256 of the user layer's bytes as Load read them (the
+    file, or LoadOptions.UserData); false when Load read no user layer
+    (no file, or LoadOptions.NoOverlay). The daemon records it at startup
+    (engine.KVDaemonConfigSum), so a saved config it does not run yet is told
+    apart from the one it runs by content, not by a modification time.
 
 func (c *Config) Validate() error
     Validate checks cross references and required fields.
@@ -4354,6 +4560,12 @@ type LoadOptions struct {
 	// NoOverlay skips the user layer (the user config) even when it exists,
 	// so the result depends on the base alone.
 	NoOverlay bool
+	// UserData, when non-nil, is the user layer's content, read from here
+	// instead of the layout's UserConfig, which still names it in messages
+	// and Sources (whether or not that file exists): a candidate checked
+	// before it is written (the settings screen's save), exactly as Load
+	// would read it from the file. An empty non-nil slice is an empty layer.
+	UserData []byte
 }
     LoadOptions tunes LoadWithOptions.
 
@@ -5627,6 +5839,22 @@ const (
 	KVDaemonBuild = "daemon.build"
 )
 const (
+	// KVConfigRestart is a saved config the daemon is to restart on
+	// (ConfigRestartMark as JSON): written by the settings screen's save
+	// (settings.RequestRestart), read by restartForBuild and `magnum
+	// status`, and cleared once the daemon runs the file on disk.
+	KVConfigRestart = "config.restart"
+	// KVDaemonConfigSum is the hex SHA-256 of the user config the running
+	// daemon loaded (config.Config.UserSum), written at startup; "" when it
+	// read no user config.
+	KVDaemonConfigSum = "daemon.config_sha256"
+	// KVConfigRestartRefused is the idle restart this daemon refused because
+	// what it would start on fails its check (ConfigRestartRefusal as JSON):
+	// written by restartForBuild, read by `magnum status`, deleted by the
+	// next start.
+	KVConfigRestartRefused = "config.restart_refused"
+)
+const (
 	// MachineEventKind is the event a round records the review machine's
 	// failures in: subject pr:<owner>/<name>#<N>, data {"failures": [{"cmd",
 	// "error"} or a bare error string, ...]}.
@@ -6045,6 +6273,11 @@ var ErrRestartForBuild = errors.New("a new build is on disk and nothing is in fl
     new build on disk ([daemon] restart_on_new_build): the exit is non-zero,
     so launchd starts the new binary.
 
+var ErrRestartForConfig = errors.New("a config was saved and nothing is in flight; exiting for launchd to start the daemon on it")
+    ErrRestartForConfig is what Tick and Run return when the daemon exits
+    to restart on a saved config (KVConfigRestart): the exit is non-zero,
+    so launchd starts it again, and the new daemon reads the saved file.
+
 var ErrRestartForLearn = errors.New("a skill version landed and nothing is in flight; exiting for launchd to start the daemon on it")
     ErrRestartForLearn is what Tick and Run return when the daemon exits
     to restart on a landed skill version (learn restart idle): the exit is
@@ -6323,6 +6556,11 @@ func ProposalStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.
     state of its base version. It reads the version's listing from the registry
     and hashes the files on disk, never a version's content.
 
+func ReadDaemonConfigSum(ctx context.Context, st *store.Store) (string, bool)
+    ReadDaemonConfigSum reads KVDaemonConfigSum: the hex SHA-256 of the user
+    config the running daemon loaded, "" when it read none; false when no daemon
+    recorded one (one older than the record, or none ever ran).
+
 func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.Time, bool)) string
     SkewNote says when the running daemon is older than what is built: the CLI's
     version (cliVersion) differs from the daemon's, or the daemon's binary on
@@ -6589,6 +6827,32 @@ type CodexFlagPayload struct {
     CodexFlagPayload is a `magnum codex-flag set|clear` request: flag the
     PR (Reason: why, from the operator) or clear its flag. By says who asks
     ("magnum codex-flag").
+
+type ConfigRestartMark struct {
+	SHA256  string    `json:"sha256"`
+	SavedAt time.Time `json:"saved_at"`
+}
+    ConfigRestartMark is a saved config the daemon waits to restart on
+    (KVConfigRestart): the hex SHA-256 of the file the save wrote and when it
+    was saved.
+
+func ReadConfigRestart(ctx context.Context, st *store.Store) (ConfigRestartMark, bool)
+    ReadConfigRestart reads KVConfigRestart (false when none is set or it cannot
+    be read).
+
+type ConfigRestartRefusal struct {
+	SHA256      string    `json:"sha256"`
+	At          time.Time `json:"at"`
+	BinaryMTime time.Time `json:"binary_mtime,omitzero"`
+}
+    ConfigRestartRefusal is an idle restart the daemon refused
+    (KVConfigRestartRefused): the hex SHA-256 of the user config on disk it
+    checked ("" for none), when, and the modification time of the binary on disk
+    when that binary was the one that refused it.
+
+func ReadConfigRestartRefused(ctx context.Context, st *store.Store) (ConfigRestartRefusal, bool)
+    ReadConfigRestartRefused reads KVConfigRestartRefused (false when none is
+    set or it cannot be read).
 
 type CurateJob struct {
 	Repo    string
@@ -6907,8 +7171,9 @@ func (e *Engine) Tick(ctx context.Context) error
     Tick runs one iteration of the daemon loop. Steps log their own
     failures; the returned error joins them for the caller's information.
     A registry migrated by another binary stops the tick before any step
-    (ErrSchemaChanged), and so does a new build the daemon restarts on
-    (ErrRestartForBuild, restart_on_new_build).
+    (ErrSchemaChanged), and so does an idle restart (restartForBuild): on a new
+    build (ErrRestartForBuild, restart_on_new_build), a landed skill version
+    (ErrRestartForLearn) or a saved config (ErrRestartForConfig).
 
 type EvalCase struct {
 	Owner, Repo string
@@ -14647,6 +14912,366 @@ func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin
 
 func (o Outcome) String() string
     String renders the outcome as one human-readable line.
+
+```
+
+## settings
+
+```text
+package settings // import "github.com/zhuravel/magnum/internal/settings"
+
+Package settings is the core of the settings screen (`magnum settings`):
+the typed allowlist of the settings it may change (Fields), what the user
+config says for each (Snapshot), the roles a draft resolves to after a
+restart (Preview), and the save: the draft becomes in-place edits of
+~/.config/magnum/config.toml (internal/confedit), checked as `magnum config`
+checks a file, shown as a diff (Plan), then written atomically with the previous
+file kept in the config history (Commit), and the daemon asked to restart on it
+when idle (RequestRestart). Identities, auto_approve_as, keys, paths, commands,
+args, env, hooks, MCP, the sandbox and pools are never in the allowlist:
+they are edited by hand.
+
+CONSTANTS
+
+const (
+	SectionSpend    = "Spend & models"
+	SectionCaps     = "Usage caps"
+	SectionWatches  = "Watches"
+	SectionRepos    = "Repositories"
+	SectionSchedule = "Schedule"
+	SectionReviews  = "Reviews & agents"
+)
+    The sections, in the order the screen lists them (its Runtime section is not
+    config and is the screen's own).
+
+const (
+	CellModel          = "model"
+	CellEffort         = "effort"
+	CellRereviewEffort = "rereview_effort"
+)
+    Grid cells of a role in a [spend.<level>] table or its [[role]] block.
+
+const HistoryKeep = 20
+    HistoryKeep is how many earlier versions of the config the history keeps.
+
+const KVDaemonConfigSHA = engine.KVDaemonConfigSum
+    KVDaemonConfigSHA is the registry key holding the hex SHA-256 of the user
+    config the running daemon loaded ("" when it read none).
+
+
+VARIABLES
+
+var Efforts = []string{"low", "medium", "high", "xhigh"}
+    Efforts are the effort levels magnum's levels use (the agent CLIs take
+    these).
+
+var ErrChanged = errors.New("settings: the config file changed on disk since it was loaded; reload it")
+    ErrChanged is a save over a config that changed on disk since the screen
+    loaded it (an editor, another screen): nothing is written.
+
+
+FUNCTIONS
+
+func RequestRestart(ctx context.Context, st *store.Store, sum [32]byte) error
+    RequestRestart asks the daemon to restart on the config whose hash is sum
+    once nothing is in flight (engine.KVConfigRestart): it checks the file still
+    loads first, and the next start clears the mark.
+
+func RestartPending(ctx context.Context, st *store.Store, s *Snapshot) (bool, error)
+    RestartPending reports whether the config on disk differs from the one
+    the daemon runs: its content's hash against the one the daemon recorded at
+    start. False when no daemon recorded one.
+
+func Sections() []string
+    Sections lists the sections in order.
+
+
+TYPES
+
+type Applies int
+    Applies is when a saved value takes effect.
+
+const (
+	AppliesAfterRestart Applies = iota // the daemon reads the config at start
+	AppliesNow
+)
+    When a value applies.
+
+type Draft map[Target]DraftValue
+    Draft is the edits the screen staged, by target.
+
+type DraftValue struct {
+	Text    string
+	List    []string
+	Default bool
+}
+    DraftValue is one staged edit: Text for a scalar, List for a list field,
+    Default to remove the key (back to the default; its comment stays as a
+    comment line).
+
+type Field struct {
+	ID      FieldID
+	Section string
+	Label   string
+	// Key is the TOML key path, a template for the scoped ones:
+	// "pipeline.spend", "kinds.<kind>.spend", "spend.<level>.<role>.model",
+	// "role.<role>.model", "watch.roles", "repo.stakes".
+	Key   string
+	Scope Scope
+	Type  Type
+	// Role, Level and Cell place a grid cell (ScopeSpendLevel, ScopeRole):
+	// Level "" is the role's base model in its [[role]] block. Kind is the
+	// agent kind of a [kinds.<kind>] spend. All four are "" in a template.
+	Role, Level, Cell, Kind string
+	// Options are an enum's members when they are fixed; Snapshot.Options
+	// computes the others (spend levels, roles, models seen in the config).
+	Options      []string
+	Validate     func(string) error   // a scalar's own check (nil: none)
+	ValidateList func([]string) error // a list's own check (nil: none)
+	Description  string
+	DefaultText  string // the built-in default, as the screen shows it
+	Applies      Applies
+}
+    Field is one setting.
+
+func Fields() []Field
+    Fields is the allowlist: every setting of the screen's v1, in screen order,
+    the role grid and the kind spends as templates (Role, Level and Kind empty;
+    Snapshot.Fields expands them for a configuration).
+
+type FieldID string
+    FieldID names a setting: a template's ("pipeline.spend",
+    "watch.roles", "spend.model") or a concrete grid or kind field's
+    ("spend.high.claude-review.model", "role.claude-review.model",
+    "kinds.codex.spend").
+
+type HistoryEntry struct {
+	Path  string
+	Saved time.Time
+	Sum   [32]byte
+	Size  int64
+}
+    HistoryEntry is an earlier version of the config: a file of the history
+    directory, when it was replaced, the hash and size of its content.
+
+type Hunk struct {
+	Table          string
+	Line           int
+	Removed, Added []string
+}
+    Hunk is one place a save changes: the table it is in ("[pipeline]",
+    "[spend.burn]", "[[repo]] talkable/web", "[[watch]] 2 (talkable)"),
+    its line in the old file (where the added lines go for an insertion),
+    and the lines removed and added.
+
+type Plan struct {
+	Path     string
+	Old, New []byte
+	Sum      [32]byte // of Old: the file the plan was built on
+	NewSum   [32]byte
+	Diff     string // a unified diff (no context lines), each hunk headed by its table
+	Hunks    []Hunk
+	Warnings []string
+	Count    int
+	Keys     []string
+
+	// Has unexported fields.
+}
+    Plan is a save checked and ready to write: the old and new bytes, the hash
+    of the file it was built on (Commit refuses another), the diff, the loader's
+    warnings about the new file, how many settings it changes and the key paths
+    it changes (for logs: never values).
+
+type RepoInfo struct {
+	Name     string // owner/name
+	HasBlock bool
+	Line     int // the block's header line (HasBlock)
+	Watch    int // the user file's [[watch]] that covers it; -1 for none, or a watch of the base file
+}
+    RepoInfo is a repository the screen offers: a [[repo]] block of the user
+    file, or a repository a watch's include names without one (the save creates
+    a minimal block for it).
+
+type Result struct {
+	History string
+	Sum     [32]byte
+}
+    Result is a written save: the history file holding the previous bytes (""
+    when there were none: the file did not exist) and the new file's hash.
+
+func Commit(p *Plan) (Result, error)
+    Commit writes a plan under the saves' lock (a flock on a file beside the
+    config, lockFile, so two screens or a screen and a script never interleave,
+    whatever layout each runs with): the file must be one the write cannot
+    break (checkWritable) and still hash as the plan's old bytes (ErrChanged
+    otherwise), the previous bytes go to the config history (the last
+    HistoryKeep kept), then, both checks made again right before the write,
+    the new bytes replace the file atomically, keeping its mode (0600 for a new
+    one).
+
+type RoleRow struct {
+	Role, Kind, Model, Effort, RereviewEffort, Spend string
+}
+    RoleRow is a role as it resolves after a restart: its kind, model, first and
+    re-review effort, and the spend level it follows.
+
+type Scope int
+    Scope is what a setting belongs to.
+
+const (
+	ScopeGlobal     Scope = iota // a key of a [section]
+	ScopeWatch                   // a key of a [[watch]] (Target.Watch picks it)
+	ScopeRepo                    // a key of a [[repo]] (Target.Repo picks it)
+	ScopeRole                    // a key of a [[role]] (Field.Role)
+	ScopeSpendLevel              // a role's key in a [spend.<level>] table (Field.Level, Field.Role)
+	ScopeKind                    // a key of a [kinds.<name>] table (Field.Kind)
+)
+    The scopes.
+
+type Snapshot struct {
+	Path   string // the user config (paths.Layout.UserConfig)
+	Bytes  []byte // its content; empty when it does not exist yet
+	Sum    [32]byte
+	Doc    *confedit.Doc
+	Config *config.Config
+
+	// Has unexported fields.
+}
+    Snapshot is the user config as the screen loaded it: its bytes and their
+    hash (a save refuses a file that changed since), the scanned file, the
+    resolved configuration, and the settings expanded for it.
+
+func Load(layout paths.Layout, base string) (*Snapshot, error)
+    Load reads the user config (layout.UserConfig; a missing file is an empty
+    one) and resolves it over base as config.Load does (base: the --config file,
+    "" for the built-in defaults or $MAGNUM_CONFIG). A file the editor does
+    not model fails with confedit.ErrUnsupported, one magnum refuses with the
+    loader's error.
+
+func (s *Snapshot) Check(t Target, v DraftValue) error
+    Check is t's own validation of a draft value: the field's check, an enum's
+    members, the round roles of a roles list. Whether the whole file still loads
+    is Plan's check.
+
+func (s *Snapshot) Field(id FieldID) (Field, bool)
+    Field is the setting id names.
+
+func (s *Snapshot) Fields() []Field
+    Fields are the settings of this configuration, in screen order: the grid for
+    every level, role and cell, the base model per role and the spend per kind
+    concrete, the watch and repository fields as templates (a Target picks the
+    instance).
+
+func (s *Snapshot) History() ([]HistoryEntry, error)
+    History lists the earlier versions of the config the saves kept, newest
+    first.
+
+func (s *Snapshot) KeyText(t Target) string
+    KeyText names t's key as the file spells it: "[pipeline] spend",
+    "[spend.high].claude-simplify.model", "[[watch]] 1 (talkable) · roles",
+    "[[repo]] talkable/web · stakes", "[[role]] claude-review · model".
+
+func (s *Snapshot) Levels() []string
+    Levels are the spend levels: low, medium, high, then the operator's own
+    ([spend.<level>] tables) by name.
+
+func (s *Snapshot) Options(t Target) []string
+    Options are the values a target offers: an enum's members, the spend levels,
+    the round roles, the judges, the models and efforts the configuration names,
+    a watch's repositories ("" is a judge_fallback of none).
+
+func (s *Snapshot) Plan(d Draft, notes bool, now time.Time) (*Plan, error)
+    Plan builds the save of d: the file re-read and refused when it changed
+    since Load (ErrChanged), the edits applied in place (with "was <old>" notes
+    when notes is on) and verified, the new file checked as `magnum config`
+    checks one (the loader, then every prompt rendered with this build), and the
+    diff. Nothing is written.
+
+func (s *Snapshot) Preview(d Draft) ([]RoleRow, error)
+    Preview is the roles after a restart on the draft, resolved by magnum's own
+    loader from the edited file: a draft that does not load is its error.
+
+func (s *Snapshot) Repos() []RepoInfo
+    Repos are the repositories the screen offers, by name: each [[repo]] block
+    of the user file, and each repository a watch's include names (without a
+    glob) that the watch covers, with or without a block.
+
+func (s *Snapshot) Restore(e HistoryEntry, now time.Time) (*Plan, error)
+    Restore is the save that puts an earlier version back: a Plan like any
+    save (the file must not have changed since Load, the version must load and
+    render, and the version it replaces goes to the history in turn).
+
+func (s *Snapshot) Saved() []RoleRow
+    Saved is the roles as the file on disk resolves them.
+
+func (s *Snapshot) Value(t Target) Value
+    Value is what the user config says for t and what applies. A role that
+    several [[role]] blocks of the file name is not edited here (Check and Plan
+    refuse it): its Source says so.
+
+func (s *Snapshot) Watches() []WatchInfo
+    Watches are the user file's [[watch]] blocks.
+
+type State int
+    State says whether the user config sets a setting.
+
+const (
+	StateDefault State = iota // the file does not set it: the default (or what it inherits) applies
+	StateSet                  // the file sets it
+)
+    The states.
+
+type Target struct {
+	Field FieldID
+	Watch int    // ScopeWatch: the 0-based position among the user file's [[watch]] blocks
+	Repo  string // ScopeRepo: owner/name, with or without a [[repo]] block yet
+}
+    Target is one setting of one scope instance: a global or concrete field
+    alone, a watch field with its watch, a repository field with its repository.
+
+type Type int
+    Type is a setting's value type: how its text is read, checked and written.
+
+const (
+	TypeEnum     Type = iota // one of Options
+	TypeBool                 // "true" or "false"
+	TypeDuration             // Go syntax with days: "15m", "2h", "1d"
+	TypeInt
+	TypePercent // 0-100, a fraction allowed
+	TypeLogins  // a list of GitHub logins
+	TypeRepos   // a list of repository names (no owner)
+	TypeRoles   // a list of role names
+	TypeText    // one line
+	TypeModel   // a model name the agent CLI takes
+	TypeEffort  // an effort level the agent CLI takes
+	TypeChecks  // a list of required check names (workflow:<glob> for a workflow)
+)
+    The types.
+
+func (t Type) IsList() bool
+    IsList reports whether values of t are lists (DraftValue.List).
+
+type Value struct {
+	Text string   // what the file says, in the field's text form; "" when StateDefault
+	List []string // a list field's entries as the file has them (StateSet)
+	// Effective is what applies: the default (or what is inherited) when
+	// StateDefault ("inherit (high)", "2h"), the resolved value when
+	// StateSet.
+	Effective string
+	State     State
+	Line      int    // the key's 1-based line in the user file (StateSet)
+	Source    string // where Effective comes from: "your file, line 12", "built-in default", "[pipeline] spend", ...
+}
+    Value is what the user config says for a target and what applies.
+
+type WatchInfo struct {
+	Index   int // its position among the user file's [[watch]] blocks
+	Owner   string
+	Label   string // "talkable · web, api +3"
+	Include []string
+	Line    int // its header's line
+}
+    WatchInfo is one [[watch]] of the user file.
 
 ```
 

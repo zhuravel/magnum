@@ -399,6 +399,85 @@ auto-approval, the retro, notes curation, parking and cleanup go on. The window 
 excludes its end, and crosses midnight when the end comes first (`"22:00-06:00"` covers 22:00 to 05:59); a
 malformed value or an empty window (`"07:00-07:00"`) is refused when the config loads.
 
+### Settings: changing your config from a screen
+
+The settings screen (`magnum settings`) changes a fixed list of settings in `~/.config/magnum/config.toml`
+so you do not have to open an editor:
+
+- **Spend & models:** `[pipeline] spend`, each agent kind's own `[kinds.<name>] spend`, the model, effort
+  and re-review effort of each role in each `[spend.<level>]` table, and each role's base `model` in its
+  `[[role]]` block. A role that two `[[role]]` blocks of your file name is left to a hand edit: the loader
+  merges them, so which one to change is not clear.
+- **Usage caps:** `[usage] codex_soft` and `codex_hard`.
+- **Each `[[watch]]`:** `roles`, `auto_approve`, `auto_approve_authors`, `auto_approve_skip_authors`,
+  `manual_repos`, `include_drafts`, `stakes` and `own_min_rereview_interval`.
+- **Each repository:** its `[[repo]]` block's `stakes`, `max_simplifications`, `auto_approve_authors`,
+  `auto_approve_skip_authors`, `allow_bot_authors` and `required_checks`. A watched repository without a
+  block gets a minimal one.
+- **Schedule:** `quiet_hours`, `push_quiet_period`, `min_rereview_interval` and
+  `own_min_rereview_interval`.
+- **Reviews & agents:** `[pipeline]` `status_comment`, `whiteboard`, `judge_fallback`, `fix_cycles`,
+  `autofix`, `max_simplifications` and `judge_fresh_after`, and `[daemon]` `park_idle_after`,
+  `max_concurrent_reviews` and `max_total_working_codex`.
+
+It never edits identities, `auto_approve_as`, App keys, paths and sockets, commands, args, env, hooks,
+MCP, the sandbox or pools. Those stay hand edits.
+
+A save edits the file in place and never rewrites it:
+
+- **Changed values:** only the value is replaced. The trailing comment stays at its column (a gap that
+  holds a tab is kept as it is), even when several cells of one inline table change, and every other
+  comment, blank line and line ending stays as it was. Each key of an inline table is edited in place
+  inside its braces.
+- **Keys you did not set:** a new key goes after the last key of its table, so above a `[pool.env]`
+  subtable.
+- **New blocks and tables:** a missing `[[repo]]` or `[[role]]` block goes after the last one of its kind.
+  A missing table goes after the last table of its family (`[spend.*]`, `[kinds.*]`); with no family, it
+  goes before the first array of tables.
+- **Back to the default:** the key's line is deleted and its comment stays as a comment line.
+- **Dated notes:** each changed line gets a note such as `# 2026-10-20: was "high"`. On a line that
+  already has a comment, the note goes first. Notes are on by default and can be turned off.
+
+Before anything is written, the save makes five checks:
+
+- The file must not have changed on disk since the screen read it.
+- The new file must decode with exactly the edited values changed.
+- No line outside the edited keys' lines may change, byte for byte. A failure here, or a file that does not
+  read back, is a bug in the editor and is reported as one; nothing is written.
+- It must pass `magnum config`'s checks: the loader and the prompt render.
+- The settings screen must understand the shape it is editing. A shape it does not, such as a table only
+  dotted keys define, an inline table over several lines, or a multi-line array with comments inside, is
+  refused, and you edit that key by hand.
+
+The file is written atomically and keeps its mode. Saves take a lock file beside the config,
+`~/.config/magnum/.config.toml.lock` (created 0600 and kept), so two screens, or a screen and a script,
+never interleave, whatever `MAGNUM_HOME` each runs with. The hash is checked again right before the
+write. A symlinked config, or one with more than one hard link, is refused rather than replaced with a
+file.
+
+The version a save replaces is kept in `~/.local/share/magnum/config-history/`, one
+`<UTC time>-<sha>.toml` per save, and the last 20 are kept. A restore goes through the same checks, and
+the version it replaces is kept too.
+
+The daemon reads the config only when it starts, so a save takes effect after a restart:
+
+- **Restart when idle:** the screen can ask the daemon to restart once nothing is in flight. Before any
+  idle restart (a saved config, a new build, a landed skill version) the daemon checks what it would start
+  on. It loads a changed config file again, and when the binary on disk changed since it started, it runs
+  that binary's own check; a binary that is missing or cannot be read counts as a failure. If the check
+  fails, the daemon does not exit and drops the request. It checks again when the file or the binary
+  changes, or every 10 minutes, and says so once. Right before exiting it checks once more that nothing
+  started meanwhile. When it
+  exits, launchd starts it again. A file reverted by hand to the config the daemon runs needs no restart,
+  and the request is dropped. The events are `daemon.restarted_for_config` and
+  `daemon.config_restart_refused`.
+- **Restart by hand:** a daemon that launchd does not run leaves the restart to you
+  (`magnum daemon-restart --when-idle`).
+- **Restart pending:** the daemon records the hash of the user config it loaded. Until it runs the file on
+  disk, `magnum status` shows `config: ... changed since the daemon started` and how the change will
+  apply. When the daemon refused to restart on the file, it says to fix the file (`magnum config` shows
+  why) instead.
+
 ### Re-reviews
 
 A push whose changes since the last review are only comment lines, whitespace or documentation is not

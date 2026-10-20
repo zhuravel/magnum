@@ -9788,6 +9788,152 @@ skill versions); people add theirs to the sections before it, at the end of the 
   reviewers, as before (the operator asked to stop that). The prompt carries the external items (that puts
   PR text in the prompt). The file also lists what outsiders wrote (in a public repository a stranger would
   steer what the fixer pushes in the operator's name).
+- **The settings screen edits config.toml in place, through a typed allowlist, and the daemon restarts on a
+  saved config when idle** (2026-10-20, spec 94, the core of the screen the operator approved that day:
+  "change spend and other settings without editing config.toml").
+  - **The file.** The operator's `~/.config/magnum/config.toml` is 33 KB, and most of its lines carry a
+    dated comment that explains a choice. BurntSushi decodes but keeps no comments and gives no
+    position per key. Its `MetaData` holds positions only in private fields, keyed without the array
+    index, so every `[[repo]]`'s `stakes` shares one. Re-encoding the file would lose every comment.
+  - **The editor.** `internal/confedit` is a scanner of our own. It records the byte span of every
+    header, key, value and trailing comment, and the indented comment lines that continue that comment.
+    It cross-checks its keys against `MetaData.Keys()` (document order: every header each time it
+    appears, every key, every key of an inline table). An edit splices only the bytes it needs. The
+    rules, in its package comment:
+    - **Replace:** a replaced value keeps its comment at the column it had when the edit started, even
+      when several changes of one save rewrite the line. The gap takes up the length change, with at least
+      one space. A gap that holds a tab is kept as it is.
+    - **Insert:** a missing key goes after the last key of its table and the lines that continue that
+      key's comment. Inserting into a `[[pool]]` therefore lands above its `[pool.env]`, and never at the
+      end of the file. A key of an inline table goes inside its braces. A key whose first part dotted keys
+      already define is written dotted too (`claude-review.effort = "high"` beside
+      `claude-review.model`), since an inline table would define that part a second time.
+    - **New table:** a missing table goes after the last table of its family. With no family it goes
+      before the first array of tables; with neither, at the end. In each case it goes before the
+      comments that introduce the next header, with a blank line on each side.
+    - **New element:** a new `[[repo]]` or `[[role]]` element goes after the last one and its subtables.
+    - **Remove:** a removed key keeps its comment, with its continuation lines, as a comment line of its
+      own.
+    - **Dated notes:** a note becomes `# YYYY-MM-DD: <note>`, or goes first when the line has a comment:
+      `# YYYY-MM-DD: <note>; <old comment>`.
+    - **Multi-line arrays:** a multi-line array is replaced only as a whole. It must have no comments
+      inside and one element per line, and it keeps that shape.
+    - **Refusals:** these fail with `ErrUnsupported`, and the screen says "edit by hand":
+      - a table only dotted keys or subtables define;
+      - a subtable inside an array element;
+      - a multi-line inline table;
+      - a value holding a comment at any depth (a comment inside a nested array counts for the value
+        holding it), whenever an edit would rewrite or remove that value;
+      - other ambiguous shapes.
+  - **The checks.** Each change applies to the text the one before left, which is parsed and
+    cross-checked again.
+    - **Text check:** a change may alter no old line outside the edited entry's lines (its key line to its
+      last continuation comment line), byte for byte. Insertions add whole lines.
+    - **`Verify`:** it decodes the old and the new file. Every leaf that differs must lie under a changed
+      key. The changes' final effect must hold, in their order: each key reads back as its last change
+      wrote it, and a removed key is absent. A change that a later one on the same key, or on one holding
+      it or under it, overrides is not checked on its own (removing a key and setting it again holds the
+      value set).
+    - **A failure** of the text check, of the re-parse or of `Verify` is `ErrEditor`, a bug in the editor
+      and never a refusal. The sweep and the fuzz test count it as a failure, and run the same text check
+      on their own.
+  - **Measured.** Every value was replaced, every key removed, and a key inserted into every table and
+    every inline table, one edit at a time. On `config.defaults.toml` that was 182 replacements, 184
+    removals and 16 insertions. On the operator's file, read for counts only, it was 280 entries in 61
+    tables: 274 replacements, 276 removals and 79 insertions. Both had zero failures; 1 and 10 edits
+    were refused (comment-holding multi-line arrays). A synthetic file with the same shapes is the test
+    fixture, and a fuzz test makes random single edits.
+    - The cross-check against `MetaData.Keys()` is tested on its own with a mismatch.
+    - A lone carriage return is refused by the decoder, before the scanner sees it.
+  - **The allowlist and the save.** `internal/settings` holds the allowlist (`Fields`): the v1 settings
+    of design.md sections 2-7, with the role grid expanded per level, role and cell. Identities,
+    `auto_approve_as`, keys, paths, commands, args, env, hooks, MCP, the sandbox and pools are never in
+    it, and a test lists the forbidden names. A save (`Plan`) does the following:
+    - re-reads the file and refuses one whose hash moved since the screen loaded it;
+    - applies the draft with "was <old>" notes;
+    - edits the cells of one role in a level each in place inside the role's braces, keeping the other
+      keys' order and spelling and adding a missing key before the closing brace;
+    - applies a role's sets before its removals, so a removal never takes the line a set still needs, and
+      gives the group one note;
+    - refuses a role that two `[[role]]` blocks of the file name, because the loader merges them (the
+      last one's keys win) and the block to edit is ambiguous;
+    - loads the candidate with `config.LoadOptions.UserData`, the user layer read from bytes with the
+      path kept for messages and `Sources`;
+    - renders the prompts with `engine.CheckPrompts`, as `magnum config` does;
+    - diffs the files.
+  - **What applies.** A value the user file does not set is shown as the resolved layers give it, not as
+    the user layer's inheritance. Examples: a base config's `[kinds.codex] spend`, its `[[role]]` models
+    (`Config.BaseRole`, the roles before any level), and its level tables. A level the roles do not follow
+    is shown as it would resolve (`Config.RolesAtLevel`).
+  - **Writing.** `Commit` takes a lock file and holds it for the whole write, so two writers never
+    interleave across processes.
+    - **Where the lock is:** beside the config, in its directory resolved to its canonical path
+      (`~/.config/magnum/.config.toml.lock`, flock, waiting up to 10 s, created 0600 and kept). Writers
+      that run with different `MAGNUM_HOME` layouts, or name the directory through a link, therefore take
+      the same lock. A lock in the state directory would differ per layout.
+    - **Under the lock** it does the following:
+      - refuses a symlink, a non-regular file or a file with more than one hard link, since
+        `fsx.WriteFileAtomic`'s rename would replace the link with a file or leave the other names on
+        the old content;
+      - checks the hash again;
+      - keeps the replaced bytes;
+      - checks the file and its hash once more right before the rename, against an editor's save, which
+        takes no lock;
+      - writes atomically with the file's mode (0600 for a new file).
+  - **History.** Replaced versions go to `~/.local/share/magnum/config-history/<UTC>-<sha12>.toml`, the
+    newest 20 kept and named in time order. A restore is a plan like any save. It reads only a regular file
+    that is a direct child of the history directory, through an `os.Root` and never through a link. The
+    history lives under the data directory and not in the registry: a migration would need a
+    `daemon-restart --drain` before the first save, and the registry would then hold private config text.
+    A `.bak` beside the config is the one-time leftover the operator rejected.
+  - **The restart.** The daemon reads the config once, at start.
+    - **Which config it runs:** it records the SHA-256 of the user layer it loaded
+      (`daemon.config_sha256`, from `Config.UserSum`). `magnum status` and the screen can then say
+      "changed since the daemon started" by content; a file that was only touched does not count.
+    - **The request:** a save asks for a restart with the kv `config.restart` = {sha256, saved_at}.
+      `restartForBuild` honours it as its third reason, after a new build and a landed skill version,
+      under the same idle conditions.
+    - **The file on disk decides, not the mark.** A mark whose file on disk equals the loaded config is
+      cleared with a compare-and-delete, with no restart: a hand revert, or a save already running. A
+      mark the next start finds while the file differs from what that start loaded is kept, because it is
+      a save made between the CLI's load and the engine's startup.
+    - **Before any idle restart:** this covers a saved config, a new build and a landed skill version.
+      - **A changed binary:** when the binary on disk changed since the start, its own check runs
+        (`checkBuild`: its version and `<bin> config`), even with `restart_on_new_build` off, since
+        launchd would start it.
+      - **A missing binary:** a binary launchd starts that is missing or cannot be read is a refusal,
+        with the cause in the event.
+      - **A changed config:** otherwise, when the config on disk differs from the loaded one, it is
+        loaded again with this build, prompt check included.
+      - **A failed check:** the daemon does not exit, since launchd would not start it again. It drops
+        the mark with a compare-and-delete each time. Only the first refusal of a file and binary writes
+        the warn event (`daemon.config_restart_refused`) and the `config.restart_refused` record.
+      - **Retries:** the check runs again when the file or the binary changes, or 10 minutes after the
+        last one. The binary's check also renders the prompts, which can be fixed apart from both, so a
+        cache keyed by the file and the binary alone would block a needed build restart for good.
+      - **What waits:** a build or learn restart waits until a check passes.
+      - **The status line:** `magnum status` then says to fix the file, not to run `daemon-restart`.
+      - **Idle again:** after a passing check the idleness is checked again right before the exit, since
+        the check can take seconds and a job may start meanwhile. A round goroutine counts as busy from
+        before it drops its reservation until its post-round fix cycle and whiteboard have reserved the
+        PR (`roundTails`), so the gap between the two is never idle.
+    - **When it does not restart:** a daemon launchd does not run leaves the restart to the operator.
+    - **After it restarts:** the next start clears the mark (and any refusal record) and writes
+      `daemon.restarted_for_config`.
+  - **Rejected:**
+    - Re-encoding the decoded config: it loses every comment, and `config.Duration` does not even
+      marshal.
+    - `pelletier/go-toml/v2/unstable`: a second TOML library, marked unstable, and an inline table's raw
+      span covers only `{`.
+    - `creachadair/tomledit`: TOML 1.0 only, called work in progress, and it re-indents through its own
+      formatter.
+    - Appending a missing key at the end of the file: it would land in the last `[[repo]]`, which the
+      loader refuses as an unknown key.
+    - A `config_versions` table in the registry.
+    - Rewriting a role's whole inline table when several of its cells change. It would reformat the
+      operator's spelling and key order; the in-place edits keep them, and the comment keeps its column.
+    - A screen that runs `daemon-restart --when-idle` itself: it blocks the terminal and cannot run from
+      inside the dashboard.
 
 ## Learned rules
 

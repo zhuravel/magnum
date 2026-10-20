@@ -6,9 +6,14 @@ package cli
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +26,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
+	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -46,6 +52,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	kv := statusKV{ctx: ctx, st: d.Store}
 
 	statusGatherDaemon(ctx, d, kv, &r)
+	statusGatherConfig(ctx, d, &r)  // after the daemon: it needs the daemon's pid and launchd's
 	statusGatherGitHub(kv, now, &r) // before the pauses: the budget pause comes first
 	statusGatherUsage(d, kv, &r)
 	statusGatherRetro(ctx, d, kv, &r)
@@ -167,6 +174,52 @@ func statusGatherDaemon(ctx context.Context, d statusDeps, kv statusKV, r *statu
 			r.Daemon.PromptsChangedFiles = strings.Split(v, ",")
 		}
 	}
+}
+
+// statusGatherConfig fills the config line: the user config while its bytes
+// differ from the ones the running daemon loaded (engine.KVDaemonConfigSum),
+// with the saved config's idle restart (engine.KVConfigRestart) and whether
+// launchd runs the daemon (its pid is launchd's job's). A file that cannot be
+// read is a warning.
+func statusGatherConfig(ctx context.Context, d statusDeps, r *statusReport) {
+	dm := &r.Daemon
+	path := d.Layout.UserConfig
+	if !dm.Running || path == "" {
+		return
+	}
+	loaded, ok := engine.ReadDaemonConfigSum(ctx, d.Store)
+	if !ok {
+		return
+	}
+	current := ""
+	var modTime *time.Time
+	switch data, err := os.ReadFile(path); {
+	case err == nil:
+		sum := sha256.Sum256(data)
+		current = hex.EncodeToString(sum[:])
+		if fi, err := os.Stat(path); err == nil {
+			mt := fi.ModTime()
+			modTime = &mt
+		}
+	case errors.Is(err, fs.ErrNotExist):
+	default:
+		r.Warnings = append(r.Warnings, "config: "+err.Error())
+		return
+	}
+	if current == loaded {
+		return
+	}
+	c := &statusConfig{Path: path, ModTime: modTime}
+	if m, ok := engine.ReadConfigRestart(ctx, d.Store); ok {
+		c.Restart = &m
+	}
+	if ref, ok := engine.ReadConfigRestartRefused(ctx, d.Store); ok && ref.SHA256 == current {
+		c.Refused = &ref
+	}
+	if dm.Launchd != string(launchd.Unknown) {
+		c.Supervised = new(dm.LaunchdPID > 0 && dm.LaunchdPID == dm.PID)
+	}
+	dm.Config = c
 }
 
 // statusPollsFailing are the configured watch owners (once each, in any

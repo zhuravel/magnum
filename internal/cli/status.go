@@ -262,10 +262,30 @@ type statusDaemon struct {
 	PromptsLoadedAt     *time.Time `json:"prompts_loaded_at,omitempty"`
 	PromptsChanged      int        `json:"prompts_changed,omitempty"`
 	PromptsChangedFiles []string   `json:"prompts_changed_files,omitempty"`
+	// Config is the user config while it differs from the one the running
+	// daemon loaded at its start; nil otherwise.
+	Config *statusConfig `json:"config_changed,omitempty"`
 	// ShellPATH is what the daemon took from the login shell's PATH at its
 	// start ([daemon] shell_path; engine.KVDaemonShellPATH): the count, or
 	// why the shell gave none; nil with the key off.
 	ShellPATH *engine.ShellPATH `json:"shell_path,omitempty"`
+}
+
+// statusConfig is the user config (Path) while its bytes differ from the
+// ones the running daemon loaded at its start (engine.KVDaemonConfigSum; a
+// missing file counts as none): when it changed (ModTime; nil when the file
+// is gone), the saved config whose idle restart waits
+// (engine.KVConfigRestart), whether launchd runs the daemon, which that
+// restart needs (nil when launchd could not be asked), and the daemon's
+// refusal to restart on this very file (engine.KVConfigRestartRefused: it
+// does not load with the build on disk). It is left out when no daemon runs
+// or the daemon recorded no sum.
+type statusConfig struct {
+	Path       string                       `json:"path"`
+	ModTime    *time.Time                   `json:"modified,omitempty"`
+	Restart    *engine.ConfigRestartMark    `json:"restart,omitempty"`
+	Supervised *bool                        `json:"supervised,omitempty"`
+	Refused    *engine.ConfigRestartRefusal `json:"refused,omitempty"`
 }
 
 // statusPollFailing is a watch whose radar calls fail: since when, the last
