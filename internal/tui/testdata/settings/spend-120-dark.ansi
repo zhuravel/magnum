@@ -1,0 +1,34 @@
+[1;94mmagnum · settings[m[37m · [mGlobal[37m · [m[37m~/.config/magnum/config.toml[m[37m · [m[1;93m1 unsaved[m
+
+[1;37mSECTIONS[m            [1;96mSPEND & MODELS[m[37m · [m[1;93mapplies after restart[m
+                      [1;37mSETTING            VALUE                   STATE[m
+  Runtime             spend level        high                    set
+[94m▌[m [1;94mSpend & models[m [1;93m●[m    codex spend        [37minherit (high)[m          [37mdefault[m
+  Usage caps          claude spend       [37minherit (high)[m          [37mdefault[m
+  Watches             codex-judge        gpt-6.1-sol xhigh/high  set
+  Repositories        claude-review      opus xhigh/high         set
+  Schedule            codex-review       gpt-6.1-sol xhigh/-     set
+  Reviews & agents  › [7mclaude-simplify    opus* high/-            ● unsaved[m
+                      claude-judge       opus xhigh/high         set
+                      claude-fix         opus high/-             [37mdefault[m
+                      claude-whiteboard  sonnet medium/-         [37mdefault[m
+
+                      [1;96mROLES AFTER RESTART[m[37m · spend high[m
+                        [1;37mROLE             MODEL  FIRST  AGAIN[m
+                        claude-simplify  [1;93mopus*[m  high   -
+
+                      [37m* differs from the saved file[m
+
+
+
+
+
+
+
+
+[37m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[m
+[94m[spend.high].claude-simplify[m                                                                       [1;93mapplies after restart[m
+claude-simplify runs opus, first high, again - while spend is high · enter edits its table or its base model
+[1;93mwas model sonnet[m[37m · [m[37mfrom: your file, line 84[m[37m · [m[37mdefault model: the role's base model (sonnet)[m
+
+[1;94mj/k[m [37mmove[m[37m · [m[1;94mtab[m [37msection[m[37m · [m[1;94menter[m [37medit[m[37m · [m[1;94md[m [37mdefault[m[37m · [m[1;94m/[m [37msearch[m[37m · [m[1;94mc[m [37mscope[m[37m · [m[1;94ms[m [37msave[m[37m · [m[1;94mu[m [37mundo[m[37m · [m[1;94m?[m [37mhelp[m[37m · [m[1;94mesc[m [37mback[m

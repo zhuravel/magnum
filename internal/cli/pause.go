@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -50,8 +51,8 @@ func runPause(c *Context, o pauseOpts, pos []string) int {
 	if len(pos) > 0 {
 		o.reason = strings.TrimSpace(o.reason + " " + strings.Join(pos, " "))
 	}
-	if o.dur < 0 || (o.dur > 0 && o.until != "") {
-		return actUsage(c, "pause", "use either --for (positive) or --until", pauseUsage)
+	if msg := o.refusal(); msg != "" {
+		return actUsage(c, "pause", msg, pauseUsage)
 	}
 	if code, refused := refuseInAgentPane(c, "pause"); refused {
 		return code
@@ -64,6 +65,15 @@ func runPause(c *Context, o pauseOpts, pos []string) int {
 	ctx, stop := signalContext()
 	defer stop()
 	return pauseMain(ctx, c, d, o)
+}
+
+// refusal is why pause refuses o's length ("" = it does not): a negative
+// --for, or --for with --until.
+func (o pauseOpts) refusal() string {
+	if o.dur < 0 || (o.dur > 0 && o.until != "") {
+		return "use either --for (positive) or --until"
+	}
+	return ""
 }
 
 func pauseMain(ctx context.Context, c *Context, d *actDeps, o pauseOpts) int {
@@ -217,14 +227,23 @@ func runResume(c *Context, o resumeOpts, pos []string) int {
 	if err != nil {
 		return cmdFail(c, "resume", err)
 	}
-	if kinds := rolesAllKinds(d.Cfg); o.tool != "" && o.tool != "all" && !slices.Contains(kinds, o.tool) {
+	if msg := resumeToolRefusal(d.Cfg, o.tool); msg != "" {
 		d.Close()
-		return actUsage(c, "resume", fmt.Sprintf("unknown tool %q (%s or all)", o.tool, strings.Join(kinds, ", ")), resumeUsage)
+		return actUsage(c, "resume", msg, resumeUsage)
 	}
 	defer d.Close()
 	ctx, stop := signalContext()
 	defer stop()
 	return resumeMain(ctx, c, d, o)
+}
+
+// resumeToolRefusal is why resume refuses --tool tool under cfg ("" = it
+// does not): a name that is no agent kind and not "all".
+func resumeToolRefusal(cfg *config.Config, tool string) string {
+	if kinds := rolesAllKinds(cfg); tool != "" && tool != "all" && !slices.Contains(kinds, tool) {
+		return fmt.Sprintf("unknown tool %q (%s or all)", tool, strings.Join(kinds, ", "))
+	}
+	return ""
 }
 
 func resumeMain(ctx context.Context, c *Context, d *actDeps, o resumeOpts) int {

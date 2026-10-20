@@ -1,0 +1,24 @@
+magnum · settings · Global · ~/.config/magnum/config.toml                                                restart pending
+
+SECTIONS            USAGE CAPS · applies after restart
+                      SETTING         VALUE  STATE
+  Runtime           › codex soft cap  85     set
+  Spend & models      codex hard cap  95     default
+▌ Usage caps
+  Watches
+  Repositories
+  Schedule
+  Reviews & agents
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[usage] codex_soft                                                                                 applies after restart
+above it only reviews you ask for start (percent of the Codex week)
+default: 90 · from: your file, line 140
+saved 1 change; the previous file is kept as ~/.local/share/magnum/config-history/20261020T101405Z.toml
+Restart the daemon when it is idle to apply? y/N  y confirms, any other key cancels

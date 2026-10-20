@@ -1,7 +1,9 @@
 // Package tui holds magnum's interactive terminal screens, built on Bubble
 // Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the
-// PR picker (RunPicker), the cleanup plan review (RunCleanupPlan) and the
-// read-only pane mirror (RunWatch).
+// PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the
+// read-only pane mirror (RunWatch) and the settings screen (RunSettings),
+// which `,` also opens over the dashboard and the board and whose field
+// popups are huh forms (charm.land/huh/v2).
 //
 // Every screen takes plain data structs and small interfaces defined here,
 // so the cli adapts its own types into them; the plain-text renderings stay
@@ -15,9 +17,10 @@
 // Styles use the 16 ANSI colors only, in a light and a dark variant picked
 // from the background the terminal reports (tea.RequestBackgroundColor);
 // every state that color shows is also spelled out in text, so the screens
-// read the same on a monochrome terminal. No screen needs a mouse, but the
-// board and the dashboard take one (mouse.go): the wheel scrolls, a click
-// selects, a double click opens, a heading click sorts (the board), a
-// heading gap drags a column wider and a right click opens the row's
-// actions, each through its key's path; m turns it off and on.
+// read the same on a monochrome terminal. No screen needs a mouse (settings
+// runs without mouse mode), but the board and the dashboard take one
+// (mouse.go): the wheel scrolls, a click selects, a double click opens, a
+// heading click sorts (the board), a heading gap drags a column wider and a
+// right click opens the row's actions, each through its key's path; m turns
+// it off and on.
 package tui

@@ -79,6 +79,9 @@ type PRBoardOptions struct {
 	// sort (`magnum tui --limit`), as the printed rows are capped: the sort
 	// decides which rows show, and a starred PR shows first. 0 lists all.
 	Limit int
+	// Settings, when set, lets `,` open the settings screen over the board;
+	// esc there comes back to the board as it was left.
+	Settings *SettingsScreen
 }
 
 // RunPRBoard shows the live PR board until the user quits or ctx ends. act
@@ -90,8 +93,8 @@ func RunPRBoard(ctx context.Context, src PRBoardSource, act DashboardActions, op
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // stops an action still running after the grace (or ctrl+c)
-	final, err := runProgram(ctx, newPRBoardModel(ctx, src, act, opts))
-	if m, ok := final.(prBoardModel); err == nil && ok && m.switching && ctx.Err() == nil {
+	final, err := runProgram(ctx, withSettings(ctx, newPRBoardModel(ctx, src, act, opts), opts.Settings))
+	if m, ok := unwrapSettings(final).(prBoardModel); err == nil && ok && m.switching && ctx.Err() == nil {
 		return ErrSwitchToDashboard
 	}
 	return err
@@ -868,6 +871,11 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		return m, cmd
 	case "W":
 		return m.resetWidths()
+	case settingsKey:
+		if m.opts.Settings == nil {
+			return m.fail("settings: not available on this screen")
+		}
+		return m, openSettings
 	default:
 		if a, ok := rowActFor(boardActs, k); ok {
 			return m.rowAction(a)

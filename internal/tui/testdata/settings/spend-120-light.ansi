@@ -1,0 +1,34 @@
+[1;34mmagnum · settings[m[90m · [mGlobal[90m · [m[90m~/.config/magnum/config.toml[m[90m · [m[1;33m1 unsaved[m
+
+[1;90mSECTIONS[m            [1;36mSPEND & MODELS[m[90m · [m[1;33mapplies after restart[m
+                      [1;90mSETTING            VALUE                   STATE[m
+  Runtime             spend level        high                    set
+[34m▌[m [1;34mSpend & models[m [1;33m●[m    codex spend        [90minherit (high)[m          [90mdefault[m
+  Usage caps          claude spend       [90minherit (high)[m          [90mdefault[m
+  Watches             codex-judge        gpt-6.1-sol xhigh/high  set
+  Repositories        claude-review      opus xhigh/high         set
+  Schedule            codex-review       gpt-6.1-sol xhigh/-     set
+  Reviews & agents  › [7mclaude-simplify    opus* high/-            ● unsaved[m
+                      claude-judge       opus xhigh/high         set
+                      claude-fix         opus high/-             [90mdefault[m
+                      claude-whiteboard  sonnet medium/-         [90mdefault[m
+
+                      [1;36mROLES AFTER RESTART[m[90m · spend high[m
+                        [1;90mROLE             MODEL  FIRST  AGAIN[m
+                        claude-simplify  [1;33mopus*[m  high   -
+
+                      [90m* differs from the saved file[m
+
+
+
+
+
+
+
+
+[90m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[m
+[34m[spend.high].claude-simplify[m                                                                       [1;33mapplies after restart[m
+claude-simplify runs opus, first high, again - while spend is high · enter edits its table or its base model
+[1;33mwas model sonnet[m[90m · [m[90mfrom: your file, line 84[m[90m · [m[90mdefault model: the role's base model (sonnet)[m
+
+[1;34mj/k[m [90mmove[m[90m · [m[1;34mtab[m [90msection[m[90m · [m[1;34menter[m [90medit[m[90m · [m[1;34md[m [90mdefault[m[90m · [m[1;34m/[m [90msearch[m[90m · [m[1;34mc[m [90mscope[m[90m · [m[1;34ms[m [90msave[m[90m · [m[1;34mu[m [90mundo[m[90m · [m[1;34m?[m [90mhelp[m[90m · [m[1;34mesc[m [90mback[m

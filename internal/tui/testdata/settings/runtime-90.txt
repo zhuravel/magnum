@@ -1,0 +1,24 @@
+magnum · settings · Global · ~/.config/magnum/config.toml
+
+SECTIONS            RUNTIME · applies now · not saved to the config file
+                      WHAT              STATE                              ACTION
+▌ Runtime             automation        running                            p pause
+  Spend & models      agent kinds
+  Usage caps        › codex             paused: budget cap, 95% of the w…  r resume codex
+  Watches             claude            paused: usage limit until 07:50 …  r resume claude
+  Repositories        all kinds         2 of 2 paused                      R resume all
+  Schedule            watches · identity-leak pauses
+  Reviews & agents    watch 1 talkable  no pause                           -
+                      watch 2 example   no pause                           -
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────
+codex                                                                          applies now
+paused by the Codex budget cap: 95% of this week used ([usage] codex_hard = 95)
+r = magnum resume --tool codex: lifts its usage-limit, login or budget pause and forgets …
+
+j/k move · tab section · p pause · r resume · R resume all · c scope · ? help · esc back

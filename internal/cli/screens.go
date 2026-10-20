@@ -26,6 +26,7 @@ var (
 	tuiPicker      = tui.RunPicker
 	tuiCleanupPlan = tui.RunCleanupPlan
 	tuiWatch       = tui.RunWatch
+	tuiSettings    = tui.RunSettings
 )
 
 // The screens tab switches between.

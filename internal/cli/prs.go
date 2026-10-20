@@ -211,9 +211,12 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 // actions, starting with first; tab switches between them. Both keep their
 // dragged column widths in the registry, the mouse toggle (m) carries over
 // to the other screen and the board reopens in the view it was left in.
+// `,` on either opens the settings screen, whose pauses go through the same
+// actions.
 func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOptions, po prsOptions, first string) error {
 	acts := newScreenActions(c)
 	defer acts.Close()
+	settings := &tui.SettingsScreen{Source: newSettingsSource(c, acts), Runtime: screenRuntime{acts}}
 	log := tui.NewActionLog() // one for both screens: tab keeps the outcomes and the requests followed
 	mouse := d.Config == nil || d.Config.Terminal.Mouse
 	toggled := func(on bool) { mouse = on }
@@ -224,7 +227,7 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 	dashboard := func(ctx context.Context) error {
 		return tuiDashboard(ctx, statusDashSource(d, so), acts, tui.DashboardOptions{
 			Refresh: statusRefresh, ShowManual: so.All, Title: "magnum status", Now: inspNow, Judge: rolesJudgeName(d.Config),
-			Icons: screenIcons(d.Config), NoMouse: !mouse, MouseToggled: toggled, Widths: widths, Log: log,
+			Icons: screenIcons(d.Config), NoMouse: !mouse, MouseToggled: toggled, Widths: widths, Log: log, Settings: settings,
 		})
 	}
 	src := po.source(prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout)) // one source: its timings cache survives tab
@@ -236,7 +239,7 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 	}
 	board := func(ctx context.Context) error {
 		o := prsBoardOptions(d.Config, po)
-		o.NoMouse, o.MouseToggled, o.Widths, o.Log = !mouse, toggled, widths, log
+		o.NoMouse, o.MouseToggled, o.Widths, o.Log, o.Settings = !mouse, toggled, widths, log, settings
 		o.Facts = func(ctx context.Context) tui.DaemonFacts { return screenFacts(ctx, d) }
 		o.ViewChanged = func(v tui.PRView) { po.View = v }
 		o.OwnerChanged = func(owner string) { po.Owner = owner }

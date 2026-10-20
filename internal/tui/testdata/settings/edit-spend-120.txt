@@ -1,0 +1,34 @@
+magnum · settings · Global · ~/.config/magnum/config.toml · 1 unsaved
+
+SECTIONS            SPEND & MODELS · applies after restart
+                      SETTING            VALUE                   STATE
+  Runtime           › spend level        high                    set
+▌ Spend & models ●    codex spend        ╭────────────────────────────────╮
+  Usage caps          claude spend       │ spend level                    │
+  Watches             codex-judge        │ burn: starts from medium, then │
+  Repositories        claude-review      │ its table (7 roles)            │
+  Schedule            codex-review       │   default (medium)             │
+  Reviews & agents    claude-simplify    │   low                          │
+                      claude-judge       │   medium                       │
+                      claude-fix         │   high (saved)                 │
+                      claude-whiteboard  │ › burn                         │
+                                         ╰────────────────────────────────╯
+                      ROLES AFTER RESTART · preview: burn
+                        ROLE               MODEL    FIRST   AGAIN
+                        claude-review      sonnet*  xhigh   high
+                        claude-simplify    sonnet   xhigh*  -
+                        claude-fix         opus     xhigh*  -
+                        claude-whiteboard  sonnet   xhigh*  -
+
+                      * differs from the saved file
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[pipeline] spend                                                                                   applies after restart
+the level every role's model and effort follows
+default: medium · from: your file, line 12
+
+j/k choose (the roles preview follows) · enter stage · esc cancel

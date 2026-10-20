@@ -1,0 +1,26 @@
+magnum · settings · Global · ~/.config/magnum/config.toml · 3 unsaved
+
+SAVE · 3 changes · checked with magnum's loader and the prompt check: ok
+
+  [pipeline] · line 12
+- spend = "high"
++ spend = "burn"  # 2026-10-20: was "high"
+
+  [spend.burn] · line 89
+- claude-simplify = { model = "sonnet", effort = "xhigh" }
++ claude-simplify = { model = "opus", effort = "xhigh" }  # 2026-10-20: was model "sonnet"
+
+  [usage] · line 140
+- codex_soft = 85
++ codex_soft = 80  # 2026-10-20: was 85
+
+
+
+
+
+
+
+dated notes: on (n turns them off) · the previous file goes to ~/.local/share/magnum/config-history/
+applies after restart: the daemon reads the config at start; agents take new models at their next launch or resume
+
+Save 3 changes to ~/.config/magnum/config.toml? y/N  y confirms, any other key cancels

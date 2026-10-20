@@ -1,0 +1,26 @@
+magnum · settings · Global · ~/.config/magnum/config.toml · 1 unsaved
+
+SAVE · 1 change · checked with magnum's loader and the prompt check: ok
+
+  [pipeline] · line 12
+- spend = "high"
++ spend = "burn"  # 2026-10-20: was "high"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+dated notes: on (n turns them off) · the previous file goes to ~/.local/share/magnum/conf…
+applies after restart: the daemon reads the config at start; agents take new models at th…
+
+n notes off · s save · esc back to editing

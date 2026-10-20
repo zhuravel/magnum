@@ -36,6 +36,7 @@ func (p *prbPainter) helpContent(width int) []string {
 		{"enter / a", "details card / jump to what needs you"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
 		{"v / O", "next view / next owner (all, then each)"},
 		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
+		{settingsKey, "settings (esc comes back here)"},
 		{"h / W", "hide ignored and skipped / reset widths"}, {"? / " + logKey, "this help / the action log"},
 		{"q", "quit"},
 	})

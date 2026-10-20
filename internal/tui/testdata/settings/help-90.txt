@@ -1,0 +1,25 @@
+magnum · settings · Global · ~/.config/magnum/config.toml
+
+╭────────────────────────────────────────────────────────────────────────────────────────╮
+│ Keys                                                                                   │
+│ j/k ↑/↓       move; pgup/pgdn half a page, g/G the ends                                │
+│ tab/shift+tab next / previous section                                                  │
+│ l/h →/←       into the roles grid and back (Spend & models, wide screens)              │
+│ enter         edit the setting in a popup (enter stages, esc cancels)                  │
+│ a / x         in a list: add after the selected item / remove it (enter edits it; eac… │
+│ d             back to the default: your key goes, its comment stays                    │
+│ u             undo the last staged edit                                                │
+│ ctrl+r        read the pauses again, and the file when nothing is staged               │
+│ /             search labels and keys in every section; a leading * keeps what is set … │
+│ c             scope: Global, a watch, a repository                                     │
+│ [ / ]         previous / next watch (Watches) or repository (Repositories)             │
+│ s             save: the diff first (n notes on/off), then s and y write it             │
+│ p             Runtime: pause automation (asks y/N; applies now)                        │
+│ r             Runtime: resume the selected row (asks y/N; applies now)                 │
+│ R             Runtime: resume every agent kind (asks y/N; applies now)                 │
+│ y             answer yes; any other key, enter too, cancels                            │
+│ ?             close this help                                                          │
+│ esc, q        back (asks before discarding unsaved changes; ctrl+c too)                │
+╰────────────────────────────────────────────────────────────────────────────────────────╯
+
+j/k scroll · ? close help

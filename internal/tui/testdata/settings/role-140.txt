@@ -1,0 +1,30 @@
+magnum · settings · Global · ~/.config/magnum/config.toml · 1 unsaved
+
+SECTIONS            SPEND & MODELS · applies after restart                              │ ROLES AFTER RESTART · preview: claude-simplify
+                      SETTING       VALUE           STATE                               │   ROLE               MODEL        FIRST   AGAIN
+  Runtime             spend level   high            set                                 │   codex-judge        gpt-6.1-sol  xhigh   high
+▌ Spend & models ●    codex spend   inherit (high)  default                             │   claude-review      opus         xhigh   high
+  Usage caps          claude spend  inherit (high)  default                             │   codex-review       gpt-6.1-sol  xhigh   -
+  Watches                                                                               │ › claude-simplify    opus*        high    -
+  Repositories                              ╭──────────────────────────────────────────╮│   claude-judge       opus         xhigh   high
+  Schedule                                  │ claude-simplify · model while spend is   ││   claude-fix         opus         high    -
+  Reviews & agents                          │ high                                     ││   claude-whiteboard  sonnet       medium  -
+                                            │   the role's base model (sonnet)         ││
+                                            │   gpt-6.1-sol                            ││ * differs from the saved file
+                                            │ › opus                                   ││
+                                            │   sonnet (saved)                         ││
+                                            │   other…                                 ││
+                                            ╰──────────────────────────────────────────╯│
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[spend.high].claude-simplify                                                                                           applies after restart
+claude-simplify runs opus, first high, again - while spend is high · enter edits its table or its base model
+was model sonnet · from: your file, line 84 · default model: the role's base model (sonnet)
+
+j/k choose (the roles preview follows) · enter next / stage · shift+tab back · esc cancel

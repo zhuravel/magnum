@@ -1,0 +1,24 @@
+magnum · settings · Global · ~/.config/magnum/config.toml
+
+SECTIONS            SEARCH · 4 matches for "auth"
+                      SETTING                         VALUE         STATE
+  Runtime           › watch 1 · auto-approve authors  alice         set
+  Spend & models      watch 1 · skip authors          bob-rev       set
+  Usage caps          watch 2 · auto-approve authors  every author  default
+  Watches             watch 2 · skip authors          none          default
+  Repositories
+  Schedule
+  Reviews & agents
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[[watch]] 1 (talkable) · auto_approve_authors                                                      applies after restart
+only these authors' PRs are auto-approved (allowlist); empty = every author
+default: every author · from: your file, line 31
+/ auth 
+type label or key · * only what your file sets or the draft changes · enter keep · esc clear

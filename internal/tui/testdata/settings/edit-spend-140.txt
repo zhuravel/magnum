@@ -1,0 +1,30 @@
+magnum · settings · Global · ~/.config/magnum/config.toml · 1 unsaved
+
+SECTIONS            SPEND & MODELS · applies after restart                              │ ROLES AFTER RESTART · preview: burn
+                      SETTING       VALUE           STATE                               │   ROLE               MODEL        FIRST   AGAIN
+  Runtime           › spend level   high            set                                 │   codex-judge        gpt-6.1-sol  xhigh   high
+▌ Spend & models ●    codex spend   ╭────────────────────────────────╮                  │   claude-review      sonnet*      xhigh   high
+  Usage caps          claude spend  │ spend level                    │                  │   codex-review       gpt-6.1-sol  xhigh   -
+  Watches                           │ burn: starts from medium, then │                  │   claude-simplify    sonnet       xhigh*  -
+  Repositories                      │ its table (7 roles)            │                  │   claude-judge       opus         xhigh   high
+  Schedule                          │   default (medium)             │                  │   claude-fix         opus         xhigh*  -
+  Reviews & agents                  │   low                          │                  │   claude-whiteboard  sonnet       xhigh*  -
+                                    │   medium                       │                  │
+                                    │   high (saved)                 │                  │ * differs from the saved file
+                                    │ › burn                         │                  │
+                                    ╰────────────────────────────────╯                  │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[pipeline] spend                                                                                                       applies after restart
+the level every role's model and effort follows
+default: medium · from: your file, line 12
+
+j/k choose (the roles preview follows) · enter stage · esc cancel

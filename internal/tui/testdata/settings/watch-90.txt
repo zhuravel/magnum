@@ -1,0 +1,26 @@
+magnum · settings · watch 1: talkable · ~/.config/magnum/config.toml · 1 unsaved
+
+SECTIONS            WATCH 1 · talkable · talkable/talkable, talkable/example, talkable/we…
+                      SETTING                 VALUE                              STATE
+  Runtime             roles                   codex-judge (judge)                set
+  Spend & models                              claude-review
+  Usage caps                                  codex-review
+▌ Watches ●                                   claude-simplify
+  Repositories      › auto-approve authors    alice                              ● unsaved
+  Schedule                                    rev-ann
+  Reviews & agents    skip authors            bob-rev                            set
+                      include drafts          false                              default
+                      stakes                  referral emails and rewards reac…  set
+                      own re-review interval  inherit (2h)                       default
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────
+[[watch]] 1 (talkable) · auto_approve_authors                        applies after restart
+only these authors' PRs are auto-approved (allowlist); empty = every author
+was [alice] · default: every author · from: your file, line 31
+
+enter edit list · [/] watch · s save · ? help · esc back

@@ -1,0 +1,34 @@
+magnum · settings · Global · ~/.config/magnum/config.toml · 1 unsaved
+
+SECTIONS            SPEND & MODELS · applies after restart
+                      SETTING            VALUE                   STATE
+  Runtime             spend level        high                    set
+▌ Spend & models ●    codex spend        inherit (high)          default
+  Usage caps          claude spend       inherit (high)          default
+  Watches             codex-judge        gpt-6.1-sol xhigh/high  set
+  Repositories        claude-review      opus xhigh/high         set
+  Schedule            codex-review       gpt-6.1-sol xhigh/-     set
+  Reviews & agents  › claude-simplify    opus* high/-            ● unsaved
+                      claude-judge       opus xhigh/high         set
+                      claude-fix         opus high/-             default
+                      claude-whiteboard  sonnet medium/-         default
+
+                      ROLES AFTER RESTART · spend high
+                        ROLE             MODEL  FIRST  AGAIN
+                        claude-simplify  opus*  high   -
+
+                      * differs from the saved file
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[spend.high].claude-simplify                                                                       applies after restart
+claude-simplify runs opus, first high, again - while spend is high · enter edits its table or its base model
+was model sonnet · from: your file, line 84 · default model: the role's base model (sonnet)
+
+j/k move · tab section · enter edit · d default · / search · c scope · s save · u undo · ? help · esc back

@@ -66,7 +66,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
 | [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which store.Open then finds current. |
 | [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals and login folding. |
-| [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan) and the read-only pane mirror (RunWatch). |
+| [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch) and the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
 
 ## agents
@@ -18815,8 +18815,10 @@ package tui // import "github.com/zhuravel/magnum/internal/tui"
 
 Package tui holds magnum's interactive terminal screens, built on Bubble Tea:
 the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker
-(RunPicker), the cleanup plan review (RunCleanupPlan) and the read-only pane
-mirror (RunWatch).
+(RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane
+mirror (RunWatch) and the settings screen (RunSettings), which `,` also
+opens over the dashboard and the board and whose field popups are huh forms
+(charm.land/huh/v2).
 
 Every screen takes plain data structs and small interfaces defined here,
 so the cli adapts its own types into them; the plain-text renderings stay
@@ -18830,11 +18832,11 @@ Built on Charm v2 (charm.land/bubbletea/v2, bubbles/v2, lipgloss/v2).
 Styles use the 16 ANSI colors only, in a light and a dark variant picked from
 the background the terminal reports (tea.RequestBackgroundColor); every state
 that color shows is also spelled out in text, so the screens read the same on a
-monochrome terminal. No screen needs a mouse, but the board and the dashboard
-take one (mouse.go): the wheel scrolls, a click selects, a double click opens,
-a heading click sorts (the board), a heading gap drags a column wider and a
-right click opens the row's actions, each through its key's path; m turns it off
-and on.
+monochrome terminal. No screen needs a mouse (settings runs without mouse mode),
+but the board and the dashboard take one (mouse.go): the wheel scrolls,
+a click selects, a double click opens, a heading click sorts (the board),
+a heading gap drags a column wider and a right click opens the row's actions,
+each through its key's path; m turns it off and on.
 
 CONSTANTS
 
@@ -18863,6 +18865,11 @@ var (
     source and actions it already holds). A caller that does not switch treats
     them as any other error, so it sees them only if it asked for both screens.
 
+var ErrSettingsChanged = errors.New("the config file changed on disk since it was read")
+    ErrSettingsChanged is a save over a file that changed on disk since the
+    screen read it; a source wraps its own error in it, and the screen offers to
+    read the file again and keep the staged edits.
+
 
 FUNCTIONS
 
@@ -18887,6 +18894,11 @@ func IsTerminal(f *os.File) bool
     a caller picks a screen of this package over plain-text output. /dev/null,
     pipes and regular files are not terminals.
 
+func NewSettings(ctx context.Context, src SettingsSource, rt SettingsRuntime, opts SettingsOptions) tea.Model
+    NewSettings is the settings screen as a model, for a program of the
+    caller's: RunSettings runs it in one of its own. Leaving it quits that
+    program (tea.Quit).
+
 func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string
     RenderPRBoard renders the board once, for output that is not interactive and
     for tests: the title bar, the state summary, the column headings and every
@@ -18903,6 +18915,10 @@ func RunPRBoard(ctx context.Context, src PRBoardSource, act DashboardActions, op
     RunPRBoard shows the live PR board until the user quits or ctx ends. act may
     be nil (the action keys then say so). It returns ErrSwitchToDashboard when
     the user pressed tab for the status dashboard.
+
+func RunSettings(ctx context.Context, src SettingsSource, rt SettingsRuntime, opts SettingsOptions) error
+    RunSettings shows the settings screen until the user leaves it or ctx ends.
+    src may not be nil; rt may be (the Runtime section then says so).
 
 func RunWatch(ctx context.Context, fetch WatchFetch, opts WatchOptions) error
     RunWatch mirrors fetch's frames full-screen, read-only, until the user
@@ -19213,6 +19229,9 @@ type DashboardOptions struct {
 	// pending; the board shares it, so tab keeps both. nil = a log of this
 	// screen's own.
 	Log *ActionLog
+	// Settings, when set, lets `,` open the settings screen over the
+	// dashboard; esc there comes back to the dashboard as it was left.
+	Settings *SettingsScreen
 }
     DashboardOptions tune the dashboard.
 
@@ -19346,6 +19365,9 @@ type PRBoardOptions struct {
 	// sort (`magnum tui --limit`), as the printed rows are capped: the sort
 	// decides which rows show, and a starred PR shows first. 0 lists all.
 	Limit int
+	// Settings, when set, lets `,` open the settings screen over the board;
+	// esc there comes back to the board as it was left.
+	Settings *SettingsScreen
 }
     PRBoardOptions tune the PR board.
 
@@ -19654,6 +19676,14 @@ type Pause struct {
 }
     Pause is one reason automation (or part of it) is held back.
 
+type PauseSpec struct {
+	For    time.Duration
+	Until  string
+	Reason string
+}
+    PauseSpec is `magnum pause`'s flags: For or Until (a local 15:30 or an
+    RFC3339 time), neither for a pause until resumed.
+
 type PickAction int
     PickAction is what the user chose to do with the picked PR.
 
@@ -19727,6 +19757,13 @@ type RequestInfo struct {
 	Mine bool // To is one of the self logins
 }
     RequestInfo is a review request: who was asked, by whom and when.
+
+type ResumeSpec struct {
+	Tool  string
+	Watch string
+}
+    ResumeSpec is `magnum resume`'s flags: Tool is an agent kind or "all",
+    Watch a watch owner; both empty resume automation.
 
 type ReviewDelta struct {
 	Base                                 string
@@ -19886,6 +19923,232 @@ type RoundsInfo struct {
     RoundsInfo is the review rounds in progress. Progress[i] is the round
     of ActivePRs[i], which the rounds line follows with its stage and time
     ("talkable#1 · simplify · 17m"); nil, or missing, when unknown.
+
+type RuntimeEntry struct {
+	Name   string // "automation", the kind, the watch owner
+	Label  string // what its row says ("watch 1 talkable"); "" = Name
+	Paused bool
+	// State is the row's text: "running", "no pause", "paused: usage limit
+	// until 07:50 · since 02:10".
+	State string
+	// Detail is the detail strip's line for it: why it is paused and what
+	// lifts it by itself.
+	Detail string
+}
+    RuntimeEntry is one pausable thing: automation, an agent kind or a watch.
+
+type RuntimeState struct {
+	// Daemon is true when a daemon runs; otherwise a change applies when it
+	// starts.
+	Daemon     bool
+	Automation RuntimeEntry
+	Kinds      []RuntimeEntry // one per agent kind
+	Watches    []RuntimeEntry // one per watch owner
+}
+    RuntimeState is what the Runtime section shows.
+
+type SettingField struct {
+	// Target is the draft's key: the setting and its scope instance, unique.
+	Target  string
+	Section string // the rail's section it lists under ("Spend & models")
+	Scope   string // "" for a global setting, else a SettingsScope.ID
+	Label   string
+	// Key is the TOML path as the detail strip shows it ("[pipeline] spend",
+	// "[spend.high].claude-simplify.model").
+	Key         string
+	Type        SettingType
+	Options     []string          // the choices of an enum, effort, model or roles setting
+	Notes       map[string]string // a note on an option ("burn": "starts from medium, then its table (7 roles)"; a role: "judge")
+	Description string
+	Default     string // what applies without the key ("medium", "inherit (high)")
+	AppliesNow  bool   // applies at once; else after a daemon restart
+	// Text and List are what the file says ("" and nil when it does not set
+	// the key); Value is the value in effect as the row shows it.
+	Text  string
+	List  []string
+	Value string
+	Set   bool   // the file sets the key; else the default applies
+	Line  int    // the key's line in the file (0 = not in it)
+	From  string // where the value comes from ("your file, line 96", "built-in default")
+	// Role, Level and Cell place a spend setting in the roles grid: the role,
+	// its spend level ("" = the role's base [[role]] block) and the cell
+	// ("model", "effort" or "rereview_effort").
+	Role, Level, Cell string
+	// Path is the setting's key path as magnum's loader names it in its
+	// messages ("usage.codex_soft"), so a refusal marks its row.
+	Path string
+	// Inherits is the Target of the setting this one takes its value from
+	// while unset ("inherit (high)" from [pipeline] spend), so the row
+	// follows a staged edit of that one; "" for none.
+	Inherits string
+	// Validate checks a scalar value and ValidateList a list before the edit
+	// is staged; nil accepts anything.
+	Validate     func(string) error
+	ValidateList func([]string) error
+}
+    SettingField is one editable setting of one scope instance.
+
+type SettingType string
+    SettingType is how a setting is edited.
+
+const (
+	SettingEnum     SettingType = "enum"     // one of Options (a Select)
+	SettingBool     SettingType = "bool"     // true or false (a Select)
+	SettingDuration SettingType = "duration" // "15m", "2h" (an Input)
+	SettingInt      SettingType = "int"      // a whole number (an Input)
+	SettingPercent  SettingType = "percent"  // 0-100 (an Input)
+	SettingText     SettingType = "text"     // free text, 300 characters at most (an Input)
+	SettingModel    SettingType = "model"    // a model name: one of Options or another (a Select, then an Input)
+	SettingEffort   SettingType = "effort"   // a reasoning effort, one of Options (a Select)
+	SettingLogins   SettingType = "logins"   // GitHub logins, in order (the list editor)
+	SettingRepos    SettingType = "repos"    // repository names, in order (the list editor)
+	SettingRoles    SettingType = "roles"    // role names out of Options (a MultiSelect)
+	SettingList     SettingType = "list"     // other strings, in order (the list editor)
+)
+    The setting types; the list types (Logins, Repos, Roles, List) hold
+    SettingField.List.
+
+func (t SettingType) IsList() bool
+    IsList reports whether t holds a list.
+
+type SettingsData struct {
+	// File is the config file as the title names it
+	// ("~/.config/magnum/config.toml").
+	File string
+	// HistoryDir is where a save keeps the previous file
+	// ("~/.local/share/magnum/config-history/").
+	HistoryDir string
+	// RestartPending is true while the daemon runs an older file than this
+	// one (the daemon's config hash differs from the file's).
+	RestartPending bool
+	// Sections are the rail's sections in order; Runtime, the screen's own,
+	// comes first whether or not they name it.
+	Sections []string
+	Fields   []SettingField  // every editable setting, per scope instance
+	Scopes   []SettingsScope // the watches, then the repositories
+	Roles    []SettingsRole  // the roles as the saved file resolves them
+	Warnings []string        // what the loader says of the saved file
+}
+    SettingsData is one load of the user config.
+
+type SettingsDraft map[string]SettingsEdit
+    SettingsDraft is the staged changes by SettingField.Target.
+
+type SettingsEdit struct {
+	Text    string
+	List    []string
+	Default bool
+}
+    SettingsEdit is one staged change: a value, a list, or back to the default
+    (the key goes; its comment stays as a comment line).
+
+type SettingsHunk struct {
+	Table          string
+	Line           int
+	Removed, Added []string
+}
+    SettingsHunk is one changed place of the file: its table heading, its line
+    in the file as saved, and the lines it removes and adds.
+
+type SettingsOptions struct {
+	// Scope opens the screen on a watch or a repository ("watch:2",
+	// "repo:talkable/web"); "" opens the global settings.
+	Scope string
+	// Restore opens the save view of the n-th kept version (1 = the newest).
+	Restore int
+}
+    SettingsOptions tune the settings screen.
+
+type SettingsPlan struct {
+	Count    int            // the settings it changes
+	Hunks    []SettingsHunk // the changed lines, file order
+	Warnings []string       // what the loader says of the new file
+	Notes    bool           // the changed lines carry dated notes
+	Restore  int            // the kept version it puts back (0 = a save of the draft)
+	// Opaque is the source's own plan, handed back to Commit.
+	Opaque any
+}
+    SettingsPlan is the save of a draft (or a restore), checked and not yet
+    written.
+
+type SettingsRole struct {
+	Role, Kind, Model, First, Again, Level string
+}
+    SettingsRole is one role as a config resolves it: its model and its first
+    and re-review efforts under the spend level it follows.
+
+type SettingsRuntime interface {
+	// Runtime reads the automation pause, each agent kind's pause and each
+	// watch's identity-leak pause.
+	Runtime(ctx context.Context) (RuntimeState, error)
+	// Pause pauses automation as `magnum pause` does; the text is its answer.
+	Pause(ctx context.Context, p PauseSpec) (string, error)
+	// Resume lifts a pause as `magnum resume` does: automation (an empty
+	// spec), an agent kind or all of them (Tool), or a watch (Watch).
+	Resume(ctx context.Context, r ResumeSpec) (string, error)
+}
+    SettingsRuntime is the runtime side of the settings screen (applies now,
+    never saved to the file): the pauses `magnum status` lists and the same
+    requests or registry writes `magnum pause` and `magnum resume` make.
+
+type SettingsSaved struct {
+	History string // the file that keeps the previous version
+	Sum     string // the new file's hash
+	// AfterRestart is true when the save changed settings the daemon reads
+	// only when it starts.
+	AfterRestart bool
+	// Opaque is the source's own result, handed back to RequestRestart.
+	Opaque any
+}
+    SettingsSaved is what a commit did.
+
+type SettingsScope struct {
+	// ID names it in SettingField.Scope: "watch:1" (by position, from 1),
+	// "repo:owner/name".
+	ID    string
+	Watch bool     // a [[watch]]; else a repository
+	Index int      // a watch's position, from 1
+	Name  string   // a watch's owner, a repository's owner/name
+	Repos []string // a watch's repositories; the title shows the first ones
+	// NoBlock is a watched repository the file has no [[repo]] block for: a
+	// save of one of its settings creates a minimal block.
+	NoBlock bool
+}
+    SettingsScope is a watch or a repository whose settings a section edits.
+
+type SettingsScreen struct {
+	Source  SettingsSource
+	Runtime SettingsRuntime
+	Options SettingsOptions
+}
+    SettingsScreen is what the dashboard and the PR board need to open the
+    settings screen on `,`.
+
+type SettingsSource interface {
+	// Load reads the user config as it is on disk now.
+	Load(ctx context.Context) (*SettingsData, error)
+	// Preview is the roles the daemon would run after a restart on the file
+	// with d applied, computed by magnum's own loader; an error is the
+	// loader's refusal of the candidate.
+	Preview(ctx context.Context, d SettingsDraft) ([]SettingsRole, error)
+	// Plan checks d against the file Load read (refusing a file that changed
+	// on disk since) and returns the save it would make: the changed lines,
+	// with a dated note on each when notes is true.
+	Plan(ctx context.Context, d SettingsDraft, notes bool) (*SettingsPlan, error)
+	// Commit writes p, keeping the previous file in the history. The screen
+	// calls it only after the operator's y.
+	Commit(ctx context.Context, p *SettingsPlan) (SettingsSaved, error)
+	// RequestRestart asks the daemon to restart on the saved file at its
+	// first idle moment; the text says what happens next.
+	RequestRestart(ctx context.Context, s SettingsSaved) (string, error)
+	// Restore is the plan that puts the n-th kept version back (1 = the
+	// newest), a save like any other.
+	Restore(ctx context.Context, n int) (*SettingsPlan, error)
+}
+    SettingsSource is the config side of the settings screen: what the user
+    config file says, the roles it resolves to, and the one path that writes it.
+    The cli adapts internal/settings into it. Every value it hands over is
+    display text; the screen never parses TOML.
 
 type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string

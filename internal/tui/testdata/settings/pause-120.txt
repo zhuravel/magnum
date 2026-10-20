@@ -1,0 +1,24 @@
+magnum · settings · Global · ~/.config/magnum/config.toml
+
+SECTIONS            RUNTIME · applies now · not saved to the config file
+                      WHAT              STATE                                                   ACTION
+▌ Runtime           › automation        running                                                 p pause
+  Spend & models      agent kin╭────────────────────────────────────────────╮
+  Usage caps          codex    │ pause automation                           │sed · since 14:20  r resume codex
+  Watches             claude   │ running rounds finish; nothing new starts  │ce 02:10           r resume claude
+  Repositories        all kinds│   until magnum resume                      │                   R resume all
+  Schedule            watches ·│ › for a while (--for)                      │
+  Reviews & agents    watch 1 t│   until a time (--until)                   │                   -
+                      watch 2 e╰────────────────────────────────────────────╯                   -
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+automation                                                                                                   applies now
+running
+p = magnum pause [--for 2h | --until 15:30] [--reason text]: running rounds finish, nothing new starts
+
+enter next · shift+tab back · esc cancel

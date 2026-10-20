@@ -2488,6 +2488,111 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (cli). Rejected: keeping the dead branch for rows an older daemon wrote (none exist, and a row that did
   would read as the loop's own end, which says what happened); hiding A on a held card (the operator may
   approve by hand, so the key stays and only the line stops inviting it).
+- **The settings screen: `magnum settings`, and `,` on the dashboard and the PR board** (2026-10-20, spec 95,
+  asked for by the operator: "make me form with settings, like other TUIs have, so I can change spend and other
+  stuff without editing config toml", using huh, lipgloss and Bubble Tea "with all magic"; the layout was
+  mocked up through the real styles and approved with six changes). The screen is internal/tui's
+  settings*.go over two small interfaces, `tui.SettingsSource` (the file, the resolved roles, the plan and
+  the commit, which the cli adapts from internal/settings, spec 94) and `tui.SettingsRuntime` (the pauses);
+  the screen never parses TOML and never writes a byte itself. Layout: the title (`magnum · settings`, the
+  scope, the file, `N unsaved`, and `restart pending` on the right while the daemon runs an older file than
+  the saved one, from spec 94's `daemon.config_sha256`), a rail of sections (Runtime, then the source's
+  sections in its order, Spend & models first) with a yellow ● on each holding unsaved edits, one line per
+  setting (label, value, state: `default` dim, `set`, `● unsaved` yellow, `✗ invalid` red; a list shows its
+  items under its first one, up to five lines), a three-line detail strip (the TOML key and "applies after
+  restart" or "applies now"; the description, or the loader's words for an invalid value; "was", the
+  default and where the value comes from), and the footer through fitHints. The six approved changes:
+  (1) Spend & models lists only the spend level and each kind's spend; the roles grid (role, model, first
+  and re-review effort, as magnum's own loader resolves the draft, `Preview`) is the editable part: enter
+  on a role opens its popup, which edits the role's cells in its level's `[spend.<level>]` table or its
+  base `[[role]]` model, one field a page; (2) save is two steps: `s` shows the diff of the exact lines
+  (each hunk's table heading and line; `n` turns the dated notes off and on), and only its own `s` asks
+  "Save N changes to ~/.config/magnum/config.toml? y/N" on magnum's confirmLine, where only `y` writes;
+  (3) at 125 columns or more the grid stands beside the list, and below it the roles become list rows
+  (`opus* high/-`) and the grid under the list lists only the roles whose model or effort changes (a level
+  that resolves the same changes nothing a role runs): the literal reading of the change, which keeps the
+  roles editable on a narrow screen without repeating the unchanged ones; (4) the Runtime rows have short
+  action labels (`p pause`, `r resume codex`, `R resume all`) and the strip's last line gives the full
+  command and what it does; (5) the grid's `*` and yellow mark what differs from the saved file, not from
+  the running daemon, and the title says `restart pending` for the daemon; (6) the dated note's rule is
+  spec 94's. After a save that changes what the daemon reads at start the screen asks "Restart the daemon
+  when it is idle to apply? y/N": `y` writes spec 94's restart mark (`RequestRestart`), anything else
+  leaves `restart pending`. huh is a field editor, not the frame: each edit is a small huh form in a box
+  over the list (a Select for an enum, a bool, an effort or a model, whose "other…" opens an Input; an Input
+  with the setting's check for a duration, a number, a percent or a 300-character text, empty putting the
+  default back; a MultiSelect for a watch's roles with its one-judge check; a list editor of its own for
+  logins, repositories and checks, which stages each add, edit or remove at once, so `u` takes each back and
+  esc only closes it), themed from magnum's 16-colour styles, with huh's quit key (ctrl+c, which aborted
+  silently) disabled so the screen asks before discarding, a Select's filter and a Text's external editor
+  off, and a WindowSizeMsg sent after the form is built and after every message (an embedded form sizes
+  itself only from one, and a description evaluated late or a page shown or hidden changes its height).
+  A Select writes its bound value on every cursor move, so the spend popup's candidate is resolved as the
+  cursor moves and the grid previews it ("preview: burn") without staging; esc cancels and the grid goes
+  back to the draft. No huh Confirm is used anywhere (its enter submits whichever side is toggled, and y or
+  n answers and moves on). A Select's first choice is always the default, which an unset key starts on, so
+  enter keeps what applies (the review found an unset bool staging its opposite). While the draft is
+  checked or saved the keys that change it wait, a plan answers only the draft it was made of, and every
+  command's answer names the screen that asked, so a screen opened again with `,` drops the answers of the
+  one before. Runtime is not config: its rows (automation, each agent kind, all kinds, each
+  watch's identity-leak pause) read what `magnum status` reads and act through the same code `magnum pause`
+  and `magnum resume` run (a pause form of how long, for or until, and a reason; `r` on the selected row;
+  `R` for every kind), each after its own y/N, and they say "applies now · not saved to the config file";
+  a plain resume's answer names the agent-kind and watch pauses it leaves, which the CLI's answer does not.
+  `,` (free on both screens) opens the screen inside the same program: a host model keeps the dashboard or
+  the board, routes the keys to settings while it shows and every other message to both, so the screen
+  that opened it keeps its timers, its data and an action in flight, and esc brings it back with the same
+  cursor, filter and scroll without rebuilding anything. The screen runs without mouse mode (a click
+  reaches nothing and the terminal keeps its own selection), its frames are cached by a generation bumped
+  only by messages it shows, it starts dark and follows tea.BackgroundColorMsg, every state is spelled out
+  in words for a colorless terminal, and every text a load hands it is cleaned of terminal controls. Other
+  keys: `/` searches labels and keys across every section and scope (a leading `*` keeps what the file sets
+  or the draft changes), `c` picks the scope (Global, each watch by position with its owner and first
+  repositories, each repository, a watched one without a block saying a save creates it), `[` and `]` move
+  between watches or repositories, `d` stages the default (the key goes, its comment stays), `u` undoes
+  the last staged edit, `?` lists the keys, and esc, q or ctrl+c ask "Discard N unsaved changes? y/N" when
+  the draft holds any. The cli adapts spec 94's internal/settings (settings_source.go): one row per
+  [[watch]] and per repository from the templates, each value checked by Snapshot.Check before it is
+  staged, the loader's refusal shown without its "config <the layers read>: " prefix (its paths pushed the
+  reason off the line), a restart the daemon refused on the file as it is shown as a warning, and
+  `--history` listing the kept versions numbered as `--restore` takes them; tui.NewSettings exports the
+  model so a program of the caller's embeds it, which the end-to-end test does over a synthetic config.
+  Two reviews of the screen hardened it. Every popup has an id that tags its form's commands (their
+  batches and sequences too), so what a cancelled popup's form answers late never reaches the next one;
+  a cursor's blink stays untagged, since it names its cursor. huh's g and G move a Select without
+  writing its value, so the screen reads each Select's hovered option after every message and sets its
+  description itself (no huh evaluation runs on another goroutine reading the bound value); huh keeps
+  the first theme a field gets, so the popup's theme reads the screen's styles through a pointer, and a
+  background answer redraws it; a resize sizes it again. The grid takes a role's level from the roles
+  of the draft alone, never a popup's candidate, and a role popup waits while the draft's roles are on
+  their way; a cancelled picker shows the draft's roles at once. Values stay as the file has them (an
+  untouched list entry is staged back byte for byte) and are cleaned only where shown; an empty list
+  shows what it stands for ("every author"); a row that inherits follows a staged edit of what it
+  inherits ("inherit (burn)"); duplicates in a list follow the setting's matching (logins and
+  repositories whatever their case, check names as written); a Select offers a saved value off its
+  list as "(saved)" rather than start on another; emptying a list the file never set stages nothing; a
+  runtime answer older than the latest read is dropped; a paste reaches the open Input or the search; a
+  loader refusal marks only a setting whose whole key path it names; the Runtime section numbers the
+  watches as the scopes do; each item a list editor types has a form of its own generation, so an earlier
+  item's late answer never submits the next; `d` on a role waits for the draft's roles as its popup does; and
+  a kind's spend inherits [pipeline] spend on the screen only when no layer sets it (a base config's
+  `[kinds.codex] spend = "low"` stays low when another level is staged). A save refused because the file
+  changed on disk (tui.ErrSettingsChanged, which the adapter wraps around settings.ErrChanged) asks "Read it
+  again and keep the N staged edits? y/N"; every reload that meets staged edits drops an edit of a watch whose
+  position another watch now holds (another owner, or the same owner with other repositories, as when two of
+  one owner's watches swap), and after a save the keys that change the draft wait until the saved file's rows
+  are read. `--history` and a restore work over a file that no longer loads, through settings.History and
+  settings.RestoreFile (a small addition to spec 94's package, its own commit); the restart answer says when
+  launchd does not run the daemon (as `magnum status` tells it: launchd's pid is the daemon's) and names
+  `magnum daemon-restart --when-idle`. The colorless golden frame, identical to the plain one, became a test
+  that every state reads without color. Not taken: refusing an uppercase Y (every magnum screen confirms with
+  y or Y).
+  Rejected: huh as the whole screen (a form is a line of fields with no rail, search,
+  per-section marker or jump, dead after completion, and its errors block leaving a group); `,` as a screen
+  switch through runScreens (leaving the board cancels its context and with it an action in flight, and its
+  cursor, filter and scroll would have to be carried over by hand); applying edits live as some TUIs do
+  (the daemon reads the config only at start, and a spend change must not happen on a stray key); a stage
+  key in the list editor (esc would have had two meanings); teatest (one more dependency for what driving
+  Update with key messages already tests).
 
 ## Operations
 

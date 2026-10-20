@@ -263,6 +263,9 @@ type DashboardOptions struct {
 	// pending; the board shares it, so tab keeps both. nil = a log of this
 	// screen's own.
 	Log *ActionLog
+	// Settings, when set, lets `,` open the settings screen over the
+	// dashboard; esc there comes back to the dashboard as it was left.
+	Settings *SettingsScreen
 }
 
 // RunDashboard shows the live status dashboard until the user quits or ctx
@@ -274,8 +277,8 @@ func RunDashboard(ctx context.Context, src DashboardSource, act DashboardActions
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // stops an action still running after the grace (or ctrl+c)
-	final, err := runProgram(ctx, newDashboardModel(ctx, src, act, opts))
-	if m, ok := final.(dashboardModel); err == nil && ok && m.switching && ctx.Err() == nil {
+	final, err := runProgram(ctx, withSettings(ctx, newDashboardModel(ctx, src, act, opts), opts.Settings))
+	if m, ok := unwrapSettings(final).(dashboardModel); err == nil && ok && m.switching && ctx.Err() == nil {
 		return ErrSwitchToBoard
 	}
 	return err
@@ -630,6 +633,11 @@ func (m dashboardModel) listKey(k string) (dashboardModel, tea.Cmd) {
 		return m, cmd
 	case "W":
 		return m.resetWidths()
+	case settingsKey:
+		if m.opts.Settings == nil {
+			return m.fail("settings: not available on this screen")
+		}
+		return m, openSettings
 	case "g", "ctrl+r", "f5":
 		cmd := m.startLoad()
 		return m, cmd
@@ -1349,6 +1357,7 @@ func dashboardKeys(judge string) []hint {
 		{"W", "reset the column widths"},
 		{"g, ctrl+r", "refresh now (F5 too)"},
 		{"tab, t", "switch to the PR board"},
+		{settingsKey, "settings (esc comes back here)"},
 		{"?", "close this help"},
 		{"q, esc", "quit"},
 	}
