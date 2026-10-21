@@ -137,6 +137,9 @@ history: {{.HistoryFile}}
 {{- if .DocsFile}}
 docs: {{.DocsFile}}
 {{- end}}
+{{- if .TicketFile}}
+ticket: {{.TicketFile}}
+{{- end}}
 {{- if .PrepassFile}}
 prepass: {{.PrepassFile}}
 {{- end}}

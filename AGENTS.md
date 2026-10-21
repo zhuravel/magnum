@@ -106,6 +106,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/usage` | how much of an agent CLI's budget is used, and its pace |
 | `internal/github`, `identity`, `herdr`, `gitx`, `mysqlx`, `execx` | the outside world, each behind a fake |
 | `internal/webhooks` | magnum-relay's journal of the GitHub App's deliveries, read with curl (the token on stdin): `[webhooks]` shadow mode's source |
+| `internal/jira` | the PR's Jira issue a round hands the judge as `ticket.md`, read with curl (the token on stdin): `[jira]`'s client |
 | `internal/launchd`, `reveal` | the LaunchAgent; bringing the herdr client to the front of the terminal |
 | `internal/paths`, `fsx`, `textx` | the on-disk layout; the shared file (atomic write) and text helpers, leaves on the stdlib |
 | `internal/relay`, `cmd/magnum-relay`, `deploy/relay` | the webhook relay, a separate internet-facing service (stdlib and SQLite only): signed receiver, journal, listing; its Dockerfile, compose file and deploy guide |

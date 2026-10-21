@@ -34,6 +34,9 @@ notes_max_line: {{.NotesMaxLine}}
 {{- if .RelatedPRs}}
 related_prs: {{.RelatedPRs}}{{with .RelatedStack}} ({{.}}){{end}}
 {{- end}}
+{{- if .TicketFile}}
+ticket: {{.TicketFile}}
+{{- end}}
 {{- if .FailingChecks}}
 failing_checks: {{.FailingChecks}}
 {{- end}}

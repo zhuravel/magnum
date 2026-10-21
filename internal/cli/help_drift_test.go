@@ -122,7 +122,7 @@ var doctorHelpEntries = []doctorHelpEntry{
 	{"skill", "judge skill"}, {"fix role", "the fix role"}, {"learn editor", "skill editor"},
 	{"whiteboard", "Whiteboard CLI and server"},
 	{"prompt", "role prompts and prompts_dir"}, {"prompts", "role prompts and prompts_dir"},
-	{"gh", "gh and each identity"}, {"identity", "gh and each identity"},
+	{"gh", "gh and each identity"}, {"identity", "gh and each identity"}, {"jira", "Jira token file"},
 	{"mysql", "MySQL"},
 	{"clone", "main clones and their SSH origins"}, {"origin", "main clones and their SSH origins"},
 	{"schema", "reset_db"},

@@ -49,6 +49,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/identity"
+	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -222,6 +223,9 @@ type Runner struct {
 	Exec   execx.Runner // the readiness step's commands, and the restore of a checkout a stage left modified
 	Keys   Keys         // optional: interrupt timed-out roles (nil = leave them running)
 	Store  *store.Store
+	// Tickets reads the PR's Jira issue for the judge (ticket.go); nil when
+	// [jira] is off.
+	Tickets Tickets
 
 	Identity identity.Source // who posts: login, kind, GH_CONFIG_DIR
 	// SelfLogin is the user's own login (the poll identity). A PR authored by
@@ -666,6 +670,12 @@ type round struct {
 	// prepassFile is the head under review's prepass.json (prepass.go), as
 	// historyFile.
 	prepassFile string
+	// ticketFile is the head under review's ticket.md (ticket.go), which
+	// the judge prompts name, as historyFile; ticket is the PR's Jira issue
+	// as the round read it, once (ticketRead), for every head (nil = none).
+	ticketFile string
+	ticket     *jira.Ticket
+	ticketRead bool
 	// evidenceFile is the judge's evidence file (evidence.go), named in its
 	// prompt and read at the round's end; "" until the judge is prompted.
 	evidenceFile string

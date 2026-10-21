@@ -22,11 +22,12 @@ import (
 // (what the judge and the reviewers size a harm against), and the
 // simplification caps the judge posts by: the pipeline table's
 // max_simplifications in effect and each [[repo]] block's that is set
-// (config.Config.MaxSimplificationsFor). The texts count, not where they
-// are: a judge's skill path is left out of its role config, so a candidate
-// directory with the same texts as the checkout has its inputs (a landed
-// candidate's replays are the next baseline). magnum's own code is not part
-// of it. "" without a config.
+// (config.Config.MaxSimplificationsFor), and with [jira] on the site and the
+// account the judge reads the PR's ticket from (not the token file). The
+// texts count, not where they are: a judge's skill path is left out of its
+// role config, so a candidate directory with the same texts as the checkout
+// has its inputs (a landed candidate's replays are the next baseline).
+// magnum's own code is not part of it. "" without a config.
 func Inputs(cfg *config.Config) string {
 	return inputsOf(cfg, func(config.Role) bool { return true }, true)
 }
@@ -34,16 +35,16 @@ func Inputs(cfg *config.Config) string {
 // ReviewerInputs is the part of Inputs the reviewer roles read
 // (eval.Run.ReviewerInputs): the same hash over the roles that are not
 // judges, with the stakes lines the reviewers read too and without the
-// simplification caps, which only the judges read, so a change to a judge's
-// prompts, skill or caps leaves it alone and a judge-only replay can take
-// the reports of a full replay whose reviewers read what its own would
-// (eval.FullReplayFor). "" without a config.
+// simplification caps and [jira], which only the judges read, so a change to
+// a judge's prompts, skill, caps or ticket leaves it alone and a judge-only
+// replay can take the reports of a full replay whose reviewers read what its
+// own would (eval.FullReplayFor). "" without a config.
 func ReviewerInputs(cfg *config.Config) string {
 	return inputsOf(cfg, func(r config.Role) bool { return !r.Judge }, false)
 }
 
 // inputsOf hashes the inputs of the roles of cfg that of takes, then the
-// stakes lines, then, with judges, the simplification caps.
+// stakes lines, then, with judges, the simplification caps and [jira].
 func inputsOf(cfg *config.Config, of func(config.Role) bool, judges bool) string {
 	if cfg == nil {
 		return ""
@@ -86,6 +87,12 @@ func inputsOf(cfg *config.Config, of func(config.Role) bool, judges bool) string
 		write("max_simplifications", "pipeline", strconv.Itoa(cfg.MaxSimplificationsFor("")))
 		for _, l := range simplificationCaps(cfg) {
 			write("max_simplifications", l.key, l.line)
+		}
+		// The judge reads the PR's Jira ticket from this site as this
+		// account; with [jira] off nothing is written, so such a config
+		// hashes as before the ticket counted. The token file is no input.
+		if cfg.Jira.On() {
+			write("jira", cfg.Jira.URL, cfg.Jira.User)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]

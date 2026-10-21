@@ -24,6 +24,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/inventory"
+	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -298,10 +299,17 @@ func (a *App) wire() {
 		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner, Config: cfg, Layout: a.Layout, Tag: a.AgentTag,
 		IdentityEnv: a.identityEnv, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "agents"},
 	})
+	// One Jira client for every identity's rounds: a token file problem
+	// warns once per daemon start (jira.Client.WarnTokenFile).
+	var tickets pipeline.Tickets
+	if cfg.Jira.On() {
+		tickets = &jira.Client{Runner: a.Runner, URL: cfg.Jira.URL, User: cfg.Jira.User, TokenFile: cfg.Jira.TokenFile}
+	}
 	a.Pipeline = map[string]*pipeline.Runner{}
 	for name, src := range a.Identities {
 		a.Pipeline[name] = &pipeline.Runner{
-			Agents: a.Agents, GitHub: a.gh[name], Git: a.Git, Exec: a.Runner, Keys: a.Herdr,
+			Tickets: tickets,
+			Agents:  a.Agents, GitHub: a.gh[name], Git: a.Git, Exec: a.Runner, Keys: a.Herdr,
 			Store: a.Store, Identity: src, SelfLogin: selfLogin(cfg, name),
 			Config: cfg, Layout: a.Layout, AgentTag: a.AgentTag, Mise: a.Mise,
 			Logger: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "pipeline"},

@@ -158,3 +158,41 @@ func TestTheStakesLinesCountInTheOrderOfTheirKeys(t *testing.T) {
 		t.Errorf("listed the other way round the inputs are %s/%s, want %s/%s", got, r, all, rev)
 	}
 }
+
+// The judge reads the PR's Jira ticket when [jira] is on (spec 116), so turning it on, or reading
+// another site or as another account (which sees other fields), is another baseline of the round's
+// inputs; the reviewers read no ticket, so theirs stay. [jira] off adds nothing, whatever else the
+// table sets, so a config without it hashes as before the ticket counted, and the token file, which
+// holds a secret and changes nothing the judge reads, is never an input.
+func TestTheJiraSiteChangesTheInputsButNotTheReviewers(t *testing.T) {
+	cfg := testConfig(t)
+	off, rev := Inputs(cfg), ReviewerInputs(cfg)
+	cfg.Jira = config.Jira{User: "alice@example.com", TokenFile: "/keys/jira.token"} // no url: off
+	if got := Inputs(cfg); got != off {
+		t.Errorf("[jira] off changed the inputs to %s from %s", got, off)
+	}
+	seen := map[string]string{off: "[jira] off"}
+	for _, step := range []struct {
+		what string
+		set  func()
+	}{
+		{"turning [jira] on", func() { cfg.Jira.URL = "https://example.atlassian.net" }},
+		{"another site", func() { cfg.Jira.URL = "https://other.atlassian.net" }},
+		{"another account", func() { cfg.Jira.User = "bob@example.com" }},
+	} {
+		step.set()
+		got := Inputs(cfg)
+		if prev, ok := seen[got]; ok {
+			t.Errorf("after %s the inputs are %s, as after %s", step.what, got, prev)
+		}
+		seen[got] = step.what
+		if r := ReviewerInputs(cfg); r != rev {
+			t.Errorf("after %s the reviewer inputs are %s, want %s: the reviewers read no ticket", step.what, r, rev)
+		}
+	}
+	on := Inputs(cfg)
+	cfg.Jira.TokenFile = "/keys/other.token"
+	if got := Inputs(cfg); got != on {
+		t.Errorf("another token file changed the inputs to %s from %s", got, on)
+	}
+}

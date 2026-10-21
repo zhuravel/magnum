@@ -131,11 +131,18 @@ func (c *Config) webhooksWarnings() []string {
 	return out
 }
 
-// checkRelayURL accepts an https URL with a host and no credentials, query
-// or fragment, made of characters that need no quoting in curl's config.
+// checkRelayURL accepts the relay's URL (checkHTTPSURL).
 func checkRelayURL(raw string) error {
+	return checkHTTPSURL(raw, "the relay's https:// URL in shadow mode", "the relay's base URL")
+}
+
+// checkHTTPSURL accepts an https URL with a host and no credentials, query
+// or fragment, made of characters that need no quoting in curl's config.
+// what names the URL for "" ("the relay's https:// URL"), and base what
+// to name instead of a URL with a query ("the relay's base URL").
+func checkHTTPSURL(raw, what, base string) error {
 	if raw == "" {
-		return errors.New("must be the relay's https:// URL in shadow mode")
+		return errors.New("must be " + what)
 	}
 	if !strings.HasPrefix(raw, "https://") {
 		return fmt.Errorf("must be an https:// URL, got %q", raw)
@@ -152,7 +159,7 @@ func checkRelayURL(raw string) error {
 	case u.User != nil:
 		return fmt.Errorf("%q carries credentials: the token goes in token_file", raw)
 	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#"):
-		return fmt.Errorf("%q has a query or a fragment: name the relay's base URL", raw)
+		return fmt.Errorf("%q has a query or a fragment: name %s", raw, base)
 	}
 	return nil
 }

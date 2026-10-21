@@ -128,8 +128,8 @@ func (rd *round) reviewers(ctx context.Context, runs map[string]*store.Run, judg
 // them from the first stage on, and returns once both ended. head is the
 // PR's new head when the round must restart: a push noticed while a stage
 // or the own pass ran, or by the check before each stage and after the
-// last. It first writes the head's history.json, docs.json and
-// prepass.json, which the prompts name (writeHistory, writeDocs,
+// last. It first writes the head's history.json, docs.json, ticket.md and
+// prepass.json, which the prompts name (writeHistory, writeDocs, writeTicket,
 // writePrepass), and notes the checkout, which each stage's roles and the
 // own pass must leave as they found it (checkTree). marker is the run id
 // the round's review carries, which the own-pass prompt quotes.
@@ -142,6 +142,7 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 	defer cancel(nil)
 	rd.writeHistory(ctx)
 	rd.writeDocs(ctx)
+	rd.writeTicket(ctx)
 	rd.writePrepass(ctx)
 	if len(rd.stages) > 0 || own != nil { // a judge's own pass alone (StoredReports) leaves the checkout as it found it too
 		rd.noteTree(ctx)

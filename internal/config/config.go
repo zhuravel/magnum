@@ -72,6 +72,7 @@ type Config struct {
 	Notes      Notes      `toml:"notes"`
 	Board      Board      `toml:"board"`
 	Webhooks   Webhooks   `toml:"webhooks"`
+	Jira       Jira       `toml:"jira"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -843,7 +844,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 
 // applyOverlay merges the user config: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [github], [pipeline], [usage], [triage], [learn], [notes], [board] and [webhooks] override the committed values key by key,
+// [github], [pipeline], [usage], [triage], [learn], [notes], [board], [webhooks] and [jira] override the committed values key by key,
 // and [spend.<level>] tables merge into the base's by level, role and key (mergeSpendLevels).
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
@@ -875,6 +876,7 @@ func (c *Config) applyOverlay(path string, data []byte) (*layer, error) {
 	c.notesModelFollowsKind(md)
 	overlaySection(md, "board", &c.Board, &o.Board)
 	overlaySection(md, "webhooks", &c.Webhooks, &o.Webhooks)
+	overlaySection(md, "jira", &c.Jira, &o.Jira)
 	l, err := readLayerData(path, data, false, md, o.Kinds, o.Roles)
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
@@ -994,6 +996,7 @@ func (c *Config) expand() {
 		c.Identities[i].PrivateKeyFile = c.configPath(c.Identities[i].PrivateKeyFile)
 	}
 	c.Webhooks.TokenFile = c.configPath(c.Webhooks.TokenFile)
+	c.Jira.TokenFile = c.configPath(c.Jira.TokenFile)
 	for i := range c.Watches {
 		c.Watches[i].CloneRoot = paths.Expand(c.Watches[i].CloneRoot)
 		if c.Watches[i].CloneRoot == "" {
@@ -1019,7 +1022,7 @@ func (c *Config) expand() {
 
 // configPath expands ~ in a file the user config names and resolves a
 // relative one against the user config's directory: an identity's private
-// key file, the relay's token file.
+// key file, the relay's and Jira's token files.
 func (c *Config) configPath(p string) string {
 	f := paths.Expand(p)
 	if f != "" && !filepath.IsAbs(f) && c.Layout.ConfigDir() != "" {

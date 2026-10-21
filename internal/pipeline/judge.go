@@ -919,7 +919,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		Reports: reports, ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
 		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(rereview),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
-		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), CIRed: rd.ciRed(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile,
+		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), CIRed: rd.ciRed(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile, TicketFile: rd.ticketFile,
 		PrepassFile: rd.prepassFile, ColdJudge: cold, FullPass: in.FullPass && in.Kind == KindRecovery, HoldApproval: in.HoldApproval,
 		EvidenceMap: rd.evidenceMap(), Stakes: rd.r.Config.StakesFor(rd.owner + "/" + rd.name),
 		MaxSimplifications: rd.r.Config.MaxSimplificationsFor(rd.owner + "/" + rd.name),

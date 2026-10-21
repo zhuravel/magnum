@@ -493,6 +493,12 @@ func TestRenderGolden(t *testing.T) {
 		d.StackedBelow, d.StackedAbove = []int{751}, []int{753}
 		return d
 	}
+	// The PR's Jira ticket: every judge prompt names ticket.md by its path
+	// alone, the continued turn the paused turn's.
+	withTicket := func(d JudgeData) JudgeData {
+		d.TicketFile = ownDir + "ticket.md"
+		return d
+	}
 	// The changed files' history, the base docs that name them, the
 	// pre-pass and the PR's evidence map: the judge prompts with a block
 	// (the continued turn aside) name history.json, docs.json, prepass.json
@@ -569,6 +575,11 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_rereview_stacked", "judge-rereview.md", withStack(judgeFixture())},
 		{"judge_recovery_candidates_stacked", "judge-recovery.md", withStack(candidates(judgeFixture()))},
 		{"judge_continue_stacked", "judge-continue.md", withStack(judgeFixture())},
+		{"judge_own_pass_ticket", "judge-own-pass.md", withTicket(withHistory(ownPass("initial")))},
+		{"judge_initial_ticket", "judge-initial.md", withTicket(withHistory(judgeFixture()))},
+		{"judge_rereview_ticket", "judge-rereview.md", withTicket(judgeFixture())},
+		{"judge_recovery_candidates_ticket", "judge-recovery.md", withTicket(candidates(judgeFixture()))},
+		{"judge_continue_ticket", "judge-continue.md", withTicket(withRelated(judgeFixture()))},
 		{"judge_own_pass_history", "judge-own-pass.md", withHistory(withRelated(ownPass("initial")))},
 		{"judge_initial_history", "judge-initial.md", withHistory(withRelated(judgeFixture()))},
 		{"judge_rereview_candidates_history", "judge-rereview.md", withHistory(candidates(withNotes))},

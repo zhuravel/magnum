@@ -1,7 +1,8 @@
 // Package fsx holds the file helpers several packages share: an atomic file
 // write, plain or confined to an os.Root, a replacement without disk syncs,
-// a size-limited read of a regular file, an existence check and a canonical
-// path. It imports only the standard library.
+// a size-limited read of a regular file, the check of a file holding a
+// secret, an existence check and a canonical path. It imports only the
+// standard library.
 package fsx
 
 import (
@@ -180,6 +181,25 @@ func ReadRegular(path string, limit int64) ([]byte, error) {
 		return nil, tooLarge
 	}
 	return buf.Bytes(), nil
+}
+
+// CheckPrivate checks a file that holds a secret (a token): a regular file,
+// symlinks followed, that neither its group nor others may read or write
+// (0600 or narrower). A missing file is fs.ErrNotExist. The errors name the
+// file and what is wrong with it, never its content.
+func CheckPrivate(path string) error {
+	fi, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("%s does not exist: %w", path, fs.ErrNotExist)
+	case err != nil:
+		return err
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("%s is not a regular file", path)
+	case fi.Mode().Perm()&0o077 != 0:
+		return fmt.Errorf("%s is open to its group or others (mode %04o): chmod 600 it", path, fi.Mode().Perm())
+	}
+	return nil
 }
 
 // Exists reports whether path names something os.Stat can see (a symlink

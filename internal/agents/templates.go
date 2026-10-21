@@ -484,6 +484,14 @@ type JudgeData struct {
 	// prompts; "" when no page names a changed path, and as for
 	// HistoryFile.
 	DocsFile string
+	// TicketFile is ticket.md in the report directory: the Jira issue the
+	// PR's title or head branch names (pipeline.TicketFile: its key, URL,
+	// summary, status, type, priority, labels, parent, description and
+	// requirement fields, the text as Jira gives it, never a comment or a
+	// person), rendered as `ticket` by every judge prompt, the path only
+	// (it is data); "" when [jira] is off, the PR names no issue, or the
+	// read failed. A continued turn names the paused turn's file.
+	TicketFile string
 	// PrepassFile is prepass.json in the report directory, magnum's reading
 	// of the PR's diff with git (pipeline.Prepass: the removed definitions
 	// files outside the diff still name, the changed source files without a

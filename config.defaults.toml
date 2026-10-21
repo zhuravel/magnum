@@ -2,7 +2,7 @@
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
 # appended, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [usage], [triage],
-# [learn], [notes], [webhooks] or [kinds.<name>] overrides the value here, its [[role]] blocks override the role of the same
+# [learn], [notes], [webhooks], [jira] or [kinds.<name>] overrides the value here, its [[role]] blocks override the role of the same
 # name key by key (other names are appended), and its [spend.<level>] tables merge by level, role and key. App private keys are PEM files ([[identity]] private_key_file, by
 # convention ~/.config/magnum/keys/<identity>.pem); only the older private_key_env reads one from an environment
 # variable, e.g. from a checkout's gitignored mise.local.toml (the LaunchAgent then runs through `mise exec`).
@@ -152,6 +152,21 @@ mode = "off"                      # off | shadow ("active", acting on the events
 # owners = []                     # the watch owners the App is installed on; others are never compared
 wait = "25s"                      # how long a page waits for an event (the relay's long poll, at most 30s)
 stale_after = "90s"               # no page for this long makes the stream unhealthy (longer than wait + 10s)
+
+# Jira: a round reads the issue the PR names and hands it to the judge as ticket.md in the report directory, to
+# check the description's stated scope and the PR's behaviour against what the issue asks. The issue key is the
+# first one a [board], [[watch]] or [[repo]] tracker knows in the PR's title, else in its head branch, among the
+# trackers whose template starts with url (a Linear tracker is never read). One read a round, through curl (the
+# REST API v2): the summary, status, type, priority, labels, parent, description (the first 20,000 bytes) and the
+# text custom fields named for acceptance criteria, requirements, the definition of done or scope (8,000 bytes
+# each); never a comment, a person or an attachment. A failure is a round.ticket warning and the round goes on.
+# Off without url. `magnum doctor` checks the token file (MAGNUM_LIVE_JIRA=1 also asks Jira whether it accepts it).
+
+[jira]
+# url = ""                        # the Jira site, https only: "https://example.atlassian.net"; "" = off
+# user = ""                       # the Jira account's email
+# token_file = ""                 # the account's API token alone on one line, in a file of mode 0600 (relative:
+                                  # beside this config); it goes to curl on stdin, never in argv or a log
 
 # [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
 # codex_soft = 80                 # at this % used, full re-reviews wait (first reviews, delta checks, replies,

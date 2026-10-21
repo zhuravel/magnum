@@ -34,7 +34,8 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"$CODEX_HOME/hooks.json herdr learns session ids from: missing, or disabled in config.toml's [hooks.state]), the judge skill, the fix role, the skill editor "+
 			"(whether [learn] editor can run, and why it is off), the Whiteboard "+
 			"CLI and server (when a watch has whiteboards on), the role prompts and "+
-			"prompts_dir, gh and each identity, MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
+			"prompts_dir, gh and each identity, the Jira token file (when [jira] is on; MAGNUM_LIVE_JIRA=1 also asks Jira whether it "+
+			"accepts it), MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
 			"origins, a pool's reset_db when it names schema_paths, mise (when a pool, the LaunchAgent or your PATH uses it), the login shell "+
 			"(whether the `zsh -lc` shell the agents run their tools in sees mise's shims), free disk, the machine's memory "+
 			"pressure and swap (a WARN at critical pressure; nothing in magnum acts on it), codex staging, the launchd agent "+
@@ -169,7 +170,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 // a fixed order.
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
-		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
+		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck,
 		doctorClones, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorMemory, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
 		doctorLearnEditor, doctorRegistry,
 	}

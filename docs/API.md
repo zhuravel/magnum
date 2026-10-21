@@ -44,12 +44,13 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [evalrun](#evalrun) | Package evalrun replays one case of an eval corpus (internal/eval) as a blind dry-run round and scores it: what `magnum eval run` does for each case, in a package the daemon can call too. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
-| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, an existence check and a canonical path. |
+| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
 | [herdr](#herdr) | Package herdr is magnum's client for the herdr terminal multiplexer's Unix-socket API (verified against herdr 0.9.x, protocol 22). |
 | [identity](#identity) | Package identity provides the GitHub identities magnum acts as. |
 | [inventory](#inventory) | Package inventory is the read-mostly reconciliation view: the registry (slots, assignments, sessions) compared with what is really on disk (`git worktree list` of every watched main clone), in MySQL (per-worktree databases), in herdr (agents per path) and, on request, on GitHub (states of PRs checked out in manual worktrees). |
+| [jira](#jira) | Package jira reads the Jira issue a pull request names, for a review round (DECISIONS "A round hands the judge the PR's Jira ticket"): GET <url>/rest/api/2/issue/<KEY>?expand=names&fields=*all with curl through execx, as internal/webhooks reads the relay (the operator's outbound firewall blocks Go's own HTTP client in a rebuilt, unsigned binary). |
 | [launchd](#launchd) | Package launchd writes and manages magnum's LaunchAgent (label zhuravel.magnum): rendering the plist, installing it into the user's GUI domain, and querying, restarting and removing the job. |
 | [learn](#learn) | Package learn is the deterministic half of the retro (DECISIONS "Learning loop: daily retro"): after a pull request magnum reviewed closes, Build turns what other reviewers said about it into candidates for a classifier, after dropping what cannot be a miss (the author's and magnum's own comments, short approvals, comments on code magnum never saw, findings magnum already posted or dropped as a duplicate of the comment), and ParseOutput reads the classifier's answer back, refusing anything off schema and any lesson that retells the pull request instead of teaching (ScrubLesson). |
 | [mergecheck](#mergecheck) | Package mergecheck is `magnum merge-check`: whether an open PR's specs still pass once another PR is merged. |
@@ -1055,6 +1056,14 @@ type JudgeData struct {
 	// prompts; "" when no page names a changed path, and as for
 	// HistoryFile.
 	DocsFile string
+	// TicketFile is ticket.md in the report directory: the Jira issue the
+	// PR's title or head branch names (pipeline.TicketFile: its key, URL,
+	// summary, status, type, priority, labels, parent, description and
+	// requirement fields, the text as Jira gives it, never a comment or a
+	// person), rendered as `ticket` by every judge prompt, the path only
+	// (it is data); "" when [jira] is off, the PR names no issue, or the
+	// read failed. A continued turn names the paused turn's file.
+	TicketFile string
 	// PrepassFile is prepass.json in the report directory, magnum's reading
 	// of the PR's diff with git (pipeline.Prepass: the removed definitions
 	// files outside the diff still name, the changed source files without a
@@ -3579,6 +3588,7 @@ type Config struct {
 	Notes      Notes      `toml:"notes"`
 	Board      Board      `toml:"board"`
 	Webhooks   Webhooks   `toml:"webhooks"`
+	Jira       Jira       `toml:"jira"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -4243,6 +4253,30 @@ func (i Identity) Footer() string
     Footer is the identity's footer template, which magnum renders
     (RenderFooter) and appends to every review the identity posts once it is
     verified: review_footer, trimmed, else DefaultReviewFooter; "" = no footer.
+
+type Jira struct {
+	// URL is the Jira site, https only ("https://example.atlassian.net");
+	// "" = off. Only a [board], [[watch]] or [[repo]] tracker whose template
+	// starts with it names an issue to read.
+	URL string `toml:"url"`
+	// User is the account's email, which reads the issues with the token.
+	User string `toml:"user"`
+	// TokenFile holds the account's API token alone on one line: a regular
+	// file of mode 0600 (~ and a path relative to the user config's
+	// directory resolved). The token goes to curl on stdin, never in argv,
+	// a log or an error.
+	TokenFile string `toml:"token_file"`
+}
+    Jira is the [jira] table: the site a round reads the PR's issue from
+    (internal/jira), named by the first issue key of a tracker on that site in
+    the PR's title or head branch. Off by default (no url).
+
+func (j Jira) Names(tracker string) bool
+    Names reports whether a tracker template (Tracker.URL) is one of the site's:
+    it starts with the site's URL and a slash.
+
+func (j Jira) On() bool
+    On reports whether rounds read the PR's Jira ticket.
 
 type Kind struct {
 	// Start: extra args always appended.
@@ -8826,15 +8860,16 @@ func Inputs(cfg *config.Config) string
     Inputs is a hash (12 hex) of what a replay's review reads besides the PR and
     the notes (eval.Run.Inputs): every role's config with the model it resolves
     to and its kind's config, the prompt files the roles name as they resolve
-    now (the checkout's prompts_dir, else the embedded ones), each judge's
-    skill file, the stakes lines of the [[watch]] and [[repo]] blocks (what the
-    judge and the reviewers size a harm against), and the simplification caps
-    the judge posts by: the pipeline table's max_simplifications in effect and
-    each [[repo]] block's that is set (config.Config.MaxSimplificationsFor).
-    The texts count, not where they are: a judge's skill path is left out of its
-    role config, so a candidate directory with the same texts as the checkout
-    has its inputs (a landed candidate's replays are the next baseline).
-    magnum's own code is not part of it. "" without a config.
+    now (the checkout's prompts_dir, else the embedded ones), each judge's skill
+    file, the stakes lines of the [[watch]] and [[repo]] blocks (what the judge
+    and the reviewers size a harm against), and the simplification caps the
+    judge posts by: the pipeline table's max_simplifications in effect and each
+    [[repo]] block's that is set (config.Config.MaxSimplificationsFor), and with
+    [jira] on the site and the account the judge reads the PR's ticket from (not
+    the token file). The texts count, not where they are: a judge's skill path
+    is left out of its role config, so a candidate directory with the same texts
+    as the checkout has its inputs (a landed candidate's replays are the next
+    baseline). magnum's own code is not part of it. "" without a config.
 
 func Refused(ctx context.Context, d Deps, ec eval.Case) string
     Refused says why case ec is not replayed ("" = it may be): an earlier
@@ -8846,10 +8881,10 @@ func ReviewerInputs(cfg *config.Config) string
     ReviewerInputs is the part of Inputs the reviewer roles read
     (eval.Run.ReviewerInputs): the same hash over the roles that are not judges,
     with the stakes lines the reviewers read too and without the simplification
-    caps, which only the judges read, so a change to a judge's prompts, skill
-    or caps leaves it alone and a judge-only replay can take the reports of a
-    full replay whose reviewers read what its own would (eval.FullReplayFor).
-    "" without a config.
+    caps and [jira], which only the judges read, so a change to a judge's
+    prompts, skill, caps or ticket leaves it alone and a judge-only replay can
+    take the reports of a full replay whose reviewers read what its own would
+    (eval.FullReplayFor). "" without a config.
 
 func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun)
     RunCase replays case ec and scores it. Every failure becomes the case's
@@ -9194,8 +9229,8 @@ package fsx // import "github.com/zhuravel/magnum/internal/fsx"
 
 Package fsx holds the file helpers several packages share: an atomic file
 write, plain or confined to an os.Root, a replacement without disk syncs,
-a size-limited read of a regular file, an existence check and a canonical path.
-It imports only the standard library.
+a size-limited read of a regular file, the check of a file holding a secret,
+an existence check and a canonical path. It imports only the standard library.
 
 VARIABLES
 
@@ -9214,6 +9249,12 @@ FUNCTIONS
 func Canon(p string) string
     Canon cleans p and resolves its symlinks when it exists, so the /var and
     /private/var spellings of one directory compare equal; "" stays "".
+
+func CheckPrivate(path string) error
+    CheckPrivate checks a file that holds a secret (a token): a regular file,
+    symlinks followed, that neither its group nor others may read or write (0600
+    or narrower). A missing file is fs.ErrNotExist. The errors name the file and
+    what is wrong with it, never its content.
 
 func Exists(path string) bool
     Exists reports whether path names something os.Stat can see (a symlink
@@ -11843,6 +11884,139 @@ type SyncResult struct {
 
 ```
 
+## jira
+
+```text
+package jira // import "github.com/zhuravel/magnum/internal/jira"
+
+Package jira reads the Jira issue a pull request names, for a review
+round (DECISIONS "A round hands the judge the PR's Jira ticket"): GET
+<url>/rest/api/2/issue/<KEY>?expand=names&fields=*all with curl through execx,
+as internal/webhooks reads the relay (the operator's outbound firewall blocks
+Go's own HTTP client in a rebuilt, unsigned binary). The v2 API returns the
+description as text, not the v3 API's document format.
+
+The account's email and API token go to curl on stdin, as the `user` line of
+the config curl reads with --config - (basic auth), never in argv, a log,
+an event or an error; --disable, the first argument, keeps a ~/.curlrc out.
+The token is read from a file only its owner can open.
+
+A Ticket keeps the issue's key, URL, summary, status, type, priority, labels,
+parent, its description (cut at MaxDescription) and the custom fields whose name
+speaks of requirements (cut at MaxField): never a comment, a person (assignee,
+reporter, watchers) or an attachment. A failure is an *Error of a class,
+whose message names the class and the status code, never the answer's body.
+
+CONSTANTS
+
+const (
+	MaxDescription = 20000
+	MaxField       = 8000
+)
+    The cuts of a ticket's text, in bytes: the description and each requirement
+    field.
+
+const (
+	ClassTokenFile    = "token_file"   // the token file is missing, open to others or holds no token
+	ClassUnauthorized = "unauthorized" // HTTP 401: the email or the token is wrong
+	ClassForbidden    = "forbidden"    // HTTP 403
+	ClassNotFound     = "not_found"    // HTTP 404: no such issue, or the account cannot see it
+	ClassStatus       = "status"       // any other HTTP status
+	ClassTimeout      = "timeout"      // no answer within MaxTime
+	ClassUnreachable  = "unreachable"  // curl failed otherwise (DNS, TLS, connection)
+	ClassMalformed    = "malformed"    // an answer that is not an issue
+)
+    The classes of an *Error.
+
+const MaxTime = 20 * time.Second
+    MaxTime is curl's bound on one request (its --max-time); the command itself
+    gets 5 seconds more.
+
+
+FUNCTIONS
+
+func ReadToken(path string) (string, error)
+    ReadToken reads the API token from path: a file fsx.CheckPrivate accepts,
+    holding one word of printable ASCII, trimmed of surrounding white space.
+    Its errors are of ClassTokenFile, name the file and never quote the token.
+
+
+TYPES
+
+type Client struct {
+	Runner execx.Runner
+	// URL is the site, https ("https://example.atlassian.net"; config.Jira
+	// validates it).
+	URL string
+	// User is the account's email and TokenFile the file holding its API
+	// token (ReadToken).
+	User      string
+	TokenFile string
+
+	// Has unexported fields.
+}
+    Client reads issues from one Jira site.
+
+func (c *Client) Myself(ctx context.Context) error
+    Myself asks the site whether it accepts the credentials (GET
+    /rest/api/2/myself), keeping nothing of the answer: doctor's live check.
+
+func (c *Client) Ticket(ctx context.Context, key string) (Ticket, error)
+    Ticket reads the issue key ("PS-123") from the site.
+
+func (c *Client) WarnTokenFile() bool
+    WarnTokenFile reports whether a token file problem is to be a warning:
+    true the first time it is asked, false after. The daemon makes one Client at
+    startup, so a token file the config warned about is one warning per daemon
+    start, then info.
+
+type Error struct {
+	Class string
+	// Code is the HTTP status (ClassUnauthorized, ClassForbidden,
+	// ClassNotFound, ClassStatus) or curl's exit code (ClassUnreachable).
+	Code int
+	// Has unexported fields.
+}
+    Error is a failure to read an issue, by class. Its message names the class
+    and the status code or curl's exit code, never the answer's body, the user
+    or the token; a token file's names the file.
+
+func (e *Error) Error() string
+
+type Field struct {
+	Name  string
+	Value string
+	Bytes int
+}
+    Field is one requirement field of a ticket: its name, its text (cut at
+    MaxField) and the text's size before the cut.
+
+type Ticket struct {
+	Key string // "PS-123"
+	URL string // <site>/browse/<Key>
+	// Summary, Status, Type and Priority are the issue's, on one line each
+	// ("" when it has none); Labels its labels.
+	Summary, Status, Type, Priority string
+	Labels                          []string
+	// ParentKey and ParentSummary are its parent's (an epic's), when it has one.
+	ParentKey, ParentSummary string
+	// Description is the issue's description, cut at MaxDescription;
+	// DescriptionBytes its size before the cut.
+	Description      string
+	DescriptionBytes int
+	// Fields are the custom fields whose name holds one of requirementWords
+	// and whose value is text, by name.
+	Fields []Field
+}
+    Ticket is what a round hands the judge of an issue.
+
+func (t Ticket) Markdown() []byte
+    Markdown is ticket.md: a heading with the key and the URL, then the fields
+    as sections, the text as given, a cut text followed by a line saying how
+    much of it was kept.
+
+```
+
 ## launchd
 
 ```text
@@ -14082,6 +14256,10 @@ const PrepassFile = "prepass.json"
 const RelatedFile = "related.json"
     RelatedFile is the related PRs' file in the round's report directory.
 
+const TicketFile = "ticket.md"
+    TicketFile is the PR's Jira issue (jira.Ticket.Markdown), in the round's
+    report directory.
+
 
 VARIABLES
 
@@ -14830,6 +15008,9 @@ type Runner struct {
 	Exec   execx.Runner // the readiness step's commands, and the restore of a checkout a stage left modified
 	Keys   Keys         // optional: interrupt timed-out roles (nil = leave them running)
 	Store  *store.Store
+	// Tickets reads the PR's Jira issue for the judge (ticket.go); nil when
+	// [jira] is off.
+	Tickets Tickets
 
 	Identity identity.Source // who posts: login, kind, GH_CONFIG_DIR
 	// SelfLogin is the user's own login (the poll identity). A PR authored by
@@ -14903,6 +15084,15 @@ type ThreadLister interface {
     review threads with their comments (github.Client.ReviewThreads). Optional:
     without it a re-review names no threads file and the judge reads the replies
     itself.
+
+type Tickets interface {
+	Ticket(ctx context.Context, key string) (jira.Ticket, error)
+	// WarnTokenFile reports whether a token file problem is a warning:
+	// true once per daemon start, then false (info), as the config's
+	// warning already names it.
+	WarnTokenFile() bool
+}
+    Tickets reads Jira issues: *jira.Client, made once per daemon start.
 
 ```
 
@@ -21126,7 +21316,7 @@ FUNCTIONS
 func CheckTokenFile(path string) error
     CheckTokenFile checks the file holding the relay's token: a regular file,
     symlinks followed, that neither its group nor others may read or write (0600
-    or narrower). A missing file is fs.ErrNotExist.
+    or narrower; fsx.CheckPrivate). A missing file is fs.ErrNotExist.
 
 func ReadToken(path string) (string, error)
     ReadToken reads the relay's bearer token from path: a file CheckTokenFile

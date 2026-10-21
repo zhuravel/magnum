@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"slices"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // MaxWait is the longest long poll the relay serves (wait=).
@@ -342,21 +342,8 @@ func ReadToken(path string) (string, error) {
 
 // CheckTokenFile checks the file holding the relay's token: a regular file,
 // symlinks followed, that neither its group nor others may read or write
-// (0600 or narrower). A missing file is fs.ErrNotExist.
-func CheckTokenFile(path string) error {
-	fi, err := os.Stat(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("%s does not exist: %w", path, fs.ErrNotExist)
-	case err != nil:
-		return err
-	case !fi.Mode().IsRegular():
-		return fmt.Errorf("%s is not a regular file", path)
-	case fi.Mode().Perm()&0o077 != 0:
-		return fmt.Errorf("%s is open to its group or others (mode %04o): chmod 600 it", path, fi.Mode().Perm())
-	}
-	return nil
-}
+// (0600 or narrower; fsx.CheckPrivate). A missing file is fs.ErrNotExist.
+func CheckTokenFile(path string) error { return fsx.CheckPrivate(path) }
 
 // safe keeps what the relay sends that reaches a message (an epoch, a
 // cursor, an event name) to letters, digits and ._:- and 100 bytes.

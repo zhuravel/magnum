@@ -88,8 +88,9 @@ stops arguing and leaves the call to the operator. A P1 or P2 problem the judge 
 PR did not bring is not a finding: up to three go into a collapsed "Found nearby, not this PR's" block
 before Checks, one line each, never counted in the verdict (a security one only into `magnum debt`).
 A false claim of the description that bears on risk (a ticked "Can be reverted easily" the previous
-release cannot keep) is a finding, or one `Description: ✗ <claim>: <why>` line when it harms nothing.
-[The judge skill](#the-judge-skill) has the full format.
+release cannot keep) is a finding, or one `Description: ✗ <claim>: <why>` line when it harms nothing,
+and with `[jira]` on a requirement of the PR's Jira issue it does not meet is one `Ticket: ✗ <what>: <why>`
+line, or a finding when it has impact. [The judge skill](#the-judge-skill) has the full format.
 
 With `[pipeline] status_comment = true` the PR also gets one comment, edited in place, that says whether
 its review is queued (and why it waits), in progress or posted (with its verdict in a few words), says when
@@ -1595,6 +1596,42 @@ claude-review prompts in one sentence. The reviewers read the pages that bear on
 them (`git show <base>:<page>`); what a page records as deliberate, or as a known gap, is a nearby problem
 at most, never this PR's finding, and a finding against documented behaviour needs a proof.
 
+**Tickets.** The judge checks a PR against the Jira issue it names, since a review verified the
+description's claims but never what the task asked for. With `[jira]` on (off by default), a round
+reads the issue and writes it as `ticket.md` in the report directory. The key is the first one a
+`trackers` template on that site knows (`[board]`, `[[watch]]` or `[[repo]]`, the templates the board's `t`
+opens) in the PR's title, else in its head branch; a tracker elsewhere (Linear) is never read. The
+description is not searched for a key yet: the round has no copy of it and reads none from GitHub, and
+keeping the keys a description names at poll time is the follow-up if keys turn out to live only there.
+One read a round, before the stages of its first head, through curl with the account's email and API token
+on stdin (`GET <url>/rest/api/2/issue/<KEY>?expand=names&fields=*all`, the v2 API, whose description is
+text); a restart writes the new head's copy without reading again, a continued turn names the paused
+turn's file, and a blind replay reads it too (no comment is read, so nothing written after the review
+reaches its judge). The file holds the key and URL, the summary, status (a Done or Closed issue is still
+handed over), type, priority, labels and parent, the description (its first 20,000 bytes) and every text
+custom field whose name holds acceptance, criteria, requirement, definition of done or scope (8,000 bytes
+each); never a comment, a person (assignee, reporter, watchers) or an attachment. Every judge prompt names
+it as `ticket`, by its path only. The judge holds the description's stated scope and the PR's behaviour
+against what the issue asks: a requirement the PR does not meet, or a change the issue does not ask for
+that the description leaves unexplained, is one body line `Ticket: ✗ <what>: <why>` beside the
+description's, or a finding at its priority when it has impact; what the issue leaves open is no finding.
+Each head's `round.ticket` event names the key, the status, the number of requirement fields and the sizes,
+never the summary or any text; a PR that names no key gets one info line, and a refusal (401, 403, 404), a
+timeout or an answer that is not an issue is one warning with its class, the round going on without the
+file. A token file that is missing or open to others is a config warning, and a `round.ticket` warning
+once per daemon start, info after; `magnum doctor` checks it, and `MAGNUM_LIVE_JIRA=1 magnum doctor` also
+asks Jira whether it accepts the account (`GET /rest/api/2/myself`). No GitHub budget is spent.
+
+```toml
+[jira]
+url = "https://example.atlassian.net"   # the site, https only; the trackers whose template starts with it name the issue
+user = "alice@example.com"              # the Jira account's email
+token_file = "keys/jira.token"          # its API token alone on one line, chmod 600 (relative: beside config.toml)
+
+[board]
+trackers = ["https://example.atlassian.net/browse/PS-{num}"]   # "[PS-123] …" in a title names PS-123
+```
+
 Beside `related.json`, `history.json` and `docs.json`, the reviewers get Magnum's own reading of the diff,
 since a colleague's review tool lists the references a PR broke before any model reads code, and its
 reviewers found defects from those leads that Magnum's missed. Before the reviewers of each head, Magnum
@@ -2246,6 +2283,10 @@ What an author gets, every review alike:
   easily" whose previous release cannot run on the new schema or the jobs queued meanwhile) is a finding
   at its priority; one without impact is one body line, `Description: ✗ <claim>: <why>`; a true claim
   gets no line.
+- **The PR checked against its ticket** (with `[jira]` on, see [Tickets](#roles-and-kinds-the-review-pipeline)):
+  a requirement of the issue the PR does not meet, or a change the issue does not ask for that the
+  description leaves unexplained, is a finding at its priority when it has impact, else one body line
+  `Ticket: ✗ <what>: <why>`; what the issue leaves open is no finding, and a met ticket gets no line.
 - **Priority by reachability**: P2 is a defect that real use or an attacker reaches, with harm beyond the
   triggering request that the comment names and sizes (money, data or access lost, a task a user cannot
   finish, a day of someone's work); one that only crafted input or a stack of unlikely preconditions
@@ -3728,6 +3769,7 @@ the GitHub App's webhooks, which the sleeping Mac behind NAT cannot.
 | `internal/herdr`, `internal/reveal`, `internal/notify` | herdr socket client, terminal reveal (iTerm2, Terminal, Ghostty, WezTerm), toasts. |
 | `internal/relay`, `cmd/magnum-relay` | The webhook relay, a separate service: the signed receiver, the SQLite journal of routing envelopes, the long-polled listing. |
 | `internal/webhooks` | The daemon's reader of the relay's listing (`[webhooks]` shadow mode): curl through execx, the token on stdin. |
+| `internal/jira` | The PR's Jira issue a round hands the judge (`[jira]`): curl through execx, the account's token on stdin, the requirement fields kept, never a comment or a person. |
 
 The full exported API is in [docs/API.md](docs/API.md); live probe notes that shaped the design are in
 [docs/spikes.md](docs/spikes.md); every behavioural decision and the alternative it rejected is in
