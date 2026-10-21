@@ -7582,8 +7582,10 @@ type GitHub interface {
 
 type GitHubCost struct {
 	Identity string `json:"identity"`
-	// Rate is the identity's latest GraphQL rate limit as any call of the
-	// daemon answered it (nil before the first).
+	// Rate is the identity's GraphQL rate limit as the daemon's calls
+	// answered it: the lowest live reading (observe), or 0 left after a
+	// call GitHub refused for its rate limit (refused); nil before the
+	// first.
 	Rate *GitHubRate `json:"rate,omitempty"`
 	// Hours are the clock hours with calls among the last 24, oldest first.
 	Hours []GitHubHour `json:"hours"`
@@ -9442,6 +9444,10 @@ type Call struct {
 	// call: one request against the core budget, with a zero Rate.
 	GraphQL bool
 	Rate    RateLimit
+	// RateLimited: GitHub refused the call for its rate limit (an *APIError
+	// matching ErrRateLimited), so the identity's budget is spent, whatever
+	// its last reading said.
+	RateLimited bool
 }
     Call is one gh api command a Client ran, as its Meter hears of it.
 
@@ -9645,10 +9651,10 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
     any failed page fails the call and no repository list is returned, so the
     caller never mistakes a partial list for closed pull requests. A page GitHub
     could not answer in time is asked once more at half the size (retrySmaller),
-    and the pages after it keep that size. The returned RateLimit sums Cost
-    over all calls; the other fields are the most conservative snapshot seen.
-    When a later page fails it still carries what the earlier pages reported,
-    so the caller can pause on a low budget.
+    and the pages after it keep that size. The returned RateLimit sums Cost over
+    all calls; the other fields are the reading to keep (RateLimit.Tighter:
+    the lowest live one). When a later page fails it still carries what the
+    earlier pages reported, so the caller can pause on a low budget.
 
 func (c *Client) ReplyToReviewComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) (ReviewCommentReply, error)
     ReplyToReviewComment posts body as a reply in the thread whose first comment
@@ -9779,7 +9785,7 @@ type FileDelta struct {
     FileDelta is one changed file of a comparison (CompareFiles).
 
 type GraphQLError struct {
-	Type    string   // NOT_FOUND, FORBIDDEN, RATE_LIMITED, ...; "" for validation errors
+	Type    string   // NOT_FOUND, FORBIDDEN, RATE_LIMIT, ...; "" for validation errors
 	Message string   //
 	Path    []string // e.g. ["repository", "p123"]
 }
@@ -9969,6 +9975,17 @@ type RateLimit struct {
 	ResetAt   time.Time
 }
     RateLimit is GitHub's GraphQL rateLimit{} block.
+
+func (r RateLimit) Tighter(o RateLimit, now time.Time) bool
+    Tighter reports whether r is the reading to keep over o, the one kept so
+    far, at now. A reading whose window has ended (its reset at or before now)
+    never is, and any live reading is over one whose window ended (or none). Of
+    two live readings the one with less left is, whatever their resets say (of
+    equal remaining the later reset): one login can show two windows at once.
+    On 2026-10-21 at 11:14Z the radar read 44 points with reset 11:28:11Z while
+    a call a second before had read 3,838 with reset 11:29:16Z, and GitHub's
+    rate_limit endpoint gave a third reset; a comparison of resets kept the
+    3,838, and GitHub refused the next work.
 
 type Remark struct {
 	Review bool      // a submitted review (a reply in a thread is one); false: an issue comment

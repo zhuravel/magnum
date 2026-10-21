@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // costRecord is identity's cost record as the store holds it (ok false:
@@ -365,4 +366,164 @@ func TestGitHubOpWords(t *testing.T) {
 			t.Errorf("op %q has no words", op)
 		}
 	}
+}
+
+// observed is identity's rate limit as the meter keeps it (nil: none).
+func (h *harness) observed(identity string) *GitHubRate {
+	h.e.ghMeter.mu.Lock()
+	defer h.e.ghMeter.mu.Unlock()
+	c := h.e.ghMeter.ids[identity]
+	if c == nil || c.Rate == nil {
+		return nil
+	}
+	r := *c.Rate
+	return &r
+}
+
+// wantRate fails unless identity's kept rate limit has remaining of limit
+// left until reset, seen at seen.
+func (h *harness) wantRate(identity string, remaining, limit int, reset, seen time.Time) {
+	h.t.Helper()
+	r := h.observed(identity)
+	if r == nil || r.Remaining != remaining || r.Limit != limit || !r.ResetAt.Equal(reset) || !r.SeenAt.Equal(seen) {
+		h.t.Fatalf("%s's rate = %+v, want %d of %d until %s, seen %s", identity, r, remaining, limit,
+			reset.UTC().Format(time.TimeOnly), seen.UTC().Format(time.TimeOnly))
+	}
+}
+
+// On 2026-10-21 the operator pressed f on talkable#12054 at 11:19Z, and
+// GitHub refused the fix's read of the other reviewers' threads for its
+// rate limit, though the floor of 500 should have held the fix: the
+// meter's record said 3,838 points (reset 11:29:16Z, seen 11:14:01Z), while
+// the radar had read 47 and 44 points a second or two later with resets of
+// 11:28Z, which the meter rejected for their earlier reset. One login showed
+// two windows at once, so a reset time cannot say which reading is the
+// current one: the lower live reading wins, whatever its reset (of equal
+// remaining the later reset), and the floor holds new work.
+func TestALowerLiveReadingReplacesAHigherOneWhateverItsReset(t *testing.T) {
+	seen := time.Date(2026, 10, 21, 11, 14, 1, 297218000, time.UTC)
+	h := newHarness(t, func(h *harness) { h.clock.Set(seen) })
+	high := time.Date(2026, 10, 21, 11, 29, 16, 0, time.UTC)
+	h.metered("zhuravel", opRound, 1, 3838, high)
+	h.wantRate("zhuravel", 3838, 5000, high, seen)
+
+	h.advance(time.Second)
+	h.lowBudget("zhuravel", 47, time.Date(2026, 10, 21, 11, 28, 10, 0, time.UTC)) // the radar
+	h.advance(time.Second)
+	low := h.lowBudget("zhuravel", 44, time.Date(2026, 10, 21, 11, 28, 11, 0, time.UTC))
+	h.wantRate("zhuravel", 44, 5000, low, seen.Add(2*time.Second))
+
+	h.metered("zhuravel", opRound, 1, 3836, high) // a call answering from the other window: the 44 stays
+	h.wantRate("zhuravel", 44, 5000, low, seen.Add(2*time.Second))
+	h.advance(time.Second)
+	h.metered("zhuravel", opRound, 1, 44, high) // as low, with the later reset: it holds until then
+	h.wantRate("zhuravel", 44, 5000, high, seen.Add(3*time.Second))
+
+	h.advance(5 * time.Minute) // 11:19, when the fix was asked for
+	if l, ok := h.e.githubLow("zhuravel"); !ok || l.remaining != 44 || !l.until.Equal(high) {
+		t.Errorf("githubLow = %+v, %v; want zhuravel held at 44 points until %s", l, ok, high.Format(time.TimeOnly))
+	}
+}
+
+// A reading whose window has ended (its reset at or before now: an answer
+// that was in flight across the reset) tells nothing of the budget left:
+// it neither replaces a live record nor makes one.
+func TestAReadingOfAnEndedWindowIsIgnored(t *testing.T) {
+	h := newHarness(t)
+	now := h.clock.Now()
+	h.metered("zhuravel", opRound, 1, 30, now)
+	h.e.ghMeter.sawRate("zhuravel", github.RateLimit{Limit: 5000, Remaining: 20, ResetAt: now.Add(-time.Minute)}, now)
+	if r := h.observed("zhuravel"); r != nil {
+		t.Fatalf("rate = %+v from readings whose window ended, want none", r)
+	}
+	live := now.Add(40 * time.Minute)
+	h.metered("zhuravel", opRound, 1, 4000, live)
+	h.metered("zhuravel", opRound, 1, 30, now.Add(-10*time.Minute))
+	h.e.ghMeter.sawRate("zhuravel", github.RateLimit{Limit: 5000, Remaining: 20, ResetAt: now}, now)
+	h.wantRate("zhuravel", 4000, 5000, live, now)
+	if l, low := h.e.githubLow("zhuravel"); low {
+		t.Errorf("githubLow = %+v from a reading whose window ended", l)
+	}
+}
+
+// Once the kept reading's window ended, any live reading replaces it,
+// however much it has left: the low reading held new work until its
+// reset, and the next call tells the new window. Before then a higher
+// reading of a later window does not.
+func TestAnyLiveReadingReplacesARecordWhoseWindowEnded(t *testing.T) {
+	h := newHarness(t)
+	start := h.clock.Now()
+	lowReset, next := start.Add(14*time.Minute), start.Add(74*time.Minute)
+	h.metered("zhuravel", opRound, 1, 44, lowReset)
+	h.advance(10 * time.Minute)
+	h.metered("zhuravel", opRound, 1, 4990, next)
+	h.wantRate("zhuravel", 44, 5000, lowReset, start)
+	h.advance(5 * time.Minute) // past the 44's reset
+	h.metered("zhuravel", opRound, 1, 4990, next)
+	h.wantRate("zhuravel", 4990, 5000, next, h.clock.Now())
+	if l, low := h.e.githubLow("zhuravel"); low {
+		t.Errorf("githubLow = %+v after the new window's reading", l)
+	}
+}
+
+// A call GitHub refused for its rate limit says the budget is spent,
+// whatever the last reading said: on 2026-10-21 the fix's read of
+// talkable#12054's other threads was refused while the meter's record said
+// 3,838 points. The meter marks the identity at 0 points until the
+// record's reset when that is ahead, else for 5 minutes (a probe: the next
+// call either tells the real budget or is refused again), and the next
+// flush writes it; the floor then holds new work, so a round at dispatch
+// waits. A call that succeeds after the mark ends records the real budget
+// again, and the round starts.
+func TestARefusedCallMarksTheIdentityExhausted(t *testing.T) {
+	h := newHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick() // first sync: #1 baseline
+	refused := func(identity string) {
+		h.e.meterGitHub(identity)(github.Call{Op: opFixExternal, Kind: "review threads", GraphQL: true, RateLimited: true})
+	}
+	reset := h.clock.Now().Add(15 * time.Minute)
+	h.metered("zhuravel", opRound, 1, 3838, reset)
+	refused("zhuravel")
+	h.wantRate("zhuravel", 0, 5000, reset, h.clock.Now())
+	h.e.flushGitHubCost(h.ctx, true)
+	if c, ok := h.costRecord("zhuravel"); !ok || c.Rate == nil || c.Rate.Remaining != 0 || len(c.Hours) != 1 || c.Hours[0].Ops[opFixExternal].Calls != 1 {
+		t.Errorf("the written record = %+v, %v; want the refusal counted and the budget at 0", c, ok)
+	}
+
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "head2"})
+	h.tick() // #2 queued
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.wantState(2, store.PRQueued)
+	if n := len(h.rd.all()); n != 0 {
+		t.Fatalf("rounds = %d after a refusal, want none", n)
+	}
+	h.wantGitHubWait(2, "zhuravel", 0, reset)
+
+	h.advance(11 * time.Minute) // past the record's reset, with no reading since
+	refused("zhuravel")
+	probe := h.clock.Now().Add(5 * time.Minute)
+	h.wantRate("zhuravel", 0, 5000, probe, h.clock.Now())
+	h.tick()
+	h.wantState(2, store.PRQueued)
+	h.wantGitHubWait(2, "zhuravel", 0, probe)
+
+	h.advance(5*time.Minute + time.Second)
+	next := h.clock.Now().Add(55 * time.Minute)
+	h.metered("zhuravel", opRound, 1, 4990, next)
+	h.wantRate("zhuravel", 4990, 5000, next, h.clock.Now())
+	h.tick()
+	h.wantState(2, store.PRReviewed)
+
+	// An identity no call told of yet is at 0 of GitHub's 5000 for a
+	// probe's 5 minutes; one whose own limit a call told keeps it.
+	h2 := newHarness(t)
+	now := h2.clock.Now()
+	h2.e.meterGitHub("talkable-app")(github.Call{Kind: "review", RateLimited: true})
+	h2.wantRate("talkable-app", 0, 5000, now.Add(5*time.Minute), now)
+	h2.e.ghMeter.sawRate("zhuravel", github.RateLimit{Limit: 12500, Remaining: 12000, ResetAt: now.Add(30 * time.Minute)}, now)
+	h2.e.meterGitHub("zhuravel")(github.Call{Kind: "review threads", GraphQL: true, RateLimited: true})
+	h2.wantRate("zhuravel", 0, 12500, now.Add(30*time.Minute), now)
 }

@@ -10384,6 +10384,47 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - The platform's network and proxy labels in the file: the platform adds them to the service a domain
       names.
 
+- **The GitHub meter keeps the lowest live reading, and a call GitHub refuses for its rate limit marks
+  the budget spent** (2026-10-21, spec 101, amending spec 97's). The operator pressed `f` on talkable#12054
+  at 11:19Z. GitHub refused the fix job's read of the other reviewers' threads ("github review threads
+  talkable/talkable#12054: RATE_LIMIT: API rate limit already exceeded for user ID ..."), and the job ran
+  without a colleague's thread. The floor of 500 should have held the fix: the poll had paused on 47 and
+  44 points at 11:14:02Z and 11:14:03Z (`poll.rate_limited`). The meter's record still said 3,838 points.
+  - **Two readings at once.** A call at 11:14:01Z read 3,838 points with reset 11:29:16Z; the radar a
+    second later read 44 with reset 11:28:11Z, and GitHub's REST `rate_limit` endpoint gave a third reset.
+    The daemon's `zhuravel` shares the operator's token, so these are one budget. The meter, the client's
+    last reading and the radar's sum kept the reading with the later reset, so the 44 lost, `githubLow`
+    said "not low", and the fix started below the floor.
+  - **A refusal no one heard.** GitHub's GraphQL refusal has the error type `RATE_LIMIT`: the daemon's log
+    holds 75 such lines and none of type `RATE_LIMITED`, the only type `APIError` matched (besides HTTP
+    429 and a 403 that says so). So since spec 97 no live GraphQL refusal matched `ErrRateLimited`, and
+    nothing that checks it (the meter now, a held fix whose read GitHub refuses) ever fired.
+  - **The reading rule.** `RateLimit.Tighter` decides for the meter's record, the client's last reading
+    and the radar's sum:
+    - A reading whose reset has passed (at or before now) is ignored.
+    - Any live reading replaces a record whose window ended.
+    - Of two live readings, the lower remaining wins, whatever their resets. Of equal remaining, the
+      later reset wins.
+    The status line shows the kept reading, and the floor holds new work until its reset.
+  - **A refused call.** `github.Call.RateLimited` says that GitHub refused the call for its rate limit (an
+    `*APIError` matching `ErrRateLimited`, GraphQL or REST), and `ErrRateLimited` now matches the type
+    `RATE_LIMIT` as well as `RATE_LIMITED`. The meter then sets the identity's budget to 0 of its limit
+    (5000 when no call told it one). The 0 holds until the record's reset when that is ahead, else for 5
+    minutes, a probe: the next call either tells the real budget or is refused again. The next flush
+    writes it, and the floor holds rounds at dispatch, fixes, whiteboards, the retro and curations as
+    spec 97 designed ("0/5000, resets HH:MM" on the status line). The poll's own `rateFloor` is unchanged.
+  - **Residuals.** The lower reading can belong to a window that resets before the other one; the hold
+    then lasts until its own reset, an hour at most. A REST refusal (the core budget, or a secondary
+    limit) marks the GraphQL budget too, until the record's reset: every new job reads both. With no reset
+    known, each probe that ends and is refused again begins a new run of low budget, with its own event
+    and toast, at most one every 5 minutes.
+  - **Rejected:**
+    - Trusting the later reset: the old rule, which kept the 3,838.
+    - A tolerance of 2 minutes between resets, inside which the lower reading wins (the spec's first
+      rule): the same login showed two windows at once, so no reset comparison says which one is current.
+    - Reading GitHub's `rate_limit` endpoint after every refusal: another call per refusal, and its reset
+      disagreed with GraphQL's own the same morning.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

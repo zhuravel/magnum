@@ -127,12 +127,12 @@ func (p prConn) radar() []PRRadar {
 }
 
 // rateSum folds the RateLimit of several calls into one: Cost is summed, the
-// other fields are the most conservative snapshot seen.
+// other fields are the reading to keep (RateLimit.Tighter) at now.
 type rateSum struct{ total RateLimit }
 
-func (s *rateSum) add(r RateLimit) {
+func (s *rateSum) add(r RateLimit, now time.Time) {
 	cost := s.total.Cost + r.Cost
-	if r.tighter(s.total) {
+	if r.Tighter(s.total, now) {
 		s.total = r
 	}
 	s.total.Cost = cost
@@ -163,8 +163,9 @@ type radarJSON struct {
 // GitHub could not answer in time is asked once more at half the size
 // (retrySmaller), and the pages after it keep that size.
 // The returned RateLimit sums Cost over all calls; the other fields are the
-// most conservative snapshot seen. When a later page fails it still carries
-// what the earlier pages reported, so the caller can pause on a low budget.
+// reading to keep (RateLimit.Tighter: the lowest live one). When a later
+// page fails it still carries what the earlier pages reported, so the
+// caller can pause on a low budget.
 func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit, error) {
 	if !ownerRe.MatchString(org) {
 		return nil, RateLimit{}, fmt.Errorf("github: invalid owner %q", org)
@@ -199,7 +200,7 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
 		if err != nil {
 			return nil, sum.total, err
 		}
-		sum.add(rate)
+		sum.add(rate, c.clock())
 		if len(notFound) > 0 || data.RepositoryOwner == nil {
 			return nil, sum.total, &APIError{Op: op, Errors: notFoundOr(notFound, "owner "+org)}
 		}
@@ -265,7 +266,7 @@ func (c *Client) morePRs(ctx context.Context, sum *rateSum, id, name, after stri
 		if err != nil {
 			return nil, err
 		}
-		sum.add(rate)
+		sum.add(rate, c.clock())
 		if len(notFound) > 0 || data.Node == nil || data.Node.PullRequests == nil {
 			return nil, &APIError{Op: op, Errors: notFoundOr(notFound, "repository "+name)}
 		}

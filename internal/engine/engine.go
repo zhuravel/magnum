@@ -438,8 +438,8 @@ type Engine struct {
 	// compares are this tick's GitHub comparisons (compare.go).
 	compares compareMemo
 	// ghMeter is the GitHub cost meter: what every identity's calls cost,
-	// and each identity's latest rate limit, which the floor reads
-	// (github_cost.go).
+	// and each identity's rate limit (its lowest live reading), which the
+	// floor reads (github_cost.go).
 	ghMeter githubMeter
 
 	// Urgent toasts run in their own goroutines on toastCtx (surface.go).

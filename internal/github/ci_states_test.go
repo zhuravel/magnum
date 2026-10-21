@@ -132,7 +132,7 @@ func TestCIStatesReadsTheHeadRollupByNodeID(t *testing.T) {
 			return "null"
 		}))
 	})}}
-	states, rate, err := (&Client{Run: f}).CIStates(context.Background(), prs)
+	states, rate, err := (&Client{Run: f, now: fixtureNow}).CIStates(context.Background(), prs)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ package github
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"strings"
 )
@@ -27,6 +28,10 @@ type Call struct {
 	// call: one request against the core budget, with a zero Rate.
 	GraphQL bool
 	Rate    RateLimit
+	// RateLimited: GitHub refused the call for its rate limit (an *APIError
+	// matching ErrRateLimited), so the identity's budget is spent, whatever
+	// its last reading said.
+	RateLimited bool
 }
 
 // opKey carries the label WithOp puts into a context.
@@ -95,13 +100,14 @@ func callKind(op string) string {
 }
 
 // meter tells the client's Meter of one gh api command, the call whose
-// error label is op, made with ctx. A Meter that panics never fails the
-// call: the call's result is GitHub's, whatever the meter does with it.
-func (c *Client) meter(ctx context.Context, op string, graphql bool, rate RateLimit) {
+// error label is op, made with ctx, which failed with err (nil: it did
+// not). A Meter that panics never fails the call: the call's result is
+// GitHub's, whatever the meter does with it.
+func (c *Client) meter(ctx context.Context, op string, graphql bool, rate RateLimit, err error) {
 	m := c.Meter
 	if m == nil {
 		return
 	}
 	defer func() { _ = recover() }()
-	m(Call{Op: OpOf(ctx), Kind: callKind(op), GraphQL: graphql, Rate: rate})
+	m(Call{Op: OpOf(ctx), Kind: callKind(op), GraphQL: graphql, Rate: rate, RateLimited: errors.Is(err, ErrRateLimited)})
 }

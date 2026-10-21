@@ -70,7 +70,7 @@ func (c *Client) lastRateLimit() RateLimit {
 
 func TestLastRateLimit(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh"}, Result: execx.Result{Stdout: fixture(t, "reviews.json")}}}}
-	c := &Client{Run: f}
+	c := &Client{Run: f, now: fixtureNow}
 	if got := c.lastRateLimit(); got != (RateLimit{}) {
 		t.Fatalf("fresh client rate = %+v", got)
 	}
@@ -80,6 +80,65 @@ func TestLastRateLimit(t *testing.T) {
 	want := RateLimit{Limit: 5000, Cost: 1, Remaining: 4963, Used: 37, ResetAt: time.Date(2026, 10, 2, 21, 50, 10, 0, time.UTC)}
 	if got := c.lastRateLimit(); got != want {
 		t.Errorf("lastRateLimit = %+v, want %+v", got, want)
+	}
+}
+
+// fixtureNow is a clock before every reset the fixtures' rateLimit blocks
+// carry (the earliest, 2026-10-02T21:50:10Z), so their readings are live.
+func fixtureNow() time.Time { return time.Date(2026, 10, 2, 21, 0, 0, 0, time.UTC) }
+
+// On 2026-10-21 one login showed two GraphQL windows at once: at 11:14Z
+// the radar read 44 points with reset 11:28:11Z while a call a second
+// before had read 3,838 with reset 11:29:16Z, so a comparison of reset
+// times kept the 3,838 and the floor let a fix start that GitHub then
+// refused. The reading to keep is the lower live one, whatever the resets
+// say: a reading whose window ended is ignored, any live reading replaces
+// one whose window ended, and of two live readings the lower remaining
+// wins, of equal remaining the later reset. Client.observe and the
+// radar's sum keep that reading.
+func TestTighterKeepsTheLowerLiveReadingWhateverItsReset(t *testing.T) {
+	now := time.Date(2026, 10, 21, 11, 14, 3, 0, time.UTC)
+	high := RateLimit{Limit: 5000, Remaining: 3838, ResetAt: time.Date(2026, 10, 21, 11, 29, 16, 0, time.UTC)}
+	low := RateLimit{Limit: 5000, Remaining: 44, ResetAt: time.Date(2026, 10, 21, 11, 28, 11, 0, time.UTC)}
+	ended := RateLimit{Limit: 5000, Remaining: 10, ResetAt: now.Add(-time.Second)} // less left, but its window ended
+	for _, c := range []struct {
+		name   string
+		r, o   RateLimit
+		reason string
+		want   bool
+	}{
+		{"low over high", low, high, "the lower live reading wins though its reset is earlier", true},
+		{"high over low", high, low, "a higher live reading never replaces a lower one, though its reset is later", false},
+		{"next window over low", RateLimit{Limit: 5000, Remaining: 4990, ResetAt: low.ResetAt.Add(time.Hour)}, low,
+			"a higher reading of a later window waits until the low one's window ended", false},
+		{"ended over high", ended, high, "a reading whose window ended is ignored", false},
+		{"ending now over high", RateLimit{Limit: 5000, Remaining: 1, ResetAt: now}, high, "a reset at now has passed", false},
+		{"ended over none", ended, RateLimit{}, "an ended reading is ignored when nothing is kept too", false},
+		{"high over ended", high, ended, "any live reading replaces one whose window ended", true},
+		{"high over none", high, RateLimit{}, "any live reading replaces none", true},
+		{"equal, later reset", RateLimit{Limit: 5000, Remaining: 44, ResetAt: high.ResetAt}, low, "of equal remaining the later reset wins", true},
+		{"equal, earlier reset", low, RateLimit{Limit: 5000, Remaining: 44, ResetAt: high.ResetAt}, "of equal remaining the earlier reset loses", false},
+	} {
+		if got := c.r.Tighter(c.o, now); got != c.want {
+			t.Errorf("%s: Tighter = %v, want %v: %s", c.name, got, c.want, c.reason)
+		}
+	}
+
+	var sum rateSum
+	sum.add(high, now)
+	sum.add(RateLimit{Limit: 5000, Cost: 1, Remaining: 44, ResetAt: low.ResetAt}, now)
+	sum.add(RateLimit{Limit: 5000, Cost: 2, Remaining: 3836, ResetAt: high.ResetAt}, now)
+	if want := (RateLimit{Limit: 5000, Cost: 3, Remaining: 44, ResetAt: low.ResetAt}); sum.total != want {
+		t.Errorf("the radar's sum = %+v, want %+v", sum.total, want)
+	}
+
+	c := &Client{now: func() time.Time { return now }}
+	c.observe(high)
+	c.observe(low)
+	c.observe(high)
+	c.observe(ended)
+	if got := c.lastRateLimit(); got != low {
+		t.Errorf("the client's reading = %+v, want %+v", got, low)
 	}
 }
 
@@ -122,7 +181,8 @@ func TestUnauthorized(t *testing.T) {
 }
 
 func TestGraphQLRateLimited(t *testing.T) {
-	// Synthetic: GitHub's documented primary rate-limit GraphQL error.
+	// Synthetic: the type RATE_LIMITED, which GitHub does not send (it sends
+	// RATE_LIMIT: TestGitHubsGraphQLRateLimitRefusalIsRateLimited), still matches.
 	body := compact(t, `{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}`)
 	f := &execx.Fake{Rules: []execx.Rule{{
 		Prefix: []string{"gh", "api", "graphql"},
@@ -131,6 +191,29 @@ func TestGraphQLRateLimited(t *testing.T) {
 	_, err := (&Client{Run: f}).ReviewsWithMarker(context.Background(), "talkable", "talkable", 1, "")
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("err = %v, want ErrRateLimited", err)
+	}
+}
+
+// GitHub refuses a GraphQL call over its rate limit with the error type
+// RATE_LIMIT, not RATE_LIMITED: the daemon's log on 2026-10-21 holds 75
+// "RATE_LIMIT: API rate limit already exceeded for user ID ..." lines and
+// none of the other, so since spec 97 no live refusal matched
+// ErrRateLimited, and neither the meter nor the floor heard of one. Both
+// types are a rate limit, and the meter hears the call as refused.
+func TestGitHubsGraphQLRateLimitRefusalIsRateLimited(t *testing.T) {
+	body := compact(t, `{"errors":[{"type":"RATE_LIMIT","message":"API rate limit already exceeded for user ID 1."}]}`)
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: body, Stderr: []byte("gh: API rate limit already exceeded for user ID 1.\n"), Code: 1},
+	}}}
+	var h heard
+	_, err := (&Client{Run: f, Meter: h.meter}).ReviewThreads(WithOp(context.Background(), "fix.external"), "talkable", "talkable", 12054)
+	if !errors.Is(err, ErrRateLimited) || errors.Is(err, ErrForbidden) {
+		t.Fatalf("err = %v, want ErrRateLimited (and not ErrForbidden)", err)
+	}
+	want := Call{Op: "fix.external", Kind: "review threads", GraphQL: true, RateLimited: true}
+	if got := h.all(); len(got) != 1 || got[0] != want {
+		t.Errorf("heard %+v, want [%+v]", got, want)
 	}
 }
 

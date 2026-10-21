@@ -95,6 +95,51 @@ func TestAPanickingMeterFailsNoCall(t *testing.T) {
 	}
 }
 
+// A call GitHub refused for its rate limit is heard as refused, with no
+// points (the meter marks the identity's budget spent, whatever its last
+// reading said): a GraphQL RATE_LIMITED answer and a REST 403 rate limit
+// alike. A call that failed otherwise is not refused.
+func TestTheMeterHearsARefusedCall(t *testing.T) {
+	gqlRefused := compact(t, `{"errors":[{"type":"RATE_LIMIT","message":"API rate limit already exceeded for user ID 1."}]}`)
+	restRefused := compact(t, `{"message":"API rate limit exceeded for user ID 1.","status":"403"}`)
+	restForbidden := compact(t, `{"message":"Resource not accessible by integration","status":"403"}`)
+	for _, c := range []struct {
+		name string
+		rule execx.Rule
+		rest bool
+		want Call
+	}{
+		{"graphql refused", execx.Rule{Prefix: []string{"gh", "api", "graphql"},
+			Result: execx.Result{Stdout: gqlRefused, Stderr: []byte("gh: API rate limit already exceeded for user ID 1.\n"), Code: 1}},
+			false, Call{Op: "fix.external", Kind: "reviews", GraphQL: true, RateLimited: true}},
+		{"rest refused", execx.Rule{Prefix: []string{"gh", "api"},
+			Result: execx.Result{Stdout: restRefused, Stderr: []byte("gh: API rate limit exceeded for user ID 1. (HTTP 403)\n"), Code: 1}},
+			true, Call{Op: "fix.external", Kind: "review", RateLimited: true}},
+		{"graphql 502", execx.Rule{Prefix: []string{"gh", "api", "graphql"},
+			Result: execx.Result{Stderr: []byte("gh: Something went wrong (HTTP 502)\n"), Code: 1}},
+			false, Call{Op: "fix.external", Kind: "reviews", GraphQL: true}},
+		{"rest forbidden", execx.Rule{Prefix: []string{"gh", "api"},
+			Result: execx.Result{Stdout: restForbidden, Stderr: []byte("gh: Resource not accessible by integration (HTTP 403)\n"), Code: 1}},
+			true, Call{Op: "fix.external", Kind: "review"}},
+	} {
+		var h heard
+		cl := &Client{Run: &execx.Fake{Rules: []execx.Rule{c.rule}}, Meter: h.meter}
+		ctx := WithOp(context.Background(), "fix.external")
+		var err error
+		if c.rest {
+			_, err = cl.ReviewREST(ctx, "talkable", "talkable", 12054, 2)
+		} else {
+			_, err = cl.ReviewsWithMarker(ctx, "talkable", "talkable", 12054, "")
+		}
+		if err == nil {
+			t.Fatalf("%s: the call succeeded", c.name)
+		}
+		if got := h.all(); len(got) != 1 || got[0] != c.want {
+			t.Errorf("%s: heard %+v, want [%+v]", c.name, got, c.want)
+		}
+	}
+}
+
 // A label set deeper in the call chain wins.
 func TestTheInnermostOpWins(t *testing.T) {
 	ctx := WithOp(WithOp(context.Background(), "round"), "round.settle")

@@ -771,8 +771,10 @@ command (`magnum resume --tool codex` lifts the pause).
 Magnum meters its own GitHub calls. Every GraphQL call tells it the points GitHub charged and the rate
 limit left, every REST call counts as one request against the core budget, and the daemon adds them up
 per identity, per op and per clock hour (the last 24 hours, written to the registry at most once a minute),
-keeping each identity's latest budget. `magnum status` shows one line per identity, the window reaching
-back to the hour before while the current hour is younger than 30 minutes:
+keeping each identity's budget: the lowest reading whose window has not ended, whatever reset each names,
+since one login can show two windows at once. A call GitHub refuses for its rate limit sets the budget to
+0 until the reset the meter knows, or for 5 minutes when it knows none. `magnum status` shows one line per
+identity, the window reaching back to the hour before while the current hour is younger than 30 minutes:
 
 ```
 github:   zhuravel 4692/5000, resets 17:13 · since 16:00 1,470 points: round setup 620, settle 300, radar 180, …

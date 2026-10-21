@@ -150,7 +150,7 @@ func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]CIStat
 		if err != nil {
 			return states, sum.total, err
 		}
-		sum.add(rate)
+		sum.add(rate, c.clock())
 		heads := make(map[string]string, len(batch))
 		for _, p := range batch {
 			heads[p.NodeID] = p.HeadRefOid

@@ -15,7 +15,9 @@ package engine
 // per clock hour, keeps the last 24 hours, and writes each identity's
 // record (KVGitHubCost) at most once a minute, for `magnum status`, and a
 // run of low budget (KVGitHubLow) when it begins or ends. It
-// keeps each identity's latest rate limit as well, which the floor reads:
+// keeps each identity's rate limit as well (the lowest live reading, or
+// none left after a call GitHub refused for its rate limit; observe and
+// refused), which the floor reads:
 // below [github] budget_floor an identity's budget holds the new work that
 // reads as it (githubLow): a round's start, a fix job, a whiteboard, the
 // retro and a notes curation wait for its reset, while a running round
@@ -54,8 +56,10 @@ const githubCostFlush = time.Minute
 // GitHubCost is the meter's record of one identity (KVGitHubCost).
 type GitHubCost struct {
 	Identity string `json:"identity"`
-	// Rate is the identity's latest GraphQL rate limit as any call of the
-	// daemon answered it (nil before the first).
+	// Rate is the identity's GraphQL rate limit as the daemon's calls
+	// answered it: the lowest live reading (observe), or 0 left after a
+	// call GitHub refused for its rate limit (refused); nil before the
+	// first.
 	Rate *GitHubRate `json:"rate,omitempty"`
 	// Hours are the clock hours with calls among the last 24, oldest first.
 	Hours []GitHubHour `json:"hours"`
@@ -279,6 +283,9 @@ func (m *githubMeter) add(identity string, call github.Call, now time.Time) {
 	}
 	h.Ops[op] = oc
 	c.observe(call.Rate, now)
+	if call.RateLimited {
+		c.refused(now)
+	}
 	c.prune(now)
 	m.dirty[identity] = true
 }
@@ -297,8 +304,9 @@ func (c *GitHubCost) hour(t time.Time) *GitHubHour {
 	return &c.Hours[i]
 }
 
-// sawRate keeps rl as identity's rate limit when it is the latest (the
-// poll's radar, recordRateLimit, whose cost its call already counted).
+// sawRate keeps rl as identity's rate limit when it is the reading to keep
+// (observe; the poll's radar, recordRateLimit, whose cost its call already
+// counted).
 func (m *githubMeter) sawRate(identity string, rl github.RateLimit, now time.Time) {
 	if rl.ResetAt.IsZero() || identity == "" {
 		return
@@ -310,19 +318,50 @@ func (m *githubMeter) sawRate(identity string, rl github.RateLimit, now time.Tim
 	}
 }
 
-// observe keeps rl as the record's rate limit when it is at least as
-// current as the one it has: a later reset window, or the same window with
-// no more left (calls in flight return in any order). It reports whether
-// it kept it.
+// observe keeps rl, read at now, as the record's rate limit when it is the
+// reading to keep (github.RateLimit.Tighter): a reading whose window ended
+// is ignored, any live reading replaces a record whose window ended, and
+// of two live readings the lower remaining wins, whatever their resets say
+// (of equal remaining the later reset). One login can show two windows at
+// once and calls in flight return in any order, so a reset time cannot
+// say which reading is current; the lower one holds new work until its
+// own reset. It reports whether it kept it.
 func (c *GitHubCost) observe(rl github.RateLimit, now time.Time) bool {
-	if rl.ResetAt.IsZero() {
-		return false
+	var kept github.RateLimit
+	if r := c.Rate; r != nil {
+		kept = github.RateLimit{Limit: r.Limit, Remaining: r.Remaining, ResetAt: r.ResetAt}
 	}
-	if r := c.Rate; r != nil && (rl.ResetAt.Before(r.ResetAt) || rl.ResetAt.Equal(r.ResetAt) && rl.Remaining > r.Remaining) {
+	if !rl.Tighter(kept, now) {
 		return false
 	}
 	c.Rate = &GitHubRate{Remaining: rl.Remaining, Limit: rl.Limit, ResetAt: rl.ResetAt.UTC(), SeenAt: now.UTC()}
 	return true
+}
+
+// githubRefusedProbe is how long a call GitHub refused for its rate limit
+// holds new work when the meter knows no reset ahead: the next call after
+// it either tells the real budget or is refused again.
+const githubRefusedProbe = 5 * time.Minute
+
+// githubDefaultLimit is GitHub's GraphQL budget of a user, the limit a
+// refusal is shown against before any call told the identity's own.
+const githubDefaultLimit = 5000
+
+// refused marks the record's budget spent at now, after GitHub refused a
+// call for its rate limit, whatever the last reading said: 0 left of the
+// limit it knows, until its reset when that is ahead, else for
+// githubRefusedProbe.
+func (c *GitHubCost) refused(now time.Time) {
+	limit, reset := githubDefaultLimit, now.Add(githubRefusedProbe)
+	if r := c.Rate; r != nil {
+		if r.Limit > 0 {
+			limit = r.Limit
+		}
+		if r.ResetAt.After(now) {
+			reset = r.ResetAt
+		}
+	}
+	c.Rate = &GitHubRate{Remaining: 0, Limit: limit, ResetAt: reset.UTC(), SeenAt: now.UTC()}
 }
 
 // prune drops the hours older than the last githubCostHours and reports
@@ -472,7 +511,7 @@ func (l githubLowBudget) text() string {
 	return fmt.Sprintf("github budget: %s at %d points until %s", l.identity, l.remaining, l.until.Local().Format("15:04"))
 }
 
-// githubLow is the first of ids whose latest rate limit is below [github]
+// githubLow is the first of ids whose kept rate limit is below [github]
 // budget_floor in a reset window that has not ended (ok false: none is, the
 // floor is off, or no call told the meter of them). An identity no call
 // answered for, or whose window ended, is never held: the next call tells.

@@ -44,7 +44,7 @@ func radarFake(t *testing.T) *execx.Fake {
 
 func TestRadarPaginatesReposAndPullRequests(t *testing.T) {
 	f := radarFake(t)
-	c := &Client{Run: f, repoPage: 8, prPage: 3}
+	c := &Client{Run: f, repoPage: 8, prPage: 3, now: fixtureNow}
 	repos, rate, err := c.Radar(context.Background(), "zhuravel")
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestRadarPaginatesReposAndPullRequests(t *testing.T) {
 	if n := len(byName["zhuravel/widgets"].PRs); n != 0 {
 		t.Errorf("widgets PRs = %d", n)
 	}
-	// Three calls cost 1 each; the snapshot is the most conservative one seen.
+	// Three calls cost 1 each; the reading is the lowest live one.
 	wantRate := RateLimit{Limit: 5000, Cost: 3, Remaining: 4978, Used: 22, ResetAt: time.Date(2026, 10, 2, 21, 50, 10, 0, time.UTC)}
 	if rate != wantRate {
 		t.Errorf("rate = %+v, want %+v", rate, wantRate)
@@ -262,7 +262,7 @@ func TestRadarFailsWholeWhenAPageFails(t *testing.T) {
 		}
 		return okResult(fixture(t, "radar_p1.json"))
 	})}}
-	repos, rate, err := (&Client{Run: f, repoPage: 8, prPage: 3}).Radar(context.Background(), "zhuravel")
+	repos, rate, err := (&Client{Run: f, repoPage: 8, prPage: 3, now: fixtureNow}).Radar(context.Background(), "zhuravel")
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -303,7 +303,7 @@ func TestRadarKeepsRateLimitWhenPullRequestPageFails(t *testing.T) {
 		}
 		return okResult(fixture(t, "radar_p1.json"))
 	})}}
-	repos, rate, err := (&Client{Run: f, repoPage: 8, prPage: 3}).Radar(context.Background(), "example")
+	repos, rate, err := (&Client{Run: f, repoPage: 8, prPage: 3, now: fixtureNow}).Radar(context.Background(), "example")
 	if err == nil || repos != nil {
 		t.Fatalf("want an error and no partial list, got %d repos, err %v", len(repos), err)
 	}

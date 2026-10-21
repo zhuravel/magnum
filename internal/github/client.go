@@ -66,10 +66,13 @@ type Client struct {
 	// panics fails no call. Set it before the client's first call.
 	Meter func(Call)
 
-	// last is the most conservative rate-limit snapshot any GraphQL call of
-	// this client saw (latest reset window, lowest remaining; observe).
+	// last is the rate-limit reading to keep of every GraphQL call of this
+	// client (RateLimit.Tighter; observe).
 	mu   sync.Mutex
 	last RateLimit
+	// now is the clock the readings are judged by (nil: time.Now): one whose
+	// window ended is ignored.
+	now func() time.Time
 
 	// Radar page sizes; zero means 100. Tests shrink them to match fixtures.
 	repoPage, prPage int
@@ -84,24 +87,41 @@ type RateLimit struct {
 	ResetAt   time.Time
 }
 
-// tighter reports whether r is a more current/conservative snapshot than o.
-func (r RateLimit) tighter(o RateLimit) bool {
-	if o.ResetAt.IsZero() {
+// Tighter reports whether r is the reading to keep over o, the one kept so
+// far, at now. A reading whose window has ended (its reset at or before
+// now) never is, and any live reading is over one whose window ended (or
+// none). Of two live readings the one with less left is, whatever their
+// resets say (of equal remaining the later reset): one login can show two
+// windows at once. On 2026-10-21 at 11:14Z the radar read 44 points with
+// reset 11:28:11Z while a call a second before had read 3,838 with reset
+// 11:29:16Z, and GitHub's rate_limit endpoint gave a third reset; a
+// comparison of resets kept the 3,838, and GitHub refused the next work.
+func (r RateLimit) Tighter(o RateLimit, now time.Time) bool {
+	switch {
+	case !r.ResetAt.After(now):
+		return false
+	case !o.ResetAt.After(now):
 		return true
+	case r.Remaining != o.Remaining:
+		return r.Remaining < o.Remaining
 	}
-	if !r.ResetAt.Equal(o.ResetAt) {
-		return r.ResetAt.After(o.ResetAt)
-	}
-	return r.Remaining <= o.Remaining
+	return r.ResetAt.After(o.ResetAt)
 }
 
-func (c *Client) observe(r RateLimit) {
-	if r.ResetAt.IsZero() {
-		return
+// clock is the time readings are judged by.
+func (c *Client) clock() time.Time {
+	if c.now != nil {
+		return c.now()
 	}
+	return time.Now()
+}
+
+// observe keeps r as the client's reading when it is the one to keep.
+func (c *Client) observe(r RateLimit) {
+	now := c.clock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if r.tighter(c.last) {
+	if r.Tighter(c.last, now) {
 		c.last = r
 	}
 }
@@ -116,7 +136,7 @@ var (
 
 // GraphQLError is one entry of a GraphQL response's "errors" array.
 type GraphQLError struct {
-	Type    string   // NOT_FOUND, FORBIDDEN, RATE_LIMITED, ...; "" for validation errors
+	Type    string   // NOT_FOUND, FORBIDDEN, RATE_LIMIT, ...; "" for validation errors
 	Message string   //
 	Path    []string // e.g. ["repository", "p123"]
 }
@@ -197,8 +217,12 @@ func (e *APIError) Is(target error) bool {
 	return false
 }
 
+// rateLimited reports whether GitHub refused the call for its rate limit:
+// HTTP 429, a 403 that says so, or a GraphQL error of type RATE_LIMIT, the
+// one GitHub sends ("RATE_LIMIT: API rate limit already exceeded for user
+// ID ..."), or RATE_LIMITED.
 func (e *APIError) rateLimited() bool {
-	if e.Status == 429 || e.anyError("RATE_LIMITED") {
+	if e.Status == 429 || e.anyError("RATE_LIMIT") || e.anyError("RATE_LIMITED") {
 		return true
 	}
 	return e.Status == 403 && strings.Contains(strings.ToLower(e.Message), "rate limit")
@@ -309,7 +333,7 @@ func (c *Client) graphql(ctx context.Context, op, query string, vars map[string]
 	return rate, notFound, nil
 }
 
-func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[string]any, out any) (RateLimit, []GraphQLError, error) {
+func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[string]any, out any) (_ RateLimit, _ []GraphQLError, err error) {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
 		return RateLimit{}, nil, fmt.Errorf("github %s: encode request: %w", op, err)
@@ -318,7 +342,7 @@ func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[str
 	args = append(args, "--input", "-")
 	res, runErr := c.gh(ctx, op, args, body, false, nil)
 	var rate RateLimit // what the meter hears: the answer's rate limit, when it carried one
-	defer func() { c.meter(ctx, op, true, rate) }()
+	defer func() { c.meter(ctx, op, true, rate, err) }()
 	var exitErr *execx.ExitError
 	if runErr != nil && !errors.As(runErr, &exitErr) {
 		return RateLimit{}, nil, fmt.Errorf("github %s: %w", op, runErr)
@@ -429,12 +453,10 @@ func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [
 		args = append(args, "--input", "-")
 	}
 	res, err := c.gh(ctx, op, args, stdin, mutates, expected)
-	c.meter(ctx, op, false, RateLimit{})
+	err = restFailure(op, res, err)
+	c.meter(ctx, op, false, RateLimit{}, err)
 	if err != nil {
-		if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
-			return ghFailure(op, res, exitErr)
-		}
-		return fmt.Errorf("github %s: %w", op, err)
+		return err
 	}
 	if out == nil {
 		return nil
@@ -467,17 +489,28 @@ func (c *Client) restRawOnce(ctx context.Context, op, path, accept string) ([]by
 	args := append([]string{"api", path}, ghHost...)
 	args = append(args, "-H", "Accept: "+accept)
 	res, err := c.gh(ctx, op, args, nil, false, nil)
-	c.meter(ctx, op, false, RateLimit{})
+	err = restFailure(op, res, err)
+	c.meter(ctx, op, false, RateLimit{}, err)
 	if err != nil {
-		if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
-			return nil, ghFailure(op, res, exitErr)
-		}
-		return nil, fmt.Errorf("github %s: %w", op, err)
+		return nil, err
 	}
 	if res.Stdout == nil {
 		return []byte{}, nil
 	}
 	return res.Stdout, nil
+}
+
+// restFailure is the error of a REST command gh ran with the error label
+// op: nil for none, an *APIError when GitHub answered (ghFailure), else
+// the runner's error wrapped.
+func restFailure(op string, res execx.Result, err error) error {
+	if err == nil {
+		return nil
+	}
+	if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
+		return ghFailure(op, res, exitErr)
+	}
+	return fmt.Errorf("github %s: %w", op, err)
 }
 
 // httpStatusRe finds the status gh prints for a failed call: "(HTTP 404)"
