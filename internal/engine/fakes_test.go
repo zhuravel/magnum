@@ -1540,6 +1540,9 @@ type fakeSlots struct {
 	// the checked-out commit of a slot held for head_drift or
 	// unpushed_commits, as slots.Manager.Unpin does.
 	heads map[string]string
+	// resetFailures counts each slot's rounds in a row whose schema reset
+	// failed (ResetFailed; RecordSchema clears it), by slot id.
+	resetFailures map[int64]int
 }
 
 func (f *fakeSlots) record(s string) {
@@ -1750,9 +1753,27 @@ func (f *fakeSlots) ForgetSchema(ctx context.Context, slot store.Slot) error {
 	return f.setSchema(ctx, slot.ID, "", "")
 }
 
+// RecordSchema records the schema and, as slots.RecordSchema does, clears
+// the slot's count of failed resets.
 func (f *fakeSlots) RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error {
 	f.record("record_schema:" + slot.Name + ":" + c.FP)
+	f.mu.Lock()
+	delete(f.resetFailures, slot.ID)
+	f.mu.Unlock()
 	return f.setSchema(ctx, slot.ID, c.FP, c.SHA)
+}
+
+// ResetFailed counts the slot's rounds in a row whose reset failed, as
+// slots.ResetFailed does.
+func (f *fakeSlots) ResetFailed(_ context.Context, slot store.Slot, cause string) (int, error) {
+	f.record("reset_failed:" + slot.Name)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.resetFailures == nil {
+		f.resetFailures = map[int64]int{}
+	}
+	f.resetFailures[slot.ID]++
+	return f.resetFailures[slot.ID], nil
 }
 
 // setSchema records fp loaded from sha on slot id ("" = unknown).

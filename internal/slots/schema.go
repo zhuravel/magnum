@@ -9,12 +9,15 @@ package slots
 // schema again for the next PR to replace. Now a round reloads only when its
 // checkout's fingerprint differs from the recorded one (LazySchema), and the
 // release keeps whatever the databases carry, checked against the
-// development database's schema_migrations.
+// development database's schema_migrations. A slot whose round-time reload
+// fails in BreakAfterResetFailures rounds in a row is broken at its release
+// (ResetFailed), since the release no longer reloads it.
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -138,15 +141,94 @@ func (m *Manager) devSchemaDiffers(ctx context.Context, sl store.Slot, pool conf
 }
 
 // RecordSchema stores c, CheckSchema's answer, as the schema the slot's
-// databases carry, once its reload succeeded.
+// databases carry, once its reload succeeded, and forgets the slot's failed
+// resets (ResetFailed): the count is of rounds in a row.
 func (m *Manager) RecordSchema(ctx context.Context, slot store.Slot, c SchemaCheck) error {
-	if m.d.DryRun || c.FP == "" {
+	if m.d.DryRun {
+		return nil
+	}
+	if err := m.clearResetFailures(ctx, slot.ID); err != nil {
+		return fmt.Errorf("slots: record the schema of %s: %w", slot.Name, err)
+	}
+	if c.FP == "" {
 		return nil
 	}
 	if err := m.d.Store.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { setSchema(u, c) }); err != nil {
 		return fmt.Errorf("slots: record the schema of %s: %w", slot.Name, err)
 	}
 	return nil
+}
+
+// BreakAfterResetFailures is how many rounds in a row whose readiness
+// reset_db failed in a pool slot break it at its release (resetSchema): the
+// release keeps a LazySchema slot's databases, so nothing else ever tells
+// the operator that every round in the slot fails the same reset.
+const BreakAfterResetFailures = 2
+
+// resetFailures is the kv record of a slot's rounds in a row whose
+// readiness reset_db failed (resetFailuresKey).
+type resetFailures struct {
+	Rounds int    `json:"rounds"`
+	Cause  string `json:"cause"` // the last failure's: the failed command's last line
+}
+
+// resetFailuresKey is the kv key of slot id's resetFailures: kept until a
+// reset_db passes (a round's RecordSchema, the release's reload,
+// EnsureSchema) or the slot starts a new life (reviveSlot: a repair, an
+// adoption) or is removed.
+func resetFailuresKey(id int64) string { return fmt.Sprintf("slot.%d.reset_failures", id) }
+
+// ResetFailed counts a round whose readiness reset_db failed in slot, with
+// cause (the failed command's last line), and returns how many rounds in a
+// row failed it. At BreakAfterResetFailures the slot's release breaks it
+// (store.BreakSlot, as the release's own reload failing twice does), so
+// `magnum slots repair` takes it; the round itself goes on.
+func (m *Manager) ResetFailed(ctx context.Context, slot store.Slot, cause string) (int, error) {
+	if m.d.DryRun {
+		return 0, nil
+	}
+	f, _, err := m.resetFailuresOf(ctx, slot)
+	if err != nil {
+		return 0, err
+	}
+	f.Rounds++
+	f.Cause = cause
+	b, err := json.Marshal(f)
+	if err == nil {
+		err = m.d.Store.SetKV(context.WithoutCancel(ctx), resetFailuresKey(slot.ID), string(b))
+	}
+	if err != nil {
+		return 0, fmt.Errorf("slots: count the failed schema reset of %s: %w", slot.Name, err)
+	}
+	return f.Rounds, nil
+}
+
+// resetFailuresOf reads slot's resetFailures; ok is false when there are
+// none (or the record does not parse, which counts as none).
+func (m *Manager) resetFailuresOf(ctx context.Context, slot store.Slot) (resetFailures, bool, error) {
+	raw, ok, err := m.d.Store.GetKV(ctx, resetFailuresKey(slot.ID))
+	if err != nil {
+		return resetFailures{}, false, fmt.Errorf("slots: failed schema resets of %s: %w", slot.Name, err)
+	}
+	var f resetFailures
+	if ok && json.Unmarshal([]byte(raw), &f) == nil {
+		return f, true, nil
+	}
+	return resetFailures{}, false, nil
+}
+
+// clearResetFailures forgets slot id's failed resets: a reset passed, or
+// the slot starts a new life.
+func (m *Manager) clearResetFailures(ctx context.Context, id int64) error {
+	return m.d.Store.DeleteKV(context.WithoutCancel(ctx), resetFailuresKey(id))
+}
+
+// roundsWord is "two rounds" for 2, else "<n> rounds".
+func roundsWord(n int) string {
+	if n == 2 {
+		return "two rounds"
+	}
+	return textx.Count(n, "round", "rounds")
 }
 
 // ForgetSchema marks the schema of the slot's databases unknown, before a

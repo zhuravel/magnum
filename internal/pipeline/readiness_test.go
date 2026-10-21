@@ -645,6 +645,123 @@ func TestLastLine(t *testing.T) {
 	}
 }
 
+// A failed rake task ends its output with a trailer ("Tasks: TOP => …",
+// "(See full trace by running task with --trace)") and puts its cause on the
+// line after "<name> aborted!": from 2026-10-19 to 10-21, 11 rounds recorded
+// the trailer as the reason their schema reset failed. A failed command's
+// reason is the first non-empty line after "aborted!", else its last line
+// that is not the trailer, redacted and shortened as before; a passing
+// command keeps its last line.
+func TestAFailedRakeCommandsReasonIsTheLineAfterAborted(t *testing.T) {
+	const trailer = "\nTasks: TOP => db:schema:load\n(See full trace by running task with --trace)\n"
+	token := "ghp_" + strings.Repeat("a", 36)
+	for _, tc := range []struct {
+		name   string
+		res    execx.Result
+		failed bool
+		want   string
+	}{
+		{"the line after aborted!", execx.Result{Stderr: []byte("bin/rails aborted!\n" +
+			"ActiveRecord::NoDatabaseError: Unknown database 'talkable_development__review4'\n" +
+			"/talkable/bin/rails:4:in `<main>'" + trailer)}, true,
+			"ActiveRecord::NoDatabaseError: Unknown database 'talkable_development__review4'"},
+		{"blank lines after aborted!", execx.Result{Stderr: []byte("rake aborted!\n\n   Mysql2::Error: Table 'offers' doesn't exist  \n" + trailer)}, true,
+			"Mysql2::Error: Table 'offers' doesn't exist"},
+		{"the trailer skipped without aborted!", execx.Result{Stderr: []byte(
+			"Run `bin/rails db:migrate` to update your database then try again." + trailer)}, true,
+			"Run `bin/rails db:migrate` to update your database then try again."},
+		{"the trailer alone: stdout's last line", execx.Result{Stdout: []byte("-- create_table(\"offers\")\nboom\n"), Stderr: []byte(trailer)}, true,
+			"boom"},
+		{"aborted! as the last line", execx.Result{Stderr: []byte("warning: x\nrake aborted!\n")}, true, "rake aborted!"},
+		{"a passing command keeps its last line", execx.Result{Stdout: []byte("rake aborted!\nnext\nlast\n")}, false, "last"},
+		{"redacted", execx.Result{Stderr: []byte("rake aborted!\nMysql2::Error: Access denied for " + token + trailer)}, true,
+			"Mysql2::Error: Access denied for"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := lastLine(tc.res, tc.failed)
+			if tc.name == "redacted" {
+				if strings.Contains(got, strings.Repeat("a", 36)) || !strings.HasPrefix(got, tc.want) {
+					t.Errorf("lastLine = %q, want %q and no token", got, tc.want)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("lastLine = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A round whose schema reset fails tells the engine why (ResetFailed, once,
+// with the failed command's cause), so the slot counts the rounds in a row
+// whose reset failed; one that passed calls Loaded instead, and one the
+// round's cancel stopped calls neither. The readiness file and the
+// round.readiness event name the cause.
+func TestAFailedSchemaResetTellsTheEngineItsCause(t *testing.T) {
+	const cause = "ActiveRecord::NoDatabaseError: Unknown database 'talkable_development__review4'"
+	rake := execx.Result{Code: 1, Stderr: []byte("bin/rails aborted!\n" + cause +
+		"\n\nTasks: TOP => db:schema:load\n(See full trace by running task with --trace)\n")}
+	for _, tc := range []struct {
+		name      string
+		rule      func(cancel context.CancelFunc) execx.Rule
+		wantCause string // ResetFailed's argument; "" = not called
+		loaded    bool
+	}{
+		{"a failure", func(context.CancelFunc) execx.Rule {
+			return execx.Rule{Prefix: []string{"mise"}, Result: rake, Err: &execx.ExitError{Code: 1}}
+		}, cause, false},
+		{"a time-out", func(context.CancelFunc) execx.Rule {
+			return execx.Rule{Prefix: []string{"mise"}, Result: execx.Result{Code: -1}, Err: &execx.RunError{Err: context.DeadlineExceeded}}
+		}, "stopped when reset_db's budget (30m0s) ran out", false},
+		{"a pass", func(context.CancelFunc) execx.Rule {
+			return execx.Rule{Prefix: []string{"mise"}, Result: execx.Result{}}
+		}, "", true},
+		{"a cancel", func(cancel context.CancelFunc) execx.Rule {
+			return execx.Rule{Prefix: []string{"mise"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+				cancel()
+				return execx.Result{Code: -1}, &execx.RunError{Cmd: c, Err: context.Canceled}
+			}}
+		}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			ctx, cancel := context.WithCancel(e.ctx)
+			defer cancel()
+			e.exec.Rules = []execx.Rule{tc.rule(cancel)}
+			var causes []string
+			loaded := 0
+			rd := readinessRound(t, e, KindInitial, t.TempDir(), ReadinessPlan{ResetDB: []string{"bin/rails db:schema:load"},
+				Loaded:      func(context.Context) { loaded++ },
+				ResetFailed: func(_ context.Context, c string) { causes = append(causes, c) }})
+			_ = rd.readiness(ctx)
+			if want := []string{tc.wantCause}; tc.wantCause == "" && len(causes) != 0 || tc.wantCause != "" && !slices.Equal(causes, want) {
+				t.Fatalf("ResetFailed got %q, want %q", causes, tc.wantCause)
+			}
+			if loaded > 1 || (loaded == 1) != tc.loaded {
+				t.Fatalf("Loaded called %d times, want it called %v", loaded, tc.loaded)
+			}
+			if tc.name != "a failure" {
+				return
+			}
+			if c := rd.readinessData().Checks[0]; c.LastLine != cause {
+				t.Errorf("check = %+v, want the cause as its last line", c)
+			}
+			if f := readReadinessFile(t, rd.dir); f.Checks[0].LastLine != cause {
+				t.Errorf("readiness file = %+v", f)
+			}
+			var msg string
+			for _, x := range e.events() {
+				if x.Kind == "round.readiness" {
+					msg = x.Message
+				}
+			}
+			if !strings.Contains(msg, "reset_db `bin/rails db:schema:load`: exit 1 ("+cause+")") {
+				t.Errorf("round.readiness = %q, want the cause", msg)
+			}
+		})
+	}
+}
+
 // The daemon's judges read the skill copy taken at startup, not the file
 // as it is now.
 func TestJudgeReadsTheStartupCopyOfItsSkill(t *testing.T) {

@@ -1,6 +1,7 @@
 package slots
 
 import (
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -223,4 +224,79 @@ func TestEnsureSchemaLoadsTheCheckoutsSchemaForAPerson(t *testing.T) {
 	if note, err := h.m.EnsureSchema(h.ctx, store.Slot{ID: sl.ID, Name: sl.Name, Kind: store.SlotKindPerPR}, h.pool); err != nil || note != "" {
 		t.Fatalf("per-PR worktree: %q, %v", note, err)
 	}
+}
+
+// A slot whose schema reset fails in two rounds in a row is broken at its
+// release, as the release breaks a slot whose own reload failed twice: from
+// 2026-10-19, 11 rounds in three slots failed the same reset_db, each judge
+// worked around it, and nothing told the operator, since the release keeps
+// the databases and never reloads them. The second release breaks the slot
+// without running reset_db, with the cause in its last error, and lets its
+// PR go; `magnum slots repair` clears the count. A reset that passed
+// between two failures starts the count again, and one failed round alone
+// is released as before.
+func TestASlotWhoseSchemaResetFailsInTwoRoundsIsBrokenForRepair(t *testing.T) {
+	const cause = "ActiveRecord::NoDatabaseError: Unknown database 'talkable_development__review1'"
+	// failedRound is a round whose readiness reset failed: the schema is
+	// forgotten before the reset, which then fails.
+	failedRound := func(h *harness, sl store.Slot, want int) {
+		h.t.Helper()
+		if err := h.m.ForgetSchema(h.ctx, sl); err != nil {
+			h.t.Fatal(err)
+		}
+		if n, err := h.m.ResetFailed(h.ctx, sl, cause); err != nil || n != want {
+			h.t.Fatalf("ResetFailed = %d, %v; want %d rounds in a row", n, err, want)
+		}
+	}
+	t.Run("two rounds in a row", func(t *testing.T) {
+		h := newHarness(t)
+		sl, _ := h.claimedCheckout(8, h.shaPR8)
+		failedRound(h, sl, 1)
+		if err := h.m.Release(h.ctx, h.slot(sl.Name), h.pool, "evicted"); err != nil {
+			t.Fatalf("release after one failed round: %v", err)
+		}
+		if got := h.slot(sl.Name); got.State != store.SlotFree {
+			t.Fatalf("after one failed round: %s, want free", got.State)
+		}
+
+		sl, pr := h.claimAgain(t, 7, h.shaPR7)
+		failedRound(h, sl, 2)
+		h.clearScripts()
+		if err := h.m.Release(h.ctx, h.slot(sl.Name), h.pool, "evicted"); !errors.Is(err, ErrBroken) {
+			t.Fatalf("release after two failed rounds: %v, want ErrBroken", err)
+		}
+		if n := len(h.scriptCalls(h.pool.ResetDB[0])); n != 0 {
+			t.Fatalf("the release ran reset_db %d times, want none", n)
+		}
+		got := h.slot(sl.Name)
+		if want := sl.Name + " schema reset failed in two rounds: " + cause; got.State != store.SlotBroken || got.PRID != nil ||
+			!strings.Contains(store.Deref(got.LastError), want) {
+			t.Fatalf("slot = %s pr %v last_error %q; want broken without its PR, with %q", got.State, got.PRID, store.Deref(got.LastError), want)
+		}
+		if _, err := h.openAssignment(pr.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("open assignment of the PR: %v, want none", err)
+		}
+
+		if err := h.m.Repair(h.ctx, got, h.pool); err != nil {
+			t.Fatalf("Repair: %v", err)
+		}
+		if got := h.slot(sl.Name); got.State != store.SlotFree {
+			t.Fatalf("after the repair: %s, want free", got.State)
+		}
+		// The repair cleared the count: the next failed round is the first.
+		failedRound(h, h.slot(sl.Name), 1)
+	})
+	t.Run("a reset that passed between them", func(t *testing.T) {
+		h := newHarness(t)
+		sl, _ := h.claimedCheckout(7, h.shaPR7)
+		failedRound(h, sl, 1)
+		h.loadSchema(sl, h.checkSchema(sl)) // the next round's reset passed
+		failedRound(h, sl, 1)
+		if err := h.m.Release(h.ctx, h.slot(sl.Name), h.pool, "evicted"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		if got := h.slot(sl.Name); got.State != store.SlotFree {
+			t.Fatalf("slot = %s, want free", got.State)
+		}
+	})
 }

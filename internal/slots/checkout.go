@@ -462,7 +462,8 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // is set or that version differs from db/schema.rb at HEAD: the slot moves
 // to dirty_schema and pool.reset_db runs through mise exec, 30m; a second
 // failure in a row moves the slot to broken, with its PR released unless
-// it is pinned, and returns ErrBroken) and
+// it is pinned, and returns ErrBroken, as does a slot whose readiness
+// reset_db failed in BreakAfterResetFailures rounds in a row) and
 // mark_free (store.ReleaseSlot: free, pr_id cleared, assignment closed with
 // reason). A releasing or dirty_schema slot resumes after its last completed
 // step, after Guard ran again: whatever a human did since the last attempt
@@ -602,13 +603,23 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 // version, and records the base schema as theirs. Two failed reloads in a
 // row move the slot to broken (store.BreakSlot): an unpinned slot lets its
 // PR go, so the PR's next round takes another slot instead of waiting for a
-// repair, and a slot pinned meanwhile keeps it. With a hold (ReleaseHeld)
-// the slot stays held during the reload instead of moving to dirty_schema,
-// and the failures move it from held to broken without the hold.
+// repair, and a slot pinned meanwhile keeps it. So does a slot whose
+// readiness reset_db failed in BreakAfterResetFailures rounds in a row
+// (ResetFailed), before anything else and without a reload: its last error
+// names the last failure's cause. With a hold (ReleaseHeld) the slot stays
+// held during the reload instead of moving to dirty_schema, and the
+// failures move it from held to broken without the hold.
 func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.Pool, hold string) error {
 	sl, err := m.reload(ctx, slot)
 	if err != nil {
 		return err
+	}
+	if f, ok, err := m.resetFailuresOf(ctx, sl); err != nil {
+		return err
+	} else if ok && f.Rounds >= BreakAfterResetFailures {
+		from := []string{store.SlotReleasing, store.SlotDirtySchema}
+		return m.breakSchema(ctx, sl, from, hold,
+			fmt.Errorf("%w: %s schema reset failed in %s: %s", ErrBroken, sl.Name, roundsWord(f.Rounds), f.Cause))
 	}
 	need := sl.DirtySchema
 	why := "dirty_schema"
@@ -665,6 +676,9 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 		runErr = m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.ResetDB, "reset_db", "slot-"+sl.Name+".log", ResetDBTimeout)
 		if runErr == nil {
 			base := m.loadedSchema(ctx, sl, pool)
+			if err := m.clearResetFailures(ctx, sl.ID); err != nil {
+				return err
+			}
 			return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) {
 				u.Set("dirty_schema", false)
 				setSchema(u, base)
@@ -674,8 +688,15 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 			return runErr
 		}
 	}
-	broken := fmt.Errorf("%w: %s schema reset failed twice: %w", ErrBroken, sl.Name, runErr)
-	from := []string{store.SlotDirtySchema}
+	return m.breakSchema(ctx, sl, []string{store.SlotDirtySchema}, hold,
+		fmt.Errorf("%w: %s schema reset failed twice: %w", ErrBroken, sl.Name, runErr))
+}
+
+// breakSchema moves a slot whose schema could not be reloaded from one of
+// from (from held for hold, with a hold) to broken, broken (an ErrBroken)
+// as its last error, and returns broken: an unpinned slot lets its PR go
+// (store.BreakSlot), and the hold goes so `magnum slots repair` takes it.
+func (m *Manager) breakSchema(ctx context.Context, sl store.Slot, from []string, hold string, broken error) error {
 	if hold != "" {
 		from = []string{store.SlotHeld}
 	}

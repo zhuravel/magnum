@@ -40,8 +40,11 @@ type ReadinessCheck struct {
 	// output, so prompts may show it.
 	Detail string `json:"detail,omitempty"`
 	// LastLine is the last non-empty line the command printed (redacted,
-	// shortened). It comes from code in the PR's checkout, so it is data:
-	// it goes into the readiness file only, never into a prompt.
+	// shortened); for a failed rake task, the cause after "aborted!", not
+	// its trailer. It comes from code in the PR's checkout, so it is data:
+	// it goes into the readiness file, and a failed reset_db's into the
+	// round.readiness event and the slot's count of failed resets, never
+	// into a prompt.
 	LastLine string `json:"last_line,omitempty"`
 	Duration string `json:"duration"` // e.g. "4.2s"
 }

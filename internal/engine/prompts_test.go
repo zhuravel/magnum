@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -503,6 +504,75 @@ func TestRoundReloadsTheSchemaOnlyWhenTheSlotCarriesAnother(t *testing.T) {
 			}
 			if strings.HasPrefix(tc.note, "schema unchanged") && !h.hasEvent("slot:review1", "slot.schema_unchanged") {
 				t.Fatal("no slot.schema_unchanged event")
+			}
+		})
+	}
+}
+
+// A round whose schema reset failed is counted for its slot
+// (Slots.ResetFailed, which breaks the slot at its release after two rounds
+// in a row): from 2026-10-19, 11 rounds in three slots failed the same
+// reset_db and nothing told the operator. Each failure is a
+// slot.schema_reset_failed event, and the second in a row toasts once,
+// with the cause and the repair; a third adds no toast. A reset that passed
+// between two failures starts the count again.
+func TestTheSecondRoundWhoseSchemaResetFailsToastsTheRepair(t *testing.T) {
+	const cause = "ActiveRecord::NoDatabaseError: Unknown database 'talkable_development__review1'"
+	for _, tc := range []struct {
+		name   string
+		passes []bool // each round's reset
+		toasts int
+	}{
+		{"three failures in a row", []bool{false, false, false}, 1},
+		{"a pass between two failures", []bool{false, true, false}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(h *harness) {
+				p := &h.cfg.Pools[0]
+				p.SchemaPaths, p.ResetDB = []string{"db/"}, []string{"bin/rails db:schema:load"}
+			})
+			for i, passes := range tc.passes {
+				if i == 0 {
+					h.reviewedPR(2, "b1")
+				} else {
+					head := fmt.Sprintf("b%d", i+1)
+					h.push(2, head)
+					h.reviewTo(2, head)
+				}
+				ins := h.rd.all()
+				if len(ins) != i+1 {
+					t.Fatalf("round %d: %d rounds ran", i+1, len(ins))
+				}
+				rd := ins[i].Readiness
+				if rd.ResetFailed == nil || rd.Loaded == nil {
+					t.Fatalf("round %d reloads the schema without ResetFailed and Loaded", i+1)
+				}
+				if passes { // the pipeline's calls
+					rd.Loaded(h.ctx)
+					h.sl.mu.Lock()
+					h.sl.schemaChange = true // the next push changes the schema: its round reloads
+					h.sl.mu.Unlock()
+				} else {
+					rd.ResetFailed(h.ctx, cause)
+				}
+			}
+			h.e.toastWG.Wait()
+			var toasts []string
+			for _, s := range h.nh.all() {
+				if strings.Contains(s, "schema reset") {
+					toasts = append(toasts, s)
+				}
+			}
+			if len(toasts) != tc.toasts {
+				t.Fatalf("toasts = %q, want %d", toasts, tc.toasts)
+			}
+			want := "slot review1: the schema reset failed in two rounds (" + cause + "); it breaks at its release, then `magnum slots repair review1`"
+			if tc.toasts == 1 && !strings.Contains(toasts[0], want) {
+				t.Fatalf("toast = %q, want %q", toasts[0], want)
+			}
+			failed := len(tc.passes) - len(slices.DeleteFunc(slices.Clone(tc.passes), func(p bool) bool { return !p }))
+			if got := len(h.events("slot.schema_reset_failed")); got != failed {
+				t.Fatalf("slot.schema_reset_failed events = %d, want %d, one per failed round", got, failed)
 			}
 		})
 	}

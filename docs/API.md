@@ -1847,8 +1847,11 @@ type ReadinessCheck struct {
 	// output, so prompts may show it.
 	Detail string `json:"detail,omitempty"`
 	// LastLine is the last non-empty line the command printed (redacted,
-	// shortened). It comes from code in the PR's checkout, so it is data:
-	// it goes into the readiness file only, never into a prompt.
+	// shortened); for a failed rake task, the cause after "aborted!", not
+	// its trailer. It comes from code in the PR's checkout, so it is data:
+	// it goes into the readiness file, and a failed reset_db's into the
+	// round.readiness event and the slot's count of failed resets, never
+	// into a prompt.
 	LastLine string `json:"last_line,omitempty"`
 	Duration string `json:"duration"` // e.g. "4.2s"
 }
@@ -8078,10 +8081,12 @@ type Slots interface {
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
 	Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error)
 	// CheckSchema, ForgetSchema and RecordSchema decide and record a round's
-	// schema reload (readinessPlan); EnsureSchema reloads for magnum open.
+	// schema reload (readinessPlan), ResetFailed counts a reload that failed
+	// (RecordSchema clears the count); EnsureSchema reloads for magnum open.
 	CheckSchema(ctx context.Context, slot store.Slot, pool config.Pool) (slots.SchemaCheck, error)
 	ForgetSchema(ctx context.Context, slot store.Slot) error
 	RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error
+	ResetFailed(ctx context.Context, slot store.Slot, cause string) (int, error)
 	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
 }
     Slots is the part of *slots.Manager the engine drives.
@@ -14424,6 +14429,12 @@ type ReadinessPlan struct {
 	// Loaded is called once every ResetDB command passed: the engine
 	// records the schema the databases now carry. nil = nothing to record.
 	Loaded func(ctx context.Context)
+	// ResetFailed is called once when a ResetDB command failed or ran out
+	// of its budget (not when the round's cancel stopped it), with the
+	// first such command's cause (its last line, or magnum's reason when it
+	// printed none): the engine counts the slot's rounds in a row whose
+	// reset failed (slots.Manager.ResetFailed). nil = nothing to count.
+	ResetFailed func(ctx context.Context, cause string)
 	// SchemaNote is magnum's line about the schema for the readiness event
 	// and file: why ResetDB runs, or why it does not ("schema unchanged
 	// since abc1234: no reset").
@@ -15862,6 +15873,12 @@ const AgentPrefix = "mg-"
     AgentPrefix starts the name of every agent magnum starts; the guard treats
     any other agent as a human's.
 
+const BreakAfterResetFailures = 2
+    BreakAfterResetFailures is how many rounds in a row whose readiness reset_db
+    failed in a pool slot break it at its release (resetSchema): the release
+    keeps a LazySchema slot's databases, so nothing else ever tells the operator
+    that every round in the slot fails the same reset.
+
 const DefaultCloneRoot = "~/Projects"
     DefaultCloneRoot is used when a watch has no clone_root.
 
@@ -16302,7 +16319,8 @@ func (m *Manager) Guard(ctx context.Context, slot store.Slot) error
         which Release resets wherever HEAD is) carries commits on no remote or
         magnum ref (HoldUnpushed). A HEAD equal to the commit an interrupted
         Checkout (or a release's reset) was switching to is magnum's own and is
-        recorded instead;
+        recorded instead, and so is the PR's pushed head on a clean tree with
+        nothing unpushed (pushedPRHead);
       - the working tree has changes to tracked files and a human was there
         (HoldDirtyWorktree): a foreign agent or process as above, or the PR's
         human_active_at after the slot's last checkout (last_used_at), which the
@@ -16387,7 +16405,8 @@ func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) er
 
 func (m *Manager) RecordSchema(ctx context.Context, slot store.Slot, c SchemaCheck) error
     RecordSchema stores c, CheckSchema's answer, as the schema the slot's
-    databases carry, once its reload succeeded.
+    databases carry, once its reload succeeded, and forgets the slot's failed
+    resets (ResetFailed): the count is of rounds in a row.
 
 func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
     Release hands a claimed or held pool slot back to the pool. Steps (subject
@@ -16402,15 +16421,16 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
     schema_check (resetSchema: a LazySchema pool keeps the databases unless
     MAX(schema_migrations.version) of the development database differs from
     the version of the schema recorded for them; otherwise when dirty_schema
-    is set or that version differs from db/schema.rb at HEAD: the slot moves
-    to dirty_schema and pool.reset_db runs through mise exec, 30m; a second
-    failure in a row moves the slot to broken, with its PR released unless it
-    is pinned, and returns ErrBroken) and mark_free (store.ReleaseSlot: free,
-    pr_id cleared, assignment closed with reason). A releasing or dirty_schema
-    slot resumes after its last completed step, after Guard ran again:
-    whatever a human did since the last attempt refuses the release before its
-    next destructive step. Per-PR slots are removed instead (RemovePRWorktree
-    semantics).
+    is set or that version differs from db/schema.rb at HEAD: the slot
+    moves to dirty_schema and pool.reset_db runs through mise exec, 30m;
+    a second failure in a row moves the slot to broken, with its PR released
+    unless it is pinned, and returns ErrBroken, as does a slot whose readiness
+    reset_db failed in BreakAfterResetFailures rounds in a row) and mark_free
+    (store.ReleaseSlot: free, pr_id cleared, assignment closed with reason).
+    A releasing or dirty_schema slot resumes after its last completed step,
+    after Guard ran again: whatever a human did since the last attempt refuses
+    the release before its next destructive step. Per-PR slots are removed
+    instead (RemovePRWorktree semantics).
 
 func (m *Manager) ReleaseHeld(ctx context.Context, slot store.Slot, pool config.Pool, hold string, refs ...string) error
     ReleaseHeld hands a slot held for hold back to the pool with Release's
@@ -16459,6 +16479,13 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
     like Claim but through store.AssignSlot (slot → claimed with pr_id,
     open assignment with the pool's database names). A claimed or held slot the
     PR already has is returned as is; no free slot left is ErrNoFreeSlot.
+
+func (m *Manager) ResetFailed(ctx context.Context, slot store.Slot, cause string) (int, error)
+    ResetFailed counts a round whose readiness reset_db failed in slot,
+    with cause (the failed command's last line), and returns how many rounds
+    in a row failed it. At BreakAfterResetFailures the slot's release breaks
+    it (store.BreakSlot, as the release's own reload failing twice does),
+    so `magnum slots repair` takes it; the round itself goes on.
 
 func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
     Resync puts a slot back in order after a run that committed in it (the

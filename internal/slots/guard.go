@@ -29,7 +29,8 @@ import (
 //     branch, which Release resets wherever HEAD is) carries commits on no
 //     remote or magnum ref (HoldUnpushed). A HEAD equal to the commit an
 //     interrupted Checkout (or a release's reset) was switching to is
-//     magnum's own and is recorded instead;
+//     magnum's own and is recorded instead, and so is the PR's pushed head
+//     on a clean tree with nothing unpushed (pushedPRHead);
 //   - the working tree has changes to tracked files and a human was there
 //     (HoldDirtyWorktree): a foreign agent or process as above, or the PR's
 //     human_active_at after the slot's last checkout (last_used_at), which the
@@ -78,7 +79,7 @@ func (m *Manager) guardChecks(ctx context.Context, sl store.Slot, pr store.PR, u
 		}
 		return live
 	}
-	if err := m.guardHead(ctx, sl); err != nil {
+	if err := m.guardHead(ctx, sl, pr, untracked); err != nil {
 		return err
 	}
 	if why := humanActivity(sl, pr); why != "" {
@@ -276,8 +277,9 @@ func processNames(pi herdr.ProcessInfo) string {
 	return strings.Join(names, ", ")
 }
 
-// guardHead detects commits a human made in the slot.
-func (m *Manager) guardHead(ctx context.Context, sl store.Slot) error {
+// guardHead detects commits a human made in the slot. pr is the slot's PR
+// (guardPR): a HEAD that is its pushed head is no drift (pushedPRHead).
+func (m *Manager) guardHead(ctx context.Context, sl store.Slot, pr store.PR, untracked bool) error {
 	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return nil
 	}
@@ -290,6 +292,9 @@ func (m *Manager) guardHead(ctx context.Context, sl store.Slot) error {
 			return nil
 		}
 		if ok, err := m.resumeSwitch(ctx, sl, head); err != nil || ok {
+			return err
+		}
+		if ok, err := m.pushedPRHead(ctx, sl, pr, head, untracked); err != nil || ok {
 			return err
 		}
 		return m.persistHold(ctx, sl, HoldHeadDrift, fmt.Sprintf("HEAD is %s, magnum checked out %s",
@@ -366,6 +371,42 @@ func (m *Manager) resumeSwitch(ctx context.Context, sl store.Slot, head string) 
 	}
 	m.event(ctx, "slot:"+sl.Name, "info", "slot.switch_recorded",
 		fmt.Sprintf("HEAD %s is the commit an interrupted checkout switched to; recorded as checked out", textx.ShortSHA(head)))
+	return true, nil
+}
+
+// pushedPRHead reports whether head, a HEAD that moved off the slot's
+// checked_out_sha, is the PR's pushed head: the PR's row has it as its head
+// (the poll read it from GitHub), the tree has no changes (untracked files
+// only with untracked, never the local mise file magnum rendered) and no
+// commit of HEAD is on no remote. Such a HEAD is no work a reset would lose
+// (a person went on in the PR's panes and pushed), so it is recorded as
+// checked out, with a slot.head_recorded event, instead of a head_drift
+// hold.
+func (m *Manager) pushedPRHead(ctx context.Context, sl store.Slot, pr store.PR, head string, untracked bool) (bool, error) {
+	if sl.ID == 0 || pr.HeadSHA == "" || pr.HeadSHA != head {
+		return false, nil
+	}
+	ch, err := m.worktreeChanges(ctx, sl.Path)
+	if err != nil {
+		return false, fmt.Errorf("slots: guard %s: %w", sl.Name, err)
+	}
+	ch.untracked = withoutRenderedMiseLocal(sl.Path, ch.untracked)
+	if len(ch.paths(untracked)) > 0 {
+		return false, nil
+	}
+	if n, err := m.git.Unpushed(ctx, sl.Path); err != nil {
+		return false, fmt.Errorf("slots: guard %s: %w", sl.Name, err)
+	} else if n > 0 {
+		return false, nil
+	}
+	if m.d.DryRun {
+		return true, nil
+	}
+	if err := m.recordSwitch(ctx, sl, head); err != nil {
+		return false, fmt.Errorf("slots: guard %s: %w", sl.Name, err)
+	}
+	m.event(ctx, "slot:"+sl.Name, "info", "slot.head_recorded",
+		fmt.Sprintf("HEAD %s is PR #%d's pushed head; recorded as checked out", textx.ShortSHA(head), pr.Number))
 	return true, nil
 }
 

@@ -1076,7 +1076,40 @@ func (e *Engine) readinessPlan(ctx context.Context, job *roundJob, kind string) 
 			e.log.Warn("record the slot's schema", "slot", slot.Name, "err", err)
 		}
 	}
+	pr := job.repo.FullName() + "#" + strconv.Itoa(job.pr.Number)
+	plan.ResetFailed = func(ctx context.Context, cause string) { e.resetFailed(ctx, slot, pr, cause) }
 	return plan
+}
+
+// resetFailed counts a round (of pr) whose schema reset failed in slot
+// (Slots.ResetFailed; the release breaks the slot once
+// slots.BreakAfterResetFailures rounds in a row failed it): a
+// slot.schema_reset_failed event each time, a warning from the second on,
+// and one urgent toast when the count reaches the break, with the cause
+// (the failed command's last line) and the repair. Before it, the judges
+// of every round in the slot worked around the same failed reset and
+// nothing told the operator.
+func (e *Engine) resetFailed(ctx context.Context, slot store.Slot, pr, cause string) {
+	n, err := e.d.Slots.ResetFailed(ctx, slot, cause)
+	if err != nil {
+		e.log.Warn("count the slot's failed schema reset", "slot", slot.Name, "err", err)
+		return
+	}
+	if n <= 0 { // a dry run counts nothing
+		return
+	}
+	level := "info"
+	if n >= slots.BreakAfterResetFailures {
+		level = "warn"
+	}
+	e.event(ctx, level, "slot:"+slot.Name, "slot.schema_reset_failed",
+		fmt.Sprintf("the schema reset failed in %s in a row (%s): %s", textx.Count(n, "round", "rounds"), pr, cause),
+		map[string]any{"rounds": n, "pr": pr})
+	if n == slots.BreakAfterResetFailures {
+		e.urgent("schema_reset:"+slot.Name, "magnum: schema reset failing in "+slot.Name,
+			fmt.Sprintf("slot %s: the schema reset failed in two rounds (%s); it breaks at its release, then `magnum slots repair %s`",
+				slot.Name, cause, slot.Name), attentionWindow)
+	}
 }
 
 // finalizeStaleRuns closes runs earlier rounds left behind (a crash, a

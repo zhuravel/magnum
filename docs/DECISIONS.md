@@ -10597,6 +10597,65 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - Timing a backlog event as a hint after a sleep: an event hours old would announce a change it did
       not see, and a hint must come within the window of the poll that sees the change.
 
+- **A failed rake task's reason is the line after "aborted!"** (2026-10-21, spec 105; amends "Verification
+  readiness runs before the reviewers"). Since 2026-10-19 17:32Z, 11 talkable rounds' readiness failed all
+  three `reset_db` commands (exit 1 within about 6 s) in three pool slots, and each check recorded rake's
+  trailer as its last line, "(See full trace by running task with --trace)" or "Tasks: TOP =>
+  db:schema:load": the cause, on the line after "rake aborted!", was lost, so neither the readiness file the
+  judge reads, the `round.readiness` event nor the machine lines of `magnum status` (the judges' reports)
+  said why the schema did not load. `lastLine` now skips that trailer for a failed command and, when the
+  output holds a line ending in "aborted!", takes the first non-empty line after the last such line
+  (redacted, one line, 200 runes, as before), else the last line that is not the trailer; a passing
+  command keeps its last line. The `round.readiness` event adds a failed `reset_db`'s cause in parentheses
+  ("reset_db `…`: exit 1 (ActiveRecord::NoDatabaseError: …)"): the pool's own command, whose errors already
+  reach the slot's last error and the release's events; prepare and ready output stays in the readiness
+  file, and the judge's prompt list still carries the status and magnum's reason only. New test
+  TestAFailedRakeCommandsReasonIsTheLineAfterAborted. Rejected: the whole stderr (a backtrace in the file
+  and the event).
+
+- **A slot whose schema reset fails in two rounds in a row is broken at its release** (2026-10-21, spec
+  105; amends "A slot reloads its databases only when the checkout needs another schema"). The 11 rounds
+  above ran in review4 and review13 (since 10-19) and review10 (since 10-20 08:16Z): the release keeps a
+  slot's databases (since 10-06), so its "schema reset failed twice → broken" path never ran, readiness
+  never escalated, and each later round in the slot failed the same reset, said "the schema its databases
+  carry is unknown", and had its judge work around it ("focused DB specs ran successfully") with no word to
+  the operator; `magnum status` showed review4 and review13 held with `dirty_schema`. Now the readiness step
+  tells the engine when a `reset_db` command failed or ran out of its budget (`ReadinessPlan.ResetFailed`,
+  with the first such command's cause; a reset the round's cancel stopped counts nothing), and
+  `slots.Manager.ResetFailed` counts the slot's rounds in a row in kv `slot.<id>.reset_failures` (the count
+  and the last cause; no migration). A reset that passes clears it (a round's `RecordSchema`, the release's
+  reload, `magnum open`'s `EnsureSchema`), as do a repair or an adoption (`reviveSlot`) and a removal. Each
+  failure is a `slot.schema_reset_failed` event (a warning from the second on), and the second toasts once:
+  "slot review4: the schema reset failed in two rounds (<cause>); it breaks at its release, then `magnum
+  slots repair review4`" (a held slot cannot be repaired). The round that found it finishes (its other
+  checks ran, its judge is told as before); the slot's next release breaks it in its `schema_check` step
+  before any reload (`slots.BreakAfterResetFailures`, 2), from releasing or `dirty_schema` (held, for
+  `ReleaseHeld`'s hold) to broken as the release's own break does (`breakSchema`, which both now share),
+  with "<slot> schema reset failed in two rounds: <cause>" as its last error and an unpinned slot's PR let
+  go; `magnum slots repair` takes it and starts the count again. New tests
+  TestASlotWhoseSchemaResetFailsInTwoRoundsIsBrokenForRepair, TestAFailedSchemaResetTellsTheEngineItsCause
+  and TestTheSecondRoundWhoseSchemaResetFailsToastsTheRepair. Two rounds, because one failure can be the
+  PR's own schema (a migration that does not load), while a second in a row in the same slot, over pushes
+  or PRs, points at the slot. Residual: a slot its PR keeps (no eviction, no close) is not released, so its
+  rounds keep failing until the PR lets it go or the operator releases it, which the toast says. Rejected:
+  an automatic drop-and-recreate of the databases at release (what the keep rule avoids: minutes of MySQL
+  writes per release, and a cause outside the databases would fail again), and breaking the slot at the
+  first failure (a PR whose own schema does not load would break a healthy slot).
+
+- **A HEAD that is the PR's pushed head is no drift** (2026-10-21, spec 105). On
+  talkable/talkable-integration#867 (10-17, requests 323 to 327) a fix ended "needs your call", the operator
+  went on in the pane and pushed 3e8c5b6, and the next round's setup failed with "held: head_drift: HEAD is
+  3e8c5b6" though 3e8c5b6 was already the PR's head on GitHub: two forced reviews, two releases and an
+  unpin, 41 minutes. The guard (`guardHead`) now takes a HEAD that moved off `checked_out_sha` as the
+  checkout Magnum expects when it is the PR row's head (what the poll read from GitHub), the tree has no
+  changes (untracked files only for a removal's guard, never the rendered local mise file) and none of its
+  commits is off the remotes and `refs/magnum/*` (`git rev-list --count HEAD --not --remotes`): it records
+  it as `checked_out_sha` with a `slot.head_recorded` event instead of the hold. Any other moved HEAD
+  (another commit, a dirty tree, an unpushed commit) holds as before. New test
+  TestAHeadThatIsThePRsPushedHeadIsNoDrift. Rejected: asking GitHub for the head at guard time (a read per
+  guard, while the PR row is what the round reviews), and taking any pushed HEAD (a person's other branch is
+  still theirs).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

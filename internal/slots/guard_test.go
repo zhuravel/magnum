@@ -173,6 +173,61 @@ func TestGuardHeadDriftPersistsHold(t *testing.T) {
 	}
 }
 
+// A HEAD that is the PR's pushed head is no drift: on 2026-10-17 a fix ended
+// "needs your call", the operator went on in the pane and pushed, and the
+// next round's setup held the slot for head_drift though that commit was
+// already the PR's head on GitHub (two forced reviews, two releases and an
+// unpin, 41 minutes). The guard records such a HEAD as checked out when the
+// tree is clean and nothing is unpushed; a HEAD that is not the PR's head,
+// an unpushed commit or a dirty tree still holds.
+func TestAHeadThatIsThePRsPushedHeadIsNoDrift(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		pushed bool // a remote-tracking ref holds the new HEAD
+		prHead bool // the PR's row has the new HEAD as its head
+		dirty  bool // a tracked file changed since
+		hold   bool
+	}{
+		{"the PR's pushed head on a clean tree", true, true, false, false},
+		{"not the PR's head", true, false, false, true},
+		{"unpushed", false, true, false, true},
+		{"a dirty tree", true, true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			sl, _ := h.claimedCheckout(8, h.shaPR8)
+			head := humanCommit(t, sl.Path)
+			if tc.pushed { // what the push leaves: origin's branch at HEAD
+				gitT(t, sl.Path, "update-ref", "refs/remotes/origin/feature-8", head)
+			}
+			if tc.prHead { // the poll read the push
+				h.pr(h.repo().ID, 8, head, store.PRQueued)
+			}
+			if tc.dirty {
+				writeFile(t, filepath.Join(sl.Path, "README"), "still editing\n")
+			}
+			err := h.m.Guard(h.ctx, h.slot(sl.Name))
+			got := h.slot(sl.Name)
+			if tc.hold {
+				wantHold(t, err, HoldHeadDrift)
+				if store.Deref(got.CheckedOutSHA) != h.shaPR8 {
+					t.Fatalf("checked_out_sha = %s, want magnum's checkout kept", store.Deref(got.CheckedOutSHA))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Guard = %v, want the pushed head taken", err)
+			}
+			if store.Deref(got.CheckedOutSHA) != head || got.HoldReason != nil {
+				t.Fatalf("checked_out_sha = %s hold %v; want %s recorded, no hold", store.Deref(got.CheckedOutSHA), store.Deref(got.HoldReason), head)
+			}
+			if !h.hasEvent("slot.head_recorded") {
+				t.Fatal("no slot.head_recorded event")
+			}
+		})
+	}
+}
+
 // Unpin clears the last_error the hold wrote ("slots: held: …", which
 // `magnum slots` shows), and only that: another failure stays until the next
 // operation clears it.

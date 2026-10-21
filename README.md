@@ -721,7 +721,11 @@ pinned: for a `head_drift` or `unpushed_commits` hold it takes the folder's curr
 Magnum expects, so the next release resets the slot, and answers "acknowledged the head_drift hold of slot
 talkable/talkable-integration#867: HEAD 3e8c5b6 is now the checkout magnum expects; the next release resets
 it" (a `dirty_worktree` hold comes back at the next guard while the changes are there). `magnum release`
-never acknowledges a hold: a release must not take a HEAD it did not check out.
+never acknowledges a hold: a release must not take a HEAD it did not check out. A HEAD that is the PR's
+pushed head is no drift, though: when the folder's HEAD is the head the poll last read from GitHub, its tree
+has no changes and none of its commits is missing from the remotes (a person went on in the PR's panes and
+pushed), the guard takes it as the checkout Magnum expects (a `slot.head_recorded` event) and the round goes
+on; any other moved HEAD is held as before.
 
 A round that fails three times on one head (a timeout, an error, a setup failure charged to the PR) parks
 its PR in needs attention. When the cause was Magnum's own (an unknown role, a launch line that broke), the
@@ -1193,7 +1197,14 @@ base carries the `dirty_schema` flag, and a release that must reload the databas
 `reset_db_on_schema_change = false`, or kept databases that no longer match what was loaded) moves the slot
 to the `dirty_schema` state and runs `reset_db` through `mise exec` within 30 minutes. A reload that fails
 twice in a row makes the slot `broken`, with the reload's error as its last error, and lets its PR go: the
-PR's next round takes another slot (a slot pinned meanwhile keeps its PR, which waits for it).
+PR's next round takes another slot (a slot pinned meanwhile keeps its PR, which waits for it). So does a
+slot whose reload before the reviewers fails in two rounds in a row (counted per slot, until a reload passes
+or a repair): its next release breaks it without reloading, with "<slot> schema reset failed in two rounds:
+<cause>" as its last error, and the second failure toasts once ("slot review4: the schema reset failed in two
+rounds (<cause>); it breaks at its release, then `magnum slots repair review4`"; each failure is a
+`slot.schema_reset_failed` event). The cause is the failed command's last line, which for a rake task is the
+line after "aborted!", not its "(See full trace by running task with --trace)" trailer; the readiness file,
+the `round.readiness` event and the judge's machine lines carry it too.
 `magnum slots repair <slot>` provisions the slot again and puts it back in the pool. A free slot above a pool's `min` is removed once it has been idle for
 `idle_remove_after` (168h when unset or 0; a negative value is refused). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced

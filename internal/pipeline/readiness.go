@@ -54,6 +54,12 @@ type ReadinessPlan struct {
 	// Loaded is called once every ResetDB command passed: the engine
 	// records the schema the databases now carry. nil = nothing to record.
 	Loaded func(ctx context.Context)
+	// ResetFailed is called once when a ResetDB command failed or ran out
+	// of its budget (not when the round's cancel stopped it), with the
+	// first such command's cause (its last line, or magnum's reason when it
+	// printed none): the engine counts the slot's rounds in a row whose
+	// reset failed (slots.Manager.ResetFailed). nil = nothing to count.
+	ResetFailed func(ctx context.Context, cause string)
 	// SchemaNote is magnum's line about the schema for the readiness event
 	// and file: why ResetDB runs, or why it does not ("schema unchanged
 	// since abc1234: no reset").
@@ -153,8 +159,14 @@ func (rd *round) readiness(ctx context.Context) error {
 	checks := make([]agents.ReadinessCheck, 0, len(resets)+len(cmds))
 	// The reset runs within its own budget; ready_timeout starts after it.
 	checks = append(checks, rd.runPhase(ctx, resets, plan.Env, readinessBudget{"reset_db's budget", resetBudget}, pin)...)
-	if len(resets) > 0 && plan.Loaded != nil && !slices.ContainsFunc(checks, func(c agents.ReadinessCheck) bool { return !c.OK }) {
-		plan.Loaded(context.WithoutCancel(ctx))
+	if len(resets) > 0 {
+		cause, failed := resetFailure(checks)
+		switch {
+		case failed && plan.ResetFailed != nil:
+			plan.ResetFailed(context.WithoutCancel(ctx), cause)
+		case plan.Loaded != nil && !slices.ContainsFunc(checks, func(c agents.ReadinessCheck) bool { return !c.OK }):
+			plan.Loaded(context.WithoutCancel(ctx))
+		}
 	}
 	checks = append(checks, rd.runPhase(ctx, cmds, plan.Env, readinessBudget{"ready_timeout", budget}, pin)...)
 	res := agents.Readiness{Checks: checks}
@@ -255,6 +267,22 @@ func (rd *round) runReadiness(ctx context.Context, c readinessCmd, env map[strin
 	return check
 }
 
+// resetFailure is the cause of the first reset_db check that failed or ran
+// out of its budget, and whether there is one: its last line, else its
+// detail. A check the round's cancel skipped or stopped is no failure.
+func resetFailure(checks []agents.ReadinessCheck) (string, bool) {
+	for _, c := range checks {
+		switch {
+		case c.Kind != agents.ReadinessResetDB:
+		case c.Status == agents.ReadinessFailed:
+			return cmp.Or(c.LastLine, c.Detail), true
+		case c.Status == agents.ReadinessTimeout:
+			return c.Detail, true
+		}
+	}
+	return "", false
+}
+
 // errorCause is a runner error without the command line execx puts in
 // front of it (the check names its command already).
 func errorCause(err error) string {
@@ -266,15 +294,22 @@ func errorCause(err error) string {
 
 // readinessEvent records the step: round.readiness, a warning when a check
 // did not pass. Commands come from the configuration; their output stays in
-// the readiness file (it is the PR's code talking). schema, the plan's
-// SchemaNote, ends the message.
+// the readiness file (it is the PR's code talking), but for the cause of a
+// failed reset_db, its last line in parentheses: the pool's own command,
+// whose cause also becomes the slot's last error when the reset keeps
+// failing (slots.Manager.ResetFailed). schema, the plan's SchemaNote, ends
+// the message.
 func (rd *round) readinessEvent(ctx context.Context, res agents.Readiness, took time.Duration, schema string) {
 	var failed []string
 	summary := make([]map[string]any, 0, len(res.Checks))
 	for _, c := range res.Checks {
 		summary = append(summary, map[string]any{"kind": c.Kind, "command": c.Command, "status": c.Status, "detail": c.Detail, "duration": c.Duration})
 		if !c.OK {
-			failed = append(failed, fmt.Sprintf("%s `%s`: %s", c.Kind, c.Command, cmp.Or(c.Detail, c.Status)))
+			line := fmt.Sprintf("%s `%s`: %s", c.Kind, c.Command, cmp.Or(c.Detail, c.Status))
+			if c.Kind == agents.ReadinessResetDB && c.Status == agents.ReadinessFailed && c.LastLine != "" {
+				line += " (" + c.LastLine + ")"
+			}
+			failed = append(failed, line)
 		}
 	}
 	level, msg := "info", fmt.Sprintf("readiness: %d of %d checks ok in %s", len(res.Checks)-res.Failed, len(res.Checks), took.Round(time.Second))
@@ -299,7 +334,12 @@ func (rd *round) readinessData() agents.Readiness {
 }
 
 // lastLine is the last non-empty line a command printed (stderr first when
-// it failed), redacted, without control characters, shortened.
+// it failed), redacted, without control characters, shortened. A failed
+// rake task ends with a trailer ("Tasks: TOP => db:schema:load", "(See full
+// trace by running task with --trace)") and puts its cause on the line
+// after "<task> aborted!": for a failed command the first non-empty line
+// after the last "aborted!" is the line, else the last one that is not the
+// trailer.
 func lastLine(res execx.Result, failed bool) string {
 	streams := [][]byte{res.Stdout, res.Stderr}
 	if failed {
@@ -308,13 +348,52 @@ func lastLine(res execx.Result, failed bool) string {
 	for _, s := range streams {
 		s = bytes.TrimSuffix(s, []byte(execx.TruncationMarker))
 		lines := strings.Split(strings.TrimSpace(string(s)), "\n")
+		if failed {
+			if l := afterAborted(lines); l != "" {
+				return l
+			}
+		}
 		for _, line := range slices.Backward(lines) {
+			if failed && rakeTrailer(line) {
+				continue
+			}
 			if l := oneLine(execx.Redact(line)); l != "" {
 				return l
 			}
 		}
 	}
 	return ""
+}
+
+// afterAborted is the first non-empty line, but rake's trailer, after the
+// last line ending in "aborted!" ("rake aborted!", "bin/rails aborted!"),
+// cleaned as lastLine's; "" when there is none.
+func afterAborted(lines []string) string {
+	at := -1
+	for i, line := range lines {
+		if strings.HasSuffix(strings.TrimSpace(line), "aborted!") {
+			at = i
+		}
+	}
+	if at < 0 {
+		return ""
+	}
+	for _, line := range lines[at+1:] {
+		if rakeTrailer(line) {
+			continue
+		}
+		if l := oneLine(execx.Redact(line)); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// rakeTrailer reports a line of the trailer a failed rake task prints
+// after its cause.
+func rakeTrailer(line string) bool {
+	line = strings.TrimSpace(line)
+	return line == "(See full trace by running task with --trace)" || strings.HasPrefix(line, "Tasks: TOP =>")
 }
 
 // oneLine drops control characters and invalid UTF-8 from s, trims it and

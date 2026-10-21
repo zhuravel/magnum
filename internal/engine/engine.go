@@ -192,10 +192,12 @@ type Slots interface {
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
 	Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error)
 	// CheckSchema, ForgetSchema and RecordSchema decide and record a round's
-	// schema reload (readinessPlan); EnsureSchema reloads for magnum open.
+	// schema reload (readinessPlan), ResetFailed counts a reload that failed
+	// (RecordSchema clears the count); EnsureSchema reloads for magnum open.
 	CheckSchema(ctx context.Context, slot store.Slot, pool config.Pool) (slots.SchemaCheck, error)
 	ForgetSchema(ctx context.Context, slot store.Slot) error
 	RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error
+	ResetFailed(ctx context.Context, slot store.Slot, cause string) (int, error)
 	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
 }
 

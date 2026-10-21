@@ -121,9 +121,14 @@ func errPathTaken(name, path string) error {
 // resumes the previous life's steps. The per-use columns are reset (set
 // applied on top) while sl keeps its state, then store.ReleaseSlot moves it
 // to `to`, clearing pr_id and closing any open assignment with reason in
-// one transaction: a slot never loses its PR but keeps the assignment.
+// one transaction: a slot never loses its PR but keeps the assignment. The
+// previous life's failed schema resets (ResetFailed) go first, so a
+// repaired slot starts its count again.
 func (m *Manager) reviveSlot(ctx context.Context, sl store.Slot, subject, to, reason string, set func(*store.SlotUpdate)) error {
 	if err := steps.ResetSubject(ctx, m.d.Store, subject); err != nil {
+		return err
+	}
+	if err := m.clearResetFailures(ctx, sl.ID); err != nil {
 		return err
 	}
 	err := m.d.Store.TransitionSlot(ctx, sl.ID, []string{sl.State}, sl.State, func(u *store.SlotUpdate) {
@@ -593,6 +598,9 @@ func (m *Manager) removeSteps(ctx context.Context, subject string, sl store.Slot
 // any open assignment.
 func (m *Manager) markRemoved(ctx context.Context, sl store.Slot, reason string) error {
 	if err := m.d.Store.DeleteKV(ctx, switchingKey(sl.ID)); err != nil {
+		return err
+	}
+	if err := m.clearResetFailures(ctx, sl.ID); err != nil {
 		return err
 	}
 	err := m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) {
