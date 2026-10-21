@@ -15147,8 +15147,10 @@ both within DefaultBodyTimeout of the headers (408 for a body that stalls, which
 frees its turn; 503 when no turn came), checks the signature as the HMAC-SHA256
 of those exact bytes with the current or the previous secret (401 when neither
 matches, and nothing is stored or parsed), then reads only the routing fields
-of the payload (Envelope) and inserts them under the delivery's GUID: 202 when
-stored, 200 for a delivery already stored, 503 when the journal refuses. A
+of the payload (Envelope) and inserts them under the delivery's GUID: 202
+when stored, 200 for a delivery already stored, 503 when the journal refuses.
+With Options.Installations set, a delivery of another installation, or of none
+but the App's ping, answers 202 {"status":"ignored"} and is not stored. A
 delivery is answered within WebhookDeadline of its headers, under GitHub's 10 s.
 The body itself is never stored or logged.
 
@@ -15159,13 +15161,17 @@ accepted hashes, and waits up to `wait` for a first event when there is none
 more answers 429). A cursor of another journal (epoch), or one older than the
 journal's oldest cursor (its events were pruned) or ahead of its high water,
 answers 410 "gap", and the daemon then resyncs by polling GitHub. GET /healthz
-answers without auth and without event data, from counters the journal keeps and
-a snapshot read again at most every 2 s.
+tells anyone whether the journal answers ({"ok":true}, or 503 {"ok":false}),
+and adds its epoch, the events kept and when the newest arrived for an accepted
+bearer token, from counters the journal keeps and a snapshot read again at most
+every 2 s.
 
 Retention deletes the events older than Options.Retention (30 days by default),
 as a prefix of the journal, so the oldest cursor only moves forward. Logs carry
 delivery ids, event names, sequence numbers and error classes, never a body,
-a secret, a token or an error's text.
+a secret, a token or an error's text. A request refused before it is
+authenticated, and a delivery of another installation, logs no line of its own:
+RunRefusalLog logs their count by kind once a minute.
 
 CONSTANTS
 
@@ -15284,6 +15290,10 @@ type Options struct {
 	BodyTimeout time.Duration
 	// MaxWaiting is how many long polls may wait at once (DefaultMaxWaiting when zero).
 	MaxWaiting int
+	// Installations are the ids of the App's installations whose deliveries are kept, each at least 1; a
+	// signed delivery of another installation, or of none but the App's own ping, answers 202 and is not
+	// stored. Empty keeps every installation's.
+	Installations []int64
 	// Logger receives the relay's logs (discarded when nil).
 	Logger *slog.Logger
 	// Now is the relay's clock (time.Now when nil).
@@ -15329,6 +15339,13 @@ func (r *Relay) Handler() http.Handler
 func (r *Relay) Prune(ctx context.Context) (int64, error)
     Prune deletes the events older than the retention and returns how many it
     deleted.
+
+func (r *Relay) RunRefusalLog(ctx context.Context, every time.Duration)
+    RunRefusalLog logs the refusals counted since its last lines every interval
+    (serve's is a minute), one line a kind with its count, and once more
+    when ctx ends. A request the relay refuses before it is authenticated,
+    or a delivery of another installation, logs nothing on its own, so a flood
+    of them costs a few lines a minute, not one a request.
 
 func (r *Relay) RunRetention(ctx context.Context, every time.Duration)
     RunRetention prunes at once and then every interval, until ctx ends.

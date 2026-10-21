@@ -3680,13 +3680,16 @@ the GitHub App's webhooks, which the sleeping Mac behind NAT cannot.
 - **What it keeps.** It checks each delivery's signature over the exact bytes. It keeps only the
   routing envelope in SQLite: the delivery id, the event and action, the installation, repository and
   pull request numbers, the head SHA, the base branch, and a check's name and conclusion. It never
-  keeps a body, a title, a comment or a user name.
+  keeps a body, a title, a comment or a user name. Anyone may install a public App, so when
+  `MAGNUM_RELAY_INSTALLATIONS` lists your installations, it keeps only their deliveries.
 - **How the daemon reads it.** The daemon pulls the events with a bearer token, through a long-polled
   listing with a cursor. A cursor the relay can no longer continue answers 410, and the daemon then
   resyncs by polling.
 - **Deploying it.** [deploy/relay/README.md](deploy/relay/README.md) covers the deploy on a self-hosted
   container platform (`deploy/relay/Dockerfile`, or `deploy/relay/compose.yaml` as a Compose project), the webhook secret and the token, and the GitHub App settings you set by
-  hand: the webhook URL, the secret, the events and the permissions.
+  hand: the webhook URL, the secret, the events and the permissions. It also covers the installation
+  ids, the log limits, and `/healthz`, which tells anyone only whether the relay is up and gives the
+  token's holder the counters.
 
 ## Under the hood
 

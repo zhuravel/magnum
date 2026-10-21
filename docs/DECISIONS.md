@@ -10891,6 +10891,74 @@ skill versions); people add theirs to the sections before it, at the end of the 
   install); and a warning when mise cannot answer (each Claude update would toast again whenever mise
   fails, the noise this removes).
 
+- **magnum-relay keeps only the installations `MAGNUM_RELAY_INSTALLATIONS` lists** (2026-10-21, spec 113;
+  amends "Webhooks reach magnum through a relay of its own, `magnum-relay`", whose Rejected list holds
+  "Dropping `check_run` actions or other installations at the relay"). New evidence: the App is public
+  (an unauthenticated GET of the App answers 200), so anyone may install it, and GitHub signs that
+  installation's deliveries with the App's secret. The relay kept them for 30 days: the journal's first
+  500 rows were 498 of one installation, 1 of another and a ping. The daemon still filters by
+  installation and repository, but a stranger's traffic no longer fills the journal, the disk and the
+  pages.
+  - With the variable set, a signed delivery of an installation it does not list answers 202
+    `{"status":"ignored"}` and stores nothing, as does one that names no installation. It is counted in
+    the minute's `webhook ignored` line. The installation is the payload's `installation.id`, which the
+    envelope already read.
+  - The App's `ping` names none and is still stored: only the App's owner sends it, by saving the
+    webhook, and the guide checks with it. Any other delivery without an installation is ignored, since
+    `github_app_authorization` reaches every App and any user who authorized it can cause one.
+  - Empty keeps every installation's deliveries, as before, and `serve` logs a warning at start.
+  - **Rejected:** a 4xx (GitHub would list a failed delivery to redeliver); `{"ignored":true}` (the
+    other answers say `status`); the `X-GitHub-Hook-Installation-Target-ID` header (on an App's hook it
+    names the App, where the hook was made).
+  - **Open, the operator's decision, not changed here:** whether the relay's domain stays behind the
+    Cloudflare proxy, which terminates TLS and so reads the bearer token, the deliveries and the pages.
+
+- **`/healthz` tells anyone only whether the relay is up; the counters need the token** (2026-10-21, spec
+  113; amends the relay entry's "`/healthz`. It has no auth and carries no event data"). The epoch (the
+  first half of every cursor), the events kept and when the newest arrived told anyone how busy the
+  operator's repositories are. Without an `Authorization` header, or with a token the listing would
+  refuse, it answers `{"ok":true}`, or 503 `{"ok":false}` when the journal does not answer. An accepted
+  bearer token adds the counters. A wrong token is not answered 401, so a checker with a stale token
+  still sees the relay up; it is counted in the minute's `health counters refused` line. The image's
+  `HEALTHCHECK` sends no token and reads only `ok`, and the daemon does not read `/healthz`, so its status
+  line is unchanged.
+
+- **A health check whose caller hung up no longer fails the checks after it** (2026-10-21, spec 113).
+  `refreshHealth` read the journal under the request's context. A check whose caller had gone by then
+  stored a failed snapshot, so the checks of the next 2 s answered 503 and each logged `health check
+  failed`: a monitor with a short timeout could turn the container unhealthy. The read now runs under
+  `context.WithoutCancel` within `healthTimeout`, as the insert outlives a client that hung up. New test
+  TestAHungUpHealthCheckDoesNotFailTheNextOne, the analyst's reproduction.
+
+- **The webhook's body buffer grows with the body, not with its Content-Length** (2026-10-21, spec 113).
+  `readBody` grew its buffer to the Content-Length, up to 26 MiB, before any of the body came and before
+  the signature was checked. Four senders holding the four turns reserved about 104 MiB with headers
+  alone. The first reservation is now at most 1 MiB (`firstBodyBuffer`), and the buffer grows as the body
+  arrives. A real 25 MB payload still reads whole, with a few copies while it grows. New test
+  TestTheBodyBufferGrowsWithTheBodyNotTheContentLength.
+
+- **Refusals are logged as one line a kind a minute, and the container's log is capped** (2026-10-21,
+  spec 113). Every request refused before it was authenticated logged its own line, and `compose.yaml`
+  set no log limit, so a flood of forged requests could fill the server's disk.
+  - Such a refusal, a delivery of another installation and a wrong token on `/healthz` are now counted
+    by message, status and class. These are all the relay's own constants, so the kinds stay few.
+  - `RunRefusalLog`, which `serve` runs every minute and once more at shutdown, logs one line a kind with
+    its `count`. A signed delivery that is not JSON still logs its own line, with its delivery id.
+  - `compose.yaml` sets the `json-file` driver to `max-size: 10m` and `max-file: "3"`. The guide gives the
+    same for the application built from the Dockerfile: the platform's log setting, else Docker's
+    defaults in `daemon.json`.
+  - Residual: net/http's own error log (a query holding a semicolon) still writes a line a request; the
+    cap bounds it.
+
+- **A test holds the consumer's copy of the relay's types to what the relay serves** (2026-10-21, spec
+  113). `internal/webhooks` copies the relay's `Event`, `Page`, `Check` and token bounds, since only its
+  tests may import the relay. TestTheConsumerDecodesWhatTheRelayServes stores a pull request's and a check
+  run's deliveries in a real relay over a temporary journal, lists them with the token and decodes the
+  page with `parsePage`. Every field of the relay's types must be in the consumer's, under the same JSON
+  tag and with the same value, and the consumer's page must encode back to the relay's JSON. `MinToken`
+  and `MaxToken` must equal the relay's. The two deliveries give every event field a value, which the test
+  checks, so a renamed tag cannot hide behind a zero.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

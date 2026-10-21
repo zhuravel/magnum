@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -20,7 +21,8 @@ const signaturePrefix = "sha256="
 
 // receive is POST /github/webhook. Headers that cannot be a delivery are refused before the body is read
 // or a turn taken; then the body is read whole within the body timeout, its signature checked over those
-// exact bytes, and only then its routing fields read and stored.
+// exact bytes, and only then its routing fields read and stored (or ignored, for an installation the relay
+// does not keep: keeps).
 func (r *Relay) receive(w http.ResponseWriter, req *http.Request) {
 	rc := http.NewResponseController(w)
 	// The wait for a turn and the body share one deadline: a body that stalls is cut and frees its turn.
@@ -75,6 +77,11 @@ func (r *Relay) receive(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "payload"})
 		return
 	}
+	if !r.keeps(ev) {
+		r.refusals.add(ignoredInstallation)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "ignored"})
+		return
+	}
 	ev.DeliveryID = delivery[0]
 	ev.ReceivedAt = r.now().UTC().Truncate(time.Second)
 	// The insert outlives a client that hung up: GitHub records the delivery as failed either way, and a
@@ -98,19 +105,40 @@ func (r *Relay) receive(w http.ResponseWriter, req *http.Request) {
 
 // refuse answers a delivery the relay does not store and stops reading its connection: the answer says
 // Connection: close (so net/http does not read the rest of the body to reuse it) and the read deadline
-// passes now. The log names only the class, since nothing of an unsigned request is trusted.
+// passes now. It is counted for the minute's log line (RunRefusalLog) by its status and class only, since
+// nothing of a request whose signature was not found good is trusted.
 func (r *Relay) refuse(w http.ResponseWriter, rc *http.ResponseController, code int, class string) {
-	r.log.Warn("webhook refused", "status", code, "class", class)
+	r.refusals.add(refusedWebhook(code, class))
 	w.Header().Set("Connection", "close")
 	_ = rc.SetReadDeadline(time.Now())
 	writeJSON(w, code, map[string]string{"error": class})
 }
 
-// readBody reads the whole body, at most limit bytes.
+// keeps says whether the relay stores a signed delivery: every one when no installation is listed, else one
+// of a listed installation, or the App's ping, which names none (only the App's owner sends it, by saving
+// the webhook). Anyone may install a public App, and GitHub signs that installation's deliveries with the
+// App's secret too.
+func (r *Relay) keeps(ev Event) bool {
+	if len(r.installations) == 0 {
+		return true
+	}
+	if ev.InstallationID == 0 {
+		return ev.Event == "ping"
+	}
+	_, listed := slices.BinarySearch(r.installations, ev.InstallationID)
+	return listed
+}
+
+// firstBodyBuffer is the most readBody reserves before the body arrives, whatever its Content-Length says.
+const firstBodyBuffer = 1 << 20
+
+// readBody reads the whole body, at most limit bytes. Its buffer starts at the Content-Length up to
+// firstBodyBuffer and grows as the body comes: a sender's header alone reserves no more, while four turns
+// at the 26 MiB limit would reserve over 100 MiB before any signature is checked.
 func readBody(w http.ResponseWriter, req *http.Request, limit int64) ([]byte, error) {
 	var buf bytes.Buffer
 	if req.ContentLength > 0 {
-		buf.Grow(int(req.ContentLength))
+		buf.Grow(int(min(req.ContentLength, firstBodyBuffer, limit)))
 	}
 	_, err := buf.ReadFrom(http.MaxBytesReader(w, req.Body, limit))
 	return buf.Bytes(), err

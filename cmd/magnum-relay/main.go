@@ -9,8 +9,10 @@
 // Each flag of serve defaults to its environment variable: -addr MAGNUM_RELAY_ADDR (":8080"), -db
 // MAGNUM_RELAY_DB ("/data/relay.db"), -secret-file MAGNUM_RELAY_SECRET_FILE and -previous-secret-file
 // MAGNUM_RELAY_PREVIOUS_SECRET_FILE (the webhook secrets, read from files), -token-hashes
-// MAGNUM_RELAY_TOKEN_HASHES (comma-separated sha256 hex of the accepted bearer tokens) and -retention
-// MAGNUM_RELAY_RETENTION ("720h"). SIGINT or SIGTERM answers the waiting long polls and shuts down.
+// MAGNUM_RELAY_TOKEN_HASHES (comma-separated sha256 hex of the accepted bearer tokens), -installations
+// MAGNUM_RELAY_INSTALLATIONS (comma-separated ids of the App's installations whose deliveries are kept;
+// empty keeps every installation's, and serve logs that it does) and -retention MAGNUM_RELAY_RETENTION
+// ("720h"). SIGINT or SIGTERM answers the waiting long polls and shuts down.
 package main
 
 import (
@@ -28,6 +30,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,7 +44,7 @@ var version = "dev"
 
 const (
 	usage = `usage: magnum-relay [serve] [-addr :8080] [-db /data/relay.db] [-secret-file F] [-previous-secret-file F]
-                    [-token-hashes H1,H2] [-retention 720h]
+                    [-token-hashes H1,H2] [-installations ID1,ID2] [-retention 720h]
        magnum-relay hash-token < token-file
        magnum-relay healthcheck [-addr :8080]
        magnum-relay version
@@ -55,6 +59,8 @@ const (
 	// still open are closed.
 	shutdownTimeout = relay.WebhookDeadline + 5*time.Second
 	pruneEvery      = time.Hour
+	// refusalLogEvery is how often the refusals counted are logged, one line a kind (relay.RunRefusalLog).
+	refusalLogEvery = time.Minute
 )
 
 func main() {
@@ -109,11 +115,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 
 // config is serve's settings.
 type config struct {
-	addr, db  string
-	secrets   [][]byte
-	tokens    [][sha256.Size]byte
-	retention time.Duration
-	shutdown  time.Duration
+	addr, db      string
+	secrets       [][]byte
+	tokens        [][sha256.Size]byte
+	installations []int64 // sorted, once each; none: every installation
+	retention     time.Duration
+	shutdown      time.Duration
 }
 
 func envOr(getenv func(string) string, key, def string) string {
@@ -133,6 +140,7 @@ func parseServe(args []string, getenv func(string) string, stderr io.Writer) (co
 	secretFile := fs.String("secret-file", getenv("MAGNUM_RELAY_SECRET_FILE"), "file holding the webhook secret")
 	previousFile := fs.String("previous-secret-file", getenv("MAGNUM_RELAY_PREVIOUS_SECRET_FILE"), "file holding the previous webhook secret, during a rotation")
 	hashes := fs.String("token-hashes", getenv("MAGNUM_RELAY_TOKEN_HASHES"), "comma-separated sha256 hex of the accepted bearer tokens")
+	installations := fs.String("installations", getenv("MAGNUM_RELAY_INSTALLATIONS"), "comma-separated ids of the App's installations whose deliveries are kept (every installation's when empty)")
 	retention := fs.String("retention", envOr(getenv, "MAGNUM_RELAY_RETENTION", "720h"), "how long events are kept")
 	if err := fs.Parse(args); err != nil {
 		return config{}, usageError{err}
@@ -159,6 +167,9 @@ func parseServe(args []string, getenv func(string) string, stderr io.Writer) (co
 		return config{}, usageError{err}
 	}
 	cfg.tokens = tokens
+	if cfg.installations, err = parseInstallations(*installations); err != nil {
+		return config{}, usageError{err}
+	}
 	d, err := time.ParseDuration(*retention)
 	if err != nil || d < relay.MinRetention {
 		return config{}, usageError{fmt.Errorf("retention %q: a duration of at least %v, such as 720h", *retention, relay.MinRetention)}
@@ -208,6 +219,25 @@ func parseHashes(s string) ([][sha256.Size]byte, error) {
 	return out, nil
 }
 
+// parseInstallations reads the comma-separated installation ids, sorted and once each: none for "" (every
+// installation's deliveries are kept).
+func parseInstallations(s string) ([]int64, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var out []int64
+	for i, f := range strings.Split(s, ",") {
+		f = strings.TrimSpace(f)
+		id, err := strconv.ParseInt(f, 10, 64)
+		if err != nil || id < 1 || strings.HasPrefix(f, "+") {
+			return nil, fmt.Errorf("MAGNUM_RELAY_INSTALLATIONS: entry %d is not an installation id (a whole number of at least 1, the last part of the installation's settings URL)", i+1)
+		}
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
+}
+
 // hashToken prints the sha256 hex of the one token on stdin (a trailing newline dropped).
 func hashToken(stdin io.Reader, stdout io.Writer) error {
 	b, err := io.ReadAll(io.LimitReader(bufio.NewReader(stdin), maxSecretFile+1))
@@ -230,11 +260,12 @@ func hashToken(stdin io.Reader, stdout io.Writer) error {
 // flight finish and closes the journal. ready, when set, gets the listening address.
 func serve(ctx context.Context, cfg config, logger *slog.Logger, ver string, ready func(net.Addr)) error {
 	r, err := relay.Open(ctx, relay.Options{
-		DB:          cfg.db,
-		Secrets:     cfg.secrets,
-		TokenHashes: cfg.tokens,
-		Retention:   cfg.retention,
-		Logger:      logger,
+		DB:            cfg.db,
+		Secrets:       cfg.secrets,
+		TokenHashes:   cfg.tokens,
+		Installations: cfg.installations,
+		Retention:     cfg.retention,
+		Logger:        logger,
 	})
 	if err != nil {
 		return err
@@ -255,13 +286,20 @@ func serve(ctx context.Context, cfg config, logger *slog.Logger, ver string, rea
 		MaxHeaderBytes:    32 << 10,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
-	pruneCtx, stopPrune := context.WithCancel(context.WithoutCancel(ctx))
+	// The retention and the refusals' log run until the server has shut down; the log's last lines then
+	// count what came up to the end.
+	bgCtx, stopBg := context.WithCancel(context.WithoutCancel(ctx))
 	var wg sync.WaitGroup
-	wg.Go(func() { r.RunRetention(pruneCtx, pruneEvery) })
+	wg.Go(func() { r.RunRetention(bgCtx, pruneEvery) })
+	wg.Go(func() { r.RunRefusalLog(bgCtx, refusalLogEvery) })
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	logger.Info("relay listening", "addr", ln.Addr().String(), "version", ver, "epoch", r.Epoch(),
-		"secrets", len(cfg.secrets), "tokens", len(cfg.tokens), "retention", cfg.retention.String())
+		"secrets", len(cfg.secrets), "tokens", len(cfg.tokens), "installations", len(cfg.installations),
+		"retention", cfg.retention.String())
+	if len(cfg.installations) == 0 {
+		logger.Warn("every installation's deliveries are kept: MAGNUM_RELAY_INSTALLATIONS names none, and anyone may install a public App")
+	}
 	if ready != nil {
 		ready(ln.Addr())
 	}
@@ -278,7 +316,7 @@ func serve(ctx context.Context, cfg config, logger *slog.Logger, ver string, rea
 		logger.Warn("shutdown timed out, closing the connections left", "class", "timeout")
 		_ = srv.Close()
 	}
-	stopPrune()
+	stopBg()
 	wg.Wait()
 	logger.Info("relay stopped")
 	if errors.Is(serveErr, http.ErrServerClosed) {

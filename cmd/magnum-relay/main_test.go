@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -160,6 +161,87 @@ func TestServeRefusesAMissingOrWeakSecretAndBadTokenHashes(t *testing.T) {
 	}
 }
 
+func TestServeReadsTheInstallationAllowlist(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	env := map[string]string{
+		"MAGNUM_RELAY_SECRET_FILE":   writeFile(t, dir, "secret", secret),
+		"MAGNUM_RELAY_TOKEN_HASHES":  hashOf(token),
+		"MAGNUM_RELAY_INSTALLATIONS": " 456, 123,456 ",
+	}
+	cfg, err := parseServe(nil, envOf(env), io.Discard)
+	if err != nil || !slices.Equal(cfg.installations, []int64{123, 456}) {
+		t.Fatalf("parseServe: %v %v, want installations 123 and 456", cfg.installations, err)
+	}
+	if cfg, err = parseServe([]string{"-installations", "7"}, envOf(env), io.Discard); err != nil || !slices.Equal(cfg.installations, []int64{7}) {
+		t.Fatalf("the flag over the variable: %v %v", cfg.installations, err)
+	}
+	for _, empty := range []string{"", "  "} {
+		env["MAGNUM_RELAY_INSTALLATIONS"] = empty
+		if cfg, err = parseServe(nil, envOf(env), io.Discard); err != nil || cfg.installations != nil {
+			t.Fatalf("installations %q: %v %v, want every installation", empty, cfg.installations, err)
+		}
+	}
+	for _, bad := range []string{"abc", "1,,2", "1,", "0", "-5", "+5", "1.5", "1;2", "1 2", "0x10", "99999999999999999999"} {
+		env["MAGNUM_RELAY_INSTALLATIONS"] = bad
+		var out, errOut bytes.Buffer
+		if code := run(t.Context(), nil, envOf(env), strings.NewReader(""), &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "MAGNUM_RELAY_INSTALLATIONS") {
+			t.Errorf("installations %q: exit %d, want 2 naming the variable (%s)", bad, code, errOut.String())
+		}
+	}
+}
+
+func TestServeSaysWhenItStoresEveryInstallation(t *testing.T) {
+	t.Parallel()
+	every := &lockedWriter{}
+	_, cancel, served := startServeLogging(t, testConfig(t), every)
+	cancel()
+	<-served
+	if s := every.String(); !strings.Contains(s, "every installation") || !strings.Contains(s, "MAGNUM_RELAY_INSTALLATIONS") {
+		t.Fatalf("no line says every installation is stored: %s", s)
+	}
+	listed := &lockedWriter{}
+	cfg := testConfig(t)
+	cfg.installations = []int64{123}
+	addr, cancel, served := startServeLogging(t, cfg, listed)
+	// The relay serve runs keeps the listed installation's delivery and ignores another's.
+	for id, want := range map[int]string{123: `"status":"stored"`, 99: `"status":"ignored"`} {
+		body := []byte(`{"action":"opened","pull_request":{"number":45},"repository":{"id":2,"full_name":"talkable/example"},"installation":{"id":` + strconv.Itoa(id) + `}}`)
+		if code, answer := deliver(t, addr, "d-"+strconv.Itoa(id), body); code != http.StatusAccepted || !strings.Contains(answer, want) {
+			t.Errorf("installation %d: %d %s, want 202 %s", id, code, answer, want)
+		}
+	}
+	cancel()
+	<-served
+	if s := listed.String(); strings.Contains(s, "every installation") || !strings.Contains(s, `"installations":1`) {
+		t.Fatalf("with an allowlist: %s", s)
+	}
+}
+
+// deliver posts a delivery signed with the test secret to the relay on addr.
+func deliver(t *testing.T, addr, id string, body []byte) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+addr+"/github/webhook", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write(body)
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", id)
+	req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(m.Sum(nil)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(b)
+}
+
 func TestServeStoresADeliveryAnswersItsHealthCheckAndShutsDownGracefully(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -211,6 +293,20 @@ func TestServeStoresADeliveryAnswersItsHealthCheckAndShutsDownGracefully(t *test
 	if err := healthcheck(t.Context(), addr); err != nil {
 		t.Fatalf("healthcheck: %v", err)
 	}
+	// An unsigned delivery is refused, and its count logged by the minute's line, which the shutdown writes.
+	unsigned, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+addr+"/github/webhook", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsigned.Header.Set("X-GitHub-Event", "pull_request")
+	unsigned.Header.Set("X-GitHub-Delivery", "d-unsigned")
+	if resp, err = http.DefaultClient.Do(unsigned); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unsigned delivery: %d", resp.StatusCode)
+	}
 	// A long poll waiting at shutdown is answered at once, and serve returns.
 	list := func(query string) (int, string) {
 		req, err := http.NewRequestWithContext(context.WithoutCancel(t.Context()), http.MethodGet, "http://"+addr+"/v1/events?"+query, nil)
@@ -260,6 +356,9 @@ func TestServeStoresADeliveryAnswersItsHealthCheckAndShutsDownGracefully(t *test
 	}
 	if s := logs.String(); strings.Contains(s, "SECRET") || strings.Contains(s, secret) || strings.Contains(s, token) || !strings.Contains(s, "d-1") {
 		t.Fatalf("logs: %s", s)
+	}
+	if s := logs.String(); !strings.Contains(s, `"msg":"webhook refused","status":401,"class":"signature","count":1}`) {
+		t.Fatalf("the refusal's count was not logged at the shutdown: %s", s)
 	}
 }
 
@@ -348,12 +447,18 @@ func (l *lockedWriter) String() string {
 // startServe runs serve on a loopback port until the returned cancel, and returns its address and its result.
 func startServe(t *testing.T, cfg config) (string, context.CancelFunc, <-chan error) {
 	t.Helper()
+	return startServeLogging(t, cfg, io.Discard)
+}
+
+// startServeLogging is startServe with serve's logs going to logs.
+func startServeLogging(t *testing.T, cfg config, logs io.Writer) (string, context.CancelFunc, <-chan error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	addrs := make(chan net.Addr, 1)
 	served := make(chan error, 1)
 	go func() {
-		served <- serve(ctx, cfg, slog.New(slog.DiscardHandler), "test", func(a net.Addr) { addrs <- a })
+		served <- serve(ctx, cfg, slog.New(slog.NewJSONHandler(logs, nil)), "test", func(a net.Addr) { addrs <- a })
 	}()
 	select {
 	case a := <-addrs:

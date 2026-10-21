@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -162,6 +164,40 @@ func (h *harness) get(query, token string) (int, string) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	return h.do(req)
+}
+
+// healthz asks for the health check with the given token (none when token is "").
+func (h *harness) healthz(token string) (int, string) {
+	h.t.Helper()
+	req, err := http.NewRequestWithContext(h.t.Context(), http.MethodGet, h.srv.URL+"/healthz", nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return h.do(req)
+}
+
+// logLines are the JSON log lines whose message is one of msgs, decoded.
+func (h *harness) logLines(msgs ...string) []map[string]any {
+	h.t.Helper()
+	var out []map[string]any
+	for line := range strings.Lines(h.logs.String()) {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			h.t.Fatalf("log line %q: %v", line, err)
+		}
+		if msg, _ := m["msg"].(string); slices.Contains(msgs, msg) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// otherInstallation is prBody's payload from installation 99 (prBody's is 1).
+func otherInstallation(number int) string {
+	return strings.Replace(prBody(number, "opened"), `"installation":{"id":1}`, `"installation":{"id":99}`, 1)
 }
 
 // page lists the journal with the test token and decodes a 200 answer.

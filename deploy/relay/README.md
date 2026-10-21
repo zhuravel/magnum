@@ -11,10 +11,19 @@ are in [docs/DECISIONS.md](../../docs/DECISIONS.md) ("A webhook relay…", under
   installation and repository ids, `owner/name`, the pull request numbers, the head SHA, the base
   branch, and a check's name and conclusion. It never keeps a body, a title, a comment, a user name or
   a URL.
+- **Whose deliveries.** Only those of the App's installations that `MAGNUM_RELAY_INSTALLATIONS` lists
+  (see [Find the App's installation ids](#find-the-apps-installation-ids)). When it is empty, the relay
+  keeps every installation's deliveries and logs a line saying so at start.
 - **Retention.** Events are kept for 30 days (`MAGNUM_RELAY_RETENTION`). The journal can be thrown
   away: a new one gets a new epoch, and the daemon resyncs by polling GitHub.
 - **Logs.** The logs carry delivery ids, event names, sequence numbers and error classes. They never
   carry a body, a secret or a token.
+  - A request refused before it is authenticated logs no line of its own: a bad signature or header, a
+    body too large or too slow, no turn, a wrong token. Neither does a delivery of another installation.
+  - Once a minute the relay logs one line for each kind, with its `count`: `webhook refused`,
+    `listing refused`, `health counters refused` and `webhook ignored`, each with its `status` and
+    `class`. A flood of forged requests costs a few lines a minute.
+  - The log's size is capped at three files of 10 MB, as described in [Log limits](#log-limits).
 
 ## The API
 
@@ -22,7 +31,7 @@ are in [docs/DECISIONS.md](../../docs/DECISIONS.md) ("A webhook relay…", under
 |---|---|---|
 | `POST /github/webhook` | `X-Hub-Signature-256` | GitHub's deliveries, described below. |
 | `GET /v1/events?after=<cursor>&limit=<1..500>&wait=<0..30s>` | `Authorization: Bearer <token>` | The events after the cursor, in journal order (described below). |
-| `GET /healthz` | none | `{"ok":true,"epoch":…,"events":<count>,"last_received_at":…}`, with no event data, from a snapshot at most 2 s old. |
+| `GET /healthz` | none, or `Authorization: Bearer <token>` | `{"ok":true}`, or 503 `{"ok":false}` when the journal does not answer. With an accepted token, the counters as well: `{"ok":true,"epoch":…,"events":<count>,"last_received_at":…}`. It never answers event data, and it answers from a snapshot at most 2 s old. |
 
 **Deliveries.**
 - **Before the body.** A request without well-formed `X-Hub-Signature-256`, `X-GitHub-Event` and
@@ -37,6 +46,9 @@ are in [docs/DECISIONS.md](../../docs/DECISIONS.md) ("A webhook relay…", under
   a delivery already stored answers 200 (a redelivery keeps its GUID). When the journal refuses a write,
   the relay answers 503: GitHub shows the failed delivery, and the daemon's poll, the backstop, finds
   the change.
+- **Another installation.** When `MAGNUM_RELAY_INSTALLATIONS` is set, some signed deliveries answer 202
+  `{"status":"ignored"}` and are not stored: those of an installation it does not list, and those that
+  name no installation. The App's `ping` names none and is still stored.
 
 **The listing.** A cursor is `<epoch>:<seq>`.
 - **The token** is one word of 32 to 512 printable ASCII characters, the bounds `hash-token` applies.
@@ -71,6 +83,20 @@ docker run --rm -i magnum-relay hash-token < relay-token            # from a bui
 Put the token where the daemon reads it, `~/.config/magnum/keys/relay.token` (chmod 600) by
 convention. Delete the working copies once the secret is on the server and in the App.
 
+## Find the App's installation ids
+
+The App is public, so anyone can install it. GitHub signs that installation's deliveries with the App's
+secret too, so the signature alone does not tell them from yours. Set `MAGNUM_RELAY_INSTALLATIONS` to
+your installations' ids, separated by commas, and the relay keeps only their deliveries. Each id is either
+of these:
+- The `installation_id` of a `kind = "app"` identity in `~/.config/magnum/config.toml`.
+- The number at the end of the installation's settings page:
+  `https://github.com/organizations/<org>/settings/installations/<id>`, or
+  `https://github.com/settings/installations/<id>` for a personal account.
+
+An entry that is not a whole number of at least 1 stops the relay at start, and the error names the
+variable.
+
 ## Deploy on a container platform
 
 These steps fit a self-hosted platform that builds an application from a repository's Dockerfile and
@@ -87,9 +113,12 @@ names below are the usual ones; yours may differ. Create an application on the p
    ```
    MAGNUM_RELAY_SECRET_FILE=/run/secrets/webhook-secret
    MAGNUM_RELAY_TOKEN_HASHES=<the hash hash-token printed>
+   MAGNUM_RELAY_INSTALLATIONS=<your installation ids, separated by commas>
    ```
 
    - `MAGNUM_RELAY_TOKEN_HASHES` takes several hashes, separated by commas.
+   - `MAGNUM_RELAY_INSTALLATIONS` is described in
+     [Find the App's installation ids](#find-the-apps-installation-ids).
    - `MAGNUM_RELAY_RETENTION` defaults to `720h`.
    - `MAGNUM_RELAY_ADDR` (`:8080`) and `MAGNUM_RELAY_DB` (`/data/relay.db`) are set in the image.
    - The secret is read only from a file, never from a variable.
@@ -107,8 +136,16 @@ names below are the usual ones; yours may differ. Create an application on the p
    - HTTPS: on, Certificate: `letsencrypt`
 
    Publish no port on the host: the reverse proxy reaches the container on the platform's network.
-6. **Deploy.** Then check `https://relay.example.com/healthz`, which should answer `{"ok":true,…}`. The
-   image's `HEALTHCHECK` runs `magnum-relay healthcheck` against the same endpoint.
+6. **Logs.** Cap the container's log as described in [Log limits](#log-limits).
+7. **Deploy.** Then check `https://relay.example.com/healthz`, which should answer `{"ok":true}`. The
+   image's `HEALTHCHECK` runs `magnum-relay healthcheck` against the same endpoint, without a token.
+   With the token, the answer adds the counters. The token goes to curl on stdin, never on its command
+   line:
+
+   ```bash
+   printf 'header = "Authorization: Bearer %s"\n' "$(cat ~/.config/magnum/keys/relay.token)" |
+     curl -s --config - https://relay.example.com/healthz
+   ```
 
 ## Deploy with Compose
 
@@ -123,16 +160,45 @@ volume `relay-data` on `/data`. Use it on a platform that deploys a Compose proj
    ```
    RELAY_WEBHOOK_SECRET=<the content of webhook-secret>
    RELAY_TOKEN_HASHES=<the hash hash-token printed>
+   RELAY_INSTALLATIONS=<your installation ids, separated by commas>
    ```
 
    - Compose gives the secret to the relay as the file `/run/secrets/webhook_secret` (`secrets:` with
      `environment:`). The relay's environment never holds it.
    - A deploy without `RELAY_TOKEN_HASHES` stops with an error that names the variable.
+   - `RELAY_INSTALLATIONS` becomes `MAGNUM_RELAY_INSTALLATIONS`, described in
+     [Find the App's installation ids](#find-the-apps-installation-ids). It is optional.
    - `RELAY_RETENTION` is optional and defaults to `720h`.
+   - `compose.yaml` caps the container's log already (`logging:`, as in [Log limits](#log-limits)).
 3. **Domain.** Add the domain to the service `relay`: container port `8080`, path `/`, HTTPS on, and a
    Let's Encrypt certificate. The platform adds its proxy's labels and network to that service. Publish
    no port on the host.
-4. **Deploy.** Then check `https://relay.example.com/healthz`, as in step 6 above.
+4. **Deploy.** Then check `https://relay.example.com/healthz`, as in step 7 above.
+
+## Log limits
+
+Docker keeps a container's log in a file that grows without bound by default. Cap it with the
+`json-file` driver at three files of 10 MB.
+- **Compose.** `compose.yaml` sets it on the service `relay`:
+
+  ```yaml
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  ```
+
+- **An application built from the Dockerfile.** Set the same options where your platform sets a
+  container's log options. When it has no such setting, make them Docker's defaults on the server, in
+  `/etc/docker/daemon.json`:
+
+  ```json
+  {"log-driver": "json-file", "log-opts": {"max-size": "10m", "max-file": "3"}}
+  ```
+
+  Then restart Docker, which restarts its containers. The defaults reach only containers created after
+  the restart, so redeploy the relay.
 
 ## Rotating the secret or the token
 

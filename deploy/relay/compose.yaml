@@ -3,10 +3,13 @@
 #
 #   RELAY_WEBHOOK_SECRET   the App's webhook secret (openssl rand -hex 32)
 #   RELAY_TOKEN_HASHES     the SHA-256 of each accepted bearer token, comma-separated (magnum-relay hash-token)
+#   RELAY_INSTALLATIONS    the ids of the App's installations whose deliveries are kept, comma-separated
+#                          (optional; empty keeps every installation's, and the relay logs that it does)
 #   RELAY_RETENTION        how long events are kept (optional, 720h by default)
 #
 # The secret reaches the relay as a file under /run/secrets, never in its environment. No port is
-# published: a reverse proxy on the same Docker network routes the domain to container port 8080.
+# published: a reverse proxy on the same Docker network routes the domain to container port 8080. The
+# container's log is capped at three files of 10 MB.
 
 services:
   relay:
@@ -17,6 +20,7 @@ services:
     environment:
       MAGNUM_RELAY_SECRET_FILE: /run/secrets/webhook_secret
       MAGNUM_RELAY_TOKEN_HASHES: ${RELAY_TOKEN_HASHES:?set RELAY_TOKEN_HASHES to the hash that magnum-relay hash-token prints}
+      MAGNUM_RELAY_INSTALLATIONS: ${RELAY_INSTALLATIONS:-}
       MAGNUM_RELAY_RETENTION: ${RELAY_RETENTION:-720h}
     secrets:
       - webhook_secret
@@ -24,6 +28,11 @@ services:
       - relay-data:/data
     expose:
       - "8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
 secrets:
   webhook_secret:

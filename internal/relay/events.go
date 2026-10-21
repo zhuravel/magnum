@@ -37,7 +37,7 @@ const (
 // list is GET /v1/events?after=<cursor>&limit=<1..500>&wait=<0..30s>, for an accepted bearer token.
 func (r *Relay) list(w http.ResponseWriter, req *http.Request) {
 	if !r.authorized(req.Header.Values("Authorization")) {
-		r.log.Warn("listing refused", "class", "token")
+		r.refusals.add(refusedListingToken)
 		w.Header().Set("WWW-Authenticate", `Bearer realm="magnum-relay"`)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
@@ -246,13 +246,22 @@ func (r *Relay) answerGap(ctx context.Context, w http.ResponseWriter) {
 	writeJSON(w, http.StatusGone, r.gap(b))
 }
 
-// health is GET /healthz: whether the journal answers, its epoch, how many events it keeps and when the
-// newest arrived; no auth, so no event data. It answers from a snapshot (healthNow), so however many checks
-// come, the journal is read at most once each healthEvery and by one check at a time.
+// health is GET /healthz: whether the journal answers ({"ok":true}, else 503 {"ok":false}), for anyone (the
+// container's HEALTHCHECK sends no token); its epoch, how many events it keeps and when the newest arrived
+// only for an accepted bearer token, and never event data. It answers from a snapshot (healthNow), so however
+// many checks come, the journal is read at most once each healthEvery and by one check at a time.
 func (r *Relay) health(w http.ResponseWriter, req *http.Request) {
 	s := r.healthNow(req.Context())
 	if !s.ok {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]bool{"ok": false})
+		return
+	}
+	auth := req.Header.Values("Authorization")
+	if len(auth) == 0 || !r.authorized(auth) {
+		if len(auth) > 0 {
+			r.refusals.add(refusedHealthToken)
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
@@ -289,9 +298,11 @@ func (r *Relay) healthNow(ctx context.Context) *healthSnapshot {
 	return r.refreshHealth(ctx)
 }
 
-// refreshHealth reads the journal's counters into a new snapshot (Open takes the first).
+// refreshHealth reads the journal's counters into a new snapshot (Open takes the first). The read outlives
+// a caller that hung up, within healthTimeout: the snapshot is the journal's, never the caller's cancel,
+// which would answer the checks of the next healthEvery 503.
 func (r *Relay) refreshHealth(ctx context.Context) *healthSnapshot {
-	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), healthTimeout)
 	defer cancel()
 	r.healthReads.Add(1)
 	count, last, err := r.j.stats(ctx)

@@ -8,20 +8,25 @@
 // when no turn came), checks the signature as the HMAC-SHA256 of those exact bytes with the current or the
 // previous secret (401 when neither matches, and nothing is stored or parsed), then reads only the routing
 // fields of the payload (Envelope) and inserts them under the delivery's GUID: 202 when stored, 200 for a
-// delivery already stored, 503 when the journal refuses. A delivery is answered within WebhookDeadline of its
-// headers, under GitHub's 10 s. The body itself is never stored or logged.
+// delivery already stored, 503 when the journal refuses. With Options.Installations set, a delivery of
+// another installation, or of none but the App's ping, answers 202 {"status":"ignored"} and is not stored. A
+// delivery is answered within WebhookDeadline of its headers, under GitHub's 10 s. The body itself is never
+// stored or logged.
 //
 // GET /v1/events lists the journal after a cursor ("<epoch>:<seq>") in journal order, for a bearer token
 // (CheckToken's bounds) whose SHA-256 is among the accepted hashes, and waits up to `wait` for a first event
 // when there is none (a long poll woken by the next insert; at most MaxWaiting wait at once, and one more
 // answers 429). A cursor of another journal (epoch), or one older than the journal's oldest cursor (its
 // events were pruned) or ahead of its high water, answers 410 "gap", and the daemon then resyncs by polling
-// GitHub. GET /healthz answers without auth and without event data, from counters the journal keeps and a
-// snapshot read again at most every 2 s.
+// GitHub. GET /healthz tells anyone whether the journal answers ({"ok":true}, or 503 {"ok":false}), and adds
+// its epoch, the events kept and when the newest arrived for an accepted bearer token, from counters the
+// journal keeps and a snapshot read again at most every 2 s.
 //
 // Retention deletes the events older than Options.Retention (30 days by default), as a prefix of the
 // journal, so the oldest cursor only moves forward. Logs carry delivery ids, event names, sequence numbers
-// and error classes, never a body, a secret, a token or an error's text.
+// and error classes, never a body, a secret, a token or an error's text. A request refused before it is
+// authenticated, and a delivery of another installation, logs no line of its own: RunRefusalLog logs their
+// count by kind once a minute.
 package relay
 
 import (
@@ -32,6 +37,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,6 +105,10 @@ type Options struct {
 	BodyTimeout time.Duration
 	// MaxWaiting is how many long polls may wait at once (DefaultMaxWaiting when zero).
 	MaxWaiting int
+	// Installations are the ids of the App's installations whose deliveries are kept, each at least 1; a
+	// signed delivery of another installation, or of none but the App's own ping, answers 202 and is not
+	// stored. Empty keeps every installation's.
+	Installations []int64
 	// Logger receives the relay's logs (discarded when nil).
 	Logger *slog.Logger
 	// Now is the relay's clock (time.Now when nil).
@@ -107,14 +117,16 @@ type Options struct {
 
 // Relay is the receiver, the journal and the listing.
 type Relay struct {
-	j           *journal
-	secrets     [][]byte
-	tokens      [][sha256.Size]byte
-	retention   time.Duration
-	maxBody     int64
-	bodyTimeout time.Duration
-	log         *slog.Logger
-	now         func() time.Time
+	j             *journal
+	secrets       [][]byte
+	tokens        [][sha256.Size]byte
+	installations []int64 // sorted, once each; empty: every installation
+	retention     time.Duration
+	maxBody       int64
+	bodyTimeout   time.Duration
+	log           *slog.Logger
+	now           func() time.Time
+	refusals      refusals
 
 	bodies   chan struct{} // a turn to read a delivery's body
 	waiters  chan struct{} // a place for a waiting long poll
@@ -146,17 +158,23 @@ func Open(ctx context.Context, opts Options) (*Relay, error) {
 	if maxWaiting < 0 {
 		return nil, fmt.Errorf("relay: MaxWaiting %d is negative", maxWaiting)
 	}
+	for _, id := range opts.Installations {
+		if id < 1 {
+			return nil, fmt.Errorf("relay: installation id %d is not positive", id)
+		}
+	}
 	r := &Relay{
-		secrets:     opts.Secrets,
-		tokens:      opts.TokenHashes,
-		retention:   cmp.Or(opts.Retention, DefaultRetention),
-		maxBody:     opts.MaxBody,
-		bodyTimeout: cmp.Or(opts.BodyTimeout, DefaultBodyTimeout),
-		log:         opts.Logger,
-		now:         opts.Now,
-		bodies:      make(chan struct{}, concurrentBodies),
-		waiters:     make(chan struct{}, maxWaiting),
-		stop:        make(chan struct{}),
+		secrets:       opts.Secrets,
+		tokens:        opts.TokenHashes,
+		installations: slices.Compact(slices.Sorted(slices.Values(opts.Installations))),
+		retention:     cmp.Or(opts.Retention, DefaultRetention),
+		maxBody:       opts.MaxBody,
+		bodyTimeout:   cmp.Or(opts.BodyTimeout, DefaultBodyTimeout),
+		log:           opts.Logger,
+		now:           opts.Now,
+		bodies:        make(chan struct{}, concurrentBodies),
+		waiters:       make(chan struct{}, maxWaiting),
+		stop:          make(chan struct{}),
 	}
 	if r.retention < MinRetention {
 		return nil, fmt.Errorf("relay: retention %v is shorter than %v", r.retention, MinRetention)

@@ -1,12 +1,19 @@
 package webhooks
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -325,5 +332,154 @@ func TestEventsCutsAnEventsPullRequestsAt100(t *testing.T) {
 	ev, err := relay.Envelope("check_suite", []byte(`{"action":"completed","check_suite":{"pull_requests":[`+strings.Join(prs, ",")+`]}}`))
 	if err != nil || len(ev.PRNumbers) != maxPRNumbers {
 		t.Errorf("the relay keeps %d of 150 pull requests (%v), the client %d", len(ev.PRNumbers), err, maxPRNumbers)
+	}
+}
+
+// The consumer's Page, Event and Check copy the relay's (this package
+// cannot import the relay outside its tests): a page the real relay serves
+// from its journal decodes through parsePage into the same value in every
+// field, under the same JSON names, and the consumer's page encodes back
+// to the relay's JSON. Two deliveries, a pull request's and a check run's,
+// give every field of an event a value, so a renamed tag cannot hide
+// behind a zero.
+func TestTheConsumerDecodesWhatTheRelayServes(t *testing.T) {
+	const secret = "contract-webhook-secret-0123456789"
+	r, err := relay.Open(t.Context(), relay.Options{
+		DB:          filepath.Join(t.TempDir(), "relay.db"),
+		Secrets:     [][]byte{[]byte(secret)},
+		TokenHashes: [][sha256.Size]byte{sha256.Sum256([]byte(testToken))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(r.Handler())
+	t.Cleanup(func() {
+		r.StopWaiting()
+		srv.Close()
+		r.Close()
+	})
+	call := func(req *http.Request) (int, []byte) {
+		t.Helper()
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, b
+	}
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	for _, d := range []struct{ event, id, body string }{
+		{"pull_request", "d-pr", `{"action":"synchronize","pull_request":{"number":45,"title":"a title","head":{"sha":"` + sha + `"},
+		  "base":{"ref":"master"}},"repository":{"id":2,"full_name":"talkable/example"},"installation":{"id":1}}`},
+		{"check_run", "d-check", `{"action":"completed","check_run":{"name":"rspec","conclusion":"failure","head_sha":"` + sha + `",
+		  "pull_requests":[{"number":46},{"number":45}]},"repository":{"id":2,"full_name":"talkable/example"},"installation":{"id":1}}`},
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/github/webhook", strings.NewReader(d.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(d.body))
+		req.Header.Set("X-GitHub-Event", d.event)
+		req.Header.Set("X-GitHub-Delivery", d.id)
+		req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+		if code, b := call(req); code != http.StatusAccepted {
+			t.Fatalf("delivery %s: %d %s", d.id, code, b)
+		}
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	code, raw := call(req)
+	if code != http.StatusOK {
+		t.Fatalf("listing: %d %s", code, raw)
+	}
+	var served relay.Page
+	if err := json.Unmarshal(raw, &served); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parsePage(raw, asked(0))
+	if err != nil {
+		t.Fatalf("parsePage of the relay's page: %v", err)
+	}
+	if len(served.Events) != 2 {
+		t.Fatalf("the relay served %d events, want 2", len(served.Events))
+	}
+	for f := range reflect.TypeFor[relay.Event]().Fields() {
+		if !slices.ContainsFunc(served.Events, func(ev relay.Event) bool { return !reflect.ValueOf(ev).FieldByName(f.Name).IsZero() }) {
+			t.Errorf("no served event gives %s a value: the fixture no longer covers it", f.Name)
+		}
+	}
+	sameFields(t, "page", reflect.ValueOf(served), reflect.ValueOf(got))
+	back, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want, have any
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(back, &have); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, have) {
+		t.Errorf("the consumer's page encodes to\n%s\nthe relay served\n%s", back, raw)
+	}
+	if MinToken != relay.MinTokenLength || MaxToken != relay.MaxTokenLength {
+		t.Errorf("the client's token bounds %d..%d, the relay's %d..%d", MinToken, MaxToken, relay.MinTokenLength, relay.MaxTokenLength)
+	}
+}
+
+// sameFields compares a relay value with the consumer's copy: every field
+// of the relay's type is in the consumer's, under the same JSON tag and with
+// the same value (pointers, slices and structs field by field; a time by
+// its instant).
+func sameFields(t *testing.T, path string, want, got reflect.Value) {
+	t.Helper()
+	if tm, ok := reflect.TypeAssert[time.Time](want); ok {
+		if gt, ok := reflect.TypeAssert[time.Time](got); !ok || !gt.Equal(tm) {
+			t.Errorf("%s: %v, want %v", path, got.Interface(), tm)
+		}
+		return
+	}
+	switch want.Kind() {
+	case reflect.Pointer:
+		if got.Kind() != reflect.Pointer || want.IsNil() != got.IsNil() {
+			t.Errorf("%s: %v, want %v", path, got, want)
+			return
+		}
+		if !want.IsNil() {
+			sameFields(t, path, want.Elem(), got.Elem())
+		}
+	case reflect.Slice:
+		if got.Kind() != reflect.Slice || got.Len() != want.Len() {
+			t.Errorf("%s: %v, want %v", path, got, want)
+			return
+		}
+		for i := range want.Len() {
+			sameFields(t, fmt.Sprintf("%s[%d]", path, i), want.Index(i), got.Index(i))
+		}
+	case reflect.Struct:
+		for f := range want.Type().Fields() {
+			g, ok := got.Type().FieldByName(f.Name)
+			if !ok {
+				t.Errorf("%s.%s: the consumer's %s has no such field", path, f.Name, got.Type())
+				continue
+			}
+			if g.Tag.Get("json") != f.Tag.Get("json") {
+				t.Errorf("%s.%s: json tag %q, the relay's %q", path, f.Name, g.Tag.Get("json"), f.Tag.Get("json"))
+			}
+			sameFields(t, path+"."+f.Name, want.FieldByIndex(f.Index), got.FieldByIndex(g.Index))
+		}
+	default:
+		if got.Kind() != want.Kind() || !reflect.DeepEqual(got.Interface(), want.Interface()) {
+			t.Errorf("%s: %v (%s), want %v (%s)", path, got.Interface(), got.Type(), want.Interface(), want.Type())
+		}
 	}
 }

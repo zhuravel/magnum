@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -323,5 +324,80 @@ func TestNothingOfABodyASecretOrATokenReachesTheLogsOrTheJournal(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Dir(h.db)); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("journal directory mode: %v %v, want 0700", fi.Mode().Perm(), err)
+	}
+}
+
+// The App is public, so anyone may install it and send deliveries GitHub signs with the App's secret. With
+// Installations set, a delivery of another installation, or of none (but the App's own ping), answers 202
+// and stores nothing; without it every installation's delivery is stored, as before.
+func TestADeliveryOfAnotherInstallationIsIgnoredAndStoresNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, func(o *Options) { o.Installations = []int64{1, 7} })
+	for name, c := range map[string]struct{ event, body string }{
+		"another installation":     {"pull_request", otherInstallation(46)},
+		"no installation":          {"github_app_authorization", `{"action":"revoked","sender":{"login":"alice"}}`},
+		"a malformed installation": {"pull_request", strings.Replace(prBody(47, "opened"), `"installation":{"id":1}`, `"installation":{"id":"1"}`, 1)},
+		"a ping of another":        {"ping", `{"zen":"Design for failure.","hook_id":5,"installation":{"id":99}}`},
+	} {
+		delivery := "d-" + strings.ReplaceAll(name, " ", "-")
+		code, body := h.post(c.event, delivery, []byte(c.body), sign(testSecret, []byte(c.body)))
+		if code != http.StatusAccepted || body != `{"status":"ignored"}`+"\n" {
+			t.Errorf("%s: %d %s, want 202 ignored", name, code, body)
+		}
+		if strings.Contains(h.logs.String(), delivery) {
+			t.Errorf("%s: logged one by one", name)
+		}
+	}
+	if n := h.count(); n != 0 {
+		t.Fatalf("rows after ignored deliveries: %d, want 0", n)
+	}
+	// A listed installation's delivery is stored, and so is the App's own ping, which names none.
+	if code := h.deliver("pull_request", "d-mine", prBody(45, "opened")); code != http.StatusAccepted {
+		t.Fatalf("a listed installation's delivery: %d, want 202", code)
+	}
+	if code := h.deliver("ping", "d-ping", `{"zen":"Keep it logically awesome.","hook_id":5}`); code != http.StatusAccepted {
+		t.Fatalf("the App's ping: %d, want 202", code)
+	}
+	p := h.page("")
+	if len(p.Events) != 2 || p.Events[0].DeliveryID != "d-mine" || p.Events[1].DeliveryID != "d-ping" {
+		t.Fatalf("events: %+v, want the listed installation's and the ping", p.Events)
+	}
+	all := newHarness(t)
+	if code := all.deliver("pull_request", "d-other", otherInstallation(46)); code != http.StatusAccepted || all.count() != 1 {
+		t.Fatalf("without an allowlist, another installation's delivery: %d, %d rows; want it stored", code, all.count())
+	}
+}
+
+func TestOpenRefusesAnInstallationIDBelow1(t *testing.T) {
+	t.Parallel()
+	for _, id := range []int64{0, -1} {
+		o := Options{DB: filepath.Join(t.TempDir(), "relay.db"), Secrets: [][]byte{[]byte(testSecret)},
+			TokenHashes: [][32]byte{tokenHash(testToken)}, Installations: []int64{1, id}}
+		if r, err := Open(t.Context(), o); err == nil {
+			r.Close()
+			t.Errorf("installation %d: Open succeeded", id)
+		}
+	}
+}
+
+// A sender's Content-Length reserves nothing past the first MiB before the signature is checked: four turns
+// of 26 MiB reserved about 104 MiB for bodies that never came.
+func TestTheBodyBufferGrowsWithTheBodyNotTheContentLength(t *testing.T) {
+	t.Parallel()
+	small := []byte(prBody(45, "opened"))
+	req := httptest.NewRequest(http.MethodPost, "/github/webhook", bytes.NewReader(small))
+	req.ContentLength = DefaultMaxBody
+	body, err := readBody(httptest.NewRecorder(), req, DefaultMaxBody)
+	if err != nil || !bytes.Equal(body, small) {
+		t.Fatalf("readBody: %v, %d bytes", err, len(body))
+	}
+	if cap(body) > 1<<20 {
+		t.Fatalf("a %d-byte body under a Content-Length of %d took a buffer of %d bytes, want at most 1 MiB", len(small), req.ContentLength, cap(body))
+	}
+	// A body larger than the first buffer is read whole.
+	big := bytes.Repeat([]byte("x"), 3<<20+17)
+	req = httptest.NewRequest(http.MethodPost, "/github/webhook", bytes.NewReader(big))
+	if body, err = readBody(httptest.NewRecorder(), req, DefaultMaxBody); err != nil || !bytes.Equal(body, big) {
+		t.Fatalf("a 3 MiB body: %v, %d bytes read", err, len(body))
 	}
 }

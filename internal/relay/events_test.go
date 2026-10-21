@@ -342,18 +342,14 @@ func TestTheListingWantsAnAcceptedBearerToken(t *testing.T) {
 func TestHealthzSaysTheJournalIsUpWithoutEventData(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, h.srv.URL+"/healthz", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	code, body := h.do(req)
+	code, body := h.healthz(testToken)
 	if code != http.StatusOK || body != `{"ok":true,"epoch":"`+h.relay.Epoch()+`","events":0,"last_received_at":null}`+"\n" {
 		t.Fatalf("empty journal: %d %s", code, body)
 	}
 	h.deliverN(2)
 	h.clock.Add(time.Minute)
 	h.deliver("pull_request", "d-3", prBody(3, "opened"))
-	code, body = h.do(req.Clone(t.Context()))
+	code, body = h.healthz(testToken)
 	if code != http.StatusOK || body != `{"ok":true,"epoch":"`+h.relay.Epoch()+`","events":3,"last_received_at":"2026-10-20T12:01:00Z"}`+"\n" {
 		t.Fatalf("three events: %d %s", code, body)
 	}
@@ -361,8 +357,41 @@ func TestHealthzSaysTheJournalIsUpWithoutEventData(t *testing.T) {
 	if err := h.relay.j.db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if code, body = h.do(req.Clone(t.Context())); code != http.StatusServiceUnavailable || !strings.Contains(body, `"ok":false`) {
-		t.Fatalf("closed journal: %d %s", code, body)
+	for _, token := range []string{"", testToken} {
+		if code, body = h.healthz(token); code != http.StatusServiceUnavailable || body != `{"ok":false}`+"\n" {
+			t.Fatalf("closed journal: %d %s", code, body)
+		}
+	}
+}
+
+// Anyone may ask whether the relay is up (the container's HEALTHCHECK sends no token); how many events it
+// keeps, since when and its epoch are for the token's holder.
+func TestHealthzHidesItsCountersWithoutTheToken(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.deliverN(2)
+	h.clock.Add(healthEvery)
+	for name, header := range map[string]string{
+		"no token":           "",
+		"a wrong token":      "Bearer relay-pull-token-wrong-0123456789abcdef",
+		"a malformed token":  "Bearer x",
+		"the token as Basic": "Basic " + testToken,
+		"the token alone":    testToken,
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, h.srv.URL+"/healthz", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		if code, body := h.do(req); code != http.StatusOK || body != `{"ok":true}`+"\n" {
+			t.Errorf("%s: %d %s, want 200 and ok alone", name, code, body)
+		}
+	}
+	code, body := h.healthz(testToken)
+	if code != http.StatusOK || body != `{"ok":true,"epoch":"`+h.relay.Epoch()+`","events":2,"last_received_at":"2026-10-20T12:00:00Z"}`+"\n" {
+		t.Fatalf("with the token: %d %s, want the counters", code, body)
 	}
 }
 

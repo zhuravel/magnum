@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -272,12 +273,100 @@ func TestHealthzCountsWhatThePruneLeft(t *testing.T) {
 		t.Fatalf("Prune: %d %v", n, err)
 	}
 	h.clock.Add(healthEvery)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, h.srv.URL+"/healthz", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code, body := h.do(req); code != http.StatusOK || !strings.Contains(body, `"events":1,`) || !strings.Contains(body, `"last_received_at":"2026-11-20T12:00:00Z"`) {
+	if code, body := h.healthz(testToken); code != http.StatusOK || !strings.Contains(body, `"events":1,`) || !strings.Contains(body, `"last_received_at":"2026-11-20T12:00:00Z"`) {
 		t.Fatalf("healthz after the prune: %d %s", code, body)
+	}
+}
+
+// A check whose caller hung up before the relay read the journal still reads it: the snapshot it stores is
+// the journal's, so the checks of the next 2 s answer 200 and nothing logs a failure.
+func TestAHungUpHealthCheckDoesNotFailTheNextOne(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.deliverN(1)
+	h.clock.Add(healthEvery) // the snapshot Open took is stale: the next check reads the journal
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	h.relay.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/healthz", nil))
+	if code, body := h.healthz(testToken); code != http.StatusOK || !strings.Contains(body, `"events":1,`) {
+		t.Fatalf("the check after a hung-up one: %d %s, want 200 with the counters", code, body)
+	}
+	if lines := h.logLines("health check failed"); len(lines) != 0 {
+		t.Fatalf("a hung-up check logged a failure: %v", lines)
+	}
+}
+
+// What the relay refuses before a request is authenticated, and the deliveries of other installations, are
+// summed by kind and logged once a minute, so a flood costs a few lines, not one a request.
+func TestRefusalsAreLoggedPerMinute(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, func(o *Options) { o.Installations = []int64{1} })
+	body := []byte(prBody(45, "opened"))
+	wrong := sign("not-the-webhook-secret-at-all-000", body)
+	for i := range 30 {
+		h.post("pull_request", fmt.Sprintf("d-wrong-%d", i), body, wrong)
+	}
+	for i := range 5 {
+		h.post("pull_request", fmt.Sprintf("d-unsigned-%d", i), body, "")
+	}
+	for range 3 {
+		h.post("", "d-no-event", body, sign(testSecret, body))
+	}
+	for range 4 {
+		h.get("", "relay-pull-token-wrong-0123456789abcdef")
+	}
+	other := []byte(otherInstallation(46))
+	for i := range 2 {
+		h.post("pull_request", fmt.Sprintf("d-other-%d", i), other, sign(testSecret, other))
+	}
+	h.healthz("relay-pull-token-wrong-0123456789abcdef")
+	kinds := []string{"webhook refused", "webhook ignored", "listing refused", "health counters refused"}
+	if lines := h.logLines(kinds...); len(lines) != 0 {
+		t.Fatalf("refusals logged one by one: %v", lines)
+	}
+	h.relay.logRefusals()
+	got := map[string]float64{}
+	for _, l := range h.logLines(kinds...) {
+		key := fmt.Sprintf("%s %v %v", l["msg"], l["class"], l["status"])
+		if _, twice := got[key]; twice {
+			t.Errorf("%s: more than one line", key)
+		}
+		n, _ := l["count"].(float64)
+		got[key] += n
+	}
+	want := map[string]float64{
+		"webhook refused signature 401":     35,
+		"webhook refused headers 400":       3,
+		"listing refused token 401":         4,
+		"webhook ignored installation 202":  2,
+		"health counters refused token 200": 1,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the minute's lines: %v, want %v", got, want)
+	}
+	// A minute without a refusal logs nothing.
+	before := h.logs.String()
+	h.relay.logRefusals()
+	if h.logs.String() != before {
+		t.Fatalf("an empty minute logged: %s", strings.TrimPrefix(h.logs.String(), before))
+	}
+	// RunRefusalLog logs on its interval, and what is left once more when it stops.
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		h.relay.RunRefusalLog(ctx, time.Hour)
+		close(done)
+	}()
+	h.post("pull_request", "d-last", body, wrong)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunRefusalLog did not return when its context ended")
+	}
+	// The first minute logged two kinds of refused deliveries; the stop adds the last one's line.
+	if lines := h.logLines("webhook refused"); len(lines) != 3 || lines[2]["class"] != "signature" || lines[2]["count"] != float64(1) {
+		t.Fatalf("the refusal before the stop: %v", lines)
 	}
 }
 
