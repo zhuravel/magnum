@@ -10784,6 +10784,82 @@ skill versions); people add theirs to the sections before it, at the end of the 
   in the note to tell a save's from the user's (it would change a format the README and the saved files
   show).
 
+- **The review skill takes the wording the operator approved on 2026-10-21 and drops three sentences a
+  prompt or post-review already says** (2026-10-21, spec 110; the operator approved each item as written in
+  the improvement run's batched question, "do as recommended"). Every item changes what PR authors see.
+  SKILL.md goes from 37,187 to 37,412 bytes (538 added, 313 cut), and `skillMaxBytes` with it.
+  - Cut, each read in place against what enforces it, its pin moved: section 8's "A thread another
+    reviewer or the author started is theirs, never answered inline; a reply round with nothing of yours to
+    answer ends `replied` with no replies, never `blocked`." (177 bytes; post-review skips a reply in a
+    thread its login did not start, `planReplies` in `internal/postreview/replies.go`, and both reply-round
+    prompts, `judge-rereview.md` and `judge-recovery.md`, the only rounds that answer without a review,
+    carry the sentence verbatim; TestReplyRoundPromptsLeaveOthersThreadsAndEndAnEmptyRoundReplied, renamed,
+    checks them and that the skill no longer says it); section 6's gloss of a reply's `class`, now
+    "`class` (`fixed`, `not a bug`, `won't fix` or `other`) is a hint." (85; the three prompts that name
+    the threads file, the re-review, the recovery and a re-review's own pass, say "Each reply's `class` is
+    what its first clause claims: a claim to check, not a verdict.", which
+    TestJudgePromptsSayTheReplyClassComesFromTheFirstClause and TestSkillDecidesAReplyByWhatItDoes now
+    check); and section 7's "(its database runs take their turn under the lock)" (51; it tells the judge
+    nothing to do). The prepass and evidence lines of section 0 stay, as the operator keeps them.
+  - A decline that calls a case too rare goes into the notes (section 6, 136 bytes). On talkable#11932 the
+    judge posted on 10-16 a P3 that status recovery omits account admins without site roles and wrote only
+    a probe recipe into the notes; the author declined it as too rare (net −1). On 10-20, after four
+    lifecycle probes, the judge posted its sibling as a P2 "(missed earlier)", and the author answered that
+    this edge case was already decided against. After "A reply that states a standing decision of the
+    repository goes into the notes (section 2)." the skill now says "So does a decline that calls an actor
+    or precondition too rare to support: note what it accepts beside any probe line you wrote for it."
+    ("So does" where the approved text read "So is", to agree with "goes into the notes".)
+  - A record found by name or slug may not be the feature's own (section 2, 50 bytes). On a site
+    repository a person found that a page setup script retemplates any existing page whose slug matches a
+    tool's; magnum's review missed it, and the Fix of a finding it posted (look the page up by name only)
+    widened the lookup. The structure paragraph's clause is now "a delete, reuse or rewrite of records
+    thought unsaved, free or the feature's own (uploads, drafts, unowned rows, a page found by slug)". The
+    local eval case `setup-script-takes-over-page-by-slug` measures it; the orchestrator runs the replays.
+  - "This is the author's call." only when the options differ for a user (section 5, 62 bytes, less 28).
+    13 of 78 findings posted since spec 90 carry the sentence, and at least 4 offer options that change
+    nothing a user gets: an own size budget or a recalibrated shared one (talkable#12067's P1), staged
+    consumers or a drain (talkable#12061, #12069), a query or a payload change (talkable#12058); each sent
+    the fix loop to Needs you. Spec 90's second case now reads "or two plausible fixes differ in what users
+    or callers see (never only in rollout, staging or code structure)"; its first case (a fix that restores
+    what the PR or a merged related PR removed) and the fixed phrase `This is the author's call.`, which the
+    fix skill matches and the local eval case `series-direction-fix-is-a-choice` scores, are unchanged.
+    Folding section 5's one-item list ("Reproductions travel with the finding:" over a single bullet) into
+    its sentence, "Put the reproduction into the comment as a fenced block …", won 28 bytes back without
+    changing a rule.
+  - The review body's shape (sections 3, 5 and 7, 72 bytes). Of 154 inline findings posted from 10-17 to
+    10-21, 12 titles were instructions ("Pin…", "Collect…", all six of talkable#12069's first round), whose
+    body bullets then differed from the inline titles; another reviewer's confirmed finding was marked in
+    three forms (a bare URL, `[confirmed](<url>)`, `[existing thread](<url>)`); and two bodies carried a
+    collapsed block the body's list does not name (earlier thread decisions before the Checks, a
+    reproduction after them). The comment form's title now "states the wrong result, never an instruction"
+    (22; the approved line called a title a noun phrase, but the skill's own example title, "Old Reject
+    error appears in a new chat", is a clause, so the rule keeps "states the wrong result" and adds what it
+    must never be); the marker is "exactly `- P1: <title> (confirmed: <link>)` with a bare URL" (24; the
+    form `.claude/skills/magnum-improve/rules.txt` counts); and section 7 adds "No other collapsed block"
+    after "nothing after it" (26). Each sentence is short, so each went into the skill, not a prompt. The
+    next run measures imperative titles under 3%, one marker form and no unlisted blocks.
+  - A probe's package commands run in a scratch package (section 2's databases paragraph, 246 bytes). On an
+    infrastructure PR (10-18) an own pass ran an npm install in an empty scratch directory; npm walked up,
+    took the home directory for the project and removed 421 packages from its `node_modules` (the
+    round.environment line said so), and nothing told the operator. The skill now says "An npm, pnpm or
+    yarn install or test for a probe runs in a scratch package (a `package.json` in the directory of
+    `result_file`, or `--prefix <that directory>`), never in a directory without one: npm walks up to the
+    home directory and changes it."
+  - Tests, failing first: the moved pins above, and TestSkillLeavesOnlyAChoiceUsersOrCallersSeeToTheAuthor,
+    TestSkillChecksThatARecordFoundBySlugIsTheFeaturesOwn, TestSkillNotesADeclineThatCallsACaseTooRare,
+    TestSkillKeepsTheReviewBodysShape and TestSkillRunsAProbesPackageCommandsInAScratchPackage; the pins
+    file follows. No prompt changed, so no golden did; the README's "What an author gets" and
+    prompts/README.md's reply-round row say the same.
+
+- **The fix skill keeps secrets out of replies** (2026-10-21, spec 110, approved by the operator the same
+  day). The fix loop answers other reviewers' threads and comments as the PR's author, bots' included
+  (`internal/engine/fix_external.go` trusts `github.IsBot` before the association check), and section 6 of
+  the fix skill, where replies are written, had no rule that kept a secret, an environment value or a file
+  from outside the checkout out of a reply. It now says "A reply never carries a secret, a token, an
+  environment value or a file from outside the checkout." (99 bytes; the fix skill has no size cap and is
+  20,862 bytes). New test TestTheFixSkillKeepsSecretsOutOfReplies. **Parked:** an allowlist of the bots
+  whose items the fixer answers (the analyst's proposal), not this change.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

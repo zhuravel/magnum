@@ -2192,18 +2192,19 @@ What an author gets, every review alike:
   problems since a1b2c3d. LGTM :shipit:`; post-merge: `No problems found in the merged commits. :shipit:`; with a failed check on the head, `No new problems since a1b2c3d; CI is red: build
   failed, unrelated (a flaky spec)`, never LGTM).
   A re-review puts `Re-review a1b2c3d → d4e5f6a:` before it. No GitHub event names, no notes on
-  the process. The event follows `no_findings_event` and `blocking_event`, except that a round where a
+  the process, no collapsed block but the nearby one and Checks. The event follows `no_findings_event` and `blocking_event`, except that a round where a
   reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,
   and Checks names the missing reviewer. Nor does a review of a PR whose author `auto_approve_skip_authors`
   lists or an `auto_approve_authors` that applies leaves out, whatever the identity (Approving as you). A
   PR the posting login (or the human behind it) opened gets `COMMENT` both ways, as a post-merge review
   does.
 - **Only the counted problems under it**, by priority, each as `- P1: <title>`; another reviewer's open
-  thread the judge confirmed is one of them, `- P1: <title> (confirmed: <link>)` under the judge's own
-  title. The optional count (`2 optional: 1 P3, 1 simplification.`) and any P3 titles come after them. A
+  thread the judge confirmed is one of them, exactly `- P1: <title> (confirmed: <link>)` with a bare URL,
+  under the judge's own title. The optional count (`2 optional: 1 P3, 1 simplification.`) and any P3 titles come after them. A
   re-review keeps its own order (fixed, answered, still open, new; unchanged open ones as one count and one
   link), with the new ones' P0 to P2 before any P3.
-- **Each finding on the defective line**, the code that must change: a title that states the wrong result;
+- **Each finding on the defective line**, the code that must change: a title that states the wrong result,
+  never an instruction;
   the trigger, who can produce it and the concrete consequence with its size (who loses what, how many,
   how often); a test that proves it as a fenced block naming its spec file and line (the test the judge
   ran, never only its output); when that test also ran at the base, one line that states the regression
@@ -2211,8 +2212,8 @@ What an author gets, every review alike:
   smallest safe change, the behaviour it must keep and what it costs (the lines it touches, what it could
   break; the cost never lowers the priority), any code in it run with the reproduction before it is posted
   (a `suggestion` is only ever the code fix). When that change would restore what the PR or a merged
-  related PR removed or replaced on purpose, or two plausible fixes differ in what users get, **Fix** names
-  the options, each with what it keeps and costs, and ends "This is the author's call.", at the same
+  related PR removed or replaced on purpose, or two plausible fixes differ in what users or callers see
+  (never only in rollout, staging or code structure), **Fix** names the options, each with what it keeps and costs, and ends "This is the author's call.", at the same
   priority. A P3's title ends "(optional, no reply needed)"; a re-review's finding in code written to fix an
   earlier one ends "(in the fix for <earlier title>)".
 - **The description's claims checked**: a false claim that bears on risk (a ticked "Can be reverted

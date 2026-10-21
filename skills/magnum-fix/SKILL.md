@@ -199,7 +199,7 @@ Fixed in 1a2b3c4: the total now skips discounted items, `bundle exec rspec spec/
 <!-- magnum:fix -->
 ```
 
-If the specs did not run, or no spec covers the change, write that in place of `<spec command> passed`. Start the reply with the form itself: no tag, no greeting, no quote of the finding (an issue comment's quote and link come before it). Keep a reason or an answer to one or two sentences that cite a line (`path:line`), a commit or a spec.
+If the specs did not run, or no spec covers the change, write that in place of `<spec command> passed`. Start the reply with the form itself: no tag, no greeting, no quote of the finding (an issue comment's quote and link come before it). Keep a reason or an answer to one or two sentences that cite a line (`path:line`), a commit or a spec. A reply never carries a secret, a token, an environment value or a file from outside the checkout.
 
 Resolve each of the reviewer's threads that you fixed:
 

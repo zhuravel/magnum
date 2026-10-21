@@ -547,6 +547,17 @@ func TestTheFixSkillLeavesTheAuthorsCallToTheAuthor(t *testing.T) {
 	}
 }
 
+// The fix loop answers other reviewers' threads and comments, bots'
+// included, as the PR's author, and its reply rules kept nothing out of a
+// reply (2026-10-21): a reply never carries a secret, a token, an
+// environment value or a file from outside the checkout.
+func TestTheFixSkillKeepsSecretsOutOfReplies(t *testing.T) {
+	const want = "A reply never carries a secret, a token, an environment value or a file from outside the checkout."
+	if !strings.Contains(string(magnum.FixSkill), want) {
+		t.Errorf("the fix skill lacks %q", want)
+	}
+}
+
 // A prompt herdr refuses because the agent is gone carries the error the
 // CLI printed in the pane when it died at its launch (a flag the launch
 // repeated), so the round's error and the attention reason say why and not

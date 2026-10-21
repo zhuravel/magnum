@@ -110,31 +110,51 @@ func TestJudgePromptsLeaveReadinessToTheSkill(t *testing.T) {
 	}
 }
 
-// The prompts describe a reply's class the way the classifier makes it: from
-// the reply's first clause, past an acknowledgement ("Good catch, fixed in
-// …"), not from its first words.
-func TestJudgePromptsSayTheReplyClassComesFromTheFirstClause(t *testing.T) {
+// threadsFilePrompts renders the three prompts that name the threads file:
+// the re-review, the recovery and a re-review's own pass.
+func threadsFilePrompts(t *testing.T) map[string]string {
+	t.Helper()
 	d := judgeFixture()
 	d.ThreadsFile, d.ThreadSummary = "/r/review-threads.json", "2 threads; replies: 1 fixed, 1 other"
-	for _, name := range []string{"judge-rereview.md", "judge-recovery.md"} {
-		got, err := RenderPrompt(prompt(t, name), d)
+	own := d
+	own.Mode, own.Phase, own.OwnFindings = "rereview", PhaseOwnPass, "/r/judge-own.md"
+	out := map[string]string{}
+	for name, data := range map[string]JudgeData{"judge-rereview.md": d, "judge-recovery.md": d, "judge-own-pass.md": own} {
+		got, err := RenderPrompt(prompt(t, name), data)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if strings.Contains(got, "first words") || !strings.Contains(got, "first clause") {
-			t.Errorf("%s:\n%s", name, got)
+		out[name] = got
+	}
+	return out
+}
+
+// The prompts describe a reply's class the way the classifier makes it: from
+// the reply's first clause, past an acknowledgement ("Good catch, fixed in
+// …"), not from its first words. The three prompts that name the threads
+// file say so; since 2026-10-21 the skill only names the classes, as a hint,
+// instead of saying it a second time.
+func TestJudgePromptsSayTheReplyClassComesFromTheFirstClause(t *testing.T) {
+	prompts := threadsFilePrompts(t)
+	promptsSay(t, prompts, "Each reply's `class` is what its first clause claims: a claim to check, not a verdict.")
+	for name, got := range prompts {
+		if strings.Contains(got, "first words") {
+			t.Errorf("%s says the class comes from the first words:\n%s", name, got)
 		}
 	}
-	skillSays(t, []string{"first clause"}, []string{"first words"})
+	skillSays(t, []string{"`class` (`fixed`, `not a bug`, `won't fix` or `other`) is a hint."},
+		[]string{"first words", "first clause claims, past an acknowledgement"})
 }
 
 // A reply is decided by what it does, not by its keywords: a judge kept a
 // finding open, and the PR from approval, because the author's reply scored
 // the proposed fix at −8 yet called the thread "still open" and the remedy
-// "undecided". A reply that weighs the fix and declines it is won't fix.
+// "undecided". A reply that weighs the fix and declines it is won't fix. The
+// class is a claim to check, as the prompts that name the threads file say.
 func TestSkillDecidesAReplyByWhatItDoes(t *testing.T) {
+	promptsSay(t, threadsFilePrompts(t), "a claim to check, not a verdict.")
 	skillSays(t, []string{
-		"`other`: a keyword hint, not a verdict. Decide a reply by what it does.",
+		"is a hint. Decide a reply by what it does.",
 		"- **answered**: a reply that disputes the finding or declines the fix with a reason.",
 		"Weighing the fix and turning it down (a negative score, \"not worth it\", \"we accept the risk\") is `won't fix`, even if the reply calls the thread open or the remedy undecided.",
 		"Honour it unless you prove the reason wrong at `head_sha` (say, the impact is larger).",
@@ -272,12 +292,14 @@ func TestSkillRunsTheDatabaseLockAsGiven(t *testing.T) {
 // localhost, so since 2026-10-12 its command runs under the checkout's
 // db-lock: the skill names the network and Redis as its limits, not the
 // databases. Four reviews of 2026-10-12 to 10-14 still noted its sandbox
-// in Checks: its unrun checks get no Checks line either.
+// in Checks: its unrun checks get no Checks line either. Since 2026-10-21
+// the skill no longer says that its database runs take their turn under the
+// lock: that tells the judge nothing to do.
 func TestSkillKeepsByDesignLimitsOutOfMachineFailures(t *testing.T) {
 	skillSays(t, []string{
-		"A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without the network or Redis (its database runs take their turn under the lock), " +
+		"A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without the network or Redis, " +
 			"so its unrun checks are no `environment_failures` and no Checks line; run what you need yourself.",
-	}, []string{"without Redis or databases", "are no `environment_failures`; run"})
+	}, []string{"without Redis or databases", "are no `environment_failures`; run", "take their turn under the lock"})
 }
 
 // A reply that confirmed a finding and left the decision open landed in a
@@ -318,7 +340,7 @@ func TestSkillCarriesTheRulesFromMisses(t *testing.T) {
 		"A case called a known edge case or rare: check how often real traffic reaches it, starting with the paths that traffic takes (a new visitor's first page, the inputs the PR's callers produce).",
 		"an input no caller, documented API or user sends is P3 at most;",
 		"parallel copies (of a helper, or a file per client, integration or provider) of which one lacks a guard another has (compare them when the PR edits one; `nearby` if older than the PR)",
-		"a delete or reuse of records thought unsaved or free (uploads, drafts, unowned rows) that a save path leaves on a stale list or flag,",
+		"(uploads, drafts, unowned rows, a page found by slug) that a save path leaves on a stale list or flag,",
 		"A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`.",
 		"- `failing_checks` (when present): the head's failed CI checks (section 7).",
 		"Each check in `failing_checks` gets one Checks line: caused by the PR (a P1 broken build) or unrelated, as its log shows (`gh run view --log-failed`, or the check's output).",
@@ -358,11 +380,23 @@ func TestSkillPostsEveryThreadReplyThroughPostReplies(t *testing.T) {
 // answer them, post-review refused each one, and the judge wrote blocked,
 // which parked the PR for 15 hours. A thread another reviewer or the author
 // started is theirs (post-review skips a reply there), and a reply round
-// with nothing of its own to answer ends replied with no replies.
-func TestSkillLeavesOthersThreadsAndEndsAnEmptyReplyRoundReplied(t *testing.T) {
-	skillSays(t, []string{
-		"A thread another reviewer or the author started is theirs, never answered inline; a reply round with nothing of yours to answer ends `replied` with no replies, never `blocked`.",
-	}, nil)
+// with nothing of its own to answer ends replied with no replies. Since
+// 2026-10-21 only the reply round's prompts say so, not the skill as well:
+// post-review skips such a reply in every round, and only a reply round
+// answers without a review.
+func TestReplyRoundPromptsLeaveOthersThreadsAndEndAnEmptyRoundReplied(t *testing.T) {
+	const rule = "A thread another reviewer or the author started is theirs, never answered inline; " +
+		"a reply round with nothing of yours to answer ends `replied` with no replies, never `blocked`."
+	rounds, first := judgeReplyPrompts(t)
+	for name, got := range rounds {
+		if has, want := strings.Contains(got, rule), strings.HasSuffix(name, " (reply round)"); has != want {
+			t.Errorf("%s: the rule %v, want %v:\n%s", name, has, want, got)
+		}
+	}
+	if strings.Contains(first, rule) {
+		t.Errorf("judge-initial.md carries the reply round's rule:\n%s", first)
+	}
+	skillSays(t, nil, []string{"is theirs, never answered inline"})
 }
 
 // Three rules contradicted each other: a missing report's Checks line even
@@ -547,8 +581,21 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // missing), section 5's local-path line (118: post-review refuses a local
 // path in those words) and section 1's HEAD check (114: the slot verifies
 // HEAD at checkout, and the pipeline restores it after each stage).
+// Then 37,412 (2026-10-21, spec 110: the wording the operator approved
+// that day, 538 bytes, less 313 that a prompt or post-review already
+// says): section 8's sentence that another's thread is theirs (-177: the
+// reply round's prompts carry it, post-review skips such a reply), the
+// reply class's gloss (-85: the prompts that name the threads file say it
+// is a claim to check) and codex-review's database runs under the lock
+// (-51: it tells the judge nothing to do); a decline that calls a case too
+// rare goes into the notes (136), a record rewritten as the feature's own,
+// a page found by slug (50), the author's call only for options users or
+// callers see (62, less 28 from folding section 5's one-item reproduction
+// list into its sentence), a title never an instruction (22), the confirmed
+// marker's one form (24), no other collapsed block in the body (26) and a
+// probe's npm, pnpm or yarn run in a scratch package (246).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 37187
+const skillMaxBytes = 37412
 
 // skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex
 // returns at most 10,000 tokens of one tool call's output and drops the
@@ -1731,8 +1778,24 @@ func TestSkillTakesARecordedPayloadOverAnExternalSystemsDocs(t *testing.T) {
 func TestSkillGivesAnotherReviewersFindingItDecidedABodyLine(t *testing.T) {
 	skillSays(t, []string{
 		"already covers it. Another reviewer's open P0–P2 you confirmed counts in N and is listed under your own title as " +
-			"`- P1: <title> (confirmed: <link>)`; one you rejected gets the body line `Considered <link>: <why not>`;",
+			"exactly `- P1: <title> (confirmed: <link>)` with a bare URL; one you rejected gets the body line `Considered <link>: <why not>`;",
 	}, []string{"`Confirmed <link> (counted in N)`"})
+}
+
+// Of 154 inline findings posted from 10-17 to 10-21, 12 had titles that were
+// instructions ("Pin…", "Collect…": all six of talkable#12069's first
+// round), whose body bullets then differed from the inline titles; another
+// reviewer's confirmed finding was marked in three forms (a bare URL,
+// `[confirmed](<url>)`, `[existing thread](<url>)`); and two bodies carried
+// a collapsed block the body's list does not name, earlier thread decisions
+// before the Checks and a reproduction after them (2026-10-21).
+func TestSkillKeepsTheReviewBodysShape(t *testing.T) {
+	skillSays(t, []string{
+		"a title that states the wrong result, never an instruction;",
+		"as exactly `- P1: <title> (confirmed: <link>)` with a bare URL;",
+		"the Checks block, nothing after it (`post_review` adds the run's marker, magnum the footer). " +
+			"No other collapsed block, no GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process.",
+	}, nil)
 }
 
 // On talkable#12048 the body listed every posted title under "Blocking: 2
@@ -1937,9 +2000,57 @@ func TestSkillStatesARegressionAgainstTheBase(t *testing.T) {
 func TestSkillLeavesAFixThatUndoesThePRsDirectionToTheAuthor(t *testing.T) {
 	skillSays(t, []string{
 		"When the smallest fix would restore what this PR or a merged related PR deliberately removed or replaced " +
-			"(its diff, `history`, `related_prs`, the description), or two plausible fixes differ in what users get, " +
+			"(its diff, `history`, `related_prs`, the description), or two plausible fixes differ in what users or callers see " +
+			"(never only in rollout, staging or code structure), " +
 			"**Fix** names the options, each with what it keeps and costs, and ends `This is the author's call.`",
 		"The choice never lowers the priority.",
+	}, nil)
+}
+
+// 13 of 78 findings posted since the author's-call rule carry its sentence,
+// and at least 4 offer options that change nothing a user gets: an own size
+// budget or a recalibrated shared one (talkable#12067), staged consumers or
+// a drain (talkable#12061, #12069), a query or a payload change
+// (talkable#12058); each sent the fix loop to Needs you (2026-10-21). The
+// sentence is for options a user or caller tells apart (or a fix that
+// restores what the PR removed), never for a rollout, staging or
+// code-structure choice.
+func TestSkillLeavesOnlyAChoiceUsersOrCallersSeeToTheAuthor(t *testing.T) {
+	skillSays(t, []string{
+		"or two plausible fixes differ in what users or callers see (never only in rollout, staging or code structure),",
+	}, []string{"differ in what users get"})
+}
+
+// A person found that a site's page setup script retemplates any existing
+// page whose slug matches a tool's; magnum's review missed it, and its
+// posted finding's Fix (look the page up by name only) widened the lookup
+// (2026-10-21): a record found by name or slug may not be the feature's own.
+func TestSkillChecksThatARecordFoundBySlugIsTheFeaturesOwn(t *testing.T) {
+	skillSays(t, []string{
+		"a delete, reuse or rewrite of records thought unsaved, free or the feature's own (uploads, drafts, unowned rows, a page found by slug)",
+	}, []string{"a delete or reuse of records thought unsaved or free"})
+}
+
+// On talkable#11932 the author declined a P3 as too rare to support, and the
+// judge wrote only a probe recipe into the notes; four rounds later it
+// posted the declined case's sibling as a P2 "(missed earlier)", and the
+// author answered with the same decision (2026-10-16 to 10-20). A decline
+// that calls an actor or precondition too rare goes into the notes too.
+func TestSkillNotesADeclineThatCallsACaseTooRare(t *testing.T) {
+	skillSays(t, []string{
+		"A reply that states a standing decision of the repository goes into the notes (section 2). " +
+			"So does a decline that calls an actor or precondition too rare to support: note what it accepts beside any probe line you wrote for it.",
+	}, nil)
+}
+
+// On an infrastructure PR (2026-10-18) an own pass ran an npm install in an
+// empty scratch directory: npm walked up to the home directory and removed
+// 421 packages from its node_modules, and nothing told the operator.
+func TestSkillRunsAProbesPackageCommandsInAScratchPackage(t *testing.T) {
+	skillSays(t, []string{
+		"An npm, pnpm or yarn install or test for a probe runs in a scratch package " +
+			"(a `package.json` in the directory of `result_file`, or `--prefix <that directory>`), " +
+			"never in a directory without one: npm walks up to the home directory and changes it.",
 	}, nil)
 }
 
