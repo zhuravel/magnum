@@ -167,7 +167,13 @@ func (e *Engine) PauseTool(ctx context.Context, p pipeline.Pause) { e.pauseTool(
 // extended only to a later reset the new pause names: the round's settle
 // pauses again what a reviewer's failure paused at once, and doubling the
 // fallback for it paused one failure for 2.5h instead of 1h (2026-10-12).
+// A usage limit that a Codex session older than the current Codex login hit
+// pauses nothing: that session restarts instead (staleLimit, restartStale).
 func (e *Engine) pauseTool(ctx context.Context, p pipeline.Pause) {
+	if s, stale := e.staleLimit(ctx, p); stale {
+		e.restartStale(ctx, s, p) // codex_login.go
+		return
+	}
 	tool := p.Tool
 	if tool == "" {
 		tool = agents.KindCodex
@@ -417,6 +423,7 @@ func (e *Engine) health(ctx context.Context) {
 	e.checkDrain(ctx)
 	e.continueAfterDrain(ctx)
 	e.probeInfra(ctx)
+	e.checkCodexLogin(ctx) // codex_login.go: before the budget, whose reading a change overrules
 	e.checkBudget(ctx)
 	e.checkCLIVersions(ctx)   // cli_version.go
 	e.noteSharedFailures(ctx) // shared_failure.go: after the versions it names

@@ -194,7 +194,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 			continue
 		}
 		paused[tool] = true
-		p := pipeline.Pause{Kind: rep.Status, Tool: tool, Detail: rep.Detail, Proven: rep.RunID != ""} // a reviewer the preflight skipped has no run
+		p := pipeline.Pause{Kind: rep.Status, Tool: tool, Detail: rep.Detail, Proven: rep.RunID != "", RunID: rep.RunID} // a reviewer the preflight skipped has no run
 		if p.Proven {
 			p.ProvenAt = e.runEnded(ctx, rep.RunID)
 		}
@@ -224,7 +224,14 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	case pipeline.OutcomeReplied:
 		e.onReplied(ctx, job, pr, in, res, from) // replies.go
 	case pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired:
-		e.toPaused(ctx, pr, from, outcome+": "+msg, time.Time{}, nil)
+		why, retry := outcome+": "+msg, time.Time{}
+		if res.Pause != nil {
+			if _, stale := e.staleLimit(ctx, *res.Pause); stale { // codex_login.go: the old login's limit paused no kind
+				why += " (in a session older than the current Codex login: it restarts, and the round retries in a minute)"
+				retry = now.Add(staleLimitRetry)
+			}
+		}
+		e.toPaused(ctx, pr, from, why, retry, nil)
 	case pipeline.OutcomeOverloaded:
 		attempts := pr.Attempts + 1
 		setAttempts := func(u *store.PRUpdate) { u.Set("attempts", attempts) }

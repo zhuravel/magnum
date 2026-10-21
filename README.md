@@ -784,6 +784,21 @@ the caps wait for Codex's next reading`; `overruled_at` in the JSON), and a roun
 command (`magnum resume --tool codex` lifts the pause; at the soft cap, it overrules a reading made stale
 by a switch of Codex account).
 
+A Codex process keeps the login it started with, so after a switch of Codex account (clauth makes
+`~/.codex/auth.json` a symlink to a profile's file) a live session goes on spending the old account's
+budget. Once a minute, with the budget, the daemon reads `auth.json` under `codex_home` (through a
+symlink) and keeps only a fingerprint of its account in the registry (the sha256 of `tokens.account_id`,
+or of `api-key` in API-key mode; never a token). When it changes, or at the first read when a live Codex
+session started before the file last changed, every live Codex session started before parks once it is
+idle (a busy one after its turn; a pinned PR's stay), so its next prompt resumes it with `codex resume
+<id>` in a new process under the new login, a judge keeping its conversation; no round starts on its PR
+before (the wait says `codex-judge restarts in a new process first`). The usage-limit pause of `codex`
+is lifted and the budget reading overruled, both the old account's, and one `codex.login_changed` event
+and toast say how many sessions restart ("Codex login changed: 3 Codex sessions restart with the new
+one"). A token refresh of the same account changes nothing. A usage limit hit by a session started
+before the current login pauses no kind: the session restarts, and its round retries a minute later
+(`codex.stale_usage_limit`).
+
 Magnum meters its own GitHub calls. Every GraphQL call tells it the points GitHub charged and the rate
 limit left, every REST call counts as one request against the core budget, and the daemon adds them up
 per identity, per op and per clock hour (the last 24 hours, written to the registry at most once a minute),

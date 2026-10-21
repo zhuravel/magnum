@@ -5961,6 +5961,18 @@ const (
 	KVDaemonBuild = "daemon.build"
 )
 const (
+	// KVCodexLogin is the fingerprint of Codex's login (usage.Login), the
+	// only thing of auth.json magnum keeps.
+	KVCodexLogin = "codex.login"
+	// KVCodexLoginAt is when the daemon first saw that login
+	// (store.FormatTime), or, at the first read with none kept, when
+	// auth.json last changed: the Codex sessions started before it run
+	// with an older login.
+	KVCodexLoginAt = "codex.login_at"
+)
+    kv keys of Codex's login.
+
+const (
 	// KVConfigRestart is a saved config the daemon is to restart on
 	// (ConfigRestartMark as JSON): written by the settings screen's save
 	// (settings.RequestRestart), read by restartForBuild and `magnum
@@ -7230,6 +7242,11 @@ type Deps struct {
 	// (usage.CodexAt, which FromApp sets); nil = no last-day pace next to
 	// the window's average.
 	UsageAt func(ctx context.Context, codexHome string, at time.Time) (usage.Snapshot, error)
+	// CodexLogin reads the login of Codex's auth.json under a CODEX_HOME
+	// (usage.CodexLogin, which FromApp sets: a fingerprint of its account,
+	// never a token); nil = no restart of the Codex sessions when it
+	// changes (codex_login.go).
+	CodexLogin func(codexHome string) (usage.Login, error)
 	// Probe checks that a clone's origin answers (`git ls-remote` with the
 	// environment gitx gives git); it lifts an infrastructure pause. nil =
 	// no probe: the pause lifts when its backoff ends.
@@ -14632,6 +14649,10 @@ type Pause struct {
 	// ProvenAt is when the run showed it: a reviewer's run's end, the time
 	// the judge stopped. Zero on a proven pause means now.
 	ProvenAt time.Time
+	// RunID is the run whose turn showed it ("" = none, a login check): the
+	// engine reads its session's start, and a usage limit hit by a Codex
+	// session older than the current Codex login pauses no kind.
+	RunID string
 }
     Pause asks the engine to pause an agent kind.
 
@@ -21178,12 +21199,21 @@ const (
 )
     Bounds of one Codex read.
 
+const LoginAPIKey = "api-key"
+    LoginAPIKey stands for the account of a login in API-key mode (auth.json
+    holds OPENAI_API_KEY and no ChatGPT account): the key itself is never read
+    past telling it is there.
+
 
 VARIABLES
 
 var ErrNoData = errors.New("usage: no Codex rate-limit snapshot found")
     ErrNoData means no rate-limit snapshot was found: no session directory,
     no session files, or none of the newest files carries one.
+
+var ErrNoLogin = errors.New("usage: no Codex login in auth.json")
+    ErrNoLogin means auth.json is absent, or holds neither an account nor an API
+    key.
 
 
 FUNCTIONS
@@ -21223,6 +21253,24 @@ func Decide(snap Snapshot, soft, hard float64) Level
     of zero or less is off.
 
 func (l Level) String() string
+
+type Login struct {
+	// Fingerprint is the first 12 hex digits of the sha256 of the login's
+	// account: tokens.account_id, or LoginAPIKey in API-key mode.
+	Fingerprint string
+	// ChangedAt is when auth.json last changed: the newer of its own
+	// modification time and, when it is a symlink, its target's.
+	ChangedAt time.Time
+}
+    Login is the Codex login of a CODEX_HOME, as far as magnum tells logins
+    apart.
+
+func CodexLogin(home string) (Login, error)
+    CodexLogin reads the login of home's auth.json (home is a CODEX_HOME; empty
+    means DefaultCodexHome), following a symlink. A ChatGPT login's account
+    (tokens.account_id) wins over an API key. It returns ErrNoLogin for no file,
+    a dangling link and a file with neither; a file that is not JSON is an error
+    that quotes nothing of it.
 
 type Pace struct {
 	Used     float64   // percent of the budget used, 0–100

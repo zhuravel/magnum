@@ -324,6 +324,11 @@ type Deps struct {
 	// (usage.CodexAt, which FromApp sets); nil = no last-day pace next to
 	// the window's average.
 	UsageAt func(ctx context.Context, codexHome string, at time.Time) (usage.Snapshot, error)
+	// CodexLogin reads the login of Codex's auth.json under a CODEX_HOME
+	// (usage.CodexLogin, which FromApp sets: a fingerprint of its account,
+	// never a token); nil = no restart of the Codex sessions when it
+	// changes (codex_login.go).
+	CodexLogin func(codexHome string) (usage.Login, error)
 	// Probe checks that a clone's origin answers (`git ls-remote` with the
 	// environment gitx gives git); it lifts an infrastructure pause. nil =
 	// no probe: the pause lifts when its backoff ends.
@@ -603,6 +608,16 @@ type Engine struct {
 	// deleted).
 	usagePaceRecorded string
 
+	// codexLoginRead is when the tick last read Codex's login
+	// (codex_login.go; the tick's goroutine only).
+	codexLoginRead time.Time
+	// restarts are the sessions marked to park once idle, so that their
+	// next prompt resumes them in new processes, by session id, loaded from
+	// kv on first use (session_restart.go). restartMu guards them: the
+	// tick, a round's settle and the heavy worker change them.
+	restartMu sync.Mutex
+	restarts  map[int64]restartMark
+
 	// hooks is the webhooks consumer's memory in shadow mode (webhooks.go).
 	hooks webhookState
 }
@@ -659,7 +674,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		Config: a.Config, Layout: a.Layout, Store: a.Store, Logger: a.Logger, DryRun: a.DryRun,
 		Herdr: a.Herdr, Agents: a.Agents, Slots: a.Slots, Git: a.Git, Inventory: a.Inventory,
 		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex, UsageAt: usage.CodexAt, Runner: a.Runner,
-		MemoryRunner: a.Runner,
+		MemoryRunner: a.Runner, CodexLogin: usage.CodexLogin,
 	}
 	d.GitHub = func(id string) GitHub {
 		if c := a.GitHub(id); c != nil {
@@ -985,7 +1000,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// github_floor.go: the work the GitHub budget held, once it recovered,
 	// before dispatch gives the PR to another round.
 	e.continueBudgetHeld(ctx)
-	e.continuePauseHeld(ctx) // fix_held.go: the held fixes the fixer's pause held, once it ended
+	e.continuePauseHeld(ctx)   // fix_held.go: the held fixes the fixer's pause held, once it ended
+	e.restartSessions(ctx, ts) // session_restart.go: a PR whose marked sessions park now waits in dispatch
 	e.dispatch(ctx, ts)
 	e.noteWaits(ctx, ts)
 	e.noteStatusComments(ctx) // status_comment.go: after the waits it names

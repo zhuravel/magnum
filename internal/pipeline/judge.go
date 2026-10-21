@@ -386,7 +386,7 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	}
 	switch h.Kind {
 	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthOverloaded:
-		p := &Pause{Kind: string(h.Kind), Tool: rd.judge.AgentKind(), Detail: h.Detail, Proven: true, ProvenAt: rd.stoppedAt(t)}
+		p := &Pause{Kind: string(h.Kind), Tool: rd.judge.AgentKind(), Detail: h.Detail, Proven: true, ProvenAt: rd.stoppedAt(t), RunID: t.run.ID}
 		if h.ResetAt != nil {
 			p.Until = *h.ResetAt
 		}

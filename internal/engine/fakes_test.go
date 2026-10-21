@@ -851,12 +851,16 @@ func (f *fakeNotifyHerdr) all() []string {
 type fakeAgents struct {
 	st *store.Store
 
-	mu           sync.Mutex
-	calls        []string
-	obs          []agents.Observation
-	loggedOut    map[string]bool
-	loginStamp   map[string]string // LoginStamp per kind ("" = no login file)
-	resumeIDs    map[agents.Role]string
+	mu         sync.Mutex
+	calls      []string
+	obs        []agents.Observation
+	loggedOut  map[string]bool
+	loginStamp map[string]string // LoginStamp per kind ("" = no login file)
+	resumeIDs  map[agents.Role]string
+	// resumeParked: ResumeID answers, for a role resumeIDs leaves out, the
+	// session id of the role's newest parked or lost session, as
+	// agents.Manager.ResumeID does.
+	resumeParked bool
 	failResume   bool
 	parkErr      error
 	parkGate     chan struct{} // when set, Park signals parkStarted and waits for a value (or ctx)
@@ -1061,10 +1065,25 @@ func (f *fakeAgents) StartAgent(ctx context.Context, pr store.PR, role config.Ro
 	return nil
 }
 
-func (f *fakeAgents) ResumeID(_ context.Context, _ int64, role agents.Role) (string, error) {
+func (f *fakeAgents) ResumeID(ctx context.Context, prID int64, role agents.Role) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.resumeIDs[role], nil
+	id, fromStore := f.resumeIDs[role], f.resumeParked
+	f.mu.Unlock()
+	if id != "" || !fromStore {
+		return id, nil
+	}
+	// As agents.Manager.ResumeID: the newest parked or lost session of the
+	// role that recorded a session id.
+	ss, err := f.st.SessionsByPR(ctx, prID)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range slices.Backward(ss) {
+		if s.Role == string(role) && (s.State == store.SessionParked || s.State == store.SessionLost) && deref(s.SessionID) != "" {
+			return *s.SessionID, nil
+		}
+	}
+	return "", nil
 }
 
 func (f *fakeAgents) LoginStamp(kind string) string {

@@ -2014,6 +2014,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   refusal: the operator asks again. Nothing changes for the whiteboard's content, its model or its yields.
   Rejected: running the job during the drain, which waits for agents to end and would wait for the writer
   too; waiting for the next posted review, what happened (22 of 23 heads never got one).
+- **A change of Codex login restarts the Codex sessions that run with the old one** (2026-10-22, spec 119).
+  A Codex process keeps the login it started with. At 01:11 the operator switched the Codex account with
+  clauth, which makes `~/.codex/auth.json` a symlink to a profile's file (the old login was a plain file);
+  five codex-judge sessions started at 00:35 under the old account stayed live and idle between rounds, so
+  every judge turn after the switch ran on the old account, at 100% of its week: four rounds ended
+  `usage_limit` from 00:57 to 01:16, the codex kind paused, and the four PRs sat paused with their judge's
+  turn to continue, which would have prompted the same processes again; `magnum release` refuses a paused
+  PR, nothing closed a kind's sessions, and the judges would park only 90 minutes after their last prompt
+  (`judge_fresh_after`). Now the health tick reads, once a minute with the usage read, `auth.json` under
+  `[usage] codex_home`, through the link (`usage.CodexLogin`), and keeps only the first 12 hex digits of
+  the sha256 of `tokens.account_id` (of `api-key` in API-key mode) in kv (`codex.login`), with when it
+  first saw it (`codex.login_at`); the decoder keeps that field and whether an API key is set, nothing
+  else, a file that is not JSON is an error that quotes none of it, and no file or no account changes
+  nothing. When the fingerprint changes, or at the first read with none kept while live Codex sessions
+  started before the file last changed (the newer of the link's and the target's mtime, which
+  `codex.login_at` then holds), every live session of a kind Codex backs (any role but a shell; a pinned
+  PR's left alone) started before is marked for a restart (kv `sessions.restart`, so a daemon restart
+  keeps the ones still waiting); a usage-limit pause of the kind is lifted and the budget reading
+  overruled (`overruleBudget`), both the old account's; one `codex.login_changed` info event (counts, never
+  an account) and one toast say "Codex login changed: N Codex sessions restart with the new one". A
+  marked session parks through the early park (`Agents.ParkSessions`: its pane closes, its conversation
+  stays resumable; one without a conversation is quit and starts fresh) on the heavy worker, under the
+  PR's reservation taken at once, when its PR has no round, no agent at work, no pin, no human within
+  `human_cooldown` and no park backoff (a busy one parks after its turn; a failed park waits out
+  `parkFailed`'s backoff), with one `agent.restarted` event; until then no round starts on its PR
+  (`prGate`: "codex-judge restarts in a new process first (the Codex login changed)"), so no prompt
+  reaches the old process. Its next prompt resumes it with `codex resume <id>` in a new process
+  (`ensureAgent`, `ResumeID`), a paused round's continuation included, which stays a continue of the
+  paused turn. A usage limit whose run's session started before `codex.login_at` (`pipeline.Pause.RunID`,
+  set by the judge's verdict and a reviewer's pause) is the old account's: it pauses no kind, the session
+  is marked, one `codex.stale_usage_limit` info event says so, and a round that ended on it pauses with a
+  retry a minute later; a session started under the current login pauses the kind as before. Park and
+  resume rather than a fresh session: `codex resume` carries the conversation into the new process, so a
+  judge keeps its context, the paused turn continues where it stopped and a re-review keeps its history.
+  The account id and not the mtime: Codex rewrites auth.json at every token refresh, and a refresh of the
+  same account parks nothing; the mtime decides only the first read, when no login was kept. Rejected: a
+  second CODEX_HOME per account, which the operator rejected earlier (Codex sessions are isolated with
+  `-c` overrides only); restarting the sessions on every write of auth.json; leaving it to
+  `judge_fresh_after`, which parks a judge 90 minutes after its last prompt while every prompt before goes
+  to the old account.
 
 ## Screens and commands
 

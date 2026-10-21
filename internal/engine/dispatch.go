@@ -429,6 +429,9 @@ func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *co
 	if ts.busyPR[pr.ID] {
 		return otherGate("an agent of the PR is working or blocked")
 	}
+	if why := e.restartWait(ctx, pr.ID); why != "" {
+		return otherGate(why) // session_restart.go: no prompt reaches a process the restart replaces
+	}
 	if now.Before(e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
 		return otherGate("human active in the PR's panes")
 	}

@@ -460,6 +460,10 @@ type Pause struct {
 	// ProvenAt is when the run showed it: a reviewer's run's end, the time
 	// the judge stopped. Zero on a proven pause means now.
 	ProvenAt time.Time
+	// RunID is the run whose turn showed it ("" = none, a login check): the
+	// engine reads its session's start, and a usage limit hit by a Codex
+	// session older than the current Codex login pauses no kind.
+	RunID string
 }
 
 // RoleReport is what one non-judge role produced.
