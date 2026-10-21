@@ -6158,6 +6158,11 @@ const (
 	// (LearnRevertPayload, learn_revert.go), as `magnum learn --revert`
 	// asks.
 	ReqLearnRevert = "learn_revert"
+	// ReqRestartSessions parks the live sessions of an agent kind so that
+	// their next prompt resumes them in new processes
+	// (RestartSessionsPayload, session_restart.go), as `magnum
+	// restart-sessions` asks.
+	ReqRestartSessions = "restart_sessions"
 )
     Request kinds (requests.kind) the daemon consumes.
 
@@ -6758,6 +6763,13 @@ func RecordedBudgetAtCap(ctx context.Context, st *store.Store, u config.Usage, n
     pending (KVUsageCodexOverruledAt): the reading the CLI's offline `magnum
     resume --tool` of a Codex kind overrules, as liftToolPause does the
     daemon's. No reading, or one whose window reset since, is at no cap.
+
+func RestartableSessions(ctx context.Context, st *store.Store, cfg *config.Config, kind string, prID int64) (sessions []store.Session, pinned int, err error)
+    RestartableSessions are the live sessions `magnum restart-sessions --tool
+    kind` restarts: each one runs an agent of kind (its recorded kind, else its
+    role's; "all" = any kind; a shell role's pane never), of PR prID unless it
+    is 0, and pinned counts those it leaves alone because their PR or its slot
+    is pinned. The settings screen counts them for its question.
 
 func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.Time, bool)) string
     SkewNote says when the running daemon is older than what is built: the CLI's
@@ -8053,6 +8065,14 @@ type Request struct {
 func (r Request) Phrase() string
     Phrase is how screens name the request: "requested by alice", "requested on
     a draft by alice" or "ready for review".
+
+type RestartSessionsPayload struct {
+	PRTarget
+	Tool string `json:"tool"`
+}
+    RestartSessionsPayload is a `magnum restart-sessions` request: the live
+    sessions of agent kind Tool ("all": every kind) park so that their next
+    prompt resumes them in new processes, only the PR's when it names one.
 
 type RetroGitHub interface {
 	ReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, error)
@@ -20837,6 +20857,9 @@ type RuntimeEntry struct {
 	// Detail is the detail strip's line for it: why it is paused and what
 	// lifts it by itself.
 	Detail string
+	// Live counts an agent kind's live sessions `magnum restart-sessions`
+	// would restart (a pinned PR's left out).
+	Live int
 }
     RuntimeEntry is one pausable thing: automation, an agent kind or a watch.
 
@@ -20989,6 +21012,10 @@ type SettingsRuntime interface {
 	// Resume lifts a pause as `magnum resume` does: automation (an empty
 	// spec), an agent kind or all of them (Tool), or a watch (Watch).
 	Resume(ctx context.Context, r ResumeSpec) (string, error)
+	// RestartSessions parks the live sessions of an agent kind (or "all")
+	// so that they resume in new processes, as `magnum restart-sessions
+	// --tool` does; the text is its answer.
+	RestartSessions(ctx context.Context, tool string) (string, error)
 }
     SettingsRuntime is the runtime side of the settings screen (applies now,
     never saved to the file): the pauses `magnum status` lists and the same

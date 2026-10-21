@@ -19,6 +19,6 @@ SECTIONS            RUNTIME · applies now · not saved to the config file
 ──────────────────────────────────────────────────────────────────────────────────────────
 codex                                                                          applies now
 paused by the Codex budget cap: 95% of this week used ([usage] codex_hard = 95)
-r = magnum resume --tool codex: lifts its usage-limit, login or budget pause and forgets …
+r = magnum resume --tool codex: lifts its pause, forgets its model limits · x = magnum re…
 
-j/k move · tab section · p pause · r resume · R resume all · c scope · ? help · esc back
+j/k move · tab section · p pause · r resume · R resume all · x restart · ? help · esc back

@@ -24,8 +24,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // kvSessionsRestart holds the sessions marked for a restart, as JSON by
@@ -218,8 +220,8 @@ func (e *Engine) pinnedPR(ctx context.Context, pr store.PR) bool {
 	if pr.Pinned {
 		return true
 	}
-	sl, has, err := e.slotOf(ctx, pr.ID)
-	return err != nil || (has && sl.Pinned)
+	pinned, err := prPinned(ctx, e.st, pr.ID)
+	return err != nil || pinned
 }
 
 // queueRestart queues the park of the PR's marked sessions (marked; all
@@ -338,4 +340,146 @@ func (e *Engine) parkToRestart(ctx context.Context, pr store.PR, sessions []stor
 		parked = append(parked, s)
 	}
 	return parked, errors.Join(errs...)
+}
+
+// restartRequested is the mark of a session `magnum restart-sessions`
+// restarts (restartMark.Why).
+const restartRequested = "magnum restart-sessions"
+
+// RestartSessionsPayload is a `magnum restart-sessions` request: the live
+// sessions of agent kind Tool ("all": every kind) park so that their next
+// prompt resumes them in new processes, only the PR's when it names one.
+type RestartSessionsPayload struct {
+	PRTarget
+	Tool string `json:"tool"`
+}
+
+// RestartableSessions are the live sessions `magnum restart-sessions --tool
+// kind` restarts: each one runs an agent of kind (its recorded kind, else
+// its role's; "all" = any kind; a shell role's pane never), of PR prID
+// unless it is 0, and pinned counts those it leaves alone because their PR
+// or its slot is pinned. The settings screen counts them for its question.
+func RestartableSessions(ctx context.Context, st *store.Store, cfg *config.Config, kind string, prID int64) (sessions []store.Session, pinned int, err error) {
+	live, err := st.LiveSessions(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	pins := map[int64]bool{}
+	for _, s := range live {
+		if prID != 0 && s.PRID != prID {
+			continue
+		}
+		r, ok := cfg.RoleByNameOrAlias(nil, s.Role)
+		if ok && r.IsShell() {
+			continue
+		}
+		k := deref(s.AgentKind)
+		if k == "" && ok {
+			k = r.AgentKind()
+		}
+		if kind != "all" && k != kind {
+			continue
+		}
+		p, seen := pins[s.PRID]
+		if !seen {
+			if p, err = prPinned(ctx, st, s.PRID); err != nil {
+				return nil, 0, err
+			}
+			pins[s.PRID] = p
+		}
+		if p {
+			pinned++
+			continue
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, pinned, nil
+}
+
+// prPinned reports whether PR prID or its slot is pinned (`magnum pin`,
+// `magnum open`): its sessions are the operator's.
+func prPinned(ctx context.Context, st *store.Store, prID int64) (bool, error) {
+	pr, err := st.PRByID(ctx, prID)
+	if err != nil {
+		return false, err
+	}
+	if pr.Pinned {
+		return true, nil
+	}
+	sl, err := st.SlotByPR(ctx, prID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return sl.Pinned, nil
+}
+
+// requestRestartSessions is `magnum restart-sessions`: it marks the
+// sessions RestartableSessions gives for a restart and queues the park of
+// each PR's that may park now (queueRestart); the others park after their
+// turn (restartSessions). The answer counts both, and the sessions of
+// pinned PRs it left alone.
+func (e *Engine) requestRestartSessions(ctx context.Context, p RestartSessionsPayload) (string, error) {
+	switch {
+	case p.Tool == "":
+		return "", errors.New("which agent kind? --tool <kind> or all")
+	case p.Tool != "all" && !e.isKind(p.Tool):
+		return "", fmt.Errorf("unknown tool %q (%s or all)", p.Tool, strings.Join(e.kinds(), ", "))
+	}
+	var prID int64
+	of := ""
+	if p.Ref != "" || p.Repo != "" {
+		repo, pr, err := e.resolve(ctx, p.PRTarget)
+		if err != nil {
+			return "", err
+		}
+		prID, of = pr.ID, fmt.Sprintf(" of %s#%d", repo.FullName(), pr.Number)
+	}
+	sessions, pinned, err := RestartableSessions(ctx, e.st, e.cfg, p.Tool, prID)
+	if err != nil {
+		return "", err
+	}
+	what := "live " + p.Tool + " session"
+	if p.Tool == "all" {
+		what = "live agent session"
+	}
+	note := ""
+	if pinned > 0 {
+		note = "; " + textx.Count(pinned, "session", "sessions") + " of pinned PRs left alone"
+	}
+	if len(sessions) == 0 {
+		return "no " + what + of + " to restart" + note, nil
+	}
+	e.markRestart(ctx, sessions, restartRequested)
+	live, err := e.st.LiveSessions(ctx)
+	if err != nil {
+		return "", err
+	}
+	byPR := map[int64][]store.Session{}
+	for _, s := range sessions {
+		byPR[s.PRID] = append(byPR[s.PRID], s)
+	}
+	now, later := 0, 0
+	at := e.now()
+	herdrDown := e.herdrUp != nil && !*e.herdrUp
+	for _, id := range slices.Sorted(maps.Keys(byPR)) {
+		all := sessionsOf(live, id)
+		busy := slices.ContainsFunc(all, func(s store.Session) bool {
+			st := herdr.Status(deref(s.AgentStatus))
+			return st == herdr.StatusWorking || st == herdr.StatusBlocked
+		})
+		if !herdrDown && e.queueRestart(ctx, id, byPR[id], all, busy, at) {
+			now += len(byPR[id])
+		} else {
+			later += len(byPR[id])
+		}
+	}
+	turn := "their turn"
+	if later == 1 {
+		turn = "its turn"
+	}
+	return fmt.Sprintf("restarting %s%s: %d park now, %d after %s; each resumes in a new process at its next prompt%s",
+		textx.Count(len(sessions), what, what+"s"), of, now, later, turn, note), nil
 }

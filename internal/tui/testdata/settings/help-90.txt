@@ -17,6 +17,7 @@ magnum · settings · Global · ~/.config/magnum/config.toml
 │ p             Runtime: pause automation (asks y/N; applies now)                        │
 │ r             Runtime: resume the selected row (asks y/N; applies now)                 │
 │ R             Runtime: resume every agent kind (asks y/N; applies now)                 │
+│ x             Runtime: restart a kind's live sessions in new processes (asks y/N)      │
 │ y             answer yes; any other key, enter too, cancels                            │
 │ ?             close this help                                                          │
 │ esc, q        back (asks before discarding unsaved changes; ctrl+c too)                │

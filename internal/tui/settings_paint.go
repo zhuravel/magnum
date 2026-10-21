@@ -737,8 +737,9 @@ func (m settingsModel) footerLine(w int) string {
 	switch kind := m.sectionKind(m.currentSection()); {
 	case m.currentSection() == sectionRuntime && m.query == "":
 		return m.st.fitHints(w,
-			append([]hint{{"j/k", "move"}, {"tab", "section"}, {"p", "pause"}, {"r", "resume"}, {"R", "resume all"}, {"c", "scope"}}, tail...),
-			append([]hint{{"p", "pause"}, {"r", "resume"}, {"R", "resume all"}}, tail...), tail)
+			append([]hint{{"j/k", "move"}, {"tab", "section"}, {"p", "pause"}, {"r", "resume"}, {"R", "resume all"}, {"x", "restart sessions"}, {"c", "scope"}}, tail...),
+			append([]hint{{"j/k", "move"}, {"tab", "section"}, {"p", "pause"}, {"r", "resume"}, {"R", "resume all"}, {"x", "restart"}}, tail...),
+			append([]hint{{"p", "pause"}, {"r", "resume"}, {"R", "resume all"}, {"x", "restart"}}, tail...), tail)
 	case kind != "" && m.query == "":
 		edit := "edit"
 		if r, ok := rowAt(m.rows(), m.cursor); ok && r.kind == rowField && m.data.Fields[r.field].Type.IsList() {
@@ -944,6 +945,7 @@ func settingsKeys() []hint {
 		{"p", "Runtime: pause automation (asks y/N; applies now)"},
 		{"r", "Runtime: resume the selected row (asks y/N; applies now)"},
 		{"R", "Runtime: resume every agent kind (asks y/N; applies now)"},
+		{"x", "Runtime: restart a kind's live sessions in new processes (asks y/N)"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 		{"?", "close this help"},
 		{"esc, q", "back (asks before discarding unsaved changes; ctrl+c too)"},

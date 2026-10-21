@@ -49,6 +49,10 @@ type SettingsRuntime interface {
 	// Resume lifts a pause as `magnum resume` does: automation (an empty
 	// spec), an agent kind or all of them (Tool), or a watch (Watch).
 	Resume(ctx context.Context, r ResumeSpec) (string, error)
+	// RestartSessions parks the live sessions of an agent kind (or "all")
+	// so that they resume in new processes, as `magnum restart-sessions
+	// --tool` does; the text is its answer.
+	RestartSessions(ctx context.Context, tool string) (string, error)
 }
 
 // PauseSpec is `magnum pause`'s flags: For or Until (a local 15:30 or an
@@ -87,6 +91,9 @@ type RuntimeEntry struct {
 	// Detail is the detail strip's line for it: why it is paused and what
 	// lifts it by itself.
 	Detail string
+	// Live counts an agent kind's live sessions `magnum restart-sessions`
+	// would restart (a pinned PR's left out).
+	Live int
 }
 
 // SettingType is how a setting is edited.

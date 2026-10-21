@@ -142,48 +142,22 @@ func restartCount(n int) string {
 
 // codexSessionsBefore are the live sessions of the kinds Codex backs, any
 // role that runs an agent, started before since, but those of pinned PRs
-// (pinnedPR).
+// (RestartableSessions).
 func (e *Engine) codexSessionsBefore(ctx context.Context, since time.Time) []store.Session {
-	live, err := e.st.LiveSessions(ctx)
-	if err != nil {
-		e.warnUnlessStopped(ctx, err, "codex login: live sessions")
-		return nil
-	}
 	var out []store.Session
-	pinned := map[int64]bool{}
-	for _, s := range live {
-		if !s.StartedAt.Before(since) || !e.codexSession(s) {
-			continue
+	for _, kind := range e.budgetKinds() {
+		sessions, _, err := RestartableSessions(ctx, e.st, e.cfg, kind, 0)
+		if err != nil {
+			e.warnUnlessStopped(ctx, err, "codex login: live sessions")
+			return nil
 		}
-		p, ok := pinned[s.PRID]
-		if !ok {
-			pr, err := e.st.PRByID(ctx, s.PRID)
-			p = err != nil || e.pinnedPR(ctx, pr)
-			pinned[s.PRID] = p
-		}
-		if !p {
-			out = append(out, s)
+		for _, s := range sessions {
+			if s.StartedAt.Before(since) {
+				out = append(out, s)
+			}
 		}
 	}
 	return out
-}
-
-// codexSession reports whether s runs an agent of a kind Codex backs (its
-// recorded kind, else its role's).
-func (e *Engine) codexSession(s store.Session) bool {
-	return !e.shellRole(s.Role) && slices.Contains(e.budgetKinds(), e.sessionKind(s))
-}
-
-// sessionKind is the agent kind session s runs: the one it recorded, else
-// its role's.
-func (e *Engine) sessionKind(s store.Session) string {
-	if k := deref(s.AgentKind); k != "" {
-		return k
-	}
-	if r, ok := e.cfg.RoleByNameOrAlias(nil, s.Role); ok {
-		return r.AgentKind()
-	}
-	return ""
 }
 
 // staleLimit reports whether pause p is a usage limit that a session of a

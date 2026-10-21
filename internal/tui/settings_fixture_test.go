@@ -502,6 +502,16 @@ func (f *fakeRuntime) Resume(_ context.Context, r ResumeSpec) (string, error) {
 	return cmp.Or(f.resumed, "resumed"), nil
 }
 
+func (f *fakeRuntime) RestartSessions(_ context.Context, tool string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, "restart tool="+tool)
+	if tool == "all" {
+		return "restarting 3 live agent sessions: 3 park now, 0 after their turn; each resumes in a new process at its next prompt", nil
+	}
+	return "restarting 3 live " + tool + " sessions: 2 park now, 1 after its turn; each resumes in a new process at its next prompt", nil
+}
+
 func (f *fakeRuntime) requests() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

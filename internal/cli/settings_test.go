@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -256,6 +257,51 @@ func TestScreenRuntimeReadsThePausesStatusLists(t *testing.T) {
 	}
 	if a := s.Automation; !a.Paused || !strings.HasPrefix(a.State, "paused: infrastructure failure (ssh) until ") || !strings.Contains(a.Detail, "magnum resume") {
 		t.Errorf("an infrastructure pause: automation %+v", a)
+	}
+}
+
+// The screen counts each agent kind's live sessions a restart takes (a
+// pinned PR's left out), and its x sends what `magnum restart-sessions`
+// sends, refused without a daemon.
+func TestScreenRuntimeCountsAndRestartsAKindsLiveSessions(t *testing.T) {
+	storetest.Serial(t)
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 12, store.PRPaused)
+	pinned := h.seedPR("talkable/talkable", 13, store.PRReviewed)
+	if err := h.st.UpdatePR(h.ctx, pinned.ID, func(u *store.PRUpdate) { u.Set("pinned", true) }); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []int64{pr.ID, pinned.ID} {
+		s := h.session(id, "codex-judge", store.SessionLive, fmt.Sprintf("mg-judge-%d", i), "", "w1")
+		if err := h.st.UpdateSession(h.ctx, s.ID, func(u *store.SessionUpdate) { u.Set("agent_kind", "codex") }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acts := newScreenActions(h.c)
+	t.Cleanup(func() { _ = acts.Close() })
+	rt := screenRuntime{acts}
+	s, err := rt.Runtime(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range s.Kinds {
+		if want := map[string]int{"codex": 1}[k.Name]; k.Live != want {
+			t.Errorf("%s: %d live sessions, want %d", k.Name, k.Live, want)
+		}
+	}
+
+	if text, err := rt.RestartSessions(h.ctx, "codex"); err == nil || !strings.Contains(err.Error(), "no daemon is running") {
+		t.Fatalf("without a daemon: %q, %v", text, err)
+	}
+	h.pid = 3
+	answer := "restarting 1 live codex session: 1 park now, 0 after their turn; each resumes in a new process at its next prompt"
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, answer) }
+	if text, err := rt.RestartSessions(h.ctx, "codex"); err != nil || text != answer {
+		t.Fatalf("restart: %q, %v", text, err)
+	}
+	reqs := h.requests()
+	if last := reqs[len(reqs)-1]; last.Kind != engine.ReqRestartSessions || actDecode[engine.RestartSessionsPayload](t, last.Payload).Tool != "codex" {
+		t.Fatalf("requests %+v", reqs)
 	}
 }
 

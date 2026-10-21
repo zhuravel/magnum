@@ -550,6 +550,46 @@ func TestSettingsRuntimeActionsAskThenSendTheirRequest(t *testing.T) {
 	mustContain(t, viewOf(m), "paused automation", "paused: lunch")
 }
 
+// TestSettingsRuntimeXRestartsAKindsLiveSessions: x on an agent kind's row
+// asks before restarting its live sessions in new processes, y sends the
+// request and the footer shows the daemon's answer; on "all kinds" it asks
+// for every kind's, and a kind with no live session sends nothing.
+func TestSettingsRuntimeXRestartsAKindsLiveSessions(t *testing.T) {
+	rt := newFakeRuntime()
+	rt.state.Kinds[0].Live, rt.state.Kinds[1].Live = 3, 0
+	m := testSettings(t, newFakeSettings(), rt, SettingsOptions{}, 160, 34)
+	m = toSection(t, m, sectionRuntime)
+	m = selectRow(t, m, "codex")
+	mustContain(t, viewOf(m), "x = magnum restart-sessions --tool codex")
+	m = press(t, m, "x")
+	mustContain(t, viewOf(m), "Restart the 3 live codex sessions? They resume in new processes. y/N")
+	m = press(t, m, "n")
+	if len(rt.requests()) != 0 {
+		t.Fatal("n must not restart")
+	}
+	m = press(t, m, "x", "y")
+	if got := rt.requests(); !slices.Equal(got, []string{"restart tool=codex"}) {
+		t.Fatalf("requests = %v", got)
+	}
+	mustContain(t, viewOf(m), "restarting 3 live codex sessions: 2 park now, 1 after its turn")
+
+	m = selectRow(t, m, "all kinds")
+	m = press(t, m, "x")
+	mustContain(t, viewOf(m), "Restart the 3 live agent sessions? They resume in new processes. y/N")
+	m = press(t, m, "y")
+	if got := rt.requests(); got[len(got)-1] != "restart tool=all" {
+		t.Fatalf("x on all kinds should restart every kind's, got %v", got)
+	}
+
+	m = selectRow(t, m, "claude")
+	m = press(t, m, "x")
+	mustContain(t, viewOf(m), "claude has no live session to restart")
+	press(t, m, "y")
+	if got := rt.requests(); len(got) != 2 {
+		t.Fatalf("x on a kind without live sessions sent %v", got)
+	}
+}
+
 func TestSettingsPlainResumeNamesThePausesItLeaves(t *testing.T) {
 	rt := newFakeRuntime()
 	rt.state.Automation = RuntimeEntry{Name: "automation", Paused: true, State: "paused: lunch"}

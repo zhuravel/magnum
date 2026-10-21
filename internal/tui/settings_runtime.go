@@ -32,15 +32,16 @@ func (m settingsModel) runtimeRows() []setRow {
 	out := []setRow{{kind: rowRuntime, what: rtAutomation, entry: auto}}
 	if len(s.Kinds) > 0 {
 		out = append(out, setRow{kind: rowHeading, label: "agent kinds"})
-		paused := 0
+		paused, live := 0, 0
 		for _, k := range s.Kinds {
 			out = append(out, setRow{kind: rowRuntime, what: rtKind, entry: k})
 			if k.Paused {
 				paused++
 			}
+			live += k.Live
 		}
 		out = append(out, setRow{kind: rowRuntime, what: rtAllKinds, paused: paused, kinds: len(s.Kinds),
-			entry: RuntimeEntry{Name: "all kinds"}})
+			entry: RuntimeEntry{Name: "all kinds", Live: live}})
 	}
 	if len(s.Watches) > 0 {
 		out = append(out, setRow{kind: rowHeading, label: "watches · identity-leak pauses"})
@@ -124,16 +125,16 @@ func rtCommand(r setRow) string {
 		}
 		return "p = magnum pause [--for 2h | --until 15:30] [--reason text]: running rounds finish, nothing new starts"
 	case rtKind:
-		return "r = magnum resume --tool " + r.entry.Name + ": lifts its usage-limit, login or budget pause and forgets its model limits"
+		return "r = magnum resume --tool " + r.entry.Name + ": lifts its pause, forgets its model limits · " + restartCommand(r.entry.Name)
 	case rtAllKinds:
-		return "R = magnum resume --tool all: lifts every agent kind's pause and forgets their model limits"
+		return "R = magnum resume --tool all: lifts every kind's pause and model limits · " + restartCommand("all")
 	case rtWatch:
 		return "r = magnum resume --watch " + r.entry.Name + ": lifts its identity-leak pause"
 	}
 	return ""
 }
 
-// runtimeKey handles p, r and R: they act only in the Runtime section, on
+// runtimeKey handles p, r, R and x: they act only in the Runtime section, on
 // the selected row, each after y/N.
 func (m settingsModel) runtimeKey(k string, rows []setRow) (settingsModel, tea.Cmd, bool) {
 	if m.currentSection() != sectionRuntime || m.query != "" {
@@ -155,6 +156,9 @@ func (m settingsModel) runtimeKey(k string, rows []setRow) (settingsModel, tea.C
 	if !ok || r.kind != rowRuntime {
 		return m, nil, true
 	}
+	if k == "x" {
+		return m.restartKey(r)
+	}
 	switch r.what {
 	case rtAutomation:
 		if !r.entry.Paused {
@@ -174,6 +178,45 @@ func (m settingsModel) runtimeKey(k string, rows []setRow) (settingsModel, tea.C
 		}
 		return m.askResume("Resume watch "+r.entry.Name+": lift its identity-leak pause?", ResumeSpec{Watch: r.entry.Name}), nil, true
 	}
+	return m, nil, true
+}
+
+// restartCommand is the detail strip's command for x on a kind's row (tool
+// "all": the all-kinds row), which restarts its live sessions in new
+// processes.
+func restartCommand(tool string) string { return "x = magnum restart-sessions --tool " + tool }
+
+// restartKey handles x on a Runtime row: on an agent kind's row it asks
+// before restarting that kind's live sessions in new processes, on "all
+// kinds" every kind's ("Restart the 3 live codex sessions? They resume in
+// new processes."), and on y sends the request; the answer counts the
+// sessions parked now and after their turn. A row with no live session
+// sends nothing.
+func (m settingsModel) restartKey(r setRow) (settingsModel, tea.Cmd, bool) {
+	tool, what := r.entry.Name, r.entry.Name+" session"
+	switch r.what {
+	case rtKind:
+	case rtAllKinds:
+		tool, what = "all", "agent session"
+	default:
+		return m.warn("x restarts an agent kind's live sessions: select its row, or all kinds"), nil, true
+	}
+	n := r.entry.Live
+	if n == 0 {
+		return m.warn(r.entry.Name + " has no live session to restart"), nil, true
+	}
+	if n != 1 {
+		what += "s"
+	}
+	question := "Restart the " + strconv.Itoa(n) + " live " + what + "? They resume in new processes."
+	m.confirm = &settingsConfirm{question: question, yes: func(m settingsModel) (settingsModel, tea.Cmd) {
+		m.busy = "restarting sessions"
+		ctx, rt := m.ctx, m.rt
+		return m, m.async(func() tea.Msg {
+			text, err := rt.RestartSessions(ctx, tool)
+			return settingsAnswerMsg{text: text, err: err, reload: true}
+		})
+	}}
 	return m, nil, true
 }
 

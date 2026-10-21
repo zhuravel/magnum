@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -40,7 +41,28 @@ func (r screenRuntime) Runtime(ctx context.Context) (tui.RuntimeState, error) {
 	}
 	rep := statusReport{GeneratedAt: d.now()}
 	statusGatherPauses(statusDeps{Store: d.Store, Config: d.Cfg, Now: d.Now}, statusKV{ctx: ctx, st: d.Store}, &rep)
-	return settingsRuntimeState(d.Cfg, rep.Pauses, rep.GeneratedAt, pid > 0), nil
+	s := settingsRuntimeState(d.Cfg, rep.Pauses, rep.GeneratedAt, pid > 0)
+	for i, k := range s.Kinds { // x on its row restarts them (`magnum restart-sessions`)
+		live, _, err := engine.RestartableSessions(ctx, d.Store, d.Cfg, k.Name, 0)
+		if err != nil {
+			return tui.RuntimeState{}, err
+		}
+		s.Kinds[i].Live = len(live)
+	}
+	return s, nil
+}
+
+// RestartSessions parks the live sessions of an agent kind (or all) as
+// `magnum restart-sessions --tool` does, the screen having asked first; the
+// text is the daemon's answer.
+func (s *screenActions) RestartSessions(ctx context.Context, tool string) (string, error) {
+	res, err := s.do(ctx, "restart-sessions", func(ctx context.Context, c *Context, d *actDeps) int {
+		if msg := resumeToolRefusal(d.Cfg, tool); msg != "" {
+			return cmdFail(c, "restart-sessions", errors.New(msg))
+		}
+		return restartSessionsMain(ctx, c, d, restartSessionsOpts{tool: tool, yes: true})
+	})
+	return res.Text, err
 }
 
 // settingsRuntimeState is the Runtime section from the pauses status

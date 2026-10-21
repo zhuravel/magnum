@@ -53,6 +53,11 @@ const (
 	// (LearnRevertPayload, learn_revert.go), as `magnum learn --revert`
 	// asks.
 	ReqLearnRevert = "learn_revert"
+	// ReqRestartSessions parks the live sessions of an agent kind so that
+	// their next prompt resumes them in new processes
+	// (RestartSessionsPayload, session_restart.go), as `magnum
+	// restart-sessions` asks.
+	ReqRestartSessions = "restart_sessions"
 )
 
 // LearnProposePayload is a `magnum learn --propose` request.
@@ -264,6 +269,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, func(ctx context.Context, p PausePayload) (string, error) {
 			return e.requestPause(ctx, p, req.Kind == ReqPause)
 		})
+	case ReqRestartSessions: // session_restart.go
+		answer(e, ctx, req, e.requestRestartSessions)
 	case ReqIdentityVerdict:
 		answer(e, ctx, req, e.requestIdentityVerdict)
 	case ReqRetro:

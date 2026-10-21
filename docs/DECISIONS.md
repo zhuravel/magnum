@@ -2054,6 +2054,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `-c` overrides only); restarting the sessions on every write of auth.json; leaving it to
   `judge_fresh_after`, which parks a judge 90 minutes after its last prompt while every prompt before goes
   to the old account.
+- **`magnum restart-sessions` restarts an agent kind's live sessions on request** (2026-10-22, spec 119
+  item 4). The operator asked for "a manual option or button to restart codex sessions", and a Claude
+  account switch has the same problem with no login magnum watches. `magnum restart-sessions --tool
+  <kind>|all [--pr <ref>]` sends `restart_sessions` (`RestartSessionsPayload`) to the daemon, never queued
+  without one (a restart nobody waits for must not run when a daemon starts later); a terminal asks
+  "Restart the N live codex sessions? They resume in new processes." first (`--yes` does not). The daemon
+  marks the live sessions `engine.RestartableSessions` gives (a role that runs an agent of that kind, its
+  recorded kind else its role's; a pinned PR's or pinned slot's counted apart and left alone) as the login
+  change does, queues the park of each PR's that may park now, and answers "restarting 3 live codex
+  sessions: 2 park now, 1 after its turn; each resumes in a new process at its next prompt", naming the
+  sessions of pinned PRs it left alone; the marked ones then go the login change's way (the gate, the
+  early park, the resume). The settings screen's Runtime section has the same action as `x` on a kind's
+  row and on "all kinds", with that question (the count is each kind's live sessions,
+  `RuntimeEntry.Live`), the answer in the footer, the strip naming the command and the help and footer the
+  key; a row with no live session sends nothing. `magnum resume --tool` restarts nothing: lifting a pause
+  and replacing processes are separate asks. Rejected: a key on the board's PR rows, since a switch of
+  account concerns every PR's sessions of the kind at once; parking busy sessions at once, which would cut
+  a judge's turn short.
 
 ## Screens and commands
 

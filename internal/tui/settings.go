@@ -663,7 +663,7 @@ func (m settingsModel) browseKey(k string) (settingsModel, tea.Cmd, bool) {
 		return m.undoLast()
 	case "s":
 		return m.startSave()
-	case "p", "r", "R":
+	case "p", "r", "R", "x":
 		return m.runtimeKey(k, rows)
 	case "ctrl+r", "f5":
 		return m.refresh()
@@ -687,7 +687,7 @@ func (m settingsModel) refresh() (settingsModel, tea.Cmd, bool) {
 // draftKeys are the keys that change the draft, open a popup or act: they
 // wait while the draft is checked or saved, or a runtime request is out.
 var draftKeys = map[string]bool{"enter": true, "d": true, "backspace": true, "delete": true, "u": true, "s": true,
-	"c": true, "p": true, "r": true, "R": true}
+	"c": true, "p": true, "r": true, "R": true, "x": true}
 
 // leave closes the screen, asking first when the draft holds edits.
 func (m settingsModel) leave() (settingsModel, tea.Cmd, bool) {
@@ -779,7 +779,7 @@ func (m settingsModel) edit(rows []setRow) (settingsModel, tea.Cmd, bool) {
 	case rowRole:
 		return m.openRolePopup(r.role)
 	case rowRuntime:
-		return m.warn("p pauses automation, r resumes the selected row, R resumes every agent kind"), nil, true
+		return m.warn("p pauses automation, r resumes the selected row, R resumes every agent kind, x restarts a kind's live sessions"), nil, true
 	}
 	return m, nil, true
 }
