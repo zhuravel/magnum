@@ -1538,16 +1538,23 @@ unset keeps the pipeline's); an open PR without activity for 30 days (the board'
 are ranked by shared paths, at most 10 with 20 paths each, and each has its number, URL, state (and merge
 time), last activity, head, the shared paths, whether Magnum reviewed it with its last review's URL and
 verdict, and how many findings Magnum posted on those paths; no titles, bodies or comments (the judge
-reads a PR itself with `gh` when it matters). Every judge prompt records its whole set in
+reads a PR itself with `gh` when it matters). An open one whose head is in the history of the head under
+review is marked `"stack": "below"` (this PR is stacked on it), one whose history holds that head
+`"above"`: the round's checkout answers (`git merge-base --is-ancestor`), never GitHub, so a head Magnum
+never fetched gets no mark, nor do the same head and a merged PR. The `related_prs` line names them
+(`(#751 stacked below this PR; #753 above it)`), and with a PR below, every judge prompt but a continued
+turn's says in one line, listed in `related.json` or named by an earlier review, that a finding only on
+lines that PR introduced is that PR's (`outside_diff`), named in the review's related-PR line. Every
+judge prompt records its whole set in
 `related-all.json` beside it, with what the PR's posted reviews named so far (each related PR's state
 when last named and every path it shared), and a later round's `related.json` leaves out a related PR an
 earlier posted review named unless its state changed since (merged, closed and reopened, made ready or
 turned back into a draft) or it now shares a path no earlier line of it listed; fewer shared paths, a
 new head or activity are no news, so a busy neighbour's pushes do not repeat the Related or Stacked
 line. The first review names them all; with nothing new there is no file and no `related_prs`. A round's
-`round.related` event says what the judge was given: the numbers of the related PRs, and how many an
-earlier review named that were left out (a warning when the list could not be made and the judge goes
-without it). The
+`round.related` event says what the judge was given: the numbers of the related PRs, how many an
+earlier review named that were left out, and the PRs stacked below and above this one (a warning when
+the list could not be made and the judge goes without it). The
 skill has the judge name an open PR
 that changes the same behaviour (a duplicate or competing fix, conflicting edits, one needing the other)
 in one line of its review, raise a finding only when merging both provably breaks something, check that

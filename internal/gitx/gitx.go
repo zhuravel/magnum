@@ -513,6 +513,25 @@ func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error
 	return sha, nil
 }
 
+// IsAncestor reports whether ancestor is in rev's history (`git merge-base
+// --is-ancestor`; a commit is its own ancestor). Its exit 1 is the answer
+// no, logged at Debug; any other failure, a revision dir lacks among them
+// (exit 128), is an error, never a no.
+func (c *Client) IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error) {
+	if err := checkRev("revision", ancestor); err != nil {
+		return false, err
+	}
+	if err := checkRev("revision", rev); err != nil {
+		return false, err
+	}
+	_, err := c.git(ctx, dir, call{label: fmt.Sprintf("merge-base --is-ancestor %s %s", ancestor, rev), noExit: 1},
+		"merge-base", "--is-ancestor", ancestor, rev)
+	if code, isExit := exitCode(err); isExit && code == 1 {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // FileDiff returns the unified diff of one file from base to head (git diff
 // base head -- path; path is relative to the repository's top and taken
 // literally) as GitHub shows a pull request's patch: three lines of

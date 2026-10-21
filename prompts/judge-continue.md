@@ -32,7 +32,7 @@ notes_max_line: {{.NotesMaxLine}}
 {{- end}}
 {{- end}}
 {{- if .RelatedPRs}}
-related_prs: {{.RelatedPRs}}
+related_prs: {{.RelatedPRs}}{{with .RelatedStack}} ({{.}}){{end}}
 {{- end}}
 {{- if .FailingChecks}}
 failing_checks: {{.FailingChecks}}

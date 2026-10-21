@@ -561,6 +561,11 @@ func ProjectTouched(kind string, paths []string) bool
     directory, in any case (pathOf: macOS opens .Claude/settings.json for
     .claude/settings.json). A kind magnum does not compare touches nothing.
 
+func RelatedStackLine(below, above []int) string
+    RelatedStackLine is JudgeData.RelatedStack, and the round.related event's
+    words for the stacks: "#751 stacked below this PR; #753 above it", either
+    half alone ("#753 stacked above this PR"); "" without either.
+
 func RenderPrompt(p config.Prompt, data any) (string, error)
     RenderPrompt executes a resolved prompt template
     (config.Config.ResolvePrompt or RolePrompt) with data: JudgeData for the
@@ -1024,6 +1029,17 @@ type JudgeData struct {
 	// never PR text), rendered as `related_prs`; "" when there is none, and
 	// always in a blind replay.
 	RelatedPRs string
+	// StackedBelow and StackedAbove are the open PRs of the related set
+	// (before related.json leaves out those an earlier review named)
+	// stacked under this one, their head in HeadSHA's history, and on top
+	// of it, HeadSHA in theirs, as git answers in the checkout (pipeline's
+	// related step), by number. RelatedStack says both in words after
+	// `related_prs` on its line (RelatedStackLine; always derived). With a
+	// PR below, the own pass and the initial, rereview and recovery
+	// prompts say in one line, related.json or not, that a finding only on
+	// that PR's lines is that PR's (`outside_diff`).
+	StackedBelow, StackedAbove []int
+	RelatedStack               string
 	// HistoryFile is history.json in the report directory: each file the PR
 	// changes (at most 40, related_ignore's paths aside) with its last 8
 	// commits on the base (pipeline.FilesHistory), rendered as `history` by
@@ -10528,6 +10544,12 @@ func (c *Client) InProgress(ctx context.Context, repo string) (string, error)
     InProgress names the operation repo is in the middle of: "rebase", "merge",
     "cherry-pick", "revert", or "" for none.
 
+func (c *Client) IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
+    IsAncestor reports whether ancestor is in rev's history (`git merge-base
+    --is-ancestor`; a commit is its own ancestor). Its exit 1 is the answer no,
+    logged at Debug; any other failure, a revision dir lacks among them (exit
+    128), is an error, never a no.
+
 func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
     the way fetches do (NetworkRemote with HTTPSFetch), and returns its output.
@@ -14255,6 +14277,7 @@ type Git interface {
 	SwitchDetach(ctx context.Context, dir, ref string) error
 	Status(ctx context.Context, dir string) (gitx.Status, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
 	ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
 	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
@@ -14268,9 +14291,9 @@ type Git interface {
     Git is the subset of *gitx.Client the checkout check after each stage
     (and its restore) uses, a restart's check that a head is not an older
     one (MergeBase), the changed files' history (ModifiedPaths, FileLog;
-    history.go), the base docs that name them (ChangedPaths, Mentions;
-    docs.go) and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles, FileAt;
-    prepass.go).
+    history.go), the base docs that name them (ChangedPaths, Mentions; docs.go),
+    the pre-pass (DiffStat, DiffLines, WordUses, DirFiles, FileAt; prepass.go)
+    and the related PRs' stacks (RevParse, IsAncestor; related.go).
 
 type GitHub interface {
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
@@ -14516,6 +14539,10 @@ type RelatedPR struct {
 	// FindingsOnPaths counts the findings magnum posted on it, over all its
 	// rounds, on the shared paths (all of them, not only Paths).
 	FindingsOnPaths int `json:"findings_on_paths"`
+	// Stack is "below" for an open PR stacked under this one, its head in
+	// the history of the head under review, and "above" for one stacked on
+	// top of it, that head in its history (stackRelated); "" for any other.
+	Stack string `json:"stack,omitempty"`
 
 	// Has unexported fields.
 }

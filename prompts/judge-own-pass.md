@@ -58,6 +58,9 @@ Read `prepass` first: the removed definitions that files outside the diff still 
 {{- if .EvidenceMap}}
 `evidence` lists what earlier rounds examined in this PR, by path and behaviour: read the areas marked `unknown` or `stale` (changed since) first, as leads, never as findings by themselves; a `probed` entry with `control: true` needs no new probe, as its file is unchanged since.
 {{- end}}
+{{- if .StackedBelow}}
+A finding that sits only on lines a PR stacked below this one introduced ({{range $i, $n := .StackedBelow}}{{if $i}}, {{end}}#{{$n}}{{end}}) is that PR's: `outside_diff` (the skill's section 3), named in the body's related-PR line as the PR it belongs to.
+{{- end}}
 
 <magnum>
 mode: {{.Mode}}
@@ -114,7 +117,7 @@ notes_lock: {{.NotesLockCommand}}
 notes_unlock: {{.NotesUnlockCommand}}
 {{- end}}
 {{- if .RelatedPRs}}
-related_prs: {{.RelatedPRs}}
+related_prs: {{.RelatedPRs}}{{with .RelatedStack}} ({{.}}){{end}}
 {{- end}}
 {{- if .HistoryFile}}
 history: {{.HistoryFile}}

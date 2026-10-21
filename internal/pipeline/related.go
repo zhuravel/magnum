@@ -21,6 +21,12 @@ package pipeline
 // (related-all.json in the report directory of the newest posted review's
 // head) in the same state and with every path it shares now; with none
 // left there is no file.
+//
+// An open related PR whose head is in the history of the head under review
+// is stacked below it, one whose history holds that head above it, as git
+// answers in the checkout (stackRelated): a finding only on a lower PR's
+// lines is that PR's, which the judge prompts say in every round, named
+// before or not.
 
 import (
 	"cmp"
@@ -38,6 +44,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -97,8 +104,12 @@ type RelatedPR struct {
 	// FindingsOnPaths counts the findings magnum posted on it, over all its
 	// rounds, on the shared paths (all of them, not only Paths).
 	FindingsOnPaths int `json:"findings_on_paths"`
-	id              int64
-	shared          []string
+	// Stack is "below" for an open PR stacked under this one, its head in
+	// the history of the head under review, and "above" for one stacked on
+	// top of it, that head in its history (stackRelated); "" for any other.
+	Stack  string `json:"stack,omitempty"`
+	id     int64
+	shared []string
 }
 
 // relatedPRs is the candidates whose paths overlap own's, paths matching an
@@ -194,7 +205,72 @@ func (rd *round) related(ctx context.Context) (RelatedPRs, error) {
 			r.FindingsOnPaths += findings[r.id][p]
 		}
 	}
+	rd.stackRelated(ctx, out.Related)
 	return out, nil
+}
+
+// Stacks of RelatedPR.Stack.
+const (
+	stackBelow = "below" // its head is in the history of the head under review
+	stackAbove = "above" // the head under review is in its history
+)
+
+// relatedStackTimeout bounds one judge prompt's stack checks (at most three
+// git calls per open related PR); the PRs not checked by then get no stack.
+const relatedStackTimeout = 30 * time.Second
+
+// stackRelated sets Stack on each open PR of rel (DECISIONS "A related PR
+// stacked below this one owns the findings on its lines"): stackBelow when
+// its head is in the history of the head under review (this PR is stacked
+// on it: the head holds its commits), stackAbove when its history holds the
+// head under review (it is stacked on this PR), as git answers in the slot
+// checkout, which shares the main clone's objects: a head magnum fetched
+// for its own round, or one in this PR's history. Never a GitHub call: a
+// head the checkout lacks gets no stack, nor does the same head (git would
+// answer both), a merged PR (a base merged in holds its head too) or a PR
+// whose check failed (a log line; the related step goes on).
+func (rd *round) stackRelated(ctx context.Context, rel []RelatedPR) {
+	if rd.r.Git == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, relatedStackTimeout)
+	defer cancel()
+	ours := rd.in.TargetSHA
+	for i := range rel {
+		r := &rel[i]
+		if r.State != "open" || r.HeadSHA == "" || r.HeadSHA == ours {
+			continue
+		}
+		stack, err := rd.stackOf(ctx, r.HeadSHA, ours)
+		if err != nil {
+			rd.logErr(ctx, err, "pipeline: %s: the stack of related #%d: %v", rd.subject, r.Number, err)
+			continue
+		}
+		r.Stack = stack
+	}
+}
+
+// stackOf is the stack of a related PR whose head is theirs against the
+// head under review, ours: "" when the checkout lacks theirs.
+func (rd *round) stackOf(ctx context.Context, theirs, ours string) (string, error) {
+	slot := rd.in.SlotPath
+	if _, err := rd.r.Git.RevParse(ctx, slot, theirs); errors.Is(err, gitx.ErrNoSuchRef) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	below, err := rd.r.Git.IsAncestor(ctx, slot, theirs, ours)
+	switch {
+	case err != nil:
+		return "", err
+	case below:
+		return stackBelow, nil
+	}
+	above, err := rd.r.Git.IsAncestor(ctx, slot, ours, theirs)
+	if err != nil || !above {
+		return "", err
+	}
+	return stackAbove, nil
 }
 
 // toldPR is one related PR as the PR's posted reviews named it: its state
@@ -378,8 +454,11 @@ func writeRelatedJSON(path string, v any) error {
 // judge prompt about to go out, and writes related.json and names it in jd
 // when a related PR is left that the PR's posted reviews did not name the
 // same way (relatedBase, namedAlike); with none left, no related.json is
-// there. A blind replay gets none. A failure leaves the prompt without it
-// (a warning): the review goes on.
+// there. The PRs of the whole set stacked below and above this one go to
+// jd whether related.json names them or not (the prompts' one line on a PR
+// below), and the round.related event names them. A blind replay gets
+// none. A failure leaves the prompt without it (a warning): the review
+// goes on.
 func (rd *round) addRelated(ctx context.Context, jd *agents.JudgeData) {
 	if rd.in.Blind || rd.r.Store == nil {
 		return
@@ -398,6 +477,7 @@ func (rd *round) addRelated(ctx context.Context, jd *agents.JudgeData) {
 	}
 	path := filepath.Join(rd.dir, RelatedFile)
 	told := 0
+	below, above := stackedPRs(rel.Related) // the whole set: the stack decides findings in every round
 	if err == nil {
 		if rel.Related, told = newRelated(rel.Related, base); len(rel.Related) > 0 {
 			err = writeRelatedJSON(path, rel)
@@ -411,9 +491,17 @@ func (rd *round) addRelated(ctx context.Context, jd *agents.JudgeData) {
 		}
 		return
 	}
+	jd.StackedBelow, jd.StackedAbove = below, above
+	report := func(msg string, data map[string]any) { // round.related, with the stacks
+		if s := agents.RelatedStackLine(below, above); s != "" {
+			msg += "; " + s
+			data["stacked_below"], data["stacked_above"] = below, above
+		}
+		rd.event(ctx, "info", "round.related", msg, data)
+	}
 	if len(rel.Related) == 0 {
 		if told > 0 {
-			rd.event(ctx, "info", "round.related", fmt.Sprintf("%d related PR(s) on the same paths, each named before in its state and paths: no %s", told, RelatedFile),
+			report(fmt.Sprintf("%d related PR(s) on the same paths, each named before in its state and paths: no %s", told, RelatedFile),
 				map[string]any{"related": 0, "told": told})
 		}
 		return
@@ -427,5 +515,19 @@ func (rd *round) addRelated(ctx context.Context, jd *agents.JudgeData) {
 	if told > 0 {
 		msg += fmt.Sprintf("; %d named before in their state and paths left out", told)
 	}
-	rd.event(ctx, "info", "round.related", msg, map[string]any{"related": len(rel.Related), "more": rel.More, "told": told, "file": path})
+	report(msg, map[string]any{"related": len(rel.Related), "more": rel.More, "told": told, "file": path})
+}
+
+// stackedPRs are the numbers of the PRs of rel stacked below and above the
+// PR under review (RelatedPR.Stack), in rel's order.
+func stackedPRs(rel []RelatedPR) (below, above []int) {
+	for _, r := range rel {
+		switch r.Stack {
+		case stackBelow:
+			below = append(below, r.Number)
+		case stackAbove:
+			above = append(above, r.Number)
+		}
+	}
+	return below, above
 }

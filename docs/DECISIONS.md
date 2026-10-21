@@ -11025,6 +11025,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
     tell); dropping the name glob's merge across workflows (it would break the Completion posted through
     the API that spec 84 kept it for).
 
+- **A related PR stacked below this one owns the findings on its lines** (2026-10-21, spec 111, approved by
+  the operator the same day). A review of #752 posted a P2 (a rule without a regression test) on a line of
+  a background job; #752's head was #751's head plus 41 commits, and the author answered that the line
+  came unchanged from #751, which had made the change. related.json listed #751 with that file among 40
+  shared paths but nothing said #752 was built on it, so the skill's section 3 rule (a problem in a lower
+  layer of a stack is `outside_diff`) never applied; the run before had the mirror case (#751's review,
+  "#752 replaces it").
+  - The related step (`stackRelated`, internal/pipeline/related.go) now asks the round's checkout, for each
+    open related PR whose head it has (`git rev-parse --verify`), `git merge-base --is-ancestor <its head>
+    <the head under review>` and the reverse (gitx.IsAncestor; exit 1 is the answer no, logged at Debug):
+    an ancestor head gets `"stack": "below"` in related.json and related-all.json, the reverse `"above"`.
+    The checkout shares the main clone's objects, so it has every head Magnum fetched for a round of that
+    PR and every head in this PR's history: a stack below is always seen, one above when Magnum reviewed
+    the PR above at that head. A head never fetched, the same head (git would answer both) and a merged
+    PR (merging the base puts its head in this PR's history too) get none; a git failure leaves the PR
+    without a stack (a log line), and the checks of one prompt stop after 30 seconds.
+  - The judge prompts' `related_prs` line names them (`(#751 stacked below this PR; #753 above it)`), and
+    with a PR below, the own pass, initial, rereview and recovery prompts add one line: a finding that sits
+    only on lines a PR stacked below this one introduced is that PR's (`outside_diff`, the skill's section
+    3), named in the body's related-PR line as the PR it belongs to. The line is built from the round's
+    whole related set, not related.json's part of it, so a re-review whose related.json leaves the lower
+    PR out (an earlier review named it in its state and paths) still carries it: the stack decides findings
+    in every round, while the body names the PR only for such a finding. The continued turn renders only
+    the field (the paused turn had the line). The `round.related` event names the PRs below and above
+    (`stacked_below`, `stacked_above`). SKILL.md is unchanged: its section 3 rule stands.
+  - Tests, failing first: TestARelatedPRWhoseHeadIsAnAncestorIsStackedBelow (below, above, a head never
+    fetched, the same head and a merged PR; the files, the prompt and the event) and
+    TestAStackedPRNamedBeforeStillGetsItsLineInTheJudgePrompt in pipeline,
+    TestJudgePromptsGiveAFindingOnlyOnAStackedBelowPRsLinesToThatPR, TestRelatedStackLineSaysBothDirections
+    and five goldens in agents, TestRealIsAncestorAnswersWhetherOneHeadIsInTheOthersHistory and
+    TestIsAncestorRefusesAnOptionForARevision in gitx. Mutations checked: no stack, a merged PR checked,
+    the same head checked.
+  - Rejected: reading the related PRs' base refs from GitHub (a call per PR against the poll's budget, and
+    #752's base was the default branch, so its base ref would not have shown the stack); a SKILL.md rule
+    (section 3 already has it, the judge only lacked the fact, and the skill is near its byte ceiling);
+    marking only the PRs related.json names (a fresh session's re-review would lose the stack); fetching a
+    related head the checkout lacks (a network call in the prompt's path, for the "above" case only).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

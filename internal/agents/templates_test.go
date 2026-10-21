@@ -484,6 +484,15 @@ func TestRenderGolden(t *testing.T) {
 		d.RelatedPRs = ownDir + "related.json"
 		return d
 	}
+	// A related PR stacked below this one (its head in this PR's history)
+	// and one above it: the related_prs line says so, and every prompt but
+	// the continued turn's gives a finding only on the lower PR's lines to
+	// it in one line.
+	withStack := func(d JudgeData) JudgeData {
+		d = withRelated(d)
+		d.StackedBelow, d.StackedAbove = []int{751}, []int{753}
+		return d
+	}
 	// The changed files' history, the base docs that name them, the
 	// pre-pass and the PR's evidence map: the judge prompts with a block
 	// (the continued turn aside) name history.json, docs.json, prepass.json
@@ -555,6 +564,11 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_candidates_related", "judge-recovery.md", withRelated(candidates(judgeFixture()))},
 		{"judge_rereview_delta_check_related", "judge-rereview.md", withRelated(deltaCheck)},
 		{"judge_continue_related", "judge-continue.md", withRelated(withNotes)},
+		{"judge_own_pass_stacked", "judge-own-pass.md", withStack(ownPass("initial"))},
+		{"judge_initial_stacked", "judge-initial.md", withStack(withHistory(judgeFixture()))},
+		{"judge_rereview_stacked", "judge-rereview.md", withStack(judgeFixture())},
+		{"judge_recovery_candidates_stacked", "judge-recovery.md", withStack(candidates(judgeFixture()))},
+		{"judge_continue_stacked", "judge-continue.md", withStack(judgeFixture())},
 		{"judge_own_pass_history", "judge-own-pass.md", withHistory(withRelated(ownPass("initial")))},
 		{"judge_initial_history", "judge-initial.md", withHistory(withRelated(judgeFixture()))},
 		{"judge_rereview_candidates_history", "judge-rereview.md", withHistory(candidates(withNotes))},

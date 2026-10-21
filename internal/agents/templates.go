@@ -458,6 +458,17 @@ type JudgeData struct {
 	// never PR text), rendered as `related_prs`; "" when there is none, and
 	// always in a blind replay.
 	RelatedPRs string
+	// StackedBelow and StackedAbove are the open PRs of the related set
+	// (before related.json leaves out those an earlier review named)
+	// stacked under this one, their head in HeadSHA's history, and on top
+	// of it, HeadSHA in theirs, as git answers in the checkout (pipeline's
+	// related step), by number. RelatedStack says both in words after
+	// `related_prs` on its line (RelatedStackLine; always derived). With a
+	// PR below, the own pass and the initial, rereview and recovery
+	// prompts say in one line, related.json or not, that a finding only on
+	// that PR's lines is that PR's (`outside_diff`).
+	StackedBelow, StackedAbove []int
+	RelatedStack               string
 	// HistoryFile is history.json in the report directory: each file the PR
 	// changes (at most 40, related_ignore's paths aside) with its last 8
 	// commits on the base (pipeline.FilesHistory), rendered as `history` by
@@ -533,6 +544,28 @@ type JudgeData struct {
 	ProjectChecks string
 }
 
+// RelatedStackLine is JudgeData.RelatedStack, and the round.related event's
+// words for the stacks: "#751 stacked below this PR; #753 above it", either
+// half alone ("#753 stacked above this PR"); "" without either.
+func RelatedStackLine(below, above []int) string {
+	prs := func(nums []int) string {
+		s := make([]string, len(nums))
+		for i, n := range nums {
+			s[i] = fmt.Sprintf("#%d", n)
+		}
+		return strings.Join(s, ", ")
+	}
+	switch {
+	case len(below) > 0 && len(above) > 0:
+		return prs(below) + " stacked below this PR; " + prs(above) + " above it"
+	case len(below) > 0:
+		return prs(below) + " stacked below this PR"
+	case len(above) > 0:
+		return prs(above) + " stacked above this PR"
+	}
+	return ""
+}
+
 // projectCheck says that the sessions of one agent CLI ran without the
 // PR's changes to the named project paths: "Claude ran without the PR's
 // CLAUDE.md changes" (the board's card adds how, ProjectSentences).
@@ -564,8 +597,8 @@ const OwnFindingsFile = "judge-own.md"
 const EvidenceFile = "evidence.json"
 
 // completed is d with its Reports, notes fields, PreviousHeadShort,
-// post-review line and simplification cap (MaxSimplifications) completed (a
-// copy; d is not modified).
+// post-review line, RelatedStack and simplification cap
+// (MaxSimplifications) completed (a copy; d is not modified).
 func (d *JudgeData) completed() JudgeData {
 	out := *d
 	out.PreviousHeadShort = textx.ShortSHA(d.PreviousHeadSHA)
@@ -577,6 +610,7 @@ func (d *JudgeData) completed() JudgeData {
 	}
 	out.PostReviewCommand = PostReviewLine(out)
 	out.DBLockCommand = DBLockLine(out.Magnum, out.Checkout, out.Role)
+	out.RelatedStack = RelatedStackLine(d.StackedBelow, d.StackedAbove)
 	out.RepliesFile, out.PostRepliesCommand = "", ""
 	if d.Replies > 0 || d.PreviousReviewID != 0 || d.PreviousHeadSHA != "" {
 		out.RepliesFile = cmp.Or(d.RepliesFile, filepath.Join(filepath.Dir(out.ResultFile), PostRepliesFile))

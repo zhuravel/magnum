@@ -183,13 +183,15 @@ type GitHub interface {
 // (and its restore) uses, a restart's check that a head is not an older
 // one (MergeBase), the changed files' history (ModifiedPaths, FileLog;
 // history.go), the base docs that name them (ChangedPaths, Mentions;
-// docs.go) and the pre-pass (DiffStat, DiffLines, WordUses, DirFiles,
-// FileAt; prepass.go).
+// docs.go), the pre-pass (DiffStat, DiffLines, WordUses, DirFiles,
+// FileAt; prepass.go) and the related PRs' stacks (RevParse, IsAncestor;
+// related.go).
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	SwitchDetach(ctx context.Context, dir, ref string) error
 	Status(ctx context.Context, dir string) (gitx.Status, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
 	ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
 	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)

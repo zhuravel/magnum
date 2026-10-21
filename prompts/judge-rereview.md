@@ -64,6 +64,10 @@ Read `prepass` first: the removed definitions that files outside the diff still 
 
 `evidence` lists what earlier rounds examined in this PR, by path and behaviour: read the areas marked `unknown` or `stale` (changed since) first, as leads, never as findings by themselves; a `probed` entry with `control: true` needs no new probe, as its file is unchanged since.
 {{- end}}
+{{- if .StackedBelow}}
+
+A finding that sits only on lines a PR stacked below this one introduced ({{range $i, $n := .StackedBelow}}{{if $i}}, {{end}}#{{$n}}{{end}}) is that PR's: `outside_diff` (the skill's section 3), named in the body's related-PR line as the PR it belongs to.
+{{- end}}
 {{- if .EvidenceFile}}
 
 Before you write `result_file`, write `evidence_file`, what you examined in this round: `{"head_sha":"<head_sha>","entries":[{"path":"app/x.rb","symbol":"X#y","behaviour":"<what holds, one clause>","state":"probed","command":"<the probe>","control":true,"result":"passed"}]}`. One entry per behaviour you read (`read`) or probed (`probed`: its `command`, `control: true` when a control ran, its `result`), `skipped` with the reason in `result`, and one `unknown` entry without `behaviour` per file of the diff you reviewed that you did not read; `symbol`, `command`, `control` and `result` are optional. Keep it short: 30 to 80 entries for 30 files.
@@ -125,7 +129,7 @@ notes_max_line: {{.NotesMaxLine}}
 {{- end}}
 {{- end}}
 {{- if .RelatedPRs}}
-related_prs: {{.RelatedPRs}}
+related_prs: {{.RelatedPRs}}{{with .RelatedStack}} ({{.}}){{end}}
 {{- end}}
 {{- if .HistoryFile}}
 history: {{.HistoryFile}}

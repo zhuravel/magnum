@@ -724,6 +724,37 @@ type fakeGit struct {
 	diffErr      error
 	diffHangs    bool
 	prepassCalls []string
+	// graph maps each commit the checkout has, besides head, to its
+	// parents (the related step's stacks, related.go): RevParse resolves
+	// them, IsAncestor walks it and fails for a commit it lacks, as git
+	// does. ancestry records the IsAncestor calls ("<ancestor> <rev>").
+	graph    map[string][]string
+	ancestry []string
+}
+
+// IsAncestor answers as git merge-base --is-ancestor on graph.
+func (g *fakeGit) IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ancestry = append(g.ancestry, ancestor+" "+rev)
+	for _, c := range []string{ancestor, rev} {
+		if _, ok := g.graph[c]; !ok {
+			return false, fmt.Errorf("fake merge-base --is-ancestor: not a valid commit name %s", c)
+		}
+	}
+	seen := map[string]bool{}
+	for todo := []string{rev}; len(todo) > 0; {
+		c := todo[0]
+		todo = todo[1:]
+		if c == ancestor {
+			return true, nil
+		}
+		if !seen[c] {
+			seen[c] = true
+			todo = append(todo, g.graph[c]...)
+		}
+	}
+	return false, nil
 }
 
 func (g *fakeGit) DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error) {
@@ -917,10 +948,13 @@ func (g *fakeGit) MergeBase(ctx context.Context, dir, a, b string) (string, erro
 func (g *fakeGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if ref != "HEAD" {
-		return "", fmt.Errorf("fake rev-parse %s: %w", ref, gitx.ErrNoSuchRef)
+	if ref == "HEAD" {
+		return g.head, nil
 	}
-	return g.head, nil
+	if _, ok := g.graph[ref]; ok {
+		return ref, nil
+	}
+	return "", fmt.Errorf("fake rev-parse %s: %w", ref, gitx.ErrNoSuchRef)
 }
 
 func (g *fakeGit) SwitchDetach(ctx context.Context, dir, ref string) error {
