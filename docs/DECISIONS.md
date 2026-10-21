@@ -10860,6 +10860,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   20,862 bytes). New test TestTheFixSkillKeepsSecretsOutOfReplies. **Parked:** an allowlist of the bots
   whose items the fixer answers (the analyst's proposal), not this change.
 
+- **A routine CLI update is recorded at info, without a toast; a change of a CLI mise pins still warns**
+  (2026-10-21, spec 115, amending "The daemon records each agent CLI's version and names a launch failure
+  shared across PRs", spec 75). From 10-18 to 10-21 the daemon recorded four `kind.version_changed`
+  warnings, each with a toast, all Claude Code's daily auto-update (2.1.302 to 2.1.306), and no launch
+  failure followed any of them. Codex is pinned by mise (0.162.1, since 0.163.0 broke the judge panes), so a
+  change of its version is unexpected; Claude is not, so its changes are routine. Now, when a version
+  changes, `cliPin` asks mise once (`mise ls --current --json`, through the runner with the version read's
+  15-second timeout; mise is the shim's own binary when the kind's command is one, else the one on the
+  daemon's PATH): the tool listed under the kind's name, else the one whose install directory holds the
+  binary the kind's command runs (a tool named `npm:@openai/codex`), pins the CLI when the version its
+  config requests is the very version mise resolves it to, a leading v aside (`codex = "0.162.1"`). A
+  pinned kind's change keeps the warning and the toast, both naming the pin ("mise pins it to 0.162.1",
+  the event with the config file and data `pin`, `pin_source`); any other change, a tool mise does not
+  list or one it requests as `latest`, `lts` or a prefix, is `kind.version_changed` at info, with no toast.
+  A mise that cannot answer (an error, its timeout, output that is not the listing) counts as no pin,
+  logged once per cause. The registry's record is the same for both, so `magnum status`'s `clis:` line,
+  a parked launch's "; the codex CLI changed at 11:24" (`cliChangeNote`) and a shared failure's line
+  (`sayShared`) still name any change of the day. Residual: the 10-16 case itself, mise's `codex =
+  "latest"` installing a broken version, is now a routine change with no toast until launches fail, when
+  the attention line and the shared failure name it; and mise is asked from the daemon's working directory,
+  so a pin only a repository's own mise.toml makes is not seen (the agents start in the slots' checkouts).
+  New tests TestARoutineCLIUpdateRecordsInfoAndNoToast (not in mise's config, and requested as latest:
+  info, no toast, the parked launch's note and the shared failure still naming the update) and
+  TestAChangeOfAPinnedCLIStillWarnsAndToasts (by the kind's name with a binary the pin does not explain,
+  and by the install directory with the pin moved: a warning and a toast naming the pin, mise asked once);
+  TestACLIVersionChangeIsRecordedOnceAndToasted pins codex. **Rejected:** reading the pin from the
+  checkout's mise.toml (the operator's pin is in mise's global config); asking mise at every health check
+  (a change is rare, and the answer matters only then); a prefix such as `2.1` as a pin (it moves with each
+  install); and a warning when mise cannot answer (each Claude update would toast again whenever mise
+  fails, the noise this removes).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

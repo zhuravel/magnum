@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,21 +24,39 @@ import (
 
 // fakeCLIs are the agent CLIs on the daemon's PATH: files in a temporary
 // directory that the engine's LookPath finds, with what their --version
-// prints and what `mise which <kind>` names, through a fake runner.
+// prints, what `mise which <kind>` names and the tools `mise ls --current
+// --json` lists, through a fake runner.
 type fakeCLIs struct {
 	t   *testing.T
 	dir string
 	run *execx.Fake
 
-	mu    sync.Mutex
-	out   map[string]string  // a command's path → what its --version prints
-	which map[string]string  // kind → the binary `mise which <kind>` names
-	fails map[string][]error // a command's path → the errors its next --version reads fail with, in order
+	mu     sync.Mutex
+	out    map[string]string    // a command's path → what its --version prints
+	which  map[string]string    // kind → the binary `mise which <kind>` names
+	fails  map[string][]error   // a command's path → the errors its next --version reads fail with, in order
+	listed map[string]miseEntry // tool → what `mise ls --current --json` says of it
+}
+
+// miseEntry is a tool as `mise ls --current --json` lists it.
+type miseEntry struct {
+	Version     string     `json:"version"`
+	Requested   string     `json:"requested_version"`
+	InstallPath string     `json:"install_path"`
+	Source      miseSource `json:"source"`
+	Installed   bool       `json:"installed"`
+	Active      bool       `json:"active"`
+}
+
+type miseSource struct {
+	Type string `json:"type"`
+	Path string `json:"path"`
 }
 
 func newFakeCLIs(t *testing.T) *fakeCLIs {
 	t.Helper()
-	c := &fakeCLIs{t: t, dir: t.TempDir(), out: map[string]string{}, which: map[string]string{}, fails: map[string][]error{}}
+	c := &fakeCLIs{t: t, dir: t.TempDir(), out: map[string]string{}, which: map[string]string{}, fails: map[string][]error{},
+		listed: map[string]miseEntry{}}
 	c.run = &execx.Fake{Rules: []execx.Rule{{Fn: c.answer}}}
 	return c
 }
@@ -71,8 +90,50 @@ func (c *fakeCLIs) answer(cmd execx.Cmd) (execx.Result, error) {
 		if p, ok := c.which[cmd.Args[1]]; ok {
 			return execx.Result{Stdout: []byte(p + "\n")}, nil
 		}
+	case slices.Equal(cmd.Args, []string{"ls", "--current", "--json"}) && len(c.listed) > 0:
+		list := map[string][]miseEntry{}
+		for tool, e := range c.listed {
+			list[tool] = []miseEntry{e}
+		}
+		out, err := json.Marshal(list)
+		if err != nil {
+			c.t.Error(err)
+		}
+		return execx.Result{Stdout: out}, nil
 	}
 	return execx.Result{Code: 1}, fmt.Errorf("fake CLIs: no answer for %s", cmd.String())
+}
+
+// lists makes `mise ls --current --json` list tool as mise's config
+// requests it (an exact version pins it, "latest" floats), resolved to
+// version and installed in installs/<tool>/<version> of the directory; the
+// directory has a mise binary from then on, which LookPath finds.
+func (c *fakeCLIs) lists(tool, requested, version string) {
+	c.t.Helper()
+	if _, err := os.Lstat(filepath.Join(c.dir, "mise")); err != nil {
+		c.binary("mise", time.Date(2026, 10, 1, 9, 0, 0, 0, time.Local))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.listed[tool] = miseEntry{Version: version, Requested: requested, Installed: true, Active: true,
+		InstallPath: filepath.Join(c.dir, installDir(tool, version)), Source: miseSource{Type: "mise.toml", Path: filepath.Join(c.dir, ".config", "mise", "config.toml")}}
+}
+
+// installDir is where, in the directory, the fake mise installs version of
+// tool.
+func installDir(tool, version string) string {
+	return filepath.Join("installs", strings.NewReplacer("/", "-", ":", "-", "@", "").Replace(tool), version)
+}
+
+// miseLists counts the `mise ls --current --json` commands the engine ran.
+func (c *fakeCLIs) miseLists() int {
+	n := 0
+	for _, cmd := range c.run.CallsWithPrefix() {
+		if slices.Equal(cmd.Args, []string{"ls", "--current", "--json"}) {
+			n++
+		}
+	}
+	return n
 }
 
 // binary writes a binary at rel, modified at mtime, and returns its path.
@@ -178,14 +239,15 @@ func resolved(t *testing.T, path string) string {
 // magnum said the CLI had changed. The daemon reads each agent kind's
 // version at its start and keeps it (kind.<name>.version) with the binary's
 // path and mtime; a health check runs the version command again only when
-// the binary changed, and a new version is one warning and one toast, which
-// later checks and a restart do not repeat.
+// the binary changed, and a new version of a CLI mise pins is one warning
+// and one toast, which later checks and a restart do not repeat.
 func TestACLIVersionChangeIsRecordedOnceAndToasted(t *testing.T) {
 	cli := newFakeCLIs(t)
 	h := newHarness(t, cli.install)
 	installed := time.Date(2026, 10, 9, 21, 20, 0, 0, time.Local)
 	codex := cli.binary("codex", installed)
 	cli.prints(codex, "codex-cli 0.162.1\n")
+	cli.lists("codex", "0.162.1", "0.162.1")
 	claude := cli.binary("claude", installed)
 	cli.prints(claude, "2.1.290 (Claude Code)\n")
 
@@ -212,6 +274,7 @@ func TestACLIVersionChangeIsRecordedOnceAndToasted(t *testing.T) {
 	at := h.clock.Now()
 	cli.binary("codex", at)
 	cli.prints(codex, "codex-cli 0.163.0\n")
+	cli.lists("codex", "0.163.0", "0.163.0")
 	h.tick()
 	evs := h.events(EventKindVersionChanged)
 	if len(evs) != 1 || evs[0].Level != "warn" || !strings.Contains(evs[0].Message, "the codex CLI changed: codex-cli 0.162.1 → 0.163.0 at 11:24") {
@@ -275,6 +338,132 @@ func TestACLIBehindAMiseShimIsReadThroughMiseWhich(t *testing.T) {
 	}
 	if got := cli.run.CallsWithPrefix(shim, "--version"); len(got) != 2 {
 		t.Fatalf("the version is read through the shim: %d reads", len(got))
+	}
+}
+
+// From 2026-10-18 to 10-21 Claude Code's daily auto-update (2.1.302 to
+// 2.1.306) was four kind.version_changed warnings, each with a toast, and no
+// launch failure followed any of them. A change of a CLI mise does not pin
+// (not in mise's config, or requested as latest) is routine: recorded at
+// info, with no toast. The launch-failure path still names it, in a parked
+// launch's note and in a shared failure's line.
+func TestARoutineCLIUpdateRecordsInfoAndNoToast(t *testing.T) {
+	for name, inMise := range map[string]bool{
+		"not in mise's config": false,
+		"mise requests latest": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cli := newFakeCLIs(t)
+			h := newHarness(t, cli.install)
+			installed := time.Date(2026, 10, 20, 7, 31, 0, 0, time.Local)
+			codex := cli.binary("codex", installed)
+			cli.prints(codex, "codex-cli 0.162.1\n")
+			cli.lists("codex", "0.162.1", "0.162.1")
+			claude := cli.binary("claude", installed)
+			cli.prints(claude, "2.1.305 (Claude Code)\n")
+			if inMise {
+				cli.lists("claude", "latest", "2.1.305")
+			}
+			h.startup()
+			h.tick()
+
+			h.advance(time.Hour)
+			at := h.clock.Now()
+			cli.binary("claude", at)
+			cli.prints(claude, "2.1.306 (Claude Code)\n")
+			if inMise {
+				cli.lists("claude", "latest", "2.1.306")
+			}
+			h.tick()
+			evs := h.events(EventKindVersionChanged)
+			if len(evs) != 1 || evs[0].Level != "info" ||
+				!strings.Contains(evs[0].Message, "the claude CLI changed: 2.1.305 (Claude Code) → 2.1.306 at "+at.Local().Format("15:04")) {
+				t.Fatalf("events %+v, want one at info naming the change", evs)
+			}
+			if v := kindVersion(h, "claude"); v.Version != "2.1.306 (Claude Code)" || v.Previous != "2.1.305 (Claude Code)" || !v.ChangedAt.Equal(at) {
+				t.Fatalf("claude after the update: %+v", v)
+			}
+			h.flush()
+			if got := toastsWith(h, "2.1.306"); len(got) != 0 {
+				t.Fatalf("toasts %q, want none for a CLI mise does not pin", got)
+			}
+
+			note := attention.CLIChange("claude", at, h.clock.Now())
+			if got := h.e.cliChangeNote(h.ctx, "start claude-review: agents: the agent did not come up"); got != note {
+				t.Fatalf("a parked launch's note = %q, want %q", got, note)
+			}
+			const line = "Error: unexpected argument '--frobnicate' found"
+			clearedLaunch(h, 1, "claude-review", line)
+			clearedLaunch(h, 2, "claude-review", line)
+			h.tick()
+			if evs := h.events(EventSharedFailure); len(evs) != 1 || !strings.Contains(evs[0].Message, note+", to 2.1.306 (Claude Code)") {
+				t.Fatalf("shared failures %+v, want one naming the update", evs)
+			}
+		})
+	}
+}
+
+// Codex is pinned by mise (0.162.1 since 0.163.0 broke the judge panes on
+// 2026-10-16), so a change of its version is unexpected: a warning and one
+// toast, both naming the pin. mise's tool is found by the kind's name, or
+// by the install directory of the binary the kind's command runs; the pin
+// is read only when the version changed.
+func TestAChangeOfAPinnedCLIStillWarnsAndToasts(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tool string // as mise's config names it
+		shim bool   // the daemon's PATH finds codex as mise's shim, which runs the pinned install
+		pin  string // what mise pins once the version changed
+	}{
+		"by its name, a binary on PATH the pin does not explain": {tool: "codex", pin: "0.162.1"},
+		"by the binary's install directory, the pin moved":       {tool: "npm:@openai/codex", shim: true, pin: "0.163.0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cli := newFakeCLIs(t)
+			h := newHarness(t, cli.install)
+			installed := time.Date(2026, 10, 16, 11, 0, 0, 0, time.Local)
+			cli.lists(tc.tool, "0.162.1", "0.162.1")
+			codex := filepath.Join(cli.dir, "codex")
+			if tc.shim {
+				if err := os.Symlink(filepath.Join(cli.dir, "mise"), codex); err != nil {
+					t.Fatal(err)
+				}
+				cli.names("codex", cli.binary(filepath.Join(installDir(tc.tool, "0.162.1"), "bin", "codex"), installed))
+			} else {
+				cli.binary("codex", installed)
+			}
+			cli.prints(codex, "codex-cli 0.162.1\n")
+			claude := cli.binary("claude", installed)
+			cli.prints(claude, "2.1.305 (Claude Code)\n")
+			h.startup()
+			h.tick()
+			if n := cli.miseLists(); n != 0 {
+				t.Fatalf("mise listed its tools %d times before any change", n)
+			}
+
+			h.advance(time.Hour + 24*time.Minute)
+			at := h.clock.Now()
+			if tc.shim {
+				cli.names("codex", cli.binary(filepath.Join(installDir(tc.tool, tc.pin), "bin", "codex"), at))
+			} else {
+				cli.binary("codex", at)
+			}
+			cli.prints(codex, "codex-cli 0.163.0\n")
+			cli.lists(tc.tool, tc.pin, tc.pin)
+			h.tick()
+			pins := "mise pins it to " + tc.pin
+			evs := h.events(EventKindVersionChanged)
+			if len(evs) != 1 || evs[0].Level != "warn" || !strings.Contains(evs[0].Message, "the codex CLI changed: codex-cli 0.162.1 → 0.163.0 at 11:24") ||
+				!strings.Contains(evs[0].Message, pins) {
+				t.Fatalf("events %+v, want one warning naming the change and %q", evs, pins)
+			}
+			h.flush()
+			if got := toastsWith(h, "codex-cli 0.162.1 → 0.163.0 at 11:24"); len(got) != 1 || !strings.Contains(got[0], pins) {
+				t.Fatalf("toasts %q, want one naming the change and %q", h.nh.shown(), pins)
+			}
+			if n := cli.miseLists(); n != 1 {
+				t.Fatalf("mise listed its tools %d times, want once, at the change", n)
+			}
+		})
 	}
 }
 

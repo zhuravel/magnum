@@ -914,15 +914,21 @@ modification time. The version command runs again only once the binary changes, 
 failed (an error, its 15-second timeout, a context that ended) leaves nothing recorded and is tried again at
 the next health check: one warning per cause since the daemon started, and a `kind.version_unknown` warning
 when three checks in a row failed (the start's read is the first; the reads go on). Another version than the
-one recorded is a `kind.version_changed` warning and one toast ("codex-cli 0.162.1 → 0.163.0 at 11:24"),
-and `magnum status` shows the versions on its `clis:` line, with "(changed at 11:24)" for a day after a
-change. For that day a PR that goes to needs attention because a role of that kind did not start (the
-"failed 3× … start codex-judge" line, a dead launch's line among them) ends its line with "; the codex CLI
-changed at 11:24". When two or more PRs' agents end with the same pane error line within 30 minutes (the
-line of a `pr.launch_cleared`, of a prompt herdr refused because the agent was gone, or of a lost agent's pane
-in `pr.panes_closed`), the daemon records an `agents.shared_failure` warning naming the PRs, the roles, the
-line and a CLI change of the day, with one toast ("2 PRs' codex-judge launches end the same way"), once per
-line a day. Nothing is paused and no version is pinned: you decide, and mise owns the versions.
+one recorded is a `kind.version_changed` event. For a CLI mise pins, one whose tool in `mise ls --current
+--json` (by the kind's name, else the one whose install directory holds the binary) requests the very version
+it resolves to (`codex = "0.162.1"`), the change is unexpected: a warning and one toast ("codex-cli 0.162.1 →
+0.163.0 at 11:24"), both naming the pin ("mise pins it to 0.162.1"). Any other change is routine, such as
+Claude Code updating itself or a tool mise requests as `latest`, `lts` or a prefix: the event is info, with
+no toast, and so is a change when mise cannot answer (mise is asked only when a version changed). Either way
+`magnum status` shows the versions on its `clis:` line, with "(changed at 11:24)" for a day after a change.
+For that day a PR that goes to needs attention because a role of that kind did not start (the "failed 3× …
+start codex-judge" line, a dead launch's line among them) ends its line with "; the codex CLI changed at
+11:24", whether mise pins the CLI or not. When two or more PRs' agents end with the same pane error line
+within 30 minutes (the line of a `pr.launch_cleared`, of a prompt herdr refused because the agent was gone, or
+of a lost agent's pane in `pr.panes_closed`), the daemon records an `agents.shared_failure` warning naming the
+PRs, the roles, the line and a CLI change of the day, pinned or not, with one toast ("2 PRs' codex-judge
+launches end the same way"), once per line a day. Nothing is paused and magnum pins no version: you decide,
+and mise owns the versions.
 
 The machine's memory is measured, not acted on. At most once a minute the health check starts a sample of
 the kernel's memory pressure level (`sysctl -n kern.memorystatus_vm_pressure_level`: 1 normal, 2 warn, 4
@@ -3654,7 +3660,7 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
   someone made that `magnum pause` holds toasts once per pause, and a round that has waited 30 minutes on
   its pinned slot once per PR and pin. A watch whose radar calls have failed for 15 minutes and 10 polls in a
   row toasts once per failure streak, a command the judges report failing on the review machine in 3 rounds of one
-  repository once a day, and an agent CLI once per new version it reports. These, new repositories and, with `[herdr]
+  repository once a day, and an agent CLI mise pins once per new version it reports. These, new repositories and, with `[herdr]
   toast_every_review = true`, every automatic review posted come as one summary a minute; `[herdr] notify
   = false` turns all toasts off. `magnum install` prints a tab-bar entry for herdr's config that shows the
   daemon's status line ("magnum · 1 reviewing · paused 19h · 6 requests held"), or "magnum down" once the

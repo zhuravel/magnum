@@ -5,14 +5,19 @@ package engine
 // mise's `codex = "latest"` installed codex-cli 0.163.0 at 11:24, which died
 // at its TUI bootstrap in every judge pane; four PRs parked, each naming
 // its own failure, and 79 minutes passed before the operator found the new
-// version. Only `magnum doctor` printed the CLIs' versions.
+// version. Only `magnum doctor` printed the CLIs' versions. A change of a
+// CLI mise does not pin is routine (DECISIONS "A routine CLI update is
+// recorded at info, without a toast"): Claude Code updates itself daily.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,9 +31,11 @@ import (
 // version (KindVersion, JSON).
 func KVKindVersion(kind string) string { return "kind." + kind + ".version" }
 
-// EventKindVersionChanged is recorded (warn, subject tool:<kind>) when an
-// agent kind's CLI reports another version than the one recorded
-// (KVKindVersion): the kind, the versions and the binary.
+// EventKindVersionChanged is recorded (subject tool:<kind>) when an agent
+// kind's CLI reports another version than the one recorded (KVKindVersion):
+// the kind, the versions and the binary. It is a warning, with one toast,
+// when mise pins the CLI (cliPin; the pin and its config file too), and
+// info without a toast otherwise: a routine update.
 const EventKindVersionChanged = "kind.version_changed"
 
 // EventKindVersionUnknown is recorded (warn, subject tool:<kind>) once when
@@ -43,10 +50,11 @@ const EventKindVersionUnknown = "kind.version_unknown"
 // kind's roles that parks a PR names it (attention.CLIChange).
 const CLIChangeRecent = 24 * time.Hour
 
-// cliVersionTimeout bounds `<cli> --version` and `mise which <cli>`, at the
-// daemon's start and at the health checks alike; cliVersionRunes bounds the
-// version kept; cliVersionUnknownAfter is how many health checks in a row
-// may fail to read a kind's version before EventKindVersionUnknown.
+// cliVersionTimeout bounds `<cli> --version`, `mise which <cli>` and `mise
+// ls --current --json`, at the daemon's start and at the health checks
+// alike; cliVersionRunes bounds the version kept; cliVersionUnknownAfter is
+// how many health checks in a row may fail to read a kind's version before
+// EventKindVersionUnknown.
 const (
 	cliVersionTimeout      = 15 * time.Second
 	cliVersionRunes        = 80
@@ -120,8 +128,9 @@ func (e *Engine) checkCLIVersions(ctx context.Context) {
 // (cliRead): a read that failed leaves no stamp, so a binary whose version
 // cannot be read is tried again at the next health check (cliReadFailed).
 // The first version recorded is only logged; another one than the recorded
-// is EventKindVersionChanged with one toast ("codex-cli 0.162.1 → 0.163.0
-// at 11:24").
+// is EventKindVersionChanged, at info for a CLI mise does not pin, and a
+// warning with one toast ("codex-cli 0.162.1 → 0.163.0 at 11:24") for one
+// it pins (cliPin).
 func (e *Engine) checkCLIVersion(ctx context.Context, kind string) {
 	cmd, err := e.d.LookPath(kind)
 	if err == nil {
@@ -182,11 +191,101 @@ func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cli
 		return
 	}
 	what := versionChange(prev.Version, version) + " at " + now.Local().Format("15:04")
-	e.event(ctx, "warn", "tool:"+kind, EventKindVersionChanged, fmt.Sprintf("the %s CLI changed: %s (%s)", kind, what, stamp.path),
-		map[string]any{"kind": kind, "from": prev.Version, "to": version, "path": stamp.path})
+	msg := fmt.Sprintf("the %s CLI changed: %s (%s)", kind, what, stamp.path)
+	data := map[string]any{"kind": kind, "from": prev.Version, "to": version, "path": stamp.path}
+	pin, pinned := e.cliPin(ctx, kind, cmd, stamp)
+	if !pinned { // a routine update, as Claude Code's daily one: a launch failure still names it (cliChangeNote, sayShared)
+		e.event(ctx, "info", "tool:"+kind, EventKindVersionChanged, msg, data)
+		return
+	}
+	data["pin"], data["pin_source"] = pin.version, pin.source
+	e.event(ctx, "warn", "tool:"+kind, EventKindVersionChanged, fmt.Sprintf("%s; mise pins it to %s (%s)", msg, pin.version, pin.source), data)
 	e.info(notify.Item{Key: "cli-changed:" + kind + ":" + version, Title: "magnum: " + what,
-		Body: fmt.Sprintf("The %s CLI magnum's agents start changed. If their launches fail from now on, suspect the new version first; `magnum status` shows the versions.", kind),
+		Body: fmt.Sprintf("The %s CLI magnum's agents start changed, and mise pins it to %s. If their launches fail from now on, suspect the new version first; `magnum status` shows the versions.", kind, pin.version),
 		Line: what, Kind: kindCLIChanged, Window: CLIChangeRecent})
+}
+
+// cliMisePin is the version mise's config pins an agent kind's CLI to, and
+// the file that says so.
+type cliMisePin struct {
+	version, source string
+}
+
+// miseTool is a tool as `mise ls --current --json` lists it: the version its
+// config requests, the one mise resolves that to, where that is installed
+// and the config file that requests it.
+type miseTool struct {
+	Version     string `json:"version"`
+	Requested   string `json:"requested_version"`
+	InstallPath string `json:"install_path"`
+	Source      struct {
+		Path string `json:"path"`
+	} `json:"source"`
+}
+
+// cliPin reports whether mise pins kind's CLI, which the daemon runs as
+// command cmd, the binary stamp: the tool `mise ls --current --json` lists
+// under the kind's name, else the one whose install directory holds the
+// binary, requests the very version mise resolves it to (`codex =
+// "0.162.1"`; latest, lts or a prefix such as 2.1 floats). mise is the
+// shim's own binary when cmd is one, else the one on the daemon's PATH; no
+// mise pins nothing. It runs only when a version changed. A mise that cannot
+// answer counts as no pin, logged once per cause: the change is recorded at
+// info, and a launch failure still names it.
+func (e *Engine) cliPin(ctx context.Context, kind, cmd string, stamp cliStamp) (cliMisePin, bool) {
+	mise, err := filepath.EvalSymlinks(cmd)
+	if err != nil || filepath.Base(mise) != "mise" {
+		if mise, err = e.d.LookPath("mise"); err != nil {
+			return cliMisePin{}, false
+		}
+	}
+	res, err := e.d.Runner.Run(ctx, execx.Cmd{Name: mise, Args: []string{"ls", "--current", "--json"}, Timeout: cliVersionTimeout, Label: "mise ls --current"})
+	var tools map[string][]miseTool
+	if err == nil {
+		err = json.Unmarshal(res.Stdout, &tools)
+	}
+	if err != nil {
+		if e.logOnce("cli-pin:"+kind, err.Error(), e.now()) {
+			e.log.Info("mise does not say whether it pins the agent CLI; its change is recorded at info", "kind", kind, "err", err)
+		}
+		return cliMisePin{}, false
+	}
+	t, ok := miseToolOf(tools, kind, stamp.path)
+	if !ok || !exactPin(t.Requested, t.Version) {
+		return cliMisePin{}, false
+	}
+	return cliMisePin{version: t.Requested, source: t.Source.Path}, true
+}
+
+// miseToolOf is the tool of tools named kind, else the first (by name) whose
+// install directory holds bin, a resolved path.
+func miseToolOf(tools map[string][]miseTool, kind, bin string) (miseTool, bool) {
+	if ts := tools[kind]; len(ts) > 0 {
+		return ts[0], true
+	}
+	for _, name := range slices.Sorted(maps.Keys(tools)) {
+		for _, t := range tools[name] {
+			if t.InstallPath == "" {
+				continue
+			}
+			dir := t.InstallPath
+			if p, err := filepath.EvalSymlinks(dir); err == nil {
+				dir = p
+			}
+			if strings.HasPrefix(bin, dir+string(filepath.Separator)) {
+				return t, true
+			}
+		}
+	}
+	return miseTool{}, false
+}
+
+// exactPin reports whether a tool's requested version is the version mise
+// resolves it to, a leading v aside: a pin, where latest, lts or a prefix
+// moves with each install.
+func exactPin(requested, version string) bool {
+	r := strings.TrimPrefix(requested, "v")
+	return r != "" && r[0] >= '0' && r[0] <= '9' && r == strings.TrimPrefix(version, "v")
 }
 
 // cliReadFailed handles a failed read of kind's version (an error, its

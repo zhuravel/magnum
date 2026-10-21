@@ -6230,9 +6230,11 @@ const EvPRMuted = "pr.muted"
     (requestMute); the board's card shows the latest one's next to the flag.
 
 const EventKindVersionChanged = "kind.version_changed"
-    EventKindVersionChanged is recorded (warn, subject tool:<kind>) when
-    an agent kind's CLI reports another version than the one recorded
-    (KVKindVersion): the kind, the versions and the binary.
+    EventKindVersionChanged is recorded (subject tool:<kind>) when an agent
+    kind's CLI reports another version than the one recorded (KVKindVersion):
+    the kind, the versions and the binary. It is a warning, with one toast,
+    when mise pins the CLI (cliPin; the pin and its config file too), and info
+    without a toast otherwise: a routine update.
 
 const EventKindVersionUnknown = "kind.version_unknown"
     EventKindVersionUnknown is recorded (warn, subject tool:<kind>) once when
