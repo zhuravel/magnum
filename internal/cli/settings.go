@@ -36,7 +36,8 @@ func newSettingsCmd(c *Context) *cobra.Command {
 			"section's pauses (automation, each agent kind, each watch owner), which apply at once as `magnum pause` "+
 			"and `magnum resume` do. A save shows the changed lines and asks y/N first, keeps the previous file "+
 			"in the history and can ask the daemon to restart on it. --watch N opens the screen on the N-th "+
-			"[[watch]] (from 1) and --repo on a repository; --history lists the kept versions and --restore N "+
+			"[[watch]] (from 1) and --repo on a repository; --history lists the kept versions (it takes no other "+
+			"flag) and --restore N "+
 			"opens the save that puts the N-th back (1 = the newest). `,` on the board and the dashboard opens "+
 			"the same screen. It needs a terminal (--history does not): anywhere else, edit the file and check it with "+
 			"`magnum config`. --history and --restore work when a hand edit broke the file.",

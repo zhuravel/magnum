@@ -35,8 +35,8 @@ are in [docs/DECISIONS.md](../../docs/DECISIONS.md) ("A webhook relay…", under
   secret. A wrong one answers 401, and the body is neither parsed nor stored.
 - **The answer** comes within 9 s of the headers, under GitHub's 10. A stored delivery answers 202, and
   a delivery already stored answers 200 (a redelivery keeps its GUID). When the journal refuses a write,
-  the relay answers 503: GitHub shows the failed delivery, and the daemon's backstop reads it from the
-  App's deliveries log.
+  the relay answers 503: GitHub shows the failed delivery, and the daemon's poll, the backstop, finds
+  the change.
 
 **The listing.** A cursor is `<epoch>:<seq>`.
 - **The token** is one word of 32 to 512 printable ASCII characters, the bounds `hash-token` applies.

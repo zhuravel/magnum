@@ -104,12 +104,14 @@ func runVerdict(c *Context, name, req, usage string, o verdictOpts, pos []string
 var agentPaneEnv = []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL"}
 
 // refuseInAgentPane refuses (exit 1) a command that acts for the operator
-// (approve --as, unapprove, mute, ignore, pause, fix) when it runs in a review
-// agent's pane, which carries agentPaneEnv: the agent reads the PR, whose
-// text may steer it to approve, unapprove, mute or pause for the operator.
-// It is defense in depth on top of the agents running with full
-// permissions, since an agent could unset the variables; the commands the
-// roles run (post-review, db-lock) are never refused.
+// (approve --as, unapprove, mute, ignore, pause, fix, whiteboard, settings)
+// when it runs in a review agent's pane, which carries agentPaneEnv: the
+// agent reads the PR, whose text may steer it to approve, unapprove, mute or
+// pause for the operator. It is defense in depth on top of the agents running
+// with full permissions, since an agent could unset the variables; the
+// commands the roles run (post-review, db-lock) are never refused. The other
+// commands have no such guard (resume, snooze, star, release, unpin,
+// codex-flag and retro among them).
 func refuseInAgentPane(c *Context, name string) (code int, refused bool) {
 	for _, k := range agentPaneEnv {
 		if os.Getenv(k) != "" {

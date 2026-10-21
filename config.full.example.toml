@@ -3,7 +3,7 @@
 # config.defaults.toml (embedded in the binary); set one here only to change it. App private keys are files
 # next to the config (~/.config/magnum/keys/, chmod 600). Your config's [[watch]], [[identity]], [[pool]] and
 # [[repo]] blocks are appended to the defaults, any key it sets under [daemon], [herdr], [terminal], [board],
-# [github], [pipeline], [usage], [triage], [learn], [notes] or [kinds.<name>] overrides the default, its [[role]] blocks
+# [github], [pipeline], [usage], [triage], [learn], [notes], [webhooks] or [kinds.<name>] overrides the default, its [[role]] blocks
 # override the role of the same name key by key (other names are appended), and its [spend.<level>] tables (the
 # models and efforts of a [pipeline] spend level, per role) merge by level, role and key. `magnum roles` prints the
 # effective roles and `magnum config` validates the result.
@@ -145,7 +145,10 @@ databases = [
 #                                         # (default: dismissed until the re-review posts; also on [[watch]])
 # required_checks = ["ci / *"]            # checks a PR must pass to be ready; magnum reads GitHub's rulesets by
 #                                         # itself, so set it only where GitHub will not tell (a private repo on a
-#                                         # free plan) or to override; "workflow:<glob>" = a whole Actions workflow
+#                                         # free plan) or to override; "workflow:<glob>" = a whole Actions workflow;
+#                                         # the board shows their state, and the automatic approval counts only
+#                                         # these checks (a failing check outside the list never holds it; without
+#                                         # the key every check counts)
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

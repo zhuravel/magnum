@@ -63,7 +63,10 @@ func newReviewCmd(c *Context) *cobra.Command {
 			"posting identity from now on, --no-post runs the "+
 			"round but posts nothing (the judge writes its planned review), and --dry-run only prints the "+
 			"request. --wait follows the round until it is reviewed, needs attention or pauses; --timeout "+
-			"(default 2h, 0 = no limit) stops following it after that long, and the round goes on.",
+			"(default 2h, 0 = no limit) stops following it after that long, and the round goes on.\n\n"+
+			"A forced round still waits while the GitHub budget of the watch's poll identity or of the identity it "+
+			"posts as is below [github] budget_floor: the answer ends \"waiting: github budget: ...\" and the round "+
+			"starts once the budget's reset brings it back.",
 		func(pos []string) int { return runReview(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.fresh, "fresh", false, "park the sessions and start new conversations (no resume)")

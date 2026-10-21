@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	pauseUsage  = "pause [--for 2h | --until 15:30] [--reason text]"
+	pauseUsage  = "pause [--for 2h | --until 15:30] [--reason text | reason…]"
 	resumeUsage = "resume [--tool <kind>|all] [--watch owner]"
 )
 
@@ -30,8 +30,9 @@ func newPauseCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupAct, pauseUsage, "pause automatic reviews (running rounds finish; reviews you ask for still run)",
 		"Pause automatic reviews: running rounds finish and no automatic round starts, while a review you ask for "+
 			"(`magnum review`, the board's r/R/i, the picker) still runs. The pause lasts until `magnum resume`, "+
-			"for --for, or until --until (a local time like 15:30 or an RFC3339 timestamp); --reason shows in "+
-			"`magnum status`. It is recorded in the registry, so it applies even when no daemon runs yet.",
+			"for --for, or until --until (a local time like 15:30 or an RFC3339 timestamp); --reason, or the words "+
+			"after `pause`, say why and show in `magnum status` (a word that reads as a duration is refused: use "+
+			"--for). It is recorded in the registry, so it applies even when no daemon runs yet.",
 		func(pos []string) int { return runPause(c, o, pos) })
 	fs := cmd.Flags()
 	fs.DurationVar(&o.dur, "for", 0, "pause for this long (default: until magnum resume)")

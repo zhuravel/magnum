@@ -158,6 +158,24 @@ func TestTheSettingsScreenMatchesItsGoldenFrames(t *testing.T) {
 	}
 }
 
+// The help box is at most 90 cells wide however wide the screen is, and a
+// line that does not fit it ends in "…": the entries of a / x and / did, at
+// every width. F5 is bound beside ctrl+r and the help says so.
+func TestSettingsHelpLinesFitTheirBox(t *testing.T) {
+	for _, w := range []int{90, 120, 160} {
+		m := testSettings(t, newFakeSettings(), newFakeRuntime(), SettingsOptions{}, w, 30)
+		help := ansi.Strip(press(t, m, "?").View().Content)
+		if strings.Contains(help, "…") {
+			t.Errorf("the help at %d columns cuts a line short:\n%s", w, help)
+		}
+		for _, want := range []string{"ctrl+r / F5", "add after the selected item", "search every label and key"} {
+			if !strings.Contains(help, want) {
+				t.Errorf("the help at %d columns lacks %q:\n%s", w, want, help)
+			}
+		}
+	}
+}
+
 func TestSettingsFitsANarrowScreen(t *testing.T) {
 	for _, w := range []int{40, 60, 80} {
 		m := stagedSettings(t, w, 24)

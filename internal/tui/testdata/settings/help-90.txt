@@ -6,11 +6,11 @@ magnum · settings · Global · ~/.config/magnum/config.toml
 │ tab/shift+tab next / previous section                                                  │
 │ l/h →/←       into the roles grid and back (Spend & models, wide screens)              │
 │ enter         edit the setting in a popup (enter stages, esc cancels)                  │
-│ a / x         in a list: add after the selected item / remove it (enter edits it; eac… │
+│ a / x         in a list: add after the selected item / remove it (each is staged)      │
 │ d             back to the default: your key goes, its comment stays                    │
 │ u             undo the last staged edit                                                │
-│ ctrl+r        read the pauses again, and the file when nothing is staged               │
-│ /             search labels and keys in every section; a leading * keeps what is set … │
+│ ctrl+r / F5   read the pauses again, and the file when nothing is staged               │
+│ /             search every label and key; a leading * keeps what is set or staged      │
 │ c             scope: Global, a watch, a repository                                     │
 │ [ / ]         previous / next watch (Watches) or repository (Repositories)             │
 │ s             save: the diff first (n notes on/off), then s and y write it             │

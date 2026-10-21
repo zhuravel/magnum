@@ -10758,6 +10758,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - **Rejected:** the optional cut of "Never commit, push, label, merge or edit the PR." (49 bytes): the
     pipeline restores the checkout after a stage, but nothing undoes a label, a merge or an edit on GitHub.
 
+- **The backstop of a delivery the relay missed is the poll, not the App's deliveries log** (2026-10-21,
+  spec 109; amends "Webhooks reach magnum through a relay of its own, `magnum-relay`"). The deploy guide said
+  that when the journal refuses a write the relay answers 503, "GitHub shows the failed delivery, and the
+  daemon's backstop reads it from the App's deliveries log". No code reads that log: spec 99's entry calls
+  it a candidate for a later phase (it lists no PR number and spends the App's REST budget per payload
+  read), and the guide's own Compose rotation says the poll finds the changes. The guide now says the
+  daemon's poll finds the change; `[webhooks]` is in shadow mode, so every change still comes from the poll.
+  The earlier entries keep their words: read their "backstop" as the poll until a phase reads the log.
+
+- **The settings screen's help fits its box, names F5, and a line keeps one "was" note** (2026-10-21, spec
+  109). The help box is at most 90 cells wide at any screen width, and its `a / x` and `/` entries (90 and
+  80 cells of text) ended in "…" at every width; both are shorter now, with a test that no help line is
+  cut at 90, 120 and 160 columns. `F5` was bound beside `ctrl+r` and in neither the help nor the README;
+  both name it. Each save put its dated note in front of the line's old comment, so a setting saved three
+  times read `# 2026-10-23: was "low"; 2026-10-22: was "medium"; 2026-10-21: was "high"; <the reason>`.
+  `confedit.withNote` now drops the leading "was" notes of earlier saves (`dropWasNotes`) and puts the new
+  one first; the line keeps the newest note and the rest of its comment. A note counts as a save's own
+  only when it has the forms the screen writes, up to the next `; ` outside double quotes: `was the
+  default`, `was <one TOML value>` and `was <cell> <value or unset>, …` for a level table's cells. A
+  comment of the user's that only begins alike (`2026-10-02: was 3, raised after the queue grew`, or
+  `2026-10-14: medium -> high`) stays. Residual: a user's dated comment that is nothing but `was <value>`
+  is taken for a save's note and replaced. New tests TestANoteReplacesTheEarlierWasNotesOfItsLine,
+  TestASecondSaveKeepsTheNewestWasNoteOnly and TestSettingsHelpLinesFitTheirBox. **Rejected:** a marker
+  in the note to tell a save's from the user's (it would change a format the README and the saved files
+  show).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

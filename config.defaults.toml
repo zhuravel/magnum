@@ -2,7 +2,7 @@
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
 # appended, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [usage], [triage],
-# [learn], [notes] or [kinds.<name>] overrides the value here, its [[role]] blocks override the role of the same
+# [learn], [notes], [webhooks] or [kinds.<name>] overrides the value here, its [[role]] blocks override the role of the same
 # name key by key (other names are appended), and its [spend.<level>] tables merge by level, role and key. App private keys are PEM files ([[identity]] private_key_file, by
 # convention ~/.config/magnum/keys/<identity>.pem); only the older private_key_env reads one from an environment
 # variable, e.g. from a checkout's gitignored mise.local.toml (the LaunchAgent then runs through `mise exec`).

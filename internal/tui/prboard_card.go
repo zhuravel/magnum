@@ -16,6 +16,59 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
+// boardNavHints are the keys of the help's "Move and view" section.
+func boardNavHints() []hint {
+	return []hint{
+		{"j/k ↑/↓", "move"}, {"g / G", "first / last PR"}, {"pgup/pgdn", "a page up / down"},
+		{"enter / a", "details card / jump to what needs you"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
+		{"v / O", "next view / next owner (all, then each)"},
+		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
+		{settingsKey, "settings (esc comes back here)"},
+		{"h / W", "hide ignored and skipped / reset widths"}, {"? / " + logKey, "this help / the action log"},
+		{"q", "quit"},
+	}
+}
+
+// boardActHints are the keys of the help's "Act on the PR" section; judge
+// names the judge role.
+func boardActHints(judge string) []hint {
+	return []hint{
+		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
+		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix findings as you / fix off or on (asks y/N)"},
+		{"o", "open the " + judgeName(judge) + " pane"},
+		{"b / t", "open the PR / its issue in the browser"}, {"w", "open the PR's whiteboard (asks y/N)"},
+		{"p / u", "pin / unpin / acknowledge a hold"}, {"*", "star or unstar: starred PRs lead their section"},
+		{"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
+		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
+		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"},
+		{"D", "withdraw magnum's approval as you (asks y/N)"},
+		{"y", "answer yes; any other key, enter too, cancels"},
+	}
+}
+
+// BoardHelpKeys are the key labels the PR board's help lists ("g / G",
+// "ctrl+r / F5"): the keys the help of `magnum tui` has to name.
+func BoardHelpKeys() []string {
+	return hintKeys(boardNavHints(), boardActHints(""))
+}
+
+// DashboardHelpKeys are the key labels the status dashboard's help lists
+// ("j/k ↑/↓", "enter, o"): the keys the help of `magnum status` has to name.
+func DashboardHelpKeys() []string {
+	return hintKeys(dashboardKeys(""))
+}
+
+// hintKeys are the keys of the hints, in order.
+func hintKeys(sets ...[]hint) []string {
+	var keys []string
+	for _, hs := range sets {
+		for _, h := range hs {
+			keys = append(keys, h.key)
+		}
+	}
+	return keys
+}
+
 // helpContent is the keys and the legend, at most width-6 cells wide (the
 // box adds a border and padding): two columns of keys when they fit.
 func (p *prbPainter) helpContent(width int) []string {
@@ -31,27 +84,8 @@ func (p *prbPainter) helpContent(width int) []string {
 		}
 		return strings.Join(lines, "\n")
 	}
-	nav := section("Move and view", []hint{
-		{"j/k ↑/↓", "move"}, {"g / G", "first / last PR"}, {"pgup/pgdn", "a page up / down"},
-		{"enter / a", "details card / jump to what needs you"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
-		{"v / O", "next view / next owner (all, then each)"},
-		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
-		{settingsKey, "settings (esc comes back here)"},
-		{"h / W", "hide ignored and skipped / reset widths"}, {"? / " + logKey, "this help / the action log"},
-		{"q", "quit"},
-	})
-	acts := section("Act on the PR", []hint{
-		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
-		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix findings as you / fix off or on (asks y/N)"},
-		{"o", "open the " + judgeName(p.judge) + " pane"},
-		{"b / t", "open the PR / its issue in the browser"}, {"w", "open the PR's whiteboard (asks y/N)"},
-		{"p / u", "pin / unpin / acknowledge a hold"}, {"*", "star or unstar: starred PRs lead their section"},
-		{"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
-		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
-		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"},
-		{"D", "withdraw magnum's approval as you (asks y/N)"},
-		{"y", "answer yes; any other key, enter too, cancels"},
-	})
+	nav := section("Move and view", boardNavHints())
+	acts := section("Act on the PR", boardActHints(p.judge))
 	keys := lipgloss.JoinHorizontal(lipgloss.Top, nav, "     ", acts)
 	if lipgloss.Width(keys) > inner {
 		keys = nav + "\n\n" + acts

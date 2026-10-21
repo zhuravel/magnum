@@ -52,7 +52,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"first, and only y confirms. Starred PRs (✪ before the title) lead their section, the open PRs or the "+
 			"recently closed ones, newest update first whatever the sort. a jumps to "+
 			"what needs you, ! shows the action log, ctrl+r or F5 refreshes now, tab switches to the status "+
-			"dashboard (and back), ? lists every key and q quits. With the mouse ([terminal] mouse, on by default; "+
+			"dashboard (and back), `,` opens the settings screen (esc comes back), ? lists every key and q quits. With the mouse ([terminal] mouse, on by default; "+
 			"m toggles it) the wheel scrolls, a "+
 			"click selects and a double click opens the card, a click on a heading sorts by it (again reverses), "+
 			"dragging the gap between two headings resizes a column (W resets) and a right click opens the PR's "+

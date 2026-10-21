@@ -2,11 +2,14 @@ package confedit
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Change sets a key (Value non-nil) or removes it (nil: back to the
@@ -162,16 +165,85 @@ func width(s string) int { return utf8.RuneCountInString(s) }
 
 func dated(now time.Time, note string) string { return now.Format("2006-01-02") + ": " + note }
 
-// withNote is a trailing comment ("# ..." or "") with note put first.
+// withNote is a trailing comment ("# ..." or "") with note put first, in
+// place of the "was" notes an earlier save put there.
 func withNote(comment, note string, now time.Time) string {
 	if note == "" {
 		return comment
 	}
-	old := strings.TrimSpace(strings.TrimPrefix(comment, "#"))
+	old := dropWasNotes(strings.TrimSpace(strings.TrimPrefix(comment, "#")))
 	if old == "" {
 		return "# " + dated(now, note)
 	}
 	return "# " + dated(now, note) + "; " + old
+}
+
+// wasNote starts the dated note a save writes: "2026-10-20: was ...".
+var wasNote = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}: was `)
+
+// dropWasNotes is a comment (without its "#") without the leading notes of
+// earlier saves, so a line keeps the newest "was" note only. A note is one
+// of the forms the settings screen writes, up to the next "; " outside
+// double quotes: "was the default", "was <value>", or "was <cell> <value or
+// unset>, ..." for the cells of a level table. A comment of the user's that
+// only starts alike ("2026-10-02: was 3, raised after the queue grew") is
+// no such note and stays.
+func dropWasNotes(comment string) string {
+	for {
+		loc := wasNote.FindStringIndex(comment)
+		if loc == nil {
+			return comment
+		}
+		body, rest, _ := cutOutsideQuotes(comment[loc[1]:], "; ")
+		if !isWasBody(body) {
+			return comment
+		}
+		comment = rest
+	}
+}
+
+// isWasBody reports whether body, what follows "was ", is one of the forms
+// a save writes.
+func isWasBody(body string) bool {
+	if body == "the default" || isTOMLValue(body) {
+		return true
+	}
+	for part := range strings.SplitSeq(body, ", ") { // a cell's value holds no ", " outside quotes
+		cell, value, ok := strings.Cut(part, " ")
+		if !ok || cell == "" || strings.ContainsFunc(cell, func(r rune) bool { return r != '_' && (r < 'a' || r > 'z') }) ||
+			(value != "unset" && !isTOMLValue(value)) {
+			return false
+		}
+	}
+	return true
+}
+
+// isTOMLValue reports whether s reads as one TOML value.
+func isTOMLValue(s string) bool {
+	if s == "" {
+		return false
+	}
+	var m map[string]any
+	_, err := toml.Decode("v = "+s, &m)
+	return err == nil && len(m) == 1
+}
+
+// cutOutsideQuotes cuts s around the first sep that is not inside a
+// double-quoted string (a backslash escapes the next character there);
+// without one, before is s.
+func cutOutsideQuotes(s, sep string) (before, after string, found bool) {
+	quoted := false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case quoted && s[i] == '\\':
+			i++
+		case s[i] == '"':
+			quoted = !quoted
+		case !quoted && strings.HasPrefix(s[i:], sep):
+			return s[:i], s[i+len(sep):], true
+		}
+	}
+	return s, "", false
 }
 
 func (d *Doc) replace(i int, v any, lit, note string, now time.Time) (edited, error) {

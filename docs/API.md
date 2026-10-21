@@ -2874,7 +2874,8 @@ The rules (DECISIONS "The settings screen edits config.toml in place"):
     comment stays as a comment line of its own, with the lines that continue it.
   - A note (Change.Note) becomes the trailing comment "# YYYY-MM-DD: note" on a
     line without one, and goes first on a line with one: "# YYYY-MM-DD: note;
-    <the old comment>".
+    <the old comment>", less the "was" notes of earlier saves (the forms of
+    dropWasNotes, such as "2026-10-19: was 5"), so a line keeps the newest only.
   - A key only dotted keys or subtables define (an implicit table), a table
     inside a nested array of tables, a multi-line inline table and anything else
     ambiguous fail with ErrUnsupported.
@@ -19413,6 +19414,14 @@ var ErrSettingsChanged = errors.New("the config file changed on disk since it wa
 
 
 FUNCTIONS
+
+func BoardHelpKeys() []string
+    BoardHelpKeys are the key labels the PR board's help lists ("g / G", "ctrl+r
+    / F5"): the keys the help of `magnum tui` has to name.
+
+func DashboardHelpKeys() []string
+    DashboardHelpKeys are the key labels the status dashboard's help lists ("j/k
+    ↑/↓", "enter, o"): the keys the help of `magnum status` has to name.
 
 func DeltaCheckPhrase(lines int) string
     DeltaCheckPhrase names a delta check of lines changed code lines: "delta

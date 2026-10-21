@@ -45,7 +45,9 @@ func newRetroCmd(c *Context) *cobra.Command {
 			"without one. While another learn job runs (a notes "+
 			"curation, a skill edit or gate) the retro is queued too: the answer names that job and when it started, "+
 			"and the retro starts, with the lookback and the PRs asked for, once that job ended, before any queued "+
-			"curation; one retro waits at a time, and a second request says one is queued already. Exits 1 when no "+
+			"curation; one retro waits at a time, and a second request says one is queued already. While a watch's "+
+			"poll identity has a GitHub budget below [github] budget_floor the retro is queued too, and starts once "+
+			"the budget recovers. Exits 1 when no "+
 			"daemon runs (the request stays queued and starts the retro when one does) or the daemon refuses it.",
 		func(pos []string) int { return runRetro(c, o, pos) })
 	fs := cmd.Flags()

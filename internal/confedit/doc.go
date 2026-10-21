@@ -30,7 +30,9 @@
 //     that continue it.
 //   - A note (Change.Note) becomes the trailing comment "# YYYY-MM-DD: note"
 //     on a line without one, and goes first on a line with one: "#
-//     YYYY-MM-DD: note; <the old comment>".
+//     YYYY-MM-DD: note; <the old comment>", less the "was" notes of earlier
+//     saves (the forms of dropWasNotes, such as "2026-10-19: was 5"), so a
+//     line keeps the newest only.
 //   - A key only dotted keys or subtables define (an implicit table), a
 //     table inside a nested array of tables, a multi-line inline table and
 //     anything else ambiguous fail with ErrUnsupported.

@@ -101,6 +101,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/learn`, `eval`, `evalrun` | the daily retro's candidates and answers and the learned corpus; scoring replays of seeded PRs; one case's replay, which the CLI and the daemon run |
 | `internal/mergecheck` | `magnum merge-check`: a PR's specs on the tree another PR's merge leaves (an experiment, CLI only) |
 | `internal/cli`, `internal/tui` | cobra commands, Bubble Tea v2 screens |
+| `internal/settings`, `confedit` | the settings screen's core (`magnum settings`): the typed allowlist of settings, the plan, the commit and the history of config.toml; the in-place TOML editor that keeps every byte of the file an edit does not touch |
 | `internal/attention`, `notify` | why a PR needs the user; toasts and herdr sidebar tokens |
 | `internal/usage` | how much of an agent CLI's budget is used, and its pace |
 | `internal/github`, `identity`, `herdr`, `gitx`, `mysqlx`, `execx` | the outside world, each behind a fake |
