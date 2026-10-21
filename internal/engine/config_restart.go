@@ -356,8 +356,12 @@ func restartReasons(build, learn, cfg bool) string {
 // and, when announce (the first refusal of this file and binary, not a
 // retry after restartRefuseRetry), a warning in the log, an event naming
 // why and what waits, and the refusal recorded for `magnum status`
-// (KVConfigRestartRefused).
-func (e *Engine) refuseRestart(ctx context.Context, chk restartCheck, waiting, v string, err error, announce bool) {
+// (KVConfigRestartRefused). The event says how the restart comes: goesOn
+// (a new build or a landed skill version waits too, and stays due) once
+// the file loads; else, the saved config's mark being dropped, nothing
+// restarts on a file fixed by hand, so it names `magnum daemon-restart
+// --when-idle` and a new save.
+func (e *Engine) refuseRestart(ctx context.Context, chk restartCheck, waiting string, goesOn bool, v string, err error, announce bool) {
 	if v != "" {
 		e.deleteMark(ctx, v)
 	}
@@ -367,9 +371,13 @@ func (e *Engine) refuseRestart(ctx context.Context, chk restartCheck, waiting, v
 	}
 	e.log.Warn("the idle restart is held: what it would start on fails its check; the daemon keeps running on the config and build it started with",
 		"waiting", waiting, "sha256", shortSum(chk.disk), "err", err)
+	then := "and the restart goes on once it loads"
+	if !goesOn {
+		then = "then `magnum daemon-restart --when-idle` restarts the daemon on it, or save it again from the settings screen"
+	}
 	e.event(ctx, "warn", "", "daemon.config_restart_refused",
 		fmt.Sprintf("the daemon does not restart for %s: %v. It keeps running on the config and build it started with; fix the file "+
-			"(`magnum config` shows why), and the restart goes on once it loads", waiting, err),
+			"(`magnum config` shows why), %s", waiting, err, then),
 		map[string]any{"waiting": waiting, "config": shortSum(chk.disk)})
 	if raw, jerr := json.Marshal(ConfigRestartRefusal{SHA256: chk.disk, At: e.now(), BinaryMTime: chk.binary}); jerr == nil {
 		e.setKV(ctx, KVConfigRestartRefused, string(raw))

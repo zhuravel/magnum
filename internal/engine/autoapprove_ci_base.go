@@ -13,6 +13,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -37,11 +38,19 @@ const baseChecksTTL = 10 * time.Minute
 type baseTip struct{ repo, sha string }
 
 // baseTipRead is a base tip's checks as read at at; ok is false when the
-// read failed.
+// read failed. retry is when a read GitHub refused for its rate limit is
+// made again (the identity's reset, autoapprove_budget.go): the read is
+// kept until then, or baseChecksTTL when that is later.
 type baseTipRead struct {
 	checks []github.Check
 	ok     bool
 	at     time.Time
+	retry  time.Time
+}
+
+// fresh reports whether r is still the tip's read at now.
+func (r baseTipRead) fresh(now time.Time) bool {
+	return now.Sub(r.at) < baseChecksTTL || now.Before(r.retry)
 }
 
 // kvAutoApproveCIBase records "<head>|<run id>" once the gates let that
@@ -107,11 +116,14 @@ func (e *Engine) failsLikeTheBase(ctx context.Context, c store.RepoPR, sum store
 
 // baseTipChecks is the checks of c's base tip sha, read as its watch's poll
 // identity and kept baseChecksTTL; ok is false when they cannot be read (no
-// watch or client, a failed read, logged at info: a reason never carries an
-// error's text). A read the daemon's stop cut short is not kept.
+// watch or client, no read while the identity's GitHub budget holds
+// auto-approval's reads, a failed read, logged at info: a reason never
+// carries an error's text). A read GitHub refused for its rate limit is
+// kept until the identity's reset, and a read the daemon's stop cut short
+// is not kept.
 func (e *Engine) baseTipChecks(ctx context.Context, c store.RepoPR, sha string) ([]github.Check, bool) {
 	k, now := baseTip{c.Repo, sha}, e.now()
-	if r, hit := e.baseChecks[k]; hit && now.Sub(r.at) < baseChecksTTL {
+	if r, hit := e.baseChecks[k]; hit && r.fresh(now) {
 		return r.checks, r.ok
 	}
 	w := e.cfg.WatchFor(c.Repo)
@@ -119,26 +131,33 @@ func (e *Engine) baseTipChecks(ctx context.Context, c store.RepoPR, sha string) 
 		return nil, false
 	}
 	gh := e.gh(w.PollIdentity)
-	if gh == nil {
+	if gh == nil || e.autoReadHeld(w.PollIdentity, 0) {
 		return nil, false
 	}
 	repo := repoOf(c.Repo)
 	checks, err := gh.CommitChecks(ctx, repo.Owner, repo.Name, sha)
+	read := baseTipRead{checks: checks, ok: err == nil, at: now}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, false
 		}
-		e.log.Info("auto approval: the base tip's checks", "pr", c.PR.ID, "base", textx.ShortSHA(sha), "err", err)
+		if errors.Is(err, github.ErrRateLimited) {
+			read.retry = e.autoRetryAt(w.PollIdentity)
+			e.log.Info("auto approval: the base tip's checks; GitHub refused the read for its rate limit, read again after the reset",
+				"pr", c.PR.ID, "base", textx.ShortSHA(sha), "identity", w.PollIdentity, "until", read.retry, "err", err)
+		} else {
+			e.log.Info("auto approval: the base tip's checks", "pr", c.PR.ID, "base", textx.ShortSHA(sha), "err", err)
+		}
 	}
 	for old, r := range e.baseChecks {
-		if now.Sub(r.at) >= baseChecksTTL {
+		if !r.fresh(now) {
 			delete(e.baseChecks, old)
 		}
 	}
 	if e.baseChecks == nil {
 		e.baseChecks = map[baseTip]baseTipRead{}
 	}
-	e.baseChecks[k] = baseTipRead{checks: checks, ok: err == nil, at: now}
+	e.baseChecks[k] = read
 	return checks, err == nil
 }
 

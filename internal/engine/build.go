@@ -215,7 +215,7 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 	if err != nil {
 		announce := chk.key != e.restartRefused.key
 		e.restartRefused = restartRefusal{key: chk.key, checked: e.now()}
-		e.refuseRestart(ctx, chk, restartReasons(build, learn, cfgDue), raw, err, announce)
+		e.refuseRestart(ctx, chk, restartReasons(build, learn, cfgDue), build || learn, raw, err, announce)
 		return nil
 	}
 	e.restartRefused = restartRefusal{}

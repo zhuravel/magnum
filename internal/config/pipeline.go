@@ -94,8 +94,10 @@ type Pipeline struct {
 	// first review) cannot approve: its clean verdict posts as a comment,
 	// and a full pass of the whole PR on the same head follows at once,
 	// whose clean verdict approves (engine approval_hold.go). A full pass, a
-	// post-merge review, a reply round, a CI check and a dry run never hold.
-	// Default DefaultApproveAfterFullPass; 0 = off.
+	// post-merge review, a reply round, a CI check and a dry run never hold,
+	// nor does a repository with no approval to hold (its clean review
+	// comments, and no auto_approve names it). Default
+	// DefaultApproveAfterFullPass; 0 = off.
 	ApproveAfterFullPass int `toml:"approve_after_full_pass"`
 	// MaxSimplifications is how many of claude-simplify's proposals the
 	// judge posts at most, the most substantial first: the initial,

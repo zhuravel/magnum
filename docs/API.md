@@ -4714,8 +4714,10 @@ type Pipeline struct {
 	// first review) cannot approve: its clean verdict posts as a comment,
 	// and a full pass of the whole PR on the same head follows at once,
 	// whose clean verdict approves (engine approval_hold.go). A full pass, a
-	// post-merge review, a reply round, a CI check and a dry run never hold.
-	// Default DefaultApproveAfterFullPass; 0 = off.
+	// post-merge review, a reply round, a CI check and a dry run never hold,
+	// nor does a repository with no approval to hold (its clean review
+	// comments, and no auto_approve names it). Default
+	// DefaultApproveAfterFullPass; 0 = off.
 	ApproveAfterFullPass int `toml:"approve_after_full_pass"`
 	// MaxSimplifications is how many of claude-simplify's proposals the
 	// judge posts at most, the most substantial first: the initial,
@@ -15495,8 +15497,10 @@ FUNCTIONS
 
 func RequestRestart(ctx context.Context, st *store.Store, sum [32]byte) error
     RequestRestart asks the daemon to restart on the config whose hash is sum
-    once nothing is in flight (engine.KVConfigRestart): it checks the file still
-    loads first, and the next start clears the mark.
+    once nothing is in flight (engine.KVConfigRestart), and the next start
+    clears the mark. It checks nothing itself: the daemon loads the file before
+    it exits (engine restartSafe), and drops the mark when the file does not
+    load.
 
 func RestartPending(ctx context.Context, st *store.Store, s *Snapshot) (bool, error)
     RestartPending reports whether the config on disk differs from the one

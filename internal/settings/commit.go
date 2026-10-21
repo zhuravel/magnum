@@ -318,8 +318,10 @@ func readHistory(dir, path string) ([]byte, error) {
 const KVDaemonConfigSHA = engine.KVDaemonConfigSum
 
 // RequestRestart asks the daemon to restart on the config whose hash is
-// sum once nothing is in flight (engine.KVConfigRestart): it checks the
-// file still loads first, and the next start clears the mark.
+// sum once nothing is in flight (engine.KVConfigRestart), and the next
+// start clears the mark. It checks nothing itself: the daemon loads the
+// file before it exits (engine restartSafe), and drops the mark when the
+// file does not load.
 func RequestRestart(ctx context.Context, st *store.Store, sum [32]byte) error {
 	b, err := json.Marshal(engine.ConfigRestartMark{SHA256: hex.EncodeToString(sum[:]), SavedAt: time.Now().UTC()})
 	if err != nil {

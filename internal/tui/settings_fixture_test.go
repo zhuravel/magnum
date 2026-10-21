@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
@@ -441,6 +442,8 @@ type fakeRuntime struct {
 	mu    sync.Mutex
 	state RuntimeState
 	sent  []string
+	// resumed is a plain resume's answer ("" = "resumed").
+	resumed string
 }
 
 func newFakeRuntime() *fakeRuntime {
@@ -496,7 +499,7 @@ func (f *fakeRuntime) Resume(_ context.Context, r ResumeSpec) (string, error) {
 		return "resumed watch " + r.Watch, nil
 	}
 	f.state.Automation = RuntimeEntry{Name: "automation", State: "running"}
-	return "resumed", nil
+	return cmp.Or(f.resumed, "resumed"), nil
 }
 
 func (f *fakeRuntime) requests() []string {

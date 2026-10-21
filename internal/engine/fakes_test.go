@@ -95,6 +95,7 @@ type fakeGH struct {
 	confirmErr error                   // ConfirmStates fails
 	allReviews map[int][]github.Review // number -> AllReviews, oldest first (ReviewsWithMarker: the last 30, as GitHub)
 	reviewsCut map[int]bool            // number -> AllReviews reports the list incomplete
+	reviewsErr error                   // AllReviews fails
 	dismissErr error                   // DismissReview fails
 	createErr  error                   // CreateReview fails
 	created    []string                // CreateReview calls: "<event>@<sha>:<body>"
@@ -681,6 +682,9 @@ func (g *fakeGH) AllReviews(_ context.Context, owner, repo string, number int) (
 	g.record(fmt.Sprintf("all_reviews:%s/%s#%d", owner, repo, number))
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.reviewsErr != nil {
+		return nil, false, g.reviewsErr
+	}
 	return slices.Clone(g.allReviews[number]), !g.reviewsCut[number], nil
 }
 

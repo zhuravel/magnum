@@ -365,6 +365,7 @@ func (e *Engine) autoApproveFor(ctx context.Context, only int64) {
 	if e.autoSeen == nil {
 		e.autoSeen, e.autoFollow, e.autoRefused = map[int64]string{}, map[int64]string{}, map[int64]string{}
 	}
+	e.autoReadsPass(ctx) // autoapprove_budget.go
 	for _, a := range live {
 		e.followAutoApproval(ctx, a, summaryOf(sums, a.PRID), holdOf(holds, a.PRID))
 	}
@@ -457,15 +458,13 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 		return
 	}
 	gh, ag := e.autoClient(id)
-	if ag == nil {
+	if ag == nil || e.autoReadHeld(id.Name, pr.ID) {
 		return
 	}
 	repo := repoOf(c.Repo)
 	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, pr.Number)
 	if err != nil {
-		if ctx.Err() == nil {
-			e.log.Info("auto approval: read the reviews", "pr", pr.ID, "err", err)
-		}
+		e.autoReadFailed(ctx, "read the reviews", id.Name, pr.ID, err)
 		return
 	}
 	if !complete { // what GitHub left out may be the operator's review by hand
@@ -687,8 +686,14 @@ func (e *Engine) closeAutoApproval(ctx context.Context, repo store.Repo, a store
 // later tick tries again). A list GitHub cut short proves nothing: it is
 // asked again on the next tick.
 func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, gh GitHub) {
+	if e.autoReadHeld(a.Identity, a.PRID) {
+		return
+	}
 	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, a.PR.Number)
 	if err != nil {
+		if errors.Is(err, github.ErrRateLimited) { // any other failure is asked again on the next tick, unlogged
+			e.autoReadFailed(ctx, "find a post on GitHub", a.Identity, a.PRID, err)
+		}
 		return
 	}
 	w := operatorWord(reviews, a.Login, a.HeadSHA, time.Time{})
@@ -726,14 +731,12 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 	}
 	gate := e.standingGateRefusal(ctx, a, sum)
 	fp := runID + "|" + timeKey(a.PR.GHUpdatedAt)
-	if gate == "" && e.autoFollow[a.ID] == fp {
+	if (gate == "" && e.autoFollow[a.ID] == fp) || e.autoReadHeld(a.Identity, a.PRID) {
 		return
 	}
 	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, a.PR.Number)
 	if err != nil {
-		if ctx.Err() == nil {
-			e.log.Info("auto approval: read the reviews", "pr", a.PRID, "err", err)
-		}
+		e.autoReadFailed(ctx, "read the reviews", a.Identity, a.PRID, err)
 		return
 	}
 	for _, r := range reviews {
@@ -801,9 +804,7 @@ func standingWithdrawal(sum store.ReviewSummary, body, gate string) string {
 func (e *Engine) dismissedOnGitHub(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, ag autoApproveGitHub) bool {
 	by, why, err := dismissalBy(ctx, ag, repo, a.PR.Number, a.AutoApproval)
 	if err != nil {
-		if ctx.Err() == nil {
-			e.log.Info("auto approval: read the dismissals", "pr", a.PRID, "err", err)
-		}
+		e.autoReadFailed(ctx, "read the dismissals", a.Identity, a.PRID, err)
 		return false
 	}
 	if !e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding}, by, why) {

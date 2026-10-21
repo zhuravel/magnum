@@ -319,7 +319,9 @@ approve_after_full_pass = 2       # a re-review of a PR with this many re-review
                                   # whose body says "A full pass of the whole PR follows before approval.", and a
                                   # full pass of every role on the same head follows at once, which approves when
                                   # it finds nothing. A full pass, a post-merge review, a reply round and a CI
-                                  # check never hold. 2 lets one round of fixes approve on its delta. 0 = off
+                                  # check never hold, nor does a repository where a clean review comments anyway
+                                  # (no_findings_event COMMENT) and no auto_approve names it. 2 lets one round of
+                                  # fixes approve on its delta. 0 = off
 max_simplifications = 5           # how many of claude-simplify's proposals the judge posts at most, the most
                                   # substantial first, each proven by its own equivalence probe; 1 to 10. A
                                   # [[repo]] block's own wins

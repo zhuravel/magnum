@@ -10656,6 +10656,70 @@ skill versions); people add theirs to the sections before it, at the end of the 
   guard, while the PR row is what the round reviews), and taking any pushed HEAD (a person's other branch is
   still theirs).
 
+- **Auto-approval reads nothing while its GitHub budget is spent** (2026-10-21, spec 106; amends spec 97's
+  floor). A read of auto-approval that failed kept no fingerprint (`autoSeen`, `autoFollow`), so the next
+  tick read again: from 10-19 to 10-21 GitHub refused 127 of them for its rate limit (96 reads of a PR's
+  reviews, 31 of a base tip's checks), 15 after the floor went live. Now the pass reads nothing as an
+  identity below `[github] budget_floor` (`githubLow`: the identity it approves as for the reviews, the
+  watch's poll identity for a base tip's checks) or while the poll is paused for GitHub's rate limit
+  (`KVGHPollPausedUntil`, read once per pass), and a read GitHub refused with `github.ErrRateLimited`
+  waits for the identity's reset (the meter's, which spec 101's refusal set, else 5 minutes): by PR beside
+  the fingerprints (`autoRetry`), by tip for the checks (`baseTipRead.retry`, kept until the later of the
+  reset and the ten minutes). A hold is logged once (`auto approval: no GitHub reads until the budget
+  recovers`, by identity and its end), a refusal once with when it is read again. A held read refuses
+  nothing new: the PR is decided at the first pass after the reset, and the card's CI refusal of a base
+  read held is the one a failed read gave. The withdrawal of a standing approval and a post are writes and
+  are not held. New tests TestAutoApprovalReadsNothingWhileTheBudgetIsExhausted,
+  TestAutoApprovalWaitsForTheGitHubFloorAndThePollsPause, TestAStandingApprovalIsFollowedOnlyOnceTheBudgetRecovers
+  and TestARefusedReadOfTheBaseTipsChecksWaitsForTheReset. Rejected: a retry time per identity (a refusal
+  marks the identity spent through the meter already, which holds every PR's reads while the floor is on;
+  with it off, one read per PR and reset is the cost).
+
+- **A Codex turn that "failed to load workspace requirements" is an overload** (2026-10-21, spec 106). On
+  10-19 at 15:24Z the judge's turn on a PR and its nudge ended at once with that error (the rollout's
+  `task_complete`, `codex_error_info` "other"), no health pattern matched, and the PR went to needs
+  attention; it was forced 22.5 hours later and merged unreviewed 8 minutes after. Four such turns on
+  10-14 fell within two minutes: a passing fault. The default `overloaded` patterns (every kind starts from
+  them) gain `\bfailed to load workspace requirements\b`, so the round takes the overload path and
+  continues. Fixture "codex workspace requirements" in TestClassifyFixtures.
+
+- **A plain `magnum resume` names the agent kinds it leaves paused, and a refusal for a paused kind names
+  the command that lifts it** (2026-10-21, spec 106). On 10-20 at 07:25Z `magnum fix` was refused twice
+  ("claude paused (usage_limit) until 14:00"), a bare `magnum resume` between the two answered "resumed",
+  though it lifts only the daemon's pause, and `--tool claude` came 13 minutes later. Now the plain
+  resume's answer adds, for each kind still paused, "; claude is still paused (usage_limit) until 14:00:
+  `magnum resume --tool claude` lifts it", and `pausedKind` (with `kindPauseReason`, which `magnum fix`,
+  `magnum whiteboard`, `magnum review`'s waiting note, the retro, curation, the skill editor and the gate
+  use) ends its reason with "; `magnum resume --tool claude` lifts it". A round's dispatch gate takes the
+  reason without it (`kindPause`), since its wait sentence already ends with "`magnum resume --tool …`
+  lifts the pause". The settings screen, which adds "still paused: …" to a plain resume's answer, leaves
+  out a kind the answer names. New tests TestABareResumeNamesTheToolsStillPaused and
+  TestSettingsPlainResumeDoesNotNameAKindTheAnswerNames; TestPauseByKindOmp checks the command. Residual:
+  the CLI's offline resume (no daemon) answers as before.
+
+- **A refused config restart says what restarts on the fixed file** (2026-10-21, spec 106; amends "The
+  settings screen edits config.toml in place, …, and the daemon restarts on a saved config when idle"). A refusal drops the saved config's mark, but its event
+  said "the restart goes on once it loads": with no new build and no skill version waiting, nothing checks
+  a file fixed by hand again, and the daemon runs on. The event now says so when only the saved config
+  waited: "fix the file (`magnum config` shows why), then `magnum daemon-restart --when-idle` restarts the
+  daemon on it, or save it again from the settings screen"; with a build or a skill version waiting it
+  keeps "the restart goes on once it loads", which stays true. `settings.RequestRestart`'s comment no
+  longer claims a load check it does not make (the daemon's `restartSafe` makes it). The refusal tests
+  check both texts.
+
+- **No approval hold in a repository that cannot approve** (2026-10-21, spec 106; amends "An approval rests
+  on a whole-PR read"). On one repository whose identity's `no_findings_event` is `COMMENT`, with no
+  `[[repo]]` override and no `auto_approve` for it, round 7 posted "No new problems since …. LGTM" with the
+  line "A full pass of the whole PR follows before approval.", and round 8, on the same head, was that full
+  pass: 24 minutes, three reviewers and two judge passes, a comment with the same body. 6 of the 24
+  `round.approval_hold` events since 10-15 were in such repositories. `approvalHoldDue` now holds only
+  where a clean review can lead to an approval (`approvalPath`): the judge's no-findings event there is
+  `APPROVE` (`pipeline.JudgeEvents`: the `[[repo]]` override, else the posting identity's, `COMMENT` for an
+  author the auto-approval lists refuse) or `AutoApproveFor` names an identity. Elsewhere the clean
+  re-review posts its comment without the false line and no full pass follows; `full_pass_every` and the
+  other full-pass rules still apply. New test TestNoApprovalHoldInARepoThatCannotApprove; the hold tests'
+  harness gives the App `no_findings_event = "APPROVE"`.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

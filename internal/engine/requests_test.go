@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -591,5 +592,33 @@ BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
 	}
 	if h.pr(2).Pinned {
 		t.Fatal("the PR shows pinned")
+	}
+}
+
+// A plain `magnum resume` lifts the daemon's pause only: its answer names
+// each agent kind still paused, until when and the command that lifts it
+// (on 10-20 a bare resume answered "resumed" while claude's usage limit
+// went on refusing `magnum fix`); a pause that ended is not named, and
+// once the kind is resumed the answer is a plain "resumed" again.
+func TestABareResumeNamesTheToolsStillPaused(t *testing.T) {
+	h := newHarness(t)
+	h.startup()
+	if _, err := h.e.requestPause(h.ctx, PausePayload{Reason: "lunch"}, true); err != nil {
+		t.Fatal(err)
+	}
+	until := h.clock.Now().Add(4 * time.Hour)
+	h.e.pauseTool(h.ctx, pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: config.KindClaude, Until: until})
+	h.e.pauseTool(h.ctx, pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: config.KindCodex, Until: h.clock.Now().Add(30 * time.Minute)})
+	h.advance(45 * time.Minute) // codex's pause ended
+	res, err := h.e.requestPause(h.ctx, PausePayload{}, false)
+	want := "resumed; claude is still paused (usage_limit) until " + until.Format("15:04") + ": `magnum resume --tool claude` lifts it"
+	if err != nil || res != want {
+		t.Fatalf("resume = %q, %v\nwant %q", res, err, want)
+	}
+	if res, err := h.e.requestPause(h.ctx, PausePayload{Tool: config.KindClaude}, false); err != nil || res != "resumed claude" {
+		t.Fatalf("resume claude = %q, %v", res, err)
+	}
+	if res, err := h.e.requestPause(h.ctx, PausePayload{}, false); err != nil || res != "resumed" {
+		t.Fatalf("resume after the kind's = %q, %v, want resumed", res, err)
 	}
 }

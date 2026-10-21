@@ -562,7 +562,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	if job.deltaCheck || job.sameHead {
 		toRun = judgeAlone(toRun)
 	}
-	if kind, why := e.pausedKind(ctx, agentKinds(toRun)); why != "" {
+	if kind, why := e.kindPause(ctx, agentKinds(toRun)); why != "" { // the wait's sentence names the command (Wait.Sentence)
 		return false, 0, gate{reason: WaitKind, kind: kind, text: why}
 	}
 	codex := codexRoles(toRun)
@@ -688,9 +688,11 @@ func unusableSlotSentence(slot store.Slot) string {
 // CreatePRWorktree (re)creates.
 var recreatedPerPR = []string{store.SlotProvisioning, store.SlotLost, store.SlotBroken}
 
-// kindPauseReason is why a round whose roles use kinds must wait: the first
-// of them that is paused ("" = none). A pause of one kind leaves rounds that
-// do not use it alone.
+// kindPauseReason is why work whose roles use kinds must wait: the first
+// of them that is paused, with the command that lifts its pause ("" =
+// none): "claude paused (usage_limit) until 14:00; `magnum resume --tool
+// claude` lifts it", which the refusals that name it end with. A pause of
+// one kind leaves rounds that do not use it alone.
 func (e *Engine) kindPauseReason(ctx context.Context, kinds []string) string {
 	_, why := e.pausedKind(ctx, kinds)
 	return why
@@ -698,6 +700,21 @@ func (e *Engine) kindPauseReason(ctx context.Context, kinds []string) string {
 
 // pausedKind is kindPauseReason with the paused kind it names.
 func (e *Engine) pausedKind(ctx context.Context, kinds []string) (kind, why string) {
+	if kind, why = e.kindPause(ctx, kinds); why != "" {
+		why += "; " + resumeToolHint(kind)
+	}
+	return kind, why
+}
+
+// resumeToolHint is the command that lifts the pause of agent kind, as a
+// refusal or a resume's answer ends with it: "`magnum resume --tool
+// claude` lifts it".
+func resumeToolHint(kind string) string { return "`magnum resume --tool " + kind + "` lifts it" }
+
+// kindPause is pausedKind without the command, for a round's dispatch
+// gate, whose wait sentence ends with it (Wait.Sentence): "claude paused
+// (usage_limit) until 14:00".
+func (e *Engine) kindPause(ctx context.Context, kinds []string) (kind, why string) {
 	now := e.now()
 	for _, kind := range kinds {
 		if p, ok := e.toolPause(ctx, kind); ok && now.Before(p.Until) {

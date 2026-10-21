@@ -95,6 +95,11 @@ func TestClassifyFixtures(t *testing.T) {
 		{"codex 429", "■ exceeded retry limit, last status: 429 Too Many Requests", HealthOverloaded, nil, ""},
 		{"codex 503", "■ unexpected status 503 Service Unavailable: upstream connect error", HealthOverloaded, nil, ""},
 		{"codex reconnecting", "⚠ Reconnecting... 2/5", HealthOverloaded, nil, ""},
+		// A turn that ended at once with this error (its rollout's
+		// task_complete, codex_error_info "other"), four within two
+		// minutes on 10-14 and a judge's turn and its nudge on 10-19: a
+		// passing fault of Codex's, as an overload is.
+		{"codex workspace requirements", "■ failed to load workspace requirements", HealthOverloaded, nil, "workspace requirements"},
 		{"rate limit exceeded", "Error: rate limit exceeded, please slow down", HealthOverloaded, nil, ""},
 
 		{"codex approval", `  Would you like to run the following command?

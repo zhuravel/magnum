@@ -297,8 +297,9 @@ func TestABrokenConfigOnDiskHoldsALearnRestart(t *testing.T) {
 		h.settle()
 	}
 	evs := h.events("daemon.config_restart_refused")
-	if len(evs) != 1 || !strings.Contains(evs[0].Message, "a landed skill version") || !strings.Contains(evs[0].Message, "not_a_key") {
-		t.Fatalf("config_restart_refused events = %+v", evs)
+	if len(evs) != 1 || !strings.Contains(evs[0].Message, "a landed skill version") || !strings.Contains(evs[0].Message, "not_a_key") ||
+		!strings.Contains(evs[0].Message, "the restart goes on once it loads") {
+		t.Fatalf("config_restart_refused events = %+v, want the skill version's restart to go on once the file loads", evs)
 	}
 	h.writeUserConfig("[daemon]\nmax_concurrent_reviews = 2\n")
 	if err := h.e.Tick(h.ctx); !errors.Is(err, ErrRestartForLearn) {
@@ -340,13 +341,19 @@ func TestASavedConfigThatNoLongerLoadsIsNotRestartedOn(t *testing.T) {
 		!strings.Contains(evs[0].Message, "not_a_key") {
 		t.Fatalf("config_restart_refused events = %+v", evs)
 	}
+	// With the mark gone nothing restarts on the file fixed by hand: the
+	// event says what does, and promises no restart.
+	if msg := evs[0].Message; !strings.Contains(msg, "`magnum daemon-restart --when-idle`") || !strings.Contains(msg, "save it again") ||
+		strings.Contains(msg, "the restart goes on") {
+		t.Fatalf("config_restart_refused says %q, want the command that restarts on the fixed file and no promise", msg)
+	}
 	if _, ok := h.configMark(); ok {
 		t.Fatal("the refused mark stayed")
 	}
 
 	// The refusal deletes only the mark it read.
 	fresh := h.saveUserConfig("[daemon]\nmax_concurrent_reviews = 2\n", h.clock.Now())
-	h.e.refuseRestart(h.ctx, restartCheck{key: "x"}, "a saved config", `{"sha256":"0123456789"}`, errors.New("broken"), true)
+	h.e.refuseRestart(h.ctx, restartCheck{key: "x"}, "a saved config", false, `{"sha256":"0123456789"}`, errors.New("broken"), true)
 	if v, ok, _ := h.st.GetKV(h.ctx, KVConfigRestart); !ok || v != fresh {
 		t.Fatalf("a newer save's mark = %q, %v", v, ok)
 	}

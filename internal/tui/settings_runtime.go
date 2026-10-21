@@ -189,7 +189,7 @@ func (m settingsModel) askResume(question string, spec ResumeSpec) settingsModel
 				return settingsAnswerMsg{text: text, err: err, reload: true}
 			}
 			if s, err := rt.Runtime(ctx); err == nil {
-				text = joinNonEmpty(text, leftPauses(s))
+				text = joinNonEmpty(text, leftPauses(s, text))
 			}
 			return settingsAnswerMsg{text: text, reload: true}
 		})
@@ -198,11 +198,12 @@ func (m settingsModel) askResume(question string, spec ResumeSpec) settingsModel
 }
 
 // leftPauses names the pauses a plain resume leaves: each agent kind's and
-// each watch's, with the key that lifts it.
-func leftPauses(s RuntimeState) string {
+// each watch's, with the key that lifts it, but a kind the resume's answer
+// names with the command that lifts it (the daemon's answer does).
+func leftPauses(s RuntimeState, answer string) string {
 	var left []string
 	for _, k := range s.Kinds {
-		if k.Paused {
+		if k.Paused && !strings.Contains(answer, "`magnum resume --tool "+k.Name+"`") {
 			left = append(left, k.Name)
 		}
 	}

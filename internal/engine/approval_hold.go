@@ -19,9 +19,11 @@ package engine
 // baseline. The hold applies to automatic and requested rounds alike (a
 // delta check, a recovery, an audit pass, a re-review of the same head); a
 // full pass, a post-merge review, a reply round, a CI check, a dry run and
-// an eval replay never hold. Auto-approval as the operator waits for the
-// full pass too (autoGateRefusal), and the status comment's posted line
-// says that it follows.
+// an eval replay never hold, nor does a round in a repository whose clean
+// review cannot lead to an approval (approvalPath: it comments anyway and
+// nothing approves as the operator). Auto-approval as the operator waits
+// for the full pass too (autoGateRefusal), and the status comment's posted
+// line says that it follows.
 
 import (
 	"context"
@@ -30,6 +32,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -80,13 +83,15 @@ func (h heldReview) reason() string {
 // it may): approve_after_full_pass is set, the round is a re-review (a
 // delta check, a recovery, an audit pass, a re-review of the same head, a
 // round someone asked for), not a full pass, a post-merge review, an eval
-// replay, a dry run, a reply round or a CI check, and the PR had that many
-// re-reviews or more since its last full pass, else its first review
+// replay, a dry run, a reply round or a CI check, the repository has an
+// approval to hold (approvalPath), and the PR had that many re-reviews or
+// more since its last full pass, else its first review
 // (rereviewsSinceFullPass).
 func (e *Engine) approvalHoldDue(ctx context.Context, job *roundJob, rs *roundSetup, dryRun bool) string {
 	after := e.cfg.Pipeline.ApproveAfterFullPass
 	switch {
-	case after <= 0, job.kind != pipeline.KindRereview, rs.fullPass, job.postMerge, job.evalHead != "", dryRun, rs.replies > 0, rs.ciRed:
+	case after <= 0, job.kind != pipeline.KindRereview, rs.fullPass, job.postMerge, job.evalHead != "", dryRun, rs.replies > 0, rs.ciRed,
+		!e.approvalPath(job, rs):
 		return ""
 	}
 	n, last := e.rereviewsSinceFullPass(ctx, job.pr.ID)
@@ -98,6 +103,27 @@ func (e *Engine) approvalHoldDue(ctx context.Context, job *roundJob, rs *roundSe
 		since = fmt.Sprintf("the full pass of round %d", last.Round)
 	}
 	return fmt.Sprintf("%s since %s (approve_after_full_pass %d)", textx.Count(n, "re-review", "re-reviews"), since, after)
+}
+
+// approvalPath reports whether a clean review of job's PR can lead to an
+// approval: the judge's no-findings event there is APPROVE
+// (pipeline.JudgeEvents: the [[repo]] override, else the posting
+// identity's, COMMENT for an author the auto-approval lists refuse), or
+// magnum approves the repository's PRs as the operator
+// (config.Config.AutoApproveFor). Without either a clean verdict posts as
+// a comment anyway, and a hold would only add a full pass that cannot
+// approve and a false line to the review.
+func (e *Engine) approvalPath(job *roundJob, rs *roundSetup) bool {
+	full := job.repo.FullName()
+	if e.cfg.AutoApproveFor(full) != nil {
+		return true
+	}
+	id := e.cfg.IdentityByName(job.pr.Identity)
+	if id == nil && rs.src != nil { // the round runner's fallback (pipeline Runner.identityConfig)
+		id = &config.Identity{Name: rs.src.Name(), Kind: rs.src.Kind(), Login: rs.src.Login()}
+	}
+	nf, _ := pipeline.JudgeEvents(e.cfg, full, id, deref(job.pr.AuthorLogin), false)
+	return nf == "APPROVE"
 }
 
 // planApprovalHold settles whether the round rs sets up for job holds its

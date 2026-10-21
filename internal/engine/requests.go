@@ -806,7 +806,22 @@ func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (
 		e.event(ctx, "info", "", "infra.resumed", "infrastructure pause lifted (magnum resume)", nil)
 	}
 	e.event(ctx, "info", "", "daemon.resumed", "automation resumed", nil)
-	return "resumed", nil
+	return "resumed" + e.stillPausedNote(ctx), nil
+}
+
+// stillPausedNote names, for a plain resume's answer, each agent kind whose
+// pause it leaves, until when and the command that lifts it ("; claude is
+// still paused (usage_limit) until 14:00: `magnum resume --tool claude`
+// lifts it"); "" when none is paused.
+func (e *Engine) stillPausedNote(ctx context.Context) string {
+	var b strings.Builder
+	now := e.now()
+	for _, kind := range e.kinds() {
+		if p, ok := e.toolPause(ctx, kind); ok && now.Before(p.Until) { // kindPause's rule
+			fmt.Fprintf(&b, "; %s is still paused (%s) until %s: %s", kind, p.Reason, p.Until.Local().Format("15:04"), resumeToolHint(kind))
+		}
+	}
+	return b.String()
 }
 
 // liftToolPause is clearToolPause for `magnum resume --tool`: a budget-cap

@@ -560,6 +560,20 @@ func TestSettingsPlainResumeNamesThePausesItLeaves(t *testing.T) {
 	mustContain(t, viewOf(m), "resumed; still paused: codex, claude (r on its row resumes it)")
 }
 
+// The daemon's answer to a plain resume names each agent kind still paused
+// with the command that lifts it; the screen names only the pauses it left
+// out, not the same kind twice.
+func TestSettingsPlainResumeDoesNotNameAKindTheAnswerNames(t *testing.T) {
+	rt := newFakeRuntime()
+	rt.state.Automation = RuntimeEntry{Name: "automation", Paused: true, State: "paused: lunch"}
+	rt.resumed = "resumed; claude is still paused (usage_limit) until 07:50: `magnum resume --tool claude` lifts it"
+	m := testSettings(t, newFakeSettings(), rt, SettingsOptions{}, 160, 34)
+	m = toSection(t, m, sectionRuntime)
+	m = selectRow(t, m, "automation")
+	m = press(t, m, "r", "y")
+	mustContain(t, viewOf(m), "lifts it; still paused: codex (r on its row resumes it)")
+}
+
 func TestSettingsRuntimeKeysActOnlyInTheRuntimeSection(t *testing.T) {
 	rt := newFakeRuntime()
 	m := testSettings(t, newFakeSettings(), rt, SettingsOptions{}, 120, 34)

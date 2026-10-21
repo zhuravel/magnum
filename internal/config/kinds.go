@@ -419,6 +419,10 @@ func DefaultHealthPatterns() HealthPatterns {
 			`\b(?:server|servers|api|model|service) (?:is |are )?(?:currently )?overloaded\b`,
 			`(?m)^[^\w\n]*overloaded\b`,
 			`\brequest timed out\b`,
+			// Codex ends a turn at once with "failed to load workspace
+			// requirements" (codex_error_info "other"), a passing fault:
+			// the round continues as after an overload.
+			`\bfailed to load workspace requirements\b`,
 		},
 	}
 }

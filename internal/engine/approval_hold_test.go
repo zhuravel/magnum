@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -49,10 +50,12 @@ func planVerdicts(h *harness, plan ...string) {
 }
 
 // holdHarness is the full-pass harness with no scheduled full pass, whose
-// rounds post plan (planVerdicts).
+// rounds post plan (planVerdicts) as an App that approves a clean review
+// (no_findings_event APPROVE: a repository with an approval to hold).
 func holdHarness(t *testing.T, plan []string, mods ...func(*harness)) *harness {
 	t.Helper()
-	h := fullPassHarness(t, 0, mods...)
+	approves := func(h *harness) { h.cfg.IdentityByName("talkable-app").NoFindingsEvent = "APPROVE" }
+	h := fullPassHarness(t, 0, append([]func(*harness){approves}, mods...)...)
 	planVerdicts(h, plan...)
 	return h
 }
@@ -348,5 +351,59 @@ func TestAutoApprovalWaitsForAHeldReviewsFullPass(t *testing.T) {
 	full := store.ReviewSummary{ReviewID: 502, SHA: "b1", Verdict: store.VerdictClean}
 	if why, _ := h.e.autoGateRefusal(h.ctx, c, full); why == approvalHoldRefusal {
 		t.Fatal("the full pass's review is refused as the held one")
+	}
+}
+
+// The hold and its full pass are for an approval. In a repository where no
+// clean review approves (the judge's no-findings event there is COMMENT:
+// its identity's, with no [[repo]] override saying APPROVE) and magnum
+// does not approve as the operator (no auto_approve for it), a clean
+// re-review after approve_after_full_pass re-reviews holds nothing: no
+// round.approval_hold, no line "A full pass of the whole PR follows before
+// approval." asked of the judge, no forced full pass (on one such PR the
+// held review's full pass took 24 minutes, three reviewers and two judge
+// passes, and could not approve either). An identity that approves, a
+// [[repo]] override that does, or auto-approval as the operator keep the
+// hold.
+func TestNoApprovalHoldInARepoThatCannotApprove(t *testing.T) {
+	comments := func(h *harness) { h.cfg.IdentityByName("talkable-app").NoFindingsEvent = "COMMENT" }
+	override := func(event string) func(*harness) {
+		return func(h *harness) {
+			h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", NoFindingsEvent: event})
+		}
+	}
+	autoApproves := func(h *harness) {
+		h.cfg.Watches[0].AutoApprove = []string{"talkable"}
+		h.cfg.Watches[0].AutoApproveAs = "zhuravel"
+	}
+	for _, tc := range []struct {
+		name string
+		mods []func(*harness)
+		hold bool
+	}{
+		{"a commenting identity, no override, no auto-approval", []func(*harness){comments}, false},
+		{"an approving identity under a commenting override", []func(*harness){override("COMMENT")}, false},
+		{"an approving identity", nil, true},
+		{"a commenting identity under an approving override", []func(*harness){comments, override("APPROVE")}, true},
+		{"a commenting identity with auto-approval", []func(*harness){comments, autoApproves}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := holdHarness(t, []string{store.VerdictBlocking, store.VerdictBlocking, store.VerdictBlocking, store.VerdictClean}, tc.mods...)
+			h.reviewedPR(2, "b1")
+			pushAndRereview(t, h, "b2")
+			pushAndRereview(t, h, "b3")
+			if tc.hold {
+				wantHeld(t, "re-review 3", pushHeld(t, h, 2, "b4"))
+				return
+			}
+			wantApproves(t, "re-review 3", pushAndRereview(t, h, "b4"))
+			wantNoMoreRounds(t, h, 2)
+			if evs := h.events("round.approval_hold"); len(evs) != 0 {
+				t.Fatalf("round.approval_hold events = %+v, want none", evs)
+			}
+			if v, ok := kvValue(h, KVPRApprovalHold(h.pr(2).ID)); ok {
+				t.Fatalf("a held review is recorded: %q", v)
+			}
+		})
 	}
 }

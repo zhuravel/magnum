@@ -139,8 +139,14 @@ func TestPauseByKindOmp(t *testing.T) {
 	if reason := h.e.pauseReason(h.ctx); reason != "" {
 		t.Fatalf("daemon pause reason = %q", reason)
 	}
-	if reason := h.e.kindPauseReason(h.ctx, []string{config.KindCodex, config.KindOMP}); !strings.Contains(reason, "omp paused (usage_limit)") {
-		t.Fatalf("kind pause reason = %q", reason)
+	// The refusals that name it (`magnum fix`, `magnum whiteboard`, ...)
+	// end with the command that lifts it.
+	if reason := h.e.kindPauseReason(h.ctx, []string{config.KindCodex, config.KindOMP}); !strings.HasPrefix(reason, "omp paused (usage_limit) until ") ||
+		!strings.HasSuffix(reason, "; `magnum resume --tool omp` lifts it") {
+		t.Fatalf("kind pause reason = %q, want omp's pause and the command that lifts it", reason)
+	}
+	if kind, why := h.e.pausedKind(h.ctx, []string{config.KindOMP}); kind != config.KindOMP || !strings.HasSuffix(why, "; `magnum resume --tool omp` lifts it") {
+		t.Fatalf("paused kind = %q, %q, want omp with the command that lifts it", kind, why)
 	}
 	if reason := h.e.kindPauseReason(h.ctx, []string{config.KindCodex, config.KindClaude}); reason != "" {
 		t.Fatalf("codex and claude held by the omp pause: %q", reason)
