@@ -12,10 +12,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -196,14 +198,16 @@ func (e *Engine) budgetLevel() (usage.Level, usage.Snapshot) {
 	return usage.Decide(snap, e.cfg.Usage.CodexSoft, e.cfg.Usage.CodexHard), snap
 }
 
-// overruleBudget records that the operator lifted the budget-cap pause
-// (`magnum resume --tool`): the reading Codex last gave is stale to them,
-// as after a switch to another Codex account, whose limits reach the
-// session files only once a Codex session runs, which the pause prevents.
-// Both caps wait for a snapshot stamped after now (settleOverrule), from the
-// next Codex session magnum or the operator runs, and the cap's toast is
-// forgotten so a pause from that snapshot toasts at once. The mark is kept
-// in kv for a restart and for the CLI's offline resume (loadBudgetOverrule).
+// overruleBudget records that the operator resumed a Codex kind with its
+// reading at a cap (`magnum resume --tool`, liftToolPause): the reading
+// Codex last gave is stale to them, as after a switch to another Codex
+// account, whose limits reach the session files only once a Codex session
+// runs, which the hard cap's pause prevents, and the soft cap too while
+// every round waiting is a full re-review. Both caps wait for a snapshot
+// stamped after now (settleOverrule), from the next Codex session magnum or
+// the operator runs, and the cap's toast is forgotten so a pause from that
+// snapshot toasts at once. The mark is kept in kv for a restart and for the
+// CLI's offline resume (loadBudgetOverrule).
 func (e *Engine) overruleBudget(ctx context.Context) {
 	now := e.now()
 	e.usageMu.Lock()
@@ -237,15 +241,53 @@ func (e *Engine) settleOverrule(ctx context.Context, snap usage.Snapshot) {
 	e.log.Info("codex usage: Codex reported again after magnum resume", "used", fmt.Sprintf("%.0f%%", snap.Used()))
 }
 
-// budgetKinds are the declared agent kinds backed by Codex (their pause
-// holds every role whose AgentKind is one of them, shell roles with tool =
-// "codex" included).
-func (e *Engine) budgetKinds() []string {
-	if e.isKind(agents.KindCodex) {
+// RecordedBudgetAtCap reports whether the Codex reading the daemon last
+// recorded in st (KVUsageCodexPercent, of the window resetting at
+// KVUsageCodexResetsAt) is at u's soft or hard cap at now, with no overrule
+// pending (KVUsageCodexOverruledAt): the reading the CLI's offline `magnum
+// resume --tool` of a Codex kind overrules, as liftToolPause does the
+// daemon's. No reading, or one whose window reset since, is at no cap.
+func RecordedBudgetAtCap(ctx context.Context, st *store.Store, u config.Usage, now time.Time) (bool, error) {
+	mark, ok, err := st.GetKV(ctx, KVUsageCodexOverruledAt)
+	if err != nil {
+		return false, err
+	}
+	if _, perr := store.ParseTime(mark); ok && perr == nil { // loadBudgetOverrule's rule
+		return false, nil
+	}
+	v, ok, err := st.GetKV(ctx, KVUsageCodexPercent)
+	if err != nil || !ok {
+		return false, err
+	}
+	pct, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return false, nil //nolint:nilerr // a value no build writes is no reading
+	}
+	snap := usage.Snapshot{Window: usage.Window{UsedPercent: pct}}
+	resets, ok, err := st.GetKV(ctx, KVUsageCodexResetsAt)
+	if err != nil {
+		return false, err
+	}
+	if at, perr := store.ParseTime(resets); ok && perr == nil {
+		snap.ResetsAt = at
+	}
+	return usage.Decide(currentBudget(snap, now), u.CodexSoft, u.CodexHard) != usage.OK, nil
+}
+
+// BudgetKinds are cfg's declared agent kinds backed by Codex: the [usage]
+// caps hold them (their pause holds every role whose AgentKind is one of
+// them, shell roles with tool = "codex" included), and a resume of one
+// overrules Codex's reading at a cap (liftToolPause, the CLI's offline
+// resume).
+func BudgetKinds(cfg *config.Config) []string {
+	if slices.Contains(cfg.KindNames(), agents.KindCodex) {
 		return []string{agents.KindCodex}
 	}
 	return nil
 }
+
+// budgetKinds is BudgetKinds of the engine's config.
+func (e *Engine) budgetKinds() []string { return BudgetKinds(e.cfg) }
 
 // checkBudget reads the budget (readBudget) and applies the hard cap: the
 // Codex kinds pause through the tool-pause path with one urgent toast, and
@@ -352,8 +394,10 @@ func (e *Engine) notePace(ctx context.Context, snap usage.Snapshot, now time.Tim
 
 // budgetGate is why a round must wait for the Codex budget ("" = go): at
 // the soft cap an automatic full re-review whose roles run Codex waits
-// (softCapHolds). The hard cap holds rounds through the kind pause
-// (checkBudget).
+// (softCapHolds), and the wait names the resume that overrules a reading a
+// switch of Codex account made stale (liftToolPause), as a kind pause's
+// names the one that lifts it. The hard cap holds rounds through the kind
+// pause (checkBudget).
 func (e *Engine) budgetGate(job *roundJob, codexRoles int) string {
 	if codexRoles == 0 || !softCapHolds(job) {
 		return ""
@@ -362,8 +406,8 @@ func (e *Engine) budgetGate(job *roundJob, codexRoles int) string {
 	if level != usage.Soft {
 		return ""
 	}
-	return fmt.Sprintf("Codex budget %.0f%% used (soft cap %g%%): full re-reviews wait; first reviews, delta checks and `magnum review` still run",
-		snap.Used(), e.cfg.Usage.CodexSoft)
+	return fmt.Sprintf("Codex budget %.0f%% used (soft cap %g%%): full re-reviews wait; first reviews, delta checks and `magnum review` still run; "+
+		"`magnum resume --tool %s` overrules a reading made stale by a switch of Codex account", snap.Used(), e.cfg.Usage.CodexSoft, agents.KindCodex)
 }
 
 // softCapHolds reports whether the soft cap holds job: a full re-review

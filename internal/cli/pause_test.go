@@ -160,6 +160,58 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	}
 }
 
+// TestTheOfflineResumeAtTheSoftCapOverrulesTheReading: with no daemon, a
+// resume of codex or all while the reading the daemon last recorded is at
+// the soft or the hard cap writes the overrule mark the daemon takes over at
+// its start, with no pause to lift, and its answer says what the mark means.
+// A reading below the soft cap, one whose window reset since, a resume of a
+// kind Codex does not back and a mark already pending write none.
+func TestTheOfflineResumeAtTheSoftCapOverrulesTheReading(t *testing.T) {
+	h := newActHarness(t)
+	h.d.Cfg.Usage.CodexSoft, h.d.Cfg.Usage.CodexHard = 95, 98
+	later := h.now.Add(72 * time.Hour)
+	for _, tc := range []struct {
+		name, pct, tool string
+		resets          time.Time
+		overrules       bool
+	}{
+		{"below the soft cap", "94", "codex", later, false},
+		{"a window reset since", "97", "codex", h.now.Add(-time.Minute), false},
+		{"a kind Codex does not back", "97", "claude", later, false},
+		{"at the soft cap", "97", "codex", later, true},
+		{"all at the soft cap", "97", "all", later, true},
+		{"at the hard cap", "99", "codex", later, true},
+	} {
+		_ = h.st.DeleteKV(h.ctx, engine.KVUsageCodexOverruledAt)
+		_ = h.st.SetKV(h.ctx, engine.KVUsageCodexPercent, tc.pct)
+		_ = h.st.SetKV(h.ctx, engine.KVUsageCodexResetsAt, store.FormatTime(tc.resets))
+		h.out.Reset()
+		if code := h.cmd("resume", "--tool", tc.tool); code != 0 {
+			t.Fatalf("%s: exit %d: %s", tc.name, code, h.errb.String())
+		}
+		v, ok := h.kv(engine.KVUsageCodexOverruledAt)
+		if ok != tc.overrules || (ok && v != store.FormatTime(h.now)) {
+			t.Errorf("%s: overruled_at = %q %v, want a mark %v", tc.name, v, ok, tc.overrules)
+		}
+		if said := strings.Contains(h.out.String(), "("+engine.BudgetOverruledNote+")"); said != tc.overrules {
+			t.Errorf("%s: answer %q, want the overrule's note %v", tc.name, h.out.String(), tc.overrules)
+		}
+	}
+	if got := strings.TrimSpace(h.out.String()); got != "codex had no pause ("+engine.BudgetOverruledNote+")" {
+		t.Errorf("answer at the hard cap with no pause = %q", got)
+	}
+
+	pending := store.FormatTime(h.now.Add(-10 * time.Minute))
+	_ = h.st.SetKV(h.ctx, engine.KVUsageCodexOverruledAt, pending)
+	h.out.Reset()
+	if code := h.cmd("resume", "--tool", "codex"); code != 0 || strings.TrimSpace(h.out.String()) != "codex had no pause" {
+		t.Fatalf("resume under a pending overrule: exit %d %q", code, h.out.String())
+	}
+	if v, _ := h.kv(engine.KVUsageCodexOverruledAt); v != pending {
+		t.Errorf("a pending overrule's mark moved to %q", v)
+	}
+}
+
 // With a daemon running, pause and resume go through its request handler
 // (the engine's transitions); the CLI writes nothing itself.
 func TestPauseAndResumeThroughTheDaemon(t *testing.T) {

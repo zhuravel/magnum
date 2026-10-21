@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/usage"
 )
 
 // Request kinds (requests.kind) the daemon consumes.
@@ -824,17 +825,32 @@ func (e *Engine) stillPausedNote(ctx context.Context) string {
 	return b.String()
 }
 
-// liftToolPause is clearToolPause for `magnum resume --tool`: a budget-cap
-// pause lifted by hand overrules Codex's reading (overruleBudget), with an
-// event, and the answer's note says what that means ("" for any other pause).
+// liftToolPause is clearToolPause for `magnum resume --tool`, which also
+// overrules Codex's reading (overruleBudget) for a kind Codex backs: when it
+// lifts a budget-cap pause, and with no such pause when the reading is at
+// the soft or the hard cap and no overrule is pending (the soft cap pauses
+// nothing, yet it holds the full re-reviews whose Codex turns would refresh
+// a reading a switch of Codex account made stale). Either is one
+// tool.resumed event, and the answer's note says what it means ("" when
+// nothing is overruled).
 func (e *Engine) liftToolPause(ctx context.Context, tool string) string {
 	p, paused := e.toolPause(ctx, tool)
 	e.clearToolPause(ctx, tool)
-	if !paused || p.Reason != BudgetPauseReason {
+	switch {
+	case paused && p.Reason == BudgetPauseReason:
+		e.overruleBudget(ctx)
+		e.event(ctx, "info", "tool:"+tool, "tool.resumed", tool+" pause ("+BudgetPauseReason+") lifted by magnum resume: "+BudgetOverruledNote, nil)
+	case slices.Contains(e.budgetKinds(), tool):
+		level, snap := e.budgetLevel() // OK below the soft cap, before any reading and under a pending overrule
+		if level == usage.OK {
+			return ""
+		}
+		e.overruleBudget(ctx)
+		e.event(ctx, "info", "tool:"+tool, "tool.resumed", fmt.Sprintf("%s resumed by magnum resume at the %s cap (Codex budget %.0f%% used): %s",
+			tool, level, snap.Used(), BudgetOverruledNote), nil)
+	default:
 		return ""
 	}
-	e.overruleBudget(ctx)
-	e.event(ctx, "info", "tool:"+tool, "tool.resumed", tool+" pause ("+BudgetPauseReason+") lifted by magnum resume: "+BudgetOverruledNote, nil)
 	return " (" + BudgetOverruledNote + ")"
 }
 

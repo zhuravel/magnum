@@ -204,10 +204,10 @@ func newResumeCmd(c *Context) *cobra.Command {
 		"Resume automation after `magnum pause` (and lift an infrastructure pause, whose probe would otherwise "+
 			"lift it). --tool lifts a usage-limit, login or Codex-budget pause of an agent kind (codex, claude or "+
 			"any [kinds.<name>]; `magnum roles --kinds` lists them) or of all, and forgets the kind's per-model "+
-			"limits, so its sessions go back to their roles' models. A Codex-budget pause lifted this way overrules "+
-			"Codex's last reading, which is stale after a switch to another Codex account: both [usage] caps wait "+
-			"for Codex's next reading, from the next Codex session. --watch lifts the identity-leak pause of a "+
-			"watch owner.",
+			"limits, so its sessions go back to their roles' models. For codex (or all), with Codex's last reading at "+
+			"either [usage] cap, a Codex-budget pause or not, it also overrules that reading, which is stale after a "+
+			"switch to another Codex account: both caps wait for Codex's next reading, from the next Codex session. "+
+			"--watch lifts the identity-leak pause of a watch owner.",
 		func(pos []string) int { return runResume(c, o, pos) })
 	fs := cmd.Flags()
 	fs.StringVar(&o.tool, "tool", "", "lift a pause of this agent kind (codex, claude, ...) or all, and forget its model limits")
@@ -321,6 +321,15 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 			for _, m := range models {
 				limits = append(limits, t+"/"+m)
 			}
+		}
+		if !budget && slices.ContainsFunc(tools, func(t string) bool { return slices.Contains(engine.BudgetKinds(d.Cfg), t) }) {
+			// No budget-cap pause: the reading the daemon recorded is
+			// overruled at the soft or the hard cap, as its liftToolPause does.
+			atCap, err := engine.RecordedBudgetAtCap(ctx, d.Store, d.Cfg.Usage, d.now())
+			if err != nil {
+				return "", err
+			}
+			budget = atCap
 		}
 		note := ""
 		if budget { // the daemon takes the mark over at its start (engine.overruleBudget)

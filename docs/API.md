@@ -6460,6 +6460,12 @@ func AutoApprovalMarker(head string) string
     AutoApprovalMarker is the marker of an automatic approval of head: "<!--
     magnum:auto-approval head=<sha7> -->".
 
+func BudgetKinds(cfg *config.Config) []string
+    BudgetKinds are cfg's declared agent kinds backed by Codex: the usage caps
+    hold them (their pause holds every role whose AgentKind is one of them,
+    shell roles with tool = "codex" included), and a resume of one overrules
+    Codex's reading at a cap (liftToolPause, the CLI's offline resume).
+
 func CheckPrompts(cfg *config.Config) (int, error)
     CheckPrompts renders, with representative data and this binary's renderer,
     every prompt file the configured roles name (judges with agents.JudgeData,
@@ -6732,6 +6738,14 @@ func ReadDaemonConfigSum(ctx context.Context, st *store.Store) (string, bool)
 func ReadWebhooks(ctx context.Context, st *store.Store) (WebhooksHealth, []WebhooksHour)
     ReadWebhooks reads what the consumer recorded: the stream's health and the
     hourly totals, oldest first (zero and nil when nothing was).
+
+func RecordedBudgetAtCap(ctx context.Context, st *store.Store, u config.Usage, now time.Time) (bool, error)
+    RecordedBudgetAtCap reports whether the Codex reading the daemon
+    last recorded in st (KVUsageCodexPercent, of the window resetting at
+    KVUsageCodexResetsAt) is at u's soft or hard cap at now, with no overrule
+    pending (KVUsageCodexOverruledAt): the reading the CLI's offline `magnum
+    resume --tool` of a Codex kind overrules, as liftToolPause does the
+    daemon's. No reading, or one whose window reset since, is at no cap.
 
 func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.Time, bool)) string
     SkewNote says when the running daemon is older than what is built: the CLI's

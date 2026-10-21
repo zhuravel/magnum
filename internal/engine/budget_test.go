@@ -315,6 +315,9 @@ func TestAResumeOverrulesTheBudgetCapUntilCodexReportsAgain(t *testing.T) {
 	if v, _ := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); v != store.FormatTime(resumed) {
 		t.Fatalf("overruled_at = %q", v)
 	}
+	if evs := h.events("tool.resumed"); len(evs) != 1 || evs[0].Message != "codex pause (budget_cap) lifted by magnum resume: "+BudgetOverruledNote {
+		t.Fatalf("tool.resumed events = %+v", evs)
+	}
 	// The same snapshot, read again a minute later, pauses nothing and holds
 	// no round.
 	h.advance(time.Minute)
@@ -365,4 +368,131 @@ func TestAResumeOverrulesTheBudgetCapUntilCodexReportsAgain(t *testing.T) {
 			t.Fatalf("paused despite the CLI's mark: %+v", p)
 		}
 	})
+}
+
+// TestAResumeAtTheSoftCapOverrulesTheReading: at the soft cap nothing is
+// paused, so `magnum resume --tool codex` overruled nothing, and the held
+// full re-reviews waited behind a reading the operator knew was stale until
+// some Codex turn refreshed it, which the soft cap prevents while every
+// pending round is a full re-review (2026-10-21: seven re-reviews waited at
+// 97% of a 95/98 config after a switch of Codex account). Now the soft-cap
+// wait names that resume, which overrules the reading at either cap, a
+// pause or not: its answer and a tool.resumed event say the caps wait for
+// Codex's next reading, the held re-review dispatches at the next tick, and
+// a snapshot stamped after the resume, still at the soft cap, holds the
+// next push's re-review again. `--tool all` does the same.
+func TestAResumeAtTheSoftCapOverrulesTheReading(t *testing.T) {
+	for _, tool := range []string{agents.KindCodex, "all"} {
+		t.Run(tool, func(t *testing.T) {
+			h, u := newBudgetHarness(t)
+			h.cfg.Usage.CodexSoft, h.cfg.Usage.CodexHard = 95, 98
+			resets := h.clock.Now().Add(72 * time.Hour)
+			u.setAt(97, resets, h.clock.Now().Add(-time.Hour))
+			h.reviewedPR(2, "b1") // the first review runs at the soft cap
+			pollPR(h, 40*time.Minute, 2, "b2")
+			h.advance(time.Hour)
+			h.tick()
+			reqWantRounds(t, h, 1)
+			if _, ok := h.e.toolPause(h.ctx, agents.KindCodex); ok {
+				t.Fatal("codex paused at the soft cap")
+			}
+			w := waitOf(t, h, 2)
+			if w.Reason != WaitBudget {
+				t.Fatalf("wait = %+v, want the soft cap", w)
+			}
+			if got, want := w.Short(h.clock.Now()), "re-review · Codex soft cap"; got != want {
+				t.Errorf("short = %q, want %q", got, want)
+			}
+			const hint = "`magnum resume --tool codex` overrules a reading made stale by a switch of Codex account"
+			if got := w.Sentence("talkable#2", h.clock.Now()); !strings.Contains(got, hint) {
+				t.Errorf("sentence = %q, want it to name %q", got, hint)
+			}
+
+			resumed := h.clock.Now()
+			res, err := h.e.requestPause(h.ctx, PausePayload{Tool: tool}, false)
+			want := "resumed codex (" + BudgetOverruledNote + ")"
+			if tool == "all" {
+				want = "resumed " + strings.Join(h.e.kinds(), ", ") + " (" + BudgetOverruledNote + ")"
+			}
+			if err != nil || res != want {
+				t.Fatalf("resume = %q, %v; want %q", res, err, want)
+			}
+			if v, _ := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); v != store.FormatTime(resumed) {
+				t.Fatalf("overruled_at = %q", v)
+			}
+			evs := h.events("tool.resumed")
+			if len(evs) != 1 || evs[0].Level != "info" || !strings.Contains(evs[0].Message, "soft cap") ||
+				!strings.HasSuffix(evs[0].Message, ": "+BudgetOverruledNote) {
+				t.Fatalf("tool.resumed events = %+v", evs)
+			}
+
+			// The same snapshot, read again, holds nothing: the re-review starts.
+			h.advance(time.Minute)
+			h.tick()
+			if ins := h.rd.all(); len(ins) != 2 || ins[1].TargetSHA != "b2" || ins[1].Kind != pipeline.KindRereview {
+				t.Fatalf("rounds = %d, want the held re-review of b2 under the overrule", len(ins))
+			}
+
+			// Codex reports again, still at the soft cap: the next push waits.
+			u.setAt(97, resets, h.clock.Now())
+			pollPR(h, time.Minute, 2, "b3")
+			h.advance(time.Hour)
+			h.tick()
+			reqWantRounds(t, h, 2)
+			if w := waitOf(t, h, 2); w.Reason != WaitBudget {
+				t.Fatalf("wait = %+v, want the soft cap from the new reading", w)
+			}
+			if _, ok := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); ok {
+				t.Fatal("overrule kept after Codex reported again")
+			}
+		})
+	}
+}
+
+// TestAResumeBelowTheSoftCapOverrulesNothing: a resume of the codex kind
+// with Codex's reading below the soft cap leaves the caps judging it, and
+// its answer is the plain one; so is a resume of a kind Codex does not back
+// at the soft cap, and a second resume while an overrule is pending, which
+// moves the overrule's mark not at all.
+func TestAResumeBelowTheSoftCapOverrulesNothing(t *testing.T) {
+	h, u := newBudgetHarness(t)
+	h.cfg.Usage.CodexSoft, h.cfg.Usage.CodexHard = 95, 98
+	resets := h.clock.Now().Add(72 * time.Hour)
+	u.setAt(94, resets, h.clock.Now().Add(-time.Hour))
+	h.startup()
+	h.tick()
+	if res, err := h.e.requestPause(h.ctx, PausePayload{Tool: agents.KindCodex}, false); err != nil || res != "resumed codex" {
+		t.Fatalf("resume below the soft cap = %q, %v", res, err)
+	}
+	if v, ok := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); ok {
+		t.Fatalf("overruled below the soft cap at %q", v)
+	}
+
+	u.setAt(97, resets, h.clock.Now())
+	h.advance(time.Minute)
+	h.tick()
+	if res, err := h.e.requestPause(h.ctx, PausePayload{Tool: agents.KindClaude}, false); err != nil || res != "resumed claude" {
+		t.Fatalf("resume of claude at the soft cap = %q, %v", res, err)
+	}
+	if _, ok := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); ok {
+		t.Fatal("a resume of claude overruled Codex's reading")
+	}
+	if evs := h.events("tool.resumed"); len(evs) != 0 {
+		t.Fatalf("tool.resumed events = %+v", evs)
+	}
+
+	if _, err := h.e.requestPause(h.ctx, PausePayload{Tool: agents.KindCodex}, false); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := h.e.getKV(h.ctx, KVUsageCodexOverruledAt)
+	h.advance(10 * time.Second)
+	if res, err := h.e.requestPause(h.ctx, PausePayload{Tool: agents.KindCodex}, false); err != nil || res != "resumed codex" {
+		t.Fatalf("a second resume under the overrule = %q, %v", res, err)
+	}
+	if v, _ := h.e.getKV(h.ctx, KVUsageCodexOverruledAt); first == "" || v != first {
+		t.Fatalf("overruled_at moved from %q to %q", first, v)
+	}
+	if n := len(h.events("tool.resumed")); n != 1 {
+		t.Fatalf("tool.resumed events = %d, want the first resume's", n)
+	}
 }

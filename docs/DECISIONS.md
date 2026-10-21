@@ -865,6 +865,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a command, into a draft or into another conversation. A close of the pane after exit keys that did not quit
   the agent: the early park forces nothing, and the PR's park and its hard mode stay.
 
+- **`magnum resume --tool codex` overrules Codex's reading at the soft cap too** (2026-10-21, amends
+  "`magnum resume --tool codex` overrules a stale Codex reading"). `magnum status` said `codex: 97% used of
+  the weekly limit ... at the soft cap 95%: full re-reviews wait` (codex_soft 95, codex_hard 98) and seven
+  re-reviews waited on the board; the operator had switched Codex accounts. That switch had not reached
+  Codex, so the reading was right, but after a real one the state had no way out: the README said the
+  resume overrules the reading for both caps, while liftToolPause overruled it only when it lifted a
+  budget-cap pause, which the soft cap never sets, and the reading refreshes only when a Codex turn runs,
+  which the soft cap prevents while every pending round is a full re-review. Now a resume of a kind Codex
+  backs (engine.BudgetKinds), or of all, overrules the reading whenever it is at the soft or the hard cap
+  and no overrule is pending, a pause or not, with the same answer (" (the Codex budget caps wait for
+  Codex's next reading)") and a `tool.resumed` event ("codex resumed by magnum resume at the soft cap
+  (Codex budget 97% used): ..."); the hard-cap pause's lift is unchanged. A reading below the soft cap, no
+  reading and a pending overrule (whose mark does not move) overrule nothing, and the answer is the plain
+  one. The CLI's offline resume does the same from the reading the daemon recorded
+  (engine.RecordedBudgetAtCap: the percent and the reset in kv, a window whose reset passed reading as
+  none) and writes the same kv mark. The soft-cap wait's text ends with "`magnum resume --tool codex`
+  overrules a reading made stale by a switch of Codex account", as a kind pause's names the resume that
+  lifts it; the board's short label stays `re-review · Codex soft cap`. The overrule lets no round past the
+  hard cap that today's does not: at a reading between the caps the hard cap holds nothing, and the
+  first snapshot stamped after the resume, which the first released round's Codex turn writes, ends the
+  overrule and is judged against both caps. The settings screen's Runtime `r` on the codex row refuses a
+  kind with no pause ("codex has no pause"), so at the soft cap only its `R` (all kinds) sends the resume.
+  Rejected: a resume flag or command of its own (the README and the wait already name `--tool codex`);
+  overruling below the soft cap (nothing waits, and it would hide the next climb to a cap until Codex
+  reports again); moving a pending overrule's mark (a resume twice in a row would discard a snapshot the
+  next read was about to settle on).
+
 ## Agents in panes
 
 - **Agents are launched through the user's own zsh**, so wrapper functions and aliases apply and
