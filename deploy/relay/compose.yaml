@@ -1,0 +1,33 @@
+# magnum-relay as a Compose project (deploy/relay/README.md, "Deploy with Compose"). The build context is
+# the repository root. Set these variables in the environment or in a .env file beside this file:
+#
+#   RELAY_WEBHOOK_SECRET   the App's webhook secret (openssl rand -hex 32)
+#   RELAY_TOKEN_HASHES     the SHA-256 of each accepted bearer token, comma-separated (magnum-relay hash-token)
+#   RELAY_RETENTION        how long events are kept (optional, 720h by default)
+#
+# The secret reaches the relay as a file under /run/secrets, never in its environment. No port is
+# published: a reverse proxy on the same Docker network routes the domain to container port 8080.
+
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: deploy/relay/Dockerfile
+    restart: unless-stopped
+    environment:
+      MAGNUM_RELAY_SECRET_FILE: /run/secrets/webhook_secret
+      MAGNUM_RELAY_TOKEN_HASHES: ${RELAY_TOKEN_HASHES:?set RELAY_TOKEN_HASHES to the hash that magnum-relay hash-token prints}
+      MAGNUM_RELAY_RETENTION: ${RELAY_RETENTION:-720h}
+    secrets:
+      - webhook_secret
+    volumes:
+      - relay-data:/data
+    expose:
+      - "8080"
+
+secrets:
+  webhook_secret:
+    environment: RELAY_WEBHOOK_SECRET
+
+volumes:
+  relay-data:

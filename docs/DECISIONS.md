@@ -10362,6 +10362,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - Refusing the config over the token file's mode: shadow mode would then keep the daemon from
       starting, and the consumer refuses the file itself.
 
+- **magnum-relay also deploys as a Compose project, `deploy/relay/compose.yaml`** (2026-10-21). The
+  operator asked for a compose file to deploy the relay with.
+  - **The file.** It builds `deploy/relay/Dockerfile` from the repository root, keeps the journal in the
+    named volume `relay-data` (a new named volume takes the image's `/data`, owned by uid 65532) and
+    publishes no port: the platform's proxy routes the domain to container port 8080. A deploy without
+    `RELAY_TOKEN_HASHES` stops at interpolation with an error that names it.
+  - **The secret.** Compose reads `RELAY_WEBHOOK_SECRET` from the platform's `.env` file and mounts it
+    as `/run/secrets/webhook_secret` (`secrets:` with `environment:`). The relay still reads the secret
+    only from a file, and `docker inspect` shows it in no environment. A local run with Docker Compose
+    v5.5 stored a signed delivery (202, then 200 for the repeat), refused a bad signature and a missing
+    token (401), kept the journal's epoch across a down and up, and reported healthy as uid 65532.
+  - **No previous secret.** Compose refuses to start when a secret's variable is unset, so the file
+    holds one secret only. A rotation with Compose changes the relay and then the App, and the
+    deliveries between them answer 401: the App's Recent Deliveries can redeliver them, and the poll
+    finds their changes in any case.
+  - **Rejected:**
+    - A bind mount of a file the platform writes: its host path depends on where the platform keeps the
+      project and the compose file, and a missing host path is created as a directory.
+    - The secret in the relay's environment: rejected in spec 98, and `secrets:` makes it unneeded.
+    - The platform's network and proxy labels in the file: the platform adds them to the service a domain
+      names.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -110,7 +110,31 @@ names below are the usual ones; yours may differ. Create an application on the p
 6. **Deploy.** Then check `https://relay.example.com/healthz`, which should answer `{"ok":true,…}`. The
    image's `HEALTHCHECK` runs `magnum-relay healthcheck` against the same endpoint.
 
-### Rotating the secret or the token
+## Deploy with Compose
+
+[compose.yaml](compose.yaml) builds the same image from the repository root and runs it with the named
+volume `relay-data` on `/data`. Use it on a platform that deploys a Compose project from a repository.
+
+1. **Source.** Create a Compose project from this repository's `master` branch. Set the Compose Path to
+   `./deploy/relay/compose.yaml`.
+2. **Environment.** Set these variables. The platform writes them to a `.env` file beside the compose
+   file, and Compose reads them from there.
+
+   ```
+   RELAY_WEBHOOK_SECRET=<the content of webhook-secret>
+   RELAY_TOKEN_HASHES=<the hash hash-token printed>
+   ```
+
+   - Compose gives the secret to the relay as the file `/run/secrets/webhook_secret` (`secrets:` with
+     `environment:`). The relay's environment never holds it.
+   - A deploy without `RELAY_TOKEN_HASHES` stops with an error that names the variable.
+   - `RELAY_RETENTION` is optional and defaults to `720h`.
+3. **Domain.** Add the domain to the service `relay`: container port `8080`, path `/`, HTTPS on, and a
+   Let's Encrypt certificate. The platform adds its proxy's labels and network to that service. Publish
+   no port on the host.
+4. **Deploy.** Then check `https://relay.example.com/healthz`, as in step 6 above.
+
+## Rotating the secret or the token
 
 - **The webhook secret.**
   1. Mount the old secret as a second file, for example at `/run/secrets/webhook-secret-previous`.
@@ -118,6 +142,10 @@ names below are the usual ones; yours may differ. Create an application on the p
   3. Put the new secret in the first file mount and redeploy. The relay now accepts both secrets.
   4. Change the App's webhook secret.
   5. Once the App's deliveries succeed, remove the previous file and its variable, then redeploy.
+- **The webhook secret, with Compose.** `compose.yaml` holds one secret only. Set the new
+  `RELAY_WEBHOOK_SECRET`, redeploy, and then change the App's secret at once. The deliveries between
+  the two changes answer 401. Redeliver them from the App's Recent Deliveries, or let the daemon's poll
+  find their changes.
 - **The token.** Add the new token's hash after a comma and redeploy. Switch the daemon to the new
   token, then remove the old hash.
 

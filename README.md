@@ -3613,7 +3613,7 @@ the GitHub App's webhooks, which the sleeping Mac behind NAT cannot.
   listing with a cursor. A cursor the relay can no longer continue answers 410, and the daemon then
   resyncs by polling.
 - **Deploying it.** [deploy/relay/README.md](deploy/relay/README.md) covers the deploy on a self-hosted
-  container platform (`deploy/relay/Dockerfile`), the webhook secret and the token, and the GitHub App settings you set by
+  container platform (`deploy/relay/Dockerfile`, or `deploy/relay/compose.yaml` as a Compose project), the webhook secret and the token, and the GitHub App settings you set by
   hand: the webhook URL, the secret, the events and the permissions.
 
 ## Under the hood
