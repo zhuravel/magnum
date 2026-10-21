@@ -69,6 +69,12 @@ const (
 	webhooksPageLimit = 200
 	// webhooksSeenMax is how many delivery ids the dedupe remembers.
 	webhooksSeenMax = 10000
+	// webhooksHintsMax and webhooksLastMax bound the hints kept and the
+	// last events kept for a missed change's event: the oldest go first,
+	// counted in the hour's totals, so a flood of events, or a relay gone
+	// wrong, cannot grow the daemon's memory.
+	webhooksHintsMax = 10000
+	webhooksLastMax  = 10000
 	// webhooksMaxBackoff bounds the wait after failed pages and gaps.
 	webhooksMaxBackoff = 2 * time.Minute
 	// webhooksQuiet is how long the loop waits after an empty page: a
@@ -133,6 +139,12 @@ type WebhooksHour struct {
 	Missed    int       `json:"missed"`
 	Early     int       `json:"early"`
 	Gaps      int       `json:"gaps"`
+	// HintsDropped and LastDropped count what the consumer's bounds let go
+	// (a flood of events, a relay gone wrong): the oldest hints past the
+	// 10,000 it keeps, and the oldest of the 10,000 last events it keeps of
+	// PRs and heads.
+	HintsDropped int `json:"hints_dropped,omitempty"`
+	LastDropped  int `json:"last_events_dropped,omitempty"`
 }
 
 // ReadWebhooks reads what the consumer recorded: the stream's health and
@@ -196,11 +208,13 @@ type hookChange struct {
 }
 
 // hookSeen is the last event read for a PR or a head: its name, when the
-// consumer read it and when the relay received it.
+// consumer read it and when the relay received it, and n, the order it was
+// read in (capLast forgets the lowest first).
 type hookSeen struct {
 	name     string
 	at       time.Time
 	received time.Time
+	n        uint64
 }
 
 // hookPRState is what the comparison last counted of a PR (by node id).
@@ -243,9 +257,10 @@ type webhookState struct {
 	seen     map[string]bool
 	seenRing []string // the last webhooksSeenMax ids, seenNext the oldest's place once full
 	seenNext int
-	hints    []*hookHint
+	hints    []*hookHint // at most webhooksHintsMax, oldest first
 	pending  []hookChange
-	last     map[hookKey]hookSeen
+	last     map[hookKey]hookSeen // at most webhooksLastMax after each page
+	lastN    uint64               // the order of the last event read (hookSeen.n)
 	pruned   time.Time
 	memo     map[string]hookPRState
 	compared map[string]time.Time
@@ -255,6 +270,12 @@ type webhookState struct {
 	gapRun   int    // gaps in a row, each waited for longer
 	busyRun  int    // busy answers (429) in a row, likewise
 	notes    []hookNote
+	// held are the repositories a backlog named and sleptAt the end of the
+	// last tick before a sleep of the Mac: such a repository's next
+	// comparison counts nothing, and so does the first after sleptAt of
+	// each one compared before it (resync, like a gap's hold).
+	held    map[string]bool
+	sleptAt time.Time
 }
 
 // with runs fn holding mu, which a panic in fn releases too.
@@ -333,6 +354,11 @@ func (e *Engine) loadWebhooks(ctx context.Context) {
 	var cur webhooksCursor
 	if v, ok := e.getKV(ctx, KVWebhooksCursor); ok {
 		_ = json.Unmarshal([]byte(v), &cur) // malformed: start again at the newest event
+	}
+	if !webhooks.ValidCursor(cur.Epoch) || !webhooks.ValidCursor(cur.Cursor) {
+		// None, or one the client refuses today (an earlier build kept it):
+		// never read after nor written again.
+		cur = webhooksCursor{}
 	}
 	health, hours := ReadWebhooks(ctx, e.st)
 	hk.flushMu.Lock()
@@ -443,7 +469,9 @@ func (e *Engine) webhooksRestart(page webhooks.Page) {
 // webhooksPage takes a page's events: each delivery once, and each event of
 // a covered repository the relay received within webhooksWindow before the
 // page (by its own clock) a hint, which also settles a change the poll saw
-// just before it; then the cursor moves past them.
+// just before it; an older one (a backlog after a sleep or an outage) hints
+// at nothing and holds its repository's next comparison. Either is the last
+// event read for what it names. Then the cursor moves past them.
 func (e *Engine) webhooksPage(page webhooks.Page) {
 	now := e.now()
 	relayNow := page.ServerTime
@@ -458,16 +486,25 @@ func (e *Engine) webhooksPage(page webhooks.Page) {
 			}
 			hk.hour(now).Events++
 			keys := e.hintKeys(ev)
-			if len(keys) == 0 || (!ev.ReceivedAt.IsZero() && relayNow.Sub(ev.ReceivedAt) > webhooksWindow) {
-				continue // no hint: another repository, or a backlog too old to announce what a poll sees now
+			if len(keys) == 0 {
+				continue // another repository: no hint
+			}
+			hk.lastN++
+			for _, k := range keys {
+				hk.lastOf()[k] = hookSeen{name: ev.Name(), at: now, received: ev.ReceivedAt, n: hk.lastN}
+			}
+			if !ev.ReceivedAt.IsZero() && relayNow.Sub(ev.ReceivedAt) > webhooksWindow {
+				// A backlog (a sleep, an outage) is too old to announce what
+				// a poll sees now, and the repository's next poll may see
+				// the change it names with no hint: that poll counts nothing.
+				hk.hold(keys[0].repo)
+				continue
 			}
 			h := &hookHint{repo: keys[0].repo, keys: keys, at: now}
-			for _, k := range keys {
-				hk.lastOf()[k] = hookSeen{name: ev.Name(), at: now, received: ev.ReceivedAt}
-			}
 			hk.lateHint(h, now)
-			hk.hints = append(hk.hints, h)
+			hk.addHint(h, now)
 		}
+		hk.capLast(now)
 		hk.cursor = webhooksCursor{Epoch: page.Epoch, Cursor: page.Next}
 		hk.gapRun, hk.busyRun = 0, 0
 		hk.answered(now)
@@ -569,20 +606,29 @@ func (e *Engine) hintKeys(ev webhooks.Event) []hookKey {
 // hint for it came within webhooksWindow before (or since the repository's
 // previous poll), else waits webhooksLate for a late one. A repository's
 // first sync counts nothing, and neither does a poll while the stream is
-// unhealthy (WebhooksHealth.State) or the repository's first poll after a
-// gap: what changed during an outage or a gap is the health line's, not the
-// events' miss. It reads only what the poll already read and writes
-// nothing: it marks the consumer's own kv rows and events for the writer
-// (webhooksWriter), so a slow registry never holds the poll; a panic in it
-// is recorded, never the poll's.
+// unhealthy (WebhooksHealth.State), the repository's first poll after a
+// gap or after a sleep of the Mac, or its next poll after a page that
+// listed a backlog of its events: what changed during an outage, a gap or a
+// sleep is no miss of the events. It reads only what the poll already read
+// and writes nothing: it marks the consumer's own kv rows and events for
+// the writer (webhooksWriter), so a slow registry never holds the poll; a
+// panic in it is recorded, never the poll's.
 func (e *Engine) webhooksSaw(ctx context.Context, w config.Watch, full string, radar []github.PRRadar, stored []store.PR, firstSync bool) {
 	hk := &e.hooks
 	if !hk.on.Load() || !e.cfg.Webhooks.Covers(w.Owner) {
 		return
 	}
+	// The tick's own fields (webhooksSaw runs on its goroutine): after a
+	// sleep, tickEnded is still the end of the tick before it.
+	slept, before := e.afterSleep, e.tickEnded
 	e.safely(ctx, "webhooks comparison", "", func() {
 		now := e.now()
-		hk.with(func() { hk.compare(w.Owner, full, radar, stored, firstSync, now, e.cfg.Webhooks.StaleAfter.Duration) })
+		hk.with(func() {
+			if slept && before.After(hk.sleptAt) {
+				hk.sleptAt = before
+			}
+			hk.compare(w.Owner, full, radar, stored, firstSync, now, e.cfg.Webhooks.StaleAfter.Duration)
+		})
 		hk.changed()
 	}, nil)
 }
@@ -595,7 +641,12 @@ func (hk *webhookState) compare(owner, full string, radar []github.PRRadar, stor
 	// A gap holds each repository until its own first poll after it.
 	health.GapOpen = health.GapOpen && health.GapAt != nil && (!compared || !prev.After(*health.GapAt))
 	healthy, _ := health.State(now, staleAfter)
-	changes := hk.diff(full, radar, stored, firstSync, healthy)
+	// So do a backlog and a sleep of the Mac: the changes their polls see
+	// came with events too old to hint (webhooksPage), or none read yet.
+	held := hk.held[repo] || (!hk.sleptAt.IsZero() && (!compared || !prev.After(hk.sleptAt)))
+	delete(hk.held, repo)
+	counting := healthy && !held
+	changes := hk.diff(full, radar, stored, firstSync, counting)
 	from := now.Add(-webhooksWindow)
 	if compared && prev.Before(from) {
 		from = prev
@@ -606,8 +657,8 @@ func (hk *webhookState) compare(owner, full string, radar []github.PRRadar, stor
 	hk.compared[repo] = now
 	hk.expire(repo, from, now)
 	for _, c := range changes {
-		if !healthy {
-			break // an outage's changes are the health line's, not misses
+		if !counting {
+			break // an outage's, a gap's, a backlog's or a sleep's changes are no misses of the events
 		}
 		c.owner, c.at, c.until = owner, now, now.Add(webhooksLate)
 		if hk.match(c, from, now) {
@@ -904,6 +955,49 @@ func (hk *webhookState) lastOf() map[hookKey]hookSeen {
 		hk.last = map[hookKey]hookSeen{}
 	}
 	return hk.last
+}
+
+// addHint keeps h, the newest hint, letting the oldest go past
+// webhooksHintsMax, counted in the hour's totals (hk.mu held).
+func (hk *webhookState) addHint(h *hookHint, now time.Time) {
+	if over := len(hk.hints) + 1 - webhooksHintsMax; over > 0 {
+		clear(hk.hints[:over])
+		hk.hints = hk.hints[over:]
+		hk.hour(now).HintsDropped += over
+	}
+	hk.hints = append(hk.hints, h)
+}
+
+// capLast forgets the last events read longest ago past webhooksLastMax,
+// counted in the hour's totals (hk.mu held). It runs after each page, which
+// adds the keys of at most webhooksPageLimit events (the client refuses a
+// longer page), each naming at most 100 PRs and a head.
+func (hk *webhookState) capLast(now time.Time) {
+	over := len(hk.last) - webhooksLastMax
+	if over <= 0 {
+		return
+	}
+	type entry struct {
+		key hookKey
+		n   uint64
+	}
+	all := make([]entry, 0, len(hk.last))
+	for k, s := range hk.last {
+		all = append(all, entry{k, s.n})
+	}
+	slices.SortFunc(all, func(a, b entry) int { return cmp.Compare(a.n, b.n) })
+	for _, x := range all[:over] {
+		delete(hk.last, x.key)
+	}
+	hk.hour(now).LastDropped += over
+}
+
+// hold makes repo's next comparison count nothing (hk.mu held).
+func (hk *webhookState) hold(repo string) {
+	if hk.held == nil {
+		hk.held = map[string]bool{}
+	}
+	hk.held[repo] = true
 }
 
 // hour is the totals of now's hour, kept in order of their hours even

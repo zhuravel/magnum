@@ -53,8 +53,8 @@ func TestStatusShowsTheWebhooksLineInShadowMode(t *testing.T) {
 	since := now.Add(-2 * time.Hour).Truncate(time.Hour)
 	set(engine.KVWebhooksHealth, engine.WebhooksHealth{PageAt: new(now.Add(-8 * time.Second))})
 	set(engine.KVWebhooksHours, []engine.WebhooksHour{
-		{Hour: since, Events: 100, Changes: 15, Announced: 15, Early: 9},
-		{Hour: since.Add(time.Hour), Events: 40, Changes: 8, Announced: 7, Missed: 1},
+		{Hour: since, Events: 100, Changes: 15, Announced: 15, Early: 9, HintsDropped: 3},
+		{Hour: since.Add(time.Hour), Events: 40, Changes: 8, Announced: 7, Missed: 1, HintsDropped: 2, LastDropped: 4},
 	})
 	if line, w := render(); line != "" || w != nil {
 		t.Fatalf("webhooks off: line %q, json %v", line, w)
@@ -67,7 +67,8 @@ func TestStatusShowsTheWebhooksLineInShadowMode(t *testing.T) {
 	if line != want {
 		t.Fatalf("webhooks line = %q\nwant              %q", line, want)
 	}
-	for key, n := range map[string]float64{"events": 140, "poll_changes": 23, "announced": 22, "missed": 1, "early_or_noise": 9, "gaps": 0} {
+	for key, n := range map[string]float64{"events": 140, "poll_changes": 23, "announced": 22, "missed": 1, "early_or_noise": 9, "gaps": 0,
+		"hints_dropped": 5, "last_events_dropped": 4} {
 		if w[key] != n {
 			t.Errorf("json %s = %v, want %v (%v)", key, w[key], n, w)
 		}

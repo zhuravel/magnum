@@ -2711,8 +2711,9 @@ owners = ["talkable"]                # the watch owners the App is installed on;
 - **Hints.** An event of a covered owner's watched repository names what changed: its PR (a
   `pull_request*`, review or comment event), or a head (a check or a status, for a fork's check too). An
   event of any other repository or owner is only counted, and so is one the relay received more than 5
-  minutes before the page that lists it (a backlog read after a sleep or an outage): it could not have
-  announced what a poll sees now.
+  minutes before the page that lists it (a backlog read after a sleep, an outage or a restart): it could
+  not have announced what a poll sees now. It is still the last event read for what it names, and its
+  repository's next poll compares nothing.
 - **The comparison.** Each poll of a covered owner compares what it saw change on each PR (a push, draft
   or ready, a newer `updatedAt`, a reopen, a new PR, a close GitHub confirmed) with the hints. A change
   some event named in the 5 minutes before it (or since the repository's previous poll, when the poll
@@ -2723,9 +2724,18 @@ owners = ["talkable"]                # the watch owners the App is installed on;
   a head two PRs share) announces each of them. An event no change followed within 5 minutes is **early
   or noise**: a check run, a review thread resolved, a comment that moves nothing the radar reads. A poll
   while the stream is unhealthy compares nothing, and neither does each repository's first poll after a
-  gap: what changed during an outage or a gap (a close GitHub confirms later included) is the health
-  line's, not a miss. The comparison writes nothing itself: a writer goroutine of the consumer's does, so
-  a slow registry never holds the poll.
+  gap or after a sleep of the Mac, nor its next poll after a page that listed a backlog of its events:
+  what changed during an outage, a gap or a sleep (a close GitHub confirms later included) is not a miss
+  of the events (a push made while the Mac slept comes as a backlog, whether its page reaches the daemon
+  before the poll after the wake or after it). The comparison writes nothing itself: a writer goroutine of
+  the consumer's does, so a slow registry never holds the poll.
+- **Bounds.** The relay, and the proxy in front of it, are not magnum's to trust. The consumer refuses a
+  page that lists more events than it asked for (200), or carries an epoch or a cursor over 100 bytes or
+  with a character other than letters, digits and `._:-`: the stream turns unhealthy with the cause, and
+  the cursor stays the last good one (a kept cursor the client would refuse, an earlier build's, is
+  dropped at the start). It cuts an event's PRs at 100, as the relay does, and keeps at most 10,000 hints
+  and the last events of 10,000 PRs and heads, letting the oldest go first and counting them
+  (`hints_dropped` and `last_events_dropped` under `webhooks` in `magnum status --json`).
 - **Reading the line.** `magnum status` shows, in shadow mode:
 
   ```
@@ -2737,9 +2747,9 @@ owners = ["talkable"]                # the watch owners the App is installed on;
   client: they spend no GitHub budget, and the `github:` lines' meter does not count them. Missed changes
   are what a later phase would have to catch by a slower radar; many early or noise events cost nothing
   but a read. The stream is **unhealthy** with its cause when the last page failed (the relay refused the
-  token, a 5xx, curl could not connect), after a gap until each repository's next poll, or when no page
-  came within `stale_after`; the daemon writes a `webhooks.unhealthy` event when a kind of failure starts
-  and `webhooks.healthy` when the pages come again.
+  token, a 5xx, curl could not connect, a page out of bounds), after a gap until each repository's next
+  poll, or when no page came within `stale_after`; the daemon writes a `webhooks.unhealthy` event when a
+  kind of failure starts and `webhooks.healthy` when the pages come again.
 
 ## Daily use
 

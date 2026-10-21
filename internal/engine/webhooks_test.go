@@ -38,6 +38,9 @@ type fakeRelay struct {
 	// block makes a long poll with nothing to list wait for its context,
 	// as the relay waits for an event (Run's tests).
 	block bool
+	// tamper, when set, changes each page before it is answered: a relay
+	// gone wrong, or a proxy in front of it, which is not magnum's.
+	tamper func(*webhooks.Page)
 	// now is the relay's clock (the harness's): it stamps the server time
 	// and the deliveries received without a time.
 	now func() time.Time
@@ -118,6 +121,10 @@ func (r *fakeRelay) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) 
 		return answer(code, map[string]string{"error": "refused"})
 	}
 	start := r.oldest
+	if len(after) > 100 { // the relay reads no longer cursor
+		defer r.mu.Unlock()
+		return answer(400, map[string]string{"error": "bad_request"})
+	}
 	if after != "" {
 		epoch, seq, _ := strings.Cut(after, ":")
 		n, _ := strconv.ParseInt(seq, 10, 64)
@@ -144,6 +151,9 @@ func (r *fakeRelay) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) 
 		body.ServerTime = r.now().UTC().Truncate(time.Second)
 	}
 	block := r.block && len(page) == 0 && wait > 0
+	if r.tamper != nil {
+		r.tamper(&body)
+	}
 	r.mu.Unlock()
 	if block {
 		<-ctx.Done()
@@ -211,6 +221,8 @@ func (h *harness) webhooksTotals() WebhooksHour {
 		sum.Missed += x.Missed
 		sum.Early += x.Early
 		sum.Gaps += x.Gaps
+		sum.HintsDropped += x.HintsDropped
+		sum.LastDropped += x.LastDropped
 	}
 	return sum
 }

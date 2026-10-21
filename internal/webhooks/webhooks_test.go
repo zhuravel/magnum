@@ -1,7 +1,9 @@
 package webhooks
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -218,5 +220,110 @@ func TestReadTokenRefusesWhatItCannotSendSafely(t *testing.T) {
 		if got, want := err == nil, relay.CheckToken(tok) == nil; got != want {
 			t.Errorf("token of %d characters: ReadToken accepts %v, the relay %v (%v)", len(tok), got, want, err)
 		}
+	}
+}
+
+// pageOf is a page of n status events of talkable/talkable, its cursors
+// after the last.
+func pageOf(n int) string {
+	evs := make([]string, n)
+	for i := range evs {
+		evs[i] = fmt.Sprintf(`{"seq":%d,"delivery_id":"d-%d","event":"status","repository":"talkable/talkable"}`, i+1, i+1)
+	}
+	return fmt.Sprintf(`{"epoch":"ep1","events":[%s],"next":"ep1:%d","high_water":"ep1:%d","oldest":"ep1:0"}`, strings.Join(evs, ","), n, n)
+}
+
+// A page lists at most the events asked for (the limit, at most MaxLimit,
+// or the relay's default of 200 when none is asked): one that lists more is
+// refused whole as malformed, never cut, since its next cursor is past the
+// events a cut would drop; the error says how many came for how many were
+// asked, so the stream's health says what was refused.
+func TestEventsRefusesAPageOverTheLimitItAskedFor(t *testing.T) {
+	for _, tc := range []struct {
+		limit, events int
+		want          string // "" = the page is taken
+	}{
+		{2, 2, ""}, {2, 3, "lists 3 events, more than the 2 asked for"}, {1, 2, "more than the 1 asked for"},
+		{0, 200, ""}, {0, 201, "more than the 200 asked for"}, {900, 500, ""}, {900, 501, "more than the 500 asked for"},
+	} {
+		c, _ := answering(t, "200", pageOf(tc.events))
+		p, err := c.Events(t.Context(), "ep1:0", tc.limit, 0)
+		switch {
+		case tc.want == "" && (err != nil || len(p.Events) != tc.events):
+			t.Errorf("limit %d, %d events: %d taken, err %v", tc.limit, tc.events, len(p.Events), err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want) || len(p.Events) != 0):
+			t.Errorf("limit %d, %d events: %d taken, err %v, want %q", tc.limit, tc.events, len(p.Events), err, tc.want)
+		}
+	}
+	if defaultLimit != relay.DefaultLimit || MaxLimit != relay.MaxLimit {
+		t.Errorf("the client's limits %d and %d, the relay's %d and %d", defaultLimit, MaxLimit, relay.DefaultLimit, relay.MaxLimit)
+	}
+}
+
+// A page's epoch and cursors (next, high_water, oldest) are at most 100
+// bytes of letters, digits and ._:-, as the relay's own are: a page with
+// any other is refused whole as malformed, so the consumer never keeps,
+// writes or quotes it; the error names the field, never its value.
+// ValidCursor is the same check.
+func TestEventsRefusesAPageWithAMalformedCursor(t *testing.T) {
+	long := "ep1:" + strings.Repeat("9", 10<<10)
+	for _, field := range []string{"epoch", "next", "high_water", "oldest"} {
+		for name, bad := range map[string]string{
+			"10 KB": long, "101 bytes": strings.Repeat("e", 101), "a newline": "ep1:\n8", "a NUL": "ep1:\x008",
+			"an escape": "ep1:\x1b[2J", "a space": "ep1: 8", "a quote": `ep1:"8`, "a slash": "ep1/8", "not ASCII": "ép1:8",
+		} {
+			fields := map[string]any{"epoch": "ep1", "events": []any{}, "next": "ep1:8", "high_water": "ep1:8", "oldest": "ep1:0"}
+			fields[field] = bad
+			body, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, _ := answering(t, "200", string(body))
+			_, err = c.Events(t.Context(), "ep1:6", 10, 0)
+			if err == nil || !strings.Contains(err.Error(), "malformed "+field) {
+				t.Errorf("%s with %s: err = %v, want a malformed %s", field, name, err, field)
+			} else if strings.Contains(err.Error(), bad) {
+				t.Errorf("%s with %s: the error quotes the value", field, name)
+			}
+			if ValidCursor(bad) {
+				t.Errorf("ValidCursor accepts %s", name)
+			}
+		}
+	}
+	edge := strings.Repeat("e", 96) + ":123"
+	c, _ := answering(t, "200", `{"epoch":"`+edge[:96]+`","events":[],"next":"`+edge+`"}`)
+	if p, err := c.Events(t.Context(), "ep1:6", 10, 0); err != nil || p.Next != edge || p.HighWater != "" || p.Oldest != "" {
+		t.Errorf("a cursor of 100 bytes and no high water or oldest: %+v, %v", p, err)
+	}
+	if !ValidCursor(edge) || ValidCursor("") {
+		t.Error("ValidCursor: a cursor of 100 bytes refused, or an empty one accepted")
+	}
+}
+
+// An event names at most 100 pull requests, as the relay keeps them
+// (relay.Envelope): one that lists more has the rest cut, the first 100
+// kept.
+func TestEventsCutsAnEventsPullRequestsAt100(t *testing.T) {
+	nums := make([]string, 1000)
+	for i := range nums {
+		nums[i] = fmt.Sprint(i + 1)
+	}
+	c, _ := answering(t, "200", `{"epoch":"ep1","events":[{"seq":1,"delivery_id":"d-1","event":"check_run","repository":"talkable/talkable",
+ "pr_numbers":[`+strings.Join(nums, ",")+`]}],"next":"ep1:1"}`)
+	p, err := c.Events(t.Context(), "ep1:0", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Events[0].PRNumbers; len(got) != maxPRNumbers || got[0] != 1 || got[len(got)-1] != maxPRNumbers {
+		t.Errorf("pr_numbers = %d of them (%v ... %v), want the first %d", len(got), got[:1], got[len(got)-1:], maxPRNumbers)
+	}
+	// The relay keeps as many of a check suite's 150.
+	var prs []string
+	for i := 1; i <= 150; i++ {
+		prs = append(prs, fmt.Sprintf(`{"number":%d}`, i))
+	}
+	ev, err := relay.Envelope("check_suite", []byte(`{"action":"completed","check_suite":{"pull_requests":[`+strings.Join(prs, ",")+`]}}`))
+	if err != nil || len(ev.PRNumbers) != maxPRNumbers {
+		t.Errorf("the relay keeps %d of 150 pull requests (%v), the client %d", len(ev.PRNumbers), err, maxPRNumbers)
 	}
 }

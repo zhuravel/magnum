@@ -10546,6 +10546,57 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `why` in the `fix.dropped` event's data. The `KVPRFixHeld` comment and `fix_held.go`'s header describe
   every hold, and `fixJob.started`'s comment names its reader, `dropFixerAnswered`.
 
+- **The webhooks consumer bounds what it takes from the relay, and a sleep or a backlog is no miss**
+  (2026-10-21, spec 103). The security lens of an improvement run read spec 99's consumer: the client
+  took a page of any length up to execx's output bound (8 MiB) and an event naming any number of PRs,
+  the engine kept hints for an hour and last events for a day with no cap on their number, and `next`,
+  `high_water` and the epoch reached kv (`webhooks.cursor`) and an event's data at any length. A
+  compromised or broken relay, or the proxy that terminates its TLS, could grow the daemon's memory
+  without bound and write junk to the registry; shadow mode decides nothing from it, phase 2 will. A
+  code-health analyst then reproduced a false miss with a scratch test: a push made while the Mac
+  sleeps reaches the relay during the sleep, the page after the wake lists it as a backlog that hints at
+  nothing (and did not record it as the PR's last event), and when that page came before the poll the
+  stream was healthy, so the poll counted the push as missed with "no event for it in the last 24h".
+  The Mac sleeps nightly, so every morning added false misses to the numbers that decide phase 2.
+  - **The page.** The client (`internal/webhooks`) refuses a page that lists more events than it asked
+    for (the limit, at most 500, or the relay's default of 200), or whose epoch, `next`, `high_water`
+    or `oldest` is over 100 bytes or holds a character other than letters, digits and `._:-` (what
+    `safe` keeps of a value a message quotes; `ValidCursor`): a malformed answer, refused whole, its
+    error naming the count or the field and never the value, so the stream turns unhealthy with the
+    cause, said once while it lasts, and the cursor stays the last good one. It cuts an event's PR
+    numbers at 100, the relay's own cut (unexported there; a test pins it against `relay.Envelope`).
+  - **Memory.** The engine keeps at most 10,000 hints and 10,000 last events (the PRs and heads a missed
+    change's event names), letting the oldest go first: the hints in the order they were read, the last
+    events by the order they were last read, cut after each page. What goes is counted in the hour's
+    totals (`hints_dropped`, `last_events_dropped`, omitted while zero, so `webhooks.hours` keeps its
+    format) and `magnum status --json` sums them under `webhooks`; the line stays as it was. The
+    delivery ids were already a ring of 10,000.
+  - **The kept cursor.** A cursor in kv that the client would refuse (an earlier build kept it from a
+    page it took) is dropped at the start: the relay answers such a cursor 400, which would hold the
+    stream unhealthy for good, and the first flush would write it again.
+  - **A sleep or a backlog holds the comparison, like a gap.** The first poll of each repository after
+    a sleep of the Mac (the tick's `afterSleep`; every repository compared before the last tick ended
+    before the sleep) compares nothing, and so does a repository's next poll after a page that listed a
+    backlog of its events (received more than 5 minutes before the page, by the relay's clock: a sleep,
+    an outage of the network, a restart of the daemon). A backlog event still hints at nothing, but it
+    is now the last event read for what it names. Each hold closes one gap the other leaves: the sleep's
+    covers a poll that comes before the page while `stale_after` is longer than the sleep, and the
+    backlog's an outage without a sleep and a restart. The holds count nothing and say nothing: the
+    health line is unchanged.
+  - **Residual.** The bounds count entries, not bytes: a head SHA or a delivery id kilobytes long still
+    fits a page's 8 MiB, so 10,000 such hints or ids hold more memory than real ones (the relay's
+    contract keeps both short: 40 hex, a GUID). A held poll also leaves uncounted a real miss in the same
+    repository.
+  - **Rejected:**
+    - Trusting the relay's own limits (100 PRs an event, 500 events a page, 100-byte cursors): the relay
+      and the proxy in front of it are not magnum's, and neither is what a broken build of the relay
+      sends.
+    - Cutting a page over its limit to the events asked for: its `next` cursor is past the events cut,
+      which would be lost unread; refusing the page keeps the cursor and says why.
+    - Holding on a sleep alone or on a backlog alone: each leaves one order or cause a false miss (above).
+    - Timing a backlog event as a hint after a sleep: an event hours old would announce a change it did
+      not see, and a hint must come within the window of the poll that sees the change.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

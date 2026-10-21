@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,28 @@ const PageSlack = 10 * time.Second
 
 // MaxLimit is the most events the relay lists in one page.
 const MaxLimit = 500
+
+// defaultLimit is the page the relay lists when none is asked
+// (relay.DefaultLimit).
+const defaultLimit = 200
+
+// maxPRNumbers is the most pull requests the relay keeps of one event (its
+// envelope's bound, unexported there): an event naming more has the rest
+// cut, so a relay gone wrong, or the proxy in front of it, cannot make one
+// event hint at a thousand PRs.
+const maxPRNumbers = 100
+
+// maxCursor is the longest epoch or cursor a page may carry, as long as the
+// relay reads one in after=.
+const maxCursor = 100
+
+// ValidCursor reports whether s can be one of the relay's epochs or cursors:
+// 1 to 100 bytes of letters, digits and ._:- (what safe keeps of a value a
+// message quotes). A page carrying any other is malformed, and the consumer
+// never keeps or writes one.
+func ValidCursor(s string) bool {
+	return s != "" && len(s) <= maxCursor && safe(s) == s
+}
 
 // Event is one delivery as the relay keeps it (relay-api: ids and routing
 // only).
@@ -173,7 +196,7 @@ func (c *Client) Events(ctx context.Context, after string, limit int, wait time.
 	}
 	switch code {
 	case 200:
-		return parsePage(body)
+		return parsePage(body, asked(limit))
 	case 401:
 		return Page{}, ErrUnauthorized
 	case 429:
@@ -193,9 +216,18 @@ func eventsURL(base, after string, limit int, wait time.Duration) (string, error
 	}
 	q := url.Values{"after": {after}, "wait": {strconv.Itoa(int(wait / time.Second))}}
 	if limit > 0 {
-		q.Set("limit", strconv.Itoa(min(limit, MaxLimit)))
+		q.Set("limit", strconv.Itoa(asked(limit)))
 	}
 	return strings.TrimRight(base, "/") + "/v1/events?" + q.Encode(), nil
+}
+
+// asked is the most events a page asked with limit may list: the limit, at
+// most MaxLimit, or the relay's default when none is asked (0).
+func asked(limit int) int {
+	if limit <= 0 {
+		return defaultLimit
+	}
+	return min(limit, MaxLimit)
 }
 
 // curlConfig is what curl reads with --config -: HTTPS only, no redirect
@@ -243,14 +275,33 @@ func splitStatus(out []byte) (int, []byte, error) {
 	return code, body, nil
 }
 
-// parsePage decodes a 200's page, which must name its epoch and next cursor.
-func parsePage(body []byte) (Page, error) {
+// parsePage decodes a 200's page, which must name its epoch and next cursor
+// and list at most limit events, the most the page asked for. The relay
+// and the proxy in front of it are not magnum's: a page listing more
+// events, or carrying an epoch or a cursor ValidCursor refuses, is
+// malformed and refused whole (never cut: its next cursor is past the
+// events a cut would drop), its error naming the field, never the value;
+// an event naming more than maxPRNumbers pull requests has the rest cut.
+func parsePage(body []byte, limit int) (Page, error) {
 	var p Page
 	if err := json.Unmarshal(body, &p); err != nil {
 		return Page{}, fmt.Errorf("the relay's page does not decode: %w", err)
 	}
 	if p.Epoch == "" || p.Next == "" {
 		return Page{}, errors.New("the relay's page names no epoch or next cursor")
+	}
+	if len(p.Events) > limit {
+		return Page{}, fmt.Errorf("the relay's page lists %d events, more than the %d asked for", len(p.Events), limit)
+	}
+	for _, f := range []struct{ name, value string }{{"epoch", p.Epoch}, {"next", p.Next}, {"high_water", p.HighWater}, {"oldest", p.Oldest}} {
+		if f.value != "" && !ValidCursor(f.value) {
+			return Page{}, fmt.Errorf("the relay's page carries a malformed %s (over %d bytes, or a character other than letters, digits and ._:-)", f.name, maxCursor)
+		}
+	}
+	for i := range p.Events {
+		if ev := &p.Events[i]; len(ev.PRNumbers) > maxPRNumbers {
+			ev.PRNumbers = slices.Clip(ev.PRNumbers[:maxPRNumbers])
+		}
 	}
 	return p, nil
 }

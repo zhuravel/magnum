@@ -28,6 +28,10 @@ type statusWebhooks struct {
 	Gaps       int        `json:"gaps"`
 	Healthy    bool       `json:"healthy"`
 	Cause      string     `json:"cause,omitempty"`
+	// HintsDropped and LastDropped are what the consumer's bounds let go
+	// (engine.WebhooksHour), in --json only: the line stays as it is.
+	HintsDropped int `json:"hints_dropped"`
+	LastDropped  int `json:"last_events_dropped"`
 }
 
 // statusGatherWebhooks fills the webhooks line from what the daemon's
@@ -45,6 +49,8 @@ func statusGatherWebhooks(ctx context.Context, d statusDeps, r *statusReport) {
 		w.Missed += h.Missed
 		w.Early += h.Early
 		w.Gaps += h.Gaps
+		w.HintsDropped += h.HintsDropped
+		w.LastDropped += h.LastDropped
 	}
 	if len(hours) > 0 {
 		w.Since = new(hours[0].Hour)

@@ -8299,6 +8299,12 @@ type WebhooksHour struct {
 	Missed    int       `json:"missed"`
 	Early     int       `json:"early"`
 	Gaps      int       `json:"gaps"`
+	// HintsDropped and LastDropped count what the consumer's bounds let go
+	// (a flood of events, a relay gone wrong): the oldest hints past the
+	// 10,000 it keeps, and the oldest of the 10,000 last events it keeps of
+	// PRs and heads.
+	HintsDropped int `json:"hints_dropped,omitempty"`
+	LastDropped  int `json:"last_events_dropped,omitempty"`
 }
     WebhooksHour is one hour's totals (KVWebhooksHours keeps the last
     WebhooksKeepHours, oldest first): the events read, the poll changes compared
@@ -20990,6 +20996,12 @@ func ReadToken(path string) (string, error)
     accepts, holding one token the relay can accept (relay.CheckToken: one word
     of MinToken to MaxToken printable ASCII characters), trimmed of surrounding
     white space. Its errors never quote the token.
+
+func ValidCursor(s string) bool
+    ValidCursor reports whether s can be one of the relay's epochs or cursors:
+    1 to 100 bytes of letters, digits and ._:- (what safe keeps of a value a
+    message quotes). A page carrying any other is malformed, and the consumer
+    never keeps or writes one.
 
 
 TYPES
