@@ -10425,6 +10425,50 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - Reading GitHub's `rate_limit` endpoint after every refusal: another call per refusal, and its reset
       disagreed with GraphQL's own the same morning.
 
+- **The reply classifier reads "I did not make this change", "not patching" and a fix sent to a follow-up
+  as declines** (2026-10-21, spec 104; amends "A reply "Follow-up in <sha>" is a fix, not a won't-fix").
+  Five replies since 10-17 declined or deferred a finding and were `other`: three on talkable#12041 opened
+  "I did not make this change" (once after "Correct: …"), which no pattern knew; two on another
+  repository's PR accepted the finding ("Confirmed. This is a real gap …", "Thanks — all four are real …
+  we are not patching them here. We'll raise them as one templates follow-up") and sent the fix to a
+  follow-up, which the deferral pattern missed because it reads a clause's start ("Follow-up …",
+  "Deferred to a follow-up") while these name the follow-up at the clause's end, and the first's sat four
+  paragraphs down, past the first paragraph, which alone was read. The judge honoured all five, so only the
+  threads file's class, the `round.threads` "replies:" line, the evidence tables and the retro's guess
+  were wrong. Now `replyDeclines` also takes a clause "I (or we) did not (didn't) make, apply or take this
+  (that, the, the suggested) change", alone or before "here", "because", "since" or "in this PR" (so "… yet"
+  and "… myself" claim nothing), and "<…> we are (I'm) not patching" or a clause that starts "not
+  patching"; and a clause that ends in "as a (one, up to two words) follow-up" (or "follow-up PR", issue,
+  ticket, task, change) with no verb saying it was made (pushed, landed, committed, merged, shipped, added,
+  made, done, fixed, applied) defers the fix (`replyDefers`), in the first paragraph like the other
+  declines, and in a later one only when the first clause acknowledges the finding ("Confirmed", "Thanks")
+  and no clause before the deferral says fixed or not a bug (`replyDeferredLater`; a verdict, score or
+  other decline past the first paragraph still claims nothing). Ending at the follow-up, the clause names
+  no commit, so "follow-up in <sha>" stays `fixed` and "as a follow-up in <sha>" is no deferral. Run over
+  the 915 distinct author replies in the stored threads files (excerpts of 600 characters), the change
+  moves four from `other` to `won't fix`, the four above, and none of another class; the fifth's deferral
+  lies past its excerpt, and its full body moves too. New tests TestAReplyThatDidNotMakeTheChangeIsAWontFix
+  and TestAnAcceptedGapDeferredToAFollowUpIsAWontFix. Rejected: "in a follow-up" (the pinned "Good catch,
+  added in a follow-up" stays `other`), reading every decline past the first paragraph (the pinned "Noted."
+  followed by a paragraph "I score that fix at −8" stays `other`), and a deferral anywhere in a clause
+  ("runs as a follow-up step" describes code).
+
+- **A memory pressure level counts only when two samples in a row read it** (2026-10-21, spec 104; amends
+  "The daemon records the machine's memory pressure and swap"). `machine.memory_pressure` was recorded at
+  every change of a single one-minute sample: 83 events since 10-19, 35 of them warn, in pairs one to five
+  minutes apart (10-21: warn 08:49, normal 08:52, warn 08:53, and the same twice more that morning). Now
+  `noteMemoryLevel` keeps the level that counts and a pending one: a known sample at another level is
+  pending, the next known sample at that level makes it count (one event, with that sample's swap), and a
+  sample at the counted level drops it; an unknown sample changes neither. The first known level since a
+  start still counts at once (there is nothing to flap from, and a restart records where it starts). The
+  critical toast keeps its rule: a run of critical starts at the first critical sample and ends at the next
+  normal one, so the toast can come a minute before its error event, and a single critical sample toasts
+  with no event. The `memory:` status line still shows the latest sample (kv `machine.memory` is written
+  every sample). New test TestAMemoryLevelCountsOnlyWhenTwoSamplesAgree;
+  TestEachChangeOfTheMemoryPressureIsOneEvent takes two samples per change. Residual: a level that
+  alternates between warn and critical without two equal samples in a row leaves the counted level where it
+  was (the toast still goes out).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

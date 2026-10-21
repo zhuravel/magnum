@@ -106,8 +106,22 @@ var (
 	// fix at -3", "Net: −3", "net -2.5".
 	replyNegativeScore = regexp.MustCompile(`(?i)(?:\bscore[sd]?\s+(?:that|the|this)\s+fix\s+at|\bnet:?)\s*[-−]\s*\d`)
 	// replyDeclines is a clause (replyClauseLead dropped) that declines the
-	// fix: "we accept the risk", "not worth it", "but not worth the cost".
-	replyDeclines = regexp.MustCompile(`(?i)^(?:we\s+accept\s+(?:the|this)\s+risk|not\s+worth\s+(?:it|the))\b`)
+	// fix: "we accept the risk", "not worth it", "but not worth the cost", "I
+	// did not make this change" (or "we didn't apply the suggested change",
+	// alone or before "here", "because", "since" or "in this PR"), "<…> we
+	// are not patching them here" (or "I'm not patching", "not patching").
+	replyDeclines = regexp.MustCompile(`(?i)^(?:(?:we\s+accept\s+(?:the|this)\s+risk|not\s+worth\s+(?:it|the))\b|` +
+		`(?:i|we)\s+(?:did\s+not|didn't)\s+(?:make|apply|take)\s+(?:this|that|the)\s+(?:(?:suggested|proposed)\s+)?changes?` +
+		`(?:$|\s+(?:here|because|since|in\s+this\s+(?:pr|push|round))\b)|` +
+		`(?:.*\b(?:i|we)(?:'m|'re|\s+am|\s+are)\s+)?not\s+patching\b)`)
+	// replyAsFollowUp is a clause (replyClauseLead dropped) that ends in the
+	// follow-up its fix goes to: "Backend fix as a separate follow-up", "We'll
+	// raise them as one templates follow-up", "tracking it as a follow-up PR".
+	// Ending there, it names no commit after the follow-up.
+	replyAsFollowUp = regexp.MustCompile(`(?i)\bas\s+(?:a|an|one)\s+(?:[a-z-]+\s+){0,2}?follow[- ]?up(?:\s+(?:pr|issue|ticket|task|change))?$`)
+	// replyMadeVerb in such a clause says the follow-up was made ("pushed as a
+	// follow-up"): no deferral.
+	replyMadeVerb = regexp.MustCompile(`(?i)\b(?:pushed|landed|committed|merged|shipped|added|made|done|fixed|applied)\b`)
 )
 
 // classifyReply says what a reply claims from its first clause: "fixed",
@@ -122,7 +136,12 @@ var (
 // PR" (or push, round; or "not changed"), "No guard for now", "not adding
 // it", "won't add" (ReplyWontFix). A "follow-up" with no commit after it
 // ("follow-up PR", "follow-up later", "deferred to a follow-up") is a
-// deferral; "followed up" with no commit is no verdict.
+// deferral; "followed up" with no commit is no verdict. A clause that ends
+// in the follow-up its fix goes to ("Backend fix as a separate follow-up",
+// replyDefers) is a deferral too, in the first paragraph and, when the
+// reply's first clause acknowledges the finding ("Confirmed", "Thanks"), in a
+// later one (replyDeferredLater: an accepted gap whose reply ends where the
+// fix goes).
 // An acknowledgement ("Good catch", "Valid", "Analyzed", "Noted", "Low
 // priority", "Low priority (Net 0)", "Correction", "You're right") passes the
 // verdict on to a later clause of the first paragraph ("Good catch, fixed in
@@ -135,12 +154,13 @@ var (
 // Anything else is ReplyOther, as is another acknowledgement no verdict
 // follows, unless the paragraph declines the fix before any clause says fixed
 // or not a bug (replyDeclined: "Confirmed. Still open … so I score that fix at
-// −8" is ReplyWontFix), or says "by design" or "by decision" anywhere and no
-// clause names a verdict (ReplyNotABug: "…, so such a behaviour is by
-// design"). The class is a hint for the judge, not a verdict. Case does not
-// matter; leading quoted lines (">"), markup, emoji, an agent's "(Claude)" tag
-// and the comment it answers ("Re 4100000001:") are skipped, and a verdict may
-// follow "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
+// −8", "I did not make this change", "we are not patching them here" are
+// ReplyWontFix), or says "by design" or "by decision" anywhere and no clause
+// names a verdict (ReplyNotABug: "…, so such a behaviour is by design"). The
+// class is a hint for the judge, not a verdict. Case does not matter; leading
+// quoted lines (">"), markup, emoji, an agent's "(Claude)" tag and the
+// comment it answers ("Re 4100000001:") are skipped, and a verdict may follow
+// "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
 // intentional").
 func classifyReply(body string) string {
 	s := strings.ReplaceAll(body, "’", "'")
@@ -162,8 +182,9 @@ func classifyReply(body string) string {
 	if loc := replyRe.FindStringIndex(s); loc != nil {
 		s = trimReplyLead(s[loc[1]:])
 	}
-	if para, _, ok := strings.Cut(s, "\n\n"); ok {
-		s = para
+	rest := ""
+	if para, after, ok := strings.Cut(s, "\n\n"); ok {
+		s, rest = para, after
 	}
 	clauses := replyClauses(s)
 	acked, low := false, false
@@ -187,13 +208,18 @@ func classifyReply(body string) string {
 	if replyByDesign.MatchString(s) && !slices.ContainsFunc(clauses, func(c replyClause) bool { return replyVerdict(c.text) != "" }) {
 		return ReplyNotABug
 	}
+	if acked && replyDeferredLater(rest) {
+		return ReplyWontFix // the first clause accepts the finding, a later paragraph defers its fix
+	}
 	return ReplyOther
 }
 
 // replyDeclined is ReplyWontFix when the paragraph s weighs the proposed fix
 // and declines it before any clause says fixed or not a bug: a negative score
-// for the fix anywhere ("I score that fix at −8", "Net: −3"), or a clause
-// "we accept the risk" or "not worth it". Otherwise it is ReplyOther.
+// for the fix anywhere ("I score that fix at −8", "Net: −3"), a clause "we
+// accept the risk", "not worth it", "I did not make this change" or "we are
+// not patching them here" (replyDeclines), or one that sends the fix to a
+// follow-up (replyDefers). Otherwise it is ReplyOther.
 func replyDeclined(s string, clauses []replyClause) string {
 	scored := len(s)
 	if loc := replyNegativeScore.FindStringIndex(s); loc != nil {
@@ -203,15 +229,41 @@ func replyDeclined(s string, clauses []replyClause) string {
 		if class := replyVerdict(c.text); class == ReplyFixed || class == ReplyNotABug {
 			return ReplyOther
 		}
-		if scored < c.end || replyDeclines.MatchString(c.text[len(replyClauseLead.FindString(c.text)):]) {
+		v := c.text[len(replyClauseLead.FindString(c.text)):]
+		if scored < c.end || replyDeclines.MatchString(v) || replyDefers(v) {
 			return ReplyWontFix
 		}
 	}
 	return ReplyOther
 }
 
-// replyClause is a clause of a reply's first paragraph, trimmed of what is no
-// letter or digit at either end, and the offset in the paragraph where it ends.
+// replyDeferredLater reports whether the paragraphs after a reply's first
+// (rest) send the fix to a follow-up (replyDefers) before any of their
+// clauses says fixed or not a bug. Only a deferral counts there: a verdict, a
+// score or a decline past the first paragraph claims nothing.
+func replyDeferredLater(rest string) bool {
+	for _, c := range replyClauses(rest) {
+		if class := replyVerdict(c.text); class == ReplyFixed || class == ReplyNotABug {
+			return false
+		}
+		if replyDefers(c.text[len(replyClauseLead.FindString(c.text)):]) {
+			return true
+		}
+	}
+	return false
+}
+
+// replyDefers reports whether a clause (replyClauseLead dropped) ends in the
+// follow-up its fix goes to, with no commit after it and no verb that says
+// the follow-up was made: "Backend fix as a separate follow-up" defers,
+// "pushed as a follow-up" and "as a follow-up in 9aed21f" do not.
+func replyDefers(v string) bool {
+	return replyAsFollowUp.MatchString(v) && !replyMadeVerb.MatchString(v)
+}
+
+// replyClause is a clause of a reply's first paragraph (or of the paragraphs
+// after it, for replyDeferredLater), trimmed of what is no letter or digit at
+// either end, and the offset in that text where it ends.
 type replyClause struct {
 	text string
 	end  int

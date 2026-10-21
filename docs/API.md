@@ -6237,9 +6237,11 @@ const EventKindVersionUnknown = "kind.version_unknown"
 
 const EventMemoryPressure = "machine.memory_pressure"
     EventMemoryPressure is recorded at each change of the machine's memory
-    pressure level: the first known level since the daemon started (info),
-    a return to normal (info), warn (warn) and critical (error, with one urgent
-    toast per run of critical). A sample whose level is unknown changes nothing.
+    pressure level, a new level counting once two samples in a row read it:
+    the first known level since the daemon started (info, at once), a return to
+    normal (info), warn (warn) and critical (error; the one urgent toast of a
+    run of critical goes out at its first critical sample). A sample whose level
+    is unknown changes nothing.
 
 const EventSharedFailure = "agents.shared_failure"
     EventSharedFailure is recorded (warn) when two or more PRs' agent launches

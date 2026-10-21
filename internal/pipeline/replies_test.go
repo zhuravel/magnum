@@ -337,6 +337,87 @@ func TestClassifyReplyReadsFollowUpInACommitAsFixed(t *testing.T) {
 	}
 }
 
+// Three replies of 2026-10-17 declined a finding with "I did not make this
+// change", which no pattern read: the classifier filed them `other`. A clause
+// "I (or we) did not (or didn't) make, apply or take this (that, the, the
+// suggested) change", alone or before "here", "in this PR" or "because", is a
+// decline; one that goes on ("yet", "myself") claims nothing.
+func TestAReplyThatDidNotMakeTheChangeIsAWontFix(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		// The three phrasings, paraphrased.
+		{"(Claude) I did not make this change. The result stays the same, so the gain is shorter code only. " +
+			"A copy of this file in #42 needs the same edit.", ReplyWontFix},
+		{"(Claude) I did not make this change. This comment is on an older version of the file; in the current one " +
+			"the gain is one loop fewer.", ReplyWontFix},
+		{"(Claude) Correct: the provider declares the field as a set, so `distinct()` has no effect. I did not make " +
+			"this change, because the result stays the same.", ReplyWontFix},
+		// The forms around them.
+		{"We didn't apply the suggested change: the caller already checks.", ReplyWontFix},
+		{"I did not take that change here.", ReplyWontFix},
+		{"Valid, but I did not make the change in this PR.", ReplyWontFix},
+		{"I did not make this change because the plan stays the same.", ReplyWontFix},
+		// Not a decline, or a verdict first.
+		{"I did not make this change yet; I'll push it tomorrow.", ReplyOther},
+		{"Good catch, I did not make this change myself, it came from the rebase. Fixed in 1a2b3c4.", ReplyFixed},
+		{"Fixed in 1a2b3c4. I did not make this change in the old path.", ReplyFixed},
+		{"Not a bug: I did not make this change because the lock is held.", ReplyNotABug},
+		{"Why did you not make this change?", ReplyOther},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
+// Two replies of 2026-10-20 accepted a finding and sent its fix elsewhere,
+// which the classifier filed `other`: "Confirmed. This is a real gap …",
+// whose deferral ("Backend fix as a separate follow-up") comes paragraphs
+// after the first, which alone was read, and "Thanks — all four are real …
+// we are not patching them here. We'll raise them as one templates
+// follow-up", whose clauses name the follow-up at their end, where the
+// deferral pattern, which reads a clause's start, never looks. A clause "we
+// are not patching" (or "not patching", "I'm not patching") declines; a
+// clause that ends in "as a (separate, …) follow-up" (or "follow-up PR")
+// with no commit defers, in the first paragraph and, after an
+// acknowledgement, in a later one, unless a fixed or not-a-bug clause comes
+// before it. A follow-up in a commit stays fixed (spec 60).
+func TestAnAcceptedGapDeferredToAFollowUpIsAWontFix(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		// The two phrasings, paraphrased.
+		{"Confirmed. This is a real gap, and it sits in the backend, not in this config.\n\n" +
+			"- The callback creates only one hook.\n- The uninstall leaves the flag as it was.\n\n" +
+			"Resolution in this PR: the manual step is written down in the changelog (1a2b3c4). " +
+			"Backend fix as a separate follow-up: the manager also turns the flag on.", ReplyWontFix},
+		{"Thanks — all four are real, and all four come from the shared template. This copy is that template " +
+			"verbatim, so per repo convention we are not patching them here. We'll raise them as one templates " +
+			"follow-up, fix them in the template and copy the fix to the clients:\n\n1. The renderer drops a space.", ReplyWontFix},
+		// Each signal on its own.
+		{"Thanks — all four are real. We'll raise them as one templates follow-up.", ReplyWontFix},
+		{"This copy is the template verbatim, so per repo convention we are not patching it here.", ReplyWontFix},
+		{"Not patching it here: the template owns it.", ReplyWontFix},
+		{"I'm not patching the copy.", ReplyWontFix},
+		{"Valid; tracking it as a follow-up PR.", ReplyWontFix},
+		{"Thanks!\n\nWe'll handle it as a follow-up.", ReplyWontFix},
+		{"Confirmed.\n\nThe path is real. Backend fix as a separate follow-up.", ReplyWontFix},
+		// A follow-up in a commit stays fixed; a commit or a fix said first is no deferral.
+		{"Follow-up in 9aed21f: the pin is gone.", ReplyFixed},
+		{"Confirmed, a real gap. Follow-up in 9aed21f.", ReplyFixed},
+		{"Confirmed.\n\nShipped as a follow-up in 9aed21f.", ReplyOther},
+		{"Pushed as a follow-up.", ReplyOther},
+		{"Confirmed.\n\nFixed in 1a2b3c4; the docs as a separate follow-up.", ReplyOther},
+		// Not a deferral, or not read past the first paragraph.
+		{"Good catch, added in a follow-up.", ReplyOther},
+		{"The job runs as a follow-up step after the import.", ReplyOther},
+		{"The guard runs first.\n\nThe cleanup goes in as a separate follow-up.", ReplyOther},
+		{"Why are we not patching this?", ReplyOther},
+		{"The migration is not patching the schema.", ReplyOther},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestExcerpt(t *testing.T) {
 	if s, cut := excerpt("  short  ", 600); s != "short" || cut {
 		t.Fatalf("short = %q, %v", s, cut)

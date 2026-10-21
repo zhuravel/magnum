@@ -31,10 +31,11 @@ import (
 const KVMachineMemory = "machine.memory"
 
 // EventMemoryPressure is recorded at each change of the machine's memory
-// pressure level: the first known level since the daemon started (info), a
-// return to normal (info), warn (warn) and critical (error, with one urgent
-// toast per run of critical). A sample whose level is unknown changes
-// nothing.
+// pressure level, a new level counting once two samples in a row read it:
+// the first known level since the daemon started (info, at once), a return
+// to normal (info), warn (warn) and critical (error; the one urgent toast of
+// a run of critical goes out at its first critical sample). A sample whose
+// level is unknown changes nothing.
 const EventMemoryPressure = "machine.memory_pressure"
 
 // The kernel's memory pressure levels (kern.memorystatus_vm_pressure_level);
@@ -282,9 +283,12 @@ type memoryWatch struct {
 	// sampled again until the daemon restarts, and the last sample, unknown
 	// with that cause, stays recorded.
 	off bool
-	// level is the last known level since the daemon started
-	// (MemoryUnknown: none yet); an unknown sample leaves it.
-	level int
+	// level is the level that counts since the daemon started
+	// (MemoryUnknown: none yet): the first known one, then one that two
+	// known samples in a row read. pending is another level that only the
+	// last known sample read (MemoryUnknown: none); the next decides. An
+	// unknown sample leaves both.
+	level, pending int
 	// critical is a run of critical: from a critical sample to the next
 	// normal one, whose toast went out (or was kept back by the key).
 	critical bool
@@ -369,16 +373,18 @@ func (e *Engine) recordMemory(ctx context.Context, r memoryRead) {
 	e.noteMemoryLevel(ctx, r.sample)
 }
 
-// noteMemoryLevel records EventMemoryPressure when s's level differs from
-// the last known one (the first known level since the daemon started is
-// info), and shows the urgent toast at the start of a run of critical. A
-// sample whose level is unknown is no change, and never a return to normal.
+// noteMemoryLevel records EventMemoryPressure when the level that counts
+// changes: the first known level since the daemon started counts at once
+// (info), and another counts when two known samples in a row read it (a
+// single sample of it is pending, and one at the counted level drops it), so
+// a level that flaps for a sample records nothing. The urgent toast keeps its
+// own rule: it goes out at the first critical sample of a run of critical,
+// which the next normal sample ends. A sample whose level is unknown changes
+// nothing, and is never a return to normal.
 func (e *Engine) noteMemoryLevel(ctx context.Context, s MemorySample) {
 	if s.Level == MemoryUnknown {
 		return
 	}
-	prev := e.mem.level
-	e.mem.level = s.Level
 	switch {
 	case s.Level == MemoryNormal:
 		e.mem.critical = false
@@ -386,9 +392,16 @@ func (e *Engine) noteMemoryLevel(ctx context.Context, s MemorySample) {
 		e.mem.critical = true
 		e.toastCriticalMemory(ctx, s)
 	}
-	if prev == s.Level {
+	prev := e.mem.level
+	switch {
+	case prev == s.Level:
+		e.mem.pending = MemoryUnknown
+		return
+	case prev != MemoryUnknown && e.mem.pending != s.Level:
+		e.mem.pending = s.Level // read once: the next known sample decides
 		return
 	}
+	e.mem.level, e.mem.pending = s.Level, MemoryUnknown
 	level, msg := "info", fmt.Sprintf("memory pressure %s (the first reading since the daemon started)", s.Pressure)
 	switch {
 	case prev == MemoryUnknown:

@@ -913,9 +913,11 @@ the kernel's memory pressure level (`sysctl -n kern.memorystatus_vm_pressure_lev
 critical) and the swap (`sysctl -n vm.swapusage`) on a goroutine of its own, each command with a 3-second
 timeout, so one that fails keeps the other's reading; the tick never waits for it, and the next tick's check
 records the finished sample in the registry (`machine.memory`: the level, the swap used and its total in
-bytes, when it was read and, for a part it could not read, why). Each change of the level is a
-`machine.memory_pressure` event: the first known level since a start is info, a return to normal is info,
-warn a warning and critical an error. A run of critical pressure, which lasts until a normal sample, toasts
+bytes, when it was read and, for a part it could not read, why). A new level counts once two samples in a
+row read it (the first known level since a start counts at once), so a level that flaps for one sample
+records nothing, and each change of the level that counts is a `machine.memory_pressure` event: the first
+known level since a start is info, a return to normal is info, warn a warning and critical an error. A run
+of critical pressure, which starts at its first critical sample and lasts until a normal sample, toasts
 once ("magnum: memory pressure critical", with the swap and how many of magnum's agents are live), and never
 twice within an hour, so a level that flaps does not toast again. A command that fails (Linux has neither
 value) leaves its part unknown, with one warning per value and kind of failure (a non-zero exit, a timeout,
@@ -2033,8 +2035,10 @@ that discharged it or `unknown`, and a lesson the judge writes into the notes ap
 first. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
-risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it"
-and "No guard for now"; "added in", "removed in", "closed by … in" and "follow-up in" with a commit are `fixed`); the
+risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it",
+"No guard for now", "I did not make this change", "we are not patching them here" and a clause that ends
+"as a separate follow-up", also in a later paragraph after "Confirmed" or "Thanks"; "added in", "removed
+in", "closed by … in" and "follow-up in" with a commit are `fixed`); the
 judge decides a reply by what it does, not by that hint, accepts a fix
 only when the code shows it (a defect that is an end state only when every write that reaches it is
 covered, with a probe of one the fix left untouched; a fix that rests on what another part writes, such as

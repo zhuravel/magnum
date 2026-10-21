@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -320,12 +321,13 @@ func TestOneFailingSysctlKeepsTheOthersReading(t *testing.T) {
 	}
 }
 
-// Each change of the pressure level is one machine.memory_pressure event:
-// the first known level since the start is recorded once as info, an
-// unchanged level records nothing, warn is a warning, critical an error with
-// one urgent toast per run of critical (a run lasts until a normal sample,
-// so a level that flaps between critical and warn toasts once), and the
-// return to normal is info. An unknown sample is no return to normal.
+// Each change of the pressure level (two samples in a row, but the first
+// known level) is one machine.memory_pressure event: the first known level
+// since the start is recorded once as info, an unchanged level records
+// nothing, warn is a warning, critical an error with one urgent toast per run
+// of critical (a run lasts until a normal sample, so a level that flaps
+// between critical and warn toasts once), and the return to normal is info.
+// An unknown sample is no return to normal.
 func TestEachChangeOfTheMemoryPressureIsOneEvent(t *testing.T) {
 	s := newFakeSysctl()
 	h := newHarness(t, s.install)
@@ -354,10 +356,12 @@ func TestEachChangeOfTheMemoryPressureIsOneEvent(t *testing.T) {
 	sample("4\n")
 	sample("4\n")
 	sample("2\n")
+	sample("2\n")
 	sample("4\n") // the same run: no second toast
 	s.fails("sysctl: unknown oid 'kern.memorystatus_vm_pressure_level'", "")
 	h.advance(time.Minute)
 	memoryCheck(h) // unknown: no event, no return to normal
+	sample("4\n")  // the second critical in a row
 	sample("4\n")  // still critical: nothing new
 	want = append(want,
 		"error: memory pressure critical (was warn): swap 49.1 of 50.0 GB used",
@@ -370,6 +374,7 @@ func TestEachChangeOfTheMemoryPressureIsOneEvent(t *testing.T) {
 		t.Fatalf("%d critical toasts in one run of critical, want 1", n)
 	}
 
+	sample("1\n")
 	sample("1\n")
 	want = append(want, "info: memory pressure back to normal (was critical): swap 49.1 of 50.0 GB used")
 	if got := levels(); !slices.Equal(got, want) {
@@ -384,6 +389,77 @@ func TestEachChangeOfTheMemoryPressureIsOneEvent(t *testing.T) {
 	sample("4\n") // a new run past the window toasts again
 	if n := toasts(); n != 2 {
 		t.Fatalf("%d critical toasts after a new run past the window, want 2", n)
+	}
+}
+
+// A new level counts only when two samples in a row read it: on 2026-10-21
+// the level went warn, normal and warn again within four minutes, three
+// times that morning, and every sample of it was an event (83 since 10-19).
+// After a normal start, a warn, a normal and a warn a minute apart record
+// nothing, the second warn in a row records the change, and an unknown
+// sample between two readings of a level changes nothing; the sample in kv,
+// which the status line shows, is always the latest. The critical toast
+// keeps its own rule: it goes out at the first critical sample, and the
+// error event comes with the second.
+func TestAMemoryLevelCountsOnlyWhenTwoSamplesAgree(t *testing.T) {
+	s := newFakeSysctl()
+	h := newHarness(t, s.install)
+	sample := func(level string) {
+		t.Helper()
+		s.prints(level, slowSwap)
+		h.advance(time.Minute)
+		memoryCheck(h)
+		if want, _ := strconv.Atoi(strings.TrimSpace(level)); memorySample(h).Level != want {
+			t.Fatalf("the recorded sample is %+v, want the latest, level %d", memorySample(h), want)
+		}
+	}
+	levels := func() []string {
+		var out []string
+		for _, ev := range h.events(EventMemoryPressure) {
+			out = append(out, ev.Level+": "+ev.Message)
+		}
+		return out
+	}
+	toasts := func() int { return len(h.nh.titles("memory pressure critical")) }
+
+	sample("1\n") // the first known level counts at once
+	want := []string{"info: memory pressure normal (the first reading since the daemon started): swap 49.1 of 50.0 GB used"}
+	sample("2\n")
+	sample("1\n")
+	sample("2\n")
+	if got := levels(); !slices.Equal(got, want) {
+		t.Fatalf("events after warn, normal, warn in three minutes = %q, want %q", got, want)
+	}
+	sample("2\n") // the second warn in a row
+	want = append(want, "warn: memory pressure warn (was normal): swap 49.1 of 50.0 GB used")
+	if got := levels(); !slices.Equal(got, want) {
+		t.Fatalf("events after two warn samples in a row = %q, want %q", got, want)
+	}
+
+	sample("1\n")
+	s.fails("sysctl: unknown oid 'kern.memorystatus_vm_pressure_level'", "")
+	h.advance(time.Minute)
+	memoryCheck(h) // unknown: it changes nothing
+	sample("1\n")
+	want = append(want, "info: memory pressure back to normal (was warn): swap 49.1 of 50.0 GB used")
+	if got := levels(); !slices.Equal(got, want) {
+		t.Fatalf("events after normal, unknown, normal = %q, want %q", got, want)
+	}
+
+	sample("4\n")
+	if n := toasts(); n != 1 {
+		t.Fatalf("%d critical toasts at the first critical sample, want 1", n)
+	}
+	if got := levels(); !slices.Equal(got, want) {
+		t.Fatalf("events after one critical sample = %q, want %q", got, want)
+	}
+	sample("4\n")
+	want = append(want, "error: memory pressure critical (was normal): swap 49.1 of 50.0 GB used")
+	if got := levels(); !slices.Equal(got, want) {
+		t.Fatalf("events after two critical samples = %q, want %q", got, want)
+	}
+	if n := toasts(); n != 1 {
+		t.Fatalf("%d critical toasts in one run of critical, want 1", n)
 	}
 }
 
