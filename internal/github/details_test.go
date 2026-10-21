@@ -369,7 +369,7 @@ func TestDetailsCIFixture(t *testing.T) {
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
 	for _, want := range []string{"commits { totalCount }", "headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state",
 		"contexts(first: 100) { totalCount pageInfo { hasNextPage } checkRunCountsByState { state count } statusContextCountsByState { state count } nodes {",
-		"... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } }",
+		"... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name resourcePath } } } }",
 		"... on StatusContext { context state createdAt }"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
@@ -384,21 +384,21 @@ func TestDetailsCIFixture(t *testing.T) {
 		return ts
 	}
 	want := CIRollup{SHA: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", State: "FAILURE", Total: 15, Complete: true, Checks: []Check{
-		{"rspec (1)", CheckPassed, "CI", at("09:10")},
-		{"rspec (2)", CheckPassed, "CI", at("09:40")}, // the re-run replaces the timeout
-		{"rspec (3)", CheckFailed, "CI", at("09:15")}, // a stale SKIPPED run listed later does not
-		{"jest", CheckPending, "CI", at("09:05")},     // started, not finished
-		{"lint", CheckPassed, "CI", at("09:10")},      // NEUTRAL
-		{"deploy-preview", CheckSkipped, "CI", at("09:01")},
-		{"cancelled-job", CheckFailed, "CI", at("09:02")},
-		{"e2e", CheckPending, "CI", time.Time{}}, // a queued re-run is the newest
-		{"Completion", CheckSkipped, "CI", at("08:00")},
-		{"Completion", CheckPassed, "Pronto", at("09:30")}, // same name, another workflow: kept
-		{"danger", CheckPassed, "", at("09:12")},           // not an Actions run
-		{"completion", CheckPending, "", at("09:00")},
-		{"coverage", CheckFailed, "", at("09:01")},
-		{"license", CheckPassed, "", at("09:02")},
-		{"expected-context", CheckPending, "", at("09:03")},
+		{Name: "rspec (1)", State: CheckPassed, Workflow: "CI", WorkflowFile: "ci.yml", At: at("09:10")},
+		{Name: "rspec (2)", State: CheckPassed, Workflow: "CI", WorkflowFile: "ci.yml", At: at("09:40")}, // the re-run replaces the timeout
+		{Name: "rspec (3)", State: CheckFailed, Workflow: "CI", WorkflowFile: "ci.yml", At: at("09:15")}, // a stale SKIPPED run listed later does not
+		{Name: "jest", State: CheckPending, Workflow: "CI", WorkflowFile: "ci.yml", At: at("09:05")},     // started, not finished
+		{Name: "lint", State: CheckPassed, Workflow: "CI", WorkflowFile: "ci.yml", At: at("09:10")},      // NEUTRAL
+		{Name: "deploy-preview", State: CheckSkipped, Workflow: "CI", WorkflowFile: "ci.yml", At: at("09:01")},
+		{Name: "cancelled-job", State: CheckFailed, Workflow: "CI", WorkflowFile: "ci.yml", At: at("09:02")},
+		{Name: "e2e", State: CheckPending, Workflow: "CI", WorkflowFile: "ci.yml", At: time.Time{}}, // a queued re-run is the newest
+		{Name: "Completion", State: CheckSkipped, Workflow: "CI", WorkflowFile: "ci.yml", At: at("08:00")},
+		{Name: "Completion", State: CheckPassed, Workflow: "Pronto", WorkflowFile: "pronto.yml", At: at("09:30")}, // same name, another workflow: kept
+		{Name: "danger", State: CheckPassed, Workflow: "", At: at("09:12")},                                       // not an Actions run
+		{Name: "completion", State: CheckPending, Workflow: "", Status: true, At: at("09:00")},
+		{Name: "coverage", State: CheckFailed, Workflow: "", Status: true, At: at("09:01")},
+		{Name: "license", State: CheckPassed, Workflow: "", Status: true, At: at("09:02")},
+		{Name: "expected-context", State: CheckPending, Workflow: "", Status: true, At: at("09:03")},
 	}}
 	if ci := got[101].CI; !reflect.DeepEqual(ci, want) {
 		t.Errorf("#101 CI =\n%+v\nwant\n%+v", ci, want)

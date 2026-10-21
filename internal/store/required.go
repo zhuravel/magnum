@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -96,14 +97,22 @@ func (s *Store) RequiredChecks(ctx context.Context, fullName string, configured 
 const RequiredWorkflowPrefix = "workflow:"
 
 // RequiredNames reports whether entry, a required check (a check-name glob,
-// or RequiredWorkflowPrefix and a glob over GitHub Actions workflow names),
-// names c: a name glob matches c's name whatever its workflow, a workflow
-// entry every check of a matching workflow (never a status or another
-// app's check, which have none). A malformed glob names nothing.
+// or RequiredWorkflowPrefix and a glob over GitHub Actions workflows) names
+// c: a name glob matches c's name whatever its workflow, a check run's or a
+// commit status's; a workflow entry every check of each workflow whose file
+// ("ci.yml") or declared name ("CI") it matches (never a status or another
+// app's check, which have neither). A workflow file a PR adds may declare
+// the name of the base's: its runs are one more workflow's, kept apart by
+// their file (Key), and the automatic approval holds such a PR before its
+// CI gate reads them. A malformed glob names nothing.
 func RequiredNames(entry string, c CheckResult) bool {
 	if glob, ok := strings.CutPrefix(entry, RequiredWorkflowPrefix); ok {
-		m, _ := path.Match(glob, c.Workflow)
-		return m && c.Workflow != ""
+		if c.Status || c.Workflow == "" {
+			return false
+		}
+		byName, _ := path.Match(glob, c.Workflow)
+		byFile, _ := path.Match(glob, c.WorkflowFile)
+		return byName || byFile && c.WorkflowFile != ""
 	}
 	m, _ := path.Match(entry, c.Name)
 	return m
@@ -111,10 +120,12 @@ func RequiredNames(entry string, c CheckResult) bool {
 
 // RequiredRuns are the runs of checks that count for entry, a required
 // check (RequiredNames), in checks' order: every check of a workflow
-// entry's workflows; for a name glob the latest run of each matching name
-// across workflows (a check posted through the API lands in another
-// workflow's suite, next to an older run). None when entry names no check.
-// The board's required checks and the auto-approval's CI gate read them.
+// entry's workflows; for a name glob the latest check run of each matching
+// name across workflows (a check posted through the API lands in another
+// workflow's suite, next to an older run) and, apart, the latest commit
+// status of that name, which anyone who can write to the repository posts,
+// so it never stands for a check run. None when entry names no check. The
+// board's required checks and the auto-approval's CI gate read them.
 func RequiredRuns(checks []CheckResult, entry string) []CheckResult {
 	var out []CheckResult
 	if strings.HasPrefix(entry, RequiredWorkflowPrefix) {
@@ -125,15 +136,20 @@ func RequiredRuns(checks []CheckResult, entry string) []CheckResult {
 		}
 		return out
 	}
-	at := map[string]int{} // name -> its run's index in out
+	type key struct {
+		status bool
+		name   string
+	}
+	at := map[key]int{} // a check run's or a status's name -> its run's index in out
 	for _, c := range checks {
 		if !RequiredNames(entry, c) {
 			continue
 		}
-		i, seen := at[c.Name]
+		k := key{c.Status, c.Name}
+		i, seen := at[k]
 		switch {
 		case !seen:
-			at[c.Name] = len(out)
+			at[k] = len(out)
 			out = append(out, c)
 		case newerRun(c, out[i]):
 			out[i] = c
@@ -152,4 +168,23 @@ func newerRun(a, b CheckResult) bool {
 		return false
 	}
 	return a.At.After(b.At)
+}
+
+// CheckKey is the check a CheckResult is a run of (CheckResult.Key).
+type CheckKey struct {
+	Status   bool   // a commit status
+	Workflow string // a check run's workflow file, else its workflow's name; "" for a status or another app's check
+	Name     string // the check run's name or the status's context
+}
+
+// Key is the check c is a run of: a check run's workflow file (its
+// workflow's name for a run read without one, by an earlier build) and
+// name, or a commit status's context. Two workflow files that declare the
+// same name are two workflows, and a status is never a run of a check run's
+// check, so neither replaces the other's runs.
+func (c CheckResult) Key() CheckKey {
+	if c.Status {
+		return CheckKey{Status: true, Name: c.Name}
+	}
+	return CheckKey{Workflow: cmp.Or(c.WorkflowFile, c.Workflow), Name: c.Name}
 }

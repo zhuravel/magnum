@@ -1,6 +1,7 @@
 package github
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -181,9 +182,10 @@ type CIRollup struct {
 	// Complete is true when Checks is every check: GitHub returned a single
 	// page of at most 100.
 	Complete bool
-	// Checks is the latest run of each (Workflow, Name), in GitHub's order;
-	// never nil. A re-run, or a SKIPPED run left from a draft, supersedes or
-	// is superseded by the same job's other runs.
+	// Checks is the latest run of each check (a check run's WorkflowFile
+	// and Name, a commit status's context apart), in GitHub's order; never
+	// nil. A re-run, or a SKIPPED run left from a draft, supersedes or is
+	// superseded by the same job's other runs.
 	Checks []Check
 	// Counts are the rollup's own counts by state, as CIStates reads them
 	// (superseded runs included, so not Checks' tally): the poll compares
@@ -196,9 +198,20 @@ type CIRollup struct {
 type Check struct {
 	Name  string // the check run's name or the status's context
 	State string // CheckPassed | CheckFailed | CheckPending | CheckSkipped
-	// Workflow is the GitHub Actions workflow whose run the check belongs
-	// to; "" for a commit status or another app's check run.
+	// Workflow is the name the GitHub Actions workflow whose run the check
+	// belongs to declares; "" for a commit status or another app's check
+	// run. Any workflow file may declare any name, a file the PR adds
+	// included.
 	Workflow string
+	// WorkflowFile is that workflow's file as GitHub's path to the workflow
+	// ends ("ci.yml" for .github/workflows/ci.yml, from the workflow's
+	// resourcePath "/<owner>/<repo>/actions/workflows/ci.yml"); "" where
+	// Workflow is. Runs are told apart by it, not by Workflow.
+	WorkflowFile string
+	// Status is true for a commit status (the statuses API, which anyone
+	// who can write to the repository posts), false for a check run: the
+	// two are never taken for runs of one check.
+	Status bool
 	// At is when the check finished, else started (a check run), or was
 	// posted (a commit status); zero for a check run not started yet.
 	At time.Time
@@ -294,8 +307,10 @@ const detailsFragment = `fragment PRDetails on PullRequest {
 
 // contextNodes selects what Details and CommitChecks read of each context of
 // a check rollup (contextJSON): a check run's name, status, conclusion,
-// times and workflow, a commit status's context, state and time.
-const contextNodes = `nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } }`
+// times and workflow (its name and the resourcePath that names its file, a
+// field of an object read already, which GitHub does not price), a commit
+// status's context, state and time.
+const contextNodes = `nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name resourcePath } } } } ... on StatusContext { context state createdAt } }`
 
 // activityTypes are the timeline items that are activity on a pull request
 // (PRDetails.ActivityAt): what a reviewer sees happen to it. A review counts
@@ -462,7 +477,8 @@ type contextJSON struct {
 	CheckSuite  *struct {
 		WorkflowRun *struct {
 			Workflow struct {
-				Name string `json:"name"`
+				Name         string `json:"name"`
+				ResourcePath string `json:"resourcePath"`
 			} `json:"workflow"`
 		} `json:"workflowRun"`
 	} `json:"checkSuite"` // CheckRun
@@ -471,12 +487,18 @@ type contextJSON struct {
 	CreatedAt time.Time `json:"createdAt"` // StatusContext
 }
 
-// checks is the latest run of each (Workflow, Name) of the connection's
-// nodes (olderRun), normalized (checkRunState, statusState), in GitHub's
-// order; never nil.
+// checks is the latest run of each check of the connection's nodes
+// (olderRun), normalized (checkRunState, statusState), in GitHub's order;
+// never nil. A check is a check run's workflow file (else, for a run read
+// without one, its workflow's name) and name, or a commit status's context:
+// a workflow file a PR adds never replaces the runs of another file that
+// declares the same name, nor a status a check run.
 func (r rollupContextsJSON) checks() []Check {
 	out := []Check{}
-	type key struct{ workflow, name string }
+	type key struct {
+		status         bool
+		workflow, name string
+	}
 	at := map[key]int{} // index in out
 	for _, n := range r.Nodes {
 		var c Check
@@ -487,14 +509,15 @@ func (r rollupContextsJSON) checks() []Check {
 				c.At = n.StartedAt
 			}
 			if n.CheckSuite != nil && n.CheckSuite.WorkflowRun != nil {
-				c.Workflow = n.CheckSuite.WorkflowRun.Workflow.Name
+				w := n.CheckSuite.WorkflowRun.Workflow
+				c.Workflow, c.WorkflowFile = w.Name, workflowFile(w.ResourcePath)
 			}
 		case "StatusContext":
-			c = Check{Name: n.Context, State: statusState(n.State), At: n.CreatedAt}
+			c = Check{Name: n.Context, State: statusState(n.State), Status: true, At: n.CreatedAt}
 		default:
 			continue
 		}
-		k := key{c.Workflow, c.Name}
+		k := key{c.Status, cmp.Or(c.WorkflowFile, c.Workflow), c.Name}
 		if i, ok := at[k]; !ok {
 			at[k] = len(out)
 			out = append(out, c)
@@ -503,6 +526,19 @@ func (r rollupContextsJSON) checks() []Check {
 		}
 	}
 	return out
+}
+
+// workflowsPath is where GitHub's path to a workflow names its file
+// ("/<owner>/<repo>/actions/workflows/ci.yml").
+const workflowsPath = "/actions/workflows/"
+
+// workflowFile is Check.WorkflowFile of a workflow whose resourcePath is p:
+// the rest of p after workflowsPath ("ci.yml"), p itself when it has none.
+func workflowFile(p string) string {
+	if _, file, ok := strings.Cut(p, workflowsPath); ok {
+		return file
+	}
+	return p
 }
 
 func (d detailsJSON) details() PRDetails {

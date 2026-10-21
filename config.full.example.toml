@@ -145,10 +145,14 @@ databases = [
 #                                         # (default: dismissed until the re-review posts; also on [[watch]])
 # required_checks = ["ci / *"]            # checks a PR must pass to be ready; magnum reads GitHub's rulesets by
 #                                         # itself, so set it only where GitHub will not tell (a private repo on a
-#                                         # free plan) or to override; "workflow:<glob>" = a whole Actions workflow;
-#                                         # the board shows their state, and the automatic approval counts only
-#                                         # these checks (a failing check outside the list never holds it; without
-#                                         # the key every check counts)
+#                                         # free plan) or to override; "workflow:<glob>" = every check of each
+#                                         # Actions workflow whose file ("ci.yml") or declared name ("CI") it
+#                                         # matches; the board shows their state, and the automatic approval
+#                                         # counts only these checks (a failing check outside the list never holds
+#                                         # it; without the key every check counts), one run per workflow file and
+#                                         # name, a commit status apart from a check run of its name; it never
+#                                         # approves a PR that changes .github/workflows/ or .github/actions/ on
+#                                         # its own
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

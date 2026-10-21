@@ -81,7 +81,7 @@ func TestCIThatFailedBeforeTheJudgePromptIsFetchedOnceAndQueuesNothing(t *testin
 	want := store.CIStatus{SHA: "b1", State: "FAILURE", Total: 3, Passed: 1, Failed: 1, Skipped: 1, Complete: true,
 		Checks: []store.CheckResult{{Name: "rspec (1)", State: store.CheckPassed}, {Name: "jest", State: store.CheckFailed, Workflow: "CI", At: failedAt},
 			{Name: "completion", State: store.CheckSkipped}},
-		Rollup: store.CheckCounts{Failed: 1, Passed: 1, Skipped: 1, Total: 3}}
+		Rollup: store.CheckCounts{Failed: 1, Passed: 1, Skipped: 1, Total: 3}, ByWorkflowFile: true}
 	if deref(pr.CIState) != "FAILURE" || pr.CI == nil || !reflect.DeepEqual(*pr.CI, want) {
 		t.Fatalf("failed CI = %v %+v", pr.CIState, pr.CI)
 	}

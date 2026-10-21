@@ -700,9 +700,12 @@ type Repo struct {
 	// protection, which a private repository on a free plan does not
 	// expose): globs (path.Match, case-sensitive) over check run names and
 	// commit status contexts, or RequiredWorkflowPrefix and a glob over
-	// GitHub Actions workflow names (every check of the workflow). The board
-	// shows their state, and the automatic approval's CI gate counts only
-	// the checks they name (see Config.RequiredChecks).
+	// GitHub Actions workflows, matched against each one's file ("ci.yml")
+	// and declared name ("CI") (every check of the workflow;
+	// store.RequiredNames). The board shows their state, and the automatic
+	// approval's CI gate counts only the checks they name (see
+	// Config.RequiredChecks), one run per workflow file and name, a commit
+	// status apart from a check run of its name.
 	RequiredChecks []string `toml:"required_checks"`
 
 	// Trackers are [board] trackers templates for this repository's PRs; an

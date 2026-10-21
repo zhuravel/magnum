@@ -37,23 +37,26 @@ type requiredCI struct {
 // requiredCIOf reads pr's stored checks against required, its repository's
 // required_checks (config.Config.RequiredChecks); ok is false when they
 // cannot decide and the rollup does, as without the key: no list, no checks
-// stored for the head or not every one (GitHub lists 100), or an entry that
-// names no check on the head (one that never ran there, or has not started:
-// what it would be is unknown). A run two entries name counts once.
+// stored for the head or not every one (GitHub lists 100), checks an earlier
+// build kept by workflow name (CIStatus.ByWorkflowFile: a PR's own workflow
+// of the base's name, or a status, may have replaced a run there), or an
+// entry that names no check on the head (one that never ran there, or has
+// not started: what it would be is unknown). A run two entries name counts
+// once.
 func requiredCIOf(pr store.PR, required []string) (requiredCI, bool) {
 	ci := pr.CI
-	if len(required) == 0 || ci == nil || ci.SHA != pr.HeadSHA || !ci.Complete {
+	if len(required) == 0 || ci == nil || ci.SHA != pr.HeadSHA || !ci.Complete || !ci.ByWorkflowFile {
 		return requiredCI{}, false
 	}
 	var r requiredCI
-	counted := map[[2]string]bool{} // workflow and name: the stored checks hold one run of each
+	counted := map[store.CheckKey]bool{} // the stored checks hold one run of each
 	for _, entry := range required {
 		runs := store.RequiredRuns(ci.Checks, entry)
 		if len(runs) == 0 {
 			return requiredCI{}, false
 		}
 		for _, run := range runs {
-			k := [2]string{run.Workflow, run.Name}
+			k := run.Key()
 			if counted[k] {
 				continue
 			}

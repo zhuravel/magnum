@@ -10959,6 +10959,72 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and `MaxToken` must equal the relay's. The two deliveries give every event field a value, which the test
   checks, so a renamed tag cannot hide behind a zero.
 
+- **The automatic approval trusts no workflow the PR adds or edits, keys check runs by workflow file, and
+  never lets a status stand for a check run** (2026-10-21, spec 112, a security fix the operator approved;
+  amends "The approval's CI gate counts only the checks required_checks names"). The hole: since spec 84
+  the CI gate decides by the checks `required_checks` names, and the head's checks were kept one run per
+  workflow name and check name, the newest (`rollupContextsJSON.checks` in internal/github, and the gate's
+  own count in `requiredCIOf`). talkable/talkable sets `required_checks = ["workflow:CI"]`, auto-approves
+  as the operator's login, and GitHub enforces no checks there. So a PR that added a workflow file
+  declaring `name: CI` with jobs named like the real ones, which pass after the real ones fail, replaced
+  each failed run; a PR that edited the CI workflow controlled it outright; and for a name-glob entry a
+  commit status anyone who can write to the repository posts replaced a same-named check run
+  (`store.RequiredRuns` took the newest run of each name, a status included).
+  - The changed-files gate (`changedFilesRefusal`, internal/engine/autoapprove_gates.go, which now holds
+    the agents' files check too and reads the file list once): a head whose file list names any path
+    under `.github/workflows/` or `.github/actions/` (at the root, in any case) is refused with "the PR
+    changes its own workflows or actions: approve by hand", and a list Magnum has none of for the head, or
+    one GitHub cut at 100, with "Magnum cannot tell whether it changes the review agents' instructions or
+    hooks, or its own workflows or actions: …". The list is pr_files, which the poller reads with the
+    Details: the spec named the round's changed paths too, but a round keeps none (`gitx.ChangedPaths`
+    runs inside the round, in the slot, and its result goes only into docs.json, cut at 400), so pr_files
+    is the one the gate has when it decides, without a GitHub call. A clean review of a new head that
+    changes a workflow withdraws a standing approval, as any gate does; the operator's `A` is not held.
+  - Check runs are keyed by the workflow's file: Details and CommitChecks read `workflow { name
+    resourcePath }` (a field of an object read already; GitHub prices connections, not fields), and
+    `github.Check.WorkflowFile` is the resourcePath's rest after `/actions/workflows/` ("ci.yml"; a
+    read-only query on a public repository on 2026-10-21 answered `/cli/cli/actions/workflows/go.yml` for
+    `.github/workflows/go.yml`; `WorkflowRun.file.path` names the full path too, but is a nullable object
+    of its own). A commit status is `Status`, kept apart from every check run. `store.CheckResult` gains
+    `workflow_file` and `status`, `store.CIStatus` `by_workflow_file`, and `CheckResult.Key` is the check a
+    run belongs to (a check run's file, else its workflow's name, and name; a status's context): GitHub's
+    dedupe, the gate's count and the base tip's comparison (`failsLikeTheBase`, so a failure of the PR's
+    own `CI` no longer passes for the base tip's failure of the base's) all use it. prs.ci_json is JSON,
+    so no migration: checks an earlier build stored (`by_workflow_file` unset) are read again by the next
+    poll (`fetchDetails`), and until then `requiredCIOf` does not decide and the rollup, which counts every
+    check, does.
+  - The rule for `workflow:<glob>`: the entry names every check of each workflow whose file name or
+    declared name the glob matches. The spec's "the file the base's workflow of that name lives in",
+    without reading the base: the CI gate decides only on a head whose whole file list changes no workflow
+    (the changed-files gate refuses the rest first, in `autoGateRefusal`'s order, and the standing gate
+    and the approval's ignored-checks note run after it), so every workflow file on the head, and the name
+    it declares, is the base's as of the merge base. A workflow of the base's name in another file is one
+    more workflow the entry names: its runs count beside the base's, never in their place, so the gate is
+    stricter for it, not looser.
+  - A name glob counts the latest check run of each matching name across workflows (spec 84's choice: a
+    check posted through the API lands in another workflow's suite, next to an older run) and, apart, the
+    latest commit status of that name.
+  - Residuals: under a name glob a run of a workflow the PR adds can still stand for a run of that name
+    (the changed-files gate holds such a PR); an action elsewhere that a workflow runs (`uses:
+    ./tools/setup`), or a script the CI runs, is the PR's code, which the review reads; a check run an app
+    with checks:write posts into a workflow's suite is not told from the workflow's own.
+  - New tests, each failing first: in engine TestAPRThatChangesItsWorkflowsIsNotAutoApproved (added,
+    edited, a local action, another case, a cut list; a nested `.github` and look-alike directories
+    approve; `A` approves the held ones), TestAStandingApprovalIsWithdrawnWhenTheNewHeadChangesAWorkflow,
+    TestASameNamedWorkflowAddedByThePRDoesNotPassTheGate (either order of the runs, and the PR's own `CI`
+    failing like the base tip's), TestAStatusNeverReplacesACheckRun and
+    TestChecksAnEarlierBuildStoredAreReadAgain; in github TestChecksAreKeyedByWorkflowFileWithStatusesApart
+    (and the fixtures' resourcePath); in store TestARequiredWorkflowEntryNamesItsFileOrItsDeclaredName,
+    TestARequiredNameCountsAStatusApartFromTheCheckRun and
+    TestChecksKeyedByWorkflowFileReplaceAnEarlierBuildsRead.
+  - **Rejected:** trusting the workflow's name (spec 84's keying: any file may declare any name, a file
+    the PR adds included); reading the base's workflow files from GitHub each time (a contents read per
+    workflow file and approval, and a YAML parse of each `name:`, for what the changed-files gate already
+    guarantees); reading the base tip's checks for every approval to learn which file runs `CI` there (a
+    read per tip even for a green head, and a base whose CI runs only on pull requests has no runs to
+    tell); dropping the name glob's merge across workflows (it would break the Completion posted through
+    the API that spec 84 kept it for).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

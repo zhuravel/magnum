@@ -81,7 +81,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -96,7 +97,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -111,7 +113,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -126,7 +129,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -141,7 +145,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -156,7 +161,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -171,7 +177,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -186,7 +193,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -201,7 +209,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -216,7 +225,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -231,7 +241,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -246,7 +257,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -261,7 +273,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "Pronto"
+                              "name": "Pronto",
+                              "resourcePath": "/talkable/talkable/actions/workflows/pronto.yml"
                             }
                           }
                         }
@@ -451,7 +464,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -543,7 +557,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }
@@ -558,7 +573,8 @@
                         "checkSuite": {
                           "workflowRun": {
                             "workflow": {
-                              "name": "CI"
+                              "name": "CI",
+                              "resourcePath": "/talkable/talkable/actions/workflows/ci.yml"
                             }
                           }
                         }

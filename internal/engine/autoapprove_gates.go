@@ -6,7 +6,8 @@ package engine
 // by hand there. A review whose judge went without a reviewer's report
 // (DECISIONS "Auto-approval hears every reviewer"), a PR its watch would not
 // review on its own (a forced round on it), one that changes what steers
-// the review agents, and a head whose checks fail (other than the way the
+// the review agents or its own workflows or actions (what its CI gate would
+// then trust), and a head whose checks fail (other than the way the
 // base branch's tip fails them, autoapprove_ci_base.go) or still run (only
 // the checks required_checks names, where it is set:
 // autoapprove_required.go) are not approved; the card says why (KVPRAutoApproveRefused) and a
@@ -110,7 +111,8 @@ func (e *Engine) authorRefusal(c store.RepoPR) string {
 // (missingReports), the PR's watch would not review it on its own
 // (classify: a manual repository's, a bot's, one skip_paths leaves out, one
 // Codex flagged; a forced round's included), it changes what steers the
-// review agents (agentConfigRefusal), and its head's check rollup fails or
+// review agents or its own workflows or actions, or magnum cannot tell
+// (changedFilesRefusal), and its head's check rollup fails or
 // runs (wait for green: the judge's result says nothing of the failures it
 // found unrelated), unless every failing check fails the same way on the
 // base branch's tip (failingCIRefusal); where the repository sets
@@ -132,7 +134,7 @@ func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.
 			return "its watch would not review it on its own: " + dec.Reason, false
 		}
 	}
-	if why := e.agentConfigRefusal(ctx, pr); why != "" {
+	if why := e.changedFilesRefusal(ctx, pr); why != "" {
 		return why, false
 	}
 	if r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(c.Repo)); ok {
@@ -209,29 +211,76 @@ func (e *Engine) missingReports(ctx context.Context, prID int64, sum store.Revie
 	return ""
 }
 
-// agentConfigRefusal says why auto-approval leaves pr to the operator for
-// what it changes: an instruction file of the review agents at any depth
-// (agentInstructionFiles), or a project config an agent CLI loads from the
-// checkout (agents.ProjectTouched: .claude/, .codex/, .mcp.json, in any
-// case), by the head's file list (pr_files), or a session of the head that
-// ran without the PR's project config (agents.ProjectDeclined: git found it
-// changed). Such files steer the review agents, and their hooks run on
-// every teammate's machine once merged. A head magnum has no whole list of
-// files for is refused too: what it does not list may be one of them.
-func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
-	const what = "the review agents' instructions or hooks"
+// agentConfigWhat is what agentConfigRefusal guards, as its refusals name
+// it.
+const agentConfigWhat = "the review agents' instructions or hooks"
+
+// workflowsRefusal is why auto-approval leaves a PR that changes its own
+// workflows or actions (changesWorkflow) to the operator.
+const workflowsRefusal = "the PR changes its own workflows or actions: approve by hand"
+
+// workflowDirs are what a repository's GitHub Actions run as the PR's head
+// has them: its workflows and its local actions, at the checkout's root.
+var workflowDirs = []string{".github/workflows/", ".github/actions/"}
+
+// changesWorkflow reports whether p, a path the PR changes, is under one of
+// workflowDirs, in any case (GitHub reads them in one; a stricter match
+// costs nothing).
+func changesWorkflow(p string) bool {
+	lower := strings.ToLower(p)
+	return slices.ContainsFunc(workflowDirs, func(dir string) bool { return strings.HasPrefix(lower, dir) })
+}
+
+// changedFilesRefusal says why auto-approval leaves pr to the operator for
+// the files its head changes, by the head's file list (pr_files, which the
+// poller reads with the Details; a round keeps no list of its own): what
+// steers the review agents (agentConfigRefusal), else its own workflows or
+// actions (changesWorkflow), which decide the checks the CI gate trusts
+// (required_checks names workflows by a name any workflow file may declare,
+// and a PR that edits the CI workflow controls it outright). A head magnum
+// has no whole list of files for is refused too: what it does not list may
+// be one of them.
+func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) string {
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "auto approval: the PR's files", "pr", pr.ID)
 		return "Magnum cannot read the files it changes"
 	}
-	kinds := e.projectKinds()
 	listed := ok && f.HeadSHA == pr.HeadSHA
+	var paths []string
 	if listed {
-		for _, p := range f.Paths {
-			if name, hit := agentConfigPath(kinds, p); hit {
-				return "it changes " + what + " (" + name + ")"
-			}
+		paths = f.Paths
+	}
+	if why := e.agentConfigRefusal(ctx, pr, paths); why != "" {
+		return why
+	}
+	if slices.ContainsFunc(paths, changesWorkflow) {
+		return workflowsRefusal
+	}
+	const what = agentConfigWhat + ", or its own workflows or actions"
+	switch {
+	case !listed:
+		return "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files"
+	case f.Truncated:
+		return fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths))
+	}
+	return ""
+}
+
+// agentConfigRefusal says why auto-approval leaves pr to the operator for
+// what it changes: an instruction file of the review agents at any depth
+// (agentInstructionFiles), or a project config an agent CLI loads from the
+// checkout (agents.ProjectTouched: .claude/, .codex/, .mcp.json, in any
+// case), by paths, the head's file list (none when magnum has none), or a
+// session of the head that ran without the PR's project config
+// (agents.ProjectDeclined: git found it changed). Such files steer the
+// review agents, and their hooks run on every teammate's machine once
+// merged.
+func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR, paths []string) string {
+	kinds := e.projectKinds()
+	for _, p := range paths {
+		if name, hit := agentConfigPath(kinds, p); hit {
+			return "it changes " + agentConfigWhat + " (" + name + ")"
 		}
 	}
 	for _, kind := range kinds {
@@ -240,14 +289,8 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
 			if names == "" {
 				names, _, _, _, _ = agents.ProjectRule(kind)
 			}
-			return "it changes " + what + " (" + names + ")"
+			return "it changes " + agentConfigWhat + " (" + names + ")"
 		}
-	}
-	switch {
-	case !listed:
-		return "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files"
-	case f.Truncated:
-		return fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths))
 	}
 	return ""
 }

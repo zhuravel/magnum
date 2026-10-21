@@ -84,10 +84,11 @@ func ciState(failed, pending int, allSkipped bool, checks int) string {
 }
 
 // requiredCheck is one required check on the head: a name glob
-// ("Completion", "rspec*") matched across workflows, the latest run of each
-// matching name counting, or "workflow:<glob>" for every check of the
-// matching workflows (store.RequiredRuns). State "missing" when nothing
-// matched.
+// ("Completion", "rspec*") matched across workflows, the latest check run
+// of each matching name counting and, apart, the latest commit status of
+// it, or "workflow:<glob>" for every check of the workflows whose file or
+// declared name it matches (store.RequiredRuns). State "missing" when
+// nothing matched.
 func requiredCheck(checks []store.CheckResult, pattern string) tui.CheckState {
 	out := tui.CheckState{Name: pattern, Label: checkLabel(pattern)}
 	matched := store.RequiredRuns(checks, pattern)

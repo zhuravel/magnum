@@ -20,9 +20,10 @@ const commitChecksQuery = `query($owner: String!, $name: String!, $oid: GitObjec
 var commitOidRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // CommitChecks reads the checks of commit sha of owner/repo (a base branch's
-// tip, for auto-approval): the latest run of each (Workflow, Name),
-// normalized as Details' CIRollup.Checks, in GitHub's order; empty, never
-// nil, for a commit without checks. It reads one page of 100: a check past
+// tip, for auto-approval): the latest run of each check (a check run's
+// workflow file and name, a commit status apart), normalized as Details'
+// CIRollup.Checks, in GitHub's order; empty, never nil, for a commit
+// without checks. It reads one page of 100: a check past
 // it is not listed. A missing repository or commit is an error matching
 // ErrNotFound; a sha that is no full commit id is refused before any call.
 func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) ([]Check, error) {

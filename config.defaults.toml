@@ -875,12 +875,16 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # these authors' PRs are approved as you on their own (unset or []:
 #                                         # the watch's)
 # allow_bot_authors = ["helper[bot]"]     # added to the watch's list for this repository's PRs alone
-# required_checks = ["Completion"]        # checks a PR must pass to be ready (name globs; "workflow:<glob>" = a whole
-#                                         # Actions workflow); replaces the list GitHub's rulesets declare, which
+# required_checks = ["Completion"]        # checks a PR must pass to be ready (name globs; "workflow:<glob>" = every
+#                                         # check of each Actions workflow whose file, "ci.yml", or declared name,
+#                                         # "CI", it matches); replaces the list GitHub's rulesets declare, which
 #                                         # magnum reads by itself; needed where GitHub will not tell (private repos
 #                                         # on a free plan); the board shows their state, and the automatic
 #                                         # approval counts only these checks (a failing check outside the list
-#                                         # never holds it; without the key every check counts)
+#                                         # never holds it; without the key every check counts), one run per
+#                                         # workflow file and name, a commit status apart from a check run of its
+#                                         # name; it never approves a PR that changes .github/workflows/ or
+#                                         # .github/actions/ on its own
 # trackers = ["https://your-org.atlassian.net/browse/APP-{num}"]   # [board] trackers for this repository's PRs;
 #                                         # its key prefixes win over the watch's and [board]'s
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]

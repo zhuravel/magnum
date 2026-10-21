@@ -6,7 +6,8 @@ package engine
 // PR's heads and on master alike, the reviews said so in prose, and the gate
 // still refused every approval of it with "its head's checks fail". A head
 // whose rollup fails is let through when each check it fails (the same
-// workflow and name) failed on the base tip the last Details fetch read
+// check, store.CheckResult.Key: a check run's workflow file and name, a
+// status's context) failed on the base tip the last Details fetch read
 // (prs.base_sha) too, once its other checks finished; anything it cannot
 // tell refuses as before. The base tip's checks are read once per tip and
 // baseChecksTTL, not once per PR or tick.
@@ -86,8 +87,8 @@ func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR, sum store
 // failsLikeTheBase is the CI gate's answer for failed, the failing checks
 // of c's head that count (every one, or those required_checks names:
 // requiredCIRefusal), after magnum's round sum: "" when each failed on the
-// base tip (pr.BaseSHA) too, the same workflow and name, and no check that
-// counts still runs (running); ciRunsRefusal, which waits, when they match
+// base tip (pr.BaseSHA) too, the same check (store.CheckResult.Key), and no
+// check that counts still runs (running); ciRunsRefusal, which waits, when they match
 // but one still runs; ciFailsRefusal otherwise, and when it cannot tell (no
 // failed check, no base tip, a read that failed).
 func (e *Engine) failsLikeTheBase(ctx context.Context, c store.RepoPR, sum store.ReviewSummary, failed []store.CheckResult,
@@ -102,7 +103,7 @@ func (e *Engine) failsLikeTheBase(ctx context.Context, c store.RepoPR, sum store
 	}
 	for _, f := range failed {
 		if !slices.ContainsFunc(checks, func(b github.Check) bool {
-			return b.Workflow == f.Workflow && b.Name == f.Name && b.State == github.CheckFailed
+			return checkResult(b).Key() == f.Key() && b.State == github.CheckFailed
 		}) {
 			return ciFailsRefusal, false
 		}

@@ -4981,9 +4981,12 @@ type Repo struct {
 	// protection, which a private repository on a free plan does not
 	// expose): globs (path.Match, case-sensitive) over check run names and
 	// commit status contexts, or RequiredWorkflowPrefix and a glob over
-	// GitHub Actions workflow names (every check of the workflow). The board
-	// shows their state, and the automatic approval's CI gate counts only
-	// the checks they name (see Config.RequiredChecks).
+	// GitHub Actions workflows, matched against each one's file ("ci.yml")
+	// and declared name ("CI") (every check of the workflow;
+	// store.RequiredNames). The board shows their state, and the automatic
+	// approval's CI gate counts only the checks they name (see
+	// Config.RequiredChecks), one run per workflow file and name, a commit
+	// status apart from a check run of its name.
 	RequiredChecks []string `toml:"required_checks"`
 
 	// Trackers are [board] trackers templates for this repository's PRs; an
@@ -9439,9 +9442,10 @@ type CIRollup struct {
 	// Complete is true when Checks is every check: GitHub returned a single
 	// page of at most 100.
 	Complete bool
-	// Checks is the latest run of each (Workflow, Name), in GitHub's order;
-	// never nil. A re-run, or a SKIPPED run left from a draft, supersedes or
-	// is superseded by the same job's other runs.
+	// Checks is the latest run of each check (a check run's WorkflowFile
+	// and Name, a commit status's context apart), in GitHub's order; never
+	// nil. A re-run, or a SKIPPED run left from a draft, supersedes or is
+	// superseded by the same job's other runs.
 	Checks []Check
 	// Counts are the rollup's own counts by state, as CIStates reads them
 	// (superseded runs included, so not Checks' tally): the poll compares
@@ -9481,9 +9485,20 @@ type Call struct {
 type Check struct {
 	Name  string // the check run's name or the status's context
 	State string // CheckPassed | CheckFailed | CheckPending | CheckSkipped
-	// Workflow is the GitHub Actions workflow whose run the check belongs
-	// to; "" for a commit status or another app's check run.
+	// Workflow is the name the GitHub Actions workflow whose run the check
+	// belongs to declares; "" for a commit status or another app's check
+	// run. Any workflow file may declare any name, a file the PR adds
+	// included.
 	Workflow string
+	// WorkflowFile is that workflow's file as GitHub's path to the workflow
+	// ends ("ci.yml" for .github/workflows/ci.yml, from the workflow's
+	// resourcePath "/<owner>/<repo>/actions/workflows/ci.yml"); "" where
+	// Workflow is. Runs are told apart by it, not by Workflow.
+	WorkflowFile string
+	// Status is true for a commit status (the statuses API, which anyone
+	// who can write to the repository posts), false for a check run: the
+	// two are never taken for runs of one check.
+	Status bool
 	// At is when the check finished, else started (a check run), or was
 	// posted (a commit status); zero for a check run not started yet.
 	At time.Time
@@ -9547,11 +9562,12 @@ func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]CIStat
 
 func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) ([]Check, error)
     CommitChecks reads the checks of commit sha of owner/repo (a base branch's
-    tip, for auto-approval): the latest run of each (Workflow, Name),
-    normalized as Details' CIRollup.Checks, in GitHub's order; empty, never nil,
-    for a commit without checks. It reads one page of 100: a check past it is
-    not listed. A missing repository or commit is an error matching ErrNotFound;
-    a sha that is no full commit id is refused before any call.
+    tip, for auto-approval): the latest run of each check (a check run's
+    workflow file and name, a commit status apart), normalized as Details'
+    CIRollup.Checks, in GitHub's order; empty, never nil, for a commit without
+    checks. It reads one page of 100: a check past it is not listed. A missing
+    repository or commit is an error matching ErrNotFound; a sha that is no full
+    commit id is refused before any call.
 
 func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (CompareStats, error)
     Compare reads GET /repos/{o}/{r}/compare/{base}...{head} with per_page=1:
@@ -17245,10 +17261,14 @@ func ParseTime(s string) (time.Time, error)
 
 func RequiredNames(entry string, c CheckResult) bool
     RequiredNames reports whether entry, a required check (a check-name glob,
-    or RequiredWorkflowPrefix and a glob over GitHub Actions workflow names),
-    names c: a name glob matches c's name whatever its workflow, a workflow
-    entry every check of a matching workflow (never a status or another app's
-    check, which have none). A malformed glob names nothing.
+    or RequiredWorkflowPrefix and a glob over GitHub Actions workflows) names c:
+    a name glob matches c's name whatever its workflow, a check run's or a
+    commit status's; a workflow entry every check of each workflow whose file
+    ("ci.yml") or declared name ("CI") it matches (never a status or another
+    app's check, which have neither). A workflow file a PR adds may declare the
+    name of the base's: its runs are one more workflow's, kept apart by their
+    file (Key), and the automatic approval holds such a PR before its CI gate
+    reads them. A malformed glob names nothing.
 
 
 TYPES
@@ -17428,10 +17448,19 @@ type CIStatus struct {
 	// Complete is true when Checks lists every check (GitHub returns at
 	// most 100).
 	Complete bool `json:"complete"`
-	// Checks holds the latest run of each (Workflow, Name). The same name
-	// can still appear under several workflows (a check posted through the
-	// API attaches to another workflow's suite): At tells the latest.
+	// Checks holds the latest run of each check (CheckResult.Key: a check
+	// run's workflow file and name, a commit status's context apart). The
+	// same name can still appear under several workflows (a check posted
+	// through the API attaches to another workflow's suite): At tells the
+	// latest.
 	Checks []CheckResult `json:"checks"`
+	// ByWorkflowFile is true when Checks were read keyed by CheckResult.Key.
+	// An earlier build's read kept one run per workflow name and name, so a
+	// workflow file a PR adds could replace the runs of the base's workflow
+	// of the same name, and a status a check run of another app: the
+	// automatic approval's required checks do not decide by it, and the
+	// poll reads the checks again.
+	ByWorkflowFile bool `json:"by_workflow_file,omitempty"`
 	// Rollup is GitHub's own count of the rollup's check runs and statuses
 	// by state when Checks were read (superseded runs included, past the
 	// 100 Checks lists, so not their tally): the poll reads Checks again
@@ -17469,10 +17498,23 @@ type CheckCounts struct {
     CheckCounts are check runs and statuses by state (CheckResult.State's
     values).
 
+type CheckKey struct {
+	Status   bool   // a commit status
+	Workflow string // a check run's workflow file, else its workflow's name; "" for a status or another app's check
+	Name     string // the check run's name or the status's context
+}
+    CheckKey is the check a CheckResult is a run of (CheckResult.Key).
+
 type CheckResult struct {
 	Name     string `json:"name"`               // the check run's name or the status's context
 	State    string `json:"state"`              // CheckPassed | CheckFailed | CheckPending | CheckSkipped
-	Workflow string `json:"workflow,omitempty"` // the GitHub Actions workflow; "" for a status or another app's check
+	Workflow string `json:"workflow,omitempty"` // the name the GitHub Actions workflow declares; "" for a status or another app's check
+	// WorkflowFile is that workflow's file (github.Check.WorkflowFile:
+	// "ci.yml"); "" where Workflow is, and in a read of an earlier build.
+	WorkflowFile string `json:"workflow_file,omitempty"`
+	// Status is true for a commit status, false for a check run: a status
+	// never stands for a check run of the same name (Key).
+	Status bool `json:"status,omitempty"`
 	// At is when the check finished, else started, or the status was
 	// posted; zero for a check run not started yet (the newest run).
 	At time.Time `json:"at,omitzero"`
@@ -17482,10 +17524,19 @@ type CheckResult struct {
 func RequiredRuns(checks []CheckResult, entry string) []CheckResult
     RequiredRuns are the runs of checks that count for entry, a required
     check (RequiredNames), in checks' order: every check of a workflow entry's
-    workflows; for a name glob the latest run of each matching name across
+    workflows; for a name glob the latest check run of each matching name across
     workflows (a check posted through the API lands in another workflow's suite,
-    next to an older run). None when entry names no check. The board's required
-    checks and the auto-approval's CI gate read them.
+    next to an older run) and, apart, the latest commit status of that name,
+    which anyone who can write to the repository posts, so it never stands for
+    a check run. None when entry names no check. The board's required checks and
+    the auto-approval's CI gate read them.
+
+func (c CheckResult) Key() CheckKey
+    Key is the check c is a run of: a check run's workflow file (its workflow's
+    name for a run read without one, by an earlier build) and name, or a commit
+    status's context. Two workflow files that declare the same name are two
+    workflows, and a status is never a run of a check run's check, so neither
+    replaces the other's runs.
 
 type Decline struct {
 	ID        int64  `json:"id"`

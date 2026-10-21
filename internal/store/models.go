@@ -281,10 +281,19 @@ type CIStatus struct {
 	// Complete is true when Checks lists every check (GitHub returns at
 	// most 100).
 	Complete bool `json:"complete"`
-	// Checks holds the latest run of each (Workflow, Name). The same name
-	// can still appear under several workflows (a check posted through the
-	// API attaches to another workflow's suite): At tells the latest.
+	// Checks holds the latest run of each check (CheckResult.Key: a check
+	// run's workflow file and name, a commit status's context apart). The
+	// same name can still appear under several workflows (a check posted
+	// through the API attaches to another workflow's suite): At tells the
+	// latest.
 	Checks []CheckResult `json:"checks"`
+	// ByWorkflowFile is true when Checks were read keyed by CheckResult.Key.
+	// An earlier build's read kept one run per workflow name and name, so a
+	// workflow file a PR adds could replace the runs of the base's workflow
+	// of the same name, and a status a check run of another app: the
+	// automatic approval's required checks do not decide by it, and the
+	// poll reads the checks again.
+	ByWorkflowFile bool `json:"by_workflow_file,omitempty"`
 	// Rollup is GitHub's own count of the rollup's check runs and statuses
 	// by state when Checks were read (superseded runs included, past the
 	// 100 Checks lists, so not their tally): the poll reads Checks again
@@ -307,7 +316,13 @@ type CheckCounts struct {
 type CheckResult struct {
 	Name     string `json:"name"`               // the check run's name or the status's context
 	State    string `json:"state"`              // CheckPassed | CheckFailed | CheckPending | CheckSkipped
-	Workflow string `json:"workflow,omitempty"` // the GitHub Actions workflow; "" for a status or another app's check
+	Workflow string `json:"workflow,omitempty"` // the name the GitHub Actions workflow declares; "" for a status or another app's check
+	// WorkflowFile is that workflow's file (github.Check.WorkflowFile:
+	// "ci.yml"); "" where Workflow is, and in a read of an earlier build.
+	WorkflowFile string `json:"workflow_file,omitempty"`
+	// Status is true for a commit status, false for a check run: a status
+	// never stands for a check run of the same name (Key).
+	Status bool `json:"status,omitempty"`
 	// At is when the check finished, else started, or the status was
 	// posted; zero for a check run not started yet (the newest run).
 	At time.Time `json:"at,omitzero"`
@@ -346,8 +361,10 @@ func (c *CIStatus) Tally() {
 func (c CIStatus) equal(o CIStatus) bool {
 	return c.SHA == o.SHA && c.State == o.State && c.Total == o.Total && c.Passed == o.Passed && c.Failed == o.Failed &&
 		c.Pending == o.Pending && c.Skipped == o.Skipped && c.AllSkipped == o.AllSkipped && c.Complete == o.Complete &&
+		c.ByWorkflowFile == o.ByWorkflowFile &&
 		slices.EqualFunc(c.Checks, o.Checks, func(a, b CheckResult) bool {
-			return a.Name == b.Name && a.State == b.State && a.Workflow == b.Workflow && a.At.Equal(b.At)
+			return a.Name == b.Name && a.State == b.State && a.Workflow == b.Workflow && a.WorkflowFile == b.WorkflowFile &&
+				a.Status == b.Status && a.At.Equal(b.At)
 		})
 }
 

@@ -1298,9 +1298,16 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   and no `.mcp.json` (the head's file list, as the poller read it), and no session of the head ran
   without the PR's project config (they steer the review agents, and their hooks run on every
   teammate's machine once merged). A PR of more files than GitHub lists (100) is not approved either;
+- it changes none of its own workflows or actions: nothing under `.github/workflows/` or `.github/actions/`
+  (in any case; the same file list). A workflow the PR adds may declare the CI workflow's name, and one
+  that edits the CI workflow or an action it runs controls what the checks below say, so such a PR waits
+  for you: the card reads "the PR changes its own workflows or actions: approve by hand". A file list
+  Magnum cannot read whole holds the PR for this too ("Magnum cannot tell whether it changes the review
+  agents' instructions or hooks, or its own workflows or actions: …"). An action elsewhere in the
+  repository that a workflow runs (`uses: ./tools/setup`) is not looked for;
 - its head's checks pass, or it has none: while they fail or still run (the rollup `FAILURE`, `ERROR`,
   `PENDING` or `EXPECTED`) Magnum waits, and approves once they pass. A check that fails the same way on
-  the base branch's tip (the same workflow and check failed on the tip the poller last read) does not
+  the base branch's tip (the same workflow file and check failed on the tip the poller last read) does not
   hold it: once the head's other checks finished, a head whose every failing check also fails there is
   approved, and a `review.auto_approve_ci_base` event says so once per head and review (it names no
   check). The base tip's checks are read once per tip and ten minutes; a failure Magnum cannot match
@@ -1310,16 +1317,22 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   approval, whose `review.auto_approved` event and the daemon's log name it ("ignored 1 failing check
   outside required_checks: Terraform scripts / lint"; the posted approval does not), one outside it that
   still runs is not waited for, and a required one that fails or runs holds the PR as above, the base
-  tip's comparison included. When the head's stored checks cannot say (none read for the head, more than
-  GitHub lists, an entry that names no check on the head) every check counts, as without the key; the
-  list GitHub's rulesets declare does not change the gate;
+  tip's comparison included. A `workflow:<glob>` entry names every check of each workflow whose file
+  (`ci.yml`) or declared name (`CI`) it matches; the head's checks are kept one run per workflow file and
+  check name, so a workflow of the same name in another file never replaces the runs of the CI workflow's
+  file (its runs count beside them). A name glob counts the latest check run of each matching name and,
+  apart, the latest commit status of that name: a status, which anyone who can write to the repository
+  posts, never stands for a check run, nor a check run for a status. When the head's stored checks cannot
+  say (none read for the head, more than GitHub lists, an entry that names no check on the head, checks a
+  build before this rule stored, which the poller reads again at once) every check counts, as without
+  the key; the list GitHub's rulesets declare does not change the gate;
 - on GitHub (read just before posting) you have not approved that head, have no review in progress, and
   have not reviewed the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
 
-When the review, the watch, the agents' files or the checks hold a PR back, the card says why ("magnum does
-not approve it as you: its head's checks fail …"; `auto_approve_refused` in `magnum tui --json`) and a
-`review.auto_approve_refused` event records each reason once. They do not refuse the board's `A` (or
-`magnum approve --as`) on a row that needs you: there you decide by hand.
+When the review, the watch, the agents' files, the workflows or the checks hold a PR back, the card says
+why ("magnum does not approve it as you: its head's checks fail …"; `auto_approve_refused` in
+`magnum tui --json`) and a `review.auto_approve_refused` event records each reason once. They do not
+refuse the board's `A` (or `magnum approve --as`) on a row that needs you: there you decide by hand.
 
 `auto_approve_skip_authors` keeps some authors' PRs for a person's review, whatever Magnum's review says
 (a colleague whose PRs must get an explicit human approval): GitHub logins, matched as `skip_authors`
@@ -1358,8 +1371,8 @@ a post GitHub refuses (403, 422) is not tried again for that review, another fai
 New commits alone leave the approval standing (the repository decides about stale approvals): the next
 review decides. One that leaves something to fix, on any head, withdraws it (Magnum dismisses it as you:
 "Magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn ([review](<url>))."),
-and a clean one of the PR's head is held to the reviewers, watch, agents' files and checks conditions above
-as a new approval is: one they refuse withdraws it too ("Magnum's review of <sha7> found nothing to fix, but
+and a clean one of the PR's head is held to the reviewers, watch, agents' files, workflows and checks
+conditions above as a new approval is: one they refuse withdraws it too ("Magnum's review of <sha7> found nothing to fix, but
 it changes the review agents' instructions or hooks (AGENTS.md); this automatic approval is withdrawn
 ([review](<url>)).") with the same event and toast, while the head's checks still run Magnum waits, and a
 head it has not reviewed yet changes nothing. A clean review they let through leaves the approval standing

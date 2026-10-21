@@ -320,10 +320,11 @@ func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs [
 		// DetailsAt == nil: a PR recorded before the board fields existed
 		// gets its Details (assignees, reviewers, size) once.
 		// AuthorAssociation == nil: one fetch fills it (skip_departed_authors).
-		// CI == nil: likewise for its checks.
+		// CI == nil: likewise for its checks, and !CI.ByWorkflowFile for
+		// checks an earlier build kept by workflow name.
 		if !ok || cur.HeadSHA != p.HeadRefOid || cur.IsDraft != p.IsDraft || cur.Title == nil || cur.DetailsAt == nil ||
 			cur.AuthorAssociation == nil ||
-			cur.CI == nil || cur.CI.SHA != p.HeadRefOid || (p.CIKnown && cur.CI.State != p.CIState) ||
+			cur.CI == nil || !cur.CI.ByWorkflowFile || cur.CI.SHA != p.HeadRefOid || (p.CIKnown && cur.CI.State != p.CIState) ||
 			(p.CIKnown && ciCountsMoved(cur.CI.Rollup, p.CICounts)) ||
 			cur.GHState != store.GHOpen || cur.GHUpdatedAt == nil || !cur.GHUpdatedAt.Equal(p.UpdatedAt) {
 			need = append(need, p.Number)
@@ -604,20 +605,26 @@ func prFiles(d github.PRDetails) *store.PRFiles {
 	return &store.PRFiles{HeadSHA: d.HeadRefOid, Paths: d.Files, Truncated: !d.FilesComplete}
 }
 
-// ciStatus is the registry's view of the Details' head checks.
+// ciStatus is the registry's view of the Details' head checks, read keyed
+// by workflow file (store.CIStatus.ByWorkflowFile).
 func ciStatus(d github.PRDetails) *store.CIStatus {
 	ci := &store.CIStatus{SHA: d.CI.SHA, State: d.CI.State, Total: d.CI.Total, Complete: d.CI.Complete,
-		Checks: make([]store.CheckResult, 0, len(d.CI.Checks))}
+		Checks: make([]store.CheckResult, 0, len(d.CI.Checks)), ByWorkflowFile: true}
 	if ci.SHA == "" {
 		ci.SHA = d.HeadRefOid // GitHub listed no commit: the head has no checks to wait for
 	}
 	for _, c := range d.CI.Checks {
-		ci.Checks = append(ci.Checks, store.CheckResult{Name: c.Name, State: c.State, Workflow: c.Workflow, At: c.At})
+		ci.Checks = append(ci.Checks, checkResult(c))
 	}
 	ci.Tally()
 	n := d.CI.Counts
 	ci.Rollup = store.CheckCounts{Failed: n.Failed, Pending: n.Pending, Passed: n.Passed, Skipped: n.Skipped, Total: n.Total}
 	return ci
+}
+
+// checkResult is the registry's view of check c.
+func checkResult(c github.Check) store.CheckResult {
+	return store.CheckResult{Name: c.Name, State: c.State, Workflow: c.Workflow, WorkflowFile: c.WorkflowFile, Status: c.Status, At: c.At}
 }
 
 // ciCountsMoved reports whether the rollup's counts read now (CIStates)
