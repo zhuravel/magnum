@@ -119,9 +119,12 @@ type fakeGH struct {
 	contents map[string][]byte
 	statuses map[string]string
 	// threadsErr fails ReviewThreads; threadsCut marks by number the lists
-	// AllReviewThreads reports incomplete (more threads than GitHub lists).
+	// AllReviewThreads reports incomplete (more threads than GitHub lists);
+	// onThreads runs during ReviewThreads (outside the lock), before it
+	// answers: what the meter learns from a refused call.
 	threadsErr error
 	threadsCut map[int]bool
+	onThreads  func()
 	// prComments answers IssueComments by number (the conversation
 	// comments people and bots wrote, oldest first; the comments
 	// CreateIssueComment posts are not among them), read as GitHub pages
@@ -277,6 +280,9 @@ func (g *fakeGH) CompareFilesStatus(ctx context.Context, owner, repo, base, head
 
 func (g *fakeGH) ReviewThreads(_ context.Context, owner, repo string, number int) ([]github.Thread, error) {
 	g.record(fmt.Sprintf("threads:%s/%s#%d", owner, repo, number))
+	if fn := g.hook(&g.onThreads); fn != nil {
+		fn()
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.threadsErr != nil {

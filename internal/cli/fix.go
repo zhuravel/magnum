@@ -60,10 +60,14 @@ func newFixCmd(c *Context) *cobra.Command {
 			"starts after the restart, or once the drain is lifted without one, if the review still stands at the same "+
 			"head, and is dropped otherwise (the fix.dropped event and a toast say why; `magnum abort` takes it back). "+
 			"While the GitHub budget of the identity the fix reads as is below [github] budget_floor, the fix is held the "+
-			"same way and starts once the budget recovers, if the review still stands. "+
+			"same way and starts once the budget recovers, if the review still stands; so is a fix whose read of the other "+
+			"reviewers' threads and comments, made before it starts, GitHub refuses for its rate limit. A held fix that would "+
+			"start while the fix role's agent kind is paused (a usage limit) waits for the pause to end instead of being "+
+			"dropped (a fix you ask for during the pause is refused with it). "+
 			"A terminal asks y/N first (--yes does not; there --json needs "+
 			"--yes), and a review agent's pane is refused. --wait follows the loop until its end and says how it ended "+
-			"(clean after N fix cycles, needs you, pushed nothing, aborted or ended); --timeout (default 2h, 0 = no limit) "+
+			"(clean after N fix cycles, needs you, pushed nothing, aborted or ended, and when the last fixer did not get the "+
+			"other reviewers' threads and comments, that they were not read); --timeout (default 2h, 0 = no limit) "+
 			"stops following it after that long, and the loop goes on; `magnum abort` stops a loop. --off takes the PR out "+
 			"of autofix ([pipeline] autofix = \"own\"), so its findings stay yours (a `magnum fix` you ask for still runs, "+
 			"with a note), and --on puts it back; both ask y/N and start no loop. --dry-run only asks the daemon what would happen.",
@@ -203,10 +207,10 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 }
 
 // fixHeldForRestart reports whether the daemon held the fix, through a drain
-// for a restart or while the GitHub budget is below the floor
-// (engine.KVPRFixHeld): no loop runs before the restart or the budget's
-// recovery, so --wait has nothing to follow yet, and it says when the fix
-// starts.
+// for a restart, while the GitHub budget is below the floor or while the fix
+// role's agent kind is paused (engine.KVPRFixHeld): no loop runs before the
+// restart, the budget's recovery or the pause's end, so --wait has nothing
+// to follow yet, and it says when the fix starts.
 func fixHeldForRestart(ctx context.Context, c *Context, d *actDeps, t actTarget, label string, o fixOpts) bool {
 	raw, held, err := d.Store.GetKV(ctx, engine.KVPRFixHeld(t.PR.ID))
 	if err != nil || !held {
@@ -359,9 +363,10 @@ func fixEndOf(ctx context.Context, d *actDeps, t actTarget, start time.Time) (fi
 			continue
 		}
 		var data struct {
-			Cycle int    `json:"cycle"`
-			Run   string `json:"run"`
-			Fix   bool   `json:"fix"`
+			Cycle        int    `json:"cycle"`
+			Run          string `json:"run"`
+			Fix          bool   `json:"fix"`
+			OthersUnread string `json:"others_unread"`
 		}
 		_ = json.Unmarshal(ev.Data, &data)
 		msg := actClean(ev.Message)
@@ -379,6 +384,10 @@ func fixEndOf(ctx context.Context, d *actDeps, t actTarget, start time.Time) (fi
 			e = fixEnding{fixEndClean, "clean"}
 			if data.Cycle > 0 {
 				e.Text += " after " + textx.Count(data.Cycle, "fix cycle", "fix cycles")
+			}
+			if data.OthersUnread != "" { // the last fixer did not get all the other reviewers' items
+				e.Text += fmt.Sprintf(" for magnum's findings; the other reviewers' threads and comments were %s: `magnum fix %s#%d` reads them again",
+					actClean(data.OthersUnread), t.full(), t.PR.Number)
 			}
 		case "fix.needs_you", "fix.capped":
 			e = fixEnding{fixEndNeedsYou, "needs you: " + strings.TrimPrefix(msg, "fix: ")}

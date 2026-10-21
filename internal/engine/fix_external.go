@@ -20,12 +20,17 @@ package engine
 // threads file caps a reply, and never the prompt, an event or a log. After
 // the run, a fix the fixer left under Needs you as unanswered in one of
 // these threads is looked at on GitHub (dropFixerAnswered): one it did
-// reply in during the run asks nothing of the operator. A failed read
-// leaves the file out: the fixer then works on magnum's findings alone, and
-// a fix.external event says so. A review of magnum's that found nothing and
+// reply in during the run asks nothing of the operator. prepareFix reads
+// these items before every cycle starts (othersBeforeStart, spec 102), and
+// the job writes that read: GitHub refusing it for the rate limit holds the
+// job until the budget recovers, as the floor does, rather than start a
+// fixer that never sees them (talkable#12054). A read that fails otherwise
+// is tried once more at the job's start, and a second failure leaves the
+// file out: the fixer then works on magnum's findings alone, and a
+// fix.external event says so. A review of magnum's that found nothing and
 // left nothing open starts a fix only when one of these items waits for an
-// answer (spec 96): prepareFix reads them then (othersWaiting), refusing
-// the fix when none waits or the read fails, and the job writes that read.
+// answer (spec 96): the fix is refused when none waits or the read fails
+// (othersWaiting).
 
 import (
 	"cmp"
@@ -36,6 +41,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -416,15 +422,58 @@ func (e *Engine) othersWaiting(ctx context.Context, probe *fixJob, on string, ca
 	return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and no other reviewer's thread or comment waits for an answer", on)
 }
 
+// othersBeforeStart reads the other reviewers' items of probe's PR (its
+// repo, watch, pr and login) before a fix cycle starts, or takes carried,
+// the read the same request made at the same head before a whiteboard job
+// yielded to it (spec 102). alone, a new loop on a review that found
+// nothing and left nothing open (on: its short sha), has othersWaiting
+// decide, refusing when nothing waits or the read fails. A read GitHub
+// refuses for the rate limit, once the meter says the poll identity's
+// budget is below the floor, returns that low budget instead, for
+// prepareFix to hold the job. Any other failure of a job with findings
+// returns no read and no error: the job starts and writeExternal tries the
+// read once more (with the floor off, a rate limit too).
+func (e *Engine) othersBeforeStart(ctx context.Context, probe *fixJob, on string, alone bool, carried *externalRead) (*externalRead, *githubLowBudget, error) {
+	var read *externalRead
+	var err error
+	switch {
+	case alone:
+		read, err = e.othersWaiting(ctx, probe, on, carried)
+	case carried != nil && carried.head == probe.pr.HeadSHA:
+		read = carried
+	default:
+		var r externalRead
+		if r, err = e.readExternal(ctx, probe); err == nil {
+			read = &r
+		}
+	}
+	if err == nil {
+		return read, nil, nil
+	}
+	if errors.Is(err, github.ErrRateLimited) {
+		if low, ok := e.githubLow(probe.watch.PollIdentity); ok { // github_cost.go: the refusal told the meter
+			return nil, &low, nil
+		}
+	}
+	if alone {
+		return nil, nil, err
+	}
+	e.log.Info("fix: the other reviewers' items could not be read before the start; the job reads them again", "subject", probe.subject(), "err", err)
+	return nil, nil, nil
+}
+
 // writeExternal writes the other reviewers' open items of the job's PR to
 // externalFile in dir, the fixer's report's directory, and returns its
 // path, recording a fix.external event with the counts; "" when they cannot
 // be read or written, which the event says (the fixer then answers
 // magnum's findings alone, and a job of the others alone fails), and a
 // file an earlier run of the review left there is removed, so that nothing
-// reads it for this run. A job whose request read them already (others)
-// writes that read. The event names the lists GitHub cut short.
-func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) string {
+// reads it for this run. A job prepareFix read them for (others) writes
+// that read; one whose read failed reads them here, its one retry. The
+// event names the lists GitHub cut short. unread is what the fixer does not
+// get of them, for the loop's row (FixState.OthersUnread): "not read (HTTP
+// 502)", "not all read (over 1000 review threads)", "" when it gets all.
+func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) (path, unread string) {
 	var read externalRead
 	var err error
 	if job.others != nil {
@@ -433,9 +482,12 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) str
 		read, err = e.readExternal(ctx, job)
 	}
 	x, outside := read.items, read.outside
-	path := filepath.Join(dir, externalFile)
-	if err == nil {
-		err = writeExternalFile(path, x)
+	path = filepath.Join(dir, externalFile)
+	cause := ""
+	if err != nil {
+		cause = unreadCause(err)
+	} else if err = writeExternalFile(path, x); err != nil {
+		cause = "their file could not be written"
 	}
 	if err != nil {
 		if rerr := os.Remove(path); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
@@ -443,13 +495,16 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) str
 		}
 		if ctx.Err() == nil {
 			then := job.role.Name + " answers magnum's findings alone"
-			if job.others != nil {
+			if job.alone {
 				then = "the review found nothing, so " + job.role.Name + " has nothing to answer"
 			}
 			e.event(ctx, "warn", job.subject(), "fix.external", fmt.Sprintf("could not list the other reviewers' open threads and comments; "+
 				"%s: %v", then, err), map[string]any{"run": job.run.ID})
 		}
-		return ""
+		return "", "not read (" + cause + ")"
+	}
+	if len(read.cut) > 0 {
+		unread = "not all read (" + strings.Join(read.cut, ", ") + ")"
 	}
 	threads, conversation := x.unanswered()
 	msg := fmt.Sprintf("%s: %s of other reviewers (%d unanswered), %s since the author's last (%d unanswered)",
@@ -464,7 +519,42 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) str
 	e.event(ctx, "info", job.subject(), "fix.external", msg,
 		map[string]any{"run": job.run.ID, "file": path, "threads": len(x.Threads), "unanswered_threads": threads,
 			"conversation": len(x.Conversation), "unanswered_conversation": conversation, "outside": outside, "cut": len(read.cut)})
-	return path
+	return path, unread
+}
+
+// graphQLTypeRe is a GraphQL error type as GitHub names it (RATE_LIMIT,
+// NOT_FOUND), the only part of a GraphQL error unreadCause repeats.
+var graphQLTypeRe = regexp.MustCompile(`^[A-Z_]{1,40}$`)
+
+// unreadCause is why the other reviewers' items could not be read, in a few
+// words for the loop's row and its end, never an error's text: GitHub's
+// rate limit, a time-out, an HTTP status, a GraphQL error type, else "a
+// failed read".
+func unreadCause(err error) string {
+	var api *github.APIError
+	isAPI := errors.As(err, &api)
+	switch {
+	case errors.Is(err, github.ErrRateLimited):
+		return "GitHub's rate limit"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "a time-out"
+	case isAPI && api.Status != 0:
+		return fmt.Sprintf("HTTP %d", api.Status)
+	case isAPI && len(api.Errors) > 0 && graphQLTypeRe.MatchString(api.Errors[0].Type):
+		return api.Errors[0].Type
+	}
+	return "a failed read"
+}
+
+// othersUnread is what a loop's end says when the fixer of its last cycle
+// did not get all the other reviewers' items (FixState.OthersUnread): "the
+// other reviewers' threads and comments were not read (HTTP 502): `magnum
+// fix talkable/talkable#2` reads them again"; "" when it got them.
+func (j *fixJob) othersUnread() string {
+	if j.state.OthersUnread == "" {
+		return ""
+	}
+	return "the other reviewers' threads and comments were " + j.state.OthersUnread + ": `magnum fix " + j.label() + "` reads them again"
 }
 
 // writeExternalFile writes x to path as indented JSON, the directory made

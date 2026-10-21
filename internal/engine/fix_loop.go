@@ -355,18 +355,26 @@ func (e *Engine) loopMovedOn(ctx context.Context, prID int64, head string) (stri
 
 // fixLoopDone ends a loop whose re-review of head found nothing: its row
 // goes (while it is still raw, endFixRowIf), fix.done is recorded and an
-// info toast says how many cycles it took.
+// info toast says how many cycles it took. A loop whose last fixer did not
+// get all the other reviewers' items is clean for magnum's findings only,
+// and its event and toast say so (othersUnread).
 func (e *Engine) fixLoopDone(ctx context.Context, job *fixJob, raw, head string) {
 	st, pr := job.state, job.pr
 	if !e.endFixRowIf(ctx, job, raw) {
 		return
 	}
 	cycles := textx.Count(st.Cycle, "fix cycle", "fix cycles")
-	e.event(ctx, "info", job.subject(), "fix.done", fmt.Sprintf("the fix loop ends clean after %s: the re-review of %s found nothing",
-		cycles, textx.ShortSHA(head)), job.loopData())
+	msg := fmt.Sprintf("the fix loop ends clean after %s: the re-review of %s found nothing", cycles, textx.ShortSHA(head))
 	what := fmt.Sprintf("PR #%d: clean after %s", pr.Number, cycles)
+	body, line := pr.URL+"\nthe re-review of "+textx.ShortSHA(head)+" found nothing", ""
+	if unread := job.othersUnread(); unread != "" { // fix_external.go
+		msg += "; " + unread
+		what = fmt.Sprintf("PR #%d: clean for magnum's findings after %s", pr.Number, cycles)
+		body, line = body+"\n"+unread, "; "+unread
+	}
+	e.event(ctx, "info", job.subject(), "fix.done", msg, job.loopData())
 	e.info(notify.Item{Key: fmt.Sprintf("fix-done:%d:%s", pr.ID, store.FormatTime(st.StartedAt)), Title: "magnum: " + what,
-		Body: pr.URL + "\nthe re-review of " + textx.ShortSHA(head) + " found nothing", Line: what + " " + pr.URL, Kind: kindFixEnded})
+		Body: body, Line: what + line + " " + pr.URL, Kind: kindFixEnded})
 }
 
 // endLoopForAttention ends a loop after its re-review as needs attention
@@ -383,7 +391,7 @@ func (e *Engine) endLoopForAttention(ctx context.Context, job *fixJob, raw, kind
 	if pr, err := e.st.PRByID(ctx, job.pr.ID); err == nil && pr.State == store.PRNeedsAttention {
 		return
 	}
-	e.fixAttention(ctx, job, msg)
+	e.fixAttention(ctx, job, withUnread(msg, job.othersUnread())) // fix_settle.go
 }
 
 // endFixRowIf ends the job's loop by removing its row while the row is still

@@ -16,9 +16,19 @@ package engine
 //
 // The GitHub floor holds a fix the same way (github_floor.go): a `magnum
 // fix` or an autofix that would start while the budget of the identity it
-// reads as is below [github] budget_floor is held (heldFix.Why heldBudget),
-// and the tick that finds the budget recovered starts it (continueBudgetHeld),
-// as does the restart, with the same checks.
+// reads as is below [github] budget_floor, or whose read of the other
+// reviewers' items GitHub refused for the rate limit, is held (heldFix.Why
+// heldBudget), and the tick that finds the budget recovered starts it
+// (continueBudgetHeld), as does the restart, with the same checks.
+//
+// A held fix whose fixer's agent kind is paused (a usage limit, a login)
+// when it would start waits out the pause instead of being dropped
+// (heldPause, with the kind): talkable#12054's fix, held through a drain on
+// 2026-10-19, was dropped after the restart for claude's usage limit. The
+// tick that finds the kind no longer paused starts it (continuePauseHeld),
+// with the same checks. One row holds whichever of the three holds applies
+// now: a pause hold whose start finds the budget low becomes a budget
+// hold, and the reverse.
 
 import (
 	"cmp"
@@ -26,6 +36,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,36 +47,54 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// KVPRFixHeld holds a `magnum fix` a drain for a restart held (heldFix as
-// JSON) until the restart, or the drain's end without one, starts it.
+// KVPRFixHeld holds a fix that could not start yet (heldFix as JSON): a
+// `magnum fix` a drain for a restart held until the restart, or the drain's
+// end without one, starts it; a `magnum fix` or an autofix the GitHub
+// budget held until it recovers; one the fixer's paused kind held until the
+// pause ends.
 func KVPRFixHeld(prID int64) string { return fmt.Sprintf("pr.%d.fix_held", prID) }
 
-// heldFix is a `magnum fix` held through a drain, or a fix the GitHub floor
-// held: when it was asked, the
-// PR's head then (the head the review it would fix stood at), who asked
-// (fixBy, whose loop unpins a pinned PR as the request would have; autofixBy
-// for an autofix the GitHub floor held) and why it is held ("" for a drain,
-// heldBudget for the GitHub floor).
+// heldFix is a held fix: when it was asked, the PR's head then (the head
+// the review it would fix stood at), who asked (fixBy, whose loop unpins a
+// pinned PR as the request would have; autofixBy for an autofix the GitHub
+// floor held) and why it is held ("" for a drain, heldBudget for the GitHub
+// budget, heldPause for the fixer's paused agent kind, Kind).
 type heldFix struct {
 	At   time.Time `json:"at"`
 	Head string    `json:"head"`
 	By   string    `json:"by"`
 	Why  string    `json:"why,omitempty"`
+	Kind string    `json:"kind,omitempty"`
 }
 
-// heldBudget is the heldFix.Why of a fix the GitHub floor held.
-const heldBudget = "github_budget"
+const (
+	// heldBudget is the heldFix.Why of a fix the GitHub budget held.
+	heldBudget = "github_budget"
+	// heldPause is the heldFix.Why of a fix the pause of its fixer's agent
+	// kind (heldFix.Kind) held.
+	heldPause = "kind_pause"
+)
 
 // HeldFixStarts is when the held fix raw (a KVPRFixHeld value) starts, for
 // `magnum fix --wait`: "after the restart" for a drain's, "when the GitHub
-// budget recovers" for the GitHub floor's.
+// budget recovers" for the GitHub budget's, "when claude's pause ends" for
+// the fixer's pause.
 func HeldFixStarts(raw string) string {
 	var h heldFix
-	if json.Unmarshal([]byte(raw), &h) == nil && h.Why == heldBudget {
+	if json.Unmarshal([]byte(raw), &h) != nil {
+		return "after the restart"
+	}
+	switch h.Why {
+	case heldBudget:
 		return "when the GitHub budget recovers"
+	case heldPause:
+		return "when " + h.kind() + "'s pause ends"
 	}
 	return "after the restart"
 }
+
+// kind is the paused agent kind a pause hold waits for, in words.
+func (h heldFix) kind() string { return cmp.Or(h.Kind, "the fixer") }
 
 // fixHold is why holdFix holds a fix: a drain for a restart (the zero
 // value) or a GitHub budget below the floor (low), with the job startFix
@@ -74,10 +104,13 @@ type fixHold struct {
 	job *fixJob
 }
 
-// during is what a held fix was asked during, for its drop.
+// during is what a held fix was held during, for its drop.
 func (h heldFix) during() string {
-	if h.Why == heldBudget {
+	switch h.Why {
+	case heldBudget:
 		return "while the GitHub budget was low"
+	case heldPause:
+		return "while " + h.kind() + " was paused"
 	}
 	return "during a drain"
 }
@@ -87,9 +120,11 @@ var kindFixDropped = notify.Kind{One: "held fix dropped", Many: "held fixes drop
 
 // holdFix answers `magnum fix` on pr while the daemon drains for a restart,
 // or while the GitHub budget of the identity it reads as is below the floor
-// (hold.low): every refusal of prepareFix, which leaves the drain and the
-// floor to startFix, answers at once (a loop already running, nothing to
-// fix, a PR that is not yours, ...), and otherwise the request is held
+// (hold.low; also when GitHub refused prepareFix's read of the other
+// reviewers' items for the rate limit): every refusal of prepareFix, which
+// leaves the drain and the floor to startFix, answers at once (a loop
+// already running, nothing to fix, a PR that is not yours, ...), and
+// otherwise the request is held
 // (KVPRFixHeld) and answered so, with a fix.held event. by is who asks
 // (fixBy; autofixBy for an autofix the floor held, which answers nobody).
 // The PR joins drainHeld (budgetHeld for the floor), so a drain lifted
@@ -141,8 +176,10 @@ func (e *Engine) holdFix(ctx context.Context, pr store.PR, dry bool, by string, 
 	return "held; " + stands + " (" + why + ")", nil
 }
 
-// startHeldFixes starts, once the daemon started, the fixes a drain held
-// for the restart (startHeldFix). A dry run starts none.
+// startHeldFixes starts, once the daemon started, the fixes held for the
+// restart, and decides again those the GitHub budget or the fixer's pause
+// held (startHeldFix: one still held is held again, in budgetHeld or
+// pauseHeld). A dry run starts none.
 func (e *Engine) startHeldFixes(ctx context.Context) {
 	if e.d.DryRun {
 		return
@@ -161,18 +198,21 @@ func (e *Engine) startHeldFixes(ctx context.Context) {
 	}
 }
 
-// startHeldFix starts the fix a drain held on the PR prID (KVPRFixHeld),
-// once the daemon restarted (startHeldFixes) or the drain ended without a
-// restart (continueDrainHeldLoops); after says which, for the event. The
-// request's row goes first, so it is acted on once. Its loop starts at
-// cycle 1 (startFix, by `magnum fix`) while the PR still sits at the head it
-// was asked on and the review there still stands with something to fix
-// (prepareFix's refusals); otherwise the request is dropped with fix.dropped
-// at warn, naming why, and an info toast: the operator was told it would
-// start. A drain that began again meanwhile holds it again, and so does a
-// GitHub budget below the floor (as a fix the floor held, budgetHeld). An
-// autofix's drop toasts nothing: the operator asked for none. It reports
-// whether a fix was held.
+// startHeldFix starts the fix held on the PR prID (KVPRFixHeld), once the
+// daemon restarted (startHeldFixes), the drain ended without a restart
+// (continueDrainHeldLoops), the GitHub budget recovered
+// (continueBudgetHeld) or the fixer's pause ended (continuePauseHeld);
+// after says which, for the event. The request's row goes first, so it is
+// acted on once. Its loop starts at cycle 1 (startFix, by who asked) while
+// the PR still sits at the head it was asked on and the review there still
+// stands with something to fix (prepareFix's refusals); otherwise the
+// request is dropped with fix.dropped at warn, naming why, and an info
+// toast: the operator was told it would start. A drain that began again
+// meanwhile holds it again, and so does a GitHub budget below the floor (as
+// a fix the floor held, budgetHeld) and a paused agent kind of the fix role
+// (heldPause, pauseHeld): the daemon waits those out. An autofix's drop
+// toasts nothing: the operator asked for none. It reports whether a fix was
+// held.
 func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) bool {
 	key := KVPRFixHeld(prID)
 	raw, found, err := e.st.GetKV(ctx, key)
@@ -211,6 +251,7 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 		why = gone
 	default:
 		job, err := e.startFix(ctx, pr, cmp.Or(h.By, fixBy), FixState{}, nil)
+		var paused *kindPausedError
 		switch {
 		case err == nil:
 			e.log.Info("fix: the held fix starts "+after, "subject", subject, "role", job.role.Name, "cycles", job.state.Cap)
@@ -228,6 +269,14 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 			}
 			e.holdForBudget(prID)
 			e.log.Info("fix: the held fix waits for the GitHub budget", "subject", subject, "why", err.Error())
+			return true
+		case errors.As(err, &paused): // the fixer's kind is paused: it waits for the pause's end
+			h.Why, h.Kind = heldPause, paused.kind
+			if werr := writeKVJSON(ctx, e, key, "held fix", h); werr != nil {
+				e.setKV(ctx, key, raw)
+			}
+			e.holdForPause(prID)
+			e.log.Info("fix: the held fix waits for the pause of "+paused.kind, "subject", subject, "why", err.Error())
 			return true
 		}
 		why = err.Error()
@@ -247,10 +296,11 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 	return true
 }
 
-// dropHeldFix takes back the fix a drain held on pr (KVPRFixHeld) for a
-// stop of the PR by by ("magnum abort", "magnum ignore", a close): its row
-// goes and fix.dropped says so at info. It returns what it did, for the
-// stop's answer ("" = nothing was held).
+// dropHeldFix takes back the fix held on pr (KVPRFixHeld) for a stop of
+// the PR by by ("magnum abort", "magnum ignore", a close): its row goes and
+// fix.dropped says so at info, naming the hold it was in ("the fix held
+// while the GitHub budget was low is dropped"). It returns what it did, for
+// the stop's answer ("" = nothing was held).
 func (e *Engine) dropHeldFix(ctx context.Context, repo store.Repo, pr store.PR, by string) string {
 	key := KVPRFixHeld(pr.ID)
 	raw, found, err := e.st.GetKV(ctx, key)
@@ -260,7 +310,63 @@ func (e *Engine) dropHeldFix(ctx context.Context, repo store.Repo, pr store.PR, 
 	if gone, err := e.st.DeleteKVIf(ctx, key, raw); err != nil || !gone {
 		return ""
 	}
-	const note = "the fix held for the restart is dropped"
-	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.dropped", note+" by "+by, map[string]any{"by": by})
+	var h heldFix
+	_ = json.Unmarshal([]byte(raw), &h) // a record that does not read says "during a drain", the hold it had before Why
+	note := "the fix held " + h.during() + " is dropped"
+	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.dropped", note+" by "+by, map[string]any{"by": by, "why": h.Why})
 	return note
+}
+
+// holdForPause marks the PR prID as holding a fix for its fixer's paused
+// agent kind: the tick that finds the kind no longer paused starts it
+// (continuePauseHeld).
+func (e *Engine) holdForPause(prID int64) {
+	e.mu.Lock()
+	e.pauseHeld[prID] = true
+	e.mu.Unlock()
+}
+
+// continuePauseHeld starts, once a tick finds the agent kind of a held
+// fix's fix role no longer paused, the fixes that pause held (pauseHeld),
+// as the restart would start them (startHeldFix: the head, the review, an
+// autofix's own checks, and a GitHub budget below the floor or a pause
+// begun again holding it anew). A held fix whose watch or fix role is gone
+// is started too, for startHeldFix to drop it with the refusal. Nothing
+// starts while the daemon drains: the drain's end or the restart decides
+// them then.
+func (e *Engine) continuePauseHeld(ctx context.Context) {
+	if e.d.DryRun || e.draining(ctx) || ctx.Err() != nil {
+		return
+	}
+	e.mu.Lock()
+	held := slices.Sorted(maps.Keys(e.pauseHeld))
+	e.mu.Unlock()
+	for _, id := range held {
+		pr, err := e.st.PRByID(ctx, id)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				e.mu.Lock()
+				delete(e.pauseHeld, id)
+				e.mu.Unlock()
+			}
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			continue
+		}
+		kind := ""
+		if w := e.cfg.WatchFor(repo.FullName()); w != nil {
+			if role, ok := e.cfg.FixRoleFor(w); ok {
+				kind = role.AgentKind()
+			}
+		}
+		if kind != "" && e.kindPauseReason(ctx, []string{kind}) != "" {
+			continue
+		}
+		e.mu.Lock()
+		delete(e.pauseHeld, id)
+		e.mu.Unlock()
+		e.startHeldFix(ctx, id, "after "+cmp.Or(kind, "the fixer")+"'s pause ended")
+	}
 }

@@ -449,6 +449,25 @@ func TestFixWaitFollowsToTheLoopsEnd(t *testing.T) {
 	}
 }
 
+// A loop whose last fixer did not get the other reviewers' items ends clean
+// for magnum's findings only, and --wait says so with what reads them again
+// (talkable#12054 ended "clean" with a colleague's thread never read).
+func TestFixWaitSaysACleanLoopDidNotReadTheOtherReviewers(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 1
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.fixDaemon(pr, func(h *actHarness) {
+		h.fixLoopGone(pr)
+		h.fixEvent("fix.pushed", "claude-fix pushed 1 commit", map[string]any{"cycle": 1})
+		h.fixEvent("fix.done", "the fix loop ends clean after 1 fix cycle: the re-review of def5678 found nothing", map[string]any{"cycle": 1, "others_unread": "not read (HTTP 502)"})
+	})
+	if code := h.cmd("fix", "5", "--wait", "--yes"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String()+h.errb.String(), "talkable#5: clean after 1 fix cycle for magnum's findings; the other reviewers' threads and comments "+
+		"were not read (HTTP 502): `magnum fix talkable/talkable#5` reads them again")
+}
+
 // How a loop ended is read from the registry once its row is gone: the latest
 // end event of the loop, with the PR's attention. Clean and nothing pushed
 // exit 0; everything else exits 1 with the sentence the daemon recorded.
@@ -795,6 +814,28 @@ func TestFixWaitOnAFixHeldForTheGitHubBudgetSaysItWaitsForTheBudget(t *testing.T
 	if strings.Contains(out, "after the restart (`magnum status") {
 		t.Errorf("a budget hold is said to wait for the restart:\n%s", out)
 	}
+	if h.sleeps > 3 {
+		t.Errorf("slept %d times: it followed a held fix", h.sleeps)
+	}
+}
+
+// A held fix whose fixer's kind was paused when it would start waits for
+// the pause's end, and --wait names the kind.
+func TestFixWaitOnAFixHeldForTheFixersPauseSaysWhenItEnds(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 1
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	const held = "held; the fix of talkable/talkable#5 starts after the restart if the review on abc1234 still stands (the daemon is draining)"
+	h.onSleep = func(h *actHarness) {
+		if err := h.st.SetKV(h.ctx, engine.KVPRFixHeld(pr.ID), `{"at":"2026-10-17T18:00:00Z","head":"abc1234","by":"magnum fix","why":"kind_pause","kind":"claude"}`); err != nil {
+			h.t.Error(err)
+		}
+		h.completePending(store.RequestDone, held)
+	}
+	if code := h.cmd("fix", "5", "--wait", "--yes"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String()+h.errb.String(), "talkable#5: nothing to follow yet: the fix starts when claude's pause ends (`magnum status talkable#5` shows it then)")
 	if h.sleeps > 3 {
 		t.Errorf("slept %d times: it followed a held fix", h.sleeps)
 	}

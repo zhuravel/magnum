@@ -97,12 +97,17 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	if counted {
 		replied, data["threads"] = "replied in "+textx.Count(threads, "thread", "threads"), threads
 	}
+	unread := job.othersUnread() // fix_external.go: what the fixer did not get of the other reviewers
+	if unread != "" {
+		replied += "; " + unread
+	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
 	if len(rep.NeedsYou) > 0 {
 		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou) // fix_external.go
 	}
 	n := len(rep.NeedsYou)
 	needs := "fix: " + needsYouText(rep.NeedsYou, report, job.pr.URL, job.label(), false)
+	attn := withUnread(needs, unread)
 	if n > 0 {
 		data["needs_you"] = n
 	}
@@ -111,7 +116,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.event(ctx, "warn", subject, "fix.needs_you", needs+"; the re-review of "+textx.ShortSHA(target)+" runs first", data)
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
 		if e.fixReReview(ctx, job, target, rep.NeedsYou) {
-			e.fixCallToast(job, needs) // the operator can act on it while the re-review runs
+			e.fixCallToast(job, attn) // the operator can act on it while the re-review runs
 		}
 	case pushed:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
@@ -120,15 +125,15 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
 		e.event(ctx, "warn", subject, "fix.needs_you", needs, data)
-		e.fixAttention(ctx, job, needs)
+		e.fixAttention(ctx, job, attn)
 	default:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
 		answered := "the findings"
 		switch {
-		case job.others != nil && counted: // a review that found nothing: the fixer answered the other reviewers alone
+		case job.alone && counted: // a review that found nothing: the fixer answered the other reviewers alone
 			answered = textx.Count(threads, "thread or comment", "threads and comments") + " of other reviewers"
-		case job.others != nil:
+		case job.alone:
 			answered = "the other reviewers"
 		case counted:
 			answered = textx.Count(threads, "finding", "findings")
@@ -138,8 +143,11 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 			did = "updated the description"
 		}
 		what := fmt.Sprintf("PR #%d: %s %s, replied to %s", job.pr.Number, job.role.Name, did, answered)
-		e.info(notify.Item{Key: "fix-replied:" + job.run.ID, Title: "magnum: " + what,
-			Body: job.pr.URL + "\nthe fix loop ends; the report: " + report, Line: what + " " + job.pr.URL, Kind: kindFixEnded})
+		body, line := job.pr.URL+"\nthe fix loop ends; the report: "+report, what
+		if unread != "" {
+			body, line = body+"\n"+unread, line+"; "+unread
+		}
+		e.info(notify.Item{Key: "fix-replied:" + job.run.ID, Title: "magnum: " + what, Body: body, Line: line + " " + job.pr.URL, Kind: kindFixEnded})
 	}
 }
 
@@ -222,7 +230,22 @@ func (e *Engine) recordFixPush(ctx context.Context, job *fixJob, pr store.PR, he
 // eventData is the data every fix event carries: the run, the role, the
 // cycle and the report.
 func (j *fixJob) eventData() map[string]any {
-	return map[string]any{"run": j.run.ID, "role": j.role.Name, "cycle": j.state.Cycle, "cap": j.state.Cap, "report": deref(j.run.ReportPath)}
+	data := map[string]any{"run": j.run.ID, "role": j.role.Name, "cycle": j.state.Cycle, "cap": j.state.Cap, "report": deref(j.run.ReportPath)}
+	if j.state.OthersUnread != "" {
+		data["others_unread"] = j.state.OthersUnread
+	}
+	return data
+}
+
+// withUnread is the attention message msg of a loop whose fixer did not get
+// all the other reviewers' items, with unread (fixJob.othersUnread) on a
+// line of its own: the reason's first line, which attention.Explain reads
+// for the calls and the remedy, stays msg, and unread shows under it.
+func withUnread(msg, unread string) string {
+	if unread == "" {
+		return msg
+	}
+	return msg + "\n" + unread
 }
 
 // readFixReport reads the fixer's report of the job's run. Its errors name
@@ -550,8 +573,9 @@ func (e *Engine) stopFix(ctx context.Context, job *fixJob, orders []stopOrder) {
 // goes only while it is the one read here (Store.DeleteKVIf; claimFixRow is
 // the other side), and an abort without the reservation goes through
 // abortFixLoop, which hands a fix job that claimed the PR meanwhile the
-// stop instead. A PR without a loop has the fix a drain held for the
-// restart taken back instead (dropHeldFix). It returns what it did for the
+// stop instead. A PR without a loop has its held fix (a drain's, the
+// GitHub budget's or the fixer's pause's) taken back instead (dropHeldFix).
+// It returns what it did for the
 // stop's answer ("" = the PR had neither, or a cycle took the loop on
 // meanwhile).
 func (e *Engine) endFixLoop(ctx context.Context, repo store.Repo, pr store.PR, by string) string {
@@ -559,7 +583,7 @@ func (e *Engine) endFixLoop(ctx context.Context, repo store.Repo, pr store.PR, b
 	if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, by); note != "" {
 		return note
 	}
-	return e.dropHeldFix(ctx, repo, pr, by) // fix_held.go: a `magnum fix` a drain held, which no loop runs yet
+	return e.dropHeldFix(ctx, repo, pr, by) // fix_held.go: a held fix, which no loop runs yet
 }
 
 // endFixLoopRow is endFixLoop for the row the caller read: st, raw as stored
@@ -595,8 +619,8 @@ const abortFixLoopTries = 3
 // loop ended quietly by stopFix), never a bare delete of the row the job
 // works under; with no reservation, the row read goes (endFixLoopRow, a
 // compare-and-set), and a row that changed since it was read (a cycle took
-// the loop on) is looked at again. A PR without a loop has the fix a drain
-// held for the restart taken back (dropHeldFix). It reports whether it
+// the loop on) is looked at again. A PR without a loop has its held fix
+// taken back (dropHeldFix). It reports whether it
 // answered the request (false: the PR has neither).
 func (e *Engine) abortFixLoop(ctx context.Context, id int64, repo store.Repo, pr store.PR) bool {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)

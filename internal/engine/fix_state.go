@@ -54,21 +54,25 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // (fixCompact: "compacted 82% → 31%", "compacted from 82%" when the pane
 // shows no figure after it, "fresh session (82% after /compact)", "fresh
 // session (/compact failed)"); "" when it resumed it as it was or started a
-// fresh fixer anyway.
+// fresh fixer anyway. OthersUnread says that the current cycle's fixer did
+// not get all the other reviewers' items (writeExternal): "not read (HTTP
+// 502)", "not all read (over 1000 review threads)", a short cause and never
+// PR text; the loop's end says so (othersUnread). "" when it got them.
 type FixState struct {
-	Cycle     int       `json:"cycle"`
-	Cap       int       `json:"cap"`
-	Phase     string    `json:"phase"`
-	Since     string    `json:"since"`
-	Head      string    `json:"head"`
-	By        string    `json:"by"`
-	Report    string    `json:"report"`
-	StartedAt time.Time `json:"started_at"`
-	NeedsYou  []string  `json:"needs_you,omitempty"`
-	Role      string    `json:"role,omitempty"`
-	ForcedAt  time.Time `json:"forced_at,omitzero"`
-	Held      bool      `json:"held,omitempty"`
-	Context   string    `json:"context,omitempty"`
+	Cycle        int       `json:"cycle"`
+	Cap          int       `json:"cap"`
+	Phase        string    `json:"phase"`
+	Since        string    `json:"since"`
+	Head         string    `json:"head"`
+	By           string    `json:"by"`
+	Report       string    `json:"report"`
+	StartedAt    time.Time `json:"started_at"`
+	NeedsYou     []string  `json:"needs_you,omitempty"`
+	Role         string    `json:"role,omitempty"`
+	ForcedAt     time.Time `json:"forced_at,omitzero"`
+	Held         bool      `json:"held,omitempty"`
+	Context      string    `json:"context,omitempty"`
+	OthersUnread string    `json:"others_unread,omitempty"`
 }
 
 // FixOff is a PR's opt-out of the fix job: when it was set and by whom

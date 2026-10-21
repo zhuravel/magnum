@@ -396,6 +396,10 @@ type Engine struct {
 	// identities whose low budget left a whiteboard pending (guarded by mu).
 	budgetHeld        map[int64]bool
 	budgetWhiteboards map[string]bool
+	// pauseHeld are the PRs whose held fix waits for its fixer's paused
+	// agent kind (heldPause), guarded by mu: the tick that finds the kind no
+	// longer paused starts it (continuePauseHeld, fix_held.go).
+	pauseHeld map[int64]bool
 	// yieldCarry is, by request id, what a request read before a whiteboard
 	// job yielded the PR to it (whiteboardHeld.carry), handed to the request
 	// when it is answered after the yield (answerYielding), guarded by mu.
@@ -614,6 +618,7 @@ func New(d Deps) *Engine {
 		drainHeld:         map[int64]bool{},
 		budgetHeld:        map[int64]bool{},
 		budgetWhiteboards: map[string]bool{},
+		pauseHeld:         map[int64]bool{},
 		yieldCarry:        map[int64]any{},
 		heavy:             make(chan heavyJob, 64),
 		heavyKeys:         map[string]bool{},
@@ -971,6 +976,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// github_floor.go: the work the GitHub budget held, once it recovered,
 	// before dispatch gives the PR to another round.
 	e.continueBudgetHeld(ctx)
+	e.continuePauseHeld(ctx) // fix_held.go: the held fixes the fixer's pause held, once it ended
 	e.dispatch(ctx, ts)
 	e.noteWaits(ctx, ts)
 	e.noteStatusComments(ctx) // status_comment.go: after the waits it names

@@ -80,6 +80,16 @@ var errFixLoopGone = errors.New("the fix loop is no longer waiting for its re-re
 // `magnum fix` never sees it: requestFix holds the request (holdFix).
 var errFixDraining = errors.New("the daemon is draining; try after the restart")
 
+// kindPausedError is prepareFix's refusal while the fix role's agent kind
+// is paused (a usage limit, a login): its text is the refusal a `magnum fix`
+// answers, and a held fix waits for the pause of kind to end instead of
+// being dropped (startHeldFix, heldPause).
+type kindPausedError struct {
+	kind, text string
+}
+
+func (e *kindPausedError) Error() string { return e.text }
+
 // fixJob is one cycle of a fix loop: the PR, its watch and slot, the fix
 // role, the review the fixer fixes and the loop's row.
 type fixJob struct {
@@ -97,18 +107,21 @@ type fixJob struct {
 	state  FixState            // the loop's row as the job writes it
 	run    store.Run           // the fixer's run, once fixStart created it
 	// started is when fixStart created the run: a reply of the fixer's on
-	// GitHub since then is this run's (noteFixerReplies).
+	// GitHub since then is this run's (dropFixerAnswered).
 	started time.Time
-	// others is what the other reviewers wrote, as prepareFix read it for a
-	// review that found nothing and left nothing open (nil otherwise): the
-	// job then answers their unanswered items alone, and writeExternal
-	// writes these without reading GitHub again.
+	// others is what the other reviewers wrote, as prepareFix read it before
+	// the start (nil when the read failed, or the budget held the job):
+	// writeExternal writes these without reading GitHub again. alone: the
+	// review found nothing and left nothing open, and the job, a new loop,
+	// answers their unanswered items alone (spec 96).
 	others *externalRead
+	alone  bool
 	// budget is set when prepareFix found the GitHub budget of the identity
-	// the job reads as below the floor (github_floor.go): it read nothing
-	// and took no pin off, and the job is held (startFix refuses with
-	// githubBudgetError). othersDeferred: such a job of a review that found
-	// nothing reads the other reviewers' items when the held fix starts.
+	// the job reads as below the floor (github_floor.go), or GitHub refused
+	// its read of the other reviewers' items for the rate limit and the
+	// meter then said so: it took no pin off, and the job is held (startFix
+	// refuses with githubBudgetError). othersDeferred: the other reviewers'
+	// items are read when the held fix starts.
 	budget         *githubLowBudget
 	othersDeferred bool
 	// touched: the fixer may have changed the slot (its prompt was sent), so
@@ -145,10 +158,10 @@ func (j *fixJob) fixes() string {
 	open := j.review.OpenProblems()
 	n := j.review.Findings() + open
 	switch {
-	case n == 0 && j.othersDeferred:
+	case j.alone && j.othersDeferred:
 		return fmt.Sprintf("answers what the other reviewers left unanswered, read once the GitHub budget recovers, in %s (magnum's review of %s found nothing)",
 			j.slot.Name, textx.ShortSHA(j.review.SHA))
-	case n == 0 && j.others != nil:
+	case j.alone && j.others != nil:
 		threads, conversation := j.others.items.unanswered()
 		note := "magnum's review of " + textx.ShortSHA(j.review.SHA) + " found nothing"
 		if kept != "" {
@@ -193,9 +206,9 @@ func fixRunningSentence(st FixState) string {
 // daemon's) answers what would start. A whiteboard job holding the PR is
 // refused with whiteboardHeld once every other refusal passed: it yields to
 // the request (answerYielding). That refusal carries the other reviewers'
-// items prepareFix read for a review that found nothing, and the request's
-// pass after the yield gets them back as carried: it runs every refusal
-// again but reads GitHub no second time.
+// items prepareFix read, and the request's pass after the yield gets them
+// back as carried: it runs every refusal again but reads GitHub no second
+// time at the same head.
 func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *externalRead) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -287,14 +300,19 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 // goes as for `magnum review` (the job's notes say so for the answer). A
 // drain for a restart is startFix's refusal (errFixDraining), not this one:
 // holdFix asks it under a drain, so a request it would refuse after the
-// restart is refused at once, not held. carried is the other reviewers'
-// items the same request read before (nil = none): a review that found
-// nothing then decides on them instead of reading GitHub again
-// (othersWaiting). Below the GitHub floor of the identity the job reads as
-// (github_floor.go) it reads nothing from GitHub and takes no pin off: the
-// job carries the low budget (fixJob.budget) for startFix to hold it, and a
-// review that found nothing has the other reviewers' items read when the
-// held fix starts (othersDeferred).
+// restart is refused at once, not held. A paused agent kind of the fix
+// role refuses with kindPausedError, which a held fix waits out. Once every
+// other refusal passed, and before the pin goes, it reads the other
+// reviewers' items for every job (othersBeforeStart, spec 102), which the
+// job's external file gets: a review that found nothing is refused when
+// none waits for an answer or the read fails (othersWaiting). carried is
+// the other reviewers' items the same request read before (nil = none),
+// used instead of reading GitHub again at the same head. Below the GitHub
+// floor of the identity the job reads as (github_floor.go), or when GitHub
+// refuses that read for the rate limit and the meter then says the budget
+// is below it, it takes no pin off: the job carries the low budget
+// (fixJob.budget) for startFix to hold it, and the other reviewers' items
+// are read when the held fix starts (othersDeferred).
 func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin, carried *externalRead) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
@@ -369,21 +387,6 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	if src == nil || src.Login() == "" {
 		return nil, fmt.Errorf("identity %q is not configured", pr.Identity)
 	}
-	// A review that found nothing and left nothing open leaves the fixer
-	// what the other reviewers wrote that waits for an answer (spec 96); a
-	// next cycle's changes request may keep earlier findings open with
-	// neither (fixRemains).
-	var others *externalRead
-	deferred := false
-	switch {
-	case sum.Findings()+sum.OpenProblems() != 0 || prev.Cycle != 0:
-	case isLow: // read once the budget recovered, when the held fix starts
-		deferred = true
-	default:
-		if others, err = e.othersWaiting(ctx, &fixJob{repo: repo, watch: *w, pr: pr, login: src.Login()}, on, carried); err != nil {
-			return nil, err
-		}
-	}
 	reviewRun, err := e.st.RunByID(ctx, sum.RunID)
 	if err != nil {
 		return nil, fmt.Errorf("%s: the review's run %s: %w", label, sum.RunID, err)
@@ -402,8 +405,25 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	if until := e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt); now.Before(until) {
 		return nil, fmt.Errorf("%s: someone typed into its panes; run `magnum fix %s` again after %s (human_cooldown)", label, label, waitClock(until, now))
 	}
-	if why := e.kindPauseReason(ctx, []string{role.AgentKind()}); why != "" {
-		return nil, fmt.Errorf("%s: %s", label, why)
+	if kind, why := e.pausedKind(ctx, []string{role.AgentKind()}); why != "" {
+		return nil, &kindPausedError{kind: kind, text: fmt.Sprintf("%s: %s", label, why)}
+	}
+	// The other reviewers' items, read before the start (spec 102): a
+	// review that found nothing and left nothing open leaves the fixer only
+	// what waits for an answer there (spec 96; a next cycle's changes
+	// request may keep earlier findings open with neither, fixRemains). A
+	// read GitHub refuses for the rate limit holds the job as the floor does.
+	alone := prev.Cycle == 0 && sum.Findings()+sum.OpenProblems() == 0
+	var others *externalRead
+	if !isLow {
+		var held *githubLowBudget
+		probe := &fixJob{repo: repo, watch: *w, pr: pr, login: src.Login()}
+		if others, held, err = e.othersBeforeStart(ctx, probe, on, alone, carried); err != nil { // fix_external.go
+			return nil, err
+		}
+		if held != nil {
+			low, isLow = *held, true
+		}
 	}
 	var notes []string
 	switch {
@@ -426,9 +446,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		notes = append(notes, note)
 	}
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
-		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, othersDeferred: deferred}
-	if isLow {
-		job.budget = &low
+		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone}
+	if isLow { // the other reviewers' items are read when the held fix starts
+		job.budget, job.othersDeferred = &low, true
 	}
 	if job.state.Cap == 0 {
 		job.state.Cap = e.cfg.FixCyclesFor(w)
@@ -495,8 +515,9 @@ func (e *Engine) reviewStood(ctx context.Context, pr store.PR, sum store.ReviewS
 
 // startFix starts a fix cycle on pr under prepareFix's refusals, a
 // drain's (errFixDraining) and the GitHub floor's (githubBudgetError:
-// below it prepareFix reads nothing from GitHub and takes no pin off, and
-// the hold keeps the job it prepared): a new loop
+// below it, or after a read of the other reviewers' items GitHub refused
+// for the rate limit, prepareFix takes no pin off, and the hold keeps the
+// job it prepared): a new loop
 // (prev zero, started by by: "magnum fix", "autofix") at cycle 1 of the
 // watch's fix_cycles, or the next cycle of the loop prev waits in. A new
 // loop `magnum fix` asks for unpins a pinned PR (fixPinUnpins); autofix and
@@ -533,7 +554,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 		st.Cycle++
 	}
 	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseFixing, job.head, "", job.role.Name, nil, time.Time{}, false
-	st.Context = ""
+	st.Context, st.OthersUnread = "", ""
 	job.state = st
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, fix: true}) {
@@ -781,11 +802,17 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		e.abandonFixRun(ctx, run, err.Error())
 		return err
 	}
-	external := ""
+	external, unread := "", ""
 	if job.state.Report != "" {
-		external = e.writeExternal(ctx, job, filepath.Dir(job.state.Report)) // fix_external.go
+		external, unread = e.writeExternal(ctx, job, filepath.Dir(job.state.Report)) // fix_external.go
 	}
-	if external == "" && job.others != nil { // the other reviewers' items are the job's whole work
+	if unread != "" { // the loop's end says so (othersUnread)
+		job.state.OthersUnread = unread
+		if err := e.setFixState(ctx, pr.ID, job.state); err != nil {
+			e.log.Warn("fix: record the other reviewers' items as unread", "subject", job.subject(), "err", err)
+		}
+	}
+	if external == "" && job.alone { // the other reviewers' items are the job's whole work
 		err := errors.New("the review found nothing, and the file of the other reviewers' threads and comments, all the fixer would answer, could not be written beside the report")
 		e.abandonFixRun(ctx, run, err.Error())
 		return err
@@ -797,7 +824,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		ExternalFile:  external,
 		ReviewerLogin: job.login,
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
-		NoFindings:    job.others != nil,
+		NoFindings:    job.alone,
 	})
 	if err != nil {
 		e.abandonFixRun(ctx, run, err.Error())

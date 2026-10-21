@@ -10469,6 +10469,83 @@ skill versions); people add theirs to the sections before it, at the end of the 
   alternates between warn and critical without two equal samples in a row leaves the counted level where it
   was (the toast still goes out).
 
+- **A fix reads the other reviewers' items before it starts, and a read GitHub refuses for the rate limit
+  holds it** (2026-10-21, spec 102, amending specs 93, 96 and 97). On 2026-10-21 at 11:19Z `magnum fix` on
+  talkable#12054, a review with findings, read the other reviewers' threads at the job's start
+  (`writeExternal`); GitHub refused the read for the rate limit, and the job went on with magnum's findings
+  alone (`fix.external`, warn), while a colleague's MINOR thread stayed unanswered. The floor looked at the
+  budget only in `prepareFix`, before that read, and the meter's record lagged (spec 101): a budget that
+  runs out between the two let the job start without the items.
+  - **The read before the start.** `prepareFix` reads the items for every cycle (`othersBeforeStart`): a
+    new loop on a review with findings, a loop's next cycle, and a review that found nothing (spec 96),
+    which still decides on them. It reads after every other refusal and before the pin goes, so a refused
+    request reads nothing and a fix held for a pause reads nothing while it waits; the clean review's read
+    moved there too (it came before the slot, snooze, cooldown and pause refusals, which now answer first).
+    The job writes that read to `external-threads.json` with no second fetch, a request a whiteboard job
+    yielded to carries it as before, now for every job, and a dry run reads as well.
+  - **The hold.** A read refused for the rate limit (`errors.Is(err, github.ErrRateLimited)`) asks
+    `githubLow` again: spec 101's meter marks the identity exhausted on a refused call, so it says low, and
+    the job is held as below the floor (`fixJob.budget`, `othersDeferred`, no pin taken,
+    `githubBudgetError`): `magnum fix` and autofix become held fixes ("held; the fix of … starts once the
+    GitHub budget of zhuravel recovers …"), a next cycle waits in phase reviewing with `fix.waiting`, and
+    the held start reads again, so a held job never carries a stale read. The hold depends on that
+    sentinel: GitHub's GraphQL refusal carries the error type `RATE_LIMIT` with no HTTP status (the daemon
+    log of 2026-10-21), which spec 101 made `ErrRateLimited` match. With the floor off (`budget_floor = 0`)
+    `githubLow` never says low, and the job starts as before.
+  - **Other failures.** A job with findings whose read fails for another reason starts without it, and
+    `writeExternal`'s read at the start is its one retry, its warning unchanged; a review that found nothing
+    is refused with the cause, as before. `fixJob.alone` (a new loop on a review that found nothing and left
+    nothing open) now marks the job of the other reviewers alone, which `others` marked while only that path
+    read.
+  - **The loop's end says what was not read.** On talkable#12054 the `fix.external` warning was the only
+    trace: no toast, nothing on the board or in `magnum status`, and the loop would have ended "clean after
+    1 fix cycle". A cycle whose fixer did not get all the items records it on the loop's row
+    (`FixState.OthersUnread`, reset each cycle: "not read (HTTP 502)", "not all read (over 1000 review
+    threads)", "not read (their file could not be written)"; a short cause, never an error's text or PR
+    text: GitHub's rate limit, a time-out, an HTTP status, a GraphQL error type), and the loop's end carries
+    one sentence, "the other reviewers' threads and comments were not read (HTTP 502): `magnum fix
+    talkable/talkable#2` reads them again": `fix.replied`, `fix.done` (whose toast reads "clean for magnum's
+    findings after 1 fix cycle"), the toast of a loop that ends on replies, every loop-end event's data
+    (`others_unread`), `magnum fix --wait` ("clean after 1 fix cycle for magnum's findings; …"), and an
+    attention's message, on a second line, so that the reason's cause, calls and remedy, read off its first
+    line, stay as they were and the sentence shows in its detail.
+  - **Residuals:** a `magnum fix` asked during a drain reads the items to answer its refusals, and the
+    restart's start reads them again; the read a job writes is as old as the fixer's start-up.
+  - **Rejected:**
+    - Reading inside the job and holding it mid-start: the hold would have to unwind a claimed row, the
+      reservation and a run.
+    - Retrying the read inside the job: it spends the budget the floor keeps, and leaves the items out all
+      the same once the budget is gone.
+    - A second cycle for the external items after the loop: they would be answered late, and only after a
+      loop that ended clean.
+
+- **A held fix waits out its fixer's pause** (2026-10-21, spec 102). On 2026-10-19 talkable#12054's fix,
+  asked during a drain, was held (`fix.held` at 23:05Z) and dropped after the restart (`fix.dropped` at
+  23:24Z: "…: claude paused (usage_limit) until 14:00"): `startHeldFix` held again only for a new drain and
+  for the GitHub floor, and `prepareFix`'s refusal for a paused agent kind was a plain error, so the
+  operator had to ask again by hand.
+  - That refusal is now a `kindPausedError` naming the kind, its text unchanged: a `magnum fix` or
+    an autofix asked during a pause is refused as before. `startHeldFix` keeps a held fix on it, with `why`
+    `kind_pause` and the paused kind in `KVPRFixHeld`'s JSON (a new `kind` key; no migration), and the PR
+    joins `pauseHeld`. A tick pass after `continueBudgetHeld` (`continuePauseHeld`) starts it once
+    `kindPauseReason` is empty for the fix role's kind, through `startHeldFix` and its checks (the head, the
+    review, an autofix's own); the restart decides it again (`startHeldFixes`). `magnum fix --wait` says
+    "the fix starts when claude's pause ends", and a drop says "while claude was paused".
+  - One row holds whichever hold applies now: a pause hold whose start finds the budget low becomes a
+    budget hold, and the reverse, so no held fix is dropped for a reason the daemon can wait out.
+  - The pass looks at the pause before calling `startHeldFix`, which would only hold the fix again (the
+    mutation that drops the check passes the tests): without it a paused fix's row would be taken and
+    written back each tick.
+  - **Rejected:** holding a `magnum fix` asked during a pause: its answer names the pause and its end, while
+    a held fix had been promised to start.
+
+- **`magnum abort` names the hold of the fix it takes back** (2026-10-21, spec 102). `dropHeldFix` said
+  "the fix held for the restart is dropped" for every held fix, though the same row holds the GitHub
+  budget's holds since spec 97 and the pause's now. Its note is "the fix held <during> is dropped", from
+  `heldFix.during` ("during a drain", "while the GitHub budget was low", "while claude was paused"), with
+  `why` in the `fix.dropped` event's data. The `KVPRFixHeld` comment and `fix_held.go`'s header describe
+  every hold, and `fixJob.started`'s comment names its reader, `dropFixerAnswered`.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

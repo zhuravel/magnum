@@ -6464,7 +6464,8 @@ func GitHubOpWords(op string) string
 func HeldFixStarts(raw string) string
     HeldFixStarts is when the held fix raw (a KVPRFixHeld value) starts,
     for `magnum fix --wait`: "after the restart" for a drain's, "when the GitHub
-    budget recovers" for the GitHub floor's.
+    budget recovers" for the GitHub budget's, "when claude's pause ends" for the
+    fixer's pause.
 
 func HeldReviewID(v string) (int64, bool)
     HeldReviewID is the review a KVPRApprovalHold value names: the one whose
@@ -6525,8 +6526,11 @@ func KVPRFix(prID int64) string
     KVPRFix holds a PR's fix loop (FixState as JSON).
 
 func KVPRFixHeld(prID int64) string
-    KVPRFixHeld holds a `magnum fix` a drain for a restart held (heldFix as
-    JSON) until the restart, or the drain's end without one, starts it.
+    KVPRFixHeld holds a fix that could not start yet (heldFix as JSON):
+    a `magnum fix` a drain for a restart held until the restart, or the drain's
+    end without one, starts it; a `magnum fix` or an autofix the GitHub budget
+    held until it recovers; one the fixer's paused kind held until the pause
+    ends.
 
 func KVPRFixOff(prID int64) string
     KVPRFixOff holds a PR's opt-out of the fix job (FixOff as JSON).
@@ -7444,19 +7448,20 @@ func ParseFixReport(text string, runID string) (FixReport, error)
     fit its section is an error that quotes the line (not a sentinel).
 
 type FixState struct {
-	Cycle     int       `json:"cycle"`
-	Cap       int       `json:"cap"`
-	Phase     string    `json:"phase"`
-	Since     string    `json:"since"`
-	Head      string    `json:"head"`
-	By        string    `json:"by"`
-	Report    string    `json:"report"`
-	StartedAt time.Time `json:"started_at"`
-	NeedsYou  []string  `json:"needs_you,omitempty"`
-	Role      string    `json:"role,omitempty"`
-	ForcedAt  time.Time `json:"forced_at,omitzero"`
-	Held      bool      `json:"held,omitempty"`
-	Context   string    `json:"context,omitempty"`
+	Cycle        int       `json:"cycle"`
+	Cap          int       `json:"cap"`
+	Phase        string    `json:"phase"`
+	Since        string    `json:"since"`
+	Head         string    `json:"head"`
+	By           string    `json:"by"`
+	Report       string    `json:"report"`
+	StartedAt    time.Time `json:"started_at"`
+	NeedsYou     []string  `json:"needs_you,omitempty"`
+	Role         string    `json:"role,omitempty"`
+	ForcedAt     time.Time `json:"forced_at,omitzero"`
+	Held         bool      `json:"held,omitempty"`
+	Context      string    `json:"context,omitempty"`
+	OthersUnread string    `json:"others_unread,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -7479,6 +7484,10 @@ type FixState struct {
     "compacted 82% → 31%", "compacted from 82%" when the pane shows no figure
     after it, "fresh session (82% after /compact)", "fresh session (/compact
     failed)"); "" when it resumed it as it was or started a fresh fixer anyway.
+    OthersUnread says that the current cycle's fixer did not get all the other
+    reviewers' items (writeExternal): "not read (HTTP 502)", "not all read (over
+    1000 review threads)", a short cause and never PR text; the loop's end says
+    so (othersUnread). "" when it got them.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix

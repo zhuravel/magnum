@@ -8,7 +8,9 @@ package engine
 // is not held), and so does `magnum review`'s forced round, whose answer
 // says so. A fix cycle is held: prepareFix reads nothing from GitHub below
 // the floor and takes no pin off, and startFix refuses with
-// githubBudgetError. `magnum fix` and autofix are kept as held fixes
+// githubBudgetError; so does a cycle whose read of the other reviewers'
+// items, made before the start, GitHub refused for the rate limit, once the
+// meter says the budget is below the floor. `magnum fix` and autofix are kept as held fixes
 // (KVPRFixHeld, with heldBudget) and a loop's next cycle is held in phase
 // reviewing, as a drain holds them, and the tick that finds the budget
 // recovered goes on with them before dispatch (continueBudgetHeld). A
