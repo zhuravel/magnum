@@ -284,7 +284,7 @@ func TestARunOfLowBudgetIsAnnouncedOnce(t *testing.T) {
 	h.tick() // the first flush
 	writes := h.costWrites()
 	reset := h.clock.Now().Add(30 * time.Minute)
-	h.metered("zhuravel", opRound, 1, 300, reset)
+	h.metered("zhuravel", opRound, 4500, 300, reset) // the daemon's own calls spent it: nothing outside magnum to tell
 	h.tick()
 	h.tick()
 	low := h.events("github.budget_low")
@@ -323,7 +323,7 @@ func TestARunOfLowBudgetIsAnnouncedOnce(t *testing.T) {
 		t.Errorf("the run stays after the recovery: %+v", l)
 	}
 
-	h.metered("zhuravel", opRound, 1, 120, h.clock.Now().Add(time.Hour))
+	h.metered("zhuravel", opRound, 4800, 120, h.clock.Now().Add(time.Hour))
 	h.tick()
 	if n := len(h.events("github.budget_low")); n != 2 {
 		t.Errorf("github.budget_low events = %d, want a second for the second run", n)

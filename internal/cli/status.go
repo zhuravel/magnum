@@ -397,6 +397,21 @@ type statusGitHubIdentity struct {
 	WindowRESTCalls int                 `json:"window_rest_calls"`
 	WindowOps       []statusGitHubOp    `json:"window_ops"` // costliest first
 	Hours           []engine.GitHubHour `json:"hours"`      // the stored hours, ops included
+	// Windows are the GraphQL rate-limit windows the daemon's calls answered
+	// in (engine.GitHubWindow), oldest reset first, those that reset
+	// included.
+	Windows []statusGitHubRateWindow `json:"windows"`
+}
+
+// statusGitHubRateWindow is one rate-limit window: what GitHub counted used
+// of its limit, what the daemon's calls cost in it, and the rest, spent
+// outside magnum's calls.
+type statusGitHubRateWindow struct {
+	ResetAt time.Time `json:"reset_at"`
+	Limit   int       `json:"limit"`
+	Used    int       `json:"used"`
+	Points  int       `json:"points"`
+	Outside int       `json:"outside"`
 }
 
 // statusGitHubOp is one op's cost in the window.

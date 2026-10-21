@@ -78,6 +78,14 @@ func TestPluralAndCount(t *testing.T) {
 	}
 }
 
+func TestThousandsPutsACommaBetweenEachThreeDigits(t *testing.T) {
+	for n, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 4412: "4,412", 1234567: "1,234,567", -1050: "-1,050"} {
+		if got := Thousands(n); got != want {
+			t.Errorf("Thousands(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
 func TestFoldLoginDropsCaseAtAndBotSuffix(t *testing.T) {
 	cases := map[string]string{
 		"zhuravel":          "zhuravel",

@@ -67,7 +67,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
 | [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which store.Open then finds current. |
-| [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals and login folding. |
+| [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals, thousands separators and login folding. |
 | [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch) and the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
 | [webhooks](#webhooks) | Package webhooks reads the events magnum-relay keeps of the GitHub App's webhook deliveries: GET <url>/v1/events, a long poll by cursor, with curl through execx. |
@@ -7675,6 +7675,9 @@ type GitHubCost struct {
 	Rate *GitHubRate `json:"rate,omitempty"`
 	// Hours are the clock hours with calls among the last 24, oldest first.
 	Hours []GitHubHour `json:"hours"`
+	// Windows are the GraphQL rate-limit windows the daemon's calls answered
+	// in, oldest reset first, until 24 hours after their reset.
+	Windows []GitHubWindow `json:"windows,omitempty"`
 }
     GitHubCost is the meter's record of one identity (KVGitHubCost).
 
@@ -7735,6 +7738,31 @@ type GitHubRate struct {
 	SeenAt    time.Time `json:"seen_at"` // when the call that answered it returned
 }
     GitHubRate is a GraphQL rate limit as a call answered it.
+
+type GitHubWindow struct {
+	ResetAt time.Time `json:"reset_at"` // UTC
+	Limit   int       `json:"limit"`
+	// Used is the highest count of points used in the window any reading of
+	// the daemon's calls gave (GitHub's used, else limit − remaining): what
+	// every caller on the login or installation spent, the daemon included.
+	Used int `json:"used"`
+	// Points sums what the daemon's calls answered in the window cost.
+	Points int `json:"points"`
+	// Told: the daemon said that the window's spend outside its calls
+	// reached a fifth of the limit (noteGitHubOutside).
+	Told bool `json:"told,omitempty"`
+}
+    GitHubWindow is one GraphQL rate-limit window of an identity as the daemon's
+    calls answered in it, keyed by the reset GitHub gave it first (a reading
+    within 10 seconds of it is the same window): one login can show two windows
+    at once (on 2026-10-21 at 19:11Z thirteen reads within 15 seconds answered
+    19:29:51Z and 19:32:12Z), and calls in flight return in any order, so the
+    window holds what the order cannot change.
+
+func (w GitHubWindow) Outside() int
+    Outside is what the window's readings say was spent outside the daemon's
+    calls: Used − Points, never below 0. It counts what others spent before the
+    daemon's first call of the window too.
 
 type Herdr interface {
 	Snapshot(ctx context.Context) (herdr.Snapshot, error)
@@ -19617,9 +19645,9 @@ func (c *Clock) Set(t time.Time)
 ```text
 package textx // import "github.com/zhuravel/magnum/internal/textx"
 
-Package textx holds the small text helpers several packages share: clipping to a
-number of runes, the first line, a short commit SHA, plurals and login folding.
-It imports only the standard library.
+Package textx holds the small text helpers several packages share: clipping
+to a number of runes, the first line, a short commit SHA, plurals, thousands
+separators and login folding. It imports only the standard library.
 
 FUNCTIONS
 
@@ -19648,6 +19676,9 @@ func Plural(n int, one, many string) string
 
 func ShortSHA(sha string) string
     ShortSHA is a commit SHA cut to 7 characters; a shorter string is kept.
+
+func Thousands(n int) string
+    Thousands writes n with a comma between each three digits: "4,412".
 
 ```
 

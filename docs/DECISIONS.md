@@ -11155,6 +11155,79 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the comments (people's names and later decisions, which a replay must not see); the v3 API (its
     description is a document tree, ADF, that would need rendering to text).
 
+- **The GitHub meter says how much of each rate-limit window was spent outside magnum's own calls**
+  (2026-10-21, spec 117, asked for by the operator the same day: "improve magnum status"). From 16:30 to
+  17:13Z the poll identity `zhuravel` (the operator's gh login) went down to 12 GraphQL points, and the
+  floor held new work from 17:10. The meter counted 526 points for the whole 16:00 hour (radar 227, ci
+  states 227, details 54), so about 4,400 points of that window went to something else on the login, and
+  `magnum status` said nothing of it: its github line showed only magnum's spend and the lowest reading.
+  The operator logged Herdr.app out of GitHub (its pull request and CI view polls every worktree magnum
+  keeps open); from 17:30 to 17:41Z GitHub counted 103 points used and the meter about 100. For an App
+  identity the same gap is the agents' own `gh` calls: a pane gets its posting identity's
+  `GH_CONFIG_DIR`, so the agents spend the installation's window too, and the meter never hears them.
+  - Per window: each identity's record (`github.cost.<identity>`) keeps `windows`, each GraphQL window
+    the daemon's calls answered in, keyed by the reset GitHub gave it first (a reading whose reset is
+    within 10 seconds of a kept window's is that window's, the nearest one's): its limit, the highest
+    `used` any answer in it gave (limit − remaining for an answer without it) and `points`, the sum of
+    the daemon's calls' cost answered in it. Outside is used − points, never below 0. Both are
+    order-insensitive (a maximum and a sum), so calls in flight may return in any order, and the window's
+    used counts what others spent before the daemon's first call in it. A call no rate limit came back
+    with (it failed before GraphQL answered, or GitHub refused it) and a REST call add nothing; the
+    radar's reading (recordRateLimit) raises its window's used and adds no points, since its calls were
+    counted. Windows go 24 hours after their reset, as hours do, and are written and read back with the
+    record. The floor is unchanged: it still reads the kept reading.
+  - Why by window and not by clock hour: GitHub's budget is a window that starts with the first call
+    after a reset and lasts an hour (the day's resets were 13:28:45, 14:29:01, 15:29:07, 16:29:15 and
+    17:29:29Z), so an hour's points and a window's used never cover the same calls. And one login can
+    show two windows at once (resets 18:29:46 and 18:31:00Z, different remaining, with the daemon's calls
+    in both), which a reading per hour would mix. Before relying on the reset as a key, a read-only check
+    at 19:11Z made 13 `rateLimit` reads within 15 seconds: they answered two windows, 19:29:51Z (315 used)
+    and 19:32:12Z (69 used), each with the same reset and used every time, and used + remaining = limit.
+  - Status: when the windows that have not reset hold 100 points or more outside, the identity's line
+    ends with `· 4,412 points outside magnum since 16:29` (their sum; the earliest one's start, an hour
+    before its reset). `--json` lists every kept window under `windows` (reset_at, limit, used, points,
+    outside); the daemon's `told` stays in the record.
+  - The notice: the first tick that finds a window that has not reset at a fifth of its own limit or more
+    outside (1,000 of 5,000) writes one `github.outside_spend` warning (subject `github:<identity>`, as the
+    budget events) and one toast, "GitHub budget of zhuravel: 1,050 points of this window went to calls
+    outside magnum (another tool on this login, or the agents' own gh)", the same words in the event, the
+    toast's body (its title is "GitHub budget of zhuravel: 1,050 points outside magnum", 80 runes being a
+    toast title's most) and the README. The window is marked `told` and the records are written at once,
+    so neither a later tick nor a restart says it again; the next window that gets there is told again.
+  - Residuals: while calls are in flight a window's used can run ahead of its points by their cost, so
+    the line can show a few points too many until they return (the tick, not the call, decides the
+    notice). A window whose reset GitHub gives a second off between calls would split its used and its
+    points over two keys, each showing outside spend, so the line would count the other tools' spend
+    twice and the notice could fire for nothing: at 11:14Z the radar read 47 and then 44 points a second
+    apart with resets 11:28:10Z and 11:28:11Z, one window by the look of it, though the 19:11Z check saw
+    none move. So a reading whose reset is within 10 seconds of a kept window's belongs to that window
+    (the nearest, which keeps its first reset as its key, so its outside spend is counted once), while
+    the windows seen at once were 65 to 141 seconds apart (11:28:11Z and 11:29:16Z, 18:29:46Z and
+    18:31:00Z, 19:29:51Z and 19:32:12Z) and stay apart. A reset that moved by more than 10 seconds would
+    still split its window. The REST core budget is not covered (its headers are not read), and nothing
+    says which tool spent the points.
+  - Tests, failing first: in engine TestTheMeterKeepsWhatEachWindowSpentOutsideItsCalls,
+    TestTwoWindowsOfOneLoginAreKeptApart, TestAResetSecondsOffAKeptWindowsIsThatWindow (1 and 10 seconds
+    off either way one window, 11 and 51 seconds two), TestAWindowIsTheSameWhateverOrderItsCallsReturnIn,
+    TestACallWithoutARateLimitAddsToNoWindow, TestTheRadarsReadingRaisesUsedWithoutPoints,
+    TestAWindowIsPruned24HoursAfterItsReset, TestTheWindowsOutliveARestart,
+    TestAWindowsOutsideSpendIsToldOnceAtAFifthOfItsLimit and
+    TestTheOutsideNoticeIsAtAFifthOfTheWindowsOwnLimit; in cli
+    TestTheGitHubLineSaysWhatWasSpentOutsideMagnum, TestTheGitHubLineSaysNothingOfLessThan100PointsOutside,
+    TestTheGitHubLineSumsTheLiveWindows, TestTheGitHubLineLeavesOutAnExpiredWindow and
+    TestStatusJSONCarriesTheGitHubWindows; in textx TestThousandsPutsACommaBetweenEachThreeDigits (the
+    status line's thousands, now shared with the event). TestARunOfLowBudgetIsAnnouncedOnce's low readings
+    now come with the points that spent them, so they hold nothing outside magnum. Mutations checked,
+    each failing a test: no points, the last used for the highest, no limit − remaining, the radar's
+    points counted, the radar's raise not written, no pruning, pruning at the reset, told ignored, a
+    window that reset told, above a fifth only, a fixed 5,000 limit, no write at once, the highest window
+    for the sum, the latest start, a window that reset counted, a threshold of 101, no slack, a minute of
+    slack, a slack that excludes 10 seconds, and either neighbouring window never matched.
+  - Rejected: reading `gh api rate_limit` on a timer (it spends nothing, but it shows one window, and on
+    10-21 its reset disagreed with GraphQL's own); counting by clock hour (an hour's points and a
+    window's used cover different calls); a hard pause on outside spend (the operator decides what else
+    uses the login, and the floor already holds new work when the budget runs low, whoever spent it).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

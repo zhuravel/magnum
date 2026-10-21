@@ -476,12 +476,15 @@ func statusGitHubWindow(now time.Time) time.Time {
 }
 
 // statusGitHubOf is one cost record as the report holds it, with its run of
-// low budget (nil: none): the budget as the last call told it and the cost
-// of the hours from window on. A run whose reset passed is over (a daemon
-// that stopped during it never cleared it).
+// low budget (nil: none): the budget as the last call told it, the cost of
+// the hours from window on and the rate-limit windows. A run whose reset
+// passed is over (a daemon that stopped during it never cleared it).
 func statusGitHubOf(c engine.GitHubCost, low *engine.GitHubLow, window, now time.Time) statusGitHubIdentity {
 	id := statusGitHubIdentity{Identity: c.Identity, Low: low, WindowStart: window, WindowOps: []statusGitHubOp{},
-		Hours: append([]engine.GitHubHour{}, c.Hours...)}
+		Hours: append([]engine.GitHubHour{}, c.Hours...), Windows: []statusGitHubRateWindow{}}
+	for _, w := range c.Windows {
+		id.Windows = append(id.Windows, statusGitHubRateWindow{ResetAt: w.ResetAt, Limit: w.Limit, Used: w.Used, Points: w.Points, Outside: w.Outside()})
+	}
 	if id.Low != nil && !now.Before(id.Low.Until) {
 		id.Low = nil
 	}

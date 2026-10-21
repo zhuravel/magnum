@@ -391,3 +391,123 @@ func TestTheGitHubLineCleansWhatTheRecordsHold(t *testing.T) {
 		t.Errorf("status lacks %q:\n%s", want, b.String())
 	}
 }
+
+// ghOutsideLine is zhuravel's github line, and its identity in the report,
+// with windows: a budget of 4692 resetting in 20 minutes and no calls in the
+// status window.
+func ghOutsideLine(t *testing.T, windows ...engine.GitHubWindow) (string, statusGitHubIdentity) {
+	t.Helper()
+	_, st, d, _ := statusFixture(t)
+	d.Now = func() time.Time { return ghNow }
+	putGitHubCost(t, st, engine.GitHubCost{Identity: "zhuravel",
+		Rate:    &engine.GitHubRate{Remaining: 4692, Limit: 5000, ResetAt: ghNow.Add(20 * time.Minute), SeenAt: ghNow.Add(-time.Minute)},
+		Windows: windows})
+	r, err := statusGather(context.Background(), d, statusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.GitHub.Identities) != 1 {
+		t.Fatalf("identities = %+v, want zhuravel", r.GitHub.Identities)
+	}
+	var b bytes.Buffer
+	statusRender(&b, r)
+	for line := range strings.Lines(b.String()) {
+		if strings.HasPrefix(line, "github:") {
+			return strings.TrimSuffix(line, "\n"), r.GitHub.Identities[0]
+		}
+	}
+	t.Fatalf("no github line in\n%s", b.String())
+	return "", statusGitHubIdentity{}
+}
+
+// On 2026-10-21 the meter counted 526 points of zhuravel's window while
+// GitHub counted about 4,900 used: the github line ends with what its live
+// windows spent outside magnum's calls and since when (the earliest live
+// window's start, an hour before its reset).
+func TestTheGitHubLineSaysWhatWasSpentOutsideMagnum(t *testing.T) {
+	reset := ghNow.Add(20 * time.Minute)
+	got, _ := ghOutsideLine(t, engine.GitHubWindow{ResetAt: reset, Limit: 5000, Used: 4938, Points: 526})
+	want := fmt.Sprintf("github:   zhuravel 4692/5000, resets %s · no calls since %s · 4,412 points outside magnum since %s",
+		ghClock(reset), ghClock(ghNow.Truncate(time.Hour).Add(-time.Hour)), ghClock(reset.Add(-time.Hour)))
+	if got != want {
+		t.Errorf("github line =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// Below 100 points outside the line says nothing of it.
+func TestTheGitHubLineSaysNothingOfLessThan100PointsOutside(t *testing.T) {
+	reset := ghNow.Add(20 * time.Minute)
+	got, _ := ghOutsideLine(t, engine.GitHubWindow{ResetAt: reset, Limit: 5000, Used: 625, Points: 526})
+	if strings.Contains(got, "outside") {
+		t.Errorf("github line names 99 points outside: %q", got)
+	}
+	got, _ = ghOutsideLine(t, engine.GitHubWindow{ResetAt: reset, Limit: 5000, Used: 626, Points: 526})
+	if want := " · 100 points outside magnum since " + ghClock(reset.Add(-time.Hour)); !strings.HasSuffix(got, want) {
+		t.Errorf("github line = %q, want it to end %q", got, want)
+	}
+}
+
+// A login that shows two windows at once has both summed, since the
+// earlier one's start, whatever order the record lists them in.
+func TestTheGitHubLineSumsTheLiveWindows(t *testing.T) {
+	early, late := ghNow.Add(19*time.Minute+46*time.Second), ghNow.Add(21*time.Minute)
+	got, _ := ghOutsideLine(t,
+		engine.GitHubWindow{ResetAt: late, Limit: 5000, Used: 1500, Points: 88},
+		engine.GitHubWindow{ResetAt: early, Limit: 5000, Used: 3400, Points: 400})
+	if want := " · 4,412 points outside magnum since " + ghClock(early.Add(-time.Hour)); !strings.HasSuffix(got, want) {
+		t.Errorf("github line = %q, want it to end %q", got, want)
+	}
+}
+
+// A window whose reset passed counts no more: its spend is GitHub's past.
+func TestTheGitHubLineLeavesOutAnExpiredWindow(t *testing.T) {
+	live := ghNow.Add(50 * time.Minute)
+	got, _ := ghOutsideLine(t,
+		engine.GitHubWindow{ResetAt: ghNow.Add(-10 * time.Minute), Limit: 5000, Used: 4900, Points: 900},
+		engine.GitHubWindow{ResetAt: ghNow, Limit: 5000, Used: 4900, Points: 900}, // resets now: over
+		engine.GitHubWindow{ResetAt: live, Limit: 5000, Used: 500, Points: 88})
+	if want := " · 412 points outside magnum since " + ghClock(live.Add(-time.Hour)); !strings.HasSuffix(got, want) {
+		t.Errorf("github line = %q, want it to end %q", got, want)
+	}
+	got, _ = ghOutsideLine(t, engine.GitHubWindow{ResetAt: ghNow.Add(-10 * time.Minute), Limit: 5000, Used: 4900, Points: 900})
+	if strings.Contains(got, "outside") {
+		t.Errorf("github line names an expired window's spend: %q", got)
+	}
+}
+
+// --json has every kept window of each identity, expired ones included,
+// with what it spent outside magnum's calls.
+func TestStatusJSONCarriesTheGitHubWindows(t *testing.T) {
+	expired, live := ghNow.Add(-10*time.Minute), ghNow.Add(50*time.Minute)
+	_, id := ghOutsideLine(t,
+		engine.GitHubWindow{ResetAt: expired, Limit: 5000, Used: 4900, Points: 900, Told: true},
+		engine.GitHubWindow{ResetAt: live, Limit: 5000, Used: 500, Points: 520})
+	b, err := json.Marshal(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Windows []struct {
+			ResetAt time.Time `json:"reset_at"`
+			Limit   int       `json:"limit"`
+			Used    int       `json:"used"`
+			Points  int       `json:"points"`
+			Outside *int      `json:"outside"`
+		} `json:"windows"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	ws := doc.Windows
+	if len(ws) != 2 || !ws[0].ResetAt.Equal(expired) || ws[0].Limit != 5000 || ws[0].Used != 4900 || ws[0].Points != 900 ||
+		ws[0].Outside == nil || *ws[0].Outside != 4000 || !ws[1].ResetAt.Equal(live) || ws[1].Outside == nil || *ws[1].Outside != 0 {
+		t.Errorf("windows = %s, want both with their outside spend", b)
+	}
+	if strings.Contains(string(b), "told") {
+		t.Errorf("the status JSON carries the daemon's told mark: %s", b)
+	}
+	_, none := ghOutsideLine(t)
+	if b, _ := json.Marshal(none); !strings.Contains(string(b), `"windows":[]`) {
+		t.Errorf("an identity without windows = %s, want an empty windows list", b)
+	}
+}

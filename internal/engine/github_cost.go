@@ -24,6 +24,16 @@ package engine
 // finishes and the poll keeps its own rateFloor. The meter is a hook on
 // every call, so it only takes a lock and adds; the store sees it once a
 // minute, from the tick.
+//
+// The budget is the login's (or the installation's), not the daemon's: on
+// 2026-10-21 the meter counted 526 points of the operator's 16:00 hour
+// while about 4,400 more went elsewhere on the login (Herdr.app's pull
+// request and CI view: once it was logged out, GitHub's count and the
+// meter's agreed). So the meter also keeps each rate-limit window its
+// calls answered in (GitHubWindow: what GitHub counted used and what the
+// daemon's calls cost), `magnum status` names what was spent outside
+// magnum's calls, and the tick says so once per window when that reaches a
+// fifth of its limit (noteGitHubOutside).
 
 import (
 	"cmp"
@@ -37,6 +47,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // KVGitHubCost holds the cost record of one identity's GitHub calls
@@ -63,7 +74,35 @@ type GitHubCost struct {
 	Rate *GitHubRate `json:"rate,omitempty"`
 	// Hours are the clock hours with calls among the last 24, oldest first.
 	Hours []GitHubHour `json:"hours"`
+	// Windows are the GraphQL rate-limit windows the daemon's calls answered
+	// in, oldest reset first, until 24 hours after their reset.
+	Windows []GitHubWindow `json:"windows,omitempty"`
 }
+
+// GitHubWindow is one GraphQL rate-limit window of an identity as the
+// daemon's calls answered in it, keyed by the reset GitHub gave it first (a
+// reading within 10 seconds of it is the same window): one login
+// can show two windows at once (on 2026-10-21 at 19:11Z thirteen reads
+// within 15 seconds answered 19:29:51Z and 19:32:12Z), and calls in flight
+// return in any order, so the window holds what the order cannot change.
+type GitHubWindow struct {
+	ResetAt time.Time `json:"reset_at"` // UTC
+	Limit   int       `json:"limit"`
+	// Used is the highest count of points used in the window any reading of
+	// the daemon's calls gave (GitHub's used, else limit − remaining): what
+	// every caller on the login or installation spent, the daemon included.
+	Used int `json:"used"`
+	// Points sums what the daemon's calls answered in the window cost.
+	Points int `json:"points"`
+	// Told: the daemon said that the window's spend outside its calls
+	// reached a fifth of the limit (noteGitHubOutside).
+	Told bool `json:"told,omitempty"`
+}
+
+// Outside is what the window's readings say was spent outside the
+// daemon's calls: Used − Points, never below 0. It counts what others spent
+// before the daemon's first call of the window too.
+func (w GitHubWindow) Outside() int { return max(0, w.Used-w.Points) }
 
 // GitHubRate is a GraphQL rate limit as a call answered it.
 type GitHubRate struct {
@@ -277,6 +316,7 @@ func (m *githubMeter) add(identity string, call github.Call, now time.Time) {
 	if call.GraphQL {
 		h.Points += call.Rate.Cost
 		oc.Points += call.Rate.Cost
+		c.window(call.Rate, call.Rate.Cost)
 	} else {
 		h.RESTCalls++
 		oc.RESTCalls++
@@ -304,16 +344,63 @@ func (c *GitHubCost) hour(t time.Time) *GitHubHour {
 	return &c.Hours[i]
 }
 
+// githubWindowSlack is how far a reading's reset may be from a kept
+// window's for the reading to be that window's: on 2026-10-21 the radar
+// read 47 and then 44 points a second apart with resets 11:28:10Z and
+// 11:28:11Z, one window by the look of it, while the windows one login
+// showed at once were 65 to 141 seconds apart.
+const githubWindowSlack = 10 * time.Second
+
+// window notes rl, the rate limit a GraphQL answer carried, in its window:
+// the kept window whose reset is nearest rl's within githubWindowSlack (its
+// key stays the reset it was made with), else one made in its place,
+// oldest reset first. It notes the window's limit, the highest used it read
+// and points, the cost of the daemon's call that read it (0 for a reading
+// whose call counted already). A call no rate limit came back with notes
+// nothing. It reports whether the window changed.
+func (c *GitHubCost) window(rl github.RateLimit, points int) bool {
+	if rl.ResetAt.IsZero() {
+		return false
+	}
+	reset := rl.ResetAt.UTC()
+	i, found := slices.BinarySearchFunc(c.Windows, reset, func(w GitHubWindow, t time.Time) int { return w.ResetAt.Compare(t) })
+	if !found {
+		// The kept windows nearest the reset are the ones either side of i.
+		off := func(j int) time.Duration {
+			return max(c.Windows[j].ResetAt.Sub(reset), reset.Sub(c.Windows[j].ResetAt))
+		}
+		switch {
+		case i < len(c.Windows) && off(i) <= githubWindowSlack && (i == 0 || off(i) <= off(i-1)):
+			found = true
+		case i > 0 && off(i-1) <= githubWindowSlack:
+			i, found = i-1, true
+		default:
+			c.Windows = slices.Insert(c.Windows, i, GitHubWindow{ResetAt: reset})
+		}
+	}
+	w := &c.Windows[i]
+	used := rl.Used
+	if used <= 0 { // an answer without used
+		used = rl.Limit - rl.Remaining
+	}
+	was := *w
+	w.Limit = max(w.Limit, rl.Limit)
+	w.Used = max(w.Used, used)
+	w.Points += max(points, 0)
+	return !found || *w != was
+}
+
 // sawRate keeps rl as identity's rate limit when it is the reading to keep
 // (observe; the poll's radar, recordRateLimit, whose cost its call already
-// counted).
+// counted, so it raises its window's used and adds no points).
 func (m *githubMeter) sawRate(identity string, rl github.RateLimit, now time.Time) {
 	if rl.ResetAt.IsZero() || identity == "" {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.record(identity).observe(rl, now) {
+	c := m.record(identity)
+	if changed := c.window(rl, 0); c.observe(rl, now) || changed {
 		m.dirty[identity] = true
 	}
 }
@@ -364,13 +451,16 @@ func (c *GitHubCost) refused(now time.Time) {
 	c.Rate = &GitHubRate{Remaining: 0, Limit: limit, ResetAt: reset.UTC(), SeenAt: now.UTC()}
 }
 
-// prune drops the hours older than the last githubCostHours and reports
+// prune drops the hours older than the last githubCostHours and the
+// windows whose reset is more than githubCostHours before now, and reports
 // whether it dropped any.
 func (c *GitHubCost) prune(now time.Time) bool {
 	oldest := now.UTC().Truncate(time.Hour).Add(-(githubCostHours - 1) * time.Hour)
-	n := len(c.Hours)
+	expired := now.Add(-githubCostHours * time.Hour)
+	hours, windows := len(c.Hours), len(c.Windows)
 	c.Hours = slices.DeleteFunc(c.Hours, func(h GitHubHour) bool { return h.Hour.Before(oldest) })
-	return len(c.Hours) != n
+	c.Windows = slices.DeleteFunc(c.Windows, func(w GitHubWindow) bool { return w.ResetAt.Before(expired) })
+	return len(c.Hours) != hours || len(c.Windows) != windows
 }
 
 // clone is a deep copy of the record, for a write outside the lock.
@@ -385,15 +475,16 @@ func (c *GitHubCost) clone() GitHubCost {
 		h.Ops = maps.Clone(h.Ops)
 		out.Hours[i] = h
 	}
+	out.Windows = slices.Clone(c.Windows)
 	return out
 }
 
 // loadGitHubCost reads the records and the runs of low budget an earlier
-// daemon wrote back into the meter, at the start: the hours and the latest
-// rate limits outlive a restart, and so does a run of low budget (no second
-// event or toast). The rows of an identity the config no longer declares
-// go, and a record whose oldest hours fell out of the last 24 is written
-// again without them.
+// daemon wrote back into the meter, at the start: the hours, the windows
+// and the latest rate limits outlive a restart, and so do a run of low
+// budget and a window's told (no second event or toast). The rows of an
+// identity the config no longer declares go, and a record whose oldest
+// hours fell out of the last 24 is written again without them.
 func (e *Engine) loadGitHubCost(ctx context.Context) {
 	costs, err := e.st.KVValues(ctx, kvGitHubCostGlob)
 	if err != nil {
@@ -628,5 +719,69 @@ func (e *Engine) noteGitHubBudget(ctx context.Context) {
 			e.event(ctx, "info", "github:"+id, "github.budget_recovered", fmt.Sprintf("GitHub budget of %s recovered (%d points): new work starts again", id, ch.left), data)
 			e.forgetSend(ctx, githubBudgetToastKey(id))
 		}
+	}
+}
+
+// githubOutsideShare is the share of a window's limit, one in so many
+// points, that the spend outside the daemon's calls reaches when
+// noteGitHubOutside says so: a fifth, 1,000 points of 5,000.
+const githubOutsideShare = 5
+
+// githubOutsideText is what noteGitHubOutside says of identity's window
+// (the words of the event, the toast's body and the README).
+func githubOutsideText(identity string, outside int) string {
+	return fmt.Sprintf("GitHub budget of %s: %s points of this window went to calls outside magnum (another tool on this login, or the agents' own gh)",
+		identity, textx.Thousands(outside))
+}
+
+// githubOutsideToastKey dedupes the toast of identity's window that resets
+// at reset.
+func githubOutsideToastKey(identity string, reset time.Time) string {
+	return "github-outside:" + identity + ":" + reset.UTC().Format(time.RFC3339)
+}
+
+// noteGitHubOutside says, once per window, that the spend outside the
+// daemon's calls of a window that has not reset reached a fifth of its
+// limit (githubOutsideShare): another tool on the gh login, or the agents'
+// own gh calls, which a pane makes as its posting identity (an App's
+// installation too) and the meter never hears. It marks the window told
+// and writes the records at once, so neither a later tick nor a restart
+// says it again, then writes a github.outside_spend warning and toasts.
+// Nothing waits for it: the floor still reads the kept reading.
+func (e *Engine) noteGitHubOutside(ctx context.Context) {
+	now := e.now()
+	type notice struct {
+		identity string
+		w        GitHubWindow
+	}
+	var notices []notice
+	m := &e.ghMeter
+	m.mu.Lock()
+	for _, id := range slices.Sorted(maps.Keys(m.ids)) {
+		ws := m.ids[id].Windows
+		for i := range ws {
+			w := &ws[i]
+			if w.Told || w.Limit <= 0 || !w.ResetAt.After(now) || w.Outside()*githubOutsideShare < w.Limit {
+				continue
+			}
+			w.Told = true
+			m.dirty[id] = true
+			notices = append(notices, notice{identity: id, w: *w})
+		}
+	}
+	m.mu.Unlock()
+	if len(notices) == 0 {
+		return
+	}
+	e.flushGitHubCost(ctx, true)
+	for _, n := range notices {
+		msg := githubOutsideText(n.identity, n.w.Outside())
+		counts := fmt.Sprintf("GitHub counts %s of the window's %s points used, magnum's own calls %s; it resets at %s",
+			textx.Thousands(n.w.Used), textx.Thousands(n.w.Limit), textx.Thousands(n.w.Points), n.w.ResetAt.Local().Format("15:04"))
+		e.event(ctx, "warn", "github:"+n.identity, "github.outside_spend", msg+"; "+counts, map[string]any{"identity": n.identity,
+			"reset_at": n.w.ResetAt, "limit": n.w.Limit, "used": n.w.Used, "points": n.w.Points, "outside": n.w.Outside()})
+		e.urgent(githubOutsideToastKey(n.identity, n.w.ResetAt),
+			fmt.Sprintf("magnum: GitHub budget of %s: %s points outside magnum", n.identity, textx.Thousands(n.w.Outside())),
+			msg+". "+counts+".", time.Hour)
 	}
 }

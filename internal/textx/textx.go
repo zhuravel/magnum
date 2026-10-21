@@ -1,6 +1,7 @@
 // Package textx holds the small text helpers several packages share:
-// clipping to a number of runes, the first line, a short commit SHA, plurals
-// and login folding. It imports only the standard library.
+// clipping to a number of runes, the first line, a short commit SHA, plurals,
+// thousands separators and login folding. It imports only the standard
+// library.
 package textx
 
 import (
@@ -50,6 +51,19 @@ func Plural(n int, one, many string) string {
 // Count is n and its noun: "1 file", "3 files".
 func Count(n int, one, many string) string {
 	return strconv.Itoa(n) + " " + Plural(n, one, many)
+}
+
+// Thousands writes n with a comma between each three digits: "4,412".
+func Thousands(n int) string {
+	s := strconv.Itoa(n)
+	digits, sign := strings.CutPrefix(s, "-")
+	for i := len(digits) - 3; i > 0; i -= 3 {
+		digits = digits[:i] + "," + digits[i:]
+	}
+	if sign {
+		return "-" + digits
+	}
+	return digits
 }
 
 // FoldLogin folds a GitHub login for comparison: case, surrounding spaces, a

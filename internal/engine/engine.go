@@ -1001,7 +1001,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.autoApprove(ctx)    // before noteNeedsMe: a PR approved as the operator no longer needs them
 	e.noteNeedsMe(ctx)
 	e.noteMachine(ctx)
-	e.noteGitHubBudget(ctx) // github_cost.go: a run of low budget begins or ends
+	e.noteGitHubBudget(ctx)  // github_cost.go: a run of low budget begins or ends
+	e.noteGitHubOutside(ctx) // github_cost.go: a window's spend outside magnum reached a fifth
 	e.flushGitHubCost(ctx, false)
 	e.surface(ctx)
 	return errors.Join(errs...)

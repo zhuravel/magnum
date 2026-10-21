@@ -258,14 +258,48 @@ func statusRenderGitHub(w io.Writer, g statusGitHub, now time.Time) {
 }
 
 // statusGitHubIdentityText is one identity's line: the budget the last call
-// told, a run below the floor, and what the calls since the window's start
-// cost, the costliest ops first:
+// told, a run below the floor, what the calls since the window's start
+// cost, the costliest ops first, and what the rate-limit windows that have
+// not reset spent outside magnum's calls (statusGitHubOutsideText):
 //
-//	zhuravel 4692/5000, resets 15:00 · since 14:00 1,470 points: round setup 620, settle 300, radar 180, …
+//	zhuravel 4692/5000, resets 15:00 · since 14:00 1,470 points: round setup 620, settle 300, radar 180, … · 4,412 points outside magnum since 14:30
 //
 // A budget whose window has ended is not shown as left (no call has updated
 // it since). Times are local, as the other lines write them.
 func statusGitHubIdentityText(id statusGitHubIdentity, now time.Time) string {
+	return statusGitHubSpendText(id, now) + statusGitHubOutsideText(id.Windows, now)
+}
+
+// statusGitHubOutsideMin is the least spend outside magnum's calls, summed
+// over an identity's windows that have not reset, its github line names.
+const statusGitHubOutsideMin = 100
+
+// statusGitHubOutsideText is the github line's end for windows: " · 4,412
+// points outside magnum since 14:30", the outside spend summed over those
+// that have not reset and since the earliest one's start (an hour before
+// its reset: GitHub's windows last an hour), or "" below
+// statusGitHubOutsideMin.
+func statusGitHubOutsideText(windows []statusGitHubRateWindow, now time.Time) string {
+	outside := 0
+	var since time.Time
+	for _, w := range windows {
+		if !w.ResetAt.After(now) {
+			continue
+		}
+		outside += w.Outside
+		if start := w.ResetAt.Add(-time.Hour); since.IsZero() || start.Before(since) {
+			since = start
+		}
+	}
+	if outside < statusGitHubOutsideMin {
+		return ""
+	}
+	return " · " + textx.Thousands(outside) + " points outside magnum since " + since.Local().Format("15:04")
+}
+
+// statusGitHubSpendText is the github line of one identity without what
+// was spent outside magnum (statusGitHubIdentityText).
+func statusGitHubSpendText(id statusGitHubIdentity, now time.Time) string {
 	clock := func(t time.Time) string { return t.Local().Format("15:04") }
 	s := statusSafe(id.Identity, 40)
 	switch {
@@ -289,15 +323,15 @@ func statusGitHubIdentityText(id statusGitHubIdentity, now time.Time) string {
 	if id.WindowCalls == 0 && id.WindowPoints == 0 {
 		return s + " · no calls since " + since
 	}
-	s += " · since " + since + " " + statusThousands(id.WindowPoints) + " " + textx.Plural(id.WindowPoints, "point", "points")
+	s += " · since " + since + " " + textx.Thousands(id.WindowPoints) + " " + textx.Plural(id.WindowPoints, "point", "points")
 	if id.WindowRESTCalls > 0 {
 		s += ", " + textx.Count(id.WindowRESTCalls, "REST call", "REST calls")
 	}
 	var ops []string
 	for _, op := range id.WindowOps[:min(len(id.WindowOps), statusGitHubTop)] {
-		cost := statusThousands(op.Points)
+		cost := textx.Thousands(op.Points)
 		if op.Points == 0 && op.RESTCalls > 0 {
-			cost = statusThousands(op.RESTCalls) + " REST" // REST calls spend no points
+			cost = textx.Thousands(op.RESTCalls) + " REST" // REST calls spend no points
 		}
 		ops = append(ops, statusSafe(op.Words, 40)+" "+cost)
 	}
@@ -307,18 +341,6 @@ func statusGitHubIdentityText(id statusGitHubIdentity, now time.Time) string {
 	s += ": " + strings.Join(ops, ", ")
 	if len(id.WindowOps) > statusGitHubTop {
 		s += ", …"
-	}
-	return s
-}
-
-// statusThousands writes n with a comma between each three digits: 1,470.
-func statusThousands(n int) string {
-	s := strconv.Itoa(max(n, -n))
-	for i := len(s) - 3; i > 0; i -= 3 {
-		s = s[:i] + "," + s[i:]
-	}
-	if n < 0 {
-		s = "-" + s
 	}
 	return s
 }
