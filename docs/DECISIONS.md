@@ -10720,6 +10720,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   other full-pass rules still apply. New test TestNoApprovalHoldInARepoThatCannotApprove; the hold tests'
   harness gives the App `no_findings_event = "APPROVE"`.
 
+- **The review skill loses 489 bytes that the code or a prompt already says, may never pass 40,000 bytes,
+  and every prompt that links a skill says to read it by itself** (2026-10-21, spec 107). Evidence, from
+  102 Codex judge sessions of 2026-10-18 to 10-21: every live judge read `skills/magnum-review/SKILL.md`
+  in its first turn (9,068 tokens, 4.9% of the judges' input; the first request's median of 19.5K input
+  tokens became 28.6K after the read), and 14 sessions read it 18 more times after a compaction. Codex
+  returns at most 10,000 tokens of one tool call's output and drops the middle of a longer one ("original
+  token count: 11997 … 1997 tokens truncated"): 5 of 101 judges read the skill in one call with another
+  file, lost sections 5 and 6 (the comment form and the re-review mode) and read the gap again with `sed`.
+  - The ceiling: at about 4.15 bytes a token (37,676 bytes were 9,068 tokens), a skill of about 40,000
+    bytes is the most one call returns whole, with room for a denser text, and only when the call reads
+    the skill alone. `TestSkillStaysTight` now also refuses a skill, or a `skillMaxBytes`, over
+    `skillCeilingBytes` (40,000), naming Codex's cap and the sections it drops; `skillMaxBytes` stays the
+    working cap, which a rule raises, and the ceiling is the bound no raise passes.
+  - The read: the initial, rereview, recovery, continue and own-pass judge prompts and `fix.md` (the fix
+    skill is 20,763 bytes, and a kind is data: a fixer may run on Codex) say "Read <path> first, by itself,
+    unless this session already read that file, …"; `TestJudgePromptsReadTheSkillFirstByItselfAndLoadNoOther`
+    and the fix prompt's test pin it.
+  - The cuts, from 37,676 bytes to 37,187 (the cap follows; no pin touched), each checked against what
+    enforces it: section 0's `readiness` line (117 bytes; the paragraph under the list says what to do with
+    the field); the own pass of a full pass, now "With `full_pass: true`, the prompt says what to read."
+    (111; only a scheduled full pass sets it, `in.FullPass && in.Kind == KindRecovery` in
+    `internal/pipeline/judge.go`, and its own-pass prompt names the full diff, no earlier review, thread or
+    reply, and the threads decided in the next prompt); "(do the pass now if missing)" (29; each candidates
+    prompt says so when `OwnFindingsMissing`); section 5's local-path line (118; post-review refuses a body
+    that names a local path, "name files by their repository path and describe output instead"); section
+    1's HEAD check (114; the slot verifies HEAD when it checks the PR out, and `checkTree` restores it after
+    each stage, `internal/pipeline/checkout.go`; no judge result of 528 reported a mismatch). The freed
+    bytes are for the review rules the operator approves next.
+  - Rules applied: `.claude/skills/magnum-improve/rules.txt`'s count-query line read the skill's own
+    wording and counted 0, while 4 posted reviews (and own passes in other report directories) wrote the
+    query as `SELECT COUNT`, a "Read-only count", "Read-only precondition" or "Count matching
+    configurations"; its pattern now takes those phrases, and the line lost its "skill wording". Five lines
+    count the fixed phrases of rules approved since: `This is the author's call`, `This PR introduced it:
+    on`, `Description: ✗`, `(confirmed: ` and `not run on the review machine`. Over the window from
+    2026-10-17T15:15Z (126 report directories, 107 posted reviews) they read 4, 13, 21, 22, 2 and 0.
+  - **Rejected:** the optional cut of "Never commit, push, label, merge or edit the PR." (49 bytes): the
+    pipeline restores the checkout after a stage, but nothing undoes a label, a merge or an edit on GitHub.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -10,12 +10,15 @@
 # Where a pattern comes from. The swept set's phrases, (also covers, (missed earlier), (in the fix for, the
 # merged-tree "skipped (machine)" line and the platform rule's number or shopify.dev link are the ones the
 # skill-economy analysis of master 3e09420 grepped by hand (analysis/11-skill.md of the 2026-10-14 run, "The 13
-# rules of 275a217 and the de84b79 sentence"). That analysis quotes no phrase for the count query, the
-# operator-only precondition command or the mechanism that cannot be completed (only the one posted case's
-# "Across <sha> → <sha>"). Those lines say "skill wording": their patterns come from the rule's own sentence in
-# skills/magnum-review/SKILL.md (sections 2 and 4). A review may word such a rule differently, so a low count on
-# a "skill wording" line is weaker evidence than a count on a fixed phrase. Add the rule's real phrase once a
-# run shows how reviews write it.
+# rules of 275a217 and the de84b79 sentence"). That analysis quotes no phrase for the operator-only precondition
+# command or the mechanism that cannot be completed (only the one posted case's "Across <sha> → <sha>"). Those
+# lines say "skill wording": their patterns come from the rule's own sentence in skills/magnum-review/SKILL.md
+# (sections 2 and 4). A review may word such a rule differently, so a low count on a "skill wording" line is
+# weaker evidence than a count on a fixed phrase. Add the rule's real phrase once a run shows how reviews write it.
+# The count query's pattern is what reviews wrote from 2026-10-17 to 10-21 (the 2026-10-21 run's skill-economy
+# analysis): its skill wording counted 0 while 4 posted reviews and 10 report directories carried the query as
+# a `SELECT COUNT`, a read-only count or precondition, or a count of the matching rows. The five lines after the
+# mechanism's are the fixed phrases the skill gives those rules (sections 2, 3, 5 and 7).
 
 swept set: the Checks line `swept N <things>: M gaps` | swept [0-9]+ [^:\n]{1,120}: [0-9]+ (proven )?gaps?
 swept set: a member left unproven (`unproven:`) | unproven:
@@ -24,6 +27,11 @@ a finding the earlier reviews missed (`(missed earlier)`) | \(missed earlier\)
 a finding in the fix for an earlier one (`(in the fix for`) | \(in the fix for
 merged-tree specs skipped (machine) | [Mm]erged?[- ]tree[^\n]{0,200}skipped \(machine\)
 platform rules: a rule number or a shopify.dev link | [Rr]ule [0-9]+\.[0-9]+|shopify\.dev
-count query for the rows a migration affects (skill wording) | read-only (query|count)|counts the (affected )?rows|rows it affects
+count query for the rows a migration affects | SELECT COUNT|COUNT\(\*\)|[Rr]ead-only (query|count|precondition)|[Cc]ounts? (the )?(matching|affected|candidate|existing|legacy) [a-z_ ]{0,20}(rows|records|configurations|sets)|rows it affects
 operator-only trigger as P3 with a precondition command (skill wording) | checks? the precondition
 a mechanism that cannot be completed (skill wording; the posted case: `Across <sha> → <sha>`) | cannot be completed|Across `?[0-9a-f]{7,12}`? →
+fixes users tell apart left to the author (`This is the author's call`) | This is the author.s call
+the regression line of a finding the base lacks (`This PR introduced it: on`) | This PR introduced it: on
+a false description claim (`Description: ✗`) | Description: ✗
+another reviewer's finding confirmed (`(confirmed: <link>)`) | \(confirmed:
+an unrun suite in the clean line (`not run on the review machine`) | not run on the review machine

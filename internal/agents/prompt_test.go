@@ -314,7 +314,7 @@ func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "[$magnum-fix](" + skillCopy + ") Read " + skillCopy + " first"; !strings.HasPrefix(got, want) {
+	if want := "[$magnum-fix](" + skillCopy + ") Read " + skillCopy + " first, by itself, "; !strings.HasPrefix(got, want) {
 		t.Errorf("the fix prompt does not start with %q:\n%s", want, got)
 	}
 	for _, want := range []string{e.pr.URL, "`" + e.pr.HeadSHA + "`", "HEAD:" + in.HeadRef, in.ReviewURL, in.ReviewFile,

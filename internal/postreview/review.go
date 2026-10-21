@@ -125,11 +125,12 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string) 
 	return r, appended, nil
 }
 
-// localPathRe finds a path that may be on the judge's machine (SKILL.md: no
-// local path in posted text): under a home directory or macOS's temp
-// directories, or /tmp, at a word's start (not inside a repository path, a
-// URL or a word; a `~/` not after a slash either), up to a blank, quote,
-// backtick or bracket. /home is left out: a PR's Dockerfile or CI config
+// localPathRe finds a path that may be on the judge's machine (no local path
+// in posted text; the skill leaves the rule to localPathProblem's words):
+// under a home directory or macOS's temp directories, or /tmp, at a word's
+// start (not inside a repository path, a URL or a word; a `~/` not after a
+// slash either), up to a blank, quote, backtick or bracket. /home is left
+// out: a PR's Dockerfile or CI config
 // names /home/app, and this machine (macOS) keeps no one's home there.
 var localPathRe = regexp.MustCompile("(?:^|[^A-Za-z0-9_.~/-])(~/[^\\s`'\"()<>\\[\\]{}]*)" +
 	"|(?:^|[^A-Za-z0-9_.~-])((?:/tmp|/private|/var/folders|/Users)/[^\\s`'\"()<>\\[\\]{}]*)")

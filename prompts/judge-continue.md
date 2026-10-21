@@ -1,4 +1,4 @@
-[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. The pause is over. Continue the run for {{.URL}} where you stopped. First list the reviews by `{{.ReviewerLogin}}` on this PR. If one already contains `magnum:run={{.RunID}}`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `{{.HeadSHA}}`.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, by itself, unless this session already read that file, and follow it; load no other skill. The pause is over. Continue the run for {{.URL}} where you stopped. First list the reviews by `{{.ReviewerLogin}}` on this PR. If one already contains `magnum:run={{.RunID}}`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `{{.HeadSHA}}`.
 {{- if and .NotesPath .NotesMaxLine}}
 
 Keep each line of the `notes` file at most `notes_max_line` characters long: a longer line triggers a curation.

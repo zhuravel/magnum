@@ -1,9 +1,9 @@
 {{- if .SameHead -}}
-[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. No new commits were pushed to {{.URL}} since your last review.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, by itself, unless this session already read that file, and follow it; load no other skill. No new commits were pushed to {{.URL}} since your last review.
 
 HEAD is still `{{.HeadSHA}}`, the commit your last review ({{.PreviousReviewID}}, {{.PreviousEvent}}) covered.
 {{- else -}}
-[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. New commits were pushed to {{.URL}}. Read the replies and re-review.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, by itself, unless this session already read that file, and follow it; load no other skill. New commits were pushed to {{.URL}}. Read the replies and re-review.
 
 magnum already updated this checkout: HEAD is `{{.HeadSHA}}`. Your last review ({{.PreviousReviewID}}, {{.PreviousEvent}}) covered `{{.PreviousHeadSHA}}`.
 {{- end}}

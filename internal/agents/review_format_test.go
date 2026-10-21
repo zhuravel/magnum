@@ -539,11 +539,38 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // P3 titles (80), another reviewer's confirmed one listed among them under
 // the judge's own title instead of a `Confirmed <link>` line (70), and a
 // re-review's new findings with the counted ones first (61).
+// Then 37,187 (2026-10-21, spec 107: 489 bytes of text the code or a
+// prompt already says): section 0's `readiness` line (117: the paragraph
+// under the list reads the field), the own pass of a full pass (111: its
+// prompt says what to read and when to decide the threads), "do the pass
+// now if missing" (29: every candidates prompt says it when the file is
+// missing), section 5's local-path line (118: post-review refuses a local
+// path in those words) and section 1's HEAD check (114: the slot verifies
+// HEAD at checkout, and the pipeline restores it after each stage).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 37676
+const skillMaxBytes = 37187
+
+// skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex
+// returns at most 10,000 tokens of one tool call's output and drops the
+// middle of a longer one ("… tokens truncated"), and every judge reads the
+// skill in its first turn (and again after a compaction). At 37,676 bytes
+// the skill was 9,068 tokens, about 4.15 bytes a token, so a read of about
+// 40,000 bytes is the most that comes back whole, and only when the skill
+// is read by itself, as the prompts that link it say: from 2026-10-18 to
+// 10-21, 5 of 101 Codex judges read it in one call with another file and
+// lost sections 5 and 6, the comment form and the re-review mode.
+const skillCeilingBytes = 40000
 
 func TestSkillStaysTight(t *testing.T) {
-	if n := len(magnum.Skill); n > skillMaxBytes {
+	const why = "Codex returns at most 10,000 tokens of one tool call's output and drops the middle, sections 5 and 6, of a longer skill"
+	n := len(magnum.Skill)
+	if skillMaxBytes > skillCeilingBytes {
+		t.Fatalf("skillMaxBytes is %d, over the ceiling of %d bytes: %s", skillMaxBytes, skillCeilingBytes, why)
+	}
+	if n > skillCeilingBytes {
+		t.Fatalf("SKILL.md is %d bytes, over the ceiling of %d: %s; shorten it", n, skillCeilingBytes, why)
+	}
+	if n > skillMaxBytes {
 		t.Fatalf("SKILL.md is %d bytes, over %d: shorten it instead of adding to it", n, skillMaxBytes)
 	}
 }
@@ -1157,14 +1184,17 @@ func TestJudgePromptsCarryTheBlindAndPostMergeRulesOnlyInTheirRounds(t *testing.
 // prompt tells the judge to open the skill it links. Each prompt that links
 // the skill says, right after the link, to read that file first (a session
 // that read it keeps it: its path changes with every version) and follow it,
-// and to load no other skill.
-func TestJudgePromptsReadTheSkillFirstAndLoadNoOther(t *testing.T) {
+// and to load no other skill. It reads the file by itself: Codex cuts the
+// middle out of one call's output over 10,000 tokens, and 5 of 101 judges
+// that read the skill in one call with another file lost sections 5 and 6
+// (skillCeilingBytes).
+func TestJudgePromptsReadTheSkillFirstByItselfAndLoadNoOther(t *testing.T) {
 	own := judgeFixture()
 	own.Mode, own.Phase, own.OwnFindings, own.Reports = ModeInitial, PhaseOwnPass, "/r/judge-own.md", nil
 	same := judgeFixture()
 	same.SameHead, same.PreviousHeadSHA = true, same.HeadSHA
 	path := judgeFixture().SkillPath
-	link := "[$magnum-review](" + path + ") Read " + path + " first, unless this session already read that file, and follow it; load no other skill. "
+	link := "[$magnum-review](" + path + ") Read " + path + " first, by itself, unless this session already read that file, and follow it; load no other skill. "
 	for _, tc := range []struct {
 		name string
 		data JudgeData

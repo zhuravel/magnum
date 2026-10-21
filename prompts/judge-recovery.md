@@ -1,4 +1,4 @@
-[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. Re-review {{.URL}}. An earlier session reviewed this PR, but its history is gone.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, by itself, unless this session already read that file, and follow it; load no other skill. Re-review {{.URL}}. An earlier session reviewed this PR, but its history is gone.
 Earlier reviews by `{{.ReviewerLogin}}`{{if .FormerLogins}} or, before magnum moved this PR to that login, by {{range $i, $l := .FormerLogins}}{{if $i}}, {{end}}`{{$l}}`{{end}}{{end}}:
 {{- range .PreviousReviews}}
   - {{.ID}} {{.Event}} on `{{.SHA}}` ({{.SubmittedAt}})
