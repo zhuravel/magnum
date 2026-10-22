@@ -371,6 +371,26 @@ type RoundInput struct {
 	// pass of the whole PR follows before the approval
 	// (agents.JudgeData.HoldApproval).
 	HoldApproval bool
+	// NoApproval: why the round cannot approve although its identity
+	// would, by the approval's gates that need no review, decided at
+	// dispatch (the engine's approval_gates.go: a draft, a muted PR, one
+	// its watch would not review on its own, one that changes its own
+	// workflows or actions or the review agents' instructions or hooks, or
+	// whose files magnum cannot list), in a few fixed words that never
+	// carry PR text ("the PR changes its own workflows or actions"); a
+	// continue keeps the paused round's. The judge's no-findings event is
+	// then COMMENT whatever the identity, and its prompt says why
+	// (agents.JudgeData.NoApproval). "" = none.
+	NoApproval string
+	// CIGate is the approval's CI gate (the engine's approval_gates.go),
+	// asked when the judge's prompt is written, a continue's too, of the
+	// PR as the registry has it then (the read failing-checks.json comes
+	// from) and the round's target, while the round would approve a clean
+	// review: a Refusal (the target's checks fail other than the way the
+	// base branch's tip fails them) makes its no-findings event COMMENT and
+	// is said as NoApproval is; checks that still run, or pass, let the
+	// APPROVE through. nil = no gate.
+	CIGate func(ctx context.Context, pr store.PR, target string) CIGateResult
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at
@@ -539,6 +559,13 @@ type RoundResult struct {
 	// out: the replies and comments it re-decided are those it could read
 	// then (zero: no judge prompt).
 	JudgePromptedAt time.Time
+	// NoApproval is why the judge's prompt asked for a COMMENT where its
+	// identity would approve a clean review: the approval's gates refused
+	// it (RoundInput.NoApproval, or CIGate's refusal when the prompt was
+	// written), in their fixed words; "" = they did not. The engine keeps it
+	// with the review posted (store.KVPRNoApprovalReview), so the needs-you
+	// list takes that review, when clean, for an approval.
+	NoApproval string
 	// ThreadsRead: the round read the reviewer's threads before the judge's
 	// prompt (re-reviews and recoveries), so Stops is what they say now.
 	// Stops are the threads marked stop (agents.ReviewThread.Stop): after

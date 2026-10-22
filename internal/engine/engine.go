@@ -521,14 +521,18 @@ type Engine struct {
 	// serializes auto-approval, which the tick and a round's goroutine at
 	// its end (autoApproveRound) both run. baseChecks are the base tips'
 	// checks the gates read, by repository and commit, for baseChecksTTL
-	// (autoapprove_ci_base.go), also under autoMu. autoRetry is, by PR,
-	// when a read GitHub refused for its rate limit may be made again,
-	// autoHeld, by identity, the end of the budget hold last logged, and
-	// autoPollPaused the poll's rate-limit pause the pass found
-	// (autoapprove_budget.go), under autoMu too.
+	// (autoapprove_ci_base.go), under baseMu: a round's judge gate reads
+	// them too (approval_gates.go), and must not wait behind the writes
+	// auto-approval makes under autoMu. autoRetry is, by PR, when a read
+	// GitHub refused for its rate limit may be made again, autoHeld, by
+	// identity, the end of the budget hold last logged, and autoPollPaused
+	// the poll's rate-limit pause the pass found (autoapprove_budget.go),
+	// under budgetMu, for the same reason: the base tip's read asks them.
 	autoMu                            sync.Mutex
 	autoSeen, autoFollow, autoRefused map[int64]string
+	baseMu                            sync.Mutex
 	baseChecks                        map[baseTip]baseTipRead
+	budgetMu                          sync.Mutex
 	autoRetry                         map[int64]time.Time
 	autoHeld                          map[string]time.Time
 	autoPollPaused                    time.Time

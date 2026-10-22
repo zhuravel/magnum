@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -77,19 +78,19 @@ func requiredCIOf(pr store.PR, required []string) (requiredCI, bool) {
 	return r, true
 }
 
-// requiredCIRefusal is autoGateRefusal's CI answer for c, after magnum's
-// round sum, by r, its head's required checks: a failing one goes to the
-// base-tip comparison (failsLikeTheBase, which waits for a required one
-// that still runs), a running one waits (ciRunsRefusal), and "" when every
-// one passed or skipped, whatever the checks outside the list do.
-func (e *Engine) requiredCIRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary, r requiredCI) (why string, waits bool) {
+// requiredCIRefusal is the CI gate's answer (ciGateOf) for c by r, its
+// head's required checks: a failing one goes to the base-tip comparison
+// (failsLikeTheBase, which waits for a required one that still runs), a
+// running one waits (ciRunsRefusal), and every one passed or skipped lets
+// it through, whatever the checks outside the list do.
+func (e *Engine) requiredCIRefusal(ctx context.Context, c store.RepoPR, r requiredCI) ciAnswer {
 	switch {
 	case len(r.failed) > 0:
-		return e.failsLikeTheBase(ctx, c, sum, r.failed, r.running)
+		return e.failsLikeTheBase(ctx, c, r.failed, r.running)
 	case r.running:
-		return ciRunsRefusal, true
+		return ciAnswer{why: ciRunsRefusal, waits: true, state: pipeline.CIRunning}
 	}
-	return "", false
+	return ciAnswer{state: pipeline.CIGreen}
 }
 
 // ignoredChecksShown is how many failing checks an ignored-checks note

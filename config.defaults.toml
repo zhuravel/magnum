@@ -757,7 +757,11 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # name = "me"
 # kind = "gh"                             # your `gh auth login` account
 # login = "your-login"
-# no_findings_event = "APPROVE"           # APPROVE | COMMENT when the judge finds nothing
+# no_findings_event = "APPROVE"           # APPROVE | COMMENT when the judge finds nothing; an APPROVE round is held to
+#                                         # the approval's gates (a draft, a muted PR, one its watch would not review
+#                                         # on its own, its own workflows or the agents' files changed, red CI that
+#                                         # fails unlike the base's tip): a refused round comments (README: the
+#                                         # judge's own approval)
 # dismiss_own_stale_change_requests = true  # a re-review with no blocking finding dismisses this identity's own earlier
 #                                         # CHANGES_REQUESTED review of the PR ("Superseded by the newer Magnum review"),
 #                                         # which would otherwise stay and keep blocking the author's merge. The default
@@ -927,7 +931,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #
 # [[repo]]
 # repo = "your-org/your-app"
-# no_findings_event = "COMMENT"           # APPROVE | COMMENT; default: the identity's
+# no_findings_event = "COMMENT"           # APPROVE | COMMENT; default: the identity's; APPROVE is held to the
+#                                         # approval's gates, as the identity's is
 # blocking_event = "REQUEST_CHANGES"      # REQUEST_CHANGES | COMMENT; default: the identity's
 # keep_approvals = false                  # true: keep an App's approval when the PR gets new commits
 #                                         # (default: dismissed until the re-review posts; also on [[watch]])

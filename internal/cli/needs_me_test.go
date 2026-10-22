@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -185,5 +186,62 @@ func TestPickMarksThePRsThatNeedYou(t *testing.T) {
 		if states[ref] != w {
 			t.Errorf("%s state %q, want %q", ref, states[ref], w)
 		}
+	}
+}
+
+// A clean review that the approval's gates turned from the identity's
+// approval into a comment (here a gh identity, whose clean review
+// approves) still needs you: `magnum tui --json` says needs_me "approve"
+// with the gates' reason in the list's words, --needs-me lists it, and the
+// same clean comment without the record stays off the list, as an
+// approving identity's comment always did.
+func TestTheBoardListsACleanCommentTheGatesAskedForAsNeedingYou(t *testing.T) {
+	const words = "approve by hand: the PR changes its own workflows or actions"
+	f := newInspFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	for _, n := range []int{11970, 11971} {
+		_, pr := inspSeedPR(t, st, "talkable/talkable", n, store.PRReviewed, func(u *store.PRUpdate) {
+			approvedBy("COMMENTED", nmRequired)(u)
+			u.Set("identity", "zhuravel")
+			u.Set("last_review_id", int64(n))
+		})
+		if _, err := st.DB().ExecContext(ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login, state, outcome, review_id, prompt_text, result_json, created_at)
+			VALUES (?, ?, 1, 'codex-judge', 'initial', ?, 'zhuravel', 'zhuravel', 'verified', 'posted', ?, 'p', '{"event":"COMMENT","verdict":"clean","findings":{}}', ?)`,
+			"r-"+strconv.Itoa(n), pr.ID, nmHead, n, store.FormatTime(pr.CreatedAt)); err != nil {
+			t.Fatal(err)
+		}
+		if n == 11970 {
+			rec := store.NoApprovalReview{ReviewID: int64(n), Reason: "the PR changes its own workflows or actions"}
+			if err := st.SetKV(ctx, store.KVPRNoApprovalReview(pr.ID), rec.Value()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	st.Close()
+
+	if code := f.run("tui", "--json"); code != 0 {
+		t.Fatalf("code %d err %s", code, f.Err.String())
+	}
+	var rows []prsJSONRow
+	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	got := map[int][2]string{}
+	for _, r := range rows {
+		got[r.Number] = [2]string{r.NeedsMe, r.NeedsMeReason}
+	}
+	if got[11970] != [2]string{"approve", words} || got[11971] != [2]string{"", ""} {
+		t.Fatalf("needs_me, needs_me_reason = %v", got)
+	}
+	if code := f.run("tui", "--needs-me", "--json"); code != 0 {
+		t.Fatalf("code %d err %s", code, f.Err.String())
+	}
+	rows = nil
+	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Number != 11970 {
+		t.Fatalf("--needs-me rows %+v", rows)
 	}
 }

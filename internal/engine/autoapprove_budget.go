@@ -26,14 +26,24 @@ import (
 
 // autoReadsPass readies a pass of auto-approval's GitHub reads (under
 // autoMu): the poll's rate-limit pause, read once per pass, and the maps,
-// whose retry times that passed go (a PR no longer read leaves none).
+// whose retry times that passed go (a PR no longer read leaves none). The
+// state is budgetMu's: a round's judge gate reads a base tip's checks
+// outside the pass (approval_gates.go).
 func (e *Engine) autoReadsPass(ctx context.Context) {
-	e.autoPollPaused, _ = e.kvTime(ctx, store.KVGHPollPausedUntil)
+	paused, _ := e.kvTime(ctx, store.KVGHPollPausedUntil)
+	e.budgetMu.Lock()
+	defer e.budgetMu.Unlock()
+	e.autoPollPaused = paused
+	e.initBudget()
+	now := e.now()
+	maps.DeleteFunc(e.autoRetry, func(_ int64, until time.Time) bool { return !now.Before(until) })
+}
+
+// initBudget makes the budget's maps (under budgetMu).
+func (e *Engine) initBudget() {
 	if e.autoRetry == nil {
 		e.autoRetry, e.autoHeld = map[int64]time.Time{}, map[string]time.Time{}
 	}
-	now := e.now()
-	maps.DeleteFunc(e.autoRetry, func(_ int64, until time.Time) bool { return !now.Before(until) })
 }
 
 // autoReadHeld reports whether auto-approval reads nothing from GitHub as
@@ -44,6 +54,9 @@ func (e *Engine) autoReadsPass(ctx context.Context) {
 // holds for identity and its end is logged once.
 func (e *Engine) autoReadHeld(identity string, prID int64) bool {
 	now := e.now()
+	e.budgetMu.Lock()
+	defer e.budgetMu.Unlock()
+	e.initBudget()
 	if now.Before(e.autoRetry[prID]) {
 		return true // the refusal was logged
 	}
@@ -76,7 +89,10 @@ func (e *Engine) autoReadFailed(ctx context.Context, what, identity string, prID
 		return
 	}
 	until := e.autoRetryAt(identity)
+	e.budgetMu.Lock()
+	e.initBudget()
 	e.autoRetry[prID] = until
+	e.budgetMu.Unlock()
 	e.log.Info("auto approval: "+what+"; GitHub refused it for its rate limit, read again after the reset", "pr", prID,
 		"identity", identity, "until", until, "err", err)
 }

@@ -259,7 +259,8 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		rs.ciRed = true
 		e.noteCIRound(ctx, pr.ID, rs.target, job.startedAt) // ci_red.go
 	}
-	e.planApprovalHold(ctx, job, &rs, dryRun) // approval_hold.go
+	e.planApprovalHold(ctx, job, &rs, dryRun)  // approval_hold.go
+	e.planApprovalGates(ctx, job, &rs, dryRun) // approval_gates.go
 
 	in := e.roundInput(ctx, job, rs, ws, dryRun)
 	e.sidebar(ctx, ws.WorkspaceID, map[string]string{"magnum": "reviewing " + textx.ShortSHA(rs.target)})
@@ -305,6 +306,9 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	}
 	if job.approvalHold != "" {
 		data["approval_hold"] = true
+	}
+	if job.noApproval != "" {
+		data["no_approval"] = true
 	}
 	if job.postMerge {
 		what = "post-merge " + what
@@ -601,6 +605,10 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		FullPass:     rs.fullPass,
 		Audit:        rs.audit,
 		HoldApproval: job.approvalHold != "",
+		NoApproval:   job.noApproval,
+	}
+	if job.ciGated {
+		in.CIGate = e.judgeCIGate(job)
 	}
 	if job.evalHead != "" {
 		in.Blind = true

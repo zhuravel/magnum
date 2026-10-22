@@ -272,6 +272,12 @@ type PRBoardRow struct {
 	// only one blocking it; "" otherwise. The state cell says "✔ needs you"
 	// or "✔ lift your ✗" and the updated sort lists it first.
 	NeedsMe string
+	// NeedsMeReason: magnum's clean review of the head is a comment because
+	// the approval's gates refused the approval its identity would have
+	// posted, in the list's words ("approve by hand: the PR changes its own
+	// workflows or actions", store.NeedsMeWords); "" otherwise. The card says
+	// it when no line about the approval as the operator does.
+	NeedsMeReason string
 	// ReviewDecision is GitHub's reviewDecision: APPROVED,
 	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
 	// no review or magnum has not read it yet. tui --json only.
@@ -747,7 +753,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	r.AutoStopped, r.AutoRefused = cleanText(r.AutoStopped), cleanText(r.AutoRefused)
-	r.NeedsMe, r.ReviewDecision = cleanText(r.NeedsMe), cleanText(r.ReviewDecision)
+	r.NeedsMe, r.NeedsMeReason, r.ReviewDecision = cleanText(r.NeedsMe), cleanText(r.NeedsMeReason), cleanText(r.ReviewDecision)
 	if r.Findings != nil {
 		f := *r.Findings
 		f.Verdict, f.Posted, f.SHA = cleanText(f.Verdict), cleanText(f.Posted), cleanText(f.SHA)

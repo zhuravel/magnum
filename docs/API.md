@@ -686,8 +686,11 @@ func PostReviewLine(d JudgeData) string
     (JudgeData.PostReviewCommand, `post_review` in the <magnum> block):
     `magnum post-review` with the run's facts as flags, each value shell-quoted.
     --gh-config-dir only for an identity with its own gh config; --dry-run in
-    a dry run; --local-base (the base the blind replay's diff starts at) in a
-    blind one, so the tool reads nothing from GitHub.
+    a dry run; --no-findings-event, the round's no-findings event, from the
+    value the prompt's no_findings_event shows (d.NoFindingsEvent), so the two
+    never disagree and post-review refuses an APPROVE the round cannot post;
+    --local-base (the base the blind replay's diff starts at) in a blind one,
+    so the tool reads nothing from GitHub.
 
 func ProjectPaths(kind string) []string
     ProjectPaths are the paths, relative to the checkout's root, that kind
@@ -1075,8 +1078,10 @@ type JudgeData struct {
 	GhConfigDir   string // "" for the gh identity
 	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
 	// of the round left no usable report or the auto-approval author lists
-	// refuse the PR's author (pipeline.JudgeEvents), or the round holds its
-	// approval for a full pass (HoldApproval).
+	// refuse the PR's author (pipeline.JudgeEvents), the round holds its
+	// approval for a full pass (HoldApproval), or the approval's gates
+	// refuse it (NoApproval). The post_review line passes the same value as
+	// --no-findings-event (PostReviewLine).
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
@@ -1184,6 +1189,14 @@ type JudgeData struct {
 	// full pass of the whole PR follows before the approval. Rendered as
 	// one instruction, with the body line a clean verdict adds, only then.
 	HoldApproval bool
+	// NoApproval (initial, rereview, recovery, continue): why the round
+	// cannot approve although its identity would (pipeline.RoundInput:
+	// NoApproval, the gates decided at dispatch, else CIGate's refusal when
+	// the prompt is written), in a few fixed words that never carry PR text
+	// ("the PR changes its own workflows or actions"); NoFindingsEvent is
+	// then COMMENT. Rendered as one instruction beside the events, only
+	// then; "" = none.
+	NoApproval string
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string
@@ -15031,6 +15044,22 @@ run's), and when a file with another status has been present for ResultSettle.
 CONSTANTS
 
 const (
+	CIGreen       = "green"
+	CIRunning     = "running"
+	CIRedLikeBase = "red-like-base"
+	CIRed         = "red"
+	CIUnknown     = "unknown"
+)
+    The CI states the approval's CI gate decides by (CIGateResult.State),
+    which the round's events record (round.judge's ci_gate, the engine's
+    round.approval_refused): every check that counts passed or skipped, or none
+    ran (CIGreen); one still runs (CIRunning, which lets the APPROVE through:
+    the one risk the gate's moment accepts); every failing one fails the same
+    way on the base branch's tip (CIRedLikeBase, through); one fails otherwise,
+    or magnum cannot tell (CIRed, refused); the registry holds the checks of a
+    newer head than the round's target (CIUnknown, through).
+
+const (
 	EvidenceRead    = "read"    // the judge read the code of the behaviour
 	EvidenceProbed  = "probed"  // it ran a probe (Command), with a control or not
 	EvidenceSkipped = "skipped" // it left the behaviour alone on purpose (Result says why)
@@ -15292,6 +15321,15 @@ type BaseDocs struct {
 	More int `json:"more,omitempty"`
 }
     BaseDocs is docs.json.
+
+type CIGateResult struct {
+	Refusal string
+	State   string
+}
+    CIGateResult is what the approval's CI gate (RoundInput.CIGate) says of the
+    round's target when the judge's prompt is written: Refusal, why the round
+    cannot approve in a few fixed words ("" = it may), and State, the CI state
+    it decided by.
 
 type DeltaCheck struct {
 	Lines int         `json:"lines"`
@@ -15797,6 +15835,26 @@ type RoundInput struct {
 	// pass of the whole PR follows before the approval
 	// (agents.JudgeData.HoldApproval).
 	HoldApproval bool
+	// NoApproval: why the round cannot approve although its identity
+	// would, by the approval's gates that need no review, decided at
+	// dispatch (the engine's approval_gates.go: a draft, a muted PR, one
+	// its watch would not review on its own, one that changes its own
+	// workflows or actions or the review agents' instructions or hooks, or
+	// whose files magnum cannot list), in a few fixed words that never
+	// carry PR text ("the PR changes its own workflows or actions"); a
+	// continue keeps the paused round's. The judge's no-findings event is
+	// then COMMENT whatever the identity, and its prompt says why
+	// (agents.JudgeData.NoApproval). "" = none.
+	NoApproval string
+	// CIGate is the approval's CI gate (the engine's approval_gates.go),
+	// asked when the judge's prompt is written, a continue's too, of the
+	// PR as the registry has it then (the read failing-checks.json comes
+	// from) and the round's target, while the round would approve a clean
+	// review: a Refusal (the target's checks fail other than the way the
+	// base branch's tip fails them) makes its no-findings event COMMENT and
+	// is said as NoApproval is; checks that still run, or pass, let the
+	// APPROVE through. nil = no gate.
+	CIGate func(ctx context.Context, pr store.PR, target string) CIGateResult
 	// RestartJudge starts the round's judge once more in its pane, the way
 	// the round started it, when its session is gone, or herdr never
 	// registered its agent, at the own pass's prompt (ownPassTurn) or at
@@ -15917,6 +15975,13 @@ type RoundResult struct {
 	// out: the replies and comments it re-decided are those it could read
 	// then (zero: no judge prompt).
 	JudgePromptedAt time.Time
+	// NoApproval is why the judge's prompt asked for a COMMENT where its
+	// identity would approve a clean review: the approval's gates refused
+	// it (RoundInput.NoApproval, or CIGate's refusal when the prompt was
+	// written), in their fixed words; "" = they did not. The engine keeps it
+	// with the review posted (store.KVPRNoApprovalReview), so the needs-you
+	// list takes that review, when clean, for an approval.
+	NoApproval string
 	// ThreadsRead: the round read the reviewer's threads before the judge's
 	// prompt (re-reviews and recoveries), so Stops is what they say now.
 	// Stops are the threads marked stop (agents.ReviewThread.Stop): after
@@ -16172,6 +16237,12 @@ type Options struct {
 	// `git diff LocalBase HeadSHA` in the checkout and read nothing from
 	// GitHub, whose pull request may have moved on since HeadSHA.
 	LocalBase string
+	// NoFindingsEvent is the round's no-findings event, the judge prompt's
+	// no_findings_event (EventApprove or EventComment; "" = not given, any
+	// event goes): with EventComment the round cannot approve, so Parse
+	// refuses a review whose event is EventApprove, and the judge rewrites
+	// its file. REQUEST_CHANGES stays the judge's to post either way.
+	NoFindingsEvent string
 }
     Options are the run's facts, from the judge's <magnum> block.
 
@@ -16276,7 +16347,8 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string)
     It returns the review to post, with each comment's side (RIGHT unless
     given) and a multi-line comment's start side filled in and the run's marker
     appended as the body's last line when the body lacks it (appended reports
-    that), or the problems found, each naming its field.
+    that), or the problems found, each naming its field. An APPROVE in a round
+    whose no-findings event is COMMENT (Options.NoFindingsEvent) is one of them.
 
 type SkippedReply struct {
 	CommentID int64  `json:"comment_id"`
@@ -18288,6 +18360,14 @@ func KVPRGate(prID int64) string
     still working, a human in its panes, an unhealthy identity, ...); cleared
     when a round starts. Shown by `magnum status` as "waiting: <reason>".
 
+func KVPRNoApprovalReview(prID int64) string
+    KVPRNoApprovalReview holds the PR's latest review that magnum's judge posted
+    as a comment although its identity would have approved a clean review,
+    because the approval's gates refused it (the engine's approval_gates.go),
+    with the gates' fixed words (NoApprovalReview.Value): the needs-you list
+    takes that review, when clean, for an approval (NeedsMeFacts.Refused).
+    Any other review magnum posts drops it.
+
 func KVPRProject(prID int64, kind string) string
     KVPRProject records a session of agent kind kind ("codex", "claude")
     launched without the checkout's project configuration because the PR changes
@@ -18367,10 +18447,18 @@ func NeedsMe(f NeedsMeFacts, mine func(login string) bool) string
     "" when nothing: an open PR, not a draft and not authored by one of the
     operator's logins (mine), whose latest verified magnum review is on the
     current head and clean (an approval, or a clean comment from an identity
-    that comments when clean), and which GitHub still blocks on a review:
+    that comments when clean or one the approval's gates turned from an approval
+    into a comment: Refused), and which GitHub still blocks on a review:
     NeedsMeApprove for REVIEW_REQUIRED, NeedsMeLift for CHANGES_REQUESTED when
     every outstanding changes request is the operator's. Anyone else's changes
     request, an unread gate or a list of opinions GitHub cut leaves it alone.
+
+func NeedsMeWords(refused string) string
+    NeedsMeWords are the needs-you words of a PR whose clean review the
+    approval's gates turned from an approval into a comment, for their reason
+    refused ("" for none): "approve by hand: the PR changes its own workflows
+    or actions", which the toast, the board's card and `magnum tui --json`'s
+    needs_me_reason say.
 
 func ParseReviewResult(data []byte, sum *ReviewSummary) bool
     ParseReviewResult fills sum from a judge result file (the skill's section 8
@@ -19052,6 +19140,12 @@ type NeedsMeFacts struct {
 	// refuse its author: config.Config.CommentsWhenClean), so a clean
 	// comment is its approval.
 	CommentWhenClean bool
+	// Refused is why the approval's gates turned magnum's latest review,
+	// which its identity would have posted as an approval, into a comment
+	// (KVPRNoApprovalReview of that review; the gates' fixed words, "" =
+	// they did not): a clean comment is then its approval too, one only a
+	// person can give.
+	Refused string
 	// Verdict is the verdict of magnum's latest posted round
 	// (ReviewSummary.Verdict); only a comment reads it.
 	Verdict string
@@ -19061,15 +19155,38 @@ type NeedsMeFacts struct {
     and what the configuration and magnum's latest round say of its review.
 
 func (f NeedsMeFacts) WantsVerdict() bool
-    WantsVerdict reports whether NeedsMe reads f.Verdict: magnum's latest review
-    is a comment from an identity that comments when clean.
+    WantsVerdict reports whether NeedsMe reads f.Verdict: magnum's latest
+    review is a comment from an identity that comments when clean, or one the
+    approval's gates turned from an approval into a comment (Refused).
 
 type NeedsMePR struct {
 	PR      PR
 	Repo    string // owner/name
 	NeedsMe string // NeedsMeApprove or NeedsMeLift
+	// Refused is why magnum's clean review there is a comment, not an
+	// approval: the approval's gates refused it (NeedsMeFacts.Refused); ""
+	// for an approval, or an identity that comments when clean.
+	Refused string
 }
     NeedsMePR is an open PR that needs the operator.
+
+type NoApprovalReview struct {
+	ReviewID int64
+	Reason   string
+}
+    NoApprovalReview is a KVPRNoApprovalReview record: the review and why the
+    gates refused its approval.
+
+func ParseNoApprovalReview(v string) (NoApprovalReview, bool)
+    ParseNoApprovalReview reads a KVPRNoApprovalReview value; ok is false for
+    one that names no review or no reason.
+
+func (r NoApprovalReview) For(reviewID int64) string
+    For is r's reason when r is review reviewID's, "" otherwise (another review
+    came since, or none was recorded).
+
+func (r NoApprovalReview) Value() string
+    Value is r as KVPRNoApprovalReview holds it: "<review id>|<reason>".
 
 type NotesBlob struct {
 	Path   string `json:"path"`
@@ -20123,7 +20240,12 @@ func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, ide
     a comment for a clean verdict on a repository (owner/name) on a PR by an
     author (its login, "" when unknown); mine whether a login is one of the
     operator's. It reads magnum's latest round only for a PR whose last review
-    is such a comment.
+    is such a comment, or one the approval's gates turned from an approval into
+    a comment (NoApprovalReviews: its Refused).
+
+func (s *Store) NoApprovalReviews(ctx context.Context) (map[int64]NoApprovalReview, error)
+    NoApprovalReviews reads every PR's KVPRNoApprovalReview record in one query,
+    by PR id (a value that does not parse is left out).
 
 func (s *Store) NotesCritiques(ctx context.Context, f NotesCritiqueFilter) ([]NotesCritique, error)
     NotesCritiques lists the critiques f selects.
@@ -21456,6 +21578,12 @@ type PRBoardRow struct {
 	// only one blocking it; "" otherwise. The state cell says "✔ needs you"
 	// or "✔ lift your ✗" and the updated sort lists it first.
 	NeedsMe string
+	// NeedsMeReason: magnum's clean review of the head is a comment because
+	// the approval's gates refused the approval its identity would have
+	// posted, in the list's words ("approve by hand: the PR changes its own
+	// workflows or actions", store.NeedsMeWords); "" otherwise. The card says
+	// it when no line about the approval as the operator does.
+	NeedsMeReason string
 	// ReviewDecision is GitHub's reviewDecision: APPROVED,
 	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
 	// no review or magnum has not read it yet. tui --json only.

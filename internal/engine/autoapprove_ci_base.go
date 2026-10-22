@@ -17,9 +17,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -60,16 +62,52 @@ func (r baseTipRead) fresh(now time.Time) bool {
 // round: the gates run on every tick until the approval posts).
 func kvAutoApproveCIBase(prID int64) string { return fmt.Sprintf("pr.%d.auto_approve_ci_base", prID) }
 
-// failingCIRefusal is autoGateRefusal's answer for c, whose head's rollup
-// fails, after magnum's round sum: failsLikeTheBase for every check the
-// head's stored checks (pr.CI, read on the head, every one listed) fail and
-// whether any of them still runs (GitHub's rollup fails as soon as one
-// check fails); ciFailsRefusal when it cannot tell (no checks stored for
-// the head, or not every one).
-func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
+// ciAnswer is what the CI gate (ciGateOf) says of a PR's head: why it
+// holds an approval back ("" = it does not; never an error's text: a
+// withdrawal posts it on GitHub), whether that is only checks that still
+// run, which auto-approval waits out (waits), the CI state it decided by
+// (pipeline.CIGreen, CIRunning, CIRedLikeBase, CIRed), and, when every
+// failing check that counts fails on the base tip too, how many (failing)
+// and that tip (base), which auto-approval records once it goes ahead on
+// them (noteCIBase); the gate itself records nothing, so the judge's CI
+// gate (approval_gates.go) reads the same answer.
+type ciAnswer struct {
+	why     string
+	waits   bool
+	state   string
+	failing int
+	base    string
+}
+
+// ciGateOf is the CI gate of c's head: where the repository sets
+// required_checks, the checks it names decide in place of the rollup
+// (requiredCIRefusal: one outside the list neither fails nor runs); else a
+// rollup that fails goes to the base-tip comparison (failingCIRefusal), one
+// that runs waits (ciRunsRefusal), and any other (passed, none) lets it
+// through.
+func (e *Engine) ciGateOf(ctx context.Context, c store.RepoPR) ciAnswer {
+	pr := c.PR
+	if r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(c.Repo)); ok {
+		return e.requiredCIRefusal(ctx, c, r) // autoapprove_required.go: the rollup does not decide
+	}
+	switch strings.ToUpper(deref(pr.CIState)) {
+	case "FAILURE", "ERROR":
+		return e.failingCIRefusal(ctx, c)
+	case "PENDING", "EXPECTED":
+		return ciAnswer{why: ciRunsRefusal, waits: true, state: pipeline.CIRunning}
+	}
+	return ciAnswer{state: pipeline.CIGreen}
+}
+
+// failingCIRefusal is the CI gate's answer for c, whose head's rollup
+// fails: failsLikeTheBase for every check the head's stored checks (pr.CI,
+// read on the head, every one listed) fail and whether any of them still
+// runs (GitHub's rollup fails as soon as one check fails); ciFailsRefusal
+// when it cannot tell (no checks stored for the head, or not every one).
+func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR) ciAnswer {
 	ci := c.PR.CI
 	if ci == nil || ci.SHA != c.PR.HeadSHA || !ci.Complete {
-		return ciFailsRefusal, false
+		return ciAnswer{why: ciFailsRefusal, state: pipeline.CIRed}
 	}
 	var failed []store.CheckResult
 	running := false
@@ -81,38 +119,38 @@ func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR, sum store
 			running = true
 		}
 	}
-	return e.failsLikeTheBase(ctx, c, sum, failed, running)
+	return e.failsLikeTheBase(ctx, c, failed, running)
 }
 
 // failsLikeTheBase is the CI gate's answer for failed, the failing checks
 // of c's head that count (every one, or those required_checks names:
-// requiredCIRefusal), after magnum's round sum: "" when each failed on the
-// base tip (pr.BaseSHA) too, the same check (store.CheckResult.Key), and no
-// check that counts still runs (running); ciRunsRefusal, which waits, when they match
-// but one still runs; ciFailsRefusal otherwise, and when it cannot tell (no
-// failed check, no base tip, a read that failed).
-func (e *Engine) failsLikeTheBase(ctx context.Context, c store.RepoPR, sum store.ReviewSummary, failed []store.CheckResult,
-	running bool) (why string, waits bool) {
+// requiredCIRefusal): through (pipeline.CIRedLikeBase, with their number
+// and the tip) when each failed on the base tip (pr.BaseSHA) too, the same
+// check (store.CheckResult.Key), and no check that counts still runs
+// (running); ciRunsRefusal, which waits, when they match but one still
+// runs; ciFailsRefusal otherwise, and when it cannot tell (no failed
+// check, no base tip, a read that failed).
+func (e *Engine) failsLikeTheBase(ctx context.Context, c store.RepoPR, failed []store.CheckResult, running bool) ciAnswer {
+	red := ciAnswer{why: ciFailsRefusal, state: pipeline.CIRed}
 	base := deref(c.PR.BaseSHA)
 	if len(failed) == 0 || base == "" {
-		return ciFailsRefusal, false
+		return red
 	}
 	checks, ok := e.baseTipChecks(ctx, c, base)
 	if !ok {
-		return ciFailsRefusal, false
+		return red
 	}
 	for _, f := range failed {
 		if !slices.ContainsFunc(checks, func(b github.Check) bool {
 			return checkResult(b).Key() == f.Key() && b.State == github.CheckFailed
 		}) {
-			return ciFailsRefusal, false
+			return red
 		}
 	}
 	if running {
-		return ciRunsRefusal, true
+		return ciAnswer{why: ciRunsRefusal, waits: true, state: pipeline.CIRunning}
 	}
-	e.noteCIBase(ctx, c, sum, len(failed), base)
-	return "", false
+	return ciAnswer{state: pipeline.CIRedLikeBase, failing: len(failed), base: base}
 }
 
 // baseTipChecks is the checks of c's base tip sha, read as its watch's poll
@@ -121,10 +159,16 @@ func (e *Engine) failsLikeTheBase(ctx context.Context, c store.RepoPR, sum store
 // auto-approval's reads, a failed read, logged at info: a reason never
 // carries an error's text). A read GitHub refused for its rate limit is
 // kept until the identity's reset, and a read the daemon's stop cut short
-// is not kept.
+// is not kept. baseMu guards the cache, held for no GitHub read, so a
+// round's judge gate (approval_gates.go) never waits behind auto-approval's
+// writes under autoMu; two reads of one tip at once both go out, and the
+// later one is kept.
 func (e *Engine) baseTipChecks(ctx context.Context, c store.RepoPR, sha string) ([]github.Check, bool) {
 	k, now := baseTip{c.Repo, sha}, e.now()
-	if r, hit := e.baseChecks[k]; hit && r.fresh(now) {
+	e.baseMu.Lock()
+	r, hit := e.baseChecks[k]
+	e.baseMu.Unlock()
+	if hit && r.fresh(now) {
 		return r.checks, r.ok
 	}
 	w := e.cfg.WatchFor(c.Repo)
@@ -150,6 +194,8 @@ func (e *Engine) baseTipChecks(ctx context.Context, c store.RepoPR, sha string) 
 			e.log.Info("auto approval: the base tip's checks", "pr", c.PR.ID, "base", textx.ShortSHA(sha), "err", err)
 		}
 	}
+	e.baseMu.Lock()
+	defer e.baseMu.Unlock()
 	for old, r := range e.baseChecks {
 		if !r.fresh(now) {
 			delete(e.baseChecks, old)

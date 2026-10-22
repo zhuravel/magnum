@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -62,6 +63,12 @@ type NeedsMeFacts struct {
 	// refuse its author: config.Config.CommentsWhenClean), so a clean
 	// comment is its approval.
 	CommentWhenClean bool
+	// Refused is why the approval's gates turned magnum's latest review,
+	// which its identity would have posted as an approval, into a comment
+	// (KVPRNoApprovalReview of that review; the gates' fixed words, "" =
+	// they did not): a clean comment is then its approval too, one only a
+	// person can give.
+	Refused string
 	// Verdict is the verdict of magnum's latest posted round
 	// (ReviewSummary.Verdict); only a comment reads it.
 	Verdict string
@@ -69,16 +76,23 @@ type NeedsMeFacts struct {
 }
 
 // WantsVerdict reports whether NeedsMe reads f.Verdict: magnum's latest
-// review is a comment from an identity that comments when clean.
+// review is a comment from an identity that comments when clean, or one
+// the approval's gates turned from an approval into a comment (Refused).
 func (f NeedsMeFacts) WantsVerdict() bool {
-	return f.CommentWhenClean && reviewEvent(f.LastReviewEvent) == "COMMENTED"
+	return f.cleanCommentCounts() && reviewEvent(f.LastReviewEvent) == "COMMENTED"
 }
+
+// cleanCommentCounts reports whether a clean comment of magnum's stands for
+// its approval: its identity comments when clean, or the approval's gates
+// turned its approval into that comment.
+func (f NeedsMeFacts) cleanCommentCounts() bool { return f.CommentWhenClean || f.Refused != "" }
 
 // NeedsMe is what the operator's approval would fix on a PR magnum approved,
 // "" when nothing: an open PR, not a draft and not authored by one of the
 // operator's logins (mine), whose latest verified magnum review is on the
 // current head and clean (an approval, or a clean comment from an identity
-// that comments when clean), and which GitHub still blocks on a review:
+// that comments when clean or one the approval's gates turned from an
+// approval into a comment: Refused), and which GitHub still blocks on a review:
 // NeedsMeApprove for REVIEW_REQUIRED, NeedsMeLift for CHANGES_REQUESTED when
 // every outstanding changes request is the operator's. Anyone else's changes
 // request, an unread gate or a list of opinions GitHub cut leaves it alone.
@@ -92,7 +106,7 @@ func NeedsMe(f NeedsMeFacts, mine func(login string) bool) string {
 	switch reviewEvent(f.LastReviewEvent) {
 	case "APPROVED":
 	case "COMMENTED":
-		if !f.CommentWhenClean || f.Verdict != VerdictClean {
+		if !f.cleanCommentCounts() || f.Verdict != VerdictClean {
 			return ""
 		}
 	default:
@@ -157,6 +171,78 @@ type NeedsMePR struct {
 	PR      PR
 	Repo    string // owner/name
 	NeedsMe string // NeedsMeApprove or NeedsMeLift
+	// Refused is why magnum's clean review there is a comment, not an
+	// approval: the approval's gates refused it (NeedsMeFacts.Refused); ""
+	// for an approval, or an identity that comments when clean.
+	Refused string
+}
+
+// NeedsMeWords are the needs-you words of a PR whose clean review the
+// approval's gates turned from an approval into a comment, for their
+// reason refused ("" for none): "approve by hand: the PR changes its own
+// workflows or actions", which the toast, the board's card and `magnum tui
+// --json`'s needs_me_reason say.
+func NeedsMeWords(refused string) string {
+	if refused == "" {
+		return ""
+	}
+	return "approve by hand: " + refused
+}
+
+// KVPRNoApprovalReview holds the PR's latest review that magnum's judge
+// posted as a comment although its identity would have approved a clean
+// review, because the approval's gates refused it (the engine's
+// approval_gates.go), with the gates' fixed words (NoApprovalReview.Value):
+// the needs-you list takes that review, when clean, for an approval
+// (NeedsMeFacts.Refused). Any other review magnum posts drops it.
+func KVPRNoApprovalReview(prID int64) string { return fmt.Sprintf("pr.%d.no_approval_review", prID) }
+
+// NoApprovalReview is a KVPRNoApprovalReview record: the review and why the
+// gates refused its approval.
+type NoApprovalReview struct {
+	ReviewID int64
+	Reason   string
+}
+
+// Value is r as KVPRNoApprovalReview holds it: "<review id>|<reason>".
+func (r NoApprovalReview) Value() string { return fmt.Sprintf("%d|%s", r.ReviewID, r.Reason) }
+
+// For is r's reason when r is review reviewID's, "" otherwise (another
+// review came since, or none was recorded).
+func (r NoApprovalReview) For(reviewID int64) string {
+	if reviewID == 0 || r.ReviewID != reviewID {
+		return ""
+	}
+	return r.Reason
+}
+
+// ParseNoApprovalReview reads a KVPRNoApprovalReview value; ok is false for
+// one that names no review or no reason.
+func ParseNoApprovalReview(v string) (NoApprovalReview, bool) {
+	id, reason, found := strings.Cut(v, "|")
+	n, err := strconv.ParseInt(id, 10, 64)
+	if !found || err != nil || n <= 0 || reason == "" {
+		return NoApprovalReview{}, false
+	}
+	return NoApprovalReview{ReviewID: n, Reason: reason}, true
+}
+
+// NoApprovalReviews reads every PR's KVPRNoApprovalReview record in one
+// query, by PR id (a value that does not parse is left out).
+func (s *Store) NoApprovalReviews(ctx context.Context) (map[int64]NoApprovalReview, error) {
+	vals, err := s.KVValues(ctx, "pr.*.no_approval_review")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]NoApprovalReview, len(vals))
+	for k, v := range vals {
+		id, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(k, "pr."), ".no_approval_review"), 10, 64)
+		r, ok := ParseNoApprovalReview(v)
+		if err == nil && ok {
+			out[id] = r
+		}
+	}
+	return out, nil
 }
 
 // NeedsMePRs lists the open PRs that need the operator (NeedsMe), by
@@ -164,7 +250,8 @@ type NeedsMePR struct {
 // a comment for a clean verdict on a repository (owner/name) on a PR by an
 // author (its login, "" when unknown); mine whether a login is one of the
 // operator's. It reads magnum's latest round only for a PR whose last
-// review is such a comment.
+// review is such a comment, or one the approval's gates turned from an
+// approval into a comment (NoApprovalReviews: its Refused).
 func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, identity, author string) bool, mine func(login string) bool) ([]NeedsMePR, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("p", prColumns)+`, r.owner || '/' || r.name
 FROM prs p JOIN repos r ON r.id = p.repo_id
@@ -188,11 +275,16 @@ ORDER BY r.owner, r.name, p.number`, GHOpen)
 	if err != nil {
 		return nil, fmt.Errorf("needs me: %w", err)
 	}
+	refused, err := s.NoApprovalReviews(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("needs me: %w", err)
+	}
 	var ids []int64
 	for i := range list {
 		c := &list[i]
 		c.facts = c.pr.NeedsMeFacts()
 		c.facts.CommentWhenClean = commentsWhenClean != nil && commentsWhenClean(c.repo, c.pr.Identity, Deref(c.pr.AuthorLogin))
+		c.facts.Refused = refused[c.pr.ID].For(Deref(c.pr.LastReviewID))
 		if c.facts.WantsVerdict() {
 			ids = append(ids, c.pr.ID)
 		}
@@ -205,7 +297,7 @@ ORDER BY r.owner, r.name, p.number`, GHOpen)
 	for _, c := range list {
 		c.facts.Verdict = sums[c.pr.ID].Verdict
 		if n := NeedsMe(c.facts, mine); n != "" {
-			out = append(out, NeedsMePR{PR: c.pr, Repo: c.repo, NeedsMe: n})
+			out = append(out, NeedsMePR{PR: c.pr, Repo: c.repo, NeedsMe: n, Refused: c.facts.Refused})
 		}
 	}
 	return out, nil

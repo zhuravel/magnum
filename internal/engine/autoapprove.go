@@ -193,10 +193,8 @@ func autoApproveRefusal(f autoFacts) string {
 	switch {
 	case pr.GHState != store.GHOpen:
 		return "it is " + strings.ToLower(pr.GHState)
-	case pr.IsDraft:
-		return "it is a draft"
-	case pr.Muted:
-		return "it is muted"
+	case prStateRefusal(pr) != "": // a draft, a muted PR (autoapprove_gates.go)
+		return prStateRefusal(pr)
 	case github.SameAccount(github.Account(deref(pr.AuthorLogin), deref(pr.AuthorType)), f.Login):
 		return "it is your own"
 	case pr.State != store.PRReviewed:

@@ -167,3 +167,41 @@ func TestParsePatchReadsHunksOnBothSides(t *testing.T) {
 		t.Error("a binary diff has hunks")
 	}
 }
+
+// A round that cannot approve (the judge gates of spec 09: its prompt's
+// no_findings_event is COMMENT, which post_review passes as
+// --no-findings-event COMMENT) refuses a review file whose event is
+// APPROVE with status invalid, exit 2 and nothing sent to GitHub, so the
+// judge rewrites it; COMMENT and REQUEST_CHANGES go on to the post. A round
+// whose event is APPROVE, and a line without the flag, take every event.
+func TestARoundThatCannotApproveRefusesAnApproveOnly(t *testing.T) {
+	commentOnly := opts()
+	commentOnly.NoFindingsEvent = EventComment
+	_, _, problems := Parse([]byte(review(EventApprove, "No problems found. LGTM :shipit:")), commentOnly)
+	if len(problems) != 1 || !strings.Contains(problems[0], "this round cannot approve, its no-findings event is COMMENT") ||
+		!strings.Contains(problems[0], "post a clean verdict as COMMENT") {
+		t.Fatalf("problems = %q, want the refused APPROVE naming the round's event", problems)
+	}
+	w := newWorld(t)
+	out := w.run(commentOnly, review(EventApprove, "No problems found. LGTM :shipit:"))
+	if out.Status != StatusInvalid || out.ExitCode() != 2 || len(w.fake.Calls) != 0 {
+		t.Fatalf("Run: status %s exit %d after %d calls, want invalid, 2, none", out.Status, out.ExitCode(), len(w.fake.Calls))
+	}
+	for _, ev := range []string{EventComment, EventRequestChanges} {
+		if _, _, problems := Parse([]byte(review(ev, "Blocking: 1 problem must be fixed before merging.")), commentOnly); len(problems) > 0 {
+			t.Errorf("%s with --no-findings-event COMMENT: problems %q", ev, problems)
+		}
+	}
+	approves := opts()
+	approves.NoFindingsEvent = EventApprove
+	for _, o := range []Options{approves, opts()} {
+		if _, _, problems := Parse([]byte(review(EventApprove, "No problems found. LGTM :shipit:")), o); len(problems) > 0 {
+			t.Errorf("APPROVE with no-findings event %q: problems %q", o.NoFindingsEvent, problems)
+		}
+	}
+	odd := opts()
+	odd.NoFindingsEvent = "REQUEST_CHANGES"
+	if err := odd.Check(); err == nil || !strings.Contains(err.Error(), `the no-findings event "REQUEST_CHANGES" is not APPROVE or COMMENT`) {
+		t.Fatalf("Check of no-findings event REQUEST_CHANGES: %v", err)
+	}
+}

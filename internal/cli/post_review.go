@@ -19,16 +19,16 @@ import (
 )
 
 const postReviewUsage = "post-review --repo OWNER/NAME --pr N --head SHA --run-id ID --login LOGIN [--former-login LOGIN]... " +
-	"[--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE | --replies FILE)"
+	"[--gh-config-dir DIR] [--dry-run] [--local-base SHA] [--no-findings-event APPROVE|COMMENT] (--review FILE | --replies FILE)"
 
 // postReviewRunner runs gh and git for post-review; tests replace it.
 var postReviewRunner = func() execx.Runner { return &execx.Real{} }
 
 type postReviewOpts struct {
-	repo, head, runID, login, ghDir, localBase, review, replies string
-	number                                                      int
-	former                                                      []string
-	dryRun                                                      bool
+	repo, head, runID, login, ghDir, localBase, review, replies, noFindings string
+	number                                                                  int
+	former                                                                  []string
+	dryRun                                                                  bool
 }
 
 func newPostReviewCmd(c *Context) *cobra.Command {
@@ -45,7 +45,9 @@ func newPostReviewCmd(c *Context) *cobra.Command {
 			"else posts the review once on --head (JSON on gh's stdin), retrying a refused self-verdict as COMMENT, and reads it "+
 			"back. --dry-run posts nothing and prints the planned review; --local-base (a blind replay, with --dry-run) checks the "+
 			"lines against git diff <SHA> <head> and reads nothing from GitHub. --gh-config-dir is the identity's gh config "+
-			"(empty: your own gh login).\n\n"+
+			"(empty: your own gh login). --no-findings-event is the round's no_findings_event: with COMMENT the round cannot "+
+			"approve, so a review whose event is APPROVE is refused (exit 2) and REQUEST_CHANGES and COMMENT go out as usual; "+
+			"without it any event goes.\n\n"+
 			"--replies is the replies-only mode, for a round whose head is unchanged since magnum's review and where the authors "+
 			"answered its threads: instead of a new review the judge answers in the threads, writing the --replies file as JSON: "+
 			"{\"replies\":[{\"comment_id\":123,\"kind\":\"ack|rebuttal|answer\",\"body\":\"…\"}]} (an empty list is valid). "+
@@ -85,6 +87,7 @@ func newPostReviewCmd(c *Context) *cobra.Command {
 	fs.StringVar(&o.ghDir, "gh-config-dir", "", "the identity's gh config directory (gh_config_dir; empty: your gh login)")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "check everything, post nothing, print the planned review")
 	fs.StringVar(&o.localBase, "local-base", "", "with --dry-run: check the lines against git diff <SHA> <head>; read nothing from GitHub")
+	fs.StringVar(&o.noFindings, "no-findings-event", "", "the round's no_findings_event (APPROVE or COMMENT): COMMENT refuses a review whose event is APPROVE")
 	fs.StringVar(&o.review, "review", "", "the review file the judge wrote (JSON)")
 	fs.StringVar(&o.replies, "replies", "", "the replies file the judge wrote (JSON): answer in the review threads instead of posting a review")
 	_ = cmd.MarkFlagFilename("review", "json")
@@ -113,7 +116,7 @@ func runPostReview(c *Context, o postReviewOpts, pos []string) int {
 		return fail("--repo %q is not owner/name", o.repo)
 	}
 	opts := postreview.Options{Owner: owner, Repo: name, Number: o.number, HeadSHA: o.head, RunID: o.runID,
-		Login: o.login, FormerLogins: o.former, DryRun: o.dryRun, LocalBase: o.localBase}
+		Login: o.login, FormerLogins: o.former, DryRun: o.dryRun, LocalBase: o.localBase, NoFindingsEvent: o.noFindings}
 	if err := opts.Check(); err != nil {
 		return fail("%v", err)
 	}

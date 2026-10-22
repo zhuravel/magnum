@@ -10,6 +10,7 @@ magnum checked out the PR head `{{.HeadSHA}}` (detached) in this directory. {{if
 
 Post-merge review: GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`. Expect `merged == true` instead of `state == open`. Post `COMMENT` whatever you find (`no_findings_event` and `blocking_event` say so), start the body with `**Post-merge review** of <head_sha, 7 chars>:`, write each finding as a follow-up for a new change, not a change to this PR, and say `in a follow-up` instead of `before merging`.
 {{- end}}
+{{- template "no-approval" .}}
 {{- template "review-rules" .}}
 
 <magnum>

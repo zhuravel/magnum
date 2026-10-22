@@ -78,8 +78,12 @@ func (e *Engine) noteNeedsMe(ctx context.Context) {
 		if n.NeedsMe == store.NeedsMeLift {
 			what, why = label+": lift your changes request", "your changes request is the only one blocking it"
 		}
+		body := fmt.Sprintf("%s\nmagnum approved %s; %s.", n.PR.URL, head, why)
+		if n.Refused != "" { // its clean review is a comment: the approval's gates refused it (approval_gates.go)
+			body = fmt.Sprintf("%s\nmagnum found nothing to fix in %s; %s.", n.PR.URL, head, store.NeedsMeWords(n.Refused))
+		}
 		e.info(notify.Item{Key: key, Title: "magnum: " + what,
-			Body: fmt.Sprintf("%s\nmagnum approved %s; %s.", n.PR.URL, head, why),
+			Body: body,
 			Line: what + " " + n.PR.URL, Kind: kindNeedsMe, Window: needsMeToastWindow})
 	}
 	for k := range e.needsMe {

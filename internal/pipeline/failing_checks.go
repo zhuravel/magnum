@@ -53,16 +53,13 @@ func (rd *round) failingChecks(ci *store.CIStatus) FailingChecks {
 
 // addFailingChecks writes failing-checks.json for the judge prompt about to
 // go out and names it in jd, when a check of the head under review failed,
-// from the registry's latest read of the PR (the round's input when that
-// read fails); a blind replay, which reads no CI result, gets none. A
-// failure to write leaves the prompt without it (a warning).
-func (rd *round) addFailingChecks(ctx context.Context, jd *agents.JudgeData) {
+// from pr, the registry's latest read of the PR (registryPR: the round's
+// input when that read fails), the read the approval's CI gate decides
+// from too (applyCIGate); a blind replay, which reads no CI result, gets
+// none. A failure to write leaves the prompt without it (a warning).
+func (rd *round) addFailingChecks(ctx context.Context, jd *agents.JudgeData, pr store.PR) {
 	if rd.in.Blind || rd.r.Store == nil {
 		return
-	}
-	pr := rd.in.PR
-	if cur, err := rd.r.Store.PRByID(ctx, pr.ID); err == nil {
-		pr = cur
 	}
 	fc := rd.failingChecks(pr.CI)
 	if len(fc.Checks) == 0 {

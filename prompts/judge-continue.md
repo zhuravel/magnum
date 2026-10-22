@@ -1,4 +1,5 @@
 {{template "skill" .}} The pause is over. Continue the run for {{.URL}} where you stopped. First list the reviews by `{{.ReviewerLogin}}` on this PR. If one already contains `magnum:run={{.RunID}}`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `{{.HeadSHA}}`.
+{{- template "no-approval" .}}
 {{- template "notes-line-limit" .}}
 
 <magnum>

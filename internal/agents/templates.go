@@ -268,8 +268,10 @@ type JudgeData struct {
 	GhConfigDir   string // "" for the gh identity
 	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
 	// of the round left no usable report or the auto-approval author lists
-	// refuse the PR's author (pipeline.JudgeEvents), or the round holds its
-	// approval for a full pass (HoldApproval).
+	// refuse the PR's author (pipeline.JudgeEvents), the round holds its
+	// approval for a full pass (HoldApproval), or the approval's gates
+	// refuse it (NoApproval). The post_review line passes the same value as
+	// --no-findings-event (PostReviewLine).
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
@@ -377,6 +379,14 @@ type JudgeData struct {
 	// full pass of the whole PR follows before the approval. Rendered as
 	// one instruction, with the body line a clean verdict adds, only then.
 	HoldApproval bool
+	// NoApproval (initial, rereview, recovery, continue): why the round
+	// cannot approve although its identity would (pipeline.RoundInput:
+	// NoApproval, the gates decided at dispatch, else CIGate's refusal when
+	// the prompt is written), in a few fixed words that never carry PR text
+	// ("the PR changes its own workflows or actions"); NoFindingsEvent is
+	// then COMMENT. Rendered as one instruction beside the events, only
+	// then; "" = none.
+	NoApproval string
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string

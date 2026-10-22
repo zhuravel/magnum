@@ -510,6 +510,12 @@ func TestRenderGolden(t *testing.T) {
 	// pass follows before the approval, in the judge's session or a fresh one.
 	holdApproval := judgeFixture()
 	holdApproval.HoldApproval, holdApproval.NoFindingsEvent = true, "COMMENT"
+	// The approval's gates refuse the round (spec 09): a PR that changes
+	// its own workflows, in a repository whose judge approves a clean
+	// review. Every posting prompt says why in fixed words, beside the
+	// events, and its post_review line carries the same COMMENT.
+	noApproval := judgeFixture()
+	noApproval.NoApproval, noApproval.NoFindingsEvent = "the PR changes its own workflows or actions", "COMMENT"
 	ownBlind := ownPass("initial")
 	ownBlind.DryRun, ownBlind.Blind = true, true
 	ownDryRun := ownPass("initial")
@@ -609,6 +615,10 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_full_pass", "judge-recovery.md", fullPass},
 		{"judge_recovery_audit", "judge-recovery.md", audit},
 		{"judge_rereview_hold_approval", "judge-rereview.md", holdApproval},
+		{"judge_initial_no_approval", "judge-initial.md", noApproval},
+		{"judge_rereview_no_approval", "judge-rereview.md", noApproval},
+		{"judge_recovery_no_approval", "judge-recovery.md", noApproval},
+		{"judge_continue_no_approval", "judge-continue.md", noApproval},
 		{"judge_recovery_hold_approval", "judge-recovery.md", holdApproval},
 		{"judge_recovery_full_pass_candidates", "judge-recovery.md", candidates(fullPass)},
 		{"judge_own_pass_recovery_full_pass", "judge-own-pass.md", ownFullPass},

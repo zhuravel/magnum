@@ -94,7 +94,11 @@ type prsJSONRow struct {
 	// NeedsMe: magnum approved the head, but GitHub still blocks the PR on
 	// your approval: "approve" (a review that counts is required), "lift"
 	// (your changes request is the only one); "" otherwise.
-	NeedsMe        string `json:"needs_me"`
+	NeedsMe string `json:"needs_me"`
+	// NeedsMeReason: magnum's clean review there is a comment because the
+	// approval's gates refused its approval, in the list's words ("approve
+	// by hand: the PR changes its own workflows or actions"); "" otherwise.
+	NeedsMeReason  string `json:"needs_me_reason"`
 	ReviewDecision string `json:"review_decision"` // GitHub's: APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED; "" when none is required or not read yet
 	// AutoApproved is the approval magnum posted as you that stands
 	// ([[watch]] auto_approve); null when none. AutoApproveStopped is why
@@ -322,7 +326,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Whiteboard:    mapPtr(r.Whiteboard, func(w tui.PRWhiteboard) prsJSONWhiteboard { return prsJSONWhiteboard{Session: w.Session, Head: w.Head} }),
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
-		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped, AutoApproveRefused: r.AutoRefused,
+		NeedsMe: r.NeedsMe, NeedsMeReason: r.NeedsMeReason, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped, AutoApproveRefused: r.AutoRefused,
 		AutoApproved: mapPtr(r.AutoApproved, func(a tui.AutoApproval) prsJSONAutoApproval {
 			return prsJSONAutoApproval{ReviewID: a.ReviewID, Head: a.Head, URL: a.URL, At: a.At}
 		}),

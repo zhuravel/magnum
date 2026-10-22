@@ -89,7 +89,7 @@ func TestHappyPathInitialRound(t *testing.T) {
 		"result_file: "+filepath.Join(dir, "codex-judge.json"), "dry_run: false",
 		// The judge posts through this build's post-review, as the round's identity.
 		"post_review: "+e.r.Layout.Binary()+" post-review --repo talkable/talkable --pr 11920 --head "+target+" --run-id "+judgeRun.ID+
-			" --login 'talkable[bot]' --gh-config-dir /state/gh/talkable-app --review "+filepath.Join(dir, "review.json")+"\n")
+			" --login 'talkable[bot]' --gh-config-dir /state/gh/talkable-app --no-findings-event COMMENT --review "+filepath.Join(dir, "review.json")+"\n")
 	if res.JudgeRunID != judgeRun.ID {
 		t.Errorf("JudgeRunID = %q, want %q", res.JudgeRunID, judgeRun.ID)
 	}

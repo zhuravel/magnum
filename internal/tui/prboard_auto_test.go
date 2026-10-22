@@ -164,3 +164,28 @@ func TestTheCardSaysAutoApprovalIsOffForAnAuthorOutsideTheAllowlist(t *testing.T
 		}
 	}
 }
+
+// A PR whose clean review the approval's gates turned from an approval into
+// a comment needs you all the same: its row shows "needs you", and its card
+// says why only a person can approve it ("approve by hand: the PR changes
+// its own workflows or actions"), unless a line about the approval as you
+// says why already.
+func TestTheCardSaysToApproveByHandWhenTheGatesRefusedTheJudge(t *testing.T) {
+	const words = "approve by hand: the PR changes its own workflows or actions"
+	m, _, _ := newBoard(t, 170, 40, PRBoardOptions{})
+	gated := actPR(func(r *PRBoardRow) {
+		r.ActivityAt, r.NeedsMe, r.NeedsMeReason = ago(time.Hour), NeedsMeApprove, words
+		r.ApproveAs = &ApproveAs{Identity: "zhuravel", Login: "zhuravel"}
+	})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{gated}})
+	mustContain(t, viewOf(m), "needs you")
+	c, _ := send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(c), words)
+
+	both := gated
+	both.AutoRefused = "the PR changes its own workflows or actions: approve by hand"
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{both}})
+	c, _ = send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(c), "magnum does not approve it as you: the PR changes its own workflows or actions")
+	mustNotContain(t, viewOf(c), words)
+}

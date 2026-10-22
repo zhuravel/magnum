@@ -107,22 +107,24 @@ func (e *Engine) approvalHoldDue(ctx context.Context, job *roundJob, rs *roundSe
 
 // approvalPath reports whether a clean review of job's PR can lead to an
 // approval: the judge's no-findings event there is APPROVE
-// (pipeline.JudgeEvents: the [[repo]] override, else the posting
-// identity's, COMMENT for an author the auto-approval lists refuse), or
-// magnum approves the repository's PRs as the operator
+// (judgeApproves), or magnum approves the repository's PRs as the operator
 // (config.Config.AutoApproveFor). Without either a clean verdict posts as
 // a comment anyway, and a hold would only add a full pass that cannot
 // approve and a false line to the review.
 func (e *Engine) approvalPath(job *roundJob, rs *roundSetup) bool {
-	full := job.repo.FullName()
-	if e.cfg.AutoApproveFor(full) != nil {
-		return true
-	}
+	return e.cfg.AutoApproveFor(job.repo.FullName()) != nil || e.judgeApproves(job, rs)
+}
+
+// judgeApproves reports whether the judge of job's round posts a clean
+// review as an APPROVE (pipeline.JudgeEvents: the [[repo]] override, else
+// the posting identity's, COMMENT for an author the auto-approval lists
+// refuse).
+func (e *Engine) judgeApproves(job *roundJob, rs *roundSetup) bool {
 	id := e.cfg.IdentityByName(job.pr.Identity)
 	if id == nil && rs.src != nil { // the round runner's fallback (pipeline Runner.identityConfig)
 		id = &config.Identity{Name: rs.src.Name(), Kind: rs.src.Kind(), Login: rs.src.Login()}
 	}
-	nf, _ := pipeline.JudgeEvents(e.cfg, full, id, deref(job.pr.AuthorLogin), false)
+	nf, _ := pipeline.JudgeEvents(e.cfg, job.repo.FullName(), id, deref(job.pr.AuthorLogin), false)
 	return nf == "APPROVE"
 }
 

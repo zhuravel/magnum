@@ -12202,6 +12202,96 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Rejected: counting a heavy job only while it runs (between two jobs the CLI could find nothing in flight), a kv
   mark per kind of work, and holding the heavy worker during a drain (a release a closed PR needs would wait for the
   restart).
+- **The judge's own approval passes the approval's gates** (2026-10-23, spec 09 of the 2026-10-22 run). When a
+  review finds nothing the judge posts the posting identity's `no_findings_event`, and where that is APPROVE the
+  judge approves: a gh identity's default (`magnum init` without an App writes that setup) and a `[[repo]]` override,
+  which three repositories of the operator's config set, talkable/talkable, talkable/talkable-proxies and a third,
+  private one. The approval as the operator passes the gates of autoapprove_gates.go (a draft, a muted PR, one its
+  watch would not review on its own, one that changes its own workflows or actions or what steers the review agents
+  or whose file list is cut, CI); the judge's passed none, and `JudgeEvents` dropped it to COMMENT only for a
+  post-merge round, a self-authored one, a missing report, the auto-approval author lists and the full-pass hold.
+  Measured read-only on 2026-10-22: in talkable/talkable the App's approval does not count toward the ruleset's one
+  required approving review (talkable#12056 carries the App's APPROVED review, no human approval, and GitHub's
+  reviewDecision is REVIEW_REQUIRED; talkable#12042 shows the App's approval beside CHANGES_REQUESTED; the App has
+  `contents: read`, and GitHub counts approvals from accounts with write access), talkable/talkable-proxies has the
+  same ruleset, and the third repository, private on a free plan, enforces no review at all. So for the operator the
+  App's approval on a PR that changes its own workflows, carries red CI or is a draft was a misleading green signal,
+  and for an install whose judge posts as a gh login, or as an App with `contents: write`, a real approval nothing
+  checked. Now (internal/engine/approval_gates.go, internal/pipeline/approval_gates.go):
+  - A round whose judge would approve a clean review (`judgeApproves`; never a post-merge review, an eval replay, a
+    dry run or a round of the operator's own PR, which comment anyway) is held, at its dispatch, to the gates that
+    need no review, by the same functions as the approval as the operator (`prStateRefusal`, `watchRefusal`,
+    `changedFilesRefusal`, factored out of `autoApproveRefusal` and `autoGateRefusal`, no second copy of a rule):
+    `pipeline.RoundInput.NoApproval` carries the refusal in the judge prompt's fixed words ("the PR changes its own
+    workflows or actions"; never a path or another word of the PR's), and a continue keeps the paused round's
+    (`pr.<id>.no_approval_round`, as the hold's record).
+  - The CI gate decides when the judge's prompt is written, through `RoundInput.CIGate`, an engine callback like
+    `RestartJudge`, from the registry read the judge's failing-checks.json comes from, so the judge and the gate see
+    one CI; a continue's prompt decides it again. Red CI that does not fail the way the base branch's tip fails
+    refuses; checks that still run, pass, or fail as the tip's do let the APPROVE through, and a registry that holds
+    a newer head's checks than the round's target says `unknown` and lets it through too.
+  - A refusal makes the no-findings event COMMENT, whatever the identity. The prompt's `no_findings_event` and its
+    `post_review` line's new `--no-findings-event` render from that one value (`agents.PostReviewLine`), so a continue
+    that decides again can never leave them disagreeing, and with COMMENT `post-review` refuses a review file whose
+    event is APPROVE (exit 2, a message naming the round's event), while REQUEST_CHANGES and COMMENT go out. The
+    prompt says why in one instruction beside the events (`JudgeData.NoApproval`, the `no-approval` block of the
+    initial, rereview, recovery and continue prompts).
+  - One `round.approval_refused` info event per head and reason (`pr.<id>.judge_approval_refused`) says why in the
+    prompt's words; a CI refusal's data carries `ci`, the CI state the gate decided by. The judge's `round.judge`
+    event carries `ci_gate` (`green`, `running`, `red-like-base`, `red`, `unknown`) whenever the gate was asked, and
+    `no_approval` with a refusal, so a later run can count the App approvals posted while CI ran that then went red.
+    The needs-you list (`store.NeedsMe`) takes such a clean comment for an approval too, as it does an identity's
+    that comments when clean: magnum found nothing and a person must approve by hand, which is what the list is for
+    (the App's approval never counted toward the required review here). The round's result carries the refusal its
+    judge's prompt applied (`RoundResult.NoApproval`), the posted review keeps it (`pr.<id>.no_approval_review`,
+    "<review id>|<reason>", dropped by any other review magnum posts), and a PR whose latest review it names is
+    listed with the gates' reason in the list's words: "approve by hand: the PR changes its own workflows or
+    actions" on the board's card, in the toast and as `needs_me_reason` in `magnum tui --json`. Tests:
+    TestAWorkflowChangingPRReviewedCleanNeedsYouWithTheGatesReason in engine,
+    TestNeedsMePRsTakesACleanCommentTheGatesAskedForAsAnApproval and two cases of
+    TestNeedsMeDecidesWhatTheOperatorsApprovalWouldFix in store, TestTheBoardListsACleanCommentTheGatesAskedForAsNeedingYou
+    in cli and TestTheCardSaysToApproveByHandWhenTheGatesRefusedTheJudge in tui.
+  - Two prerequisites. The base tips' checks the CI gate reads (`baseChecks`) have their own lock, `baseMu`, held for
+    no GitHub read, and auto-approval's GitHub budget (`autoRetry`, `autoHeld`, `autoPollPaused`) one of its own,
+    `budgetMu`, which the base tip's read asks: before both lived under `autoMu`, which auto-approval holds across its
+    writes as the operator (up to gh's 2-minute timeout), and a round's setup and judge prompt must never wait behind
+    one. And `failsLikeTheBase` decides only (`ciGateOf`'s `ciAnswer`: why, waits, the state, the failing checks and
+    the tip), while the approval as the operator records `review.auto_approve_ci_base` ("the approval goes ahead")
+    itself once it goes ahead, so the judge's gate reads the decision without that record.
+  - Which moment's CI the gate uses was the spec's open question (its second stop condition), settled by the
+    operator on 2026-10-23: when the judge's prompt is written, running checks let through (option C). From the
+    registry: of 581 reviews posted since 10-01, a round took a median of 30 minutes from its dispatch to its posted
+    review (90th percentile 55) and 11 minutes from its judge's prompt (90th percentile 23); magnum does not wait for
+    CI before it dispatches. Of the 36 approvals posted since 09-15 whose reviewed head was still the PR's head, with
+    every check listed:
+
+    | CI at dispatch | CI at posting | approvals |
+    |---|---|---|
+    | green | green | 27 |
+    | red | red | 1 |
+    | running | green | 5 |
+    | running | still running | 3 |
+
+    That sample cannot show CI that ran at dispatch and was red at posting: red CI usually brings a push, which
+    drops the PR from it. The risk option C accepts is an APPROVE on checks that still run when the prompt is
+    written and fail later, which `ci_gate` = `running` lets a later run count.
+  - Rejected: (A) deciding the CI gate at dispatch with running checks let through (the spec's shape, a string on
+    the round's input, but the widest window: 30 minutes against 11); (B) at dispatch with running checks refusing,
+    as the approval as the operator waits for them (8 of the 36 approvals would have been comments, 5 of them on
+    heads green by posting time, and nothing reviews a head again when its CI turns green, so those approvals would
+    never come); (D) at posting time, in `post-review` (it reads no config and no registry, so it would need a second
+    copy of the CI rule, the base tip's comparison and required_checks); dismissing an approval after it posted (with
+    post-review's refusal only a judge that bypasses post-review posts one, and the skill forbids that).
+  - Tests, failing first: TestTheJudgesApprovalIsHeldToTheGatesDecidedAtDispatch (the CI workflow, a local action,
+    .claude/, an AGENTS.md, a draft on request, a cut file list, as the App and a gh identity; a clean PR carries no
+    refusal; one event per head), TestARoundThatCannotApproveAnywayIsHeldToNoGate, TestAContinueKeepsTheDispatchGatesAnswer,
+    TestTheJudgesCIGateRefusesOnlyRedCIUnlikeTheBase, TestTheJudgesCIGateNeverWaitsBehindAnApprovalWrite and
+    TestTheCIGateDecisionIsSplitFromItsRecord in engine, with the two kv keys pinned;
+    TestTheApprovalsGatesTurnAJudgesCleanReviewIntoAComment, TestTheCIGateDecidesWhenTheJudgesPromptIsWritten,
+    TestAContinueWhoseCIChangedDecidesTheCIGateAgain and TestPostMergeAndSelfAuthoredRoundsKeepTheirCommentAndAskNoGate
+    in pipeline (a fake judge that posts the event its prompt names and checks its post_review line names the same);
+    TestARoundThatCannotApproveRefusesAnApproveOnly in postreview; TestPostReviewRefusesAnApproveTheRoundCannotPost in
+    cli; the judge prompts' goldens with the `no-approval` block, and every post_review line's new flag.
 
 ## Learned rules
 

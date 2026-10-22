@@ -60,6 +60,12 @@ type Options struct {
 	// `git diff LocalBase HeadSHA` in the checkout and read nothing from
 	// GitHub, whose pull request may have moved on since HeadSHA.
 	LocalBase string
+	// NoFindingsEvent is the round's no-findings event, the judge prompt's
+	// no_findings_event (EventApprove or EventComment; "" = not given, any
+	// event goes): with EventComment the round cannot approve, so Parse
+	// refuses a review whose event is EventApprove, and the judge rewrites
+	// its file. REQUEST_CHANGES stays the judge's to post either way.
+	NoFindingsEvent string
 }
 
 var (
@@ -85,6 +91,8 @@ func (o Options) Check() error {
 		return fmt.Errorf("the local base %q is not a full commit id", o.LocalBase)
 	case o.LocalBase != "" && !o.DryRun:
 		return errors.New("a local base is for a dry run only")
+	case o.NoFindingsEvent != "" && o.NoFindingsEvent != EventApprove && o.NoFindingsEvent != EventComment:
+		return fmt.Errorf("the no-findings event %q is not APPROVE or COMMENT", o.NoFindingsEvent)
 	}
 	return nil
 }

@@ -19,10 +19,17 @@ const PostRepliesFile = "replies.json"
 // (JudgeData.PostReviewCommand, `post_review` in the <magnum> block):
 // `magnum post-review` with the run's facts as flags, each value
 // shell-quoted. --gh-config-dir only for an identity with its own gh
-// config; --dry-run in a dry run; --local-base (the base the blind replay's
-// diff starts at) in a blind one, so the tool reads nothing from GitHub.
+// config; --dry-run in a dry run; --no-findings-event, the round's
+// no-findings event, from the value the prompt's no_findings_event shows
+// (d.NoFindingsEvent), so the two never disagree and post-review refuses
+// an APPROVE the round cannot post; --local-base (the base the blind
+// replay's diff starts at) in a blind one, so the tool reads nothing from
+// GitHub.
 func PostReviewLine(d JudgeData) string {
 	args := postArgs(d)
+	if d.NoFindingsEvent != "" {
+		args = append(args, "--no-findings-event", d.NoFindingsEvent)
+	}
 	if d.DryRun && d.Blind && d.BaseSHA != "" {
 		args = append(args, "--local-base", d.BaseSHA)
 	}

@@ -77,6 +77,13 @@ type roundJob struct {
 	// planApprovalHold, at the round's setup): its clean verdict posts as a
 	// comment and a full pass of the whole PR follows; "" = it may approve.
 	approvalHold string
+	// noApproval says why the round cannot approve by the approval's gates
+	// decided at dispatch (approval_gates.go: planApprovalGates, at the
+	// round's setup), the judge prompt's fixed words; "" = they let it.
+	// ciGated: the round's judge asks the CI gate when its prompt is
+	// written (pipeline.RoundInput.CIGate).
+	noApproval string
+	ciGated    bool
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it

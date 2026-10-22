@@ -411,6 +411,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 		}
 		mine := textx.MatchLogins(self)
+		refused, _ := st.NoApprovalReviews(ctx) // a registry that cannot say counts no gate's comment
 		for i, r := range rows {
 			if r.ReviewGate != nil {
 				out[i].ReviewDecision = r.ReviewGate.Decision
@@ -418,7 +419,10 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			nf := r.NeedsMeFacts()
 			nf.CommentWhenClean = cfg.CommentsWhenClean(r.Owner+"/"+r.Name, r.Identity, r.Author)
 			nf.Verdict = sums[r.PRID].Verdict
-			out[i].NeedsMe = store.NeedsMe(nf, mine)
+			nf.Refused = refused[r.PRID].For(sums[r.PRID].ReviewID) // magnum's latest posted round's review
+			if out[i].NeedsMe = store.NeedsMe(nf, mine); out[i].NeedsMe != "" {
+				out[i].NeedsMeReason = store.NeedsMeWords(nf.Refused)
+			}
 		}
 		_ = prsAutoApprovals(ctx, st, ids, out) // a registry that cannot say leaves them out rather than the board
 

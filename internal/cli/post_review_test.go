@@ -43,6 +43,40 @@ func TestPostReviewRunsTheJudgesLine(t *testing.T) {
 	}
 }
 
+// The judge's line of a round that cannot approve (no_findings_event
+// COMMENT, rendered as --no-findings-event COMMENT) refuses a review file
+// whose event is APPROVE: status invalid, exit 2, nothing asked of GitHub;
+// REQUEST_CHANGES and COMMENT go on to the post (a dry run here).
+func TestPostReviewRefusesAnApproveTheRoundCannotPost(t *testing.T) {
+	for event, want := range map[string]int{"APPROVE": 2, "REQUEST_CHANGES": 0, "COMMENT": 0} {
+		t.Run(event, func(t *testing.T) {
+			f := fakePostReview(t)
+			dir := t.TempDir()
+			d := agents.JudgeData{Owner: "talkable", Repo: "talkable", Number: 5, HeadSHA: postReviewHead, RunID: "r-20261006T120000-7",
+				ReviewerLogin: "talkable[bot]", DryRun: true, NoFindingsEvent: "COMMENT", ResultFile: filepath.Join(dir, "codex-judge.json")}
+			line, err := agents.RenderPrompt(config.Prompt{Name: "line", Text: "{{.PostReviewCommand}}"}, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(line, " --no-findings-event COMMENT ") {
+				t.Fatalf("line = %s: want the round's no-findings event", line)
+			}
+			body := `{"event":"` + event + `","body":"No problems found. LGTM :shipit:","comments":[]}`
+			if err := os.WriteFile(filepath.Join(dir, "review.json"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, out, errb := bareContext(t)
+			code := execute(c, shellWords(t, line)[1:])
+			if code != want {
+				t.Fatalf("exit %d, want %d\nstdout: %s\nstderr: %s", code, want, out, errb)
+			}
+			if want == 2 && (!strings.Contains(out.String(), `"status": "invalid"`) || !strings.Contains(out.String(), "this round cannot approve") || len(f.Calls) != 0) {
+				t.Fatalf("stdout = %s after %d calls: want the refused APPROVE and no call", out, len(f.Calls))
+			}
+		})
+	}
+}
+
 // shellWords splits a line the way a POSIX shell does for the quoting
 // agents.shellQuote produces: plain words and single-quoted runs.
 func shellWords(t *testing.T, line string) []string {

@@ -85,7 +85,12 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	rd.addDeltaCheck(ctx, &jd)
 	rd.addAudit(ctx, &jd) // audit.go
 	rd.addRelated(ctx, &jd)
-	rd.addFailingChecks(ctx, &jd)
+	cur := rd.registryPR(ctx) // one read of its checks: the failing checks' and the CI gate's
+	rd.addFailingChecks(ctx, &jd, cur)
+	ciGate := rd.applyCIGate(ctx, &jd, cur) // approval_gates.go
+	rd.mu.Lock()
+	rd.res.NoApproval = jd.NoApproval // the review this prompt posts is a comment the gates asked for
+	rd.mu.Unlock()
 	rd.addProjectDeclined(ctx, &jd)
 	rd.ownPassPhase(&jd)
 	rd.snapshotNotes()
@@ -104,17 +109,26 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	full, commentOnly := rd.owner+"/"+rd.name, in.PostMerge || jd.SelfAuthored
 	usual, _ := JudgeEvents(rd.r.Config, full, &rd.idCfg, rd.author(), commentOnly)
 	if usual != jd.NoFindingsEvent {
-		if missing := missingReports(jd.Reports); len(missing) > 0 || !in.HoldApproval {
+		switch missing := missingReports(jd.Reports); {
+		case len(missing) > 0:
 			msg += fmt.Sprintf("; no %s this round, a report is missing: %s", usual, strings.Join(missing, ", "))
-		} else {
+		case in.HoldApproval:
 			msg += fmt.Sprintf("; no %s this round: a full pass of the whole PR follows before approval (approve_after_full_pass)", usual)
+		default:
+			msg += fmt.Sprintf("; no %s this round: %s", usual, jd.NoApproval)
 		}
 	}
 	if policy, _ := rd.r.Config.VerdictsFor(full, &rd.idCfg); !commentOnly && policy != usual {
 		msg += fmt.Sprintf("; no %s: the auto-approval author lists (auto_approve_skip_authors, auto_approve_authors) keep this author's PRs from an approval", policy)
 	}
-	rd.event(ctx, "info", "round.judge", msg,
-		map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports, "no_findings_event": jd.NoFindingsEvent, "phase": jd.Phase})
+	data := map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports, "no_findings_event": jd.NoFindingsEvent, "phase": jd.Phase}
+	if jd.NoApproval != "" {
+		data["no_approval"] = jd.NoApproval
+	}
+	if ciGate != "" {
+		data["ci_gate"] = ciGate // the CI state the approval's CI gate decided by
+	}
+	rd.event(ctx, "info", "round.judge", msg, data)
 	markers := []string{marker}
 	if marker != run.ID {
 		markers = append(markers, run.ID)
@@ -847,8 +861,9 @@ const PostMergeEvent = "COMMENT"
 
 // noApproveEvent is the no-findings event of a round that lacks a reviewer's
 // report or whose author the auto-approval author lists refuse
-// (JudgeEvents), or that holds its approval for a full pass
-// (RoundInput.HoldApproval).
+// (JudgeEvents), that holds its approval for a full pass
+// (RoundInput.HoldApproval), or that the approval's gates refuse
+// (RoundInput.NoApproval, RoundInput.CIGate).
 const noApproveEvent = "COMMENT"
 
 // JudgeEvents are the review events the judge's prompt names for a round of
@@ -899,6 +914,10 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	if in.HoldApproval {
 		nf = noApproveEvent // the approval waits for a full pass of the whole PR (RoundInput.HoldApproval)
 	}
+	noApproval := ""
+	if in.NoApproval != "" && nf == approveEvent {
+		nf, noApproval = noApproveEvent, in.NoApproval // the approval's gates refuse it (RoundInput.NoApproval)
+	}
 	skill := config.SkillPath(rd.judge.Skill, rd.r.Layout) // config.Defaults keeps {{repo}} unexpanded
 	base := in.BaseRef
 	if base == "" {
@@ -921,6 +940,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
 		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), CIRed: rd.ciRed(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile, TicketFile: rd.ticketFile,
 		PrepassFile: rd.prepassFile, ColdJudge: cold, FullPass: in.FullPass && in.Kind == KindRecovery, HoldApproval: in.HoldApproval,
+		NoApproval:  noApproval,
 		EvidenceMap: rd.evidenceMap(), Stakes: rd.r.Config.StakesFor(rd.owner + "/" + rd.name),
 		MaxSimplifications: rd.r.Config.MaxSimplificationsFor(rd.owner + "/" + rd.name),
 	}

@@ -36,6 +36,7 @@ Only the commits since your last review changed ({{.DeltaLines}} {{if eq .DeltaL
 {{- template "simplify" .}}
 {{- template "post-merge-rereview" .}}
 {{- template "hold-approval" .}}
+{{- template "no-approval" .}}
 {{- template "review-rules" .}}
 
 <magnum>

@@ -299,6 +299,8 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add(p.st.Dim.Render(truncate(line, inner))) // the operator's own setting, not a hold to clear
 	} else if r.AutoRefused != "" && r.AutoApproved == nil {
 		add(p.pal.yellow.Render(truncate("magnum does not approve it as you: "+oneLine(r.AutoRefused), inner)))
+	} else if r.NeedsMe != "" && r.NeedsMeReason != "" { // its clean review is a comment the approval's gates asked for
+		add(p.pal.yellow.Render(truncate(oneLine(r.NeedsMeReason), inner)))
 	}
 	if r.NeedsMe != "" && r.ApproveAs == nil { // A refuses: no auto_approve_as to approve as
 		add(p.pal.yellow.Render(truncate(onlyYourApproval(rowActDefs[actBrowser].key), inner)))

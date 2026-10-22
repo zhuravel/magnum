@@ -80,6 +80,15 @@ func TestNeedsMeDecidesWhatTheOperatorsApprovalWouldFix(t *testing.T) {
 		{"a comment whose verdict is unknown", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.CommentWhenClean = "COMMENTED", true
 		}, ""},
+		// The approval's gates turned the approval of an identity that
+		// approves when clean into a comment (spec 09): a clean one still
+		// needs the operator's approval by hand.
+		{"a clean comment the approval's gates asked for", func(f *NeedsMeFacts) {
+			f.LastReviewEvent, f.Verdict, f.Refused = "COMMENTED", VerdictClean, "the PR changes its own workflows or actions"
+		}, NeedsMeApprove},
+		{"a non-blocking comment the gates asked for", func(f *NeedsMeFacts) {
+			f.LastReviewEvent, f.Verdict, f.Refused = "COMMENTED", VerdictNonBlocking, "the PR changes its own workflows or actions"
+		}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := base()
@@ -247,5 +256,68 @@ func TestNeedsMePRsListsThePRsWaitingForTheOperator(t *testing.T) {
 	}
 	if got[0].PR.ID != approved || got[1].PR.ID != lift || got[2].PR.ID != clean || got[3].PR.ID != refused {
 		t.Fatalf("ids %d %d %d %d", got[0].PR.ID, got[1].PR.ID, got[2].PR.ID, got[3].PR.ID)
+	}
+}
+
+// A clean comment of an identity that approves when clean counts for the
+// needs-you list when the approval's gates turned its approval into that
+// comment (KVPRNoApprovalReview names the PR's latest review): the entry
+// carries the gates' reason, and NeedsMeWords says it as the list does. A
+// record of an earlier review, one that does not parse, and a PR without
+// one leave the comment out, as before.
+func TestNeedsMePRsTakesACleanCommentTheGatesAskedForAsAnApproval(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	required := &ReviewGate{Decision: "REVIEW_REQUIRED", Opinions: []LatestReview{}, Complete: true}
+	const why = "the PR changes its own workflows or actions"
+	add := func(n int, record string) int64 {
+		t.Helper()
+		head := "h" + strconv.Itoa(n)
+		res, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_" + head, Number: n, URL: "https://github.com/talkable/talkable/pull/" + head,
+			HeadSHA: head, GHState: GHOpen, AuthorLogin: new("alice"), ReviewGate: required, InitialState: PRReviewed, Identity: "talkable-app"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := res.PR.ID
+		if err := st.UpdatePR(ctx, id, func(u *PRUpdate) {
+			u.Set("reviewed_sha", head)
+			u.Set("last_review_event", "COMMENTED")
+			u.Set("last_review_id", 900+int64(n))
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.DB().ExecContext(ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login, state, outcome, review_id, prompt_text, result_json, created_at)
+			VALUES (?, ?, 1, 'codex-judge', 'initial', ?, 'talkable-app', 'talkable[bot]', 'verified', 'posted', ?, 'p', '{"event":"COMMENT","verdict":"clean","findings":{}}', ?)`,
+			"r-"+head, id, head, 900+n, FormatTime(t0)); err != nil {
+			t.Fatal(err)
+		}
+		if record != "" {
+			if err := st.SetKV(ctx, KVPRNoApprovalReview(id), record); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	gated := add(1, NoApprovalReview{ReviewID: 901, Reason: why}.Value())
+	add(2, NoApprovalReview{ReviewID: 800, Reason: why}.Value()) // an earlier review's record
+	add(3, "garbage")
+	add(4, "")
+	approves := func(string, string, string) bool { return false }
+	got, err := st.NeedsMePRs(ctx, approves, mineZhuravel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].PR.ID != gated || got[0].NeedsMe != NeedsMeApprove || got[0].Refused != why {
+		t.Fatalf("NeedsMePRs = %+v: want #1 alone, with the gates' reason", got)
+	}
+	if w := NeedsMeWords(got[0].Refused); w != "approve by hand: "+why {
+		t.Fatalf("NeedsMeWords = %q", w)
+	}
+	if NeedsMeWords("") != "" {
+		t.Fatal("words without a refusal")
+	}
+	if r, ok := ParseNoApprovalReview("901|" + why); !ok || r.For(901) != why || r.For(902) != "" || r.For(0) != "" {
+		t.Fatalf("ParseNoApprovalReview = %+v, %v", r, ok)
 	}
 }

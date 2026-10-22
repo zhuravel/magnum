@@ -84,6 +84,8 @@ func markerRe(runID string) *regexp.Regexp {
 // given) and a multi-line comment's start side filled in and the run's
 // marker appended as the body's last line when the body lacks it
 // (appended reports that), or the problems found, each naming its field.
+// An APPROVE in a round whose no-findings event is COMMENT
+// (Options.NoFindingsEvent) is one of them.
 func Parse(data []byte, o Options) (r Review, appended bool, problems []string) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -94,7 +96,12 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string) 
 		return Review{}, false, []string{"the file holds more than one JSON value"}
 	}
 	switch r.Event {
-	case EventComment, EventRequestChanges, EventApprove:
+	case EventApprove:
+		if o.NoFindingsEvent == EventComment {
+			problems = append(problems, "event APPROVE: this round cannot approve, its no-findings event is COMMENT (no_findings_event, "+
+				"--no-findings-event COMMENT): post a clean verdict as COMMENT")
+		}
+	case EventComment, EventRequestChanges:
 	default:
 		problems = append(problems, fmt.Sprintf("event %q is not COMMENT, REQUEST_CHANGES or APPROVE", r.Event))
 	}

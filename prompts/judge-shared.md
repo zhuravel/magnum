@@ -36,6 +36,13 @@ This round cannot approve: the PR has had several re-reviews since it was last r
 {{- end}}
 {{- end}}
 
+{{define "no-approval"}}
+{{- if .NoApproval}}
+
+This round cannot approve: {{.NoApproval}}, so a clean verdict posts as a comment (`no_findings_event` says so, and `post_review` refuses an `APPROVE`).
+{{- end}}
+{{- end}}
+
 {{define "review-rules"}}
 {{- template "notes-line-limit" .}}
 {{- if .PrepassFile}}

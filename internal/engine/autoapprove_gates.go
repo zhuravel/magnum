@@ -109,18 +109,20 @@ func (e *Engine) authorRefusal(c store.RepoPR) string {
 // the whole PR (heldReviewOf, which waits: the full pass decides), the
 // review did not hear every reviewer
 // (missingReports), the PR's watch would not review it on its own
-// (classify: a manual repository's, a bot's, one skip_paths leaves out, one
-// Codex flagged; a forced round's included), it changes what steers the
-// review agents or its own workflows or actions, or magnum cannot tell
-// (changedFilesRefusal), and its head's check rollup fails or
+// (watchRefusal: classify, a manual repository's, a bot's, one skip_paths
+// leaves out, one Codex flagged; a forced round's included), it changes
+// what steers the review agents or its own workflows or actions, or magnum
+// cannot tell (changedFilesRefusal), and its head's check rollup fails or
 // runs (wait for green: the judge's result says nothing of the failures it
 // found unrelated), unless every failing check fails the same way on the
-// base branch's tip (failingCIRefusal); where the repository sets
-// required_checks, the checks it names decide in place of the rollup
-// (requiredCIRefusal: one outside the list neither fails nor runs). waits
-// says the refusal is only checks that still run, which a standing approval
-// waits out (standingGateRefusal). A reason never carries an error's text:
-// a withdrawal posts it on GitHub.
+// base branch's tip (ciGateOf, whose going ahead on those it records:
+// noteCIBase); where the repository sets required_checks, the checks it
+// names decide in place of the rollup (requiredCIRefusal: one outside the
+// list neither fails nor runs). waits says the refusal is only checks that
+// still run, which a standing approval waits out (standingGateRefusal). A
+// reason never carries an error's text: a withdrawal posts it on GitHub.
+// The judge's own approval is held to the same gates, but for the review's
+// (approval_gates.go).
 func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
 	pr := c.PR
 	if _, held := e.heldReviewOf(ctx, pr.ID, sum.ReviewID); held {
@@ -129,24 +131,44 @@ func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.
 	if why := e.missingReports(ctx, pr.ID, sum); why != "" {
 		return why, false
 	}
-	if w := e.cfg.WatchFor(c.Repo); w != nil {
-		if dec := e.classify(ctx, *w, pr, e.now()); !dec.Eligible {
-			return "its watch would not review it on its own: " + dec.Reason, false
-		}
-	}
-	if why := e.changedFilesRefusal(ctx, pr); why != "" {
+	if why, _ := e.watchRefusal(ctx, c); why != "" {
 		return why, false
 	}
-	if r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(c.Repo)); ok {
-		return e.requiredCIRefusal(ctx, c, sum, r) // autoapprove_required.go: the rollup does not decide
+	if why, _ := e.changedFilesRefusal(ctx, pr); why != "" {
+		return why, false
 	}
-	switch strings.ToUpper(deref(pr.CIState)) {
-	case "FAILURE", "ERROR":
-		return e.failingCIRefusal(ctx, c, sum)
-	case "PENDING", "EXPECTED":
-		return ciRunsRefusal, true
+	ci := e.ciGateOf(ctx, c) // autoapprove_ci_base.go
+	if ci.state == pipeline.CIRedLikeBase && ci.why == "" {
+		e.noteCIBase(ctx, c, sum, ci.failing, ci.base) // the approval goes ahead on checks the base fails too
 	}
-	return "", false
+	return ci.why, ci.waits
+}
+
+// watchRefusal says why no approval goes to c, a PR its watch would not
+// review on its own (classify: a manual repository's, a bot's, one
+// skip_paths leaves out, one Codex flagged; a forced round's included),
+// and short, the judge prompt's fixed words for it (approvalGatesDue); ""
+// both when its watch would, or none watches its repository.
+func (e *Engine) watchRefusal(ctx context.Context, c store.RepoPR) (why, short string) {
+	if w := e.cfg.WatchFor(c.Repo); w != nil {
+		if dec := e.classify(ctx, *w, c.PR, e.now()); !dec.Eligible {
+			return "its watch would not review it on its own: " + dec.Reason, "the PR's watch would not review it on its own"
+		}
+	}
+	return "", ""
+}
+
+// prStateRefusal says why no approval goes to pr for what it is now, a
+// draft or muted, "" for neither: auto-approval's (autoApproveRefusal) and
+// the judge's (approvalGatesDue), whose prompt says it as is (fixed words).
+func prStateRefusal(pr store.PR) string {
+	switch {
+	case pr.IsDraft:
+		return "it is a draft"
+	case pr.Muted:
+		return "it is muted"
+	}
+	return ""
 }
 
 // kvAutoApprovalGated records "<approval id>|<run id>" once the gates let
@@ -239,12 +261,14 @@ func changesWorkflow(p string) bool {
 // (required_checks names workflows by a name any workflow file may declare,
 // and a PR that edits the CI workflow controls it outright). A head magnum
 // has no whole list of files for is refused too: what it does not list may
-// be one of them.
-func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) string {
+// be one of them. short is the judge prompt's fixed words for why, which
+// never name a path the PR chose (approvalGatesDue).
+func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (why, short string) {
+	const unknown = "magnum cannot tell which files the PR changes"
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "auto approval: the PR's files", "pr", pr.ID)
-		return "Magnum cannot read the files it changes"
+		return "Magnum cannot read the files it changes", unknown
 	}
 	listed := ok && f.HeadSHA == pr.HeadSHA
 	var paths []string
@@ -252,19 +276,19 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) string {
 		paths = f.Paths
 	}
 	if why := e.agentConfigRefusal(ctx, pr, paths); why != "" {
-		return why
+		return why, "the PR changes " + agentConfigWhat
 	}
 	if slices.ContainsFunc(paths, changesWorkflow) {
-		return workflowsRefusal
+		return workflowsRefusal, "the PR changes its own workflows or actions"
 	}
 	const what = agentConfigWhat + ", or its own workflows or actions"
 	switch {
 	case !listed:
-		return "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files"
+		return "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files", unknown
 	case f.Truncated:
-		return fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths))
+		return fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths)), unknown
 	}
-	return ""
+	return "", ""
 }
 
 // agentConfigRefusal says why auto-approval leaves pr to the operator for

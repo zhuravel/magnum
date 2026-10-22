@@ -32,6 +32,7 @@ The head is unchanged (`{{.PreviousHeadShort}}`): re-read the replies and the co
 {{- template "simplify" .}}
 {{- template "post-merge-rereview" .}}
 {{- template "hold-approval" .}}
+{{- template "no-approval" .}}
 {{- template "review-rules" .}}
 
 <magnum>
