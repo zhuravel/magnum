@@ -188,14 +188,17 @@ func (r *Recorder) Ops() []PlannedOp {
 	return append([]PlannedOp(nil), r.ops...)
 }
 
-// heavyJob is one unit of slow slot work for the background worker.
+// heavyJob is one unit of slow slot work for the background worker; end
+// ends its record as work in flight (beginWork).
 type heavyJob struct {
 	key string
 	fn  func(ctx context.Context) error
+	end func()
 }
 
 // enqueueHeavy queues fn unless a job with the same key is queued or
-// running. It reports whether the job was queued.
+// running. It reports whether the job was queued. A queued job is work in
+// flight (work.go) until it ends: a restart waits for it.
 func (e *Engine) enqueueHeavy(key string, fn func(ctx context.Context) error) bool {
 	e.heavyMu.Lock()
 	if e.heavyKeys[key] {
@@ -204,13 +207,15 @@ func (e *Engine) enqueueHeavy(key string, fn func(ctx context.Context) error) bo
 	}
 	e.heavyKeys[key] = true
 	e.heavyMu.Unlock()
+	end := e.beginWork("heavy job " + key)
 	select {
-	case e.heavy <- heavyJob{key: key, fn: fn}:
+	case e.heavy <- heavyJob{key: key, fn: fn, end: end}:
 		return true
 	default:
 		e.heavyMu.Lock()
 		delete(e.heavyKeys, key)
 		e.heavyMu.Unlock()
+		end()
 		e.log.Warn("heavy queue full; job dropped until the next tick", "job", key)
 		return false
 	}
@@ -219,11 +224,7 @@ func (e *Engine) enqueueHeavy(key string, fn func(ctx context.Context) error) bo
 // runHeavy runs one heavy job; a job that panics fails alone (safely), and
 // its key is free again either way.
 func (e *Engine) runHeavy(ctx context.Context, j heavyJob) {
-	defer func() {
-		e.heavyMu.Lock()
-		delete(e.heavyKeys, j.key)
-		e.heavyMu.Unlock()
-	}()
+	defer e.endHeavy(j)
 	var err error
 	e.safely(ctx, "heavy job "+j.key, "", func() { err = j.fn(ctx) }, nil)
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -295,6 +296,30 @@ func (e *Engine) heavyWorkerUntil(ctx context.Context, idle <-chan struct{}) {
 			e.runHeavy(ctx, j)
 		case <-idle:
 			e.drainHeavy(ctx)
+			return
+		}
+	}
+}
+
+// endHeavy frees heavy job j's key and ends its record as work in flight.
+func (e *Engine) endHeavy(j heavyJob) {
+	e.heavyMu.Lock()
+	delete(e.heavyKeys, j.key)
+	e.heavyMu.Unlock()
+	if j.end != nil {
+		j.end()
+	}
+}
+
+// dropHeavy drops the jobs still queued once the heavy worker stopped (the
+// shutdown): the next daemon queues them again from the registry, and the
+// CLI no longer counts them.
+func (e *Engine) dropHeavy() {
+	for {
+		select {
+		case j := <-e.heavy:
+			e.endHeavy(j)
+		default:
 			return
 		}
 	}

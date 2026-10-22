@@ -6884,6 +6884,14 @@ const KVDaemonShellPATH = "daemon.shell_path"
     PATH at its start, as ShellPATH's JSON (the count, never a directory);
     absent with [daemon] shell_path off.
 
+const KVDaemonWork = "daemon.work"
+    KVDaemonWork holds the work in flight that no registry row shows (WorkMark
+    as JSON), which the CLI reads before it stops the daemon: the jobs queued or
+    running on the heavy worker and the GitHub writes as the operator under way.
+    The engine keeps it to its own state (beginWork): written whenever that
+    changes, deleted when nothing is in flight, at the shutdown and at every
+    start of the daemon.
+
 const KVLearnEditing = "learn.editing"
     KVLearnEditing holds the skill edit running now (EditMark as JSON), which
     the CLI reads before it stops the daemon: set when it starts, deleted when
@@ -9305,6 +9313,19 @@ type WhiteboardRecord struct {
 func ParseWhiteboardRecord(s string) (WhiteboardRecord, bool)
     ParseWhiteboardRecord reads a KVPRWhiteboard value; ok is false for one that
     names no session or head.
+
+type WorkItem struct {
+	What    string    `json:"what"`
+	Started time.Time `json:"started"`
+}
+    WorkItem is one piece of work in flight: what it is ("heavy job
+    provision:talkable/talkable", "approval of talkable/talkable#2 as zhuravel")
+    and since when (a heavy job's since it was queued).
+
+type WorkMark struct {
+	Work []WorkItem `json:"work"`
+}
+    WorkMark is KVDaemonWork's value: the work in flight, oldest first.
 
 ```
 

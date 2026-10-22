@@ -357,29 +357,29 @@ func TestTheOperatorsWordOnGitHub(t *testing.T) {
 	ownApproval := rev(2, "zhuravel", "User", "APPROVED", "h1", autoBody("h1", "u"), 2)
 	others := []github.Review{rev(3, "alice", "User", "CHANGES_REQUESTED", "h1", "no", 3), rev(4, "zhuravel", "Bot", "COMMENTED", "h1", "x", 3)}
 
-	w := operatorWord(append([]github.Review{magnumRound, ownApproval}, others...), "zhuravel", "h1", time.Time{})
+	w := operatorWord(append([]github.Review{magnumRound, ownApproval}, others...), "zhuravel", "h1", time.Time{}, "")
 	if w.hand != nil || w.pending || w.approved == nil || w.approved.DatabaseID != 2 || !w.approvedByMagnum {
 		t.Fatalf("magnum's own reviews: %+v", w)
 	}
 	for state, want := range map[string]string{"CHANGES_REQUESTED": "requested changes", "APPROVED": "approved", "COMMENTED": "commented",
 		"DISMISSED": "reviewed"} {
 		hand := rev(5, "Zhuravel", "User", state, "h0", "by hand", 4)
-		w := operatorWord([]github.Review{magnumRound, hand}, "zhuravel", "h1", time.Time{})
+		w := operatorWord([]github.Review{magnumRound, hand}, "zhuravel", "h1", time.Time{}, "")
 		if w.hand == nil || w.hand.DatabaseID != 5 || !strings.Contains(w.handReason(), want) {
 			t.Errorf("%s by hand: %+v (%q)", state, w, w.handReason())
 		}
 	}
 	verdict := rev(6, "zhuravel", "User", "APPROVED", "h1", "Approved after Magnum's review.\n<!-- magnum:verdict=APPROVE head=h1 -->", 5)
-	if w := operatorWord([]github.Review{verdict}, "zhuravel", "h1", time.Time{}); w.hand == nil {
+	if w := operatorWord([]github.Review{verdict}, "zhuravel", "h1", time.Time{}, ""); w.hand == nil {
 		t.Error("a verdict the operator posted through magnum is not theirs")
 	}
 	pending := rev(7, "zhuravel", "User", "PENDING", "h1", "", 0)
 	pending.SubmittedAt = time.Time{}
-	if w := operatorWord([]github.Review{pending}, "zhuravel", "h1", time.Time{}); !w.pending || w.hand != nil {
+	if w := operatorWord([]github.Review{pending}, "zhuravel", "h1", time.Time{}, ""); !w.pending || w.hand != nil {
 		t.Errorf("a pending review: %+v", w)
 	}
 	old := rev(8, "zhuravel", "User", "COMMENTED", "h0", "earlier", -1)
-	if w := operatorWord([]github.Review{old}, "zhuravel", "h1", since); w.hand != nil {
+	if w := operatorWord([]github.Review{old}, "zhuravel", "h1", since, ""); w.hand != nil {
 		t.Errorf("a review before the resume counts: %+v", w)
 	}
 }

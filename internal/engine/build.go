@@ -190,8 +190,9 @@ func (e *Engine) noteBuild(ctx context.Context) {
 // idle restart (learnRestartDue, KVLearnRestart), or ErrRestartForConfig
 // when a saved config waits for one (configRestartDue, KVConfigRestart),
 // and nothing is in flight: no round is claiming, reviewing or verifying, in
-// the registry or in this process, and no notes curation, retro, skill edit
-// or gate runs (backgroundBusy). The binary must still be the one checked: a
+// the registry or in this process, no notes curation, retro, skill edit or
+// gate runs (backgroundBusy), and no heavy job or GitHub write as the
+// operator is under way (workInFlight). The binary must still be the one checked: a
 // newer one is checked again on the next reconcile. Whatever the reason,
 // what launchd would start must pass its check first (restartSafe: a binary
 // rebuilt since the start, else a changed user config); a failure holds
@@ -243,10 +244,13 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 // flight: a round, fix job, whiteboard job or open in this process (their
 // reservations), a round goroutine between its reservation and its
 // post-round fix cycle or whiteboard (roundTails), a notes curation, retro,
-// skill edit or gate (backgroundBusy), or a round the registry holds as
-// claiming, reviewing or verifying.
+// skill edit or gate (backgroundBusy), a job queued or running on the heavy
+// worker or a GitHub write as the operator under way (workInFlight, the
+// CLI's KVDaemonWork), or a round the registry holds as claiming, reviewing
+// or verifying.
 func (e *Engine) restartBusy(ctx context.Context) bool {
-	return e.activeRounds() > 0 || e.roundTails.Load() > 0 || e.backgroundBusy() != "" || e.roundsInFlight(ctx)
+	return e.activeRounds() > 0 || e.roundTails.Load() > 0 || e.backgroundBusy() != "" || len(e.workInFlight()) > 0 ||
+		e.roundsInFlight(ctx)
 }
 
 // roundsInFlight reports whether the registry holds a PR whose round is

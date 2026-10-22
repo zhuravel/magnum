@@ -442,6 +442,15 @@ type Engine struct {
 	heavyMu   sync.Mutex
 	heavyKeys map[string]bool
 
+	// work is the work in flight no registry row shows (work.go:
+	// beginWork), by its sequence number, under workMu.
+	workMu  sync.Mutex
+	workSeq int64
+	work    map[int64]WorkItem
+	// writeGrace is how long a stop lets a GitHub write as the operator
+	// that started finish (operatorWriteGrace; autoapprove_pending.go).
+	writeGrace time.Duration
+
 	kick          chan struct{}
 	batch         *notify.Batcher
 	lastReconcile time.Time
@@ -667,6 +676,8 @@ func New(d Deps) *Engine {
 		yieldCarry:        map[int64]any{},
 		heavy:             make(chan heavyJob, 64),
 		heavyKeys:         map[string]bool{},
+		work:              map[int64]WorkItem{},
+		writeGrace:        operatorWriteGrace,
 		inflight:          map[int64]bool{},
 		lastSeen:          map[string]string{},
 		logged:            map[string]time.Time{},
@@ -934,8 +945,10 @@ func (e *Engine) lockHeld() error {
 // shutdown stops rounds (their runs stay observed, never re-sent), a
 // running retro, notes curation, skill edit and gate, waits for them and a
 // memory sample in flight (which Run's context ends, or its timeouts)
-// briefly, flushes pending toasts and gives urgent toasts still retrying a
-// bounded time before cancelling them.
+// briefly, drops the heavy jobs still queued, flushes pending toasts and
+// gives urgent toasts still retrying a bounded time before cancelling them.
+// A GitHub write as the operator a round's goroutine started finishes within
+// that wait: its grace (writeContext) is no longer than it.
 func (e *Engine) shutdown() {
 	e.mu.Lock()
 	for _, h := range e.rounds {
@@ -964,6 +977,7 @@ func (e *Engine) shutdown() {
 		e.log.Warn("rounds, the retro, the notes curation, the skill edit, the skill gate or the memory sample did not stop within 30s")
 	}
 	e.noteRetroRunning(context.Background()) // a retro that stopped no longer holds the CLI
+	e.dropHeavy()                            // Run's worker stopped before the shutdown: what it left queued
 	e.flushGitHubCost(context.Background(), true)
 	if e.batch != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1065,6 +1079,7 @@ func (e *Engine) startup(ctx context.Context) {
 	// requests queued after it were never seen by a daemon (expireRequests).
 	lastTick, _ := e.kvTime(ctx, store.KVDaemonLastTick)
 	e.setKV(ctx, store.KVDaemonStartedAt, store.FormatTime(e.now()))
+	e.writeWorkMark() // work.go: a crashed daemon's mark goes before this one queues any
 	if !e.d.DryRun {
 		e.setKV(ctx, store.KVDaemonPid, strconv.Itoa(os.Getpid()))
 	}

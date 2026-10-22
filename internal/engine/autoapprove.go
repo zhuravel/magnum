@@ -19,7 +19,8 @@ package engine
 // dismissal of one of these approvals, stops it on that PR for good
 // (`magnum unapprove --resume` lifts that). Every post and withdrawal is
 // compare-and-set on the auto_approvals row, writes begin/ok/fail events,
-// and is found on GitHub instead of repeated when its answer was lost; a
+// and is found on GitHub instead of repeated when its answer was lost, as
+// magnum's own by its pending record (autoapprove_pending.go); a
 // withdrawal GitHub keeps refusing ends failed after autoApproveAttempts,
 // and the approval of a merged or closed PR ends as history.
 
@@ -29,6 +30,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -223,7 +225,8 @@ type opWord struct {
 	pending bool
 	// approved is their approval of the head when that is their latest
 	// verdict; approvedByMagnum says it is one of magnum's automatic
-	// approvals (its marker).
+	// approvals (its marker, or the pending record of magnum's post of an
+	// approval of the head: autoapprove_pending.go).
 	approved         *github.Review
 	approvedByMagnum bool
 }
@@ -253,10 +256,15 @@ func magnumPosted(body string) bool {
 
 // operatorWord reads the operator's (login's; an App of that name is not
 // them) reviews of a PR whose head is head; reviews submitted at or before
-// since (a resume) do not count as by hand.
-func operatorWord(reviews []github.Review, login, head string, since time.Time) opWord {
+// since (a resume) do not count as by hand, and neither does an approval of
+// pending, the head of magnum's pending post of an approval ("" = none),
+// whatever its body: it is that post's.
+func operatorWord(reviews []github.Review, login, head string, since time.Time, pending string) opWord {
 	var w opWord
 	var verdict *github.Review
+	ours := func(r *github.Review) bool {
+		return magnumPosted(r.Body) || (pending != "" && r.CommitOid == pending && strings.EqualFold(r.State, "APPROVED"))
+	}
 	for i := range reviews {
 		r := &reviews[i]
 		if !github.SameAccount(github.Account(r.AuthorLogin, r.AuthorType), login) {
@@ -266,7 +274,7 @@ func operatorWord(reviews []github.Review, login, head string, since time.Time) 
 			w.pending = true
 			continue
 		}
-		if !magnumPosted(r.Body) && (since.IsZero() || r.SubmittedAt.After(since)) && (w.hand == nil || !r.SubmittedAt.Before(w.hand.SubmittedAt)) {
+		if !ours(r) && (since.IsZero() || r.SubmittedAt.After(since)) && (w.hand == nil || !r.SubmittedAt.Before(w.hand.SubmittedAt)) {
 			w.hand = r
 		}
 		switch strings.ToUpper(r.State) {
@@ -278,7 +286,7 @@ func operatorWord(reviews []github.Review, login, head string, since time.Time) 
 	}
 	if verdict != nil && strings.EqualFold(verdict.State, "APPROVED") && head != "" && verdict.CommitOid == head {
 		w.approved = verdict
-		w.approvedByMagnum = strings.Contains(verdict.Body, AutoApprovalMarker(head))
+		w.approvedByMagnum = strings.Contains(verdict.Body, AutoApprovalMarker(head)) || pending == head
 	}
 	return w
 }
@@ -424,8 +432,10 @@ func (e *Engine) autoClient(id *config.Identity) (GitHub, autoApproveGitHub) {
 // progress, no approval of the head of theirs, and
 // a verdict line that leaves nothing to fix when the result cannot tell. An
 // approval of magnum's GitHub has but the registry lost is recorded instead
-// of posted again. GitHub is asked again only when the PR's latest round or
-// updatedAt moved since it said no (or listed only part of the reviews).
+// of posted again: its marker says so, or the pending record of a post of
+// it whose answer was lost (then it is magnum's whatever its body). GitHub
+// is asked again only when the PR's latest round or updatedAt moved since it
+// said no (or listed only part of the reviews).
 func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *store.ReviewSummary, hold *store.AutoApproveHold) {
 	id := e.cfg.AutoApproveFor(c.Repo)
 	pr := c.PR
@@ -479,9 +489,10 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	if hasPrior {
 		priorPtr = &prior
 	}
-	w := operatorWord(reviews, id.Login, pr.HeadSHA, since)
+	pending := e.pendingAutoApproval(ctx, pr.ID)
+	w := operatorWord(reviews, id.Login, pr.HeadSHA, since, pending)
 	if w.approved != nil && w.approvedByMagnum {
-		e.adoptAutoApproval(ctx, repo, pr, id, *sum, priorPtr, w.approved)
+		e.adoptAutoApproval(ctx, repo, pr, id, *sum, priorPtr, w.approved, pending == pr.HeadSHA)
 	}
 	if w.hand != nil {
 		e.stopAutoApproval(ctx, repo, pr, w.handReason())
@@ -502,7 +513,10 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 // configured body and the marker: the row goes posting (a new one, or the
 // failed prior one), then standing with GitHub's review, or failed (a 403 or
 // 422 for good) with review.auto_approve_begin, review.auto_approved or
-// review.auto_approve_failed; a posted one is toasted.
+// review.auto_approve_failed; a posted one is toasted. The post is pending
+// (kvAutoApprovePending) from before it goes until its outcome is known, is
+// work in flight a restart waits for, and a stop gives it its grace
+// (writeContext); a stop starts none.
 func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, id *config.Identity, sum store.ReviewSummary,
 	prior *store.AutoApproval, gh GitHub) {
 	subject := prSubject(repo, pr.Number)
@@ -514,6 +528,9 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 		return
 	}
 	body += "\n\n" + AutoApprovalMarker(pr.HeadSHA)
+	if ctx.Err() != nil {
+		return // the daemon is stopping: no write starts
+	}
 	var a store.AutoApproval
 	if prior != nil {
 		if err := e.st.TransitionAutoApproval(ctx, prior.ID, []string{store.AutoFailed}, store.AutoPosting, func(u *store.AutoApprovalUpdate) {
@@ -536,18 +553,32 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 		e.log.Info("auto approval: "+ignored, "pr", pr.ID, "head", textx.ShortSHA(pr.HeadSHA))
 		ignored = "; " + ignored
 	}
+	end := e.beginWork(fmt.Sprintf("approval of %s#%d as %s", full, pr.Number, id.Login))
+	defer end()
+	ctx, cancel := e.writeContext(ctx)
+	defer cancel()
 	e.event(ctx, "info", subject, "review.auto_approve_begin", fmt.Sprintf("approving %s as %s: magnum's review %d found nothing to fix (attempt %d)%s",
 		textx.ShortSHA(pr.HeadSHA), id.Login, sum.ReviewID, a.Attempts, ignored), data)
-	rev, err := gh.CreateReview(ctx, repo.Owner, repo.Name, pr.Number, pr.HeadSHA, "APPROVE", body)
+	pending := kvAutoApprovePending(pr.ID)
+	var rev github.RESTReview
+	if err = e.st.SetKV(ctx, pending, pr.HeadSHA); err != nil {
+		err = fmt.Errorf("record the request before it goes: %w", err) // no request without its record
+	} else {
+		rev, err = gh.CreateReview(ctx, repo.Owner, repo.Name, pr.Number, pr.HeadSHA, "APPROVE", body)
+	}
 	if err != nil && ctx.Err() != nil {
-		// The daemon is stopping, and the post may or may not have reached
-		// GitHub: the row stays posting, as a crash would leave it, and the
-		// next daemon settles it (resumeAutoPost). Neither a failed row nor a
-		// "could not approve" event: nothing failed.
-		e.log.Debug("auto approval cut short by the stop", "pr", pr.ID, "err", err)
+		// The stop's grace ran out, and the post may or may not have reached
+		// GitHub: the row stays posting and the post pending, as a crash
+		// would leave them, and the next daemon settles it (resumeAutoPost).
+		// Neither a failed row nor a "could not approve" event: nothing
+		// failed.
+		e.log.Info("auto approval cut short by the stop", "pr", pr.ID, "err", err)
 		return
 	}
 	if err != nil {
+		if writeAnswered(err) { // GitHub refused it: nothing of it stands
+			e.dropPending(ctx, pending, pr.HeadSHA)
+		}
 		var apiErr *github.APIError
 		final := errors.Is(err, github.ErrForbidden) || (errors.As(err, &apiErr) && apiErr.Status == 422)
 		if uerr := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoFailed, func(u *store.AutoApprovalUpdate) {
@@ -561,6 +592,7 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 		again := fmt.Sprintf("tried again in %s", humanDuration(autoApproveRetry))
 		if final || a.Attempts >= autoApproveAttempts {
 			again = "not tried again for this review"
+			e.dropPending(ctx, pending, pr.HeadSHA) // nothing settles it now: an approval found later is not taken for this one
 		}
 		e.event(ctx, "warn", subject, "review.auto_approve_failed", fmt.Sprintf("could not approve %s as %s: %v; %s",
 			textx.ShortSHA(pr.HeadSHA), id.Login, err, again), data)
@@ -570,9 +602,10 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 }
 
 // autoPosted records approval a posted as GitHub's review reviewID (url) at
-// at, with review.auto_approved and a toast; how says how it was found
-// ("" = its post answered), and note ends the event's message ("; ignored
-// 1 failing check outside required_checks: ...", or "").
+// at, with review.auto_approved and a toast, and drops its post's pending
+// record; how says how it was found ("" = its post answered), and note ends
+// the event's message ("; ignored 1 failing check outside required_checks:
+// ...", or "").
 func (e *Engine) autoPosted(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, reviewID int64, url string, at time.Time,
 	data map[string]any, how, note string) {
 	if err := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoStanding, func(u *store.AutoApprovalUpdate) {
@@ -584,6 +617,7 @@ func (e *Engine) autoPosted(ctx context.Context, repo store.Repo, pr store.PR, a
 		e.log.Warn("auto approval posted and not recorded", "pr", pr.ID, "review_id", reviewID, "err", err)
 		return
 	}
+	e.dropPending(ctx, kvAutoApprovePending(pr.ID), a.HeadSHA)
 	data["review_id"] = reviewID
 	e.event(ctx, "info", prSubject(repo, pr.Number), "review.auto_approved", fmt.Sprintf("approved %s as %s (review %d)%s: %s%s",
 		textx.ShortSHA(a.HeadSHA), a.Login, reviewID, how, url, note), data)
@@ -595,10 +629,11 @@ func (e *Engine) autoPosted(ctx context.Context, repo store.Repo, pr store.PR, a
 }
 
 // adoptAutoApproval records r, an approval of the head GitHub has with
-// magnum's marker but the registry does not (the answer to its post was
-// lost), as the PR's standing approval: never posted twice.
+// magnum's marker, or that the pending record of its post names (lost), but
+// the registry does not (the answer to its post was lost), as the PR's
+// standing approval: never posted twice.
 func (e *Engine) adoptAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, id *config.Identity, sum store.ReviewSummary,
-	prior *store.AutoApproval, r *github.Review) {
+	prior *store.AutoApproval, r *github.Review, lost bool) {
 	var a store.AutoApproval
 	var err error
 	if prior != nil {
@@ -618,7 +653,11 @@ func (e *Engine) adoptAutoApproval(ctx context.Context, repo store.Repo, pr stor
 		at = e.now()
 	}
 	data := map[string]any{"approval_id": a.ID, "head_sha": pr.HeadSHA, "identity": id.Name, "run_id": sum.RunID, "source_review_id": sum.ReviewID}
-	e.autoPosted(ctx, repo, pr, a, r.DatabaseID, r.URL, at, data, " (found on GitHub: the answer to its post was lost)", "")
+	how := " (found on GitHub: the answer to its post was lost)"
+	if lost {
+		how, data["answer_lost"] = lostAnswer, true
+	}
+	e.autoPosted(ctx, repo, pr, a, r.DatabaseID, r.URL, at, data, how, "")
 }
 
 // stopAutoApproval stops auto-approval of pr for good (until `magnum
@@ -677,14 +716,18 @@ func (e *Engine) closeAutoApproval(ctx context.Context, repo store.Repo, a store
 	if a.State == store.AutoDismissing {
 		why = "the PR was " + what + " before its withdrawal went through"
 	}
-	e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding, store.AutoDismissing}, store.AutoEndedClosed, why)
+	if e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding, store.AutoDismissing}, store.AutoEndedClosed, why) {
+		e.dropPending(ctx, kvAutoWithdrawPending(a.PRID), strconv.FormatInt(a.ReviewID, 10)) // a withdrawal under way is dropped
+	}
 	delete(e.autoFollow, a.ID)
 }
 
 // resumeAutoPost settles a post a stopped daemon left without its answer:
-// the approval GitHub has with magnum's marker on its head, else failed (a
-// later tick tries again). A list GitHub cut short proves nothing: it is
-// asked again on the next tick.
+// the approval GitHub has with magnum's marker on its head, or any approval
+// of the head by the operator's login when the post is pending (its record
+// says it went out), else failed (a later tick tries again; the post is no
+// longer pending). A list GitHub cut short proves nothing: it is asked again
+// on the next tick.
 func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, gh GitHub) {
 	if e.autoReadHeld(a.Identity, a.PRID) {
 		return
@@ -696,19 +739,25 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 		}
 		return
 	}
-	w := operatorWord(reviews, a.Login, a.HeadSHA, time.Time{})
+	pending := e.pendingAutoApproval(ctx, a.PRID)
+	w := operatorWord(reviews, a.Login, a.HeadSHA, time.Time{}, pending)
 	if w.approved != nil && w.approvedByMagnum {
 		data := map[string]any{"approval_id": a.ID, "head_sha": a.HeadSHA, "identity": a.Identity, "run_id": a.RunID}
-		e.autoPosted(ctx, repo, a.PR, a.AutoApproval, w.approved.DatabaseID, w.approved.URL, w.approved.SubmittedAt,
-			data, " (found on GitHub after a restart)", "")
+		how := " (found on GitHub after a restart)"
+		if pending == a.HeadSHA {
+			how, data["answer_lost"] = lostAnswer, true
+		}
+		e.autoPosted(ctx, repo, a.PR, a.AutoApproval, w.approved.DatabaseID, w.approved.URL, w.approved.SubmittedAt, data, how, "")
 		return
 	}
 	if !complete {
 		return
 	}
-	_ = e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoFailed, func(u *store.AutoApprovalUpdate) {
+	if err := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoFailed, func(u *store.AutoApprovalUpdate) {
 		u.Set("error", "the daemon stopped before GitHub answered")
-	})
+	}); err == nil {
+		e.dropPending(ctx, kvAutoApprovePending(a.PRID), a.HeadSHA) // GitHub's whole list has no such approval
+	}
 }
 
 // followStanding reads GitHub's reviews when the PR moved, or when the
@@ -764,7 +813,7 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 	if a.PostedAt != nil && a.PostedAt.After(since) {
 		since = *a.PostedAt
 	}
-	if w := operatorWord(reviews, a.Login, a.PR.HeadSHA, since); w.hand != nil {
+	if w := operatorWord(reviews, a.Login, a.PR.HeadSHA, since, ""); w.hand != nil {
 		e.stopAutoApproval(ctx, repo, a.PR, w.handReason())
 		if s := strings.ToUpper(w.hand.State); s == "APPROVED" || s == "CHANGES_REQUESTED" {
 			e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding}, store.AutoEndedOperator,
@@ -873,13 +922,21 @@ func (e *Engine) endAutoApproval(ctx context.Context, repo store.Repo, pr store.
 // has the review, or refuses (422) a review it lists as dismissed already
 // (withdrawnOnGitHub), with review.auto_approval_withdraw_begin,
 // review.auto_approval_withdrawn or review.auto_approval_withdraw_failed.
-// A review dismissed already was dismissed by someone else meanwhile: the
-// row ends by whom its timeline says, and that stops auto-approval of the
-// PR as any such dismissal does (dismissalBy, stopForDismissal). A
-// withdrawal of magnum's own is toasted; one GitHub did not take stays
-// dismissing, tried again after autoApproveRetry, and after
-// autoApproveAttempts it ends failed with one urgent toast.
+// The dismissal is pending (kvAutoWithdrawPending) from before it goes
+// until its outcome is known, is work in flight a restart waits for, and a
+// stop gives it its grace (writeContext); a stop starts none. A review
+// dismissed already while an earlier dismissal of it is pending was
+// dismissed by that request, whose answer was lost: magnum's own
+// withdrawal. Otherwise someone else dismissed it meanwhile: the row ends
+// by whom its timeline says, and that stops auto-approval of the PR as any
+// such dismissal does (dismissalBy, stopForDismissal). A withdrawal of
+// magnum's own is toasted; one GitHub did not take stays dismissing, tried
+// again after autoApproveRetry, and after autoApproveAttempts it ends
+// failed with one urgent toast.
 func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, gh GitHub, by, message string) error {
+	if err := ctx.Err(); err != nil {
+		return err // the daemon is stopping: no write starts
+	}
 	subject := prSubject(repo, pr.Number)
 	if a.State == store.AutoStanding {
 		if err := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoStanding}, store.AutoDismissing, func(u *store.AutoApprovalUpdate) {
@@ -893,10 +950,33 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 	}
 	attempt := a.Attempts + 1
 	data := map[string]any{"approval_id": a.ID, "review_id": a.ReviewID, "head_sha": a.HeadSHA, "identity": a.Identity, "by": by, "attempt": attempt}
+	end := e.beginWork(fmt.Sprintf("withdrawal of approval %d of %s#%d by %s", a.ReviewID, repo.FullName(), pr.Number, a.Login))
+	defer end()
+	ctx, cancel := e.writeContext(ctx)
+	defer cancel()
 	e.event(ctx, "info", subject, "review.auto_approval_withdraw_begin",
 		fmt.Sprintf("withdrawing approval %d of %s by %s (attempt %d): %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, attempt, message), data)
-	err := gh.DismissReview(ctx, repo.Owner, repo.Name, pr.Number, a.ReviewID, message)
+	pending, reviewID := kvAutoWithdrawPending(pr.ID), strconv.FormatInt(a.ReviewID, 10)
+	lost := e.pendingAutoWithdrawal(ctx, pr.ID, a.ReviewID) // an earlier dismissal of it went out unanswered
+	var err error
+	if !lost {
+		if err = e.st.SetKV(ctx, pending, reviewID); err != nil {
+			err = fmt.Errorf("record the request before it goes: %w", err) // no request without its record
+		}
+	}
+	if err == nil {
+		err = gh.DismissReview(ctx, repo.Owner, repo.Name, pr.Number, a.ReviewID, message)
+		if err != nil && ctx.Err() != nil {
+			// The stop's grace ran out, and the dismissal may or may not
+			// have reached GitHub: the row stays dismissing and the request
+			// pending, and the next daemon tries again and settles it.
+			// Nothing failed.
+			e.log.Info("auto approval withdrawal cut short by the stop", "approval", a.ID, "err", err)
+			return err
+		}
+	}
 	ended, how, theirs := by, "", ""
+	known := writeAnswered(err) && !lost // this request's refusal: nothing of it stands, and no earlier one is unanswered
 	var apiErr *github.APIError
 	switch {
 	case err == nil:
@@ -907,6 +987,11 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 		case store.AutoEndedGone:
 			ended, how, err = store.AutoEndedGone, " (GitHub no longer has it)", nil
 		case store.AutoDismissed:
+			if lost { // the earlier request did it: magnum's own withdrawal
+				how, err = lostAnswer, nil
+				data["answer_lost"] = true
+				break
+			}
 			ended, theirs = store.AutoEndedSomeone, "dismissed on GitHub (by whom, magnum cannot read its timeline)"
 			if ag, ok := gh.(autoApproveGitHub); ok {
 				if b, w, derr := dismissalBy(ctx, ag, repo, pr.Number, a); derr == nil {
@@ -914,7 +999,12 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 				}
 			}
 			how, err = " (GitHub lists it as dismissed already: "+theirs+")", nil
+		case store.AutoStanding: // a dismissal is for good: no request of magnum's took
+			known = true
 		}
+	}
+	if err == nil || known {
+		e.dropPending(ctx, pending, reviewID)
 	}
 	if err != nil {
 		return e.withdrawFailed(ctx, repo, pr, a, attempt, err, data)
@@ -942,8 +1032,9 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 
 // withdrawnOnGitHub reads review id of PR number again after GitHub
 // refused its dismissal: store.AutoDismissed when GitHub lists it as
-// dismissed (someone or a push did it meanwhile), store.AutoEndedGone when
-// a whole list lacks it, "" when it still stands or GitHub cannot say.
+// dismissed (someone, a push or an earlier request of magnum's did it),
+// store.AutoEndedGone when a whole list lacks it, store.AutoStanding when it
+// still stands, "" when GitHub cannot say.
 func (e *Engine) withdrawnOnGitHub(ctx context.Context, gh GitHub, repo store.Repo, number int, id int64) string {
 	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, number)
 	if err != nil {
@@ -954,7 +1045,7 @@ func (e *Engine) withdrawnOnGitHub(ctx context.Context, gh GitHub, repo store.Re
 			if strings.EqualFold(r.State, "DISMISSED") {
 				return store.AutoDismissed
 			}
-			return ""
+			return store.AutoStanding
 		}
 	}
 	if complete {
@@ -974,6 +1065,9 @@ func (e *Engine) withdrawFailed(ctx context.Context, repo store.Repo, pr store.P
 	to := "" // stays dismissing
 	if final {
 		to = store.AutoFailed
+		// Nothing settles it now: a dismissal found later is not taken for
+		// this one.
+		e.dropPending(ctx, kvAutoWithdrawPending(pr.ID), strconv.FormatInt(a.ReviewID, 10))
 	}
 	if uerr := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoDismissing}, to, func(u *store.AutoApprovalUpdate) {
 		u.Set("error", err.Error())

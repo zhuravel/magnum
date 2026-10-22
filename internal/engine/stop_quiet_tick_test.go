@@ -121,10 +121,10 @@ func TestAFailureThatIsNoStopStillWarns(t *testing.T) {
 	}
 }
 
-// An approval whose post the stop cut short is neither recorded as failed
-// nor announced as an event that says "could not approve ... context
-// canceled; tried again in 5m": the row stays posting, the restart's pass
-// finds it, and the log has no warning.
+// An approval whose post the stop cut short (its grace ran out) is neither
+// recorded as failed nor announced as an event that says "could not approve
+// ... context canceled; tried again in 5m": the row stays posting, the
+// restart's pass finds it, and the log has no warning.
 func TestAStopWhilePostingAnAutoApprovalLogsNoWarning(t *testing.T) {
 	h, _ := newAutoHarness(t)
 	h.gh.createErr = &github.APIError{Op: "review", Status: 502, Message: "Bad Gateway"}
@@ -135,6 +135,7 @@ func TestAStopWhilePostingAnAutoApprovalLogsNoWarning(t *testing.T) {
 	}
 	h.gh.createErr = nil
 	h.advance(autoApproveRetry)
+	h.e.writeGrace = 10 * time.Millisecond
 
 	ctx, stop := context.WithCancel(h.ctx)
 	live := h.e.d.GitHub
@@ -166,9 +167,16 @@ type stopsOnReview struct {
 	stop context.CancelFunc
 }
 
-func (g stopsOnReview) CreateReview(_ context.Context, owner, repo string, number int, _, _, _ string) (github.RESTReview, error) {
+// CreateReview stops the daemon and answers when its own context ends: when
+// the stop's grace for a write runs out (writeContext).
+func (g stopsOnReview) CreateReview(ctx context.Context, owner, repo string, number int, _, _, _ string) (github.RESTReview, error) {
 	g.stop()
-	return github.RESTReview{}, fmt.Errorf("github review %s/%s#%d (APPROVE): gh api: %w", owner, repo, number, context.Canceled)
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		return github.RESTReview{}, fmt.Errorf("github review %s/%s#%d (APPROVE): the stop's grace never ended", owner, repo, number)
+	}
+	return github.RESTReview{}, fmt.Errorf("github review %s/%s#%d (APPROVE): gh api: %w", owner, repo, number, ctx.Err())
 }
 
 // A radar or CI read the stop cut short is no poll failure: no poll.error or

@@ -12125,6 +12125,83 @@ skill versions); people add theirs to the sections before it, at the end of the 
     is used up. A byte cap that the critic enforces. Critiques of restores. The critic chooses sides in a conflicting
     merge. The name "reviewer". Also rejected now: an apply of a clean merge on the critic's word (amendment 3), and
     the `checked` and `losses` lists only in the run directory (amendment 4).
+- **Magnum never mistakes its own dismissal for the operator's, and a restart never cuts an approval write**
+  (2026-10-23, spec 125 of the 2026-10-17 run, amends "Magnum approves as the operator when its review found nothing
+  to fix"). The operator asked why a PR of a watched repository got no automatic approval as him after a clean
+  review. The timeline, in UTC:
+  1. 17:49:50: round 2 found nothing to fix, and magnum approved the head as the operator.
+  2. 19:35:24: round 3 posted blocking problems on a new head. At 19:35:26 magnum began to withdraw the approval.
+  3. 19:35:26: in the same second, `magnum daemon-restart --when-idle` restarted the daemon. Its idle check counted
+     no running round, but the withdrawal was in flight. The dismissal request ended with "context canceled", and
+     magnum planned a retry in 5 minutes. GitHub had received the PUT and dismissed the review.
+  4. 19:40:40: the retry got "Validation Failed (HTTP 422)". Magnum read the review as dismissed already, by the
+     operator's login in its timeline, and wrote "withdrew approval ... (GitHub lists it as dismissed already: you
+     dismissed it)", then `review.auto_approve_stopped`: "magnum no longer approves ... as you: you dismissed it".
+  5. 20:41:56: round 4 found nothing again. The App's review approved, but no approval as the operator came: the
+     stop held it.
+
+  Magnum had dismissed the review itself. Magnum and the operator both act as the operator's login, so the
+  dismissal's actor cannot tell them apart; only magnum's own record of the request can. Now
+  (internal/engine/autoapprove_pending.go):
+  - A pending record. Before magnum sends an automatic approval or its withdrawal it records the request in kv:
+    `pr.<id>.auto_approve_pending` holds the head, `pr.<id>.auto_withdraw_pending` the review id, and no request
+    goes without its record. An answer that tells what GitHub did clears it: done, or refused with a 4xx
+    (`writeAnswered`), or a retry's 422 that finds the review still standing (a dismissal is for good, so no request
+    took). An answer magnum never got (a cancelled context, a timeout, a network failure, a 5xx, after which GitHub
+    may have applied the request) leaves it. A row that ends for good (failed after its attempts, its PR closed)
+    drops it, so a later dismissal or approval is never taken for it.
+  - Its own outcome. A retry that gets 422 and finds the review dismissed while a dismissal of it is pending, and a
+    retry or a restart's check (`resumeAutoPost`) that finds an approval of the head by the operator's login while
+    an approval of that head is pending, count it as magnum's own success: the normal `review.auto_approval_withdrawn`
+    or `review.auto_approved` event and toast, ending "(the first request's answer was lost)", with `answer_lost` in
+    its data. Nothing stops auto-approval, and nothing says "you dismissed it" or "you approved it by hand". For
+    approvals the marker in the body already told magnum's own; the record makes the approval of the head its own
+    whatever its body says (one edited on GitHub). Without a record the current rules stay: a dismissal found is by
+    whom the timeline says, and an approval without the marker is the operator's by hand.
+  - The restart waits for these writes. An approval or a withdrawal is work in flight from before its record until
+    its answer is recorded (`daemon.work`, the entry after this one), so `--when-idle`, `--drain`, the refusal
+    without them and the daemon's own idle restart wait for it. A stop that comes anyway (`--now`, a signal) gives a
+    write that started `operatorWriteGrace`, 30 s, to finish (`writeContext`: the request and the recording of its
+    answer run on a context the stop ends only after the grace), and a stop starts no new write. The bound: gh's
+    own timeout for the call is 2 minutes (`execx.DefaultTimeout`), longer than launchd lets a stopping daemon live
+    (ExitTimeOut 45 s, then SIGKILL); GitHub itself ends a request it takes more than 10 s on, so 30 s covers gh's
+    start, the request and its answer, and equals the shutdown's wait for the rounds, whose goroutines write the
+    approvals of the rounds they end. A write the grace runs out on is logged, not failed: the row stays posting or
+    dismissing, the record stays, and the next daemon settles it as above.
+  - Tests, failing first (mutations of the record, the approval rule, the grace, its bound, the clearing on a known
+    answer and the work mark each fail one): TestAWithdrawalWhoseAnswerWasLostIsMagnumsOwnWhenTheRetryFindsTheReviewDismissed
+    (the case above; a cancelled context, a timeout and a 502), TestTheOperatorsDismissalAfterAKnownOutcomeStillStopsAutoApproval,
+    TestAnApprovalWhoseAnswerWasLostIsMagnumsOwnWithoutItsMarker, TestAnApprovalByHandAfterARefusedPostStillStopsAutoApproval,
+    TestAStopDuringAWithdrawalLetsTheRequestFinishWithinTheGrace, TestAWithdrawalPastTheStopsGraceIsCancelledAndSettledByTheNextDaemon,
+    TestAnApprovalPastTheStopsGraceIsFoundByTheNextDaemonAsItsOwn and TestARestartWaitsForAnApprovalOrAWithdrawalInFlight
+    in engine; TestDaemonRestartWhenIdleWaitsForAHeavyJobAndAnApprovalWrite and TestTheDaemonsWorkInFlightRefusesAStop
+    in cli. TestAStopWhilePostingAnAutoApprovalLogsNoWarning's fake now answers when its grace ends.
+  - Rejected: telling magnum's dismissal from the operator's by the GitHub actor, which is the same login. The
+    auto_approvals row's posting or dismissing state as the record (a request GitHub refused leaves the row
+    dismissing too, and the operator's dismissal before the retry would then count as magnum's). A grace as long as
+    gh's own 2 minutes (launchd kills the daemon first). Reading the review before each retry instead of sending
+    again (the 422 tells the same, one read later).
+- **A restart waits for the heavy worker's jobs and the operator's approval writes** (2026-10-23, roadmap item 13
+  with spec 125, amends "A restart waits for a running notes curation and the retro"). The restart's guards, the
+  engine's `restartBusy` (the daemon's own idle restart for a new build, a landed skill version or a saved config)
+  and the CLI's `backgroundWork` (daemon-restart, `--when-idle`, `--drain`, install, uninstall, daemon-stop), counted
+  rounds, fix and whiteboard jobs and the learn jobs, but no job on the heavy worker, so an idle restart cancelled a
+  slot's provision of 20 to 45 minutes, a release or an eviction half way, and no GitHub write as the operator (the
+  entry before this one). Both count them now through one notion of the work in flight no registry row shows
+  (internal/engine/work.go): `beginWork` records a piece of work in this process and in the kv mark `daemon.work`
+  (`engine.WorkMark`: what, since when), rewritten under one lock whenever it changes, deleted when nothing is in
+  flight, and rewritten from the daemon's own state at every start, so a crashed daemon's mark goes. A heavy job
+  counts from the time it is queued until it ends ("heavy job provision:talkable/talkable", by its key), so the CLI
+  never finds a gap between two queued jobs; the shutdown drops the jobs still queued, which the next daemon queues
+  again from the registry. The refusal, the waits and the stop's consequence name them ("2 background job(s) in
+  flight: heavy job provision:talkable/talkable (since 15:04), withdrawal of approval 9001 of talkable/talkable#2
+  by zhuravel (since 15:04)"). A drain still starts heavy jobs (the reconcile, a pool's provision) and waits for
+  those too. Tests: TestARestartWaitsForAHeavyJobQueuedOrRunning (queued, running, ended, dropped at the shutdown,
+  a crashed daemon's mark at the start) in engine and TestDaemonRestartWhenIdleWaitsForAHeavyJobAndAnApprovalWrite
+  in cli; TestARefusalThatKeepsFailingIsSaidOnce now lets the reconcile its ticks queue run, as the worker does.
+  Rejected: counting a heavy job only while it runs (between two jobs the CLI could find nothing in flight), a kv
+  mark per kind of work, and holding the heavy worker during a drain (a release a closed PR needs would wait for the
+  restart).
 
 ## Learned rules
 

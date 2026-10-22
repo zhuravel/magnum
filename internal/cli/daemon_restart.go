@@ -77,11 +77,13 @@ func newDaemonRestartCmd(c *Context) *cobra.Command {
 			"agent on the current binary, after stopping a daemon that was started by hand. Without a loaded "+
 			"agent a running daemon is stopped (SIGTERM) and `magnum install` is suggested. The binary launchd runs "+
 			"checks the configuration and renders every prompt first (`<binary> config`); the restart is refused when it "+
-			"fails. While review rounds, a notes curation or critique, the retro, a skill edit or gate, a fix job or a whiteboard job are in flight the restart is refused, because "+
+			"fails. While review rounds, a notes curation or critique, the retro, a skill edit or gate, a fix job, a whiteboard job, "+
+			"a job on the heavy worker (a slot's provision, release or eviction, a slot request, the reconcile) or a GitHub "+
+			"write as you (an automatic approval or its withdrawal) are in flight the restart is refused, because "+
 			"it abandons them; --drain starts nothing new, waits for those in flight (a line every 15s, at most "+
 			"--timeout, default 2h) and then restarts; --when-idle waits the same way without stopping anything and "+
 			"restarts at the first moment nothing runs (it waits again when something starts in between); --now "+
-			"restarts at once. ctrl+c, or closing the terminal, stops a wait and lifts a drain; once the restart "+
+			"restarts at once, and gives a GitHub write as you that started 30s to finish. ctrl+c, or closing the terminal, stops a wait and lifts a drain; once the restart "+
 			"stops the daemon it finishes even after ctrl+c, so the daemon is not left down.",
 		func(pos []string) int { return runDaemonRestartCmd(c, pos, f) })
 	addRestartFlags(cmd, &f)

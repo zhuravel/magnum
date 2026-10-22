@@ -511,6 +511,7 @@ func TestARefusalThatKeepsFailingIsSaidOnce(t *testing.T) {
 		if err := h.e.Tick(h.ctx); err != nil {
 			t.Fatalf("tick: %v, want no exit", err)
 		}
+		h.settle() // the reconcile it queued runs, as the heavy worker runs it: a queued job holds the restart
 		h.clock.Add(restartRefuseRetry + time.Minute)
 	}
 	if checks != 3 {

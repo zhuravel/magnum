@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -112,18 +113,20 @@ func (f inFlight) cutShort() string {
 	}
 	if len(f.work) > 0 {
 		parts = append(parts, "cuts the background work short (a notes curation or a skill edit proposes nothing, a notes critique runs again later, "+
-			"a retro or a skill gate runs again, a fix loop ends and needs you, a whiteboard is lost)")
+			"a retro or a skill gate runs again, a fix loop ends and needs you, a whiteboard is lost, a slot job starts over, "+
+			"an approval or a withdrawal as you gets 30s to finish)")
 	}
 	return "stopping the daemon now " + strings.Join(parts, " and ")
 }
 
 // activeRounds reads what is in flight, read-only: the PRs whose review
 // round is claiming, reviewing or verifying, as "owner/repo#N (state)", and
-// the notes curation, the notes critique, the retro and the skill edit
-// running (backgroundWork). Stopping the daemon abandons the rounds (their
-// agents keep working in herdr but nobody collects the result, and the next
-// daemon starts them over) and cuts the curation, the critique, the retro
-// and the edit short.
+// the notes curation, the notes critique, the retro, the skill edit, the
+// heavy worker's jobs and the GitHub writes as the operator under way
+// (backgroundWork). Stopping the daemon abandons the rounds (their agents
+// keep working in herdr but nobody collects the result, and the next daemon
+// starts them over) and cuts the curation, the critique, the retro, the
+// edit and a slot job short.
 // No registry yet means nothing; any other
 // read failure is an error, so callers fail closed.
 func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
@@ -203,12 +206,14 @@ func (c *Context) gateRunning(ctx context.Context) (string, error) {
 // curation of owner/repo (since 15:04)", "notes critique of owner/repo
 // (proposal 3, since 15:04)", "retro (since 15:04)", "skill edit (since
 // 15:04)" (or "revert of skill version 2 (since 15:04)", which runs in the
-// edit's slot), "skill gate of proposal 3 (since 15:04)"; then the fix jobs
-// whose fixer works (fixesAtWork) and the whiteboard jobs whose writer works
+// edit's slot), "skill gate of proposal 3 (since 15:04)"; the daemon's work
+// in flight that no row shows (daemonWork: the heavy worker's jobs, the
+// GitHub writes as the operator); then the fix jobs whose fixer works
+// (fixesAtWork) and the whiteboard jobs whose writer works
 // (whiteboardsAtWork). A mark it cannot parse still counts.
 func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?, ?, ?, ?) AND value != '' ORDER BY key`,
-		engine.KVNotesCurating, engine.KVNotesCritic, engine.KVRetroRunning, engine.KVLearnEditing, engine.KVLearnGating)
+	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?, ?, ?, ?, ?) AND value != '' ORDER BY key`,
+		engine.KVNotesCurating, engine.KVNotesCritic, engine.KVRetroRunning, engine.KVLearnEditing, engine.KVLearnGating, engine.KVDaemonWork)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +224,10 @@ func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
 			return nil, err
+		}
+		if key == engine.KVDaemonWork {
+			out = append(out, daemonWork(value, now)...)
+			continue
 		}
 		what, since, detail := "retro", time.Time{}, ""
 		switch key {
@@ -278,6 +287,28 @@ func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 	}
 	whiteboards, err := whiteboardsAtWork(ctx, db, now)
 	return append(append(out, fixes...), whiteboards...), err
+}
+
+// daemonWork lists the daemon's work in flight that no registry row shows,
+// from its engine.KVDaemonWork mark: "heavy job provision:owner/repo (since
+// 15:04)" (queued or running on the heavy worker: a slot's provision,
+// release or eviction, a slot request, the reconcile), "approval of
+// owner/repo#N as login (since 15:04)", "withdrawal of approval 9001 of
+// owner/repo#N by login (since 15:04)". A mark it cannot parse still counts.
+func daemonWork(value string, now time.Time) []string {
+	var m engine.WorkMark
+	if json.Unmarshal([]byte(value), &m) != nil || len(m.Work) == 0 {
+		return []string{"daemon work"}
+	}
+	out := make([]string, 0, len(m.Work))
+	for _, w := range m.Work {
+		what := cmp.Or(w.What, "daemon work")
+		if !w.Started.IsZero() {
+			what += " (since " + inspClock(now, w.Started) + ")"
+		}
+		out = append(out, what)
+	}
+	return out
 }
 
 // whiteboardsAtWork lists the whiteboard jobs whose writer works, from their
