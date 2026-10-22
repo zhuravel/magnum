@@ -96,7 +96,8 @@ func (e *Engine) checkCodexLogin(ctx context.Context) {
 // codexLoginChanged acts on a new Codex login first seen (or, at the first
 // read, made) at since: it keeps the login, marks stale (the live Codex
 // sessions started before since) for a restart, lifts a usage-limit pause
-// of each kind Codex backs and overrules the budget reading
+// of each kind Codex backs, a lift a settle honours whether a pause was
+// there or not (noteLift), and overrules the budget reading
 // (overruleBudget), both the old account's, and says so in one
 // codex.login_changed event and one toast. A dry run only records it.
 func (e *Engine) codexLoginChanged(ctx context.Context, login usage.Login, since time.Time, stale []store.Session, had bool) {
@@ -112,6 +113,7 @@ func (e *Engine) codexLoginChanged(ctx context.Context, login usage.Login, since
 	e.markRestart(ctx, stale, restartLoginChanged)
 	var lifted []string
 	for _, kind := range e.budgetKinds() {
+		e.noteLift(ctx, kind) // the old account's limits, a pause or not, pause the kind no more at a settle
 		if p, ok := e.toolPause(ctx, kind); ok && p.Reason == string(agents.HealthUsageLimit) {
 			e.clearToolPause(ctx, kind)
 			e.event(ctx, "info", "tool:"+kind, "tool.resumed", fmt.Sprintf("%s pause (%s) lifted: the Codex login changed", kind, p.Reason), nil)

@@ -839,10 +839,13 @@ func (e *Engine) stillPausedNote(ctx context.Context) string {
 // nothing, yet it holds the full re-reviews whose Codex turns would refresh
 // a reading a switch of Codex account made stale). Either is one
 // tool.resumed event, and the answer's note says what it means ("" when
-// nothing is overruled).
+// nothing is overruled). Every resume of the kind, a pause or not, is a
+// lift (noteLift): a reviewer's failure from before it pauses the kind no
+// more at a round's settle.
 func (e *Engine) liftToolPause(ctx context.Context, tool string) string {
 	p, paused := e.toolPause(ctx, tool)
 	e.clearToolPause(ctx, tool)
+	e.noteLift(ctx, tool)
 	switch {
 	case paused && p.Reason == BudgetPauseReason:
 		e.overruleBudget(ctx)

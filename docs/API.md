@@ -14856,6 +14856,15 @@ type RoleReport struct {
 	Path    string // the report file when Status is ok
 	Detail  string
 	Health  *agents.Health // pane classification when it explains the status
+	// CarriedFrom is, for a report a continued round carried from its paused
+	// round (existingReports: RunID is ""), when the paused round's turn of
+	// the role ended: the end of the role's latest run of the round on this
+	// head, else the paused round's stop (the latest end of the round's runs
+	// on this head). Zero for a report of this round's own run or check, and
+	// when the runs cannot tell. The engine pauses a kind for a carried
+	// health status only when this, if known, is after the kind's pause was
+	// last lifted on purpose.
+	CarriedFrom time.Time
 }
     RoleReport is what one non-judge role produced.
 
@@ -17506,6 +17515,13 @@ func KVScreenWidths(screen string) string
 
 func KVToolBackoff(tool string) string
     KVToolBackoff holds the last fallback pause of a tool (a Go duration).
+
+func KVToolPauseLiftedAt(tool string) string
+    KVToolPauseLiftedAt holds when a tool's pause was last lifted on purpose
+    (FormatTime): by `magnum resume --tool`, with or without a daemon, or,
+    for a kind Codex backs, by a change of Codex login; a pause that expires
+    records nothing. A reviewer's health failure from before it pauses the tool
+    no more at a round's settle.
 
 func KVToolPausedDetail(tool string) string
     KVToolPausedDetail holds the pane line that caused a tool pause.

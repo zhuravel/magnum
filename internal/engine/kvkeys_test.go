@@ -34,6 +34,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"store.KVToolPausedDetail", store.KVToolPausedDetail("codex"), "codex.paused_detail"},
 		{"store.KVToolPausedLogin", store.KVToolPausedLogin("codex"), "codex.paused_login"},
 		{"store.KVToolBackoff", store.KVToolBackoff("claude"), "claude.backoff"},
+		{"store.KVToolPauseLiftedAt", store.KVToolPauseLiftedAt("codex"), "codex.pause_lifted_at"},
 		{"store.KVIdentityCheck", store.KVIdentityCheck("zhuravel"), "identity.zhuravel.check"},
 		{"store.KVIdentityError", store.KVIdentityError("zhuravel"), "identity.zhuravel.error"},
 		{"store.KVIdentityTickError", store.KVIdentityTickError("app"), "identity.app.tick_error"},

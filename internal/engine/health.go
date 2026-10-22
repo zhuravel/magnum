@@ -248,6 +248,26 @@ func (e *Engine) clearToolPause(ctx context.Context, tool string) {
 		store.KVToolPausedLogin(tool), kvToolPausedLoginAt(tool))
 }
 
+// noteLift records that tool's pause is lifted now on purpose
+// (store.KVToolPauseLiftedAt): `magnum resume --tool` and, for the kinds
+// Codex backs, a change of Codex login; never a pause that expires or a
+// login check that passes. A reviewer's failure from before pauses the kind
+// no more at a round's settle (overruledFailure).
+func (e *Engine) noteLift(ctx context.Context, tool string) {
+	e.setKV(ctx, store.KVToolPauseLiftedAt(tool), store.FormatTime(e.now()))
+}
+
+// liftedSince is when tool's pause was last lifted on purpose (noteLift),
+// true when that was at failed, the time a health failure happened, or
+// later. A zero failed (not known) is after every lift.
+func (e *Engine) liftedSince(ctx context.Context, tool string, failed time.Time) (time.Time, bool) {
+	if failed.IsZero() {
+		return time.Time{}, false
+	}
+	lifted, ok := e.kvTime(ctx, store.KVToolPauseLiftedAt(tool))
+	return lifted, ok && !failed.After(lifted)
+}
+
 // kvToolPausedLoginAt holds when the login stamp (store.KVToolPausedLogin)
 // was recorded (store.FormatTime): where the hold loginStampHold caps began.
 func kvToolPausedLoginAt(tool string) string { return tool + ".paused_login_at" }

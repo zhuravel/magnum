@@ -801,6 +801,14 @@ before the current login pauses no kind: the session restarts, and its round ret
 settings screen's Runtime section) does the same by hand for any kind, Claude included, whose login magnum
 does not watch.
 
+A round's end pauses a kind again for a reviewer's usage limit or lost login only when it came after the
+kind's pause was last lifted on purpose: by `magnum resume --tool <kind>` (or `all`, with or without a
+daemon, a pause or not) or, for `codex`, by a change of Codex login; a pause that ends by itself lifts
+nothing. A paused round's continue carries its reviewers' reports, and the end of the paused turn is the
+failure's time; a run of the round has its own end. A failure from before the lift pauses nothing, and an
+info event under the PR says so (`round.pause_skipped`: "codex-review's usage_limit is from before the
+codex pause was lifted at 22:50; not paused again"); the review still names the report as missing.
+
 Magnum meters its own GitHub calls. Every GraphQL call tells it the points GitHub charged and the rate
 limit left, every REST call counts as one request against the core budget, and the daemon adds them up
 per identity, per op and per clock hour (the last 24 hours, written to the registry at most once a minute),

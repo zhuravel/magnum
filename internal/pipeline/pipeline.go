@@ -476,6 +476,15 @@ type RoleReport struct {
 	Path    string // the report file when Status is ok
 	Detail  string
 	Health  *agents.Health // pane classification when it explains the status
+	// CarriedFrom is, for a report a continued round carried from its paused
+	// round (existingReports: RunID is ""), when the paused round's turn of
+	// the role ended: the end of the role's latest run of the round on this
+	// head, else the paused round's stop (the latest end of the round's runs
+	// on this head). Zero for a report of this round's own run or check, and
+	// when the runs cannot tell. The engine pauses a kind for a carried
+	// health status only when this, if known, is after the kind's pause was
+	// last lifted on purpose.
+	CarriedFrom time.Time
 }
 
 // RoundResult is the round's verdict. The engine decides the PR state from
@@ -1062,10 +1071,15 @@ func (rd *round) setAsideStale() error {
 // asked for. A file whose run did not verify it was written after that run
 // ended (a reviewer that kept working): it is not read, with a warning.
 // When the runs cannot be read, the files on disk are read unchecked, with
-// a warning that names the read failure.
+// a warning that names the read failure. Each report carries when the
+// paused round's turn of its role ended (RoleReport.CarriedFrom): its
+// latest run's end, else the paused round's stop, the latest end of the
+// round's runs on this head.
 func (rd *round) existingReports(ctx context.Context) {
-	verified := map[string]bool{} // role -> its latest run of the paused round on this head is verified
-	ran := map[string]bool{}      // role -> the paused round ran it on this head
+	verified := map[string]bool{}   // role -> its latest run of the paused round on this head is verified
+	ran := map[string]bool{}        // role -> the paused round ran it on this head
+	ended := map[string]time.Time{} // role -> its latest run of the paused round on this head ended then (zero: not yet)
+	var stopped time.Time           // the latest end of the paused round's runs on this head
 	runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID)
 	unchecked := err != nil
 	if unchecked {
@@ -1076,6 +1090,10 @@ func (rd *round) existingReports(ctx context.Context) {
 		if r.Round == rd.in.Round && r.TargetSHA == rd.in.TargetSHA {
 			verified[r.Role] = r.State == store.RunVerified
 			ran[r.Role] = true
+			ended[r.Role] = store.Deref(r.EndedAt)
+			if r.EndedAt != nil && r.EndedAt.After(stopped) {
+				stopped = *r.EndedAt
+			}
 		}
 	}
 	without := map[string]string{} // role -> why the paused round's judge went without its report
@@ -1094,6 +1112,10 @@ func (rd *round) existingReports(ctx context.Context) {
 			present = false
 		}
 		rep := rd.newReport(role, "")
+		rep.CarriedFrom = ended[role.Name]
+		if rep.CarriedFrom.IsZero() { // no run of the role (skipped as logged out), or one that never ended
+			rep.CarriedFrom = stopped
+		}
 		switch {
 		case present:
 			rep.Status, rep.Path = ReportOK, p

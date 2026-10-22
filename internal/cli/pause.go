@@ -310,6 +310,11 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 			if err != nil {
 				return "", err
 			}
+			// A lift, a pause or not, as the daemon's resume records it: a
+			// reviewer's failure from before pauses the kind no more at a settle.
+			if err := d.Store.SetKV(ctx, store.KVToolPauseLiftedAt(t), store.FormatTime(d.now())); err != nil {
+				return "", err
+			}
 			if had {
 				lifted = append(lifted, t)
 				budget = budget || reason == engine.BudgetPauseReason

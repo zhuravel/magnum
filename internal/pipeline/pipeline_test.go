@@ -847,6 +847,54 @@ func TestAContinueCountsOnlyTheRolesItsPausedRoundRan(t *testing.T) {
 	}
 }
 
+// A continue's carried reports say when the paused round's turn of their
+// role ended (CarriedFrom), which the engine compares with the last lift of
+// the role's kind: the end of the role's own run of the paused round on
+// this head (codex-review's usage limit), else, for a role the paused round
+// skipped without a run (a logged-out one), the paused round's stop, the
+// latest end of its runs on this head (the judge's); a run of the round on
+// another head, which a restart left behind, counts for neither.
+func TestAContinuesCarriedReportsSayWhenThePausedTurnEnded(t *testing.T) {
+	e := newEnv(t)
+	reviewerEnded := e.clock.Now().Add(-40 * time.Minute)
+	judgeEnded := e.clock.Now().Add(-30 * time.Minute)
+	otherHeadEnded := e.clock.Now().Add(-10 * time.Minute)
+	for _, r := range []store.Run{
+		{Role: string(agents.RoleCodexReview), TargetSHA: target, State: store.RunFailed, Outcome: new(string(agents.HealthUsageLimit)), EndedAt: &reviewerEnded},
+		{Role: store.RoleJudge, TargetSHA: target, State: store.RunFailed, Outcome: new(OutcomeUsageLimit), EndedAt: &judgeEnded},
+		{Role: string(agents.RoleCodexReview), TargetSHA: "0ld0ld0ld0ld0ld0ld0ld0ld0ld0ld0ld0ld0ld0", State: store.RunFailed, Outcome: new(ReportMissing), EndedAt: &otherHeadEnded},
+	} {
+		r.PRID, r.Round, r.Kind = e.pr.ID, 1, store.RunInitial
+		if _, err := e.st.CreateRun(e.ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := json.Marshal(MissingReports{Round: 1, Head: target, Missing: []MissingReport{
+		{Role: string(agents.RoleCodexReview), Status: string(agents.HealthUsageLimit)}, {Role: string(agents.RoleClaude), Status: string(agents.HealthLoginRequired)}}})
+	if err := e.st.SetKV(e.ctx, KVMissingReports(e.pr.ID), string(b)); err != nil {
+		t.Fatal(err)
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(519, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindContinue)
+	in.ContinueRunID = "r-20261003T100000-7"
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	for role, want := range map[agents.Role]struct {
+		status string
+		from   time.Time
+	}{
+		agents.RoleCodexReview: {string(agents.HealthUsageLimit), reviewerEnded},
+		agents.RoleClaude:      {string(agents.HealthLoginRequired), judgeEnded},
+	} {
+		rep := res.Reports[role]
+		if rep.Status != want.status || rep.RunID != "" || !rep.CarriedFrom.Equal(want.from) {
+			t.Errorf("%s report = %+v, want %s carried from %v", role, rep, want.status, want.from)
+		}
+	}
+}
+
 func TestContinueSkipsReviewersAndReusesReports(t *testing.T) {
 	e := newEnv(t)
 	dir := e.reportDir()

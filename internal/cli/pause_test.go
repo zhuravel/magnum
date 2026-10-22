@@ -212,6 +212,35 @@ func TestTheOfflineResumeAtTheSoftCapOverrulesTheReading(t *testing.T) {
 	}
 }
 
+// TestTheOfflineResumeRecordsTheLiftOfEachKind: with no daemon, `magnum
+// resume --tool` records when it lifted each kind it names, a pause or not,
+// as the daemon's resume does, so the daemon's next settle of a paused
+// round's continue pauses the kind no more for a reviewer's failure from
+// before (talkable#12069); a kind it does not name keeps no lift.
+func TestTheOfflineResumeRecordsTheLiftOfEachKind(t *testing.T) {
+	h := newActHarness(t)
+	_ = h.st.SetKV(h.ctx, store.KVToolPausedUntil("codex"), store.FormatTime(h.now.Add(time.Hour)))
+	_ = h.st.SetKV(h.ctx, store.KVToolPausedReason("codex"), "usage_limit")
+	if code := h.cmd("resume", "--tool", "codex"); code != 0 {
+		t.Fatalf("resume codex: exit %d: %s", code, h.errb.String())
+	}
+	if v, ok := h.kv(store.KVToolPauseLiftedAt("codex")); !ok || v != store.FormatTime(h.now) {
+		t.Errorf("codex lifted at %q %v, want now", v, ok)
+	}
+	if v, ok := h.kv(store.KVToolPauseLiftedAt("claude")); ok {
+		t.Errorf("a resume of codex recorded a lift of claude at %q", v)
+	}
+	_ = h.st.DeleteKV(h.ctx, store.KVToolPauseLiftedAt("codex"))
+	if code := h.cmd("resume", "--tool", "all"); code != 0 {
+		t.Fatalf("resume all: exit %d: %s", code, h.errb.String())
+	}
+	for _, kind := range rolesAllKinds(h.d.Cfg) {
+		if v, ok := h.kv(store.KVToolPauseLiftedAt(kind)); !ok || v != store.FormatTime(h.now) {
+			t.Errorf("%s lifted at %q %v, want now", kind, v, ok)
+		}
+	}
+}
+
 // With a daemon running, pause and resume go through its request handler
 // (the engine's transitions); the CLI writes nothing itself.
 func TestPauseAndResumeThroughTheDaemon(t *testing.T) {

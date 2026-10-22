@@ -51,6 +51,13 @@ func KVToolPausedLogin(tool string) string { return tool + ".paused_login" }
 // KVToolBackoff holds the last fallback pause of a tool (a Go duration).
 func KVToolBackoff(tool string) string { return tool + ".backoff" }
 
+// KVToolPauseLiftedAt holds when a tool's pause was last lifted on purpose
+// (FormatTime): by `magnum resume --tool`, with or without a daemon, or, for
+// a kind Codex backs, by a change of Codex login; a pause that expires
+// records nothing. A reviewer's health failure from before it pauses the
+// tool no more at a round's settle.
+func KVToolPauseLiftedAt(tool string) string { return tool + ".pause_lifted_at" }
+
 // KVIdentityCheck holds "pass" or "fail" from an identity's last Check. An
 // identity is healthy unless it or KVIdentityTickError says otherwise.
 func KVIdentityCheck(name string) string { return "identity." + name + ".check" }

@@ -2072,6 +2072,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and replacing processes are separate asks. Rejected: a key on the board's PR rows, since a switch of
   account concerns every PR's sessions of the kind at once; parking busy sessions at once, which would cut
   a judge's turn short.
+- **A round's settle pauses a kind again only for a reviewer's failure after the kind's last lift**
+  (2026-10-22, spec 120). Round 4 of talkable#12069 paused at 22:14 on the old Codex account (the judge's
+  usage limit; its codex-review report was a usage limit too); at 22:50:54 the login change lifted the
+  codex pause and parked the judge; the round continued at 22:54:37 and the resumed judge posted at
+  22:57:48, and in the same second the settle wrote `tool.paused: codex paused (usage_limit) until 02:57:
+  not available`, which held two other PRs for an hour. `finish` turns every reviewer report with a
+  pause status into a pause; the codex-review report the continue carried from its paused round had no
+  run of the continued round, so spec 119's stale check (which needs a run) did not apply and the unproven
+  pause took the one-hour fallback; `magnum resume --tool codex` before a continue had the same end. Now
+  each deliberate lift is recorded per kind (kv `<kind>.pause_lifted_at`, `store.KVToolPauseLiftedAt`):
+  every `magnum resume --tool <kind>` or `all`, through the daemon (`liftToolPause`) or without one (the
+  CLI's offline resume), a pause or not, since the resume is the operator's word that the kind works; and,
+  for each kind Codex backs, a change of Codex login (`codexLoginChanged`), a pause or not, since the old
+  account's limits are moot. A pause that expires and a login check that passes are no lift. The failure's
+  time is the report's run's end (`ProvenAt`) for a report with a run of the round, else the new
+  `pipeline.RoleReport.CarriedFrom`, which `existingReports` sets for a continue's carried report: the end
+  of the role's latest run of the paused round on the head, and, for a role with no run there (skipped as
+  logged out) or one that never ended, the paused round's stop, the latest end of its runs on the head.
+  That run's end and not the PR's paused transition, which no column dates, nor `pr.<id>.work_ended`,
+  which a whiteboard or fix job after the pause moves past the lift and which the continue's own settle
+  has not written yet: the run is the failure itself, and the round's stop, a later time, is only the
+  fallback, which errs toward pausing as before. A report whose failure is not after the kind's last lift
+  pauses nothing (`overruledFailure`), with one `round.pause_skipped` info event under the PR
+  ("codex-review's usage_limit is from before the codex pause was lifted at 22:50; not paused again");
+  a failure with no known time (no run, nothing carried, a run without an end) is after every lift, so a
+  reviewer the login check skipped this round still pauses its kind. A failure in a Codex session older
+  than the current login still goes spec 119's way first (its session restarts, `codex.stale_usage_limit`).
+  The reports themselves are unchanged: the continued judge still hears the report as missing, and the
+  review approves nothing. Rejected: never pausing from a carried report, which would drop a failure that
+  came after an earlier resume (the operator resumed while the paused round still ran); clearing the
+  reports' statuses at the lift, which would tell the continued judge a report was there that it never
+  read.
 
 ## Screens and commands
 

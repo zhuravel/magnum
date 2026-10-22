@@ -182,7 +182,10 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 
 	// Role health → pauses of the roles' agent kinds (the round itself may
 	// have posted). A model limit never pauses a kind: the pipeline switched
-	// models, and reports a usage limit when no fallback was left.
+	// models, and reports a usage limit when no fallback was left. A failure
+	// from before the kind's pause was last lifted on purpose, a continue's
+	// report carried from its paused round included, pauses nothing
+	// (overruledFailure).
 	paused := map[string]bool{}
 	for _, role := range slices.Sorted(maps.Keys(res.Reports)) {
 		rep := res.Reports[role]
@@ -193,11 +196,18 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		if tool == "" || paused[tool] || (res.Pause != nil && res.Pause.Tool == tool) {
 			continue
 		}
-		paused[tool] = true
 		p := pipeline.Pause{Kind: rep.Status, Tool: tool, Detail: rep.Detail, Proven: rep.RunID != "", RunID: rep.RunID} // a reviewer the preflight skipped has no run
+		// When the failure happened: its run's end, else the turn of the
+		// paused round a continue carried the report from.
+		failed := rep.CarriedFrom
 		if p.Proven {
 			p.ProvenAt = e.runEnded(ctx, rep.RunID)
+			failed = p.ProvenAt
 		}
+		if e.overruledFailure(ctx, subject, rep, p, failed) {
+			continue
+		}
+		paused[tool] = true
 		if rep.Health != nil && rep.Health.ResetAt != nil {
 			p.Until = *rep.Health.ResetAt
 		}
@@ -631,6 +641,29 @@ func (e *Engine) reportKind(w *config.Watch, rep pipeline.RoleReport) string {
 		return r.AgentKind()
 	}
 	return ""
+}
+
+// overruledFailure reports whether rep's health failure, which happened at
+// failed, pauses its kind (p.Tool) no more at the round's settle: the
+// kind's pause was lifted on purpose at that time or later (liftedSince),
+// and the failure is no Codex session's older than the current login,
+// whose session pauseTool restarts instead (staleLimit). It says so in one
+// round.pause_skipped info event under subject, the PR's. talkable#12069
+// (2026-10-22): a continue's settle paused codex for an hour from the
+// codex-review usage limit it carried from its paused round, after the
+// login change had lifted that pause.
+func (e *Engine) overruledFailure(ctx context.Context, subject string, rep pipeline.RoleReport, p pipeline.Pause, failed time.Time) bool {
+	lifted, ok := e.liftedSince(ctx, p.Tool, failed)
+	if !ok {
+		return false
+	}
+	if _, stale := e.staleLimit(ctx, p); stale {
+		return false
+	}
+	e.event(ctx, "info", subject, "round.pause_skipped",
+		fmt.Sprintf("%s's %s is from before the %s pause was lifted at %s; not paused again", rep.Role, rep.Status, p.Tool, lifted.Local().Format("15:04")),
+		map[string]any{"role": rep.Role, "status": rep.Status, "tool": p.Tool, "failed_at": store.FormatTime(failed), "lifted_at": store.FormatTime(lifted)})
+	return true
 }
 
 // runEnded is when the run id names ended (its ended_at), the time a
