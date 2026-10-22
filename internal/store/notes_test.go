@@ -123,7 +123,7 @@ func TestNotesProposalsAreKeptWhateverBecomesOfThem(t *testing.T) {
 		t.Errorf("pending = %d, want 3", n)
 	}
 	clk.Add(time.Hour)
-	p, err := st.DecideNotesProposal(ctx, applied.ID, []string{ProposalPending}, ProposalApplied, "", time.Time{},
+	p, err := st.DecideNotesProposal(ctx, applied.ID, []string{ProposalPending}, ProposalApplied, DecidedByOperator, "", time.Time{},
 		&NotesVersionInput{Source: NotesFromCuration, Content: proposed})
 	if err != nil {
 		t.Fatal(err)
@@ -131,13 +131,13 @@ func TestNotesProposalsAreKeptWhateverBecomesOfThem(t *testing.T) {
 	if p.State != ProposalApplied || p.AppliedVersionID == nil || p.DecidedAt == nil {
 		t.Fatalf("applied = %+v", p)
 	}
-	if _, err := st.DecideNotesProposal(ctx, rejected.ID, []string{ProposalPending}, ProposalRejected, "keep the probes list short", time.Time{}, nil); err != nil {
+	if _, err := st.DecideNotesProposal(ctx, rejected.ID, []string{ProposalPending}, ProposalRejected, DecidedByOperator, "keep the probes list short", time.Time{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DecideNotesProposal(ctx, expired.ID, []string{ProposalPending}, ProposalExpired, "older than 7 days", time.Time{}, nil); err != nil {
+	if _, err := st.DecideNotesProposal(ctx, expired.ID, []string{ProposalPending}, ProposalExpired, DecidedByMagnum, "older than 7 days", time.Time{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DecideNotesProposal(ctx, expired.ID, []string{ProposalPending}, ProposalApplied, "", time.Time{}, nil); !errors.Is(err, ErrConflict) {
+	if _, err := st.DecideNotesProposal(ctx, expired.ID, []string{ProposalPending}, ProposalApplied, DecidedByOperator, "", time.Time{}, nil); !errors.Is(err, ErrConflict) {
 		t.Errorf("deciding an expired proposal again: %v, want a conflict", err)
 	}
 	invalid, err := st.CreateNotesProposal(ctx, NotesProposalInput{RepoID: repo.ID, Kind: ProposalCuration, BaseVersionID: base.ID,
@@ -193,7 +193,7 @@ func TestARestoreNeverHidesTheVersionItProposes(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.Add(time.Hour)
-	applied, err := st.DecideNotesProposal(ctx, cur.ID, []string{ProposalPending}, ProposalApplied, "", time.Time{},
+	applied, err := st.DecideNotesProposal(ctx, cur.ID, []string{ProposalPending}, ProposalApplied, DecidedByOperator, "", time.Time{},
 		&NotesVersionInput{Source: NotesFromCuration, Content: proposed, Dedupe: true})
 	if err != nil {
 		t.Fatal(err)

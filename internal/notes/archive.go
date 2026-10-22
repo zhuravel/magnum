@@ -143,29 +143,69 @@ func lineWord(n int) string { return textx.Count(n, "line", "lines") }
 // the base notes is in changes.json's sections (sections, by normalized
 // heading). A proposal with an archive names it in its notes.
 func checkPreserved(p Proposal, base State, sections map[string]Change) []string {
+	names := preserveNames{current: scratchCurrent, proposal: scratchProposal, archive: scratchHarness + "/" + ArchiveName}
+	out := lostLines(base, p.State, sections, names)
+	for _, s := range Sections(base.Notes) {
+		if _, ok := sections[normalize(s)]; !ok {
+			out = append(out, fmt.Sprintf("current section %q of %s is not in %s's sections (kept, merged or removed, with a reason)", s, scratchCurrent, scratchChanges))
+		}
+	}
+	return append(out, archiveNamed(p.State, names)...)
+}
+
+// CheckPreserved is the preservation check an apply runs before it writes
+// anything (engine.ApplyNotesProposal), for the operator and the critic
+// alike: after, the state the apply would write (a curation's proposed
+// state, or a stale one's merge with the notes' changes since), loses no
+// line of before, the notes now. Every non-empty line of before's notes is
+// in after's notes or among the lines after adds to the archive, word for
+// word (the title, a leaking line and a "## " heading the curator's changes
+// account for exempt, as in Validate); the archive keeps every line it held.
+// Unlike Validate it asks only that nothing be lost: not that changes.json
+// account for every section of before (a section a judge added since the
+// proposal was made is kept by the merge, line by line), nor that the notes
+// name the archive (a recovery leaves the notes text as it is). nil = the
+// apply may go on; a proposal that fails it can only be rejected or curated
+// again.
+func CheckPreserved(before, after State, changes Changes) []string {
+	sections := map[string]Change{}
+	for _, ch := range changes.Sections {
+		sections[normalize(ch.Name)] = ch
+	}
+	return lostLines(before, after, sections, preserveNames{current: "the notes now", proposal: "what the apply would write", archive: ArchiveName})
+}
+
+// preserveNames are how the preservation problems name the notes before,
+// the proposed notes and the archive: the scratch directory's files for a
+// curator's nudge, plainer words for an apply's refusal.
+type preserveNames struct{ current, proposal, archive string }
+
+// lostLines lists what after loses of before: the archive's lines it no
+// longer holds, then the notes' lines neither in after's notes nor added to
+// its archive (checkPreserved's exemptions apply).
+func lostLines(before, after State, sections map[string]Change, names preserveNames) []string {
 	var out []string
-	archivePath := scratchHarness + "/" + ArchiveName
-	before, after := counts(contentLines(base.Archive())), counts(contentLines(p.State.Archive()))
+	had, has := counts(contentLines(before.Archive())), counts(contentLines(after.Archive()))
 	var lost []string
 	added := map[string]bool{}
-	for line, n := range after {
-		if n > before[line] {
+	for line, n := range has {
+		if n > had[line] {
 			added[line] = true
 		}
 	}
-	for _, line := range contentLines(base.Archive()) {
-		if after[line] < before[line] {
+	for _, line := range contentLines(before.Archive()) {
+		if has[line] < had[line] {
 			lost = append(lost, line)
-			before[line]-- // each missing occurrence once
+			had[line]-- // each missing occurrence once
 		}
 	}
 	if len(lost) > 0 {
-		out = append(out, fmt.Sprintf("the archive (%s) lost %s it held; the archive keeps every line: %s", archivePath, lineWord(len(lost)), quoteLines(lost)))
+		out = append(out, fmt.Sprintf("the archive (%s) lost %s it held; the archive keeps every line: %s", names.archive, lineWord(len(lost)), quoteLines(lost)))
 	}
-	proposed := counts(contentLines(p.State.Notes))
+	proposed := counts(contentLines(after.Notes))
 	var missing []string
 	seen := map[string]bool{}
-	for i, line := range contentLines(base.Notes) {
+	for i, line := range contentLines(before.Notes) {
 		switch {
 		case i == 0 && strings.HasPrefix(line, "# "), proposed[line] > 0, added[line], seen[line], lineLeaks(line), accountedHeading(line, sections):
 			continue
@@ -176,17 +216,18 @@ func checkPreserved(p Proposal, base State, sections map[string]Change) []string
 	if len(missing) > 0 {
 		out = append(out, fmt.Sprintf("%s of %s %s neither in %s nor added to the archive (%s) word for word (trailing spaces aside); "+
 			"keep each line, or move it to the archive with what became of it: %s",
-			lineWord(len(missing)), scratchCurrent, isAre(len(missing)), scratchProposal, archivePath, quoteLines(missing)))
-	}
-	for _, s := range Sections(base.Notes) {
-		if _, ok := sections[normalize(s)]; !ok {
-			out = append(out, fmt.Sprintf("current section %q of %s is not in %s's sections (kept, merged or removed, with a reason)", s, scratchCurrent, scratchChanges))
-		}
-	}
-	if len(p.State.Archive()) > 0 && !strings.Contains(string(p.State.Notes), ArchiveName) {
-		out = append(out, fmt.Sprintf("%s does not name the archive %s: name it once, with %q", scratchProposal, ArchiveName, ArchiveLine))
+			lineWord(len(missing)), names.current, isAre(len(missing)), names.proposal, names.archive, quoteLines(missing)))
 	}
 	return out
+}
+
+// archiveNamed is the problem of a state with an archive its notes do not
+// name.
+func archiveNamed(s State, names preserveNames) []string {
+	if len(s.Archive()) > 0 && !strings.Contains(string(s.Notes), ArchiveName) {
+		return []string{fmt.Sprintf("%s does not name the archive %s: name it once, with %q", names.proposal, ArchiveName, ArchiveLine)}
+	}
+	return nil
 }
 
 // accountedHeading reports whether line is a "## " heading that changes.json

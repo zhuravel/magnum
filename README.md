@@ -3822,8 +3822,17 @@ board's and the dashboard's titles count the proposals to review. `magnum notes 
 the notes and the archive's additions as colored unified diffs, the harness changes with the curator's
 reasons and the sizes before and after (the archive's apart), then asks y/N (on a terminal; `--json` prints the data for scripts). `y` applies it under the
 notes lock, as the judges take it: the live notes are read again and must still be what the review showed
-(else nothing is written and `--review` again shows the proposal against them), then the notes and the
-harness are replaced and the version recorded. `n` rejects it, with an optional `--reason` the next
+(else nothing is written and `--review` again shows the proposal against them), the proposal is claimed
+(state `applying`) before anything is written, then the notes and the harness are replaced and the version
+recorded. A claim is a compare-and-set, so when the notes critic decided the proposal meanwhile nothing is
+written and the answer names who decided it ("proposal 12 is already applied by the critic at …"). A crash
+between the claim and the record leaves the proposal `applying`: the daemon's next start finishes it when the
+notes hold what it wrote, and puts it back to waiting when they hold what it found (a `notes.apply_finished`
+or `notes.apply_reverted` warning). A curation that would lose a line of the notes now (the curation rule
+above, run again on what the apply would write) cannot be applied, by you or by the critic: the review says
+"CANNOT BE APPLIED" and quotes the lines, and `y` asks the daemon for a new curation from the notes now
+that reads it (kept as superseded). A restore is exempt: it brings back a version you chose, and the
+registry keeps the state it replaces. `n` rejects it, with an optional `--reason` the next
 curation reads; any other answer leaves it waiting.
 
 **Stale proposals.** Judges keep writing the notes while a proposal waits, so a proposal goes stale: its

@@ -82,13 +82,15 @@ const (
 )
 
 // proposal stores a curation proposal from the notes on disk (the base)
-// to newNotes with run_spec.sh alone.
+// to newNotes with run_spec.sh alone, the lines it drops in the archive
+// (archiveV2), so nothing is lost.
 func (h *notesHarness) proposal() store.NotesProposal {
 	h.t.Helper()
 	base := h.write(oldNotes, map[string]string{"run_spec.sh": "bin/rspec \"$@\"\n", "campaign_snapshot_probes_spec.rb": "probe\n"})
 	bv := h.record(base, store.NotesFromImport)
 	proposed := engine.ContentOf(notes.State{Exists: true, Notes: []byte(newNotes),
-		Files: []notes.Blob{{Path: "run_spec.sh", SHA256: notes.TextSHA([]byte("bin/rspec \"$@\"\n")), Body: []byte("bin/rspec \"$@\"\n")}}})
+		Files: []notes.Blob{{Path: "run_spec.sh", SHA256: notes.TextSHA([]byte("bin/rspec \"$@\"\n")), Body: []byte("bin/rspec \"$@\"\n")}}}.
+		WithArchive([]byte(archiveV2)))
 	changes, _ := json.Marshal(notes.Changes{
 		Sections: []notes.Change{{Name: "Tests", Action: notes.ActionKept, Reason: "every review runs specs"}},
 		Files: []notes.Change{
@@ -145,7 +147,7 @@ func TestNotesReviewYAppliesTheProposalUnderTheLock(t *testing.T) {
 		t.Errorf("colors on a pipe:\n%s", out)
 	}
 	live, err := notes.ReadState(h.nr)
-	if err != nil || string(live.Notes) != newNotes || len(live.Files) != 1 || live.Files[0].Path != "run_spec.sh" {
+	if err != nil || string(live.Notes) != newNotes || len(live.Files) != 2 || string(live.Archive()) != archiveV2 || live.Files[1].Path != "run_spec.sh" {
 		t.Fatalf("live notes = %q %+v, %v", live.Notes, live.Files, err)
 	}
 	got := h.proposalNow(p.ID)
@@ -440,7 +442,7 @@ func TestNotesApplyWaitsForTheJudgesLock(t *testing.T) {
 	prev := notesLockWait
 	notesLockWait = 0
 	t.Cleanup(func() { notesLockWait = prev })
-	if _, err := notesApply(context.Background(), h.st, h.nr, p, "", store.NotesContent{}, false, h.now); !errors.Is(err, notes.ErrBusy) {
+	if _, err := notesApply(context.Background(), h.st, h.nr, p, "", "", h.now); !errors.Is(err, notes.ErrBusy) {
 		t.Fatalf("apply under a held lock: %v", err)
 	}
 	if got := h.proposalNow(p.ID); got.State != store.ProposalPending {

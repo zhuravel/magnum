@@ -6248,6 +6248,12 @@ const (
     MemoryUnknown is a sample without one.
 
 const (
+	ApplyFinished = "finished" // the files held what the apply wrote (or part of it, completed): recorded applied
+	ApplyReverted = "reverted" // the files held what the apply found, or something else: the proposal waits again
+)
+    Outcomes of RecoverNotesApply.
+
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -6614,6 +6620,18 @@ var (
 	// finished writing.
 	ErrFixReportPartial = errors.New("fix report: a section is missing")
 )
+var (
+	// ErrNotesChanged: the notes are not what the decider saw.
+	ErrNotesChanged = errors.New("the notes changed since the proposal was reviewed")
+	// ErrTargetChanged: the state the apply would write is not the one the
+	// decider approved (its fingerprint differs).
+	ErrTargetChanged = errors.New("the state to write is not the one that was approved")
+	// ErrStaleConflict: the notes changed since the proposal was made and
+	// its changes conflict with theirs; it cannot be applied.
+	ErrStaleConflict = errors.New("the notes changed since the proposal was made, and the changes conflict")
+)
+    Errors of ApplyNotesProposal.
+
 var DeltaClasses = config.TrivialDeltaClasses
     DeltaClasses lists every class, the default of skip_trivial_deltas
     (config.TrivialDeltaClasses, the list the configuration accepts).
@@ -6667,6 +6685,10 @@ var EvalObserveEvery = 10 * time.Second
 var RetroObserveEvery = 10 * time.Second
     RetroObserveEvery is how often the retro's agent is observed.
 
+var WaitingStates = []string{store.ProposalPending, store.ProposalApplying}
+    WaitingStates are the states of a proposal that waits for a decision or is
+    being applied: a repository with one gets no new curation or recovery.
+
 
 FUNCTIONS
 
@@ -6675,6 +6697,24 @@ func AcquireLock(path string) (unlock func(), held bool, err error)
     layout.Lock(); the CLI takes the same lock before running slot or cleanup
     operations in-process). held reports that another process has it; unlock
     releases it.
+
+func ApplyNotesProposal(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal, a NotesApply) (store.NotesProposal, error)
+    ApplyNotesProposal applies proposal id (p, as the decider reviewed it)
+    to nr's notes, decided by a.By, under the notes lock: the proposal
+    must still be pending (else ProposalDecidedError), the notes must be
+    what the decider saw (ErrNotesChanged), the state to write the one it
+    approved (ErrTargetChanged) and a clean merge when the proposal is stale
+    (ErrStaleConflict), and a curation must lose no line (NotPreservedError).
+    Then the claim, the write and the record: the notes as found are recorded
+    first (an import, when the registry did not hold them), and the state
+    written is recorded as a version (a curation's, or the operator's for a
+    restore) linked to the proposal. A write that fails releases the claim,
+    so the proposal waits again.
+
+func ApplyTarget(check StaleCheck) (notes.State, bool)
+    ApplyTarget is what applying p writes to the notes now (check): its proposed
+    state, or when it is stale its merge with the notes' changes since; false
+    when that merge conflicts.
 
 func ApproveAsFor(cfg *config.Config, fullName string) *config.Identity
     ApproveAsFor is the identity A (on a row GitHub blocks on the operator)
@@ -6721,6 +6761,10 @@ func DaemonPID(layout paths.Layout) (int, error)
     DaemonPID returns the pid of the running daemon from the pidfile, or 0 when
     there is no pidfile or that process is gone. It never touches the lock
     (probing it could make a starting daemon exit as "already running").
+
+func DeciderName(by string) string
+    DeciderName says who decided a proposal (store.DecidedBy*), for a sentence:
+    "you", "the critic", "magnum".
 
 func DeltaLabel(classes []string) string
     DeltaLabel is how a review note and events name the classes: "comments
@@ -6948,6 +6992,11 @@ func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, er
     hold (pr.open_hold_ended), forgets the subject. A pin older than the events
     kept (store.Prune), or set by hand, has no entry.
 
+func PreservationProblems(p store.NotesProposal, live, target notes.State) ([]string, error)
+    PreservationProblems is notes.CheckPreserved of applying p over live
+    (target, ApplyTarget's): nil for a restore, which brings back a recorded
+    version the operator chose (the registry keeps the state it replaces).
+
 func PressureName(level int) string
     PressureName names a pressure level: "normal", "warn", "critical",
     or "unknown" for any other.
@@ -6983,6 +7032,21 @@ func RecordedBudgetAtCap(ctx context.Context, st *store.Store, u config.Usage, n
     pending (KVUsageCodexOverruledAt): the reading the CLI's offline `magnum
     resume --tool` of a Codex kind overrules, as liftToolPause does the
     daemon's. No reading, or one whose window reset since, is at no cap.
+
+func RecoverNotesApply(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal, now time.Time, wait time.Duration) (string, error)
+    RecoverNotesApply finishes or reverts proposal p, which an apply left
+    applying (a crash between its claim and its record), under the notes lock
+    (waiting at most wait): when the notes hold the state the claim meant
+    to write (its target, computed again from the base, the prior and the
+    proposed versions and checked against the target the claim recorded),
+    the proposal is recorded applied; when they hold the state the claim
+    found (its prior version), nothing was written and the claim is released;
+    when they hold the notes of one and the harness of the other (the write cut
+    short between its two steps), the target is written whole and recorded.
+    Anything else (a writer after the crash) is recorded as an import, so the
+    registry holds it, and the claim is released: the proposal waits again,
+    stale against those notes. It reports what it did ("" when p no longer waits
+    for a recovery) and writes an event.
 
 func RestartableSessions(ctx context.Context, st *store.Store, cfg *config.Config, kind string, prID int64) (sessions []store.Session, pinned int, err error)
     RestartableSessions are the live sessions `magnum restart-sessions --tool
@@ -8167,13 +8231,36 @@ type MemorySwap struct {
 }
     MemorySwap is the swap in use and the swap files' size, in bytes.
 
+type NotPreservedError struct {
+	ID       int64
+	Problems []string
+}
+    NotPreservedError refuses an apply that would lose lines of the notes
+    (notes.CheckPreserved): such a proposal can only be rejected or curated
+    again.
+
+func (e *NotPreservedError) Error() string
+
+type NotesApply struct {
+	Live   string // the notes' fingerprint when the decider read them
+	Target string // the fingerprint of the state it approved to write
+	By     string // store.DecidedBy*
+	Now    time.Time
+	// Wait bounds the wait for the notes lock (0 = NotesLockWait).
+	Wait time.Duration
+}
+    NotesApply is what a decider approved: the fingerprints of the notes it saw
+    and of the state to write, and who it is.
+
 type NotesCuratePayload struct {
 	Repo      string `json:"repo"` // owner/name
 	Supersede int64  `json:"supersede,omitempty"`
+	Why       string `json:"why,omitempty"`
 }
-    NotesCuratePayload is a `magnum notes <repo> --curate` request, or the
-    new curation `magnum notes <repo> --review` asks for instead of a stale
-    proposal: Supersede is that proposal's id.
+    NotesCuratePayload is a `magnum notes <repo> --curate` request, or the new
+    curation `magnum notes <repo> --review` asks for instead of a stale proposal
+    or one that would lose lines of the notes: Supersede is that proposal's id,
+    and Why the reason it is superseded with ("" = it is stale).
 
 type OpenHold struct {
 	Until time.Time `json:"until"`
@@ -8260,6 +8347,12 @@ type PlannedOp struct {
 	Detail  string    `json:"detail,omitempty"`
 }
     PlannedOp is one side effect a dry run decided on but did not perform.
+
+type ProposalDecidedError struct{ Proposal store.NotesProposal }
+    ProposalDecidedError refuses an apply of a proposal that no longer waits:
+    another decider applied or rejected it, or claimed it first.
+
+func (e *ProposalDecidedError) Error() string
 
 type ProvisionPayload struct {
 	Pool  string `json:"pool,omitempty"`
@@ -13458,6 +13551,21 @@ func CheckLeaks(text string, check Check) []string
     check's branches, holds what looks like a secret, or names a home directory
     path. nil = none.
 
+func CheckPreserved(before, after State, changes Changes) []string
+    CheckPreserved is the preservation check an apply runs before it writes
+    anything (engine.ApplyNotesProposal), for the operator and the critic alike:
+    after, the state the apply would write (a curation's proposed state, or a
+    stale one's merge with the notes' changes since), loses no line of before,
+    the notes now. Every non-empty line of before's notes is in after's notes
+    or among the lines after adds to the archive, word for word (the title,
+    a leaking line and a "## " heading the curator's changes account for exempt,
+    as in Validate); the archive keeps every line it held. Unlike Validate it
+    asks only that nothing be lost: not that changes.json account for every
+    section of before (a section a judge added since the proposal was made
+    is kept by the merge, line by line), nor that the notes name the archive
+    (a recovery leaves the notes text as it is). nil = the apply may go on;
+    a proposal that fails it can only be rejected or curated again.
+
 func Fingerprint(notes []byte, files []File) string
     Fingerprint identifies a state of the notes and the harness: the notes'
     content (a missing file is empty notes, as a version records it) and every
@@ -17361,7 +17469,12 @@ const (
 	ProposalCuration = "curation"
 	ProposalRestore  = "restore"
 
-	ProposalPending  = "pending"
+	ProposalPending = "pending"
+	// ProposalApplying is a proposal an apply claimed (migration 0027): its
+	// files are being written, and the apply moves it to applied, or back to
+	// pending when the write failed. One a crash left here is finished or
+	// reverted by the next daemon start (engine.RecoverNotesApply).
+	ProposalApplying = "applying"
 	ProposalApplied  = "applied"
 	ProposalRejected = "rejected"
 	ProposalExpired  = "expired"
@@ -17372,6 +17485,13 @@ const (
 	ProposalSuperseded = "superseded"
 )
     Notes proposal kinds and states (notes_proposals.kind, .state).
+
+const (
+	DecidedByOperator = "operator" // `magnum notes <repo> --review`
+	DecidedByCritic   = "critic"   // the notes critic ([notes] critic)
+	DecidedByMagnum   = "magnum"   // an expiry, a supersede, an invalid proposal
+)
+    Who decided a proposal (notes_proposals.decided_by, migration 0027).
 
 const (
 	MissNoted   = "noted"   // a note covers it now, in Section
@@ -18293,6 +18413,18 @@ type NotesBlob struct {
     harness directory, its content's SHA-256 and size, and (when read with
     NotesVersionContent, or recorded) its body.
 
+type NotesClaim struct {
+	By string // DecidedBy*
+	// Prior is the notes as the claim found them, recorded as a version
+	// (source import, deduplicated against the latest) and named by the
+	// proposal's prior_version_id.
+	Prior NotesContent
+	// Target is the fingerprint of the state the apply writes.
+	Target string
+	At     time.Time // zero = now
+}
+    NotesClaim is an apply's claim of a pending proposal (ClaimNotesProposal).
+
 type NotesContent struct {
 	Notes []byte
 	Files []NotesBlob
@@ -18325,12 +18457,20 @@ type NotesProposal struct {
 	AppliedVersionID *int64          `json:"applied_version_id,omitempty"` // recorded when it was applied
 	Changes          json.RawMessage `json:"changes,omitempty"`            // the curator's changes.json
 	State            string          `json:"state"`
-	Reason           string          `json:"reason,omitempty"` // rejected: the operator's; expired, invalid, superseded: magnum's
+	Reason           string          `json:"reason,omitempty"` // rejected: its decider's; expired, invalid, superseded: magnum's
 	Model            string          `json:"model,omitempty"`
 	PromptSHA256     string          `json:"prompt_sha256,omitempty"`
 	Scratch          string          `json:"scratch,omitempty"` // the curation's directory
 	CreatedAt        time.Time       `json:"created_at"`
 	DecidedAt        *time.Time      `json:"decided_at,omitempty"`
+	// DecidedBy is who decided it (DecidedBy*): set by the decision, or by
+	// the claim of an apply; "" while it waits.
+	DecidedBy string `json:"decided_by,omitempty"`
+	// PriorVersionID and TargetSHA256 are set by an apply's claim (state
+	// applying, and kept once applied): the version of the notes the claim
+	// found, and the fingerprint of the state the apply writes.
+	PriorVersionID *int64 `json:"prior_version_id,omitempty"`
+	TargetSHA256   string `json:"target_sha256,omitempty"`
 }
     NotesProposal is a proposal for a repository's notes: a curator's, or a
     restore of an earlier version.
@@ -18982,6 +19122,14 @@ func (s *Store) CheckoutSteps(ctx context.Context, prID int64, limit int) ([]Eve
     the subjects "slot:<slot>:pr:<N>:<sha7>" of every slot the PR was assigned
     to and its per-PR worktree's own "slot:<owner>/<name>#<N>".
 
+func (s *Store) ClaimNotesProposal(ctx context.Context, id int64, c NotesClaim) (NotesProposal, error)
+    ClaimNotesProposal moves proposal id from pending to applying, compare-
+    and-set (ErrConflict when it is in another state: someone decided it,
+    or another apply claimed it), recording c's prior version, target and
+    decider in the same transaction. An apply writes the files only after its
+    claim (engine.ApplyNotesProposal), so a proposal the registry calls rejected
+    never had its files written.
+
 func (s *Store) ClaimSlot(ctx context.Context, prID, slotID int64, dbNames ...string) (Assignment, error)
     ClaimSlot atomically hands a free slot to a PR: the PR moves from
     a ClaimableStates state to claiming, the slot from free (unpinned,
@@ -19068,13 +19216,15 @@ func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string
     It never lands one: LandLearnProposal records a landing with its commit and
     its version.
 
-func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error)
-    DecideNotesProposal moves proposal id from one of from to state to,
-    with reason, compare-and-set (ErrConflict when it is in another state). With
-    applied, the state the proposal leads to is recorded in the same transaction
-    as a version of the repository (applied.RepoID and ProposalID are set here)
-    and linked as the proposal's applied_version_id. The misses the proposal was
-    given follow it (decideProposalMisses).
+func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, by, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error)
+    DecideNotesProposal moves proposal id from one of from to state to, decided
+    by (DecidedBy*), with reason, compare-and-set (ErrConflict when it is in
+    another state). With applied, the state the proposal leads to is recorded
+    in the same transaction as a version of the repository (applied.RepoID and
+    ProposalID are set here) and linked as the proposal's applied_version_id.
+    The misses the proposal was given follow it (decideProposalMisses). An apply
+    claims the proposal first (ClaimNotesProposal, engine.ApplyNotesProposal),
+    so applied comes from applying.
 
 func (s *Store) Declines(ctx context.Context, f DeclineFilter) ([]Decline, error)
     Declines returns the declines f selects, newest first, each with its PR's
@@ -19287,6 +19437,9 @@ func (s *Store) NotesHistory(ctx context.Context, repoID int64, limit int) ([]No
     (limit <= 0 = all): every recorded version except the proposed states of
     curations, which appear as the version recorded when one was applied.
 
+func (s *Store) NotesProposalByID(ctx context.Context, id int64) (NotesProposal, error)
+    NotesProposalByID reads proposal id (ErrNotFound when there is none).
+
 func (s *Store) NotesProposals(ctx context.Context, f NotesProposalFilter) ([]NotesProposal, error)
     NotesProposals lists the proposals f selects.
 
@@ -19411,6 +19564,12 @@ func (s *Store) RecordRetroPR(ctx context.Context, r RetroPR) error
     Status must be one of the Retro* values. An empty Error is stored as NULL.
     Attempts is not taken from r: a failed status adds one to the PR's count,
     any other sets it to 0.
+
+func (s *Store) ReleaseNotesClaim(ctx context.Context, id int64) (NotesProposal, error)
+    ReleaseNotesClaim moves proposal id from applying back to pending, its
+    claim cleared (decider, prior version and target): the apply wrote nothing,
+    and the proposal waits for a decision again. ErrConflict when it is not
+    applying.
 
 func (s *Store) ReleaseSlot(ctx context.Context, slotID int64, from []string, to, reason string) error
     ReleaseSlot atomically moves slot slotID from one of from to state to,

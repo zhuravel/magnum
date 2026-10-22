@@ -11696,6 +11696,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
     which are what the operator's rejections were about); an archive outside the versioned state (no history,
     no restore, no stale merge, and a judge's edit could not be undone); a higher size trigger alone (curations
     would still cut, only less often).
+- **A notes proposal is applied by a claim, a write and a record** (2026-10-22, spec 07, amends "A curator
+  proposes curated notes" and "Stale notes proposals"). The notes critic (design
+  docs/superpowers/specs/2026-10-10-notes-critic-and-configurability-design.md, confirmed again by the operator on
+  2026-10-22) adds a second decider beside the operator's `magnum notes <repo> --review`. A Codex review of the
+  design on that day found a gap. The CLI's apply wrote the files before the compare-and-set of the proposal
+  (`notes.WriteState`, then `DecideNotesProposal`). With two deciders, a lost race can leave notes that a rejected
+  proposal wrote. The apply is now in the engine (`engine.ApplyNotesProposal`), and the CLI's `y` calls it. It works
+  under the notes lock, in this order:
+  1. It reads the proposal again. A proposal that no longer waits is refused, and the refusal names who decided it
+     and when (`ProposalDecidedError`, from the new `decided_by`).
+  2. It reads the notes again. It refuses notes that are not the notes the decider saw (`ErrNotesChanged`). It also
+     refuses a target with a fingerprint other than the approved one (`ErrTargetChanged`). The target is the
+     proposed state, or the clean merge of a stale proposal.
+  3. It runs the preservation check of curation on the target (`notes.CheckPreserved`). No line of the notes now
+     can go, and the archive keeps every line. Two rules of `notes.Validate` are not in this check. A section that
+     a judge added after the proposal stays in the merge line by line, so `changes.json` does not have to name it.
+     A recovery does not change the notes text, so the notes do not have to name the archive. A proposal that fails
+     the check (for example, one stored before spec 05) cannot be applied (`NotPreservedError`). It can only be
+     rejected or curated again. `--review` shows "CANNOT BE APPLIED" with the lines, and its `y` asks for a new
+     curation. That curation supersedes the proposal with the reason, through the new `why` of the request.
+  4. It claims the proposal: the state goes from pending to `applying` (`store.ClaimNotesProposal`). The claim
+     records the decider, the notes as found (`prior_version_id`) and the fingerprint of the target
+     (`target_sha256`).
+  5. It writes the notes and the harness, then records the proposal as applied with its version. When the write
+     fails, `WriteState` puts the old state back and the apply releases the claim.
+
+  A restore does not get the preservation check. It brings back a version that the operator chose, the critic
+  never decides a restore, and the registry keeps the state that the restore replaces.
+  - Recovery. A crash between the claim and the record leaves the proposal in `applying`. The daemon start does a
+    recovery before it imports the notes. Each curation scan does it again, because the lock of a crashed process
+    becomes stale only after ten minutes. The recovery takes the notes lock. It calculates the target again from
+    the base, prior and proposed versions, and compares it with the fingerprint of the claim. Then:
+    - Notes that hold the target are recorded as applied (`notes.apply_finished`).
+    - Notes that hold the prior state show that nothing was written. The claim is released (`notes.apply_reverted`).
+    - Notes of one state with the harness of the other show a write that stopped halfway (`WriteState` replaces the
+      harness first). The recovery writes the full target and records it.
+    - Other notes are recorded as an import, so that the registry keeps them. The claim is released, and the
+      proposal is stale against those notes.
+
+    A proposal in `applying` stops a new curation and a recovery, as a pending proposal does.
+  - Migration 0027 rebuilds `notes_proposals`, as 0017 did, for the `applying` state. It adds `decided_by`
+    (`operator`, `critic` or `magnum`), `prior_version_id` and `target_sha256`. The backfill gives the operator all
+    applied and rejected rows, and magnum all expired, invalid and superseded rows. `DecideNotesProposal` takes the
+    decider. The CLI gives `operator` for a rejection and `magnum` for an expiry. The engine gives `magnum` for an
+    expiry or a supersede. An invalid proposal is magnum's.
+  - Tests (written before the code passed them): in engine TestTheOperatorAndTheCriticRaceAndExactlyOneApplies,
+    TestARejectionAndAnApplyNeverBothWin, TestAStopBetweenTheClaimAndTheWriteIsRevertedAtTheNextStart,
+    TestAStopBetweenTheWriteAndTheRecordIsFinishedAtTheNextStart, TestAWriteStoppedHalfwayIsCompletedAtTheNextStart,
+    TestAnApplyCutShortUnderChangedNotesWaitsAgain, TestAProposalThatLosesALineCannotBeAppliedByEitherDecider and
+    TestAnApprovalOfAnotherTargetIsRefused. In store TestMigrationV26ToV27AddsApplyingAndBackfillsDeciders and
+    TestAClaimIsCompareAndSetAndReleasable. In cli TestReviewOfAProposalThatLosesALineAsksForANewCurationInstead and
+    TestTheOperatorsRefusalNamesTheCritic. The CLI test fixtures now put the lines that their proposals drop into
+    the archive.
+  - Rejected: write first and ignore a lost compare-and-set (the files can then hold a rejected proposal). Store the
+    merge as a version at the claim (no history must show that version). The recovery calculates the merge again
+    from three recorded versions and compares the fingerprint. Recover only at the daemon start (the lock of a
+    crashed CLI is not stale for ten minutes).
 
 ## Learned rules
 

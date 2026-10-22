@@ -120,7 +120,7 @@ func TestRecoverArchivesWhatTheHistoryDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.st.DecideNotesProposal(h.ctx, p.ID, []string{store.ProposalPending}, store.ProposalRejected, "no", h.now, nil); err != nil {
+	if _, err := h.st.DecideNotesProposal(h.ctx, p.ID, []string{store.ProposalPending}, store.ProposalRejected, store.DecidedByOperator, "no", h.now, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.record(h.write(n2, nil), store.NotesFromJudge)

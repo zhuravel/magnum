@@ -62,7 +62,7 @@ func notesRecover(ctx context.Context, c *Context, d *actDeps, f notesFlags, rep
 	if out.Groups == nil {
 		out.Groups = []notes.RecoveryGroup{}
 	}
-	pending, err := d.Store.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: []string{store.ProposalPending}, Limit: 1})
+	pending, err := d.Store.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: engine.WaitingStates, Limit: 1})
 	if err != nil {
 		return cmdFail(c, "notes", err)
 	}

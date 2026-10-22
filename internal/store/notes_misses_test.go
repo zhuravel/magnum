@@ -127,7 +127,7 @@ func TestProposalMissesFollowTheProposal(t *testing.T) {
 		if to == ProposalApplied {
 			applied = &NotesVersionInput{Source: NotesFromCuration, Content: proposed}
 		}
-		if _, err := st.DecideNotesProposal(ctx, p.ID, []string{ProposalPending}, to, reason, time.Time{}, applied); err != nil {
+		if _, err := st.DecideNotesProposal(ctx, p.ID, []string{ProposalPending}, to, DecidedByOperator, reason, time.Time{}, applied); err != nil {
 			t.Fatal(err)
 		}
 	}

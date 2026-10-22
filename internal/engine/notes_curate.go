@@ -94,10 +94,13 @@ func KVNotesMisses(fullName string) string { return "notes." + strings.ToLower(f
 
 // NotesCuratePayload is a `magnum notes <repo> --curate` request, or the
 // new curation `magnum notes <repo> --review` asks for instead of a stale
-// proposal: Supersede is that proposal's id.
+// proposal or one that would lose lines of the notes: Supersede is that
+// proposal's id, and Why the reason it is superseded with ("" = it is
+// stale).
 type NotesCuratePayload struct {
 	Repo      string `json:"repo"` // owner/name
 	Supersede int64  `json:"supersede,omitempty"`
+	Why       string `json:"why,omitempty"`
 }
 
 // CurateRun is one curation: its id and scratch directory.
@@ -292,6 +295,7 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 		return
 	}
 	e.curateChecked = now
+	e.recoverNotesApplies(ctx) // notes_apply.go: one the start could not (a crashed holder's lock)
 	e.expireProposals(ctx)
 	if e.d.Curator == nil || len(e.cfg.Notes.Curate) == 0 || e.learnBusy() != "" || e.userPause(ctx) != "" || e.holdReason(ctx) != "" ||
 		e.curateToolPause(ctx) != "" || low {
@@ -348,8 +352,8 @@ func (e *Engine) dueCurations(ctx context.Context, now time.Time) []curateDue {
 		if err != nil {
 			continue
 		}
-		if i := slices.IndexFunc(props, func(p store.NotesProposal) bool { return p.State == store.ProposalPending }); i >= 0 {
-			if p := props[i]; p.Kind == store.ProposalCuration && p.Trigger != CurateTriggerRecover && now.Sub(p.CreatedAt) >= staleRecurateAfter &&
+		if i := slices.IndexFunc(props, func(p store.NotesProposal) bool { return waiting(p.State) }); i >= 0 {
+			if p := props[i]; p.State == store.ProposalPending && p.Kind == store.ProposalCuration && p.Trigger != CurateTriggerRecover && now.Sub(p.CreatedAt) >= staleRecurateAfter &&
 				e.staleConflicts(ctx, repo, p) {
 				out = append(out, curateDue{repo: repo, trigger: CurateTriggerStale, stale: &p})
 			}
@@ -444,13 +448,14 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	if reason := cmp.Or(e.refusingHold(ctx), e.curateToolPause(ctx)); reason != "" {
 		return "", fmt.Errorf("no curation now: %s", reason)
 	}
-	pending, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: []string{store.ProposalPending}, Limit: 1})
+	pending, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: WaitingStates, Limit: 1})
 	if err != nil {
 		return "", err
 	}
 	var stale *store.NotesProposal
 	switch {
-	case len(pending) > 0 && p.Supersede != 0 && pending[0].ID == p.Supersede && pending[0].Kind == store.ProposalCuration &&
+	case len(pending) > 0 && p.Supersede != 0 && pending[0].ID == p.Supersede && pending[0].State == store.ProposalPending &&
+		pending[0].Kind == store.ProposalCuration &&
 		pending[0].Trigger != CurateTriggerRecover:
 		stale = &pending[0]
 	case len(pending) > 0:
@@ -467,7 +472,9 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	}
 	prefix := ""
 	if stale != nil {
-		if !e.supersede(ctx, *stale, full, "the notes changed since it was made; the operator asked for a new curation from the notes now") {
+		why := cmp.Or(textx.Clip(oneLine(p.Why, curateReasonRunes), curateReasonRunes),
+			"the notes changed since it was made; the operator asked for a new curation from the notes now")
+		if !e.supersede(ctx, *stale, full, why) {
 			return "", fmt.Errorf("proposal %d for the notes of %s could not be superseded", stale.ID, full)
 		}
 		prefix = fmt.Sprintf("proposal %d superseded; ", stale.ID)
@@ -957,7 +964,7 @@ func (e *Engine) expireProposals(ctx context.Context) {
 		if now.Sub(p.CreatedAt) < ProposalTTL {
 			continue
 		}
-		_, err := e.st.DecideNotesProposal(ctx, p.ID, []string{store.ProposalPending}, store.ProposalExpired,
+		_, err := e.st.DecideNotesProposal(ctx, p.ID, []string{store.ProposalPending}, store.ProposalExpired, store.DecidedByMagnum,
 			"not reviewed within "+ProposalTTL.String(), now, nil)
 		if err != nil {
 			if !errors.Is(err, store.ErrConflict) {

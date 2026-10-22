@@ -371,7 +371,7 @@ func TestARestoreOfAnAppliedCurationIsNotImportedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err = h.st.DecideNotesProposal(h.ctx, p.ID, []string{store.ProposalPending}, store.ProposalApplied, "", time.Time{},
+	p, err = h.st.DecideNotesProposal(h.ctx, p.ID, []string{store.ProposalPending}, store.ProposalApplied, store.DecidedByOperator, "", time.Time{},
 		&store.NotesVersionInput{Source: store.NotesFromCuration, Content: ContentOf(curated), Dedupe: true})
 	if err != nil {
 		t.Fatal(err)

@@ -33,12 +33,14 @@ func blob(path, body string) notes.Blob {
 }
 
 // wideProposal stores a curation of wideNotes: the header and the Tests
-// section rewritten, the probe and qa.sh deleted.
+// section rewritten (the lines it drops in the archive, archiveV2), the
+// probe and qa.sh deleted.
 func (h *notesHarness) wideProposal() store.NotesProposal {
 	h.t.Helper()
 	base := h.write(wideNotes, map[string]string{"run_spec.sh": "bin/rspec \"$@\"\n", "campaign_snapshot_probes_spec.rb": "probe\n", "qa.sh": "open admin\n"})
 	bv := h.record(base, store.NotesFromImport)
-	proposed := engine.ContentOf(notes.State{Exists: true, Notes: []byte(wideCurated), Files: []notes.Blob{blob("run_spec.sh", "bin/rspec \"$@\"\n")}})
+	proposed := engine.ContentOf(notes.State{Exists: true, Notes: []byte(wideCurated), Files: []notes.Blob{blob("run_spec.sh", "bin/rspec \"$@\"\n")}}.
+		WithArchive([]byte(archiveV2)))
 	changes, _ := json.Marshal(notes.Changes{
 		Sections: []notes.Change{{Name: "Tests", Action: notes.ActionKept, Reason: "every review runs specs"}},
 		Files: []notes.Change{
@@ -82,8 +84,8 @@ func TestNotesReviewOfAStaleProposalAppliesTheCleanMerge(t *testing.T) {
 		t.Errorf("the diff undoes the judge's change:\n%s", out)
 	}
 	live, err := notes.ReadState(h.nr)
-	if err != nil || string(live.Notes) != wideMerged || len(live.Files) != 2 || live.Files[0].Path != "qa.sh" ||
-		string(live.Files[0].Body) != "open admin --url \"$1\"\n" || live.Files[1].Path != "run_spec.sh" {
+	if err != nil || string(live.Notes) != wideMerged || len(live.Files) != 3 || string(live.Archive()) != archiveV2 || live.Files[1].Path != "qa.sh" ||
+		string(live.Files[1].Body) != "open admin --url \"$1\"\n" || live.Files[2].Path != "run_spec.sh" {
 		t.Fatalf("live notes = %q %+v, %v", live.Notes, live.Files, err)
 	}
 	got := h.proposalNow(p.ID)
@@ -190,7 +192,7 @@ func TestNotesApplyRefusesWhenTheNotesChangedDuringTheReview(t *testing.T) {
 	}
 	h.write(oldNotes+"- a judge's new lesson\n", nil)
 	content, _ := h.st.NotesVersionContent(h.ctx, *p.VersionID)
-	if _, err := notesApply(context.Background(), h.st, h.nr, p, shown.Fingerprint(), content, false, h.now); !errors.Is(err, errNotesChanged) {
+	if _, err := notesApply(context.Background(), h.st, h.nr, p, shown.Fingerprint(), engine.StateOf(content).Fingerprint(), h.now); !errors.Is(err, errNotesChanged) {
 		t.Fatalf("apply = %v", err)
 	}
 	if got := h.proposalNow(p.ID); got.State != store.ProposalPending {

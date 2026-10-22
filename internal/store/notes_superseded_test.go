@@ -67,7 +67,7 @@ func TestMigrationV16ToV17AcceptsSupersededProposals(t *testing.T) {
 
 	// A stale proposal is superseded; its miss stays new for the curation
 	// that follows it up.
-	p, err := st.DecideNotesProposal(ctx, 4, []string{ProposalPending}, ProposalSuperseded, "the notes changed since it was made", time.Time{}, nil)
+	p, err := st.DecideNotesProposal(ctx, 4, []string{ProposalPending}, ProposalSuperseded, DecidedByMagnum, "the notes changed since it was made", time.Time{}, nil)
 	if err != nil || p.State != ProposalSuperseded || p.DecidedAt == nil {
 		t.Fatalf("supersede = %+v, %v", p, err)
 	}

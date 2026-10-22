@@ -43,7 +43,7 @@ func (h *notesHarness) missesProposal(links ...store.ProposalMiss) store.NotesPr
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	if _, err := h.st.DecideNotesProposal(h.ctx, p.ID, []string{store.ProposalPending}, store.ProposalExpired, "replaced", h.now, nil); err != nil {
+	if _, err := h.st.DecideNotesProposal(h.ctx, p.ID, []string{store.ProposalPending}, store.ProposalExpired, store.DecidedByMagnum, "replaced", h.now, nil); err != nil {
 		h.t.Fatal(err)
 	}
 	return q

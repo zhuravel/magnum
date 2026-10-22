@@ -132,7 +132,17 @@ func ProposalStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.
 // CheckStale reads p's base and proposed states and the notes now and, when
 // the notes are no longer p's base, merges both sides' changes.
 func CheckStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal) (StaleCheck, error) {
-	var c StaleCheck
+	live, err := notes.ReadState(nr)
+	if err != nil {
+		return StaleCheck{}, err
+	}
+	return checkStaleWith(ctx, st, p, live)
+}
+
+// checkStaleWith is CheckStale against live, the notes as read (under the
+// lock, by an apply).
+func checkStaleWith(ctx context.Context, st *store.Store, p store.NotesProposal, live notes.State) (StaleCheck, error) {
+	c := StaleCheck{Live: live}
 	if p.VersionID == nil {
 		return c, fmt.Errorf("proposal %d has no proposed state", p.ID)
 	}
@@ -148,9 +158,6 @@ func CheckStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.Not
 		return c, err
 	}
 	c.Proposed = StateOf(content)
-	if c.Live, err = notes.ReadState(nr); err != nil {
-		return c, err
-	}
 	if c.Live.Fingerprint() != c.Base.Fingerprint() {
 		c.Stale, c.Merge = true, notes.MergeStates(c.Base, c.Live, c.Proposed)
 	}
@@ -161,7 +168,7 @@ func CheckStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.Not
 // the notes now follows it up and reads it (runCurate). False when it
 // cannot (it was decided meanwhile, or the registry failed).
 func (e *Engine) supersede(ctx context.Context, p store.NotesProposal, full, why string) bool {
-	if _, err := e.st.DecideNotesProposal(ctx, p.ID, []string{store.ProposalPending}, store.ProposalSuperseded, why, e.now(), nil); err != nil {
+	if _, err := e.st.DecideNotesProposal(ctx, p.ID, []string{store.ProposalPending}, store.ProposalSuperseded, store.DecidedByMagnum, why, e.now(), nil); err != nil {
 		e.log.Warn("notes curation: supersede a stale proposal", "proposal", p.ID, "err", err)
 		return false
 	}
@@ -250,7 +257,7 @@ func (e *Engine) startQueuedCuration(ctx context.Context) {
 		drop := err != nil
 		if err == nil {
 			_, ok := notesRepo(e.d.Layout, repo.Owner, repo.Name)
-			pending, perr := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: []string{store.ProposalPending}, Limit: 1})
+			pending, perr := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: WaitingStates, Limit: 1})
 			drop = !ok || (perr == nil && len(pending) > 0)
 		}
 		if drop {

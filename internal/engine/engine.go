@@ -1064,7 +1064,8 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recoverWhiteboards(ctx)
 	// whiteboard_pending.go: the whiteboards the drain this start ended skipped.
 	e.startPendingWhiteboards(ctx, "after the restart")
-	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
+	e.recoverNotesApplies(ctx) // notes_apply.go: an apply a crash cut short, before the notes are imported
+	e.syncNotes(ctx, true)     // notes_record.go: the first start imports every repository's notes
 	// No curation, retro, skill edit or gate runs yet: a mark left behind
 	// is a crashed daemon's (a gating proposal keeps its state and its gate
 	// starts again at a tick, maybeGate), and so is the gate's worktree of

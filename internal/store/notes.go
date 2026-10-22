@@ -34,7 +34,12 @@ const (
 	ProposalCuration = "curation"
 	ProposalRestore  = "restore"
 
-	ProposalPending  = "pending"
+	ProposalPending = "pending"
+	// ProposalApplying is a proposal an apply claimed (migration 0027): its
+	// files are being written, and the apply moves it to applied, or back to
+	// pending when the write failed. One a crash left here is finished or
+	// reverted by the next daemon start (engine.RecoverNotesApply).
+	ProposalApplying = "applying"
 	ProposalApplied  = "applied"
 	ProposalRejected = "rejected"
 	ProposalExpired  = "expired"
@@ -45,10 +50,18 @@ const (
 	ProposalSuperseded = "superseded"
 )
 
+// Who decided a proposal (notes_proposals.decided_by, migration 0027).
+const (
+	DecidedByOperator = "operator" // `magnum notes <repo> --review`
+	DecidedByCritic   = "critic"   // the notes critic ([notes] critic)
+	DecidedByMagnum   = "magnum"   // an expiry, a supersede, an invalid proposal
+)
+
 var (
 	notesSources    = []string{NotesFromJudge, NotesFromCuration, NotesFromHuman, NotesFromImport}
 	proposalKinds   = []string{ProposalCuration, ProposalRestore}
-	proposalStates  = []string{ProposalPending, ProposalApplied, ProposalRejected, ProposalExpired, ProposalInvalid, ProposalSuperseded}
+	proposalStates  = []string{ProposalPending, ProposalApplying, ProposalApplied, ProposalRejected, ProposalExpired, ProposalInvalid, ProposalSuperseded}
+	deciders        = []string{DecidedByOperator, DecidedByCritic, DecidedByMagnum}
 	errNoNotesState = errors.New("store: notes version without content")
 )
 
@@ -401,23 +414,32 @@ type NotesProposal struct {
 	AppliedVersionID *int64          `json:"applied_version_id,omitempty"` // recorded when it was applied
 	Changes          json.RawMessage `json:"changes,omitempty"`            // the curator's changes.json
 	State            string          `json:"state"`
-	Reason           string          `json:"reason,omitempty"` // rejected: the operator's; expired, invalid, superseded: magnum's
+	Reason           string          `json:"reason,omitempty"` // rejected: its decider's; expired, invalid, superseded: magnum's
 	Model            string          `json:"model,omitempty"`
 	PromptSHA256     string          `json:"prompt_sha256,omitempty"`
 	Scratch          string          `json:"scratch,omitempty"` // the curation's directory
 	CreatedAt        time.Time       `json:"created_at"`
 	DecidedAt        *time.Time      `json:"decided_at,omitempty"`
+	// DecidedBy is who decided it (DecidedBy*): set by the decision, or by
+	// the claim of an apply; "" while it waits.
+	DecidedBy string `json:"decided_by,omitempty"`
+	// PriorVersionID and TargetSHA256 are set by an apply's claim (state
+	// applying, and kept once applied): the version of the notes the claim
+	// found, and the fingerprint of the state the apply writes.
+	PriorVersionID *int64 `json:"prior_version_id,omitempty"`
+	TargetSHA256   string `json:"target_sha256,omitempty"`
 }
 
 const proposalColumns = `id, repo_id, kind, trigger_reason, base_version_id, version_id, applied_version_id, changes_json, state,
-reason, model, prompt_sha256, scratch, created_at, decided_at`
+reason, model, prompt_sha256, scratch, created_at, decided_at, decided_by, prior_version_id, target_sha256`
 
 func scanNotesProposal(sc scanner) (NotesProposal, error) {
 	var p NotesProposal
-	var trigger, reason, model, prompt, scratch sql.NullString
+	var trigger, reason, model, prompt, scratch, by, target sql.NullString
 	err := sc.Scan(&p.ID, &p.RepoID, &p.Kind, &trigger, &p.BaseVersionID, &p.VersionID, &p.AppliedVersionID, rawCol(&p.Changes),
-		&p.State, &reason, &model, &prompt, &scratch, timeCol(&p.CreatedAt), nullTime(&p.DecidedAt))
+		&p.State, &reason, &model, &prompt, &scratch, timeCol(&p.CreatedAt), nullTime(&p.DecidedAt), &by, &p.PriorVersionID, &target)
 	p.Trigger, p.Reason, p.Model, p.PromptSHA256, p.Scratch = trigger.String, reason.String, model.String, prompt.String, scratch.String
+	p.DecidedBy, p.TargetSHA256 = by.String, target.String
 	return p, err
 }
 
@@ -465,14 +487,14 @@ func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) 
 		if in.Changes != nil {
 			changes = string(in.Changes)
 		}
-		var decided any
+		var decided, by any
 		if in.State != ProposalPending {
-			decided = FormatTime(at)
+			decided, by = FormatTime(at), DecidedByMagnum // an invalid proposal: magnum's checks decided it
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO notes_proposals (repo_id, kind, trigger_reason, base_version_id, version_id,
-  changes_json, state, reason, model, prompt_sha256, scratch, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  changes_json, state, reason, model, prompt_sha256, scratch, created_at, decided_at, decided_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			in.RepoID, in.Kind, nullString(in.Trigger), nullInt(in.BaseVersionID), nullInt(in.VersionID), changes, in.State,
-			nullString(in.Reason), nullString(in.Model), nullString(in.PromptSHA), nullString(in.Scratch), FormatTime(at), decided)
+			nullString(in.Reason), nullString(in.Model), nullString(in.PromptSHA), nullString(in.Scratch), FormatTime(at), decided, by)
 		if err != nil {
 			return err
 		}
@@ -544,14 +566,16 @@ func (s *Store) CountNotesProposals(ctx context.Context, state string) (int, err
 	return n, err
 }
 
-// DecideNotesProposal moves proposal id from one of from to state to, with
-// reason, compare-and-set (ErrConflict when it is in another state). With
-// applied, the state the proposal leads to is recorded in the same
-// transaction as a version of the repository (applied.RepoID and ProposalID
-// are set here) and linked as the proposal's applied_version_id. The misses
-// the proposal was given follow it (decideProposalMisses).
-func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error) {
-	if err := oneOf("proposal state", to, proposalStates); err != nil {
+// DecideNotesProposal moves proposal id from one of from to state to, decided
+// by (DecidedBy*), with reason, compare-and-set (ErrConflict when it is in
+// another state). With applied, the state the proposal leads to is recorded
+// in the same transaction as a version of the repository (applied.RepoID and
+// ProposalID are set here) and linked as the proposal's applied_version_id.
+// The misses the proposal was given follow it (decideProposalMisses). An
+// apply claims the proposal first (ClaimNotesProposal,
+// engine.ApplyNotesProposal), so applied comes from applying.
+func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, by, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error) {
+	if err := errors.Join(oneOf("proposal state", to, proposalStates), oneOf("decider", by, deciders)); err != nil {
 		return NotesProposal{}, err
 	}
 	if at.IsZero() {
@@ -559,12 +583,9 @@ func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string
 	}
 	var out NotesProposal
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		p, err := scanNotesProposal(tx.QueryRowContext(ctx, "SELECT "+proposalColumns+" FROM notes_proposals WHERE id = ?", id))
+		p, err := proposalInState(ctx, tx, id, from)
 		if err != nil {
-			return notFound(err, "notes proposal", id)
-		}
-		if !slices.Contains(from, p.State) {
-			return fmt.Errorf("%w: notes proposal %d is %s", ErrConflict, id, p.State)
+			return err
 		}
 		var appliedID any
 		if applied != nil {
@@ -576,18 +597,122 @@ func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string
 			}
 			appliedID = v.ID
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE notes_proposals SET state = ?, reason = COALESCE(?, reason), decided_at = ?,
-  applied_version_id = COALESCE(?, applied_version_id) WHERE id = ?`, to, nullString(reason), FormatTime(at), appliedID, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE notes_proposals SET state = ?, reason = COALESCE(?, reason), decided_at = ?, decided_by = ?,
+  applied_version_id = COALESCE(?, applied_version_id) WHERE id = ?`, to, nullString(reason), FormatTime(at), by, appliedID, id); err != nil {
 			return err
 		}
 		if err := decideProposalMisses(ctx, tx, id, to, at); err != nil {
 			return err
 		}
-		out, err = scanNotesProposal(tx.QueryRowContext(ctx, "SELECT "+proposalColumns+" FROM notes_proposals WHERE id = ?", id))
+		out, err = proposalByID(ctx, tx, id)
 		return err
 	})
 	if err != nil {
 		return NotesProposal{}, fmt.Errorf("decide notes proposal %d: %w", id, err)
+	}
+	return out, nil
+}
+
+// proposalByID reads proposal id.
+func proposalByID(ctx context.Context, q querier, id int64) (NotesProposal, error) {
+	p, err := scanNotesProposal(q.QueryRowContext(ctx, "SELECT "+proposalColumns+" FROM notes_proposals WHERE id = ?", id))
+	if err != nil {
+		return NotesProposal{}, notFound(err, "notes proposal", id)
+	}
+	return p, nil
+}
+
+// proposalInState reads proposal id, ErrConflict when it is in none of
+// states.
+func proposalInState(ctx context.Context, q querier, id int64, states []string) (NotesProposal, error) {
+	p, err := proposalByID(ctx, q, id)
+	if err != nil {
+		return p, err
+	}
+	if !slices.Contains(states, p.State) {
+		return p, fmt.Errorf("%w: notes proposal %d is %s", ErrConflict, id, p.State)
+	}
+	return p, nil
+}
+
+// NotesProposalByID reads proposal id (ErrNotFound when there is none).
+func (s *Store) NotesProposalByID(ctx context.Context, id int64) (NotesProposal, error) {
+	return proposalByID(ctx, s.db, id)
+}
+
+// NotesClaim is an apply's claim of a pending proposal (ClaimNotesProposal).
+type NotesClaim struct {
+	By string // DecidedBy*
+	// Prior is the notes as the claim found them, recorded as a version
+	// (source import, deduplicated against the latest) and named by the
+	// proposal's prior_version_id.
+	Prior NotesContent
+	// Target is the fingerprint of the state the apply writes.
+	Target string
+	At     time.Time // zero = now
+}
+
+// ClaimNotesProposal moves proposal id from pending to applying, compare-
+// and-set (ErrConflict when it is in another state: someone decided it, or
+// another apply claimed it), recording c's prior version, target and
+// decider in the same transaction. An apply writes the files only after its
+// claim (engine.ApplyNotesProposal), so a proposal the registry calls
+// rejected never had its files written.
+func (s *Store) ClaimNotesProposal(ctx context.Context, id int64, c NotesClaim) (NotesProposal, error) {
+	if err := oneOf("decider", c.By, deciders); err != nil {
+		return NotesProposal{}, err
+	}
+	if c.Target == "" {
+		return NotesProposal{}, errors.New("claim notes proposal: a target is required")
+	}
+	at := c.At
+	if at.IsZero() {
+		at = s.now()
+	}
+	var out NotesProposal
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		p, err := proposalInState(ctx, tx, id, []string{ProposalPending})
+		if err != nil {
+			return err
+		}
+		prior, _, err := recordNotesVersion(ctx, tx, NotesVersionInput{RepoID: p.RepoID, At: at, Source: NotesFromImport, Content: c.Prior,
+			Dedupe: true}, at)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE notes_proposals SET state = ?, decided_by = ?, prior_version_id = ?, target_sha256 = ?
+WHERE id = ? AND state = ?`, ProposalApplying, c.By, prior.ID, c.Target, id, ProposalPending); err != nil {
+			return err
+		}
+		out, err = proposalByID(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return NotesProposal{}, fmt.Errorf("claim notes proposal %d: %w", id, err)
+	}
+	return out, nil
+}
+
+// ReleaseNotesClaim moves proposal id from applying back to pending, its
+// claim cleared (decider, prior version and target): the apply wrote
+// nothing, and the proposal waits for a decision again. ErrConflict when it
+// is not applying.
+func (s *Store) ReleaseNotesClaim(ctx context.Context, id int64) (NotesProposal, error) {
+	var out NotesProposal
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := proposalInState(ctx, tx, id, []string{ProposalApplying}); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE notes_proposals SET state = ?, decided_by = NULL, prior_version_id = NULL, target_sha256 = NULL
+WHERE id = ? AND state = ?`, ProposalPending, id, ProposalApplying); err != nil {
+			return err
+		}
+		var err error
+		out, err = proposalByID(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return NotesProposal{}, fmt.Errorf("release notes proposal %d: %w", id, err)
 	}
 	return out, nil
 }
