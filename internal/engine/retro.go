@@ -125,10 +125,13 @@ type ClassifyResult struct {
 	// set up); they are stored unclassified, not as a failure.
 	Unclassified bool
 	// Pause: the classifier's agent hit a limit (Kind: usage_limit,
-	// login_required, model_limit or overloaded). The retro stops without
-	// recording the PR, which stays due; a usage limit and a logout also
-	// pause the tool, as after a round.
+	// login_required, overloaded, or model_limit with no fallback model
+	// left). The retro stops without recording the PR, which stays due; a
+	// usage limit and a logout also pause the tool, as after a round.
 	Pause *pipeline.Pause
+	// Model is the model the answer came from ("" = unknown), which the
+	// retro.ok event names.
+	Model string
 }
 
 // ErrClassifierDown wraps a Classifier's error that is not the PR's: the
@@ -745,6 +748,9 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 		return stop(o, "the classifier cannot start: "+oneLine(err.Error(), retroWhyRunes))
 	case cl != nil:
 		cres, cerr := cl.Classify(ctx, job)
+		if cres.Model != "" {
+			counts["model"] = cres.Model
+		}
 		switch {
 		case cres.Pause != nil:
 			if p := *cres.Pause; p.Kind == string(agents.HealthUsageLimit) || p.Kind == string(agents.HealthLoginRequired) {

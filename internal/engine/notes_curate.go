@@ -120,11 +120,13 @@ type CurateJob struct {
 }
 
 // CurateResult is how a curator's turns ended: a proposal, valid when
-// Problems is empty, or a Pause (a limit the agent hit).
+// Problems is empty, or a Pause (a limit the agent hit). Model is the model
+// the proposal came from ("" = unknown: the role's).
 type CurateResult struct {
 	Proposal notes.Proposal
 	Problems []string
 	Pause    *pipeline.Pause
+	Model    string
 }
 
 // Curator proposes curated notes for one curation; Close ends it.
@@ -154,8 +156,11 @@ type paneCurator struct{ *paneAgent }
 
 // Curate prompts the agent with job's prompt and waits for its turn to end;
 // a proposal that is missing or invalid gets one nudge listing its problems.
-// A usage limit, a logout, a per-model limit or an overload is a Pause; an
-// agent that cannot be set up or started, or went away, is ErrCuratorDown.
+// A model limit starts the agent again on a fallback model with the first
+// prompt (afterTurn). A usage limit, a logout, an overload or a model limit
+// with no fallback left is a Pause; an agent that cannot be set up or
+// started, or went away, is ErrCuratorDown. The result's Model is the model
+// the proposal came from.
 func (c *paneCurator) Curate(ctx context.Context, job CurateJob) (CurateResult, error) {
 	if err := c.setup(ctx); err != nil {
 		return CurateResult{}, fmt.Errorf("%w: set up: %w", ErrCuratorDown, err)
@@ -171,10 +176,16 @@ func (c *paneCurator) Curate(ctx context.Context, job CurateJob) (CurateResult, 
 		t := c.turn(ctx, attempt, text)
 		p, problems := job.Check()
 		if len(problems) == 0 {
-			return CurateResult{Proposal: p}, nil
+			return CurateResult{Proposal: p, Model: c.currentModel(ctx)}, nil
 		}
-		if pause := c.health(ctx, t, job.Scratch.Changes()); pause != nil {
+		switch restarted, pause, err := c.afterTurn(ctx, t, job.Scratch.Changes()); {
+		case pause != nil:
 			return CurateResult{Pause: pause}, fmt.Errorf("the notes curator stopped: %s", pause.Kind)
+		case err != nil && ctx.Err() == nil:
+			return CurateResult{}, fmt.Errorf("%w: %w", ErrCuratorDown, err)
+		case restarted: // a fresh session: the first prompt, the nudge count kept
+			text, attempt = job.Prompt, attempt-1
+			continue
 		}
 		switch {
 		case ctx.Err() != nil:
@@ -182,7 +193,7 @@ func (c *paneCurator) Curate(ctx context.Context, job CurateJob) (CurateResult, 
 		case t.down:
 			return CurateResult{}, fmt.Errorf("%w: %w", ErrCuratorDown, t.err)
 		case attempt > 0:
-			return CurateResult{Proposal: p, Problems: problems}, nil
+			return CurateResult{Proposal: p, Problems: problems, Model: c.currentModel(ctx)}, nil
 		}
 		if t.err != nil {
 			c.d.Logger.Warn("notes curation: the agent's turn did not end well; nudging", "run", c.id, "err", t.err)
@@ -712,7 +723,7 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 	}
 
 	in := store.NotesProposalInput{RepoID: repo.ID, Kind: store.ProposalCuration, Trigger: trigger, BaseVersionID: base.ID,
-		Model: e.cfg.RoleModel(e.cfg.NotesRole()), PromptSHA: promptSHA, Scratch: run.Dir}
+		Model: cmp.Or(res.Model, e.cfg.RoleModel(e.cfg.NotesRole())), PromptSHA: promptSHA, Scratch: run.Dir}
 	octx := context.WithoutCancel(ctx)
 	if len(res.Problems) > 0 {
 		in.State, in.Reason = store.ProposalInvalid, textx.Clip(strings.Join(res.Problems, "; "), curateReasonRunes)

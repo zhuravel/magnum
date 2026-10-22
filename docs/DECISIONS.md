@@ -11754,6 +11754,82 @@ skill versions); people add theirs to the sections before it, at the end of the 
     from three recorded versions and compares the fingerprint. Recover only at the daemon start (the lock of a
     crashed CLI is not stale for ten minutes).
 
+- **A pane job whose model hits its own limit goes on on a fallback, and a role names its own fallbacks**
+  (2026-10-22, the model-fallback part of spec 07; design docs/superpowers/specs/2026-10-10-notes-critic-and-
+  configurability-design.md section 4, approved 2026-10-10, the critic re-confirmed by the operator on
+  2026-10-22; amends "A per-model limit switches the session's model; an account limit still pauses the
+  kind"). A pane job (the curator, the retro's classifier, the skill editor, and the notes critic to come)
+  ran its agent over a scratch registry that `Close` deletes: at a model limit it stopped as a Pause, the
+  limit was recorded nowhere that outlived the job, and the next job started on the same model and hit the
+  same limit. The critic is to run on fable, whose plan share runs out, and must then continue on opus.
+  - Per-role lists: `fallback_models` on a `[[role]]`, `[notes] fallback_models` (the curator), `[learn]
+    fallback_models` (the classifier) and `[learn] editor_fallback_models` (the editor), each carried into its
+    role (`NotesRole`, `LearnRole`, `EditorRole`), empty by default (the kind's list). `agents.fallbacksFor`
+    gives the role's list when it has one, else the kind's (never both), and every path that picks a fallback
+    asks it: `startModel` (whose guard now considers the role's list), `LaunchModel`, `ensureModel`,
+    `FallbackModel` (so a round's reviewer and judge use a `[[role]]` list), `NoteModelLimit`'s `Using`, and
+    `ModelLimits` (no role: the kind's). A new role needs only its `Role.FallbackModels`. Each entry is one
+    word, listed once, refused under its own key (`role <name>: fallback_models`, `notes.fallback_models`,
+    `learn.fallback_models`, `learn.editor_fallback_models`); a shell role takes none. The kind's
+    `switch_model = ""` still turns switching off.
+  - The limit lives in the live registry: `paneDeps.Store` is the daemon's registry, `setup` seeds the scratch
+    one with the kind's active limits and the CLI's default model as a limit message named it
+    (`agents.CopyModelLimits`), so a launch skips a model rounds or an earlier job found limited. A
+    model-limit reading records the limit live first (`agents.RecordModelLimit`, which `NoteModelLimit` now
+    calls for its own writes, with a `kind.model_limited` event there) and then in the scratch registry
+    through the scratch manager's `NoteModelLimit` with the live end. `magnum resume --tool` forgets it.
+  - A limit hit again within a day of the last one's end (`MaxReset`) lasts twice the last one's span, up to
+    24 hours, when its message names no reset time, so a weekly window costs one probe of the model a day; a
+    report while the limit lasts is no repeat, a named reset is kept, a cooldown over a day is never shortened.
+    The memory is `kind.<kind>.model_limited_at.<model>` ("<first recorded> <end>"), which outlives the limit
+    and which `ClearModelLimits` deletes with the limit.
+  - The restart stays inside the job (`paneAgent.afterTurn`, which every driver calls after a turn without
+    a valid answer): a model limit is no longer a Pause. When the job has not restarted yet and a fresh
+    launch would start on a free fallback (`agents.LaunchModel` over the scratch registry), the agent is
+    released as `release` does (its open run interrupted and abandoned, parked, else quit and its workspace
+    closed) and `ensureAgent` starts it again: a new session row, `StartAgent` with no conversation to
+    resume and the scratch limits picking the fallback, so never the parked conversation. It gets the job's
+    first prompt (its inputs are files) and the nudge it had left. No fallback left, or a second limit in the
+    job, is a Pause of kind `model_limit`, which the callers already turn into a stop without a tool pause (a
+    curation uncounted and tried again after `curateRetry`, the retro's PR left due, the editor's run
+    stopped): only `usage_limit` and `login_required` pause a kind. A limit naming a model other than the
+    one a fresh launch would run starts nothing again.
+  - Each result (`ClassifyResult`, `CurateResult`, `EditResult`) carries `Model`, the model of the session
+    the answer came from (`paneAgent.currentModel`: the scratch registry's session model, else the role's
+    model): the curation proposal's and the skill-edit proposal's `model` column record it (the role's model
+    when unknown), the retro's `retro.ok` event names it.
+  - A blocked dialog ends a turn: magnum answers only the dialogs it knows, so an unknown one held a turn
+    until its timeout. `paneAgent.wait` ends a turn whose session has shown herdr's `blocked` for
+    `paneBlockedWait` (2 minutes): it reads the screen, sends escape and abandons the run, and the screen
+    read before the escape is what `health` classifies. Claude Code asks before it bills Fable to usage
+    credits once the plan's share is used: "Fable limit reached · continuing on Fable 5.1 uses usage
+    credits", and, unanswered, "... and the prompt to confirm went unanswered" (third-party guides of
+    2026-10; no official page has the wording yet). The claude kind's default `model_limit` patterns gain
+    `continuing on (?P<model>fable)\b[\w .-]*\busage credits`; magnum never consents to a bill. When the
+    dialog is first seen live, its text goes into docs/spikes.md and the pattern follows it.
+  - Spec 119's restarts on a Codex login change mark and park live-registry sessions only
+    (`RestartableSessions` over the daemon's store); a pane job's sessions live in its scratch registry, so
+    the two never meet.
+  - Tests, failing first: in config TestEveryFallbackModelsKeyIsReadIntoItsRoleAndEmptyByDefault and
+    TestAFallbackModelsEntryOfTwoWordsIsRefusedUnderItsOwnKey (the model_limit pattern count in
+    TestResetModelLimitPatternsSeparateModelFromAccountLimits now 4); in agents
+    TestTheFableConsentDialogIsAModelLimitOfFable, TestARoleFallbackListWinsOverTheKindsInEveryPath,
+    TestARoleFallbackListNeedsTheKindsSwitchModel, TestCopyModelLimitsSeedsAnotherRegistry,
+    TestALimitHitAgainWithinADayDoublesItsCooldownUpTo24Hours and
+    TestARepeatedLimitKeepsANamedResetAndDoublesWithoutOne; in pipeline
+    TestARolesFallbackListAppliesToARoundsReviewerAndJudge; in engine
+    TestAPaneJobOnALimitedModelContinuesOnItsFallbackInsideTheJob,
+    TestTheNextPaneJobStartsOnTheFallbackOfALimitRecordedBefore,
+    TestAPaneJobWithNoFallbackLeftStopsAndNeverPausesTheKind, TestASecondModelLimitInOnePaneJobStopsIt,
+    TestATurnBlockedOnADialogEndsAfterPaneBlockedWait and TestClearModelLimitsForgetsTheRepeatsToo, with the
+    key pinned in TestEveryKVKeyTheEngineWritesKeepsItsString.
+  - Rejected: Claude Code's `--fallback-model` (it switches on overload and server errors only, never on a
+    model or usage limit); pausing the kind once a job's fallback list runs out (a critic's list is short on
+    purpose, and the rounds still have sonnet); switching the job's live session with `/model` as rounds do
+    (the job's turn ended with no answer, and a fresh session with the same file inputs loses nothing); a
+    restart per fallback (one per job bounds a job's cost when a window closes on every model). The design's
+    section 5 (policy values moved into the configuration) stays a follow-up.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

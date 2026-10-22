@@ -101,11 +101,13 @@ type EditJob struct {
 }
 
 // EditResult is how an editor's turns ended: its changes, valid when
-// Problems is empty, or a Pause (a limit the agent hit).
+// Problems is empty, or a Pause (a limit the agent hit). Model is the model
+// the changes came from ("" = unknown: the role's).
 type EditResult struct {
 	Changes  learn.Changes
 	Problems []string
 	Pause    *pipeline.Pause
+	Model    string
 }
 
 // Editor drafts the skill change of one run; Close ends it.
@@ -166,11 +168,13 @@ func paneEditors(d paneDeps) func(context.Context, EditRun) (Editor, error) {
 type paneEditor struct{ *paneAgent }
 
 // Edit prompts the agent with job's prompt and waits for its turn to end; a
-// result with problems gets one nudge listing them. A usage limit, a
-// logout, a per-model limit or an overload is a Pause; an agent that cannot
-// be set up or started, or went away, is ErrEditorDown; a turn and a nudged
-// turn that both timed out are an error (the run stops: the agent never
-// answered, so its result says nothing about the edit).
+// result with problems gets one nudge listing them. A model limit starts the
+// agent again on a fallback model with the first prompt (afterTurn). A
+// usage limit, a logout, an overload or a model limit with no fallback left
+// is a Pause; an agent that cannot be set up or started, or went away, is
+// ErrEditorDown; a turn and a nudged turn that both timed out are an error
+// (the run stops: the agent never answered, so its result says nothing
+// about the edit). The result's Model is the model the changes came from.
 func (c *paneEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) {
 	if err := c.setup(ctx); err != nil {
 		return EditResult{}, fmt.Errorf("%w: set up: %w", ErrEditorDown, err)
@@ -188,10 +192,16 @@ func (c *paneEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) 
 		timedOut = timedOut && t.timedOut
 		ch, problems := job.Check()
 		if len(problems) == 0 {
-			return EditResult{Changes: ch}, nil
+			return EditResult{Changes: ch, Model: c.currentModel(ctx)}, nil
 		}
-		if pause := c.health(ctx, t, filepath.Join(job.Run.Worktree, learn.ChangesFile)); pause != nil {
+		switch restarted, pause, err := c.afterTurn(ctx, t, filepath.Join(job.Run.Worktree, learn.ChangesFile)); {
+		case pause != nil:
 			return EditResult{Pause: pause}, fmt.Errorf("the skill editor stopped: %s", pause.Kind)
+		case err != nil && ctx.Err() == nil:
+			return EditResult{}, fmt.Errorf("%w: %w", ErrEditorDown, err)
+		case restarted: // a fresh session: the first prompt, the nudge count kept
+			text, attempt = job.Prompt, attempt-1
+			continue
 		}
 		switch {
 		case ctx.Err() != nil:
@@ -201,7 +211,7 @@ func (c *paneEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) 
 		case attempt > 0 && timedOut:
 			return EditResult{}, fmt.Errorf("the skill editor timed out twice: %w", t.err)
 		case attempt > 0:
-			return EditResult{Changes: ch, Problems: problems}, nil
+			return EditResult{Changes: ch, Problems: problems, Model: c.currentModel(ctx)}, nil
 		}
 		if t.err != nil {
 			c.d.Logger.Warn("skill edit: the agent's turn did not end well; nudging", "run", c.id, "err", t.err)
@@ -587,6 +597,7 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 	// The agent writes nothing more: what is committed below is what the
 	// last check saw, or nothing.
 	closeEditor()
+	model = cmp.Or(res.Model, model) // a fallback's, when the editor started again on one
 	if err == nil && res.Pause == nil && len(res.Problems) == 0 && ctx.Err() == nil {
 		if fp, ferr := e.editFingerprint(octx, run.Worktree); ferr != nil || fp != cand.last.fp {
 			res.Problems = []string{"the worktree changed after its last check (the agent wrote on after its answer), so none of it is committed"}

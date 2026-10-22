@@ -65,7 +65,9 @@ delta_check = true                # such a small delta (more than 0 code lines; 
                                   #   wait and a full round; an App's approval stands until it posts, at most 1h
                                   #   (false = wait and re-review in full; [[watch]] may override)
 model_limit_cooldown = "5h"       # a model capped on its own (health pattern model_limit) without a reset time
-                                  # counts as limited this long; sessions use the kind's fallback_models meanwhile
+                                  # counts as limited this long, twice the last limit's span (24h at most) when it
+                                  # hits its limit again within a day of that one's end; sessions use their role's
+                                  # fallback_models, else the kind's, meanwhile
 # park_idle_after = "15m"         # park an agent of a reviewed or ineligible PR (a draft, a mute, a skip) once it
                                   # idled this long since its last turn and the end of the PR's last round, fix or
                                   # whiteboard job ("0" = never; a judge waits [pipeline] judge_fresh_after when that
@@ -228,6 +230,8 @@ effort = ""                       # passed through the kind's `effort` args ("" 
 # args = []                       # appended to the agent's launch args
 prompt = "retro.md"               # in prompts_dir; the embedded copy when absent
 timeout = "20m"                   # per PR: a turn that takes longer is abandoned
+# fallback_models = []            # when `model` hits its own limit, the job starts the agent again, once, on the
+                                  # first of these that is not limited ([] = the kind's fallback_models)
 # The self-improving loop: an editor agent drafts a change to the judge skill and the judge and Claude reviewer
 # prompts from the general misses and the findings authors declined, in a git worktree of the checkout on a
 # learn/<run> branch; magnum checks it, regenerates the golden files, runs the agents, pipeline and config tests
@@ -250,6 +254,7 @@ editor_effort = ""                # passed through the kind's `effort` args ("" 
 # editor_args = []                # appended to the editor's launch args
 editor_prompt = "skill-edit.md"   # in prompts_dir; the embedded copy when absent
 editor_timeout = "45m"            # per turn: a turn that takes longer is abandoned
+# editor_fallback_models = []     # as fallback_models above, for `editor_model`
 gate_cases = 6                    # eval cases the gate of a proposal replays at most (the inputs' own first)
 land_per_day = 1                  # proposals that land per local day; a later passed one waits for the next day
 restart = "idle"                  # after a landing: "idle" restarts the daemon once nothing is in flight, "manual"
@@ -287,6 +292,7 @@ effort = ""                       # passed through the kind's `effort` args ("" 
 # args = []                       # appended to the agent's launch args
 prompt = "notes-curate.md"        # in prompts_dir; the embedded copy when absent
 timeout = "30m"                   # a curator turn that takes longer is abandoned
+# fallback_models = []            # as in [learn]: the curator's models when `model` hits its own limit
 
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it
@@ -533,7 +539,9 @@ status_comment_note = ""          # a line of yours under the status comment whi
 # login_ok = "json:loggedIn"
 # switch_model = "/model {model}"     # typed into the idle pane when its model hits its own limit ("You've reached
 #                                     # your Fable limit"); "" = cannot switch, so that limit pauses the kind
-# fallback_models = ["opus", "sonnet"]  # switched to in order, once each per run, then back after the limit ends
+# fallback_models = ["opus", "sonnet"]  # switched to in order, once each per run, then back after the limit ends;
+#                                     # a pane job (curator, retro, editor) starts again once on the first free one;
+#                                     # a role's own fallback_models replace this list
 # default_model = ""                  # the model of claude roles without their own `model` ("" = the CLI's)
 # reset_model = "default"             # the switch_model argument back to the CLI's default (no model set)
 # exit_keys = ["/", "e", "x", "i", "t", "enter"]   # /exit, one key each (herdr's send-keys takes key combos,
@@ -616,6 +624,9 @@ summary = "deep review for bugs, security and correctness"   # one line for [tri
                                       # (a role without one is never dropped from a round)
 effort = "high"                       # passed to /code-review by the prompt
 rereview_effort = "medium"            # re-reviews of new commits: fewer, surer findings on a smaller delta
+# fallback_models = []                # the models this role moves to, in order, when its model hits its own
+                                      # limit (one word each); [] = [kinds.claude] fallback_models. Any session
+                                      # role may set it; it replaces the kind's list, never adds to it
 prompt = "claude-review.md"
 rereview = "claude-rereview.md"
 restart = "claude-restart.md"         # a push cut the review short; the round restarted on the new head

@@ -160,7 +160,9 @@ type Daemon struct {
 	BurstWindow      Duration `toml:"burst_window"`
 	// ModelLimitCooldown is how long a model that hit its own limit
 	// (health pattern model_limit) counts as limited when the pane text
-	// names no reset time; sessions use the kind's fallback_models meanwhile.
+	// names no reset time (a limit hit again within a day of the last one's
+	// end lasts twice that one's span, up to 24h: agents.RecordModelLimit);
+	// sessions use their role's fallback_models, else the kind's, meanwhile.
 	ModelLimitCooldown Duration `toml:"model_limit_cooldown"`
 	// ParkIdleAfter parks a live agent of a reviewed or ineligible PR (a
 	// draft, a mute or a skip after its review) once it has been idle this

@@ -2,12 +2,15 @@ package agents
 
 // Per-model limits: one model of an agent kind hit its own cap (health
 // kind model_limit, "You've reached your Fable limit") while the account
-// still has usage left. The pipeline then switches the session to the
-// kind's next fallback model (SwitchModel) and continues the run. The limit
-// is remembered in kv, so a new session of a role on the limited model
-// starts on a fallback (StartAgent), a live one switches before its next
-// prompt (Submit), and both return to the role's model once the limit is
-// over.
+// still has usage left. The pipeline then switches the session to the next
+// fallback model (SwitchModel; the role's fallback_models, else its kind's:
+// fallbacksFor) and continues the run. The limit is remembered in kv
+// (RecordModelLimit; a limit hit again within a day of the last one's end
+// lasts twice as long, up to MaxReset), so a new session of a role on the
+// limited model starts on a fallback (StartAgent, LaunchModel), a live one
+// switches before its next prompt (Submit), and both return to the role's
+// model once the limit is over. A pane job copies the live limits into its
+// own registry (CopyModelLimits) and records its own in both.
 
 import (
 	"cmp"
@@ -35,6 +38,15 @@ func KVModelLimited(kind, model string) string { return "kind." + kind + ".model
 // KVModelLimits is the kv key listing (comma-separated) the models of kind
 // that have a KVModelLimited row, so status can find them.
 func KVModelLimits(kind string) string { return "kind." + kind + ".model_limits" }
+
+// KVModelLimitedAt is the kv key holding when kind's last limit on model was
+// first recorded and when it ends, "<at> <until>" (both store.FormatTime):
+// "kind.<kind>.model_limited_at.<model>". Unlike KVModelLimited it outlives
+// the limit, so RecordModelLimit knows a model that hits its limit again
+// soon after the last one ended.
+func KVModelLimitedAt(kind, model string) string {
+	return "kind." + kind + ".model_limited_at." + model
+}
 
 // KVKindCLIModel is the kv key holding the CLI's own default model of kind
 // (what a session runs when neither its role's model nor the kind's
@@ -85,8 +97,8 @@ type ModelLimit struct {
 	Kind  string
 	Model string
 	Until time.Time
-	// Using is the first of the kind's fallback_models that is not limited
-	// itself ("" = none).
+	// Using is the first of the fallback models (fallbacksFor: the role's,
+	// else the kind's) that is not limited itself ("" = none).
 	Using string
 }
 
@@ -188,16 +200,30 @@ func firstFallback(fallbacks []string, limits map[string]time.Time, skip ...stri
 	return "", false
 }
 
+// fallbacksFor is the models a session of role moves to, in order, when its
+// model is limited: the role's own fallback_models when it lists any, else
+// its kind's. A role's list replaces the kind's; the two never merge. Every
+// path that picks a fallback (startModel, LaunchModel, ensureModel,
+// FallbackModel, NoteModelLimit, ModelLimits) asks it, so a role built
+// anywhere (a [[role]], a pane job's role) needs only its FallbackModels.
+func fallbacksFor(role config.Role, k config.Kind) []string {
+	if len(role.FallbackModels) > 0 {
+		return role.FallbackModels
+	}
+	return k.FallbackModels
+}
+
 // ModelLimits lists the per-model limits of kind recorded in st that end
 // after now, by model name, each with the fallback a session uses meanwhile.
-// cfg may be nil (Using then stays empty). It is for display: a limit whose
-// row cannot be read is left out.
+// A kind has no role, so Using names the kind's own list. cfg may be nil
+// (Using then stays empty). It is for display: a limit whose row cannot be
+// read is left out.
 func ModelLimits(ctx context.Context, st *store.Store, cfg *config.Config, kind string, now time.Time) []ModelLimit {
 	limits, _ := activeLimits(ctx, st, kind, now)
 	var fallbacks []string
 	if cfg != nil {
 		if k, ok := cfg.KindSpec(kind); ok && k.SwitchModel != "" {
-			fallbacks = k.FallbackModels
+			fallbacks = fallbacksFor(config.Role{}, k)
 		}
 	}
 	out := make([]ModelLimit, 0, len(limits))
@@ -242,12 +268,12 @@ func (m *Manager) sessionModel(ctx context.Context, s store.Session, role config
 // NoteModelLimit records that the model of session s hit its own limit (h,
 // a HealthModelLimit verdict on its pane): h.Model, else the session's
 // current model, is limited until h.ResetAt, else for
-// daemon.model_limit_cooldown, never shortening a later recorded end. A
-// session on its CLI's default model also teaches magnum which model that
-// default is (KVKindCLIModel). It appends a kind.model_limited event. A
-// recorded limit that cannot be read is the error, before anything is
-// written: the index rewritten from a partial view would drop limits still
-// active.
+// daemon.model_limit_cooldown (doubled for a limit hit again within a day,
+// see RecordModelLimit), never shortening a later recorded end. A session
+// on its CLI's default model also teaches magnum which model that default is
+// (KVKindCLIModel). It appends a kind.model_limited event. A recorded limit
+// that cannot be read is the error, before anything is written: the index
+// rewritten from a partial view would drop limits still active.
 func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health) (ModelLimit, error) {
 	ctx = context.WithoutCancel(ctx)
 	kind := m.sessionKind(s)
@@ -260,49 +286,23 @@ func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health)
 	if model == "" {
 		model = UnknownModel
 	}
-	now := m.now()
-	limits, err := activeLimits(ctx, m.d.Store, kind, now)
+	var cooldown time.Duration
+	if m.d.Config != nil {
+		cooldown = m.d.Config.Daemon.ModelLimitCooldown.Duration
+	}
+	until, limits, err := recordModelLimit(ctx, m.d.Store, kind, model, h.ResetAt, cooldown, m.now(),
+		func(err error) { m.logErr(ctx, err, "%v", err) })
 	if err != nil {
-		return ModelLimit{}, fmt.Errorf("agents: record %s limit of %s: %w", model, kind, err)
+		return ModelLimit{}, err
 	}
 	if h.Model != "" && m.configuredModel(role) == "" && !switched {
 		if err := m.d.Store.SetKV(ctx, KVKindCLIModel(kind), model); err != nil {
 			m.logErr(ctx, err, "agents: %v", err)
 		}
 	}
-	cooldown := DefaultModelLimitCooldown
-	if m.d.Config != nil && m.d.Config.Daemon.ModelLimitCooldown.Duration > 0 {
-		cooldown = m.d.Config.Daemon.ModelLimitCooldown.Duration
-	}
-	until := now.Add(cooldown)
-	if h.ResetAt != nil && h.ResetAt.After(now) {
-		until = *h.ResetAt
-	}
-	if prev, ok := limits[model]; ok && prev.After(until) {
-		until = prev
-	}
-	limits[model] = until
-	if err := m.d.Store.SetKV(ctx, KVModelLimited(kind, model), store.FormatTime(until)); err != nil {
-		return ModelLimit{}, fmt.Errorf("agents: record %s limit of %s: %w", model, kind, err)
-	}
-	// The index keeps the active limits only; rows of expired ones go too.
-	idx, _, err := m.d.Store.GetKV(ctx, KVModelLimits(kind))
-	if err != nil {
-		m.logErr(ctx, err, "agents: expired limits of %s kept: %v", kind, err)
-	}
-	for _, name := range splitList(idx) {
-		if _, active := limits[name]; !active {
-			if err := m.d.Store.DeleteKV(ctx, KVModelLimited(kind, name)); err != nil {
-				m.logErr(ctx, err, "agents: expired %s limit of %s kept: %v", name, kind, err)
-			}
-		}
-	}
-	if err := m.d.Store.SetKV(ctx, KVModelLimits(kind), strings.Join(slices.Sorted(maps.Keys(limits)), ",")); err != nil {
-		return ModelLimit{}, fmt.Errorf("agents: record %s limit of %s: %w", model, kind, err)
-	}
 	l := ModelLimit{Kind: kind, Model: model, Until: until}
 	if k, ok := m.kindSpec(kind); ok && k.SwitchModel != "" {
-		l.Using, _ = firstFallback(k.FallbackModels, limits, model)
+		l.Using, _ = firstFallback(fallbacksFor(role, k), limits, model)
 	}
 	m.event(ctx, "tool:"+kind, "warn", EventModelLimited,
 		fmt.Sprintf("%s: %s limited until %s: %s", kind, model, until.Local().Format("15:04"), h.Detail),
@@ -310,11 +310,163 @@ func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health)
 	return l, nil
 }
 
+// RecordModelLimit records in registry st that model of kind hit its own
+// limit at now and returns when the limit ends: at reset when the limit
+// message named one after now, else after cooldown
+// (DefaultModelLimitCooldown when 0 or less), never earlier than an end
+// already recorded for the model (a report while the limit lasts is no
+// repeat). A model whose last limit ended less than MaxReset before now hit
+// it again within the day: without a named reset its limit lasts at least
+// twice the last one's span, capped at MaxReset, so a weekly window costs at
+// most one probe of the model a day; a longer cooldown stays as it is. It
+// is what NoteModelLimit writes for a session, for a caller without one (a
+// pane job records its limit in the live registry with it) and over any
+// registry. Ended limits leave the index with their rows. A limit that
+// cannot be read is the error, before anything is written; a failure after
+// the limit's row was written (the repeat record, an ended row) leaves the
+// limit recorded.
+func RecordModelLimit(ctx context.Context, st *store.Store, kind, model string, reset *time.Time, cooldown time.Duration, now time.Time) (time.Time, error) {
+	until, _, err := recordModelLimit(ctx, st, kind, model, reset, cooldown, now, nil)
+	return until, err
+}
+
+// recordModelLimit is RecordModelLimit, which also returns the limits of
+// kind that end after now (the new one included) and hands the failures
+// that leave the limit recorded to warn (nil: dropped).
+func recordModelLimit(ctx context.Context, st *store.Store, kind, model string, reset *time.Time, cooldown time.Duration,
+	now time.Time, warn func(error)) (time.Time, map[string]time.Time, error) {
+	ctx = context.WithoutCancel(ctx)
+	if warn == nil {
+		warn = func(error) {}
+	}
+	if model = strings.ToLower(strings.TrimSpace(model)); model == "" {
+		model = UnknownModel
+	}
+	if cooldown <= 0 {
+		cooldown = DefaultModelLimitCooldown
+	}
+	limits, err := activeLimits(ctx, st, kind, now)
+	if err != nil {
+		return time.Time{}, nil, fmt.Errorf("agents: record %s limit of %s: %w", model, kind, err)
+	}
+	named := reset != nil && reset.After(now)
+	until := now.Add(cooldown)
+	if named {
+		until = *reset
+	}
+	end, active := limits[model]
+	last, hadLast, err := readLimitedAt(ctx, st, kind, model)
+	if err != nil {
+		warn(err)
+	}
+	if !named && !active && hadLast && now.Sub(last.until) < MaxReset {
+		span := last.until.Sub(last.at)
+		if span <= 0 {
+			span = cooldown
+		}
+		if doubled := now.Add(min(2*span, MaxReset)); doubled.After(until) {
+			until = doubled
+		}
+	}
+	if active && end.After(until) {
+		until = end
+	}
+	limits[model] = until
+	if err := st.SetKV(ctx, KVModelLimited(kind, model), store.FormatTime(until)); err != nil {
+		return time.Time{}, nil, fmt.Errorf("agents: record %s limit of %s: %w", model, kind, err)
+	}
+	// A limit still active keeps when it was first recorded: its end moved,
+	// not its start.
+	at := now
+	if active && hadLast && last.at.Before(now) {
+		at = last.at
+	}
+	if err := st.SetKV(ctx, KVModelLimitedAt(kind, model), store.FormatTime(at)+" "+store.FormatTime(until)); err != nil {
+		warn(fmt.Errorf("agents: the repeat record of the %s limit of %s not kept: %w", model, kind, err))
+	}
+	// The index keeps the active limits only; rows of expired ones go too.
+	idx, _, err := st.GetKV(ctx, KVModelLimits(kind))
+	if err != nil {
+		warn(fmt.Errorf("agents: expired limits of %s kept: %w", kind, err))
+	}
+	for _, name := range splitList(idx) {
+		if _, live := limits[name]; !live {
+			if err := st.DeleteKV(ctx, KVModelLimited(kind, name)); err != nil {
+				warn(fmt.Errorf("agents: expired %s limit of %s kept: %w", name, kind, err))
+			}
+		}
+	}
+	if err := st.SetKV(ctx, KVModelLimits(kind), strings.Join(slices.Sorted(maps.Keys(limits)), ",")); err != nil {
+		return time.Time{}, nil, fmt.Errorf("agents: record %s limit of %s: %w", model, kind, err)
+	}
+	return until, limits, nil
+}
+
+// limitedAt is a KVModelLimitedAt row: when a limit was first recorded and
+// when it was to end.
+type limitedAt struct{ at, until time.Time }
+
+// readLimitedAt reads the KVModelLimitedAt row of kind's model; ok is false
+// when there is none or it does not parse.
+func readLimitedAt(ctx context.Context, st *store.Store, kind, model string) (limitedAt, bool, error) {
+	v, found, err := readKV(ctx, st, KVModelLimitedAt(kind, model))
+	if err != nil {
+		return limitedAt{}, false, fmt.Errorf("agents: read the repeat record of the %s limit of %s: %w", model, kind, err)
+	}
+	if !found {
+		return limitedAt{}, false, nil
+	}
+	from, to, _ := strings.Cut(v, " ")
+	at, errAt := store.ParseTime(from)
+	until, errUntil := store.ParseTime(to)
+	return limitedAt{at, until}, errAt == nil && errUntil == nil, nil
+}
+
+// CopyModelLimits copies kind's limits that end after now from registry
+// from into registry to, keeping the later end of a model both hold, with
+// the CLI's default model as a limit message named it (KVKindCLIModel) when
+// to has none: a pane job seeds its scratch registry with what rounds and
+// earlier jobs recorded in the live one, so its launch (StartAgent,
+// LaunchModel) skips a model they found limited. The limits read are copied
+// even when another cannot be read; that one is the error.
+func CopyModelLimits(ctx context.Context, from, to *store.Store, kind string, now time.Time) error {
+	src, rerr := activeLimits(ctx, from, kind, now)
+	dst, err := activeLimits(ctx, to, kind, now)
+	if err != nil {
+		return errors.Join(rerr, err)
+	}
+	if len(src) == 0 {
+		return rerr
+	}
+	var errs []error
+	for model, until := range src {
+		if end, ok := dst[model]; ok && !until.After(end) {
+			continue
+		}
+		if err := to.SetKV(ctx, KVModelLimited(kind, model), store.FormatTime(until)); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		dst[model] = until
+	}
+	if err := to.SetKV(ctx, KVModelLimits(kind), strings.Join(slices.Sorted(maps.Keys(dst)), ",")); err != nil {
+		errs = append(errs, err)
+	}
+	if _, ok, _ := to.GetKV(ctx, KVKindCLIModel(kind)); !ok {
+		if v, ok, err := from.GetKV(ctx, KVKindCLIModel(kind)); err == nil && ok {
+			if err := to.SetKV(ctx, KVKindCLIModel(kind), v); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(append(errs, rerr)...)
+}
+
 // FallbackModel is the model session s switches to next: the first of its
-// kind's fallback_models that is not limited, not the session's current
-// model and not among tried. ok is false when the kind cannot switch
-// (switch_model unset), every fallback is used up, or the limits cannot be
-// read (logged: the session keeps its model).
+// fallback models (the role's, else the kind's: fallbacksFor) that is not
+// limited, not the session's current model and not among tried. ok is false
+// when the kind cannot switch (switch_model unset), every fallback is used
+// up, or the limits cannot be read (logged: the session keeps its model).
 func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool) {
 	kind := m.sessionKind(s)
 	k, ok := m.kindSpec(kind)
@@ -328,7 +480,7 @@ func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []st
 	}
 	role, _ := m.roleSpec(Role(s.Role))
 	cur, _ := m.sessionModel(ctx, s, role)
-	return firstFallback(k.FallbackModels, limits, append(slices.Clone(tried), cur)...)
+	return firstFallback(fallbacksFor(role, k), limits, append(slices.Clone(tried), cur)...)
 }
 
 // SwitchModel switches the idle agent of session s to model with its
@@ -632,28 +784,66 @@ func (m *Manager) isSwitching(id int64) bool {
 }
 
 // startModel is the model a fresh launch of role passes through Kind.Argv:
-// role.Model, or the first fallback that is not limited when the role's
-// model is limited and the kind can select a model at launch (a kind
-// without model args starts on the role's model and switches before the
-// first prompt, see ensureModel). fallback reports the substitution. Limits
-// that cannot be read start the role's model (logged).
+// role.Model, or the first of its fallback models (fallbacksFor: the
+// role's, else the kind's) that is not limited when the role's model is
+// limited and the kind can select a model at launch (a kind without model
+// args starts on the role's model and switches before the first prompt, see
+// ensureModel). fallback reports the substitution. Limits that cannot be
+// read start the role's model (logged).
 func (m *Manager) startModel(ctx context.Context, role config.Role, k config.Kind) (model string, fallback bool) {
-	if len(k.Model) == 0 || k.SwitchModel == "" || len(k.FallbackModels) == 0 {
+	if len(k.Model) == 0 || k.SwitchModel == "" || len(fallbacksFor(role, k)) == 0 {
 		return role.Model, false
 	}
-	limits, err := activeLimits(ctx, m.d.Store, role.AgentKind(), m.now())
+	model, fallback, _, err := launchModel(ctx, m.d.Store, role, k, m.roleModel(ctx, role), m.now())
 	if err != nil {
 		m.logErr(ctx, err, "agents: %s starts on its own model: %v", role.Name, err)
-		return role.Model, false
 	}
-	want := m.roleModel(ctx, role)
+	return model, fallback
+}
+
+// LaunchModel is the model a fresh launch of role starts on over registry
+// st, as StartAgent picks it (startModel) for a Manager over st: role.Model
+// while the model the role's sessions run (Config.RoleModel, else the CLI's
+// default as a limit message named it, KVKindCLIModel) is not limited, else
+// the first of the role's fallback models (the role's, else its kind's)
+// that is not, and fallback reports that substitution. none reports a
+// limited model with nothing to start on instead: the list is empty or used
+// up, or the kind cannot pick a model (no model args, no switch_model);
+// model is then role.Model. A pane job asks it before it starts again on a
+// fallback. Limits that cannot be read give role.Model, neither a fallback
+// nor none.
+func LaunchModel(ctx context.Context, st *store.Store, cfg *config.Config, role config.Role, now time.Time) (model string, fallback, none bool) {
+	var k config.Kind
+	want := role.Model
+	if cfg != nil {
+		k, _ = cfg.KindSpec(role.AgentKind())
+		want = cfg.RoleModel(role)
+	}
+	if want == "" {
+		want, _, _ = st.GetKV(ctx, KVKindCLIModel(role.AgentKind()))
+	}
+	model, fallback, none, _ = launchModel(ctx, st, role, k, want, now)
+	return model, fallback, none
+}
+
+// launchModel is startModel's and LaunchModel's choice over registry st for
+// role of kind k, whose sessions run want unless magnum switched them; err
+// is a read of the limits that failed (model is then role.Model, none
+// false).
+func launchModel(ctx context.Context, st *store.Store, role config.Role, k config.Kind, want string, now time.Time) (model string, fallback, none bool, err error) {
+	limits, err := activeLimits(ctx, st, role.AgentKind(), now)
+	if err != nil {
+		return role.Model, false, false, err
+	}
 	if _, lim := limitOf(limits, want); !lim {
-		return role.Model, false
+		return role.Model, false, false, nil
 	}
-	if f, ok := firstFallback(k.FallbackModels, limits, want); ok {
-		return f, true
+	if len(k.Model) > 0 && k.SwitchModel != "" {
+		if f, ok := firstFallback(fallbacksFor(role, k), limits, want); ok {
+			return f, true, false, nil
+		}
 	}
-	return role.Model, false
+	return role.Model, false, true, nil
 }
 
 // startedOnFallback records that a session launched on fallback model
@@ -698,7 +888,7 @@ func (m *Manager) ensureModel(ctx context.Context, s store.Session) {
 	}
 	var target, reason string
 	if _, lim := limitOf(limits, cur); lim {
-		f, ok := firstFallback(k.FallbackModels, limits, cur)
+		f, ok := firstFallback(fallbacksFor(role, k), limits, cur)
 		if !ok {
 			return
 		}

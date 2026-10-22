@@ -454,6 +454,15 @@ func CommandAnchor(marker string) string
     marker contains (the done printf's format, which the output shows with a
     number instead): pane text after it is the command's output.
 
+func CopyModelLimits(ctx context.Context, from, to *store.Store, kind string, now time.Time) error
+    CopyModelLimits copies kind's limits that end after now from registry from
+    into registry to, keeping the later end of a model both hold, with the CLI's
+    default model as a limit message named it (KVKindCLIModel) when to has none:
+    a pane job seeds its scratch registry with what rounds and earlier jobs
+    recorded in the live one, so its launch (StartAgent, LaunchModel) skips
+    a model they found limited. The limits read are copied even when another
+    cannot be read; that one is the error.
+
 func CountWorking(agents []herdr.AgentInfo, kind string) int
     CountWorking counts agents of kind (codex, claude, ...) whose status is
     working, magnum's or not (daemon.max_total_working_codex gate).
@@ -481,6 +490,13 @@ func KVModelLimited(kind, model string) string
     KVModelLimited is the kv key holding when kind's limit on model ends
     (store.FormatTime): "kind.<kind>.model_limited.<model>".
 
+func KVModelLimitedAt(kind, model string) string
+    KVModelLimitedAt is the kv key holding when kind's last limit on model was
+    first recorded and when it ends, "<at> <until>" (both store.FormatTime):
+    "kind.<kind>.model_limited_at.<model>". Unlike KVModelLimited it outlives
+    the limit, so RecordModelLimit knows a model that hits its limit again soon
+    after the last one ended.
+
 func KVModelLimits(kind string) string
     KVModelLimits is the kv key listing (comma-separated) the models of kind
     that have a KVModelLimited row, so status can find them.
@@ -492,6 +508,18 @@ func KVSessionModel(sessionID int64) string
 func KindName(kind string) string
     KindName is an agent kind as a sentence names it: "Codex" for codex,
     "Claude" for claude ("The agent" for none).
+
+func LaunchModel(ctx context.Context, st *store.Store, cfg *config.Config, role config.Role, now time.Time) (model string, fallback, none bool)
+    LaunchModel is the model a fresh launch of role starts on over registry st,
+    as StartAgent picks it (startModel) for a Manager over st: role.Model
+    while the model the role's sessions run (Config.RoleModel, else the CLI's
+    default as a limit message named it, KVKindCLIModel) is not limited,
+    else the first of the role's fallback models (the role's, else its kind's)
+    that is not, and fallback reports that substitution. none reports a limited
+    model with nothing to start on instead: the list is empty or used up,
+    or the kind cannot pick a model (no model args, no switch_model); model is
+    then role.Model. A pane job asks it before it starts again on a fallback.
+    Limits that cannot be read give role.Model, neither a fallback nor none.
 
 func NewRunID(now time.Time) string
     NewRunID is a run id: "r-<UTC yyyymmddThhmmss>-<6 random hex digits>",
@@ -590,6 +618,22 @@ func ProjectTouched(kind string, paths []string) bool
     a file at or under one of its paths, or of the name of a path in any
     directory, in any case (pathOf: macOS opens .Claude/settings.json for
     .claude/settings.json). A kind magnum does not compare touches nothing.
+
+func RecordModelLimit(ctx context.Context, st *store.Store, kind, model string, reset *time.Time, cooldown time.Duration, now time.Time) (time.Time, error)
+    RecordModelLimit records in registry st that model of kind hit its own limit
+    at now and returns when the limit ends: at reset when the limit message
+    named one after now, else after cooldown (DefaultModelLimitCooldown when 0
+    or less), never earlier than an end already recorded for the model (a report
+    while the limit lasts is no repeat). A model whose last limit ended less
+    than MaxReset before now hit it again within the day: without a named reset
+    its limit lasts at least twice the last one's span, capped at MaxReset,
+    so a weekly window costs at most one probe of the model a day; a longer
+    cooldown stays as it is. It is what NoteModelLimit writes for a session,
+    for a caller without one (a pane job records its limit in the live registry
+    with it) and over any registry. Ended limits leave the index with their
+    rows. A limit that cannot be read is the error, before anything is written;
+    a failure after the limit's row was written (the repeat record, an ended
+    row) leaves the limit recorded.
 
 func RelatedStackLine(below, above []int) string
     RelatedStackLine is JudgeData.RelatedStack, and the round.related event's
@@ -1347,10 +1391,10 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 
 func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
     FallbackModel is the model session s switches to next: the first of its
-    kind's fallback_models that is not limited, not the session's current model
-    and not among tried. ok is false when the kind cannot switch (switch_model
-    unset), every fallback is used up, or the limits cannot be read (logged:
-    the session keeps its model).
+    fallback models (the role's, else the kind's: fallbacksFor) that is not
+    limited, not the session's current model and not among tried. ok is false
+    when the kind cannot switch (switch_model unset), every fallback is used up,
+    or the limits cannot be read (logged: the session keeps its model).
 
 func (m *Manager) FallbackPrompt(d FallbackData) (string, error)
     FallbackPrompt renders FallbackPromptName from pipeline.prompts_dir or the
@@ -1393,12 +1437,13 @@ func (m *Manager) NewRun(ctx context.Context, pr store.PR, role Role, kind strin
 func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health) (ModelLimit, error)
     NoteModelLimit records that the model of session s hit its own limit (h,
     a HealthModelLimit verdict on its pane): h.Model, else the session's current
-    model, is limited until h.ResetAt, else for daemon.model_limit_cooldown,
-    never shortening a later recorded end. A session on its CLI's default
-    model also teaches magnum which model that default is (KVKindCLIModel).
-    It appends a kind.model_limited event. A recorded limit that cannot be read
-    is the error, before anything is written: the index rewritten from a partial
-    view would drop limits still active.
+    model, is limited until h.ResetAt, else for daemon.model_limit_cooldown
+    (doubled for a limit hit again within a day, see RecordModelLimit), never
+    shortening a later recorded end. A session on its CLI's default model also
+    teaches magnum which model that default is (KVKindCLIModel). It appends a
+    kind.model_limited event. A recorded limit that cannot be read is the error,
+    before anything is written: the index rewritten from a partial view would
+    drop limits still active.
 
 func (m *Manager) Observe(ctx context.Context) ([]Observation, error)
     Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time
@@ -1808,17 +1853,18 @@ type ModelLimit struct {
 	Kind  string
 	Model string
 	Until time.Time
-	// Using is the first of the kind's fallback_models that is not limited
-	// itself ("" = none).
+	// Using is the first of the fallback models (fallbacksFor: the role's,
+	// else the kind's) that is not limited itself ("" = none).
 	Using string
 }
     ModelLimit is one model of a kind that hit its own limit.
 
 func ModelLimits(ctx context.Context, st *store.Store, cfg *config.Config, kind string, now time.Time) []ModelLimit
-    ModelLimits lists the per-model limits of kind recorded in st that end
-    after now, by model name, each with the fallback a session uses meanwhile.
-    cfg may be nil (Using then stays empty). It is for display: a limit whose
-    row cannot be read is left out.
+    ModelLimits lists the per-model limits of kind recorded in st that end after
+    now, by model name, each with the fallback a session uses meanwhile. A kind
+    has no role, so Using names the kind's own list. cfg may be nil (Using then
+    stays empty). It is for display: a limit whose row cannot be read is left
+    out.
 
 type NotesPart struct {
 	From, To       int
@@ -3855,8 +3901,8 @@ func (c *Config) CommentsWhenClean(repo, identity, author string) bool
 func (c *Config) EditorRole() Role
     EditorRole is the role the skill editor runs as: EditorRoleName, the
     [learn] editor_kind in session mode with its editor_model, editor_effort,
-    editor_args, editor_prompt and editor_timeout, writing changes.json,
-    normalized like a configured role.
+    editor_args, editor_prompt, editor_timeout and editor_fallback_models,
+    writing changes.json, normalized like a configured role.
 
 func (c *Config) FixCyclesFor(w *Watch) int
     FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
@@ -3928,8 +3974,9 @@ func (c *Config) KindSpec(name string) (Kind, bool)
 
 func (c *Config) LearnRole() Role
     LearnRole is the role the retro's classifying agent runs as: LearnRoleName,
-    the [learn] kind in session mode with its model, effort, args, prompt and
-    timeout, writing retro.json, normalized like a configured role.
+    the [learn] kind in session mode with its model, effort, args, prompt,
+    timeout and fallback models, writing retro.json, normalized like a
+    configured role.
 
 func (c *Config) MaxSimplificationsFor(fullName string) int
     MaxSimplificationsFor is how many simplifications the judge posts
@@ -3945,8 +3992,8 @@ func (c *Config) Normalize()
 
 func (c *Config) NotesRole() Role
     NotesRole is the role the curator runs as: NotesRoleName, the [notes] kind
-    in session mode with its model, effort, args, prompt and timeout, normalized
-    like a configured role.
+    in session mode with its model, effort, args, prompt, timeout and fallback
+    models, normalized like a configured role.
 
 func (c *Config) OperatorIdentity(w Watch) *Identity
     OperatorIdentity is the gh identity of the operator's own account for
@@ -4224,7 +4271,9 @@ type Daemon struct {
 	BurstWindow      Duration `toml:"burst_window"`
 	// ModelLimitCooldown is how long a model that hit its own limit
 	// (health pattern model_limit) counts as limited when the pane text
-	// names no reset time; sessions use the kind's fallback_models meanwhile.
+	// names no reset time (a limit hit again within a day of the last one's
+	// end lasts twice that one's span, up to 24h: agents.RecordModelLimit);
+	// sessions use their role's fallback_models, else the kind's, meanwhile.
 	ModelLimitCooldown Duration `toml:"model_limit_cooldown"`
 	// ParkIdleAfter parks a live agent of a reviewed or ineligible PR (a
 	// draft, a mute or a skip after its review) once it has been idle this
@@ -4790,6 +4839,10 @@ type Learn struct {
 	Prompt string `toml:"prompt"`
 	// Timeout bounds the agent's turn on one PR.
 	Timeout Duration `toml:"timeout"`
+	// FallbackModels are the models the classifier starts again on, in
+	// order, when Model hits its own limit (Role.FallbackModels); empty =
+	// the kind's fallback_models.
+	FallbackModels []string `toml:"fallback_models"`
 
 	// The self-improving loop (internal/engine/learn_edit.go, DECISIONS "The
 	// editor proposes skill and prompt changes on a branch"). Editor turns
@@ -4798,15 +4851,18 @@ type Learn struct {
 	// that drafts a change to the judge skill and the prompts on a branch
 	// of the checkout. EditorKind, EditorModel, EditorEffort and EditorArgs
 	// are its role's (EditorRole; editor_kind without editor_model gets
-	// DefaultLearnModel of that kind), EditorPrompt its template and
-	// EditorTimeout the bound of one turn.
-	Editor        bool     `toml:"editor"`
-	EditorKind    string   `toml:"editor_kind"`
-	EditorModel   string   `toml:"editor_model"`
-	EditorEffort  string   `toml:"editor_effort"`
-	EditorArgs    []string `toml:"editor_args"`
-	EditorPrompt  string   `toml:"editor_prompt"`
-	EditorTimeout Duration `toml:"editor_timeout"`
+	// DefaultLearnModel of that kind), EditorPrompt its template,
+	// EditorTimeout the bound of one turn and EditorFallbackModels the
+	// models it starts again on when EditorModel hits its own limit (empty =
+	// the kind's fallback_models).
+	Editor               bool     `toml:"editor"`
+	EditorKind           string   `toml:"editor_kind"`
+	EditorModel          string   `toml:"editor_model"`
+	EditorEffort         string   `toml:"editor_effort"`
+	EditorArgs           []string `toml:"editor_args"`
+	EditorPrompt         string   `toml:"editor_prompt"`
+	EditorTimeout        Duration `toml:"editor_timeout"`
+	EditorFallbackModels []string `toml:"editor_fallback_models"`
 	// GateCases bounds the eval cases the gate of a proposal replays,
 	// LandPerDay the proposals that land per local day; Restart is idle
 	// (the daemon restarts on a landed change once nothing is in flight) or
@@ -4871,6 +4927,10 @@ type Notes struct {
 	Prompt string `toml:"prompt"`
 	// Timeout bounds the curator's turn.
 	Timeout Duration `toml:"timeout"`
+	// FallbackModels are the models the curator starts again on, in order,
+	// when Model hits its own limit (Role.FallbackModels); empty = the
+	// kind's fallback_models.
+	FallbackModels []string `toml:"fallback_models"`
 }
     Notes is the [notes] section: the repository notes every review role reads
     first and the judge rewrites (engine.NotesPath). The four limits are hints
@@ -5330,6 +5390,15 @@ type Role struct {
 	// an earlier review); "" = Effort. The first review and a recovery keep
 	// Effort. See EffortFor.
 	RereviewEffort string `toml:"rereview_effort"`
+	// FallbackModels: the models a session of the role moves to, in order,
+	// when its model hits its own limit (health pattern model_limit): a
+	// round's reviewer or judge switches in its session, a pane job (the
+	// curator, the retro's classifier, the skill editor) starts a fresh
+	// session on the first one that is not limited. Empty = the kind's
+	// fallback_models; a list here replaces the kind's, the two never merge.
+	// Each entry is one word. The kind's switch_model is still what lets a
+	// session switch at all (agents.fallbacksFor). Session roles only.
+	FallbackModels []string `toml:"fallback_models"`
 	// MaxSubagents caps the subagents the role's agent may have open at
 	// once, passed through its kind's subagents args (0: the kind's
 	// no_subagents args, which turn them off); nil = the CLI's own limit.
@@ -6749,10 +6818,12 @@ func CheckPrompts(cfg *config.Config) (int, error)
 
 func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]string, error)
     ClearModelLimits deletes the per-model limits recorded for kind
-    (agents.KVModelLimited rows indexed by agents.KVModelLimits), so new
-    sessions start on their roles' models again and live ones switch back before
-    their next prompt. It returns the models that were limited. `magnum resume
-    --tool` runs it (through the daemon, or directly when no daemon runs).
+    (agents.KVModelLimited rows indexed by agents.KVModelLimits) with what they
+    were (agents.KVModelLimitedAt, so a limit after the clear is no repeat
+    that doubles), so new sessions start on their roles' models again and live
+    ones switch back before their next prompt. It returns the models that were
+    limited. `magnum resume --tool` runs it (through the daemon, or directly
+    when no daemon runs).
 
 func ContentOf(s notes.State) store.NotesContent
     ContentOf is a notes state as the registry stores it.
@@ -7243,10 +7314,13 @@ type ClassifyResult struct {
 	// set up); they are stored unclassified, not as a failure.
 	Unclassified bool
 	// Pause: the classifier's agent hit a limit (Kind: usage_limit,
-	// login_required, model_limit or overloaded). The retro stops without
-	// recording the PR, which stays due; a usage limit and a logout also
-	// pause the tool, as after a round.
+	// login_required, overloaded, or model_limit with no fallback model
+	// left). The retro stops without recording the PR, which stays due; a
+	// usage limit and a logout also pause the tool, as after a round.
 	Pause *pipeline.Pause
+	// Model is the model the answer came from ("" = unknown), which the
+	// retro.ok event names.
+	Model string
 }
     ClassifyResult is how a Classifier's turn ended, besides its error.
 
@@ -7384,9 +7458,11 @@ type CurateResult struct {
 	Proposal notes.Proposal
 	Problems []string
 	Pause    *pipeline.Pause
+	Model    string
 }
     CurateResult is how a curator's turns ended: a proposal, valid when Problems
-    is empty, or a Pause (a limit the agent hit).
+    is empty, or a Pause (a limit the agent hit). Model is the model the
+    proposal came from ("" = unknown: the role's).
 
 type CurateRun struct {
 	ID  string
@@ -7598,9 +7674,11 @@ type EditResult struct {
 	Changes  learn.Changes
 	Problems []string
 	Pause    *pipeline.Pause
+	Model    string
 }
     EditResult is how an editor's turns ended: its changes, valid when Problems
-    is empty, or a Pause (a limit the agent hit).
+    is empty, or a Pause (a limit the agent hit). Model is the model the changes
+    came from ("" = unknown: the role's).
 
 type EditRun struct {
 	ID, Dir, Worktree string

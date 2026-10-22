@@ -203,9 +203,11 @@ func fillSample(v reflect.Value, truth bool, depth int) {
 }
 
 // ClearModelLimits deletes the per-model limits recorded for kind
-// (agents.KVModelLimited rows indexed by agents.KVModelLimits), so new
-// sessions start on their roles' models again and live ones switch back
-// before their next prompt. It returns the models that were limited.
+// (agents.KVModelLimited rows indexed by agents.KVModelLimits) with what
+// they were (agents.KVModelLimitedAt, so a limit after the clear is no
+// repeat that doubles), so new sessions start on their roles' models again
+// and live ones switch back before their next prompt. It returns the models
+// that were limited.
 // `magnum resume --tool` runs it (through the daemon, or directly when no
 // daemon runs).
 func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]string, error) {
@@ -219,6 +221,9 @@ func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]stri
 			continue
 		}
 		if err := st.DeleteKV(ctx, agents.KVModelLimited(kind, m)); err != nil {
+			return models, err
+		}
+		if err := st.DeleteKV(ctx, agents.KVModelLimitedAt(kind, m)); err != nil {
 			return models, err
 		}
 		models = append(models, m)

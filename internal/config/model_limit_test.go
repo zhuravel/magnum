@@ -21,11 +21,11 @@ func TestResetModelLimitPatternsSeparateModelFromAccountLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(DefaultHealthPatterns().ModelLimit) != 3 {
-		t.Fatalf("default model_limit patterns = %d, want 3", len(DefaultHealthPatterns().ModelLimit))
+	if len(DefaultHealthPatterns().ModelLimit) != 4 {
+		t.Fatalf("default model_limit patterns = %d, want 4", len(DefaultHealthPatterns().ModelLimit))
 	}
-	if len(h.ModelLimit) != 3 {
-		t.Fatalf("compiled model_limit = %d, want 3", len(h.ModelLimit))
+	if len(h.ModelLimit) != 4 {
+		t.Fatalf("compiled model_limit = %d, want 4", len(h.ModelLimit))
 	}
 	model := map[string]string{
 		"You've reached your Fable limit. /model to switch models.": "",
@@ -35,6 +35,9 @@ func TestResetModelLimitPatternsSeparateModelFromAccountLimits(t *testing.T) {
 		"You've hit your Opus limit · resets 3:45pm":                "opus",
 		"you've hit your sonnet weekly limit":                       "sonnet",
 		"Press /model to switch models":                             "",
+		// Claude Code's consent before it bills Fable to usage credits, the
+		// dialog's own words alone.
+		"Continuing on Fable 5.1 uses usage credits": "fable",
 	}
 	for text := range model {
 		if !anyMatch(h.ModelLimit, text) {

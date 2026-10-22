@@ -48,6 +48,10 @@ type Learn struct {
 	Prompt string `toml:"prompt"`
 	// Timeout bounds the agent's turn on one PR.
 	Timeout Duration `toml:"timeout"`
+	// FallbackModels are the models the classifier starts again on, in
+	// order, when Model hits its own limit (Role.FallbackModels); empty =
+	// the kind's fallback_models.
+	FallbackModels []string `toml:"fallback_models"`
 
 	// The self-improving loop (internal/engine/learn_edit.go, DECISIONS "The
 	// editor proposes skill and prompt changes on a branch"). Editor turns
@@ -56,15 +60,18 @@ type Learn struct {
 	// that drafts a change to the judge skill and the prompts on a branch
 	// of the checkout. EditorKind, EditorModel, EditorEffort and EditorArgs
 	// are its role's (EditorRole; editor_kind without editor_model gets
-	// DefaultLearnModel of that kind), EditorPrompt its template and
-	// EditorTimeout the bound of one turn.
-	Editor        bool     `toml:"editor"`
-	EditorKind    string   `toml:"editor_kind"`
-	EditorModel   string   `toml:"editor_model"`
-	EditorEffort  string   `toml:"editor_effort"`
-	EditorArgs    []string `toml:"editor_args"`
-	EditorPrompt  string   `toml:"editor_prompt"`
-	EditorTimeout Duration `toml:"editor_timeout"`
+	// DefaultLearnModel of that kind), EditorPrompt its template,
+	// EditorTimeout the bound of one turn and EditorFallbackModels the
+	// models it starts again on when EditorModel hits its own limit (empty =
+	// the kind's fallback_models).
+	Editor               bool     `toml:"editor"`
+	EditorKind           string   `toml:"editor_kind"`
+	EditorModel          string   `toml:"editor_model"`
+	EditorEffort         string   `toml:"editor_effort"`
+	EditorArgs           []string `toml:"editor_args"`
+	EditorPrompt         string   `toml:"editor_prompt"`
+	EditorTimeout        Duration `toml:"editor_timeout"`
+	EditorFallbackModels []string `toml:"editor_fallback_models"`
 	// GateCases bounds the eval cases the gate of a proposal replays,
 	// LandPerDay the proposals that land per local day; Restart is idle
 	// (the daemon restarts on a landed change once nothing is in flight) or
@@ -178,22 +185,23 @@ func parseDailyAt(s string) (hour, minute int, ok bool) {
 }
 
 // LearnRole is the role the retro's classifying agent runs as: LearnRoleName,
-// the [learn] kind in session mode with its model, effort, args, prompt and
-// timeout, writing retro.json, normalized like a configured role.
+// the [learn] kind in session mode with its model, effort, args, prompt,
+// timeout and fallback models, writing retro.json, normalized like a
+// configured role.
 func (c *Config) LearnRole() Role {
 	l := c.Learn
 	return c.sessionRole(Role{Name: LearnRoleName, Kind: l.Kind, Model: l.Model, Effort: l.Effort, Args: l.Args,
-		Prompt: l.Prompt, Output: LearnRoleName + ".json", Timeout: l.Timeout})
+		Prompt: l.Prompt, Output: LearnRoleName + ".json", Timeout: l.Timeout, FallbackModels: l.FallbackModels})
 }
 
 // EditorRole is the role the skill editor runs as: EditorRoleName, the
 // [learn] editor_kind in session mode with its editor_model, editor_effort,
-// editor_args, editor_prompt and editor_timeout, writing changes.json,
-// normalized like a configured role.
+// editor_args, editor_prompt, editor_timeout and editor_fallback_models,
+// writing changes.json, normalized like a configured role.
 func (c *Config) EditorRole() Role {
 	l := c.Learn
 	return c.sessionRole(Role{Name: EditorRoleName, Kind: l.EditorKind, Model: l.EditorModel, Effort: l.EditorEffort, Args: l.EditorArgs,
-		Prompt: l.EditorPrompt, Output: "changes.json", Timeout: l.EditorTimeout})
+		Prompt: l.EditorPrompt, Output: "changes.json", Timeout: l.EditorTimeout, FallbackModels: l.EditorFallbackModels})
 }
 
 // sessionRole is r, a role an agent runs outside the review rounds (the
@@ -206,12 +214,12 @@ func (c *Config) sessionRole(r Role) Role {
 
 // validateSessionRole runs a sessionRole through validateRole, the checks a
 // [[role]] gets, with its messages worded for its section ("learn: kind
-// droid has no model args ..."). The prompt and the timeout are left out:
-// the section's own checks cover its prompt and timeout, with their own
-// wording, so neither is reported twice. The kind is declared (the caller
-// checked).
+// droid has no model args ..."). The prompt, the timeout and the fallback
+// models are left out: the section's own checks cover them, with their own
+// key names (fallbackModelErrs), so none is reported twice. The kind is
+// declared (the caller checked).
 func (c *Config) validateSessionRole(section string, r Role) []error {
-	r.Prompt, r.Rereview, r.Timeout = "", "", Duration{time.Minute}
+	r.Prompt, r.Rereview, r.Timeout, r.FallbackModels = "", "", Duration{time.Minute}, nil
 	var errs []error
 	for _, err := range c.validateRole(r, c.kinds(), nil) {
 		errs = append(errs, errors.New(section+": "+strings.TrimPrefix(err.Error(), "role "+r.Name+": ")))
@@ -261,6 +269,7 @@ func (c *Config) validateLearn() []error {
 	if l.MinCommentChars <= 0 {
 		errs = append(errs, fmt.Errorf("learn.min_comment_chars must be positive, got %d", l.MinCommentChars))
 	}
+	errs = append(errs, fallbackModelErrs("learn.fallback_models", l.FallbackModels)...)
 	return append(errs, c.validateEditor()...)
 }
 
@@ -284,6 +293,7 @@ func (c *Config) validateEditor() []error {
 	} else if err := parseTemplate(l.EditorPrompt, p.Text); err != nil {
 		errs = append(errs, fmt.Errorf("learn.editor_prompt %s: %w", l.EditorPrompt, err))
 	}
+	errs = append(errs, fallbackModelErrs("learn.editor_fallback_models", l.EditorFallbackModels)...)
 	if l.EditorTimeout.Duration <= 0 {
 		errs = append(errs, fmt.Errorf("learn.editor_timeout must be positive, got %s", l.EditorTimeout.Duration))
 	}

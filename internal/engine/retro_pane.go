@@ -17,6 +17,7 @@ package engine
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,6 +59,12 @@ const (
 // RetroObserveEvery is how often the retro's agent is observed.
 var RetroObserveEvery = 10 * time.Second
 
+// paneBlockedWait is how long a pane agent's turn may show herdr's blocked
+// status (a dialog magnum does not answer, such as Claude Code's consent
+// before it bills Fable to usage credits) before wait ends the turn: escape,
+// and its screen is read as for any turn without an answer.
+const paneBlockedWait = 2 * time.Minute
+
 // paneAgents is the part of *agents.Manager the retro's classifier drives.
 type paneAgents interface {
 	Agents
@@ -66,6 +73,9 @@ type paneAgents interface {
 	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
 	Submit(ctx context.Context, run store.Run, text string) error
 	ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
+	// NoteModelLimit records a session's model limit in the scratch
+	// registry, so the next launch there starts on a fallback.
+	NoteModelLimit(ctx context.Context, s store.Session, h agents.Health) (agents.ModelLimit, error)
 }
 
 var _ paneAgents = (*agents.Manager)(nil)
@@ -85,6 +95,11 @@ type paneDeps struct {
 	// Agents makes the agents manager over the scratch registry
 	// (agents.New with the live herdr client, tagged LearnAgentTag).
 	Agents func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents
+	// Store is the daemon's live registry, which holds the per-model limits
+	// rounds and pane jobs share: a pane agent's scratch registry starts
+	// with its kind's limits (agents.CopyModelLimits), and a limit the agent
+	// hits is recorded there too. nil: a job's limits stay in the job.
+	Store *store.Store
 	// Now and Sleep as in Deps (nil = the real ones); ObserveEvery and Poll
 	// default to RetroObserveEvery and learnPoll.
 	Now          func() time.Time
@@ -162,6 +177,9 @@ type paneAgent struct {
 	obs     *Engine  // observes herdr for mgr
 	pr      store.PR // the scratch registry's row the agent's session hangs on
 	turns   int
+	// restarted: the agent started again on a fallback model once
+	// (afterTurn); a second model limit stops the job.
+	restarted bool
 
 	stopObserving context.CancelFunc
 	observed      chan struct{}
@@ -177,14 +195,21 @@ type paneTurn struct {
 	// timedOut: the role's timeout passed before the turn ended (it was
 	// interrupted and its run abandoned).
 	timedOut bool
+	// screen, set when the session showed herdr's blocked status for
+	// paneBlockedWait (a dialog nobody answers; the turn was interrupted and
+	// its run abandoned), is the pane as it stood before the escape, which
+	// health classifies.
+	screen string
 }
 
 // Classify prompts the agent with job's paths (prompts/retro.md) and waits
 // for its turn to end; an answer that is missing or invalid gets one nudge.
-// A usage limit, a logout, a per-model limit or an overload on the agent's
-// screen (or a logout at preflight) is a Pause. An agent that cannot be set
-// up or started, or that a turn could not reach, is ErrClassifierDown: no
-// nudge, and the retro stops without blaming the PR.
+// A model limit starts the agent again on a fallback model with the first
+// prompt (afterTurn). A usage limit, a logout, an overload or a model limit
+// with no fallback left on the agent's screen (or a logout at preflight) is
+// a Pause. An agent that cannot be set up or started, or that a turn could
+// not reach, is ErrClassifierDown: no nudge, and the retro stops without
+// blaming the PR. The result's Model is the model the answer came from.
 func (c *paneClassifier) Classify(ctx context.Context, job ClassifyJob) (ClassifyResult, error) {
 	if err := c.setup(ctx); err != nil {
 		return ClassifyResult{}, fmt.Errorf("%w: set up: %w", ErrClassifierDown, err)
@@ -195,19 +220,26 @@ func (c *paneClassifier) Classify(ctx context.Context, job ClassifyJob) (Classif
 		}
 		return ClassifyResult{}, fmt.Errorf("%w: start: %w", ErrClassifierDown, err)
 	}
-	text, err := c.prompt(job)
+	first, err := c.prompt(job)
 	if err != nil { // the prompt file, not the PR
 		return ClassifyResult{}, fmt.Errorf("%w: %w", ErrClassifierDown, err)
 	}
 	_ = os.Remove(job.OutputPath)
+	text := first
 	for attempt := 0; ; attempt++ {
 		t := c.turn(ctx, attempt, text)
 		missing, valid := answered(job)
 		if valid {
-			return ClassifyResult{}, nil
+			return ClassifyResult{Model: c.currentModel(ctx)}, nil
 		}
-		if p := c.health(ctx, t, job.OutputPath); p != nil {
+		switch restarted, p, err := c.afterTurn(ctx, t, job.OutputPath); {
+		case p != nil:
 			return ClassifyResult{Pause: p}, fmt.Errorf("the retro's agent stopped: %s", p.Kind)
+		case err != nil && ctx.Err() == nil:
+			return ClassifyResult{}, fmt.Errorf("%w: %w", ErrClassifierDown, err)
+		case restarted: // a fresh session: the first prompt, the nudge count kept
+			text, attempt = first, attempt-1
+			continue
 		}
 		what := "is not valid"
 		if missing {
@@ -278,9 +310,11 @@ func (c *paneClassifier) prompt(job ClassifyJob) (string, error) {
 }
 
 // setup makes, once, the scratch registry under the run directory with the
-// row the agent's session hangs on, the agents manager over it with the
-// agent's role ([learn], [notes]) as its only role, and the engine that
-// observes herdr for it.
+// row the agent's session hangs on and the per-model limits of the agent's
+// kind the live registry holds (agents.CopyModelLimits: a launch skips a
+// model rounds or an earlier job found limited; a copy that fails is
+// logged), the agents manager over it with the agent's role ([learn],
+// [notes]) as its only role, and the engine that observes herdr for it.
 func (c *paneAgent) setup(ctx context.Context) error {
 	if c.mgr != nil {
 		return nil
@@ -312,6 +346,11 @@ func (c *paneAgent) setup(ctx context.Context) error {
 		st.Close()
 		_ = os.RemoveAll(c.scratch)
 		return fmt.Errorf("seed the scratch registry: %w", err)
+	}
+	if c.d.Store != nil {
+		if err := agents.CopyModelLimits(ctx, c.d.Store, st, c.role.AgentKind(), c.d.Now()); err != nil {
+			c.d.Logger.Warn(c.spec.what+": the model limits the live registry holds were not all copied", "err", err)
+		}
 	}
 	c.cfg, c.st = &cfg, st
 	c.mgr = c.d.Agents(st, &cfg, layout)
@@ -457,6 +496,10 @@ func (c *paneAgent) turn(ctx context.Context, attempt int, text string) paneTurn
 
 // wait polls run id until it ends (the observation saw the agent idle
 // twice), fails, loses its session, ctx ends or the role's timeout passes.
+// A session that shows herdr's blocked status for paneBlockedWait (a dialog
+// that magnum does not answer, which would hold the turn until the
+// timeout) ends the turn too: the screen is read, escape sent and the run
+// abandoned.
 func (c *paneAgent) wait(ctx context.Context, id string) paneTurn {
 	deadline := c.d.Now().Add(c.role.Timeout.Duration)
 	for {
@@ -471,8 +514,17 @@ func (c *paneAgent) wait(ctx context.Context, id string) paneTurn {
 			return paneTurn{run: run, err: fmt.Errorf("run %s is %s: %s", run.ID, run.State, store.Deref(run.Error))}
 		}
 		if run.SessionID != nil {
-			if s, err := c.st.SessionByID(ctx, *run.SessionID); err == nil && s.State != store.SessionLive && s.State != store.SessionStarting {
-				return paneTurn{run: run, err: fmt.Errorf("the agent's session is %s", s.State), down: true}
+			if s, err := c.st.SessionByID(ctx, *run.SessionID); err == nil {
+				if s.State != store.SessionLive && s.State != store.SessionStarting {
+					return paneTurn{run: run, err: fmt.Errorf("the agent's session is %s", s.State), down: true}
+				}
+				if blockedSince(s, c.d.Now()) >= paneBlockedWait {
+					screen, _ := c.mgr.ReadRecent(context.WithoutCancel(ctx), s, agents.HealthLines)
+					c.interrupt(ctx, run)
+					err := fmt.Errorf("the agent waited on a dialog for %s", paneBlockedWait)
+					c.finish(ctx, run.ID, err)
+					return paneTurn{run: run, err: err, screen: screen}
+				}
 			}
 		}
 		if !c.d.Now().Before(deadline) {
@@ -521,42 +573,213 @@ func (c *paneAgent) finish(ctx context.Context, id string, why error) {
 	}
 }
 
+// blockedSince is how long session s has shown herdr's blocked status, as
+// the observation recorded it (0 when it does not).
+func blockedSince(s store.Session, now time.Time) time.Duration {
+	if herdr.Status(store.Deref(s.AgentStatus)) != herdr.StatusBlocked || s.AgentStatusAt == nil {
+		return 0
+	}
+	return now.Sub(*s.AgentStatusAt)
+}
+
 // health classifies the agent's screen after a turn without a valid answer,
 // with its kind's health patterns, after the prompt (which names the answer
-// file): a usage limit, a logout, a per-model limit or an overload is a
-// Pause of that kind (the retro job pauses the tool for the first two
-// only, as rounds do).
-func (c *paneAgent) health(ctx context.Context, t paneTurn, anchor string) *pipeline.Pause {
+// file): the screen a blocked turn left (paneTurn.screen), else the pane as
+// it is now. HealthOK when there is nothing to read.
+func (c *paneAgent) health(ctx context.Context, t paneTurn, anchor string) agents.Health {
+	none := agents.Health{Kind: agents.HealthOK}
 	if t.run.SessionID == nil {
-		return nil
+		return none
 	}
-	s, err := c.st.SessionByID(context.WithoutCancel(ctx), *t.run.SessionID)
-	if err != nil {
-		return nil
-	}
-	text, err := c.mgr.ReadRecent(context.WithoutCancel(ctx), s, agents.HealthLines)
-	if err != nil {
-		return nil
+	text := t.screen
+	if text == "" {
+		s, err := c.st.SessionByID(context.WithoutCancel(ctx), *t.run.SessionID)
+		if err != nil {
+			return none
+		}
+		if text, err = c.mgr.ReadRecent(context.WithoutCancel(ctx), s, agents.HealthLines); err != nil {
+			return none
+		}
 	}
 	if i := strings.LastIndex(text, anchor); i >= 0 {
 		text = text[i+len(anchor):]
 	}
-	kind := c.role.AgentKind()
 	h := agents.ClassifyAt(text, c.d.Now())
-	if k, ok := c.cfg.KindSpec(kind); ok {
+	if k, ok := c.cfg.KindSpec(c.role.AgentKind()); ok {
 		if rx, err := k.HealthPatterns.Compile(); err == nil {
 			h = agents.ClassifyWith(rx, text, c.d.Now())
 		}
 	}
+	return h
+}
+
+// afterTurn is what every pane job's driver (paneClassifier, paneCurator,
+// paneEditor, and any later one) calls after a turn that left no valid
+// answer, before it nudges, with that turn and the anchor of its prompt
+// (the answer file the prompt names). It reads the agent's screen (health):
+//
+//   - A usage limit, a logout or an overload is pause, of that kind: the
+//     driver stops the job with it, and its caller pauses the kind for the
+//     first two only, as rounds do.
+//   - The model's own limit is recorded in the live registry and the
+//     scratch one (recordLimit). When the job has not started again yet and
+//     a fresh launch would start on a fallback model that is not limited
+//     (agents.LaunchModel over the scratch registry: the role's
+//     fallback_models, else its kind's), the agent is released (release: its
+//     open run interrupted and abandoned, then parked, else quit and its
+//     workspace closed) and started again (ensureAgent: a new session on the
+//     fallback, which StartAgent picks; never a resume of the parked
+//     conversation), and restarted is true: the driver sends its first
+//     prompt again (the job's inputs are files) and keeps its nudge count.
+//     A second model limit in the job, or no fallback to start on, is pause
+//     of kind model_limit, which stops the job without pausing the kind
+//     (only usage_limit and login_required pause it).
+//   - err is a release or a start again that failed (with pause too for a
+//     logout at the preflight): the driver stops the job as when its agent
+//     is down.
+//   - Anything else returns nothing: the driver nudges or gives up.
+//
+// currentModel then names the model a later answer comes from.
+func (c *paneAgent) afterTurn(ctx context.Context, t paneTurn, anchor string) (restarted bool, pause *pipeline.Pause, err error) {
+	h := c.health(ctx, t, anchor)
 	switch h.Kind {
-	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthModelLimit, agents.HealthOverloaded:
-		p := &pipeline.Pause{Kind: string(h.Kind), Tool: kind, Detail: h.Detail}
+	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthOverloaded:
+		p := &pipeline.Pause{Kind: string(h.Kind), Tool: c.role.AgentKind(), Detail: h.Detail}
 		if h.ResetAt != nil {
 			p.Until = *h.ResetAt
 		}
-		return p
+		return false, p, nil
+	case agents.HealthModelLimit:
+		return c.restartOnFallback(ctx, t, h)
 	}
-	return nil
+	return false, nil, nil
+}
+
+// restartOnFallback is afterTurn for a model limit h on the turn t's
+// session.
+func (c *paneAgent) restartOnFallback(ctx context.Context, t paneTurn, h agents.Health) (bool, *pipeline.Pause, error) {
+	model, until := c.recordLimit(ctx, t, h)
+	stop := func(why string) *pipeline.Pause {
+		return &pipeline.Pause{Kind: string(agents.HealthModelLimit), Tool: c.role.AgentKind(), Until: until,
+			Detail: execx.Redact(why + ": " + h.Detail)}
+	}
+	if c.restarted {
+		return false, stop(model + " is limited too, after the job started again on it"), nil
+	}
+	next, fallback, _ := agents.LaunchModel(ctx, c.st, c.cfg, c.role, c.d.Now())
+	if !fallback {
+		return false, stop(model + " is limited and no fallback model is free"), nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, nil, err
+	}
+	c.restarted = true
+	c.d.Logger.Warn(c.spec.what+": the agent's model is limited; it starts again on a fallback", "run", c.id, "model", model,
+		"until", until, "fallback", next)
+	if err := c.release(ctx); err != nil {
+		return false, nil, fmt.Errorf("release the agent on the limited %s: %w", model, err)
+	}
+	if pause, err := c.ensureAgent(ctx); err != nil {
+		return false, pause, fmt.Errorf("start the agent again on %s: %w", next, err)
+	}
+	return true, nil, nil
+}
+
+// recordLimit records the model limit h of turn t's session, the model h
+// names, else the one the session runs (sessionModel): in the live registry
+// first (agents.RecordModelLimit: rounds and later jobs read it, and a limit
+// hit again within a day lasts longer), with a kind.model_limited event
+// there, and a session on the CLI's default model teaches the live registry
+// which model that is, as agents.Manager.NoteModelLimit does; then in the
+// scratch registry with the live end (the scratch manager's NoteModelLimit),
+// so the next launch here skips the model. It returns the model and when
+// its limit ends. Failures are logged: the job goes on with what was
+// recorded.
+func (c *paneAgent) recordLimit(ctx context.Context, t paneTurn, h agents.Health) (string, time.Time) {
+	ctx = context.WithoutCancel(ctx)
+	now, kind := c.d.Now(), c.role.AgentKind()
+	var s *store.Session
+	if t.run.SessionID != nil {
+		if x, err := c.st.SessionByID(ctx, *t.run.SessionID); err == nil {
+			s = &x
+		}
+	}
+	running, switched := c.sessionModel(ctx, s)
+	model := cmp.Or(strings.ToLower(strings.TrimSpace(cmp.Or(h.Model, running))), agents.UnknownModel)
+	cooldown := c.cfg.Daemon.ModelLimitCooldown.Duration
+	until := now.Add(cmp.Or(max(cooldown, 0), agents.DefaultModelLimitCooldown))
+	if h.ResetAt != nil && h.ResetAt.After(now) {
+		until = *h.ResetAt
+	}
+	if live := c.d.Store; live != nil {
+		if u, err := agents.RecordModelLimit(ctx, live, kind, model, h.ResetAt, cooldown, now); err != nil {
+			c.d.Logger.Warn(c.spec.what+": the model limit was not recorded in the live registry", "model", model, "err", err)
+		} else {
+			until = u
+			if h.Model != "" && c.cfg.RoleModel(c.role) == "" && !switched {
+				if err := live.SetKV(ctx, agents.KVKindCLIModel(kind), model); err != nil {
+					c.d.Logger.Warn(c.spec.what+": the CLI's default model was not recorded", "err", err)
+				}
+			}
+			c.liveEvent(ctx, "tool:"+kind, agents.EventModelLimited,
+				fmt.Sprintf("%s: %s limited until %s (the %s's agent): %s", kind, model, until.Local().Format("15:04"), c.spec.what, h.Detail),
+				map[string]any{"kind": kind, "model": model, "until": store.FormatTime(until), "job": c.spec.what})
+		}
+	}
+	if s != nil {
+		h.ResetAt = &until
+		if _, err := c.mgr.NoteModelLimit(ctx, *s, h); err != nil {
+			c.d.Logger.Warn(c.spec.what+": the model limit was not recorded in the scratch registry", "model", model, "err", err)
+		}
+	}
+	return model, until
+}
+
+// liveEvent appends a warn event to the live registry (best effort: a
+// failure is logged).
+func (c *paneAgent) liveEvent(ctx context.Context, subject, kind, msg string, data map[string]any) {
+	raw, _ := json.Marshal(data)
+	if _, err := c.d.Store.AppendEvent(ctx, store.Event{Level: "warn", Subject: &subject, Kind: kind, Message: execx.Redact(msg),
+		Data: raw}); err != nil {
+		c.d.Logger.Warn(c.spec.what+": event "+kind, "err", err)
+	}
+}
+
+// sessionModel is the model session s of the agent runs (s nil: the one a
+// new session runs), read from the scratch registry: the model StartAgent
+// started it on or SwitchModel switched it to (agents.KVSessionModel;
+// switched true), else the role's configured model (Config.RoleModel), else
+// the CLI's default as a limit message named it (agents.KVKindCLIModel); ""
+// when unknown.
+func (c *paneAgent) sessionModel(ctx context.Context, s *store.Session) (model string, switched bool) {
+	if s != nil {
+		if v, ok, _ := c.st.GetKV(ctx, agents.KVSessionModel(s.ID)); ok && v != "" {
+			return v, true
+		}
+	}
+	if m := c.cfg.RoleModel(c.role); m != "" {
+		return m, false
+	}
+	v, _, _ := c.st.GetKV(ctx, agents.KVKindCLIModel(c.role.AgentKind()))
+	return v, false
+}
+
+// currentModel is the model the agent's current session runs (sessionModel
+// of the role's live session in the scratch registry): the model a driver's
+// answer came from, which its result carries as Model. "" before the agent
+// is set up or when the model is unknown.
+func (c *paneAgent) currentModel(ctx context.Context) string {
+	if c.st == nil {
+		return ""
+	}
+	ctx = context.WithoutCancel(ctx)
+	s, err := c.st.LiveSessionByPRRole(ctx, c.pr.ID, c.role.Name)
+	if err != nil {
+		m, _ := c.sessionModel(ctx, nil)
+		return m
+	}
+	m, _ := c.sessionModel(ctx, &s)
+	return m
 }
 
 // Close stops observing and closes the agent: a turn still in flight (a

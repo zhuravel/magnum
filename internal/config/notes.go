@@ -41,6 +41,10 @@ type Notes struct {
 	Prompt string `toml:"prompt"`
 	// Timeout bounds the curator's turn.
 	Timeout Duration `toml:"timeout"`
+	// FallbackModels are the models the curator starts again on, in order,
+	// when Model hits its own limit (Role.FallbackModels); empty = the
+	// kind's fallback_models.
+	FallbackModels []string `toml:"fallback_models"`
 }
 
 // Curation triggers ([notes] curate).
@@ -149,19 +153,20 @@ func (c *Config) notesModelFollowsKind(md toml.MetaData) {
 }
 
 // NotesRole is the role the curator runs as: NotesRoleName, the [notes] kind
-// in session mode with its model, effort, args, prompt and timeout,
-// normalized like a configured role.
+// in session mode with its model, effort, args, prompt, timeout and fallback
+// models, normalized like a configured role.
 func (c *Config) NotesRole() Role {
 	n := c.Notes
 	return c.sessionRole(Role{Name: NotesRoleName, Kind: n.Kind, Model: n.Model, Effort: n.Effort, Args: n.Args,
-		Prompt: n.Prompt, Output: "changes.json", Timeout: n.Timeout})
+		Prompt: n.Prompt, Output: "changes.json", Timeout: n.Timeout, FallbackModels: n.FallbackModels})
 }
 
 // validateNotes checks [notes] always (`magnum notes --curate` runs whatever
 // curate says): the limits are positive, curate is one of its values, the
 // kind is a declared agent kind whose role (NotesRole) passes a [[role]]'s
-// checks, the prompt resolves and parses and the timeout is positive.
-// curate lists known triggers, each once.
+// checks, the prompt resolves and parses, the timeout is positive and the
+// fallback models are one word each, each listed once. curate lists known
+// triggers, each once.
 func (c *Config) validateNotes() []error {
 	n := c.Notes
 	var errs []error
@@ -189,5 +194,5 @@ func (c *Config) validateNotes() []error {
 	if n.Timeout.Duration <= 0 {
 		errs = append(errs, fmt.Errorf("notes.timeout must be positive, got %s", n.Timeout.Duration))
 	}
-	return errs
+	return append(errs, fallbackModelErrs("notes.fallback_models", n.FallbackModels)...)
 }

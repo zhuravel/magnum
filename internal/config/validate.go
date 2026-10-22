@@ -946,20 +946,8 @@ func validateKind(name string, k Kind) []error {
 		bad("%v", err)
 	}
 
-	// Model names are typed into the pane: a space or control character
-	// would split the command or submit it early.
-	oneWord := func(s string) bool {
-		return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
-	}
-	seenModel := map[string]bool{}
-	for _, mdl := range k.FallbackModels {
-		if !oneWord(mdl) {
-			bad("fallback_models: %q must be one word", mdl)
-		}
-		if seenModel[strings.ToLower(mdl)] {
-			bad("fallback_models lists %q twice", mdl)
-		}
-		seenModel[strings.ToLower(mdl)] = true
+	for _, p := range fallbackModelProblems("fallback_models", k.FallbackModels) {
+		bad("%s", p)
 	}
 	for _, key := range k.ExitKeys {
 		if key == "" || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
@@ -967,7 +955,7 @@ func validateKind(name string, k Kind) []error {
 		}
 	}
 	for _, x := range []struct{ key, model string }{{"default_model", k.DefaultModel}, {"reset_model", k.ResetModel}} {
-		if x.model != "" && !oneWord(x.model) {
+		if x.model != "" && !oneModelWord(x.model) {
 			bad("%s %q must be one word", x.key, x.model)
 		}
 	}
@@ -987,6 +975,39 @@ func validateKind(name string, k Kind) []error {
 		if !envKeyRe.MatchString(key) {
 			bad("env key %q is not a valid variable name", key)
 		}
+	}
+	return errs
+}
+
+// oneModelWord reports whether a model name can be typed into a pane: a
+// space or a control character would split the command or submit it early.
+func oneModelWord(s string) bool {
+	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
+}
+
+// fallbackModelProblems checks a fallback_models list held by key (a kind's,
+// a [[role]]'s, notes.fallback_models, ...): each entry one word
+// (oneModelWord), none listed twice (case ignored).
+func fallbackModelProblems(key string, models []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, mdl := range models {
+		if !oneModelWord(mdl) {
+			out = append(out, fmt.Sprintf("%s: %q must be one word", key, mdl))
+		}
+		if seen[strings.ToLower(mdl)] {
+			out = append(out, fmt.Sprintf("%s lists %q twice", key, mdl))
+		}
+		seen[strings.ToLower(mdl)] = true
+	}
+	return out
+}
+
+// fallbackModelErrs is fallbackModelProblems as errors.
+func fallbackModelErrs(key string, models []string) []error {
+	var errs []error
+	for _, p := range fallbackModelProblems(key, models) {
+		errs = append(errs, errors.New(p))
 	}
 	return errs
 }
@@ -1120,6 +1141,12 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 		bad("max_session_rounds must be 0 (no limit) or more, got %d", r.MaxSessionRounds)
 	case r.MaxSessionRounds > 0 && r.IsShell():
 		bad("max_session_rounds is for session roles only (a shell role keeps no session)")
+	}
+	if len(r.FallbackModels) > 0 && r.IsShell() {
+		bad("fallback_models needs a session role (a shell role's command picks its own model)")
+	}
+	for _, p := range fallbackModelProblems("fallback_models", r.FallbackModels) {
+		bad("%s", p)
 	}
 	for key := range r.Env {
 		if !envKeyRe.MatchString(key) {

@@ -86,6 +86,15 @@ type Role struct {
 	// an earlier review); "" = Effort. The first review and a recovery keep
 	// Effort. See EffortFor.
 	RereviewEffort string `toml:"rereview_effort"`
+	// FallbackModels: the models a session of the role moves to, in order,
+	// when its model hits its own limit (health pattern model_limit): a
+	// round's reviewer or judge switches in its session, a pane job (the
+	// curator, the retro's classifier, the skill editor) starts a fresh
+	// session on the first one that is not limited. Empty = the kind's
+	// fallback_models; a list here replaces the kind's, the two never merge.
+	// Each entry is one word. The kind's switch_model is still what lets a
+	// session switch at all (agents.fallbacksFor). Session roles only.
+	FallbackModels []string `toml:"fallback_models"`
 	// MaxSubagents caps the subagents the role's agent may have open at
 	// once, passed through its kind's subagents args (0: the kind's
 	// no_subagents args, which turn them off); nil = the CLI's own limit.
@@ -594,7 +603,7 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 	for i := range roles {
 		r := &roles[i]
 		r.Aliases, r.After, r.Args = cloneOrNil(r.Aliases), cloneOrNil(r.After), cloneOrNil(r.Args)
-		r.OKStatus = cloneOrNil(r.OKStatus)
+		r.OKStatus, r.FallbackModels = cloneOrNil(r.OKStatus), cloneOrNil(r.FallbackModels)
 		if len(r.Env) == 0 {
 			r.Env = nil
 		}

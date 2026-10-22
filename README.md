@@ -2097,8 +2097,27 @@ to a JSON file (`{"mcpServers": {...}}`) and add `"--mcp-config", "/absolute/pat
 (`mcp_allow` names Codex servers only). A running session keeps what it started with until its next start.
 Under a `managed-mcp.json` Claude Code refuses `--strict-mcp-config` and exits: set `mcp_off = false` there.
 
-A session whose model hits its own limit switches to the kind's next `fallback_models` entry by
-itself (Claude: `["opus", "sonnet"]`) and back once the limit lifts.
+A session whose model hits its own limit switches to the next `fallback_models` entry by itself and back
+once the limit lifts: its role's own list (`fallback_models` on a `[[role]]`, one word per entry; `[notes]
+fallback_models` for the curator, `[learn] fallback_models` for the retro's classifier and `[learn]
+editor_fallback_models` for the skill editor), else its kind's (Claude: `["opus", "sonnet"]`). A role's list
+replaces the kind's, never adds to it, and the kind's `switch_model = ""` still turns switching off. A limit
+whose message names no reset time lasts `[daemon] model_limit_cooldown` (5h); one hit again within a day of
+the last one's end lasts twice that one's span, 24 hours at most, so a weekly window costs one probe of the
+model a day. `magnum resume --tool` forgets both.
+
+A pane job (the curator, the retro's classifier, the skill editor) runs its agent in a registry of its own,
+and the limits are shared through the registry the rounds read: a job starts on a fallback at once when
+rounds or an earlier job found its model limited, and a limit its agent hits is recorded there too. At its
+model's limit the job parks its agent and starts it again, once, in a fresh session (never the parked
+conversation) on the first fallback that is not limited, with the job's first prompt (its inputs are files)
+and the nudge it had left. With no fallback left, or a second limit in one job, the job stops as it does at an
+overload and is tried again later; a pane job never pauses the kind for a model limit, so the rounds keep
+their models. A pane agent's turn that waits 2 minutes on a dialog Magnum does not answer ends with escape,
+and its screen is read like any turn without an answer: Claude Code's consent before it bills Fable to usage
+credits ("Fable limit reached · continuing on Fable 5.1 uses usage credits") counts as Fable's limit, so the
+job goes on on the fallback; Magnum never agrees to a bill. A curation proposal and a skill-edit proposal
+record the model their answer came from.
 
 `context_pattern` reads how full a session's context is from the last status lines of its pane: a Go
 regexp with a group named `used` (the percent used) or `left` (the percent left). `[kinds.claude]` reads
@@ -3390,7 +3409,8 @@ comment on deleted lines keeps its file and hunk but no line.
 The rest goes to an interactive agent in a herdr workspace named `learn retro`, tagged `learn` like eval's
 agents are tagged `eval`: `kind` and `model` (Claude sonnet by default; `sonnet` is the default of the
 `claude` kind only, so another `kind` without a `model` runs on its own default model, and the agent
-is checked like a `[[role]]`), one prompt per pull request
+is checked like a `[[role]]`; `fallback_models` are the models it starts again on when that one hits its own
+limit, else the kind's, see Models and effort), one prompt per pull request
 (`prompts/retro.md`) that carries only file paths, the pull request's URL and the reviewed SHAs. The agent
 reads the comments from a file, with each commented file, and the file of each of Magnum's answered
 findings, as it was at the reviewed commit (copied from GitHub, up to 512 KiB each, each once), and writes
@@ -3494,7 +3514,8 @@ Magnum runs from (`~/.local/state/magnum/learn/wt/<run>`, on a new branch `learn
 checkout's `master`), so your own branch and files are never touched, and only when Magnum runs from a
 checkout: an installed binary has none. Like the retro's agent it is an interactive agent in a herdr
 workspace, `learn skill`, tagged `learn`: `editor_kind` and `editor_model` (Claude sonnet by default,
-checked like a `[[role]]`; `editor_effort` and `editor_args` give it an effort and extra launch args), one prompt
+checked like a `[[role]]`; `editor_effort` and `editor_args` give it an effort and extra launch args, and
+`editor_fallback_models` the models it starts again on when its model hits its own limit), one prompt
 (`editor_prompt`, default `prompts/skill-edit.md`) with paths only, `editor_timeout` (45 minutes) per turn. Its run directory, `~/.local/share/magnum/learn/skill/<run>/` (deleted after 30 days),
 gives it `inputs.json` (the newest 40 such misses and declines still `new`, by id: `m<n>` and `d<n>`, with its
 severity or posted priority, title, lesson and patterns, scrubbed of logins, pull request references,
@@ -3759,7 +3780,8 @@ as it did: `"weekly"` is `["over_limit", "weekly"]`.) Every curation takes the r
 whatever triggered it. A curation copies the
 notes and the harness under the notes lock into a scratch directory (`notes/.curate/<owner>/<repo>/<run>/`,
 kept 30 days) and starts an interactive agent there, tagged `learn` like the retro's, in a herdr workspace
-named `learn notes` (`[notes]` kind, model and effort: Claude sonnet by default). Its prompt
+named `learn notes` (`[notes]` kind, model and effort: Claude sonnet by default; `fallback_models`, the
+models it starts again on when its model hits its own limit). Its prompt
 (`prompts/notes-curate.md`) carries paths, the limits and a usage file only, never notes text; the usage
 file has each harness file's rounds and uses and the operator's reasons for rejecting earlier proposals, and
 `misses.json`, when there are misses, has them with the reasons of the rejected proposals each was in. A

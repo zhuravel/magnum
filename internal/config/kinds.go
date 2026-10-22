@@ -400,11 +400,16 @@ func DefaultHealthPatterns() HealthPatterns {
 		},
 		// A model's own cap: Claude Code's "You've reached your Fable
 		// limit. /model to switch models." and "You've hit your Opus limit ·
-		// resets 3:45pm" (the account windows still have room).
+		// resets 3:45pm" (the account windows still have room). The last is
+		// Claude Code's consent before it bills Fable to usage credits once
+		// the plan's share of Fable is used ("Fable limit reached ·
+		// continuing on Fable 5.1 uses usage credits"): magnum never consents
+		// to a bill, so the session moves on to a fallback model.
 		ModelLimit: []string{
 			`you(?:'|’|‘)?ve (?:reached|hit) your (?P<model>fable|mythos|opus|sonnet|haiku)\b[\w .-]* limit`,
 			`(?P<model>fable|mythos|opus|sonnet|haiku)\b[\w .-]* limit reached`,
 			`/model to switch models`,
+			`continuing on (?P<model>fable)\b[\w .-]*\busage credits`,
 		},
 		// Account-wide limits only: the optional word is never a model name
 		// (those are model_limit above).

@@ -161,6 +161,34 @@ func TestClassifyFixtures(t *testing.T) {
 	}
 }
 
+// Claude Code asks before it bills Fable to usage credits once the plan's
+// share of Fable is used ("Fable limit reached · continuing on Fable 5.1 uses
+// usage credits"; when nobody answers, "the prompt to confirm went
+// unanswered"). Magnum never consents to a bill: the dialog, its line after
+// it went unanswered and its own words alone are a model limit of fable, as
+// the Opus and Fable limit lines are (TestClassifyModelLimitApartFromUsageLimit),
+// so a pane job moves on to a fallback model.
+func TestTheFableConsentDialogIsAModelLimitOfFable(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	for _, text := range []string{
+		"Fable limit reached · continuing on Fable 5.1 uses usage credits",
+		"Fable limit reached · continuing on Fable 5.1 uses usage credits, and the prompt to confirm went unanswered — " +
+			"nothing was sent · answer it where this session is running, or /model to change",
+		"  Continuing on Fable 5.1 uses usage credits\n  ❯ 1. Yes, continue\n    2. No, switch model",
+		"continuing on fable uses usage credits",
+	} {
+		for name, h := range map[string]Health{"ClassifyAt": ClassifyAt(text, now), "ClassifyWith": ClassifyWith(defaultHealth, text, now)} {
+			if h.Kind != HealthModelLimit || h.Model != "fable" || h.ResetAt != nil {
+				t.Errorf("%s(%q) = %s %q reset %v, want a model limit of fable", name, text, h.Kind, h.Model, h.ResetAt)
+			}
+		}
+	}
+	// Another model's credits line is not Fable's limit.
+	if h := ClassifyAt("Continuing on Opus 5.5 uses usage credits", now); h.Kind == HealthModelLimit && h.Model == "fable" {
+		t.Errorf("an Opus credits line classified as a fable limit: %+v", h)
+	}
+}
+
 func TestClassifyDetailIsRedactedAndBounded(t *testing.T) {
 	h := ClassifyAt("API Error: 401 Authorization: Bearer ghs_abcdefghijklmnopqrstuvwxyz0123456789 "+strings.Repeat("x", 600), time.Now())
 	if h.Kind != HealthLoginRequired {

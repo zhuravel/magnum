@@ -27,9 +27,10 @@ import (
 // turn the way the observation would (the run ends).
 type fakePaneAgents struct {
 	*fakeAgents
-	scratch string // the registry's directory, from the layout it was made with
+	scratch string         // the registry's directory, from the layout it was made with
+	cfg     *config.Config // the config it was made with (nil: StartAgent picks no model)
 	reply   func(n int, text string) (end bool)
-	screen  string // what ReadRecent shows
+	screen  string // what ReadRecent shows (setScreen while a turn runs)
 	// submitErr refuses prompts before sending; quitErr fails Quit.
 	submitErr, quitErr error
 	// parkSaw are the PR's runs ("<id>:<state>") at Park, which refuses
@@ -101,7 +102,57 @@ func (f *fakePaneAgents) Submit(ctx context.Context, run store.Run, text string)
 }
 
 func (f *fakePaneAgents) ReadRecent(context.Context, store.Session, int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.screen, nil
+}
+
+// setScreen changes what ReadRecent shows (from a reply, while a turn runs).
+func (f *fakePaneAgents) setScreen(text string) {
+	f.mu.Lock()
+	f.screen = text
+	f.mu.Unlock()
+}
+
+// StartAgent starts the agent as fakeAgents does, on the model
+// agents.Manager.StartAgent would pick from the scratch registry's limits
+// (agents.LaunchModel, recorded as "start_model:<model>"), and records a
+// fallback as the session's model, as the manager does.
+func (f *fakePaneAgents) StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error {
+	model, fallback := role.Model, false
+	if f.cfg != nil {
+		model, fallback, _ = agents.LaunchModel(ctx, f.st, f.cfg, role, f.st.Clock())
+		f.record("start_model:" + model)
+	}
+	if err := f.fakeAgents.StartAgent(ctx, pr, role, paneID, resume); err != nil {
+		return err
+	}
+	if !fallback {
+		return nil
+	}
+	s, err := f.st.LiveSessionByPRRole(ctx, pr.ID, role.Name)
+	if err != nil {
+		return err
+	}
+	return f.st.SetKV(ctx, agents.KVSessionModel(s.ID), model)
+}
+
+// NoteModelLimit records the limit in the scratch registry as
+// agents.Manager.NoteModelLimit does: h.Model, else the session's model,
+// until h.ResetAt (else the default cooldown).
+func (f *fakePaneAgents) NoteModelLimit(ctx context.Context, s store.Session, h agents.Health) (agents.ModelLimit, error) {
+	model := h.Model
+	if model == "" {
+		model, _, _ = f.st.GetKV(ctx, agents.KVSessionModel(s.ID))
+	}
+	if model == "" && f.cfg != nil {
+		if role, ok := f.cfg.RoleByNameOrAlias(nil, s.Role); ok {
+			model = f.cfg.RoleModel(role)
+		}
+	}
+	f.record("note_limit:" + model)
+	until, err := agents.RecordModelLimit(ctx, f.st, store.Deref(s.AgentKind), model, h.ResetAt, 0, f.st.Clock())
+	return agents.ModelLimit{Kind: store.Deref(s.AgentKind), Model: model, Until: until}, err
 }
 
 func (f *fakePaneAgents) sent() []string {
@@ -128,7 +179,7 @@ func newPaneHarness(t *testing.T, mods ...func(*harness)) *paneHarness {
 	p.ag = &fakePaneAgents{}
 	var mu sync.Mutex
 	p.mk = paneClassifiers(paneDeps{
-		Config: p.cfg, Layout: p.layout, Logger: p.d.Logger, Herdr: p.hd, Now: p.clock.Now,
+		Config: p.cfg, Layout: p.layout, Logger: p.d.Logger, Herdr: p.hd, Store: p.st, Now: p.clock.Now,
 		Sleep: func(ctx context.Context, d time.Duration) error {
 			if p.step > 0 {
 				p.clock.Add(p.step)
@@ -145,6 +196,9 @@ func newPaneHarness(t *testing.T, mods ...func(*harness)) *paneHarness {
 				p.hd.agents = slices.DeleteFunc(p.hd.agents, func(a herdr.AgentInfo) bool { return a.Name == target })
 				p.hd.mu.Unlock()
 			}
+			if slices.Contains(keys, "esc") { // a dialog closes: the observation sees the agent idle
+				p.unblockSessions()
+			}
 			return nil
 		},
 		CloseWorkspace: p.hd.WorkspaceClose,
@@ -153,7 +207,7 @@ func newPaneHarness(t *testing.T, mods ...func(*harness)) *paneHarness {
 				t.Errorf("the manager's roles = %v, want the [learn] role alone", cfg.Roles)
 			}
 			p.ag.fakeAgents = &fakeAgents{st: st}
-			p.ag.scratch = layout.Scratch
+			p.ag.scratch, p.ag.cfg = layout.Scratch, cfg
 			return p.ag
 		},
 	})

@@ -51,6 +51,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		// agents' keys the engine deletes (skew.go).
 		{"agents.KVModelLimits", agents.KVModelLimits("codex"), "kind.codex.model_limits"},
 		{"agents.KVModelLimited", agents.KVModelLimited("codex", "gpt-5"), "kind.codex.model_limited.gpt-5"},
+		{"agents.KVModelLimitedAt", agents.KVModelLimitedAt("claude", "fable"), "kind.claude.model_limited_at.fable"},
 		// The engine's own keys.
 		{"KVDaemonDraining", KVDaemonDraining, "daemon.draining"},
 		{"KVInfraPausedUntil", KVInfraPausedUntil, "daemon.infra_paused_until"},
