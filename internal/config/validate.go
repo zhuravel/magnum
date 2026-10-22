@@ -927,10 +927,14 @@ func validateKind(name string, k Kind) []error {
 		args    []string
 	}{{"resume", PlaceholderSession, k.Resume}, {"model", PlaceholderModel, k.Model},
 		{"effort", PlaceholderEffort, k.Effort}, {"name", PlaceholderTitle, k.Name}, {"subagents", PlaceholderSubagents, k.Subagents},
-		{"mcp_disable", PlaceholderServer, k.MCPDisable}, {"plugin_disable", PlaceholderPlugin, k.PluginDisable}} {
+		{"mcp_disable", PlaceholderServer, k.MCPDisable}, {"plugin_disable", PlaceholderPlugin, k.PluginDisable},
+		{"tool_output", PlaceholderLimit, k.ToolOutput}} {
 		if len(g.args) > 0 && !slices.ContainsFunc(g.args, func(s string) bool { return strings.Contains(s, g.ph) }) {
 			bad("%s %q must contain %s", g.key, g.args, g.ph)
 		}
+	}
+	if k.ToolOutputLimit < 0 {
+		bad("tool_output_limit must be 0 (the CLI's own) or more tokens, got %d", k.ToolOutputLimit)
 	}
 	if k.Rename != "" && !strings.Contains(k.Rename, PlaceholderTitle) {
 		bad("rename %q must contain %s", k.Rename, PlaceholderTitle)

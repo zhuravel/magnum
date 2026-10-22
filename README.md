@@ -1518,7 +1518,7 @@ name = "codex-review"
 kind = "shell"
 tool = "codex"                     # codex's login check, pauses and health patterns apply
 effort = "high"                    # -c model_reasoning_effort=high, never your global Codex effort
-command = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # takes its turn on the slot's databases; no MCP servers; the merge base
+command = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .ToolOutput}} {{.}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # takes its turn on the slot's databases; no MCP servers; the merge base
 capture = "stdout"
 
 [[role]]
@@ -3706,6 +3706,21 @@ review: magnum notes talkable/talkable --review (stale: it merges the notes' cha
 2 proposals to review (talkable/talkable, example/api stale) · 1 over limit", with a curation running or
 queued), left out while no repository has notes, and `magnum notes <TAB>` completes the repositories with
 notes.
+
+**Reading in parts.** The notes outgrew what one tool call returns whole: Codex keeps 10,000 tokens of a
+command's output by default and drops the middle (94 of 103 whole reads of an 89 KB file by Codex roles on
+2026-10-20 and 10-21 came back cut), and Claude Code's Read refuses a file above about 25,000 tokens. So
+right before a round's first prompt Magnum copies the live file into the round's report directory
+(`notes-read.md`; a blind replay copies its scratch notes), and every role of the round reads that copy in
+parts of at most 16 KiB of whole lines (a longer line is cut inside it), one `sed -n` command each, one part
+per tool call: the claude reviewers (review, re-review, restart, simplify) in their notes paragraph, the
+judge as `notes_parts` in its `<magnum>` block, and the fixer, from a copy beside its report, which it reads
+and never edits. Judges rewrite the live file about 20 times a day, so the copy keeps the line ranges of the
+parts still between two reads; before the judge merges its lessons it takes the lock and reads the live
+file again in the parts `notes_reread` prints. The stock `codex review` takes no prompt, so codex-review
+gets no notes. Every Codex launch, resume and codex-review line passes `-c tool_output_token_limit=65536`
+too (`[kinds.codex] tool_output_limit`, through `tool_output`; 0 = Codex's own): a ceiling for the reads a
+model asks to make larger, not the size of a read.
 
 **Curation triggers.** After each judge round and at startup Magnum measures the notes against `[notes]`
 `max_bytes` (16 KiB), `max_line` (300 characters), `max_harness_files` (15) and `max_harness_bytes` (128

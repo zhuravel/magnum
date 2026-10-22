@@ -28,7 +28,7 @@ func magnumBlock(t *testing.T, prompt string) string {
 // longer asks the judge to write it.
 func TestJudgePromptsAndSkillLeaveTheFooterToMagnum(t *testing.T) {
 	d := judgeFixture()
-	d.NotesPath, d.Blind, d.PostMerge = testNotesPath, true, true
+	d.NotesPath, d.NotesParts, d.Blind, d.PostMerge = testNotesPath, notesPartsFixture(), true, true
 	d.ThreadsFile, d.ThreadSummary, d.FormerLogins = "/r/review-threads.json", "1 thread", []string{"talkable-old[bot]"}
 	for _, name := range append(judgePrompts, "judge-nudge.md") {
 		got, err := RenderPrompt(prompt(t, name), d)
@@ -599,13 +599,20 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // behaviour against it (435 with its paragraph break), `ticket` among
 // section 0's fields (10) and its `Ticket: ✗` line in section 7's body
 // order (15).
+// Then 37,927 (2026-10-22, spec 06: 55 bytes) for the repository notes the
+// prompts give in parts: section 2 reads `notes_parts`, else `notes` (20),
+// and its update reads the live file again in the parts `notes_reread`
+// prints (35).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 37872
+const skillMaxBytes = 37927
 
-// skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex
-// returns at most 10,000 tokens of one tool call's output and drops the
-// middle of a longer one ("… tokens truncated"), and every judge reads the
-// skill in its first turn (and again after a compaction). At 37,676 bytes
+// skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex's
+// default output budget returns at most 10,000 tokens of one tool call's
+// output and drops the middle of a longer one ("… tokens truncated"): the
+// exec tool asks for that much unless the model asks for more, and the
+// codex kind's tool_output_limit raises only the ceiling of such a request.
+// Every judge reads the skill in its first turn (and again after a
+// compaction). At 37,676 bytes
 // the skill was 9,068 tokens, about 4.15 bytes a token, so a read of about
 // 40,000 bytes is the most that comes back whole, and only when the skill
 // is read by itself, as the prompts that link it say: from 2026-10-18 to
@@ -614,7 +621,7 @@ const skillMaxBytes = 37872
 const skillCeilingBytes = 40000
 
 func TestSkillStaysTight(t *testing.T) {
-	const why = "Codex returns at most 10,000 tokens of one tool call's output and drops the middle, sections 5 and 6, of a longer skill"
+	const why = "Codex's default output budget returns at most 10,000 tokens of one tool call's output and drops the middle, sections 5 and 6, of a longer skill"
 	n := len(magnum.Skill)
 	if skillMaxBytes > skillCeilingBytes {
 		t.Fatalf("skillMaxBytes is %d, over the ceiling of %d bytes: %s", skillMaxBytes, skillCeilingBytes, why)
@@ -633,7 +640,7 @@ var blockField = regexp.MustCompile(`(?m)^([a-z_]+):`)
 // skill, which is the only place that says what to do with it.
 func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d := judgeFixture()
-	d.NotesPath, d.Blind, d.PostMerge = testNotesPath, true, true
+	d.NotesPath, d.NotesParts, d.Blind, d.PostMerge = testNotesPath, notesPartsFixture(), true, true
 	d.ThreadsFile, d.ThreadSummary, d.FormerLogins = "/r/review-threads.json", "1 thread", []string{"talkable-old[bot]"}
 	d.MovedFrom, d.ForcePushed = "/Users/bohdan/Projects/talkable.review1", true
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
@@ -670,7 +677,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "docs", "ticket", "failing_checks", "project_checks", "delta_check", "post_replies"} {
+	for _, f := range []string{"notes", "notes_parts", "notes_dir", "notes_harness", "notes_lock", "notes_reread", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "docs", "ticket", "failing_checks", "project_checks", "delta_check", "post_replies"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}

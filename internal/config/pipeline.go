@@ -620,6 +620,8 @@ const (
 	// PlaceholderProjects is the TOML table of untrusted paths in
 	// Kind.ProjectUntrust (Kind.UntrustArgs), optional there.
 	PlaceholderProjects = "{projects}"
+	// PlaceholderLimit is Kind.ToolOutputLimit in Kind.ToolOutput.
+	PlaceholderLimit = "{limit}"
 )
 
 // DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).

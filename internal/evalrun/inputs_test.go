@@ -1,6 +1,7 @@
 package evalrun
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -78,6 +79,35 @@ func TestAnEditOfThePartialsFileAloneChangesTheInputs(t *testing.T) {
 	}
 	if got := ReviewerInputs(cfg); got != rev {
 		t.Errorf("an edited partials file changed the reviewer inputs from %s to %s", rev, got)
+	}
+}
+
+// The sentence that has a role read the repository notes in parts lives in the prompt files, never in
+// magnum's code, so an edit of it is another baseline: in the judge's partials file it changes the round's
+// inputs and leaves the reviewers', in a reviewer's prompt it changes both.
+func TestAnEditOfTheNotesPartsSentenceChangesTheInputs(t *testing.T) {
+	const sentence = "Read the repository notes in these parts, one part per tool call. Never print two parts in one call."
+	cfg := testConfig(t)
+	embedded, rev := Inputs(cfg), ReviewerInputs(cfg)
+	for _, tc := range []struct {
+		name         string
+		reviewersToo bool
+	}{{config.SharedPrompt, false}, {"claude-review.md", true}} {
+		text, ok := prompts.Read(tc.name)
+		if !ok || !strings.Contains(text, sentence) {
+			t.Fatalf("%s lacks the parts sentence", tc.name)
+		}
+		file := filepath.Join(cfg.Pipeline.PromptsDir, tc.name)
+		writeFile(t, file, strings.Replace(text, sentence, "Read the repository notes in these parts.", 1))
+		if got := Inputs(cfg); got == embedded {
+			t.Errorf("%s: an edited parts sentence left the inputs at %s", tc.name, got)
+		}
+		if got := ReviewerInputs(cfg); (got != rev) != tc.reviewersToo {
+			t.Errorf("%s: an edited parts sentence moved the reviewer inputs from %s to %s: want a change %v", tc.name, rev, got, tc.reviewersToo)
+		}
+		if err := os.Remove(file); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -20,9 +20,14 @@ no_findings_event: COMMENT
 blocking_event: REQUEST_CHANGES
 self_authored: false
 notes: /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md
+notes_parts: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md (41065 bytes, 215 lines), a copy of `notes` frozen for this round. Read the repository notes in these parts, one part per tool call. Never print two parts in one call.
+  - `sed -n '1,85p' /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md`
+  - `sed -n '86,170p' /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md`
+  - `sed -n '171,215p' /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md`
 notes_dir: /Users/bohdan/Projects/magnum/state/notes/talkable/talkable
 notes_harness: fixtures/, run-spec.sh
 notes_lock: n=0; until mkdir /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.lock 2>/dev/null; do n=$((n+1)); if [ "$n" -ge 90 ]; then echo 'notes busy'; break; fi; find /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.lock -maxdepth 0 -mmin +10 -exec rmdir {} + 2>/dev/null; sleep 2; done; [ "$n" -lt 90 ] && echo 'notes locked'
+notes_reread: once `notes_lock` printed `notes locked`, before you merge, read the live `notes` again in the parts this prints, one part per tool call: `LC_ALL=C awk -v m=16384 'function p(a, b) { if (a <= b) printf "sed -n %c%d,%dp%c %s\n", 39, a, b, 39, f } BEGIN { f = "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"; s = 1 } { l = length($0) + 1; if (l > m) { p(s, NR - 1); for (o = 1; o < l; o += m) printf "sed -n %c%dp%c %s | cut -b %d-%d\n", 39, NR, 39, f, o, o + m - 1; s = NR + 1; n = 0; next } if (n + l > m) { p(s, NR - 1); s = NR; n = 0 } n += l } END { p(s, NR) }' /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md`
 notes_unlock: rmdir /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.lock
 notes_max_line: 300
 related_prs: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/related.json

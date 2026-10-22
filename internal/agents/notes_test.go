@@ -1,20 +1,34 @@
 package agents
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 )
 
+// notesPartsSentence is the fixed sentence every prompt that names the
+// notes puts before their parts.
+const notesPartsSentence = "Read the repository notes in these parts, one part per tool call. Never print two parts in one call."
+
 const testNotesPath = "/m/state/notes/talkable/talkable.md"
 
-const testNotesParagraph = "Repository notes at " + testNotesPath + ": read them first; they are hints from earlier reviews, verify before relying on them."
+// testNotesParagraph is the reviewer prompts' notes paragraph for np.
+func testNotesParagraph(np NotesParts) string {
+	s := fmt.Sprintf("Repository notes at %s (%d bytes, %d lines, frozen for this round): read them first; they are hints from earlier reviews, verify before relying on them. %s",
+		np.Path, np.Bytes, np.Lines, notesPartsSentence)
+	for _, p := range np.Parts {
+		s += "\n- `" + p.Command + "`"
+	}
+	return s
+}
 
-// Every prompt that starts or continues a review shows the notes paragraph
-// when the data has a NotesPath and omits it otherwise; the judge's also
-// tell it to rewrite the file at the end of the round.
+// Every reviewer prompt shows the notes paragraph, the round's frozen copy
+// in parts, when the round has notes to read and omits it otherwise (no
+// notes file yet, or an empty one, though NotesPath is set); a reviewer
+// never rewrites the notes.
 func TestNotesParagraphInRolePrompts(t *testing.T) {
-	for _, name := range []string{"claude-review.md", "claude-rereview.md", "claude-simplify.md"} {
+	for _, name := range []string{"claude-review.md", "claude-rereview.md", "claude-restart.md", "claude-simplify.md"} {
 		t.Run(name, func(t *testing.T) {
 			p := prompt(t, name)
 			d := roleFixture()
@@ -26,12 +40,16 @@ func TestNotesParagraphInRolePrompts(t *testing.T) {
 				t.Fatalf("without NotesPath:\n%s", plain)
 			}
 			d.NotesPath = testNotesPath
+			if got, err := RenderPrompt(p, d); err != nil || got != plain {
+				t.Fatalf("NotesPath without parts (no notes yet): %v\n%s", err, got)
+			}
+			d.NotesParts = notesPartsFixture()
 			got, err := RenderPrompt(p, d)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := plain + "\n\n" + testNotesParagraph; got != want {
-				t.Fatalf("with NotesPath:\n%s\nwant the plain prompt plus a paragraph:\n%s", got, want)
+			if want := plain + "\n\n" + testNotesParagraph(d.NotesParts); got != want {
+				t.Fatalf("with notes:\n%s\nwant the plain prompt plus a paragraph:\n%s", got, want)
 			}
 			if strings.Contains(got, "rewrite") {
 				t.Errorf("a reviewer must not rewrite the notes:\n%s", got)
@@ -40,16 +58,40 @@ func TestNotesParagraphInRolePrompts(t *testing.T) {
 	}
 }
 
-// The judge prompts pass the notes as <magnum> fields (the file, its harness
-// directory and listing, the lock commands), and only when there are notes;
-// the steps are the skill's (SKILL.md section 2), so no prompt repeats them
-// and the text before the block is the same with or without notes.
+// testNotesPartsField is the judge's `notes_parts` field for np.
+func testNotesPartsField(np NotesParts) string {
+	s := fmt.Sprintf("\nnotes_parts: %s (%d bytes, %d lines), a copy of `notes` frozen for this round. %s", np.Path, np.Bytes, np.Lines, notesPartsSentence)
+	for _, p := range np.Parts {
+		s += "\n  - `" + p.Command + "`"
+	}
+	return s + "\n"
+}
+
+// testNotesLockFields are the judge's lock fields for the notes file
+// notes: the lock, the re-read of the live file in parts beside it, the
+// unlock.
+func testNotesLockFields(notes string) string {
+	_, lock := NotesFiles(notes)
+	return "\nnotes_lock: " + NotesLockLine(lock) +
+		"\nnotes_reread: once `notes_lock` printed `notes locked`, before you merge, read the live `notes` again in the parts this prints, one part per tool call: `" +
+		NotesRereadLine(notes) + "`\nnotes_unlock: " + NotesUnlockLine(lock) + "\n"
+}
+
+// The judge prompts pass the notes as <magnum> fields (the file, the
+// round's frozen copy in parts, its harness directory and listing, the lock
+// commands and the re-read of the live file beside them), and only when
+// there are notes, the parts only when there is a copy to read; the steps
+// are the skill's (SKILL.md section 2), so no prompt repeats them and the
+// text before the block is the same with or without notes.
 func TestJudgePromptsPassTheNotesAsMagnumFields(t *testing.T) {
-	dir, lock := NotesFiles(testNotesPath)
-	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md"} {
+	dir, _ := NotesFiles(testNotesPath)
+	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md", "judge-own-pass.md"} {
 		t.Run(name, func(t *testing.T) {
 			p := prompt(t, name)
 			d := judgeFixture()
+			if name == "judge-own-pass.md" {
+				d.Mode, d.Phase, d.OwnFindings, d.Reports = "initial", PhaseOwnPass, "/rep/"+OwnFindingsFile, nil
+			}
 			plain, err := RenderPrompt(p, d)
 			if err != nil {
 				t.Fatal(err)
@@ -58,6 +100,10 @@ func TestJudgePromptsPassTheNotesAsMagnumFields(t *testing.T) {
 				t.Fatalf("without NotesPath:\n%s", plain)
 			}
 			d.NotesPath = testNotesPath
+			if got, err := RenderPrompt(p, d); err != nil || strings.Contains(got, "notes_parts") || strings.Contains(got, notesPartsSentence) {
+				t.Errorf("NotesPath without parts (no notes yet): %v\n%s", err, got)
+			}
+			d.NotesParts = notesPartsFixture()
 			for _, data := range []any{d, &d} { // values and pointers render alike
 				got, err := RenderPrompt(p, data)
 				if err != nil {
@@ -65,8 +111,8 @@ func TestJudgePromptsPassTheNotesAsMagnumFields(t *testing.T) {
 				}
 				at := strings.Index(got, "<magnum>")
 				block := got[at:]
-				for _, want := range []string{"\nnotes: " + testNotesPath + "\n", "\nnotes_dir: " + dir + "\n", "\nnotes_harness:\n",
-					"\nnotes_lock: " + NotesLockLine(lock) + "\n", "\nnotes_unlock: " + NotesUnlockLine(lock) + "\n"} {
+				for _, want := range []string{"\nnotes: " + testNotesPath + testNotesPartsField(d.NotesParts) + "notes_dir: " + dir + "\n", "\nnotes_harness:\n",
+					testNotesLockFields(testNotesPath)} {
 					if !strings.Contains(block, want) {
 						t.Errorf("the <magnum> block lacks %q:\n%s", want, block)
 					}

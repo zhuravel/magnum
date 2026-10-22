@@ -21,7 +21,7 @@ func TestCodexTurnsOffTheMCPServersItWouldLoadButTheAllowedOnes(t *testing.T) {
 	appsOff := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"}
 	servers := []string{"browser", "docs"}
 	got := codex.Argv(LaunchArgs{Effort: "xhigh", MCPServers: servers, Wrapper: true})
-	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
+	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("codex argv = %q, want %q", got, want)
 	}
@@ -36,8 +36,8 @@ func TestCodexTurnsOffTheMCPServersItWouldLoadButTheAllowedOnes(t *testing.T) {
 	}
 	on := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nmcp_off = false\n" + minimalConfig})
 	k, _ = on.KindSpec(KindCodex)
-	if got := k.Argv(LaunchArgs{MCPServers: servers, Wrapper: true}); len(got) != 0 {
-		t.Fatalf("mcp_off = false: %q, want none", got)
+	if got := k.Argv(LaunchArgs{MCPServers: servers, Wrapper: true}); !slices.Equal(got, codexToolOutput) {
+		t.Fatalf("mcp_off = false: %q, want only the tool output ceiling", got)
 	}
 	// A kind without mcp_disable args cannot turn a server off by name: the
 	// claude kind's mcp_strict turns them all off at once, whatever the
@@ -96,7 +96,7 @@ func TestCodexTurnsOffItsPluginsButTheAllowedOnes(t *testing.T) {
 	codex, _ := Defaults().KindSpec(KindCodex)
 	plugins := []string{"github@claude-plugins-official", "playwright@claude-plugins-official"}
 	got := codex.Argv(LaunchArgs{MCPServers: []string{"docs"}, Plugins: plugins, Wrapper: true})
-	want := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false",
+	want := []string{"-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false",
 		"-c", "plugins.github@claude-plugins-official.enabled=false", "-c", "plugins.playwright@claude-plugins-official.enabled=false"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("codex argv = %q\nwant %q", got, want)
@@ -111,8 +111,8 @@ func TestCodexTurnsOffItsPluginsButTheAllowedOnes(t *testing.T) {
 	}
 	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nmcp_off = false\n" + minimalConfig})
 	k, _ = off.KindSpec(KindCodex)
-	if got := k.Argv(LaunchArgs{Plugins: plugins, Wrapper: true}); len(got) != 0 {
-		t.Fatalf("mcp_off = false: %q, want none", got)
+	if got := k.Argv(LaunchArgs{Plugins: plugins, Wrapper: true}); !slices.Equal(got, codexToolOutput) {
+		t.Fatalf("mcp_off = false: %q, want only the tool output ceiling", got)
 	}
 	claude, _ := Defaults().KindSpec(KindClaude)
 	if got := claude.PluginOffArgs(plugins); got != nil || len(claude.PluginDisable) != 0 {

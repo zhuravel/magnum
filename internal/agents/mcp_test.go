@@ -52,7 +52,7 @@ func TestJudgeStartsWithoutTheOperatorsMCPServers(t *testing.T) {
 		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], resume); err != nil {
 			t.Fatal(err)
 		}
-		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}, mcpOffArgs)
+		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536"}, mcpOffArgs)
 		if resume != "" {
 			want = slices.Concat(codexResumeArgs(resume), want)
 		}
@@ -93,7 +93,7 @@ func TestJudgeKeepsTheMCPServersAllowedOrWhenMCPOffIsFalse(t *testing.T) {
 		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
 			t.Fatal(err)
 		}
-		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}, tc.want)
+		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536"}, tc.want)
 		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
 			t.Errorf("%s: args = %q\nwant %q", name, got, want)
 		}
@@ -171,7 +171,7 @@ func TestCodexRunsWithoutTheAppsConnector(t *testing.T) {
 		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], resume); err != nil {
 			t.Fatal(err)
 		}
-		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}, appsOff)
+		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536"}, appsOff)
 		if resume != "" {
 			want = slices.Concat(codexResumeArgs(resume), want)
 		}
@@ -182,7 +182,7 @@ func TestCodexRunsWithoutTheAppsConnector(t *testing.T) {
 	e := newEnv(t)
 	d := ShellData{BaseRef: "origin/master", ReportPath: "/r/codex.md", Marker: DoneMarker("r-1")}
 	role := e.spec(RoleCodexReview)
-	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false --base") {
 		t.Fatalf("codex-review: line = %q, %v", got, err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = false })
@@ -202,7 +202,7 @@ func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 	role := e.spec(RoleCodexReview)
 	sh := role
 	sh.Command, sh.Prompt = "", "codex-review.sh"
-	want := "-- codex review -c model_reasoning_effort=high " + strings.Join(mcpOffArgs, " ") + " --base origin/master; } |"
+	want := "-- codex review -c model_reasoning_effort=high -c tool_output_token_limit=65536 " + strings.Join(mcpOffArgs, " ") + " --base origin/master; } |"
 	for name, r := range map[string]config.Role{"command": role, "codex-review.sh": sh} {
 		got, err := e.m.ShellLine(e.ctx, e.pr.ID, r, d)
 		if err != nil || !strings.Contains(got, want) {
@@ -210,11 +210,11 @@ func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 		}
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow = []string{"browser", "docs"} })
-	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false --base") {
 		t.Fatalf("all allowed: line = %q, %v", got, err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow, k.MCPOff = nil, false })
-	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c tool_output_token_limit=65536 --base") {
 		t.Fatalf("mcp_off false: line = %q, %v", got, err)
 	}
 }
@@ -242,7 +242,7 @@ func TestJudgeStartsWithoutTheOperatorsCodexPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	pluginsOff := []string{"-c", "plugins.docs@acme.enabled=false", "-c", "plugins.playwright@claude-plugins-official.enabled=false"}
-	want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}, pluginsOff)
+	want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}, pluginsOff)
 	if got := e.h.starts[0].Args; !slices.Equal(got, want) {
 		t.Fatalf("args = %q\nwant %q", got, want)
 	}

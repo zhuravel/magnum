@@ -14,6 +14,11 @@ Prove a security finding with the repository's own tests (a focused or request s
 
 Time budget: 40 minutes. Your turn must end with the report written. Start background work (a background command, an asynchronous subagent) only when it can finish well within the budget, wait for it before you write the report, and prefer the specs of the changed code to a whole-suite run.
 
+Repository notes at /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md (41065 bytes, 215 lines, frozen for this round): read them first; they are hints from earlier reviews, verify before relying on them. Read the repository notes in these parts, one part per tool call. Never print two parts in one call.
+- `sed -n '1,85p' /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md`
+- `sed -n '86,170p' /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md`
+- `sed -n '171,215p' /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/notes-read.md`
+
 Read /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/prepass.json first, magnum's reading of the diff: the removed definitions that files outside the diff still name, the changed source files without a test change, each changed method's body before its hunk, and each new file's closest existing sibling, to read before it. Each item is a lead to check, never a finding by itself.
 
 /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/evidence.json lists what earlier magnum rounds examined in this PR, by path and behaviour: read the areas marked `unknown` or `stale` (changed since) first, as leads, never as findings by themselves, and probe no `probed` entry with `control: true` again, as its file is unchanged since.

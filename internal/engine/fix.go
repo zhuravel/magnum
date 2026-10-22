@@ -817,6 +817,16 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		e.abandonFixRun(ctx, run, err.Error())
 		return err
 	}
+	// The fixer reads the repository notes, never edits them: a copy
+	// beside the report, in parts (agents.FreezeNotes), as a round's roles.
+	var notesParts agents.NotesParts
+	if job.state.Report != "" {
+		var err error
+		notesParts, err = agents.FreezeNotes(NotesPath(e.d.Layout, job.repo.Owner, job.repo.Name), filepath.Dir(job.state.Report))
+		if err != nil {
+			e.log.Warn("fix: freeze the repository notes", "subject", job.subject(), "err", err)
+		}
+	}
 	text, err := e.d.Agents.FixPrompt(pr, agents.Role(job.role.Name), run, agents.FixPromptInput{
 		HeadRef:       deref(pr.HeadRef),
 		ReviewURL:     job.review.URL,
@@ -825,6 +835,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		ReviewerLogin: job.login,
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
 		NoFindings:    job.alone,
+		NotesParts:    notesParts,
 	})
 	if err != nil {
 		e.abandonFixRun(ctx, run, err.Error())

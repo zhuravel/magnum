@@ -406,7 +406,7 @@ resume = ["--session", "{session}"]
 func TestArgv(t *testing.T) {
 	k := DefaultKinds()
 	if got := k["codex"].Argv(LaunchArgs{Session: "u-1", Title: "PR #1 codex-judge - r", Effort: "xhigh", Wrapper: true}); !slices.Equal(got,
-		[]string{"resume", "u-1", "-c", "tui.resume_cwd=current", "-c", "model_reasoning_effort=xhigh", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}) {
+		[]string{"resume", "u-1", "-c", "tui.resume_cwd=current", "-c", "model_reasoning_effort=xhigh", "-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}) {
 		t.Errorf("codex = %q", got)
 	}
 	if got := k["claude"].Argv(LaunchArgs{Session: "u-2", Title: "PR #1 claude-review - r", Effort: "high", Wrapper: true}); !slices.Equal(got,

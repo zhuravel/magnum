@@ -914,6 +914,8 @@ type fakeAgents struct {
 	onTell func(run store.Run, text string)
 	// fixPromptErr, when set, is what FixPrompt fails with.
 	fixPromptErr error
+	// fixInputs are the inputs FixPrompt was called with, in order.
+	fixInputs []agents.FixPromptInput
 	// contextUsed, when set, answers ContextUsed with the figure session
 	// s's pane shows (ok false: none); unset, every pane shows 0%.
 	// onCompact, when set, runs as Compact is called, with the session it
@@ -1342,6 +1344,7 @@ func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in 
 		in.ExternalFile) + map[bool]string{true: "|no findings"}[in.NoFindings])
 	f.mu.Lock()
 	ferr := f.fixPromptErr
+	f.fixInputs = append(f.fixInputs, in)
 	f.mu.Unlock()
 	if ferr != nil {
 		return "", ferr

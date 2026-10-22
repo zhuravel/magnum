@@ -96,10 +96,23 @@ func roleFixture() RoleData {
 	}
 }
 
+// fixtureNotes is the live notes file of the fixtures' repository.
+const fixtureNotes = "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"
+
+// notesPartsFixture is a round's frozen copy of 215 notes lines of 190
+// bytes, in three parts.
+func notesPartsFixture() NotesParts {
+	line := strings.Repeat("n", 190) + "\n"
+	return SplitNotes("/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/"+NotesReadFile,
+		[]byte(strings.Repeat(line, 215)))
+}
+
 // fixFixture is the fix job's data: the reviewer fields the fix prompt uses,
-// the fix skill's startup copy and the posted review it fixes.
+// the fix skill's startup copy, the posted review it fixes and the job's
+// frozen copy of the notes.
 func fixFixture() RoleData {
 	d := roleFixture()
+	d.NotesParts = notesPartsFixture()
 	d.Role = "claude-fix"
 	d.ReportPath = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-fix.md"
 	d.SkillPath = "/Users/bohdan/.local/state/magnum/skill/4f1c2a9b7e3d/SKILL.md"
@@ -348,9 +361,9 @@ func TestRenderGolden(t *testing.T) {
 	restarted.RestartedFrom = "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
 	restartedRereview := restarted
 	restartedRereview.PreviousHeadSHA = roleFixture().PreviousHeadSHA
-	restartedRereview.NotesPath = "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"
+	restartedRereview.NotesPath, restartedRereview.NotesParts = fixtureNotes, notesPartsFixture()
 	restartedForced := restartedRereview
-	restartedForced.ForcePushed, restartedForced.NotesPath = true, ""
+	restartedForced.ForcePushed, restartedForced.NotesPath, restartedForced.NotesParts = true, "", NotesParts{}
 	noBase := forcedRole
 	noBase.BaseSHA, noBase.BaseRef, noBase.ForcePushed, noBase.EffortInPrompt, noBase.Effort = "", "origin/master", false, false, "high"
 
@@ -372,7 +385,7 @@ func TestRenderGolden(t *testing.T) {
 	// The <magnum> fields of the repository notes (with a threads file, as a
 	// re-review of a reviewed PR has).
 	withNotes := judgeFixture()
-	withNotes.NotesPath = "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"
+	withNotes.NotesPath, withNotes.NotesParts = fixtureNotes, notesPartsFixture()
 	withNotes.NotesHarness, withNotes.NotesHarnessMore = []string{"fixtures/", "run-spec.sh"}, 0
 	withNotes.NotesMaxLine = 300
 	withNotes.ThreadsFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review-threads.json"
@@ -433,7 +446,7 @@ func TestRenderGolden(t *testing.T) {
 		return d
 	}
 	ownRereview := ownPass("rereview")
-	ownRereview.NotesPath, ownRereview.NotesHarness = withNotes.NotesPath, withNotes.NotesHarness
+	ownRereview.NotesPath, ownRereview.NotesHarness, ownRereview.NotesParts = withNotes.NotesPath, withNotes.NotesHarness, withNotes.NotesParts
 	ownRereview.ThreadsFile, ownRereview.ThreadSummary = withNotes.ThreadsFile, withNotes.ThreadSummary
 	ownRecovery := ownPass("recovery")
 	ownRecovery.FormerLogins = []string{"alice"}
@@ -525,9 +538,11 @@ func TestRenderGolden(t *testing.T) {
 	// review, in its session or a fresh one.
 	ciRed := withFailingChecks(sameHead)
 	ciRed.CIRed = true
+	// The round's files, the frozen notes among them.
 	roleHistory := func(d RoleData) RoleData {
 		d.HistoryFile, d.DocsFile, d.PrepassFile = ownDir+"history.json", ownDir+"docs.json", ownDir+"prepass.json"
 		d.EvidenceMap = evidenceMap
+		d.NotesPath, d.NotesParts = fixtureNotes, notesPartsFixture()
 		return d
 	}
 	// A round whose Codex sessions ran with the checkout untrusted because
@@ -648,6 +663,7 @@ func TestRenderGolden(t *testing.T) {
 		{"claude_restart_rereview_forced", "claude-restart.md", restartedForced},
 		{"claude_rereview_no_base", "claude-rereview.md", noBase},
 		{"simplify", "claude-simplify.md", simplifyData(roleFixture())},
+		{"simplify_notes", "claude-simplify.md", simplifyData(roleHistory(roleFixture()))},
 		{"fix", "fix.md", fixFixture()},
 		{"fix_no_findings", "fix.md", fixNoFindings},
 		{"whiteboard", "whiteboard.md", whiteboardFixture("")},

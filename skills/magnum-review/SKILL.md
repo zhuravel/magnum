@@ -60,7 +60,7 @@ Search for existing helpers before you suggest new code.
 
 Databases: other roles use this worktree's suffixed databases (`WT_BRANCH` is exported) at the same time, so run every command that touches them (specs, `rails runner`, rake tasks, migrations, scratch tables, dropped after) as `<db_lock> <command>`, as given (add no `--timeout`). Its exit 75 is a timeout: the check did not run (`skipped (machine)`, section 7), not a finding; a check that waited, then ran, is no `environment_failures` entry. Never run `db:drop`, `db:create`, `db:setup` or a full test suite. An npm, pnpm or yarn install or test for a probe runs in a scratch package (a `package.json` in the directory of `result_file`, or `--prefix <that directory>`), never in a directory without one: npm walks up to the home directory and changes it.
 
-Repository notes (`notes`): read them first and verify a hint before relying on it. Before the verdict, list in the own pass, under `## Notes applied`, each notes line that applies, with the probe or argument that discharged it, or `unknown`; a lesson you write this round applies to this round first.
+Repository notes (`notes_parts`, else `notes`): read them first and verify a hint before relying on it. Before the verdict, list in the own pass, under `## Notes applied`, each notes line that applies, with the probe or argument that discharged it, or `unknown`; a lesson you write this round applies to this round first.
 
 Related PRs (`related_prs`): an open one changing the same behaviour gets one body line naming it; a finding only when merging both provably breaks something. A fix of a flaky test or a recurring bug class: record the pattern in the notes.
 
@@ -75,7 +75,7 @@ Platform rules: a flow the PR adds or changes that a third party governs with pu
 When the round taught you something durable, update the notes after the review is posted or found posted (`dry_run: true`: planned), before you write `result_file`. Other judges update it at the same time, so:
 
 1. Run `notes_lock`. It prints `notes locked`, or `notes busy` after three minutes: then skip the notes this round.
-2. Read `notes` again and merge your lessons into that text: keep every standing decision and harness reference another review wrote, unless you proved it wrong.
+2. Read `notes` again in the parts `notes_reread` prints and merge your lessons into that text: keep every standing decision and harness reference another review wrote, unless you proved it wrong.
 3. Write the whole file to `<notes>.tmp` (rewrite, never append), then `mv` it over `notes`.
 4. Run `notes_unlock`, also when a step failed.
 

@@ -11567,6 +11567,61 @@ skill versions); people add theirs to the sections before it, at the end of the 
     that it names no role), a warning when the default is off (nothing is wrong: the configuration chose
     its roles), and a `*string` field (every reader of `Pipeline.JudgeFallback` would change for one
     distinction the loader already has).
+- **Every role reads the whole notes, in bounded parts of a frozen copy** (2026-10-22, spec 06, approved
+  by the operator the same day). The main repository's notes are 96,835 bytes. On 2026-10-20 and 10-21
+  Codex roles read the then 89 KB file whole 103 times, and 94 of those reads came back truncated: Codex
+  returns at most 10,000 tokens of one tool output by default and drops the middle, where the pitfalls
+  and the standing decisions sit. Claude Code's Read refuses a file above about 25,000 tokens, so the
+  Claude reviewers had a limit too. A judge's merge read the file the same way, so a truncated read could
+  also lose the middle of the file it rewrote. A Codex review of codex-cli 0.162.1's source found the
+  layers: a direct `exec_command` returns the smaller of its `max_output_tokens` (10,000 unless the model
+  asks for more) and the configured policy, which `tool_output_token_limit` sets; code mode's outer `exec`
+  prints 10,000 tokens by default, so several reads printed in one call exceed it; the history keeps a tool
+  result within the same policy; no other fixed ceiling applies in these paths but a 1 MiB collection
+  bound.
+  - Parts of a frozen copy: right before a round's first prompt (after readiness), the pipeline copies the
+    live notes into the report directory (`notes-read.md`, agents.FreezeNotes), once per round, kept
+    across restarts on newer heads; a blind replay copies its scratch notes the same way. Judges rewrite
+    the live file about 20 times a day, so line ranges of the live file would shift between two reads.
+    agents.SplitNotes cuts the copy into runs of whole lines of at most 16 KiB (a line counted with its
+    newline); only a line longer than that is cut inside it, into 16 KiB pieces (`sed -n 'Np' | cut -b`).
+    Every prompt that names the notes renders `.NotesParts` (the copy, its bytes and lines, one `sed -n`
+    command per part) with one fixed sentence, "Read the repository notes in these parts, one part per tool
+    call. Never print two parts in one call.": the claude reviewer prompts (review, rereview, restart,
+    simplify) in their notes paragraph, which now shows only when there is a copy to read; the judge
+    prompts as the `notes_parts` field of the partials file's `notes-fields` block; and fix.md, which
+    rendered no notes before, from a copy the fix job writes beside its report, with "Read them. Never edit
+    the notes." The judge still rewrites the live file under the lock; `notes_reread`, beside `notes_lock`,
+    is an awk line (`LC_ALL=C`, so lengths are bytes) that prints the same part commands for the live file
+    as it is then, which the judge reads before it merges, since the copy can be older. SKILL.md changed
+    in two places, 55 bytes, for sentences the parts contradict: section 2 reads `notes_parts`, else
+    `notes`, and the update's step 2 reads `notes` again in the parts `notes_reread` prints (skillMaxBytes
+    37,927). The stock `codex review` takes no prompt, so codex-review gets no notes: a documented limit.
+  - The ceiling: every Codex process magnum starts passes `-c tool_output_token_limit=65536`, a kind key
+    (`tool_output_limit`, 65,536 for codex, 0 = the CLI's own, through `tool_output`, `["-c",
+    "tool_output_token_limit={limit}"]`) and not `start`, which the operator's config replaces. Kind.Argv
+    puts it after the effort and the subagent cap, before the args that keep configuration out, so it
+    reaches every launch and resume (the round's roles, the fixer, the whiteboard writer, the curator, the
+    retro, the skill editor and the eval replays all start through agents.StartAgent); codex-review's
+    command and codex-review.sh pass `.ToolOutput`, which Manager.ShellLine fills from the tool's kind. A
+    person's resume line carries none, as it keeps their MCP servers. 65,536 tokens is about 256 KiB at
+    Codex's four bytes a token: room for today's notes and the larger reads a model asks for, never the
+    normal reading size.
+  - The eval inputs hash the prompt files and the kind's config, so the parts sentence and the key are in
+    every role's inputs: the judge's and the reviewers' inputs change once with this commit.
+  - Tests (config's and the parts' in agents written failing first): in config
+    TestEveryCodexLaunchAndResumeCarriesTheToolOutputCeiling and TestToolOutputKeysAreValidated; in agents TestTheNotesPartsCoverEveryLineOnceWithinTheBound (the
+    commands, run, print the file), TestTheRereadLinePrintsThePartsOfTheLiveFile,
+    TestFreezeNotesCopiesTheLiveFileOnce and TestEveryCodexProcessCarriesTheToolOutputCeiling, with the
+    notes tests of the reviewer and judge prompts now on the parts; in pipeline
+    TestEveryRoleOfARoundReadsOneFrozenCopyOfTheNotes and TestABlindReplayReadsPartsOfItsScratchNotes; in
+    engine TestTheFixerReadsAFrozenCopyOfTheNotesInParts; in evalrun
+    TestAnEditOfTheNotesPartsSentenceChangesTheInputs.
+  - Rejected: the config key alone (the exec tool still asks for 10,000 tokens, so a whole-file read stays
+    cut); whole-file reads with a larger request (each model would have to ask for it, and code mode's
+    outer print keeps its own 10,000); parts of the live file (a rewrite between two reads shifts their
+    ranges); relevance selection of sections now (at today's size every role reads everything; topics and
+    a core are for when the notes grow past what the parts carry).
 
 ## Learned rules
 

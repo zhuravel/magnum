@@ -354,6 +354,8 @@ func DefaultRoles() []Role {
 // review` on the role's model when it has one (its block's or its spend
 // level's) and at the role's effort (config overrides, so it never runs at
 // the effort of the user's global Codex config; args after them still win),
+// with the codex kind's tool output ceiling (.ToolOutput, its
+// tool_output_limit, as its sessions have it),
 // without the MCP servers of the user's Codex config (.MCPOff, the codex
 // kind's mcp_off), against the PR's merge base, or its base ref when the
 // merge base is unknown. The merge base does not move: with --base
@@ -362,7 +364,7 @@ func DefaultRoles() []Role {
 // (.DBLockCommand) like the other roles' database commands: its sandbox
 // still reaches the slot's databases on localhost, which they use at the
 // same time.
-const defaultCodexReviewCommand = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+const defaultCodexReviewCommand = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .ToolOutput}} {{.}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
 
 // DefaultJudgeSubagents is the judge's max_subagents: on its own it started
 // 53 subagent threads in 36 sessions, 27% of the Codex spend.

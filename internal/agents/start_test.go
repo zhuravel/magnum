@@ -26,7 +26,7 @@ func TestStartAgentFreshWrapperPassesOnlyExtras(t *testing.T) {
 	// The judge role's effort (xhigh) goes through the codex kind's effort
 	// args, its max_subagents (2) through the subagents args.
 	if j.Name != "mg-11920-codex-judge-5d01cf" || j.Kind != "codex" || j.PaneID != ws.Panes[RoleJudge] || j.Timeout != 120*time.Second ||
-		!slices.Equal(j.Args, []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}) {
+		!slices.Equal(j.Args, []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}) {
 		t.Fatalf("judge start = %+v", j)
 	}
 	c := e.h.starts[1]
@@ -88,11 +88,11 @@ func TestStartAgentResumeArgs(t *testing.T) {
 		want        string
 		probeOutput string
 	}{
-		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false", "codex: function"},
+		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false", "codex: function"},
 		{"claude wrapper", "true", RoleClaude, []string{"--x"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --strict-mcp-config", ""},
-		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false --dangerously-bypass-approvals-and-sandbox --search", ""},
+		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false --dangerously-bypass-approvals-and-sandbox --search", ""},
 		{"claude plain", "false", RoleClaude, []string{"--dangerously-skip-permissions"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --strict-mcp-config --dangerously-skip-permissions", ""},
-		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false --search", "codex: command"},
+		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false --search", "codex: command"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -494,7 +494,7 @@ func TestBypassRemovesTheShellFunctionBeforeTheLaunch(t *testing.T) {
 		t.Fatalf("the removal must precede the launch: calls = %q", calls)
 	}
 	j := e.h.starts[0]
-	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2",
+	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536",
 		"-c", "features.apps=false", "-c", "skills.include_instructions=false", "--dangerously-bypass-approvals-and-sandbox"}
 	if j.Kind != "codex" || !slices.Equal(j.Args, want) {
 		t.Fatalf("judge start = %+v, want args %q", j, want)

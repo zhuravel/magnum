@@ -16,9 +16,12 @@ Scope: {{if $merged}}the lines whose change in the PR's own diff is new since th
 3. Report. Write {{.ReportPath}} as Markdown. The report's first line must be `<!-- magnum:run={{.RunID}} -->`, exactly: a report without it is discarded. Then one section per proposal in rank order, each with: its angle; the file and line range at `{{.HeadSHA}}`; a one-line summary; the concrete cost it removes; the exact current lines; the exact replacement lines in a ```suggestion block that replaces exactly those lines; the other sites of the same idea ("Same change at L…", each with its replacement); why behaviour is unchanged, with a probe command (a focused test, or the old and the new code run on the same inputs) when one is obvious. End with a "Skipped" list that accounts for every other finding, the subagents' and yours, one line each with its file and line and why: the valid ones below the cut first, then the rest. With nothing left to propose, write "No proposals." and the skipped list.
 
 Other roles use this checkout's databases at the same time: run every command that touches them (specs, `rails runner`, rake tasks, migrations) as `{{.DBLockCommand}} <command>`, which waits its turn and covers one command: one spec command per call, never a batch or a loop of them, and each mutant or overlay run takes the lock on its own, so other roles get their turn between commands; exit status 75 means it timed out and the check did not run (say so; it is not a finding).
-{{- if .NotesPath}}
+{{- if .NotesParts.Parts}}
 
-Repository notes at {{.NotesPath}}: read them first; they are hints from earlier reviews, verify before relying on them.
+Repository notes at {{.NotesParts.Path}} ({{.NotesParts.Bytes}} bytes, {{.NotesParts.Lines}} lines, frozen for this round): read them first; they are hints from earlier reviews, verify before relying on them. Read the repository notes in these parts, one part per tool call. Never print two parts in one call.
+{{- range .NotesParts.Parts}}
+- `{{.Command}}`
+{{- end}}
 {{- end}}
 {{- if .PostMerge}}
 

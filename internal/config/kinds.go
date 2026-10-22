@@ -23,7 +23,8 @@ import (
 // built by Argv in this order: Resume (resumed sessions only), Name (when a
 // title is known), Model (the role's model, else DefaultModel), Effort
 // (when the role sets it), Subagents or NoSubagents (when the role sets
-// max_subagents), MCPStrict and MCPDisable per MCP server to turn off and
+// max_subagents), ToolOutput (when ToolOutputLimit is set; ToolOutputArgs),
+// MCPStrict and MCPDisable per MCP server to turn off and
 // ProjectUntrust for a checkout whose project config (.codex/ and
 // AGENTS.md; .claude/, .mcp.json, CLAUDE.md and AGENTS.md) the PR changes,
 // or ProjectDocsOff when it changes only the instruction files
@@ -126,6 +127,18 @@ type Kind struct {
 	// ProjectUntrust covers them (claude: --setting-sources user keeps its
 	// CLAUDE.md and AGENTS.md out with the rest).
 	ProjectDocsOff []string `toml:"project_docs_off"`
+	// ToolOutputLimit: the most tokens of one tool call's output the CLI
+	// keeps for the model, passed through ToolOutput (ToolOutputArgs) to
+	// every launch and resume, and to the line of a shell role whose tool
+	// is the kind; 0 = the CLI's own. codex: DefaultCodexToolOutputLimit.
+	// A ceiling, not the size of a read: Codex 0.162.1 still cuts a
+	// command's output at the 10,000 tokens its exec tool asks for by
+	// default, so the roles read the repository notes in parts.
+	ToolOutputLimit int `toml:"tool_output_limit"`
+	// ToolOutput: args that set ToolOutputLimit {limit}, e.g. codex's
+	// ["-c", "tool_output_token_limit={limit}"]; empty = the kind cannot
+	// set it, and tool_output_limit is ignored.
+	ToolOutput []string `toml:"tool_output"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -438,7 +451,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //     "-c","skills.include_instructions=false"] and
 //     mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
 //     project_untrust ["-c","projects={projects}"], project_docs_off
-//     ["-c","project_doc_max_bytes=0"], project_mcp "off".
+//     ["-c","project_doc_max_bytes=0"], project_mcp "off", tool_output_limit
+//     65536 with tool_output ["-c","tool_output_token_limit={limit}"].
 //   - claude: args ["--dangerously-skip-permissions"],
 //     resume ["--resume","{session}"], model ["--model","{model}"],
 //     effort ["--effort","{effort}"], name ["--name","{title}"], login_check
@@ -514,6 +528,13 @@ func DefaultKinds() map[string]Kind {
 			// first) from the root to the session's cwd only when
 			// project_doc_max_bytes is above 0 (core/src/agents_md.rs).
 			ProjectDocsOff: []string{"-c", "project_doc_max_bytes=0"},
+			// Codex 0.162.1 replaces its truncation policy for every tool
+			// output it keeps with tool_output_token_limit
+			// (models-manager/src/model_info.rs); its exec tool still asks
+			// for 10,000 tokens by default (core/src/tools/context.rs), so
+			// this is the ceiling of the reads a model asks to make larger.
+			ToolOutputLimit: DefaultCodexToolOutputLimit,
+			ToolOutput:      []string{"-c", "tool_output_token_limit=" + PlaceholderLimit},
 		}),
 		KindClaude: base(Kind{
 			Args:       []string{"--dangerously-skip-permissions"},
@@ -584,8 +605,9 @@ type LaunchArgs struct {
 
 // Argv builds the args after the command name (herdr shell-quotes each one):
 // Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
-// NoSubagents for 0), ConfigOffArgs(a.MCPServers, a.ProjectServers,
-// a.Untrusted, a.DocsOff), Start, Args (no wrapper only), then a.Extra. A group whose value is empty is skipped;
+// NoSubagents for 0), ToolOutputArgs, ConfigOffArgs(a.MCPServers,
+// a.ProjectServers, a.Untrusted, a.DocsOff), Start, Args (no wrapper only),
+// then a.Extra. A group whose value is empty is skipped;
 // placeholders are replaced in every element.
 func (k Kind) Argv(a LaunchArgs) []string {
 	var out []string
@@ -608,12 +630,32 @@ func (k Kind) Argv(a LaunchArgs) []string {
 	default:
 		add(k.Subagents, PlaceholderSubagents, strconv.Itoa(*a.Subagents))
 	}
+	out = append(out, k.ToolOutputArgs()...)
 	out = append(out, k.ConfigOffArgs(a.MCPServers, a.Plugins, a.ProjectServers, a.Untrusted, a.DocsOff)...)
 	out = append(out, k.Start...)
 	if !a.Wrapper {
 		out = append(out, k.Args...)
 	}
 	return append(out, a.Extra...)
+}
+
+// DefaultCodexToolOutputLimit is the codex kind's tool_output_limit: about
+// 256 KiB at Codex's four bytes a token, room for today's 97 KB notes and
+// the reads a model asks to make larger.
+const DefaultCodexToolOutputLimit = 65536
+
+// ToolOutputArgs are ToolOutput with {limit} replaced by ToolOutputLimit;
+// nil when the limit is 0 (the CLI's own) or the kind has no ToolOutput.
+func (k Kind) ToolOutputArgs() []string {
+	if k.ToolOutputLimit <= 0 || len(k.ToolOutput) == 0 {
+		return nil
+	}
+	limit := strconv.Itoa(k.ToolOutputLimit)
+	out := make([]string, len(k.ToolOutput))
+	for i, a := range k.ToolOutput {
+		out[i] = strings.ReplaceAll(a, PlaceholderLimit, limit)
+	}
+	return out
 }
 
 // MCPOffArgs are the args that keep the user's MCP servers out of a
@@ -832,7 +874,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.Effort, k.Name, k.FallbackModels = cloneOrNil(k.Effort), cloneOrNil(k.Name), cloneOrNil(k.FallbackModels)
 		k.Subagents, k.NoSubagents = cloneOrNil(k.Subagents), cloneOrNil(k.NoSubagents)
 		k.MCPAllow, k.MCPDisable, k.ProjectUntrust = cloneOrNil(k.MCPAllow), cloneOrNil(k.MCPDisable), cloneOrNil(k.ProjectUntrust)
-		k.ProjectDocsOff = cloneOrNil(k.ProjectDocsOff)
+		k.ProjectDocsOff, k.ToolOutput = cloneOrNil(k.ProjectDocsOff), cloneOrNil(k.ToolOutput)
 		k.MCPStrict = cloneOrNil(k.MCPStrict)
 		k.PluginDisable, k.PluginAllow = cloneOrNil(k.PluginDisable), cloneOrNil(k.PluginAllow)
 		k.ExitKeys = cloneOrNil(k.ExitKeys)

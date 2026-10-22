@@ -152,6 +152,27 @@ const (
     SwitchModel reasons (EventModelSwitched's reason).
 
 const (
+	// NotesReadFile is the frozen copy of the notes in a round's (or a fix
+	// job's) report directory.
+	NotesReadFile = "notes-read.md"
+	// NotesPartMax bounds a part: whole lines of at most this many bytes,
+	// newlines counted, or a piece of one longer line.
+	NotesPartMax = 16 << 10
+)
+    The roles read the repository notes in parts. Codex 0.162.1 keeps at most
+    10,000 tokens of one command's output by default and drops the middle
+    (its exec tool's default request, under the policy the codex kind's
+    tool_output_limit raises), and Claude Code's Read refuses a file above about
+    25,000 tokens: whole, the 97 KB notes reached the Codex judges cut in 94 of
+    103 reads, their middle (pitfalls, decisions) gone. So a round copies the
+    live file into its report directory before its first prompt (FreezeNotes;
+    judges rewrite the live file about 20 times a day, so line ranges of the
+    live file would shift between two reads), and its prompts give the copy
+    as parts of at most NotesPartMax bytes, one command each (SplitNotes);
+    the judge re-reads the live file in parts, under the notes lock, before it
+    merges (NotesRereadLine).
+
+const (
 
 	// NotesHarnessMax bounds the harness entries a judge prompt lists.
 	NotesHarnessMax = 40
@@ -507,6 +528,13 @@ func NotesLockLine(lock string) string
     directory): it prints "notes locked" once it holds it, or "notes busy" after
     three minutes. A lock older than ten minutes is removed first.
 
+func NotesRereadLine(path string) string
+    NotesRereadLine is the shell line that prints, for the notes file path as
+    it is when it runs, the commands of its parts, as SplitNotes gives them (awk
+    under LC_ALL=C, so lengths are bytes). The judge runs it under the notes
+    lock, before it merges its lessons into the live file, which the round's
+    frozen copy can be older than.
+
 func NotesUnlockLine(lock string) string
     NotesUnlockLine is the shell line that releases the notes lock.
 
@@ -740,6 +768,7 @@ type FallbackData struct {
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand string
 	NoFindings                                                                 bool
+	NotesParts                                                                 NotesParts
 }
     FixPromptInput is what the fix job knows beyond the PR, the role and the
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
@@ -747,9 +776,11 @@ type FixPromptInput struct {
     posted it), the file of the other reviewers' open items (ExternalFile,
     external-threads.json beside the report; "" = none, the prompt then names
     no such file), the line the fixer runs its database commands through
-    (DBLockCommand, DBLockLine; "" = derived without a checkout) and whether
-    the review found nothing, leaving the fixer the external file's items alone
-    (NoFindings).
+    (DBLockCommand, DBLockLine; "" = derived without a checkout), whether the
+    review found nothing, leaving the fixer the external file's items alone
+    (NoFindings), and the job's frozen copy of the repository notes in parts
+    (NotesParts, FreezeNotes beside the report; zero = none), which the fixer
+    reads and never edits.
 
 type Health struct {
 	Kind    HealthKind
@@ -885,6 +916,17 @@ type JudgeData struct {
 	// NotesUnlockLine; always derived).
 	NotesDir, NotesLock                  string
 	NotesLockCommand, NotesUnlockCommand string
+	// NotesParts is the round's frozen copy of the notes, in parts
+	// (FreezeNotes): the judge prompts render it as `notes_parts`, the
+	// copy, its size and one command per part, with the sentence that asks
+	// for one part per tool call; zero = no notes to read (none yet, or
+	// empty), and the field is left out.
+	NotesParts NotesParts
+	// NotesRereadCommand prints the parts of the live notes file
+	// (NotesRereadLine; always derived from NotesPath): rendered as
+	// `notes_reread` beside `notes_lock`, which the judge runs once it holds
+	// the lock, before it merges, since the frozen copy can be older.
+	NotesRereadCommand string
 	// NotesHarness names the harness directory's entries (sorted; a
 	// directory ends in "/"), at most NotesHarnessMax of them, so the judge
 	// sees scripts the notes no longer mention; NotesHarnessMore counts the
@@ -1570,13 +1612,14 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error)
     ShellLine is ShellLine with the role's full-line template (role.Prompt)
     resolved through the configuration (pipeline.prompts_dir, then the embedded
-    defaults) unless d.Template is set, and d.MCPOff, when nil, keeping out
-    what a session of the role's tool kind must not load: the MCP servers
-    and plugins of the Codex home (codexOff) and the PR's project config in
-    d.Checkout (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered
-    line records the decision for PR prID, recordProject). d.Magnum, when empty,
-    is the daemon's own executable (the layout's), which d.DBLockCommand runs
-    for the checkout and the role.
+    defaults) unless d.Template is set, d.MCPOff, when nil, keeping out what a
+    session of the role's tool kind must not load: the MCP servers and plugins
+    of the Codex home (codexOff) and the PR's project config in d.Checkout
+    (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered line records
+    the decision for PR prID, recordProject), and d.ToolOutput, when nil,
+    the kind's tool output ceiling (config.Kind.ToolOutputArgs), as a session of
+    the kind gets it. d.Magnum, when empty, is the daemon's own executable (the
+    layout's), which d.DBLockCommand runs for the checkout and the role.
 
 func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error
     StartAgent launches (or adopts) the agent of an agent role in paneID and
@@ -1774,6 +1817,42 @@ func ModelLimits(ctx context.Context, st *store.Store, cfg *config.Config, kind 
     after now, by model name, each with the fallback a session uses meanwhile.
     cfg may be nil (Using then stays empty). It is for display: a limit whose
     row cannot be read is left out.
+
+type NotesPart struct {
+	From, To       int
+	CutFrom, CutTo int
+	Command        string
+}
+    NotesPart is one part of NotesParts: lines From to To (1-based, inclusive),
+    or, with CutFrom set, bytes CutFrom to CutTo (1-based, inclusive,
+    CutTo possibly past the line's end) of the single line From, longer than
+    NotesPartMax. Command prints it: `sed -n 'From,Top' <path>`, or `sed -n
+    'Fromp' <path> | cut -b CutFrom-CutTo`, the path shell-quoted.
+
+type NotesParts struct {
+	Path  string // the copy, absolute (the live file when it could not be written)
+	Bytes int    // its size
+	Lines int    // its lines, a last one without a newline counted
+	Parts []NotesPart
+}
+    NotesParts is the frozen copy of the repository notes a round's roles read
+    (RoleData and JudgeData.NotesParts), in parts. The zero value is no notes
+    (none, or empty), and the prompts then name no parts.
+
+func FreezeNotes(live, dir string) (NotesParts, error)
+    FreezeNotes copies the notes file live into dir as NotesReadFile and returns
+    the copy's parts (SplitNotes), so every role of a round reads the same text
+    however the judges rewrite live meanwhile. No notes ("" live, a missing
+    or empty file) is no copy and the zero NotesParts. A copy that cannot be
+    written returns the live file's parts with the error: the roles still read
+    the notes in parts, which a rewrite can shift.
+
+func SplitNotes(path string, text []byte) NotesParts
+    SplitNotes cuts text, the notes file at path, into NotesParts: runs of whole
+    lines of at most NotesPartMax bytes (each line counted with its newline, a
+    last line without one too), a line longer than that split inside into pieces
+    of NotesPartMax bytes. Empty text has no parts. NotesRereadLine prints the
+    same commands for a file.
 
 type Observation struct {
 	Kind    ObservationKind
@@ -1991,6 +2070,12 @@ type RoleData struct {
 	// NotesPath is the repository notes file the role reads first (hints from
 	// earlier reviews of the repository); "" = no notes.
 	NotesPath string
+	// NotesParts is the round's frozen copy of the notes, in parts
+	// (FreezeNotes; the fix job freezes its own): the claude reviewer
+	// prompts and the fix prompt name the copy and give one command per
+	// part, with the sentence that asks for one part per tool call; zero =
+	// no notes to read, and they name none.
+	NotesParts NotesParts
 	// HistoryFile is history.json in the report directory, the changed
 	// files' last commits on the base (see JudgeData.HistoryFile): the claude
 	// reviewer prompts name it in one sentence; "" = none.
@@ -2084,6 +2169,12 @@ type ShellData struct {
 	// codex-review's command passes them after its effort.
 	// Manager.ShellLine fills it when nil.
 	MCPOff []string
+	// ToolOutput are the args that raise the most tokens of one tool
+	// call's output the role's tool kind keeps (config.Kind.ToolOutputArgs,
+	// its tool_output_limit; codex: -c tool_output_token_limit=65536), as
+	// its sessions get them; codex-review's command passes them after its
+	// effort. Manager.ShellLine fills it when nil.
+	ToolOutput []string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
 	// codex_review.sh data working: RunID is Marker without its
@@ -3217,6 +3308,8 @@ const (
 	// PlaceholderProjects is the TOML table of untrusted paths in
 	// Kind.ProjectUntrust (Kind.UntrustArgs), optional there.
 	PlaceholderProjects = "{projects}"
+	// PlaceholderLimit is Kind.ToolOutputLimit in Kind.ToolOutput.
+	PlaceholderLimit = "{limit}"
 )
     Placeholders substituted by Kind.Argv and in Kind.Rename.
 
@@ -3280,6 +3373,11 @@ const DefaultClaudeContextPattern = `(?:\((?P<used>\d{1,3})%\)|Context left unti
     in parentheses, as a status line shows the context used ("418k/1m (41%)"),
     or Claude Code's warning as the context fills up ("Context left until
     auto-compact: 8%").
+
+const DefaultCodexToolOutputLimit = 65536
+    DefaultCodexToolOutputLimit is the codex kind's tool_output_limit: about
+    256 KiB at Codex's four bytes a token, room for today's 97 KB notes and the
+    reads a model asks to make larger.
 
 const DefaultEditorPrompt = "skill-edit.md"
     DefaultEditorPrompt is the skill editor's prompt file.
@@ -3468,7 +3566,8 @@ func DefaultKinds() map[string]Kind
         ["-c","features.apps=false", "-c","skills.include_instructions=false"]
         and mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
         project_untrust ["-c","projects={projects}"], project_docs_off
-        ["-c","project_doc_max_bytes=0"], project_mcp "off".
+        ["-c","project_doc_max_bytes=0"], project_mcp "off", tool_output_limit
+        65536 with tool_output ["-c","tool_output_token_limit={limit}"].
       - claude: args ["--dangerously-skip-permissions"], resume
         ["--resume","{session}"], model ["--model","{model}"], effort
         ["--effort","{effort}"], name ["--name","{title}"], login_check
@@ -4451,6 +4550,18 @@ type Kind struct {
 	// ProjectUntrust covers them (claude: --setting-sources user keeps its
 	// CLAUDE.md and AGENTS.md out with the rest).
 	ProjectDocsOff []string `toml:"project_docs_off"`
+	// ToolOutputLimit: the most tokens of one tool call's output the CLI
+	// keeps for the model, passed through ToolOutput (ToolOutputArgs) to
+	// every launch and resume, and to the line of a shell role whose tool
+	// is the kind; 0 = the CLI's own. codex: DefaultCodexToolOutputLimit.
+	// A ceiling, not the size of a read: Codex 0.162.1 still cuts a
+	// command's output at the 10,000 tokens its exec tool asks for by
+	// default, so the roles read the repository notes in parts.
+	ToolOutputLimit int `toml:"tool_output_limit"`
+	// ToolOutput: args that set ToolOutputLimit {limit}, e.g. codex's
+	// ["-c", "tool_output_token_limit={limit}"]; empty = the kind cannot
+	// set it, and tool_output_limit is ignored.
+	ToolOutput []string `toml:"tool_output"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -4546,19 +4657,20 @@ type Kind struct {
     by Argv in this order: Resume (resumed sessions only), Name (when a title
     is known), Model (the role's model, else DefaultModel), Effort (when the
     role sets it), Subagents or NoSubagents (when the role sets max_subagents),
-    MCPStrict and MCPDisable per MCP server to turn off and ProjectUntrust for a
-    checkout whose project config (.codex/ and AGENTS.md; .claude/, .mcp.json,
-    CLAUDE.md and AGENTS.md) the PR changes, or ProjectDocsOff when it changes
-    only the instruction files (ConfigOffArgs), Start, Args (only without a
-    wrapper), then the role's args.
+    ToolOutput (when ToolOutputLimit is set; ToolOutputArgs), MCPStrict and
+    MCPDisable per MCP server to turn off and ProjectUntrust for a checkout
+    whose project config (.codex/ and AGENTS.md; .claude/, .mcp.json, CLAUDE.md
+    and AGENTS.md) the PR changes, or ProjectDocsOff when it changes only the
+    instruction files (ConfigOffArgs), Start, Args (only without a wrapper),
+    then the role's args.
 
 func (k Kind) Argv(a LaunchArgs) []string
     Argv builds the args after the command name (herdr shell-quotes each one):
     Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents
-    (or NoSubagents for 0), ConfigOffArgs(a.MCPServers, a.ProjectServers,
-    a.Untrusted, a.DocsOff), Start, Args (no wrapper only), then a.Extra.
-    A group whose value is empty is skipped; placeholders are replaced in every
-    element.
+    (or NoSubagents for 0), ToolOutputArgs, ConfigOffArgs(a.MCPServers,
+    a.ProjectServers, a.Untrusted, a.DocsOff), Start, Args (no wrapper only),
+    then a.Extra. A group whose value is empty is skipped; placeholders are
+    replaced in every element.
 
 func (k Kind) ConfigOffArgs(servers, plugins, project, untrusted []string, docsOff bool) []string
     ConfigOffArgs are the args that keep configuration out of a session:
@@ -4605,6 +4717,10 @@ func (k Kind) RenameCommand(title string) string
 func (k Kind) SwitchModelCommand(model string) string
     SwitchModelCommand is SwitchModel with {model} replaced ("" when the kind
     cannot switch or model is empty).
+
+func (k Kind) ToolOutputArgs() []string
+    ToolOutputArgs are ToolOutput with {limit} replaced by ToolOutputLimit;
+    nil when the limit is 0 (the CLI's own) or the kind has no ToolOutput.
 
 func (k Kind) UntrustArgs(paths []string) []string
     UntrustArgs are ProjectUntrust for a checkout at paths, with {projects},

@@ -21,7 +21,7 @@ func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 	paths := []string{"/Users/x/Projects/talkable.review1", `/private/tmp/a "b"\c`}
 	got := codex.Argv(LaunchArgs{MCPServers: []string{"docs"}, Untrusted: paths})
 	table := `{"/Users/x/Projects/talkable.review1"={trust_level="untrusted"},"/private/tmp/a \"b\"\\c"={trust_level="untrusted"}}`
-	want := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false", "-c", "projects=" + table, "--dangerously-bypass-approvals-and-sandbox"}
+	want := []string{"-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false", "-c", "projects=" + table, "--dangerously-bypass-approvals-and-sandbox"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("argv = %q\nwant %q", got, want)
 	}
@@ -74,7 +74,7 @@ func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T)
 	if got := k.ConfigOffArgs(user, nil, project, nil, false); !slices.Equal(got, want) {
 		t.Fatalf("project_mcp off: %q\nwant %q", got, want)
 	}
-	if got := k.Argv(LaunchArgs{MCPServers: user, ProjectServers: project, Wrapper: true}); !slices.Equal(got, want) {
+	if got := k.Argv(LaunchArgs{MCPServers: user, ProjectServers: project, Wrapper: true}); !slices.Equal(got, slices.Concat(codexToolOutput, want)) {
 		t.Fatalf("argv: %q\nwant %q", got, want)
 	}
 	userOn := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"off\"\nmcp_off = false\n" + minimalConfig})
@@ -97,7 +97,7 @@ func TestCodexKeepsOnlyTheInstructionFilesOutWithProjectDocsOff(t *testing.T) {
 		t.Fatalf("codex project_docs_off = %q", codex.ProjectDocsOff)
 	}
 	got := codex.Argv(LaunchArgs{MCPServers: []string{"docs"}, DocsOff: true, Wrapper: true})
-	if want := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false", "-c", "project_doc_max_bytes=0"}; !slices.Equal(got, want) {
+	if want := []string{"-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false", "-c", "project_doc_max_bytes=0"}; !slices.Equal(got, want) {
 		t.Fatalf("argv = %q\nwant %q", got, want)
 	}
 	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"off\"\n" + minimalConfig})

@@ -266,7 +266,7 @@ func TestCodexReviewFallsBackToTheBaseRef(t *testing.T) {
 	if _, err := e.r.RunRound(e.ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, " -- codex review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false --base origin/master; } |") {
+	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, " -- codex review -c model_reasoning_effort=high -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false --base origin/master; } |") {
 		t.Fatalf("codex calls = %+v", e.ag.codexCalls)
 	}
 }
@@ -286,7 +286,7 @@ func TestCodexReviewRunsAtItsRereviewEffortInAReReview(t *testing.T) {
 	if _, err := e.r.RunRound(e.ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, " -- codex review -c model_reasoning_effort=medium -c features.apps=false -c skills.include_instructions=false --base ") {
+	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, " -- codex review -c model_reasoning_effort=medium -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false --base ") {
 		t.Fatalf("codex calls = %+v", e.ag.codexCalls)
 	}
 }

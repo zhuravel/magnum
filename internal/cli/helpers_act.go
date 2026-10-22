@@ -634,7 +634,9 @@ func actResumeArgv(cfg *config.Config, s store.Session) []string {
 	if id == "" || !ok || len(k.Resume) == 0 {
 		return nil
 	}
-	k.MCPOff = false // a person resuming by hand keeps their own MCP servers
+	// A person resuming by hand keeps their own MCP servers and their own
+	// tool output limit: the line is theirs to run, not a process magnum starts.
+	k.MCPOff, k.ToolOutputLimit = false, 0
 	return append([]string{kind}, k.Argv(config.LaunchArgs{Session: id, Wrapper: true})...)
 }
 

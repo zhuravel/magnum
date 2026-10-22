@@ -195,9 +195,16 @@ readiness:{{if .File}} {{.File}}{{end}}
 
 {{define "notes-fields" -}}
 notes: {{.NotesPath}}
+{{- if .NotesParts.Parts}}
+notes_parts: {{.NotesParts.Path}} ({{.NotesParts.Bytes}} bytes, {{.NotesParts.Lines}} lines), a copy of `notes` frozen for this round. Read the repository notes in these parts, one part per tool call. Never print two parts in one call.
+{{- range .NotesParts.Parts}}
+  - `{{.Command}}`
+{{- end}}
+{{- end}}
 notes_dir: {{.NotesDir}}
 notes_harness:{{range $i, $f := .NotesHarness}}{{if $i}},{{end}} {{$f}}{{end}}{{if .NotesHarnessMore}} (+{{.NotesHarnessMore}} more){{end}}
 notes_lock: {{.NotesLockCommand}}
+notes_reread: once `notes_lock` printed `notes locked`, before you merge, read the live `notes` again in the parts this prints, one part per tool call: `{{.NotesRereadCommand}}`
 notes_unlock: {{.NotesUnlockCommand}}
 {{- end}}
 

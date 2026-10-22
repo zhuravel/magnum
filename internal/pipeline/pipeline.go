@@ -690,6 +690,10 @@ type round struct {
 	ticketFile string
 	ticket     *jira.Ticket
 	ticketRead bool
+	// notesParts is the round's frozen copy of the repository notes in
+	// parts (freezeNotes), which every role's prompt gives: written once,
+	// before the first prompt, and kept across restarts on newer heads.
+	notesParts agents.NotesParts
 	// evidenceFile is the judge's evidence file (evidence.go), named in its
 	// prompt and read at the round's end; "" until the judge is prompted.
 	evidenceFile string
@@ -933,6 +937,7 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 	if err := rd.readiness(ctx); err != nil {
 		return rd.stopped(ctx)
 	}
+	rd.freezeNotes()
 	if judgeRun, err = rd.reviewers(ctx, runs, judgeRun, own); err != nil {
 		if ctx.Err() != nil {
 			return rd.stopped(ctx)

@@ -485,6 +485,13 @@ status_comment_note = ""          # a line of yours under the status comment whi
 # project_mcp = "off"                 # the MCP servers of an unchanged .codex/config.toml (the team's): off
 #                                     # turns them off like mcp_off, but for mcp_allow (each one a server you
 #                                     # keep); allow keeps them all, outside code in every session
+# tool_output_limit = 65536           # the most tokens of one tool call's output Codex keeps for the model,
+#                                     # passed through tool_output to every launch, resume and codex-review
+#                                     # line; 0 = Codex's own (10,000). A ceiling, not the size of a read:
+#                                     # Codex still asks 10,000 tokens of a command by default, so the roles
+#                                     # read the repository notes in parts of 16 KiB
+# tool_output = ["-c", "tool_output_token_limit={limit}"]   # sets the limit {limit}; [] = the kind cannot,
+#                                     # and tool_output_limit is ignored (claude, droid and omp have none)
 # name = []                         # codex has no name flag, so magnum types `rename` while it works
 # rename = "/rename {title}"
 # login_check = "codex login status"  # "" = no preflight
@@ -622,13 +629,14 @@ tool = "codex"                        # codex's login check, pauses and health p
                                       # would win over the level's model
 effort = "high"                       # passed by the command as -c model_reasoning_effort=high, so `codex review`
                                       # never runs at your global Codex effort; args come after it and win
-command = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+command = "{{.DBLockCommand}} codex review{{if .Model}} -c model={{.Model}}{{end}}{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .ToolOutput}} {{.}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
                                       # .DBLockCommand is `magnum db-lock --checkout <slot> --role codex-review --`:
                                       # codex review is sandboxed but reaches the slot's databases on localhost
                                       # (Rails boots and truncates them), so it takes its turn on them like the
                                       # other roles, and db-lock runs codex from PATH, not your shell function.
-                                      # The model (when the role or its spend level has one) and the effort
-                                      # follow as config overrides. A command of your own that leaves .Model
+                                      # The model (when the role or its spend level has one), the effort and
+                                      # .ToolOutput, the codex kind's tool_output_limit (-c
+                                      # tool_output_token_limit=65536), follow as config overrides. A command of your own that leaves .Model
                                       # out refuses a model rather than dropping it. .MCPOff turns off your Codex MCP servers ([kinds.codex] mcp_off) and
                                       # keeps a PR's .codex/ and AGENTS.md changes out (project_untrust,
                                       # project_docs_off); then

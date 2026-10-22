@@ -99,16 +99,17 @@ func TestNotesHarnessListsEntriesSortedAndBounded(t *testing.T) {
 	}
 }
 
-// RenderPrompt derives the harness directory, the lock and its commands
-// from NotesPath, and the judge prompts' <magnum> blocks name them with the
-// listing (and how many entries it left out).
+// RenderPrompt derives the harness directory, the lock, its commands and
+// the re-read of the live file from NotesPath, and the judge prompts'
+// <magnum> blocks name them with the listing (and how many entries it left
+// out).
 func TestJudgePromptsCarryTheNotesFields(t *testing.T) {
 	d := judgeFixture()
 	d.NotesPath = testNotesPath
 	d.NotesHarness, d.NotesHarnessMore = []string{"fixtures/", "jest-setup.js", "run-spec.sh"}, 3
-	dir, lock := NotesFiles(testNotesPath)
-	want := "\nnotes: " + testNotesPath + "\nnotes_dir: " + dir + "\nnotes_harness: fixtures/, jest-setup.js, run-spec.sh (+3 more)\n" +
-		"notes_lock: " + NotesLockLine(lock) + "\nnotes_unlock: " + NotesUnlockLine(lock) + "\n"
+	dir, _ := NotesFiles(testNotesPath)
+	want := "\nnotes: " + testNotesPath + "\nnotes_dir: " + dir + "\nnotes_harness: fixtures/, jest-setup.js, run-spec.sh (+3 more)" +
+		testNotesLockFields(testNotesPath)
 	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md"} {
 		got, err := RenderPrompt(prompt(t, name), d)
 		if err != nil {

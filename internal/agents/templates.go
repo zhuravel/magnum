@@ -315,6 +315,17 @@ type JudgeData struct {
 	// NotesUnlockLine; always derived).
 	NotesDir, NotesLock                  string
 	NotesLockCommand, NotesUnlockCommand string
+	// NotesParts is the round's frozen copy of the notes, in parts
+	// (FreezeNotes): the judge prompts render it as `notes_parts`, the
+	// copy, its size and one command per part, with the sentence that asks
+	// for one part per tool call; zero = no notes to read (none yet, or
+	// empty), and the field is left out.
+	NotesParts NotesParts
+	// NotesRereadCommand prints the parts of the live notes file
+	// (NotesRereadLine; always derived from NotesPath): rendered as
+	// `notes_reread` beside `notes_lock`, which the judge runs once it holds
+	// the lock, before it merges, since the frozen copy can be older.
+	NotesRereadCommand string
 	// NotesHarness names the harness directory's entries (sorted; a
 	// directory ends in "/"), at most NotesHarnessMax of them, so the judge
 	// sees scripts the notes no longer mention; NotesHarnessMore counts the
@@ -635,6 +646,7 @@ func (d *JudgeData) completed() JudgeData {
 		dir, lock := NotesFiles(out.NotesPath)
 		out.NotesDir, out.NotesLock = cmp.Or(out.NotesDir, dir), cmp.Or(out.NotesLock, lock)
 		out.NotesLockCommand, out.NotesUnlockCommand = NotesLockLine(out.NotesLock), NotesUnlockLine(out.NotesLock)
+		out.NotesRereadCommand = NotesRereadLine(out.NotesPath)
 	}
 	return out
 }
@@ -676,6 +688,12 @@ type RoleData struct {
 	// NotesPath is the repository notes file the role reads first (hints from
 	// earlier reviews of the repository); "" = no notes.
 	NotesPath string
+	// NotesParts is the round's frozen copy of the notes, in parts
+	// (FreezeNotes; the fix job freezes its own): the claude reviewer
+	// prompts and the fix prompt name the copy and give one command per
+	// part, with the sentence that asks for one part per tool call; zero =
+	// no notes to read, and they name none.
+	NotesParts NotesParts
 	// HistoryFile is history.json in the report directory, the changed
 	// files' last commits on the base (see JudgeData.HistoryFile): the claude
 	// reviewer prompts name it in one sentence; "" = none.
@@ -751,12 +769,15 @@ func (d RoleData) completed() RoleData {
 // posted it), the file of the other reviewers' open items (ExternalFile,
 // external-threads.json beside the report; "" = none, the prompt then
 // names no such file), the line the fixer runs its database commands
-// through (DBLockCommand, DBLockLine; "" = derived without a checkout) and
+// through (DBLockCommand, DBLockLine; "" = derived without a checkout),
 // whether the review found nothing, leaving the fixer the external file's
-// items alone (NoFindings).
+// items alone (NoFindings), and the job's frozen copy of the repository
+// notes in parts (NotesParts, FreezeNotes beside the report; zero = none),
+// which the fixer reads and never edits.
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand string
 	NoFindings                                                                 bool
+	NotesParts                                                                 NotesParts
 }
 
 // FixPrompt renders the fix role's prompt (its initial prompt, fix.md by
@@ -779,6 +800,7 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)), NoFindings: in.NoFindings,
+		NotesParts: in.NotesParts,
 	})
 }
 
@@ -850,6 +872,12 @@ type ShellData struct {
 	// codex-review's command passes them after its effort.
 	// Manager.ShellLine fills it when nil.
 	MCPOff []string
+	// ToolOutput are the args that raise the most tokens of one tool
+	// call's output the role's tool kind keeps (config.Kind.ToolOutputArgs,
+	// its tool_output_limit; codex: -c tool_output_token_limit=65536), as
+	// its sessions get them; codex-review's command passes them after its
+	// effort. Manager.ShellLine fills it when nil.
+	ToolOutput []string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
 	// codex_review.sh data working: RunID is Marker without its
@@ -981,7 +1009,7 @@ func (d ShellData) shellSafe() (ShellData, error) {
 		Args: quoteAll(d.Args), ExtraArgs: quoteAll(d.ExtraArgs),
 		ReportPath: quoteNonEmpty(d.ReportPath), BaseRef: quoteNonEmpty(d.BaseRef), BaseSHA: quoteNonEmpty(d.BaseSHA),
 		HeadSHA: quoteNonEmpty(d.HeadSHA), URL: quoteNonEmpty(d.URL), Title: quoteNonEmpty(d.Title),
-		Model: quoteNonEmpty(d.Model), Effort: quoteNonEmpty(d.Effort), MCPOff: quoteAll(d.MCPOff),
+		Model: quoteNonEmpty(d.Model), Effort: quoteNonEmpty(d.Effort), MCPOff: quoteAll(d.MCPOff), ToolOutput: quoteAll(d.ToolOutput),
 		DBLockCommand: d.DBLockCommand, // a quoted shell line already (DBLockLine)
 	}
 	return out, nil
@@ -1122,21 +1150,26 @@ func promptLine(role config.Role, d ShellData) (string, error) {
 
 // ShellLine is ShellLine with the role's full-line template (role.Prompt)
 // resolved through the configuration (pipeline.prompts_dir, then the
-// embedded defaults) unless d.Template is set, and d.MCPOff, when nil,
+// embedded defaults) unless d.Template is set, d.MCPOff, when nil,
 // keeping out what a session of the role's tool kind must not load: the MCP
 // servers and plugins of the Codex home (codexOff) and the PR's project config in
 // d.Checkout (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered
-// line records the decision for PR prID, recordProject). d.Magnum, when
+// line records the decision for PR prID, recordProject), and d.ToolOutput,
+// when nil, the kind's tool output ceiling (config.Kind.ToolOutputArgs), as
+// a session of the kind gets it. d.Magnum, when
 // empty, is the daemon's own executable (the layout's), which d.DBLockCommand
 // runs for the checkout and the role.
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error) {
 	d.Magnum = cmp.Or(d.Magnum, m.d.Layout.Binary())
 	var project projectScope
-	if d.MCPOff == nil {
-		if k, ok := m.kindSpec(role.AgentKind()); ok {
+	if k, ok := m.kindSpec(role.AgentKind()); ok {
+		if d.MCPOff == nil {
 			project = m.checkoutProject(ctx, role, d.Checkout, cmp.Or(d.BaseSHA, d.BaseRef), d.HeadSHA)
 			servers, plugins := m.codexOff(role)
 			d.MCPOff = k.ConfigOffArgs(servers, plugins, project.servers, project.paths, project.docsOff)
+		}
+		if d.ToolOutput == nil {
+			d.ToolOutput = k.ToolOutputArgs()
 		}
 	}
 	if d.Template == nil && role.IsShell() && role.Command == "" && d.Command == "" && role.Prompt != "" {

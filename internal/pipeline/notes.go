@@ -5,8 +5,28 @@ import (
 	"io/fs"
 	"log/slog"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/notes"
 )
+
+// freezeNotes copies the repository notes into the report directory
+// (agents.NotesReadFile), right before the round's first prompt, and keeps
+// the copy's parts for every role's prompt (rd.notesParts): judges rewrite
+// the live file about 20 times a day, and a role reads the notes in parts,
+// whose line ranges a rewrite between two reads would shift. A blind
+// replay copies its scratch notes the same way. A copy that cannot be
+// written leaves the live file's parts; notes that cannot be read leave
+// none. A failure is logged, never the round's.
+func (rd *round) freezeNotes() {
+	if rd.in.NotesPath == "" {
+		return
+	}
+	np, err := agents.FreezeNotes(rd.in.NotesPath, rd.dir)
+	if err != nil {
+		rd.logAt(slog.LevelWarn, "pipeline: freeze the repository notes: %v", err)
+	}
+	rd.notesParts = np
+}
 
 // snapshotNotes records the repository notes and their harness as the judge
 // finds them (notes.SnapshotFile in the report directory), right before it

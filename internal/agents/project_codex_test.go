@@ -102,7 +102,7 @@ func untrustArgs(dir string) []string {
 	return k.UntrustArgs(withRealPath(dir))
 }
 
-var judgeLaunchArgs = []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}
+var judgeLaunchArgs = []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}
 
 // A PR controls its checkout's .codex/ (MCP servers Codex starts or sends
 // the slot's secrets to, hooks, rules, settings), and magnum trusts its
@@ -157,7 +157,7 @@ func TestCodexReviewOfAPRChangingCodexRunsWithTheCheckoutUntrusted(t *testing.T)
 		t.Fatal(err)
 	}
 	untrust := untrustArgs(dir)
-	want := "-- codex review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false -c " + shellQuote(untrust[1]) + " --base " + projectMergeBase
+	want := "-- codex review -c model_reasoning_effort=high -c tool_output_token_limit=65536 -c features.apps=false -c skills.include_instructions=false -c " + shellQuote(untrust[1]) + " --base " + projectMergeBase
 	if !strings.Contains(got, want) {
 		t.Fatalf("line = %q\nwant it to contain %q", got, want)
 	}

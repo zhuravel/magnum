@@ -15,9 +15,12 @@ Prove a security finding with the repository's own tests (a focused or request s
 
 Time budget: {{.Budget}}. Your turn must end with the report written. Start background work (a background command, an asynchronous subagent) only when it can finish well within the budget, wait for it before you write the report, and prefer the specs of the changed code to a whole-suite run.
 {{- end}}
-{{- if .NotesPath}}
+{{- if .NotesParts.Parts}}
 
-Repository notes at {{.NotesPath}}: read them first; they are hints from earlier reviews, verify before relying on them.
+Repository notes at {{.NotesParts.Path}} ({{.NotesParts.Bytes}} bytes, {{.NotesParts.Lines}} lines, frozen for this round): read them first; they are hints from earlier reviews, verify before relying on them. Read the repository notes in these parts, one part per tool call. Never print two parts in one call.
+{{- range .NotesParts.Parts}}
+- `{{.Command}}`
+{{- end}}
 {{- end}}
 {{- if .PrepassFile}}
 

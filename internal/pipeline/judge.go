@@ -930,6 +930,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		jd.NotesDir, jd.NotesLock = agents.NotesFiles(in.NotesPath)
 		jd.NotesHarness, jd.NotesHarnessMore = agents.NotesHarnessLogged(jd.NotesDir, rd.r.Logger)
 		jd.NotesMaxLine = rd.r.Config.Notes.MaxLine
+		jd.NotesParts = rd.notesParts
 	}
 	if p := in.Previous; p != nil {
 		jd.PreviousReviewID, jd.PreviousEvent = p.ID, p.Event
