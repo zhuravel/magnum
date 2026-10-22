@@ -117,6 +117,18 @@ func (s *Store) LiveSessions(ctx context.Context) ([]Session, error) {
 	return collect(rows, scanSession)
 }
 
+// SessionIDHeld reports whether a session other than except, in any state,
+// records sessionID as its session_id: the observer never gives a Codex
+// session an id from a rollout that another session holds.
+func (s *Store) SessionIDHeld(ctx context.Context, sessionID string, except int64) (bool, error) {
+	var held bool
+	err := s.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM sessions WHERE session_id = ? AND id <> ?)", sessionID, except).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("session id held: %w", err)
+	}
+	return held, nil
+}
+
 // PRsWithPanes returns the ids of the PRs a session of which, in any
 // state, records one of panes (herdr pane ids), ascending and once each;
 // none for no panes. The engine's reconcile asks it for the panes herdr

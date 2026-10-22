@@ -2104,6 +2104,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   came after an earlier resume (the operator resumed while the paused round still ran); clearing the
   reports' statuses at the lift, which would tell the continued judge a report was there that it never
   read.
+- **A Codex session that herdr gives no id gets it from its rollout** (2026-10-22, spec 123, item 1). From
+  16:08 that day herdr's Codex SessionStart hook stopped reaching most new sessions (registry sessions
+  1639, 1649, 1650, 1653), and after the operator's hooks order was restored fresh codex-judge sessions
+  still came up without one (1665, 1670, 1672, while 1656 and 1664 got theirs): herdr's hook script reports
+  over herdr's socket with a 0.5 s timeout and swallows a failure, and the machine's load was about 70.
+  Without an id a judge is never resumed and `TurnError` has no rollout to read ("no Codex rollout to read
+  the turn's error from"). Codex writes each session's rollout as
+  `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<start>-<id>.jsonl` (the day and the start in local time),
+  created at the session's first prompt, and its first line, the `session_meta`, carries `payload.id`,
+  `payload.timestamp` (the session's start; the line's own timestamp is when it was written, half an hour
+  later for a session prompted late), `payload.cwd`, `payload.source` and, for a helper agent,
+  `payload.parent_thread_id`. Now the observer (`recoverSessionID`, internal/agents/rollout_id.go) gives a
+  live codex session that neither herdr nor its row has an id for, from a minute after its start
+  (`RecoverIDAfter`) and at each observation after until it has one, the id of the rollout of its Codex
+  home (`TurnError`'s: the pane env's CODEX_HOME, `Deps.CodexHome`, `$CODEX_HOME`, `~/.codex`) that
+  started within two minutes of the session's start (`RecoverIDWindow`), whose source is `cli` (the TUI an
+  agent pane runs), with no parent_thread_id, whose cwd is the session's (both cleaned, symlinks resolved)
+  and whose id no other session of the registry holds (`store.SessionIDHeld`). Exactly one such rollout is
+  recorded in `sessions.session_id` as herdr's report is, compare-and-set on a row that still has none,
+  with one info event `agent.session_id` under the PR ("<role>: session id <id> from its Codex rollout;
+  herdr's session hook gave none", data `source` `rollout`); none, or two, records nothing and is logged
+  once per session. herdr's id, when it comes and differs, wins, which is logged (`herdrSessionID`). The
+  read is bounded: the day directories of the window only, the files whose names start within it only,
+  the first line (at most 1 MiB) of at most 300 of them (`RecoverIDHeads`), newest first by name. The
+  source condition was added in the build, approved in the run: of the 263 top-level rollouts of
+  2026-10-20 to 10-22 on the operator's machine, 96 of the 115 TUI sessions had an exec rollout (codex-review's `codex
+  exec`) in the same checkout within two minutes of their start, so the rule without it would have refused
+  nearly every judge as ambiguous; TUI against TUI in one checkout within two minutes happened for 2 of the
+  115, which the refusal covers. A recovered id spares the session the `agents.session_id_missing` warning,
+  as herdr's would. Tests: TestACodexSessionHerdrGaveNoIDGetsItFromTheRolloutOfItsCheckoutAndStart,
+  TestTwoCodexSessionsStartedInOneCheckoutWithinTheWindowRecordNoID and
+  TestTheRolloutRecoveryReadsABoundedNumberOfFirstLines. Rejected: replacing herdr's hook altogether
+  (herdr's own agent state needs the hook, and it gives the id at once when it works); taking the nearest
+  of two candidates, which would hand one judge the other's conversation; the line's own timestamp, which
+  is when Codex created the file, not when the session started; doing the same for Claude now (its transcripts
+  and its idle detection differ).
 
 ## Screens and commands
 

@@ -230,6 +230,18 @@ const (
     Readiness check statuses (ReadinessCheck.Status).
 
 const (
+	// RecoverIDAfter is how long after its start a live Codex session that
+	// herdr gave no id gets it from its rollout; it is tried again at each
+	// observation until it has one.
+	RecoverIDAfter = time.Minute
+	// RecoverIDWindow is how far a rollout's start (its session_meta's
+	// timestamp) may be from the session's start to be its rollout.
+	RecoverIDWindow = 2 * time.Minute
+	// RecoverIDHeads bounds the rollouts one recovery reads the first line
+	// of, newest first by name.
+	RecoverIDHeads = 300
+)
+const (
 	PhaseOwnPass    = "own_pass"   // the judge's own pass, while the reviewers work
 	PhaseCandidates = "candidates" // the judge judges the reviewers' reports against its own pass
 )
@@ -311,6 +323,11 @@ const EventParkForced = "pr.park_forced"
     its kind's exit keys; it names the role, the pane and the cause, never the
     pane's text.
 
+const EventSessionID = "agent.session_id"
+    EventSessionID is recorded (info, the PR's subject) when the observer
+    records a Codex session's id from its rollout because herdr's session hook
+    gave none (data: role, session, session_id, source).
+
 const EventSessionIDMissing = "agents.session_id_missing"
     EventSessionIDMissing is recorded (warn, subject tool:<kind>) once per kind
     and Manager when a session's first turn ends without a session id from herdr
@@ -373,6 +390,10 @@ const SessionIDBlind = "no session id: judges are never resumed, and a helper's 
     SessionIDBlind says what goes blind without a Codex session id: resumable
     never resumes the judge and TurnError cannot read the rollout, which the
     pipeline's check for a helper's refusal reads.
+
+const SessionIDFromRollout = "rollout"
+    SessionIDFromRollout is EventSessionID's source of an id read from the
+    session's Codex rollout.
 
 const ShellStatusUnknown = -1
     ShellStatusUnknown is RunShell's status when the done marker carried no exit
@@ -1489,14 +1510,18 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         any other kind, and a claude agent without a transcript to read,
         carried on by itself. A claude agent idle with a submitted/working run
         whose transcript shows background work started during the run still
-        running, or a task notification not answered yet, counts as working for
-        completion (idle_ticks 0, Background set; see backgroundWait), until the
-        pipeline tells it (Tell) to stop waiting for that work. An agent of a
-        kind named by a rename command (codex), working on a submitted/working
-        run, whose terminal title lacks Title gets that command (`/rename
-        <Title>`) typed into its pane (at most once per call, TitleAttempts per
-        session row; see nameAgent). An agent that ends a turn magnum prompted
-        (working, then idle) while herdr still reports no session id records
+        running, or a task notification not answered yet, counts as working
+        for completion (idle_ticks 0, Background set; see backgroundWait),
+        until the pipeline tells it (Tell) to stop waiting for that work.
+        An agent of a kind named by a rename command (codex), working on a
+        submitted/working run, whose terminal title lacks Title gets that
+        command (`/rename <Title>`) typed into its pane (at most once per call,
+        TitleAttempts per session row; see nameAgent). A codex agent that
+        herdr still reports without a session id, and whose row has none,
+        RecoverIDAfter after its start, gets the id of its Codex rollout,
+        when exactly one matches (see recoverSessionID); herdr's id, when
+        it comes, wins. An agent that ends a turn magnum prompted (working,
+        then idle) while neither herdr nor its rollout gave a session id records
         EventSessionIDMissing, once per kind and Manager (see sessionIDMissing).
       - live agent session without its agent, or any session whose pane is gone
         -> session lost, ObsLost. A starting session (agent not started yet)
@@ -20108,6 +20133,11 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error)
 
 func (s *Store) SessionByID(ctx context.Context, id int64) (Session, error)
     SessionByID looks up a session by id.
+
+func (s *Store) SessionIDHeld(ctx context.Context, sessionID string, except int64) (bool, error)
+    SessionIDHeld reports whether a session other than except, in any state,
+    records sessionID as its session_id: the observer never gives a Codex
+    session an id from a rollout that another session holds.
 
 func (s *Store) SessionsByPR(ctx context.Context, prID int64) ([]Session, error)
     SessionsByPR returns every session of a PR, oldest first.

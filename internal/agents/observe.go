@@ -133,9 +133,14 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     submitted/working run, whose terminal title lacks Title gets that
 //     command (`/rename <Title>`) typed into its pane (at most once per call,
 //     TitleAttempts per session row; see nameAgent).
+//     A codex agent that herdr still reports without a session id, and
+//     whose row has none, RecoverIDAfter after its start, gets the id of
+//     its Codex rollout, when exactly one matches (see recoverSessionID);
+//     herdr's id, when it comes, wins.
 //     An agent that ends a turn magnum prompted (working, then idle) while
-//     herdr still reports no session id records EventSessionIDMissing, once
-//     per kind and Manager (see sessionIDMissing).
+//     neither herdr nor its rollout gave a session id records
+//     EventSessionIDMissing, once per kind and Manager (see
+//     sessionIDMissing).
 //   - live agent session without its agent, or any session whose pane is gone
 //     -> session lost, ObsLost. A starting session (agent not started yet)
 //     with its pane still present is left alone, and so is a session that
@@ -214,7 +219,13 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	busy := a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked
 	sid := store.Deref(s.SessionID) // the agent's own session id (a claude agent's transcript)
 	if a.AgentSession != nil && a.AgentSession.Value != "" {
+		if sid != a.AgentSession.Value {
+			m.herdrSessionID(s, a.AgentSession.Value)
+		}
 		sid = a.AgentSession.Value
+	}
+	if sid == "" {
+		sid = m.recoverSessionID(ctx, s, now) // herdr's session hook gave none: the Codex rollout's
 	}
 	held := false // idle, but background work keeps the turn going
 	if idle && o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {

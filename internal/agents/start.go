@@ -593,6 +593,7 @@ func (m *Manager) setSessionID(ctx context.Context, s store.Session, id string) 
 	if id == "" || id == store.Deref(s.SessionID) {
 		return nil
 	}
+	m.herdrSessionID(s, id)
 	if err := m.d.Store.UpdateSession(ctx, s.ID, func(u *store.SessionUpdate) { u.Set("session_id", id) }); err != nil {
 		return fmt.Errorf("agents: record session id %d: %w", s.ID, err)
 	}

@@ -1846,7 +1846,12 @@ SessionStart hook in `$CODEX_HOME/hooks.json` (`herdr-agent-state.sh`). Codex ke
 every Codex session without an id: no judge is resumed, and a helper's Codex refusal is not seen. `magnum
 doctor` warns about it, the daemon records an `agents.session_id_missing` warning once per kind and start when
 a session's first turn ends without an id, and Magnum never turns the hook back on itself (set `enabled =
-true` in that entry). Prompts are files under `[pipeline]
+true` in that entry). When herdr gives a Codex session no id (its hook did not reach the session, as on a
+loaded machine), Magnum takes it from the session's rollout from a minute after its start: the one rollout
+under the session's Codex home that Codex's TUI (`source` `cli` in its first line, never `codex exec`'s or
+a helper agent's) started in the session's checkout within two minutes of the session's start, whose id no
+other session holds, recorded with an `agent.session_id` event. None, or two (two Codex sessions started
+in one checkout at once), records nothing, and herdr's id, when it comes, wins. Prompts are files under `[pipeline]
 prompts_dir` (default `prompts/`, falling back to copies built into the binary), so a prompt change is
 a file edit, not a rebuild. The judge prompts take the text they share from one file,
 `prompts/judge-shared.md`, so a shared rule is one edit. The daemon loads the prompts and copies the judge skill and the fix skill when it starts,

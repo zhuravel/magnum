@@ -221,6 +221,11 @@ type Manager struct {
 	// once per session).
 	sidMissing    map[string]bool
 	rolloutWarned map[int64]bool
+	// recovered is the Codex session id each session got from its rollout
+	// (recoverSessionID), until herdr reports one, and recoverLogged the
+	// sessions whose recovery found no single rollout (logged once).
+	recovered     map[int64]string
+	recoverLogged map[int64]bool
 	// bg is what each claude session's transcript says about the
 	// background work of its run in flight (see backgroundWait).
 	bg map[int64]*bgWatch
@@ -241,6 +246,7 @@ func New(d Deps) *Manager {
 	return &Manager{d: d, sleep: sleep, wrapper: map[string]bool{}, health: map[string][]healthRule{},
 		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{},
 		switching: map[int64]bool{}, compacting: map[int64]bool{}, sidMissing: map[string]bool{}, rolloutWarned: map[int64]bool{},
+		recovered: map[int64]string{}, recoverLogged: map[int64]bool{},
 		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}}
 }
 
