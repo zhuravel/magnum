@@ -11426,6 +11426,58 @@ skill versions); people add theirs to the sections before it, at the end of the 
     second renderer). Sentence fragments as blocks (the prompts then read as template calls, to the
     operator and to the editor alike).
 
+- **An overload that other PRs' rounds share charges no attempt** (2026-10-22, spec 02 of the
+  2026-10-22 improvement run, approved by the operator the same day). On 2026-10-20 from 13:01 to 13:27Z a
+  provider outage ended 21 rounds as overloaded ("stream disconnected before completion"), 12 of them
+  continued judge turns, and six PRs went to needs attention between 13:14 and 13:28: an overload charged
+  the PR an attempt, retried after 1 and then 2 minutes, and the third parked it, so an outage longer
+  than about 3 minutes parked every PR it touched. At 13:55 the operator forced five of them by hand.
+  - The rule: a round that ends overloaded charges nothing when the overload is shared, that is when,
+    within the last hour (`overloadShareWindow`, twice `retryMax`), another PR's round
+    on the same agent kind ended overloaded (the engine's own `engine.round_result`, which now names the
+    kind of the pause or overload a round hit, data `tool`), or another PR's agent of that kind ended with
+    the same pane line (`launchLines`, the lines `agents.shared_failure` groups, with the PRs counted once
+    each through the same grouping, `onePerPR`). The kind of a pane line is its role's. The PR goes back
+    to paused with its attempts untouched and continues after `backoff(n)`, n its shared overloads in a
+    row (`pr.<id>.overload_shared`, deleted by any other end of a round of the PR, a lone overload
+    included), so the wait doubles from 1 minute up to `retryMax`, 30 minutes, the engine's retry cap.
+    Its `last_error` leads with the shared part, which a one-line summary keeps ("overloaded: codex is
+    overloaded across 3 PRs (no attempt charged; retry 2 in 2m): judge pane: …"), and one
+    `round.overload_shared` info event under the PR names the kind, how many PRs share the overload and
+    the wait, never the pane line. A lone overload keeps its charge, its 1- and 2-minute retries and its
+    park on the third. The first PR an outage reaches is charged once, since nobody shares its overload
+    yet. No kind is paused, and a PR an overload parked is never retried: only the round's own PR moves,
+    from the round's states, which keeps the operator's rule of 2026-10-17 that a parked PR waits for his
+    `magnum review`. A usage limit and a lost login are charged and paused as before.
+  - Why the window is twice the cap: at the 30-minute cap PRs in lockstep (their rounds overloading in the
+    same tick with the same duration, so retrying in the same tick again) settle a cap and a round's
+    length after their last overloads. The first of them to settle, before the other's round has ended,
+    would find the other's last overload just outside a window of 30 minutes, the shared failures' own
+    (`sharedFailureWindow`), and be charged, and over a long outage the third such charge would park it.
+    Twice the cap keeps the other's last overload inside whatever the rounds' length up to another 30
+    minutes. `noteSharedFailures` keeps its 30 minutes: a launch line two PRs share is news only when
+    close in time.
+  - Tests, failing first: in engine TestAnOverloadSharedAcrossPRsChargesNoAttempt (the 10-20 shape: three
+    codex PRs overloading 20 seconds apart, eight times each: only the first overload charged, the others
+    waiting 1, 2, 4, 8 and 16 minutes, then 30, none parked, one event per uncharged overload naming 2
+    and then 3 PRs and never the line, each posting once the provider answers and forgetting its count),
+    TestALoneOverloadStillParksOnTheThirdAttempt (which also drops a count of shared overloads),
+    TestAnOverloadIsSharedOnlyWithinTheWindowAndOnItsKind (a codex overload 59 minutes before shares, 61
+    minutes before does not, nor a claude overload; a codex launch on the same pane line shares, a claude
+    one on it or a codex one on another line does not), TestPRsOverloadingInLockstepAtTheCapStayUncharged
+    (two PRs whose 2-minute rounds overload in the same tick and settle one after the other, eight cycles:
+    both uncharged and retrying together, at 30 minutes from the sixth) and
+    TestASharedOverloadNeverRetriesAParkedPR, with the key pinned in
+    TestEveryKVKeyTheEngineWritesKeepsItsString. Mutations checked, each failing a test: the PR itself
+    counted as sharing, any kind, any pane line, twice the window, a window of the cap (the lockstep pair's
+    first settler charged at the seventh cycle), no doubling, no cap, the count never deleted, a lone
+    overload keeping it, and the round's result without its kind.
+  - Rejected: pausing the kind on a shared overload (spec 75 rejected pausing on a shared failure: the
+    operator decides, and a pause hides a short outage behind a wait nobody asked for); retrying the PRs
+    an overload already parked (the operator's rule: a parked PR waits for `magnum review`); a longer fixed
+    backoff for every overload (a lone overload is the PR's own, and a fixed wait long enough for an
+    outage would delay every single blip); the shared failures' 30-minute window (the lockstep gap above).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

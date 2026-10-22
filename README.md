@@ -750,6 +750,19 @@ parked by failed rounds before this build"). A PR that fails again on the same b
 stays parked (and its attention toasts again), as does every other cause: a fix loop that needs your call,
 a blocked judge, an identity failure, an API that stayed overloaded, a Codex flag.
 
+An agent API that answers overloaded (a 5xx, a 429, "stream disconnected before completion" in the judge's
+pane) pauses the PR's round, never the kind: the round continues after 1 minute, then after 2, and the
+third overload on the head parks the PR in needs attention. An overload other PRs share is the provider's,
+not the PR's, and charges no attempt: when, within the last hour, another PR's round on the same agent
+kind ended overloaded, or another PR's agent of that kind ended with the same pane line (the lines
+`agents.shared_failure` groups), the round continues after a wait that doubles from 1 minute up to 30
+minutes for as long as its overloads come shared, and the PR does not park for them. The hour is twice
+that longest wait, so PRs that retry together every 30 minutes still find each other. Its error says so
+(`overloaded: codex is overloaded across 3 PRs (no attempt charged; retry 2 in 2m): judge pane: …`), and
+each such retry is one `round.overload_shared` info event under the PR naming how many PRs share it. An
+overload no other PR shares is charged as before, and a PR an overload already parked stays parked until
+`magnum review`.
+
 A fetch, clone, checkout or dependency step that fails for a reason outside the PR (an SSH key the
 agent lost, DNS, a network timeout or refusal, TLS, or the same dependency error on two PRs within ten
 minutes) pauses dispatch for everything once, with one toast, and is never charged to the PR. Magnum

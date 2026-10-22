@@ -172,9 +172,12 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	if msg == "" && runErr != nil {
 		msg = runErr.Error()
 	}
-	e.event(ctx, "info", subject, "engine.round_result", fmt.Sprintf("round %d: %s %s", res.Round, outcome, res.Event),
-		map[string]any{"outcome": outcome, "event": res.Event, "review_id": res.ReviewID, "target_sha": in.TargetSHA,
-			"restarts": res.Restarts, "error": msg})
+	result := map[string]any{"outcome": outcome, "event": res.Event, "review_id": res.ReviewID, "target_sha": in.TargetSHA,
+		"restarts": res.Restarts, "error": msg}
+	if res.Pause != nil {
+		result["tool"] = res.Pause.Tool // whose overload other PRs' overloads share (overloadedRounds)
+	}
+	e.event(ctx, "info", subject, eventRoundResult, fmt.Sprintf("round %d: %s %s", res.Round, outcome, res.Event), result)
 	if !cancelled { // a judge a shutdown left working records its notes with the round that continues it
 		e.recordRoundNotes(ctx, job, in, res) // notes_record.go
 	}
@@ -223,6 +226,9 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		e.log.Info("round stopped by shutdown; recovery re-evaluates it on the next start", "subject", subject)
 		return
 	}
+	if outcome != pipeline.OutcomeOverloaded {
+		e.delKV(ctx, kvPROverloadShared(pr.ID)) // only shared overloads in a row lengthen the wait (sharedOverload)
+	}
 
 	from := []string{store.PRReviewing, store.PRClaiming}
 	now := e.now()
@@ -243,6 +249,10 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		}
 		e.toPaused(ctx, pr, from, why, retry, nil)
 	case pipeline.OutcomeOverloaded:
+		if e.sharedOverload(ctx, job, pr, from, res, msg) { // shared_failure.go: other PRs' rounds overload too, no attempt charged
+			break
+		}
+		e.delKV(ctx, kvPROverloadShared(pr.ID)) // a lone overload ends the shared ones in a row
 		attempts := pr.Attempts + 1
 		setAttempts := func(u *store.PRUpdate) { u.Set("attempts", attempts) }
 		if attempts >= maxAttempts {
