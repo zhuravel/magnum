@@ -1,7 +1,7 @@
 package engine
 
-// Requested reviews run without delay: a review request for the poll login
-// or a posting identity (or for a team a watch lists in request_teams), and
+// Requested reviews run without delay: a review request for the operator's
+// own login (config.OperatorIdentity) or a posting identity (or for a team a watch lists in request_teams), and
 // a draft marked ready for review, start a round after [daemon]
 // request_debounce instead of the quiet period, and skip the re-review
 // interval, the small-delta threshold and the daily cap. A review request
@@ -77,17 +77,24 @@ func (e *Engine) noteRequestsSince(ctx context.Context) {
 }
 
 // requestLogins are the logins a review request for magnum names: the
-// watch's poll login, the PR's identity's and every watch's posting
-// identity's.
+// operator's own (config.OperatorIdentity: the watch's poll login when a gh
+// identity polls), the watch's posting identity's, the PR's identity's and
+// every watch's posting identity's.
 func (e *Engine) requestLogins(w config.Watch, prIdentity string) []string {
-	names := []string{w.PollIdentity, w.Identity, prIdentity}
+	var out []string
+	add := func(login string) {
+		if login != "" && !slices.Contains(out, login) {
+			out = append(out, login)
+		}
+	}
+	add(e.cfg.OperatorLogin(w))
+	names := []string{w.Identity, prIdentity}
 	for _, x := range e.cfg.Watches {
 		names = append(names, x.Identity)
 	}
-	var out []string
 	for _, n := range names {
-		if id := e.cfg.IdentityByName(n); id != nil && id.Login != "" && !slices.Contains(out, id.Login) {
-			out = append(out, id.Login)
+		if id := e.cfg.IdentityByName(n); id != nil {
+			add(id.Login)
 		}
 	}
 	return out

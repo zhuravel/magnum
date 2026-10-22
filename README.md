@@ -264,9 +264,10 @@ makes a live screen append one line per message to the file, with how long its U
 diagnose a frozen or spinning screen (off unless set). Every role's pane gets the round's context
 in its environment, next to the identity's gh selection (an App's `GH_CONFIG_DIR`, with `GH_TOKEN` and
 `GITHUB_TOKEN` blanked) and the slot's env: `MAGNUM_PR_URL`, `MAGNUM_IDENTITY` (`gh` or `app`),
-`MAGNUM_REVIEWER_LOGIN` (the login that posts), `MAGNUM_SELF_LOGIN` (the watch's poll login),
-`MAGNUM_NO_FINDINGS_EVENT` and `MAGNUM_BLOCKING_EVENT` (the repository's verdict events) and
-`MAGNUM_REPORT_DIR` (the round's report directory).
+`MAGNUM_REVIEWER_LOGIN` (the login that posts), `MAGNUM_SELF_LOGIN` (your own login: the watch's
+poll login when a `gh` identity polls, see `poll_identity`), `MAGNUM_NO_FINDINGS_EVENT` and
+`MAGNUM_BLOCKING_EVENT` (the repository's verdict events) and `MAGNUM_REPORT_DIR` (the round's report
+directory).
 
 `[daemon] restart_on_new_build` (default `false`): when `true`, every reconcile looks at the binary
 launchd starts; once a new one passes its check (`<binary> version` and `<binary> config`, as
@@ -684,9 +685,10 @@ reading the base branch's commits as the PR's.
 
 ### Review requests, caps and pauses
 
-A review request runs without delay: when someone requests a review from the poll login, from a posting
-identity's login (an App's `<slug>[bot]` too) or from a team a `[[watch]]` lists in `request_teams`, or
-marks a draft ready for review, the round starts `[daemon] request_debounce` (default `"1m"`) after the
+A review request runs without delay: when someone requests a review from your login (the watch's poll
+login when a `gh` identity polls, else its `auto_approve_as` or the first `gh` identity: see
+`poll_identity`), from a posting identity's login (an App's `<slug>[bot]` too) or from a team a `[[watch]]`
+lists in `request_teams`, or marks a draft ready for review, the round starts `[daemon] request_debounce` (default `"1m"`) after the
 request and the last push. It skips the quiet periods, the re-review intervals, the delta threshold and
 the daily cap. Requests are edge-triggered by their time on the PR's timeline: one counts once, and only
 when it is newer than the PR's last round start; a review of the head posted after it answers it too.
@@ -1167,8 +1169,9 @@ watch runs a role aliased `simplify`), that new pushes are re-reviewed automatic
 `[daemon] quiet_hours` is set, during it only small ones by a short check, the window named with the
 daemon's offset from UTC, "03:00-12:00 UTC+3"; drafts only on request when the watch has
 `include_drafts = false`), that a thread reply gets an answer without a push,
-and whose review request starts a round (the watch's poll login when that is a `gh` identity, else the
-posting login); `config.defaults.toml` shows it word for word. It is a Go
+and whose review request starts a round (your login, as for review requests: the watch's poll login when
+that is a `gh` identity, else its `auto_approve_as` or the first `gh` identity; the posting login when no `gh`
+identity is declared); `config.defaults.toml` shows it word for word. It is a Go
 `text/template` of at most 2,000 characters, line breaks allowed, with `.SHA` and `.Short` (10 characters)
 of the reviewed commit, `.Repo`, `.Number`, `.Login` (the posting login), `.Simplify`, `.Clean` (no
 findings and no simplifications), `.Event` (`APPROVE`, `COMMENT` or `REQUEST_CHANGES`), `.PostMerge`,
@@ -1185,7 +1188,7 @@ as it is.
 owner = "talkable"
 include = ["talkable"]             # repository globs; ["*"] for the whole organization
 identity = "reviewer-app"          # who posts
-poll_identity = "me"               # who polls
+poll_identity = "me"               # who polls: a gh identity (your account) or an App (below)
 include_drafts = true              # false: a draft waits until ready for review, or a review request for you (one round per request)
 skip_bot_authors = true
 allow_bot_authors = ["helper[bot]"]
@@ -1207,6 +1210,16 @@ setup = ["bin/worktree-setup"]     # runs once per slot with WT_BRANCH=review<n>
 teardown = ["bin/worktree-archive"]
 copy_files = ["mise.local.toml", "config/initializers/local.rb"]
 ```
+
+`poll_identity` is who polls the watch's repositories and reads their PRs: a `gh` identity (your account,
+as in the config `magnum init` writes) or an App, whose installation has a GitHub budget of its own that
+other tools on your login cannot drain; unset, it is the watch's `identity`. Magnum still needs your own
+login, whoever polls: a review request for it starts a round, a PR it authored is self-authored (the judge
+posts COMMENT both ways), the footer names it as the login to request, and panes get it as
+`MAGNUM_SELF_LOGIN`. It is the poll identity's login when that is a `gh` identity, else the watch's
+`auto_approve_as`, else the first `gh` identity declared; a watch that polls as an App with no `gh`
+identity declared has none, and `magnum doctor` warns. The inventory's GitHub reads (the PR states of
+`magnum status --all`) go through that `gh` identity too.
 
 Repositories without a pool get a worktree per PR (`<clone>__worktrees/pr-<N>`). The clone is the one found
 under the watch's `clone_root` (default `~/Projects`) by its `origin`. If the clone has

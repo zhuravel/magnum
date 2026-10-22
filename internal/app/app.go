@@ -347,28 +347,37 @@ func (a *App) identityEnv(name string) (map[string]string, bool) {
 // githubFor implements App.GitHub.
 func (a *App) githubFor(name string) *github.Client { return a.gh[name] }
 
-// pollClient is the gh client of the first watch's poll identity (reads).
+// pollClient is the client the inventory reads with, a gh identity's
+// when one is declared: the first watch's operator identity
+// (config.OperatorIdentity: its poll identity when a gh identity polls),
+// else the first gh identity, else the first watch's poll identity (an App).
 func (a *App) pollClient() *github.Client {
+	for _, w := range a.Config.Watches {
+		if id := a.Config.OperatorIdentity(w); id != nil && a.gh[id.Name] != nil {
+			return a.gh[id.Name]
+		}
+	}
+	for _, id := range a.Config.Identities {
+		if id.Kind == "gh" && a.gh[id.Name] != nil {
+			return a.gh[id.Name]
+		}
+	}
 	for _, w := range a.Config.Watches {
 		if c := a.gh[w.PollIdentity]; c != nil {
 			return c
 		}
 	}
-	for _, id := range a.Config.Identities {
-		if id.Kind == "gh" {
-			return a.gh[id.Name]
-		}
-	}
 	return nil
 }
 
-// selfLogin is the user's own login for an identity's rounds: the poll
-// identity of a watch that posts as name, else the first gh identity.
+// selfLogin is the user's own login for an identity's rounds: the
+// operator's login (config.OperatorIdentity) of a watch that posts as name,
+// else the first gh identity's.
 func selfLogin(cfg *config.Config, name string) string {
 	for _, w := range cfg.Watches {
 		if w.Identity == name {
-			if id := cfg.IdentityByName(w.PollIdentity); id != nil {
-				return id.Login
+			if l := cfg.OperatorLogin(w); l != "" {
+				return l
 			}
 		}
 	}

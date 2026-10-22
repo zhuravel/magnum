@@ -116,8 +116,9 @@ func (rd *round) appendFooter(ctx context.Context, p *postedReview, res *judgeRe
 
 // footerData is what the footer template of review p renders with: the
 // PR's watch says whether drafts are skipped and whose review request
-// starts a round (its poll login when a gh identity's, else the posting
-// login), [daemon] quiet_hours when pushes wait.
+// starts a round (the operator's login, config.OperatorIdentity: its poll
+// login when a gh identity polls, else a gh identity's; the posting login
+// when no gh identity is declared), [daemon] quiet_hours when pushes wait.
 func (rd *round) footerData(p *postedReview, res *judgeResult) config.FooterData {
 	sha := cmp.Or(p.commit, rd.in.TargetSHA)
 	w := rd.r.Config.WatchFor(rd.owner + "/" + rd.name)
@@ -128,9 +129,7 @@ func (rd *round) footerData(p *postedReview, res *judgeResult) config.FooterData
 	}
 	request := rd.login
 	if w != nil {
-		if poll := rd.r.Config.IdentityByName(w.PollIdentity); poll != nil && poll.Kind == "gh" && poll.Login != "" {
-			request = poll.Login
-		}
+		request = cmp.Or(rd.r.Config.OperatorLogin(*w), request)
 	}
 	return config.FooterData{SHA: sha, Short: sha[:min(len(sha), 10)], Repo: rd.owner + "/" + rd.name, Number: rd.in.PR.Number,
 		Login: rd.login, Simplify: simplify, Clean: clean(res), Event: reviewEvent(event),

@@ -544,14 +544,16 @@ func reviewGitHubPR(d *actDeps, w *config.Watch, repo store.Repo, p github.PRDet
 	return in
 }
 
-// reviewRequested mirrors the poller: the watch's poll or posting login is
-// a requested (non-team) reviewer.
+// reviewRequested mirrors the poller: the operator's login
+// (config.OperatorIdentity: the watch's poll login when a gh identity
+// polls) or the watch's posting login is a requested (non-team) reviewer.
 func reviewRequested(d *actDeps, w config.Watch, reqs []github.Reviewer) bool {
 	var logins []string
-	for _, n := range []string{w.PollIdentity, w.Identity} {
-		if id := d.Cfg.IdentityByName(n); id != nil && id.Login != "" {
-			logins = append(logins, id.Login)
-		}
+	if l := d.Cfg.OperatorLogin(w); l != "" {
+		logins = append(logins, l)
+	}
+	if id := d.Cfg.IdentityByName(w.Identity); id != nil && id.Login != "" {
+		logins = append(logins, id.Login)
 	}
 	for _, r := range reqs {
 		if r.Type == "Team" {

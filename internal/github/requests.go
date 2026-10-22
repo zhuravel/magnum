@@ -3,7 +3,7 @@ package github
 import "time"
 
 // Review requests as the PR's timeline records them. The poller treats a
-// request for the poll login or a posting identity (or a team a watch
+// request for the operator's login or a posting identity (or a team a watch
 // names) as a request for a review round, edge-triggered by its time: the
 // pending reviewRequests list cannot tell a new request from an old one,
 // and GitHub drops it once the reviewer reviews.

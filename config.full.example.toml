@@ -49,8 +49,8 @@ no_findings_event = "APPROVE"
 #                                           # (APPROVE, COMMENT or REQUEST_CHANGES), .PostMerge, .DeltaCheck, .QuietHours
 #                                           # ([daemon] quiet_hours with the daemon's UTC offset; "" when unset),
 #                                           # .DraftsSkipped (the watch's include_drafts = false) and .RequestLogin (whose
-#                                           # review request starts a round: the watch's poll login when it is a gh
-#                                           # identity's, else the posting login)
+#                                           # review request starts a round: your login, the watch's poll login when a
+#                                           # gh identity polls, else auto_approve_as's or the first gh identity's)
 
 [[identity]]
 name = "talkable-app"

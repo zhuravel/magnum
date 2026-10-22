@@ -34,7 +34,7 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"$CODEX_HOME/hooks.json herdr learns session ids from: missing, or disabled in config.toml's [hooks.state]), the judge skill, the fix role, the skill editor "+
 			"(whether [learn] editor can run, and why it is off), the Whiteboard "+
 			"CLI and server (when a watch has whiteboards on), the role prompts and "+
-			"prompts_dir, gh and each identity, the Jira token file (when [jira] is on; MAGNUM_LIVE_JIRA=1 also asks Jira whether it "+
+			"prompts_dir, gh and each identity (and a watch that polls as an App with no gh identity to stand for your login), the Jira token file (when [jira] is on; MAGNUM_LIVE_JIRA=1 also asks Jira whether it "+
 			"accepts it), MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
 			"origins, a pool's reset_db when it names schema_paths, mise (when a pool, the LaunchAgent or your PATH uses it), the login shell "+
 			"(whether the `zsh -lc` shell the agents run their tools in sees mise's shims), free disk, the machine's memory "+

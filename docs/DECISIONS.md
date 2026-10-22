@@ -11335,6 +11335,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   under the state directory's `merge-check/` are left alone. A revival needs a measured false-positive rate
   first: the command replayed over merges whose outcome is known, clean pairs as well as clashes, not two hits
   on clashes already known.
+- **The operator's own login no longer comes from the poll identity** (2026-10-22, spec 08). On 2026-10-22
+  the operator approved moving the daemon's poll onto the GitHub App each watch posts as: the radar and the
+  CI-state reads are about 92% of magnum's spend on his gh login (24-hour averages, points an hour: radar
+  210, CI states 209, details 18, auto-approval 13), and other tools on that login drained it in the 10-19
+  to 10-21 incidents (about 4,400 points outside magnum in one window on 10-21), while an installation's
+  budget is its own. But five behaviours took his login from the watch's poll identity, and under an App
+  they would have broken in silence: `requestLogins` (61 review requests to his login in 14 days, none to
+  the App, would have started no round), `watchLogins`' requested-reviewer flag (dispatch priority and the
+  hold of `magnum pause` read it), the rounds' `SelfLogin` (his own PRs would no longer be self-authored, so
+  the App could approve or request changes on them where the repository's verdicts allow it), `magnum
+  review`'s import of the same flag, and the footer's request login (every footer would name the App's bot,
+  which GitHub does not offer as a reviewer). `config.Config.OperatorIdentity(w)` resolves it in one place:
+  the watch's poll identity when that is a gh identity, else its `auto_approve_as` (which validation already
+  requires to be a gh identity, so the order cannot name an App), else the first gh identity declared, else
+  none. The five call sites, `MAGNUM_SELF_LOGIN` and the inventory's client (which now prefers a gh identity
+  over an App poller's) take it; for a gh poller every result equals the old one, and the App's own login
+  still counts for requests as a posting identity's. `magnum doctor` warns ("identity of watch <owner>") of a
+  watch that polls as an App with no gh identity to resolve. Out of scope: the fix role's default identity
+  (still the poll identity, which validation and doctor already flag for an App), a per-identity poll pause
+  and floor, and the config switch itself, which waits on the author-association probe.
+  - Tests, each failing on the old code: in config
+    TestTheOperatorIdentityIsTheGhPollerElseAutoApproveAsElseTheFirstGhIdentity and
+    TestAGhPollersOperatorLoginIsItsPollLogin; in engine
+    TestUnderAnAppPollerARequestForTheOperatorsLoginStartsARound,
+    TestUnderAnAppPollerARequestForTheOperatorsLoginSetsTheRequestedFlag,
+    TestThePanesSelfLoginIsTheOperatorsLogin and TestAGhPollersRequestLoginsAreUnchanged; in app
+    TestUnderAnAppPollerTheRoundsSelfLoginIsTheOperators and
+    TestTheInventoryReadsAsTheOperatorsGhIdentity; in pipeline the App cases of
+    TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound; in cli
+    TestReviewImportUnderAnAppPollerSeesARequestForTheOperatorsLogin and
+    TestDoctorWarnsWhenAnAppPollerLeavesNoOperatorLogin.
+  - Rejected: a radar-only identity key (a `radar_identity` on the watch for the radar and the CI-state reads
+    alone). It moves the same 92% of the spend and changes no meaning, but the details reads and round gating
+    stay on the login, so other tools that drain it still hold rounds; it stays the fallback should the
+    author-association probe fail (an installation that sees private org members as CONTRIBUTOR would make
+    `skip_departed_authors` skip their PRs).
 
 ## Learned rules
 

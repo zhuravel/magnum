@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -62,6 +64,25 @@ func doctorIdentities(ctx context.Context, d doctorDeps) []doctorCheck {
 		default:
 			out = append(out, doctorWarned(name, head+": never checked", "magnum identities check --name "+id.Name))
 		}
+	}
+	return append(out, doctorOperatorLogins(d.Config)...)
+}
+
+// doctorOperatorLogins warns of each watch that polls as an App while no gh
+// identity stands for the operator (config.OperatorIdentity): magnum then
+// knows no login of his, so review requests to it start no round and his
+// own PRs do not count as his.
+func doctorOperatorLogins(cfg *config.Config) []doctorCheck {
+	var out []doctorCheck
+	for _, w := range cfg.Watches {
+		poll := cfg.IdentityByName(cmp.Or(w.PollIdentity, w.Identity))
+		if poll == nil || poll.Kind != "app" || cfg.OperatorIdentity(w) != nil {
+			continue
+		}
+		out = append(out, doctorWarned("identity of watch "+w.Owner,
+			fmt.Sprintf("watch %s polls as the App %s and no gh identity is declared: review requests to your login start no round, "+
+				"the footer names the App's login, and your own PRs do not count as yours (the App may approve them)", w.Owner, poll.Name),
+			`declare your own account as an [[identity]] with kind = "gh" (magnum takes it as yours: auto_approve_as when that names it, else the first gh identity)`))
 	}
 	return out
 }

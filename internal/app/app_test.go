@@ -65,8 +65,14 @@ identity = "zhuravel"
 
 func testApp(t *testing.T, opts Options) (*App, paths.Layout) {
 	t.Helper()
+	return testAppWith(t, testConfig, opts)
+}
+
+// testAppWith is testApp on the config text cfgText.
+func testAppWith(t *testing.T, cfgText string, opts Options) (*App, paths.Layout) {
+	t.Helper()
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(testConfig), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfgText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	layout := paths.Layout{Home: home}

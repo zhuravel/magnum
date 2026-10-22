@@ -55,8 +55,9 @@ type FooterData struct {
 	// so a push to a draft starts no round; a review request does.
 	DraftsSkipped bool
 	// RequestLogin is the login a review request names to start a round:
-	// the watch's poll login when it is a person's (a gh identity), else
-	// Login.
+	// your login (Config.OperatorIdentity: the watch's poll login when a gh
+	// identity polls, else a gh identity's), else, with no gh identity
+	// declared, Login.
 	RequestLogin string
 }
 

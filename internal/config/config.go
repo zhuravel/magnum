@@ -177,10 +177,11 @@ type Daemon struct {
 	// override it (Config.TrivialDeltas).
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
 	// RequestDebounce is how long a review round waits after a review
-	// request for the poll login or a posting identity (or a team in a
-	// watch's request_teams), or after a draft became ready for review,
-	// counted from the later of that and the last push. Such a requested
-	// round skips every other timing rule and the daily cap; 0 = no wait.
+	// request for your login (Config.OperatorIdentity) or a posting
+	// identity (or a team in a watch's request_teams), or after a draft
+	// became ready for review, counted from the later of that and the last
+	// push. Such a requested round skips every other timing rule and the
+	// daily cap; 0 = no wait.
 	RequestDebounce Duration `toml:"request_debounce"`
 	// ReplyDebounce is how long after the last reply on magnum's latest
 	// review (the PR author's review or comment, or a reply in one of
@@ -435,7 +436,7 @@ type Watch struct {
 	RelatedLookback *Duration `toml:"related_lookback"`
 	RelatedIgnore   []string  `toml:"related_ignore"`
 	// RequestTeams are team slugs whose review requests count like a
-	// request for the poll login (request_debounce); other teams' do not.
+	// request for your login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
 	// AutoApprove names the watch's repositories (names, any case, or "*"
 	// for every one it covers) on whose PRs magnum posts an approval as
@@ -532,9 +533,10 @@ func boolOr(p *bool, def bool) bool {
 }
 
 // DraftsIncluded is include_drafts (default true). False skips drafts until
-// they are ready for review, except that a review request for the poll
-// login, a posting identity or a team of request_teams makes a draft
-// eligible for the round the request starts (eligibility.PRFacts.Requested).
+// they are ready for review, except that a review request for your login
+// (Config.OperatorIdentity), a posting identity or a team of request_teams
+// makes a draft eligible for the round the request starts
+// (eligibility.PRFacts.Requested).
 func (w Watch) DraftsIncluded() bool   { return boolOr(w.IncludeDrafts, true) }
 func (w Watch) OwnIncluded() bool      { return boolOr(w.IncludeOwn, true) }
 func (w Watch) BotsSkipped() bool      { return boolOr(w.SkipBotAuthors, true) }

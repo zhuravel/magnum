@@ -228,8 +228,9 @@ type Runner struct {
 	Tickets Tickets
 
 	Identity identity.Source // who posts: login, kind, GH_CONFIG_DIR
-	// SelfLogin is the user's own login (the poll identity). A PR authored by
-	// it or by the reviewer login is self_authored (the judge posts COMMENT).
+	// SelfLogin is the user's own login (config.OperatorIdentity). A PR
+	// authored by it or by the reviewer login is self_authored (the judge
+	// posts COMMENT).
 	SelfLogin string
 
 	Config *config.Config

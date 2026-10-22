@@ -505,25 +505,24 @@ func (e *Engine) clonePath(ctx context.Context, w config.Watch, existing store.R
 	return &found, stale
 }
 
-// watchLogins are the logins a review request "for us" names: the poll
-// identity's and the posting identity's.
+// watchLogins are the logins a review request "for us" names: the
+// operator's own (config.OperatorIdentity: the poll login when a gh
+// identity polls) and the posting identity's.
 func (e *Engine) watchLogins(w config.Watch) []string {
 	var out []string
-	for _, n := range []string{w.PollIdentity, w.Identity} {
-		if id := e.cfg.IdentityByName(n); id != nil && id.Login != "" {
-			out = append(out, id.Login)
-		}
+	if l := e.cfg.OperatorLogin(w); l != "" {
+		out = append(out, l)
+	}
+	if id := e.cfg.IdentityByName(w.Identity); id != nil && id.Login != "" {
+		out = append(out, id.Login)
 	}
 	return out
 }
 
-// selfLogin is the user's own login for a watch (its poll identity).
-func (e *Engine) selfLogin(w config.Watch) string {
-	if id := e.cfg.IdentityByName(w.PollIdentity); id != nil {
-		return id.Login
-	}
-	return ""
-}
+// selfLogin is the user's own login for a watch (config.OperatorIdentity:
+// its poll login when a gh identity polls; "" when no gh identity is
+// declared).
+func (e *Engine) selfLogin(w config.Watch) string { return e.cfg.OperatorLogin(w) }
 
 func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now time.Time) {
 	if d.URL != "" {

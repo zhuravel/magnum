@@ -3800,6 +3800,19 @@ func (c *Config) NotesRole() Role
     in session mode with its model, effort, args, prompt and timeout, normalized
     like a configured role.
 
+func (c *Config) OperatorIdentity(w Watch) *Identity
+    OperatorIdentity is the gh identity of the operator's own account for
+    watch w: the login whose review requests start a round, whose PRs count as
+    self-authored and whom the review footer names. It is w's poll identity
+    when that is a gh identity (its identity when it has no poll_identity, as
+    Normalize sets it), else w's auto_approve_as when that names a gh identity,
+    else the first gh identity declared; nil when the config declares none.
+    An App that polls is never the operator: GitHub offers no bot as a reviewer,
+    and its login authors no one's PRs.
+
+func (c *Config) OperatorLogin(w Watch) string
+    OperatorLogin is OperatorIdentity's login, "" when none resolves.
+
 func (c *Config) PoolFor(fullName string) *Pool
     PoolFor returns the pool for owner/name, or nil (per-PR worktree repos).
 
@@ -4082,10 +4095,11 @@ type Daemon struct {
 	// override it (Config.TrivialDeltas).
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
 	// RequestDebounce is how long a review round waits after a review
-	// request for the poll login or a posting identity (or a team in a
-	// watch's request_teams), or after a draft became ready for review,
-	// counted from the later of that and the last push. Such a requested
-	// round skips every other timing rule and the daily cap; 0 = no wait.
+	// request for your login (Config.OperatorIdentity) or a posting
+	// identity (or a team in a watch's request_teams), or after a draft
+	// became ready for review, counted from the later of that and the last
+	// push. Such a requested round skips every other timing rule and the
+	// daily cap; 0 = no wait.
 	RequestDebounce Duration `toml:"request_debounce"`
 	// ReplyDebounce is how long after the last reply on magnum's latest
 	// review (the PR author's review or comment, or a reply in one of
@@ -4164,8 +4178,9 @@ type FooterData struct {
 	// so a push to a draft starts no round; a review request does.
 	DraftsSkipped bool
 	// RequestLogin is the login a review request names to start a round:
-	// the watch's poll login when it is a person's (a gh identity), else
-	// Login.
+	// your login (Config.OperatorIdentity: the watch's poll login when a gh
+	// identity polls, else a gh identity's), else, with no gh identity
+	// declared, Login.
 	RequestLogin string
 }
     FooterData is what a review_footer template renders with: the verified
@@ -5507,7 +5522,7 @@ type Watch struct {
 	RelatedLookback *Duration `toml:"related_lookback"`
 	RelatedIgnore   []string  `toml:"related_ignore"`
 	// RequestTeams are team slugs whose review requests count like a
-	// request for the poll login (request_debounce); other teams' do not.
+	// request for your login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
 	// AutoApprove names the watch's repositories (names, any case, or "*"
 	// for every one it covers) on whose PRs magnum posts an approval as
@@ -5555,10 +5570,11 @@ func (w Watch) DepartedAuthorsSkipped() bool
     DepartedAuthorsSkipped is SkipDepartedAuthors with its default (true).
 
 func (w Watch) DraftsIncluded() bool
-    DraftsIncluded is include_drafts (default true). False skips drafts until
-    they are ready for review, except that a review request for the poll login,
-    a posting identity or a team of request_teams makes a draft eligible for the
-    round the request starts (eligibility.PRFacts.Requested).
+    DraftsIncluded is include_drafts (default true). False skips drafts
+    until they are ready for review, except that a review request for
+    your login (Config.OperatorIdentity), a posting identity or a team of
+    request_teams makes a draft eligible for the round the request starts
+    (eligibility.PRFacts.Requested).
 
 func (w Watch) ManualRepo(name string) bool
     ManualRepo reports whether manual_repos names the repository name (without
@@ -14874,8 +14890,9 @@ type Runner struct {
 	Tickets Tickets
 
 	Identity identity.Source // who posts: login, kind, GH_CONFIG_DIR
-	// SelfLogin is the user's own login (the poll identity). A PR authored by
-	// it or by the reviewer login is self_authored (the judge posts COMMENT).
+	// SelfLogin is the user's own login (config.OperatorIdentity). A PR
+	// authored by it or by the reviewer login is self_authored (the judge
+	// posts COMMENT).
 	SelfLogin string
 
 	Config *config.Config

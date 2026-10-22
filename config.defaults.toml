@@ -736,8 +736,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # REQUEST_CHANGES), .PostMerge, .DeltaCheck, .QuietHours ([daemon] quiet_hours
 #                                         # with the daemon's UTC offset, "03:00-12:00 UTC+3"; "" when unset),
 #                                         # .DraftsSkipped (the watch's include_drafts = false) and .RequestLogin (whose
-#                                         # review request starts a round: the watch's poll login when it is a gh
-#                                         # identity's, else the posting login). magnum starts it with
+#                                         # review request starts a round: your login, as poll_identity says; the
+#                                         # posting login when no gh identity is declared). magnum starts it with
 #                                         # <!-- magnum:footer --> and, editing the review again, replaces what follows
 #                                         # that marker instead of adding a second footer. Dry runs get none.
 #
@@ -761,7 +761,10 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # include = ["your-app"]                  # repository globs; ["*"] for the whole owner
 # exclude = []
 # identity = "reviewer-app"               # who posts
-# poll_identity = "me"                    # who polls (a gh identity)
+# poll_identity = "me"                    # who polls: a gh identity (your account) or an App, whose installation
+#                                         # has a GitHub budget of its own; your login (review requests for you,
+#                                         # your own PRs, the footer's .RequestLogin) is the poll identity's when
+#                                         # it is a gh one, else auto_approve_as's, else the first gh identity's
 # clone_root = "~/Projects"
 # include_drafts = true                 # false: a draft waits until ready for review, or until a review request for you,
 #                                       # a posting identity or a request_teams team (one round per request)

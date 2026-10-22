@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -139,22 +140,29 @@ func TestFooterLeavesSimplificationsOutWhenTheWatchRunsNoSimplifyRole(t *testing
 // The footer says when the PR's watch re-reviews a push and whose review
 // request starts a round: during [daemon] quiet_hours (with the daemon's
 // UTC offset) only a small push, not on a draft a watch with include_drafts
-// = false skips, and a request for the poll login when that is a person's
-// (a gh identity), else for the posting login.
+// = false skips, and a request for the operator's login
+// (config.OperatorIdentity: the poll login when a gh identity polls, else
+// the gh identity declared, as under an App poll identity), else, with no
+// gh identity, for the posting login.
 func TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound(t *testing.T) {
 	no := false
 	for _, tc := range []struct {
-		name  string
-		quiet string
-		watch config.Watch
-		want  string
+		name    string
+		quiet   string
+		watch   config.Watch
+		appOnly bool // the config declares no gh identity
+		want    string
 	}{
 		{"quiet hours, drafts skipped, a gh poll login", "03:00-12:00",
-			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "zhuravel", IncludeDrafts: &no},
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "zhuravel", IncludeDrafts: &no}, false,
 			"New pushes are re-reviewed automatically (during 03:00-12:00 UTC only small ones, by a short check), drafts only on request. " +
 				"A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round."},
-		{"an App polls", "",
-			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"},
+		{"an App polls, a gh identity is declared", "",
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"}, false,
+			"New pushes are re-reviewed automatically. " +
+				"A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round."},
+		{"an App polls, no gh identity is declared", "",
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"}, true,
 			"New pushes are re-reviewed automatically. " +
 				"A thread reply gets an answer without a push, and a review request for `talkable[bot]` starts a round."},
 	} {
@@ -162,6 +170,9 @@ func TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound(t *testing.T
 			e := newEnv(t)
 			e.cfg.Daemon.QuietHours = tc.quiet
 			e.cfg.Watches = []config.Watch{tc.watch}
+			if tc.appOnly {
+				e.cfg.Identities = slices.DeleteFunc(e.cfg.Identities, func(id config.Identity) bool { return id.Kind == "gh" })
+			}
 			e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(670, "COMMENTED", "COMMENT").behavior(t)}
 			if res, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil || res.Outcome != OutcomePosted {
 				t.Fatalf("RunRound = %+v, %v", res, err)
