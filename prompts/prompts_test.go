@@ -20,3 +20,14 @@ func TestNames(t *testing.T) {
 		t.Fatal("README.md must not be embedded")
 	}
 }
+
+// The judge prompts' partials file is embedded with them, but it is no
+// prompt a role can name, so Names leaves it out.
+func TestThePartialsFileIsEmbeddedButIsNoPrompt(t *testing.T) {
+	if text, ok := Read(Shared); !ok || text == "" {
+		t.Fatalf("Read(%s) = %q, %v: the partials file must be embedded", Shared, text, ok)
+	}
+	if slices.Contains(Names(), Shared) {
+		t.Fatalf("Names() = %v lists the partials file", Names())
+	}
+}

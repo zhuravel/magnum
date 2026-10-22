@@ -11372,6 +11372,60 @@ skill versions); people add theirs to the sections before it, at the end of the 
     author-association probe fail (an installation that sees private org members as CONTRIBUTOR would make
     `skip_departed_authors` skip their PRs).
 
+- **The judge prompts share their common blocks through one partials file** (2026-10-22, spec 04, approved
+  by the operator the same day). No judge prompt used `{{define}}` or `{{template}}`. Of the 43 commits
+  that touched judge prompts, 27 touched three or more of them. Spec 116 edited five prompts and five
+  goldens to add the `ticket:` line. judge-rereview.md and judge-recovery.md shared 13 long lines word for
+  word (7,205 bytes), and judge-initial.md and judge-rereview.md shared 2,918 bytes. The prepass,
+  evidence-map and stacked-PR paragraphs stood in four prompts. So a rule edit touched three or four
+  files, and drift was one missed copy away. `prompts/judge-shared.md` now holds 31 `{{define}}` blocks:
+  the paragraphs and the runs of `<magnum>` lines that two or more judge prompts carried word for word.
+  The prompts include them with `{{template "<name>" .}}`. The five prompts went from 45,786 to 14,895
+  bytes, with 13,304 bytes of blocks beside them.
+  - Byte for byte: this is a pure refactor. A script moved each block from the old files, by line range or
+    exact text, and asserted its match count. No block was typed again. Every judge golden passes
+    unchanged, and none was regenerated. A throwaway check rendered the old and the new prompts with
+    150,000 random JudgeData values: each pair was identical, or both refused the data. If all the prompts
+    of a paragraph share its condition and leading blank line, its block holds them too. Otherwise the
+    block holds the paragraph alone, and each prompt keeps its condition. Whole sentences of 100 bytes or
+    more, shared inside lines that differ, are blocks too: the skill link, the blind rules, the earlier
+    reviews, the former logins and the threads file. Two composites, `review-rules` and `review-fields`,
+    hold the runs that initial, rereview and recovery share whole. They include the blocks that own pass
+    and continue also use alone. A prompt keeps the lines only it carries (its mode, phase and per-mode
+    fields), so they stay in view.
+  - Loading: config.ResolvePrompt gives every judge prompt the file's text in Prompt.Shared
+    (config.UsesShared: a `judge-*.md` other than the file itself). The file resolves as a prompt does:
+    prompts_dir's file, else the embedded copy, and in the daemon the snapshot's copy. ResolvePrompt
+    refuses the file's own name (ErrSharedPrompt), so no role's prompt can name it.
+    config.ParseTemplate parses the file first, as its own template, for agents.RenderPrompt and for the
+    config check. SnapshotPrompts loads it with any judge prompt. So the start check,
+    `daemon.prompts_changed`, the changed count of `magnum status` and the snapshot's Sum count it. The
+    eval inputs hash it once per role whose prompts include it, and the reviewers' inputs stay as they
+    were. prompts.Names leaves it out. A copy in prompts_dir replaces the embedded file as a whole. A
+    prompts_dir without one uses the embedded blocks.
+  - The editor glob: the name matches `prompts/judge-*.md`. That is the skill editor's allowed glob
+    (learn.EditAllowedGlobs) and the gate's judge-only test (learn.Mode). So the editor can change the
+    file, and the gate replays the judge alone for it, with no change to either.
+  - The judge's eval inputs change once with this commit, as for any judge prompt edit. The files' texts
+    changed, though no render did. So the next judge replay of a case does not reuse an older baseline.
+  - Tests: in prompts TestThePartialsFileIsEmbeddedButIsNoPrompt. In config
+    TestUsesSharedIsEveryJudgePromptButThePartialsFile,
+    TestAJudgePromptComesWithThePartialsFileOfPromptsDirElseTheEmbeddedOne,
+    TestTheSnapshotHoldsThePartialsFileAndSeesItChange, TestThePartialsFileIsNoPromptOfItsOwn and
+    TestTheConfigCheckParsesTheJudgePromptsWithThePartialsFile. In agents
+    TestAPromptsDirPartialsFileChangesEveryJudgePromptThatIncludesIt and
+    TestEveryBlockOfThePartialsFileIsSharedAndTheFileRendersNothingByItself (a block included fewer than
+    twice belongs back in its prompt). In engine TestNotePromptChangesSeesAnEditOfThePartialsFile and
+    TestCheckPromptsRendersTheJudgePromptsWithThePartialsFile. In evalrun
+    TestAnEditOfThePartialsFileAloneChangesTheInputs. In learn
+    TestTheEditorAndTheGateTreatThePartialsFileAsAJudgePrompt. Mutations checked, each failing a test: no
+    partials file in the snapshot, none in the inputs hash and none in the config check.
+  - Rejected: an include syntax expanded before parsing (text/template has one already). Parsing the file
+    with every prompt (the reviewers' prompts are not judge prompts). One `<magnum>` block for every mode
+    behind conditions (a logic change, not a move). Hashing the expanded text to keep the old inputs (a
+    second renderer). Sentence fragments as blocks (the prompts then read as template calls, to the
+    operator and to the editor alike).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

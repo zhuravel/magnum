@@ -1,12 +1,14 @@
 package learn
 
 import (
+	"path"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/prompts"
 )
 
 const gateHead = "0123456789abcdef0123456789abcdef01234567"
@@ -294,5 +296,27 @@ func TestModeIsJudgeOnlyForSkillAndJudgePromptEdits(t *testing.T) {
 		if got := Mode(c.files); got != c.want {
 			t.Errorf("Mode(%q) = %s, want %s", c.files, got, c.want)
 		}
+	}
+}
+
+// The judge prompts' partials file matches the editor's glob prompts/judge-*.md: the editor may
+// change it, a change to it is listed like any judge prompt's, and the gate replays the judge alone
+// for it, as its blocks reach only the judge prompts.
+func TestTheEditorAndTheGateTreatThePartialsFileAsAJudgePrompt(t *testing.T) {
+	file := path.Join("prompts", prompts.Shared)
+	if !AllowedEditFile(file) {
+		t.Fatalf("%s is not a file the editor may change", file)
+	}
+	if got := Mode([]string{DecisionsFile, file}); got != GateJudgeOnly {
+		t.Errorf("Mode of an edit of %s = %s, want %s", file, got, GateJudgeOnly)
+	}
+	if got := Mode([]string{file, "prompts/claude-review.md"}); got != GateFull {
+		t.Errorf("Mode of an edit of %s and a reviewer's prompt = %s, want %s", file, got, GateFull)
+	}
+	c, ch := goodEdit()
+	c.Changed = append(c.Changed, file)
+	ch.Files = append(ch.Files, FileChange{Name: file, Action: FileEdited, Reason: "the shared prepass paragraph"})
+	if problems := ValidateEdit(c, ch); len(problems) != 0 {
+		t.Errorf("an edit of %s listed as edited: %q", file, problems)
 	}
 }

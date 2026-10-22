@@ -1,50 +1,25 @@
-[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, by itself, unless this session already read that file, and follow it; load no other skill. The pause is over. Continue the run for {{.URL}} where you stopped. First list the reviews by `{{.ReviewerLogin}}` on this PR. If one already contains `magnum:run={{.RunID}}`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `{{.HeadSHA}}`.
-{{- if and .NotesPath .NotesMaxLine}}
-
-Keep each line of the `notes` file at most `notes_max_line` characters long: a longer line triggers a curation.
-{{- end}}
+{{template "skill" .}} The pause is over. Continue the run for {{.URL}} where you stopped. First list the reviews by `{{.ReviewerLogin}}` on this PR. If one already contains `magnum:run={{.RunID}}`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `{{.HeadSHA}}`.
+{{- template "notes-line-limit" .}}
 
 <magnum>
 mode: continue
-run_id: {{.RunID}}
-pr: {{.Owner}}/{{.Repo}}#{{.Number}}
-url: {{.URL}}
-owner: {{.Owner}}
-repo: {{.Repo}}
-number: {{.Number}}
-head_sha: {{.HeadSHA}}
-checkout: {{.Checkout}}
-db_lock: {{.DBLockCommand}}
-identity: {{.IdentityKind}}
-reviewer_login: {{.ReviewerLogin}}
-gh_config_dir: {{.GhConfigDir}}
-no_findings_event: {{.NoFindingsEvent}}
-blocking_event: {{.BlockingEvent}}
-self_authored: {{.SelfAuthored}}
+{{template "pr-fields" .}}
+{{template "login-fields" .}}
+{{template "event-fields" .}}
 {{- if .NotesPath}}
-notes: {{.NotesPath}}
-notes_dir: {{.NotesDir}}
-notes_harness:{{range $i, $f := .NotesHarness}}{{if $i}},{{end}} {{$f}}{{end}}{{if .NotesHarnessMore}} (+{{.NotesHarnessMore}} more){{end}}
-notes_lock: {{.NotesLockCommand}}
-notes_unlock: {{.NotesUnlockCommand}}
+{{template "notes-fields" .}}
 {{- if .NotesMaxLine}}
 notes_max_line: {{.NotesMaxLine}}
 {{- end}}
 {{- end}}
-{{- if .RelatedPRs}}
-related_prs: {{.RelatedPRs}}{{with .RelatedStack}} ({{.}}){{end}}
-{{- end}}
+{{- template "related-field" .}}
 {{- if .TicketFile}}
 ticket: {{.TicketFile}}
 {{- end}}
 {{- if .FailingChecks}}
 failing_checks: {{.FailingChecks}}
 {{- end}}
-result_file: {{.ResultFile}}
-{{- if .EvidenceFile}}
-evidence_file: {{.EvidenceFile}}
-{{- end}}
-post_review: {{.PostReviewCommand}}
+{{template "result-fields" .}}
 {{- if .PostRepliesCommand}}
 post_replies: {{.PostRepliesCommand}}
 {{- end}}

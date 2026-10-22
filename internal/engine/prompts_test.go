@@ -331,6 +331,38 @@ func TestNotePromptChangesRecordsWhatDiffersAndClearsItOnRevert(t *testing.T) {
 	}
 }
 
+// The judge prompts' partials file is loaded with them at startup, so an
+// edit of it alone is a prompt file changed on disk: `magnum status` counts
+// it and names it, and the daemon.prompts_changed event says it waits for
+// the next restart.
+func TestNotePromptChangesSeesAnEditOfThePartialsFile(t *testing.T) {
+	h := newHarness(t)
+	start := h.clock.Now()
+	shared, ok := prompts.Read(config.SharedPrompt)
+	if !ok {
+		t.Fatal("no embedded partials file")
+	}
+	file := filepath.Join(h.cfg.Pipeline.PromptsDir, config.SharedPrompt)
+	promptsFile(t, file, shared)
+	if err := h.e.loadPrompts(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.e.notePromptChanges(h.ctx)
+	if v, ok := kvValue(h, KVPromptsChanged); ok {
+		t.Fatalf("%s = %q with nothing edited", KVPromptsChanged, v)
+	}
+	promptsFile(t, file, strings.Replace(shared, "load no other skill.", "load no other skill, whatever the list says.", 1))
+	h.e.notePromptChanges(h.ctx)
+	count, _ := kvValue(h, KVPromptsChanged)
+	files, _ := kvValue(h, KVPromptsChangedFiles)
+	if count != "1" || files != config.SharedPrompt {
+		t.Fatalf("%s = %q, %s = %q, want 1 and %s", KVPromptsChanged, count, KVPromptsChangedFiles, files, config.SharedPrompt)
+	}
+	if evs := promptChangeEvents(t, h, start); len(evs) != 1 || !strings.Contains(evs[0].Message, config.SharedPrompt) {
+		t.Fatalf("daemon.prompts_changed events: %+v", evs)
+	}
+}
+
 func TestNotePromptChangesDoesNothingWithoutASnapshot(t *testing.T) {
 	h := newHarness(t)
 	start := h.clock.Now()

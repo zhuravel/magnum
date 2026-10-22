@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/prompts"
 )
 
 // TestCheckPromptsRendersEveryConfiguredPrompt: the shipped prompts render
@@ -150,6 +151,37 @@ func TestCheckPromptsCatchesFieldsThisBuildLacks(t *testing.T) {
 				t.Fatalf("error does not name the file: %v", err)
 			}
 		})
+	}
+}
+
+// The start check renders every judge prompt with the partials file it
+// includes blocks of: a block in prompts_dir's judge-shared.md that names a
+// field this build lacks fails the check of each judge prompt that includes
+// it, naming the partials file, and no reviewer's prompt.
+func TestCheckPromptsRendersTheJudgePromptsWithThePartialsFile(t *testing.T) {
+	h := newHarness(t)
+	shared, ok := prompts.Read(config.SharedPrompt)
+	if !ok {
+		t.Fatal("no embedded partials file")
+	}
+	dir := t.TempDir()
+	edited := strings.Replace(shared, "load no other skill.", "load no other skill {{.NewTemplateField}}.", 1)
+	if err := os.WriteFile(filepath.Join(dir, config.SharedPrompt), []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := *h.cfg
+	cfg.Pipeline.PromptsDir = dir
+	_, err := CheckPrompts(&cfg)
+	if err == nil {
+		t.Fatal("a partials file this build cannot render passed")
+	}
+	for _, want := range []string{config.SharedPrompt, "judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md", "judge-own-pass.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %s: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "claude-review.md") || strings.Contains(err.Error(), "judge-nudge.md") {
+		t.Errorf("a prompt that includes no block of it failed: %v", err)
 	}
 }
 

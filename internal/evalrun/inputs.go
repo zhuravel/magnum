@@ -1,6 +1,7 @@
 package evalrun
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,7 +18,8 @@ import (
 // Inputs is a hash (12 hex) of what a replay's review reads besides the PR
 // and the notes (eval.Run.Inputs): every role's config with the model it
 // resolves to and its kind's config, the prompt files the roles name as they
-// resolve now (the checkout's prompts_dir, else the embedded ones), each
+// resolve now (the checkout's prompts_dir, else the embedded ones), with the
+// judge prompts' partials file (config.SharedPrompt) their blocks come from, each
 // judge's skill file, the stakes lines of the [[watch]] and [[repo]] blocks
 // (what the judge and the reviewers size a harm against), and the
 // simplification caps the judge posts by: the pipeline table's
@@ -64,6 +66,7 @@ func inputsOf(cfg *config.Config, of func(config.Role) bool, judges bool) string
 		role, _ := json.Marshal(at)
 		kind, _ := json.Marshal(cfg.Kinds[r.Kind])
 		write("role", string(role), cfg.RoleModel(r), string(kind))
+		shared := ""
 		for _, k := range config.PromptKinds {
 			name := r.PromptFile(k)
 			if name == "" {
@@ -71,9 +74,14 @@ func inputsOf(cfg *config.Config, of func(config.Role) bool, judges bool) string
 			}
 			text := "(missing)"
 			if p, err := cfg.ResolvePrompt(name); err == nil {
-				text = p.Text
+				text, shared = p.Text, cmp.Or(shared, p.Shared)
 			}
 			write("prompt", k, name, text)
+		}
+		if shared != "" {
+			// The blocks the role's judge prompts include; a role without
+			// one (every reviewer) hashes as before the file existed.
+			write("prompt", "shared", config.SharedPrompt, shared)
 		}
 		if r.Judge {
 			write("skill", skillText(config.SkillPath(r.Skill, cfg.Layout)))

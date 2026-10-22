@@ -1817,7 +1817,8 @@ doctor` warns about it, the daemon records an `agents.session_id_missing` warnin
 a session's first turn ends without an id, and Magnum never turns the hook back on itself (set `enabled =
 true` in that entry). Prompts are files under `[pipeline]
 prompts_dir` (default `prompts/`, falling back to copies built into the binary), so a prompt change is
-a file edit, not a rebuild. The daemon loads the prompts and copies the judge skill and the fix skill when it starts,
+a file edit, not a rebuild. The judge prompts take the text they share from one file,
+`prompts/judge-shared.md`, so a shared rule is one edit. The daemon loads the prompts and copies the judge skill and the fix skill when it starts,
 right after checking that its build renders them, so an edit takes effect at the next
 `magnum daemon-restart`; `magnum status` counts the files changed on disk since. [prompts/README.md](prompts/README.md) lists every key, every template
 variable and examples (a droid simplifier, an omp reviewer, a watch with two roles).
@@ -3509,7 +3510,7 @@ reports its declined one, is no target: the candidate is not replayed on it, the
 takes its place, and the input is `dismissed` ("found at the baseline", "not reported at the baseline"), so
 the editor stops noting it; its case stays in the learned corpus, a check that no later candidate loses
 it. A proposal whose every target is so fails (nothing to improve). Only the judge replays when the change touches `SKILL.md` and
-`prompts/judge-*.md` alone (on the reviewers' reports of the newest full replay whose reviewers read the
+`prompts/judge-*.md` (`judge-shared.md` included) alone (on the reviewers' reports of the newest full replay whose reviewers read the
 same prompts), every role otherwise; then both judges read the same reports, so the baseline is that full
 replay when the judge it compares against made it, else that judge replayed alone on those reports. A
 case's baseline is the newest stored replay with the prompts and skill of

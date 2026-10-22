@@ -61,15 +61,16 @@ func judgeFixture() JudgeData {
 // tests), or prompts/<name>.next when that file exists: a prompt change that
 // needs template fields the running daemon's binary lacks waits there until
 // the restart onto the matching build swaps it in, so the goldens describe
-// it before and after the swap.
+// it before and after the swap. A judge prompt keeps the embedded partials
+// file either way.
 func prompt(t *testing.T, name string) config.Prompt {
 	t.Helper()
-	if b, err := os.ReadFile(filepath.Join("..", "..", "prompts", name+".next")); err == nil {
-		return config.Prompt{Name: name, Text: string(b)}
-	}
 	p, err := config.Defaults().ResolvePrompt(name)
 	if err != nil {
 		t.Fatalf("ResolvePrompt(%s): %v", name, err)
+	}
+	if b, err := os.ReadFile(filepath.Join("..", "..", "prompts", name+".next")); err == nil {
+		p.Embedded, p.Text = false, string(b)
 	}
 	return p
 }

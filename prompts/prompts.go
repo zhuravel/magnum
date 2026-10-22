@@ -12,7 +12,9 @@
 // the same name (see config.Config.ResolvePrompt). The daemon reads them
 // once, at startup (config.Config.SnapshotPrompts); the CLI whenever it
 // resolves one. README.md documents the template variables and the
-// role/kind configuration.
+// role/kind configuration. Shared, judge-shared.md, is no prompt of its own:
+// it holds the blocks the judge prompts share, and every judge prompt is
+// parsed with it (config.SharedPrompt).
 package prompts
 
 import (
@@ -21,10 +23,17 @@ import (
 	"sort"
 )
 
+// Shared is the judge prompts' partials file: the blocks two or more judge
+// prompts (judge-*.md) share word for word, one {{define}} each, which a
+// judge prompt includes with {{template}}. It is embedded with them but is
+// not a prompt: Names leaves it out, Read returns it.
+const Shared = "judge-shared.md"
+
 //go:embed judge-*.md claude-*.md codex-*.sh fix.md whiteboard.md model-fallback.md triage.md retro.md notes-curate.md skill-edit.md
 var embedded embed.FS
 
-// Names lists the embedded default prompts, sorted.
+// Names lists the embedded default prompts, sorted: every embedded file but
+// the partials file (Shared).
 func Names() []string {
 	ents, err := fs.ReadDir(embedded, ".")
 	if err != nil {
@@ -32,7 +41,9 @@ func Names() []string {
 	}
 	out := make([]string, 0, len(ents))
 	for _, e := range ents {
-		out = append(out, e.Name())
+		if e.Name() != Shared {
+			out = append(out, e.Name())
+		}
 	}
 	sort.Strings(out)
 	return out

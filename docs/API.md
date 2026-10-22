@@ -571,15 +571,17 @@ func RenderPrompt(p config.Prompt, data any) (string, error)
     (config.Config.ResolvePrompt or RolePrompt) with data: JudgeData for the
     judge's prompts, RoleData for every other session role and ShellData for
     a shell role's full-line template (values or pointers). Prompts are Go
-    text/template files; a field the template needs but data lacks is an error.
-    JudgeData is completed first: its Reports (see Report), the notes
-    fields NotesPath implies (NotesDir, NotesLock and the lock commands;
-    see NotesFiles) and the derived command lines; RoleData's DBLockCommand too.
-    A judge or role prompt whose base ref, or a fix prompt whose head ref, a
-    shell would read is refused (ErrUnsafeBaseRef, ErrUnsafeHeadRef). ShellData
-    values are shell-quoted when needed (see ShellLine; use it to build a shell
-    role's line). Trailing newlines are trimmed: a prompt or typed command must
-    not end with one (a shell line would submit an extra empty command).
+    text/template files, a judge prompt parsed with the partials file whose
+    blocks it includes (config.Prompt.Shared); a field the template needs
+    but data lacks is an error. JudgeData is completed first: its Reports
+    (see Report), the notes fields NotesPath implies (NotesDir, NotesLock
+    and the lock commands; see NotesFiles) and the derived command lines;
+    RoleData's DBLockCommand too. A judge or role prompt whose base ref, or a
+    fix prompt whose head ref, a shell would read is refused (ErrUnsafeBaseRef,
+    ErrUnsafeHeadRef). ShellData values are shell-quoted when needed (see
+    ShellLine; use it to build a shell role's line). Trailing newlines are
+    trimmed: a prompt or typed command must not end with one (a shell line would
+    submit an extra empty command).
 
 func ReportMarker(runID string) string
     ReportMarker is the line a role's report starts with to say which run wrote
@@ -3401,6 +3403,15 @@ const RequiredWorkflowPrefix = "workflow:"
 const ReviewFooterMax = 2000
     ReviewFooterMax bounds review_footer, in characters.
 
+const SharedPrompt = prompts.Shared
+    SharedPrompt is the judge prompts' partials file (prompts.Shared): the
+    blocks two or more judge prompts share word for word, one {{define}} each,
+    which a judge prompt includes with {{template}}. Every judge prompt
+    (UsesShared) is parsed with it, resolved as a prompt is: <prompts_dir>/
+    judge-shared.md when that file exists, else the embedded copy, and in the
+    daemon the copy its snapshot loaded at startup. ResolvePrompt refuses the
+    name itself.
+
 const SkillCopyName = "SKILL.md"
     SkillCopyName is the file name of a judge skill's startup copy (<skill
     dir>/<first 12 hex of its SHA-256>/SKILL.md).
@@ -3418,6 +3429,11 @@ var BadgeColors = []string{"red", "green", "yellow", "blue", "magenta", "cyan", 
 var ErrPromptNotFound = errors.New("prompt not found")
     ErrPromptNotFound: a prompt name exists neither in prompts_dir nor among the
     embedded defaults.
+
+var ErrSharedPrompt = errors.New("holds the blocks the judge prompts share and is not a prompt of its own")
+    ErrSharedPrompt means a prompt name is the judge prompts' partials file
+    (SharedPrompt), which holds blocks for the judge prompts and is never a
+    prompt of its own.
 
 var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
@@ -3491,6 +3507,14 @@ func ParseDuration(s string) (time.Duration, error)
     ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",
     "30d", "1d12h". A day is 24 hours.
 
+func ParseTemplate(name, text, shared string) (*template.Template, error)
+    ParseTemplate parses a prompt or command template the way magnum renders
+    it (internal/agents.RenderPrompt), without executing it: no funcs,
+    missingkey=error, and shared (a judge prompt's Prompt.Shared; "" for none)
+    parsed first as its own template, SharedPrompt, so that text's {{template}}
+    calls find its blocks and a block text defines itself replaces the shared
+    one.
+
 func QuietHoursLabel(spec string, at time.Time) string
     QuietHoursLabel is the quiet-hours window spec (ParseQuietHours) as an
     author anywhere can read it: both clocks as HH:MM and at's offset from UTC
@@ -3519,6 +3543,11 @@ func SkillPath(skill string, layout paths.Layout) string
 
 func TOMLString(s string) string
     TOMLString renders s as a TOML basic string.
+
+func UsesShared(name string) bool
+    UsesShared reports whether the prompt named name is a judge prompt
+    (judge-*.md, the learn editor's glob), which is parsed with SharedPrompt;
+    SharedPrompt itself is not.
 
 func ValidatePathGlob(glob string) error
     ValidatePathGlob checks a skip_paths entry: it must not be blank,
@@ -3845,9 +3874,11 @@ func (c *Config) ResolvePrompt(name string) (Prompt, error)
     ResolvePrompt reads a prompt by name: <pipeline.prompts_dir>/<name> when
     that file exists, else the embedded default of the same name; an unknown
     name wraps ErrPromptNotFound. Names are plain file names (no directories).
+    A judge prompt (UsesShared) comes with the partials file (Prompt.Shared),
+    resolved the same way; the partials file's own name wraps ErrSharedPrompt.
     In the daemon, which loaded its prompts at startup (SnapshotPrompts), a name
     the snapshot holds resolves to the text loaded then, whatever the file holds
-    now.
+    now, and so does the partials file.
 
 func (c *Config) RoleByNameOrAlias(w *Watch, s string) (Role, bool)
     RoleByNameOrAlias finds one of the watch's roles by name or alias (case and
@@ -3895,8 +3926,9 @@ func (c *Config) SkillFile(src string) string
     holds one, else src itself.
 
 func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string) (*PromptSnapshot, error)
-    SnapshotPrompts loads every prompt file the roles name (each prompt
-    kind) and the extra names (model-fallback.md), copies each judge's and
+    SnapshotPrompts loads every prompt file the roles name (each prompt kind),
+    the extra names (model-fallback.md) and, with any judge prompt among them,
+    the judge prompts' partials file (SharedPrompt), copies each judge's and
     each fix role's skill file (RoleSkillPath) to skillDir/<hash>/SKILL.md
     ("" = no copies; the roles keep their configured skill paths), removes
     copies older than a week that no role uses, and installs the result:
@@ -4925,6 +4957,10 @@ type Prompt struct {
 	Path     string // the file read (<prompts_dir>/<name>); "" when embedded
 	Embedded bool   // the embedded default (package prompts) was used
 	Text     string // the template source, unrendered
+	// Shared is the source of SharedPrompt as resolved with the prompt,
+	// whose blocks the prompt's {{template}} calls include; "" for a prompt
+	// that takes none (UsesShared). ParseTemplate parses it first.
+	Shared string
 }
     Prompt is a resolved prompt template.
 
@@ -4952,8 +4988,8 @@ func (s *PromptSnapshot) Changed() []string
     changed or disappeared. The next restart loads them.
 
 func (s *PromptSnapshot) Files() int
-    Files counts the files the snapshot holds: prompts (embedded defaults
-    included) and skill copies.
+    Files counts the files the snapshot holds: prompts (embedded defaults and
+    the judge prompts' partials file included) and skill copies.
 
 func (s *PromptSnapshot) Sum() string
     Sum identifies what the snapshot holds: the SHA-256 of every prompt's
@@ -8951,19 +8987,21 @@ var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports 
 FUNCTIONS
 
 func Inputs(cfg *config.Config) string
-    Inputs is a hash (12 hex) of what a replay's review reads besides the PR and
-    the notes (eval.Run.Inputs): every role's config with the model it resolves
-    to and its kind's config, the prompt files the roles name as they resolve
-    now (the checkout's prompts_dir, else the embedded ones), each judge's skill
-    file, the stakes lines of the [[watch]] and [[repo]] blocks (what the judge
-    and the reviewers size a harm against), and the simplification caps the
-    judge posts by: the pipeline table's max_simplifications in effect and each
-    [[repo]] block's that is set (config.Config.MaxSimplificationsFor), and with
-    [jira] on the site and the account the judge reads the PR's ticket from (not
-    the token file). The texts count, not where they are: a judge's skill path
-    is left out of its role config, so a candidate directory with the same texts
-    as the checkout has its inputs (a landed candidate's replays are the next
-    baseline). magnum's own code is not part of it. "" without a config.
+    Inputs is a hash (12 hex) of what a replay's review reads besides the PR
+    and the notes (eval.Run.Inputs): every role's config with the model it
+    resolves to and its kind's config, the prompt files the roles name as
+    they resolve now (the checkout's prompts_dir, else the embedded ones),
+    with the judge prompts' partials file (config.SharedPrompt) their blocks
+    come from, each judge's skill file, the stakes lines of the [[watch]] and
+    [[repo]] blocks (what the judge and the reviewers size a harm against),
+    and the simplification caps the judge posts by: the pipeline table's
+    max_simplifications in effect and each [[repo]] block's that is set
+    (config.Config.MaxSimplificationsFor), and with [jira] on the site and
+    the account the judge reads the PR's ticket from (not the token file).
+    The texts count, not where they are: a judge's skill path is left out of its
+    role config, so a candidate directory with the same texts as the checkout
+    has its inputs (a landed candidate's replays are the next baseline).
+    magnum's own code is not part of it. "" without a config.
 
 func Refused(ctx context.Context, d Deps, ec eval.Case) string
     Refused says why case ec is not replayed ("" = it may be): an earlier

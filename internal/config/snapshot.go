@@ -148,8 +148,9 @@ func SkillPath(skill string, layout paths.Layout) string {
 	return skill
 }
 
-// SnapshotPrompts loads every prompt file the roles name (each prompt kind)
-// and the extra names (model-fallback.md), copies each judge's and each fix
+// SnapshotPrompts loads every prompt file the roles name (each prompt kind),
+// the extra names (model-fallback.md) and, with any judge prompt among them,
+// the judge prompts' partials file (SharedPrompt), copies each judge's and each fix
 // role's skill file (RoleSkillPath) to skillDir/<hash>/SKILL.md ("" = no copies; the roles
 // keep their configured skill paths), removes copies older than a week that
 // no role uses, and installs the result: from now on ResolvePrompt answers
@@ -174,6 +175,11 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 		add(n)
 	}
 	var errs []error
+	if slices.Contains(names, SharedPrompt) {
+		errs = append(errs, fmt.Errorf("prompt %s: %w", SharedPrompt, ErrSharedPrompt))
+	} else if slices.ContainsFunc(names, UsesShared) {
+		names = append(names, SharedPrompt) // every judge prompt is parsed with it (ResolvePrompt)
+	}
 	for _, name := range names {
 		if err := validPromptName(name); err != nil {
 			errs = append(errs, err)
@@ -301,8 +307,8 @@ func (s *PromptSnapshot) prompt(name string) (Prompt, bool) {
 	return sp.p, ok
 }
 
-// Files counts the files the snapshot holds: prompts (embedded defaults
-// included) and skill copies.
+// Files counts the files the snapshot holds: prompts (embedded defaults and
+// the judge prompts' partials file included) and skill copies.
 func (s *PromptSnapshot) Files() int {
 	if s == nil {
 		return 0

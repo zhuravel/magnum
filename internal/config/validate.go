@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"text/template"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -1127,7 +1126,7 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 			continue
 		}
 		parsed[name] = true
-		if err := parseTemplate(name, p.Text); err != nil {
+		if _, err := ParseTemplate(name, p.Text, p.Shared); err != nil {
 			bad("%s prompt %s: %v", kind, name, err)
 		}
 	}
@@ -1204,10 +1203,10 @@ func (c *Config) validateWhiteboardRole(r Role, bad func(string, ...any)) {
 }
 
 // parseTemplate checks that text is a valid Go template the way
-// internal/agents renders prompts and commands (no funcs, missingkey=error),
-// without executing it.
+// internal/agents renders prompts and commands (ParseTemplate, without the
+// judge prompts' partials file), without executing it.
 func parseTemplate(name, text string) error {
-	_, err := template.New(name).Option("missingkey=error").Parse(text)
+	_, err := ParseTemplate(name, text, "")
 	return err
 }
 

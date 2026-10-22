@@ -3,9 +3,11 @@ package evalrun
 import (
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/prompts"
 )
 
 // The inputs a replay records name what its review read besides the PR and the notes: the judge
@@ -52,6 +54,30 @@ func TestInputsChangeWithTheSkillAPromptOrARoleAndReviewerInputsWithTheReviewers
 	changed("changing a reviewer's effort", true)
 	if Inputs(nil) != "" || ReviewerInputs(nil) != "" {
 		t.Error("a nil config has inputs")
+	}
+}
+
+// Every judge prompt includes blocks of judge-shared.md, so a replay's inputs cover that file: an
+// edit of it alone, with every prompt file unchanged, is another baseline of the round, and the
+// reviewers, whose prompts include none of it, keep theirs.
+func TestAnEditOfThePartialsFileAloneChangesTheInputs(t *testing.T) {
+	cfg := testConfig(t)
+	embedded, rev := Inputs(cfg), ReviewerInputs(cfg)
+	shared, ok := prompts.Read(config.SharedPrompt)
+	if !ok {
+		t.Fatal("no embedded partials file")
+	}
+	file := filepath.Join(cfg.Pipeline.PromptsDir, config.SharedPrompt)
+	writeFile(t, file, shared)
+	if got := Inputs(cfg); got != embedded {
+		t.Errorf("a prompts_dir copy of the embedded partials file gave inputs %s, want %s: the texts count, not where they are", got, embedded)
+	}
+	writeFile(t, file, strings.Replace(shared, "load no other skill.", "load no other skill, ever.", 1))
+	if got := Inputs(cfg); got == embedded {
+		t.Errorf("an edited partials file left the inputs at %s", got)
+	}
+	if got := ReviewerInputs(cfg); got != rev {
+		t.Errorf("an edited partials file changed the reviewer inputs from %s to %s", rev, got)
 	}
 }
 

@@ -800,21 +800,27 @@ func TestJudgeReadsTheStartupCopyOfItsSkill(t *testing.T) {
 }
 
 // nextPrompt reads prompts/<name>.next, the edit waiting for the daemon's
-// restart, else prompts/<name> once it was swapped in.
+// restart, else prompts/<name> once it was swapped in, with the checkout's
+// judge-shared.md that a judge prompt includes blocks of.
 func nextPrompt(t *testing.T, name string) config.Prompt {
 	t.Helper()
-	dir := filepath.Join("..", "..", "prompts")
-	for _, file := range []string{name + ".next", name} {
-		b, err := os.ReadFile(filepath.Join(dir, file))
-		if err == nil {
-			return config.Prompt{Name: name, Path: filepath.Join(dir, file), Text: string(b)}
-		}
-		if !os.IsNotExist(err) {
-			t.Fatal(err)
-		}
+	dir, err := filepath.Abs(filepath.Join("..", "..", "prompts"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("no prompt %s", name)
-	return config.Prompt{}
+	cfg := config.Defaults()
+	cfg.Pipeline.PromptsDir = dir
+	p, err := cfg.ResolvePrompt(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch b, err := os.ReadFile(filepath.Join(dir, name+".next")); {
+	case err == nil:
+		p.Path, p.Text = filepath.Join(dir, name+".next"), string(b)
+	case !os.IsNotExist(err):
+		t.Fatal(err)
+	}
+	return p
 }
 
 // judgeDataWithReadiness renders the judge prompt with a readiness list

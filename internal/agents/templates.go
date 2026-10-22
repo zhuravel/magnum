@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"text/template"
 	"unicode"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -21,8 +20,10 @@ import (
 // RenderPrompt executes a resolved prompt template (config.Config.ResolvePrompt
 // or RolePrompt) with data: JudgeData for the judge's prompts, RoleData for
 // every other session role and ShellData for a shell role's full-line
-// template (values or pointers). Prompts are Go text/template files; a field
-// the template needs but data lacks is an error. JudgeData is completed
+// template (values or pointers). Prompts are Go text/template files, a
+// judge prompt parsed with the partials file whose blocks it includes
+// (config.Prompt.Shared); a field the template needs but data lacks is an
+// error. JudgeData is completed
 // first: its Reports (see Report), the notes fields NotesPath implies
 // (NotesDir, NotesLock and the lock commands; see NotesFiles) and the
 // derived command lines; RoleData's DBLockCommand too. A judge or role
@@ -64,7 +65,7 @@ func RenderPrompt(p config.Prompt, data any) (string, error) {
 	if head != "" && !gitx.ShellSafeRef(head) {
 		return "", fmt.Errorf("agents: render %s: %w", name, ErrUnsafeHeadRef)
 	}
-	return render(name, p.Text, data)
+	return render(name, p.Text, p.Shared, data)
 }
 
 // pointee is *p as data for a template, false for a nil p.
@@ -95,9 +96,11 @@ func checkBaseRef(name, ref string) error {
 	return nil
 }
 
-// render executes template text with data as is.
-func render(name, text string, data any) (string, error) {
-	t, err := template.New(name).Option("missingkey=error").Parse(text)
+// render executes template text with data as is, parsed with shared, the
+// judge prompts' partials file a judge prompt includes blocks of
+// (config.Prompt.Shared; "" for none; see config.ParseTemplate).
+func render(name, text, shared string, data any) (string, error) {
+	t, err := config.ParseTemplate(name, text, shared)
 	if err != nil {
 		return "", fmt.Errorf("agents: render %s: %w", name, err)
 	}
@@ -1060,7 +1063,7 @@ func ShellLine(role config.Role, d ShellData) (string, error) {
 	if err := d.requireUsed(d.Command); err != nil {
 		return "", fmt.Errorf("agents: shell line %s: command: %w", role.Name, err)
 	}
-	cmd, err := render(role.Name+" command", d.Command, q)
+	cmd, err := render(role.Name+" command", d.Command, "", q)
 	if err != nil {
 		return "", err
 	}

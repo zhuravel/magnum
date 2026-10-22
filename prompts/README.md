@@ -17,7 +17,8 @@ A role names prompts by file name, such as `prompt = "claude-review.md"`. magnum
 you delete falls back to the built-in copy. `magnum config` fails when a role names a prompt that exists
 in neither place.
 
-The daemon loads every prompt its roles name, `model-fallback.md`, the triage, retro and notes curation prompts and a copy
+The daemon loads every prompt its roles name, the judge prompts' shared blocks (`judge-shared.md`, see
+below), `model-fallback.md`, the triage, retro and notes curation prompts and a copy
 of each judge's and fix role's skill (`~/.local/state/magnum/skill/<hash>/SKILL.md`, under the state directory) once, when it starts, right after checking that its build
 renders them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
 without a rebuild; `magnum status` shows when the prompts were loaded and how many files changed on
@@ -40,6 +41,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `judge-continue.md` | judge, after a pause (usage limit) ended mid-turn | judge |
 | `judge-recovery.md` | judge, fresh session after the old one was lost, went cold (`[pipeline] judge_fresh_after`) or served the role's `max_session_rounds` | judge |
 | `judge-nudge.md` | judge, stopped without a result | judge |
+| `judge-shared.md` | every judge prompt: the blocks they share (see Shared blocks); never a prompt of its own | judge |
 | `model-fallback.md` | any session role, the judge included, after magnum switched its model because the model hit its own limit | fallback |
 | `claude-review.md` | claude-review, first review | role |
 | `claude-rereview.md` | claude-review, new head | role |
@@ -74,6 +76,63 @@ the judge data, every other session role gets the role data, and a shell role's 
 `retro.md` the retro data (`internal/engine/retro.go`), `notes-curate.md` the curation data
 (`internal/engine/notes_curate.go`) and `skill-edit.md` the skill edit data
 (`internal/engine/learn_edit.go`).
+
+## Shared blocks of the judge prompts (`judge-shared.md`)
+
+`judge-shared.md` holds the text that two or more judge prompts carry word for word. Each such block
+is one `{{define "<name>"}}`. A judge prompt includes a block with `{{template "<name>" .}}`. If the
+block starts with a condition that trims the line break before it, the prompt writes
+`{{- template "<name>" .}}`. magnum parses every judge prompt (every `judge-*.md`) with this file.
+The file is never a prompt of its own: `magnum config` refuses a role whose prompt names it.
+
+The file resolves as a prompt does. If `<prompts_dir>/judge-shared.md` exists, magnum reads it.
+Otherwise it reads the copy built into the binary. So a `prompts_dir` without the file uses the
+built-in blocks. A `judge-shared.md` in `prompts_dir` replaces the built-in file as a whole, for every
+judge prompt, the built-in prompts too. Start such a file from a copy of the built-in one. If it lacks
+a block, each judge prompt that includes the block fails, and `magnum config` names them. A prompt that
+defines a block of the same name keeps its own block.
+
+The daemon loads the file at startup, with the judge prompts. `magnum status` counts it among the files
+changed on disk since then. The start check and `magnum config` render every judge prompt with it. A
+replay's inputs (`magnum eval`) include it with the judge's prompts. The skill editor can change it,
+because it matches `prompts/judge-*.md`. For such a change, the gate replays the judge alone.
+
+If all the prompts that include a paragraph have the same condition and blank line before it, the
+block holds them with the paragraph. Otherwise the block holds the paragraph alone, and each prompt
+keeps its own condition. A block of `<magnum>` lines holds a run of fields. A prompt keeps the lines
+that only it carries: its mode, its phase and the fields of its mode. To change a shared rule, edit its
+block. To give the rule to one more judge prompt, include the block there. If only one prompt includes
+a block, move the text back into that prompt (a test counts the includes). Moving text into a block
+does not change a rendered prompt: the goldens in `internal/agents/testdata` pin every byte.
+
+| Block | Text | Included by |
+|---|---|---|
+| `skill` | the skill link and the sentence to read it first | initial, rereview, recovery, own pass, continue |
+| `simplify` | the proposals of claude-simplify's report | initial, rereview, recovery |
+| `blind` | the blind evaluation rules | initial, own pass |
+| `post-merge-rereview` | the post-merge rules of a re-review | rereview, recovery |
+| `hold-approval` | the approval held for a full pass | rereview, recovery |
+| `review-rules` | the closing paragraphs: `notes-line-limit`, `prepass`, `evidence-map`, `stacked` and the evidence file | initial, rereview, recovery |
+| `notes-line-limit` | the notes line limit | continue, `review-rules` |
+| `prepass`, `evidence-map`, `stacked` | the prepass, evidence map and stacked-PR paragraphs | own pass, `review-rules` |
+| `earlier-reviews` | the list of the earlier reviews | recovery, own pass |
+| `force-pushed`, `base-merged`, `new-commits` | how to read a rewritten, a base-merging and a plain push | rereview, recovery, own pass |
+| `replies`, `ci-red` | the answers of a reply round, and CI red on an unchanged head | rereview, recovery |
+| `former-logins` | the reviews and threads of the former logins are yours | recovery, own pass |
+| `post-as-reviewer` | post as the current login, and never touch the reviews of the former logins | rereview, recovery |
+| `moved-from` | the checkout moved | rereview, own pass |
+| `threads` | the threads file and its replies | own pass, `threads-and-stops` |
+| `threads-and-stops` | the threads file with the threads marked `stop` | rereview, recovery |
+| `rebuttals` | second rebuttals, answered declines and answered threads | rereview, recovery |
+| `pr-fields`, `login-fields` | `<magnum>` lines `run_id` to `head_sha`, and `checkout` to `reviewer_login` | initial, rereview, recovery, own pass, continue |
+| `event-fields` | `<magnum>` lines `gh_config_dir` to `self_authored` | initial, rereview, recovery, continue |
+| `review-fields` | `<magnum>` lines `reports` to `post_review` | initial, rereview, recovery |
+| `readiness-field`, `context-fields` | `<magnum>` lines `readiness`, and `related_prs` to `evidence` | own pass, `review-fields` |
+| `notes-fields` | `<magnum>` lines `notes` to `notes_unlock` | own pass, continue, `review-fields` |
+| `related-field` | `<magnum>` line `related_prs` | continue, `context-fields` |
+| `result-fields` | `<magnum>` lines `result_file` to `post_review` | continue, `review-fields` |
+
+`judge-nudge.md` includes no block.
 
 ## Variables
 
