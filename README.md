@@ -1856,7 +1856,20 @@ loaded machine), Magnum takes it from the session's rollout from a minute after 
 under the session's Codex home that Codex's TUI (`source` `cli` in its first line, never `codex exec`'s or
 a helper agent's) started in the session's checkout within two minutes of the session's start, whose id no
 other session holds, recorded with an `agent.session_id` event. None, or two (two Codex sessions started
-in one checkout at once), records nothing, and herdr's id, when it comes, wins. Prompts are files under `[pipeline]
+in one checkout at once), records nothing, and herdr's id, when it comes, wins. Codex keys a hook's trust
+by its place (`session_start:<group>:<index>`), so a rewrite of `hooks.json` that moves herdr's hook leaves
+it untrusted at its new place until you trust it again when Codex asks you to review the hooks. Once a
+minute, with the usage read, the daemon compares `hooks.json`'s modification time: a change after which
+herdr's hook is missing, disabled, behind a SessionStart hook without a timeout of 10 s or less, or without
+a trust entry for its place gives one `codex.hooks_changed` warning and one toast naming the file and the
+failed checks ("$CODEX_HOME/hooks.json changed at 16:07: herdr's Codex session hook runs after 2
+SessionStart hooks without a timeout (Bartender NotchBar, moshi-hook) in $CODEX_HOME/hooks.json; ... run
+`magnum doctor`"; `~/.codex/hooks.json` for the default Codex home). It also reads the registry: when the
+newest two Codex sessions in a row, of any PRs, that ran an agent have no session id five minutes after
+their start, one `codex.session_ids_missing` warning and one toast say since when ("Codex sessions get no
+session id since 16:08 (2 sessions). Judges cannot resume and can stop early. Run `magnum doctor`."),
+once, until a session started since has an id (herdr's or its rollout's), which one
+`codex.session_ids_back` info event says. Magnum never edits `hooks.json` or `[hooks.state]`. Prompts are files under `[pipeline]
 prompts_dir` (default `prompts/`, falling back to copies built into the binary), so a prompt change is
 a file edit, not a rebuild. The judge prompts take the text they share from one file,
 `prompts/judge-shared.md`, so a shared rule is one edit. The daemon loads the prompts and copies the judge skill and the fix skill when it starts,
@@ -4118,8 +4131,16 @@ prompts, the judge and fix skills and the fix role, Whiteboard when a watch asks
 whiteboards are off; FAIL when the `whiteboard` CLI is not on PATH; WARN when Whiteboard is not running, since
 the job then skips whiteboards), herdr and the plugin, the agent CLIs (logins, wrappers or autonomy flags),
 herdr's Codex session hook (a `codex session hook` WARN when no SessionStart hook in `$CODEX_HOME/hooks.json`
-names `herdr-agent-state.sh`, or when its `[hooks.state]` entry in `config.toml` has `enabled = false`, naming
-the entry: no session id, so judges are never resumed and a helper's Codex refusal is not seen), gh and
+names `herdr-agent-state.sh`, when its `[hooks.state]` entry in `config.toml` has `enabled = false`, naming
+the entry, or when a SessionStart hook before it has no timeout or one over 10 s, naming those hooks by
+their programs; a `codex session hook trust` WARN when `[hooks.state]` has no trust entry for the hook's
+place, such as `session_start:2:0`, so Codex asks you to review the hooks before it runs it; the PASS line,
+only when all pass, names its place and the herdr integration version its script's header names: without a
+session id judges are never resumed and a helper's Codex refusal is not seen) and the Codex sessions' ids
+in the registry (a `codex session ids` WARN when the newest two or more Codex sessions of the last day that
+ran an agent had no session id ten minutes after their start, whatever the hook checks say: "3 of the 4
+Codex sessions started since 16:08 have no session id, the newest 2 in a row"; the line also counts the ids
+that came from the sessions' rollouts because herdr's hook gave none), gh and
 the identities, MySQL, the main clones and pools' schema reset, mise and the LaunchAgent, free disk, the
 machine's memory pressure and swap (WARN at critical pressure, SKIP where the level cannot be read), the
 size of Codex's marketplace staging directory and the registry. It also checks login shells that do not

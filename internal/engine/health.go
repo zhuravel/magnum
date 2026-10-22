@@ -444,6 +444,7 @@ func (e *Engine) health(ctx context.Context) {
 	e.continueAfterDrain(ctx)
 	e.probeInfra(ctx)
 	e.checkCodexLogin(ctx) // codex_login.go: before the budget, whose reading a change overrules
+	e.checkCodexHook(ctx)  // codex_session_hook.go: the sessions' ids and hooks.json, once a minute
 	e.checkBudget(ctx)
 	e.checkCLIVersions(ctx)   // cli_version.go
 	e.noteSharedFailures(ctx) // shared_failure.go: after the versions it names

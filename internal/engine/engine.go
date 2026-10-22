@@ -332,6 +332,10 @@ type Deps struct {
 	// never a token); nil = no restart of the Codex sessions when it
 	// changes (codex_login.go).
 	CodexLogin func(codexHome string) (usage.Login, error)
+	// CodexHome is the Codex home a session of a role reads
+	// (agents.Manager.CodexHome, which FromApp sets); nil = herdr's Codex
+	// session hook is not watched (codex_session_hook.go).
+	CodexHome func(role config.Role) string
 	// Probe checks that a clone's origin answers (`git ls-remote` with the
 	// environment gitx gives git); it lifts an infrastructure pause. nil =
 	// no probe: the pause lifts when its backoff ends.
@@ -622,6 +626,12 @@ type Engine struct {
 	// codexLoginRead is when the tick last read Codex's login
 	// (codex_login.go; the tick's goroutine only).
 	codexLoginRead time.Time
+	// codexHookRead is when the tick last checked the Codex sessions' ids
+	// and herdr's Codex session hook, and codexHooksSeen the modification
+	// time of each Codex home's hooks.json it saw then (zero: none), by home
+	// (codex_session_hook.go; the tick's goroutine only).
+	codexHookRead  time.Time
+	codexHooksSeen map[string]time.Time
 	// restarts are the sessions marked to park once idle, so that their
 	// next prompt resumes them in new processes, by session id, loaded from
 	// kv on first use (session_restart.go). restartMu guards them: the
@@ -687,6 +697,9 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		Herdr: a.Herdr, Agents: a.Agents, Slots: a.Slots, Git: a.Git, Inventory: a.Inventory,
 		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex, UsageAt: usage.CodexAt, Runner: a.Runner,
 		MemoryRunner: a.Runner, CodexLogin: usage.CodexLogin,
+	}
+	if a.Agents != nil {
+		d.CodexHome = a.Agents.CodexHome
 	}
 	d.GitHub = func(id string) GitHub {
 		if c := a.GitHub(id); c != nil {

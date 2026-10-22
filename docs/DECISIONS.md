@@ -2167,6 +2167,77 @@ skill versions); people add theirs to the sections before it, at the end of the 
   died mid-turn until the role's timeout; ending a turn at once on a `task_complete`, which herdr's two
   ticks already bound; doing the same for Claude now (its transcript and idle detection differ, and
   background work is read there already).
+- **Doctor and the daemon tell when herdr's Codex session hook stops giving ids** (2026-10-22, spec 122,
+  amends "`magnum doctor` and the daemon say when herdr's Codex session hook is off"). At 16:07 that day a
+  rewrite of `~/.codex/hooks.json` (herdr's integration update: the new `herdr-agent-state.sh` says "managed
+  by herdr" and names `HERDR_INTEGRATION_VERSION=10`) removed four hooks and moved herdr's SessionStart hook
+  (`bash ~/.codex/herdr-agent-state.sh session`, timeout 10 s) from the first group to the third, behind
+  the Bartender NotchBar hook and `/opt/homebrew/bin/moshi-hook codex-hook`, neither with a timeout. Codex
+  keys a hook's trust by its place, `[hooks.state."<hooks.json>:session_start:<group>:<index>"]` with the
+  `trusted_hash` of the command that sat there when it was trusted, and runs a hook only when that hash is
+  the hook's own (codex-rs `hook_key` and `hook_trust_status`), so a moved hook waits for the operator's
+  review; a hook without a timeout gets up to 600 s. From 16:08 most new codex-judge sessions had no session
+  id (1639, 1649, 1650 and 1653; 1645 had one), herdr reported those judges idle while Codex still worked,
+  the own passes of three PRs failed with "finished without writing judge-own.md", and one PR parked in
+  needs_attention, while `magnum doctor` said "herdr's Codex session hook is on" (it checked only that a
+  SessionStart hook names herdr's script and that its entry is not `enabled = false`) and the daemon said
+  nothing but one "no Codex rollout to read the turn's error from" line per session. The operator restored
+  the order at 18:32 and asked to fix and improve doctor. Now `agents.ReadCodexSessionHook` also reads the
+  place of herdr's hook that runs (the first whose place has a trust entry, else the first not disabled:
+  `Group`, `Index`, `Place`), the SessionStart hooks before it with their timeouts (`Before`; one its entry
+  disables does not run and is left out), each named by the last path element of its program (the script
+  an interpreter such as bash runs, after variable assignments and env, exec, nohup or command), printable
+  runes only, at most 40; whether config.toml has an entry with a `trusted_hash` for its place (`Trusted`;
+  whether the hash is this command's magnum cannot tell, since Codex hashes its own normal form of the
+  hook); and the integration version its script's header names (`Version`, read from the command's
+  absolute path, `~/` or `$HOME/` as the user's home, at most 8 KiB). `CodexSessionHook.Problems` names the
+  failed checks, shared by doctor, the daemon and the observer's `agents.session_id_missing` message:
+  missing, disabled, its place (a hook before it with no timeout or one over 10 s,
+  `agents.CodexHookMaxTimeout`) and its trust. Doctor's `codex session hook` line warns on the place
+  ("herdr's Codex session hook runs after 2 SessionStart hooks without a timeout (Bartender NotchBar,
+  moshi-hook) in ~/.codex/hooks.json (used by codex-judge; herdr integration 10): a slow hook can hold it
+  up, and Codex sessions get no id", fix: move herdr's entry first or give those hooks a timeout of 10 s
+  or less, then trust the hooks again), a `codex session hook trust` line warns when its place has no trust
+  entry ("no trust entry for its place session_start:2:0 ... Codex asks you to review the hooks before it
+  runs this one"; a missing config.toml or table counts), the `enabled = false` warning stays, and the OK
+  line comes only when every check passes, naming the place and the version. A `codex session ids` line
+  reads the registry (`agents.RecentSessionIDs` over the new `store.SessionsStartedSince`): the Codex
+  sessions of the last 24 hours that ran an agent (prompted), were not resumed (a resume takes the id it
+  resumes, which would hide an outage, as spec 68's one id among 34 did) and are at least ten minutes old;
+  when the newest two or more in a row have no id it warns whatever the hook checks say ("3 of the 4 Codex
+  sessions started since 16:08 have no session id, the newest 2 in a row", counted back to the oldest
+  without an id since two in a row last had one, `agents.MissingSessionIDs`, so one old gap does not widen
+  the count), and it says how many ids the observer took from the sessions' rollouts (spec 123's
+  `agent.session_id` events), which herdr's hook did not give. The daemon, once a minute with the usage read
+  (`checkCodexHook`, internal/engine/codex_session_hook.go, for the Codex homes of the codex kind's session
+  roles, `agents.CodexHookHomes`, which doctor uses too, through the new `Deps.CodexHome`): when the newest
+  two Codex sessions in a row, of any PRs, at least five minutes old have no id, one
+  `codex.session_ids_missing` warning and one toast ("Codex sessions get no session id since 16:08 (2
+  sessions). Judges cannot resume and can stop early. Run `magnum doctor`."), kept in kv
+  `codex.session_ids_missing` (the run's start) so that later sessions of the run and a daemon restart say
+  nothing more, until a session started since the run began has an id (herdr's or the rollout's), which
+  one `codex.session_ids_back` info event says; and when a Codex home's hooks.json has a modification time
+  other than the one the last check saw (the first check only records it) and herdr's hook then fails a
+  check, one `codex.hooks_changed` warning and one toast naming the file and the failed checks, once per
+  change; the messages name `~/.codex/...` for the default home and `$CODEX_HOME/...` otherwise, never a
+  Codex home from a pane env. An id recovered from the rollout counts as an id: the warning is for sessions
+  that have none at all. Tests: in cli TestDoctorWarnsWhenHerdrsHookRunsBehindHooksWithoutATimeout,
+  TestDoctorPassesHerdrsHookFirstOrBehindShortTimeouts, TestDoctorWarnsWhenHerdrsHookHasNoTrustEntryForItsPlace,
+  TestDoctorWarnsWhenTheNewestCodexSessionsHaveNoSessionID and TestDoctorWarnsWhenHerdrsCodexSessionHookIsDisabled
+  (the hooks before herdr's now have timeouts); in agents
+  TestReadCodexSessionHookFindsThePlaceTheHooksBeforeItAndTheTrust and
+  TestASessionWithoutAnIDNamesTheHooksFailedPlace; in engine
+  TestTwoCodexSessionsInARowWithoutAnIDWarnOnceUntilOneHasAnID and
+  TestAChangedHooksJSONThatFailsTheChecksWarnsOncePerChange, with the kv key pinned. Codex 0.162.1 and its
+  current source were read to confirm the key format (`<path>:session_start:<group>:<index>`) and the
+  per-hook `timeout` in seconds; the current source runs a SessionStart's hooks concurrently, so the place
+  check is a heuristic for an order that can hold herdr's hook up, while the trust check follows Codex's
+  rule. Rejected: magnum fixing hooks.json or `[hooks.state]` itself (the file and the trust decision are
+  the operator's, and a moved hook must be trusted again by them); checking only `enabled`, which passed the
+  whole outage; computing Codex's trust hash to tell a stale entry from a current one (Codex's normal form of
+  a hook changes with its versions, and a wrong hash would warn on every hook); warning on every Codex
+  session without an id (one can miss its id on a loaded machine without an outage); counting resumed
+  sessions, which carry the id they resume.
 
 ## Screens and commands
 

@@ -70,6 +70,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"KVUsageCodexOverruledAt", KVUsageCodexOverruledAt, "usage.codex_overruled_at"},
 		{"KVCodexLogin", KVCodexLogin, "codex.login"},
 		{"KVCodexLoginAt", KVCodexLoginAt, "codex.login_at"},
+		{"KVCodexSessionIDsMissing", KVCodexSessionIDsMissing, "codex.session_ids_missing"},
 		{"kvSessionsRestart", kvSessionsRestart, "sessions.restart"},
 		{"KVGitHubCost", KVGitHubCost("zhuravel"), "github.cost.zhuravel"},
 		{"KVGitHubLow", KVGitHubLow("zhuravel"), "github.low.zhuravel"},

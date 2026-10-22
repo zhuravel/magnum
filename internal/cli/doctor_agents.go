@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -205,62 +206,156 @@ func doctorLogin(ctx context.Context, d doctorDeps, kind string, k config.Kind, 
 	return doctorOK(name, fmt.Sprintf("%s is logged in (`%s`)", kind, check))
 }
 
+// doctorSessionIDWait is how old a Codex session must be for doctor to
+// count it without a session id: herdr's hook reports the id at the start
+// of its first turn.
+const doctorSessionIDWait = 10 * time.Minute
+
 // doctorSessionHooks checks herdr's Codex session hook for the codex kind
 // when its session ids come from herdr (session_source "herdr") and a
-// session role starts it (a shell role's `codex review` needs no id): one
-// "codex session hook" line per Codex home those roles read
-// (agents.Manager.CodexHome). herdr learns a session's id from its
-// SessionStart hook in the home's hooks.json, which a [hooks.state] entry of
-// config.toml with enabled = false turns off (agents.ReadCodexSessionHook).
-// It warns when no SessionStart hook names herdr's script and when every
-// such hook is disabled, naming the entry and what goes blind; a home
-// without hooks.json is skipped (herdr not installed is the herdr check's).
-// It only reads: the hook's trust is the operator's to change.
-func doctorSessionHooks(_ context.Context, d doctorDeps) []doctorCheck {
-	const kind = config.KindCodex
-	name := kind + " session hook"
-	if k, ok := d.Config.KindSpec(kind); !ok || k.SessionSource != config.SessionHerdr {
+// session role starts it (a shell role's `codex review` needs no id), one
+// Codex home at a time of those the roles read (agents.CodexHookHomes over
+// agents.Manager.CodexHome). herdr learns a session's id from its
+// SessionStart hook in the home's hooks.json (agents.ReadCodexSessionHook).
+// The "codex session hook" line warns when no SessionStart hook names
+// herdr's script, when every such hook's [hooks.state] entry in config.toml
+// has enabled = false, and when a hook before it has no timeout or one over
+// agents.CodexHookMaxTimeout (its place); "codex session hook trust" warns
+// when its place has no trust entry (Codex keys trust by place); the OK line
+// comes only when every check passes and names its place and herdr's
+// integration version. A home without hooks.json is skipped (herdr not
+// installed is the herdr check's). Then "codex session ids" reads the
+// registry (doctorSessionIDs). It only reads: the hooks and their trust are
+// the operator's to change.
+func doctorSessionHooks(ctx context.Context, d doctorDeps) []doctorCheck {
+	const name = config.KindCodex + " session hook"
+	homes, users := agents.CodexHookHomes(d.Config, d.Agents.CodexHome)
+	if len(homes) == 0 {
 		return nil
-	}
-	var homes []string
-	users := map[string][]string{} // Codex home -> the session roles that read it
-	for _, r := range d.Config.AllRoles() {
-		if !r.IsAgent() || r.Kind != kind {
-			continue
-		}
-		home := d.Agents.CodexHome(r)
-		if _, seen := users[home]; !seen {
-			homes = append(homes, home)
-		}
-		users[home] = append(users[home], r.Name)
 	}
 	var out []doctorCheck
 	for _, home := range homes {
 		used := "used by " + strings.Join(users[home], ", ")
 		h, ok, err := agents.ReadCodexSessionHook(home)
+		hooksFile, configFile := inspTilde(h.HooksFile), inspTilde(h.ConfigFile)
+		if h.Version != "" {
+			used += "; herdr integration " + h.Version
+		}
 		switch {
 		case home == "":
 			out = append(out, doctorSkipped(name, fmt.Sprintf("herdr's Codex session hook not checked: the Codex home of %s is unknown", strings.Join(users[home], ", "))))
+			continue
 		case err != nil:
 			out = append(out, doctorWarned(name, fmt.Sprintf("cannot tell whether herdr's Codex session hook is on (%s): %s", used, inspTildeIn(err.Error(), home)),
 				"fix the file: Codex reads it at every start"))
+			continue
 		case !ok:
-			out = append(out, doctorSkipped(name, fmt.Sprintf("herdr's Codex session hook not checked: %s does not exist (herdr's Codex integration writes it)", inspTilde(h.HooksFile))))
+			out = append(out, doctorSkipped(name, fmt.Sprintf("herdr's Codex session hook not checked: %s does not exist (herdr's Codex integration writes it)", hooksFile)))
+			continue
 		case !h.Found:
 			out = append(out, doctorWarned(name, fmt.Sprintf("herdr's Codex session hook is missing: no SessionStart hook in %s names %s (%s): %s",
-				inspTilde(h.HooksFile), agents.HerdrSessionHook, used, agents.SessionIDBlind),
+				hooksFile, agents.HerdrSessionHook, used, agents.SessionIDBlind),
 				"reinstall herdr's Codex integration (`herdr integration` lists its commands)"))
+			continue
 		case len(h.Disabled) > 0:
 			entries := make([]string, len(h.Disabled))
 			for i, key := range h.Disabled {
 				entries[i] = fmt.Sprintf("[hooks.state.%q]", key)
 			}
 			out = append(out, doctorWarned(name, fmt.Sprintf("herdr's Codex session hook is disabled: %s in %s has enabled = false (%s): %s",
-				strings.Join(entries, ", "), inspTilde(h.ConfigFile), used, agents.SessionIDBlind),
-				fmt.Sprintf("set enabled = true in that entry of %s (Codex keeps your hook trust there; magnum never changes it)", inspTilde(h.ConfigFile))))
-		default:
-			out = append(out, doctorOK(name, fmt.Sprintf("herdr's Codex session hook is on (SessionStart %s in %s; %s): Codex sessions report their ids, so judges resume",
-				agents.HerdrSessionHook, inspTilde(h.HooksFile), used)))
+				strings.Join(entries, ", "), configFile, used, agents.SessionIDBlind),
+				fmt.Sprintf("set enabled = true in that entry of %s (Codex keeps your hook trust there; magnum never changes it)", configFile)))
+			continue
+		}
+		problems := h.Problems(hooksFile, configFile)
+		for _, p := range problems {
+			switch p.Check {
+			case agents.CodexHookPlace:
+				out = append(out, doctorWarned(name, fmt.Sprintf("%s (%s): a slow hook can hold it up, and Codex sessions get no id", p.Text, used),
+					fmt.Sprintf("move herdr's entry first in %s, or give those hooks a timeout of %d s or less; Codex keys a hook's trust by its place, "+
+						"so trust the hooks again when Codex asks (magnum never edits the file)", hooksFile, agents.CodexHookMaxTimeout)))
+			case agents.CodexHookTrust:
+				out = append(out, doctorWarned(name+" trust", fmt.Sprintf("%s (%s): Codex asks you to review the hooks before it runs this one, "+
+					"and until then Codex sessions get no id", p.Text, used),
+					fmt.Sprintf("start `codex` in a terminal and trust herdr's hook when it asks you to review the hooks; Codex records that "+
+						"under the hook's place in %s's [hooks.state] (magnum never changes it)", configFile)))
+			}
+		}
+		if len(problems) == 0 {
+			where := "first"
+			if len(h.Before) > 0 {
+				where = fmt.Sprintf("after %s with a timeout of %d s or less",
+					textx.Count(len(h.Before), "SessionStart hook", "SessionStart hooks"), agents.CodexHookMaxTimeout)
+			}
+			out = append(out, doctorOK(name, fmt.Sprintf("herdr's Codex session hook is on (SessionStart %s at %s in %s, %s, trusted; %s): "+
+				"Codex sessions report their ids, so judges resume", agents.HerdrSessionHook, h.Place, hooksFile, where, used)))
+		}
+	}
+	return append(out, doctorSessionIDs(ctx, d)...)
+}
+
+// doctorSessionIDs reads the registry: of the Codex sessions of the last
+// day that ran an agent and are at least doctorSessionIDWait old
+// (agents.RecentSessionIDs), it warns when the newest two or more in a row
+// have no session id, whatever the hook checks say (herdr's script can fail
+// too), counting those without one since two in a row last had one
+// (agents.MissingSessionIDs); it passes with how many have one, and skips
+// when none ran.
+func doctorSessionIDs(ctx context.Context, d doctorDeps) []doctorCheck {
+	const name = config.KindCodex + " session ids"
+	if d.Store == nil {
+		return nil
+	}
+	now := time.Now()
+	sessions, err := agents.RecentSessionIDs(ctx, d.Store, config.KindCodex, now, doctorSessionIDWait)
+	if err != nil {
+		return []doctorCheck{doctorWarned(name, "cannot read the Codex sessions' ids from the registry: "+err.Error(), "check "+inspTilde(d.Layout.DB()))}
+	}
+	if len(sessions) == 0 {
+		return []doctorCheck{doctorSkipped(name, fmt.Sprintf("no Codex session older than %s ran an agent in the last 24 hours", textx.DurationWords(doctorSessionIDWait)))}
+	}
+	recovered := doctorRolloutIDs(ctx, d, now.Add(-agents.SessionIDWindow))
+	with, fromRollout := 0, 0
+	for _, s := range sessions {
+		if agents.HasSessionID(s) {
+			with++
+			if recovered[s.ID] {
+				fromRollout++
+			}
+		}
+	}
+	rollouts := ""
+	if fromRollout > 0 {
+		rollouts = fmt.Sprintf("; %s Codex rollout%s, as herdr's hook gave none",
+			textx.Count(fromRollout, "id came from its session's", "ids came from their sessions'"), textx.Plural(fromRollout, "", "s"))
+	}
+	gap := agents.MissingSessionIDs(sessions)
+	if gap.Streak >= 2 {
+		return []doctorCheck{doctorWarned(name, fmt.Sprintf("%d of the %d Codex sessions started since %s have no session id, the newest %d in a row%s: %s",
+			gap.Missing, gap.Sessions, gap.Since.Local().Format("15:04"), gap.Streak, rollouts, agents.SessionIDBlind),
+			"the codex session hook lines say what is wrong with herdr's hook; when they pass, herdr's hook script may give no id: "+
+				"reinstall herdr's Codex integration (`herdr integration` lists its commands)")}
+	}
+	return []doctorCheck{doctorOK(name, fmt.Sprintf("%d of the %d Codex sessions that ran an agent in the last 24 hours have a session id%s",
+		with, len(sessions), rollouts))}
+}
+
+// doctorRolloutIDs are the sessions (row ids) whose session id the
+// observer took from their Codex rollouts since since (agent.session_id
+// events, agents.EventSessionID): herdr's hook gave them none.
+func doctorRolloutIDs(ctx context.Context, d doctorDeps, since time.Time) map[int64]bool {
+	evs, err := d.Store.EventsOfKindsSince(ctx, since, agents.EventSessionID)
+	if err != nil {
+		return nil
+	}
+	out := map[int64]bool{}
+	for _, ev := range evs {
+		var data struct {
+			Session int64  `json:"session"`
+			Source  string `json:"source"`
+		}
+		if json.Unmarshal(ev.Data, &data) == nil && data.Source == agents.SessionIDFromRollout {
+			out[data.Session] = true
 		}
 	}
 	return out

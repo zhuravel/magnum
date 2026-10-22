@@ -31,7 +31,9 @@ func newDoctorCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupInspect, "doctor "+doctorUsage, "check herdr, the agent CLIs, prompts, gh, MySQL, clones, SSH, disk, launchd and the registry",
 		"Check everything magnum depends on: config, herdr (version and socket methods), every agent CLI the "+
 			"configured roles use (on PATH in zsh, logged in, shell wrapper), herdr's Codex session hook (the SessionStart hook in "+
-			"$CODEX_HOME/hooks.json herdr learns session ids from: missing, or disabled in config.toml's [hooks.state]), the judge skill, the fix role, the skill editor "+
+			"$CODEX_HOME/hooks.json herdr learns session ids from: missing, disabled in config.toml's [hooks.state], behind a hook "+
+			"without a timeout of 10 s or less, or with no trust entry for its place) and the Codex session ids of the registry (a WARN "+
+			"when the newest two Codex sessions have none), the judge skill, the fix role, the skill editor "+
 			"(whether [learn] editor can run, and why it is off), the Whiteboard "+
 			"CLI and server (when a watch has whiteboards on), the role prompts and "+
 			"prompts_dir, gh and each identity (and a watch that polls as an App with no gh identity to stand for your login), the Jira token file (when [jira] is on; MAGNUM_LIVE_JIRA=1 also asks Jira whether it "+

@@ -74,6 +74,9 @@ func TestFromAppDryRunOnce(t *testing.T) {
 	if e.d.MemoryRunner != a.Runner {
 		t.Fatal("FromApp does not hand the app's command runner to the memory probe: the daemon would never sample the memory")
 	}
+	if e.d.CodexHome == nil {
+		t.Fatal("FromApp does not hand the agents' Codex home to the engine: the daemon would never watch herdr's Codex session hook")
+	}
 	if err := e.Run(context.Background(), Options{Once: true, NoSignals: true}); err != nil {
 		t.Fatal(err)
 	}

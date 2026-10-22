@@ -118,7 +118,7 @@ type doctorHelpEntry struct{ name, words string }
 var doctorHelpEntries = []doctorHelpEntry{
 	{"config", "config"}, {"binary", "config"}, // doctorConfig's checks
 	{"herdr", "herdr (version and socket methods)"},
-	{"codex session hook", "Codex session hook"},
+	{"codex session hook", "Codex session hook"}, {"codex session ids", "Codex session ids"},
 	{"skill", "judge skill"}, {"fix role", "the fix role"}, {"learn editor", "skill editor"},
 	{"whiteboard", "Whiteboard CLI and server"},
 	{"prompt", "role prompts and prompts_dir"}, {"prompts", "role prompts and prompts_dir"},

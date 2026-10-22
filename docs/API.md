@@ -242,6 +242,14 @@ const (
 	RecoverIDHeads = 300
 )
 const (
+	CodexHookMissing  = "missing"  // no SessionStart hook names HerdrSessionHook
+	CodexHookDisabled = "disabled" // every such hook's [hooks.state] entry has enabled = false
+	CodexHookPlace    = "place"    // a hook before it has no timeout, or one over CodexHookMaxTimeout
+	CodexHookTrust    = "trust"    // its place has no [hooks.state] entry with a trusted_hash
+)
+    The checks herdr's Codex session hook can fail (CodexHookProblem.Check).
+
+const (
 	PhaseOwnPass    = "own_pass"   // the judge's own pass, while the reviewers work
 	PhaseCandidates = "candidates" // the judge judges the reviewers' reports against its own pass
 )
@@ -268,6 +276,11 @@ const (
 const CodexCyberPolicy = "cyber_policy"
     CodexCyberPolicy is the codex_error_info of Codex's cybersecurity refusal
     ("This content was flagged for possible cybersecurity risk").
+
+const CodexHookMaxTimeout = 10
+    CodexHookMaxTimeout is the longest timeout, in seconds, a SessionStart hook
+    that runs before herdr's may have for herdr's hook's place to pass: herdr's
+    own hook has 10 s, and Codex gives a hook without a timeout up to 600 s.
 
 const CompactCommand = "/compact"
     CompactCommand is what Compact types into the agent's pane: Claude Code's
@@ -400,6 +413,10 @@ const SessionIDFromRollout = "rollout"
     SessionIDFromRollout is EventSessionID's source of an id read from the
     session's Codex rollout.
 
+const SessionIDWindow = 24 * time.Hour
+    SessionIDWindow is how far back doctor and the daemon read the session ids
+    of a kind's sessions (RecentSessionIDs).
+
 const ShellStatusUnknown = -1
     ShellStatusUnknown is RunShell's status when the done marker carried no exit
     status (a full-line template that echoes the bare marker).
@@ -475,6 +492,18 @@ func AgentName(repo string, number int, role Role) string
     stays unique per (owner, repo, number, role) and always matches herdr's
     ^[a-z][a-z0-9_-]{0,31}$.
 
+func CodexFileName(home, file string) string
+    CodexFileName names file of the Codex home home for a message that must
+    not name a pane env value: "~/.codex/<file>" for the default home, else
+    "$CODEX_HOME/<file>".
+
+func CodexHookHomes(cfg *config.Config, home func(config.Role) string) (homes []string, users map[string][]string)
+    CodexHookHomes are the Codex homes herdr's session hook is checked in,
+    in the roles' order, with the session roles of the codex kind that read each
+    (home: the Manager's CodexHome; "" for one unknown). None unless the codex
+    kind's session ids come from herdr (session_source "herdr"); a shell role's
+    `codex review` needs no id.
+
 func CommandAnchor(marker string) string
     CommandAnchor is text that only the pane's echo of a shell line built with
     marker contains (the done printf's format, which the output shows with a
@@ -506,6 +535,14 @@ func DBLockLine(magnum, checkout, role string) string
 func DoneMarker(runID string) string
     DoneMarker is the line a shell role's line prints when its command finished,
     followed by the command's exit status ("<marker> 0").
+
+func HasSessionID(s store.Session) bool
+    HasSessionID reports whether session s has its CLI's session id.
+
+func JoinCodexHookProblems(problems []CodexHookProblem) string
+    JoinCodexHookProblems says problems in one sentence without its final
+    period: the first in full, each other after "; it" ("herdr's Codex session
+    hook runs after ...; it has no trust entry ...").
 
 func KVKindCLIModel(kind string) string
     KVKindCLIModel is the kv key holding the CLI's own default model of
@@ -645,6 +682,14 @@ func ProjectTouched(kind string, paths []string) bool
     directory, in any case (pathOf: macOS opens .Claude/settings.json for
     .claude/settings.json). A kind magnum does not compare touches nothing.
 
+func RecentSessionIDs(ctx context.Context, st *store.Store, kind string, now time.Time, wait time.Duration) ([]store.Session, error)
+    RecentSessionIDs are the sessions of agent kind kind started within
+    SessionIDWindow before now whose session id tells whether herdr's hook
+    gives ids, newest first: those that ran an agent (magnum prompted them),
+    were not resumed (a resumed session takes the id it resumes) and started
+    at least wait before now (herdr's hook reports the id at the start of a
+    session's first turn). It only reads.
+
 func RecordModelLimit(ctx context.Context, st *store.Store, kind, model string, reset *time.Time, cooldown time.Duration, now time.Time) (time.Time, error)
     RecordModelLimit records in registry st that model of kind hit its own limit
     at now and returns when the limit ends: at reset when the limit message
@@ -754,6 +799,24 @@ func Title(repo string, number int, role Role) string
 
 TYPES
 
+type CodexHook struct {
+	// Name is the last path element of its program (of the script an
+	// interpreter such as bash runs), cleaned for the terminal; its type for
+	// a hook that runs no command.
+	Name string
+	// Timeout is its timeout in seconds; 0 = none.
+	Timeout int
+}
+    CodexHook is one hook of a Codex hooks.json, as messages name it.
+
+type CodexHookProblem struct {
+	Check string // CodexHookMissing, CodexHookDisabled, CodexHookPlace or CodexHookTrust
+	// Text says what is wrong in one sentence without its final period.
+	Text string
+}
+    CodexHookProblem is one check herdr's Codex session hook fails
+    (CodexSessionHook.Problems).
+
 type CodexSessionHook struct {
 	HooksFile  string // <home>/hooks.json
 	ConfigFile string // <home>/config.toml
@@ -763,6 +826,23 @@ type CodexSessionHook struct {
 	// false on each such hook, when every one of them has such an entry;
 	// nil when one of them runs (its entry enables it, or it has none).
 	Disabled []string
+	// Group and Index are the place of herdr's hook that runs, when one
+	// does (the first whose place has a trust entry, else the first not
+	// disabled): its group among HooksFile's SessionStart groups and its
+	// index in that group. Place is its [hooks.state] key without the
+	// hooks.json path ("session_start:<group>:<index>").
+	Group, Index int
+	Place        string
+	// Before are the SessionStart hooks before it, in Codex's order, but
+	// those their entries disable.
+	Before []CodexHook
+	// Trusted: config.toml has a [hooks.state] entry with a trusted_hash for
+	// its place. Whether that hash is of this command magnum cannot tell
+	// (Codex hashes its own normal form of the hook).
+	Trusted bool
+	// Version is the HERDR_INTEGRATION_VERSION its script's header names
+	// ("" = unknown: no such line, or no script where its command says).
+	Version string
 }
     CodexSessionHook is what a Codex home says of herdr's SessionStart hook
     (ReadCodexSessionHook).
@@ -770,13 +850,24 @@ type CodexSessionHook struct {
 func ReadCodexSessionHook(home string) (h CodexSessionHook, ok bool, err error)
     ReadCodexSessionHook reads herdr's SessionStart hook in the Codex home home:
     whether a SessionStart hook of its hooks.json names HerdrSessionHook,
-    and whether config.toml's [hooks.state] entry of each such hook (keyed
-    by the hooks.json path, as written or with its symlinks resolved)
-    sets enabled = false. ok is false when there is nothing to judge:
-    home unknown or no hooks.json there (herdr not installed is another check).
-    A missing config.toml, [hooks.state] table or entry disables nothing. err
-    names a file that cannot be read or decoded, without the decoder's message,
-    which may quote the file. It only reads.
+    whether config.toml's [hooks.state] entry of each such hook (keyed by the
+    hooks.json path, as written or with its symlinks resolved) sets enabled
+    = false, and, of the one that runs, its place, the hooks before it,
+    its trust entry and its script's integration version. ok is false when
+    there is nothing to judge: home unknown or no hooks.json there (herdr not
+    installed is another check). A missing config.toml, [hooks.state] table or
+    entry disables nothing and trusts nothing. err names a file that cannot be
+    read or decoded, without the decoder's message, which may quote the file.
+    It only reads.
+
+func (h CodexSessionHook) Problems(hooksFile, configFile string) []CodexHookProblem
+    Problems are the checks herdr's hook fails, naming the files as
+    hooksFile and configFile say (doctor shows their paths; a daemon message
+    CodexFileName's, since a Codex home may be a pane env value): the hook is
+    missing, or disabled, or else its place (a hook before it can hold it up:
+    no timeout, or one over CodexHookMaxTimeout) and its trust (its place has no
+    trust entry, so Codex asks the operator to review the hooks before it runs
+    it). None when it passes.
 
 type Deps struct {
 	Herdr  Herdr
@@ -2222,6 +2313,23 @@ type RoleData struct {
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
     prompts may use. Fields a template does not use may stay zero.
+
+type SessionIDGap struct {
+	// Streak is how many of the newest sessions in a row have no id.
+	Streak int
+	// Sessions counts the sessions from the newest back to the oldest
+	// without an id since two in a row last had one, Missing those of them
+	// without one, and Since is when that oldest one started (zero when no
+	// session lacks an id).
+	Sessions, Missing int
+	Since             time.Time
+}
+    SessionIDGap is what sessions say of their ids (MissingSessionIDs).
+
+func MissingSessionIDs(sessions []store.Session) SessionIDGap
+    MissingSessionIDs reads the gap in the session ids of sessions
+    (RecentSessionIDs, newest first): the newest without an id in a row,
+    and those without one since two sessions in a row last had one.
 
 type ShellData struct {
 	Title      string   // the pane title, e.g. "PR #729 codex-review - talkable"; "" = no title prefix
@@ -6320,6 +6428,19 @@ const (
     kv keys of Codex's login.
 
 const (
+	// EventCodexSessionIDsMissing (warn) says the newest Codex sessions in
+	// a row have no session id, once a run.
+	EventCodexSessionIDsMissing = "codex.session_ids_missing"
+	// EventCodexSessionIDsBack (info) says a Codex session has an id again
+	// after such a run.
+	EventCodexSessionIDsBack = "codex.session_ids_back"
+	// EventCodexHooksChanged (warn) says a Codex home's hooks.json changed
+	// and herdr's hook now fails a check, once a change.
+	EventCodexHooksChanged = "codex.hooks_changed"
+)
+    The events of herdr's Codex session hook.
+
+const (
 	// KVConfigRestart is a saved config the daemon is to restart on
 	// (ConfigRestartMark as JSON): written by the settings screen's save
 	// (settings.RequestRestart), read by restartForBuild and `magnum
@@ -6702,6 +6823,11 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     FormerDismissMessage is the reason a dismissed review of a former identity
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
+
+const KVCodexSessionIDsMissing = "codex.session_ids_missing"
+    KVCodexSessionIDsMissing is when the run of Codex sessions without a session
+    id the daemon warned of started (store.FormatTime); absent when there is no
+    such run.
 
 const KVDaemonShellPATH = "daemon.shell_path"
     KVDaemonShellPATH is what the running daemon took from the login shell's
@@ -7779,6 +7905,10 @@ type Deps struct {
 	// never a token); nil = no restart of the Codex sessions when it
 	// changes (codex_login.go).
 	CodexLogin func(codexHome string) (usage.Login, error)
+	// CodexHome is the Codex home a session of a role reads
+	// (agents.Manager.CodexHome, which FromApp sets); nil = herdr's Codex
+	// session hook is not watched (codex_session_hook.go).
+	CodexHome func(role config.Role) string
 	// Probe checks that a clone's origin answers (`git ls-remote` with the
 	// environment gitx gives git); it lifts an infrastructure pause. nil =
 	// no probe: the pause lifts when its backoff ends.
@@ -20149,6 +20279,12 @@ func (s *Store) SessionIDHeld(ctx context.Context, sessionID string, except int6
 
 func (s *Store) SessionsByPR(ctx context.Context, prID int64) ([]Session, error)
     SessionsByPR returns every session of a PR, oldest first.
+
+func (s *Store) SessionsStartedSince(ctx context.Context, kind string, since time.Time) ([]Session, error)
+    SessionsStartedSince returns the sessions of agent kind kind (agent_kind)
+    started at or after since, in any state, newest first (started_at, then id).
+    Doctor and the daemon read the session ids of a kind's recent sessions with
+    it (agents.RecentSessionIDs).
 
 func (s *Store) SetAutoApproveHold(ctx context.Context, h AutoApproveHold) error
     SetAutoApproveHold records h, replacing the PR's earlier hold.
