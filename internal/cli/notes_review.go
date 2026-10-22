@@ -17,6 +17,7 @@ package cli
 // back to new when rejected, dismissed after a second rejection.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -105,15 +106,18 @@ type notesReviewMiss struct {
 
 // notesReviewData is a proposal as --review shows it (and --json prints).
 type notesReviewData struct {
-	Repo     string               `json:"repo"`
-	Proposal store.NotesProposal  `json:"proposal"`
-	Diff     string               `json:"notes_diff"`
-	Harness  []notesHarnessChange `json:"harness"`
-	Sections []notes.Change       `json:"sections"`
-	Misses   []notesReviewMiss    `json:"misses"`
-	Before   notes.Size           `json:"size_before"`
-	After    notes.Size           `json:"size_after"`
-	Expired  bool                 `json:"expired,omitempty"` // older than engine.ProposalTTL: it can no longer be applied
+	Repo     string              `json:"repo"`
+	Proposal store.NotesProposal `json:"proposal"`
+	Diff     string              `json:"notes_diff"`
+	// ArchiveDiff is the archive's (notes.ArchiveName) unified diff, ""
+	// when the proposal leaves it as it is; Harness leaves it out.
+	ArchiveDiff string               `json:"archive_diff,omitempty"`
+	Harness     []notesHarnessChange `json:"harness"`
+	Sections    []notes.Change       `json:"sections"`
+	Misses      []notesReviewMiss    `json:"misses"`
+	Before      notes.Size           `json:"size_before"`
+	After       notes.Size           `json:"size_after"`
+	Expired     bool                 `json:"expired,omitempty"` // older than engine.ProposalTTL: it can no longer be applied
 	// Stale: the notes changed since the proposal was made; Merge is its
 	// three-way merge with their changes, and when it is clean the diff,
 	// the harness changes and the sizes are those of the merge applied to
@@ -249,15 +253,21 @@ func notesReviewProposal(ctx context.Context, c *Context, d *actDeps, f notesFla
 		}
 		return cmdFail(c, "notes", fmt.Errorf("proposal %d is older than 7 days and expired; `magnum notes %s --curate` asks for a new one", p.ID, full))
 	}
-	curation := p.Kind == store.ProposalCuration
+	// A recovery (magnum's own proposal) is reviewed like a restore: no
+	// curator to follow it up.
+	curation := p.Kind == store.ProposalCuration && p.Trigger != engine.CurateTriggerRecover
 	conflict := data.Stale && !data.Merge.Clean
+	what, again := "restore", fmt.Sprintf("--restore %d` proposes the version", store.Deref(p.VersionID))
+	if p.Trigger == engine.CurateTriggerRecover {
+		what, again = "recovery", "--recover` proposes it"
+	}
 	switch {
 	case conflict && curation:
 		fmt.Fprintf(c.Stdout, "Ask for a new curation of the notes of %s? y asks for one from the notes now, which reads proposal %d (kept as superseded), "+
 			"n rejects it, anything else leaves it for later [y/N] ", full, p.ID)
 	case conflict:
-		fmt.Fprintf(c.Stdout, "Proposal %d cannot be applied. y expires it (`--restore %d` proposes the version again from the notes now), "+
-			"n rejects it, anything else leaves it for later [y/N] ", p.ID, store.Deref(p.VersionID))
+		fmt.Fprintf(c.Stdout, "Proposal %d cannot be applied. y expires it (`%s again from the notes now), "+
+			"n rejects it, anything else leaves it for later [y/N] ", p.ID, again)
 	case data.Stale && curation:
 		fmt.Fprintf(c.Stdout, "Apply the merge of proposal %d to the notes of %s? y applies it, c asks for a new curation from the notes now instead "+
 			"(proposal %d kept as superseded), n rejects it, anything else leaves it for later [y/N] ", p.ID, full, p.ID)
@@ -279,11 +289,11 @@ func notesReviewProposal(ctx context.Context, c *Context, d *actDeps, f notesFla
 		return notesCurate(ctx, c, d, f, full, p.ID)
 	case (a == "y" || a == "yes") && conflict:
 		if _, err := d.Store.DecideNotesProposal(ctx, p.ID, []string{store.ProposalPending}, store.ProposalExpired,
-			"the notes changed since the restore was proposed, and the changes conflict", notesNow(d), nil); err != nil {
+			"the notes changed since the "+what+" was proposed, and the changes conflict", notesNow(d), nil); err != nil {
 			return cmdFail(c, "notes", err)
 		}
-		return cmdFail(c, "notes", fmt.Errorf("proposal %d conflicts with the notes' changes since and expired; `magnum notes %s --restore %d` "+
-			"proposes the version again from the notes now", p.ID, full, store.Deref(p.VersionID)))
+		return cmdFail(c, "notes", fmt.Errorf("proposal %d conflicts with the notes' changes since and expired; `magnum notes %s %s again from the notes now",
+			p.ID, full, again))
 	case a == "y" || a == "yes":
 		target := data.proposed
 		if data.Stale {
@@ -304,7 +314,7 @@ func notesReviewProposal(ctx context.Context, c *Context, d *actDeps, f notesFla
 			return cmdFail(c, "notes", err)
 		}
 		msg := fmt.Sprintf("rejected proposal %d", p.ID)
-		if reason != "" && p.Kind == store.ProposalCuration {
+		if reason != "" && curation {
 			msg += "; the next curation reads why"
 		}
 		fmt.Fprintln(c.Stdout, msg+notesMissesMoved(ctx, d, p.ID))
@@ -389,6 +399,7 @@ func notesReviewFrom(ctx context.Context, d *actDeps, full string, p store.Notes
 		toName = fmt.Sprintf("version %d", store.Deref(p.VersionID))
 	}
 	data.Diff = notes.Unified(fromName, toName, string(from.Notes), string(to.Notes), 3)
+	data.ArchiveDiff = notes.Unified(fromName, toName, string(from.Archive()), string(to.Archive()), 3)
 	reasons := map[string]notes.Change{}
 	for _, ch := range data.changes.Files {
 		reasons[ch.Name] = ch
@@ -399,7 +410,7 @@ func notesReviewFrom(ctx context.Context, d *actDeps, full string, p store.Notes
 			kept[n] = true
 		}
 	}
-	added, removed, changed := notes.HarnessDelta(from.Listing(), to.Listing())
+	added, removed, changed := notes.HarnessDelta(notes.Scripts(from.Listing()), notes.Scripts(to.Listing()))
 	seen := map[string]bool{}
 	add := func(name, change string) {
 		seen[name] = true
@@ -419,7 +430,7 @@ func notesReviewFrom(ctx context.Context, d *actDeps, full string, p store.Notes
 		add(n, "changed")
 	}
 	for _, b := range to.Files {
-		if !seen[b.Path] {
+		if !seen[b.Path] && !notes.IsArchive(b.Path) {
 			add(b.Path, "kept")
 		}
 	}
@@ -456,6 +467,8 @@ func notesPrintReview(c *Context, color bool, data notesReviewData) {
 	switch {
 	case p.Kind == store.ProposalRestore:
 		what = fmt.Sprintf("a restore of version %d", store.Deref(p.VersionID))
+	case p.Trigger == engine.CurateTriggerRecover:
+		what = "a recovery of the lines the notes history held and the notes lack (the notes stay as they are)"
 	case p.Trigger != "":
 		what += " (" + p.Trigger + ")"
 	}
@@ -467,6 +480,7 @@ func notesPrintReview(c *Context, color bool, data notesReviewData) {
 	base := store.Deref(p.BaseVersionID)
 	fromName := fmt.Sprintf("%s notes, version %d (when the proposal was made)", data.Repo, base)
 	from, to := data.base.Notes, data.proposed.Notes
+	fromArchive, toArchive := data.base.Archive(), data.proposed.Archive()
 	if m := data.Merge; data.Stale {
 		fmt.Fprintf(w, "STALE: the notes changed since the proposal was made from version %d.\n", base)
 		switch {
@@ -477,6 +491,7 @@ func notesPrintReview(c *Context, color bool, data notesReviewData) {
 			}
 			fromName, to = data.Repo+" notes, now", data.merged.Notes
 			from = data.live.Notes
+			fromArchive, toArchive = data.live.Archive(), data.merged.Archive()
 		default:
 			var where []string
 			if len(m.NotesConflicts) > 0 {
@@ -490,13 +505,21 @@ func notesPrintReview(c *Context, color bool, data notesReviewData) {
 		}
 	}
 	b, a := data.Before, data.After
-	fmt.Fprintf(w, "notes: %d → %d bytes, %d → %d lines; harness: %d → %d files, %d → %d bytes\n\n",
-		b.Bytes, a.Bytes, b.Lines, a.Lines, b.HarnessFiles, a.HarnessFiles, b.HarnessBytes, a.HarnessBytes)
+	archive := ""
+	if b.ArchiveBytes > 0 || a.ArchiveBytes > 0 {
+		archive = fmt.Sprintf("; archive: %d → %d bytes", b.ArchiveBytes, a.ArchiveBytes)
+	}
+	fmt.Fprintf(w, "notes: %d → %d bytes, %d → %d lines; harness: %d → %d files, %d → %d bytes%s\n\n",
+		b.Bytes, a.Bytes, b.Lines, a.Lines, b.HarnessFiles, a.HarnessFiles, b.HarnessBytes, a.HarnessBytes, archive)
 	toName := fmt.Sprintf("%s notes, proposal %d", data.Repo, p.ID)
 	if data.Stale && data.Merge.Clean {
 		toName += " merged"
 	}
 	notesPrintDiff(w, color, fromName, toName, from, to)
+	if !bytes.Equal(fromArchive, toArchive) {
+		fmt.Fprintln(w)
+		notesPrintDiff(w, color, strings.Replace(fromName, " notes,", " archive,", 1), strings.Replace(toName, " notes,", " archive,", 1), fromArchive, toArchive)
+	}
 	fmt.Fprintln(w)
 	var added, removed, changed []string
 	reasons := map[string]notes.Change{}

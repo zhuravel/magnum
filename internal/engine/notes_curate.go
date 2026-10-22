@@ -54,6 +54,12 @@ const (
 	CurateTriggerWeekly    = config.CurateWeekly
 	CurateTriggerMisses    = config.CurateMisses
 	CurateTriggerRequest   = "request"
+	// CurateTriggerRecover marks the proposal `magnum notes <repo>
+	// --recover` makes (a curation proposal no curator wrote): the archive
+	// of the lines the history held and the notes lack. It is no curation of
+	// the repository: the triggers' spacing and the curator's rejections
+	// leave it out.
+	CurateTriggerRecover = "recover"
 
 	// ProposalTTL is how long a proposal waits for the operator before it
 	// expires.
@@ -343,14 +349,15 @@ func (e *Engine) dueCurations(ctx context.Context, now time.Time) []curateDue {
 			continue
 		}
 		if i := slices.IndexFunc(props, func(p store.NotesProposal) bool { return p.State == store.ProposalPending }); i >= 0 {
-			if p := props[i]; p.Kind == store.ProposalCuration && now.Sub(p.CreatedAt) >= staleRecurateAfter && e.staleConflicts(ctx, repo, p) {
+			if p := props[i]; p.Kind == store.ProposalCuration && p.Trigger != CurateTriggerRecover && now.Sub(p.CreatedAt) >= staleRecurateAfter &&
+				e.staleConflicts(ctx, repo, p) {
 				out = append(out, curateDue{repo: repo, trigger: CurateTriggerStale, stale: &p})
 			}
 			continue
 		}
 		var last *store.NotesProposal
 		for i := range props {
-			if props[i].Kind == store.ProposalCuration {
+			if props[i].Kind == store.ProposalCuration && props[i].Trigger != CurateTriggerRecover {
 				last = &props[i]
 				break
 			}
@@ -443,7 +450,8 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	}
 	var stale *store.NotesProposal
 	switch {
-	case len(pending) > 0 && p.Supersede != 0 && pending[0].ID == p.Supersede && pending[0].Kind == store.ProposalCuration:
+	case len(pending) > 0 && p.Supersede != 0 && pending[0].ID == p.Supersede && pending[0].Kind == store.ProposalCuration &&
+		pending[0].Trigger != CurateTriggerRecover:
 		stale = &pending[0]
 	case len(pending) > 0:
 		return "", fmt.Errorf("proposal %d for the notes of %s waits for review: `magnum notes %s --review` applies or rejects it first", pending[0].ID, full, full)
@@ -841,6 +849,9 @@ func (e *Engine) curateUsage(ctx context.Context, repo store.Repo, nr notes.Repo
 		byName[x.File] = x
 	}
 	for _, b := range state.Files {
+		if notes.IsArchive(b.Path) { // no script: its size is in Size
+			continue
+		}
 		x := byName[b.Path]
 		u.Harness = append(u.Harness, curateFile{Name: b.Path, Bytes: int64(len(b.Body)), Rounds: x.Rounds, Uses: x.Uses,
 			LastUsed: x.LastUsed, UnusedCandidate: x.Unused()})
@@ -850,7 +861,7 @@ func (e *Engine) curateUsage(ctx context.Context, repo store.Repo, nr notes.Repo
 		return nil, nil, err
 	}
 	for _, p := range rejected {
-		if p.Kind == store.ProposalCuration && p.Reason != "" {
+		if p.Kind == store.ProposalCuration && p.Trigger != CurateTriggerRecover && p.Reason != "" {
 			u.Rejections = append(u.Rejections, curateRejection{At: store.Deref(p.DecidedAt), Reason: p.Reason})
 		}
 	}

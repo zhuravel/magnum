@@ -32,7 +32,7 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-const notesUsage = "[<repo> [--edit | --log | --diff [N] | --curate | --review [--reason <text>] | --restore <version> [--reason <text>]]] [--json]"
+const notesUsage = "[<repo> [--edit | --log | --diff [N] | --curate | --review [--reason <text>] | --restore <version> [--reason <text>] | --recover]] [--json]"
 
 // notesMaxShown caps what `magnum notes` prints: notes larger than this are
 // garbage not worth flooding the terminal with.
@@ -40,10 +40,10 @@ const notesMaxShown = 1 << 20
 
 // notesFlags are the parsed `magnum notes` flags.
 type notesFlags struct {
-	edit, log, curate, review, json bool
-	diff                            string // --diff [N]: "" = not asked
-	restore                         int64
-	reason                          string
+	edit, log, curate, review, recover, json bool
+	diff                                     string // --diff [N]: "" = not asked
+	restore                                  int64
+	reason                                   string
 }
 
 func newNotesCmd(c *Context) *cobra.Command {
@@ -60,15 +60,24 @@ func newNotesCmd(c *Context) *cobra.Command {
 			"first and the judge rewrites it after a round that taught it something durable; the directory next to it "+
 			"(the same name without .md) holds the QA scripts the notes name, the harness. <repo> is owner/name, or a "+
 			"name in daemon.default_repo's owner. A repository without notes prints a note on stderr and exits 0. Below "+
-			"the notes, on stderr: their sizes against the [notes] curation triggers, the harness files no round used "+
-			"in 20 rounds or more, and a curation proposal waiting for review.\n\n"+
+			"the notes, on stderr: their sizes against the [notes] limits (hints to organize them, not caps), the size of "+
+			"the archive (ARCHIVE.md in the harness directory: the lines curations retired, word for word, with what "+
+			"became of each; roles read it only when a lesson seems missing), the harness files no round used in 20 rounds "+
+			"or more, and a curation proposal waiting for review.\n\n"+
 			"--edit opens the file in $VISUAL, else $EDITOR, else vi, on the terminal (the harness directory is created "+
 			"first) and records the result as a version.\n\n"+
 			"Every version of the notes and the harness is kept in the registry: --log lists them (time, source, PR, "+
 			"size, harness changes), --diff [N] shows what changed between the version N back (default 1) and the notes "+
-			"now, and --restore <version> proposes an earlier version, reviewed like a curation.\n\n"+
+			"now, and --restore <version> proposes an earlier version, reviewed like a curation. The archive is part of "+
+			"every version: --diff shows its changes and --restore brings it back with the notes.\n\n"+
+			"--recover proposes, once, an archive that holds every line a recorded version of the notes held (the judges', "+
+			"the people's, the imports and the applied curations', never a proposal's own) and the notes now lack word "+
+			"for word, grouped by the day of the version that dropped it; the notes stay as they are, and a line with a "+
+			"secret or a home directory path is left out. It is reviewed like a restore; --recover --json prints what it "+
+			"would propose and records nothing.\n\n"+
 			"--curate asks the daemon for a curation now: an agent proposes new notes and harness in a scratch copy, "+
-			"keeping what helps future reviews of the repository; the live notes do not change. While the daemon drains "+
+			"organizing what helps future reviews of the repository and moving each line it retires or rewrites to the "+
+			"archive, word for word (a proposal that loses a line is invalid); the live notes do not change. While the daemon drains "+
 			"for a restart, a round of the repository is in its judge stage (which may rewrite the notes), another "+
 			"curation runs, or a watch's poll identity has a GitHub budget below [github] budget_floor, the curation "+
 			"is queued and starts once that ended (after the restart, for a drain; once the budget recovers); an "+
@@ -90,8 +99,9 @@ func newNotesCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&f.curate, "curate", false, "ask the daemon for a curation of the notes now")
 	fs.BoolVar(&f.review, "review", false, "review the waiting curation proposal and apply (y) or reject (n) it")
 	fs.Int64Var(&f.restore, "restore", 0, "propose the recorded `version` back, reviewed like a curation")
-	fs.StringVar(&f.reason, "reason", "", "with --review or --restore: why the proposal is rejected (the next curation reads it)")
-	fs.BoolVar(&f.json, "json", false, "print JSON (the list, the notes' sizes, --log, --curate, --review, --restore)")
+	fs.BoolVar(&f.recover, "recover", false, "propose an archive of the lines earlier versions held and the notes lack")
+	fs.StringVar(&f.reason, "reason", "", "with --review, --restore or --recover: why the proposal is rejected (the next curation reads it)")
+	fs.BoolVar(&f.json, "json", false, "print JSON (the list, the notes' sizes, --log, --curate, --review, --restore, --recover)")
 	cmd.ValidArgsFunction = completeFirst(c.completeNotesRepos)
 	return cmd
 }
@@ -109,23 +119,23 @@ func runNotes(c *Context, f notesFlags, pos []string) int {
 			f.diff, pos = pos[0], pos[1:]
 		}
 	}
-	if len(pos) == 0 && !f.edit && !f.log && f.diff == "" && !f.curate && !f.review && f.restore == 0 && f.reason == "" {
+	if len(pos) == 0 && !f.edit && !f.log && f.diff == "" && !f.curate && !f.review && f.restore == 0 && !f.recover && f.reason == "" {
 		return notesList(c, f)
 	}
 	if len(pos) != 1 {
 		return inspUsage(c, "notes", "want one repository (owner/name or name), or none to list them all", notesUsage)
 	}
 	actions := 0
-	for _, on := range []bool{f.edit, f.log, f.diff != "", f.curate, f.review, f.restore != 0} {
+	for _, on := range []bool{f.edit, f.log, f.diff != "", f.curate, f.review, f.restore != 0, f.recover} {
 		if on {
 			actions++
 		}
 	}
 	switch {
 	case actions > 1:
-		return inspUsage(c, "notes", "--edit, --log, --diff, --curate, --review and --restore go one at a time", notesUsage)
-	case f.reason != "" && !f.review && f.restore == 0:
-		return inspUsage(c, "notes", "--reason goes with --review or --restore", notesUsage)
+		return inspUsage(c, "notes", "--edit, --log, --diff, --curate, --review, --restore and --recover go one at a time", notesUsage)
+	case f.reason != "" && !f.review && f.restore == 0 && !f.recover:
+		return inspUsage(c, "notes", "--reason goes with --review, --restore or --recover", notesUsage)
 	case f.json && (f.edit || f.diff != ""):
 		return inspUsage(c, "notes", "--json does not go with --edit or --diff", notesUsage)
 	case f.restore < 0:
@@ -161,7 +171,7 @@ func runNotes(c *Context, f notesFlags, pos []string) int {
 	switch {
 	case f.edit:
 		return notesEdit(c, full, nr)
-	case f.log, back > 0, f.curate, f.review, f.restore != 0:
+	case f.log, back > 0, f.curate, f.review, f.restore != 0, f.recover:
 		return notesRegistryAction(c, f, back, full, nr)
 	}
 	return notesShow(c, f, full, nr)
@@ -320,8 +330,8 @@ func notesGather(c *Context, full string, nr notes.Repo) notesView {
 	return v
 }
 
-// notesSummary writes the sizes against the triggers, the unused harness
-// files and a waiting proposal.
+// notesSummary writes the sizes against the limits, the archive's size, the
+// unused harness files and a waiting proposal.
 func notesSummary(w io.Writer, v notesView) {
 	past := func(limit string) string {
 		if slices.Contains(v.Over, limit) {
@@ -332,6 +342,10 @@ func notesSummary(w io.Writer, v notesView) {
 	s, l := v.Size, v.Limits
 	fmt.Fprintf(w, "notes: %d bytes (max_bytes %d%s), %d lines, %d longer than %d characters (max_line%s)\n",
 		s.Bytes, l.MaxBytes, past(notes.LimitBytes), s.Lines, s.LongLines, l.MaxLine, past(notes.LimitLine))
+	if s.ArchiveBytes > 0 {
+		fmt.Fprintf(w, "archive: %d bytes, %d lines (%s in the harness: the lines curations retired, word for word)\n",
+			s.ArchiveBytes, s.ArchiveLines, notes.ArchiveName)
+	}
 	fmt.Fprintf(w, "harness: %d files (max_harness_files %d%s), %d bytes (max_harness_bytes %d%s)\n",
 		s.HarnessFiles, l.MaxHarnessFiles, past(notes.LimitHarnessFiles), s.HarnessBytes, l.MaxHarnessBytes, past(notes.LimitHarnessBytes))
 	if len(v.Over) > 0 {
@@ -339,7 +353,7 @@ func notesSummary(w io.Writer, v notesView) {
 		if !v.Curate.Has(config.CurateOverLimit) {
 			how = "[notes] curate = " + v.Curate.String() + " leaves over_limit out"
 		}
-		fmt.Fprintf(w, "past %s, curation triggers, not caps: %s; `magnum notes %s --curate` asks for one now\n",
+		fmt.Fprintf(w, "past %s, a hint to organize them, not a cap: %s; `magnum notes %s --curate` asks for a curation now\n",
 			strings.Join(v.Over, ", "), how, v.Repo)
 	}
 	if len(v.Unused) > 0 {

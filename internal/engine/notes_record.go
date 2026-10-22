@@ -10,6 +10,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -100,11 +101,88 @@ func (e *Engine) recordRoundNotes(ctx context.Context, job *roundJob, in pipelin
 	}
 	if snap, err := notes.ReadSnapshot(res.ReportDir); err == nil && snap.Round == res.Round {
 		if state.Fingerprint() != snap.Fingerprint() {
-			e.recordNotes(ctx, job.repo, nr, state, store.NotesFromJudge, job.pr.ID, res.JudgeRunID)
+			// The history's latest version (LatestNotesVersion leaves out
+			// proposals' own states): a curation applied during the round
+			// changed the archive too, and that change stays.
+			prev, perr := e.st.LatestNotesVersion(ctx, job.repo.ID)
+			v, err := e.recordNotes(ctx, job.repo, nr, state, store.NotesFromJudge, job.pr.ID, res.JudgeRunID)
+			if judged := archiveSHA(state.Listing()); err == nil && judged != archiveSHA(snap.Harness) &&
+				(perr != nil || judged != archiveSHA(listingOf(prev))) {
+				state = e.putArchiveBack(ctx, job.repo, nr, state, archiveSHA(snap.Harness), v)
+			}
 		}
 		e.recordNotesUsage(ctx, job.repo.ID, nr, state, res)
 	}
 	e.checkNotesLimits(ctx, nr, state.Size(e.cfg.Notes.MaxLine))
+}
+
+// archiveSHA is the archive's hash in a listing, "" when it has none.
+func archiveSHA(files []notes.File) string {
+	for _, f := range files {
+		if notes.IsArchive(f.Name) {
+			return f.SHA256
+		}
+	}
+	return ""
+}
+
+// putArchiveBack undoes a judge's change to the archive (notes.ArchiveName),
+// which only a curation or a recovery writes: the archive goes back to the
+// one the round found, found by the hash its snapshot lists (found, "" when
+// the round found none, which removes the judge's) among the bodies the
+// registry stores for any version of the repository, never to a newer row
+// (a waiting proposal's own version is one). Under the notes lock, when the
+// archive is still what the judge left (judged, recorded as the judge's
+// version v, so the history keeps it), it is written back and the result
+// recorded as an import, with one notes.archive_restored warning that names
+// the PR and the version, never the text. When no stored body has that hash,
+// the judge's archive stays and the warning says it could not be put back.
+// It returns the notes state now; a failure is logged and leaves state as it
+// is.
+func (e *Engine) putArchiveBack(ctx context.Context, repo store.Repo, nr notes.Repo, judged notes.State, found string, v store.NotesVersion) notes.State {
+	who := "the judge"
+	if v.PRNumber > 0 {
+		who = fmt.Sprintf("#%d's judge", v.PRNumber)
+	}
+	what := fmt.Sprintf("notes of %s: %s changed the archive (%s), which only a curation or a recovery writes", nr.FullName(), who, notes.ArchiveName)
+	data := map[string]any{"version": v.ID, "pr": v.PRNumber}
+	var body []byte
+	if found != "" {
+		var err error
+		body, err = e.st.NotesHarnessBlob(ctx, repo.ID, found)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			data["restored"] = false
+			e.event(ctx, "warn", notesSubject(nr), "notes.archive_restored", fmt.Sprintf("%s; it could not be put back: no recorded version "+
+				"holds the archive the round found, so it stays as the judge left it (version %d)", what, v.ID), data)
+			return judged
+		case err != nil:
+			e.log.Warn("repository notes: read the archive to put back", "repo", nr.FullName(), "err", err)
+			return judged
+		}
+	}
+	unlock, err := notes.Lock(ctx, nr.Lock(), NotesLockWait)
+	if err != nil {
+		e.log.Warn("repository notes: the lock to put the archive back", "repo", nr.FullName(), "err", err)
+		return judged
+	}
+	defer unlock()
+	now, err := notes.ReadState(nr)
+	if err != nil || archiveSHA(now.Listing()) != archiveSHA(judged.Listing()) {
+		return judged // changed again since: left for the next round or reconcile
+	}
+	if err := notes.WriteArchive(nr, body); err != nil {
+		e.log.Warn("repository notes: put the archive back", "repo", nr.FullName(), "err", err)
+		return judged
+	}
+	if now, err = notes.ReadState(nr); err != nil {
+		return judged
+	}
+	data["restored"] = true
+	e.event(ctx, "warn", notesSubject(nr), "notes.archive_restored",
+		fmt.Sprintf("%s; put back as the round found it (version %d keeps the judge's)", what, v.ID), data)
+	_, _ = e.recordNotes(ctx, repo, nr, now, store.NotesFromImport, 0, "")
+	return now
 }
 
 // measureNotes checks the limits from the files' sizes alone.
@@ -138,7 +216,7 @@ func (e *Engine) recordNotes(ctx context.Context, repo store.Repo, nr notes.Repo
 		files = listingOf(prev)
 	}
 	plus, minus := notes.LineChanges(string(before), string(state.Notes))
-	hAdd, hDel, hChg := notes.HarnessDelta(files, state.Listing())
+	hAdd, hDel, hChg := notes.HarnessDelta(notes.Scripts(files), notes.Scripts(state.Listing()))
 	what := source
 	if v.PRNumber > 0 {
 		what = fmt.Sprintf("%s of #%d", source, v.PRNumber)
@@ -229,7 +307,9 @@ func names(ns []string) []string {
 func (e *Engine) recordNotesUsage(ctx context.Context, repoID int64, nr notes.Repo, state notes.State, res pipeline.RoundResult) {
 	present := make([]string, 0, len(state.Files))
 	for _, b := range state.Files {
-		present = append(present, b.Path)
+		if !notes.IsArchive(b.Path) { // no script: never used, never unused
+			present = append(present, b.Path)
+		}
 	}
 	now := e.now()
 	if err := e.st.RecordNotesRound(ctx, repoID, present, now); err != nil {

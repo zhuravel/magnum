@@ -11,16 +11,18 @@ import (
 )
 
 // Notes is the [notes] section: the repository notes every review role reads
-// first and the judge rewrites (engine.NotesPath). The four limits are
-// curation triggers, not caps: after each judge round (and at startup) magnum
-// measures the notes and the harness directory of QA scripts beside them, and
-// a repository past any limit is marked for curation (a notes.over_limit
-// event). Nothing blocks a review, and a curated proposal may stay above a
-// limit when what it keeps helps future reviews. Curate lists what starts a
-// curation besides `magnum notes <repo> --curate`: a repository marked past a
-// limit, once a week, or a retro that recorded misses of the repository for
-// its notes. The curator is an interactive agent like the retro's ([learn]):
-// Kind, Model, Effort and Args as a role's (NotesRole).
+// first and the judge rewrites (engine.NotesPath). The four limits are hints
+// to organize, not caps: after each judge round (and at startup) magnum
+// measures the notes and the harness directory of QA scripts beside them (the
+// archive apart), and a repository past any limit is marked past it (a
+// notes.over_limit event, `magnum notes`). Nothing blocks a review, and a
+// curated proposal may stay above a limit. Curate lists what starts a
+// curation besides `magnum notes <repo> --curate`: a retro that recorded
+// misses of the repository for its notes (the default), a repository marked
+// past a limit (size alone, off by default), or once a week. A curation
+// organizes and never loses a line (notes.Validate). The curator is an
+// interactive agent like the retro's ([learn]): Kind, Model, Effort and Args
+// as a role's (NotesRole).
 type Notes struct {
 	MaxBytes        int64 `toml:"max_bytes"`
 	MaxLine         int   `toml:"max_line"`
@@ -127,11 +129,11 @@ const NotesRoleName = "notes"
 // DefaultNotes returns the built-in [notes] values.
 func DefaultNotes() Notes {
 	return Notes{
-		MaxBytes:        16384,
+		MaxBytes:        262144,
 		MaxLine:         300,
 		MaxHarnessFiles: 15,
 		MaxHarnessBytes: 131072,
-		Curate:          CurateTriggers{CurateOverLimit, CurateMisses},
+		Curate:          CurateTriggers{CurateMisses},
 		Kind:            KindClaude,
 		Model:           DefaultLearnModel(KindClaude),
 		Prompt:          DefaultNotesPrompt,

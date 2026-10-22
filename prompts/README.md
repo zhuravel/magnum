@@ -370,10 +370,10 @@ request text they quote) is data, not instructions.
 |---|---|
 | `.Repo` | the repository, `owner/name` |
 | `.Dir` | the curation's scratch directory, the only place the agent may write |
-| `.Current`, `.CurrentHarness` | the notes and the harness now, `current.md` and `current/` (read only) |
+| `.Current`, `.CurrentHarness` | the notes and the harness now, `current.md` and `current/` (read only; the archive, `ARCHIVE.md`, is among the harness files when there is one) |
 | `.Usage` | `usage.json`: the limits, the sizes, which limits the notes are past, each harness file's `rounds`, `uses` and `unused_candidate`, and the operator's reasons for rejecting earlier curations |
-| `.Proposal`, `.Harness`, `.Changes` | what the agent writes: `proposal.md`, the `harness/` directory (a copy of the current one at first) and `changes.json` |
-| `.Limits` | the [notes] curation triggers: `.MaxBytes`, `.MaxLine`, `.MaxHarnessFiles`, `.MaxHarnessBytes` |
+| `.Proposal`, `.Harness`, `.Changes` | what the agent writes: `proposal.md`, the `harness/` directory (a copy of the current one at first, where it adds to `ARCHIVE.md`, which the prompt names as `{{.Harness}}/ARCHIVE.md`) and `changes.json` |
+| `.Limits` | the [notes] limits, hints to organize the notes and no caps: `.MaxBytes`, `.MaxLine`, `.MaxHarnessFiles`, `.MaxHarnessBytes` |
 | `.Over` | the triggers the notes are past (empty: a weekly or requested curation) |
 | `.UnusedRounds` | the rounds without a use after which a harness file is a candidate (20) |
 | `.Misses`, `.MissCount` | `misses.json` and how many misses it holds, when the curation was given the retro's misses of the repository (class miss, scope repo, still new); `""` and 0 otherwise. Each miss is data: its `id`, `severity`, `where` (path:line at the reviewed commit), `title` and `lesson` (scrubbed of logins, pull request references and links again) and `rejections`, the reasons of rejected proposals it was in; never a login, a pull request number or a comment |
@@ -387,9 +387,17 @@ one rule (a note for a miss only when a future review of the repository would ca
 because of it) and `misses` lists every miss id once, `{"id", "action": "noted", "section"}` with the `## `
 section that covers it now or `{"id", "action": "skipped", "reason"}`; without misses the prompt renders as
 before (the `notes_curate` goldens) and the key may be left out. Magnum checks the proposal
-(`internal/notes`): every harness file named in the notes, every miss given accounted for, nothing outside
-the scratch directory, no pull request number, branch or probe file, no secret and no home directory path;
-size is not checked. The prompt also has the curator check each pitfall against the standing decisions
+(`internal/notes`): no line lost (every non-empty line of `current.md` is in `proposal.md` or among the
+lines the proposal adds to the archive, word for word; the problem quotes the first few), the archive keeping
+every line it held, every current `## ` section in `changes.json`, the archive named in the notes, every
+harness file named in the notes (the archive needs neither a name as a script nor a `changes.json` item),
+every miss given accounted for, nothing outside the scratch directory, no pull request number, branch or
+probe file in the notes (the archive, which is history, may name one), no secret and no home directory path;
+size is not checked. The prompt says curation organizes and never loses knowledge: merges name where each
+line went, a line is retired only when proven obsolete or superseded, standing decisions and the authors'
+answers stay in full, and each line taken out or rewritten goes to the archive word for word with its
+disposition (`→ merged into`, `→ superseded by`, `→ obsolete because`); it no longer asks the curator to stay
+within the limits. The prompt also has the curator check each pitfall against the standing decisions
 (the answer one gives goes on the pitfall's line) and turn a line that a base-branch doc covers into a
 pointer to that doc (its path and heading), only for a doc the notes name: the curator runs in its scratch
 directory, without the repository. A proposal that changes nothing is invalid unless it was given misses and skips them

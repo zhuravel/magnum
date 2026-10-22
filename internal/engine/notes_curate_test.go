@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,13 +46,36 @@ func (f *fakeCurator) Close(context.Context) error {
 	return nil
 }
 
-const curatedNotes = "# Notes for talkable/talkable (updated 2026-10-06)\n\n## Tests\nRun `run_spec.sh <spec>`.\n"
+const curatedNotes = "# Notes for talkable/talkable (updated 2026-10-06)\n\n## Tests\nRun `run_spec.sh <spec>`.\n" +
+	"Retired lines: `ARCHIVE.md` (" + notes.ArchiveLine + ").\n"
+
+// archiveDropped adds to the proposed archive every line of the notes now
+// (but their title and headings) that text lacks, as a curator does.
+func archiveDropped(s notes.Scratch, text string) {
+	current, _ := os.ReadFile(s.Current())
+	path := filepath.Join(s.Harness(), notes.ArchiveName)
+	archive, err := os.ReadFile(path)
+	if err != nil {
+		archive = []byte(notes.ArchiveHeader("talkable/talkable"))
+	}
+	out := string(archive) + "\n## Retired 2026-10-06\n"
+	for i, line := range strings.Split(string(current), "\n") {
+		if strings.TrimSpace(line) == "" || (i == 0 && strings.HasPrefix(line, "# ")) || strings.HasPrefix(line, "## ") ||
+			slices.Contains(strings.Split(text, "\n"), line) {
+			continue
+		}
+		out += line + "\n→ obsolete because the test curator retires it\n"
+	}
+	_ = os.WriteFile(path, []byte(out), 0o600)
+}
 
 // goodProposal is a curator that merges the probe into nothing: it keeps
-// run_spec.sh, deletes the probe, and accounts for both.
+// run_spec.sh, deletes the probe, accounts for both, and archives the lines
+// it drops.
 func goodProposal(s notes.Scratch) {
 	_ = os.RemoveAll(filepath.Join(s.Harness(), "campaign_snapshot_probes_spec.rb"))
 	_ = os.WriteFile(s.Proposal(), []byte(curatedNotes), 0o600)
+	archiveDropped(s, curatedNotes)
 	b, _ := json.Marshal(notes.Changes{
 		Sections: []notes.Change{{Name: "Tests", Action: notes.ActionKept, Reason: "every review runs specs"}},
 		Files: []notes.Change{
@@ -70,6 +94,7 @@ func curationHarness(t *testing.T, write func(notes.Scratch), mods ...func(*harn
 	mods = append([]func(*harness){func(h *harness) {
 		h.d.Curator = func(context.Context, CurateRun) (Curator, error) { return cur, nil }
 		h.cfg.Notes.MaxBytes = 64
+		h.cfg.Notes.Curate = config.CurateTriggers{config.CurateOverLimit, config.CurateMisses} // size curates here
 	}}, mods...)
 	h := newHarness(t, mods...)
 	nr := notesOf(t, h)
@@ -110,7 +135,8 @@ func TestACurationStoresAValidProposalForReview(t *testing.T) {
 		t.Fatalf("proposal = %+v", p)
 	}
 	content, err := h.st.NotesVersionContent(h.ctx, *p.VersionID)
-	if err != nil || string(content.Notes) != curatedNotes || len(content.Files) != 1 || content.Files[0].Path != "run_spec.sh" {
+	if err != nil || string(content.Notes) != curatedNotes || len(content.Files) != 2 || content.Files[0].Path != notes.ArchiveName ||
+		content.Files[1].Path != "run_spec.sh" || !strings.Contains(string(content.Files[0].Body), "- `campaign_snapshot_probes_spec.rb` probes #11920\n") {
 		t.Fatalf("proposed state = %q %+v, %v", content.Notes, content.Files, err)
 	}
 	if after, _ := os.ReadFile(nr.Notes()); string(after) != string(before) {

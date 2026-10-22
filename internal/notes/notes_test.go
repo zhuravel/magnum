@@ -288,7 +288,10 @@ func baseState() State {
 	return s
 }
 
-const goodNotes = "# Notes for talkable/talkable (updated 2026-10-06)\n\n## Tests\nRun `run_spec.sh <spec>`.\n\n## QA\nSmoke a change with `qa/smoke.rb <path>`.\n"
+// goodNotes rewrite baseState's one line, whose old words go to the archive
+// (goodFiles), which they name.
+const goodNotes = "# Notes for talkable/talkable (updated 2026-10-06)\n\n## Tests\nRun `run_spec.sh <spec>`.\n\n## QA\nSmoke a change with `qa/smoke.rb <path>`.\n" +
+	"Retired lines: `ARCHIVE.md` (" + ArchiveLine + ").\n"
 
 func goodChanges() Changes {
 	return Changes{
@@ -305,7 +308,8 @@ func goodChanges() Changes {
 }
 
 func goodFiles() map[string]string {
-	return map[string]string{"run_spec.sh": "bin/rspec \"$@\"\n", "qa/smoke.rb": "puts ARGV.first\n"}
+	return map[string]string{"run_spec.sh": "bin/rspec \"$@\"\n", "qa/smoke.rb": "puts ARGV.first\n",
+		ArchiveName: ArchiveHeader("talkable/talkable") + "\n## Retired 2026-10-06\nRun bin/rspec.\n→ superseded by: Run `run_spec.sh <spec>`.\n"}
 }
 
 // A proposal that keeps only general knowledge, accounts for every section

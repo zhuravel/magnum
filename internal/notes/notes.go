@@ -6,6 +6,7 @@
 //
 //	<root>/<owner>/<repo>.md                    the notes
 //	<root>/<owner>/<repo>/                      the harness
+//	<root>/<owner>/<repo>/ARCHIVE.md            the archive of retired notes lines (archive.go)
 //	<root>/<owner>/<repo>.lock/                 the lock the judges take (agents.NotesLockLine)
 //	<root>/.curate/<owner>/<repo>/<id>/         one curation's scratch copy and proposal (curate.go)
 //
@@ -82,7 +83,8 @@ const (
 	LimitHarnessBytes = "max_harness_bytes"
 )
 
-// Size is what the notes and the harness hold.
+// Size is what the notes and the harness hold. The archive (ArchiveName) is
+// measured apart: no limit applies to it.
 type Size struct {
 	Exists       bool  `json:"exists"` // the notes file exists
 	Bytes        int64 `json:"bytes"`
@@ -91,6 +93,8 @@ type Size struct {
 	LongestLine  int   `json:"longest_line"` // characters
 	HarnessFiles int   `json:"harness_files"`
 	HarnessBytes int64 `json:"harness_bytes"`
+	ArchiveBytes int64 `json:"archive_bytes"`
+	ArchiveLines int   `json:"archive_lines"`
 }
 
 // Over names the limits s is past, in the order of the Limit* constants; a
@@ -128,8 +132,8 @@ func MeasureText(text []byte, maxLine int) Size {
 	return s
 }
 
-// Measure measures r's notes file and harness. A missing notes file or
-// harness measures zero; any other read error is returned.
+// Measure measures r's notes file and harness (the archive apart). A missing
+// notes file or harness measures zero; any other read error is returned.
 func Measure(r Repo, l Limits) (Size, []File, error) {
 	var s Size
 	text, err := os.ReadFile(r.Notes())
@@ -143,8 +147,15 @@ func Measure(r Repo, l Limits) (Size, []File, error) {
 	if err != nil {
 		return Size{}, nil, err
 	}
-	s.HarnessFiles = len(files)
 	for _, f := range files {
+		if IsArchive(f.Name) {
+			s.ArchiveBytes = f.Size
+			if text, err := os.ReadFile(filepath.Join(r.Harness(), ArchiveName)); err == nil {
+				s.ArchiveLines = MeasureText(text, 0).Lines
+			}
+			continue
+		}
+		s.HarnessFiles++
 		s.HarnessBytes += f.Size
 	}
 	return s, files, nil

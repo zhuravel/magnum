@@ -521,7 +521,9 @@ func NotesHarnessLogged(dir string, log execx.Logger) (names []string, more int)
     "/", at most NotesHarnessMax, and how many more there are. A name with
     anything but letters, digits and "._@+-" is never listed: it counts under
     more, and log (optional) gets one line with how many such names there are,
-    never the names. A missing or unreadable directory lists nothing.
+    never the names. The archive of retired notes lines (notes.ArchiveName) is
+    no script and is left out: the judge reads it only where the notes name it.
+    A missing or unreadable directory lists nothing.
 
 func NotesLockLine(lock string) string
     NotesLockLine is the shell line a judge runs to take the notes lock (a
@@ -4870,17 +4872,18 @@ type Notes struct {
 	// Timeout bounds the curator's turn.
 	Timeout Duration `toml:"timeout"`
 }
-    Notes is the [notes] section: the repository notes every review role
-    reads first and the judge rewrites (engine.NotesPath). The four limits are
-    curation triggers, not caps: after each judge round (and at startup) magnum
-    measures the notes and the harness directory of QA scripts beside them,
-    and a repository past any limit is marked for curation (a notes.over_limit
-    event). Nothing blocks a review, and a curated proposal may stay above a
-    limit when what it keeps helps future reviews. Curate lists what starts a
-    curation besides `magnum notes <repo> --curate`: a repository marked past
-    a limit, once a week, or a retro that recorded misses of the repository for
-    its notes. The curator is an interactive agent like the retro's ([learn]):
-    Kind, Model, Effort and Args as a role's (NotesRole).
+    Notes is the [notes] section: the repository notes every review role reads
+    first and the judge rewrites (engine.NotesPath). The four limits are hints
+    to organize, not caps: after each judge round (and at startup) magnum
+    measures the notes and the harness directory of QA scripts beside them
+    (the archive apart), and a repository past any limit is marked past it (a
+    notes.over_limit event, `magnum notes`). Nothing blocks a review, and a
+    curated proposal may stay above a limit. Curate lists what starts a curation
+    besides `magnum notes <repo> --curate`: a retro that recorded misses of the
+    repository for its notes (the default), a repository marked past a limit
+    (size alone, off by default), or once a week. A curation organizes and never
+    loses a line (notes.Validate). The curator is an interactive agent like the
+    retro's ([learn]): Kind, Model, Effort and Args as a role's (NotesRole).
 
 func DefaultNotes() Notes
     DefaultNotes returns the built-in [notes] values.
@@ -6254,6 +6257,12 @@ const (
 	CurateTriggerWeekly    = config.CurateWeekly
 	CurateTriggerMisses    = config.CurateMisses
 	CurateTriggerRequest   = "request"
+	// CurateTriggerRecover marks the proposal `magnum notes <repo>
+	// --recover` makes (a curation proposal no curator wrote): the archive
+	// of the lines the history held and the notes lack. It is no curation of
+	// the repository: the triggers' spacing and the curator's rejections
+	// leave it out.
+	CurateTriggerRecover = "recover"
 
 	// ProposalTTL is how long a proposal waits for the operator before it
 	// expires.
@@ -13372,6 +13381,7 @@ shows and applies what is here.
 
     <root>/<owner>/<repo>.md                    the notes
     <root>/<owner>/<repo>/                      the harness
+    <root>/<owner>/<repo>/ARCHIVE.md            the archive of retired notes lines (archive.go)
     <root>/<owner>/<repo>.lock/                 the lock the judges take (agents.NotesLockLine)
     <root>/.curate/<owner>/<repo>/<id>/         one curation's scratch copy and proposal (curate.go)
 
@@ -13411,6 +13421,13 @@ const (
     Caps on what ReadState reads: a harness this large is not notes, and a
     version must fit the registry.
 
+const ArchiveLine = "retired lines, word for word; search it when a lesson seems missing"
+    ArchiveLine is how the notes name the archive, once: what it holds and when
+    to read it. Roles do not read the archive by default.
+
+const ArchiveName = "ARCHIVE.md"
+    ArchiveName is the archive's path in the harness directory.
+
 const CurateDirName = ".curate"
     CurateDirName is the curations' directory under the notes root.
 
@@ -13431,6 +13448,9 @@ var ErrTooLarge = errors.New("notes: the harness is too large to record")
 
 FUNCTIONS
 
+func ArchiveHeader(full string) string
+    ArchiveHeader is the start of a new archive.
+
 func CheckLeaks(text string, check Check) []string
     CheckLeaks applies Validate's leak rules to one text that is not notes
     (the skill editor's diff and DECISIONS entry): it returns, as phrases to
@@ -13447,6 +13467,9 @@ func HarnessDelta(before, after []File) (added, removed, changed []string)
     HarnessDelta compares two listings: the names only in after (added), only in
     before (removed) and in both with another content (changed), each sorted.
 
+func IsArchive(p string) bool
+    IsArchive reports whether the harness path p is the archive.
+
 func LineChanges(a, b string) (added, removed int)
     LineChanges counts the lines b adds to a and the lines it removes, with the
     same line matching as Unified (a changed line counts once in each).
@@ -13458,8 +13481,8 @@ func Lock(ctx context.Context, path string, wait time.Duration) (func(), error)
     a live one: every retry sleeps, and the deadline and ctx hold.
 
 func Measure(r Repo, l Limits) (Size, []File, error)
-    Measure measures r's notes file and harness. A missing notes file or harness
-    measures zero; any other read error is returned.
+    Measure measures r's notes file and harness (the archive apart). A missing
+    notes file or harness measures zero; any other read error is returned.
 
 func Printable(text string) string
     Printable replaces the control characters other than newline and tab in
@@ -13490,17 +13513,27 @@ func Unified(nameA, nameB, a, b string, ctx int) string
     by "\n\\ No newline at end of file\n". A negative ctx counts as 0.
 
 func Validate(p Proposal, c Check) []string
-    Validate returns what is wrong with proposal p (nil = valid), in words fit
-    for a nudge and the registry (names and rules, never notes text): the notes
-    and changes.json must be there; every proposed section and harness file must
-    be accounted for as kept or added with a one-line reason, and every current
-    harness file with what became of it; every proposed harness file must be
-    named in the notes; nothing may name a pull request, one of its branches or
-    probe files, carry what looks like a secret or a home directory path; every
-    miss given must be accounted for once, noted with a section of the proposal
-    or skipped with a reason. Size is not checked: the limits trigger curations,
-    they do not cap them. A proposal that changes nothing is invalid unless it
-    was given misses and skips them all (the operator confirms the skips).
+    Validate returns what is wrong with proposal p (nil = valid), in words
+    fit for a nudge and the operator's review: names and rules, and the first
+    few lines a proposal would lose (checkPreserved), never more notes text.
+    The notes and changes.json must be there; every proposed section and
+    harness file must be accounted for as kept or added with a one-line reason,
+    and every current section and harness file with what became of it;
+    every proposed harness file must be named in the notes; no line of the notes
+    may be lost: each stays in the notes or goes to the archive word for word,
+    and the archive keeps every line it held (checkPreserved); nothing may
+    name a pull request, one of its branches or probe files, carry what looks
+    like a secret or a home directory path (the archive, which is history,
+    may name a pull request); every miss given must be accounted for once,
+    noted with a section of the proposal or skipped with a reason. The archive
+    is no QA script: it needs no changes.json item. Size is not checked:
+    the limits mark notes to organize, they do not cap them. A proposal that
+    changes nothing is invalid unless it was given misses and skips them all
+    (the operator confirms the skips).
+
+func WriteArchive(r Repo, text []byte) error
+    WriteArchive makes r's archive text (removes it when text is empty),
+    confined to the harness directory. The caller holds r's lock.
 
 func WriteSnapshot(dir string, s Snapshot) error
     WriteSnapshot writes s to dir/SnapshotFile.
@@ -13575,6 +13608,19 @@ func List(dir string) ([]File, error)
     symbolic links and other special files are left out (never followed).
     A missing dir lists nothing.
 
+func Scripts(files []File) []File
+    Scripts is a listing without the archive: the harness of QA scripts.
+
+type HistoryNotes struct {
+	ID     int64
+	At     time.Time
+	Source string
+	Notes  []byte
+}
+    HistoryNotes is the notes text of one version of a repository's history
+    (store.NotesHistory: the judges', the people's, the imports and the applied
+    curations', never a proposal's own state).
+
 type Limits struct {
 	MaxBytes        int64 `json:"max_bytes"`
 	MaxLine         int   `json:"max_line"` // characters
@@ -13620,6 +13666,36 @@ func ReadProposal(s Scratch) (Proposal, []string)
     ReadProposal reads what the curator wrote in s, regular files of its
     directory only (readRegular). Problems name what is missing or unreadable,
     in words fit for a nudge (paths, never content).
+
+type Recovery struct {
+	Lines  int             `json:"lines"`    // lines recovered
+	Left   int             `json:"left_out"` // lines left out: each holds a secret or a home directory path
+	Groups []RecoveryGroup `json:"groups"`
+	// Archive is the archive to propose: the one the notes have now, with
+	// the recovered lines added (nil when there are none).
+	Archive []byte `json:"-"`
+}
+    Recovery is what Recover proposes: the archive that holds every line a
+    version of the history held and the notes now lack.
+
+func Recover(full string, history []HistoryNotes, live State, now time.Time) Recovery
+    Recover finds every line that a version of history (oldest first) held and
+    the notes now (live) lack word for word, trailing spaces aside, and proposes
+    live's archive with those lines added, grouped by the day of the version
+    that dropped them (the last time, for a line that came back and left again),
+    in the order they had there. A line live's archive holds already is not
+    added again; a line with a secret or a home directory path is left out
+    (counted). The notes now count as the history's last state: a line they
+    dropped since the last version is dated now. The archive is history:
+    a line may name a pull request.
+
+type RecoveryGroup struct {
+	Date     string   `json:"date"`     // the day the versions that dropped them were recorded, local
+	Versions []int64  `json:"versions"` // the versions that dropped them
+	Count    int      `json:"lines"`
+	Lines    []string `json:"-"`
+}
+    RecoveryGroup is the recovered lines that left the notes on one day.
 
 type Repo struct {
 	Root, Owner, Name string
@@ -13678,8 +13754,11 @@ type Size struct {
 	LongestLine  int   `json:"longest_line"` // characters
 	HarnessFiles int   `json:"harness_files"`
 	HarnessBytes int64 `json:"harness_bytes"`
+	ArchiveBytes int64 `json:"archive_bytes"`
+	ArchiveLines int   `json:"archive_lines"`
 }
-    Size is what the notes and the harness hold.
+    Size is what the notes and the harness hold. The archive (ArchiveName) is
+    measured apart: no limit applies to it.
 
 func MeasureText(text []byte, maxLine int) Size
     MeasureText measures notes text: its bytes, lines and the lines longer than
@@ -13716,12 +13795,16 @@ type State struct {
 	Files  []Blob // sorted by Path
 }
     State is the whole content of a repository's notes: the notes text and
-    every harness file with its body. It is what a version in the registry holds
-    (store.NotesVersion) and what an applied proposal writes.
+    every harness file with its body, the archive (ArchiveName) among them.
+    It is what a version in the registry holds (store.NotesVersion) and what an
+    applied proposal writes.
 
 func ReadState(r Repo) (State, error)
     ReadState reads r's notes and harness: regular files only, as List lists
     them. A missing notes file or harness reads empty.
+
+func (s State) Archive() []byte
+    Archive is s's archive text, nil when s has none.
 
 func (s State) Fingerprint() string
     Fingerprint identifies s (Fingerprint of its notes and listing).
@@ -13733,7 +13816,12 @@ func (s State) Same(o State) bool
     Same reports whether s and o hold the same notes and harness.
 
 func (s State) Size(maxLine int) Size
-    Size measures s against maxLine (Size.Over compares it with the limits).
+    Size measures s against maxLine (Size.Over compares it with the limits),
+    the archive apart.
+
+func (s State) WithArchive(text []byte) State
+    WithArchive is s with its archive text set to text (no archive when text is
+    empty); s itself is left as it was.
 
 type StateMerge struct {
 	State          State           // the merged state; apply it only when Clean
@@ -19188,6 +19276,12 @@ func (s *Store) NotesFileUses(ctx context.Context, repoID int64) ([]NotesFileUse
     NotesFileUses lists repoID's harness files with their rounds and the uses
     recorded since each was first seen, by file name.
 
+func (s *Store) NotesHarnessBlob(ctx context.Context, repoID int64, sum string) ([]byte, error)
+    NotesHarnessBlob reads the harness file body with SHA-256 sum that a version
+    of repoID holds (any version: a proposal's own too), ErrNotFound when none
+    does. The engine puts the archive a judge changed back to the one its round
+    found, by the hash the round's snapshot lists.
+
 func (s *Store) NotesHistory(ctx context.Context, repoID int64, limit int) ([]NotesVersion, error)
     NotesHistory lists repoID's history, newest first, at most limit versions
     (limit <= 0 = all): every recorded version except the proposed states of
@@ -19202,6 +19296,11 @@ func (s *Store) NotesVersionByID(ctx context.Context, id int64) (NotesVersion, e
 func (s *Store) NotesVersionContent(ctx context.Context, id int64) (NotesContent, error)
     NotesVersionContent reads what version id holds: its notes text and its
     harness files with their bodies.
+
+func (s *Store) NotesVersionText(ctx context.Context, v NotesVersion) ([]byte, error)
+    NotesVersionText reads the notes text of version v (of NotesHistory or
+    NotesVersionByID), none of its harness: `magnum notes --recover` reads every
+    version's.
 
 func (s *Store) OpenAssignment(ctx context.Context, a Assignment) (Assignment, error)
     OpenAssignment inserts an open assignment (for flows other than ClaimSlot,

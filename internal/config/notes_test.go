@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 // config.defaults.toml's.
 func TestNotesDefaults(t *testing.T) {
 	want := Notes{
-		MaxBytes: 16384, MaxLine: 300, MaxHarnessFiles: 15, MaxHarnessBytes: 131072,
-		Curate: CurateTriggers{CurateOverLimit, CurateMisses}, Kind: "claude", Model: "sonnet", Prompt: "notes-curate.md", Timeout: Duration{30 * time.Minute},
+		MaxBytes: 262144, MaxLine: 300, MaxHarnessFiles: 15, MaxHarnessBytes: 131072,
+		Curate: CurateTriggers{CurateMisses}, Kind: "claude", Model: "sonnet", Prompt: "notes-curate.md", Timeout: Duration{30 * time.Minute},
 	}
 	if got := Defaults().Notes; !reflect.DeepEqual(got, want) {
 		t.Fatalf("built-in notes = %+v, want %+v", got, want)
@@ -112,9 +113,10 @@ func TestNotesCurateReadsAListOrTheEarlierString(t *testing.T) {
 			}
 		})
 	}
+	// No curation starts for size alone: over_limit is a choice, not a default.
 	cfg := Defaults()
-	if !cfg.Notes.Curate.Has(CurateMisses) || !cfg.Notes.Curate.Has(CurateOverLimit) || cfg.Notes.Curate.Has(CurateWeekly) {
-		t.Errorf("default triggers = %v", cfg.Notes.Curate)
+	if !slices.Equal(cfg.Notes.Curate, CurateTriggers{CurateMisses}) {
+		t.Errorf("default triggers = %v, want [misses]", cfg.Notes.Curate)
 	}
 	if _, err := loadCommittedWithLocal(t, testLocalConfig+"\n[notes]\ncurate = 3\n"); err == nil {
 		t.Error("a number for curate loaded")

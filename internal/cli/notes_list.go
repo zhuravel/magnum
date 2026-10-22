@@ -160,7 +160,7 @@ func notesOverview(ctx context.Context, l paths.Layout, st *store.Store, limits 
 			t := fi.ModTime()
 			row.Modified = &t
 		}
-		has := row.Size.Exists || row.Size.HarnessFiles > 0
+		has := row.Size.Exists || row.Size.HarnessFiles > 0 || row.Size.ArchiveBytes > 0
 		if repo, ok := repos[full]; ok && st != nil {
 			if v, err := st.LatestNotesVersion(ctx, repo.ID); err == nil {
 				row.Changed = &notesRowChange{Version: v.ID, At: v.At, Source: v.Source, PRNumber: v.PRNumber}
@@ -250,6 +250,9 @@ func notesPrintList(w io.Writer, rows []notesRow, now time.Time) {
 				text += fmt.Sprintf(" (%d long%s)", r.Size.LongLines, past(notes.LimitLine))
 			}
 		}
+		if r.Size.ArchiveBytes > 0 {
+			text += ", archive " + notesBytes(r.Size.ArchiveBytes)
+		}
 		harness := "none"
 		if r.Size.HarnessFiles > 0 {
 			harness = textx.Count(r.Size.HarnessFiles, "file", "files") + past(notes.LimitHarnessFiles) + ", " +
@@ -262,7 +265,7 @@ func notesPrintList(w io.Writer, rows []notesRow, now time.Time) {
 		case notesStale:
 			hints = append(hints, "review: magnum notes "+r.Repo+" --review (stale: it merges the notes' changes since, or asks for a new curation)")
 		case notesOver:
-			hints = append(hints, "curate: magnum notes "+r.Repo+" --curate (or wait: the daemon curates notes past a limit once they change)")
+			hints = append(hints, "curate: magnum notes "+r.Repo+" --curate (organizes them; a limit is a hint, not a cap)")
 		}
 	}
 	actTable(w, []string{"REPO", "NOTES", "HARNESS", "CHANGED", "STATE"}, table)
@@ -270,7 +273,7 @@ func notesPrintList(w io.Writer, rows []notesRow, now time.Time) {
 		fmt.Fprintln(w)
 	}
 	if marked {
-		fmt.Fprintln(w, "! past a [notes] limit: a curation trigger, not a cap")
+		fmt.Fprintln(w, "! past a [notes] limit: a hint to organize the notes, not a cap")
 	}
 	for _, h := range hints {
 		fmt.Fprintln(w, h)

@@ -6,6 +6,7 @@ package cli
 // imports of what magnum found on disk.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,13 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // notesRegistryAction runs the notes actions that need the registry: --log,
-// --diff, --curate, --review and --restore.
+// --diff, --curate, --review, --restore and --recover.
 func notesRegistryAction(c *Context, f notesFlags, back int, full string, nr notes.Repo) int {
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
@@ -47,21 +49,25 @@ func notesRegistryAction(c *Context, f notesFlags, back int, full string, nr not
 		return notesDiff(ctx, c, d, back, repo, nr)
 	case f.restore != 0:
 		return notesRestore(ctx, c, d, f, repo, nr)
+	case f.recover:
+		return notesRecover(ctx, c, d, f, repo, nr)
 	}
 	return notesReview(ctx, c, d, f, repo, nr)
 }
 
-// notesLogEntry is one version as --log --json prints it.
+// notesLogEntry is one version as --log --json prints it: the harness
+// changes leave the archive out, whose size is ArchiveBytes.
 type notesLogEntry struct {
 	store.NotesVersion
 	HarnessAdded   []string `json:"harness_added"`
 	HarnessRemoved []string `json:"harness_removed"`
 	HarnessChanged []string `json:"harness_changed"`
+	ArchiveBytes   int64    `json:"archive_bytes"`
 }
 
 // notesLog lists the versions, newest first: when, the source (with the
-// round's PR), the notes' size and the harness with what changed since the
-// version before.
+// round's PR), the notes' size with the archive's, and the harness with what
+// changed since the version before.
 func notesLog(ctx context.Context, c *Context, d *actDeps, f notesFlags, repo store.Repo) int {
 	hist, err := d.Store.NotesHistory(ctx, repo.ID, 0)
 	if err != nil {
@@ -74,7 +80,12 @@ func notesLog(ctx context.Context, c *Context, d *actDeps, f notesFlags, repo st
 		if i+1 < len(hist) {
 			older = notesListing(hist[i+1])
 		}
-		e.HarnessAdded, e.HarnessRemoved, e.HarnessChanged = notes.HarnessDelta(older, notesListing(v))
+		e.HarnessAdded, e.HarnessRemoved, e.HarnessChanged = notes.HarnessDelta(notes.Scripts(older), notes.Scripts(notesListing(v)))
+		for _, f := range v.Files {
+			if notes.IsArchive(f.Path) {
+				e.ArchiveBytes = f.Bytes
+			}
+		}
 		entries = append(entries, e)
 	}
 	if f.json {
@@ -94,11 +105,16 @@ func notesLog(ctx context.Context, c *Context, d *actDeps, f notesFlags, repo st
 		if e.PRNumber > 0 {
 			pr = fmt.Sprintf("#%d", e.PRNumber)
 		}
-		harness := fmt.Sprintf("%s, %d bytes", textx.Count(len(e.Files), "file", "files"), e.HarnessBytes())
+		scripts := notes.Scripts(notesListing(e.NotesVersion))
+		harness := fmt.Sprintf("%s, %d bytes", textx.Count(len(scripts), "file", "files"), e.HarnessBytes()-e.ArchiveBytes)
 		if delta := notesDelta(e.HarnessAdded, e.HarnessRemoved, e.HarnessChanged); delta != "" {
 			harness += " (" + delta + ")"
 		}
-		rows = append(rows, []string{fmt.Sprint(e.ID), e.At.Local().Format("2006-01-02 15:04"), e.Source, pr, fmt.Sprintf("%d bytes", e.Bytes), harness})
+		size := fmt.Sprintf("%d bytes", e.Bytes)
+		if e.ArchiveBytes > 0 {
+			size += fmt.Sprintf(", archive %d bytes", e.ArchiveBytes)
+		}
+		rows = append(rows, []string{fmt.Sprint(e.ID), e.At.Local().Format("2006-01-02 15:04"), e.Source, pr, size, harness})
 	}
 	actTable(c.Stdout, []string{"VERSION", "WHEN", "SOURCE", "PR", "NOTES", "HARNESS"}, rows)
 	return 0
@@ -135,8 +151,8 @@ func notesFingerprint(v store.NotesVersion) string {
 
 // notesDiff shows what changed between the version back versions before the
 // notes now and the notes now: the history without repeats (a version that
-// holds what the one after it holds is not a step back), the notes as a
-// unified diff and the harness by file name.
+// holds what the one after it holds is not a step back), the notes and the
+// archive (when it changed) as unified diffs and the harness by file name.
 func notesDiff(ctx context.Context, c *Context, d *actDeps, back int, repo store.Repo, nr notes.Repo) int {
 	hist, err := d.Store.NotesHistory(ctx, repo.ID, 0)
 	if err != nil {
@@ -164,7 +180,10 @@ func notesDiff(ctx context.Context, c *Context, d *actDeps, back int, repo store
 	}
 	from := fmt.Sprintf("%s notes, version %d (%s, %s)", full, v.ID, v.At.Local().Format("2006-01-02 15:04"), notesSourceText(v))
 	notesPrintDiff(c.Stdout, d.StdoutTTY, from, full+" notes, now", content.Notes, live.Notes)
-	added, removed, changed := notes.HarnessDelta(notesListing(v), live.Listing())
+	if old := engine.StateOf(content).Archive(); !bytes.Equal(old, live.Archive()) {
+		notesPrintDiff(c.Stdout, d.StdoutTTY, fmt.Sprintf("%s archive, version %d", full, v.ID), full+" archive, now", old, live.Archive())
+	}
+	added, removed, changed := notes.HarnessDelta(notes.Scripts(notesListing(v)), notes.Scripts(live.Listing()))
 	notesPrintHarness(c.Stdout, d.StdoutTTY, added, removed, changed, nil)
 	return 0
 }

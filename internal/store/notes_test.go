@@ -330,3 +330,29 @@ func TestPruneLeavesNotesFindingsAndMissesAlone(t *testing.T) {
 		t.Errorf("runs.result_json after the prune = %q, %v", result, err)
 	}
 }
+
+// A harness body is found by its hash among the versions of its own
+// repository only, a proposal's own state included.
+func TestNotesHarnessBlobIsFoundAmongTheRepositorysVersions(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	other, err := st.UpsertRepo(ctx, Repo{NodeID: "R_2", Owner: "example", Name: "api", WatchOwner: "example", DefaultBranch: "main", Mode: RepoModePool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed := notesContent("# Notes\n", "ARCHIVE.md", "# Archive\n- retired\n")
+	if _, err := st.CreateNotesProposal(ctx, NotesProposalInput{RepoID: repo.ID, Kind: ProposalCuration, Proposed: &proposed, State: ProposalPending}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := st.NotesHarnessBlob(ctx, repo.ID, sha256Hex([]byte("# Archive\n- retired\n")))
+	if err != nil || string(body) != "# Archive\n- retired\n" {
+		t.Fatalf("NotesHarnessBlob = %q, %v", body, err)
+	}
+	if _, err := st.NotesHarnessBlob(ctx, other.ID, sha256Hex([]byte("# Archive\n- retired\n"))); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another repository's blob: %v", err)
+	}
+	if _, err := st.NotesHarnessBlob(ctx, repo.ID, sha256Hex([]byte("never stored"))); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an unknown hash: %v", err)
+	}
+}

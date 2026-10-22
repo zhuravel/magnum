@@ -337,17 +337,22 @@ func Sections(text []byte) []string {
 }
 
 // Validate returns what is wrong with proposal p (nil = valid), in words fit
-// for a nudge and the registry (names and rules, never notes text): the
+// for a nudge and the operator's review: names and rules, and the first few
+// lines a proposal would lose (checkPreserved), never more notes text. The
 // notes and changes.json must be there; every proposed section and harness
 // file must be accounted for as kept or added with a one-line reason, and
-// every current harness file with what became of it; every proposed harness
-// file must be named in the notes; nothing may name a pull request, one of
-// its branches or probe files, carry what looks like a secret or a home
-// directory path; every miss given must be accounted for once, noted with a
-// section of the proposal or skipped with a reason. Size is not checked: the
-// limits trigger curations, they do not cap them. A proposal that changes
-// nothing is invalid unless it was given misses and skips them all (the
-// operator confirms the skips).
+// every current section and harness file with what became of it; every
+// proposed harness file must be named in the notes; no line of the notes may
+// be lost: each stays in the notes or goes to the archive word for word, and
+// the archive keeps every line it held (checkPreserved); nothing may name a
+// pull request, one of its branches or probe files, carry what looks like a
+// secret or a home directory path (the archive, which is history, may name a
+// pull request); every miss given must be accounted for once, noted with a
+// section of the proposal or skipped with a reason. The archive is no QA
+// script: it needs no changes.json item. Size is not checked: the limits mark
+// notes to organize, they do not cap them. A proposal that changes nothing is
+// invalid unless it was given misses and skips them all (the operator
+// confirms the skips).
 func Validate(p Proposal, c Check) []string {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -387,6 +392,9 @@ func Validate(p Proposal, c Check) []string {
 	proposed := map[string]bool{}
 	for _, b := range p.State.Files {
 		proposed[b.Path] = true
+		if IsArchive(b.Path) {
+			continue
+		}
 		ch, ok := files[b.Path]
 		switch {
 		case !ok:
@@ -399,13 +407,14 @@ func Validate(p Proposal, c Check) []string {
 		}
 	}
 	for _, ch := range p.Changes.Files {
-		if (ch.Action == ActionKept || ch.Action == ActionAdded) && !proposed[ch.Name] {
+		if (ch.Action == ActionKept || ch.Action == ActionAdded) && !proposed[ch.Name] && !IsArchive(ch.Name) {
 			add("harness file %q is %s in %s but not in %s/", ch.Name, ch.Action, scratchChanges, scratchHarness)
 		}
 	}
 	for _, b := range c.Base.Files {
 		ch, ok := files[b.Path]
 		switch {
+		case IsArchive(b.Path):
 		case !ok:
 			add("current harness file %s is not in %s's files (kept, merged or deleted, with a reason)", b.Path, scratchChanges)
 		case ch.Action == ActionMerged && !proposed[ch.Into]:
@@ -415,6 +424,7 @@ func Validate(p Proposal, c Check) []string {
 		}
 	}
 
+	problems = append(problems, checkPreserved(p, c.Base, sections)...)
 	problems = append(problems, checkMisses(p, c.Misses)...)
 
 	// One pull request's content.

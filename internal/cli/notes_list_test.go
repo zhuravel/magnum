@@ -295,7 +295,7 @@ func TestNotesWithoutARepositoryListsThemAll(t *testing.T) {
 	if strings.Contains(out, "zhuravel/app") {
 		t.Errorf("a repository without notes is listed:\n%s", out)
 	}
-	actContains(t, out, "! past a [notes] limit: a curation trigger, not a cap",
+	actContains(t, out, "! past a [notes] limit: a hint to organize the notes, not a cap",
 		"review: magnum notes talkable/talkable --review (stale: it merges the notes' changes since, or asks for a new curation)",
 		"curate: magnum notes example/api --curate")
 	if strings.Contains(out, "magnum notes example/ok") || strings.Contains(out, "magnum notes example/queued") {

@@ -382,7 +382,7 @@ func TestNotesShowsTriggersUnusedFilesAndAProposal(t *testing.T) {
 	if h.out.String() != oldNotes {
 		t.Errorf("stdout = %q", h.out.String())
 	}
-	actContains(t, h.errb.String(), "notes: 130 bytes (max_bytes 100: past)", "past max_bytes, curation triggers, not caps",
+	actContains(t, h.errb.String(), "notes: 130 bytes (max_bytes 100: past)", "past max_bytes, a hint to organize them, not a cap",
 		"unused harness files (20 rounds or more, no recorded use): campaign_snapshot_probes_spec.rb",
 		"proposal "+itoa(p.ID)+" (curation) waits for review")
 	h.out.Reset()
@@ -418,7 +418,7 @@ func TestNotesFlagsGoOneAtATime(t *testing.T) {
 		want string
 	}{
 		{[]string{"--log", "--review"}, "one at a time"},
-		{[]string{"--reason", "x"}, "--reason goes with --review or --restore"},
+		{[]string{"--reason", "x"}, "--reason goes with --review, --restore or --recover"},
 		{[]string{"--diff=0"}, "want a positive number of versions back"},
 		{[]string{"--edit", "--json"}, "--json does not go with --edit or --diff"},
 	} {

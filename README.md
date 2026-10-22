@@ -2980,8 +2980,8 @@ owners = ["talkable"]                # the watch owners the App is installed on;
 | `magnum approve <ref> [-m TEXT] [--as IDENTITY] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. `--as` the watch's `auto_approve_as` posts your own approval, which GitHub counts (an App's never does), followed like an automatic one (PRs that need you, below); `--as` the PR's posting identity is the approval without it. Board keys `A` and `C`. |
 | `magnum unapprove <ref> [--resume] [--yes] [--json]` | Withdraw the approval Magnum posted as you on the PR (Approving as you), dismissing it as you, and stop it approving that PR as you; without one standing it only stops it. Asks y/N on a terminal. `--resume` lets Magnum approve the PR as you again; your reviews from before then no longer stop it. Board key `D`. On a terminal `--json` needs `--yes`: without it the command refuses (exit 2) instead of skipping the question. |
 | `magnum ignore <ref>` | Abort (a fix loop and a whiteboard job included), then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
-| `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines and the harness's files and size (`!` marks what is past a `[notes]` curation trigger), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, proposal N to review, or proposal N stale (the notes changed since it was made); a hint under the table says what to run for each (see Repository notes). |
-| `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while the daemon drains for a restart, a round of the repository is in its judge stage or another learn job runs: a curation, the retro, a skill edit or gate), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version (see Repository notes). |
+| `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines (and the archive's size) and the harness's files and size (`!` marks what is past a `[notes]` limit, a hint to organize them), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, proposal N to review, or proposal N stale (the notes changed since it was made); a hint under the table says what to run for each (see Repository notes). |
+| `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version> \| --recover] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` limits, the archive's size (the lines curations retired, word for word), the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while the daemon drains for a restart, a round of the repository is in its judge stage or another learn job runs: a curation, the retro, a skill edit or gate), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version, the archive with it, and `--recover` proposes, once, an archive of every line earlier versions held and the notes lack (see Repository notes). |
 | `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE \| --replies FILE)` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back; with `--replies` (a reply round's `post_replies`), post its answers in its own threads instead, skipping a reply to a thread someone else started (see The judge skill). Exit 2 means the file needs fixing. |
 | `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] -- COMMAND [ARG]...` | For the review roles and the fixer, which run the `db_lock` line of their prompts: run COMMAND under the checkout's database lock, so the roles sharing a slot's databases take turns (see The judge skill). Exits with COMMAND's status; 75 means it waited `--timeout` and the command did not run, 125 that db-lock itself failed. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. On a terminal the plan opens in a review screen: space toggles an action, `a`/`n` select all or none, enter confirms (`y`, or the slug typed when another slug's databases would be dropped) and applies the selection, `q` cancels. With `--yes`, `--dry-run` or `--json`, or off a terminal, the plan is printed instead and it asks its y/N and typed-slug questions on stderr, only when stdin and stderr are both terminals; otherwise it applies nothing unless you pass `--yes`. `--wait` follows the daemon while it applies the plan, `--shrink --idle` removes only free slots idle longer than `pool.idle_remove_after`, `--slot <name> --remove` removes a managed slot instead of releasing it, and `--force` discards tracked changes, accepts unpushed commits on `--external` and releases inside the close grace. |
@@ -3692,13 +3692,13 @@ harness, and the notes never describe one pull request's findings or code. `magn
 them, with their sizes on stderr. `magnum notes` lists every repository with notes:
 
 ```
-REPO               NOTES                      HARNESS          CHANGED                STATE
-example/api        552 B!, 2 lines (1 long!)  3 files!, 3 B    5d ago, import         over limit (max_bytes, max_line, max_harness_files)
-example/queued     8 B, 1 line                none             1d ago, curation       curation queued (request, waits for a judge stage)
-talkable/talkable  26.5 KB!, 81 lines         12 files, 48 KB  2h ago, judge #11940   proposal 12 stale (over_limit, 3h; the notes changed since it was made)
+REPO               NOTES                                HARNESS          CHANGED                STATE
+example/api        552 B!, 2 lines (1 long!)            3 files!, 3 B    5d ago, import         over limit (max_bytes, max_line, max_harness_files)
+example/queued     8 B, 1 line                          none             1d ago, curation       curation queued (request, waits for a judge stage)
+talkable/talkable  26.5 KB, 81 lines, archive 12.3 KB   12 files, 48 KB  2h ago, judge #11940   proposal 12 stale (misses, 3h; the notes changed since it was made)
 
-! past a [notes] limit: a curation trigger, not a cap
-curate: magnum notes example/api --curate (or wait: the daemon curates notes past a limit once they change)
+! past a [notes] limit: a hint to organize the notes, not a cap
+curate: magnum notes example/api --curate (organizes them; a limit is a hint, not a cap)
 review: magnum notes talkable/talkable --review (stale: it merges the notes' changes since, or asks for a new curation)
 ```
 
@@ -3722,21 +3722,22 @@ gets no notes. Every Codex launch, resume and codex-review line passes `-c tool_
 too (`[kinds.codex] tool_output_limit`, through `tool_output`; 0 = Codex's own): a ceiling for the reads a
 model asks to make larger, not the size of a read.
 
-**Curation triggers.** After each judge round and at startup Magnum measures the notes against `[notes]`
-`max_bytes` (16 KiB), `max_line` (300 characters), `max_harness_files` (15) and `max_harness_bytes` (128
-KiB). Past any of them the repository is marked for curation (a `notes.over_limit` event names the
-limits). They are triggers, not caps: nothing blocks a review, and a curated proposal may stay above them
-when what it keeps helps future reviews. The judge prompts carry `max_line` as `notes_max_line` and ask the
-judge to keep each notes line within it, so the judges do not write the long lines that start a curation.
+**Limits.** After each judge round and at startup Magnum measures the notes against `[notes]`
+`max_bytes` (256 KiB), `max_line` (300 characters), `max_harness_files` (15) and `max_harness_bytes` (128
+KiB). Past any of them the repository is marked past it (a `notes.over_limit` event names the limits, and
+`magnum notes` marks them with `!`): a hint that the notes need organizing, not a cap. Nothing blocks a
+review, a curated proposal may stay above them, and size alone starts a curation only when `[notes] curate`
+lists `over_limit`, which the default leaves out. The archive counts against none of them. The judge prompts
+carry `max_line` as `notes_max_line` and ask the judge to keep each notes line within it.
 
 **History.** Every version of the notes and the harness is kept in the registry, forever: the judge's
 (with the round's PR and run) after every round that changed them, an applied curation's, an edit through
 `magnum notes <repo> --edit` or a restore (the operator's), and an import of what Magnum finds on disk
 without a record of it (the first start, an edit by hand). Bodies are gzip-compressed and stored once per
 content. `magnum notes <repo> --log` lists the versions (time, source, PR, size, harness changes),
-`--diff [N]` shows what changed since the version N back (default 1), and `--restore <version>` proposes
-a version back, reviewed like a curation on a terminal, so nothing is ever unrecoverable (with `--json` it
-prints what the restore would change and records nothing). A version a restore names stays in the
+`--diff [N]` shows what changed since the version N back (default 1), the archive's changes too, and
+`--restore <version>` proposes a version back, its archive with it, reviewed like a curation on a terminal,
+so nothing is ever unrecoverable (with `--json` it prints what the restore would change and records nothing). A version a restore names stays in the
 history, an applied curation's too. A `notes.changed` event counts
 the lines and harness files each version adds and removes, without quoting them. Later rounds run the
 harness's scripts, so a judge's version that adds or changes one also writes a `notes.harness_changed`
@@ -3749,11 +3750,11 @@ writes neither.
 report that names one by its path counts too. A file that existed for 20 judge rounds of its repository
 without a use is a curation candidate; `magnum notes <repo>` lists them.
 
-**Curation.** `[notes] curate` lists what starts a curation, at most one of a repository a day: `over_limit`
-curates a marked repository once its notes changed since the last curation; `weekly` curates every
-repository with notes once a week, once they changed; `misses` curates a repository whose retro recorded
-misses for its notes (above). The default is `["over_limit", "misses"]`; `[]` leaves it to `magnum notes
-<repo> --curate`, which runs one now. (The string form `"over_limit"`, `"weekly"` and `"off"` still reads
+**Curation.** `[notes] curate` lists what starts a curation, at most one of a repository a day: `misses`
+curates a repository whose retro recorded misses for its notes (above); `over_limit` curates a marked
+repository once its notes changed since the last curation; `weekly` curates every repository with notes once
+a week, once they changed. The default is `["misses"]`: no curation starts for size alone. `[]` leaves it to
+`magnum notes <repo> --curate`, which runs one now. (The string form `"over_limit"`, `"weekly"` and `"off"` still reads
 as it did: `"weekly"` is `["over_limit", "weekly"]`.) Every curation takes the repository's pending misses,
 whatever triggered it. A curation copies the
 notes and the harness under the notes lock into a scratch directory (`notes/.curate/<owner>/<repo>/<run>/`,
@@ -3761,15 +3762,23 @@ kept 30 days) and starts an interactive agent there, tagged `learn` like the ret
 named `learn notes` (`[notes]` kind, model and effort: Claude sonnet by default). Its prompt
 (`prompts/notes-curate.md`) carries paths, the limits and a usage file only, never notes text; the usage
 file has each harness file's rounds and uses and the operator's reasons for rejecting earlier proposals, and
-`misses.json`, when there are misses, has them with the reasons of the rejected proposals each was in. It
-keeps durable repository knowledge and removes anything about one pull request, machine-specific paths and
-obsolete workarounds, duplicates and contradictions; one-off probes are merged into a few parameterized
-scripts or deleted. It checks each pitfall against the standing decisions and puts the answer one gives on
+`misses.json`, when there are misses, has them with the reasons of the rejected proposals each was in. A
+curation organizes the notes and never loses knowledge: it may merge duplicates, naming where each went,
+and retire a line only when it is proven obsolete or superseded, with the evidence; standing decisions and
+the authors' answers stay in full, and age, rarity, low use and size are no reasons. Every line it takes
+out of the notes or rewrites goes into the archive word for word, with its disposition (merged into,
+superseded by, obsolete because); a line with a secret or a home directory path leaves without it. One-off
+probes are merged into a few parameterized scripts or deleted. It checks each pitfall against the standing decisions and puts the answer one gives on
 the pitfall's line, and turns a line that a base-branch doc the notes name covers into a pointer to that
 doc (its path and heading); it runs without the repository, so it points only to docs the notes name. It writes `proposal.md`, a `harness/` directory and `changes.json`, where every kept
 section and file carries a one-line reason saying how it helps a future review, and every miss it was given
 is noted (with the section that now covers it) or skipped (with a one-line reason). Magnum checks the
-proposal: every harness file named in the notes, plain files only (`proposal.md` and `changes.json` too: a
+proposal: no line lost (every non-empty line of the notes now, trailing spaces aside, is in the proposed
+notes or among the lines the proposal adds to the archive, word for word; the title, a `## ` heading
+`changes.json` accounts for and a line with a secret or a home directory path are exempt; the problem
+counts the lines missing and quotes the first three to the curator's nudge and to your review, never to an
+event), the archive keeping every line it held, every `## ` section of the notes now in `changes.json` with
+what became of it and a reason, the archive named in the notes when there is one, every harness file named in the notes, plain files only (`proposal.md` and `changes.json` too: a
 symbolic link is refused, never followed), every file kept or added present in `harness/`, a reason for
 every item kept, every miss
 accounted for, no pull request number, branch name or probe file (a file name or path that says probe, not
@@ -3787,10 +3796,31 @@ and starts once that ended (for a drain, after the restart or once the drain is 
 proposal it supersedes is superseded at once); `magnum notes` shows it as "curation queued". An
 infrastructure pause or a pause of the curator's CLI still refuses the request.
 
+**The archive.** `ARCHIVE.md` in the harness directory holds the lines curations retired, word for word,
+each with what became of it. It is part of the notes' state, so the registry's versions, `--log`, `--diff`,
+`--restore`, the stale merge and an apply carry it like the notes. The notes name it once ("retired lines,
+word for word; search it when a lesson seems missing"), and roles read it only then: the judge's harness
+listing (`notes_harness`) leaves it out, no round counts its uses, and it needs no name in the notes as a
+script, no `changes.json` item and counts against no limit. Only a curation or a recovery writes it: what a
+judge changes in it is put back as the round found it, by the hash in the round's snapshot (the judge's
+version kept in the history, a `notes.archive_restored` warning), never to a waiting proposal's archive;
+when no recorded version holds that archive, the judge's stays and the warning says so. The archive is history, so it may name a pull request; the secret and
+home-directory rules still hold.
+
+**Recovery.** `magnum notes <repo> --recover` proposes, once, the archive of what earlier curations cut:
+every line a live version of the notes held (the judges', the people's, the imports and the applied
+curations', never the state of a proposal that was not applied) and the notes now lack word for word,
+grouped by the day of the version that dropped it (`## Recovered <today>: dropped on <day>`, naming the
+versions); a line the archive holds already is not added again, and a line with a secret or a home
+directory path is left out and counted. The notes text stays as it is. It is reviewed like a restore, on a
+terminal (`n` rejects it, any other answer leaves it for `--review`), and refused while another proposal
+waits; `--recover --json` prints the archive it would propose, the lines by day and the count left out, and
+records nothing.
+
 **Review.** A valid proposal waits for you: a toast says "notes curation for <repo> is ready", and the
 board's and the dashboard's titles count the proposals to review. `magnum notes <repo> --review` prints
-the notes as a colored unified diff, the harness changes with the curator's reasons and the sizes before
-and after, then asks y/N (on a terminal; `--json` prints the data for scripts). `y` applies it under the
+the notes and the archive's additions as colored unified diffs, the harness changes with the curator's
+reasons and the sizes before and after (the archive's apart), then asks y/N (on a terminal; `--json` prints the data for scripts). `y` applies it under the
 notes lock, as the judges take it: the live notes are read again and must still be what the review showed
 (else nothing is written and `--review` again shows the proposal against them), then the notes and the
 harness are replaced and the version recorded. `n` rejects it, with an optional `--reason` the next
@@ -3814,8 +3844,8 @@ curator's model and the hash of its prompt.
 
 ```toml
 [notes]
-max_bytes = 16384       # triggers a curation; not a cap
-curate = ["over_limit", "weekly", "misses"]   # also curate every repository with notes once a week
+max_bytes = 262144      # marks notes to organize; not a cap
+curate = ["over_limit", "weekly", "misses"]   # also curate for size, and every repository with notes once a week
 ```
 
 ## Integrations

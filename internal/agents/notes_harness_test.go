@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/notes"
 )
 
 // harnessLog records the lines NotesHarnessLogged writes.
@@ -77,5 +79,19 @@ func TestNotesHarnessCountsLeftOutNamesWithThosePastTheCap(t *testing.T) {
 	names, more := NotesHarnessLogged(dir, nil) // a nil log is allowed
 	if len(names) != NotesHarnessMax || more != 2 || slices.ContainsFunc(names, func(n string) bool { return strings.Contains(n, "\n") }) {
 		t.Fatalf("%d names, %d more: %q", len(names), more, names)
+	}
+}
+
+// The archive of retired notes lines (notes.ArchiveName) is no QA script:
+// the judge's listing leaves it out, and it counts under more neither.
+func TestNotesHarnessLeavesTheArchiveOut(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"run-spec.sh", notes.ArchiveName} {
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if names, more := NotesHarness(dir); !slices.Equal(names, []string{"run-spec.sh"}) || more != 0 {
+		t.Fatalf("listing = %q, %d more", names, more)
 	}
 }

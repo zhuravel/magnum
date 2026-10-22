@@ -16,8 +16,9 @@ import (
 )
 
 // State is the whole content of a repository's notes: the notes text and
-// every harness file with its body. It is what a version in the registry
-// holds (store.NotesVersion) and what an applied proposal writes.
+// every harness file with its body, the archive (ArchiveName) among them. It
+// is what a version in the registry holds (store.NotesVersion) and what an
+// applied proposal writes.
 type State struct {
 	Exists bool // the notes file exists (false: Notes is empty)
 	Notes  []byte
@@ -92,14 +93,19 @@ func (s State) Listing() []File {
 // Fingerprint identifies s (Fingerprint of its notes and listing).
 func (s State) Fingerprint() string { return Fingerprint(s.Notes, s.Listing()) }
 
-// Size measures s against maxLine (Size.Over compares it with the limits).
+// Size measures s against maxLine (Size.Over compares it with the limits),
+// the archive apart.
 func (s State) Size(maxLine int) Size {
 	var out Size
 	if s.Exists {
 		out = MeasureText(s.Notes, maxLine)
 	}
-	out.HarnessFiles = len(s.Files)
 	for _, b := range s.Files {
+		if IsArchive(b.Path) {
+			out.ArchiveBytes, out.ArchiveLines = int64(len(b.Body)), MeasureText(b.Body, 0).Lines
+			continue
+		}
+		out.HarnessFiles++
 		out.HarnessBytes += int64(len(b.Body))
 	}
 	return out

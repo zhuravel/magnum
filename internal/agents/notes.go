@@ -13,6 +13,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/notes"
 )
 
 // The roles read the repository notes in parts. Codex 0.162.1 keeps at
@@ -213,7 +214,9 @@ var harnessName = regexp.MustCompile(`^[A-Za-z0-9._@+-]+$`)
 // "/", at most NotesHarnessMax, and how many more there are. A name with
 // anything but letters, digits and "._@+-" is never listed: it counts under
 // more, and log (optional) gets one line with how many such names there are,
-// never the names. A missing or unreadable directory lists nothing.
+// never the names. The archive of retired notes lines (notes.ArchiveName) is
+// no script and is left out: the judge reads it only where the notes name
+// it. A missing or unreadable directory lists nothing.
 func NotesHarnessLogged(dir string, log execx.Logger) (names []string, more int) {
 	if dir == "" {
 		return nil, 0
@@ -225,6 +228,9 @@ func NotesHarnessLogged(dir string, log execx.Logger) (names []string, more int)
 	unlisted := 0
 	for _, e := range ents {
 		name := e.Name()
+		if notes.IsArchive(name) && !e.IsDir() {
+			continue
+		}
 		if !harnessName.MatchString(name) {
 			unlisted++
 			continue

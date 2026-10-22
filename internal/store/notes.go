@@ -331,16 +331,11 @@ func (s *Store) NotesVersionContent(ctx context.Context, id int64) (NotesContent
 	if err != nil {
 		return NotesContent{}, err
 	}
-	var z []byte
-	err = s.db.QueryRowContext(ctx, "SELECT body FROM notes_versions WHERE repo_id = ? AND sha256 = ? AND body IS NOT NULL ORDER BY id LIMIT 1",
-		v.RepoID, v.SHA256).Scan(&z)
-	if err != nil {
-		return NotesContent{}, fmt.Errorf("notes version %d: %w", id, errors.Join(errNoNotesState, err))
-	}
 	var out NotesContent
-	if out.Notes, err = gunzipBytes(z); err != nil {
-		return NotesContent{}, fmt.Errorf("notes version %d: %w", id, err)
+	if out.Notes, err = s.notesText(ctx, v); err != nil {
+		return NotesContent{}, err
 	}
+	var z []byte
 	for _, f := range v.Files {
 		if err := s.db.QueryRowContext(ctx, "SELECT body FROM harness_blobs WHERE sha256 = ?", f.SHA256).Scan(&z); err != nil {
 			return NotesContent{}, fmt.Errorf("notes version %d: %s: %w", id, f.Path, err)
@@ -351,6 +346,47 @@ func (s *Store) NotesVersionContent(ctx context.Context, id int64) (NotesContent
 		out.Files = append(out.Files, f)
 	}
 	return out, nil
+}
+
+// NotesVersionText reads the notes text of version v (of NotesHistory or
+// NotesVersionByID), none of its harness: `magnum notes --recover` reads
+// every version's.
+func (s *Store) NotesVersionText(ctx context.Context, v NotesVersion) ([]byte, error) {
+	return s.notesText(ctx, v)
+}
+
+// NotesHarnessBlob reads the harness file body with SHA-256 sum that a
+// version of repoID holds (any version: a proposal's own too), ErrNotFound
+// when none does. The engine puts the archive a judge changed back to the
+// one its round found, by the hash the round's snapshot lists.
+func (s *Store) NotesHarnessBlob(ctx context.Context, repoID int64, sum string) ([]byte, error) {
+	var z []byte
+	err := s.db.QueryRowContext(ctx, `SELECT b.body FROM harness_blobs b WHERE b.sha256 = ? AND EXISTS (SELECT 1 FROM notes_version_files f
+JOIN notes_versions v ON v.id = f.version_id WHERE f.sha256 = b.sha256 AND v.repo_id = ?)`, sum, repoID).Scan(&z)
+	if err != nil {
+		return nil, notFound(err, "harness blob of repo", repoID)
+	}
+	body, err := gunzipBytes(z)
+	if err != nil {
+		return nil, fmt.Errorf("harness blob %s: %w", sum, err)
+	}
+	return body, nil
+}
+
+// notesText reads v's notes text: the body stored with the first version
+// of its repository that holds the same text.
+func (s *Store) notesText(ctx context.Context, v NotesVersion) ([]byte, error) {
+	var z []byte
+	err := s.db.QueryRowContext(ctx, "SELECT body FROM notes_versions WHERE repo_id = ? AND sha256 = ? AND body IS NOT NULL ORDER BY id LIMIT 1",
+		v.RepoID, v.SHA256).Scan(&z)
+	if err != nil {
+		return nil, fmt.Errorf("notes version %d: %w", v.ID, errors.Join(errNoNotesState, err))
+	}
+	text, err := gunzipBytes(z)
+	if err != nil {
+		return nil, fmt.Errorf("notes version %d: %w", v.ID, err)
+	}
+	return text, nil
 }
 
 // NotesProposal is a proposal for a repository's notes: a curator's, or a

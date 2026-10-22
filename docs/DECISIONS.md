@@ -11622,6 +11622,80 @@ skill versions); people add theirs to the sections before it, at the end of the 
     outer print keeps its own 10,000); parts of the live file (a rewrite between two reads shifts their
     ranges); relevance selection of sections now (at today's size every role reads everything; topics and
     a core are for when the notes grow past what the parts carry).
+- **Curation organizes the notes and never loses a line** (2026-10-22, amends "Repository notes: triggers,
+  history, usage and curation" and "The retro's misses become notes proposals"). The operator asked how to stop
+  losing repository notes, now and as they grow. The registry showed where the loss came from: judges insert
+  lessons under the lock and delete nothing, but in the main repository he had applied 5 of 20 curation
+  proposals, each dropping 54 to 151 lines with nothing like them left, and rejected 11, often for cutting
+  durable knowledge ("Too much went: every standing decision and author answer must stay in full", "Keep these
+  general pitfalls and QA methods, which no other line carried"). The size trigger drove the cuts: on 10-14 he
+  raised `max_bytes` to 48 KiB because curations ran every day and each cut, his notes are now about 95 KiB, and
+  as his config sets only `max_bytes` the built-in `["over_limit", "misses"]` still applied. A review of the
+  code found three gaps: the validator accounted for every section of the proposal but not of the current
+  notes, so a whole old section could vanish without an entry; the prompt pushed toward the limits ("Stay
+  within them unless the content truly improves future reviews"); and a notes state was only the notes and the
+  harness, so a file beside them would have had no fingerprint, history, apply or restore.
+  - The invariant, in `notes.Validate` (`checkPreserved`): every non-empty line of the notes now, trailing
+    spaces aside, is in the proposed notes or among the lines the proposal adds to the archive, word for word;
+    the archive keeps every line it held, as many times as it held it; every `## ` section of the notes now is
+    in `changes.json` with an action and a reason; a proposal with an archive names it in its notes. Exempt:
+    the title (a first line starting `# `, which every curation dates anew), a `## ` heading `changes.json`
+    accounts for (what became of its section is said there) and a line with a secret or a home directory path
+    (the leak rules keep it out of the archive too, and the prompt has such lines removed; the registry keeps
+    them). The problems count the lines missing and quote the first three, clipped, to the curator's nudge and
+    to the operator's review (an invalid proposal's reason); events still quote no notes text. A rewrapped or
+    reworded line is a dropped one: its old words go to the archive, which costs bytes, not validity.
+  - The archive is a reserved file of the harness, `ARCHIVE.md` (`notes.ArchiveName`), rather than a new field
+    of the state stored beside the notes as `<repo>.archive.md`: as a harness file it is in the state already,
+    so the fingerprint, the round's snapshot, every registry version (an entry of notes_version_files, its body
+    once in harness_blobs; no migration), `--log`, `--diff`, the three-way merge of a stale proposal, apply and
+    restore carry it with no code of their own, and `WriteState` keeps its two-step swap (a third file would
+    have needed its own rollback); a forgotten exemption is a miscount, where a forgotten field would have
+    dropped the archive on that path. What treats harness files as scripts leaves it out: `Size` (the limits;
+    `archive_bytes` and `archive_lines` apart), the judge's `notes_harness` listing, the rounds that count a
+    file's uses (so it is never unused), the curator's usage data, the rules that a file be named in the notes
+    and have a `changes.json` item, and the harness events and toasts. The archive is history: it may name a
+    pull request, while the secret and home-directory rules still hold. Only a curation or a recovery writes
+    it: when a judge's round changed it (and no curation applied during the round did), the engine records
+    the judge's state (so nothing is lost), then puts back the archive the round found: the body with the hash
+    the round's snapshot lists, from the bodies the registry stores for any version of the repository (none
+    when the snapshot had no archive), never a newer row such as a waiting proposal's own version; under the
+    notes lock, recorded as an import, with a `notes.archive_restored` warning that names the PR and the
+    version. When no stored body has that hash (a hand edit not imported yet), the judge's archive stays and
+    the warning says it could not be put back.
+  - Defaults: `curate = ["misses"]` (no curation starts for size alone; `over_limit` stays a valid choice) and
+    `max_bytes = 262144`, which marks notes past it in `magnum notes` as a hint to organize them. The prompt
+    lost the sentence that pushed toward the limits and says curation organizes and never loses knowledge:
+    merge duplicates naming where each went, retire a line only when proven obsolete or superseded with the
+    evidence, keep standing decisions and the authors' answers in full (age, rarity, low use and size are no
+    reasons), and put every line taken out or rewritten into the archive word for word with its disposition
+    (`→ merged into`, `→ superseded by`, `→ obsolete because`) under `## Retired <date>`.
+  - The recovery, `magnum notes <repo> --recover`: an archive of every line a live version held (the history:
+    judges', people's, imports and applied curations', never a proposal's own unapplied state) and the notes
+    now lack, grouped by the day of the version that last dropped it, the notes text unchanged; a line already
+    in the archive is not added again, one with a secret or a home path is left out and counted. It is a
+    curation proposal no curator wrote (trigger `recover`, so no migration of the proposals' kinds), reviewed
+    like a restore and refused while another proposal waits; the daemon's spacing of curations, the curator's
+    rejections and the stale follow-up leave it out. `--json` prints it and records nothing. A dry run against
+    a copy of the registry for the main repository: 984 lines from 257 versions over 16 days, 3 left out for a
+    home directory path, none with a secret.
+  - Tests, failing first: in notes TestAProposalThatMovesALineToTheArchiveIsValid,
+    TestAProposalThatDropsALineWithoutArchivingItIsInvalid, TestTheTitleAndALeakingLineNeedNoArchive,
+    TestAProposalThatDropsAWholeOldSectionWithoutAnEntryIsInvalid,
+    TestAProposalThatRemovesALineFromTheArchiveIsInvalid, TestAProposalNamesItsArchive,
+    TestTheArchiveMayNameAPullRequestButNoSecret, TestWithArchiveAndWriteArchive,
+    TestRecoverArchivesEveryDroppedLineOnceByTheDayItLeft and TestPrepareScratchCopiesTheArchive; in engine
+    TestARepositoryPastMaxBytesGetsNoAutomaticCuration, TestTheArchiveCountsForNoRound,
+    TestAJudgesEditOfTheArchiveIsPutBack, TestAJudgesEditOfTheArchiveGoesBackToWhatTheRoundFound (a waiting
+    proposal's version, with another archive, the newest row), TestAnArchiveTheRegistryNeverHeldIsNotPutBack
+    and TestTheCuratorPromptKeepsEveryLine; in store TestNotesHarnessBlobIsFoundAmongTheRepositorysVersions; in agents
+    TestNotesHarnessLeavesTheArchiveOut; in cli TestApplyWritesTheArchiveWithTheNotes,
+    TestHistoryDiffAndRestoreCoverTheArchive and TestRecoverArchivesWhatTheHistoryDropped; in config
+    TestNotesDefaults and TestNotesCurateReadsAListOrTheEarlierString pin the new defaults.
+  - Rejected: a similarity test for kept lines (it passes a line that lost an "unless" or an author's answer,
+    which are what the operator's rejections were about); an archive outside the versioned state (no history,
+    no restore, no stale merge, and a judge's edit could not be undone); a higher size trigger alone (curations
+    would still cut, only less often).
 
 ## Learned rules
 
