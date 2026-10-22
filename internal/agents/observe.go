@@ -128,7 +128,10 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     shows background work started during the run still running, or a
 //     task notification not answered yet, counts as working for completion
 //     (idle_ticks 0, Background set; see backgroundWait), until the
-//     pipeline tells it (Tell) to stop waiting for that work.
+//     pipeline tells it (Tell) to stop waiting for that work. A codex agent
+//     idle with a submitted/working run whose rollout has no task_complete
+//     (or turn_aborted) since the run and grew within RolloutGrowth counts
+//     as working too (see codexTurnGoing).
 //     An agent of a kind named by a rename command (codex), working on a
 //     submitted/working run, whose terminal title lacks Title gets that
 //     command (`/rename <Title>`) typed into its pane (at most once per call,
@@ -227,9 +230,10 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	if sid == "" {
 		sid = m.recoverSessionID(ctx, s, now) // herdr's session hook gave none: the Codex rollout's
 	}
-	held := false // idle, but background work keeps the turn going
+	held := false // idle, but background work, or a Codex turn its rollout shows going on, keeps the turn going
 	if idle && o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
 		o.Background, held = m.backgroundWait(ctx, s, sid, *o.Run)
+		held = held || m.codexTurnGoing(ctx, s, sid, *o.Run, a.AgentStatus, now)
 	}
 	prev, prevAt := herdr.Status(store.Deref(s.AgentStatus)), s.AgentStatusAt // before this tick
 	err := m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLive, func(u *store.SessionUpdate) {

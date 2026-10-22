@@ -2140,6 +2140,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   of two candidates, which would hand one judge the other's conversation; the line's own timestamp, which
   is when Codex created the file, not when the session started; doing the same for Claude now (its transcripts
   and its idle detection differ).
+- **herdr's idle does not end a Codex turn that its rollout shows still working** (2026-10-22, spec 123,
+  item 2). The hook script that gives herdr a Codex session's id also reports its status, and on
+  2026-10-22 herdr showed judges idle while Codex still worked: their rollouts kept growing, the observer
+  ended their turns on two idle ticks, and the own passes of talkable#12066, #12065 and #12048 failed
+  "finished without writing judge-own.md", and #12071 parked needs_attention. Codex ends every turn in
+  its rollout with a `task_complete` event, or `turn_aborted` when it is interrupted. Now the observer,
+  before an idle or done reading counts toward a submitted or working run's end, reads the rollout of a
+  codex session that has an id (`codexTurnGoing`, internal/agents/rollout_turn.go): when its last
+  `task_complete` or `turn_aborted` is stamped before the run's creation (less `transcriptSkew`) and Codex
+  wrote the rollout within `RolloutGrowth` (90 s), the run is held as a claude agent's background work
+  holds it (idle_ticks stays 0), and that is logged once per run ("herdr reports the agent idle, but its
+  Codex rollout has no task_complete since run … and grew 30s ago: the turn goes on"). Every wait polls
+  the run's state, so a round's reviewers and judge and the engine's pane jobs keep waiting, within the
+  role's own timeout, and the timeout ends a run whose rollout never stops growing. A turn the rollout
+  ended ends on the two idle ticks as before, with no added wait (the data point that Claude turns already
+  end a median 66 s after the agent's last transcript entry made a third wait unwelcome); a rollout last
+  written 90 s or more ago, one that cannot be found or read and a session without an id keep herdr's
+  word. The read happens only on an idle tick of a run in flight: a stat, then the last 1 MiB of the
+  rollout only when it is that fresh. A `task_complete` while herdr says working changes nothing. Tests:
+  TestAnIdleCodexTurnWhoseRolloutStillGrowsStaysOpen and
+  TestAnIdleCodexTurnEndsAsBeforeWhenItsRolloutSaysNothingElse in agents,
+  TestAnOwnPassWhosePaneGoesIdleWhileItsRolloutGrowsIsNotFailed (the 2026-10-22 case, failing "finished
+  without writing judge-own.md" without the check) and TestTheJudgesTimeoutEndsATurnWhoseRolloutKeepsGrowing
+  in pipeline. Rejected: trusting the rollout's growth beyond 90 s, which would hold a turn whose Codex
+  died mid-turn until the role's timeout; ending a turn at once on a `task_complete`, which herdr's two
+  ticks already bound; doing the same for Claude now (its transcript and idle detection differ, and
+  background work is read there already).
 
 ## Screens and commands
 

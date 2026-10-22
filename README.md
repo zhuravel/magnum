@@ -1794,7 +1794,12 @@ its timeout, an asynchronous subagent, a skill forked into the background such a
 resumes when that work notifies it, so for a claude agent Magnum reads the session's transcript too
 (`projects/<checkout>/<session id>.jsonl` under the pane's `CLAUDE_CONFIG_DIR`, else `~/.claude`; only what
 the run appended) and keeps the turn going while such work has not finished or the agent has not answered
-its notification (one `agent.background_wait` event per run). The role's `timeout`, which its prompt names
+its notification (one `agent.background_wait` event per run). herdr's status comes from the same hook
+script as a Codex session's id, so herdr's idle alone does not end a Codex turn either: when the session has
+an id and its rollout under its Codex home holds no `task_complete` (or `turn_aborted`) since the prompt and
+was written within the last 90 seconds, the turn is still working, and Magnum keeps waiting and logs that
+once per run. A turn whose rollout has ended it, or whose rollout stopped growing, ends on the two idle
+ticks as before, and so does one with no id or no rollout to read. The role's `timeout`, which its prompt names
 as the time budget, still bounds the turn: when it passes, Magnum asks the agent once to stop its background
 tasks (TaskStop), write its report with what it found and list the checks it stopped as pending
 (`round.time_up`), and waits 5 more minutes before it interrupts the agent and counts the report as

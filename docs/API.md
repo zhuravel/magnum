@@ -386,6 +386,11 @@ const PostReviewFile = "review.json"
     `magnum post-review`, in the report directory next to its result file
     (JudgeData.ReviewFile).
 
+const RolloutGrowth = 90 * time.Second
+    RolloutGrowth is how recently a Codex session's rollout must have been
+    written for a turn without a task_complete since its prompt to count as
+    still working while herdr reports the agent idle or done.
+
 const SessionIDBlind = "no session id: judges are never resumed, and a helper's Codex refusal is not seen"
     SessionIDBlind says what goes blind without a Codex session id: resumable
     never resumes the judge and TurnError cannot read the rollout, which the
@@ -1510,19 +1515,22 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         any other kind, and a claude agent without a transcript to read,
         carried on by itself. A claude agent idle with a submitted/working run
         whose transcript shows background work started during the run still
-        running, or a task notification not answered yet, counts as working
-        for completion (idle_ticks 0, Background set; see backgroundWait),
-        until the pipeline tells it (Tell) to stop waiting for that work.
-        An agent of a kind named by a rename command (codex), working on a
-        submitted/working run, whose terminal title lacks Title gets that
-        command (`/rename <Title>`) typed into its pane (at most once per call,
-        TitleAttempts per session row; see nameAgent). A codex agent that
-        herdr still reports without a session id, and whose row has none,
-        RecoverIDAfter after its start, gets the id of its Codex rollout,
-        when exactly one matches (see recoverSessionID); herdr's id, when
-        it comes, wins. An agent that ends a turn magnum prompted (working,
-        then idle) while neither herdr nor its rollout gave a session id records
-        EventSessionIDMissing, once per kind and Manager (see sessionIDMissing).
+        running, or a task notification not answered yet, counts as working for
+        completion (idle_ticks 0, Background set; see backgroundWait), until the
+        pipeline tells it (Tell) to stop waiting for that work. A codex agent
+        idle with a submitted/working run whose rollout has no task_complete
+        (or turn_aborted) since the run and grew within RolloutGrowth counts as
+        working too (see codexTurnGoing). An agent of a kind named by a rename
+        command (codex), working on a submitted/working run, whose terminal
+        title lacks Title gets that command (`/rename <Title>`) typed into
+        its pane (at most once per call, TitleAttempts per session row; see
+        nameAgent). A codex agent that herdr still reports without a session id,
+        and whose row has none, RecoverIDAfter after its start, gets the id of
+        its Codex rollout, when exactly one matches (see recoverSessionID);
+        herdr's id, when it comes, wins. An agent that ends a turn magnum
+        prompted (working, then idle) while neither herdr nor its rollout gave a
+        session id records EventSessionIDMissing, once per kind and Manager (see
+        sessionIDMissing).
       - live agent session without its agent, or any session whose pane is gone
         -> session lost, ObsLost. A starting session (agent not started yet)
         with its pane still present is left alone, and so is a session that
