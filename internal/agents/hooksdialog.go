@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -141,7 +142,8 @@ func (m *Manager) hooksChoice(kind, dir string) (int, string) {
 // one key at a time, then the screen is read again and Enter goes only to the
 // same dialog with the cursor on the choice; magnum then waits for the agent
 // to be idle. Nothing else on screen is touched (false, nil). It records
-// EventHooksTrusted or EventHooksDeclined.
+// EventHooksTrusted or EventHooksDeclined, and after "Trust all and
+// continue" checks that Codex saved the trust (hooksTrustSaved).
 func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind string, ref paneRef, dir string) (bool, error) {
 	text, err := m.readVisible(ctx, ref)
 	if err != nil {
@@ -173,6 +175,12 @@ func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind s
 		}
 		return false, fmt.Errorf("agents: hooks review in %s: %s; not confirming", ref, what)
 	}
+	var configFile, hooksFile string // where Codex saves the trust, and the hooks it trusts (hooksTrustSaved)
+	var before time.Time
+	if choice == hooksTrustOption {
+		configFile, hooksFile = m.codexTrustFiles(role)
+		before = modTime(configFile)
+	}
 	if err := m.sendKeys(ctx, ref, "enter"); err != nil {
 		return false, fmt.Errorf("agents: hooks review in %s: %w", ref, err)
 	}
@@ -185,6 +193,9 @@ func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind s
 	m.event(ctx, m.prSubject(ctx, prID), "info", kindEv, msg, map[string]any{"role": string(role), "agent": ref.name,
 		"pane": ref.pane, "keys": keys, "option": hooksOptions[choice], "checkout": dir})
 	m.waitTrustReady(ctx, ref)
+	if configFile != "" {
+		m.hooksTrustSaved(ctx, kind, role, ref, configFile, hooksFile, before)
+	}
 	return true, nil
 }
 

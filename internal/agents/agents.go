@@ -99,6 +99,12 @@ var (
 	// ErrStalled: herdr accepted the text but the agent never started working
 	// (agent_prompt_stalled). The run is left submitted, never re-sent.
 	ErrStalled = errors.New("agent prompt stalled")
+	// ErrNotTaken: a Codex session never took its first prompt: a startup
+	// dialog (the hooks review, the folder access) ate it, and again after
+	// magnum answered the dialog and sent the prompt once more (Submit,
+	// codexRetry). The run is failed: "Codex did not take the prompt (a
+	// startup dialog ate it)".
+	ErrNotTaken = errors.New("a startup dialog ate it")
 	// ErrTimeout: herdr's own timeout or a client deadline.
 	ErrTimeout = errors.New("agent timed out")
 	// ErrLoginRequired: Preflight found the CLI logged out.
@@ -190,6 +196,10 @@ type Deps struct {
 	// in place of the posting identity's (see paneEnv); nil = no identities,
 	// so such a pane keeps the env it was given.
 	IdentityEnv func(name string) (env map[string]string, ok bool)
+	// Toast shows the operator a toast (key dedupes it, title and body say
+	// it): Codex did not save the hook trust magnum answered
+	// (EventHooksTrustUnsaved). It must not block; nil = none.
+	Toast func(ctx context.Context, key, title, body string)
 }
 
 // Manager drives agent sessions. Safe for concurrent use: the daemon tick
@@ -238,6 +248,9 @@ type Manager struct {
 	// replaced maps a pane magnum closed to clear a launch that never came
 	// up to the pane that took its place (see replacement).
 	replaced map[string]string
+	// hooksTrustMu serializes the check that tells the operator once per
+	// hooks.json that Codex did not save a hook trust (hooksTrustSaved).
+	hooksTrustMu sync.Mutex
 }
 
 // New returns a Manager.

@@ -71,8 +71,15 @@ func (h *miniHerdr) AgentRead(_ context.Context, _ string, o herdr.ReadOptions) 
 	if h.dialog != "" && o.Source == herdr.SourceVisible {
 		return herdr.ReadResult{Text: h.dialog}, nil
 	}
+	if o.Source == herdr.SourceVisible { // Codex's composer, which a first prompt waits for
+		return herdr.ReadResult{Text: "Posted.\n\n› Ask Codex to do anything\n\n  100% context left · ? for shortcuts\n"}, nil
+	}
 	return herdr.ReadResult{Text: "Posted.\n"}, nil
 }
+
+// noAgentSleep is the Deps.Sleep of a real agents.Manager whose waits (the
+// first prompt's settle, codexPromptReady) need no wall-clock time.
+func noAgentSleep(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 
 func (h *miniHerdr) PaneRead(context.Context, string, herdr.ReadOptions) (herdr.ReadResult, error) {
 	return herdr.ReadResult{Text: "Posted.\n"}, nil
@@ -134,7 +141,7 @@ func TestRealAgentsManagerJudgeTurn(t *testing.T) {
 	run := &execx.Fake{Rules: []execx.Rule{
 		{Prefix: []string{"codex", "login", "status"}, Result: execx.Result{Stdout: []byte("Logged in using ChatGPT\n")}},
 	}}
-	m := agents.New(agents.Deps{Herdr: h, Store: e.st, Runner: run, Config: e.cfg, Layout: e.layout, Clock: e.clock.Now})
+	m := agents.New(agents.Deps{Herdr: h, Store: e.st, Runner: run, Config: e.cfg, Layout: e.layout, Clock: e.clock.Now, Sleep: noAgentSleep})
 	e.r.Agents = m
 
 	ticks := 0

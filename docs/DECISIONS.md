@@ -2238,6 +2238,61 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a hook changes with its versions, and a wrong hash would warn on every hook); warning on every Codex
   session without an id (one can miss its id on a loaded machine without an outage); counting resumed
   sessions, which carry the id they resume.
+- **A new Codex session's first prompt waits for its startup dialogs, and magnum checks that Codex took
+  it** (2026-10-22, spec 124). herdr's integration update rewrote ~/.codex/hooks.json at 13:07 UTC and the
+  operator's reorder changed it again at 15:32, so new Codex sessions showed "Hooks need review", and six
+  judges lost their first prompt:
+
+  | Session | PR | Run created (UTC) | Hooks review answered (UTC) |
+  |---|---|---|---|
+  | 1649 | talkable#12071 | 14:03:50 | 14:03:53 |
+  | 1650 | talkable#12065 | 14:04:48 | 14:04:52 |
+  | 1653 | talkable#12048 | 14:05:03 | 14:06:20 |
+  | 1665 | talkable#12075 | 15:36:58 | 15:38:07 |
+  | 1670 | talkable#12066 | 15:37:37 | 15:37:43 |
+  | 1672 | another repository's #752 | 15:41:08 | 15:42:02 |
+
+  None of them has a rollout of Codex's TUI, so Codex never started a turn; herdr reported each idle
+  (also with the dialog on screen), two idle ticks ended the runs, three own passes failed "finished
+  without writing judge-own.md" and talkable#12071 parked in needs_attention. The daemon log puts each
+  answer half a second after the round's "prompting" line, from Submit's own look at the screen, and the
+  prompt after it: Submit pressed Enter on "Trust all and continue", waited only for herdr's idle (one 2 s
+  poll) and typed the prompt, which herdr saw stall. The one answer of the day that worked, session
+  1645's at 14:04:33, is the only one that wrote config.toml (its last write), and Codex
+  started that session's thread 0.12 s after it; after the six answers it started none, and their later
+  prompts (nudges, candidate prompts, up to 1.5 hours on) stalled too. What kept Codex from going on after
+  those answers the registry does not show; the same rewrite put two SessionStart hooks without a timeout
+  ahead of herdr's (spec 122's entry above), which a trust lets run before the session starts. Either
+  way herdr's idle says nothing about a startup dialog, and the screen must. Now the first prompt of a
+  Codex session (a new or resumed one,
+  last_prompt_at unset) waits until its visible screen has shown the composer (`codexComposer`: the
+  bottom input line, never a dialog's option line) and no dialog on reads one second apart spanning
+  `CodexPromptSettle` (3 s; the test fixture shows the review 2 s after the composer, which a 1 s settle
+  lets through), answering a hooks review or folder access it finds by the rules that answer them
+  elsewhere (at most 3 per wait) and starting again; after `CodexReadyTimeout` (30 s) of a screen it
+  cannot place, the prompt goes out as before, logged. When herdr reports such a first prompt stalled,
+  `codexRetry` looks for up to `PromptTakenWait` (10 s): herdr showing the agent working or blocked, a
+  user message in the session's rollout since the run (by its id, else the one TUI rollout of its
+  checkout and start), or a free composer means Codex took it, and the run is observed as before; a
+  startup dialog on screen means it ate the prompt, which is answered, recorded as one
+  `agents.prompt_retried` event and sent again once; a second loss fails the run with `ErrNotTaken`,
+  "Codex did not take the prompt (a startup dialog ate it)", never "finished without writing …". A
+  stall with no dialog and no sign either way stays observed as before (a false failure would cost more).
+  After a "Trust all and continue" magnum compares config.toml's modification time with the one before
+  its Enter; unchanged, it records `agents.hooks_trust_unsaved` (warn, tool:codex) and toasts "Codex did
+  not save the hook trust. Every new Codex session will ask again. Run `codex` once in a terminal and
+  choose Trust all.", once per hooks.json (its fingerprint in kv `kind.codex.hooks_trust_unsaved`, so a
+  daemon restart does not repeat it; the toast goes through the new `agents.Deps.Toast`, which the App
+  sends on a goroutine of its own). Tests:
+  TestTheFirstCodexPromptWaitsOutAHooksReviewThatFollowsItsComposer,
+  TestAFirstCodexPromptWithNoDialogGoesOutAfterTheSettle,
+  TestAFirstCodexPromptADialogAteIsSentAgainAfterTheAnswer,
+  TestAFirstCodexPromptLostTwiceFailsTheRunWithTheReason, TestAStalledFirstCodexPromptCodexTookIsNotSentAgain,
+  TestAHookTrustCodexDidNotSaveIsToldOncePerHooksJSON and TestASavedOrDeclinedHookTrustGivesNoWarning.
+  Rejected: a fixed long delay before every first prompt (it slows every session and still loses a
+  prompt to a dialog that comes later); editing config.toml to trust the hooks (the trust is the
+  operator's to give, and magnum never writes Codex's hook trust); Claude now (out of scope); retrying
+  the rounds that already failed.
 
 ## Screens and commands
 

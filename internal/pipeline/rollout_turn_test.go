@@ -100,7 +100,8 @@ func TestAnOwnPassWhosePaneGoesIdleWhileItsRolloutGrowsIsNotFailed(t *testing.T)
 		{Prefix: []string{"codex", "login", "status"}, Result: execx.Result{Stdout: []byte("Logged in using ChatGPT\n")}},
 	}}
 	home := t.TempDir()
-	m := agents.New(agents.Deps{Herdr: h, Store: e.st, Runner: run, Config: e.cfg, Layout: e.layout, Clock: e.clock.Now, CodexHome: home})
+	m := agents.New(agents.Deps{Herdr: h, Store: e.st, Runner: run, Config: e.cfg, Layout: e.layout, Clock: e.clock.Now, CodexHome: home,
+		Sleep: noAgentSleep})
 	e.r.Agents = ownPassOnManager{fakeAgents: e.ag, m: m}
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(801, "CHANGES_REQUESTED", "REQUEST_CHANGES").behavior(t)}
 
@@ -178,7 +179,8 @@ func TestTheJudgesTimeoutEndsATurnWhoseRolloutKeepsGrowing(t *testing.T) {
 		{Prefix: []string{"codex", "login", "status"}, Result: execx.Result{Stdout: []byte("Logged in using ChatGPT\n")}},
 	}}
 	home := t.TempDir()
-	m := agents.New(agents.Deps{Herdr: h, Store: e.st, Runner: run, Config: e.cfg, Layout: e.layout, Clock: e.clock.Now, CodexHome: home})
+	m := agents.New(agents.Deps{Herdr: h, Store: e.st, Runner: run, Config: e.cfg, Layout: e.layout, Clock: e.clock.Now, CodexHome: home,
+		Sleep: noAgentSleep})
 	e.r.Agents = m
 	start := e.clock.Now()
 	ticks := 0

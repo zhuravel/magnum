@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/cleanup"
@@ -298,6 +299,7 @@ func (a *App) wire() {
 	a.Agents = agents.New(agents.Deps{
 		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner, Config: cfg, Layout: a.Layout, Tag: a.AgentTag,
 		IdentityEnv: a.identityEnv, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "agents"},
+		Toast: a.toastAsync,
 	})
 	// One Jira client for every identity's rounds: a token file problem
 	// warns once per daemon start (jira.Client.WarnTokenFile).
@@ -325,6 +327,30 @@ func (a *App) wire() {
 		Enabled: cfg.Herdr.Notify && !a.DryRun && a.AgentTag == "",
 		Log:     Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "notify"},
 	}
+}
+
+// agentToastWindow dedupes the agents' toasts by key (agents.Deps.Toast),
+// and agentToastTimeout bounds one.
+const (
+	agentToastWindow  = 24 * time.Hour
+	agentToastTimeout = time.Minute
+)
+
+// toastAsync implements agents.Deps.Toast: the toast goes out on a goroutine
+// of its own (a round waits for no notification), best effort, through the
+// App's notifier (a no-op when it is off: dry run, a tagged App).
+func (a *App) toastAsync(ctx context.Context, key, title, body string) {
+	n := a.Notify
+	if n == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentToastTimeout)
+		defer cancel()
+		if _, err := n.Toast(ctx, key, title, body, agentToastWindow); err != nil {
+			a.Logger.Warn("toast failed", "key", key, "err", err)
+		}
+	}()
 }
 
 // identityEnv implements agents.Deps.IdentityEnv: the GitHub env of the

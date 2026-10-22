@@ -31,15 +31,20 @@ func (e *env) settleOnResult(id string) {
 
 // judgeSettledWhileWorking prompts the judge, lets it work past the
 // prompt's grace and verifies its run on its result file while the agent
-// still shows working; it returns the run id.
+// still shows working; it returns the run id. The sleeps of that first
+// prompt (its wait for the composer, codexPromptReady) are not recorded.
 func (e *env) judgeSettledWhileWorking() string {
 	e.t.Helper()
 	e.started()
+	e.h.mu.Lock()
+	e.h.reads[judgeAgent] = codexIdleScreen
+	e.h.mu.Unlock()
 	e.clock.Add(3 * time.Minute)
 	id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review")
 	if err != nil {
 		e.t.Fatal(err)
 	}
+	e.slept = nil
 	e.clock.Add(5 * time.Minute) // past humanGrace after the prompt
 	if o := e.observe()[RoleJudge]; o.Kind != "" || o.Status != herdr.StatusWorking {
 		e.t.Fatalf("working on the run = %+v", o)

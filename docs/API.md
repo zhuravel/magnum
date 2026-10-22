@@ -116,6 +116,22 @@ const (
     Timeouts used against herdr and the CLIs.
 
 const (
+	// CodexPromptSettle is how long a Codex session's screen must show its
+	// composer with no startup dialog before its first prompt goes out:
+	// Codex may draw its composer and show its hooks review a moment later
+	// (the tests' fake shows it 2 s after the composer), and a dialog that
+	// comes while the wait runs is answered and the wait starts again.
+	CodexPromptSettle = 3 * time.Second
+	// CodexReadyTimeout bounds that wait: a screen magnum cannot read, or
+	// one that shows neither the composer nor a dialog it knows, gets the
+	// prompt after it as before (logged), and the check after the prompt
+	// (codexPromptTaken) still looks for a dialog that ate it.
+	CodexReadyTimeout = 30 * time.Second
+	// PromptTakenWait bounds the check that Codex took a first prompt herdr
+	// did not see it take (agent_prompt_stalled).
+	PromptTakenWait = 10 * time.Second
+)
+const (
 	// CompactTimeout bounds Compact's wait for the compaction turn to end.
 	CompactTimeout = 10 * time.Minute
 )
@@ -313,6 +329,12 @@ const EventDefaultModelRestored = "agent.default_model_restored"
     settings' default model back (data: session, role, file, model, found;
     model and found are null when the key was absent).
 
+const EventHooksTrustUnsaved = "agents.hooks_trust_unsaved"
+    EventHooksTrustUnsaved is recorded (warn, subject tool:<kind>) when magnum
+    trusted a Codex hooks review and Codex's config.toml did not change, once
+    per hooks.json (data: role, agent, pane, hooks: the hooks.json fingerprint).
+    A toast says the same (Deps.Toast).
+
 const EventHumanActive = "agent.human_active"
     EventHumanActive is recorded on the PR when an ObsHumanActive begins its
     cooldown (Observation.CooldownUntil; data: role, until).
@@ -335,6 +357,11 @@ const EventParkForced = "pr.park_forced"
     of an agent that was still its pane's foreground process after ctrl+c and
     its kind's exit keys; it names the role, the pane and the cause, never the
     pane's text.
+
+const EventPromptRetried = "agents.prompt_retried"
+    EventPromptRetried is recorded (warn, the PR's subject) each time magnum
+    sends a Codex session's first prompt again because a startup dialog ate it
+    (data: role, run, agent, pane, dialog).
 
 const EventSessionID = "agent.session_id"
     EventSessionID is recorded (info, the PR's subject) when the observer
@@ -444,6 +471,12 @@ var (
 	// ErrStalled: herdr accepted the text but the agent never started working
 	// (agent_prompt_stalled). The run is left submitted, never re-sent.
 	ErrStalled = errors.New("agent prompt stalled")
+	// ErrNotTaken: a Codex session never took its first prompt: a startup
+	// dialog (the hooks review, the folder access) ate it, and again after
+	// magnum answered the dialog and sent the prompt once more (Submit,
+	// codexRetry). The run is failed: "Codex did not take the prompt (a
+	// startup dialog ate it)".
+	ErrNotTaken = errors.New("a startup dialog ate it")
 	// ErrTimeout: herdr's own timeout or a client deadline.
 	ErrTimeout = errors.New("agent timed out")
 	// ErrLoginRequired: Preflight found the CLI logged out.
@@ -543,6 +576,12 @@ func JoinCodexHookProblems(problems []CodexHookProblem) string
     JoinCodexHookProblems says problems in one sentence without its final
     period: the first in full, each other after "; it" ("herdr's Codex session
     hook runs after ...; it has no trust entry ...").
+
+func KVHooksTrustUnsaved(kind string) string
+    KVHooksTrustUnsaved is the kv key holding the fingerprint of the
+    hooks.json whose unsaved trust magnum last told the operator about
+    (EventHooksTrustUnsaved): "kind.<kind>.hooks_trust_unsaved". A hooks.json
+    with another fingerprint is told about again.
 
 func KVKindCLIModel(kind string) string
     KVKindCLIModel is the kv key holding the CLI's own default model of
@@ -915,6 +954,10 @@ type Deps struct {
 	// in place of the posting identity's (see paneEnv); nil = no identities,
 	// so such a pane keeps the env it was given.
 	IdentityEnv func(name string) (env map[string]string, ok bool)
+	// Toast shows the operator a toast (key dedupes it, title and body say
+	// it): Codex did not save the hook trust magnum answered
+	// (EventHooksTrustUnsaved). It must not block; nil = none.
+	Toast func(ctx context.Context, key, title, body string)
 }
     Deps are the Manager's collaborators.
 
@@ -1873,9 +1916,13 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error
     each refusal leaves the run pending for the caller to retry or abandon.
     A role whose newest session is lost while a fresh herdr snapshot still shows
     its agent gets that session back live (rebindLost) instead of a refusal.
-    Before sending, a session on a limited model switches to a fallback, and one
-    magnum switched earlier switches back once its role's model is no longer
-    limited (ensureModel). The prompt waits for the agent to reach working or
+    Before sending, a session on a limited model switches to a fallback,
+    and one magnum switched earlier switches back once its role's model is no
+    longer limited (ensureModel). The first prompt of a Codex session (a new or
+    resumed one, never prompted) waits until its screen shows the composer and
+    no startup dialog for CodexPromptSettle, answering the hooks review and the
+    folder access it finds (codexPromptReady); a later prompt to a Codex session
+    answers them first. The prompt waits for the agent to reach working or
     blocked (PromptAckTimeout):
 
       - working: run working (submitted_at, working_seen_at).
@@ -1884,7 +1931,10 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error
         Within TrustWindow of the session's start and before its first
         prompt, a first-launch trust dialog on screen is answered first
         (AnswerTrustDialog) and the prompt re-sent once.
-      - agent_prompt_stalled: run submitted with error, ErrStalled.
+      - agent_prompt_stalled: run submitted with error, ErrStalled. The first
+        prompt of a Codex session is checked first (codexRetry): one a startup
+        dialog ate is sent again once, after the dialog is answered, and one
+        that is lost again fails the run, ErrNotTaken.
       - timeout, or ctx ending while the prompt was in flight: run submitted
         with error (the text may have arrived), ErrTimeout or ctx's error.
       - anything else (herdr unavailable, agent gone): run failed.

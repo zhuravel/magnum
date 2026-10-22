@@ -140,8 +140,12 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
 // gets that session back live (rebindLost) instead of a refusal. Before
 // sending, a session on a limited model switches to a fallback, and one
 // magnum switched earlier switches back once its role's model is no longer
-// limited (ensureModel). The prompt waits for the agent to reach working or
-// blocked (PromptAckTimeout):
+// limited (ensureModel). The first prompt of a Codex session (a new or
+// resumed one, never prompted) waits until its screen shows the composer
+// and no startup dialog for CodexPromptSettle, answering the hooks review
+// and the folder access it finds (codexPromptReady); a later prompt to a
+// Codex session answers them first. The prompt waits for the agent to
+// reach working or blocked (PromptAckTimeout):
 //
 //   - working: run working (submitted_at, working_seen_at).
 //   - blocked after submission: run submitted, ErrBlocked.
@@ -149,7 +153,10 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
 //     Within TrustWindow of the session's start and before its first
 //     prompt, a first-launch trust dialog on screen is answered first
 //     (AnswerTrustDialog) and the prompt re-sent once.
-//   - agent_prompt_stalled: run submitted with error, ErrStalled.
+//   - agent_prompt_stalled: run submitted with error, ErrStalled. The
+//     first prompt of a Codex session is checked first (codexRetry): one
+//     a startup dialog ate is sent again once, after the dialog is
+//     answered, and one that is lost again fails the run, ErrNotTaken.
 //   - timeout, or ctx ending while the prompt was in flight: run submitted
 //     with error (the text may have arrived), ErrTimeout or ctx's error.
 //   - anything else (herdr unavailable, agent gone): run failed.
@@ -210,11 +217,17 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 	}
 
 	// A Codex started with its checkout untrusted opens on its restricted
-	// "Folder access", and one resumed after its hooks changed shows its
-	// hooks review; either would eat the prompt: answer them first
-	// (openRestricted, answerHooks).
-	if kind := m.sessionKind(sess); kind == KindCodex {
-		ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
+	// "Folder access", and one started or resumed after its hooks changed
+	// shows its hooks review; either would eat the prompt. The first prompt
+	// of a Codex session waits for its composer with no startup dialog,
+	// answering the dialogs it finds (codexPromptReady); a later one answers
+	// what is on screen first (openRestricted, answerHooks).
+	codexFirst := false
+	ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
+	if kind := m.sessionKind(sess); kind == KindCodex && sess.LastPromptAt == nil {
+		codexFirst = true
+		m.codexPromptReady(ctx, run, sess, ref)
+	} else if kind == KindCodex {
 		if _, err := m.openRestricted(ctx, run.PRID, role, ref); err != nil {
 			m.logErr(ctx, err, "agents: submit %s: restricted folder: %v", run.ID, err)
 		}
@@ -224,6 +237,11 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 	}
 	wait := &herdr.PromptWait{Until: []herdr.Status{herdr.StatusWorking, herdr.StatusBlocked}, Timeout: PromptAckTimeout}
 	info, perr := m.d.Herdr.AgentPrompt(ctx, target(sess), text, wait)
+	if codexFirst && perr != nil && ctx.Err() == nil && herdr.IsCode(perr, herdr.CodeAgentPromptStalled) {
+		// herdr did not see Codex take its first prompt: a startup dialog
+		// that came after the wait may have eaten it (codexRetry).
+		info, perr = m.codexRetry(ctx, run, sess, ref, text, wait, perr)
+	}
 	if perr != nil && ctx.Err() == nil && herdr.IsCode(perr, herdr.CodeAgentBlocked) && m.trustRetry(ctx, run.ID, sess) {
 		// Rejected before sending: answering a first-launch trust dialog
 		// makes the one re-send safe.

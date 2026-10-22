@@ -572,6 +572,26 @@ type env struct {
 	// edits (claudeConfig does not exist until a test writes it).
 	codexConfig, claudeConfig string
 	logs                      *logSink
+	// toasts are the toasts the manager sent (Deps.Toast), "<key>|<title>|<body>".
+	toasts *toastSink
+}
+
+// toastSink collects Deps.Toast calls.
+type toastSink struct {
+	mu    sync.Mutex
+	shown []string
+}
+
+func (s *toastSink) toast(_ context.Context, key, title, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shown = append(s.shown, key+"|"+title+"|"+body)
+}
+
+func (s *toastSink) all() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.shown...)
 }
 
 // newEnv builds a manager on fakes with a registry of its own, and runs t in
@@ -612,9 +632,10 @@ func newEnv(t *testing.T) *env {
 	}}
 	cliDir := t.TempDir()
 	e := &env{t: t, ctx: ctx, st: st, clock: clk, h: h, run: run, cfg: cfg, repo: repo, pr: up.PR,
-		codexConfig: filepath.Join(cliDir, "codex", "config.toml"), claudeConfig: filepath.Join(cliDir, "claude.json"), logs: &logSink{}}
+		codexConfig: filepath.Join(cliDir, "codex", "config.toml"), claudeConfig: filepath.Join(cliDir, "claude.json"), logs: &logSink{},
+		toasts: &toastSink{}}
 	e.m = New(Deps{Herdr: h, Store: st, Runner: run, Config: cfg, Layout: layout, Clock: clk.Now,
-		CodexConfig: e.codexConfig, ClaudeConfig: e.claudeConfig, Log: e.logs})
+		CodexConfig: e.codexConfig, ClaudeConfig: e.claudeConfig, Log: e.logs, Toast: e.toasts.toast})
 	e.m.sleep = func(ctx context.Context, d time.Duration) error {
 		e.slept = append(e.slept, d)
 		if e.onSleep != nil {

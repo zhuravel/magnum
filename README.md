@@ -4043,7 +4043,17 @@ agent as soon as its transcript shows the turn ended, even while a forked `/code
 `on_permission_prompt = "wait"` under `[kinds.<name>]` to leave such prompts to you. Codex's "Hooks need
 review" (your hooks changed since Codex last trusted them) is answered "Trust all" only when the checkout
 declares no hooks of its own, so every hook it lists is yours; hooks a repository brings are declined
-for the session (`on_hooks_review = "decline"` declines them all).
+for the session (`on_hooks_review = "decline"` declines them all). A prompt typed into that dialog, or into
+the folder access, is lost, so the first prompt of a Codex session (a new or resumed one) waits until its
+screen has shown the composer and no startup dialog for 3 seconds (30 seconds at most, then it goes out
+anyway); a dialog that comes meanwhile is answered first and the wait starts again. When herdr does not see
+Codex take that prompt, Magnum looks for 10 seconds more: herdr showing the agent working, a user message in
+its rollout or its composer free of the prompt means Codex took it; a startup dialog on its screen means the
+dialog ate it, so Magnum answers it, records an `agents.prompt_retried` event and sends the prompt once more,
+and a second loss fails the run "Codex did not take the prompt (a startup dialog ate it)". After a "Trust
+all", Magnum checks that Codex saved the trust (its `config.toml` changed); when it did not, every new Codex
+session will ask again, and Magnum says so once per `hooks.json` (an `agents.hooks_trust_unsaved` warning and a
+toast): run `codex` once in a terminal and choose Trust all. Magnum never edits the hook trust itself.
 
 ## Development
 

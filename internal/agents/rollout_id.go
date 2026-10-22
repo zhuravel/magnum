@@ -89,26 +89,10 @@ func (m *Manager) recoverSessionID(ctx context.Context, s store.Session, now tim
 	if m.sessionKind(s) != KindCodex || store.Deref(s.SessionID) != "" || now.Sub(s.StartedAt) < RecoverIDAfter {
 		return ""
 	}
-	cwd, home := store.Deref(s.Cwd), m.codexHome(s)
-	if cwd == "" || home == "" {
+	if store.Deref(s.Cwd) == "" || m.codexHome(s) == "" {
 		return ""
 	}
-	heads, err := rolloutHeads(home, s.StartedAt, RecoverIDWindow, RecoverIDHeads)
-	dir := resolvedDir(cwd)
-	var ids []string
-	for _, h := range heads {
-		if h.source != codexSourceCLI || h.parent != "" || resolvedDir(h.cwd) != dir || slices.Contains(ids, h.id) {
-			continue
-		}
-		held, herr := m.d.Store.SessionIDHeld(ctx, h.id, s.ID)
-		if herr != nil {
-			err = errors.Join(err, herr)
-			continue
-		}
-		if !held {
-			ids = append(ids, h.id)
-		}
-	}
+	ids, err := m.cliRolloutIDs(ctx, s)
 	if len(ids) != 1 {
 		if firstFor(m, m.recoverLogged, s.ID) {
 			why := "no rollout of its Codex home matches its checkout and start yet"
@@ -142,6 +126,36 @@ func (m *Manager) recoverSessionID(ctx context.Context, s store.Session, now tim
 		fmt.Sprintf("%s: session id %s from its Codex rollout; herdr's session hook gave none", s.Role, id),
 		map[string]any{"role": s.Role, "session": s.ID, "session_id": id, "source": SessionIDFromRollout})
 	return id
+}
+
+// cliRolloutIDs are the ids of the rollouts that may be Codex session s's
+// (recoverSessionID's rule): of the rollouts of its Codex home (TurnError's)
+// started within RecoverIDWindow of its start (rolloutHeads), those of
+// Codex's interactive TUI (source "cli", never a helper's) whose cwd is the
+// session's (both cleaned, symlinks resolved) and whose id no other session
+// of the registry holds. err joins the read errors met on the way.
+func (m *Manager) cliRolloutIDs(ctx context.Context, s store.Session) ([]string, error) {
+	cwd, home := store.Deref(s.Cwd), m.codexHome(s)
+	if cwd == "" || home == "" {
+		return nil, nil
+	}
+	heads, err := rolloutHeads(home, s.StartedAt, RecoverIDWindow, RecoverIDHeads)
+	dir := resolvedDir(cwd)
+	var ids []string
+	for _, h := range heads {
+		if h.source != codexSourceCLI || h.parent != "" || resolvedDir(h.cwd) != dir || slices.Contains(ids, h.id) {
+			continue
+		}
+		held, herr := m.d.Store.SessionIDHeld(ctx, h.id, s.ID)
+		if herr != nil {
+			err = errors.Join(err, herr)
+			continue
+		}
+		if !held {
+			ids = append(ids, h.id)
+		}
+	}
+	return ids, err
 }
 
 // herdrSessionID notes that herdr reports id for session s: when it differs
