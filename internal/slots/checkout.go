@@ -454,8 +454,7 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // changes discarded after a slot.discarded event, checked_out_sha cleared;
 // origin/<base>'s commit is written to the kv store first, as Checkout's
 // switch does, so a release interrupted after the reset is no head drift),
-// delete_ref (refs/magnum/pr/N, and the slot's MergeCheckRefs: a check kept
-// with --keep and handed back by an unpin), render_mise, deps, schema_check
+// delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check
 // (resetSchema: a LazySchema pool keeps the databases unless
 // MAX(schema_migrations.version) of the development database differs from
 // the version of the schema recorded for them; otherwise when dirty_schema
@@ -502,20 +501,16 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
 	default:
 		return fmt.Errorf("slots: release %s in state %s: %w", sl.Name, sl.State, store.ErrConflict)
 	}
-	err = m.releaseSteps(ctx, subject, sl, pool, reason, "", nil)
+	err = m.releaseSteps(ctx, subject, sl, pool, reason)
 	if err != nil && !errors.Is(err, ErrBroken) {
 		m.setLastError(ctx, sl.ID, err)
 	}
 	return err
 }
 
-// releaseSteps are the release's steps after its guard. With hold "" they
-// are a round's release, from releasing (or dirty_schema) to free. With a
-// hold they are ReleaseHeld's: the slot stays held with that hold_reason,
-// which the daemon never touches, until mark_free frees it in one
-// compare-and-set. delete_ref deletes refs, the slot's MergeCheckRefs and
-// its PR's refs/magnum/pr/N.
-func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slot, pool config.Pool, reason, hold string, refs []string) error {
+// releaseSteps are the release's steps after its guard, from releasing (or
+// dirty_schema) to free. delete_ref deletes its PR's refs/magnum/pr/N.
+func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slot, pool config.Pool, reason string) error {
 	if err := m.step(ctx, subject, "fetch_base", func(ctx context.Context) error {
 		return m.git.FetchBranch(ctx, sl.MainClone, pool.Base)
 	}); err != nil {
@@ -544,13 +539,6 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 		return err
 	}
 	if err := m.step(ctx, subject, "delete_ref", func(ctx context.Context) error {
-		del := slices.Concat(refs, MergeCheckRefs(sl.Name))
-		slices.Sort(del)
-		for _, ref := range slices.Compact(del) {
-			if err := m.git.UpdateRefDelete(ctx, sl.MainClone, ref); err != nil {
-				return err
-			}
-		}
 		pr, ok, err := m.slotPR(ctx, sl)
 		if err != nil || !ok || pr.Number <= 0 {
 			return err
@@ -570,23 +558,11 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 		return err
 	}
 	if err := m.step(ctx, subject, "schema_check", func(ctx context.Context) error {
-		return m.resetSchema(ctx, sl, pool, hold)
+		return m.resetSchema(ctx, sl, pool)
 	}); err != nil {
 		return err
 	}
 	return m.step(ctx, subject, "mark_free", func(ctx context.Context) error {
-		if hold != "" {
-			err := m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotHeld}, store.SlotFree, func(u *store.SlotUpdate) {
-				u.Where("hold_reason", hold)
-				u.Where("pr_id", nil)
-				u.Set("hold_reason", nil)
-				u.Set("last_error", nil)
-			})
-			if err != nil {
-				return fmt.Errorf("slots: release %s held for %s: %w", sl.Name, hold, err)
-			}
-			return nil
-		}
 		if err := m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("last_error", nil) }); err != nil {
 			return err
 		}
@@ -606,10 +582,8 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 // repair, and a slot pinned meanwhile keeps it. So does a slot whose
 // readiness reset_db failed in BreakAfterResetFailures rounds in a row
 // (ResetFailed), before anything else and without a reload: its last error
-// names the last failure's cause. With a hold (ReleaseHeld) the slot stays
-// held during the reload instead of moving to dirty_schema, and the
-// failures move it from held to broken without the hold.
-func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.Pool, hold string) error {
+// names the last failure's cause.
+func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.Pool) error {
 	sl, err := m.reload(ctx, slot)
 	if err != nil {
 		return err
@@ -618,7 +592,7 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 		return err
 	} else if ok && f.Rounds >= BreakAfterResetFailures {
 		from := []string{store.SlotReleasing, store.SlotDirtySchema}
-		return m.breakSchema(ctx, sl, from, hold,
+		return m.breakSchema(ctx, sl, from,
 			fmt.Errorf("%w: %s schema reset failed in %s: %s", ErrBroken, sl.Name, roundsWord(f.Rounds), f.Cause))
 	}
 	need := sl.DirtySchema
@@ -655,16 +629,8 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 	if len(pool.ResetDB) == 0 {
 		return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("dirty_schema", false) })
 	}
-	// The databases' schema is unknown until the reload succeeds.
-	switch {
-	case hold != "":
-		if err := m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotHeld}, "", func(u *store.SlotUpdate) {
-			u.Where("hold_reason", hold)
-			setSchema(u, SchemaCheck{})
-		}); err != nil {
-			return fmt.Errorf("slots: release %s: %w", sl.Name, err)
-		}
-	case sl.State != store.SlotDirtySchema:
+	if sl.State != store.SlotDirtySchema {
+		// The databases' schema is unknown until the reload succeeds.
 		if err := m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotReleasing}, store.SlotDirtySchema,
 			func(u *store.SlotUpdate) { setSchema(u, SchemaCheck{}) }); err != nil {
 			return fmt.Errorf("slots: release %s: %w", sl.Name, err)
@@ -688,26 +654,16 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 			return runErr
 		}
 	}
-	return m.breakSchema(ctx, sl, []string{store.SlotDirtySchema}, hold,
+	return m.breakSchema(ctx, sl, []string{store.SlotDirtySchema},
 		fmt.Errorf("%w: %s schema reset failed twice: %w", ErrBroken, sl.Name, runErr))
 }
 
 // breakSchema moves a slot whose schema could not be reloaded from one of
-// from (from held for hold, with a hold) to broken, broken (an ErrBroken)
-// as its last error, and returns broken: an unpinned slot lets its PR go
-// (store.BreakSlot), and the hold goes so `magnum slots repair` takes it.
-func (m *Manager) breakSchema(ctx context.Context, sl store.Slot, from []string, hold string, broken error) error {
-	if hold != "" {
-		from = []string{store.SlotHeld}
-	}
+// from to broken, broken (an ErrBroken) as its last error, and returns
+// broken: an unpinned slot lets its PR go (store.BreakSlot).
+func (m *Manager) breakSchema(ctx context.Context, sl store.Slot, from []string, broken error) error {
 	terr := m.d.Store.BreakSlot(context.WithoutCancel(ctx), sl.ID, from, "broken",
-		func(u *store.SlotUpdate) {
-			u.Set("last_error", redactErr(broken))
-			if hold != "" { // so `magnum slots repair` takes it
-				u.Where("hold_reason", hold)
-				u.Set("hold_reason", nil)
-			}
-		})
+		func(u *store.SlotUpdate) { u.Set("last_error", redactErr(broken)) })
 	if terr != nil {
 		return errors.Join(broken, terr)
 	}

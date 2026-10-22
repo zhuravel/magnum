@@ -11317,6 +11317,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
     10-21 its reset disagreed with GraphQL's own); counting by clock hour (an hour's points and a
     window's used cover different calls); a hard pause on outside spend (the operator decides what else
     uses the login, and the floor already holds new work when the budget runs low, whoever spent it).
+- **`magnum merge-check` is retired** (2026-10-22, amends "`magnum merge-check`: an experiment the operator
+  runs, never the daemon" and "Every release of a slot deletes its merge-check refs"). The command ran twice,
+  on 2026-10-07, on the two known clashes of 10-05 (#11939 with #11979, #11959 with #11939), and found both;
+  it never ran again, so its false-positive rate is unknown, and no later entry decided its future. On
+  2026-10-22 the operator approved retiring it. Gone with it: `internal/mergecheck` and
+  `internal/cli/merge_check.go`; the slot hold only it used (`slots.HoldFree`, `CheckoutHeld`, `ReleaseHeld`,
+  `MergeCheckRef` and `MergeCheckRefs`, and the hold `releaseSteps`, `resetSchema` and `breakSchema` took, so
+  a release runs again only from releasing or dirty_schema to free; `guardChecks`, split out for the held
+  slot's guard, is part of `guard` again); the gitx helpers only it called (`MergeTree`, `CommitTree`,
+  `FetchInto`, `UpdateRef`, `MergeCheckRefPrefix`); and the release's deletion of
+  `refs/magnum/merge-check/<slot>/`, which every release has done since 10-08 (a ref still there names a local
+  commit nothing reads). The registry holds no slot with the hold reason `merge-check`; one would be handed
+  back by `magnum slots unpin` and the daemon's release like any held slot. Kept: hold_reason itself (the
+  guard's persisted holds use it), `UpdateRefDelete`, `MergeCommitOid` (the post-merge job reads it) and the
+  judge's own `git merge-tree` run on a merged tree, which is the skill's and none of this code. The results
+  under the state directory's `merge-check/` are left alone. A revival needs a measured false-positive rate
+  first: the command replayed over merges whose outcome is known, clean pairs as well as clashes, not two hits
+  on clashes already known.
 
 ## Learned rules
 
