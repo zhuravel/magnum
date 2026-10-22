@@ -87,6 +87,7 @@ func (e *Engine) unpinFor(ctx context.Context, repo store.Repo, pr store.PR, slo
 			return "", "", failed(err)
 		}
 	}
+	e.dropOpenHold(ctx, pr.ID) // open_hold.go: the unpin ends an open's hold too
 	note = "unpinned " + what + origin + " to " + verb + " it"
 	e.event(ctx, "info", prSubject(repo, pr.Number), evPRUnpinned, by+": "+note, map[string]any{"by": by, "slot": slot.Name})
 	if has {
@@ -191,9 +192,9 @@ func (e *Engine) pinEvent(ctx context.Context, subject string, slot store.Slot, 
 // pinOrigin is who pinned the PR of subject and when: the newest pin event
 // of the subject ("magnum open", "magnum pin", "magnum slots pin"); "" when
 // there is none (a pin older than the events kept, or set by hand) or an
-// unpin is newer.
+// unpin, or the end of an open's hold, is newer.
 func (e *Engine) pinOrigin(ctx context.Context, subject string) (string, time.Time) {
-	evs, err := e.st.EventsOfKindsSince(ctx, time.Time{}, evPROpened, evPRPinned, evPRUnpinned)
+	evs, err := e.st.EventsOfKindsSince(ctx, time.Time{}, evPROpened, evPRPinned, evPRUnpinned, evPROpenHoldEnded)
 	if err != nil {
 		e.log.Warn("pin events", "subject", subject, "err", err)
 		return "", time.Time{}

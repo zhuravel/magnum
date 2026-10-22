@@ -147,8 +147,10 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 
 // statusPinText is a pinned line's value: the slot and, in parentheses, the
 // PR, what GitHub says of it and for how long the pin has held: "review16
-// (talkable#11999, closed 5h ago, pinned 5d)". A pin the events no longer
-// remember has no age; a slot without a PR says so.
+// (talkable#11999, closed 5h ago, pinned 5d)", or, for the hold `magnum
+// open` set, until when it holds: "review8 (talkable#12048, open, held by
+// open until 03:21)". A pin the events no longer remember has no age; a slot
+// without a PR says so.
 func statusPinText(p statusPin, now time.Time) string {
 	name := p.Slot
 	if name == "" {
@@ -160,7 +162,10 @@ func statusPinText(p statusPin, now time.Time) string {
 	} else {
 		parts = append(parts, inspPRLabel(p.Repo, p.Number), statusPinState(p, now))
 	}
-	if p.PinnedAt != nil {
+	switch {
+	case p.HeldUntil != nil:
+		parts = append(parts, "held by open until "+inspClock(now, *p.HeldUntil))
+	case p.PinnedAt != nil:
 		parts = append(parts, "pinned "+tui.HumanDuration(now.Sub(*p.PinnedAt)))
 	}
 	return statusSafe(name+" ("+strings.Join(parts, ", ")+")", 0)
@@ -836,7 +841,10 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 		state += ", draft"
 	}
 	state += ")"
-	if pr.Pinned {
+	switch {
+	case d.HeldUntil != nil:
+		state += ", held by open until " + inspClock(now, *d.HeldUntil)
+	case pr.Pinned:
 		state += ", pinned"
 	}
 	if pr.Muted {

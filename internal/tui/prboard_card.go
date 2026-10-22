@@ -229,7 +229,11 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	var flags []string
 	if r.Pinned {
 		pinned := " pinned"
-		if r.PinWait { // a round waits on the pin: say whose it is and how it goes
+		switch {
+		case !r.HeldUntil.IsZero(): // an open's hold, which ends by itself
+			pinned = " held by open until " + untilClock(r.HeldUntil, p.now) +
+				" (" + rowActDefs[actUnpin].key + " hands it back, " + rowActDefs[actPin].key + " keeps it)"
+		case r.PinWait: // a round waits on the pin: say whose it is and how it goes
 			if r.PinnedBy != "" {
 				pinned += " by " + r.PinnedBy
 			}

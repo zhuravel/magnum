@@ -658,12 +658,17 @@ func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, 
 }
 
 // pinWait is the wait of a PR whose slot is pinned: who pinned it and since
-// when, from the newest pin event (pinOrigin). The error an older daemon
+// when, from the newest pin event (pinOrigin), or, for an open's hold
+// (open_hold.go), when the hold ends (until). The error an older daemon
 // recorded for the pin ("slot X is pinned (magnum unpin)") goes, so the
 // screens show the wait without an error mark.
 func (e *Engine) pinWait(ctx context.Context, pr store.PR, slot store.Slot, subject string) gate {
 	if deref(pr.LastError) == "slot "+slot.Name+" is pinned (magnum unpin)" && !e.d.DryRun {
 		_ = e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("last_error", nil) })
+	}
+	if h, held := e.openHold(ctx, pr.ID); held && pr.Pinned { // open_hold.go: a hold ends by itself
+		end := h.End(e.cfg.Daemon, pr.HumanActiveAt)
+		return gate{reason: WaitPinned, text: "slot " + slot.Name + " is " + heldWords(end, e.now()), by: "magnum open", at: h.At, until: end}
 	}
 	why := "slot " + slot.Name + " is pinned"
 	by, at := e.pinOrigin(ctx, subject) // review_unpin.go

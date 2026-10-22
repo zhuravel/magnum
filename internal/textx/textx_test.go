@@ -2,6 +2,7 @@ package textx
 
 import (
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -82,6 +83,18 @@ func TestThousandsPutsACommaBetweenEachThreeDigits(t *testing.T) {
 	for n, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 4412: "4,412", 1234567: "1,234,567", -1050: "-1,050"} {
 		if got := Thousands(n); got != want {
 			t.Errorf("Thousands(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestDurationWordsSaysTheTwoLargestWholeUnits(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		45 * time.Second: "45 seconds", time.Minute: "1 minute", 30 * time.Minute: "30 minutes",
+		time.Hour: "1 hour", 90 * time.Minute: "1 hour 30 minutes", 2*time.Hour + 30*time.Second: "2 hours",
+		24 * time.Hour: "1 day", 51 * time.Hour: "2 days 3 hours", -15 * time.Minute: "15 minutes",
+	} {
+		if got := DurationWords(d); got != want {
+			t.Errorf("DurationWords(%s) = %q, want %q", d, got, want)
 		}
 	}
 }

@@ -66,7 +66,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
 | [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which store.Open then finds current. |
-| [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals, thousands separators and login folding. |
+| [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals, thousands separators, durations in words and login folding. |
 | [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch) and the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
 | [webhooks](#webhooks) | Package webhooks reads the events magnum-relay keeps of the GitHub App's webhook deliveries: GET <url>/v1/events, a long poll by cursor, with curl through execx. |
@@ -4193,6 +4193,12 @@ type Daemon struct {
 	// shell's PATH takes effect at the next start. The CLI keeps its own
 	// environment.
 	ShellPath bool `toml:"shell_path"`
+	// OpenHold is how long a restore by `magnum open` (the board's o) holds
+	// the PR and its slot for the operator, as a pin does: until the later
+	// of the open plus OpenHold and the end of HumanCooldown after the last
+	// input in the PR's panes (OpenHoldEnd), when the hold ends by itself.
+	// 0 pins for good, until `magnum unpin`.
+	OpenHold Duration `toml:"open_hold"`
 }
 
 func (d Daemon) CooldownUntil(at *time.Time) time.Time
@@ -4200,6 +4206,11 @@ func (d Daemon) CooldownUntil(at *time.Time) time.Time
     human_active_at (at: someone typed into its panes) began: the PR's prompts,
     rounds, parking and slot release wait while now is before it. Zero, which
     holds nothing, when at is nil or human_cooldown is 0.
+
+func (d Daemon) OpenHoldEnd(until time.Time, humanAt *time.Time) time.Time
+    OpenHoldEnd is when a hold `magnum open` set ends: until (the open
+    plus open_hold), or the end of human_cooldown after humanAt (the PR's
+    human_active_at, the last input in its panes) when that is later.
 
 type Duration struct{ time.Duration }
     Duration is a time.Duration that unmarshals from Go syntax ("30s", "5m",
@@ -6706,6 +6717,10 @@ func KVPRManualVerdict(prID int64) string
     never dismiss it as their own stale review (it is the reviewer's decision),
     while an approval still follows the head (approval.go).
 
+func KVPROpenHold(prID int64) string
+    KVPROpenHold holds the hold `magnum open` set on a PR it restored (OpenHold
+    as JSON).
+
 func KVPRReplyRound(prID int64) string
     KVPRReplyRound holds the last reply round of a PR (ReplyRound as JSON):
     the head it ran on and when it started, for reply_min_interval, and whether
@@ -6780,6 +6795,11 @@ func NotesRoot(l paths.Layout) string
     NotesRoot is the directory holding every repository's notes, "" when l names
     no place (paths.Layout.Valid).
 
+func OpenHolds(ctx context.Context, st *store.Store) (map[int64]OpenHold, error)
+    OpenHolds reads every PR's hold record in one query, by PR id; a record it
+    cannot read is left out. A record of a PR no longer pinned holds nothing
+    (the next tick drops it): callers read it beside the PR's pin.
+
 func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string) string
     OperatorApprovalRefusal says why the operator's own approval of pr cannot
     be posted as login (their auto_approve_as account) now, "" when it can:
@@ -6799,8 +6819,9 @@ func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, er
     PinnedSince is when each subject that is pinned now was pinned, by the
     registry's pin events: "pr:owner/name#N" for a PR pinned by `magnum open`,
     `magnum pin` or `magnum slots pin` (pr.opened, pr.pinned), "slot:<name>" for
-    a slot pinned without a PR (slot.pinned); an unpin forgets the subject. A
-    pin older than the events kept (store.Prune), or set by hand, has no entry.
+    a slot pinned without a PR (slot.pinned); an unpin, or the end of an open's
+    hold (pr.open_hold_ended), forgets the subject. A pin older than the events
+    kept (store.Prune), or set by hand, has no entry.
 
 func PressureName(level int) string
     PressureName names a pressure level: "normal", "warn", "critical",
@@ -8029,6 +8050,26 @@ type NotesCuratePayload struct {
     new curation `magnum notes <repo> --review` asks for instead of a stale
     proposal: Supersede is that proposal's id.
 
+type OpenHold struct {
+	Until time.Time `json:"until"`
+	At    time.Time `json:"at"`
+}
+    OpenHold is a PR's hold by `magnum open`: At is when it was set (the open,
+    or the start that converted the open's lasting pin) and Until At plus
+    open_hold. Input in the PR's panes extends it (End).
+
+func OpenHoldOf(ctx context.Context, st *store.Store, prID int64) (OpenHold, bool)
+    OpenHoldOf is PR prID's hold record, whether its PR is still pinned or not
+    (OpenHolds).
+
+func ParseOpenHold(s string) (OpenHold, bool)
+    ParseOpenHold reads a KVPROpenHold value; ok is false for "" or a value it
+    cannot read.
+
+func (h OpenHold) End(d config.Daemon, humanAt *time.Time) time.Time
+    End is when the hold ends: Until, or human_cooldown after humanAt (the PR's
+    human_active_at, the last input in its panes) when that is later.
+
 type OpenPayload struct {
 	PRTarget
 	Role string `json:"role,omitempty"` // a role of the PR's watch, by name or alias; "" = its judge
@@ -8455,7 +8496,8 @@ func (w Wait) Short(now time.Time) string
     00:00", "re-review · quiet → 14:09", "review · codex paused → 15:00",
     "re-review · small delta 8/30 lines → 16:40", "re-review · requested by
     alice → now", "delta check · quiet → 14:09", "re-review · retry 2/3 setup →
-    22:57", "re-review · pinned → u" (u: the screens' unpin key).
+    22:57", "re-review · pinned → u" (u: the screens' unpin key), "re-review ·
+    held → 03:21" (an open's hold, which ends by itself).
 
 type WatchPoll struct {
 	LastOK       time.Time `json:"last_ok,omitzero"`
@@ -19504,7 +19546,8 @@ package textx // import "github.com/zhuravel/magnum/internal/textx"
 
 Package textx holds the small text helpers several packages share: clipping
 to a number of runes, the first line, a short commit SHA, plurals, thousands
-separators and login folding. It imports only the standard library.
+separators, durations in words and login folding. It imports only the standard
+library.
 
 FUNCTIONS
 
@@ -19515,6 +19558,11 @@ func Clip(s string, n int) string
 
 func Count(n int, one, many string) string
     Count is n and its noun: "1 file", "3 files".
+
+func DurationWords(d time.Duration) string
+    DurationWords is d in words, as a question says it, in its two largest
+    units at most and whole: "45 seconds", "30 minutes", "1 hour", "1 hour 30
+    minutes", "2 days 3 hours". A negative d is its absolute value.
 
 func FirstLine(s string) string
     FirstLine is the first line of s that is not blank, trimmed.
@@ -19637,6 +19685,17 @@ func NewSettings(ctx context.Context, src SettingsSource, rt SettingsRuntime, op
     NewSettings is the settings screen as a model, for a program of the
     caller's: RunSettings runs it in one of its own. Leaving it quits that
     program (tea.Quit).
+
+func OpenHoldPhrase(hold time.Duration) string
+    OpenHoldPhrase is how long a restore by `magnum open` holds the PR, as its
+    question says it: "until 30 minutes after your last input" for an open_hold
+    of 30m, "until you unpin it" for 0, a lasting pin.
+
+func OpenRestoreQuestion(ref string, hold time.Duration) string
+    OpenRestoreQuestion asks before an open restores ref in a slot (the board's
+    o, `magnum open` on a terminal): the role it opens has no live pane,
+    so the daemon claims a slot, resumes the sessions and holds the PR for hold
+    ([daemon] open_hold; 0 pins it until `magnum unpin`, OpenHoldPhrase).
 
 func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string
     RenderPRBoard renders the board once, for output that is not interactive and
@@ -20210,6 +20269,18 @@ type PRBoardRow struct {
 	// unknown); the card says who pinned it and that u unpins it.
 	PinWait  bool
 	PinnedBy string
+	// HeldUntil is when the hold `magnum open` set on the PR ends
+	// (engine.OpenHold.End): its pin is that hold, which ends by itself, so
+	// the state cell says "held → 03:21" where nothing else waits there, the
+	// card "held by open until 03:21" and the title line counts it held, not
+	// pinned. Zero for a lasting pin, or no pin.
+	HeldUntil time.Time
+	// OpenRestores: o restores the PR in a slot (the role it opens has no
+	// live pane: its session is parked), so o asks first, saying for how
+	// long the restore holds the PR: OpenHold, [daemon] open_hold (0: until
+	// `magnum unpin`).
+	OpenRestores bool
+	OpenHold     time.Duration
 	// DeltaCheck: the round the PR waits for is a delta check (the judge
 	// alone on a small delta); the state cell says so, as it does for a
 	// round in flight whose RoundWhy is one.

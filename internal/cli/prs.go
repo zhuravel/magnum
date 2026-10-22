@@ -399,6 +399,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				}
 			}
 		}
+		prsOpenFacts(ctx, st, cfg, rows, out)
 		sums, err := st.LastReviewSummaries(ctx, ids)
 		if err == nil {
 			for i := range out {
@@ -434,6 +435,30 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		_ = boardRoundFacts(ctx, st, ids, out, inspNow())
 		_ = boardRoundProgress(ctx, st, cfg, ids, out)
 		return out, nil
+	}
+}
+
+// prsOpenFacts fills what the board says of `magnum open` on each row: when
+// the hold an open set on a pinned PR ends (HeldUntil; every hold in one
+// read), whether o restores the PR, so it asks first (OpenRestores: the role
+// open opens has no live pane and one of its sessions is parked,
+// openWouldRestore), and for how long a restore holds it (OpenHold, [daemon]
+// open_hold). A registry that cannot say leaves them out rather than the
+// board.
+func prsOpenFacts(ctx context.Context, st *store.Store, cfg *config.Config, rows []store.BoardRow, out []tui.PRBoardRow) {
+	var d config.Daemon
+	if cfg != nil {
+		d = cfg.Daemon
+	}
+	holds, _ := engine.OpenHolds(ctx, st)
+	for i, r := range rows {
+		out[i].OpenHold = d.OpenHold.Duration
+		if h, ok := holds[r.PRID]; ok && r.Pinned {
+			out[i].HeldUntil = openHoldEnd(ctx, st, d, h, r.PRID)
+		}
+		if ss, err := st.SessionsByPR(ctx, r.PRID); err == nil {
+			out[i].OpenRestores = openWouldRestore(ss, openRoleOf(ctx, st, cfg, r.PRID, r.Owner+"/"+r.Name))
+		}
 	}
 }
 
@@ -801,9 +826,10 @@ func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
 // ("reviewed,starred,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
 // merged before magnum reviewed its last push; "reviewed,fixing" while its
 // fixer works, "fix-off" when it was switched out of autofix, "held" when
-// its latest review held its approval for a full pass), and a snooze
-// that holds at now while no round runs ("reviewed,snoozed→18:00", as the
-// board's cell).
+// its latest review held its approval for a full pass), magnum open's hold
+// in place of the pin ("reviewed,open-hold→03:21") and a snooze that holds
+// at now while no round runs ("reviewed,snoozed→18:00", as the board's
+// cell).
 func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 	s := inspOrDash(r.State)
 	if g := strings.ToUpper(r.GHState); g == "MERGED" || g == "CLOSED" {
@@ -824,12 +850,15 @@ func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 	for _, f := range []struct {
 		on   bool
 		name string
-	}{{r.Fixing != "", "fixing"}, {r.Draft, "draft"}, {r.Starred, "starred"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.FixOff, "fix-off"},
+	}{{r.Fixing != "", "fixing"}, {r.Draft, "draft"}, {r.Starred, "starred"}, {r.Pinned && r.HeldUntil.IsZero(), "pinned"}, {r.Muted, "muted"}, {r.FixOff, "fix-off"},
 		{r.CodexFlag != "", "codex-flagged"}, {r.LastError != "", "error"}, {len(r.Stalemate) > 0, "stalemate"},
 		{r.Findings != nil && r.Findings.Held, "held"}} {
 		if f.on {
 			s += "," + f.name
 		}
+	}
+	if r.Pinned && !r.HeldUntil.IsZero() {
+		s += ",open-hold→" + inspClock(now, r.HeldUntil)
 	}
 	if r.SnoozedUntil.After(now) && !slices.Contains(prInFlight, r.State) {
 		s += ",snoozed→" + inspClock(now, r.SnoozedUntil)

@@ -101,9 +101,11 @@ func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 // runs every round (runs = "always") and one for role when it runs on
 // demand; the judge, role's agent and every other agent with a
 // conversation to resume (ResumeID; never for session_source "none") are
-// started or resumed; the PR and the slot are pinned and the slot is held. A
-// failure after a fresh Reserve parks what started and releases that slot
-// again (a claimed slot is neither evictable nor reclaimed otherwise).
+// started or resumed; the PR and the slot are pinned and the slot is held.
+// Unless open_hold is 0 or a lasting pin keeps the PR already, the pin is a
+// hold that ends by itself (holdOpened, open_hold.go). A failure after a
+// fresh Reserve parks what started and releases that slot again (a claimed
+// slot is neither evictable nor reclaimed otherwise).
 func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, role config.Role) (res string, err error) {
 	full := repo.FullName()
 	label := fmt.Sprintf("%s#%d", full, pr.Number)
@@ -220,7 +222,12 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 		}
 	}
 
-	// 3. Pinned to the human: no round, eviction or cleanup touches it.
+	// 3. Pinned to the human: no round, eviction or cleanup touches it. A
+	// hold (open_hold.go) ends the pin by itself.
+	hold, held, err := e.holdOpened(ctx, pr, pr.Pinned || slot.Pinned)
+	if err != nil {
+		return "", err
+	}
 	if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", true) }); err != nil {
 		return "", err
 	}
@@ -236,10 +243,18 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 		pane = deref(s.HerdrPaneID)
 	}
 	at := deref(slot.CheckedOutSHA)
-	e.event(ctx, "info", subject, "pr.opened", fmt.Sprintf("magnum open: restored in %s at %s, pinned", slot.Name, textx.ShortSHA(at)),
-		map[string]any{"slot": slot.Name, "pane": pane, "role": role.Name})
-	return fmt.Sprintf("restored %s in %s at %s (pinned; `magnum unpin %s` lets reviews use it again); %s pane %s%s",
-		label, slot.Name, textx.ShortSHA(at), label, role.Name, pane, schemaNote), nil
+	data := map[string]any{"slot": slot.Name, "pane": pane, "role": role.Name}
+	pinned, kept := "pinned", fmt.Sprintf("pinned; `magnum unpin %s` lets reviews use it again", label)
+	if held {
+		now := e.now()
+		data["until"] = hold.Until
+		pinned = "held until " + waitClock(hold.Until, now)
+		kept = fmt.Sprintf("%s, longer while you type in its panes (%s after your last input); `magnum pin %s` keeps it, `magnum unpin %s` hands it back now",
+			heldWords(hold.Until, now), humanDuration(e.cfg.Daemon.HumanCooldown.Duration), label, label)
+	}
+	e.event(ctx, "info", subject, evPROpened, fmt.Sprintf("magnum open: restored in %s at %s, %s", slot.Name, textx.ShortSHA(at), pinned), data)
+	return fmt.Sprintf("restored %s in %s at %s (%s); %s pane %s%s",
+		label, slot.Name, textx.ShortSHA(at), kept, role.Name, pane, schemaNote), nil
 }
 
 // releaseReserved hands back the slot a failed `magnum open` reserved: the

@@ -65,6 +65,9 @@ type prsJSONRow struct {
 	WaitNarrow       string            `json:"wait_narrow"`            // wait for a narrow cell (a retry without its cause)
 	PinWait          bool              `json:"pin_wait"`               // the round waits on the PR's pinned slot
 	PinnedBy         string            `json:"pinned_by"`              // who pinned it ("magnum open"), while a round waits on the pin
+	HeldUntil        time.Time         `json:"held_until,omitzero"`    // when magnum open's hold of the PR ends (its pin then goes by itself); left out for a lasting pin
+	OpenRestores     bool              `json:"open_restores"`          // magnum open (the board's o) restores the PR in a slot: the pane it opens is parked
+	OpenHoldSeconds  int64             `json:"open_hold_seconds"`      // how long such a restore holds the PR ([daemon] open_hold; 0 = until magnum unpin)
 	ReleaseAfter     time.Time         `json:"release_after,omitzero"` // when the close grace ends and the slot is released
 	DeltaCheck       bool              `json:"delta_check"`            // the round it waits for is a delta check
 	SnoozedUntil     time.Time         `json:"snoozed_until,omitzero"` // when the PR's snooze ends (magnum snooze); left out while not snoozed
@@ -312,7 +315,8 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), AttentionKind: r.AttentionKind, RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail,
-		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
+		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, HeldUntil: r.HeldUntil,
+		OpenRestores: r.OpenRestores, OpenHoldSeconds: wholeSeconds(r.OpenHold), ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
 		SnoozedUntil: r.SnoozedUntil, SnoozedAt: r.SnoozedAt, SnoozedBy: r.SnoozedBy,
 		CodexFlag: r.CodexFlag, CodexFlagDetail: r.CodexFlagSentence, MuteReason: r.MuteReason, Fixing: r.Fixing, FixLoop: r.FixLoop, FixOff: r.FixOff,
 		Whiteboard:    mapPtr(r.Whiteboard, func(w tui.PRWhiteboard) prsJSONWhiteboard { return prsJSONWhiteboard{Session: w.Session, Head: w.Head} }),

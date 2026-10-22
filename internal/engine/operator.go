@@ -91,7 +91,7 @@ func (e *Engine) noteOperatorWaits(ctx context.Context, waits []prWait, now time
 // never lapses by itself, and a round behind it would otherwise wait
 // unseen. The wait's start is this run's (a restart counts again); the
 // toast's key names the PR and the pin's time, so a restart does not repeat
-// it.
+// it. An open's hold (open_hold.go) ends by itself, so it toasts nothing.
 func (e *Engine) notePinWaits(ctx context.Context, waits []prWait, now time.Time) {
 	if e.pinWaits == nil {
 		e.pinWaits = map[int64]pinWaitSeen{}
@@ -99,7 +99,7 @@ func (e *Engine) notePinWaits(ctx context.Context, waits []prWait, now time.Time
 	seen := map[int64]bool{}
 	for _, pw := range waits {
 		pr, w := pw.pr, pw.wait
-		if w.Reason != WaitPinned {
+		if w.Reason != WaitPinned || !w.Until.IsZero() { // an open's hold ends by itself
 			continue
 		}
 		seen[pr.ID] = true

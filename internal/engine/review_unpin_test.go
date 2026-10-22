@@ -10,9 +10,13 @@ import (
 )
 
 // openedPR reviews PR #2, releases it and restores it with `magnum open`,
-// which pins the PR and its slot review1; it returns when the open ran.
+// which pins the PR and its slot review1; it returns when the open ran. It
+// runs open_hold = "0", so the pin lasts until an unpin, as every open's did
+// before its hold ended by itself (open_hold.go): the tests of a lasting
+// pin (its wait, its toast, a close, a flag, an unpin) use it.
 func (h *harness) openedPR() store.PR {
 	h.t.Helper()
+	h.cfg.Daemon.OpenHold.Duration = 0
 	h.parkedPR()
 	h.advance(time.Minute)
 	id := h.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Ref: "2"}})

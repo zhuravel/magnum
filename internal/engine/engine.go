@@ -1001,6 +1001,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// before dispatch gives the PR to another round.
 	e.continueBudgetHeld(ctx)
 	e.continuePauseHeld(ctx)   // fix_held.go: the held fixes the fixer's pause held, once it ended
+	e.endOpenHolds(ctx)        // open_hold.go: a PR whose hold ended goes on in this dispatch
 	e.restartSessions(ctx, ts) // session_restart.go: a PR whose marked sessions park now waits in dispatch
 	e.dispatch(ctx, ts)
 	e.noteWaits(ctx, ts)
@@ -1054,6 +1055,8 @@ func (e *Engine) startup(ctx context.Context) {
 	e.noteRepliesSince(ctx)
 	e.warmIdentities(ctx, true)
 	e.recoverRows(ctx)
+	// open_hold.go: a lasting pin of an earlier open becomes a hold.
+	e.convertOpenPins(ctx)
 	e.recoverFixes(ctx)   // fix.go: a fixer at work never survives a restart
 	e.startHeldFixes(ctx) // fix_held.go: the `magnum fix` requests a drain held for this start
 	e.retryParked(ctx)    // retry_parked.go: what failed rounds parked under another build, config or prompts

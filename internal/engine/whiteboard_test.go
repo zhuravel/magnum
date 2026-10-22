@@ -868,7 +868,7 @@ func TestAnOpenRequestStopsTheWhiteboardJob(t *testing.T) {
 
 	id := w.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Ref: "2"}})
 	w.wbYielded(id)
-	if res := w.wbWantSuperseded(kh, id, "magnum open"); !strings.HasPrefix(res, "restored talkable/talkable#2 in review1 at a1a1a1a (pinned;") {
+	if res := w.wbWantSuperseded(kh, id, "magnum open"); !strings.HasPrefix(res, "restored talkable/talkable#2 in review1 at a1a1a1a (held by magnum open until ") {
 		t.Errorf("answer = %q, want the open request's own", res)
 	}
 	if cur := w.pr(pr.Number); !cur.Pinned {

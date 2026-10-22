@@ -184,6 +184,18 @@ type PRBoardRow struct {
 	// unknown); the card says who pinned it and that u unpins it.
 	PinWait  bool
 	PinnedBy string
+	// HeldUntil is when the hold `magnum open` set on the PR ends
+	// (engine.OpenHold.End): its pin is that hold, which ends by itself, so
+	// the state cell says "held → 03:21" where nothing else waits there, the
+	// card "held by open until 03:21" and the title line counts it held, not
+	// pinned. Zero for a lasting pin, or no pin.
+	HeldUntil time.Time
+	// OpenRestores: o restores the PR in a slot (the role it opens has no
+	// live pane: its session is parked), so o asks first, saying for how
+	// long the restore holds the PR: OpenHold, [daemon] open_hold (0: until
+	// `magnum unpin`).
+	OpenRestores bool
+	OpenHold     time.Duration
 	// DeltaCheck: the round the PR waits for is a delta check (the judge
 	// alone on a small delta); the state cell says so, as it does for a
 	// round in flight whose RoundWhy is one.

@@ -13,14 +13,15 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
-const openUsage = "open <ref> [--role <role>] [--no-reveal] [--new-window] [--json] [--timeout 5m] [--workspace id] [--cwd path]"
+const openUsage = "open <ref> [--role <role>] [--no-reveal] [--new-window] [--json] [--yes] [--timeout 5m] [--workspace id] [--cwd path]"
 
 type openOpts struct {
-	role, workspace, cwd      string
-	noReveal, newWindow, json bool
-	timeout                   time.Duration
+	role, workspace, cwd           string
+	noReveal, newWindow, json, yes bool
+	timeout                        time.Duration
 }
 
 func newOpenCmd(c *Context) *cobra.Command {
@@ -29,7 +30,11 @@ func newOpenCmd(c *Context) *cobra.Command {
 		"Focus a PR's agent pane (its watch's judge by default, the fixer's while a fix loop's fixer works, or any role of the watch with --role; "+
 			"`magnum roles` lists them) in herdr and bring the terminal to the front; without a herdr client a "+
 			"new terminal tab (or --new-window) is opened. A parked PR is restored by the daemon first: a slot "+
-			"is claimed, reviewed_sha checked out, the judge resumed, and the PR and slot pinned to you. When the "+
+			"is claimed, reviewed_sha checked out, the judge resumed, and the PR and slot held for you as a pin "+
+			"holds them, until the later of [daemon] open_hold (30m) after the open and human_cooldown after your "+
+			"last input in its panes, when the hold ends by itself (open_hold = \"0\" pins them until `magnum unpin`; "+
+			"`magnum pin` makes the hold lasting). A terminal asks y/N before a restore (--yes does not; nor do "+
+			"--json and a script, which restore at once); a focus of a live pane asks nothing. When the "+
 			"role's pane is gone (its session lost or closed, as magnum closes a retired session's pane), a live agent "+
 			"pane of the PR is focused instead, the judge's first; with none, `magnum review` lays out new panes.",
 		func(pos []string) int { return runOpen(c, o, pos) })
@@ -37,7 +42,8 @@ func newOpenCmd(c *Context) *cobra.Command {
 	fs.StringVar(&o.role, "role", "", "pane to focus: "+roleFlagHelp)
 	fs.BoolVar(&o.noReveal, "no-reveal", false, "only focus inside herdr; do not bring the terminal to the front")
 	fs.BoolVar(&o.newWindow, "new-window", false, "open a new terminal window (not a tab) when no herdr client is found")
-	fs.BoolVar(&o.json, "json", false, "print what was focused and revealed as JSON")
+	fs.BoolVar(&o.json, "json", false, "print what was focused and revealed as JSON (a restore does not ask first)")
+	fs.BoolVar(&o.yes, "yes", false, "restore a parked PR without asking first")
 	fs.DurationVar(&o.timeout, "timeout", 5*time.Minute, "how long to wait for the daemon to restore a parked PR")
 	fs.StringVar(&o.workspace, "workspace", "", "herdr workspace id instead of a PR (plugin context)")
 	fs.StringVar(&o.cwd, "cwd", "", "directory inside a magnum slot instead of a PR (plugin context)")
@@ -127,6 +133,13 @@ func openMain(ctx context.Context, c *Context, d *actDeps, ref string, o openOpt
 			}
 		}
 	}
+	if errors.Is(err, errOpenDeclined) {
+		fmt.Fprintln(c.Stderr, "nothing restored")
+		if ctx.Err() != nil {
+			return 130
+		}
+		return 1
+	}
 	if err != nil {
 		return openFail(c, o, res, err)
 	}
@@ -149,15 +162,15 @@ func openFail(c *Context, o openOpts, res actFocusResult, err error) int {
 	return cmdFail(c, "open", err)
 }
 
-// openRestore handles a PR without a live session for role: a parked one is
-// handed to the daemon (request "open": claim a slot, resume the sessions,
-// pin the PR) and waited for; anything else gets the exact next step.
-func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role, label string, o openOpts) (store.Session, error) {
-	all, err := d.Store.SessionsByPR(ctx, t.PR.ID)
-	if err != nil {
-		return store.Session{}, err
-	}
-	var parked, latest *store.Session
+// errOpenDeclined is openRestore's answer when the operator said no to the
+// restore's question.
+var errOpenDeclined = errors.New("restore declined")
+
+// openSessions is what the PR's sessions of role say an open of it does:
+// latest is the newest, parked the newest parked one, and starting says the
+// newest is starting or live (the open waits for its pane). An open
+// restores when one is parked and none is starting (openWouldRestore).
+func openSessions(all []store.Session, role string) (parked, latest *store.Session, starting bool) {
 	for i := range all {
 		s := &all[i]
 		if s.Role != role {
@@ -168,7 +181,62 @@ func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role,
 			parked = s
 		}
 	}
-	starting := latest != nil && (latest.State == store.SessionStarting || latest.State == store.SessionLive)
+	starting = latest != nil && (latest.State == store.SessionStarting || latest.State == store.SessionLive)
+	return parked, latest, starting
+}
+
+// openWouldRestore reports whether `magnum open` of role asks the daemon to
+// restore the PR (claim a slot, resume its sessions, hold it): no session of
+// role is up (starting, or live with a pane or an agent: the open focuses
+// it), and one is parked. The board's o asks first when it does.
+func openWouldRestore(all []store.Session, role string) bool {
+	for _, s := range all {
+		if s.Role == role && (s.State == store.SessionStarting || s.State == store.SessionLive) {
+			return false
+		}
+	}
+	parked, _, starting := openSessions(all, role)
+	return parked != nil && !starting
+}
+
+// openRoleOf is the role `magnum open` of the PR opens without --role, as
+// openMain resolves it: the fixer's while a fix loop's fixer works, else the
+// watch's judge.
+func openRoleOf(ctx context.Context, st *store.Store, cfg *config.Config, prID int64, full string) string {
+	asked := ""
+	if fs, _ := statusFix(ctx, st, prID); fs != nil && fs.Phase == engine.FixPhaseFixing && fs.Role != "" {
+		asked = fs.Role
+	}
+	if cfg != nil {
+		if r, err := actRoleFor(cfg, full, asked); err == nil {
+			return r.Name
+		}
+	}
+	return actJudgeFor(cfg, full)
+}
+
+// openHoldEnd is when h, the hold `magnum open` set on PR prID, ends: its
+// Until, or human_cooldown after the PR's last input when that is later
+// (engine.OpenHold.End; d is the zero Daemon without a config).
+func openHoldEnd(ctx context.Context, st *store.Store, d config.Daemon, h engine.OpenHold, prID int64) time.Time {
+	var at *time.Time
+	if pr, err := st.PRByID(ctx, prID); err == nil {
+		at = pr.HumanActiveAt
+	}
+	return h.End(d, at)
+}
+
+// openRestore handles a PR without a live session for role: a parked one is
+// handed to the daemon (request "open": claim a slot, resume the sessions,
+// hold the PR) and waited for, after a y on a terminal (not with --yes or
+// --json: integrations call open, and a declined question is
+// errOpenDeclined); anything else gets the exact next step.
+func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role, label string, o openOpts) (store.Session, error) {
+	all, err := d.Store.SessionsByPR(ctx, t.PR.ID)
+	if err != nil {
+		return store.Session{}, err
+	}
+	parked, latest, starting := openSessions(all, role)
 	if parked == nil && !starting {
 		if latest != nil {
 			return store.Session{}, &openGoneError{state: latest.State,
@@ -178,9 +246,13 @@ func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role,
 	}
 	hint := openResumeHint(d.Cfg, parked)
 	reqID := int64(0)
+	hold := d.Cfg.Daemon.OpenHold.Duration
+	if !starting && d.StdinTTY && d.StdoutTTY && !o.yes && !o.json && !d.confirm(ctx, c.Stderr, tui.OpenRestoreQuestion(label, hold)) {
+		return store.Session{}, errOpenDeclined
+	}
 	if !starting {
 		// Restoring is for now: with no daemon nothing stays queued to
-		// restore and pin the PR whenever one starts.
+		// restore and hold the PR whenever one starts.
 		out, err := d.reqs().send(ctx, actReqOpen, engine.OpenPayload{PRTarget: t.prTarget(), Role: role}, reqSend{NeedDaemon: true})
 		switch {
 		case errors.Is(err, errNoDaemon):
@@ -191,7 +263,8 @@ func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role,
 		reqID = out.ID()
 		if !o.json {
 			out.printNotes(c.Stderr)
-			fmt.Fprintf(c.Stderr, "%s is parked; asked the daemon to restore its sessions in a slot, pinned to you (request %d)…\n", label, reqID)
+			fmt.Fprintf(c.Stderr, "%s is parked; asked the daemon to restore its sessions in a slot, held for you %s (request %d)…\n",
+				label, tui.OpenHoldPhrase(hold), reqID)
 		}
 	} else if !o.json {
 		fmt.Fprintf(c.Stderr, "waiting for the %s session of %s to start…\n", actRoleName(role), label)

@@ -94,6 +94,12 @@ shell_path = true                 # at its start the daemon asks your login shel
                                   # exports name (DBngin's mysql, psql, redis-server); false keeps launchd's PATH;
                                   # a change of your shell's PATH takes effect at the next daemon-restart; event
                                   # daemon.shell_path, `magnum status` shows the count; the CLI keeps its own PATH
+open_hold = "30m"                 # `magnum open` (the board's o) that restores a parked PR in a slot holds the PR and
+                                  # its slot for you as a pin does (no round, park, release or cleanup touches them)
+                                  # until the later of the open plus this and human_cooldown after your last input in
+                                  # its panes, then hands them back by itself (event pr.open_hold_ended), so a paused
+                                  # or queued round goes on; `magnum pin` makes the hold a lasting pin, `magnum unpin`
+                                  # ends it ("0" = the restore pins for good, until `magnum unpin`)
 
 [herdr]
 socket = "~/.config/herdr/herdr.sock"

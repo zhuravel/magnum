@@ -474,14 +474,17 @@ type statusPause struct {
 // to the PR (a pin never lapses, `magnum unpin` lets go). Repo and Number
 // name the PR (empty for a slot without one), GHState is GitHub's state of
 // it and ClosedAt when GitHub merged or closed it, PinnedAt when the pin was
-// set by the registry's pin events (nil: they no longer remember).
+// set by the registry's pin events (nil: they no longer remember). HeldUntil
+// is when the pin ends by itself, for the hold `magnum open` set (nil: a
+// lasting pin).
 type statusPin struct {
-	Slot     string     `json:"slot,omitempty"`
-	Repo     string     `json:"repo,omitempty"`
-	Number   int        `json:"number,omitempty"`
-	GHState  string     `json:"gh_state,omitempty"`
-	ClosedAt *time.Time `json:"closed_at,omitempty"`
-	PinnedAt *time.Time `json:"pinned_at,omitempty"`
+	Slot      string     `json:"slot,omitempty"`
+	Repo      string     `json:"repo,omitempty"`
+	Number    int        `json:"number,omitempty"`
+	GHState   string     `json:"gh_state,omitempty"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	PinnedAt  *time.Time `json:"pinned_at,omitempty"`
+	HeldUntil *time.Time `json:"held_until,omitempty"`
 }
 
 type statusDisk struct {
@@ -550,6 +553,9 @@ type statusDetail struct {
 	Evidence *engine.EvidenceCounts `json:"evidence,omitempty"`
 	// Snooze is the PR's snooze while it holds (magnum snooze, the board's z).
 	Snooze *engine.Snooze `json:"snooze,omitempty"`
+	// HeldUntil is when the hold `magnum open` set on the PR ends: its pin
+	// then goes by itself (nil: not pinned, or a lasting pin).
+	HeldUntil *time.Time `json:"held_until,omitempty"`
 	// Fix is the PR's fix loop while it runs (magnum fix, autofix) and the
 	// findings its fixer left to the author, and FixOff its opt-out of
 	// autofix (magnum fix --off); nil when it has none.

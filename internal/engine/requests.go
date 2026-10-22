@@ -620,10 +620,14 @@ func (e *Engine) resolveRequested(repo store.Repo, asked []string) ([]string, er
 	return out, nil
 }
 
+// requestPin pins or unpins a PR and its slot, or a slot (magnum pin|unpin,
+// magnum slots pin|unpin). Either way an open's hold on the PR goes
+// (open_hold.go): a pin makes it a lasting pin, which the answer says, and
+// an unpin ends it with the pin.
 func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (string, error) {
 	verb := map[bool]string{true: "pinned", false: "unpinned"}[pin]
 	var slot store.Slot
-	hasSlot, wasPinned := false, false
+	hasSlot, wasPinned, wasHeld := false, false, false
 	label, subject := p.Slot, ""
 	if p.Slot != "" {
 		sl, err := e.st.SlotByName(ctx, p.Slot)
@@ -637,6 +641,7 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 			if err := e.st.UpdatePR(ctx, *sl.PRID, func(u *store.PRUpdate) { u.Set("pinned", pin) }); err != nil {
 				return "", fmt.Errorf("%s %s: write the PR's pinned flag: %w", verb, sl.Name, err)
 			}
+			wasHeld = e.dropOpenHold(ctx, *sl.PRID)
 		}
 	} else {
 		repo, pr, err := e.resolve(ctx, p.PRTarget)
@@ -647,6 +652,7 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 		if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", pin) }); err != nil {
 			return "", err
 		}
+		wasHeld = e.dropOpenHold(ctx, pr.ID) && pr.Pinned
 		if slot, hasSlot, err = e.slotOf(ctx, pr.ID); err != nil {
 			return "", err
 		}
@@ -672,6 +678,9 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 	}
 	if answer == "" {
 		answer = verb + " " + label
+	}
+	if pin && wasHeld {
+		answer += ": magnum open's hold is now a lasting pin (`magnum unpin` lets go)"
 	}
 	e.pinEvent(ctx, subject, slot, p.Slot != "", pin, answer) // review_unpin.go
 	return answer, nil

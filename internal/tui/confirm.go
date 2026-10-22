@@ -95,6 +95,24 @@ func releaseQuestion(target string) string {
 	return "Release " + target + ": hand back its slot now, sessions parked and worktree reset?"
 }
 
+// OpenRestoreQuestion asks before an open restores ref in a slot (the board's
+// o, `magnum open` on a terminal): the role it opens has no live pane, so
+// the daemon claims a slot, resumes the sessions and holds the PR for hold
+// ([daemon] open_hold; 0 pins it until `magnum unpin`, OpenHoldPhrase).
+func OpenRestoreQuestion(ref string, hold time.Duration) string {
+	return "Restore " + ref + " in a slot to read it? It holds the PR " + OpenHoldPhrase(hold) + "."
+}
+
+// OpenHoldPhrase is how long a restore by `magnum open` holds the PR, as
+// its question says it: "until 30 minutes after your last input" for an
+// open_hold of 30m, "until you unpin it" for 0, a lasting pin.
+func OpenHoldPhrase(hold time.Duration) string {
+	if hold <= 0 {
+		return "until you unpin it"
+	}
+	return "until " + textx.DurationWords(hold) + " after your last input"
+}
+
 // verdictQuestion asks before posting the reviewer's verdict on ref: it
 // says on which head and what magnum's review f concluded, its new findings
 // and the earlier ones still open (the FINDINGS cell's "3 open"), so the

@@ -832,12 +832,14 @@ func statusGatherInventory(ctx context.Context, d statusDeps, o statusOptions, r
 // statusGatherPins lists the pins: the slots pinned or holding a pinned PR,
 // then the pinned PRs without a slot, each with its PR's GitHub state and
 // when the pin was set (engine.PinnedSince; the age is left out when the
-// events no longer remember it).
+// events no longer remember it), or, for the hold `magnum open` set, when
+// it ends (statusHeldUntil).
 func statusGatherPins(ctx context.Context, d statusDeps, r *statusReport) {
 	since, err := engine.PinnedSince(ctx, d.Store)
 	if err != nil {
 		since = nil
 	}
+	holds, _ := engine.OpenHolds(ctx, d.Store)
 	pin := func(slot string, pr *store.PR) statusPin {
 		p := statusPin{Slot: slot}
 		subject := "slot:" + slot
@@ -849,6 +851,9 @@ func statusGatherPins(ctx context.Context, d statusDeps, r *statusReport) {
 				}
 			}
 			subject = fmt.Sprintf("pr:%s#%d", p.Repo, pr.Number)
+			if h, ok := holds[pr.ID]; ok {
+				p.HeldUntil = statusHeldUntil(d.Config, h, *pr)
+			}
 		}
 		if at, ok := since[subject]; ok {
 			p.PinnedAt = &at
@@ -870,6 +875,21 @@ func statusGatherPins(ctx context.Context, d statusDeps, r *statusReport) {
 			r.Pins = append(r.Pins, pin("", &pr))
 		}
 	}
+}
+
+// statusHeldUntil is when h, the hold `magnum open` set on pr, ends
+// (engine.OpenHold.End); nil when pr is not pinned (the record holds
+// nothing: the daemon drops it).
+func statusHeldUntil(cfg *config.Config, h engine.OpenHold, pr store.PR) *time.Time {
+	if !pr.Pinned {
+		return nil
+	}
+	var d config.Daemon
+	if cfg != nil {
+		d = cfg.Daemon
+	}
+	end := h.End(d, pr.HumanActiveAt)
+	return &end
 }
 
 // statusSortQueue orders the queue like the dispatcher: forced first, then
@@ -1150,6 +1170,9 @@ func statusGatherDetail(ctx context.Context, d statusDeps, r statusReport, ref s
 	}
 	if z, ok := statusSnooze(ctx, d.Store, pr.ID, now); ok {
 		det.Snooze = &z
+	}
+	if h, ok := engine.OpenHoldOf(ctx, d.Store, pr.ID); ok {
+		det.HeldUntil = statusHeldUntil(d.Config, h, pr)
 	}
 	loop, off := statusFix(ctx, d.Store, pr.ID)
 	det.Fix, det.FixOff = statusFixView(loop, det.Attention, pr, det.Repo), off

@@ -1,12 +1,13 @@
 // Package textx holds the small text helpers several packages share:
 // clipping to a number of runes, the first line, a short commit SHA, plurals,
-// thousands separators and login folding. It imports only the standard
-// library.
+// thousands separators, durations in words and login folding. It imports
+// only the standard library.
 package textx
 
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -64,6 +65,32 @@ func Thousands(n int) string {
 		return "-" + digits
 	}
 	return digits
+}
+
+// DurationWords is d in words, as a question says it, in its two largest
+// units at most and whole: "45 seconds", "30 minutes", "1 hour", "1 hour 30
+// minutes", "2 days 3 hours". A negative d is its absolute value.
+func DurationWords(d time.Duration) string {
+	const day = 24 * time.Hour
+	d = max(d, -d)
+	switch {
+	case d < time.Minute:
+		return Count(int(d/time.Second), "second", "seconds")
+	case d < time.Hour:
+		return Count(int(d/time.Minute), "minute", "minutes")
+	case d < day:
+		return countPair(int(d/time.Hour), "hour", "hours", int(d%time.Hour/time.Minute), "minute", "minutes")
+	}
+	return countPair(int(d/day), "day", "days", int(d%day/time.Hour), "hour", "hours")
+}
+
+// countPair is n of a unit and, when m is not 0, m of the next one.
+func countPair(n int, one, many string, m int, nextOne, nextMany string) string {
+	s := Count(n, one, many)
+	if m > 0 {
+		s += " " + Count(m, nextOne, nextMany)
+	}
+	return s
 }
 
 // FoldLogin folds a GitHub login for comparison: case, surrounding spaces, a

@@ -147,7 +147,8 @@ func waitClock(t, now time.Time) string {
 // 00:00", "re-review · quiet → 14:09", "review · codex paused → 15:00",
 // "re-review · small delta 8/30 lines → 16:40", "re-review · requested by
 // alice → now", "delta check · quiet → 14:09", "re-review · retry 2/3 setup
-// → 22:57", "re-review · pinned → u" (u: the screens' unpin key).
+// → 22:57", "re-review · pinned → u" (u: the screens' unpin key),
+// "re-review · held → 03:21" (an open's hold, which ends by itself).
 func (w Wait) Short(now time.Time) string { return w.short(now, true) }
 
 // Narrow is Short for a narrower cell: a retry drops its cause first
@@ -195,7 +196,10 @@ func (w Wait) short(now time.Time, cause bool) string {
 			what += " " + w.Subject
 		}
 	case WaitPinned:
-		return w.kind() + " · pinned → u" // a pin has no end: the unpin key instead of a time
+		if w.Until.IsZero() {
+			return w.kind() + " · pinned → u" // a pin has no end: the unpin key instead of a time
+		}
+		what = "held" // an open's hold ends by itself, at Until
 	case WaitMuted:
 		what = "muted"
 	case WaitQuietHours:
@@ -288,6 +292,8 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 		s += "; `magnum review " + ref + "` runs it now"
 	case w.Reason == WaitMuted && ref != "":
 		s += "; `magnum unmute " + ref + "` brings it back"
+	case w.Reason == WaitPinned && ref != "" && !w.Until.IsZero():
+		s += "; `magnum unpin " + ref + "` lets it run now (the hold ends by itself)"
 	case w.Reason == WaitPinned && ref != "":
 		s += "; `magnum unpin " + ref + "` lets it run (a pin never lapses by itself)"
 	case w.Reason == WaitPaused || w.Reason == WaitInfra:
@@ -483,7 +489,7 @@ type gate struct {
 	by       string
 	at       time.Time // WaitPinned: when the slot was pinned (zero when unknown)
 	identity string    // WaitGitHub: the identity whose GitHub budget is below the floor
-	until    time.Time // WaitGitHub: when its budget resets
+	until    time.Time // WaitGitHub: when its budget resets; WaitPinned: when an open's hold ends (zero: a lasting pin)
 }
 
 // otherGate is a gate of no reason of its own (WaitOther).
@@ -496,7 +502,7 @@ type gateCode struct {
 	By       string    `json:"by,omitempty"`       // WaitPinned: who pinned the slot
 	At       time.Time `json:"at,omitzero"`        // WaitPinned: when
 	Identity string    `json:"identity,omitempty"` // WaitGitHub: whose budget is low
-	Until    time.Time `json:"until,omitzero"`     // WaitGitHub: when it resets
+	Until    time.Time `json:"until,omitzero"`     // WaitGitHub: when it resets; WaitPinned: when an open's hold ends
 }
 
 // gateWait is the wait of the reason the last dispatch gave for skipping
@@ -515,7 +521,7 @@ func (e *Engine) gateWait(ctx context.Context, prID int64, text string) Wait {
 	case WaitIdentity, WaitBudget, WaitCapacity, WaitSlot:
 		w.Reason = c.Reason
 	case WaitPinned:
-		w.Reason, w.Subject, w.Since = c.Reason, c.By, c.At
+		w.Reason, w.Subject, w.Since, w.Until = c.Reason, c.By, c.At, c.Until
 	case WaitGitHub:
 		w.Reason, w.Subject, w.Until = c.Reason, c.Identity, c.Until
 	case WaitKind:

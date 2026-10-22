@@ -722,8 +722,9 @@ const (
 // magnum stopped arguing in ("· argued", arguedShown). A merged PR in a
 // post-merge round says so, before the mark when the round runs:
 // "post-merge · next tick", "post-merge ∆ judge · 4m"; so does a delta
-// check that waits: "delta check · quiet → 14:09". A snoozed PR with
-// nothing else there says until when: "snoozed → 18:00".
+// check that waits: "delta check · quiet → 14:09". A PR an open holds, or a
+// snoozed one, with nothing else there says until when: "held → 03:21"
+// (openHeldShown, before a snooze), "snoozed → 18:00".
 func (p *prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
@@ -747,6 +748,9 @@ func (p *prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 	_, rest, held := strings.Cut(r.Wait, " · ")
 	if g := roundProgress(r); g != nil && d > stateBare {
 		rest, held = progressText(*g, p.now, d == stateFull), true
+	}
+	if (!held || rest == "") && openHeldShown(r, p.now) {
+		rest, held = "held → "+untilClock(r.HeldUntil, p.now), true
 	}
 	if (!held || rest == "") && snoozeShown(r, p.now) {
 		rest, held = "snoozed → "+untilClock(r.SnoozedUntil, p.now), true
@@ -827,6 +831,12 @@ func (p *prbPainter) flagNarrow(text string) cell {
 // say so: no round runs (its stage takes the cell).
 func snoozeShown(r PRBoardRow, now time.Time) bool {
 	return r.SnoozedUntil.After(now) && !workingState(rowState(r))
+}
+
+// openHeldShown reports whether an open's hold keeps r at now and its state
+// cell may say so (PRBoardRow.HeldUntil): no round runs.
+func openHeldShown(r PRBoardRow, now time.Time) bool {
+	return r.Pinned && r.HeldUntil.After(now) && !workingState(rowState(r))
 }
 
 // roundProgress is the round r runs, as its state cell shows it; nil when
@@ -1928,13 +1938,14 @@ func (p *prbPainter) titleRights(spin, clock string, facts []fact) []string {
 }
 
 // summaryLine counts the rows per state, most urgent first, with the
-// stale reviews, failures, pins and stars on the right.
+// stale reviews, failures, pins (an open's holds apart) and stars on the
+// right.
 func (p *prbPainter) summaryLine(width int) string {
 	if len(p.all) == 0 {
 		return " " + p.st.Dim.Render("no pull requests yet")
 	}
 	counts := map[string]int{}
-	var stale, failing, pinned, pinnedClosed, starred int
+	var stale, failing, pinned, pinnedClosed, openHeld, starred int
 	for _, r := range p.all {
 		if r.Starred {
 			starred++
@@ -1946,7 +1957,10 @@ func (p *prbPainter) summaryLine(width int) string {
 		if r.LastError != "" {
 			failing++
 		}
-		if r.Pinned {
+		switch {
+		case r.Pinned && !r.HeldUntil.IsZero(): // ends by itself: never one on a closed PR for long
+			openHeld++
+		case r.Pinned:
 			pinned++
 			if rowClosed(r) {
 				pinnedClosed++
@@ -1992,12 +2006,18 @@ func (p *prbPainter) summaryLine(width int) string {
 	if failing > 0 {
 		right = append(right, p.st.Err.Render(p.g.errMark)+" "+p.pal.bold.Render(strconv.Itoa(failing))+" "+p.st.Dim.Render("failing"))
 	}
-	if pinned > 0 {
-		pill := p.pinStyle().Render(p.g.pin) + " " + p.pal.bold.Render(strconv.Itoa(pinned)) + " " + p.st.Dim.Render("pinned")
-		if pinnedClosed > 0 { // a pin never lapses: it holds the slot of a PR that is gone
-			pill += p.st.Dim.Render(p.g.sep) + p.pal.bold.Render(strconv.Itoa(pinnedClosed)) + " " + p.st.Dim.Render("on closed PRs")
+	if pinned > 0 || openHeld > 0 {
+		var parts []string
+		if pinned > 0 {
+			parts = append(parts, p.pal.bold.Render(strconv.Itoa(pinned))+" "+p.st.Dim.Render("pinned"))
 		}
-		right = append(right, pill)
+		if pinnedClosed > 0 { // a pin never lapses: it holds the slot of a PR that is gone
+			parts = append(parts, p.pal.bold.Render(strconv.Itoa(pinnedClosed))+" "+p.st.Dim.Render("on closed PRs"))
+		}
+		if openHeld > 0 { // magnum open's holds, which end by themselves
+			parts = append(parts, p.pal.bold.Render(strconv.Itoa(openHeld))+" "+p.st.Dim.Render("held"))
+		}
+		right = append(right, p.pinStyle().Render(p.g.pin)+" "+strings.Join(parts, p.st.Dim.Render(p.g.sep)))
 	}
 	if starred > 0 {
 		right = append(right, p.pal.yellow.Render(p.g.star)+" "+p.pal.bold.Render(strconv.Itoa(starred))+" "+p.st.Dim.Render("starred"))

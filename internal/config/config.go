@@ -230,6 +230,12 @@ type Daemon struct {
 	// shell's PATH takes effect at the next start. The CLI keeps its own
 	// environment.
 	ShellPath bool `toml:"shell_path"`
+	// OpenHold is how long a restore by `magnum open` (the board's o) holds
+	// the PR and its slot for the operator, as a pin does: until the later
+	// of the open plus OpenHold and the end of HumanCooldown after the last
+	// input in the PR's panes (OpenHoldEnd), when the hold ends by itself.
+	// 0 pins for good, until `magnum unpin`.
+	OpenHold Duration `toml:"open_hold"`
 }
 
 // CooldownUntil is at + human_cooldown, the end of the human cooldown a
@@ -967,6 +973,7 @@ func Defaults() *Config {
 			RereviewMaxWait:          Duration{2 * time.Hour},
 			DeltaCheck:               true,
 			ShellPath:                true,
+			OpenHold:                 Duration{30 * time.Minute},
 		},
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},

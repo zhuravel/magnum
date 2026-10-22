@@ -232,6 +232,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("herdr.socket must be absolute after expansion: %s", c.Herdr.Socket))
 	}
 	errs = append(errs, c.Daemon.validateTimings()...)
+	errs = append(errs, c.Daemon.validateOpenHold()...)
 	errs = append(errs, validateQuietHours(c.Daemon.QuietHours)...)
 	errs = append(errs, validateKeep("daemon.keep_events", c.Daemon.KeepEvents)...)
 	errs = append(errs, validateKeep("daemon.keep_requests", c.Daemon.KeepRequests)...)

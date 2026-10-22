@@ -2710,6 +2710,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (the daemon reads the config only at start, and a spend change must not happen on a stray key); a stage
   key in the list editor (esc would have had two meanings); teatest (one more dependency for what driving
   Update with key messages already tests).
+- **`magnum open` holds what it restores for a while and asks first** (2026-10-22, spec 121, approved by the
+  operator). At 02:51 local the operator ran `magnum open` on talkable#12048 to look at its panes. Its judge
+  had been parked an hour earlier by spec 119's login change, so open restored the PR: it claimed review8,
+  checked out the reviewed SHA, resumed the judge and pinned the PR and the slot ("magnum open: restored in
+  review8 at 7469270, pinned"), with no question first (rowacts listed open among the keys that run at
+  once). The operator: "why does open pin stuff without confirmation? I expected to open herdr panes, not pin
+  something". The pin lasted until `magnum unpin`, so the paused round of 12048 could not continue; the
+  `magnum fix` unpins entry above records the same cost (the board's `f` failed twice on a PR open had pinned
+  30 hours earlier). Now the restore is a hold: the same pin, so every guard that leaves a pinned PR or slot
+  alone (dispatch's slotGate, the idle park, the release and cleanup plans, eviction, the session restart,
+  the fix and whiteboard jobs) applies unchanged, plus a record (engine.KVPROpenHold, `pr.<id>.open_hold`:
+  until = the open plus the new `[daemon] open_hold`, default `30m`) that a restart keeps. The hold ends at
+  the later of that and `human_cooldown` after the PR's human_active_at (the last input in its panes), when
+  the tick, before dispatch, unpins the PR and its slot with one `pr.open_hold_ended` event, so a paused or
+  queued round goes on in the same tick. It clears the slot's pin as a review's unpin does (ClearPin), not
+  as `magnum unpin` (Unpin also acknowledges a head_drift or unpushed_commits hold by taking the folder's
+  HEAD as the checkout): an automatic end must never hand a person's commits to the next release. `magnum
+  pin` drops the record (a lasting pin, which the answer says), every unpin drops it too (`magnum unpin`, a
+  review's or a fix's), a record whose PR is no longer pinned goes at the next tick, `open_hold = "0"`
+  writes none (today's lasting pin), and an open of a PR a lasting pin already keeps leaves that pin as it
+  is. A wait on the hold carries its end (`re-review · held → 03:21`, "slot review8 is held by magnum open
+  until 03:21; `magnum unpin` lets it run now (the hold ends by itself)") and toasts nothing; the board's
+  state cell says `held → 03:21` where nothing else waits, the card "held by open until 03:21 (u hands it
+  back, p keeps it)" and the summary pill counts holds apart from pins; `magnum status` says "held by open
+  until 03:21" on the pins line and the card, with `held_until` in the JSON. Open asks only when it would
+  restore: the board's row knows it (PRBoardRow.OpenRestores, from the sessions of the role o opens, the
+  judge or the fixer at work: none live and one parked, as openRestore decides), and `o` there asks
+  "Restore talkable#12048 in a slot to read it? It holds the PR until 30 minutes after your last input."
+  (the duration from open_hold; "until you unpin it" for 0); `magnum open` asks the same on a terminal
+  before it sends the request, `--yes` skips it, and `--json` and a script never ask, as the herdr plugin
+  and scripts call open. A focus of a live pane asks nothing and holds nothing. Existing pins: the newest pin
+  event of a PR is what pinOrigin reads, and `pr.opened` says open made the pin, so at the start a pinned PR
+  without a hold whose newest pin event is the open's gets a hold ending open_hold after the start (one
+  `pr.open_hold_set` event); a `magnum pin` or `magnum slots pin` pin stays lasting, as does one the pruned
+  events no longer remember; `pr.open_hold_ended` counts as an unpin for pinOrigin and PinnedSince. The
+  picker's open runs `magnum open`'s code on its terminal once the picker closes, so it asks there; the
+  dashboard's `o` does not know the PR's sessions, so it still restores without asking (with the hold,
+  which ends by itself). Rejected: asking on every `o` (a focus of a live pane is the common case
+  and changes nothing); no hold at all (the restored judge would be parked again by the idle park, which the
+  two-step park makes quick, and the panes the operator is reading would close under them); keeping the
+  lasting pin with a reminder toast (the round still waits until the operator acts, which is what the
+  evidence shows they forget).
 
 ## Operations
 

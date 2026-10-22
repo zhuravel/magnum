@@ -45,11 +45,11 @@ func (e *Engine) noteClosedPinned(repo store.Repo, pr store.PR, slot store.Slot)
 // PinnedSince is when each subject that is pinned now was pinned, by the
 // registry's pin events: "pr:owner/name#N" for a PR pinned by `magnum open`,
 // `magnum pin` or `magnum slots pin` (pr.opened, pr.pinned), "slot:<name>"
-// for a slot pinned without a PR (slot.pinned); an unpin forgets the
-// subject. A pin older than the events kept (store.Prune), or set by hand,
-// has no entry.
+// for a slot pinned without a PR (slot.pinned); an unpin, or the end of an
+// open's hold (pr.open_hold_ended), forgets the subject. A pin older than
+// the events kept (store.Prune), or set by hand, has no entry.
 func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, error) {
-	evs, err := st.EventsOfKindsSince(ctx, time.Time{}, evPROpened, evPRPinned, evPRUnpinned, evSlotPinned, evSlotUnpinned)
+	evs, err := st.EventsOfKindsSince(ctx, time.Time{}, evPROpened, evPRPinned, evPRUnpinned, evSlotPinned, evSlotUnpinned, evPROpenHoldEnded)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, er
 		switch ev.Kind {
 		case evPROpened, evPRPinned, evSlotPinned:
 			out[subject] = ev.At
-		case evPRUnpinned, evSlotUnpinned:
+		case evPRUnpinned, evSlotUnpinned, evPROpenHoldEnded:
 			delete(out, subject)
 		}
 	}

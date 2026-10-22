@@ -183,6 +183,12 @@ type actRow struct {
 	// (PRBoardRow.Whiteboard; "" when it has none, or the screen does not
 	// know: only the board offers w), which w's question names.
 	whiteboard string
+	// restores says o restores the PR in a slot (PRBoardRow.OpenRestores:
+	// the role it opens has no live pane; false when it focuses one, or the
+	// screen does not know: only the board does), so o asks first, naming
+	// openHold, how long the restore holds the PR (PRBoardRow.OpenHold).
+	restores bool
+	openHold time.Duration
 
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
@@ -421,12 +427,18 @@ func actionRefusal(a rowAct, r actRow) string {
 }
 
 // actionQuestion is the y/N question before a runs on r, saying what y
-// will do; "" for the actions that run at once (open, browser, tracker, pin,
-// unpin of a pin, and the star, which only the board reads and the same key
-// undoes). Unpin of a slot a guard holds asks: it takes the slot's HEAD.
+// will do; "" for the actions that run at once (open of a live pane,
+// browser, tracker, pin, unpin of a pin, and the star, which only the board
+// reads and the same key undoes). Unpin of a slot a guard holds asks: it
+// takes the slot's HEAD. Open asks when it restores the PR: it claims a slot
+// and holds the PR.
 func actionQuestion(a rowAct, r actRow) string {
 	l := r.label
 	switch a {
+	case actOpen:
+		if r.restores {
+			return OpenRestoreQuestion(l, r.openHold)
+		}
 	case actReview, actFresh, actSimplify:
 		o := reviewOptsFor(a, r)
 		if o.Replies {
@@ -841,5 +853,6 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 	}
 	row.facts = boardReviewFacts(r, now)
 	row.replies = r.Replies
+	row.restores, row.openHold = r.OpenRestores, r.OpenHold
 	return row
 }
