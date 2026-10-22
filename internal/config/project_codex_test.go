@@ -15,7 +15,7 @@ import (
 // [projects] entries Codex reads.
 func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 	codex, _ := Defaults().KindSpec(KindCodex)
-	if !slices.Equal(codex.ProjectUntrust, []string{"-c", "projects={projects}"}) || codex.ProjectMCP != ProjectMCPAllow {
+	if !slices.Equal(codex.ProjectUntrust, []string{"-c", "projects={projects}"}) || codex.ProjectMCP != ProjectMCPOff {
 		t.Fatalf("codex project_untrust = %q, project_mcp = %q", codex.ProjectUntrust, codex.ProjectMCP)
 	}
 	paths := []string{"/Users/x/Projects/talkable.review1", `/private/tmp/a "b"\c`}
@@ -53,13 +53,19 @@ func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 }
 
 // When the PR leaves .codex/ alone the checkout's project servers are the
-// team's: project_mcp "allow" (the default) keeps them; "off" turns them off
-// like the user's, by name, once even when both declare one, but for those
-// in mcp_allow, and also with mcp_off = false.
+// team's: project_mcp "off" (codex's default) turns them off like the
+// user's, by name, once even when both declare one, but for those in
+// mcp_allow, and also with mcp_off = false; "allow" keeps them.
 func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T) {
 	user, project := []string{"browser", "docs"}, []string{"docs", "sentry", "tracker"}
 	codex, _ := Defaults().KindSpec(KindCodex)
-	if got := codex.ConfigOffArgs(user, nil, project, nil, false); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
+	if got, want := codex.ConfigOffArgs(user, nil, project, nil, false), []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false",
+		"-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.sentry.enabled=false", "-c", "mcp_servers.tracker.enabled=false"}; !slices.Equal(got, want) {
+		t.Fatalf("project_mcp off by default: %q\nwant %q", got, want)
+	}
+	allow := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"allow\"\n" + minimalConfig})
+	ka, _ := allow.KindSpec(KindCodex)
+	if got := ka.ConfigOffArgs(user, nil, project, nil, false); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
 		t.Fatalf("project_mcp allow: %q, want the user's servers only", got)
 	}
 	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"OFF\"\nmcp_allow = [\"tracker\"]\n" + minimalConfig})

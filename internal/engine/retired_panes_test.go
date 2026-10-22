@@ -444,7 +444,7 @@ func TestEveryParkThatWorksClosesItsPanes(t *testing.T) {
 		}
 	})
 	t.Run("Codex-flagged release", func(t *testing.T) {
-		h := newHarness(t)
+		h := newHarness(t, noFallback) // a fallback judge would keep the PR's agents and slot
 		h.refusedPR()
 		pr := h.pr(2)
 		h.advance(time.Minute)

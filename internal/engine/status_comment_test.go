@@ -687,7 +687,7 @@ func TestAFixLoopShowsInTheStatusComment(t *testing.T) {
 // (needs_attention) says that magnum failed, as
 // TestTheStatusCommentNamesMagnumsOwnFailure shows for every such park.
 func TestAFlaggedOrParkedPRsStatusCommentSaysNotReviewing(t *testing.T) {
-	h := newHarness(t, statusOn)
+	h := newHarness(t, statusOn, noFallback)
 	h.open(prSpec{n: 1, head: "base1"})
 	h.startup()
 	h.tick()
@@ -789,7 +789,7 @@ func TestTheStatusCommentNamesMagnumsOwnFailure(t *testing.T) {
 	})
 
 	t.Run("refused by Codex", func(t *testing.T) {
-		h := newHarness(t, statusOn)
+		h := newHarness(t, statusOn, noFallback)
 		h.queuedPR(7, statusHead)
 		h.advance(2 * time.Minute)
 		h.setFlag(7, "Codex warned about cyber abuse")

@@ -114,16 +114,17 @@ func TestOwnPRReReviewWaitsTheOwnInterval(t *testing.T) {
 	})
 }
 
-// An own draft waits the longer of the draft (2h) and own intervals.
+// An own draft a watch includes (include_drafts = true) waits the longer of
+// the draft (2h) and own intervals.
 func TestOwnDraftWaitsTheLongerOfTheDraftAndOwnIntervals(t *testing.T) {
-	h := newHarness(t, ownInterval(3*time.Hour))
+	h := newHarness(t, ownInterval(3*time.Hour), withDrafts)
 	start := *authoredPR(h, 2, "b1", "zhuravel").LastRoundStartedAt
 	authoredPush(h, 40*time.Minute, prSpec{n: 2, head: "b2", author: "zhuravel", draft: true})
 	if w := waitOf(t, h, 2); w.Reason != WaitOwnInterval || !w.Until.Equal(start.Add(3*time.Hour)) {
 		t.Fatalf("own 3h: wait = %+v, want the own interval until %v", w, start.Add(3*time.Hour))
 	}
 
-	h = newHarness(t, ownInterval(time.Hour))
+	h = newHarness(t, ownInterval(time.Hour), withDrafts)
 	start = *authoredPR(h, 2, "b1", "zhuravel").LastRoundStartedAt
 	authoredPush(h, 40*time.Minute, prSpec{n: 2, head: "b2", author: "zhuravel", draft: true})
 	if w := waitOf(t, h, 2); w.Reason != WaitDraftInterval || !w.Until.Equal(start.Add(2*time.Hour)) {

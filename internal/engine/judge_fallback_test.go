@@ -10,10 +10,16 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// fallbackHarness is a harness with [pipeline] judge_fallback = "claude-judge".
+// fallbackHarness is a harness whose config writes no judge_fallback: the
+// built-in default, claude-judge, takes over a refused PR of a watch
+// judged by codex-judge.
 func fallbackHarness(t *testing.T) *harness {
 	t.Helper()
-	return newHarness(t, func(h *harness) { h.cfg.Pipeline.JudgeFallback = "claude-judge" })
+	h := newHarness(t)
+	if fb, ok := h.cfg.JudgeFallbackFor(&h.cfg.Watches[0]); !ok || fb.Name != "claude-judge" {
+		t.Fatalf("the built-in judge_fallback = %+v, %v, want claude-judge", fb, ok)
+	}
+	return h
 }
 
 // refusedByClaudeJudge is a round whose fallback judge's own pass Claude

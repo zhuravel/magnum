@@ -140,12 +140,12 @@ func TestFooterLeavesSimplificationsOutWhenTheWatchRunsNoSimplifyRole(t *testing
 // The footer says when the PR's watch re-reviews a push and whose review
 // request starts a round: during [daemon] quiet_hours (with the daemon's
 // UTC offset) only a small push, not on a draft a watch with include_drafts
-// = false skips, and a request for the operator's login
+// = false (the default) skips, and a request for the operator's login
 // (config.OperatorIdentity: the poll login when a gh identity polls, else
 // the gh identity declared, as under an App poll identity), else, with no
 // gh identity, for the posting login.
 func TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound(t *testing.T) {
-	no := false
+	no, yes := false, true
 	for _, tc := range []struct {
 		name    string
 		quiet   string
@@ -157,14 +157,18 @@ func TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound(t *testing.T
 			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "zhuravel", IncludeDrafts: &no}, false,
 			"New pushes are re-reviewed automatically (during 03:00-12:00 UTC only small ones, by a short check), drafts only on request. " +
 				"A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round."},
-		{"an App polls, a gh identity is declared", "",
-			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"}, false,
+		{"an App polls, a gh identity is declared, drafts included", "",
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app", IncludeDrafts: &yes}, false,
 			"New pushes are re-reviewed automatically. " +
 				"A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round."},
-		{"an App polls, no gh identity is declared", "",
-			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"}, true,
+		{"an App polls, no gh identity is declared, drafts included", "",
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app", IncludeDrafts: &yes}, true,
 			"New pushes are re-reviewed automatically. " +
 				"A thread reply gets an answer without a push, and a review request for `talkable[bot]` starts a round."},
+		{"a watch that writes no include_drafts", "",
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"}, false,
+			"New pushes are re-reviewed automatically, drafts only on request. " +
+				"A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)

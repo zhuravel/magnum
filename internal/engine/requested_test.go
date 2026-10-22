@@ -550,7 +550,7 @@ func TestReviewRequestSkipsTheTimingRules(t *testing.T) {
 		{name: "daily cap", mod: func(h *harness) { h.cfg.Daemon.MaxRoundsPerPRPerDay = 1 }, pushes: []string{"b2"}, hold: WaitCap},
 		{name: "small delta", mod: withoutDeltaCheck, files: rubyMixed, pushes: []string{"b2"}, hold: WaitDelta},
 		{name: "burst quiet period", pushes: []string{"b2", "b3", "b4"}, hold: WaitBurst},
-		{name: "draft interval", draft: true, pushes: []string{"b2"}, hold: WaitDraftInterval},
+		{name: "draft interval", mod: withDrafts, draft: true, pushes: []string{"b2"}, hold: WaitDraftInterval},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mods []func(*harness)
@@ -753,7 +753,7 @@ func TestReviewRequestDuringARoundThatMissedTheHeadRunsAsRequested(t *testing.T)
 
 func TestDraftMarkedReadyIsARequest(t *testing.T) {
 	t.Run("a new head", func(t *testing.T) {
-		h := newHarness(t)
+		h := newHarness(t, withDrafts)
 		before := h.reviewedPR(2, "b1")
 		h.advance(40 * time.Minute)
 		reqPoll(h, prSpec{n: 2, head: "b2", draft: true}) // 10:45: waits for the 2h draft interval

@@ -21,9 +21,10 @@ func TestTheJudgeLearnsItsCodexSessionsRanWithoutThePRsCodexChanges(t *testing.T
 		dry.gh, dry.status = nil, "dry_run"
 		e.ag.behaviors[agents.RoleJudge] = []behavior{dry.behavior(t)}
 		// The judge's launch recorded it; codex-review's line, which would
-		// record its own look at the checkout, keeps out of it here.
+		// record its own look at the checkout (under project_untrust or
+		// project_mcp "off"), keeps out of it here.
 		codex := e.cfg.Kinds[agents.KindCodex]
-		codex.ProjectUntrust = nil
+		codex.ProjectUntrust, codex.ProjectMCP = nil, config.ProjectMCPAllow
 		e.cfg.Kinds[agents.KindCodex] = codex
 		if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, agents.KindCodex), `{"head":"`+head+`","files":1,"compared":true,"paths":[".codex/"]}`); err != nil {
 			t.Fatal(err)
@@ -52,7 +53,7 @@ func TestTheJudgeLearnsItsClaudeSessionsRanWithoutThePRsClaudeChanges(t *testing
 		dry.gh, dry.status = nil, "dry_run"
 		e.ag.behaviors[agents.RoleJudge] = []behavior{dry.behavior(t)}
 		codex := e.cfg.Kinds[agents.KindCodex]
-		codex.ProjectUntrust = nil
+		codex.ProjectUntrust, codex.ProjectMCP = nil, config.ProjectMCPAllow
 		e.cfg.Kinds[agents.KindCodex] = codex
 		if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, agents.KindClaude), `{"head":"`+head+`","files":2,"compared":true,"paths":["CLAUDE.md"]}`); err != nil {
 			t.Fatal(err)
@@ -96,7 +97,7 @@ func TestTheJudgeHearsOfADeclinedProjectOnlyFromAKindTheRoundRan(t *testing.T) {
 		dry.gh, dry.status = nil, "dry_run"
 		e.ag.behaviors[agents.RoleJudge] = []behavior{dry.behavior(t)}
 		codex := e.cfg.Kinds[agents.KindCodex]
-		codex.ProjectUntrust = nil
+		codex.ProjectUntrust, codex.ProjectMCP = nil, config.ProjectMCPAllow
 		e.cfg.Kinds[agents.KindCodex] = codex
 		paths := map[string]string{agents.KindClaude: `[".claude/"]`, agents.KindCodex: `["AGENTS.md"]`}[c.kind]
 		if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, c.kind), `{"head":"`+target+`","files":1,"compared":true,"paths":`+paths+`}`); err != nil {

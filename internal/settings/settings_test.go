@@ -110,6 +110,32 @@ func TestFieldsListTheV1SettingsOncePerID(t *testing.T) {
 	}
 }
 
+// The fallback judge shows the one that resolves: the built-in default is
+// none under a base config whose own [[role]] list has no claude-judge,
+// and an explicit "" in the user file is none too.
+func TestTheFallbackJudgeShowsTheOneThatResolves(t *testing.T) {
+	off := newSnapshot(t, "[pipeline]\njudge_fallback = \"\"\n")
+	if v := off.Value(g("pipeline.judge_fallback")); v.Effective != "none" || v.State != StateSet {
+		t.Errorf("judge_fallback = \"\": %+v", v)
+	}
+	home := t.TempDir()
+	base := filepath.Join(home, "base.toml")
+	if err := os.WriteFile(base, []byte("[[role]]\nname = \"codex-judge\"\n[[role]]\nname = \"claude-review\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	user := filepath.Join(home, "xdg", "magnum", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(user), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(paths.Layout{Home: home, UserConfig: user}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := s.Value(g("pipeline.judge_fallback")); v.Effective != "none" || v.State != StateDefault {
+		t.Errorf("a base without claude-judge: %+v", v)
+	}
+}
+
 func TestLoadReadsWhatTheFileSetsAndWhatApplies(t *testing.T) {
 	s := newSnapshot(t, fixture(t))
 	for _, c := range []struct {
@@ -129,7 +155,8 @@ func TestLoadReadsWhatTheFileSetsAndWhatApplies(t *testing.T) {
 		{g("role.claude-review.model"), "opus", "opus", "your file, line 39", StateSet, 39},
 		{g("role.claude-judge.model"), "", "opus", "", StateDefault, 0},
 		{Target{Field: "watch.include_drafts", Watch: 0}, "false", "false", "your file, line 22", StateSet, 22},
-		{Target{Field: "watch.include_drafts", Watch: 1}, "", "true", "built-in default", StateDefault, 0},
+		{Target{Field: "watch.include_drafts", Watch: 1}, "", "false", "built-in default", StateDefault, 0},
+		{g("pipeline.judge_fallback"), "", "claude-judge", "built-in default", StateDefault, 0},
 		{Target{Field: "watch.auto_approve_skip_authors", Watch: 0}, "bob-rev", "bob-rev", "your file, line 25", StateSet, 25},
 		{Target{Field: "watch.roles", Watch: 1}, "", "codex-judge, claude-review, codex-review, claude-simplify", "", StateDefault, 0},
 		{Target{Field: "repo.stakes", Repo: "talkable/web"}, "payments and rewards", "payments and rewards", "your file, line 35", StateSet, 35},

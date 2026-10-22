@@ -80,7 +80,7 @@ func rolesGroups(out string) map[string][]string {
 		case !strings.HasPrefix(line, "  "):
 			head = line
 			groups[head] = []string{}
-		case strings.HasPrefix(line, "  NAME"), strings.Contains(line, " runs: "):
+		case strings.HasPrefix(line, "  NAME"), strings.Contains(line, " runs: "), strings.HasPrefix(line, "  fallback judge: "):
 		default:
 			groups[head] = append(groups[head], strings.Fields(line)[0])
 		}
@@ -137,6 +137,52 @@ func TestRolesPrintsTheEffectiveRolesPerWatch(t *testing.T) {
 	}
 	if code := f.run("roles", "extra"); code != 2 {
 		t.Errorf("extra argument: exit %d", code)
+	}
+}
+
+// Each watch's roles end with the fallback judge as it resolves: the
+// built-in claude-judge for a watch whose judge is codex-judge, none under
+// a base config whose own [[role]] list has no claude-judge (the built-in
+// default is off there, with no error); --json carries it per group.
+func TestRolesNamesTheFallbackJudgeThatResolves(t *testing.T) {
+	type group struct {
+		Watch         string `json:"watch"`
+		JudgeFallback string `json:"judge_fallback"`
+	}
+	for _, c := range []struct {
+		name string
+		f    func(*testing.T) *inspFixture
+		want string
+		line string
+	}{
+		{"built-in roles", newInspFixture, "claude-judge", "  fallback judge: claude-judge (takes over a PR the judge's kind refuses)\n"},
+		{"a base without claude-judge", newRolesFixture, "", "  fallback judge: none (a PR the judge's kind refuses is never reviewed again)\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := c.f(t)
+			if code := f.run("roles"); code != 0 {
+				t.Fatalf("exit %d: %s", code, f.Err.String())
+			}
+			out := f.Out.String()
+			if n := strings.Count(out, c.line); n == 0 || n != strings.Count(out, "\nwatch ") {
+				t.Errorf("%q appears %d times, want once per watch:\n%s", c.line, n, out)
+			}
+			if code := f.run("roles", "--json"); code != 0 {
+				t.Fatalf("--json exit %d: %s", code, f.Err.String())
+			}
+			var groups []group
+			if err := json.Unmarshal(f.Out.Bytes(), &groups); err != nil {
+				t.Fatal(err)
+			}
+			if len(groups) == 0 {
+				t.Fatal("no groups")
+			}
+			for _, g := range groups {
+				if g.JudgeFallback != c.want {
+					t.Errorf("watch %s: judge_fallback = %q, want %q", g.Watch, g.JudgeFallback, c.want)
+				}
+			}
+		})
 	}
 }
 
@@ -315,7 +361,7 @@ func TestRolesKinds(t *testing.T) {
 		"mcp:", "-c features.apps=false -c skills.include_instructions=false (once, whatever the servers' names); -c mcp_servers.{server}.enabled=false per MCP server of the Codex config (allowed: -)",
 		"--strict-mcp-config (none of your MCP servers load)",
 		"project:", "-c projects={projects} when the PR changes .codex/, AGENTS.md or AGENTS.override.md (the checkout untrusted for the session); "+
-			"-c project_doc_max_bytes=0 instead when it changes only AGENTS.md or AGENTS.override.md (no AGENTS.md of the checkout); else its MCP servers: allow",
+			"-c project_doc_max_bytes=0 instead when it changes only AGENTS.md or AGENTS.override.md (no AGENTS.md of the checkout); else its MCP servers: off",
 		"--setting-sources user when the PR changes .claude/ or .mcp.json, or a CLAUDE.md, CLAUDE.local.md or AGENTS.md in any directory "+
 			"(the session loads your user settings only)\n")
 	if i, j := strings.Index(out, "droid (used by"), strings.Index(out, "omp (no role"); i < 0 || j < i {

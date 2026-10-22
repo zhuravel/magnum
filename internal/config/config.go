@@ -115,6 +115,11 @@ type Config struct {
 	// with which RolesAtLevel applies another level (buildPipeline).
 	unspent  []Role
 	spendSet map[string]map[string]bool
+	// judgeFallbackSet: a file Load read (a base file or the user layer,
+	// not the built-in defaults) writes [pipeline] judge_fallback, so its
+	// value is validated as written; without it the built-in default
+	// applies only where it is valid (Config.JudgeFallbackFor).
+	judgeFallbackSet bool
 }
 
 type Daemon struct {
@@ -217,12 +222,13 @@ type Daemon struct {
 	// verifying, it exits for launchd to start the new build. Dispatch never
 	// stops for it. Needs launchd (`magnum install`).
 	RestartOnNewBuild bool `toml:"restart_on_new_build"`
-	// ShellPath: at its start, before it runs anything, the daemon asks the
-	// operator's login shell for its PATH (`$SHELL -ilc`, 20 s at most) and
-	// appends the directories its own PATH lacks, which stays first, so every
-	// command it starts finds the tools only the shell's exports name (DBngin's
-	// MySQL, PostgreSQL and Redis). A change of the shell's PATH takes effect
-	// at the next start. The CLI keeps its own environment.
+	// ShellPath (default true): at its start, before it runs anything, the
+	// daemon asks the operator's login shell for its PATH (`$SHELL -ilc`, 20
+	// s at most) and appends the directories its own PATH lacks, which stays
+	// first, so every command it starts finds the tools only the shell's
+	// exports name (DBngin's MySQL, PostgreSQL and Redis). A change of the
+	// shell's PATH takes effect at the next start. The CLI keeps its own
+	// environment.
 	ShellPath bool `toml:"shell_path"`
 }
 
@@ -532,12 +538,13 @@ func boolOr(p *bool, def bool) bool {
 	return *p
 }
 
-// DraftsIncluded is include_drafts (default true). False skips drafts until
-// they are ready for review, except that a review request for your login
-// (Config.OperatorIdentity), a posting identity or a team of request_teams
-// makes a draft eligible for the round the request starts
-// (eligibility.PRFacts.Requested).
-func (w Watch) DraftsIncluded() bool   { return boolOr(w.IncludeDrafts, true) }
+// DraftsIncluded is include_drafts (default false: the operator's choice,
+// DECISIONS "Four built-in defaults follow what the operator chose by
+// hand"). False skips drafts until they are ready for review, except that
+// a review request for your login (Config.OperatorIdentity), a posting
+// identity or a team of request_teams makes a draft eligible for the round
+// the request starts (eligibility.PRFacts.Requested).
+func (w Watch) DraftsIncluded() bool   { return boolOr(w.IncludeDrafts, false) }
 func (w Watch) OwnIncluded() bool      { return boolOr(w.IncludeOwn, true) }
 func (w Watch) BotsSkipped() bool      { return boolOr(w.SkipBotAuthors, true) }
 func (w Watch) CrossRepoSkipped() bool { return boolOr(w.SkipCrossRepository, true) }
@@ -835,6 +842,9 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	}
 	cfg.buildPipeline(base, over)
 	cfg.idleFallbacks = cfg.idleTimeoutFallbacks(base, over)
+	cfg.judgeFallbackSet = slices.ContainsFunc([]*layer{base, over}, func(l *layer) bool {
+		return l != nil && !l.builtin && l.md.IsDefined("pipeline", "judge_fallback")
+	})
 	cfg.expand()
 	cfg.Normalize()
 	cfg.expandPipeline()
@@ -956,11 +966,12 @@ func Defaults() *Config {
 			RereviewMinLines:         30,
 			RereviewMaxWait:          Duration{2 * time.Hour},
 			DeltaCheck:               true,
+			ShellPath:                true,
 		},
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
 		GitHub:   GitHub{Transport: "gh", BudgetFloor: DefaultBudgetFloor},
-		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FullPassEvery: DefaultFullPassEvery, AuditEvery: DefaultAuditEvery, ApproveAfterFullPass: DefaultApproveAfterFullPass, MaxSimplifications: DefaultMaxSimplifications, FullPassLines: DefaultFullPassLines, FullPassFiles: DefaultFullPassFiles, FullPassAfter: Duration{DefaultFullPassAfter}, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever, FixCompactAt: DefaultFixCompactAt, WhiteboardRole: RoleClaudeWhiteboard, Spend: SpendMedium},
+		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FullPassEvery: DefaultFullPassEvery, AuditEvery: DefaultAuditEvery, ApproveAfterFullPass: DefaultApproveAfterFullPass, MaxSimplifications: DefaultMaxSimplifications, FullPassLines: DefaultFullPassLines, FullPassFiles: DefaultFullPassFiles, FullPassAfter: Duration{DefaultFullPassAfter}, JudgeFallback: DefaultJudgeFallback, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever, FixCompactAt: DefaultFixCompactAt, WhiteboardRole: RoleClaudeWhiteboard, Spend: SpendMedium},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),

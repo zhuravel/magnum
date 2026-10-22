@@ -3308,6 +3308,15 @@ const DefaultIdleRemoveAfter = 168 * time.Hour
     Without it every reconcile removed the surplus at once, and the next
     provision wrote about 1 GB again.
 
+const DefaultJudgeFallback = RoleClaudeJudge
+    DefaultJudgeFallback is [pipeline] judge_fallback's default: the built-in
+    second judge, claude-judge (the operator's choice, DECISIONS "Four built-in
+    defaults follow what the operator chose by hand"). A built-in default never
+    makes a configuration that loads fail: where no file writes the key, it is
+    off for each watch it would not be valid for (no declared judge of that
+    name, or the watch's judge or one of its kind; Config.JudgeFallbackFor),
+    with no error and no warning.
+
 const DefaultJudgeSessionRounds = 6
     DefaultJudgeSessionRounds is the judge's max_session_rounds: a Codex session
     resumed round after round carries every round's context (29M tokens of
@@ -3459,7 +3468,7 @@ func DefaultKinds() map[string]Kind
         ["-c","features.apps=false", "-c","skills.include_instructions=false"]
         and mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
         project_untrust ["-c","projects={projects}"], project_docs_off
-        ["-c","project_doc_max_bytes=0"].
+        ["-c","project_doc_max_bytes=0"], project_mcp "off".
       - claude: args ["--dangerously-skip-permissions"], resume
         ["--resume","{session}"], model ["--model","{model}"], effort
         ["--effort","{effort}"], name ["--name","{title}"], login_check
@@ -3473,13 +3482,13 @@ func DefaultKinds() map[string]Kind
       - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
         effort ["--thinking={effort}"]; no login check.
 
-    All use wrapper "auto", session_source "herdr", on_permission_prompt "deny",
-    on_hooks_review "trust_own", project_mcp "allow", DefaultAfterDenyPrompt
-    and DefaultHealthPatterns. The codex and claude args make a plain binary
-    run without approval prompts and (codex) without its sandbox, as the user's
-    zsh wrappers do: review agents run tests and `gh`, and magnum answers every
-    approval prompt No. Args apply only without a wrapper, so a wrapper's own
-    flags are never doubled.
+    All use wrapper "auto", session_source "herdr", on_permission_prompt
+    "deny", on_hooks_review "trust_own", project_mcp "allow" (codex: "off"),
+    DefaultAfterDenyPrompt and DefaultHealthPatterns. The codex and claude args
+    make a plain binary run without approval prompts and (codex) without its
+    sandbox, as the user's zsh wrappers do: review agents run tests and `gh`,
+    and magnum answers every approval prompt No. Args apply only without a
+    wrapper, so a wrapper's own flags are never doubled.
 
 func DefaultLearnModel(kind string) string
     DefaultLearnModel is the [learn] model of a kind the config names without
@@ -3775,11 +3784,20 @@ func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
 
 func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool)
-    JudgeFallbackFor is the judge role that takes over a PR of watch w after its
-    judge's kind refused a round: the watch's judge_fallback, else [pipeline]
-    judge_fallback, found among every declared role (not only the watch's).
-    ok is false when none is set or the name matches no judge role; Validate
-    reports the latter.
+    JudgeFallbackFor is the judge role that takes over a PR of watch w (nil:
+    a PR no watch covers) after its judge's kind refused a round: the watch's
+    judge_fallback, else [pipeline] judge_fallback, found among every declared
+    role (not only the watch's). ok is false when none is set or the name
+    matches no judge role; Validate reports the latter for a value a file
+    writes. The built-in default (DefaultJudgeFallback, which no file wrote) is
+    off instead wherever Validate would refuse it for w: a base configuration
+    whose own [[role]] list has no claude-judge, a watch whose judge is
+    claude-judge or of its kind.
+
+func (c *Config) JudgeFallbackName(w *Watch) string
+    JudgeFallbackName is the name of the fallback judge that resolves for w
+    (JudgeFallbackFor), "" for none: what `magnum roles` and the settings screen
+    show.
 
 func (c *Config) JudgeFor(w *Watch) Role
     JudgeFor returns the watch's judge (validation guarantees exactly one);
@@ -4167,12 +4185,13 @@ type Daemon struct {
 	// verifying, it exits for launchd to start the new build. Dispatch never
 	// stops for it. Needs launchd (`magnum install`).
 	RestartOnNewBuild bool `toml:"restart_on_new_build"`
-	// ShellPath: at its start, before it runs anything, the daemon asks the
-	// operator's login shell for its PATH (`$SHELL -ilc`, 20 s at most) and
-	// appends the directories its own PATH lacks, which stays first, so every
-	// command it starts finds the tools only the shell's exports name (DBngin's
-	// MySQL, PostgreSQL and Redis). A change of the shell's PATH takes effect
-	// at the next start. The CLI keeps its own environment.
+	// ShellPath (default true): at its start, before it runs anything, the
+	// daemon asks the operator's login shell for its PATH (`$SHELL -ilc`, 20
+	// s at most) and appends the directories its own PATH lacks, which stays
+	// first, so every command it starts finds the tools only the shell's
+	// exports name (DBngin's MySQL, PostgreSQL and Redis). A change of the
+	// shell's PATH takes effect at the next start. The CLI keeps its own
+	// environment.
 	ShellPath bool `toml:"shell_path"`
 }
 
@@ -4388,9 +4407,10 @@ type Kind struct {
 	MCPDisable []string `toml:"mcp_disable"`
 	// ProjectMCP: the MCP servers the checkout's own .codex/config.toml
 	// declares when the PR leaves .codex/ as its merge base has it (the
-	// team's servers): "allow" (default) keeps them, "off" turns each off
+	// team's servers): "off" (the codex kind's default) turns each off
 	// through MCPDisable like the user's, except those in MCPAllow (see
-	// ConfigOffArgs). A PR that changes .codex/ loads none of them
+	// ConfigOffArgs); "allow" (the other kinds' default, "" counting as it)
+	// keeps them. A PR that changes .codex/ loads none of them
 	// (ProjectUntrust).
 	ProjectMCP string `toml:"project_mcp"`
 	// ProjectUntrust: args that keep the checkout's own project
@@ -4830,7 +4850,9 @@ type Pipeline struct {
 	// judges from then on. "" = a refused PR is never reviewed again. A
 	// [[watch]] may override it (Watch.JudgeFallback); see
 	// Config.JudgeFallbackFor. The role never runs otherwise: RolesFor gives
-	// a watch without roles its first judge only.
+	// a watch without roles its first judge only. Default
+	// DefaultJudgeFallback, which, unlike a value a file writes, applies
+	// only where it is valid.
 	JudgeFallback string `toml:"judge_fallback"`
 	// FixRole names the fix role that fixes magnum's findings on the
 	// operator's own PRs (the fix job; `magnum fix`): a [[role]] with
@@ -5606,11 +5628,12 @@ func (w Watch) DepartedAuthorsSkipped() bool
     DepartedAuthorsSkipped is SkipDepartedAuthors with its default (true).
 
 func (w Watch) DraftsIncluded() bool
-    DraftsIncluded is include_drafts (default true). False skips drafts
-    until they are ready for review, except that a review request for
-    your login (Config.OperatorIdentity), a posting identity or a team of
-    request_teams makes a draft eligible for the round the request starts
-    (eligibility.PRFacts.Requested).
+    DraftsIncluded is include_drafts (default false: the operator's choice,
+    DECISIONS "Four built-in defaults follow what the operator chose by hand").
+    False skips drafts until they are ready for review, except that a review
+    request for your login (Config.OperatorIdentity), a posting identity or
+    a team of request_teams makes a draft eligible for the round the request
+    starts (eligibility.PRFacts.Requested).
 
 func (w Watch) ManualRepo(name string) bool
     ManualRepo reports whether manual_repos names the repository name (without

@@ -8,9 +8,10 @@ import (
 )
 
 // The second built-in judge stands in reserve: a watch without a roles list
-// runs its first judge, and claude-judge waits for judge_fallback to name
-// it (or a roles list to), so the default configuration still has exactly
-// one judge per watch.
+// runs its first judge, and claude-judge waits for judge_fallback, which
+// names it by default, to switch a refused PR to it (or for a roles list to
+// name it), so the default configuration still has exactly one judge per
+// watch.
 func TestASecondJudgeStandsInReserve(t *testing.T) {
 	cfg := Defaults()
 	judges := cfg.Judges()
@@ -31,15 +32,15 @@ func TestASecondJudgeStandsInReserve(t *testing.T) {
 	if j := cfg.JudgeFor(nil); j.Name != RoleCodexJudge {
 		t.Errorf("JudgeFor(nil) = %s", j.Name)
 	}
-	if _, ok := cfg.JudgeFallbackFor(nil); ok {
-		t.Error("judge_fallback is set by default")
+	if r, ok := cfg.JudgeFallbackFor(nil); !ok || r.Name != RoleClaudeJudge {
+		t.Errorf("the default judge_fallback = %+v, %v, want the reserve judge", r, ok)
 	}
 	root := repoRoot(t)
 	explicit, err := LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.defaults.toml"), LoadOptions{NoOverlay: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if explicit.Pipeline.JudgeFallback != "" {
+	if explicit.Pipeline.JudgeFallback != RoleClaudeJudge {
 		t.Errorf("config.defaults.toml judge_fallback = %q", explicit.Pipeline.JudgeFallback)
 	}
 	// A watch whose roles name the reserve judge runs it as its judge.
@@ -106,6 +107,7 @@ func TestValidateJudgeFallback(t *testing.T) {
 
 	cfg = validPipelineConfig()
 	cfg.Pipeline.JudgeFallback = "claude-judge"
+	cfg.judgeFallbackSet = true // a file writes it: the built-in default is not checked (TestAWatchJudgedByClaudeJudgeLoadsWithTheFallbackOff)
 	cfg.Watches[0].Roles = []string{"claude-review", "codex-judge", "claude-judge"}
 	wantError(t, cfg.Validate(), "judge_fallback role claude-judge is also in roles")
 

@@ -11,6 +11,11 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
+// noFallback opts out of the built-in judge_fallback (claude-judge), as
+// judge_fallback = "" does: a PR the judge's kind refused is never reviewed
+// again. The tests of a flag without a fallback judge start from it.
+func noFallback(h *harness) { h.cfg.Pipeline.JudgeFallback = "" }
+
 // flagToast is the toast every refused round sends.
 const flagToast = "Codex flagged · never reviewed again"
 
@@ -51,7 +56,7 @@ func (h *harness) refusedPR() store.PR {
 // it runs again by itself: not the next push, not a review request on
 // GitHub, not a forced `magnum review`, which refuses with the reason.
 func TestARefusedRoundFlagsThePRForGood(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, noFallback)
 	pr := h.refusedPR()
 	want := "Codex refused the review: content flagged as a cybersecurity risk (codex-judge, run r-own-1)"
 	if deref(pr.LastError) != want || !strings.Contains(deref(pr.SkipReason), "Codex flagged") || pr.Forced {
@@ -102,7 +107,7 @@ func TestARefusedRoundFlagsThePRForGood(t *testing.T) {
 // What waits for a round when the flag is set (a forced review queued
 // before, a paused turn) never starts: dispatch takes it out of line.
 func TestDispatchHoldsAFlaggedPRWhateverWaits(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, noFallback)
 	h.queuedPR(2, "b1")
 	pr := h.pr(2)
 	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRQueued}, store.PRQueued, func(u *store.PRUpdate) {
@@ -118,7 +123,7 @@ func TestDispatchHoldsAFlaggedPRWhateverWaits(t *testing.T) {
 		t.Error("the forced mark stayed")
 	}
 
-	h2 := newHarness(t)
+	h2 := newHarness(t, noFallback)
 	h2.queuedPR(2, "b1")
 	if err := h2.st.TransitionPR(h2.ctx, h2.pr(2).ID, []string{store.PRQueued}, store.PRPaused, nil); err != nil {
 		t.Fatal(err)
@@ -134,7 +139,7 @@ func TestDispatchHoldsAFlaggedPRWhateverWaits(t *testing.T) {
 // round is taken out of line with the flag's reason, and no round starts,
 // not even a forced one.
 func TestAnUnreadableFlagHoldsThePROutOfDispatch(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, noFallback)
 	h.queuedPR(2, "b1")
 	if err := h.st.SetKV(h.ctx, store.KVPRCodexFlag(h.pr(2).ID), "{not json"); err != nil {
 		t.Fatal(err)
@@ -172,7 +177,7 @@ BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
 // of rounds (a push, a forced review), and the write is tried again every
 // tick until it takes.
 func TestAFailedFlagWriteIsRetriedAndHoldsThePR(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, noFallback)
 	lift := h.failFlagWrites()
 	h.refusedPR()
 	if _, ok := h.flagOf(2); ok {
@@ -215,7 +220,7 @@ func (h *harness) liveOf(n int) int {
 // live agents (talkable#11990 held review17 and three agents for a day).
 // The tick after the flag parks its agents and releases its slot, once.
 func TestAFlaggedPRGivesBackItsAgentsAndSlot(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, noFallback)
 	h.refusedPR()
 	pr := h.pr(2)
 	if h.liveOf(2) == 0 || h.slot("review1").State != store.SlotHeld {
@@ -243,7 +248,7 @@ func TestAFlaggedPRGivesBackItsAgentsAndSlot(t *testing.T) {
 // A flagged PR the operator opened (`magnum open` pins the PR and its slot)
 // to review it by hand keeps its agents and its slot.
 func TestAFlaggedPRMagnumOpenPinnedKeepsItsAgentsAndSlot(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, noFallback)
 	pr := h.openedPR()
 	parks := h.parks(pr.ID)
 	h.rawFlag(2)
@@ -286,7 +291,7 @@ func (h *harness) setFlag(n int, reason string) string {
 // whom), and `clear` lifts the flag: the PR is judged by the watch again,
 // so an unreviewed head is queued and reviewed.
 func TestCodexFlagSetAndClear(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, noFallback)
 	h.queuedPR(2, "b1")
 	res := h.setFlag(2, "Codex warned about cyber abuse on 10-06")
 	if !strings.Contains(res, "flagged talkable/talkable#2") {

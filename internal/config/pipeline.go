@@ -113,7 +113,9 @@ type Pipeline struct {
 	// judges from then on. "" = a refused PR is never reviewed again. A
 	// [[watch]] may override it (Watch.JudgeFallback); see
 	// Config.JudgeFallbackFor. The role never runs otherwise: RolesFor gives
-	// a watch without roles its first judge only.
+	// a watch without roles its first judge only. Default
+	// DefaultJudgeFallback, which, unlike a value a file writes, applies
+	// only where it is valid.
 	JudgeFallback string `toml:"judge_fallback"`
 	// FixRole names the fix role that fixes magnum's findings on the
 	// operator's own PRs (the fix job; `magnum fix`): a [[role]] with
@@ -178,15 +180,19 @@ type Pipeline struct {
 	StatusCommentNote string `toml:"status_comment_note"`
 }
 
-// JudgeFallbackFor is the judge role that takes over a PR of watch w after
-// its judge's kind refused a round: the watch's judge_fallback, else
-// [pipeline] judge_fallback, found among every declared role (not only the
-// watch's). ok is false when none is set or the name matches no judge
-// role; Validate reports the latter.
+// JudgeFallbackFor is the judge role that takes over a PR of watch w (nil:
+// a PR no watch covers) after its judge's kind refused a round: the watch's
+// judge_fallback, else [pipeline] judge_fallback, found among every
+// declared role (not only the watch's). ok is false when none is set or the
+// name matches no judge role; Validate reports the latter for a value a
+// file writes. The built-in default (DefaultJudgeFallback, which no file
+// wrote) is off instead wherever Validate would refuse it for w: a base
+// configuration whose own [[role]] list has no claude-judge, a watch whose
+// judge is claude-judge or of its kind.
 func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool) {
-	name := c.Pipeline.JudgeFallback
+	name, builtin := c.Pipeline.JudgeFallback, c.builtinJudgeFallback()
 	if w != nil && w.JudgeFallback != "" {
-		name = w.JudgeFallback
+		name, builtin = w.JudgeFallback, false
 	}
 	if strings.TrimSpace(name) == "" {
 		return Role{}, false
@@ -195,7 +201,33 @@ func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool) {
 	if !ok || !r.Judge {
 		return Role{}, false
 	}
+	if builtin {
+		if w == nil {
+			w = &Watch{} // a PR no watch covers runs RolesFor(nil)'s judge
+		}
+		if len(c.judgeFallbackErrs("", name, w)) > 0 {
+			return Role{}, false
+		}
+	}
 	return r, true
+}
+
+// builtinJudgeFallback reports whether [pipeline] judge_fallback is the
+// built-in default: no file Load read wrote the key (judgeFallbackSet) and
+// the value is still DefaultJudgeFallback.
+func (c *Config) builtinJudgeFallback() bool {
+	return !c.judgeFallbackSet && c.Pipeline.JudgeFallback == DefaultJudgeFallback
+}
+
+// JudgeFallbackName is the name of the fallback judge that resolves for w
+// (JudgeFallbackFor), "" for none: what `magnum roles` and the settings
+// screen show.
+func (c *Config) JudgeFallbackName(w *Watch) string {
+	r, ok := c.JudgeFallbackFor(w)
+	if !ok {
+		return ""
+	}
+	return r.Name
 }
 
 // FixRoleFor is the fix role of watch w: the watch's fix_role when it sets
@@ -289,6 +321,15 @@ const (
 	AutofixNever = "never" // a fix loop starts only on request
 	AutofixOwn   = "own"   // and after a review with findings on the operator's own PRs
 )
+
+// DefaultJudgeFallback is [pipeline] judge_fallback's default: the built-in
+// second judge, claude-judge (the operator's choice, DECISIONS "Four
+// built-in defaults follow what the operator chose by hand"). A built-in
+// default never makes a configuration that loads fail: where no file
+// writes the key, it is off for each watch it would not be valid for (no
+// declared judge of that name, or the watch's judge or one of its kind;
+// Config.JudgeFallbackFor), with no error and no warning.
+const DefaultJudgeFallback = RoleClaudeJudge
 
 // DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
 // followed by a re-review, before the PR is left to the operator.

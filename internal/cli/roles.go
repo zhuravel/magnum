@@ -30,7 +30,8 @@ func newRolesCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupInspect, "roles "+rolesUsage, "the effective review roles per watch (--kinds: the agent CLIs magnum drives)",
 		"Print the review roles each [[watch]] runs, resolved from [[role]], [pipeline] spend (or the role's kind's own spend) and its [spend.<level>] table, and the built-in defaults: name, kind, "+
 			"runs, model, effort, the rounds one session serves (max_session_rounds), capture, report file, initial prompt (and whether prompts_dir or the embedded copy "+
-			"provides it), the roles it runs after, the judge and the aliases --role accepts; the first line names prompts_dir and "+
+			"provides it), the roles it runs after, the judge and the aliases --role accepts, then the fallback judge that takes over a PR "+
+			"the judge's kind refuses ([pipeline] judge_fallback as it resolves for the watch); the first line names prompts_dir and "+
 			"the spend level, with each kind whose own [kinds.<name>] spend differs. --repo shows the roles "+
 			"of the watch covering one repository. --kinds prints the [kinds.<name>] specs instead: wrapper mode, "+
 			"login check, the resume, model, effort, subagents, MCP-off and name args, the session source and the command line each "+
@@ -227,7 +228,19 @@ func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
 		for _, line := range commands {
 			fmt.Fprintln(w, line)
 		}
+		fmt.Fprintln(w, rolesFallbackLine(cfg, g.Watch))
 	}
+}
+
+// rolesFallbackLine names the judge that takes over a PR of watch w (nil: a
+// PR no watch covers) after its judge's kind refused one, as it resolves
+// (config.Config.JudgeFallbackFor: the built-in default is off where it
+// does not fit).
+func rolesFallbackLine(cfg *config.Config, w *config.Watch) string {
+	if name := cfg.JudgeFallbackName(w); name != "" {
+		return "  fallback judge: " + name + " (takes over a PR the judge's kind refuses)"
+	}
+	return "  fallback judge: none (a PR the judge's kind refuses is never reviewed again)"
 }
 
 func rolesJSON(c *Context, cfg *config.Config, groups []rolesGroup) int {
@@ -237,10 +250,13 @@ func rolesJSON(c *Context, cfg *config.Config, groups []rolesGroup) int {
 		Exclude []string          `json:"exclude,omitempty"`
 		Repo    string            `json:"repo,omitempty"`
 		Roles   []json.RawMessage `json:"roles"`
+		// JudgeFallback is the fallback judge as it resolves for the
+		// watch; "" = none.
+		JudgeFallback string `json:"judge_fallback"`
 	}
 	out := make([]group, 0, len(groups))
 	for _, g := range groups {
-		gj := group{Repo: g.Repo, Roles: []json.RawMessage{}}
+		gj := group{Repo: g.Repo, Roles: []json.RawMessage{}, JudgeFallback: cfg.JudgeFallbackName(g.Watch)}
 		if g.Watch != nil {
 			gj.Watch, gj.Include, gj.Exclude = g.Watch.Owner, g.Watch.Include, g.Watch.Exclude
 		}

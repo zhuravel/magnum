@@ -28,7 +28,7 @@ func TestClassify(t *testing.T) {
 		reason string
 	}{
 		{name: "plain PR is eligible with an empty reason", want: true},
-		{name: "defaults accept drafts", mutate: func(f *PRFacts) { f.IsDraft = true }, want: true},
+		{name: "defaults skip drafts", mutate: func(f *PRFacts) { f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
 		{name: "defaults accept own PRs", mutate: own, want: true},
 
 		// departed authors: a branch PR by someone with no access now
@@ -100,6 +100,7 @@ func TestClassify(t *testing.T) {
 		{name: "skip_labels second entry matches", watch: config.Watch{SkipLabels: []string{"LG", "WIP"}}, mutate: func(f *PRFacts) { f.Labels = []string{"WIP"} }, reason: `label "WIP" is in skip_labels`},
 
 		// drafts
+		{name: "a watch without include_drafts keeps a requested draft", mutate: func(f *PRFacts) { f.IsDraft, f.Requested = true, true }, want: true},
 		{name: "include_drafts=false skips drafts", watch: config.Watch{IncludeDrafts: new(false)}, mutate: func(f *PRFacts) { f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
 		{name: "include_drafts=false keeps ready PRs", watch: config.Watch{IncludeDrafts: new(false)}, want: true},
 		{name: "include_drafts=true keeps drafts", watch: config.Watch{IncludeDrafts: new(true)}, mutate: func(f *PRFacts) { f.IsDraft = true }, want: true},

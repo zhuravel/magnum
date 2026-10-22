@@ -144,8 +144,9 @@ func TestAShellThatFailsLeavesTheLaunchdPATH(t *testing.T) {
 	}
 }
 
-// With [daemon] shell_path off (the default) no shell runs and the PATH
-// stays.
+// With [daemon] shell_path off no shell runs and the PATH stays; the key is
+// on by default (DECISIONS "Four built-in defaults follow what the operator
+// chose by hand").
 func TestTheShellPATHKeyOffRunsNoShell(t *testing.T) {
 	st := newShellPATHTest(t, "echo /opt/x/bin")
 	fake := &execx.Fake{}
@@ -157,7 +158,7 @@ func TestTheShellPATHKeyOffRunsNoShell(t *testing.T) {
 	if len(fake.Calls) != 0 || st.env["PATH"] != launchdTestPATH {
 		t.Fatalf("calls %v, PATH %s", fake.Calls, st.env["PATH"])
 	}
-	if config.Defaults().Daemon.ShellPath {
-		t.Fatal("shell_path is on by default")
+	if !config.Defaults().Daemon.ShellPath {
+		t.Fatal("shell_path is off by default")
 	}
 }

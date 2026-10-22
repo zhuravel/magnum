@@ -43,9 +43,10 @@ max_round_restarts = 2            # a push while the reviewers run restarts them
 burst_quiet_period = "15m"        # replaces push_quiet_period after a burst of pushes:
 burst_pushes = 3                  #   this many head changes (0 = off)
 burst_window = "30m"              #   within this window up to the last one ([[watch]] may override all three)
-request_debounce = "1m"           # a review request for the poll login or a posting identity (or a team in a
-                                  # [[watch]] request_teams), or a draft marked ready, starts a round this long
-                                  # after it (and the last push), skipping the timing rules above and the cap
+request_debounce = "1m"           # a review request for the operator's own login or a posting identity (or a
+                                  # team in a [[watch]] request_teams), or a draft marked ready, starts a round
+                                  # this long after it (and the last push), skipping the timing rules above and
+                                  # the cap
 reply_debounce = "3m"             # a reply on magnum's latest review (the PR author's review or comment, or a reply in
                                   # one of magnum's threads by the author or a repository owner, member or
                                   # collaborator; magnum's own logins never count) with no push
@@ -87,11 +88,11 @@ restart_on_new_build = false      # true: once a new bin/magnum on disk passes i
                                   # on it at the first tick with no round claiming, reviewing or verifying and no
                                   # notes curation or retro running (it exits for launchd to start the new build;
                                   # dispatch never stops for it; needs launchd)
-shell_path = false                # true: at its start the daemon asks your login shell for its PATH ($SHELL -ilc,
-                                  # 20s at most) and appends the directories its own PATH lacks (launchd's stays
-                                  # first, mise's shims still win), so its hooks and commands find what only your
-                                  # shell's exports name (DBngin's mysql, psql, redis-server); a change of your
-                                  # shell's PATH takes effect at the next `magnum daemon-restart`; event
+shell_path = true                 # at its start the daemon asks your login shell for its PATH ($SHELL -ilc, 20s at
+                                  # most) and appends the directories its own PATH lacks (launchd's stays first,
+                                  # mise's shims still win), so its hooks and commands find what only your shell's
+                                  # exports name (DBngin's mysql, psql, redis-server); false keeps launchd's PATH;
+                                  # a change of your shell's PATH takes effect at the next daemon-restart; event
                                   # daemon.shell_path, `magnum status` shows the count; the CLI keeps its own PATH
 
 [herdr]
@@ -340,12 +341,15 @@ approve_after_full_pass = 2       # a re-review of a PR with this many re-review
 max_simplifications = 5           # how many of claude-simplify's proposals the judge posts at most, the most
                                   # substantial first, each proven by its own equivalence probe; 1 to 10. A
                                   # [[repo]] block's own wins
-judge_fallback = ""               # a judge role of another kind that takes over a PR's rounds once the judge's
+judge_fallback = "claude-judge"   # a judge role of another kind that takes over a PR's rounds once the judge's
                                   # kind refused one (Codex's cybersecurity classifier): the PR is flagged for
                                   # that kind, its roles of that kind are dropped, and this role judges from
                                   # then on, starting fresh through the recovery prompt. "" = a refused PR is
                                   # never reviewed again. "claude-judge" names the second judge below, which
-                                  # runs for no watch otherwise. [[watch]] may override
+                                  # runs for no watch otherwise. Unless you write the key, it is off for a
+                                  # watch it does not fit (whose judge is claude-judge or another Claude judge,
+                                  # or a base config without claude-judge); a value you write must fit.
+                                  # [[watch]] may override
 fix_role = "claude-fix"           # the fix role (fix = true) that fixes magnum's findings on your own PRs: the
                                   # fix job `magnum fix` runs it, in the PR's slot, as a role of its own that
                                   # takes no part in a review round. "" = no fix job. [[watch]] may override
@@ -472,8 +476,9 @@ status_comment_note = ""          # a line of yours under the status comment whi
 #                                     # only AGENTS.md or AGENTS.override.md: no project AGENTS.md loads, the
 #                                     # rest of the team's .codex/ does and the checkout stays trusted;
 #                                     # [] = project_untrust then too
-# project_mcp = "allow"               # the MCP servers of an unchanged .codex/config.toml (the team's): allow
-#                                     # keeps them; off turns them off like mcp_off, but for mcp_allow
+# project_mcp = "off"                 # the MCP servers of an unchanged .codex/config.toml (the team's): off
+#                                     # turns them off like mcp_off, but for mcp_allow (each one a server you
+#                                     # keep); allow keeps them all, outside code in every session
 # name = []                         # codex has no name flag, so magnum types `rename` while it works
 # rename = "/rename {title}"
 # login_check = "codex login status"  # "" = no preflight
@@ -648,8 +653,8 @@ aliases = ["simplify"]
 
 [[role]]
 name = "claude-judge"                 # a second judge, held in reserve: a watch without roles = [...] runs its first
-kind = "claude"                       # judge (codex-judge); [pipeline] judge_fallback = "claude-judge" switches a PR
-judge = true                          # to this one after a Codex refusal, and a watch's roles may name it instead
+kind = "claude"                       # judge (codex-judge); [pipeline] judge_fallback (this role by default) switches
+judge = true                          # a PR to it after a Codex refusal, and a watch's roles may name it instead
 model = "opus"                        # Claude's safety classifier is not Codex's; "fable" for the strongest model
 effort = "xhigh"
 rereview_effort = "high"
@@ -766,8 +771,9 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # your own PRs, the footer's .RequestLogin) is the poll identity's when
 #                                         # it is a gh one, else auto_approve_as's, else the first gh identity's
 # clone_root = "~/Projects"
-# include_drafts = true                 # false: a draft waits until ready for review, or until a review request for you,
-#                                       # a posting identity or a request_teams team (one round per request)
+# include_drafts = false                # a draft waits until ready for review, or until a review request for you, a
+#                                       # posting identity or a request_teams team (one round per request), and the
+#                                       # review footer says drafts are reviewed only on request; true: drafts too
 # include_own = true                    # false: skip PRs authored by any of your logins (every gh identity and every
 #                                       # watch's posting identity, the board's "mine"), not only the poll login
 # skip_bot_authors = true

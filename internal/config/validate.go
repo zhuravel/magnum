@@ -664,39 +664,16 @@ func (c *Config) validatePipeline() []error {
 		errs = append(errs, fmt.Errorf("pipeline: approve_after_full_pass must be 0 (off) or positive, got %d", n))
 	}
 	// judge_fallback names a judge role of another kind than the watch's
-	// judge, outside the watch's roles (it stands in for the judge, never
-	// beside it).
+	// judge, outside the watch's roles (judgeFallbackErrs). The built-in
+	// default, which no file wrote, is checked nowhere: JudgeFallbackFor
+	// turns it off where these checks would refuse it.
+	builtinFallback := c.builtinJudgeFallback()
 	fallback := func(where, name string, w *Watch) {
-		if strings.TrimSpace(name) == "" {
-			return
-		}
-		r, ok := c.roleNamed(name)
-		switch {
-		case !ok:
-			errs = append(errs, fmt.Errorf("%s: judge_fallback names unknown role %q", where, name))
-			return
-		case !r.Judge:
-			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is not a judge (judge = true)", where, r.Name))
-			return
-		case r.IsShell():
-			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s must be an agent session, not a shell command", where, r.Name))
-			return
-		}
-		if w == nil {
-			return
-		}
-		if slices.ContainsFunc(w.Roles, r.Matches) {
-			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is also in roles; it stands in for the judge, not beside it", where, r.Name))
-		}
-		switch j := c.JudgeFor(w); {
-		case j.Name == r.Name:
-			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is the watch's own judge; name a judge of another kind", where, r.Name))
-		case j.Name != "" && j.AgentKind() == r.AgentKind():
-			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is of the same kind (%s) as judge %s; a fallback takes over when that kind refused, so it must be another kind",
-				where, r.Name, r.AgentKind(), j.Name))
-		}
+		errs = append(errs, c.judgeFallbackErrs(where, name, w)...)
 	}
-	fallback("pipeline", c.Pipeline.JudgeFallback, nil)
+	if !builtinFallback {
+		fallback("pipeline", c.Pipeline.JudgeFallback, nil)
+	}
 	// fix_role names a fix role (fix = true): an agent session that takes
 	// no part in a round, so a judge, a shell command and a reviewer are
 	// refused. The watch's roles never list it (validateWatchRoles). The
@@ -771,7 +748,7 @@ func (c *Config) validatePipeline() []error {
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
 		related("watch "+w.Owner, w.RelatedLookback, w.RelatedIgnore)
 		fallback("watch "+w.Owner, w.JudgeFallback, w)
-		if w.JudgeFallback == "" {
+		if w.JudgeFallback == "" && !builtinFallback {
 			fallback("watch "+w.Owner, c.Pipeline.JudgeFallback, w)
 		}
 		if w.FixRole != nil {
@@ -816,6 +793,42 @@ func (c *Config) validatePipeline() []error {
 	errs = append(errs, validateAfter(roles)...)
 	for _, w := range c.Watches {
 		errs = append(errs, c.validateWatchRoles(w, roles)...)
+	}
+	return errs
+}
+
+// judgeFallbackErrs is what refuses name as the judge_fallback of watch w
+// (nil: the [pipeline] value on its own, checked only for its role), each
+// error prefixed with where: a declared judge role, an agent session, and,
+// for a watch, outside its roles (it stands in for the judge, never beside
+// it), neither its judge nor of its judge's kind. nil for "" and a valid
+// name. Validate reports them for a value a file writes; JudgeFallbackFor
+// turns the built-in default off where there are any.
+func (c *Config) judgeFallbackErrs(where, name string, w *Watch) []error {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	r, ok := c.roleNamed(name)
+	switch {
+	case !ok:
+		return []error{fmt.Errorf("%s: judge_fallback names unknown role %q", where, name)}
+	case !r.Judge:
+		return []error{fmt.Errorf("%s: judge_fallback role %s is not a judge (judge = true)", where, r.Name)}
+	case r.IsShell():
+		return []error{fmt.Errorf("%s: judge_fallback role %s must be an agent session, not a shell command", where, r.Name)}
+	case w == nil:
+		return nil
+	}
+	var errs []error
+	if slices.ContainsFunc(w.Roles, r.Matches) {
+		errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is also in roles; it stands in for the judge, not beside it", where, r.Name))
+	}
+	switch j := c.JudgeFor(w); {
+	case j.Name == r.Name:
+		errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is the watch's own judge; name a judge of another kind", where, r.Name))
+	case j.Name != "" && j.AgentKind() == r.AgentKind():
+		errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is of the same kind (%s) as judge %s; a fallback takes over when that kind refused, so it must be another kind",
+			where, r.Name, r.AgentKind(), j.Name))
 	}
 	return errs
 }

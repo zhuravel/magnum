@@ -29,9 +29,10 @@ func fixPollEventCount(t *testing.T, h *harness, subject, kind string) int {
 
 // A draft that becomes ready for review is a review request: its re-review
 // waits only for request_debounce, not for the re-review interval, and does
-// not count against the daily cap.
+// not count against the daily cap. (include_drafts = true, so the draft push
+// waits for the draft interval first.)
 func TestDraftReadyRunsAsRequested(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, withDrafts)
 	h.reviewedPR(2, "b1")
 	first := h.pr(2)
 	if first.LastRoundStartedAt == nil {

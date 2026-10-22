@@ -497,13 +497,6 @@ func durationText(d time.Duration) string {
 	return b.String()
 }
 
-func boolText(b *bool, def bool) string {
-	if b == nil {
-		return strconv.FormatBool(def)
-	}
-	return strconv.FormatBool(*b)
-}
-
 func floatText(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 
 // role is the resolved role named name.
@@ -582,7 +575,7 @@ func (s *Snapshot) effective(f Field, t Target, v Value) string {
 	case "pipeline.whiteboard":
 		return strconv.FormatBool(p.Whiteboard)
 	case "pipeline.judge_fallback":
-		return cmp.Or(p.JudgeFallback, "none")
+		return cmp.Or(c.JudgeFallbackName(nil), "none") // the resolved one: the built-in default is off where it does not fit
 	case "pipeline.fix_cycles":
 		return strconv.Itoa(p.FixCycles)
 	case "pipeline.autofix":
@@ -665,7 +658,7 @@ func (s *Snapshot) watchEffective(f Field, t Target, v Value) string {
 	case "watch.manual_repos":
 		return listText(w.ManualRepos, "none")
 	case "watch.include_drafts":
-		return boolText(w.IncludeDrafts, true)
+		return strconv.FormatBool(w.DraftsIncluded())
 	case "watch.stakes":
 		return cmp.Or(w.Stakes, "none")
 	case "watch.own_min_rereview_interval":

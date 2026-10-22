@@ -93,9 +93,10 @@ type Kind struct {
 	MCPDisable []string `toml:"mcp_disable"`
 	// ProjectMCP: the MCP servers the checkout's own .codex/config.toml
 	// declares when the PR leaves .codex/ as its merge base has it (the
-	// team's servers): "allow" (default) keeps them, "off" turns each off
+	// team's servers): "off" (the codex kind's default) turns each off
 	// through MCPDisable like the user's, except those in MCPAllow (see
-	// ConfigOffArgs). A PR that changes .codex/ loads none of them
+	// ConfigOffArgs); "allow" (the other kinds' default, "" counting as it)
+	// keeps them. A PR that changes .codex/ loads none of them
 	// (ProjectUntrust).
 	ProjectMCP string `toml:"project_mcp"`
 	// ProjectUntrust: args that keep the checkout's own project
@@ -437,7 +438,7 @@ func DefaultHealthPatterns() HealthPatterns {
 //     "-c","skills.include_instructions=false"] and
 //     mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
 //     project_untrust ["-c","projects={projects}"], project_docs_off
-//     ["-c","project_doc_max_bytes=0"].
+//     ["-c","project_doc_max_bytes=0"], project_mcp "off".
 //   - claude: args ["--dangerously-skip-permissions"],
 //     resume ["--resume","{session}"], model ["--model","{model}"],
 //     effort ["--effort","{effort}"], name ["--name","{title}"], login_check
@@ -452,7 +453,7 @@ func DefaultHealthPatterns() HealthPatterns {
 //     effort ["--thinking={effort}"]; no login check.
 //
 // All use wrapper "auto", session_source "herdr", on_permission_prompt
-// "deny", on_hooks_review "trust_own", project_mcp "allow",
+// "deny", on_hooks_review "trust_own", project_mcp "allow" (codex: "off"),
 // DefaultAfterDenyPrompt and DefaultHealthPatterns. The codex and
 // claude args make a plain binary run without approval prompts and (codex)
 // without its sandbox, as the user's zsh wrappers do: review agents run
@@ -462,12 +463,18 @@ func DefaultKinds() map[string]Kind {
 	base := func(k Kind) Kind {
 		k.Wrapper, k.SessionSource, k.HealthPatterns = WrapperAuto, SessionHerdr, DefaultHealthPatterns()
 		k.OnPermissionPrompt, k.AfterDenyPrompt, k.OnHooksReview = PermissionDeny, DefaultAfterDenyPrompt, HooksTrustOwn
-		k.ProjectMCP = ProjectMCPAllow
+		k.ProjectMCP = cmp.Or(k.ProjectMCP, ProjectMCPAllow)
 		return k
 	}
 	return map[string]Kind{
 		KindCodex: base(Kind{
 			Args: []string{"--dangerously-bypass-approvals-and-sandbox"},
+			// The team's project MCP servers got no call in 307 review
+			// sessions, and each one is outside code in a session that
+			// reads untrusted PR content (DECISIONS "Four built-in
+			// defaults follow what the operator chose by hand"): off,
+			// mcp_allow keeping one by name.
+			ProjectMCP: ProjectMCPOff,
 			// Codex 0.162 resumes a session from a directory other than the
 			// one it recorded only after a "Working directory · resume"
 			// dialog (tui.resume_cwd: current | session), which magnum does

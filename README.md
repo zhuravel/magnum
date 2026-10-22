@@ -119,10 +119,10 @@ flowchart LR
 1. **Poll.** One GraphQL query per organization finds new PRs, new heads, new repositories and closed
    PRs, and a second reads the CI state of the watched repositories' open PRs (a CI run that ends does not
    count as a change of the PR). Open PRs that existed before Magnum started are left alone until they
-   change.
+   change. A draft waits until it is ready for review or someone requests a review (`include_drafts`).
 2. **Throttle.** A new head waits for a quiet period (default 5 min, 15 min after a burst of three
-   pushes within 30 min) and at least 30 min since the previous round (2 h for drafts); pushes coalesce
-   to the latest head; `magnum review` overrides.
+   pushes within 30 min) and at least 30 min since the previous round (2 h for a draft a watch
+   includes); pushes coalesce to the latest head; `magnum review` overrides.
 3. **Check out.** Pool repositories (big apps with databases) get one of N provisioned slots; small
    repositories get a worktree next to their clone. Checkouts are detached, so they never collide with
    branches you have open yourself.
@@ -196,8 +196,9 @@ it is posted, and later pushes resume the same sessions. The trade-off: reviews 
 Mac is on and the daemon runs, and they spend your own budget.
 
 **What does it cost?** Magnum is free (MIT); every round spends some of the budget of each agent it runs.
-The defaults keep that down: a push waits for 5 quiet minutes (15 after a burst), a PR gets at most one
-round per 30 minutes (2 hours for a draft) and 12 automatic rounds a day, a push that only touches
+The defaults keep that down: a draft waits until it is ready for review or a review is requested, a push
+waits for 5 quiet minutes (15 after a burst), a PR gets at most one round per 30 minutes (2 hours for a
+draft a watch includes) and 12 automatic rounds a day, a push that only touches
 comments, whitespace or docs, or only merges the base branch, is not re-reviewed, and a change under 30
 code lines since the last review gets a check by the judge alone. With 80% of the Codex budget used,
 full re-reviews wait; at 95%, rounds that need Codex wait. `magnum status` shows how fast that budget goes,
@@ -276,11 +277,11 @@ verifying, and launchd starts the new build (events `daemon.restart_pending`, th
 `daemon.restarted_for_build`). Dispatch is never held for it, and a daemon launchd does not run (started
 by hand) only says so: nothing would start it again.
 
-`[daemon] shell_path` (default `false`): launchd gives the daemon a fixed `PATH` (`~/.local/bin`, mise's
+`[daemon] shell_path` (default `true`): launchd gives the daemon a fixed `PATH` (`~/.local/bin`, mise's
 shims, Homebrew's and the system directories), and every command it runs inherits it: the pool hooks, the
 readiness commands, `mise exec`, gh and the agent CLIs. A tool only your shell's exports put on `PATH`, such
-as DBngin's `mysql`, `psql` or `redis-server` in versioned directories, is missing there. With `true` the
-daemon asks your login shell for its `PATH` once at its start, before it runs anything (`$SHELL -ilc`, `zsh`
+as DBngin's `mysql`, `psql` or `redis-server` in versioned directories, is missing there (every schema load
+then fails). So the daemon asks your login shell for its `PATH` once at its start, before it runs anything (`$SHELL -ilc`, `zsh`
 when `SHELL` is unset, 20 s at most, no terminal and no stdin), and appends the directories its own `PATH`
 lacks, in the shell's order. launchd's `PATH` stays first, so mise's shims still win. Banners and hook
 output are skipped: the last line that reads as a `PATH` (colon-separated absolute directories) counts. The
@@ -289,7 +290,8 @@ and `magnum status` shows the count on its daemon line. The debug log names the 
 never does. A shell that fails, prints no `PATH` or answers nothing in 20 s leaves launchd's `PATH`
 alone, with a warning event ("the login shell (zsh) answered nothing in 20s. The launchd PATH stays"). A
 change of your shell's `PATH` (a DBngin upgrade) takes effect at the next `magnum daemon-restart`, as a
-config change does. The CLI keeps the environment of the terminal it runs in.
+config change does. The CLI keeps the environment of the terminal it runs in. `false` keeps launchd's
+`PATH` alone and runs no shell.
 
 Three more `[daemon]` keys pace the agents. `max_total_working_codex` (default 5) caps the Codex agents working at once, your own sessions included. `agent_start_stagger` (default `"15s"`) is the least time between two agent launches, across rounds, and at most 3 Codex agents start at once. `min_warm` (default `"30m"`) is how long a pool slot another PR holds must stay unused before a waiting PR may take it back, its sessions parked and the slot released: with no human typing, no session working, blocked or prompted within it, no run and no pin.
 
@@ -363,18 +365,22 @@ session spawned counts as the role: when its rollout (the one naming the session
 ended ok and the judge posted its review (which stays posted): no nudge, no retry, the other
 roles are interrupted (the turns of the refused kind first), and the round's outcome and
 the PR's last error say "Codex refused the review: content flagged as a cybersecurity risk (codex-judge,
-run r-…)". The PR is flagged for good (the refused head, role, run and time) and one toast says so:
-magnum never reviews it again, on any head, by itself or when asked (no retry, continue, reply round or
-delta check; `magnum review` and the board's `r`/`R` refuse with the reason). With
-`[pipeline] judge_fallback = "claude-judge"` (a `[[watch]]` may set its own) the PR goes on instead: it is
+run r-…)". The PR is flagged for good (the refused head, role, run and time) and one toast says so. By
+default (`[pipeline] judge_fallback = "claude-judge"`; a `[[watch]]` may set its own) the PR goes on: it is
 flagged for Codex, which never sees it again, its roles of that kind (`codex-judge`, `codex-review`) are
 dropped, and `claude-judge`, the second built-in judge held in reserve (Claude Opus at xhigh, the judge's
 prompts and skill), judges it from the next round on, starting fresh through the recovery prompt that
 reads the earlier reviews and threads from GitHub. The PR goes back in line (a reviewed one as
 `rereview_pending`, an unreviewed one `queued`) and waits the usual re-review interval, keeps its slot
-and agents, and `magnum review` works; the board's cell reads `Codex flagged · judge claude-judge`. A
-refusal by the fallback's kind too, or a fallback no longer declared as a judge of another kind, holds
-the PR as below. Without the key, the board's state cell and
+and agents, and `magnum review` works; the board's cell reads `Codex flagged · judge claude-judge`.
+`magnum roles` names each watch's fallback judge. The built-in default is off, with no error and no
+warning, for a watch it does not fit: one whose judge is `claude-judge` or another Claude judge, or every
+watch of a base config (`--config`) whose own `[[role]]` list has no `claude-judge`; a value you write
+must fit (see [Roles and kinds](#roles-and-kinds-the-review-pipeline)). Without a fallback judge
+(`judge_fallback = ""`, or the default off for the watch), after a refusal by the fallback's kind too, or
+with a fallback no longer declared as a judge of another kind, magnum never reviews the PR again, on any
+head, by itself or when asked (no retry, continue, reply round or delta check; `magnum review` and the
+board's `r`/`R` refuse with the reason): the board's state cell and
 card read `Codex flagged · never reviewed again`, the card says when and where and how to lift it,
 `magnum status` lists the PR among what needs you, `magnum tui` prints `codex-flagged` in STATE and
 `tui --json` has `codex_flag` and `codex_flag_detail`; `magnum stats` counts such rounds as `refused`.
@@ -692,7 +698,7 @@ lists in `request_teams`, or marks a draft ready for review, the round starts `[
 request and the last push. It skips the quiet periods, the re-review intervals, the delta threshold and
 the daily cap. Requests are edge-triggered by their time on the PR's timeline: one counts once, and only
 when it is newer than the PR's last round start; a review of the head posted after it answers it too.
-On a draft a `[[watch]]` skips (`include_drafts = false`), such a request makes the draft eligible for the
+On a draft a `[[watch]]` skips (`include_drafts = false`, the default), such a request makes the draft eligible for the
 one round it starts, and the wait says so (`review · requested on a draft by alice → 14:09`); a later
 push to the draft is skipped again until a newer request (GitHub keeps your request after magnum's App
 reviews, so the request alone does not count twice).
@@ -1181,7 +1187,7 @@ classifier knows; a P3's title says it needs no reply), that simplifications are
 watch runs a role aliased `simplify`), that new pushes are re-reviewed automatically (when
 `[daemon] quiet_hours` is set, during it only small ones by a short check, the window named with the
 daemon's offset from UTC, "03:00-12:00 UTC+3"; drafts only on request when the watch has
-`include_drafts = false`), that a thread reply gets an answer without a push,
+`include_drafts = false`, the default), that a thread reply gets an answer without a push,
 and whose review request starts a round (your login, as for review requests: the watch's poll login when
 that is a `gh` identity, else its `auto_approve_as` or the first `gh` identity; the posting login when no `gh`
 identity is declared); `config.defaults.toml` shows it word for word. It is a Go
@@ -1202,7 +1208,7 @@ owner = "talkable"
 include = ["talkable"]             # repository globs; ["*"] for the whole organization
 identity = "reviewer-app"          # who posts
 poll_identity = "me"               # who polls: a gh identity (your account) or an App (below)
-include_drafts = true              # false: a draft waits until ready for review, or a review request for you (one round per request)
+include_drafts = false             # the default: a draft waits until ready for review, or a review request for you (one round per request); true: drafts too
 skip_bot_authors = true
 allow_bot_authors = ["helper[bot]"]
 skip_departed_authors = true       # default: a branch PR by someone (not a bot) no longer a member or collaborator is not reviewed
@@ -1554,10 +1560,13 @@ prompt after the reviewers.
 
 A watch without `roles = [...]` runs every role and its first judge. A second judge stands in reserve: the
 built-in `claude-judge` (kind claude, model opus, effort xhigh, the same `judge-*.md` prompts and skill,
-output `claude-judge.json`) runs for no watch until `[pipeline] judge_fallback = "claude-judge"` (or a
-`[[watch]]`'s) names it as the judge that takes a PR over after a Codex refusal, or a watch's `roles`
-names it as its judge. Validation refuses a `judge_fallback` that names no judge, a shell role, the
-watch's own judge, a judge of the same kind, or a role the watch's `roles` already list.
+output `claude-judge.json`) runs for no watch until `[pipeline] judge_fallback` (`"claude-judge"` by
+default, or a `[[watch]]`'s) switches a PR to it after a Codex refusal, or a watch's `roles` names it as
+its judge. Validation refuses a `judge_fallback` you write that names no judge, a shell role, the watch's
+own judge, a judge of the same kind, or a role the watch's `roles` already list. The built-in default is
+never refused: where it would be, it is off for that watch (a watch judged by `claude-judge` or another
+Claude judge, a base config whose own `[[role]]` list has no `claude-judge`), and `judge_fallback = ""`
+turns it off everywhere.
 
 A third kind of role takes part in no round: the fix role (`fix = true`). The built-in `claude-fix` (kind
 claude, model opus, effort high, the prompt `fix.md`, the fix skill, `timeout` 60m, no identity) belongs to
@@ -2029,8 +2038,11 @@ Untracked log files are no change: a file under `.codex/log/` or `.codex/logs/`,
 untracked file, ignored or not, still counts, and so does a tracked log. The paths match in any case:
 macOS's filesystem ignores case (and folds Unicode, so `ſ` is `s`), so Codex opening `.codex/config.toml`
 reads a `.Codex/config.toml` a PR added, and Claude `.claude/` and `.mcp.json` likewise. A PR that leaves `.codex/` alone gets the base branch's
-(the team's) project config as before; `project_mcp = "off"` turns its MCP servers off too, but for
-`mcp_allow`. Not covered: a Codex TUI that attaches to a running Codex app-server daemon hands it only
+(the team's) project config as before, but `[kinds.codex] project_mcp` (default `"off"`) turns its MCP
+servers off like yours, except those `mcp_allow` names: each one is outside code in a session that reads
+the PR, and the team's servers got no call in 307 review sessions. `project_mcp = "allow"` keeps them all.
+(Claude has no such key: by default its `mcp_off` with `--strict-mcp-config` keeps every MCP server out, the
+project's included.) Not covered: a Codex TUI that attaches to a running Codex app-server daemon hands it only
 some of its `-c` flags (Codex 0.160), so the MCP servers and the trust may then not be Magnum's to set; a
 session herdr restores by itself starts without Magnum's flags.
 
@@ -2947,7 +2959,7 @@ owners = ["talkable"]                # the watch owners the App is installed on;
 | `magnum whiteboard <url\|owner/repo#N\|repo#N\|N> [--open] [--wait] [--timeout <duration>] [--json] [--yes]` | Write the PR's whiteboard now (see Whiteboards of reviewed PRs): the whiteboard role (`claude-whiteboard` by default) writes a dev.fast Whiteboard of the head Magnum reviewed, in the PR's slot, with Magnum's review as its last section. It runs whatever `[pipeline] whiteboard` says, as long as a whiteboard role is set. A terminal asks y/N first (`--yes` skips the question, and `--json` on a terminal needs it). The daemon refuses, with the reason as its answer, a watch without a whiteboard role, a PR Magnum has not reviewed at its current head, a round or a fix loop that holds the PR, a Whiteboard that is not running, a slot not at the head, a pinned PR (`magnum open`, `magnum pin`) and a head that has its whiteboard. The command refuses inside a review agent's pane too. `--wait` follows the job and says how it ended: exit 0 when the whiteboard was written (`whiteboard.done`), exit 1 when the run failed or a push, a close or `magnum abort` stopped it (`whiteboard.failed`, `whiteboard.stopped`). `--timeout` (default `2h`, `0` = no limit) stops following after that long while the job goes on. `--open` asks the daemon nothing: it opens the recorded whiteboard in Whiteboard Desktop (`whiteboard app pick --session <id> --focus`) and refuses a PR without one. `magnum abort` ends a job. Board key `w`. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr (its judge's; the fixer's while a fix loop's fixer works; any role's with `--role`; a live agent pane of the PR, the judge's first, when that role's pane is gone with its lost or closed session) and reveal the herdr client of `[terminal] session` (default `default`) in `[terminal] app` (Terminal, iTerm2, Ghostty, WezTerm, `custom` with a `launcher` template, or any other app name, which is only brought to the front with `open -a`): focus the tab that runs it, or open a new one. When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. With `[terminal] reveal_on_attention = true` the daemon does the same by itself for a PR that needs you (an agent waiting on a dialog, a round that needs attention), at most once in 30 minutes for the same agent or cause. `--no-reveal` only focuses inside herdr and leaves the terminal where it is, and `--new-window` opens a new terminal window instead of a tab when no herdr client is found. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. `--ansi` keeps the pane's colors and text styles only: links, clipboard writes, cursor moves and screen erases are dropped, and both modes show a control character as a space. `--interval` sets the redraw interval (default `2s`) and `--lines` the lines shown (default: the terminal's height). |
-| `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, the rounds one session serves (`max_session_rounds`), capture, output, prompt file and whether it is yours or built in, after, judge, aliases), under a first line that names `prompts_dir` and the `[pipeline] spend` profile, followed by each kind whose own `spend` differs (`spend: high (codex: low)`). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
+| `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, the rounds one session serves (`max_session_rounds`), capture, output, prompt file and whether it is yours or built in, after, judge, aliases), under a first line that names `prompts_dir` and the `[pipeline] spend` profile, followed by each kind whose own `spend` differs (`spend: high (codex: low)`); each watch's roles end with its fallback judge as it resolves (`fallback judge: claude-judge`, or `none`; `judge_fallback` in the JSON). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
 | `magnum attention [--list]` | Jump to whatever needs you: a blocked agent, a failed round, an unseen result. A PR in needs_attention is explained in one line (the stage, how many attempts on which head, the line of the output that names the cause) with the next step; `magnum status <ref>` adds the failing step and the end of its output, and the dashboard, the PR board's card and `magnum review --wait` say the same. `--json` omits `since` for an item that has no time. It takes `--no-reveal` and `--new-window` as `magnum open` does. |
 | `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. `enter` reviews (a reviewed head again too), `ctrl+f` fresh, `ctrl+g` opens the pane, `ctrl+o` the browser, `ctrl+p` pins or unpins, `ctrl+x` releases, `ctrl+r` refreshes the list; a key that cannot act on the PR says why instead (a review while its round runs, a release of a pinned PR). In the herdr popup a failure stays on screen until a key is pressed. `--query` sets the initial filter, and a PR URL or reference there preselects that PR (or offers it when Magnum does not know it); `--limit N` lists at most the N most recently updated PRs (default 300, 0 = all). |
 | `magnum ui open picker\|status\|cleanup\|doctor [--workspace id] [--width 90%] [--height 60%]` | Open one of the herdr plugin's popup panes over the herdr socket (what the plugin's keys run); the sizes come from the `[[panes]]` of `herdr-plugin.toml` unless given, the workspace from the plugin's context. |
@@ -3806,7 +3818,7 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
 - **gh extension**: `magnum install --gh` installs a `gh magnum` shim, so `gh magnum tui` works anywhere.
 - **gh-dash**: [docs/gh-dash.yml](docs/gh-dash.yml) has keybindings that hand the selected PR to Magnum.
 - **launchd**: `magnum install` writes `~/Library/LaunchAgents/zhuravel.magnum.plist`, running the daemon
-  with mise's shims on its `PATH`, so it sees your mise toolchain (`[daemon] shell_path = true` also appends
+  with mise's shims on its `PATH`, so it sees your mise toolchain (`[daemon] shell_path`, on by default, also appends
   your login shell's `PATH`, see [Configuration](#configuration)); through `mise exec` only while an App
   identity reads its key from an environment variable (`private_key_env` without `private_key_file`).
 

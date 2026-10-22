@@ -174,11 +174,13 @@ func TestCodexReviewOfAPRChangingCodexRunsWithTheCheckoutUntrusted(t *testing.T)
 
 // When the PR leaves .codex/ as its merge base has it, the checkout's
 // project config is the team's: it loads as before (an earlier record of a
-// declined launch is cleared), and project_mcp = "off" turns its MCP
-// servers off like the operator's, but for those in mcp_allow.
+// declined launch is cleared), with its MCP servers under project_mcp =
+// "allow", while project_mcp = "off", codex's default, turns them off like
+// the operator's, but for those in mcp_allow.
 func TestUnchangedCodexKeepsTheTeamsServersUnlessProjectMCPIsOff(t *testing.T) {
 	files := map[string]string{".codex/config.toml": "[mcp_servers.sentry]\nurl = \"https://mcp.example.com\"\n[mcp_servers.tracker]\ncommand = \"tracker-mcp\"\n"}
 	e, _, ws := projectEnv(t, files, nil, nil)
+	e.setKind(KindCodex, func(k *config.Kind) { k.ProjectMCP = config.ProjectMCPAllow })
 	if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, KindCodex), `{"head":"`+projectHead+`","files":1}`); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +198,10 @@ func TestUnchangedCodexKeepsTheTeamsServersUnlessProjectMCPIsOff(t *testing.T) {
 	}
 
 	e, _, ws = projectEnv(t, files, nil, nil)
-	e.setKind(KindCodex, func(k *config.Kind) { k.ProjectMCP, k.MCPAllow = config.ProjectMCPOff, []string{"tracker"} })
+	if k := e.cfg.Kinds[KindCodex]; k.ProjectMCP != config.ProjectMCPOff {
+		t.Fatalf("codex project_mcp = %q by default, want off", k.ProjectMCP)
+	}
+	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow = []string{"tracker"} })
 	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
 		t.Fatal(err)
 	}

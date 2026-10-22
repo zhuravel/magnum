@@ -56,7 +56,7 @@ func TestWaitTimingReasons(t *testing.T) {
 		}
 	})
 	t.Run("draft interval", func(t *testing.T) {
-		h := newHarness(t)
+		h := newHarness(t, withDrafts)
 		h.reviewedPR(2, "b1")
 		h.advance(40 * time.Minute)
 		h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", draft: true})

@@ -12,8 +12,12 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// withoutDrafts sets include_drafts = false on every watch.
+// withoutDrafts sets include_drafts = false, the default, on every watch.
 var withoutDrafts = reqWatches(func(w *config.Watch) { w.IncludeDrafts = new(false) })
+
+// withDrafts sets include_drafts = true on every watch: drafts are reviewed
+// like ready PRs, with the draft re-review interval.
+var withDrafts = reqWatches(func(w *config.Watch) { w.IncludeDrafts = new(true) })
 
 // draftSynced is a harness past the first sync (#1 the baseline).
 func draftSynced(t *testing.T, mods ...func(*harness)) *harness {
@@ -131,11 +135,46 @@ func TestReviewRequestForSomeoneElseLeavesASkippedDraftSkipped(t *testing.T) {
 	}
 }
 
-// include_drafts = true (the default) is unchanged: a draft is reviewed
-// without a request, and a push to it waits for the draft re-review
-// interval, not for a request.
+// A watch that writes no include_drafts skips drafts (DECISIONS "Four
+// built-in defaults follow what the operator chose by hand"): a new draft
+// is skipped with the reason and starts no round, while a review request
+// for magnum still runs its round, and so does `magnum review`.
+func TestADefaultWatchReviewsADraftOnlyOnRequest(t *testing.T) {
+	skipped := func(t *testing.T) *harness {
+		t.Helper()
+		h := draftSynced(t)
+		reqPoll(h, prSpec{n: 2, head: "d1", draft: true})
+		if pr := h.wantState(2, store.PRIneligible); deref(pr.SkipReason) != "draft PR (include_drafts = false)" {
+			t.Fatalf("skip_reason = %q", deref(pr.SkipReason))
+		}
+		h.advance(10 * time.Minute)
+		h.tick()
+		reqWantRounds(t, h, 0)
+		return h
+	}
+	t.Run("a review request", func(t *testing.T) {
+		h := skipped(t)
+		h.advance(time.Minute)
+		reqPoll(h, prSpec{n: 2, head: "d1", draft: true, request: true, requests: []github.ReviewRequestEvent{reqAsk(h, "alice", askedPoll)}})
+		h.wantState(2, store.PRQueued)
+		h.advance(time.Minute)
+		h.tick()
+		reqWantRounds(t, h, 1)
+		h.wantState(2, store.PRReviewed)
+	})
+	t.Run("magnum review", func(t *testing.T) {
+		h := skipped(t)
+		h.reviewAgain(2)
+		if in := h.rd.all()[0]; in.TargetSHA != "d1" {
+			t.Fatalf("the round reviewed %s, want the skipped draft's d1", in.TargetSHA)
+		}
+	})
+}
+
+// include_drafts = true: a draft is reviewed without a request, and a push
+// to it waits for the draft re-review interval, not for a request.
 func TestDraftsIncludedNeedNoRequest(t *testing.T) {
-	h := draftSynced(t)
+	h := draftSynced(t, withDrafts)
 	reqPoll(h, prSpec{n: 2, head: "d1", draft: true})
 	h.wantState(2, store.PRQueued)
 	h.advance(5 * time.Minute)

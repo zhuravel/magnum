@@ -11477,6 +11477,54 @@ skill versions); people add theirs to the sections before it, at the end of the 
     an overload already parked (the operator's rule: a parked PR waits for `magnum review`); a longer fixed
     backoff for every overload (a lone overload is the PR's own, and a fixed wait long enough for an
     outage would delay every single blip); the shared failures' 30-minute window (the lockstep gap above).
+- **Four built-in defaults follow what the operator chose by hand** (2026-10-22, amends "A refused PR goes on
+  with the fallback judge", "A review request on a draft starts its round; the magnum view keeps requested
+  PRs", the `.codex/` entry that added `project_mcp` and "The daemon can take its PATH from the operator's
+  login shell"). The operator set each one in his own config with a dated reason and approved them as the
+  defaults on 2026-10-22; nothing changes for him, a fresh install gets them.
+  - `[pipeline] judge_fallback` is `"claude-judge"` (was `""`). On 2026-10-10 two Codex refusals in a day
+    parked PRs whose other roles had done their work, and he set the fallback; without it the built-in
+    `claude-judge` never runs and a refusal ends a PR's reviews for good.
+  - `[[watch]] include_drafts` is false (was true). He turned it off on all three of his watches on
+    2026-10-06 and 2026-10-11: marking a PR ready starts its round anyway, as a request does, and `magnum
+    review`, the board's `r` and a review request still run on a draft. The default review footer now says
+    "drafts only on request" on a watch that writes no `include_drafts` (`.DraftsSkipped`).
+  - `[kinds.codex] project_mcp` is `"off"` (was `"allow"`). He set it on 2026-10-07: the team's project MCP
+    servers got 0 calls in 307 review sessions, and each allowed server is outside code loaded into a
+    session that reads untrusted PR content. `mcp_allow` stays the per-server opt-in. The other kinds keep
+    `"allow"`, which does nothing for them: Claude's project servers are already out under its `mcp_off`
+    with `--strict-mcp-config`, and no other kind has a project file magnum reads servers from.
+  - `[daemon] shell_path` is true (was false). On 2026-10-14 launchd's fixed PATH lacked DBngin's
+    directories, every schema load the daemon ran failed and two slots broke; he set it the same day.
+  - The rule: a built-in default never makes a configuration that loads fail. The fallback is the one of
+    the four that can be invalid: a full `--config` base whose own `[[role]]` list has no `claude-judge`,
+    or a watch whose judge is `claude-judge` or another Claude judge (a fallback of the judge's own kind,
+    or the judge itself, never takes over). Where no file writes `[pipeline] judge_fallback`
+    (`Config.judgeFallbackSet`, from the base file's and the user layer's TOML metadata; the embedded
+    defaults do not count) and the value is still the default, `Config.JudgeFallbackFor` turns it off for
+    each watch Validate would refuse it for (the same checks, `judgeFallbackErrs`), with no error and no
+    warning, and Validate checks it nowhere. A value the user writes, globally or for one watch, keeps
+    every check and error it had; an explicit `""` stays the opt-out. `magnum roles` ends each watch's
+    roles with the fallback judge as it resolves (`fallback judge: claude-judge`, or `none`;
+    `judge_fallback` per group in `--json`), and the settings screen's fallback judge shows the resolved
+    one. A per-watch `judge_fallback = ""` still means "the pipeline's" (the field is a plain string), so
+    a watch opts out only through `[pipeline]`, as before.
+  - Tests, failing first: in config TestTheBuiltInFallbackJudgeIsClaudeJudgeForACodexJudgedWatch,
+    TestABaseWithoutClaudeJudgeLoadsWithTheFallbackOff, TestAWatchJudgedByClaudeJudgeLoadsWithTheFallbackOff,
+    TestAnExplicitEmptyFallbackTurnsItOff, TestDraftsWaitUntilReadyByDefault,
+    TestTheCodexKindTurnsTheTeamsProjectMCPServersOffByDefault and
+    TestTheDaemonTakesTheLoginShellsPATHByDefault; in engine TestADefaultWatchReviewsADraftOnlyOnRequest
+    (a review request and `magnum review` on a skipped draft each run a round), with the judge fallback
+    tests now on the built-in default; in cli TestRolesNamesTheFallbackJudgeThatResolves; in settings
+    TestTheFallbackJudgeShowsTheOneThatResolves. The tests that assumed the old defaults now say so: the
+    engine's flag-without-fallback tests start from `noFallback`, its draft-interval tests from
+    `withDrafts`. Mutations checked, each failing a test: the built-in value validated at the pipeline or
+    per watch, no fit check in JudgeFallbackFor, a written value never seen, the embedded defaults counted
+    as written.
+  - Rejected: a name-based exemption like fix_role's (a user who writes `"claude-judge"` must still hear
+    that it names no role), a warning when the default is off (nothing is wrong: the configuration chose
+    its roles), and a `*string` field (every reader of `Pipeline.JudgeFallback` would change for one
+    distinction the loader already has).
 
 ## Learned rules
 
