@@ -102,16 +102,37 @@ func doctorPlainBinary(d doctorDeps, kind string, k config.Kind) doctorCheck {
 	return doctorOK(name, fmt.Sprintf("%s is a plain binary (wrapper %s): magnum adds %s args, which run it without approval prompts", kind, mode, section))
 }
 
+// doctorKinds are the agent kinds doctor checks: the configured roles'
+// (rolesKindNames), then the notes critic's when [notes] critic is on.
+func doctorKinds(cfg *config.Config) []string {
+	out := rolesKindNames(cfg)
+	if k := cfg.CriticRole().AgentKind(); cfg.Notes.Critic && k != "" && k != config.KindShell && !slices.Contains(out, k) {
+		out = append(out, k)
+	}
+	return out
+}
+
+// doctorKindUsers names what uses kind: the roles (rolesUsers), and the
+// notes critic (config.CriticRoleName) when [notes] critic is on.
+func doctorKindUsers(cfg *config.Config, kind string) []string {
+	out := rolesUsers(cfg, kind)
+	if cfg.Notes.Critic && cfg.CriticRole().AgentKind() == kind {
+		out = append(out, config.CriticRoleName)
+	}
+	return out
+}
+
 // doctorAgentChecks checks every agent kind the configured roles use (a
-// shell role's tool counts): the CLI is on PATH in zsh, its login check
-// passes ([kinds.<name>] login_check and login_ok), and how magnum passes
-// its args (wrapper detection; a plain binary must get the kind's autonomy
-// flag, see doctorPlainBinary).
+// shell role's tool counts) and the notes critic's when it is on
+// (doctorKinds): the CLI is on PATH in zsh, its login check passes
+// ([kinds.<name>] login_check and login_ok), and how magnum passes its args
+// (wrapper detection; a plain binary must get the kind's autonomy flag, see
+// doctorPlainBinary).
 func doctorAgentChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 	var out, wrappers []doctorCheck
-	for _, kind := range rolesKindNames(d.Config) {
+	for _, kind := range doctorKinds(d.Config) {
 		k, _ := d.Config.KindSpec(kind)
-		users := strings.Join(rolesUsers(d.Config, kind), ", ")
+		users := strings.Join(doctorKindUsers(d.Config, kind), ", ")
 		what, werr := doctorWhence(ctx, d, kind)
 		onPath := werr == nil && what != "none"
 		skipLogin := "" // why the login check cannot run

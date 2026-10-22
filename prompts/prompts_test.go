@@ -9,7 +9,7 @@ import (
 var defaults = []string{
 	"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh",
 	"fix.md", "judge-continue.md", "judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md",
-	"model-fallback.md", "notes-curate.md", "retro.md", "skill-edit.md", "triage.md", "whiteboard.md",
+	"model-fallback.md", "notes-critic.md", "notes-curate.md", "retro.md", "skill-edit.md", "triage.md", "whiteboard.md",
 }
 
 func TestNames(t *testing.T) {

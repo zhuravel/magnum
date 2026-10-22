@@ -106,6 +106,16 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 		render("notes curation prompt", p, sampleData[curateData](true))
 		render("notes curation prompt", p, curateData{})
 	}
+	if p, err := cfg.ResolvePrompt(cfg.Notes.CriticPrompt); err != nil {
+		errs = append(errs, fmt.Errorf("notes critic prompt: %w", err))
+	} else {
+		d := sampleData[criticData](true)
+		for _, blocked := range []bool{false, true} {
+			d.Blocked, d.Conflict, d.Lossy, d.Stale = blocked, blocked, blocked, blocked
+			render("notes critic prompt", p, d)
+		}
+		render("notes critic prompt", p, criticData{})
+	}
 	if p, err := cfg.ResolvePrompt(cfg.Learn.EditorPrompt); err != nil {
 		errs = append(errs, fmt.Errorf("skill editor prompt: %w", err))
 	} else {

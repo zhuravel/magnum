@@ -3194,6 +3194,12 @@ Package config loads and validates config.toml (kept in the repository).
 CONSTANTS
 
 const (
+	DefaultCriticDeclines = 2
+	DefaultCriticPerDay   = 4
+)
+    Built-in critic values.
+
+const (
 	ContextUsedGroup = "used" // the percent of the context used
 	ContextLeftGroup = "left" // the percent left
 )
@@ -3389,6 +3395,9 @@ const CandidateSkill = "skills/magnum-review/SKILL.md"
     CandidateSkill is where a candidate directory holds the judge skill,
     as magnum's checkout does.
 
+const CriticRoleName = "notes-critic"
+    CriticRoleName is the name of the role the critic runs as (CriticRole).
+
 const DatabaseSuffix = "__{slug}"
     DatabaseSuffix ends every pool database template ([[pool]] databases):
     the slot's slug follows the last "__", which is how magnum lists and guards
@@ -3426,6 +3435,9 @@ const DefaultCodexToolOutputLimit = 65536
     DefaultCodexToolOutputLimit is the codex kind's tool_output_limit: about
     256 KiB at Codex's four bytes a token, room for today's 97 KB notes and the
     reads a model asks to make larger.
+
+const DefaultCriticPrompt = "notes-critic.md"
+    DefaultCriticPrompt is the critic's prompt file.
 
 const DefaultEditorPrompt = "skill-edit.md"
     DefaultEditorPrompt is the skill editor's prompt file.
@@ -3602,6 +3614,12 @@ var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
 
 
 FUNCTIONS
+
+func DefaultCriticModel(kind string) string
+    DefaultCriticModel is the critic's model of a kind the config names without
+    choosing a model: fable, the strongest Claude model (a second opinion on the
+    curator's work), for claude, and "" for every other kind, whose CLI would
+    not know a Claude model name.
 
 func DefaultKinds() map[string]Kind
     DefaultKinds returns the built-in kinds (fresh copies):
@@ -3897,6 +3915,11 @@ func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     event is COMMENT, or the auto-approval author lists refuse author
     (AutoApproveRefusesAuthor), which turns the judge's APPROVE into COMMENT
     (pipeline.JudgeEvents).
+
+func (c *Config) CriticRole() Role
+    CriticRole is the role the critic runs as: CriticRoleName, the [notes]
+    critic_kind in session mode with its model, effort, args, prompt, timeout
+    and fallback models, normalized like a configured role.
 
 func (c *Config) EditorRole() Role
     EditorRole is the role the skill editor runs as: EditorRoleName, the
@@ -4931,6 +4954,24 @@ type Notes struct {
 	// when Model hits its own limit (Role.FallbackModels); empty = the
 	// kind's fallback_models.
 	FallbackModels []string `toml:"fallback_models"`
+
+	// The notes critic (critic.go): Critic turns it on; CriticKind,
+	// CriticModel, CriticEffort, CriticArgs, CriticPrompt, CriticTimeout and
+	// CriticFallbackModels are its role's (CriticRole; critic_kind without
+	// critic_model gets DefaultCriticModel of that kind). CriticDeclines is
+	// how many proposals of a repository it may reject or send back in a row
+	// before the next one waits for the operator, CriticPerDay how many
+	// critiques start per local day.
+	Critic               bool     `toml:"critic"`
+	CriticKind           string   `toml:"critic_kind"`
+	CriticModel          string   `toml:"critic_model"`
+	CriticEffort         string   `toml:"critic_effort"`
+	CriticArgs           []string `toml:"critic_args"`
+	CriticPrompt         string   `toml:"critic_prompt"`
+	CriticTimeout        Duration `toml:"critic_timeout"`
+	CriticFallbackModels []string `toml:"critic_fallback_models"`
+	CriticDeclines       int      `toml:"critic_declines"`
+	CriticPerDay         int      `toml:"critic_per_day"`
 }
     Notes is the [notes] section: the repository notes every review role reads
     first and the judge rewrites (engine.NotesPath). The four limits are hints
@@ -6323,6 +6364,18 @@ const (
     Outcomes of RecoverNotesApply.
 
 const (
+	// CurateTriggerReview is the curation that follows a proposal the
+	// critic rejected or sent back (KVNotesRecurate): due at once, under the
+	// daemon's own gates, never the operator's request.
+	CurateTriggerReview = "review"
+	// KVNotesCritic holds the critique running now (CriticMark as JSON),
+	// deleted when it ends and at every start of the daemon.
+	KVNotesCritic = "notes.critic"
+	// CriticMaxAttempts is how many undecided critiques a proposal gets
+	// before it is left to the operator for good.
+	CriticMaxAttempts = 2
+)
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -6710,6 +6763,10 @@ var ErrClassifierDown = errors.New("engine: the retro's classifier is not availa
     could not be set up or started, or went away (herdr down, a prompt refused
     before it was sent). The retro stops without recording the PR.
 
+var ErrCriticDown = errors.New("engine: the notes critic is not available")
+    ErrCriticDown wraps a Critic's error that is not the decision's: the agent
+    could not be set up or started, or went away.
+
 var ErrCuratorDown = errors.New("engine: the notes curator is not available")
     ErrCuratorDown wraps a Curator's error that is not the proposal's: the agent
     could not be set up or started, or went away.
@@ -6828,6 +6885,18 @@ func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]stri
 func ContentOf(s notes.State) store.NotesContent
     ContentOf is a notes state as the registry stores it.
 
+func CriticAttempts(ctx context.Context, st *store.Store, id int64) (int, error)
+    CriticAttempts counts proposal id's undecided critiques: at
+    CriticMaxAttempts the proposal is left to the operator for good.
+
+func CriticDeclines(ctx context.Context, st *store.Store, repoID int64) int
+    CriticDeclines counts the proposals of repoID the critic rejected or
+    sent back in a row, newest first: an apply by anyone or a decision of
+    the operator ends the run; magnum's own decisions (an expiry, an invalid
+    proposal, a stale follow-up) and waiting proposals neither count nor end it.
+    At notes critic_declines the critic steps back: the repository's next
+    proposal waits for the operator.
+
 func DaemonPID(layout paths.Layout) (int, error)
     DaemonPID returns the pid of the running daemon from the pidfile, or 0 when
     there is no pidfile or that process is gone. It never touches the lock
@@ -6897,6 +6966,11 @@ func KVKindVersion(kind string) string
     KVKindVersion holds what the daemon last read of agent kind kind's CLI
     version (KindVersion, JSON).
 
+func KVNotesCriticOver(fullName string) string
+    KVNotesCriticOver marks a repository whose notes a critic apply left past a
+    limit: the apply's time. Its next over_limit curation waits a week from it,
+    so a busy repository does not cost a curation and a critique a day.
+
 func KVNotesMisses(fullName string) string
     KVNotesMisses marks a repository whose retro recorded misses for its notes:
     the time of the retro that did (store.FormatTime). The misses trigger
@@ -6907,6 +6981,12 @@ func KVNotesOver(fullName string) string
     comma-separated ("max_bytes,max_line"): the mark a curation looks for.
     It is set when they are measured past a limit and deleted when they are back
     within all of them.
+
+func KVNotesRecurate(fullName string) string
+    KVNotesRecurate marks a repository whose proposal the critic rejected or
+    sent back: the proposal's id. The next curation scan starts a curation of
+    trigger review (dueCurations); a curation that stores its proposal clears
+    it.
 
 func KVPRApprovalHold(prID int64) string
     KVPRApprovalHold holds the PR's held review whose full pass follows
@@ -7422,6 +7502,50 @@ func ReadConfigRestartRefused(ctx context.Context, st *store.Store) (ConfigResta
     ReadConfigRestartRefused reads KVConfigRestartRefused (false when none is
     set or it cannot be read).
 
+type Critic interface {
+	Critique(ctx context.Context, job CritiqueJob) (CritiqueResult, error)
+	Close(ctx context.Context) error
+}
+    Critic critiques one proposal; Close ends it.
+
+type CriticMark struct {
+	Repo     string    `json:"repo"`
+	Proposal int64     `json:"proposal"`
+	Model    string    `json:"model"`
+	Started  time.Time `json:"started"`
+}
+    CriticMark is the critique running now (KVNotesCritic).
+
+func ReadCritic(ctx context.Context, st *store.Store) *CriticMark
+    ReadCritic is the critique running now, nil when none runs (or the mark is
+    unreadable).
+
+type CriticRun struct {
+	ID  string
+	Dir string
+}
+    CriticRun is one critique: its id and run directory.
+
+type CritiqueJob struct {
+	Repo   string
+	Run    notes.CriticRun
+	Prompt string
+	Check  func() (notes.Decision, []string)
+}
+    CritiqueJob is what a Critic works on: the run directory, the rendered
+    prompt (prompts/notes-critic.md) and Check, which reads decision.json and
+    validates it (no problems: a valid decision).
+
+type CritiqueResult struct {
+	Decision notes.Decision
+	Problems []string
+	Pause    *pipeline.Pause
+	Model    string
+}
+    CritiqueResult is how a critic's turns ended: a decision, valid when
+    Problems is empty, or a Pause (a limit the agent hit). Model is the model
+    the answer came from ("" = the role's).
+
 type CurateJob struct {
 	Repo    string
 	Scratch notes.Scratch
@@ -7583,6 +7707,9 @@ type Deps struct {
 	// Curator sets up the notes curator for one curation ([notes],
 	// notes_curate.go); nil = no curation runs.
 	Curator func(ctx context.Context, run CurateRun) (Curator, error)
+	// Critic sets up the notes critic for one critique ([notes] critic,
+	// notes_critic.go); nil = no critique runs.
+	Critic func(ctx context.Context, run CriticRun) (Critic, error)
 	// Editor sets up the skill editor for one run ([learn] editor_*,
 	// learn_edit.go); nil = no edit runs. It works on Checkout, magnum's own
 	// checkout (Layout.Home; "" for an installed binary: no edit), through
@@ -8323,6 +8450,9 @@ type NotesApply struct {
 	Live   string // the notes' fingerprint when the decider read them
 	Target string // the fingerprint of the state it approved to write
 	By     string // store.DecidedBy*
+	// Reason is the decider's one-line reason, kept with the proposal (the
+	// critic's; "" = none).
+	Reason string
 	Now    time.Time
 	// Wait bounds the wait for the notes lock (0 = NotesLockWait).
 	Wait time.Duration
@@ -8339,6 +8469,85 @@ type NotesCuratePayload struct {
     curation `magnum notes <repo> --review` asks for instead of a stale proposal
     or one that would lose lines of the notes: Supersede is that proposal's id,
     and Why the reason it is superseded with ("" = it is stale).
+
+type NotesHarnessChange struct {
+	Name   string `json:"name"`
+	Change string `json:"change"` // added | removed | changed | kept
+	Action string `json:"action,omitempty"`
+	Into   string `json:"into,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+    NotesHarnessChange is one harness file of a proposal: how it differs from
+    the base, and what the curator said of it.
+
+type NotesMergeView struct {
+	Clean          bool     `json:"clean"`
+	NotesConflicts []string `json:"notes_conflicts,omitempty"`   // the base version's lines both changed differently
+	Conflicts      []string `json:"harness_conflicts,omitempty"` // harness files both changed in ways that do not merge
+	Kept           []string `json:"harness_kept,omitempty"`      // files the proposal deletes that a round changed since: kept
+	Merged         []string `json:"harness_merged,omitempty"`    // files both changed whose texts merged
+}
+    NotesMergeView is a stale proposal's merge with the notes' changes since.
+
+type NotesReviewMiss struct {
+	ID       int64  `json:"id"`
+	Severity string `json:"severity,omitempty"`
+	Where    string `json:"where,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Outcome  string `json:"outcome"` // store.MissNoted | store.MissSkipped
+	Section  string `json:"section,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	State    string `json:"state"` // the miss's state now
+}
+    NotesReviewMiss is a miss a proposal was given, and what it did with it.
+
+type NotesReviewView struct {
+	Repo     string              `json:"repo"`
+	Proposal store.NotesProposal `json:"proposal"`
+	Diff     string              `json:"notes_diff"`
+	// ArchiveDiff is the archive's (notes.ArchiveName) unified diff, ""
+	// when the proposal leaves it as it is; Harness leaves it out.
+	ArchiveDiff string               `json:"archive_diff,omitempty"`
+	Harness     []NotesHarnessChange `json:"harness"`
+	Sections    []notes.Change       `json:"sections"`
+	Misses      []NotesReviewMiss    `json:"misses"`
+	Before      notes.Size           `json:"size_before"`
+	After       notes.Size           `json:"size_after"`
+	Expired     bool                 `json:"expired,omitempty"` // older than ProposalTTL: it can no longer be applied
+	// Stale: the notes changed since the proposal was made; Merge is its
+	// three-way merge with their changes, and when it is clean the diff,
+	// the harness changes and the sizes are those of the merge applied to
+	// the notes now.
+	Stale bool            `json:"stale"`
+	Merge *NotesMergeView `json:"merge,omitempty"`
+	// NotPreserved is what applying the proposal would lose of the notes
+	// now (PreservationProblems): a proposal with any can only be rejected
+	// or curated again.
+	NotPreserved []string `json:"not_preserved,omitempty"`
+
+	// Check holds the states the review read (base, proposed, the notes now
+	// and the merge); Changes the curator's changes.json.
+	Check   StaleCheck    `json:"-"`
+	Changes notes.Changes `json:"-"`
+}
+    NotesReviewView is a proposal as a review shows it.
+
+func ReviewFrom(ctx context.Context, st *store.Store, maxLine int, full string, p store.NotesProposal, check StaleCheck) (NotesReviewView, error)
+    ReviewFrom is ReviewProposal from p's states as check read them (a restore
+    not proposed yet has no states in the registry to read): the notes' and
+    the archive's diffs, the harness changes with the curator's reasons,
+    the sections, the misses it was given with what it did with them, the sizes
+    before and after (of the proposal against its base, or of a clean merge
+    against the notes now) and what an apply would lose.
+
+func ReviewProposal(ctx context.Context, st *store.Store, maxLine int, full string, nr notes.Repo, p store.NotesProposal) (NotesReviewView, error)
+    ReviewProposal reviews proposal p of full's notes nr: its base and proposed
+    states, the notes now and, when they are no longer its base (stale), its
+    merge with their changes since. maxLine is notes max_line, for the sizes.
+
+func (v NotesReviewView) Target() (notes.State, bool)
+    Target is what an apply of the reviewed proposal writes: the proposed state,
+    or a stale one's clean merge (false when it conflicts).
 
 type OpenHold struct {
 	Until time.Time `json:"until"`
@@ -13563,6 +13772,19 @@ so ".curate" never collides with an owner's directory.
 CONSTANTS
 
 const (
+	MaxDecisionItems = 60
+)
+    Bounds on the decision's lists: free text kept with the decision for the
+    operator, so each item is one line.
+
+const (
+	DecisionApply    = "apply"    // apply the proposal as reviewed
+	DecisionReject   = "reject"   // reject it, with a reason the next curation reads
+	DecisionRecurate = "recurate" // supersede it: a new curation from the notes now reads it and the reason
+)
+    The critic's decisions.
+
+const (
 	MissNoted   = "noted"
 	MissSkipped = "skipped"
 )
@@ -13599,8 +13821,16 @@ const ArchiveLine = "retired lines, word for word; search it when a lesson seems
 const ArchiveName = "ARCHIVE.md"
     ArchiveName is the archive's path in the harness directory.
 
+const CriticDirName = ".critic"
+    CriticDirName is the directory under the notes root that holds every
+    critique's run directory (<notes>/.critic/<owner>/<repo>/<run>).
+
 const CurateDirName = ".curate"
     CurateDirName is the curations' directory under the notes root.
+
+const MaxReasonRunes = maxReasonRunes
+    MaxReasonRunes bounds a one-line reason: a curator's for a change, the
+    critic's for its decision.
 
 const SnapshotFile = "notes-before.json"
     SnapshotFile is the snapshot a round takes of the notes before its judge is
@@ -13676,6 +13906,12 @@ func Printable(text string) string
     so it cannot drive a terminal: a raw byte 0x9b is an 8-bit CSI to a terminal
     that reads C1 controls.
 
+func ReasonLeaks(text string, c Check) []string
+    ReasonLeaks applies the leak rules to a decider's one-line reason that the
+    next curation reads (the critic's): CheckLeaks (a pull request or issue
+    number, one of c's branches, a secret, a home directory path), and a probe
+    file name. nil = none.
+
 func Sections(text []byte) []string
     Sections lists the "## " headings of notes text.
 
@@ -13717,6 +13953,16 @@ func Validate(p Proposal, c Check) []string
     changes nothing is invalid unless it was given misses and skips them all
     (the operator confirms the skips).
 
+func ValidateDecision(d Decision, c DecisionCheck) []string
+    ValidateDecision returns what is wrong with decision d (nil = valid),
+    in words fit for a nudge: the decision is one of the three; the target is
+    the fingerprint the prompt gave; a proposal that cannot be applied (its
+    stale merge conflicts, or it would lose lines) is rejected or re-curated,
+    and only such a proposal is re-curated; reject and recurate need a reason;
+    the reason is one line of at most maxReasonRunes runes and passes c.Leaks;
+    losses and checked hold at most MaxDecisionItems one-line items with no
+    secret and no home directory path.
+
 func WriteArchive(r Repo, text []byte) error
     WriteArchive makes r's archive text (removes it when text is empty),
     confined to the harness directory. The caller holds r's lock.
@@ -13733,12 +13979,14 @@ func WriteState(r Repo, s State) error
     to the error. The caller holds r's lock (Lock). A harness path that is not
     clean (cleanName) is refused before anything is written.
 
-func WriteSuperseded(s Scratch, proposed State, changes []byte) error
-    WriteSuperseded writes the stale proposal a curation follows up on into s's
+func WriteSuperseded(s Scratch, proposed State, changes []byte, reason string) error
+    WriteSuperseded writes the proposal a curation follows up on into s's
     superseded/ directory, for the curator to read: its notes as notes.md, its
-    harness under harness/ and its changes.json, with a reason for every section
-    and file it kept, merged or removed. The notes changed since that proposal
-    was made, so it was superseded rather than applied; its work is not lost.
+    harness under harness/, its changes.json, with a reason for every section
+    and file it kept, merged or removed, and reason, why it was superseded,
+    as reason.txt (none when reason is empty). The notes changed since that
+    proposal was made, or its reviewer (the operator or the notes critic) sent
+    it back, so it was superseded rather than applied; its work is not lost.
 
 
 TYPES
@@ -13780,6 +14028,77 @@ type Check struct {
 }
     Check is what Validate compares a proposal with: the state the curation
     started from and what names one pull request of the repository.
+
+type CriticRun struct{ Dir string }
+    CriticRun is one critique's run directory.
+
+func PrepareCritic(dir string, live, proposed State, changes, review, rejections []byte) (CriticRun, error)
+    PrepareCritic makes a new run directory dir holding live (the notes as
+    current.md, the harness as current/), proposed (proposed.md and proposed/),
+    the proposal's changes.json, the review data (review.json) and the earlier
+    rejections (rejections.json). The decision file is the critic's to write.
+
+func (c CriticRun) Changes() string
+    Changes is changes.json, the curator's account of every section and file.
+
+func (c CriticRun) Current() string
+    Current is current.md, a copy of the notes now.
+
+func (c CriticRun) CurrentHarness() string
+    CurrentHarness is current/, a copy of the harness now.
+
+func (c CriticRun) Decision() string
+    Decision is decision.json, the critic's answer.
+
+func (c CriticRun) Proposed() string
+    Proposed is proposed.md, a copy of the proposed notes.
+
+func (c CriticRun) ProposedHarness() string
+    ProposedHarness is proposed/, a copy of the proposed harness.
+
+func (c CriticRun) Rejections() string
+    Rejections is rejections.json, why the repository's last proposals were
+    declined, and by whom.
+
+func (c CriticRun) Review() string
+    Review is review.json, the proposal as `magnum notes <repo> --review --json`
+    prints it.
+
+type Decision struct {
+	Decision string   `json:"decision"`
+	Target   string   `json:"target"`
+	Reason   string   `json:"reason"`
+	Losses   []string `json:"losses"`
+	Checked  []string `json:"checked"`
+}
+    Decision is the critic's decision.json. Target is the fingerprint of the
+    state it reviewed (the prompt gives it), which binds an apply to that state.
+    Losses lists the removed lines the critic accepts losing and Checked what it
+    examined: free text the registry keeps with the decision for the operator,
+    which magnum interprets in no other way.
+
+func ReadDecision(run CriticRun) (d Decision, missing bool, problems []string)
+    ReadDecision reads the critic's decision.json in run: a regular file of the
+    run directory (readRegular: what an agent leaves is not trusted), one JSON
+    value, no unknown fields. Problems are worded for a nudge (the file's name
+    and the parse error, never its content); missing reports that the file was
+    not written.
+
+type DecisionCheck struct {
+	// Target is the fingerprint the prompt gave: the state the critic
+	// reviewed.
+	Target string
+	// Conflict: the notes changed since the proposal was made and its merge
+	// with their changes conflicts. Lossy: what applying it would write loses
+	// lines of the notes now (CheckPreserved). Either makes apply invalid and
+	// recurate valid.
+	Conflict, Lossy bool
+	// Leaks names what is wrong with the reason (a pull request, a login, a
+	// branch, a probe file, a repository, a secret or a home path): phrases
+	// to report, nil = none. Nil checks nothing.
+	Leaks func(text string) []string
+}
+    DecisionCheck is what ValidateDecision compares a decision with.
 
 type File struct {
 	Name   string `json:"name"`
@@ -13892,6 +14211,9 @@ type Repo struct {
 func RepoOf(notesPath string) (Repo, bool)
     RepoOf is the Repo whose notes file is notesPath (<root>/<owner>/<name>.md);
     false when the path does not have that shape.
+
+func (r Repo) Critic() string
+    Critic is the directory holding r's critiques.
 
 func (r Repo) Curate() string
     Curate is the directory of the repository's curations.
@@ -17572,6 +17894,17 @@ const (
     Who decided a proposal (notes_proposals.decided_by, migration 0027).
 
 const (
+	CritiqueApplied   = "applied"   // the critic applied the proposal
+	CritiqueRejected  = "rejected"  // the critic rejected it
+	CritiqueRecurated = "recurated" // the critic superseded it for a new curation
+	CritiqueUndecided = "undecided" // no valid decision after a nudge: an attempt
+	CritiqueStopped   = "stopped"   // a shutdown, a pause, an agent that went away: no attempt
+	CritiqueChanged   = "changed"   // the notes changed before the apply: critiqued again, no attempt
+	CritiqueOvertaken = "overtaken" // the operator decided the proposal first
+)
+    Critique outcomes (notes_critiques.outcome; "" while it runs).
+
+const (
 	MissNoted   = "noted"   // a note covers it now, in Section
 	MissSkipped = "skipped" // no note helps a future review: Reason says why
 )
@@ -17602,8 +17935,8 @@ const LearnDismissFailures = 2
     would fail the same way.
 
 const MissDismissRejections = 2
-    MissDismissRejections is how many rejected proposals a miss may be in before
-    it is dismissed.
+    MissDismissRejections is how many proposals the operator rejected a miss may
+    be in before it is dismissed.
 
 const NotesUnusedRounds = 20
     NotesUnusedRounds is how many judge rounds a harness file must have existed
@@ -18098,6 +18431,29 @@ func (c CheckResult) Key() CheckKey
     workflows, and a status is never a run of a check run's check, so neither
     replaces the other's runs.
 
+type CritiqueEnd struct {
+	Outcome  string // Critique*
+	Decision string // the decision it wrote ("" = none valid)
+	Reason   string
+	Checked  []string
+	Losses   []string
+	Model    string // the model the answer came from ("" keeps the one it started on)
+	Detail   string
+	At       time.Time // zero = now
+}
+    CritiqueEnd is how a critique ended (EndCritique).
+
+type CritiqueStart struct {
+	ProposalID int64
+	RepoID     int64
+	RunID      string
+	RunDir     string
+	Model      string
+	Target     string    // the fingerprint of the state it reviews
+	At         time.Time // zero = now
+}
+    CritiqueStart is a critique that starts (StartCritique).
+
 type Decline struct {
 	ID        int64  `json:"id"`
 	PRID      int64  `json:"pr_id"`
@@ -18509,6 +18865,33 @@ type NotesContent struct {
 }
     NotesContent is what a version holds: the notes text and every harness file
     with its body, sorted by path.
+
+type NotesCritique struct {
+	ID         int64      `json:"id"`
+	ProposalID int64      `json:"proposal_id"`
+	RepoID     int64      `json:"repo_id"`
+	RunID      string     `json:"run_id"`
+	RunDir     string     `json:"run_dir,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	Model      string     `json:"model,omitempty"`
+	Target     string     `json:"target_sha256,omitempty"`
+	Outcome    string     `json:"outcome,omitempty"`
+	Decision   string     `json:"decision,omitempty"`
+	Reason     string     `json:"reason,omitempty"`
+	Checked    []string   `json:"checked"`
+	Losses     []string   `json:"losses"`
+	Detail     string     `json:"detail,omitempty"`
+}
+    NotesCritique is one critique of a notes proposal.
+
+type NotesCritiqueFilter struct {
+	RepoID     int64
+	ProposalID int64
+	Limit      int
+}
+    NotesCritiqueFilter selects critiques: of a repository and of a proposal (0
+    = any), newest first, at most Limit (0 = all).
 
 type NotesFileUse struct {
 	File      string     `json:"file"`
@@ -19236,6 +19619,10 @@ func (s *Store) CountAutoApprovedSince(ctx context.Context, since time.Time) (in
     CountAutoApprovedSince counts the approvals posted at or after since,
     withdrawn or not.
 
+func (s *Store) CountCritiquesSince(ctx context.Context, since time.Time) (int, error)
+    CountCritiquesSince counts the critiques started at or after since (the
+    daily cap: since is the local day's start).
+
 func (s *Store) CountDeclines(ctx context.Context, f DeclineFilter) (int, error)
     CountDeclines counts the declines f selects.
 
@@ -19314,6 +19701,10 @@ func (s *Store) DeleteKV(ctx context.Context, key string) error
 func (s *Store) DeleteKVIf(ctx context.Context, key, value string) (bool, error)
     DeleteKVIf removes key only while it still holds value, and reports whether
     it did (SetKVIf's counterpart).
+
+func (s *Store) EndCritique(ctx context.Context, id int64, in CritiqueEnd) error
+    EndCritique records how critique id ended, once: ErrConflict when it ended
+    already.
 
 func (s *Store) EnqueueRequest(ctx context.Context, kind string, payload any) (int64, error)
     EnqueueRequest inserts a pending request with payload marshalled as JSON
@@ -19499,6 +19890,9 @@ func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, ide
     author (its login, "" when unknown); mine whether a login is one of the
     operator's. It reads magnum's latest round only for a PR whose last review
     is such a comment.
+
+func (s *Store) NotesCritiques(ctx context.Context, f NotesCritiqueFilter) ([]NotesCritique, error)
+    NotesCritiques lists the critiques f selects.
 
 func (s *Store) NotesFileUses(ctx context.Context, repoID int64) ([]NotesFileUse, error)
     NotesFileUses lists repoID's harness files with their rounds and the uses
@@ -19767,10 +20161,18 @@ func (s *Store) StandingAutoApprovals(ctx context.Context) ([]AutoApprovalPR, er
     StandingAutoApprovals lists the approvals standing on open PRs, by
     repository and number.
 
+func (s *Store) StartCritique(ctx context.Context, in CritiqueStart) (int64, error)
+    StartCritique records a critique that starts and returns its id.
+
 func (s *Store) StepDone(ctx context.Context, subject, step string) (bool, error)
     StepDone reports whether a step event with phase ok exists for (subject,
     step) after the subject's latest KindStepReset row (its current step
     generation). See package steps.
+
+func (s *Store) StopOpenCritiques(ctx context.Context, detail string, at time.Time) (int64, error)
+    StopOpenCritiques ends every critique still running (a daemon that stopped
+    mid-critique: no critique survives a restart) as stopped, with detail,
+    and reports how many.
 
 func (s *Store) TransitionAutoApproval(ctx context.Context, id int64, from []string, to string, set func(*AutoApprovalUpdate)) error
     TransitionAutoApproval moves approval id to state to only if its state is

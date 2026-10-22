@@ -2218,6 +2218,7 @@ func (h *harness) stop() {
 	e.mu.Unlock()
 	e.stopRetro()
 	e.stopCurate()
+	e.stopCritic()
 	e.stopEdit()
 	e.stopGate()
 	done := make(chan struct{})
@@ -2225,6 +2226,7 @@ func (h *harness) stop() {
 		e.roundWG.Wait()
 		e.retroWG.Wait()
 		e.curateWG.Wait()
+		e.criticWG.Wait()
 		e.editWG.Wait()
 		e.gateWG.Wait()
 		h.runs.Wait()
@@ -2234,7 +2236,7 @@ func (h *harness) stop() {
 	select {
 	case <-done:
 	case <-time.After(leakWait):
-		h.t.Errorf("rounds, a retro, a notes curation, a skill edit, a skill gate, a Run loop or a memory sample still ran %s after the test ended", leakWait)
+		h.t.Errorf("rounds, a retro, a notes curation or critique, a skill edit, a skill gate, a Run loop or a memory sample still ran %s after the test ended", leakWait)
 		return
 	}
 	e.stopToasts()
@@ -2289,6 +2291,7 @@ func (h *harness) settle() {
 	h.e.roundWG.Wait()
 	h.e.retroWG.Wait()
 	h.e.curateWG.Wait()
+	h.e.criticWG.Wait()
 	h.e.editWG.Wait()
 	h.e.gateWG.Wait()
 	h.e.drainHeavy(h.ctx)

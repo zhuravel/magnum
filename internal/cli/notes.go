@@ -32,7 +32,8 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-const notesUsage = "[<repo> [--edit | --log | --diff [N] | --curate | --review [--reason <text>] | --restore <version> [--reason <text>] | --recover]] [--json]"
+const notesUsage = "[<repo> [--edit | --log | --diff [N] | --curate | --review [--reason <text>] | --restore <version> [--reason <text>] | --recover | " +
+	"--decisions [N]]] [--json]"
 
 // notesMaxShown caps what `magnum notes` prints: notes larger than this are
 // garbage not worth flooding the terminal with.
@@ -42,6 +43,7 @@ const notesMaxShown = 1 << 20
 type notesFlags struct {
 	edit, log, curate, review, recover, json bool
 	diff                                     string // --diff [N]: "" = not asked
+	decisions                                string // --decisions [N]: "" = not asked, notesDecisionsAll = the list
 	restore                                  int64
 	reason                                   string
 }
@@ -52,8 +54,11 @@ func newNotesCmd(c *Context) *cobra.Command {
 		"Without a repository: list every repository with notes, one row each: the notes' size and lines, the "+
 			"harness's files and size (! marks what is past a [notes] curation trigger), when they changed and by whom "+
 			"(the judge of a PR, a curation, a person, an import) and their state: ok, over limit, curation running, "+
-			"curation queued (it waits for a round's judge stage, or for another curation, to end), proposal N to "+
-			"review, or proposal N stale (the notes changed since it was made). A hint under the table says what to "+
+			"curation queued (it waits for a round's judge stage, or for another curation, to end), critic running (the "+
+			"notes critic reviews a proposal: its model and for how long), proposal N to review, or proposal N stale (the "+
+			"notes changed since it was made). With [notes] critic on, a proposal the critic stepped back from (it "+
+			"declined critic_declines proposals of the repository in a row) or left to you (two critiques without a "+
+			"decision) says so, the second with the time left before it expires. A hint under the table says what to "+
 			"run for each; --json prints the same data.\n\n"+
 			"With a repository: print the notes file magnum keeps for it, ~/.local/share/magnum/notes/<owner>/<repo>.md: what the "+
 			"repository is, how to run its tests and lint, how to QA a change, known pitfalls. Every review role reads it "+
@@ -63,7 +68,8 @@ func newNotesCmd(c *Context) *cobra.Command {
 			"the notes, on stderr: their sizes against the [notes] limits (hints to organize them, not caps), the size of "+
 			"the archive (ARCHIVE.md in the harness directory: the lines curations retired, word for word, with what "+
 			"became of each; roles read it only when a lesson seems missing), the harness files no round used in 20 rounds "+
-			"or more, and a curation proposal waiting for review.\n\n"+
+			"or more, a curation proposal waiting for review, and the last decision of a proposal: who made it (you, the "+
+			"critic with its model, magnum), when and why.\n\n"+
 			"--edit opens the file in $VISUAL, else $EDITOR, else vi, on the terminal (the harness directory is created "+
 			"first) and records the result as a version.\n\n"+
 			"Every version of the notes and the harness is kept in the registry: --log lists them (time, source, PR, "+
@@ -89,7 +95,14 @@ func newNotesCmd(c *Context) *cobra.Command {
 			"and c asks for a new curation instead; when they conflict, y asks for a new curation. The new curation "+
 			"starts from the notes now and reads the stale proposal, which is kept as superseded. --review and --restore "+
 			"ask on a terminal only; --json prints the data instead (--restore --json: what the restore would change, "+
-			"proposing and recording nothing).",
+			"proposing and recording nothing). When the notes critic works on the proposal, --review says so before "+
+			"it asks; y applies it anyway, and the critic's decision then comes too late and is dropped.\n\n"+
+			"--decisions lists the repository's proposals, newest first: what each is, its state, who decided it (you, "+
+			"the critic with its model, magnum), when and why, and its critiques counted by outcome. --decisions N shows "+
+			"proposal N with every critique of it: when it ran and on which model, its outcome and decision, the "+
+			"fingerprint of the state it reviewed, its reason, what it checked and the losses it accepted, and why it "+
+			"stopped or did not decide. The registry keeps every critique, so this works after the critique's run "+
+			"directory is pruned; the directory is named while it exists. --json prints the same data.",
 		func(pos []string) int { return runNotes(c, f, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&f.edit, "edit", false, "open the notes in $VISUAL, else $EDITOR, else vi")
@@ -100,40 +113,46 @@ func newNotesCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&f.review, "review", false, "review the waiting curation proposal and apply (y) or reject (n) it")
 	fs.Int64Var(&f.restore, "restore", 0, "propose the recorded `version` back, reviewed like a curation")
 	fs.BoolVar(&f.recover, "recover", false, "propose an archive of the lines earlier versions held and the notes lack")
+	fs.StringVar(&f.decisions, "decisions", "", "list who decided the proposals and why, or show proposal `N` with the critic's record")
+	fs.Lookup("decisions").NoOptDefVal = notesDecisionsAll
 	fs.StringVar(&f.reason, "reason", "", "with --review, --restore or --recover: why the proposal is rejected (the next curation reads it)")
-	fs.BoolVar(&f.json, "json", false, "print JSON (the list, the notes' sizes, --log, --curate, --review, --restore, --recover)")
+	fs.BoolVar(&f.json, "json", false, "print JSON (the list, the notes' sizes, --log, --curate, --review, --restore, --recover, --decisions)")
 	cmd.ValidArgsFunction = completeFirst(c.completeNotesRepos)
 	return cmd
 }
 
 func runNotes(c *Context, f notesFlags, pos []string) int {
-	// --diff takes an optional value, which pflag reads only as --diff=N:
-	// `--diff 2` leaves the 2 among the arguments.
-	if f.diff != "" && len(pos) == 2 {
+	// --diff and --decisions take an optional value, which pflag reads only
+	// as --diff=N: `--diff 2` leaves the 2 among the arguments.
+	for _, opt := range []*string{&f.diff, &f.decisions} {
+		if *opt == "" || len(pos) != 2 {
+			continue
+		}
 		_, err0 := parsePositive(pos[0])
 		_, err1 := parsePositive(pos[1])
 		switch {
 		case err0 != nil && err1 == nil:
-			f.diff, pos = pos[1], pos[:1]
+			*opt, pos = pos[1], pos[:1]
 		case err0 == nil && err1 != nil:
-			f.diff, pos = pos[0], pos[1:]
+			*opt, pos = pos[0], pos[1:]
 		}
 	}
-	if len(pos) == 0 && !f.edit && !f.log && f.diff == "" && !f.curate && !f.review && f.restore == 0 && !f.recover && f.reason == "" {
+	if len(pos) == 0 && !f.edit && !f.log && f.diff == "" && !f.curate && !f.review && f.restore == 0 && !f.recover && f.decisions == "" &&
+		f.reason == "" {
 		return notesList(c, f)
 	}
 	if len(pos) != 1 {
 		return inspUsage(c, "notes", "want one repository (owner/name or name), or none to list them all", notesUsage)
 	}
 	actions := 0
-	for _, on := range []bool{f.edit, f.log, f.diff != "", f.curate, f.review, f.restore != 0, f.recover} {
+	for _, on := range []bool{f.edit, f.log, f.diff != "", f.curate, f.review, f.restore != 0, f.recover, f.decisions != ""} {
 		if on {
 			actions++
 		}
 	}
 	switch {
 	case actions > 1:
-		return inspUsage(c, "notes", "--edit, --log, --diff, --curate, --review, --restore and --recover go one at a time", notesUsage)
+		return inspUsage(c, "notes", "--edit, --log, --diff, --curate, --review, --restore, --recover and --decisions go one at a time", notesUsage)
 	case f.reason != "" && !f.review && f.restore == 0 && !f.recover:
 		return inspUsage(c, "notes", "--reason goes with --review, --restore or --recover", notesUsage)
 	case f.json && (f.edit || f.diff != ""):
@@ -171,7 +190,7 @@ func runNotes(c *Context, f notesFlags, pos []string) int {
 	switch {
 	case f.edit:
 		return notesEdit(c, full, nr)
-	case f.log, back > 0, f.curate, f.review, f.restore != 0, f.recover:
+	case f.log, back > 0, f.curate, f.review, f.restore != 0, f.recover, f.decisions != "":
 		return notesRegistryAction(c, f, back, full, nr)
 	}
 	return notesShow(c, f, full, nr)
@@ -209,7 +228,12 @@ func notesLimits(c *Context) (notes.Limits, config.Notes) {
 	if c.Config != nil || c.LoadConfig() == nil {
 		n = c.Config.Notes
 	}
-	return notes.Limits{MaxBytes: n.MaxBytes, MaxLine: n.MaxLine, MaxHarnessFiles: n.MaxHarnessFiles, MaxHarnessBytes: n.MaxHarnessBytes}, n
+	return notesLimitsOf(n), n
+}
+
+// notesLimitsOf are the curation triggers of the [notes] table n.
+func notesLimitsOf(n config.Notes) notes.Limits {
+	return notes.Limits{MaxBytes: n.MaxBytes, MaxLine: n.MaxLine, MaxHarnessFiles: n.MaxHarnessFiles, MaxHarnessBytes: n.MaxHarnessBytes}
 }
 
 // notesExist reports whether the repository has a notes file (the card of
@@ -235,7 +259,9 @@ type notesView struct {
 	Unused   []string              `json:"unused"`
 	Proposal *store.NotesProposal  `json:"proposal,omitempty"`       // the newest waiting for review
 	Stale    bool                  `json:"proposal_stale,omitempty"` // the notes changed since it was made
-	Registry string                `json:"registry_error,omitempty"`
+	// LastDecision is the proposal decided last: by whom, when and why.
+	LastDecision *notesDecision `json:"last_decision,omitempty"`
+	Registry     string         `json:"registry_error,omitempty"`
 }
 
 // notesShow prints the notes file, with control characters other than
@@ -327,11 +353,16 @@ func notesGather(c *Context, full string, nr notes.Repo) notesView {
 		v.Proposal = &ps[0]
 		v.Stale, _ = engine.ProposalStale(ctx, st, nr, ps[0])
 	}
+	if last, err := notesLastDecision(ctx, st, repo.ID); err != nil {
+		v.Registry = err.Error()
+	} else {
+		v.LastDecision = last
+	}
 	return v
 }
 
 // notesSummary writes the sizes against the limits, the archive's size, the
-// unused harness files and a waiting proposal.
+// unused harness files, a waiting proposal and the last decision.
 func notesSummary(w io.Writer, v notesView) {
 	past := func(limit string) string {
 		if slices.Contains(v.Over, limit) {
@@ -366,6 +397,9 @@ func notesSummary(w io.Writer, v notesView) {
 		}
 		fmt.Fprintf(w, "proposal %d (%s) waits for review since %s%s: `magnum notes %s --review`\n", p.ID, p.Kind,
 			p.CreatedAt.Local().Format("2006-01-02 15:04"), stale, v.Repo)
+	}
+	if d := v.LastDecision; d != nil {
+		fmt.Fprintln(w, notesDecisionLine(*d))
 	}
 	if v.Registry != "" {
 		fmt.Fprintf(w, "registry: %s\n", v.Registry)

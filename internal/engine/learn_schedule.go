@@ -43,8 +43,8 @@ const (
 )
 
 // learnRunning is the learn job running now, named, and when it started
-// ("" = none): the retro, a notes curation, a skill edit (or revert) or the
-// gate of a skill proposal.
+// ("" = none): the retro, a notes curation, a notes critique, a skill edit
+// (or revert) or the gate of a skill proposal.
 func (e *Engine) learnRunning() (string, time.Time) {
 	e.retroMu.Lock()
 	retro, retroAt := e.retroCancel != nil, e.retroStarted
@@ -57,6 +57,9 @@ func (e *Engine) learnRunning() (string, time.Time) {
 	e.curateMu.Unlock()
 	if curate {
 		return "the notes curation of " + repo, curateAt
+	}
+	if critic, at := e.criticRunning(); critic != "" {
+		return critic, at
 	}
 	e.editMu.Lock()
 	edit, editAt, what := e.editCancel != nil, e.editStarted, e.editWhat

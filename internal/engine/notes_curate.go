@@ -283,6 +283,7 @@ type curateFile struct {
 type curateRejection struct {
 	At     time.Time `json:"at"`
 	Reason string    `json:"reason"`
+	By     string    `json:"by,omitempty"` // store.DecidedByOperator | store.DecidedByCritic
 }
 
 // maybeCurate starts a queued curation that can start now (every tick:
@@ -389,8 +390,13 @@ func (e *Engine) dueCurations(ctx context.Context, now time.Time) []curateDue {
 		}
 		trigger := ""
 		marked, _ := e.getKV(ctx, KVNotesOver(repo.FullName()))
+		recurate, _ := e.getKV(ctx, KVNotesRecurate(repo.FullName()))
+		// notes_critic.go: notes a critic apply left past a limit wait a week.
+		overAt, criticOver := e.kvTime(ctx, KVNotesCriticOver(repo.FullName()))
 		switch {
-		case changed && on(CurateTriggerOverLimit) && marked != "" && since >= curateOverLimitEvery:
+		case recurate != "":
+			trigger = CurateTriggerReview
+		case changed && on(CurateTriggerOverLimit) && marked != "" && since >= curateOverLimitEvery && (!criticOver || now.Sub(overAt) >= curateWeeklyEvery):
 			trigger = CurateTriggerOverLimit
 		case changed && on(CurateTriggerWeekly) && since >= curateWeeklyEvery:
 			trigger = CurateTriggerWeekly
@@ -732,6 +738,7 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 			e.log.Warn("notes curation: store an invalid proposal", "repo", full, "err", err)
 		} else {
 			e.clearMissesMark(octx, full, start)
+			e.delKV(octx, KVNotesRecurate(full))
 		}
 		e.event(octx, "warn", subject, "notes.curate_invalid",
 			fmt.Sprintf("notes curation of %s: the proposal is still invalid after a nudge (%d problem(s)); kept as proposal %d",
@@ -753,6 +760,7 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 		return
 	}
 	e.clearMissesMark(octx, full, start)
+	e.delKV(octx, KVNotesRecurate(full))
 	before, after := state.Size(e.cfg.Notes.MaxLine), res.Proposal.State.Size(e.cfg.Notes.MaxLine)
 	noted := 0
 	for _, m := range in.Misses {
@@ -769,6 +777,9 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 			full, p.ID, before.Bytes, after.Bytes, before.HarnessFiles, after.HarnessFiles, missText, full),
 		map[string]any{"run": run.ID, "proposal": p.ID, "bytes_before": before.Bytes, "bytes_after": after.Bytes,
 			"harness_before": before.HarnessFiles, "harness_after": after.HarnessFiles, "misses": len(in.Misses), "misses_noted": noted})
+	if e.cfg.Notes.Critic && e.d.Critic != nil {
+		return // the critic's decision is the one toast of the proposal (notes_critic.go)
+	}
 	e.info(notify.Item{Key: fmt.Sprintf("notes-proposal:%d", p.ID), Title: "notes curation for " + full + " is ready",
 		Body: "Review it with `magnum notes " + full + " --review`.", Line: "notes curation for " + full + " is ready"})
 }
@@ -874,13 +885,17 @@ func (e *Engine) curateUsage(ctx context.Context, repo store.Repo, nr notes.Repo
 		u.Harness = append(u.Harness, curateFile{Name: b.Path, Bytes: int64(len(b.Body)), Rounds: x.Rounds, Uses: x.Uses,
 			LastUsed: x.LastUsed, UnusedCandidate: x.Unused()})
 	}
-	rejected, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: []string{store.ProposalRejected}, Limit: curateRejections})
+	rejected, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: []string{store.ProposalRejected, store.ProposalSuperseded},
+		Limit: 50})
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, p := range rejected {
-		if p.Kind == store.ProposalCuration && p.Trigger != CurateTriggerRecover && p.Reason != "" {
-			u.Rejections = append(u.Rejections, curateRejection{At: store.Deref(p.DecidedAt), Reason: p.Reason})
+		// A rejection, or a proposal its reviewer sent back (the operator or
+		// the critic; magnum's own supersede says only that the notes changed).
+		if len(u.Rejections) < curateRejections && p.Kind == store.ProposalCuration && p.Trigger != CurateTriggerRecover && p.Reason != "" &&
+			p.DecidedBy != store.DecidedByMagnum {
+			u.Rejections = append(u.Rejections, curateRejection{At: store.Deref(p.DecidedAt), Reason: p.Reason, By: p.DecidedBy})
 		}
 	}
 	b, err := json.MarshalIndent(u, "", "  ")
@@ -905,7 +920,11 @@ func (e *Engine) curateSuperseded(ctx context.Context, repo store.Repo, scratch 
 	if err != nil {
 		return 0, err
 	}
-	return p.ID, notes.WriteSuperseded(scratch, StateOf(content), p.Changes)
+	reason := ""
+	if p.DecidedBy != store.DecidedByMagnum { // magnum's own supersede says only that the notes changed
+		reason = p.Reason
+	}
+	return p.ID, notes.WriteSuperseded(scratch, StateOf(content), p.Changes, reason)
 }
 
 // curatePrompt renders the curator's prompt for scratch (with misses.json
@@ -983,12 +1002,18 @@ func (e *Engine) expireProposals(ctx context.Context) {
 			}
 			continue
 		}
-		subject := ""
+		subject, full := "", ""
 		if repo, err := e.st.RepoByID(ctx, p.RepoID); err == nil {
-			subject = notesSubjectOf(repo.FullName())
+			subject, full = notesSubjectOf(repo.FullName()), repo.FullName()
 		}
 		e.event(ctx, "info", subject, "notes.proposal_expired", fmt.Sprintf("notes proposal %d expired: nobody reviewed it within 7 days", p.ID),
 			map[string]any{"proposal": p.ID})
+		// The one case of a curation the critic left to the operator says so.
+		if e.cfg.Notes.Critic && p.Kind == store.ProposalCuration && p.Trigger != CurateTriggerRecover && full != "" {
+			title := fmt.Sprintf("notes proposal %d of %s expired", p.ID, full)
+			e.info(notify.Item{Key: fmt.Sprintf("notes-expired:%d", p.ID), Title: title,
+				Body: "The critic left it to you and nobody reviewed it within 7 days; `magnum notes " + full + " --curate` asks for a new one.", Line: title})
+		}
 	}
 }
 

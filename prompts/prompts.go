@@ -29,7 +29,7 @@ import (
 // not a prompt: Names leaves it out, Read returns it.
 const Shared = "judge-shared.md"
 
-//go:embed judge-*.md claude-*.md codex-*.sh fix.md whiteboard.md model-fallback.md triage.md retro.md notes-curate.md skill-edit.md
+//go:embed judge-*.md claude-*.md codex-*.sh fix.md whiteboard.md model-fallback.md triage.md retro.md notes-curate.md notes-critic.md skill-edit.md
 var embedded embed.FS
 
 // Names lists the embedded default prompts, sorted: every embedded file but

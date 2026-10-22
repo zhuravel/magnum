@@ -43,7 +43,7 @@ func newRetroCmd(c *Context) *cobra.Command {
 			"at once and runs the retro in the background, one at a time. While the daemon drains for a restart "+
 			"(daemon-restart --drain) the retro is queued and starts after the restart, or once the drain is lifted "+
 			"without one. While another learn job runs (a notes "+
-			"curation, a skill edit or gate) the retro is queued too: the answer names that job and when it started, "+
+			"curation or critique, a skill edit or gate) the retro is queued too: the answer names that job and when it started, "+
 			"and the retro starts, with the lookback and the PRs asked for, once that job ended, before any queued "+
 			"curation; one retro waits at a time, and a second request says one is queued already. While a watch's "+
 			"poll identity has a GitHub budget below [github] budget_floor the retro is queued too, and starts once "+

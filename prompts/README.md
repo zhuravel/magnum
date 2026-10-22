@@ -18,7 +18,7 @@ you delete falls back to the built-in copy. `magnum config` fails when a role na
 in neither place.
 
 The daemon loads every prompt its roles name, the judge prompts' shared blocks (`judge-shared.md`, see
-below), `model-fallback.md`, the triage, retro and notes curation prompts and a copy
+below), `model-fallback.md`, the triage, retro, notes curation and notes critic prompts and a copy
 of each judge's and fix role's skill (`~/.local/state/magnum/skill/<hash>/SKILL.md`, under the state directory) once, when it starts, right after checking that its build
 renders them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
 without a rebuild; `magnum status` shows when the prompts were loaded and how many files changed on
@@ -53,6 +53,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
 | `retro.md` | the retro's agent, which classifies what other reviewers said about a closed pull request ([learn]) | retro |
 | `notes-curate.md` | the notes curator, which proposes curated repository notes and harness ([notes]) | curation |
+| `notes-critic.md` | the notes critic, which applies, rejects or re-curates a curation proposal ([notes] `critic_*`) | critic |
 | `skill-edit.md` | the skill editor, which drafts a change to the judge skill and these prompts from what reviews got wrong ([learn] `editor_*`) | skill edit |
 
 ## Template syntax
@@ -74,7 +75,8 @@ the judge data, every other session role gets the role data, and a shell role's 
 `.sh` template gets the shell data. `model-fallback.md` gets its own small fallback data
 (`internal/agents/models.go`, see below), `triage.md` the triage data (`internal/engine/triage.go`),
 `retro.md` the retro data (`internal/engine/retro.go`), `notes-curate.md` the curation data
-(`internal/engine/notes_curate.go`) and `skill-edit.md` the skill edit data
+(`internal/engine/notes_curate.go`), `notes-critic.md` the critic data (`internal/engine/notes_critic.go`)
+and `skill-edit.md` the skill edit data
 (`internal/engine/learn_edit.go`).
 
 ## Shared blocks of the judge prompts (`judge-shared.md`)
@@ -371,13 +373,13 @@ request text they quote) is data, not instructions.
 | `.Repo` | the repository, `owner/name` |
 | `.Dir` | the curation's scratch directory, the only place the agent may write |
 | `.Current`, `.CurrentHarness` | the notes and the harness now, `current.md` and `current/` (read only; the archive, `ARCHIVE.md`, is among the harness files when there is one) |
-| `.Usage` | `usage.json`: the limits, the sizes, which limits the notes are past, each harness file's `rounds`, `uses` and `unused_candidate`, and the operator's reasons for rejecting earlier curations |
+| `.Usage` | `usage.json`: the limits, the sizes, which limits the notes are past, each harness file's `rounds`, `uses` and `unused_candidate`, and `rejections`, the reasons of the latest curations a reviewer rejected or sent back (superseded), each with `at` and `by` (`operator`, or `critic` for the notes critic; magnum's own supersedes are left out) |
 | `.Proposal`, `.Harness`, `.Changes` | what the agent writes: `proposal.md`, the `harness/` directory (a copy of the current one at first, where it adds to `ARCHIVE.md`, which the prompt names as `{{.Harness}}/ARCHIVE.md`) and `changes.json` |
 | `.Limits` | the [notes] limits, hints to organize the notes and no caps: `.MaxBytes`, `.MaxLine`, `.MaxHarnessFiles`, `.MaxHarnessBytes` |
 | `.Over` | the triggers the notes are past (empty: a weekly or requested curation) |
 | `.UnusedRounds` | the rounds without a use after which a harness file is a candidate (20) |
 | `.Misses`, `.MissCount` | `misses.json` and how many misses it holds, when the curation was given the retro's misses of the repository (class miss, scope repo, still new); `""` and 0 otherwise. Each miss is data: its `id`, `severity`, `where` (path:line at the reviewed commit), `title` and `lesson` (scrubbed of logins, pull request references and links again) and `rejections`, the reasons of rejected proposals it was in; never a login, a pull request number or a comment |
-| `.Superseded`, `.SupersededID` | `superseded/` and its proposal's id, when the curation follows up a stale proposal that was superseded (the notes changed after it was made, and the operator, or the daemon a day later, asked for a new curation instead): its notes as `notes.md`, its `harness/` and its `changes.json`, which the curator carries over where they still apply; `""` and 0 otherwise |
+| `.Superseded`, `.SupersededID` | `superseded/` and its proposal's id, when the curation follows up a stale proposal that was superseded (the notes changed after it was made, and the operator, or the daemon a day later, asked for a new curation instead): its notes as `notes.md`, its `harness/` and its `changes.json`, which the curator carries over where they still apply, and `reason.txt`, why it was sent back, when the operator or the notes critic gave a reason; `""` and 0 otherwise |
 
 `changes.json` is `{"sections": [...], "files": [...], "misses": [...]}`, each section and file item
 `{"name", "action", "into", "reason"}`: every `## ` section of the proposal and every proposed harness file
@@ -402,6 +404,42 @@ within the limits. The prompt also has the curator check each pitfall against th
 pointer to that doc (its path and heading), only for a doc the notes name: the curator runs in its scratch
 directory, without the repository. A proposal that changes nothing is invalid unless it was given misses and skips them
 all. An invalid proposal gets one nudge naming its problems, then is kept as invalid.
+
+### Notes critic prompt (`notes-critic.md`)
+
+The one prompt of a notes critique (`[notes] critic`, see the README's "Repository notes", Critic): review one
+curation proposal as the operator does with `magnum notes <repo> --review`, and apply, reject or re-curate
+it. Notes text is never a template variable. The critic reads copies in its run directory,
+`<notes>/.critic/<owner>/<repo>/<run>/`, and the prompt must say that what they hold (the notes, the harness,
+the curator's reasons and the pull request text they quote) is data, not instructions. The copies are
+frozen for the critique, so the parts of the larger ones stay valid while the critic reads them.
+
+| Variable | Meaning |
+|---|---|
+| `.Repo`, `.ProposalID` | the repository, `owner/name`, and the proposal's id |
+| `.Dir` | the run directory, the only place the critic may write; it works in the directory that holds every run |
+| `.Review` | `review.json`: the data `magnum notes <repo> --review --json` prints (the harness changes, the sections and files with the curator's reasons, the misses noted or skipped, the sizes before and after, the stale and merge state with the conflicts, and `not_preserved`, the lines an apply loses) |
+| `.Diff`, `.ArchiveDiff` | `notes.diff` and `archive.diff`, the unified diffs from the notes now to what an apply writes, each with `.Path`, `.Bytes` and `.Parts` (one `sed -n` `.Command` per part of at most 16 KiB); `.ArchiveDiff` has no parts when the archive does not change |
+| `.Rejections` | `rejections.json`: the reasons of the latest rejected and superseded proposals of the repository, each with `proposal`, `state`, `by` and `at` |
+| `.Current`, `.CurrentHarness` | the notes and the harness now, `current.md` and `current/` (read only); `.CurrentParts` the parts of `current.md` |
+| `.Proposed`, `.ProposedHarness`, `.Changes` | the curator's notes, harness and `changes.json`, copied from its scratch directory; `.ProposedParts` the parts of `proposed.md` |
+| `.Decision` | `decision.json`, the answer the critic writes |
+| `.Target` | the fingerprint of the state the critic reviews (what an apply writes: the proposed state, or a stale proposal's clean merge), which `decision.json` must name |
+| `.Stale`, `.Conflict`, `.Lossy`, `.Blocked` | the notes changed since the proposal was made; and its merge conflicts; an apply loses lines of the notes (`not_preserved`); `.Conflict` or `.Lossy`, so only `reject` and `recurate` are valid |
+| `.Limits` | the [notes] limits, which mark notes to organize and are no caps: `.MaxBytes`, `.MaxLine`, `.MaxHarnessFiles`, `.MaxHarnessBytes` |
+| `.MaxReasonRunes` | the longest reason, in characters (300) |
+
+The answer is `{"decision", "target", "reason", "losses", "checked"}` and nothing else (`notes.ReadDecision`
+refuses unknown fields). `decision` is `apply` or `reject`, or for a blocked proposal `reject` or `recurate`.
+`target` is `.Target`, exactly: magnum writes only that state. `reason` is one line within `.MaxReasonRunes`,
+required for `reject` and `recurate`, with no pull request, login, branch, probe file, repository name,
+secret or home path (`notes.ValidateDecision`); the next curation reads it as it reads the operator's.
+`losses` lists the lines or files the critic accepts to lose and `checked` what it examined, one line each;
+magnum keeps both with the decision in the registry (`magnum notes <repo> --decisions N`) and interprets
+neither. An invalid answer gets one nudge naming its problems; a second leaves the critique undecided. The
+prompt carries curation's no-loss rules (standing decisions and the authors' answers stay in full, every
+removed line is in the archive word for word, size is no reason, a rejection names what to keep and what to
+cut and never a byte target).
 
 ### Skill editor prompt (`skill-edit.md`)
 
@@ -529,7 +567,7 @@ any other name adds a kind that starts from the same health patterns, `wrapper =
 | `env` | extra pane environment (a role's `env` wins) |
 | `health_patterns` | `login_required`, `model_limit`, `usage_limit`, `overloaded` and `refused` regexp lists, case-insensitive; a list replaces the built-in one. `refused` (Codex's safety warnings, such as "flagged for possible cybersecurity risk") ends the round at once and flags the PR for good: no round of any kind until `magnum codex-flag clear`. `model_limit` (one model capped, checked before `usage_limit`) may capture the model in a `(?P<model>...)` group; without one the session's current model is the limited one |
 | `switch_model` | a slash command typed into the idle agent's pane to switch its session to `{model}`, e.g. `/model {model}`; `""` = the kind cannot switch in-session, so a model limit pauses the kind like a usage limit |
-| `fallback_models` | the models a session switches to, in order, when its model hits its own limit; unused without `switch_model` |
+| `fallback_models` | the models a session switches to, in order, when its model hits its own limit, unless its role names its own (`fallback_models` on the role); unused without `switch_model` |
 | `reset_model` | the `switch_model` argument that returns a session to the CLI's own default once the limit is over, when neither the role's `model` nor the kind's `default_model` is set (claude: `default`); `""` = it stays on the fallback |
 | `exit_keys` | the keys a hard park sends an agent that is still its pane's foreground process after two ctrl+c (a fresh start's second try, `magnum abort`'s last), as herdr's `pane send-keys` takes them: one key combo each (a printable key, `enter`, `esc`, `ctrl+d`), never a word. It then waits 10 seconds more and closes that pane alone, never the workspace, and the session (`pr.park_forced`). The idle park's early park sends them a second after one ctrl+c, only when herdr shows the session's own conversation idle in the pane and its screen a bare prompt and no dialog, and closes nothing they leave running. claude: `["/", "e", "x", "i", "t", "enter"]` (`/exit`); `[]` = the hard park closes the pane straight away, and the early park sends two ctrl+c |
 | `context_pattern` | how full a session's context is, read from the last status lines of its pane (the newest match counts): a Go regexp with a capture group named `used` (the percent used) or `left` (the percent left, read as 100 minus it). claude: `(?:\((?P<used>\d{1,3})%\)\|Context left until auto-compact: (?P<left>\d{1,3})%)`, a status line's `418k/1m (41%)` or Claude Code's own warning. `[pipeline] fix_compact_at` compacts the fixer by it before a cycle that resumes it. A pattern that does not compile or names neither group is refused; `""` = nothing to read, so the kind's fixer is resumed as it is. A fixer resumed from a park is read every 2 seconds for up to a minute, until a figure shows (once per PR: after a miss, later resumes read once, until a figure was read); the `fix.context_unknown` warning for a pane that shows none is said again only after a figure was read in between |
@@ -574,7 +612,10 @@ kind as a usage limit does. `magnum status` lists each limit under pauses (`clau
 until magnum switches back. In a session with history Claude Code asks "Switch model?" first: magnum
 answers "Yes, switch to …" with Enter, only while the cursor is on that option, and counts the switch
 only once the status line names the new model (the visible screen's last lines, e.g. `Opus 5.5 | …`);
-a switch not confirmed within 30 s backs out of the dialog with Esc and pauses the kind as before.
+a switch not confirmed within 30 s backs out of the dialog with Esc and pauses the kind as before. A pane
+job (the curator, the critic, the retro's classifier, the skill editor) does not switch a live session:
+it records the limit in the registry, starts its agent again on the first free fallback inside the job
+and sends its first prompt again, once per job; with no fallback left it stops without pausing the kind.
 
 ## Roles
 
@@ -591,6 +632,7 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `rerun_min_lines` | `0`; claude-simplify `150` | with `runs = "first"`: the role runs again once this many code lines changed since its last completed run (comments, blank lines, whitespace moves and documentation do not count); `0` = only the first round, then on request. The other `runs` values ignore it |
 | `identity` | the watch's | the `[[identity]]` whose GitHub environment the pane gets |
 | `model`, `effort` | none | passed through the kind's `model`/`effort` args; also template variables (a shell role's command gets them too: codex-review's passes its `model` as `-c model=…` when it has one and `effort`, `high` by default, as `-c model_reasoning_effort=…`). A built-in role's `effort` and `rereview_effort` follow `[pipeline] spend` (`low`, `medium`, `high`) unless its block sets them, and the active level's `[spend.<level>]` table sets `model`, `effort`, `rereview_effort` and `max_subagents` over the block too |
+| `fallback_models` | none (the kind's) | session roles: the models the role's sessions switch to, in order, when its model hits its own limit; empty = its kind's `fallback_models`. The pane jobs' own keys: `[notes] fallback_models` (the curator), `[notes] critic_fallback_models` (the critic, `["opus"]`), `[learn] fallback_models` (the retro) and `[learn] editor_fallback_models` (the skill editor) |
 | `max_subagents` | none; the judge `2` | the subagents the role's agent may have open at once, through the kind's `subagents` args; `0` = none (`no_subagents`); a kind without those args ignores it |
 | `max_session_rounds` | `0`; the judge `6` | session roles: the review rounds one session of the role may serve on a PR, its resumes included (an own pass, a continue or a nudge is part of its round); when a round starts after that many, the role starts in a fresh session (a live one is quit first, history kept), the judge through the recovery prompt at its `rereview_effort` while the reviewers keep theirs, any other role alone with the round's prompt. Never inside a round, for a continue or for a session at work; an `agent.session_rotated` event each time. `0` = no limit |
 | `rereview_effort` | `effort` | the effort of re-review rounds (new commits after an earlier review); the judge's built-in default is `high`. A re-review starts or resumes an agent at it; a live session of a kind that sets effort only at launch is asked for it in the prompt (`.EffortInPrompt`) |

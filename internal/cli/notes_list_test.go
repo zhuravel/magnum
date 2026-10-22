@@ -370,8 +370,8 @@ func TestNotesListJSONAndNoRepositories(t *testing.T) {
 // The status line sums the list up, leaving out what is zero.
 func TestNotesSummaryLine(t *testing.T) {
 	h := listHarness(t)
-	limits, _ := notesLimits(h.c)
-	rows, err := notesOverview(h.ctx, h.c.Layout, h.st, limits, h.now)
+	_, n := notesLimits(h.c)
+	rows, err := notesOverview(h.ctx, h.c.Layout, h.st, n)
 	if err != nil {
 		t.Fatal(err)
 	}

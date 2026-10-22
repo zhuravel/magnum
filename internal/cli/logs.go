@@ -26,7 +26,8 @@ func newLogsCmd(c *Context) *cobra.Command {
 	var f logsFlags
 	cmd := newCommand(groupInspect, "logs "+logsUsage, "daemon log, or the audit events of a PR, slot or subject (-f follows)",
 		"Print the tail of the daemon log (state/logs/daemon.log), or the audit events of a PR reference, a slot "+
-			"name or a subject such as request:<id>, identity:<name>, tool:codex or pool:<repo>. -f keeps following "+
+			"name or a subject such as request:<id>, identity:<name>, tool:codex, pool:<repo> or notes:<owner>/<repo> (the "+
+			"curations and critiques of a repository's notes). -f keeps following "+
 			"new lines or events, -n sets how many to show first, --raw prints daemon log lines as written (JSON) "+
 			"and --json prints events as JSON lines.",
 		func(pos []string) int { return runLogs(c, f, pos) })
@@ -46,8 +47,9 @@ type logsFlags struct {
 }
 
 // logsSubjectPrefixes are the event subject kinds a raw "<kind>:<rest>"
-// argument may name.
-var logsSubjectPrefixes = []string{"pr", "slot", "request", "identity", "tool", "pool", "repo", "slug", "path", "watch"}
+// argument may name. notes:<owner>/<repo> are the curations and critiques
+// of a repository's notes, whose subjects are lower case.
+var logsSubjectPrefixes = []string{"pr", "slot", "request", "identity", "tool", "pool", "repo", "slug", "path", "watch", "notes"}
 
 func runLogs(c *Context, f logsFlags, pos []string) int {
 	if len(pos) > 1 {
@@ -143,6 +145,9 @@ func logsBacklog(ctx context.Context, st *store.Store, m []store.SubjectMatch, n
 //     (cleanup) and the checkout steps slot:<slot>:pr:<N>:* of every slot it was in.
 func logsMatchers(ctx context.Context, st *store.Store, refs app.RefParser, arg string) ([]store.SubjectMatch, string, error) {
 	if kind, rest, ok := strings.Cut(arg, ":"); ok && rest != "" && slices.Contains(logsSubjectPrefixes, kind) {
+		if kind == "notes" {
+			arg = kind + ":" + strings.ToLower(rest)
+		}
 		return []store.SubjectMatch{logsBelow(arg)}, arg, nil
 	}
 	if sl, err := st.SlotByName(ctx, arg); err == nil && sl.Kind != store.SlotKindPerPR {

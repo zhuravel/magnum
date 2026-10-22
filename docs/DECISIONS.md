@@ -11829,6 +11829,113 @@ skill versions); people add theirs to the sections before it, at the end of the 
     (the job's turn ended with no answer, and a fresh session with the same file inputs loses nothing); a
     restart per fallback (one per job bounds a job's cost when a window closes on every model). The design's
     section 5 (policy values moved into the configuration) stays a follow-up.
+- **The notes critic decides curation proposals** (2026-10-22, spec 07, amends "A curator proposes curated notes" and
+  "The retro's misses become notes proposals"). The operator asked eight times between 2026-10-06 and 10-17 for
+  magnum to "process notes for me". On 2026-10-10 he approved the design
+  docs/superpowers/specs/2026-10-10-notes-critic-and-configurability-design.md. Its implementation stopped after its
+  first tasks. On 2026-10-22 he confirmed the critic again. This entry builds section 3 of the design (the critic).
+  Section 4 (the model fallback of pane jobs) is the entry before this one. A Codex review of the design on 2026-10-22 gave four
+  amendments. The design log rejected an apply without review three times ("the curator deletes scripts", "every
+  later round reads the notes", "the operator reviews the merge"). Those reasons were about a proposal applied
+  unseen. The critic keeps a review before every apply. It is a second agent on a stronger model than the curator's.
+  It has a fresh context and the operator's list of rules as its prompt. The registry records its decision, its
+  reason and its record. `[notes] critic = false` is built in.
+  - When it runs. With `critic = true`, every tick after `maybeCurate` takes the oldest pending curation proposal
+    (never a restore or a recovery). These conditions must all be true:
+    - No other learn job runs (`learnMu`), and the daily retro is not due and unrun.
+    - Fewer than `critic_per_day` critiques started today.
+    - No round of the repository is in its judge stage.
+    - No hold, no pause of the critic's CLI, and no `magnum pause` (a proposal from the operator's `--curate` is
+      critiqued under a pause).
+    - The proposal has fewer than two undecided critiques, and no stop in the last hour.
+    - The critic declined fewer than `critic_declines` proposals of the repository in a row.
+  - What it reads. Magnum copies the inputs into `<notes>/.critic/<owner>/<repo>/<run>/`: `review.json`,
+    `notes.diff`, `archive.diff`, `rejections.json`, the notes now and the proposal with their harness files, and
+    `changes.json`. `review.json` is the data of `--review --json`, now `engine.NotesReviewView` from
+    `engine.ReviewProposal`, with its diffs in their own files. The prompt (`prompts/notes-critic.md`, `[notes]
+    critic_prompt`) gives paths, ids, flags, the limits and the target fingerprint. It gives no notes text. It gives
+    every large copy in parts (spec 06's `agents.SplitNotes`). It has the no-loss rules of spec 05: standing decisions
+    and the answers of authors stay in full, every removed line is in the archive word for word, and size is no
+    reason.
+  - What it answers. The critic writes `decision.json`: `apply`, `reject` or `recurate`, the target, a one-line
+    reason, and its `losses` and `checked` lists. `notes.ValidateDecision` checks it. An invalid answer gets one
+    nudge. A second invalid answer makes the critique undecided, which is an attempt. Apply is valid only for a
+    proposal that can be applied (a clean merge, nothing lost). Recurate is valid only for one that cannot. The reason
+    gets the leak checks of a revert reason (`learn.ScrubLesson` with the registry's people, magnum's logins and the
+    names of the watched repositories). It also gets `notes.ReasonLeaks` (a pull request number, a branch, a probe
+    file, a secret, a home path).
+  - What the daemon does with the answer:
+    - `apply` runs `engine.ApplyNotesProposal` with the critic as the decider (see "A notes proposal is applied by a
+      claim, a write and a record").
+    - `reject` rejects the proposal with the reason. `recurate` supersedes it with the reason. Both mark the
+      repository (`notes.<repo>.recurate`). The next curation scan then starts a curation of trigger `review` under
+      the gates of the daemon. It is never the operator's `request` trigger. Its curator reads the reason:
+      `usage.json` lists the rejections and the superseded proposals of the operator and the critic, with `by`, and
+      `superseded/reason.txt` holds the reason. The stored proposal clears the mark.
+    - At `critic_declines` declines in a row, the critic steps back. It marks nothing, and the next proposal of the
+      repository waits for the operator.
+    - When the operator decided the proposal during the critique, an info event says so. Nothing else happens.
+    - When an apply leaves the notes past a limit, the next `over_limit` curation waits a week
+      (`notes.<repo>.critic_over`).
+    - The decision toast is the only toast of a proposal. The "is ready" toast is not shown with the critic on. The
+      expiry of a curation proposal with the critic on shows a toast.
+    - Only the operator's rejections dismiss a miss (`decided_by = 'operator'`).
+  - The four amendments of the Codex review:
+    1. Safe apply, for the operator and the critic: the claim, the write and the record, with a recovery ("A notes
+       proposal is applied by a claim, a write and a record").
+    2. The decision binds to the target. Magnum gives the fingerprint of the state that an apply writes,
+       `decision.json` names it, and an apply of another target is refused.
+    3. A changed target is critiqued again. When the notes changed after the critique (`ErrNotesChanged`,
+       `ErrTargetChanged`, `ErrStaleConflict`), the critique ends `changed`. That counts as a stop, not as an
+       attempt. The next tick critiques the proposal against the new notes. The design applied a clean merge on the
+       critic's word. A clean text merge does not prove that the result keeps what the critic approved.
+    4. The registry keeps the record of the critic. Migration 0028 adds `notes_critiques`: the proposal, the run, the
+       model, the target, the outcome, the decision, the reason, the `checked` and `losses` lists, and the detail of
+       magnum. `magnum notes <repo> --decisions [N]` prints it after the run directory is pruned. In the design, that
+       record was only in the run directory, which is pruned after 30 days.
+  - Recorded state. `KVNotesCritic` marks the critique in flight. Every daemon start deletes it with the other learn
+    marks, and ends an open critique row as `stopped` (retried, uncounted). `learnRunning` and `backgroundBusy` name
+    the critique, so `magnum stop`, `daemon-restart` and `--drain` treat it as a curation. The events
+    `notes.critic_start`, `notes.critic_decided`, `notes.critic_undecided`, `notes.critic_stopped`,
+    `notes.critic_changed` and `notes.critic_overtaken` have the subject `notes:<repo>`.
+  - Configuration (`[notes]`): `critic` (false), `critic_kind` ("claude"), `critic_model` ("fable"), `critic_effort`
+    ("xhigh"), `critic_args`, `critic_prompt` ("notes-critic.md"), `critic_timeout` ("30m"), `critic_fallback_models`
+    (["opus"]), `critic_declines` (2) and `critic_per_day` (4). A `critic_kind` without a `critic_model` gets
+    `config.DefaultCriticModel`: fable for claude, and the CLI's own model for other kinds. `CriticRole` builds the
+    role (`notes-critic`) as `NotesRole` and `EditorRole` do.
+  - Tests (written before the code passed them): in engine TestTheCriticAppliesAValidProposalAndRecordsTheDeciderAndTheModel,
+    TestAStaleProposalWithACleanMergeIsCritiquedAgainNotApplied, TestACriticRejectionStartsAReviewCurationThatReadsTheReason,
+    TestTheCriticRecuratesALossyProposalAndTheCuratorReadsTheReason, TestTheCriticStepsBackAfterDeclinesInARow,
+    TestTwoUndecidedAttemptsLeaveAProposalToTheOperatorAcrossARestart,
+    TestTheOperatorsDecisionDuringACritiqueIsAnEventAndNothingElse, TestTheRetroDueTodayRunsBeforeAWaitingCritique,
+    TestTheCriticsDailyCapHolds, TestACriticApplyLeftOverALimitDelaysTheNextSizeCurationToAWeek and
+    TestWithTheCriticOffNothingCritiques. In notes TestPrepareCriticCopiesWhatTheCriticReads,
+    TestReadDecisionRefusesUnknownFieldsAndTrailingValues, TestValidateDecisionBindsTheTargetAndTheDecisionToTheProposal
+    and TestReasonLeaksNamesAProbeFile. In store TestCritiquesAreRecordedWithTheCriticsRecord and
+    TestOnlyTheOperatorsRejectionsDismissAMiss. TestACriticOnFableContinuesOnOpusAtAModelLimit drives the pane critic
+    through the fallback of the entry before this one. In cli
+    TestDecisionsPrintCheckedLossesAndTheReasonFromTheRegistryAfterTheRunDirectoryIsDeleted,
+    TestDecisionsListsTheNewestProposalsAndSaysHowManyMore, TestTheListShowsTheCriticRunningAndWhatItLeftToYou,
+    TestTheStatusLineSaysCriticOnARepository, TestTheSummaryNamesTheLastDecision, TestReviewSaysTheCriticIsOnTheProposal,
+    TestLogsFollowsTheNotesOfARepository, TestConfigFailsOnACriticPromptThisBuildCannotRender,
+    TestDoctorChecksTheCriticsKindWhenTheCriticIsOn and TestARunningCritiqueRefusesAStop. The race, crash, binding and
+    preservation tests are in the apply entry.
+  - What the operator sees:
+    - The decision toast.
+    - In `magnum notes`: "critic running (fable, 2m)", "the critic stepped back", and "the critic did not decide it,
+      expires in 2d".
+    - "critic on <repo>" in `magnum status` and on the dashboard.
+    - The last decision in `magnum notes <repo>`. A note in `--review` while the critic works on that proposal.
+    - `--decisions [N]` and `magnum logs notes:<owner>/<repo>`.
+    - The kind of the critic in `magnum doctor` (with the critic on), and its prompt in `magnum config`.
+  - Deferred: section 5 of the design (fourteen policy values moved into the configuration) is the follow-up.
+  - Rejected (design section 7): the critic edits the proposal before the apply (a second writer, a second
+    validation, no record of who wrote what). Re-curation through the operator's `request` trigger (it runs under
+    `magnum pause` and with `curate = []`, and shows the toasts of a requested curation). Claude Code's
+    `--fallback-model` (it changes models on an overload only). A pause of the kind after the critic's fallback list
+    is used up. A byte cap that the critic enforces. Critiques of restores. The critic chooses sides in a conflicting
+    merge. The name "reviewer". Also rejected now: an apply of a clean merge on the critic's word (amendment 3), and
+    the `checked` and `losses` lists only in the run directory (amendment 4).
 
 ## Learned rules
 

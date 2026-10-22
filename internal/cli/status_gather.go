@@ -28,7 +28,6 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/launchd"
-	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -363,8 +362,7 @@ func statusGatherNotes(ctx context.Context, d statusDeps, r *statusReport) {
 	if d.Config != nil {
 		n = d.Config.Notes
 	}
-	limits := notes.Limits{MaxBytes: n.MaxBytes, MaxLine: n.MaxLine, MaxHarnessFiles: n.MaxHarnessFiles, MaxHarnessBytes: n.MaxHarnessBytes}
-	rows, err := notesOverview(ctx, d.Layout, d.Store, limits, r.GeneratedAt)
+	rows, err := notesOverview(ctx, d.Layout, d.Store, n)
 	if err != nil {
 		r.Warnings = append(r.Warnings, "notes: "+err.Error())
 	}

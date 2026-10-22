@@ -33,8 +33,9 @@ const KVLearnEditing = "learn.editing"
 const KVLearnGating = "learn.gating"
 
 // backgroundBusy names the background work in flight that a restart would
-// cut short ("" = none): the notes curation running, the retro, the skill
-// edit or a revert (editRunning) and the gate of a skill proposal.
+// cut short ("" = none): the notes curation running, the notes critique,
+// the retro, the skill edit or a revert (editRunning) and the gate of a
+// skill proposal.
 func (e *Engine) backgroundBusy() string {
 	var busy []string
 	e.curateMu.Lock()
@@ -42,6 +43,9 @@ func (e *Engine) backgroundBusy() string {
 		busy = append(busy, "the notes curation of "+e.curateRepo)
 	}
 	e.curateMu.Unlock()
+	if what, _ := e.criticRunning(); what != "" {
+		busy = append(busy, what)
+	}
 	if e.retroBusy() {
 		busy = append(busy, "the retro")
 	}

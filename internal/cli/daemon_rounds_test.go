@@ -252,3 +252,35 @@ func TestARunningWhiteboardRefusesAStop(t *testing.T) {
 		t.Fatalf("after the whiteboard ended: %q, %v", running, err)
 	}
 }
+
+// A running notes critique is background work: a stop is refused and names
+// the repository and the proposal, since the critique would be cut short.
+func TestARunningCritiqueRefusesAStop(t *testing.T) {
+	c, _, errb := bareContext(t)
+	if err := c.Layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	st := storetest.Open(t, c.Layout.DB())
+	ctx := context.Background()
+	started := time.Now().Add(-4 * time.Minute)
+	mark, _ := json.Marshal(engine.CriticMark{Repo: "talkable/talkable", Proposal: 3, Model: "fable", Started: started})
+	if err := st.SetKV(ctx, engine.KVNotesCritic, string(mark)); err != nil {
+		t.Fatal(err)
+	}
+	running, err := c.activeRounds(ctx)
+	clock := inspClock(time.Now(), started)
+	if want := "notes critique of talkable/talkable (proposal 3, since " + clock + ")"; err != nil || running.String() != want {
+		t.Fatalf("in flight %q, want %q, err %v", running, want, err)
+	}
+	if c.refuseWhileRoundsRun("daemon-restart", false) {
+		t.Fatal("a critique in flight must refuse")
+	}
+	actContains(t, errb.String(), "1 background job(s) in flight: notes critique of talkable/talkable (proposal 3, since "+clock+")",
+		"a notes critique runs again later")
+	if err := st.DeleteKV(ctx, engine.KVNotesCritic); err != nil {
+		t.Fatal(err)
+	}
+	if running, err := c.activeRounds(ctx); err != nil || len(running.work) != 0 {
+		t.Fatalf("after it ended: %q, %v", running, err)
+	}
+}

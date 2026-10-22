@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -34,6 +35,7 @@ const (
 	notesOver     = "over_limit"
 	notesProposal = "proposal" // a proposal waits for review
 	notesStale    = "stale"    // it waits, and the notes changed since it was made
+	notesCritic   = "critic"   // the notes critic reviews the waiting proposal (engine.KVNotesCritic)
 	notesQueued   = "queued"   // a curation waits for a start (engine.KVNotesCurateQueue)
 	notesCurating = "curating" // a curation runs (engine.KVNotesCurating)
 )
@@ -49,6 +51,7 @@ type notesRow struct {
 	State    string             `json:"state"`
 	Proposal *notesRowProposal  `json:"proposal,omitempty"` // the newest waiting for review
 	Curation *engine.CurateMark `json:"curation,omitempty"` // running or queued: its trigger and since when
+	Critic   *engine.CriticMark `json:"critic,omitempty"`   // the critique running: its proposal, model and start
 	Waits    string             `json:"waits_for,omitempty"`
 	Error    string             `json:"error,omitempty"`
 }
@@ -63,13 +66,20 @@ type notesRowChange struct {
 }
 
 // notesRowProposal is a proposal waiting for review; Stale when the notes
-// changed since it was made.
+// changed since it was made. With [notes] critic on, CriticSteppedBack: the
+// critic declined critic_declines proposals of the repository in a row
+// (engine.CriticDeclines), and CriticLeft: two critiques of it ended
+// without a decision (engine.CriticAttempts), so it waits for the operator
+// until ExpiresAt.
 type notesRowProposal struct {
-	ID        int64     `json:"id"`
-	Kind      string    `json:"kind"`
-	Trigger   string    `json:"trigger,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	Stale     bool      `json:"stale"`
+	ID                int64     `json:"id"`
+	Kind              string    `json:"kind"`
+	Trigger           string    `json:"trigger,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	Stale             bool      `json:"stale"`
+	CriticSteppedBack bool      `json:"critic_stepped_back,omitempty"`
+	CriticLeft        bool      `json:"critic_left,omitempty"`
 }
 
 // notesListJSON is what `magnum notes --json` prints.
@@ -83,7 +93,7 @@ type notesListJSON struct {
 func notesList(c *Context, f notesFlags) int {
 	ctx, cancel := signalContext()
 	defer cancel()
-	limits, _ := notesLimits(c)
+	limits, n := notesLimits(c)
 	out := notesListJSON{Limits: limits, Repos: []notesRow{}}
 	st, err := notesOpenStore(c)
 	if err != nil {
@@ -93,7 +103,7 @@ func notesList(c *Context, f notesFlags) int {
 		defer st.Close()
 	}
 	now := inspNow()
-	rows, err := notesOverview(ctx, c.Layout, st, limits, now)
+	rows, err := notesOverview(ctx, c.Layout, st, n)
 	if err != nil {
 		out.Registry = err.Error()
 	}
@@ -117,14 +127,19 @@ func notesList(c *Context, f notesFlags) int {
 
 // notesOverview gathers every repository with notes, sorted by name: a notes
 // file on disk, or in the registry a recorded version with content, a
-// harness on disk, a proposal waiting or a curation running or queued. st
-// may be nil (no registry yet: the files alone). An error reading the
-// registry is returned with the rows the files gave.
-func notesOverview(ctx context.Context, l paths.Layout, st *store.Store, limits notes.Limits, now time.Time) ([]notesRow, error) {
+// harness on disk, a proposal waiting, a curation running or queued or a
+// critique running. n is the [notes] table: its limits, and whether the
+// critic is on (the waiting proposals then say whether the critic stepped
+// back or left one to the operator). st may be nil (no registry yet: the
+// files alone). An error reading the registry is returned with the rows
+// the files gave.
+func notesOverview(ctx context.Context, l paths.Layout, st *store.Store, n config.Notes) ([]notesRow, error) {
+	limits := notesLimitsOf(n)
 	names := notesOnDisk(l)
 	var repos map[string]store.Repo
 	var regErr error
 	var curating *engine.CurateMark
+	var critic *engine.CriticMark
 	var queue []engine.CurateQueued
 	if st != nil {
 		list, err := st.ListRepos(ctx)
@@ -137,7 +152,7 @@ func notesOverview(ctx context.Context, l paths.Layout, st *store.Store, limits 
 				names = append(names, full)
 			}
 		}
-		curating, queue = engine.ReadCurating(ctx, st), engine.ReadCurateQueue(ctx, st)
+		curating, queue, critic = engine.ReadCurating(ctx, st), engine.ReadCurateQueue(ctx, st), engine.ReadCritic(ctx, st)
 	}
 	slices.Sort(names)
 	var out []notesRow
@@ -171,16 +186,25 @@ func notesOverview(ctx context.Context, l paths.Layout, st *store.Store, limits 
 				regErr = cmp.Or(regErr, err)
 			} else if len(ps) > 0 {
 				p := ps[0]
-				row.Proposal = &notesRowProposal{ID: p.ID, Kind: p.Kind, Trigger: p.Trigger, CreatedAt: p.CreatedAt}
+				row.Proposal = &notesRowProposal{ID: p.ID, Kind: p.Kind, Trigger: p.Trigger, CreatedAt: p.CreatedAt,
+					ExpiresAt: p.CreatedAt.Add(engine.ProposalTTL)}
 				stale, err := engine.ProposalStale(ctx, st, nr, p)
 				if err != nil {
 					row.Error = cmp.Or(row.Error, err.Error())
 				}
 				row.Proposal.Stale, has = stale, true
+				if n.Critic && p.Kind == store.ProposalCuration && p.Trigger != engine.CurateTriggerRecover {
+					attempts, _ := engine.CriticAttempts(ctx, st, p.ID)
+					row.Proposal.CriticLeft = attempts >= engine.CriticMaxAttempts
+					row.Proposal.CriticSteppedBack = engine.CriticDeclines(ctx, st, repo.ID) >= n.CriticDeclines
+				}
 			}
 		}
 		if curating != nil && strings.EqualFold(curating.Repo, full) {
 			row.Curation, has = curating, true
+		}
+		if critic != nil && strings.EqualFold(critic.Repo, full) {
+			row.Critic, has = critic, true
 		}
 		if i := slices.IndexFunc(queue, func(q engine.CurateQueued) bool { return strings.EqualFold(q.Repo, full) }); i >= 0 && row.Curation == nil {
 			q := queue[i]
@@ -194,6 +218,8 @@ func notesOverview(ctx context.Context, l paths.Layout, st *store.Store, limits 
 			row.State = notesCurating
 		case row.Curation != nil:
 			row.State = notesQueued
+		case row.Critic != nil:
+			row.State = notesCritic
 		case row.Proposal != nil && row.Proposal.Stale:
 			row.State = notesStale
 		case row.Proposal != nil:
@@ -317,23 +343,36 @@ func notesStateText(r notesRow, now time.Time) string {
 		what := "a judge stage"
 		switch r.Waits {
 		case engine.QueuedBusy:
-			what = "the learn job running (a curation, the retro, a skill edit or gate)"
+			what = "the learn job running (a curation, a critique, the retro, a skill edit or gate)"
 		case engine.QueuedDrain:
 			what = "the restart after the drain"
 		case engine.QueuedGitHub:
 			what = "the GitHub budget's reset"
 		}
 		return fmt.Sprintf("curation queued (%s, waits for %s)", r.Curation.Trigger, what)
+	case notesCritic:
+		since := actAgo(now, r.Critic.Started)
+		if r.Critic.Model != "" {
+			since = notes.Printable(r.Critic.Model) + ", " + since
+		}
+		return "critic running (" + since + ")"
 	case notesStale, notesProposal:
 		p := r.Proposal
 		why := cmp.Or(p.Trigger, p.Kind)
 		if p.Kind == store.ProposalRestore {
 			why = "restore"
 		}
-		if r.State == notesStale {
-			return fmt.Sprintf("proposal %d stale (%s, %s; the notes changed since it was made)", p.ID, why, actAgo(now, p.CreatedAt))
+		critic := ""
+		switch {
+		case p.CriticLeft: // the time left: ExpiresAt is ahead of now
+			critic = "; the critic did not decide it, expires in " + actAgo(p.ExpiresAt, now)
+		case p.CriticSteppedBack:
+			critic = "; the critic stepped back"
 		}
-		return fmt.Sprintf("proposal %d to review (%s, %s)", p.ID, why, actAgo(now, p.CreatedAt))
+		if r.State == notesStale {
+			return fmt.Sprintf("proposal %d stale (%s, %s; the notes changed since it was made%s)", p.ID, why, actAgo(now, p.CreatedAt), critic)
+		}
+		return fmt.Sprintf("proposal %d to review (%s, %s%s)", p.ID, why, actAgo(now, p.CreatedAt), critic)
 	case notesOver:
 		return "over limit (" + strings.Join(r.Over, ", ") + ")"
 	}
@@ -345,15 +384,16 @@ func notesStateText(r notesRow, now time.Time) string {
 
 // notesSummaryLine sums rows up for `magnum status` and the dashboard: "4
 // repos · 2 proposals to review (talkable/talkable, example/api stale) · 1
-// over limit", leaving out the parts that are zero, then a curation running
-// or queued; "" without a repository with notes.
+// over limit", leaving out the parts that are zero, then a curation running,
+// a critique running ("critic on talkable/talkable") or curations queued;
+// "" without a repository with notes.
 func notesSummaryLine(rows []notesRow) string {
 	if len(rows) == 0 {
 		return ""
 	}
 	parts := []string{textx.Count(len(rows), "repo", "repos")}
 	var proposals, queued []string
-	over, curating := 0, ""
+	over, curating, critic := 0, "", ""
 	for _, r := range rows {
 		if p := r.Proposal; p != nil {
 			name := r.Repo
@@ -368,6 +408,8 @@ func notesSummaryLine(rows []notesRow) string {
 		switch r.State {
 		case notesCurating:
 			curating = r.Repo
+		case notesCritic:
+			critic = r.Repo
 		case notesQueued:
 			queued = append(queued, r.Repo)
 		}
@@ -380,6 +422,9 @@ func notesSummaryLine(rows []notesRow) string {
 	}
 	if curating != "" {
 		parts = append(parts, "curating "+curating)
+	}
+	if critic != "" {
+		parts = append(parts, "critic on "+critic)
 	}
 	if n := len(queued); n > 0 {
 		parts = append(parts, textx.Count(n, "curation queued", "curations queued")+" ("+strings.Join(queued, ", ")+")")

@@ -293,6 +293,9 @@ type Deps struct {
 	// Curator sets up the notes curator for one curation ([notes],
 	// notes_curate.go); nil = no curation runs.
 	Curator func(ctx context.Context, run CurateRun) (Curator, error)
+	// Critic sets up the notes critic for one critique ([notes] critic,
+	// notes_critic.go); nil = no critique runs.
+	Critic func(ctx context.Context, run CriticRun) (Critic, error)
 	// Editor sets up the skill editor for one run ([learn] editor_*,
 	// learn_edit.go); nil = no edit runs. It works on Checkout, magnum's own
 	// checkout (Layout.Home; "" for an installed binary: no edit), through
@@ -573,6 +576,14 @@ type Engine struct {
 	curateTried   map[int64]time.Time // repositories whose last curation stored nothing, and when
 	curateChecked time.Time           // the last scan for a curation due (the tick's goroutine only)
 
+	criticMu       sync.Mutex // the running notes critique (notes_critic.go)
+	criticCancel   context.CancelFunc
+	criticStarted  time.Time
+	criticRepo     string
+	criticProposal int64
+	criticWG       sync.WaitGroup
+	criticTried    map[int64]time.Time // proposals whose last critique stopped short, and when
+
 	editMu       sync.Mutex // the running skill edit (learn_edit.go)
 	editCancel   context.CancelFunc
 	editStarted  time.Time
@@ -651,6 +662,7 @@ func New(d Deps) *Engine {
 		logged:            map[string]time.Time{},
 		cleanupTried:      map[int64]time.Time{},
 		curateTried:       map[int64]time.Time{},
+		criticTried:       map[int64]time.Time{},
 		netRuns:           map[string]netRun{},
 		cliRead:           map[string]cliStamp{},
 		cliFails:          map[string]*cliReadFailures{},
@@ -707,6 +719,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		// The notes curator (notes_curate.go) and the skill editor
 		// (learn_edit.go) are the same kind of agent.
 		d.Curator = paneCurators(pd)
+		d.Critic = paneCritics(pd)
 		d.Editor = paneEditors(pd)
 	}
 	if a.Layout.Home != "" && !a.DryRun && a.AgentTag == "" && a.Git != nil && a.Runner != nil && a.Config != nil {
@@ -918,6 +931,7 @@ func (e *Engine) shutdown() {
 	e.mu.Unlock()
 	e.stopRetro()
 	e.stopCurate()
+	e.stopCritic()
 	e.stopEdit()
 	e.stopGate()
 	done := make(chan struct{})
@@ -925,6 +939,7 @@ func (e *Engine) shutdown() {
 		e.roundWG.Wait()
 		e.retroWG.Wait()
 		e.curateWG.Wait()
+		e.criticWG.Wait()
 		e.editWG.Wait()
 		e.gateWG.Wait()
 		e.memWG.Wait()
@@ -1014,6 +1029,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeRetro(ctx)
 	e.noteRetroRunning(ctx) // inflight.go
 	e.maybeCurate(ctx)
+	e.maybeCritic(ctx)    // notes_critic.go: after a curation could start, which goes first
 	e.maybeLearnScan(ctx) // learn_schedule.go: the scheduled editor
 	e.maybeGate(ctx)      // learn_gate.go
 	e.maybeLearnLand(ctx) // learn_land.go
@@ -1072,7 +1088,11 @@ func (e *Engine) startup(ctx context.Context) {
 	// is a crashed daemon's (a gating proposal keeps its state and its gate
 	// starts again at a tick, maybeGate), and so is the gate's worktree of
 	// the base (learn_gate.go).
-	e.delKV(ctx, KVNotesCurating, KVRetroRunning, KVLearnEditing, KVLearnGating)
+	e.delKV(ctx, KVNotesCurating, KVNotesCritic, KVRetroRunning, KVLearnEditing, KVLearnGating)
+	// notes_critic.go: a critique a stop cut short is retried, uncounted.
+	if _, err := e.st.StopOpenCritiques(ctx, "the daemon stopped during the critique", e.now()); err != nil {
+		e.warnUnlessStopped(ctx, err, "notes critic: end the critiques a stop cut short")
+	}
 	e.dropStaleGateBase(ctx)
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)

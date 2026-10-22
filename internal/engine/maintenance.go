@@ -211,6 +211,7 @@ func (e *Engine) prune(ctx context.Context) error {
 	e.pruneRetro()
 	e.pruneEdits()
 	e.pruneCurations()
+	e.pruneCritiques() // notes_critic.go
 	keepEvents, keepRequests := e.cfg.Daemon.KeepEvents.Duration, e.cfg.Daemon.KeepRequests.Duration
 	if keepEvents <= 0 && keepRequests <= 0 {
 		return nil

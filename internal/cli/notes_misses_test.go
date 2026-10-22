@@ -84,7 +84,7 @@ func TestNotesReviewShowsTheMissesAndYMarksThemUsed(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
 	}
 	var data struct {
-		Misses []notesReviewMiss `json:"misses"`
+		Misses []engine.NotesReviewMiss `json:"misses"`
 	}
 	if err := json.Unmarshal(h.out.Bytes(), &data); err != nil || len(data.Misses) != 2 || data.Misses[0].Outcome != store.MissNoted ||
 		data.Misses[0].Where != "app/models/coupon.rb:40" || data.Misses[1].Reason != "the cache is gone" || data.Misses[1].State != store.MissNew {

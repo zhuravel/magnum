@@ -45,6 +45,24 @@ type Notes struct {
 	// when Model hits its own limit (Role.FallbackModels); empty = the
 	// kind's fallback_models.
 	FallbackModels []string `toml:"fallback_models"`
+
+	// The notes critic (critic.go): Critic turns it on; CriticKind,
+	// CriticModel, CriticEffort, CriticArgs, CriticPrompt, CriticTimeout and
+	// CriticFallbackModels are its role's (CriticRole; critic_kind without
+	// critic_model gets DefaultCriticModel of that kind). CriticDeclines is
+	// how many proposals of a repository it may reject or send back in a row
+	// before the next one waits for the operator, CriticPerDay how many
+	// critiques start per local day.
+	Critic               bool     `toml:"critic"`
+	CriticKind           string   `toml:"critic_kind"`
+	CriticModel          string   `toml:"critic_model"`
+	CriticEffort         string   `toml:"critic_effort"`
+	CriticArgs           []string `toml:"critic_args"`
+	CriticPrompt         string   `toml:"critic_prompt"`
+	CriticTimeout        Duration `toml:"critic_timeout"`
+	CriticFallbackModels []string `toml:"critic_fallback_models"`
+	CriticDeclines       int      `toml:"critic_declines"`
+	CriticPerDay         int      `toml:"critic_per_day"`
 }
 
 // Curation triggers ([notes] curate).
@@ -132,7 +150,7 @@ const NotesRoleName = "notes"
 
 // DefaultNotes returns the built-in [notes] values.
 func DefaultNotes() Notes {
-	return Notes{
+	n := Notes{
 		MaxBytes:        262144,
 		MaxLine:         300,
 		MaxHarnessFiles: 15,
@@ -143,12 +161,18 @@ func DefaultNotes() Notes {
 		Prompt:          DefaultNotesPrompt,
 		Timeout:         Duration{30 * time.Minute},
 	}
+	defaultCritic(&n)
+	return n
 }
 
-// notesModelFollowsKind is learnModelFollowsKind for [notes].
+// notesModelFollowsKind is learnModelFollowsKind for [notes]: the curator's
+// kind and model, and the critic's (DefaultCriticModel).
 func (c *Config) notesModelFollowsKind(md toml.MetaData) {
 	if md.IsDefined("notes", "kind") && !md.IsDefined("notes", "model") {
 		c.Notes.Model = DefaultLearnModel(c.Notes.Kind)
+	}
+	if md.IsDefined("notes", "critic_kind") && !md.IsDefined("notes", "critic_model") {
+		c.Notes.CriticModel = DefaultCriticModel(c.Notes.CriticKind)
 	}
 }
 
@@ -194,5 +218,6 @@ func (c *Config) validateNotes() []error {
 	if n.Timeout.Duration <= 0 {
 		errs = append(errs, fmt.Errorf("notes.timeout must be positive, got %s", n.Timeout.Duration))
 	}
-	return append(errs, fallbackModelErrs("notes.fallback_models", n.FallbackModels)...)
+	errs = append(errs, fallbackModelErrs("notes.fallback_models", n.FallbackModels)...)
+	return append(errs, c.validateCritic()...)
 }

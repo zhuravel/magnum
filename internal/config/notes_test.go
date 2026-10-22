@@ -16,6 +16,8 @@ func TestNotesDefaults(t *testing.T) {
 	want := Notes{
 		MaxBytes: 262144, MaxLine: 300, MaxHarnessFiles: 15, MaxHarnessBytes: 131072,
 		Curate: CurateTriggers{CurateMisses}, Kind: "claude", Model: "sonnet", Prompt: "notes-curate.md", Timeout: Duration{30 * time.Minute},
+		CriticKind: "claude", CriticModel: "fable", CriticEffort: "xhigh", CriticPrompt: "notes-critic.md", CriticTimeout: Duration{30 * time.Minute},
+		CriticFallbackModels: []string{"opus"}, CriticDeclines: 2, CriticPerDay: 4,
 	}
 	if got := Defaults().Notes; !reflect.DeepEqual(got, want) {
 		t.Fatalf("built-in notes = %+v, want %+v", got, want)

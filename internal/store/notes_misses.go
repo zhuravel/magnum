@@ -5,8 +5,10 @@ package store
 // proposal says what it did with each (notes_proposal_misses). The misses
 // follow the proposal's decision (DecideNotesProposal): applied, they are
 // used; rejected or expired, they stay new for the next curation, which
-// reads the rejections' reasons; a miss in MissDismissRejections rejected
-// proposals is dismissed. The links are never pruned.
+// reads the rejections' reasons; a miss in MissDismissRejections proposals
+// the operator rejected is dismissed (the notes critic's rejections do not
+// count: a bad rewrite must not cost the repository its lesson). The links
+// are never pruned.
 
 import (
 	"context"
@@ -22,8 +24,8 @@ const (
 	MissSkipped = "skipped" // no note helps a future review: Reason says why
 )
 
-// MissDismissRejections is how many rejected proposals a miss may be in
-// before it is dismissed.
+// MissDismissRejections is how many proposals the operator rejected a miss
+// may be in before it is dismissed.
 const MissDismissRejections = 2
 
 // LearnDismissFailures is how many failed gates of skill proposals may
@@ -74,7 +76,8 @@ func decideProposalMisses(ctx context.Context, tx *sql.Tx, id int64, to string, 
 	case ProposalRejected:
 		_, err = tx.ExecContext(ctx, "UPDATE misses SET state = ?, updated_at = ? WHERE "+ofProposal+` AND
   (SELECT COUNT(*) FROM notes_proposal_misses l JOIN notes_proposals p ON p.id = l.proposal_id
-   WHERE l.miss_id = misses.id AND p.state = ?) >= ?`, MissDismissed, FormatTime(at), id, ProposalRejected, MissDismissRejections)
+   WHERE l.miss_id = misses.id AND p.state = ? AND p.decided_by = ?) >= ?`, MissDismissed, FormatTime(at), id, ProposalRejected,
+			DecidedByOperator, MissDismissRejections)
 	}
 	return err
 }

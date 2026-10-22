@@ -23,7 +23,7 @@ import (
 )
 
 // notesRegistryAction runs the notes actions that need the registry: --log,
-// --diff, --curate, --review, --restore and --recover.
+// --diff, --curate, --review, --restore, --recover and --decisions.
 func notesRegistryAction(c *Context, f notesFlags, back int, full string, nr notes.Repo) int {
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
@@ -51,6 +51,8 @@ func notesRegistryAction(c *Context, f notesFlags, back int, full string, nr not
 		return notesRestore(ctx, c, d, f, repo, nr)
 	case f.recover:
 		return notesRecover(ctx, c, d, f, repo, nr)
+	case f.decisions != "":
+		return notesDecisions(ctx, c, d, f, repo)
 	}
 	return notesReview(ctx, c, d, f, repo, nr)
 }

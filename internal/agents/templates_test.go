@@ -188,6 +188,40 @@ func curateFixtureWith(over ...string) curateFixture {
 	return f
 }
 
+// criticFixture has the shape of the engine's critic data (internal/engine
+// criticData); the engine checks the shipped prompt against the real type
+// (CheckPrompts).
+type criticFixture struct {
+	Repo, Dir, Review, Rejections, Current, CurrentHarness, Proposed, ProposedHarness, Changes, Decision string
+	Diff, ArchiveDiff, CurrentParts, ProposedParts                                                       NotesParts
+	ProposalID                                                                                           int64
+	Target                                                                                               string
+	Stale, Conflict, Lossy, Blocked                                                                      bool
+	Limits                                                                                               struct {
+		MaxBytes        int64
+		MaxLine         int
+		MaxHarnessFiles int
+		MaxHarnessBytes int64
+	}
+	MaxReasonRunes int
+}
+
+// criticFixtureWith is a critique of proposal 12 whose notes are past one
+// part; blocked makes its merge conflict, lossy makes it lose lines.
+func criticFixtureWith(conflict, lossy bool) criticFixture {
+	dir := "/data/notes/.critic/talkable/talkable/20261022-120000"
+	f := criticFixture{Repo: "talkable/talkable", Dir: dir, Review: dir + "/review.json", Rejections: dir + "/rejections.json", Current: dir + "/current.md",
+		CurrentHarness: dir + "/current", Proposed: dir + "/proposed.md", ProposedHarness: dir + "/proposed", Changes: dir + "/changes.json",
+		Decision: dir + "/decision.json", ProposalID: 12, Target: "3f1c9a0d2b7e4c8f9a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f6071",
+		Stale: conflict, Conflict: conflict, Lossy: lossy, Blocked: conflict || lossy, MaxReasonRunes: 300}
+	f.Limits.MaxBytes, f.Limits.MaxLine, f.Limits.MaxHarnessFiles, f.Limits.MaxHarnessBytes = 262144, 300, 15, 131072
+	f.Diff = SplitNotes(dir+"/notes.diff", []byte(strings.Repeat("-an old line\n", 2000)))
+	f.ArchiveDiff = SplitNotes(dir+"/archive.diff", []byte("+an old line\n"))
+	f.CurrentParts = SplitNotes(f.Current, []byte(strings.Repeat("- a lesson\n", 2000)))
+	f.ProposedParts = SplitNotes(f.Proposed, []byte("# Notes\n"))
+	return f
+}
+
 // retroFixture has the shape of the engine's retro data (internal/engine
 // retroData); the engine checks the shipped prompt against the real type
 // (CheckPrompts).
@@ -678,6 +712,9 @@ func TestRenderGolden(t *testing.T) {
 		{"notes_curate_within", "notes-curate.md", curateFixtureWith()},
 		{"notes_curate_misses", "notes-curate.md", curateMisses},
 		{"notes_curate_superseded", "notes-curate.md", curateSuperseded},
+		{"notes_critic", "notes-critic.md", criticFixtureWith(false, false)},
+		{"notes_critic_conflict", "notes-critic.md", criticFixtureWith(true, false)},
+		{"notes_critic_lossy", "notes-critic.md", criticFixtureWith(false, true)},
 		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
 		{"retro_threads", "retro.md", retroThreads},
 		{"skill_edit", "skill-edit.md", skillEditFixture()},
@@ -794,7 +831,7 @@ func checkGolden(t *testing.T, golden, got string) {
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "fix.md", "judge-continue.md",
-		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md",
+		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-critic.md", "notes-curate.md", "retro.md",
 		"skill-edit.md", "triage.md", "whiteboard.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)

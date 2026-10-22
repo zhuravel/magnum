@@ -205,7 +205,7 @@ func TestNotesReviewJSONAndTerminal(t *testing.T) {
 	var data struct {
 		Proposal store.NotesProposal `json:"proposal"`
 		Diff     string              `json:"notes_diff"`
-		Harness  []notesHarnessChange
+		Harness  []engine.NotesHarnessChange
 		After    notes.Size `json:"size_after"`
 	}
 	if err := json.Unmarshal(h.out.Bytes(), &data); err != nil {
@@ -329,7 +329,7 @@ func TestNotesRestoreThatCannotAskWritesNothing(t *testing.T) {
 	var data struct {
 		Proposal store.NotesProposal `json:"proposal"`
 		Diff     string              `json:"notes_diff"`
-		Harness  []notesHarnessChange
+		Harness  []engine.NotesHarnessChange
 		Stale    bool `json:"stale"`
 	}
 	if err := json.Unmarshal(h.out.Bytes(), &data); err != nil {

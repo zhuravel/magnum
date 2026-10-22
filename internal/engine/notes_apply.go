@@ -96,6 +96,9 @@ type NotesApply struct {
 	Live   string // the notes' fingerprint when the decider read them
 	Target string // the fingerprint of the state it approved to write
 	By     string // store.DecidedBy*
+	// Reason is the decider's one-line reason, kept with the proposal (the
+	// critic's; "" = none).
+	Reason string
 	Now    time.Time
 	// Wait bounds the wait for the notes lock (0 = NotesLockWait).
 	Wait time.Duration
@@ -223,7 +226,7 @@ func ApplyNotesProposal(ctx context.Context, st *store.Store, nr notes.Repo, p s
 	if err := crashAt("written"); err != nil {
 		return claimed, err
 	}
-	applied, err := finishApply(ctx, st, claimed, target, a.Now)
+	applied, err := finishApply(ctx, st, claimed, target, a.Reason, a.Now)
 	if err != nil {
 		return claimed, fmt.Errorf("record the apply (the next daemon start does): %w", err)
 	}
@@ -241,18 +244,18 @@ func crashAt(step string) error {
 	return applyCrash(step)
 }
 
-// finishApply records claimed (applying) as applied, with target recorded
-// as a version linked to it: a curation's, or the operator's for a
-// restore. Dedupe: a curation that only skips the misses it was given
+// finishApply records claimed (applying) as applied, with the decider's
+// reason and target recorded as a version linked to it: a curation's, or
+// the operator's for a restore. Dedupe: a curation that only skips the misses it was given
 // leaves the notes as they are, and the version they hold is not recorded
 // again.
-func finishApply(ctx context.Context, st *store.Store, claimed store.NotesProposal, target notes.State, now time.Time) (store.NotesProposal, error) {
+func finishApply(ctx context.Context, st *store.Store, claimed store.NotesProposal, target notes.State, reason string, now time.Time) (store.NotesProposal, error) {
 	source := store.NotesFromCuration
 	if claimed.Kind == store.ProposalRestore {
 		source = store.NotesFromHuman
 	}
 	return st.DecideNotesProposal(context.WithoutCancel(ctx), claimed.ID, []string{store.ProposalApplying}, store.ProposalApplied,
-		claimed.DecidedBy, "", now, &store.NotesVersionInput{Source: source, Content: ContentOf(target), Dedupe: true})
+		claimed.DecidedBy, reason, now, &store.NotesVersionInput{Source: source, Content: ContentOf(target), Dedupe: true})
 }
 
 // notesEvent appends an audit event (best effort): the apply runs in the
@@ -319,7 +322,7 @@ func RecoverNotesApply(ctx context.Context, st *store.Store, nr notes.Repo, p st
 		return revert("its states cannot be read again (" + oneLine(err.Error(), retroWhyRunes) + ")")
 	}
 	finish := func(why string) (string, error) {
-		applied, err := finishApply(ctx, st, cur, target, now)
+		applied, err := finishApply(ctx, st, cur, target, "", now)
 		if err != nil {
 			return "", err
 		}

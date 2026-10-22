@@ -61,7 +61,8 @@ func (e *Engine) loadPrompts(ctx context.Context) error {
 	if !e.d.DryRun && e.d.Layout.Valid() {
 		skillDir = SkillCopyDir(e.d.Layout.State())
 	}
-	snap, err := e.cfg.SnapshotPrompts(skillDir, e.now(), agents.FallbackPromptName, e.cfg.Triage.Prompt, e.cfg.Learn.Prompt, e.cfg.Notes.Prompt)
+	snap, err := e.cfg.SnapshotPrompts(skillDir, e.now(), agents.FallbackPromptName, e.cfg.Triage.Prompt, e.cfg.Learn.Prompt, e.cfg.Notes.Prompt,
+		e.cfg.Notes.CriticPrompt)
 	if err != nil {
 		return fmt.Errorf("engine: %w", err)
 	}

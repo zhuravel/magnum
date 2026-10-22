@@ -73,13 +73,15 @@ func PrepareScratch(dir string, base State, usage []byte) (Scratch, error) {
 	return s, fsx.WriteFileAtomic(s.Usage(), usage, 0o600)
 }
 
-// WriteSuperseded writes the stale proposal a curation follows up on into
-// s's superseded/ directory, for the curator to read: its notes as
-// notes.md, its harness under harness/ and its changes.json, with a reason
-// for every section and file it kept, merged or removed. The notes changed
-// since that proposal was made, so it was superseded rather than applied;
-// its work is not lost.
-func WriteSuperseded(s Scratch, proposed State, changes []byte) error {
+// WriteSuperseded writes the proposal a curation follows up on into s's
+// superseded/ directory, for the curator to read: its notes as notes.md,
+// its harness under harness/, its changes.json, with a reason for every
+// section and file it kept, merged or removed, and reason, why it was
+// superseded, as reason.txt (none when reason is empty). The notes changed
+// since that proposal was made, or its reviewer (the operator or the notes
+// critic) sent it back, so it was superseded rather than applied; its work
+// is not lost.
+func WriteSuperseded(s Scratch, proposed State, changes []byte, reason string) error {
 	dir := s.Superseded()
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return err
@@ -96,6 +98,11 @@ func WriteSuperseded(s Scratch, proposed State, changes []byte) error {
 	}
 	if len(changes) == 0 {
 		changes = []byte("{}")
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		if err := os.WriteFile(filepath.Join(dir, "reason.txt"), []byte(reason+"\n"), 0o600); err != nil {
+			return err
+		}
 	}
 	return os.WriteFile(filepath.Join(dir, scratchChanges), changes, 0o600)
 }
