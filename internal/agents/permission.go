@@ -434,25 +434,12 @@ var (
 		`run /review on my current changes|use /skills to list available skills)$`)
 )
 
-// composerEmpty reports whether the agent's input line (the last line
-// starting with a composer mark among the last 8 non-blank lines of the
-// visible screen) holds nothing but a placeholder. No such line, or text a
-// human may have typed, is not empty.
+// composerEmpty reports whether the agent's input line on the visible
+// screen (composerLineOf) holds nothing but a placeholder. No such line, or
+// text a human may have typed, is not empty.
 func composerEmpty(text string) bool {
-	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
-	seen := 0
-	for i := len(lines) - 1; i >= 0 && seen < 8; i-- {
-		t := stripBox(lines[i])
-		if t == "" {
-			continue
-		}
-		seen++
-		if m := composerLine.FindStringSubmatch(t); m != nil {
-			rest := strings.TrimSpace(m[1])
-			return rest == "" || composerPlaceholder.MatchString(rest)
-		}
-	}
-	return false
+	at, rest := composerLineOf(screenLines(text))
+	return at >= 0 && (rest == "" || composerPlaceholder.MatchString(rest))
 }
 
 // sendDeny answers a permission prompt No, never Yes. A (y/n) question gets

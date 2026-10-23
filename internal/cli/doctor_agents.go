@@ -294,6 +294,45 @@ func doctorSessionHooks(ctx context.Context, d doctorDeps) []doctorCheck {
 	return append(out, doctorSessionIDs(ctx, d)...)
 }
 
+// doctorHooksTrust checks, for each Codex home the codex kind's session
+// roles read (agents.CodexSessionHomes over agents.Manager.CodexHome), that
+// every hook of its hooks.json has a trust entry in config.toml
+// (agents.ReadCodexHooksTrust): Codex shows its hooks review when a session
+// starts while one has none, and the daemon holds new Codex sessions
+// meanwhile. The "codex hooks trust" line warns how many hooks and which,
+// passes when all have one, and skips a home that is unknown or has no
+// hooks.json. It only reads.
+func doctorHooksTrust(_ context.Context, d doctorDeps) []doctorCheck {
+	const name = config.KindCodex + " hooks trust"
+	homes, users := agents.CodexSessionHomes(d.Config, d.Agents.CodexHome)
+	var out []doctorCheck
+	for _, home := range homes {
+		used := "used by " + strings.Join(users[home], ", ")
+		t, ok, err := agents.ReadCodexHooksTrust(home)
+		hooksFile := inspTilde(t.HooksFile)
+		switch {
+		case home == "":
+			out = append(out, doctorSkipped(name, fmt.Sprintf("the trust of Codex's hooks not checked: the Codex home of %s is unknown", strings.Join(users[home], ", "))))
+		case err != nil:
+			out = append(out, doctorWarned(name, fmt.Sprintf("cannot tell whether Codex's hooks have trust entries (%s): %s", used, inspTildeIn(err.Error(), home)),
+				"fix the file: Codex reads it at every start"))
+		case !ok:
+			out = append(out, doctorSkipped(name, fmt.Sprintf("no hooks to trust: %s does not exist (%s)", hooksFile, used)))
+		case t.Hooks == 0:
+			out = append(out, doctorOK(name, fmt.Sprintf("no hooks to trust: %s has none (%s)", hooksFile, used)))
+		case len(t.Untrusted) > 0:
+			out = append(out, doctorWarned(name, fmt.Sprintf("%s (%s; %s): Codex asks you to review them when a session starts, and a prompt "+
+				"magnum types into that review is lost, so new Codex sessions wait until they are trusted (`magnum resume --tool codex` starts "+
+				"them anyway until the file changes)", t.UntrustedSentence(hooksFile), t.UntrustedPlaces(), used),
+				"run `codex` once in a terminal and choose Trust all"))
+		default:
+			out = append(out, doctorOK(name, fmt.Sprintf("the %s in %s %s trust entries (%s)",
+				textx.Count(t.Hooks, "hook", "hooks"), hooksFile, textx.Plural(t.Hooks, "has", "have"), used)))
+		}
+	}
+	return out
+}
+
 // doctorSessionIDs reads the registry: of the Codex sessions of the last
 // day that ran an agent and are at least doctorSessionIDWait old
 // (agents.RecentSessionIDs), it warns when the newest two or more in a row

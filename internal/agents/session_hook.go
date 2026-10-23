@@ -22,6 +22,8 @@ package agents
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -216,15 +218,22 @@ func CodexFileName(home, file string) string {
 	return "$CODEX_HOME/" + file
 }
 
-// CodexHookHomes are the Codex homes herdr's session hook is checked in, in
-// the roles' order, with the session roles of the codex kind that read each
-// (home: the Manager's CodexHome; "" for one unknown). None unless the codex
-// kind's session ids come from herdr (session_source "herdr"); a shell
-// role's `codex review` needs no id.
+// CodexHookHomes are the Codex homes herdr's session hook is checked in
+// (CodexSessionHomes). None unless the codex kind's session ids come from
+// herdr (session_source "herdr"); a shell role's `codex review` needs no id.
 func CodexHookHomes(cfg *config.Config, home func(config.Role) string) (homes []string, users map[string][]string) {
 	if k, ok := cfg.KindSpec(KindCodex); !ok || k.SessionSource != config.SessionHerdr {
 		return nil, nil
 	}
+	return CodexSessionHomes(cfg, home)
+}
+
+// CodexSessionHomes are the Codex homes the session roles of the codex kind
+// read, in the roles' order, with the roles that read each (home: the
+// Manager's CodexHome; "" for one unknown): where Codex shows its startup
+// dialogs, the hooks review among them. A shell role's `codex review` shows
+// none.
+func CodexSessionHomes(cfg *config.Config, home func(config.Role) string) (homes []string, users map[string][]string) {
 	users = map[string][]string{}
 	for _, r := range cfg.AllRoles() {
 		if !r.IsAgent() || r.Kind != KindCodex {
@@ -295,23 +304,13 @@ type sessionStartHook struct {
 // names a file that cannot be read or decoded, without the decoder's
 // message, which may quote the file. It only reads.
 func ReadCodexSessionHook(home string) (h CodexSessionHook, ok bool, err error) {
-	if home == "" {
-		return h, false, nil
-	}
-	h.HooksFile, h.ConfigFile = filepath.Join(home, "hooks.json"), filepath.Join(home, "config.toml")
-	raw, err := os.ReadFile(h.HooksFile)
-	if errors.Is(err, fs.ErrNotExist) {
-		return h, false, nil
-	}
-	if err != nil {
-		return h, false, fmt.Errorf("cannot read %s: %w", h.HooksFile, unwrapPath(err))
-	}
-	var hooks codexHooks
-	if err := json.Unmarshal(raw, &hooks); err != nil {
-		return h, false, fmt.Errorf("%s is not valid JSON", h.HooksFile)
+	f, ok, err := readCodexHooksJSON(home)
+	h.HooksFile, h.ConfigFile = f.hooksFile, f.configFile
+	if !ok || err != nil {
+		return h, false, err
 	}
 	var all []sessionStartHook
-	for g, group := range hooks.Hooks[codexSessionStart] {
+	for g, group := range f.hooks.Hooks[codexSessionStart] {
 		for i, hook := range group.Hooks {
 			herdr := strings.Contains(hook.Command, HerdrSessionHook)
 			all = append(all, sessionStartHook{group: g, index: i, command: hook.Command, herdr: herdr,
@@ -326,18 +325,8 @@ func ReadCodexSessionHook(home string) (h CodexSessionHook, ok bool, err error) 
 	if err != nil {
 		return h, false, err
 	}
-	prefixes := []string{h.HooksFile}
-	if resolved, err := filepath.EvalSymlinks(h.HooksFile); err == nil && resolved != h.HooksFile {
-		prefixes = append(prefixes, resolved)
-	}
 	entry := func(s sessionStartHook) (string, codexHookEntry, bool) {
-		for _, p := range prefixes {
-			key := p + ":" + codexSessionStartState + ":" + strconv.Itoa(s.group) + ":" + strconv.Itoa(s.index)
-			if e, ok := state[key]; ok {
-				return key, e, true
-			}
-		}
-		return "", codexHookEntry{}, false
+		return f.entry(state, codexHookPlace(codexSessionStartState, s.group, s.index))
 	}
 	off := func(s sessionStartHook) (string, bool) {
 		key, e, ok := entry(s)
@@ -371,7 +360,7 @@ func ReadCodexSessionHook(home string) (h CodexSessionHook, ok bool, err error) 
 	}
 	s := all[runs]
 	h.Group, h.Index = s.group, s.index
-	h.Place = codexSessionStartState + ":" + strconv.Itoa(s.group) + ":" + strconv.Itoa(s.index)
+	h.Place = codexHookPlace(codexSessionStartState, s.group, s.index)
 	h.Trusted = trusted(s)
 	for _, b := range all[:runs] {
 		if _, isOff := off(b); !isOff {
@@ -380,6 +369,180 @@ func ReadCodexSessionHook(home string) (h CodexSessionHook, ok bool, err error) 
 	}
 	h.Version = herdrScriptVersion(s.command)
 	return h, true, nil
+}
+
+// codexHookFiles is a Codex home's hooks.json as read
+// (readCodexHooksJSON): its path and config.toml's beside it, its content
+// and hooks, and the paths the [hooks.state] key of one of its hooks starts
+// with: as written, and with its symlinks resolved.
+type codexHookFiles struct {
+	hooksFile, configFile string
+	raw                   []byte
+	hooks                 codexHooks
+	prefixes              []string
+}
+
+// readCodexHooksJSON reads the hooks.json of the Codex home home. ok is
+// false when there is nothing to judge: home unknown or no hooks.json
+// there; the files are named all the same when home is known. err names a
+// file that cannot be read or is not JSON, without the decoder's message,
+// which may quote the file.
+func readCodexHooksJSON(home string) (f codexHookFiles, ok bool, err error) {
+	if home == "" {
+		return f, false, nil
+	}
+	f.hooksFile, f.configFile = filepath.Join(home, "hooks.json"), filepath.Join(home, "config.toml")
+	f.raw, err = os.ReadFile(f.hooksFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return f, false, nil
+	}
+	if err != nil {
+		return f, false, fmt.Errorf("cannot read %s: %w", f.hooksFile, unwrapPath(err))
+	}
+	if err := json.Unmarshal(f.raw, &f.hooks); err != nil {
+		return f, false, fmt.Errorf("%s is not valid JSON", f.hooksFile)
+	}
+	f.prefixes = []string{f.hooksFile}
+	if resolved, err := filepath.EvalSymlinks(f.hooksFile); err == nil && resolved != f.hooksFile {
+		f.prefixes = append(f.prefixes, resolved)
+	}
+	return f, true, nil
+}
+
+// entry is the [hooks.state] entry in state of the hook of f at place
+// (codexHookPlace), under any of f's prefixes, with its key.
+func (f codexHookFiles) entry(state map[string]codexHookEntry, place string) (string, codexHookEntry, bool) {
+	for _, p := range f.prefixes {
+		key := p + ":" + place
+		if e, ok := state[key]; ok {
+			return key, e, true
+		}
+	}
+	return "", codexHookEntry{}, false
+}
+
+// codexHookPlace is the place of the hook at index of group among the
+// groups of a hooks.json event, as a [hooks.state] key ends with it
+// ("session_start:2:0"): event is the key's name of the event
+// (codexHookEvents).
+func codexHookPlace(event string, group, index int) string {
+	return event + ":" + strconv.Itoa(group) + ":" + strconv.Itoa(index)
+}
+
+// codexHookEvents are the hook events Codex runs (Codex 0.162.1, codex-rs's
+// HookEventsToml), as hooks.json names them and as the keys of config.toml's
+// [hooks.state] entries do, in Codex's order. An event Codex does not know
+// runs nothing and asks for no trust, so it is not read.
+var codexHookEvents = []struct{ name, state string }{
+	{"PreToolUse", "pre_tool_use"}, {"PermissionRequest", "permission_request"}, {"PostToolUse", "post_tool_use"},
+	{"PreCompact", "pre_compact"}, {"PostCompact", "post_compact"}, {codexSessionStart, codexSessionStartState},
+	{"SessionEnd", "session_end"}, {"UserPromptSubmit", "user_prompt_submit"}, {"SubagentStart", "subagent_start"},
+	{"SubagentStop", "subagent_stop"}, {"Stop", "stop"}, {"Interrupt", "interrupt"},
+}
+
+// CodexHookAt is one hook of a hooks.json at its place.
+type CodexHookAt struct {
+	// Place is its [hooks.state] key without the hooks.json path:
+	// "<event>:<group>:<index>" ("pre_tool_use:1:0").
+	Place string
+	CodexHook
+}
+
+// CodexHooksTrust is what a Codex home says of the trust of the hooks of
+// its hooks.json (ReadCodexHooksTrust). Codex shows its hooks review when a
+// session starts while a hook's place has no trust entry, and a prompt
+// typed into the review is lost.
+type CodexHooksTrust struct {
+	HooksFile  string // <home>/hooks.json
+	ConfigFile string // <home>/config.toml
+	// Hooks counts the hooks of HooksFile, of the events Codex runs.
+	Hooks int
+	// Untrusted are those whose place has no [hooks.state] entry with a
+	// trusted_hash, by Codex's event order, then group and index. A hook
+	// changed in place keeps its entry, whose hash is then another
+	// command's: magnum cannot tell (Codex hashes its own normal form).
+	Untrusted []CodexHookAt
+	// Fingerprint is HooksFile's (its path and content, hashed), by which
+	// the daemon and the check after a "Trust all" tell the operator once.
+	Fingerprint string
+}
+
+// UntrustedSentence says how many hooks of t have no trust entry, naming
+// hooksFile as given: "2 hooks in ~/.codex/hooks.json have no trust
+// entry"; "" when every hook has one.
+func (t CodexHooksTrust) UntrustedSentence(hooksFile string) string {
+	switch n := len(t.Untrusted); n {
+	case 0:
+		return ""
+	case 1:
+		return "1 hook in " + hooksFile + " has no trust entry"
+	default:
+		return fmt.Sprintf("%d hooks in %s have no trust entry", n, hooksFile)
+	}
+}
+
+// UntrustedPlaces names the hooks of t without a trust entry and their
+// places: "moshi-hook at session_start:1:0, Bartender NotchBar at
+// pre_tool_use:0:0".
+func (t CodexHooksTrust) UntrustedPlaces() string { return hookPlaces(t.Untrusted) }
+
+// hookPlaces names hooks and their places (UntrustedPlaces).
+func hookPlaces(hooks []CodexHookAt) string {
+	parts := make([]string, len(hooks))
+	for i, h := range hooks {
+		parts[i] = h.Name + " at " + h.Place
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ReadCodexHooksTrust reads which hooks of the Codex home home's hooks.json
+// have no trust entry: every hook of every event Codex runs
+// (codexHookEvents), in every group, whose place has no [hooks.state] entry
+// with a trusted_hash in config.toml (keyed by the hooks.json path, as
+// written or with its symlinks resolved; an entry without a hash trusts
+// nothing). ok is false when there is nothing to judge: home unknown or no
+// hooks.json there. A missing config.toml or [hooks.state] table trusts
+// nothing. err names a file that cannot be read or decoded, without the
+// decoder's message. It only reads.
+func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error) {
+	f, ok, err := readCodexHooksJSON(home)
+	t.HooksFile, t.ConfigFile = f.hooksFile, f.configFile
+	if !ok || err != nil {
+		return t, false, err
+	}
+	t.Fingerprint = codexHooksFingerprint(f.hooksFile, f.raw)
+	var all []CodexHookAt
+	for _, ev := range codexHookEvents {
+		for g, group := range f.hooks.Hooks[ev.name] {
+			for i, hook := range group.Hooks {
+				all = append(all, CodexHookAt{Place: codexHookPlace(ev.state, g, i),
+					CodexHook: CodexHook{Name: codexHookName(hook.Type, hook.Command), Timeout: codexHookTimeout(hook.Timeout)}})
+			}
+		}
+	}
+	t.Hooks = len(all)
+	if len(all) == 0 {
+		return t, true, nil
+	}
+	state, err := readCodexHookState(f.configFile)
+	if err != nil {
+		return t, false, err
+	}
+	for _, h := range all {
+		if _, e, ok := f.entry(state, h.Place); !ok || e.TrustedHash == "" {
+			t.Untrusted = append(t.Untrusted, h)
+		}
+	}
+	return t, true, nil
+}
+
+// codexHooksFingerprint is the fingerprint of the hooks.json at path whose
+// content is raw: its path and content, hashed.
+func codexHooksFingerprint(path string, raw []byte) string {
+	h := sha256.New()
+	h.Write([]byte(path + "\n"))
+	h.Write(raw)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // readCodexHookState reads the [hooks.state] entries of the config.toml at

@@ -2375,6 +2375,90 @@ skill versions); people add theirs to the sections before it, at the end of the 
   error; `steps.ErrStopped` now marks such an error (whiteboardStopped is it, by errors.Is), whose fail
   row is at info, "stopped" (still not done). Tests: TestTheCLIVersionReadAStopCutsLogsNoWarning,
   TestStepNormalStopIsInfoLevel and TestAPushEndsTheWhiteboardJob's step row.
+- **magnum reads the trust of every hook of hooks.json, and doctor warns per Codex home** (2026-10-23,
+  spec 06 of the 2026-10-23 run, items 1 and 2, amends "Doctor and the daemon tell when herdr's Codex
+  session hook stops giving ids"). Spec 122 checks only the place of herdr's SessionStart hook, but Codex
+  shows its hooks review for any hook of `hooks.json` whose place has no trust entry, and four tools
+  rewrite `~/.codex/hooks.json` (herdr, Muxy, Bartender NotchBar, moshi): on 10-23 a second review wave ran
+  from 09:06 to 09:55Z. `agents.ReadCodexHooksTrust` reads every hook of every event Codex runs, in every
+  group (`ReadCodexSessionHook` now shares its reader, `readCodexHooksJSON`), and names those whose place
+  has no `[hooks.state]` entry with a `trusted_hash` (`Untrusted`, with `Hooks` and the file's
+  `Fingerprint`). Codex keys the trust as `<hooks.json path>:<event>:<group>:<index>`, the event in snake
+  case (`pre_tool_use`, `session_start`, `user_prompt_submit`, `stop`, `interrupt`, ...): read in Codex
+  0.162.1's binary next to `HookEventsToml` and its normalized hook identity, and in the operator's
+  `config.toml`, whose 49 entries cover 12 events and whose 14 hooks all had one; the path is as written or
+  with its symlinks resolved, as before. Only the 12 events Codex 0.162.1 knows are read
+  (`codexHookEvents`): an event it does not run asks for no trust, and holding new sessions for it would
+  never end. An entry without a hash, another home's entry and another place's entry trust nothing; a hook
+  whose command changed in place keeps its entry, which magnum cannot tell from a current one (Codex hashes
+  its own normal form), and that is accepted. Doctor's new `codex hooks trust` line, per Codex home of the
+  codex kind's session roles (`agents.CodexSessionHomes`, whatever herdr's session source; spec 122's
+  checks keep `agents.CodexHookHomes`), warns "2 hooks in ~/.codex/hooks.json have no trust entry
+  (moshi-hook at session_start:1:0, herdr-agent-state.sh at stop:0:0; used by codex-judge)", fix "run `codex`
+  once in a terminal and choose Trust all", passes with the count, and skips an unknown home or one without
+  `hooks.json`; the herdr hook's own trust line stays, since its consequence (no session ids) differs. Tests:
+  TestReadCodexHooksTrustNamesEveryHookWithoutATrustEntry and
+  TestDoctorWarnsPerCodexHomeOfHooksWithoutATrustEntry.
+- **New Codex sessions wait while a hook has no trust entry** (2026-10-23, spec 06 of the 2026-10-23 run,
+  item 3, approved by the operator that day with the warning). In the 10-23 wave magnum answered "Trust all"
+  13 times over 5 sessions, Codex saved no trust, and first prompts stalled with no rollout and no id; the
+  toast came at 09:07:42Z, the operator ran `codex` in a terminal at about 09:55Z, five rounds started in between,
+  and one PR needed `magnum review` by hand. Now the daemon, once a minute with spec 122's checks
+  (`checkCodexHooksTrust`, internal/engine/codex_hooks_hold.go), reads the hooks of each Codex home the codex
+  kind's session roles read, and while one has a hook without a trust entry it pauses the codex kind with
+  the new reason `hooks_review` (`HooksReviewPauseReason`), through the tool pause the budget and the
+  logins already use (kv, no migration): every round and job that needs Codex waits (a reviewer's `codex
+  review` too, a shell role that shows no review, as any kind pause holds it), sessions already running go
+  on, the board's wait and `magnum status` say why with the existing pause display ("codex paused
+  (hooks_review): 1 hook in ~/.codex/hooks.json has no trust entry: run `codex` once and choose Trust
+  all"; the wait and the status line show no end, since the check renews the pause, `hooksHoldFor`, 10
+  minutes ahead each minute, and health's expiry leaves it to the check), and one `codex.hooks_untrusted`
+  warning naming the hooks and one toast ("Codex hooks need review: run `codex` once and choose Trust all.
+  New Codex sessions wait.") come once per `hooks.json` fingerprint (kv `codex.hooks_untrusted`, the
+  fingerprints told). A pause of another reason is left alone (it says when it ends), and the hold takes
+  its place at the check after it ends. Once no home has such a hook, the check ends the pause it set with
+  one `tool.resumed` info event. `magnum resume --tool codex` (or `all`, the daemon's or the CLI's offline
+  one, `engine.OverruleHooksHold`) lifts the pause as any pause and records the told fingerprints as
+  overruled (kv `codex.hooks_overruled`, one `tool.resumed` event, the answer's note "new Codex sessions
+  start although hooks.json has hooks without a trust entry, until it changes again"); an overrule goes
+  when its file changes, so a new rewrite holds and tells again. Messages name `~/.codex/...` or
+  `$CODEX_HOME/...`, never a home from a pane env. The hold is per kind, as every tool pause is: with
+  Codex roles in two homes, an untrusted hook in one holds both, which a per-home gate in dispatch alone
+  would not, since the fix, whiteboard, notes, critic, retro and editor jobs start Codex sessions through
+  the kind pause's checks too. Tests: TestAHookWithoutATrustEntryHoldsNewCodexSessionsUntilResume,
+  TestTrustedCodexHooksStartCodexSessionsAtOnce, TestTheHooksHoldLeavesAPauseOfAnotherReasonAlone,
+  TestTheOfflineResumesMarkOverrulesTheHooksHold, and in cli TestTheOfflineResumeOverrulesTheHooksHold and
+  TestStatusShowsTheHooksHoldWithItsFix. Rejected: a new pause kind in the registry (the tool pause carries
+  a reason already); writing `hooks.json` or `config.toml` (the hooks and their trust are the operator's);
+  holding only the rounds whose judge would start a new session (a reused judge shows no review, but the
+  round's other sessions and the jobs would, and the wave lasts minutes, not hours).
+- **After "Trust all", the trust entries tell whether Codex saved the trust** (2026-10-23, spec 06 of the
+  2026-10-23 run, item 4, amends "A new Codex session's first prompt waits for its startup dialogs").
+  `hooksTrustSaved` decided "not saved" by `config.toml`'s modification time alone: when two sessions
+  showed the same review, the first answer saved the trust and the second Enter wrote nothing, so magnum
+  toasted "Codex did not save the hook trust" although it was saved (a likely reading of the 10-22
+  evidence: one of seven answers wrote the file), and any other write between Enter and the check (a
+  project's trust, a `/model` switch, another session's notice flag) hid a real failure. Now `answerHooks`
+  reads the hooks without a trust entry before Enter (`ReadCodexHooksTrust`) and `hooksTrustSaved` reads
+  them again once the agent is back: a hook from the first read still without an entry records
+  `agents.hooks_trust_unsaved` ("... and $CODEX_HOME/config.toml still has no trust entry for moshi-hook at
+  pre_tool_use:0:0", data `places`) and toasts as before, once per `hooks.json` (the fingerprint and its kv
+  key unchanged); none, or no such hook before Enter (a hook changed in place, a plugin's), says nothing.
+  Tests: TestAHookTrustCodexDidNotSaveIsToldOncePerHooksJSON and TestASavedOrDeclinedHookTrustGivesNoWarning
+  (their `hooks.json` now holds a hook), TestASecondAnswerToAReviewTheFirstAnswerSavedGivesNoWarning and
+  TestAnAnswerAfterWhichAHookStillHasNoTrustEntryWarnsWhateverTheModificationTime.
+- **One composer reader and one rollout-tail reader; the hooks check's homes after its throttle, its stat
+  error without the path** (2026-10-23, spec 06 of the 2026-10-23 run, items 5 and 6, no behaviour change
+  but the log line). `codexComposer` repeated `composerEmpty`'s scan of the last 8 non-blank lines (the
+  constant was spec 04's `composerScan`, the old function wrote 8): both, and `screenTail`, now read
+  `composerLineOf` (the line's index and what it holds, a dialog's option line never the composer; an
+  option's text was never empty nor a placeholder, so `composerEmpty` answers as before). `turnEndedSince`,
+  `userMessageSince` and TurnError's `lastTurnError` each opened a rollout and read its last MiB their own
+  way; `scanRolloutTail` is the one reader, last line first, and the three only decide (whether a user
+  message exists does not depend on the order). `checkCodexHook` built the Codex homes on every tick
+  before its once-a-minute throttle, now after it; its `os.Stat` failure of `hooks.json`, logged with the
+  Codex home's path (a pane env value), now names `~/.codex` or `$CODEX_HOME` (`codexHomeErr`, shared with
+  the read error of spec 122's check). The existing composer, rollout and turn tests cover them.
 
 ## Screens and commands
 

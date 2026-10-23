@@ -55,6 +55,34 @@ func KindName(kind string) string {
 // task_complete is among its last events.
 const rolloutTail = 1 << 20
 
+// scanRolloutTail calls fn with each line of the last rolloutTail bytes of
+// the rollout at path (the first one cut where the read starts), the last
+// line first, until fn says stop: the one reader of a rollout's end, for
+// TurnError (lastTurnError), the end of a turn (turnEndedSince) and a
+// first prompt Codex took (userMessageSince).
+func scanRolloutTail(path string, fn func(line []byte) (stop bool)) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	off := max(st.Size()-rolloutTail, 0)
+	b, err := io.ReadAll(io.NewSectionReader(f, off, st.Size()-off))
+	if err != nil {
+		return err
+	}
+	for _, line := range slices.Backward(bytes.Split(b, []byte("\n"))) {
+		if fn(line) {
+			return nil
+		}
+	}
+	return nil
+}
+
 // TurnError is the error a Codex turn ended with, as its rollout records it.
 type TurnError struct {
 	Message string // the error's message, redacted, at most 300 bytes
@@ -297,40 +325,24 @@ type rolloutEvent struct {
 
 // lastTurnError reads the end of the rollout at path for its last
 // task_complete stamped at or after since: its error, when it has one.
-func lastTurnError(path string, since time.Time) (TurnError, bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return TurnError{}, false, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return TurnError{}, false, err
-	}
-	off := max(st.Size()-rolloutTail, 0)
-	b, err := io.ReadAll(io.NewSectionReader(f, off, st.Size()-off))
-	if err != nil {
-		return TurnError{}, false, err
-	}
-	lines := strings.Split(string(b), "\n")
-	for _, line := range slices.Backward(lines) {
-
-		if !strings.Contains(line, `"task_complete"`) {
-			continue // most lines: no JSON decoding
+func lastTurnError(path string, since time.Time) (te TurnError, found bool, err error) {
+	err = scanRolloutTail(path, func(line []byte) bool {
+		if !bytes.Contains(line, []byte(`"task_complete"`)) {
+			return false // most lines: no JSON decoding
 		}
 		var ev rolloutEvent
-		if json.Unmarshal([]byte(line), &ev) != nil || ev.Payload.Type != "task_complete" {
-			continue
+		if json.Unmarshal(line, &ev) != nil || ev.Payload.Type != "task_complete" {
+			return false
 		}
-		if ev.Timestamp.Before(since) {
-			return TurnError{}, false, nil
+		if !ev.Timestamp.Before(since) && ev.Payload.Error != nil {
+			te, found = turnError(ev), true
 		}
-		if ev.Payload.Error == nil {
-			return TurnError{}, false, nil
-		}
-		return turnError(ev), true, nil
+		return true
+	})
+	if err != nil {
+		return TurnError{}, false, err
 	}
-	return TurnError{}, false, nil
+	return te, found, nil
 }
 
 // turnError is the error of task_complete event ev (Error set).

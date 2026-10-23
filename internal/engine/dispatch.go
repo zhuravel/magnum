@@ -733,10 +733,22 @@ func (e *Engine) kindPause(ctx context.Context, kinds []string) (kind, why strin
 	now := e.now()
 	for _, kind := range kinds {
 		if p, ok := e.toolPause(ctx, kind); ok && now.Before(p.Until) {
-			return kind, fmt.Sprintf("%s paused (%s) until %s", kind, p.Reason, p.Until.Local().Format("15:04"))
+			return kind, pausedWords(kind, p)
 		}
 	}
 	return "", ""
+}
+
+// pausedWords says kind's pause p as a wait does: "claude paused
+// (usage_limit) until 14:00", and for the hooks review, which ends when the
+// hooks are trusted, what holds it instead of the time the check renews
+// ("codex paused (hooks_review): 1 hook in ~/.codex/hooks.json has no trust
+// entry: run `codex` once and choose Trust all").
+func pausedWords(kind string, p toolPause) string {
+	if p.Reason == HooksReviewPauseReason {
+		return fmt.Sprintf("%s paused (%s): %s", kind, p.Reason, p.Detail)
+	}
+	return fmt.Sprintf("%s paused (%s) until %s", kind, p.Reason, p.Until.Local().Format("15:04"))
 }
 
 // codexRoles counts the roles that run a Codex agent.

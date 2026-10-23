@@ -538,6 +538,10 @@ func statusGatherPauses(d statusDeps, kv statusKV, r *statusReport) {
 			p.Fix = rolesLoginCommand(tool) + " (magnum re-checks every minute)"
 		case reason == engine.BudgetPauseReason:
 			p.Fix = "rounds that need " + tool + " resume by themselves once the Codex budget is below [usage] codex_hard (raise it, or set it to 0, to go on); `magnum resume --tool " + tool + "` lifts it when Codex's reading is stale, as after a switch to another Codex account"
+		case reason == engine.HooksReviewPauseReason:
+			p.Until = nil // it ends when the hooks are trusted; the daemon renews the time every minute
+			p.Fix = "run `codex` once in a terminal and choose Trust all: new Codex sessions start once every hook has a trust entry " +
+				"(magnum re-checks every minute); `magnum resume --tool " + tool + "` starts new Codex sessions anyway until hooks.json changes again"
 		default:
 			p.Fix = "wait, or `magnum resume --tool " + tool + "` to retry now"
 		}

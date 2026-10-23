@@ -12,13 +12,11 @@ package agents
 // rollout Codex wrote within RolloutGrowth, still works.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"os"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -75,30 +73,20 @@ func (m *Manager) codexTurnGoing(ctx context.Context, s store.Session, sid strin
 // turnEndedSince reports whether the end of the rollout at path (its last
 // rolloutTail bytes) holds a task_complete or turn_aborted event stamped at
 // or after since: the last such event decides.
-func turnEndedSince(path string, since time.Time) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return false, err
-	}
-	off := max(st.Size()-rolloutTail, 0)
-	b, err := io.ReadAll(io.NewSectionReader(f, off, st.Size()-off))
-	if err != nil {
-		return false, err
-	}
-	for _, line := range slices.Backward(strings.Split(string(b), "\n")) {
-		if !strings.Contains(line, `"task_complete"`) && !strings.Contains(line, `"turn_aborted"`) {
-			continue // most lines: no JSON decoding
+func turnEndedSince(path string, since time.Time) (ended bool, err error) {
+	err = scanRolloutTail(path, func(line []byte) bool {
+		if !bytes.Contains(line, []byte(`"task_complete"`)) && !bytes.Contains(line, []byte(`"turn_aborted"`)) {
+			return false // most lines: no JSON decoding
 		}
 		var ev rolloutEvent
-		if json.Unmarshal([]byte(line), &ev) != nil || ev.Payload.Type != "task_complete" && ev.Payload.Type != "turn_aborted" {
-			continue
+		if json.Unmarshal(line, &ev) != nil || ev.Payload.Type != "task_complete" && ev.Payload.Type != "turn_aborted" {
+			return false
 		}
-		return !ev.Timestamp.Before(since), nil
+		ended = !ev.Timestamp.Before(since)
+		return true
+	})
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return ended, nil
 }

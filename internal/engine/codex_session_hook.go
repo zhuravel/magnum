@@ -20,7 +20,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -58,25 +57,31 @@ const (
 	codexHookToastWindow = 24 * time.Hour
 )
 
-// checkCodexHook runs once a minute (usageEvery) while the codex kind's
-// session ids come from herdr and a session role starts it
-// (agents.CodexHookHomes): the sessions' ids (checkCodexSessionIDs), then
-// each Codex home's hooks.json (checkCodexHooksFile).
+// checkCodexHook runs once a minute (usageEvery): the trust of the hooks of
+// the Codex homes the codex kind's session roles read
+// (checkCodexHooksTrust, which holds new Codex sessions while one has
+// none), then, while the codex kind's session ids come from herdr and a
+// session role starts it (agents.CodexHookHomes), the sessions' ids
+// (checkCodexSessionIDs) and each Codex home's hooks.json
+// (checkCodexHooksFile).
 func (e *Engine) checkCodexHook(ctx context.Context) {
-	homes, users := agents.CodexHookHomes(e.cfg, func(r config.Role) string {
-		if e.d.CodexHome == nil {
-			return ""
-		}
-		return e.d.CodexHome(r)
-	})
-	if len(homes) == 0 {
-		return
-	}
 	now := e.now()
 	if !e.codexHookRead.IsZero() && now.Sub(e.codexHookRead) < usageEvery {
 		return
 	}
 	e.codexHookRead = now
+	home := func(r config.Role) string {
+		if e.d.CodexHome == nil {
+			return ""
+		}
+		return e.d.CodexHome(r)
+	}
+	sessionHomes, readers := agents.CodexSessionHomes(e.cfg, home)
+	e.checkCodexHooksTrust(ctx, sessionHomes, readers)
+	homes, users := agents.CodexHookHomes(e.cfg, home)
+	if len(homes) == 0 {
+		return
+	}
 	e.checkCodexSessionIDs(ctx, now)
 	for _, home := range homes {
 		if home != "" {
@@ -142,7 +147,7 @@ func (e *Engine) checkCodexHooksFile(ctx context.Context, home string, roles []s
 	case err == nil:
 		mtime = fi.ModTime()
 	case !errors.Is(err, fs.ErrNotExist):
-		e.log.Debug("codex hooks.json", "err", err)
+		e.log.Debug("codex hooks.json", "err", codexHomeErr(err, home))
 		return
 	}
 	prev, seen := e.codexHooksSeen[home]
@@ -158,8 +163,7 @@ func (e *Engine) checkCodexHooksFile(ctx context.Context, home string, roles []s
 	var problems []agents.CodexHookProblem
 	switch {
 	case err != nil:
-		problems = []agents.CodexHookProblem{{Check: "read", Text: "herdr's Codex session hook cannot be judged: " +
-			strings.ReplaceAll(err.Error(), home, strings.TrimSuffix(agents.CodexFileName(home, ""), "/"))}}
+		problems = []agents.CodexHookProblem{{Check: "read", Text: "herdr's Codex session hook cannot be judged: " + codexHomeErr(err, home)}}
 	case !ok:
 		return
 	default:

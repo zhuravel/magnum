@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
@@ -835,7 +836,7 @@ func (e *Engine) stillPausedNote(ctx context.Context) string {
 	now := e.now()
 	for _, kind := range e.kinds() {
 		if p, ok := e.toolPause(ctx, kind); ok && now.Before(p.Until) { // kindPause's rule
-			fmt.Fprintf(&b, "; %s is still paused (%s) until %s: %s", kind, p.Reason, p.Until.Local().Format("15:04"), resumeToolHint(kind))
+			fmt.Fprintf(&b, "; %s is still %s: %s", kind, strings.TrimPrefix(pausedWords(kind, p), kind+" "), resumeToolHint(kind))
 		}
 	}
 	return b.String()
@@ -850,11 +851,23 @@ func (e *Engine) stillPausedNote(ctx context.Context) string {
 // tool.resumed event, and the answer's note says what it means ("" when
 // nothing is overruled). Every resume of the kind, a pause or not, is a
 // lift (noteLift): a reviewer's failure from before it pauses the kind no
-// more at a round's settle.
+// more at a round's settle. For codex it also overrules the hold of new
+// Codex sessions by hooks without a trust entry until hooks.json changes
+// (overruleHooksHold), which the answer's note says too.
 func (e *Engine) liftToolPause(ctx context.Context, tool string) string {
 	p, paused := e.toolPause(ctx, tool)
 	e.clearToolPause(ctx, tool)
 	e.noteLift(ctx, tool)
+	note := e.overruleOnLift(ctx, tool, p, paused)
+	if tool == agents.KindCodex && e.overruleHooksHold(ctx) {
+		note += " (" + HooksOverruledNote + ")"
+	}
+	return note
+}
+
+// overruleOnLift is liftToolPause's overrule of Codex's reading: the
+// answer's note, "" when nothing is overruled.
+func (e *Engine) overruleOnLift(ctx context.Context, tool string, p toolPause, paused bool) string {
 	switch {
 	case paused && p.Reason == BudgetPauseReason:
 		e.overruleBudget(ctx)

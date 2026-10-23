@@ -23,8 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -58,7 +56,7 @@ const (
 	// dialog that comes back after its answer is not answered forever).
 	codexReadyAnswers = 3
 	// composerScan is how many non-blank lines from the bottom of a screen
-	// are searched for the composer (composerEmpty's).
+	// are searched for the composer (composerLineOf).
 	composerScan = 8
 )
 
@@ -92,17 +90,24 @@ const (
 // ("1. Review hooks"), which composerLine's mark also starts.
 var optionText = regexp.MustCompile(`^\d+[.)]\s`)
 
-// codexComposer reports whether a Codex screen shows its composer: the
-// last line marked like an input line (composerLine) among the last
-// composerScan non-blank lines, which is no dialog's option line (a
-// dialog's cursor carries the same mark). What it holds does not matter.
+// codexComposer reports whether a Codex screen shows its composer
+// (composerLineOf). What it holds does not matter.
 func codexComposer(text string) bool {
-	return composerAt(strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")) >= 0
+	at, _ := composerLineOf(screenLines(text))
+	return at >= 0
 }
 
-// composerAt is the index of the Codex composer's line in lines
-// (codexComposer's rule); -1 when they show none.
-func composerAt(lines []string) int {
+// screenLines are the lines of a pane's visible text.
+func screenLines(text string) []string {
+	return strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
+}
+
+// composerLineOf finds an agent's input line in a screen's lines: the last
+// line marked like one (composerLine) among the last composerScan non-blank
+// lines, unless it is a dialog's option line (a dialog's cursor carries the
+// same mark). It returns that line's index and what it holds, trimmed; -1
+// when the lines show none.
+func composerLineOf(lines []string) (at int, rest string) {
 	seen := 0
 	for i := len(lines) - 1; i >= 0 && seen < composerScan; i-- {
 		t := stripBox(lines[i])
@@ -111,13 +116,14 @@ func composerAt(lines []string) int {
 		}
 		seen++
 		if m := composerLine.FindStringSubmatch(t); m != nil {
-			if optionText.MatchString(strings.TrimSpace(m[1])) {
-				return -1
+			rest := strings.TrimSpace(m[1])
+			if optionText.MatchString(rest) {
+				return -1, ""
 			}
-			return i
+			return i, rest
 		}
 	}
-	return -1
+	return -1, ""
 }
 
 // screenTail is what a first-prompt warning carries of a Codex screen: of
@@ -126,8 +132,8 @@ func composerAt(lines []string) int {
 // (execx.Redact) and cut to screenLineBytes on a rune. The composer, which
 // holds a prompt typed into it, and what is below it stay out.
 func screenTail(text string) []string {
-	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
-	if i := composerAt(lines); i >= 0 {
+	lines := screenLines(text)
+	if i, _ := composerLineOf(lines); i >= 0 {
 		lines = lines[:i]
 	}
 	var out []string
@@ -304,31 +310,19 @@ func (m *Manager) codexPromptLogged(ctx context.Context, s store.Session, sid st
 
 // userMessageSince reports whether the end of the rollout at path (its last
 // rolloutTail bytes) holds a user_message event stamped at or after since.
-func userMessageSince(path string, since time.Time) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return false, err
-	}
-	off := max(st.Size()-rolloutTail, 0)
-	b, err := io.ReadAll(io.NewSectionReader(f, off, st.Size()-off))
-	if err != nil {
-		return false, err
-	}
-	for line := range bytes.SplitSeq(b, []byte("\n")) {
+func userMessageSince(path string, since time.Time) (found bool, err error) {
+	err = scanRolloutTail(path, func(line []byte) bool {
 		if !bytes.Contains(line, []byte(`"user_message"`)) {
-			continue // most lines: no JSON decoding
+			return false // most lines: no JSON decoding
 		}
 		var ev rolloutEvent
-		if json.Unmarshal(line, &ev) == nil && ev.Payload.Type == "user_message" && !ev.Timestamp.Before(since) {
-			return true, nil
-		}
+		found = json.Unmarshal(line, &ev) == nil && ev.Payload.Type == "user_message" && !ev.Timestamp.Before(since)
+		return found
+	})
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return found, nil
 }
 
 // codexRetry sends the first prompt of run again, once, when Codex session

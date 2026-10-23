@@ -202,11 +202,13 @@ func newResumeCmd(c *Context) *cobra.Command {
 	var o resumeOpts
 	cmd := newCommand(groupAct, resumeUsage, "resume automation, or lift an agent kind's or a watch's pause",
 		"Resume automation after `magnum pause` (and lift an infrastructure pause, whose probe would otherwise "+
-			"lift it). --tool lifts a usage-limit, login or Codex-budget pause of an agent kind (codex, claude or "+
+			"lift it). --tool lifts a usage-limit, login, Codex-budget or hooks-review pause of an agent kind (codex, claude or "+
 			"any [kinds.<name>]; `magnum roles --kinds` lists them) or of all, and forgets the kind's per-model "+
 			"limits, so its sessions go back to their roles' models. For codex (or all), with Codex's last reading at "+
 			"either [usage] cap, a Codex-budget pause or not, it also overrules that reading, which is stale after a "+
-			"switch to another Codex account: both caps wait for Codex's next reading, from the next Codex session. "+
+			"switch to another Codex account: both caps wait for Codex's next reading, from the next Codex session; "+
+			"and while hooks in a Codex home's hooks.json have no trust entry (the hooks-review pause), new Codex "+
+			"sessions start anyway until that hooks.json changes again. "+
 			"--watch lifts the identity-leak pause of a watch owner.",
 		func(pos []string) int { return runResume(c, o, pos) })
 	fs := cmd.Flags()
@@ -342,6 +344,15 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 				return "", err
 			}
 			note = " (" + engine.BudgetOverruledNote + ")"
+		}
+		if slices.Contains(tools, config.KindCodex) { // as the daemon's liftToolPause overrules the hooks hold
+			overruled, err := engine.OverruleHooksHold(ctx, d.Store)
+			if err != nil {
+				return "", err
+			}
+			if overruled {
+				note += " (" + engine.HooksOverruledNote + ")"
+			}
 		}
 		if len(limits) > 0 {
 			note += " (model limits cleared: " + strings.Join(limits, ", ") + ")"

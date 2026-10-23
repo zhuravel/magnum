@@ -351,9 +351,10 @@ const EventHerdrIDsReused = "agents.herdr_ids_reused"
 
 const EventHooksTrustUnsaved = "agents.hooks_trust_unsaved"
     EventHooksTrustUnsaved is recorded (warn, subject tool:<kind>) when magnum
-    trusted a Codex hooks review and Codex's config.toml did not change, once
-    per hooks.json (data: role, agent, pane, hooks: the hooks.json fingerprint).
-    A toast says the same (Deps.Toast).
+    trusted a Codex hooks review and a hook whose place had no trust entry
+    in Codex's config.toml before still has none, once per hooks.json (data:
+    role, agent, pane, places: those hooks' places, hooks: the hooks.json
+    fingerprint). A toast says the same (Deps.Toast).
 
 const EventHumanActive = "agent.human_active"
     EventHumanActive is recorded on the PR when an ObsHumanActive begins its
@@ -551,11 +552,16 @@ func CodexFileName(home, file string) string
     "$CODEX_HOME/<file>".
 
 func CodexHookHomes(cfg *config.Config, home func(config.Role) string) (homes []string, users map[string][]string)
-    CodexHookHomes are the Codex homes herdr's session hook is checked in,
-    in the roles' order, with the session roles of the codex kind that read each
-    (home: the Manager's CodexHome; "" for one unknown). None unless the codex
-    kind's session ids come from herdr (session_source "herdr"); a shell role's
-    `codex review` needs no id.
+    CodexHookHomes are the Codex homes herdr's session hook is checked in
+    (CodexSessionHomes). None unless the codex kind's session ids come from
+    herdr (session_source "herdr"); a shell role's `codex review` needs no id.
+
+func CodexSessionHomes(cfg *config.Config, home func(config.Role) string) (homes []string, users map[string][]string)
+    CodexSessionHomes are the Codex homes the session roles of the codex
+    kind read, in the roles' order, with the roles that read each (home:
+    the Manager's CodexHome; "" for one unknown): where Codex shows its startup
+    dialogs, the hooks review among them. A shell role's `codex review` shows
+    none.
 
 func CommandAnchor(marker string) string
     CommandAnchor is text that only the pane's echo of a shell line built with
@@ -871,6 +877,14 @@ type CodexHook struct {
 }
     CodexHook is one hook of a Codex hooks.json, as messages name it.
 
+type CodexHookAt struct {
+	// Place is its [hooks.state] key without the hooks.json path:
+	// "<event>:<group>:<index>" ("pre_tool_use:1:0").
+	Place string
+	CodexHook
+}
+    CodexHookAt is one hook of a hooks.json at its place.
+
 type CodexHookProblem struct {
 	Check string // CodexHookMissing, CodexHookDisabled, CodexHookPlace or CodexHookTrust
 	// Text says what is wrong in one sentence without its final period.
@@ -878,6 +892,44 @@ type CodexHookProblem struct {
 }
     CodexHookProblem is one check herdr's Codex session hook fails
     (CodexSessionHook.Problems).
+
+type CodexHooksTrust struct {
+	HooksFile  string // <home>/hooks.json
+	ConfigFile string // <home>/config.toml
+	// Hooks counts the hooks of HooksFile, of the events Codex runs.
+	Hooks int
+	// Untrusted are those whose place has no [hooks.state] entry with a
+	// trusted_hash, by Codex's event order, then group and index. A hook
+	// changed in place keeps its entry, whose hash is then another
+	// command's: magnum cannot tell (Codex hashes its own normal form).
+	Untrusted []CodexHookAt
+	// Fingerprint is HooksFile's (its path and content, hashed), by which
+	// the daemon and the check after a "Trust all" tell the operator once.
+	Fingerprint string
+}
+    CodexHooksTrust is what a Codex home says of the trust of the hooks of
+    its hooks.json (ReadCodexHooksTrust). Codex shows its hooks review when a
+    session starts while a hook's place has no trust entry, and a prompt typed
+    into the review is lost.
+
+func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error)
+    ReadCodexHooksTrust reads which hooks of the Codex home home's hooks.json
+    have no trust entry: every hook of every event Codex runs (codexHookEvents),
+    in every group, whose place has no [hooks.state] entry with a trusted_hash
+    in config.toml (keyed by the hooks.json path, as written or with its
+    symlinks resolved; an entry without a hash trusts nothing). ok is false when
+    there is nothing to judge: home unknown or no hooks.json there. A missing
+    config.toml or [hooks.state] table trusts nothing. err names a file that
+    cannot be read or decoded, without the decoder's message. It only reads.
+
+func (t CodexHooksTrust) UntrustedPlaces() string
+    UntrustedPlaces names the hooks of t without a trust entry and their places:
+    "moshi-hook at session_start:1:0, Bartender NotchBar at pre_tool_use:0:0".
+
+func (t CodexHooksTrust) UntrustedSentence(hooksFile string) string
+    UntrustedSentence says how many hooks of t have no trust entry, naming
+    hooksFile as given: "2 hooks in ~/.codex/hooks.json have no trust entry";
+    "" when every hook has one.
 
 type CodexSessionHook struct {
 	HooksFile  string // <home>/hooks.json
@@ -6523,6 +6575,17 @@ const (
 	KVDaemonBuild = "daemon.build"
 )
 const (
+	// KVCodexHooksUntrusted holds the fingerprints (comma-separated) of the
+	// hooks.json files that have hooks without a trust entry, which the
+	// daemon told about once (EventCodexHooksUntrusted); absent when there
+	// are none.
+	KVCodexHooksUntrusted = "codex.hooks_untrusted"
+	// KVCodexHooksOverruled holds the fingerprints of those `magnum resume
+	// --tool codex` overruled (OverruleHooksHold): they hold no new session
+	// while the file stays the same.
+	KVCodexHooksOverruled = "codex.hooks_overruled"
+)
+const (
 	// KVCodexLogin is the fingerprint of Codex's login (usage.Login), the
 	// only thing of auth.json magnum keeps.
 	KVCodexLogin = "codex.login"
@@ -6898,6 +6961,11 @@ const EvPRMuted = "pr.muted"
     EvPRMuted is the event a mute records, its reason in the data's "reason"
     (requestMute); the board's card shows the latest one's next to the flag.
 
+const EventCodexHooksUntrusted = "codex.hooks_untrusted"
+    EventCodexHooksUntrusted (warn, subject tool:codex) says, once per
+    hooks.json fingerprint, that the hooks without a trust entry of a Codex home
+    hold new Codex sessions (data: hooks, the fingerprint; places; roles).
+
 const EventKindVersionChanged = "kind.version_changed"
     EventKindVersionChanged is recorded (subject tool:<kind>) when an agent
     kind's CLI reports another version than the one recorded (KVKindVersion):
@@ -6930,6 +6998,16 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     FormerDismissMessage is the reason a dismissed review of a former identity
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
+
+const HooksOverruledNote = "new Codex sessions start although hooks.json has hooks without a trust entry, until it changes again"
+    HooksOverruledNote is what a resume that overrules the hold means, as its
+    answer says it.
+
+const HooksReviewPauseReason = "hooks_review"
+    HooksReviewPauseReason is the codex kind's pause reason while a hook of
+    the hooks.json of a Codex home its session roles read has no trust entry
+    (checkCodexHooksTrust). The check renews it and ends it; it has no end of
+    its own.
 
 const KVCodexSessionIDsMissing = "codex.session_ids_missing"
     KVCodexSessionIDsMissing is when the run of Codex sessions without a session
@@ -7410,6 +7488,13 @@ func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string
     not review on its own, the agents' instructions, the head's checks) does
     not refuse it either: the operator decides by hand, the board shows those.
     sum is magnum's latest posted round of pr (nil: none).
+
+func OverruleHooksHold(ctx context.Context, st *store.Store) (bool, error)
+    OverruleHooksHold lets the hooks.json files whose hooks without a trust
+    entry the daemon told about (KVCodexHooksUntrusted) start new Codex sessions
+    until they change (KVCodexHooksOverruled), for `magnum resume --tool codex`
+    (or all): the daemon's, and the CLI's when no daemon runs. It reports
+    whether it overruled a file not overruled yet.
 
 func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, error)
     PinnedSince is when each subject that is pinned now was pinned, by the

@@ -393,7 +393,8 @@ func (e *Engine) attentionRole(ctx context.Context, prID int64, kind string) str
 // first, and a login pause a run proved also needs its login file changed
 // (stampLogin), or loginStampHold passed on an unchanged one; usage limits
 // are lifted optimistically (the next round pauses again, with a doubled
-// fallback, if the limit still holds). It also reads the agent CLIs'
+// fallback, if the limit still holds); the hooks review's pause is
+// checkCodexHooksTrust's to renew and end. It also reads the agent CLIs'
 // versions (checkCLIVersions), says when PRs' launches end the same way
 // (noteSharedFailures) and samples the machine's memory (checkMemory).
 func (e *Engine) health(ctx context.Context) {
@@ -405,6 +406,9 @@ func (e *Engine) health(ctx context.Context) {
 		}
 		if p.Reason == BudgetPauseReason && e.budgetKnown() {
 			continue // checkBudget lifts it once the budget is below the cap
+		}
+		if p.Reason == HooksReviewPauseReason {
+			continue // checkCodexHooksTrust renews it and lifts it once the hooks are trusted
 		}
 		if e.d.DryRun {
 			e.rec.Record(ctx, "tool:"+tool, "resume", "pause ("+p.Reason+") expired")
