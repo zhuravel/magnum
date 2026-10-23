@@ -415,7 +415,11 @@ func (e *Engine) checkNotesLimits(ctx context.Context, nr notes.Repo, size notes
 // the registry has no version of is imported (source import: the first
 // start, an edit by hand) and the notes are measured against the limits. At
 // a reconcile a repository whose round is in its judge stage is left for
-// that round to record. A dry run records nothing.
+// that round to record, and one whose apply is in flight or cut short (a
+// proposal applying, which writes the harness and then the notes) for the
+// apply or its recovery: what a write left halfway is not the notes' state.
+// It also removes the directories a notes write left next to a harness once
+// they are an hour old (sweepNotesLeftovers). A dry run records nothing.
 func (e *Engine) syncNotes(ctx context.Context, startup bool) {
 	if e.d.DryRun || NotesRoot(e.d.Layout) == "" {
 		return
@@ -427,7 +431,11 @@ func (e *Engine) syncNotes(ctx context.Context, startup bool) {
 	}
 	for _, repo := range repos {
 		nr, ok := notesRepo(e.d.Layout, repo.Owner, repo.Name)
-		if !ok || (!startup && e.notesJudging(ctx, repo.ID)) {
+		if !ok {
+			continue
+		}
+		e.sweepNotesLeftovers(ctx, repo, nr)
+		if !startup && e.notesJudging(ctx, repo.ID) {
 			continue
 		}
 		state, err := notes.ReadState(nr)
@@ -438,6 +446,11 @@ func (e *Engine) syncNotes(ctx context.Context, startup bool) {
 		}
 		if len(state.Notes) == 0 && len(state.Files) == 0 {
 			continue // never written (the harness directory every round creates)
+		}
+		// After the read: an apply claims before it writes, so a read that
+		// saw a write in flight finds the claim.
+		if e.notesApplying(ctx, repo.ID) {
+			continue
 		}
 		_, _ = e.recordNotes(ctx, repo, nr, state, store.NotesFromImport, 0, "")
 		e.checkNotesLimits(ctx, nr, state.Size(e.cfg.Notes.MaxLine))

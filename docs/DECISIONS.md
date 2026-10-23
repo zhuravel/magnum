@@ -12293,6 +12293,75 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestARoundThatCannotApproveRefusesAnApproveOnly in postreview; TestPostReviewRefusesAnApproveTheRoundCannotPost in
     cli; the judge prompts' goldens with the `no-approval` block, and every post_review line's new flag.
 
+- **A notes apply settles its claim by what the disk holds, and a critic rejection promises no curation that cannot
+  run** (2026-10-23, spec 01 of the 2026-10-23T16-45 run, amends "A notes proposal is applied by a claim, a write and a
+  record" and "The notes critic decides curation proposals"). The run's code-health lens proved three faults with
+  throwaway tests over commits 94f2ea02..65ad2781.
+  - Evidence. (1) `notes.WriteState` ended with `return os.RemoveAll(old)`, after the harness swap and the notes
+    write had both succeeded, and `ApplyNotesProposal` took every `WriteState` error for "nothing was written": it
+    released the claim and wrote `notes.apply_failed`. With the old script directory unremovable (mode 0500) the
+    registry said `pending`, the disk held the proposal's target, and an `.old-*` directory stayed. Two more error
+    paths of `WriteState` (a restore that fails, a new harness that cannot be moved aside) leave a mixed or missing
+    harness, and the released claim hid it from `RecoverNotesApply`, which settles exactly those states but only
+    for proposals still `applying`. (2) A critic rejection or re-curation set `KVNotesRecurate` and the toast said
+    "A new curation runs.", but `maybeCurate` returns before `dueCurations` when `[notes] curate` is empty, so no
+    curation ran and the mark stayed until an asked-for curation stored a proposal. (3) `syncNotes` runs at every
+    reconcile without the notes lock. Since the claim-write-record apply it has a second writer: a read between the
+    harness swap and the notes write recorded a mixed state as an import version, and a read before `finishApply`
+    made `applied_version_id` point at an import, because `Dedupe` finds the latest version. Nothing swept the
+    `.old-*` and `.new-*` directories a write leaves.
+  - The write. `WriteStateReport` returns nil once the swap and the notes write are done and names an old harness
+    it could not remove as a `Leftover` (`WriteState` keeps its signature and drops it); the apply writes
+    `notes.write_leftover` (warn) and goes on. Tests replace the write through `writeNotesState`.
+  - One rule for a claim's notes. `whatTheNotesHold(live, prior, target)` says whether the files hold the target,
+    the state the claim found, half of each (the notes of one and the harness of the other) or neither, the target
+    first. `RecoverNotesApply` decides by it (finish, release, complete the write, import what is there) and so does
+    an apply whose write failed (`settleFailedWrite`): it reads the notes again; as found, it releases the claim
+    (`notes.apply_failed`); as meant to be written, it records the proposal applied (`notes.write_error` names the
+    error); in any other state, or notes it cannot read, the proposal stays `applying` with its claim
+    (`notes.apply_unsettled`) and the next scan's recovery settles it. The apply does not run the recovery itself:
+    the notes lock is not reentrant, and the scan comes within the daemon's `curateCheckEvery`.
+  - The sweep. At every reconcile and at the start (`syncNotes`), for each repository with notes,
+    `sweepNotesLeftovers` removes the directories named as `WriteState` names them (the harness's name, `.old-` or
+    `.new-` and eight characters of `rand.Text`'s alphabet, directories only) whose modification time is over an hour
+    old (`notes.Leftovers`, `notes.SweepLeftovers`). It takes the notes lock without waiting, since a write holds it
+    for as long as it needs its old harness (a renamed directory keeps its old modification time, so the age alone
+    protects nothing; the lock does), and leaves a repository with a proposal applying alone, since the recovery
+    may still want what the write left. A held lock or an unremovable directory is tried again at the next reconcile.
+  - The reconcile and an apply. `syncNotes` skips a repository with a proposal `applying` (one query on the
+    proposals, after the notes are read: an apply claims before it writes, so a read that saw a write in flight
+    finds the claim), also at the start, where the recovery runs first. A `pending` proposal writes nothing, so it
+    does not skip: that would stop the import of hand edits and the measuring of limits for the proposal's seven days
+    (the spec's "waiting or applying" is read as the second).
+  - The critic. After a rejection or a re-curation, and unless the critic stepped back, the mark is set only when
+    `curationRuns` (a curator is set up and `[notes] curate` is not empty; `maybeCurate` uses the same function).
+    Otherwise no mark is set and the event and the toast end "No curation starts by itself: `magnum notes <repo>
+    --curate` asks for a new one." The critic's stop paths are tested: an error from the agent, a context the
+    shutdown ends, a usage limit that pauses the kind, an agent that cannot start and inputs that cannot be built
+    each end the critique `stopped` with no attempt, the agent closed, and a new critique only after an hour (and
+    after the pause).
+  - Tests, failing first (a mutation of each rule fails one): in notes TestAnOldHarnessThatCannotBeRemovedIsNotAFailedWrite,
+    TestWriteStateReportNamesTheLeftoverAndOnlyThat, TestSweepLeftoversRemovesOnlyOldWriteDirectories and
+    TestSweepLeftoversOfARepositoryWithNoDirectoryIsEmpty; in engine TestAnApplyWhoseOldHarnessCannotBeRemovedIsApplied
+    (mode 0500, applied, version recorded, one leftover event, no apply_failed),
+    TestAnApplyThatFailsBeforeAnyWriteReleasesTheClaim,
+    TestAnApplyThatFailsBetweenItsTwoWritesStaysApplyingAndTheRecoverySettlesIt,
+    TestAnApplyWhoseWriteErroredAfterTheTargetWasInPlaceIsApplied,
+    TestAnApplyThatFailsUnderNotesSomeoneChangedStaysApplyingForTheRecovery,
+    TestWhatTheNotesHoldIsOneRuleForTheApplyAndTheRecovery,
+    TestAReconcileDuringAHalfFinishedApplyRecordsNoImportVersion,
+    TestAReconcileBetweenAnApplysWriteAndRecordLeavesTheCurationsVersion,
+    TestTheReconcileSweepsTheDirectoriesAWriteLeftOnceTheyAreAnHourOld,
+    TestTheSweepWaitsForTheNotesLockAndForAnUnsettledApply, TestACriticRejectionPromisesACurationOnlyWhereOneCanRun
+    (reject and recurate, with curate set, off and no curator) and the stop paths TestACriticThatReturnsAnErrorStopsTheCritiqueAndIsTriedAgainAfterAnHour,
+    TestACritiqueWhoseContextEndsIsStoppedByTheDaemonNotCounted, TestACritiqueThatHitsAUsageLimitPausesTheCriticsKind,
+    TestACriticThatCannotStartStopsTheCritique and TestACritiqueWhoseInputsCannotBeBuiltStopsBeforeTheAgentIsAsked.
+  - Rejected: releasing the claim on every error of the write (the old rule: it hid the states the recovery exists
+    for, and released a claim over a write that stood); an apply that runs the recovery at once (the lock is not
+    reentrant, and the next scan does it); the notes lock in `syncNotes` (a judge holds it while it edits the notes, which takes minutes, and
+    the reconcile and the start's import must not wait for it; the claim says an apply is in flight); skipping `pending` proposals too (see
+    above); sweeping by age alone, without the lock; removing a leftover that cannot be removed by changing its mode.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

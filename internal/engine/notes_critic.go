@@ -743,7 +743,8 @@ func (c *critique) undecided(ctx context.Context, problems []string) {
 // act does what the critic decided: apply (through the claim, the write and
 // the record; notes that changed since the critique send the proposal to a
 // new critique), reject or recurate (and mark the repository for a new
-// curation, unless the critic stepped back).
+// curation, unless the critic stepped back or no curation starts by itself,
+// curationRuns: then the toast names `magnum notes <repo> --curate`).
 func (c *critique) act(ctx context.Context, d notes.Decision, in critiqueIn) {
 	e := c.e
 	reason := strings.TrimSpace(d.Reason)
@@ -801,8 +802,21 @@ func (c *critique) act(ctx context.Context, d notes.Decision, in critiqueIn) {
 			textx.Count(n, "proposal", "proposals"), c.full))
 		return
 	}
+	if !e.curationRuns() {
+		// maybeCurate would never read the mark, and it would stay until an
+		// asked-for curation stored a proposal: say who can ask instead.
+		c.decided(ctx, what, reason, " No curation starts by itself: `magnum notes "+c.full+" --curate` asks for a new one.")
+		return
+	}
 	e.setKV(ctx, KVNotesRecurate(c.full), strconv.FormatInt(c.p.ID, 10))
 	c.decided(ctx, what, reason, " A new curation runs.")
+}
+
+// curationRuns reports whether a curation can start without being asked
+// for: [notes] curate lists a trigger and a curator is set up (maybeCurate
+// goes no further otherwise, so a mark KVNotesRecurate would stay unread).
+func (e *Engine) curationRuns() bool {
+	return e.d.Curator != nil && len(e.cfg.Notes.Curate) > 0
 }
 
 // decided writes the decision's event and its toast, the one toast per

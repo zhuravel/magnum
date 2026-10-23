@@ -309,7 +309,7 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 	e.curateChecked = now
 	e.recoverNotesApplies(ctx) // notes_apply.go: one the start could not (a crashed holder's lock)
 	e.expireProposals(ctx)
-	if e.d.Curator == nil || len(e.cfg.Notes.Curate) == 0 || e.learnBusy() != "" || e.userPause(ctx) != "" || e.holdReason(ctx) != "" ||
+	if !e.curationRuns() || e.learnBusy() != "" || e.userPause(ctx) != "" || e.holdReason(ctx) != "" ||
 		e.curateToolPause(ctx) != "" || low {
 		return
 	}

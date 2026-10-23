@@ -262,11 +262,11 @@ func TestACriticRejectionStartsAReviewCurationThatReadsTheReason(t *testing.T) {
 	}
 }
 
-// The critic sends a proposal that would lose lines back to the curator:
-// superseded, decided by the critic, and the curation that follows reads it
-// and the reason (superseded/reason.txt).
-func TestTheCriticRecuratesALossyProposalAndTheCuratorReadsTheReason(t *testing.T) {
-	h, _, nr := criticHarness(t, decides(notes.DecisionRecurate, "archive the probe line instead of dropping it"))
+// lossyProposal stores a pending curation of the harness's notes that
+// drops a line it keeps no archive entry for: the critic may only reject it
+// or send it back.
+func lossyProposal(t *testing.T, h *harness, nr notes.Repo) store.NotesProposal {
+	t.Helper()
 	base, err := h.st.LatestNotesVersion(h.ctx, repoID(t, h))
 	if err != nil {
 		t.Fatal(err)
@@ -279,6 +279,15 @@ func TestTheCriticRecuratesALossyProposalAndTheCuratorReadsTheReason(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	return p
+}
+
+// The critic sends a proposal that would lose lines back to the curator:
+// superseded, decided by the critic, and the curation that follows reads it
+// and the reason (superseded/reason.txt).
+func TestTheCriticRecuratesALossyProposalAndTheCuratorReadsTheReason(t *testing.T) {
+	h, _, nr := criticHarness(t, decides(notes.DecisionRecurate, "archive the probe line instead of dropping it"))
+	p := lossyProposal(t, h, nr)
 	h.tick()
 	h.settle()
 	got := proposalNow(t, h, p.ID)

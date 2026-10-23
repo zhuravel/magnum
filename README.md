@@ -3910,7 +3910,16 @@ recorded. A claim is a compare-and-set, so when the notes critic decided the pro
 written and the answer names who decided it ("proposal 12 is already applied by the critic at …"). A crash
 between the claim and the record leaves the proposal `applying`: the daemon's next start finishes it when the
 notes hold what it wrote, and puts it back to waiting when they hold what it found (a `notes.apply_finished`
-or `notes.apply_reverted` warning). A curation that would lose a line of the notes now (the curation rule
+or `notes.apply_reverted` warning). A write that fails is settled by what the notes hold afterwards, read again by
+the one rule the recovery uses: as the apply found them, the claim is released and the proposal waits again
+(`notes.apply_failed`); as it meant to write them, the proposal is recorded applied (`notes.write_error` names the
+error); in any other state, a write cut short between the harness and the notes say, the proposal stays `applying`
+and the daemon's next scan finishes it (`notes.apply_unsettled`). An old script directory that cannot be removed
+after the write is a leftover, not a failed apply (`notes.write_leftover`): the reconcile removes the `.old-*` and
+`.new-*` directories next to a harness once they are an hour old, under the notes lock and not while a proposal of
+the repository is applying. The reconcile does not record a repository's notes as an imported version while one of
+its proposals is applying either, as the harness and the notes are written one after the other. A curation that
+would lose a line of the notes now (the curation rule
 above, run again on what the apply would write) cannot be applied, by you or by the critic: the review says
 "CANNOT BE APPLIED" and quotes the lines, and `y` asks the daemon for a new curation from the notes now
 that reads it (kept as superseded). A restore is exempt: it brings back a version you chose, and the
@@ -3939,14 +3948,17 @@ through the same claim, write and record as your `y`: the notes must still be wh
 state to write must have the fingerprint it named. When the notes changed since, nothing is written and the
 proposal is critiqued again against them, uncounted. A proposal that loses a line cannot be applied by the
 critic either. `reject` and `recurate` (the second keeps the proposal as `superseded` for the next curator to
-read) start a new curation at once, trigger `review`, under the daemon's own gates, and it reads the
-critic's reason. After `critic_declines` rejections and re-curations in a row the critic steps back: no new
+read) start a new curation at once (with `[notes] curate` set), trigger `review`, under the daemon's own gates,
+and it reads the critic's reason. After `critic_declines` rejections and re-curations in a row the critic steps back: no new
 curation starts, and the repository's next proposal waits for you, until an apply or a decision of yours
 resets the count. An apply
 that leaves the notes past a limit delays the repository's next curation for size by a week. The critic's
 rejections never dismiss a miss: only yours count. The decision toast ("proposal 12 of talkable/talkable
 applied by the critic (fable): …", "rejected by the critic (fable): …. A new curation runs.") replaces
-"notes curation for <repo> is ready", and the expiry of a proposal the critic left to you toasts too.
+"notes curation for <repo> is ready", and the expiry of a proposal the critic left to you toasts too. Where no
+curation starts by itself (`[notes] curate` is empty, or there is no curator), a rejection or a re-curation sets no
+mark and its toast and event end "No curation starts by itself: `magnum notes <repo> --curate` asks for a new
+one." instead.
 `magnum notes` shows "critic running (fable, 2m)" while it works, and "the critic stepped back" or "the
 critic did not decide it, expires in 2d" on a proposal that waits for you; `magnum status` and the
 dashboard's `notes:` line say "critic on <repo>". `magnum notes <repo>` names the last decision ("last

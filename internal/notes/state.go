@@ -122,20 +122,38 @@ var renameDir = os.Rename
 // (removed when s has none), the old harness removed after. A swap that
 // fails, or a notes write that fails after it, puts the old harness back, so
 // the notes and the harness stay one state; a restore that fails too is
-// joined to the error. The caller holds r's lock (Lock). A harness path that
-// is not clean (cleanName) is refused before anything is written.
+// joined to the error. Once the swap and the notes write are done the write
+// is done: an old harness that cannot be removed is a leftover
+// (WriteStateReport names it, SweepLeftovers removes it later), not an
+// error. The caller holds r's lock (Lock). A harness path that is not clean
+// (cleanName) is refused before anything is written.
 func WriteState(r Repo, s State) error {
+	_, err := WriteStateReport(r, s)
+	return err
+}
+
+// Leftover is a directory next to the harness that a write could not
+// remove: the old harness, once the new state was in place.
+type Leftover struct {
+	Path string
+	Err  error
+}
+
+// WriteStateReport is WriteState that also reports the leftover of a write
+// that succeeded (nil when the old harness was removed or none existed); a
+// leftover never comes with an error.
+func WriteStateReport(r Repo, s State) (*Leftover, error) {
 	for _, b := range s.Files {
 		if !cleanName(b.Path) {
-			return fmt.Errorf("notes: harness path %q is not a clean relative path", b.Path)
+			return nil, fmt.Errorf("notes: harness path %q is not a clean relative path", b.Path)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(r.Notes()), 0o700); err != nil {
-		return err
+		return nil, err
 	}
 	stage := r.Harness() + ".new-" + rand.Text()[:8]
 	if err := os.Mkdir(stage, 0o700); err != nil {
-		return err
+		return nil, err
 	}
 	staged := false
 	defer func() {
@@ -144,17 +162,17 @@ func WriteState(r Repo, s State) error {
 		}
 	}()
 	if err := writeTree(stage, s.Files); err != nil {
-		return err
+		return nil, err
 	}
 	old := r.Harness() + ".old-" + rand.Text()[:8]
 	switch err := renameDir(r.Harness(), old); {
 	case errors.Is(err, fs.ErrNotExist):
 		old = ""
 	case err != nil:
-		return err
+		return nil, err
 	}
 	if err := renameDir(stage, r.Harness()); err != nil {
-		return errors.Join(err, restoreHarness(r, old))
+		return nil, errors.Join(err, restoreHarness(r, old))
 	}
 	if err := writeNotes(r, s); err != nil {
 		// The new harness goes back to the stage, removed on return.
@@ -163,15 +181,76 @@ func WriteState(r Repo, s State) error {
 			if old != "" {
 				err = errors.Join(err, fmt.Errorf("notes: the old harness stays at %s", old))
 			}
-			return err
+			return nil, err
 		}
-		return errors.Join(err, restoreHarness(r, old))
+		return nil, errors.Join(err, restoreHarness(r, old))
 	}
 	staged = true
 	if old != "" {
-		return os.RemoveAll(old)
+		if err := os.RemoveAll(old); err != nil {
+			return &Leftover{Path: old, Err: err}, nil
+		}
 	}
-	return nil
+	return nil, nil
+}
+
+// leftoverName reports whether name is a directory WriteState names for
+// the harness called base: base, ".old-" or ".new-" and eight characters of
+// rand.Text's alphabet.
+func leftoverName(base, name string) bool {
+	rest, ok := strings.CutPrefix(name, base+".")
+	if !ok {
+		return false
+	}
+	tail, ok := strings.CutPrefix(rest, "old-")
+	if !ok {
+		tail, ok = strings.CutPrefix(rest, "new-")
+	}
+	return ok && len(tail) == 8 && !strings.ContainsFunc(tail, func(r rune) bool { return !('A' <= r && r <= 'Z' || '2' <= r && r <= '7') })
+}
+
+// Leftovers lists the directories next to r's harness that a write left
+// behind (".old-" or ".new-" and WriteState's eight random characters after
+// the harness's name) and whose modification time is before cutoff. A
+// directory that is not there, or a file of that name, is none.
+func Leftovers(r Repo, cutoff time.Time) ([]string, error) {
+	dir := filepath.Dir(r.Harness())
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		if !e.IsDir() || !leftoverName(r.Name, e.Name()) {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && fi.ModTime().Before(cutoff) {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out, nil
+}
+
+// SweepLeftovers removes the Leftovers of r before cutoff and returns the
+// ones it removed; the first failure ends it, joined to what it removed.
+// The caller holds r's lock (Lock): a write in flight keeps its old harness
+// there until it is done.
+func SweepLeftovers(r Repo, cutoff time.Time) ([]string, error) {
+	paths, err := Leftovers(r, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	for _, p := range paths {
+		if err := os.RemoveAll(p); err != nil {
+			return removed, err
+		}
+		removed = append(removed, p)
+	}
+	return removed, nil
 }
 
 // restoreHarness renames the old harness (none when old is "") back into

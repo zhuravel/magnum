@@ -7064,8 +7064,10 @@ func ApplyNotesProposal(ctx context.Context, st *store.Store, nr notes.Repo, p s
     Then the claim, the write and the record: the notes as found are recorded
     first (an import, when the registry did not hold them), and the state
     written is recorded as a version (a curation's, or the operator's for a
-    restore) linked to the proposal. A write that fails releases the claim,
-    so the proposal waits again.
+    restore) linked to the proposal. A write that fails is settled by what the
+    notes hold afterwards (settleFailedWrite): as found, the claim is released
+    and the proposal waits again; as meant to be written, the apply goes on;
+    any other state, the proposal stays applying for the recovery.
 
 func ApplyTarget(check StaleCheck) (notes.State, bool)
     ApplyTarget is what applying p writes to the notes now (check): its proposed
@@ -14133,6 +14135,12 @@ func HarnessDelta(before, after []File) (added, removed, changed []string)
 func IsArchive(p string) bool
     IsArchive reports whether the harness path p is the archive.
 
+func Leftovers(r Repo, cutoff time.Time) ([]string, error)
+    Leftovers lists the directories next to r's harness that a write left behind
+    (".old-" or ".new-" and WriteState's eight random characters after the
+    harness's name) and whose modification time is before cutoff. A directory
+    that is not there, or a file of that name, is none.
+
 func LineChanges(a, b string) (added, removed int)
     LineChanges counts the lines b adds to a and the lines it removes, with the
     same line matching as Unified (a changed line counts once in each).
@@ -14161,6 +14169,12 @@ func ReasonLeaks(text string, c Check) []string
 
 func Sections(text []byte) []string
     Sections lists the "## " headings of notes text.
+
+func SweepLeftovers(r Repo, cutoff time.Time) ([]string, error)
+    SweepLeftovers removes the Leftovers of r before cutoff and returns the ones
+    it removed; the first failure ends it, joined to what it removed. The caller
+    holds r's lock (Lock): a write in flight keeps its old harness there until
+    it is done.
 
 func TextSHA(text []byte) string
     TextSHA is the SHA-256 of notes text, hex.
@@ -14222,9 +14236,12 @@ func WriteState(r Repo, s State) error
     directory renamed into place, then the notes file replaced atomically
     (removed when s has none), the old harness removed after. A swap that fails,
     or a notes write that fails after it, puts the old harness back, so the
-    notes and the harness stay one state; a restore that fails too is joined
-    to the error. The caller holds r's lock (Lock). A harness path that is not
-    clean (cleanName) is refused before anything is written.
+    notes and the harness stay one state; a restore that fails too is joined to
+    the error. Once the swap and the notes write are done the write is done:
+    an old harness that cannot be removed is a leftover (WriteStateReport names
+    it, SweepLeftovers removes it later), not an error. The caller holds r's
+    lock (Lock). A harness path that is not clean (cleanName) is refused before
+    anything is written.
 
 func WriteSuperseded(s Scratch, proposed State, changes []byte, reason string) error
     WriteSuperseded writes the proposal a curation follows up on into s's
@@ -14372,6 +14389,18 @@ type HistoryNotes struct {
     HistoryNotes is the notes text of one version of a repository's history
     (store.NotesHistory: the judges', the people's, the imports and the applied
     curations', never a proposal's own state).
+
+type Leftover struct {
+	Path string
+	Err  error
+}
+    Leftover is a directory next to the harness that a write could not remove:
+    the old harness, once the new state was in place.
+
+func WriteStateReport(r Repo, s State) (*Leftover, error)
+    WriteStateReport is WriteState that also reports the leftover of a write
+    that succeeded (nil when the old harness was removed or none existed);
+    a leftover never comes with an error.
 
 type Limits struct {
 	MaxBytes        int64 `json:"max_bytes"`

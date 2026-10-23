@@ -153,8 +153,10 @@ func PreservationProblems(p store.NotesProposal, live, target notes.State) ([]st
 // Then the claim, the write and the record: the notes as found are recorded
 // first (an import, when the registry did not hold them), and the state
 // written is recorded as a version (a curation's, or the operator's for a
-// restore) linked to the proposal. A write that fails releases the claim,
-// so the proposal waits again.
+// restore) linked to the proposal. A write that fails is settled by what
+// the notes hold afterwards (settleFailedWrite): as found, the claim is
+// released and the proposal waits again; as meant to be written, the apply
+// goes on; any other state, the proposal stays applying for the recovery.
 func ApplyNotesProposal(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal, a NotesApply) (store.NotesProposal, error) {
 	wait := a.Wait
 	if wait <= 0 {
@@ -213,15 +215,10 @@ func ApplyNotesProposal(ctx context.Context, st *store.Store, nr notes.Repo, p s
 	if err := crashAt("claimed"); err != nil {
 		return claimed, err
 	}
-	if err := notes.WriteState(nr, target); err != nil {
-		// WriteState put the old state back: nothing was written.
-		bctx := context.WithoutCancel(ctx)
-		if _, rerr := st.ReleaseNotesClaim(bctx, cur.ID); rerr != nil {
-			err = errors.Join(err, fmt.Errorf("release the claim (the next daemon start does): %w", rerr))
+	if err := writeTarget(ctx, st, nr, claimed, target); err != nil {
+		if err = settleFailedWrite(ctx, st, nr, claimed, live, target, err); err != nil {
+			return claimed, err
 		}
-		notesEvent(bctx, st, "warn", subject, "notes.apply_failed", fmt.Sprintf("proposal %d for the notes of %s was not applied: %s",
-			cur.ID, nr.FullName(), oneLine(err.Error(), retroWhyRunes)), map[string]any{"proposal": cur.ID, "by": a.By})
-		return claimed, err
 	}
 	if err := crashAt("written"); err != nil {
 		return claimed, err
@@ -234,6 +231,101 @@ func ApplyNotesProposal(ctx context.Context, st *store.Store, nr notes.Repo, p s
 		cur.ID, nr.FullName(), DeciderName(a.By), store.Deref(applied.AppliedVersionID)),
 		map[string]any{"proposal": cur.ID, "by": a.By, "version": store.Deref(applied.AppliedVersionID), "stale": check.Stale})
 	return applied, nil
+}
+
+// writeNotesState writes the notes and the harness of an apply; tests
+// replace it to fail a write at the step they choose.
+var writeNotesState = notes.WriteStateReport
+
+// writeTarget writes target for claimed proposal p (an apply's, or a
+// recovery's completion of one) and tells the old harness it could not
+// remove: a write that stands, with a directory next to the harness that
+// the reconcile removes once it is an hour old.
+func writeTarget(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal, target notes.State) error {
+	left, err := writeNotesState(nr, target)
+	if left != nil {
+		notesEvent(ctx, st, "warn", notesSubject(nr), "notes.write_leftover", fmt.Sprintf("the write for proposal %d of %s is done, but its old harness stays at %s "+
+			"(%s); the reconcile removes it once it is an hour old", p.ID, nr.FullName(), left.Path, oneLine(left.Err.Error(), retroWhyRunes)),
+			map[string]any{"proposal": p.ID, "by": p.DecidedBy})
+	}
+	return err
+}
+
+// claimHolds is what the notes on disk hold against a claim: the one fact
+// an apply whose write failed and the recovery of a cut-short apply both
+// decide by (whatTheNotesHold).
+type claimHolds int
+
+const (
+	// holdsTarget: the state the claim meant to write; the write is done.
+	holdsTarget claimHolds = iota + 1
+	// holdsPrior: the state the claim found; nothing was written.
+	holdsPrior
+	// holdsHalf: the notes of one and the harness of the other; the write
+	// stopped between its two steps (WriteState swaps the harness first).
+	holdsHalf
+	// holdsOther: neither; someone wrote after the claim, or the write
+	// left a state that is none of these.
+	holdsOther
+)
+
+// whatTheNotesHold compares live with the state a claim found (prior) and
+// meant to write (target). The target comes first: a claim that had
+// nothing to change is finished, whatever else it found. Every decision on
+// a claim's notes goes through here, so the apply and the recovery cannot
+// disagree.
+func whatTheNotesHold(live, prior, target notes.State) claimHolds {
+	lfp := live.Fingerprint()
+	switch {
+	case lfp == target.Fingerprint():
+		return holdsTarget
+	case lfp == prior.Fingerprint():
+		return holdsPrior
+	case mixedState(live, prior, target):
+		return holdsHalf
+	}
+	return holdsOther
+}
+
+// settleFailedWrite is what an apply does when its write failed with err:
+// it reads the notes again and decides as the recovery does
+// (whatTheNotesHold, against the notes it found, prior, and the state it
+// meant to write). The notes as found: the claim is released and the
+// proposal waits again (notes.apply_failed). The state it meant to write,
+// whatever the error says: nil, the apply goes on to its record
+// (notes.write_error). Anything else, a write cut short, or notes that
+// cannot be read: the proposal stays applying with its claim and the
+// recovery settles it (notes.apply_unsettled); releasing it would hide a
+// half-written state from the recovery.
+func settleFailedWrite(ctx context.Context, st *store.Store, nr notes.Repo, claimed store.NotesProposal, prior, target notes.State, err error) error {
+	bctx := context.WithoutCancel(ctx)
+	subject, full := notesSubject(nr), nr.FullName()
+	data := map[string]any{"proposal": claimed.ID, "by": claimed.DecidedBy}
+	var held claimHolds // 0: the notes cannot be read
+	live, rerr := notes.ReadState(nr)
+	if rerr == nil {
+		held = whatTheNotesHold(live, prior, target)
+	}
+	switch held {
+	case holdsTarget:
+		notesEvent(bctx, st, "warn", subject, "notes.write_error", fmt.Sprintf("the write for proposal %d of %s reported an error, but the notes hold the state "+
+			"it meant to write, so it is recorded applied: %s", claimed.ID, full, oneLine(err.Error(), retroWhyRunes)), data)
+		return nil
+	case holdsPrior:
+		if _, rel := st.ReleaseNotesClaim(bctx, claimed.ID); rel != nil {
+			err = errors.Join(err, fmt.Errorf("release the claim (the next daemon start does): %w", rel))
+		}
+		notesEvent(bctx, st, "warn", subject, "notes.apply_failed", fmt.Sprintf("proposal %d for the notes of %s was not applied: %s",
+			claimed.ID, full, oneLine(err.Error(), retroWhyRunes)), data)
+		return err
+	}
+	why := "a write cut short"
+	if rerr != nil {
+		why = "notes that cannot be read again (" + oneLine(rerr.Error(), retroWhyRunes) + ")"
+	}
+	notesEvent(bctx, st, "warn", subject, "notes.apply_unsettled", fmt.Sprintf("the write for proposal %d of %s failed and left %s: %s; "+
+		"the proposal stays applying and the next scan settles it", claimed.ID, full, why, oneLine(err.Error(), retroWhyRunes)), data)
+	return fmt.Errorf("the write failed and left the notes for the recovery to settle (the proposal stays applying): %w", err)
 }
 
 // crashAt runs the test hook after an apply's step.
@@ -331,14 +423,13 @@ func RecoverNotesApply(ctx context.Context, st *store.Store, nr notes.Repo, p st
 			map[string]any{"proposal": cur.ID, "by": cur.DecidedBy, "version": store.Deref(applied.AppliedVersionID)})
 		return ApplyFinished, nil
 	}
-	lfp := live.Fingerprint()
-	switch {
-	case lfp == target.Fingerprint():
+	switch whatTheNotesHold(live, prior, target) {
+	case holdsTarget:
 		return finish("the notes hold what it wrote")
-	case lfp == prior.Fingerprint():
+	case holdsPrior:
 		return revert("it wrote nothing")
-	case mixedState(live, prior, target):
-		if err := notes.WriteState(nr, target); err != nil {
+	case holdsHalf:
+		if err := writeTarget(ctx, st, nr, cur, target); err != nil {
 			return "", err
 		}
 		return finish("its write stopped halfway, and was completed")
@@ -411,5 +502,43 @@ func (e *Engine) recoverNotesApplies(ctx context.Context) {
 		if _, err := RecoverNotesApply(ctx, e.st, nr, p, e.now(), applyRecoverWait); err != nil {
 			e.warnUnlessStopped(ctx, err, "notes proposals: recover an apply cut short", "proposal", p.ID)
 		}
+	}
+}
+
+// notesApplying reports whether a proposal of repoID is applying: an apply
+// is writing its notes, or was cut short and waits for its recovery. A
+// registry error counts as applying: the caller leaves the notes alone.
+func (e *Engine) notesApplying(ctx context.Context, repoID int64) bool {
+	ps, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repoID, States: []string{store.ProposalApplying}, Limit: 1})
+	return err != nil || len(ps) > 0
+}
+
+// notesLeftoverAge is how old a directory a notes write left next to a
+// harness (notes.Leftovers) must be before the reconcile removes it.
+const notesLeftoverAge = time.Hour
+
+// sweepNotesLeftovers removes the old and the staged directories that a
+// write of nr's notes left (an old harness that could not be removed, a
+// stage a crash cut off) once they are an hour old. It takes the notes lock
+// without waiting, as a write holds it for as long as it needs its old
+// harness: a lock held by a judge or an apply leaves the sweep for the next
+// reconcile. A repository with a proposal applying is left alone, so the
+// directory a recovery may still need stays.
+func (e *Engine) sweepNotesLeftovers(ctx context.Context, repo store.Repo, nr notes.Repo) {
+	cutoff := e.now().Add(-notesLeftoverAge)
+	if left, err := notes.Leftovers(nr, cutoff); err != nil || len(left) == 0 || e.notesApplying(ctx, repo.ID) {
+		return
+	}
+	unlock, err := notes.Lock(ctx, nr.Lock(), 0)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	removed, err := notes.SweepLeftovers(nr, cutoff)
+	if len(removed) > 0 {
+		e.log.Info("repository notes: removed the directories a write left", "repo", nr.FullName(), "dirs", len(removed))
+	}
+	if err != nil {
+		e.log.Warn("repository notes: remove a directory a write left", "repo", nr.FullName(), "err", err)
 	}
 }
