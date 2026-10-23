@@ -159,16 +159,18 @@ func (e *Engine) watchRefusal(ctx context.Context, c store.RepoPR) (why, short s
 }
 
 // prStateRefusal says why no approval goes to pr for what it is now, a
-// draft or muted, "" for neither: auto-approval's (autoApproveRefusal) and
-// the judge's (approvalGatesDue), whose prompt says it as is (fixed words).
-func prStateRefusal(pr store.PR) string {
+// draft or muted, "" for neither, and short, the judge prompt's fixed words
+// for it (approvalGatesDue), as watchRefusal and changedFilesRefusal do:
+// the card's words and the prompt's come from one place, so a rewording of
+// either skips no gate.
+func prStateRefusal(pr store.PR) (why, short string) {
 	switch {
 	case pr.IsDraft:
-		return "it is a draft"
+		return "it is a draft", "the PR is a draft"
 	case pr.Muted:
-		return "it is muted"
+		return "it is muted", "the PR is muted"
 	}
-	return ""
+	return "", ""
 }
 
 // kvAutoApprovalGated records "<approval id>|<run id>" once the gates let

@@ -84,13 +84,19 @@ type ciAnswer struct {
 // (requiredCIRefusal: one outside the list neither fails nor runs); else a
 // rollup that fails goes to the base-tip comparison (failingCIRefusal), one
 // that runs waits (ciRunsRefusal), and any other (passed, none) lets it
-// through.
+// through. A rollup the registry never read (a NULL ci_state: the poll's CI
+// read failed, or the PR was never fetched in full) lets it through too, as
+// pipeline.CIUnknown, so that the judge's event can tell "never read" from
+// "passed".
 func (e *Engine) ciGateOf(ctx context.Context, c store.RepoPR) ciAnswer {
 	pr := c.PR
 	if r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(c.Repo)); ok {
 		return e.requiredCIRefusal(ctx, c, r) // autoapprove_required.go: the rollup does not decide
 	}
-	switch strings.ToUpper(deref(pr.CIState)) {
+	if pr.CIState == nil {
+		return ciAnswer{state: pipeline.CIUnknown}
+	}
+	switch strings.ToUpper(*pr.CIState) {
 	case "FAILURE", "ERROR":
 		return e.failingCIRefusal(ctx, c)
 	case "PENDING", "EXPECTED":

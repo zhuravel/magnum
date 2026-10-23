@@ -355,14 +355,18 @@ func TestAWithdrawalPastTheStopsGraceIsCancelledAndSettledByTheNextDaemon(t *tes
 	if waited < 40*time.Millisecond {
 		t.Fatalf("cancelled after %s, before the grace", waited)
 	}
-	if a := h.autoApproval(2); a.State != store.AutoDismissing || a.Attempts != 1 {
-		t.Fatalf("approval = %+v, want it still dismissing, the cut attempt uncounted", a)
+	if a := h.autoApproval(2); a.State != store.AutoDismissing || a.Attempts != 2 {
+		t.Fatalf("approval = %+v, want it still dismissing, the cut attempt counted (the 403's was the first)", a)
 	}
 	if v, ok := h.kvOf(kvAutoWithdrawPending(h.pr(2).ID)); !ok || v != "9001" {
 		t.Fatalf("pending record = %q, %v", v, ok)
 	}
 	if evs := h.events("review.auto_approval_withdraw_failed"); len(evs) != 1 {
 		t.Fatalf("failed events = %+v, want only the 403's", evs)
+	}
+	cut := approvalEvents(t, h, 2, "review.auto_approval_withdraw_cut")
+	if len(cut) != 1 || cut[0].Level != "info" || eventData(t, cut[0])["attempt"] != float64(2) {
+		t.Fatalf("cut events = %+v, want one info event for attempt 2", cut)
 	}
 	g.onDismiss = nil
 	h.gh.dismissErr = errUnprocessable
@@ -375,6 +379,15 @@ func TestAWithdrawalPastTheStopsGraceIsCancelledAndSettledByTheNextDaemon(t *tes
 	if hd := h.hold(2); hd.Held {
 		t.Fatalf("hold = %+v", hd)
 	}
+	var attempts []float64
+	for _, b := range approvalEvents(t, h, 2, "review.auto_approval_withdraw_begin") {
+		attempts = append(attempts, eventData(t, b)["attempt"].(float64))
+	}
+	if !slices.Equal(attempts, []float64{1, 2, 3}) {
+		t.Fatalf("withdrawal attempts begun = %v: the next daemon's began again with the cut one's number", attempts)
+	}
+	endsOfBegins(t, h, "review.auto_approval_withdraw_begin", "review.auto_approval_withdrawn", "review.auto_approval_withdraw_failed",
+		"review.auto_approval_withdraw_cut")
 }
 
 // An approval the stop's grace runs out on stays posting and pending; the
@@ -406,6 +419,10 @@ func TestAnApprovalPastTheStopsGraceIsFoundByTheNextDaemonAsItsOwn(t *testing.T)
 	if v, ok := h.kvOf(kvAutoApprovePending(h.pr(2).ID)); !ok || v != "b1" {
 		t.Fatalf("pending record = %q, %v", v, ok)
 	}
+	cut := approvalEvents(t, h, 2, "review.auto_approve_cut")
+	if len(cut) != 1 || cut[0].Level != "info" || eventData(t, cut[0])["attempt"] != float64(2) {
+		t.Fatalf("cut events = %+v, want one info event for attempt 2", cut)
+	}
 	g.onCreate = nil
 	h.gh.setReviewBody(2, 9001, "Approved.")
 	h.tick()
@@ -419,6 +436,7 @@ func TestAnApprovalPastTheStopsGraceIsFoundByTheNextDaemonAsItsOwn(t *testing.T)
 	if hd := h.hold(2); hd.Held {
 		t.Fatalf("hold = %+v", hd)
 	}
+	endsOfBegins(t, h, "review.auto_approve_begin", "review.auto_approved", "review.auto_approve_failed", "review.auto_approve_cut")
 }
 
 // workWhat lists the work in flight KVDaemonWork names.

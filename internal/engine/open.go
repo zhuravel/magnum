@@ -266,7 +266,7 @@ func (e *Engine) releaseReserved(ctx context.Context, pr store.PR, slot store.Sl
 	} else {
 		e.closeRetiredPanes(ctx, pr) // retired_panes.go
 	}
-	if err := e.d.Slots.Release(ctx, slot, pool, "open failed"); err != nil {
+	if err := e.releaseSlot(ctx, slot, pool, "open failed"); err != nil {
 		e.event(ctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after a failed magnum open: "+err.Error(), nil)
 		return
 	}

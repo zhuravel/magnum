@@ -15219,7 +15219,8 @@ const (
     the one risk the gate's moment accepts); every failing one fails the same
     way on the base branch's tip (CIRedLikeBase, through); one fails otherwise,
     or magnum cannot tell (CIRed, refused); the registry holds the checks of a
-    newer head than the round's target (CIUnknown, through).
+    newer head than the round's target, or no rollup of the PR was ever read
+    (CIUnknown, through).
 
 const (
 	EvidenceRead    = "read"    // the judge read the code of the behaviour

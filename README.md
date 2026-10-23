@@ -1326,7 +1326,22 @@ rounds (<cause>); it breaks at its release, then `magnum slots repair review4`";
 `slot.schema_reset_failed` event). The cause is the failed command's last line, which for a rake task is the
 line after "aborted!", not its "(See full trace by running task with --trace)" trailer; the readiness file,
 the `round.readiness` event and the judge's machine lines carry it too.
-`magnum slots repair <slot>` provisions the slot again and puts it back in the pool. A free slot above a pool's `min` is removed once it has been idle for
+`magnum slots repair <slot>` provisions the slot again and puts it back in the pool. A release that
+stalled half way (an eviction a restart cut, a fetch that failed in a GitHub outage) leaves its slot
+`releasing` (or `dirty_schema`), out of the pool: a PR waiting for a slot with none evictable resumes it,
+and so does the reconcile on its own (every `reconcile_interval`), one slot per reconcile, the one stalled
+longest first, once the slot has been in that state for over 30 minutes, when the heavy worker has nothing
+else to do and no step of its release runs (the newest `slot:<name>:release` step event is not a begin
+this daemon wrote less than 2 hours ago), with a `slot.release_resumed` event. It is the eviction's job:
+the PR is reserved, its sessions parked, and the release goes on after its last completed step once its
+guard allows it (a pin, a person's work or a drifted HEAD refuse it, and it is tried again half an hour
+later); the slot of a closing PR is cleanup's. After 3 resumed releases of one slot in a row that failed,
+the reconcile stops resuming it: a `slot.release_given_up` warning and one toast ("slot review4 (releasing):
+its release failed 3 times in a row, so magnum stops resuming it. Fix the cause, then `magnum release
+review4` (`magnum slots repair review4` once it is broken).") say so, and the slot is resumed again only
+when its state or `updated_at` changes by another path (your repair or release, a PR waiting for a slot
+that resumed it), after half an hour more in its new state. The count is kept in the registry
+(`slot.<id>.release_resumes`), so a restart does not start it over. A free slot above a pool's `min` is removed once it has been idle for
 `idle_remove_after` (168h when unset or 0; a negative value is refused). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
 `magnum review` still runs it. A watch's `skip_bot_authors` (default `true`) skips every bot's PR, and its
@@ -1442,8 +1457,9 @@ The judge's own approval passes the same gates. Where the posting identity's `no
 `APPROVE` (a gh identity's default, or a `[[repo]]` block's), a clean review is an approval too, with or
 without auto-approval, so a round there is held to the gates that need no review when it is dispatched (a
 draft, a muted PR, one its watch would not review on its own, one that changes its own workflows or
-actions or the review agents' instructions or hooks, one whose file list Magnum cannot read whole; a
-continued round keeps the paused round's answer), and to the CI gate when the judge's prompt is written,
+actions or the review agents' instructions or hooks, one whose file list Magnum cannot read whole;
+every kind of round decides them from the PR as it is then, a continued one too, so a PR that turned into
+a draft while its round was paused comments), and to the CI gate when the judge's prompt is written,
 from the same read of the PR's checks as the prompt's `failing_checks` (a continued round's prompt decides
 it again): a head whose checks fail other than the way the base branch's tip fails them is refused, and
 checks that still run, pass, or fail as the tip's do let the approval through (Magnum does not wait for
@@ -1451,7 +1467,9 @@ them as it does before approving as you: the judge posts once). A refused round'
 `COMMENT` in the prompt and in its `post_review` line, and one `round.approval_refused` event per head and
 reason says why in the prompt's words (`ci` in its data, the CI state the gate decided by, for a CI
 refusal); the round's `round.judge` event carries `ci_gate` (`green`, `running`, `red-like-base`, `red` or
-`unknown`, for a registry that holds a newer head's checks than the round's) whenever the CI gate was asked.
+`unknown`, for a registry that holds a newer head's checks than the round's, or no rollup of the PR at all:
+the poll's CI read failed or never ran, which lets the approval through as a green one does) whenever the CI
+gate was asked.
 A post-merge review, a dry run, an eval replay and a round of your own PR comment anyway and are held to
 none. Magnum does not dismiss an approval the judge already posted.
 
@@ -1523,7 +1541,13 @@ check that finds what the pending request asked for, the review dismissed or an 
 login (whatever its body), counts it as Magnum's own: the usual `review.auto_approval_withdrawn` or
 `review.auto_approved` event, ending "(the first request's answer was lost)", and auto-approval goes on. A
 restart waits for these writes (`daemon-restart --when-idle` and `--drain` count them as in flight), and a stop
-that comes anyway gives a write that started 30 s to finish.
+that comes anyway gives a write that started 30 s to finish. A write that grace runs out on ends its begin
+event with an info event (`review.auto_approve_cut`, `review.auto_approval_withdraw_cut`), the cut
+withdrawal counts as an attempt (the next daemon's begins with the next number), and a post still in doubt
+when the next daemon finds no approval of the head on GitHub's whole list fails its row with a
+`review.auto_approve_failed` event ("the daemon stopped before GitHub answered"). The pending record goes
+with the request wherever it ends for good: a failed row out of its three attempts, a PR that merged or
+closed, a post found missing.
 `magnum unapprove <ref>` (y/N on a terminal) and the board's `D` (y/N) withdraw a standing approval and stop
 it too.
 
@@ -1531,8 +1555,9 @@ You see every one: a toast per approval ("approved as you: talkable#12001", with
 withdrawal, `✔ auto` in the board's STATE and "N auto-approved" in the titles, the card, `magnum tui
 --auto-approved`, and "approvals: auto-approved: N today, M standing" in `magnum status`. Each post and
 withdrawal is a row of the registry's `auto_approvals` with begin, ok and fail events
-(`review.auto_approve_begin`, `review.auto_approved`, `review.auto_approve_failed`,
-`review.auto_approval_withdraw_begin`, `review.auto_approval_withdrawn`, `review.auto_approval_withdraw_failed`);
+(`review.auto_approve_begin`, `review.auto_approved`, `review.auto_approve_failed`, `review.auto_approve_cut`,
+`review.auto_approval_withdraw_begin`, `review.auto_approval_withdrawn`, `review.auto_approval_withdraw_failed`,
+`review.auto_approval_withdraw_cut`; every begin has an end, a write a stop cut included);
 `magnum approve` and `magnum request-changes` write `review.manual_verdict_begin`, `review.manual_verdict`
 and `review.manual_verdict_failed`.
 
@@ -3271,7 +3296,10 @@ pill; the summary counts them in a red "N merged unreviewed" pill, the card says
 commits (the one Magnum last reviewed, the merged head), the status dashboard lists it under ATTENTION, and
 the daemon writes a `pr.merged_unreviewed` warning and sends one toast per PR (`[herdr] notify`), except
 for your own PR (its author is one of your logins), which you merged on purpose: it gets the warning and
-the pill, no toast. A baseline,
+the pill, no toast. The warning's data says what held the PR from its round (`gate`: the wait reason the
+dispatch recorded last, such as `quiet`, `interval` or `kind` (with the paused kind as `gate_subject`),
+`round_in_flight` for a merge in the middle of a round, `paused` or `needs_attention`) and, where it is
+known, when that gate would have ended (`eligible_at`). A baseline,
 skipped, ignored or reviewed PR is never flagged: Magnum was not going to review it, and a muted one is
 not flagged either unless a review of it was forced before it merged. A merged or closed PR gets no
 automatic reviews, so `M` does not ask to stop them there: on a flagged row it asks "Dismiss the

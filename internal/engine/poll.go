@@ -1081,6 +1081,48 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 	return errors.Join(errs...)
 }
 
+// gateRoundInFlight is the gate of a PR that merged in the middle of a round.
+const gateRoundInFlight = "round_in_flight"
+
+// noteMergedGate adds to the data of pr's pr.merged_unreviewed event what
+// held the PR from its round when GitHub merged it (the state it closed in,
+// PR.PrevState): gate, and eligible_at, when that gate would have ended,
+// where it is known. A PR that waited for a round carries the wait the
+// dispatch recorded last (KVPRWait: a wait reason of wait.go such as quiet,
+// interval or kind, whose paused kind is gate_subject, and the end of the
+// wait); a round in flight (claiming, reviewing, verifying) is
+// gateRoundInFlight, with no time, since the PR was eligible already; a
+// paused round carries the time it would have continued (next_attempt_at),
+// and a PR that needed attention only that state. Fixed words, never PR
+// text.
+func (e *Engine) noteMergedGate(ctx context.Context, pr store.PR, data map[string]any) {
+	switch prev := deref(pr.PrevState); prev {
+	case store.PRClaiming, store.PRReviewing, store.PRVerifying:
+		data["gate"] = gateRoundInFlight
+	case store.PRPaused:
+		data["gate"] = prev
+		if pr.NextAttemptAt != nil {
+			data["eligible_at"] = *pr.NextAttemptAt
+		}
+	case store.PRNeedsAttention:
+		data["gate"] = prev
+	default: // queued, rereview_pending
+		raw, _ := e.getKV(ctx, KVPRWait(pr.ID))
+		w, ok := ParseWait(raw)
+		if !ok {
+			data["gate"] = "unknown"
+			return
+		}
+		data["gate"] = w.Reason
+		if w.Reason == WaitKind && w.Subject != "" {
+			data["gate_subject"] = w.Subject
+		}
+		if !w.Until.IsZero() {
+			data["eligible_at"] = w.Until
+		}
+	}
+}
+
 // mergedUnreviewed flags a PR, just confirmed closed, that GitHub merged
 // before magnum reviewed its last push (PR.MergedUnreviewed: prev_state is
 // the state it closed in): a warn event and one toast per PR, since this is
@@ -1099,6 +1141,7 @@ func (e *Engine) mergedUnreviewed(ctx context.Context, repo store.Repo, pr store
 		last = "last review " + textx.ShortSHA(reviewed)
 		data["reviewed_sha"] = reviewed
 	}
+	e.noteMergedGate(ctx, pr, data)
 	e.event(ctx, "warn", prSubject(repo, pr.Number), "pr.merged_unreviewed",
 		fmt.Sprintf("merged before magnum reviewed %s (%s)", textx.ShortSHA(pr.HeadSHA), last), data)
 	if e.ownPR(pr) {

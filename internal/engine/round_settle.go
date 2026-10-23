@@ -38,7 +38,7 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 	subject := prSubject(job.repo, pr.Number)
 	e.event(ctx, "warn", subject, "engine.setup_failed", "round setup failed: "+se.err.Error(), nil)
 	if job.kind != kindContinue {
-		e.delKV(ctx, KVPRDeltaCheck(pr.ID), kvPRFullPassRound(pr.ID), kvPRApprovalHoldRound(pr.ID), kvPRNoApprovalRound(pr.ID))
+		e.delKV(ctx, KVPRDeltaCheck(pr.ID), kvPRFullPassRound(pr.ID), kvPRApprovalHoldRound(pr.ID))
 	}
 	if !se.noCharge {
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round could not start")
@@ -166,7 +166,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	case cancelled, outcome == pipeline.OutcomeUsageLimit, outcome == pipeline.OutcomeLoginRequired, outcome == pipeline.OutcomeOverloaded:
 		// The round goes on later (a recovery, a continue): it keeps its kind.
 	default:
-		e.delKV(ctx, KVPRDeltaCheck(pr.ID), kvPRFullPassRound(pr.ID), kvPRApprovalHoldRound(pr.ID), kvPRNoApprovalRound(pr.ID))
+		e.delKV(ctx, KVPRDeltaCheck(pr.ID), kvPRFullPassRound(pr.ID), kvPRApprovalHoldRound(pr.ID))
 	}
 	msg := res.Error
 	if msg == "" && runErr != nil {

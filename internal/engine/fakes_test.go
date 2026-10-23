@@ -1581,6 +1581,15 @@ type fakeSlots struct {
 	// resetFailures counts each slot's rounds in a row whose schema reset
 	// failed (ResetFailed; RecordSchema clears it), by slot id.
 	resetFailures map[int64]int
+	// releaseErr is what Release fails with, after recording the call;
+	// releaseTouches makes the failure leave its error on the slot's row, as
+	// a failed step does (slots.Manager.setLastError, which moves the row's
+	// updated_at), where a refusal by the guard leaves the row alone.
+	releaseErr     error
+	releaseTouches bool
+	// onRelease runs inside Release, after it recorded the call (the moment a
+	// release is under way).
+	onRelease func(slot store.Slot)
 }
 
 func (f *fakeSlots) record(s string) {
@@ -1702,6 +1711,18 @@ func (f *fakeSlots) CreatePRWorktree(ctx context.Context, _ config.Watch, repo s
 
 func (f *fakeSlots) Release(ctx context.Context, slot store.Slot, _ config.Pool, reason string) error {
 	f.record(fmt.Sprintf("release:%s:%s", slot.Name, reason))
+	f.mu.Lock()
+	err, touches, hook := f.releaseErr, f.releaseTouches, f.onRelease
+	f.mu.Unlock()
+	if hook != nil {
+		hook(slot)
+	}
+	if err != nil {
+		if touches {
+			_ = f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("last_error", err.Error()) })
+		}
+		return err
+	}
 	if err := f.st.ReleaseSlot(ctx, slot.ID, []string{store.SlotClaimed, store.SlotHeld, store.SlotReleasing}, store.SlotFree, reason); err != nil {
 		return err
 	}

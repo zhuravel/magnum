@@ -445,6 +445,9 @@ type Engine struct {
 	heavy     chan heavyJob
 	heavyMu   sync.Mutex
 	heavyKeys map[string]bool
+	// releasing counts the releases of each pool slot this process runs now
+	// (releaseSlot), by slot id, under heavyMu.
+	releasing map[int64]int
 
 	// work is the work in flight no registry row shows (work.go:
 	// beginWork), by its sequence number, under workMu.

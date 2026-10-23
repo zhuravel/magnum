@@ -12627,6 +12627,133 @@ skill versions); people add theirs to the sections before it, at the end of the 
   judge and simplify goldens. Rejected again: a per-author cap on simplifications, which the operator declined.
   With items 1 to 6, SKILL.md goes from 37,927 to 38,765 bytes and `skillMaxBytes` with it, below the 39,000 at
   which the spec asked for cuts of wording the code or a prompt already says; the ceiling stays 40,000.
+- **Every approval write ends with an event, the pending records' cleanups are pinned, and a cut attempt counts**
+  (2026-10-23, spec 07 of the 2026-10-23 run, items 1 and 2; amends "A restart never cuts an approval write" of
+  the 2026-10-22 run). The code-health lens removed each of five cleanups of the pending-write records in a scratch
+  copy and the engine suite stayed green: the approval's drop after its last unanswered attempt, the withdrawal's
+  drop after its last, `resumeAutoPost`'s drop of a post GitHub's whole list does not hold, `closeAutoApproval`'s
+  drop of a withdrawal under way, and the startup's `writeWorkMark()`. The first has a concrete path: three
+  unanswered attempts (5xx, timeouts) left `pr.<id>.auto_approve_pending=<head>`; the operator then approved that
+  head by hand; on a later round of the head (a new run, so the failed row did not block it) `operatorWord` read the
+  approval as magnum's (`ours()` accepts any approval of the pending head) and `considerAutoApproval` adopted it,
+  so a round with findings after it would have dismissed the operator's own approval. Each cleanup now has a test
+  that fails without its line, and the adoption path has its own (TestAnApprovalOutOfAttemptsLeavesNoPendingRecord,
+  TestAnApprovalByHandAfterThreeUnansweredAttemptsIsNotAdoptedAsMagnums,
+  TestARestartThatFindsNoApprovalOnGitHubDropsThePendingRecord,
+  TestAMergedPRsWithdrawalInDoubtDropsItsPendingRecord, TestAWithdrawalOutOfAttemptsLeavesNoPendingRecord,
+  TestAStartDropsACrashedDaemonsWorkMarkBeforeItDoesAnythingElse). The startup's mark is kept, not deleted: the
+  reconcile queued 45 lines later does rewrite the whole mark, but until then the CLI's guards read a crashed
+  daemon's, and the test sees it still there at the identity warm-up (the start's first step that reaches out)
+  without the line. AGENTS.md asks for begin, ok
+  and fail events, and two paths left a begin with none: a write the stop's grace cut (autoapprove.go wrote a log
+  line only) and a row `resumeAutoPost` failed (no event at all); a cut withdrawal was not counted either, so the
+  next daemon's withdrawal began with the same attempt number (a cut approval was: its attempt is incremented when
+  the row goes posting). Now a cut approval writes the info event
+  `review.auto_approve_cut` and a cut withdrawal `review.auto_approval_withdraw_cut` (both on a context the cut did
+  not cancel), the withdrawal's attempt is recorded on its row (the next begins with the next number, and the cut
+  counts toward the three), and `resumeAutoPost` writes `review.auto_approve_failed` ("the daemon stopped before
+  GitHub answered, and GitHub lists no approval of it; tried again in 5m", or "not tried again" out of attempts)
+  with the attempt in its data; the events a settled post writes after a restart carry the attempt too, so every
+  begin has at least one end for the same approval and attempt (`endsOfBegins` in the tests). The next run counts
+  begin events with no end event for one approval id; the target is none. Rejected: deleting the startup mark
+  (above); leaving a cut write silent because the next daemon settles it (the begin event would stay open for
+  anyone reading the log).
+- **A rollup magnum never read is `unknown`, not `green`** (2026-10-23, spec 07 of the 2026-10-23 run, item 3).
+  `ciGateOf` fell through to `CIGreen` for a NULL `ci_state`, which means the poll never read the rollup or its
+  read failed (`ci_state` is not reset on a head change), so `round.judge`'s `ci_gate: "green"` could not tell
+  "green" from "never read", and the planned count of approvals posted while CI ran that then went red was skewed.
+  A NULL rollup now answers `unknown` and still lets the approval through, as green does; a rollup that was read
+  and is empty (no checks) stays `green`, and `required_checks` still decides by the stored checks when it can.
+  Test: TestARollupNeverReadIsUnknownAndStillLetsTheApprovalThrough. Rejected: refusing on an unread rollup (the
+  approval as the operator would stop waiting on a poll failure, which the poll's own warning reports).
+- **Every round decides the dispatch gates of the judge's approval again** (2026-10-23, spec 07 of the 2026-10-23
+  run, items 4 and 5; amends "The judge's own approval passes the approval's gates"). The dispatch gates (draft,
+  muted, the watch's own filters, the files that change workflows, the agents' instructions or an unreadable file
+  list) are functions of the registry, and the CI gate was already asked again at each prompt, so the record of the
+  paused round's answer (`pr.<id>.no_approval_round`, set at a fresh round, kept by a continue, deleted at the
+  round's end and at a failed setup) copied what a recomputation gives. It also hid a case: a continue that became
+  a fresh round (its judge's session was gone) read the old key and wrote no `round.approval_refused`. The key,
+  its three call sites and TestAContinueKeepsTheDispatchGatesAnswer are gone; `planApprovalGates` decides for every
+  kind of round, and `round.approval_refused` is still written once per head and reason (the existing
+  `pr.<id>.judge_approval_refused` mark), so a continue of the same head repeats nothing. Same registry, same
+  answer (TestAPausedRoundsContinueKeepsItsRefusalWithoutARecord runs a real stop and continue); a PR that changed
+  while its round was paused (it became a draft or muted) now gets the current answer, as any fresh round does
+  (TestAContinueDecidesTheDispatchGatesAgain, TestAContinueThatBecameAFreshRoundSaysWhyItCannotApprove). A stale
+  key of a round paused across the upgrade stays unread in the registry. `approval_hold` keeps its key: it counts
+  re-reviews. Also: `prStateRefusal` returns `(why, short)` as `watchRefusal` and `changedFilesRefusal` do, where
+  `approvalGatesDue` switched on the texts "it is a draft" and "it is muted" (a rewording would have skipped the
+  draft gate silently); `withdrawnOnGitHub` returns its own `reviewOnGitHub` (unsaid, dismissed, gone, stands)
+  where it returned the registry row states `AutoDismissed`, `AutoEndedGone` and `AutoStanding` as GitHub's
+  answer. Test: TestAPRsStateRefusalGivesTheCardsWordsAndThePromptsWords. Rejected: keeping the record and
+  checking it against a recomputation (two sources for one answer).
+- **A stalled slot release is resumed by the reconcile** (2026-10-23, spec 07 of the 2026-10-23 run, item 6). A
+  pool slot whose release stalled (an eviction whose fetch a restart cancelled, a GitHub outage) stayed
+  `releasing` until every held slot of the pool was in use and a PR waited for a slot (`needSlot` resumed it only
+  then, `store.EvictableSlots` lists held slots only). review15 stayed `releasing` from 10-22 11:18Z, and review18
+  and review5 stalled at 09:58Z and 10:00Z of 10-23: 3 of 18 slots out of the pool while held slots existed. Each
+  reconcile now queues the resumption of one: the slot in `releasing` or `dirty_schema` the longest, for over 30
+  minutes (the slot's `updated_at`), whose PR is not closing (cleanup's), that this process does not release at
+  that moment, none of whose release steps runs (the newest step event of `slot:<name>:release` is a begin nothing
+  ended, written after this daemon started and under 2 hours ago: the longest step, the schema reload, takes 30
+  minutes a try, twice), not tried in the last 30 minutes (so a release a guard keeps refusing is retried at
+  most every half hour, not every 10 minutes), and only when the heavy worker has nothing else queued or running
+  (`heavyIdle`: the reconcile is a heavy job itself). It queues `evictJob` under the existing key
+  `evict:<repo>`, so a resumption already queued or running counts, and the job reserves the PR, parks its
+  sessions and releases through the steps' own guards (Guard first, then the steps after the last completed one,
+  all idempotent); `slot.release_resumed` says it. Stop condition of the spec, checked: can a resumption race a
+  release's own step? The releases that run on the heavy worker (an eviction, the cleanup's, the Codex-flagged
+  PR's) are serial with the reconcile that queues the resumption, and the resumption is queued only on an idle
+  worker. The ones that do not (a stop's hand-back, a failed `magnum open`) run on a request's goroutine, between
+  two steps of which no begin event is open, so they go through `releaseSlot`, which marks the slot as released by
+  this process for the time it runs (`releasingNow`), and the resumption skips such a slot; a source-scan test
+  keeps the engine's calls of the slot manager's `Release` in that one place. A release run by another process
+  (the CLI) shows as an open begin event. What is left is the window between the check and the job, which the
+  PR's reservation (`reserveEviction`, taken by the job before it touches the slot, refused while a round or
+  other slot work holds the PR) closes as it does for an eviction. Tests: TestAReleaseStalledForOverHalfAnHourResumesOnTheNextReconcile,
+  TestTheTicksReconcileResumesAStalledRelease, TestAReleaseWithAStepRunningIsNotResumed (a step begun a minute
+  ago, ended, a dead daemon's, over two hours old, none), TestAReconcileResumesOneStalledReleaseTheOldestFirst,
+  TestAStalledReleaseThatFailsAgainIsTriedEveryHalfHourAtMost, TestAStalledReleaseOfAClosingPRIsLeftToCleanup,
+  TestAReleaseThisProcessRunsIsNotResumedBetweenItsSteps, TestEveryReleaseTheEngineStartsGoesThroughReleaseSlot.
+  The cap (added the same day, at the operator's request): a resumption that fails again would be retried every
+  half hour for good, each try a fetch or a schema reload on a machine under memory pressure. After
+  `releaseResumeCap` (3) resumed releases of one slot in a row that ran and ended without the slot free, the
+  reconcile stops resuming it: one `slot.release_given_up` warning and one toast, until the slot differs from what
+  the last try left, by state or `updated_at` (the operator's repair or release, a `needSlot` resume: those are not
+  counted). The slot's own failures move its `updated_at` too (a failed step leaves its error on the row), so the
+  record keeps the state and `updated_at` as the last failed try left them and compares against those. The record
+  is one registry key per slot, `slot.<id>.release_resumes` (JSON: when it was last tried, the failures, that
+  snapshot, given up), not process memory: the daemon restarts every few hours (20 starts in 2.4 days) and each
+  start reconciles at once, so a count in memory would give a slot three more tries per restart. It also holds the
+  30-minute spacing between tries, which a refusal by the guard (it leaves the row alone) needs. The record goes
+  when a try leaves the slot in another state than `releasing` or `dirty_schema` (free, or broken) and when another
+  path changed the slot. Only a try that ran and failed counts: a resumption the PR's reservation turned into a
+  no-op (nil), and a daemon stop, count nothing. The toast names `magnum release <slot>` to run once the cause is
+  fixed (`release` takes a slot's name, and resumes a `releasing` or `dirty_schema` slot's release) and `magnum
+  slots repair <slot>` for the case it breaks: `slots repair` takes a free, broken, provisioning or lost slot only,
+  and refuses `releasing` and `dirty_schema` (ErrConflict), so it alone would send the operator to a command that
+  fails. A reload that fails twice in a row already breaks the slot (`resetSchema`, then `slots repair` applies),
+  so a persistently failing reload leaves this loop at its first resumption; the cap covers the other causes (a
+  fetch, a guard that keeps refusing, the dependency steps, an unreachable GitHub). Tests:
+  TestAStalledReleaseThatFailsThreeTimesInARowIsGivenUp (a failure that leaves its error on the row, a refusal that
+  leaves the row alone), TestAGivenUpReleaseStaysGivenUpAcrossARestart,
+  TestAGivenUpReleaseIsResumedAgainWhenTheSlotChangedByAnotherPath (its state; its updated_at),
+  TestAResumeThatRanNoReleaseIsNotCounted, TestAReleaseThatEndsFreeStartsTheCountOver, and the key pinned in
+  TestEveryKVKeyTheEngineWritesKeepsItsString.
+  The next run counts slots `releasing` for over 30 minutes; the target is none. Rejected: resuming at every tick
+  (a failing guard would write a warning per tick); resuming inline in the reconcile (it would hold the reconcile's
+  other work behind a release that takes minutes); resuming only `releasing` (a restart that cuts the schema reload
+  leaves `dirty_schema` the same way); the cap in process memory (above); naming `magnum slots repair` alone in
+  the toast (above).
+- **The merged-unreviewed warning names the gate that held the PR** (2026-10-23, spec 07 of the 2026-10-23 run,
+  item 7). The 10 `pr.merged_unreviewed` events of 10-21 to 10-23 named no cause: 3 merged inside the quiet period,
+  5 in the middle of a round and 2 waited on a paused kind, told apart by hand. The event's data now carries `gate`
+  and, where known, `eligible_at`: for a PR that waited for a round, the wait the dispatch recorded last
+  (`pr.<id>.wait`: `quiet`, `interval`, `kind` with the paused kind as `gate_subject`, ...) and its end; for a merge
+  in the middle of a round `round_in_flight` and no time (the PR was eligible already); for a paused round `paused`
+  and its retry time; for `needs_attention` that word; `unknown` when no wait was recorded. Fixed words only. The
+  message is unchanged. Tests: TestMergedInsideTheQuietPeriodSaysSo, TestMergedInTheMiddleOfARoundSaysSo,
+  TestMergedWhileItsKindWasPausedSaysSo, TestMergedWhilePausedSaysSo. Rejected: recomputing the throttle at the
+  merge time (the recorded wait is what the dispatch decided, and the throttle's facts at the merge are not kept).
 
 ## Learned rules
 

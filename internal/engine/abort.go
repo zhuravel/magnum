@@ -766,7 +766,7 @@ func (e *Engine) handBack(ctx context.Context, repo store.Repo, pr store.PR, par
 	case pool == nil || e.d.Slots == nil:
 		return "slot " + slot.Name + " kept: no pool for " + repo.FullName(), nil
 	}
-	if err := e.d.Slots.Release(ctx, slot, *pool, reason); err != nil {
+	if err := e.releaseSlot(ctx, slot, *pool, reason); err != nil {
 		e.event(ctx, "warn", "slot:"+slot.Name, "slot.release_failed", err.Error(), nil)
 		return "", fmt.Errorf("release %s: %w", slot.Name, err)
 	}

@@ -187,7 +187,8 @@ func (e *Engine) reconcile(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	e.closeLeftoverPanes(ctx) // retired_panes.go
+	e.resumeStalledReleases(ctx) // pool.go: one release that stalled over half an hour ago
+	e.closeLeftoverPanes(ctx)    // retired_panes.go
 	e.warmIdentities(ctx, false)
 	e.syncNotes(ctx, false)
 	if err := e.prune(ctx); err != nil {

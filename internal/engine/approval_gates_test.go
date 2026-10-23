@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -156,29 +157,108 @@ func TestARoundThatCannotApproveAnywayIsHeldToNoGate(t *testing.T) {
 	}
 }
 
-// A continue keeps the dispatch gates' answer the paused round recorded,
-// whatever the PR's files say now, and asks the CI gate again; a round
-// that ends drops the record.
-func TestAContinueKeepsTheDispatchGatesAnswer(t *testing.T) {
-	h := judgeApprovesHarness(t)
+const judgeWorkflowsWords = "the PR changes its own workflows or actions"
+
+// A continue decides the dispatch gates again, as every other round does:
+// they are functions of the registry (the PR's draft and muted marks, its
+// watch, its files), so no record of the paused round's answer is kept. The
+// same PR gives the same answer, and a PR that changed meanwhile the
+// current one; the CI gate is asked again at its prompt as before.
+func TestAContinueDecidesTheDispatchGatesAgain(t *testing.T) {
+	h := judgeApprovesHarness(t, func(h *harness) { h.gh.defaultFiles = []string{".github/workflows/ci.yml"} })
 	pr := h.reviewedPR(2, "b1")
-	h.e.setKV(h.ctx, kvPRNoApprovalRound(pr.ID), "the PR changes its own workflows or actions")
-	job := &roundJob{pr: pr, repo: store.Repo{Owner: "talkable", Name: "talkable"}, kind: kindContinue}
-	rs := &roundSetup{kind: kindContinue, target: "b1"}
-	h.e.planApprovalGates(h.ctx, job, rs, false)
-	if job.noApproval != "the PR changes its own workflows or actions" || !job.ciGated {
-		t.Fatalf("the continue: no approval %q, CI gate %v: want the paused round's and the CI gate", job.noApproval, job.ciGated)
+	repo := store.Repo{Owner: "talkable", Name: "talkable"}
+	plan := func(pr store.PR) *roundJob {
+		job := &roundJob{pr: pr, repo: repo, kind: kindContinue}
+		h.e.planApprovalGates(h.ctx, job, &roundSetup{kind: kindContinue, target: "b1"}, false)
+		return job
 	}
-	if v, ok := kvValue(h, kvPRNoApprovalRound(pr.ID)); !ok || v != job.noApproval {
-		t.Fatalf("the paused round's record = %q, %v: a continue keeps it", v, ok)
+	if job := plan(pr); job.noApproval != judgeWorkflowsWords || !job.ciGated {
+		t.Fatalf("the continue of a workflow-changing PR: no approval %q, CI gate %v: want the refusal and the CI gate", job.noApproval, job.ciGated)
 	}
-	fresh := &roundJob{pr: pr, repo: job.repo, kind: pipeline.KindRereview}
-	h.e.planApprovalGates(h.ctx, fresh, &roundSetup{kind: pipeline.KindRereview, target: "b1"}, false)
-	if fresh.noApproval != "" {
-		t.Fatalf("a new round of a clean PR: no approval %q", fresh.noApproval)
+	pr.IsDraft = true // it turned into a draft while the round was paused
+	if job := plan(pr); job.noApproval != "the PR is a draft" {
+		t.Fatalf("the continue of a PR that became a draft: no approval %q", job.noApproval)
 	}
-	if v, ok := kvValue(h, kvPRNoApprovalRound(pr.ID)); ok {
-		t.Fatalf("the record outlived a round that decided again: %q", v)
+	pr.IsDraft, pr.Muted = false, true
+	if job := plan(pr); job.noApproval != "the PR is muted" {
+		t.Fatalf("the continue of a PR that was muted: no approval %q", job.noApproval)
+	}
+	if v, ok := kvValue(h, fmt.Sprintf("pr.%d.no_approval_round", pr.ID)); ok {
+		t.Fatalf("a record of the paused round's answer is kept again: %q", v)
+	}
+}
+
+// A round that began as a continue and became a fresh one (its judge's
+// session was gone) says why it cannot approve, like any fresh round: the
+// event is written once per head and reason, so a continue that stays a
+// continue repeats nothing.
+func TestAContinueThatBecameAFreshRoundSaysWhyItCannotApprove(t *testing.T) {
+	h := judgeApprovesHarness(t, func(h *harness) { h.gh.defaultFiles = []string{".github/workflows/ci.yml"} })
+	pr := h.reviewedPR(2, "b1")
+	repo := store.Repo{Owner: "talkable", Name: "talkable"}
+	// The first round's event stands for b1; a new head has none yet.
+	if evs := approvalEvents(t, h, 2, "round.approval_refused"); len(evs) != 1 {
+		t.Fatalf("round.approval_refused events after the first round: %+v", evs)
+	}
+	job := &roundJob{pr: pr, repo: repo, kind: kindContinue}
+	h.e.planApprovalGates(h.ctx, job, &roundSetup{kind: kindContinue, target: "b1"}, false) // a continue that stays one
+	if evs := approvalEvents(t, h, 2, "round.approval_refused"); len(evs) != 1 {
+		t.Fatalf("a continue of the same head repeated the event: %+v", evs)
+	}
+	job = &roundJob{pr: pr, repo: repo, kind: kindContinue}
+	h.e.planApprovalGates(h.ctx, job, &roundSetup{kind: pipeline.KindRecovery, target: "b2"}, false) // a continue that became a fresh round
+	if job.noApproval != judgeWorkflowsWords {
+		t.Fatalf("no approval %q", job.noApproval)
+	}
+	evs := approvalEvents(t, h, 2, "round.approval_refused")
+	if len(evs) != 2 || eventData(t, evs[1])["head_sha"] != "b2" || eventData(t, evs[1])["reason"] != judgeWorkflowsWords {
+		t.Fatalf("round.approval_refused events: %+v, want a second one for b2", evs)
+	}
+}
+
+// A round stopped during its judge's turn continues after the restart with
+// the refusal its dispatch gave, without a record of it: the same PR gives
+// the same answer, and the head's event is not written twice.
+func TestAPausedRoundsContinueKeepsItsRefusalWithoutARecord(t *testing.T) {
+	h := judgeApprovesHarness(t, func(h *harness) { h.gh.defaultFiles = []string{".github/workflows/ci.yml"} })
+	h.reviewedPR(2, "b1")
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		round, err := nextRound(h, in.PR.ID)
+		if err == nil {
+			err = sentJudge(h, in, round)
+		}
+		if err == nil {
+			err = shutDown(h, in.PR.ID)
+		}
+		if err != nil {
+			return failRound(t, err)
+		}
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeStopped, Round: round, Error: "pipeline: round cancelled: context canceled"}, nil
+	}
+	pollPR(h, 40*time.Minute, 2, "b2")
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Round: in.Round, ReviewID: 202, Event: "COMMENTED", ReviewCommit: "b2"}, nil
+	}
+	h.e = New(h.d)
+	h.startup()
+	h.wantState(2, store.PRPaused)
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+	h.tick()
+	ins := h.rd.all()
+	in := ins[len(ins)-1]
+	if in.Kind != pipeline.KindContinue || in.NoApproval != judgeWorkflowsWords || in.CIGate == nil {
+		t.Fatalf("the continue: kind %s, no approval %q, CI gate %v", in.Kind, in.NoApproval, in.CIGate != nil)
+	}
+	var heads []any
+	for _, ev := range approvalEvents(t, h, 2, "round.approval_refused") {
+		heads = append(heads, eventData(t, ev)["head_sha"])
+	}
+	if !slices.Equal(heads, []any{"b1", "b2"}) {
+		t.Fatalf("round.approval_refused events for heads %v, want one each for b1 and b2", heads)
 	}
 }
 
@@ -228,6 +308,80 @@ func TestTheJudgesCIGateRefusesOnlyRedCIUnlikeTheBase(t *testing.T) {
 			}
 			if evs := h.events(ciBaseEvent); len(evs) != 0 {
 				t.Fatalf("%s events %+v: the judge's gate records none", ciBaseEvent, evs)
+			}
+		})
+	}
+}
+
+// The draft and muted gates come from one function for the approval as the
+// operator (the card's words) and for the judge's approval (the prompt's
+// fixed words): neither side switches on the other's text, so rewording one
+// skips no gate.
+func TestAPRsStateRefusalGivesTheCardsWordsAndThePromptsWords(t *testing.T) {
+	h := judgeApprovesHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	for _, tc := range []struct {
+		name         string
+		draft, muted bool
+		why, short   string
+	}{
+		{"a draft", true, false, "it is a draft", "the PR is a draft"},
+		{"a muted PR", false, true, "it is muted", "the PR is muted"},
+		{"a muted draft", true, true, "it is a draft", "the PR is a draft"},
+		{"neither", false, false, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := pr
+			p.IsDraft, p.Muted = tc.draft, tc.muted
+			if why, short := prStateRefusal(p); why != tc.why || short != tc.short {
+				t.Fatalf("prStateRefusal = %q, %q; want %q, %q", why, short, tc.why, tc.short)
+			}
+			job := &roundJob{pr: p, repo: store.Repo{Owner: "talkable", Name: "talkable"}, kind: pipeline.KindInitial}
+			if got := h.e.approvalGatesDue(h.ctx, job, &roundSetup{kind: pipeline.KindInitial, target: "b1"}, false); got != tc.short {
+				t.Fatalf("the judge's gate = %q, want %q", got, tc.short)
+			}
+			if got := autoApproveRefusal(autoFacts{PR: p, Login: "zhuravel"}); tc.why != "" && got != tc.why {
+				t.Fatalf("the approval as the operator refuses with %q, want %q", got, tc.why)
+			}
+		})
+	}
+}
+
+// A rollup the registry never read (a NULL ci_state: the poll's CI read
+// failed, or the PR was never fetched in full) is not green: both gates say
+// unknown, which still lets the approval through, as a green rollup does,
+// and the judge's round.judge event can tell "never read" from "passed". A
+// rollup of no checks (read, and empty) is green.
+func TestARollupNeverReadIsUnknownAndStillLetsTheApprovalThrough(t *testing.T) {
+	green := github.Check{Name: "rspec", State: github.CheckPassed, Workflow: "CI", WorkflowFile: "ci.yml", At: ciBefore}
+	for _, tc := range []struct {
+		name      string
+		ci        string
+		checks    []github.Check
+		neverRead bool
+		state     string
+	}{
+		{"never read", "SUCCESS", []github.Check{green}, true, pipeline.CIUnknown},
+		{"read and green", "SUCCESS", []github.Check{green}, false, pipeline.CIGreen},
+		{"read and empty", "", nil, false, pipeline.CIGreen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := judgeApprovesHarness(t)
+			in := roundOf(t, h, prSpec{n: 2, head: "b1", ci: tc.ci, checks: tc.checks}, false)
+			if tc.neverRead {
+				if _, err := h.st.DB().ExecContext(h.ctx, "UPDATE prs SET ci_state = NULL WHERE id = ?", h.pr(2).ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pr := h.pr(2)
+			if (pr.CIState == nil) != tc.neverRead {
+				t.Fatalf("test setup: ci_state %v", pr.CIState)
+			}
+			if a := h.e.ciGateOf(h.ctx, store.RepoPR{PR: pr, Repo: "talkable/talkable"}); a.why != "" || a.waits || a.state != tc.state {
+				t.Fatalf("ciGateOf = %+v, want %s and no refusal", a, tc.state)
+			}
+			if g := in.CIGate(h.ctx, pr, "b1"); g.Refusal != "" || g.State != tc.state {
+				t.Fatalf("judge's CI gate = %+v, want %s and no refusal", g, tc.state)
 			}
 		})
 	}

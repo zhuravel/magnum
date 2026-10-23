@@ -16,10 +16,11 @@ package engine
 // dispatch the ones that need no review (a draft, a muted PR, one its
 // watch would not review on its own, one that changes its own workflows or
 // actions or what steers the review agents, or whose files magnum cannot
-// list: approvalGatesDue, pipeline.RoundInput.NoApproval; a continue keeps
-// the paused round's, kvPRNoApprovalRound), and the CI gate when the
-// judge's prompt is written (judgeCIGate, pipeline.RoundInput.CIGate, a
-// continue's prompt again), from the registry read the judge's
+// list: approvalGatesDue, pipeline.RoundInput.NoApproval; functions of the
+// registry, so every kind of round decides them again, a continue too),
+// and the CI gate when the judge's prompt is written (judgeCIGate,
+// pipeline.RoundInput.CIGate, a continue's prompt again), from the
+// registry read the judge's
 // failing-checks.json comes from: red CI that does not fail the way the
 // base branch's tip fails refuses, checks that still run or pass let the
 // APPROVE through. A refusal makes the no-findings event COMMENT, in the
@@ -36,12 +37,6 @@ import (
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
-
-// kvPRNoApprovalRound holds why the PR's round in flight cannot approve by
-// the gates decided at its dispatch (approvalGatesDue: the judge prompt's
-// words), so a continue of a paused one keeps them; the round's end
-// deletes it, a pause keeps it for the continue (as kvPRApprovalHoldRound).
-func kvPRNoApprovalRound(prID int64) string { return fmt.Sprintf("pr.%d.no_approval_round", prID) }
 
 // kvPRJudgeApprovalRefused records "<head>|<reason>" of the PR's latest
 // round.approval_refused event (noteApprovalRefused), so the event is
@@ -74,11 +69,8 @@ func (e *Engine) approvalGatesDue(ctx context.Context, job *roundJob, rs *roundS
 	if !e.approvalGated(job, rs, dryRun) {
 		return ""
 	}
-	switch prStateRefusal(job.pr) {
-	case "it is a draft":
-		return "the PR is a draft"
-	case "it is muted":
-		return "the PR is muted"
+	if why, short := prStateRefusal(job.pr); why != "" {
+		return short
 	}
 	c := store.RepoPR{PR: job.pr, Repo: job.repo.FullName()}
 	if why, short := e.watchRefusal(ctx, c); why != "" {
@@ -89,29 +81,18 @@ func (e *Engine) approvalGatesDue(ctx context.Context, job *roundJob, rs *roundS
 }
 
 // planApprovalGates settles the approval's gates of the round rs sets up
-// for job: a continue goes on with the dispatch gates' answer the paused
-// round recorded (kvPRNoApprovalRound), any other round decides them now
-// (approvalGatesDue) and records it, with a round.approval_refused event
-// when they refuse; a round held to the gates asks the CI gate when its
-// judge's prompt is written (job.ciGated), a continue's again.
+// for job: the dispatch gates (approvalGatesDue) are decided now, for every
+// kind of round, a continue and one that began as a continue and became a
+// fresh round too (they read the registry, which a paused round's answer
+// would only copy), with a round.approval_refused event when they refuse
+// (once per head and reason, noteApprovalRefused); a round held to the
+// gates asks the CI gate when its judge's prompt is written (job.ciGated),
+// a continue's again.
 func (e *Engine) planApprovalGates(ctx context.Context, job *roundJob, rs *roundSetup, dryRun bool) {
-	pr := job.pr
 	job.ciGated = e.approvalGated(job, rs, dryRun)
-	if job.kind == kindContinue {
-		job.noApproval, _ = e.getKV(ctx, kvPRNoApprovalRound(pr.ID))
-	} else {
-		job.noApproval = e.approvalGatesDue(ctx, job, rs, dryRun)
-	}
-	if rs.kind == kindContinue {
-		return // the paused round's record stands
-	}
-	if job.noApproval == "" {
-		e.delKV(ctx, kvPRNoApprovalRound(pr.ID))
-		return
-	}
-	e.setKV(ctx, kvPRNoApprovalRound(pr.ID), job.noApproval)
-	if job.kind != kindContinue {
-		e.noteApprovalRefused(ctx, job.repo, pr, rs.target, job.noApproval, "")
+	job.noApproval = e.approvalGatesDue(ctx, job, rs, dryRun)
+	if job.noApproval != "" {
+		e.noteApprovalRefused(ctx, job.repo, job.pr, rs.target, job.noApproval, "")
 	}
 }
 

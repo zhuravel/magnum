@@ -797,7 +797,7 @@ func (e *Engine) flagReleaseJob(prID int64, at time.Time) func(ctx context.Conte
 				return err
 			}
 			if pool := e.cfg.PoolFor(repo.FullName()); pool != nil {
-				if err := e.d.Slots.Release(ctx, sl, *pool, "codex-flagged"); err != nil {
+				if err := e.releaseSlot(ctx, sl, *pool, "codex-flagged"); err != nil {
 					e.flagMu.Lock()
 					if e.releaseFailed == nil {
 						e.releaseFailed = map[int64]time.Time{}
