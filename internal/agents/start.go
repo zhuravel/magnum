@@ -252,11 +252,17 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 		return nil
 	}
 	res, err := m.d.Herdr.AgentStart(ctx, opts)
-	// agent_pane_busy right after the idle-shell check is a race with the
-	// shell's startup (rc files, mise hooks): wait and try the same start
-	// again rather than letting the caller fall back to a fresh conversation.
-	for attempt := 1; err != nil && herdr.IsCode(err, codeAgentPaneBusy) && attempt <= startBusyRetries && ctx.Err() == nil; attempt++ {
-		m.logf("start %s: pane %s busy (attempt %d/%d), retrying", name, paneID, attempt, startBusyRetries)
+	// agent_pane_busy or agent_start_input_failed right after the idle-shell
+	// check is a race with the shell's startup (rc files, mise hooks): wait
+	// and try the same start again rather than letting the caller fall back
+	// to a fresh conversation.
+	for attempt := 1; err != nil && shellStarting(err) && attempt <= startBusyRetries && ctx.Err() == nil; attempt++ {
+		if herdr.IsCode(err, codeAgentStartInputFailed) {
+			m.logf("start %s: pane %s did not take its launch line (attempt %d/%d; its shell has no prompt yet), retrying",
+				name, paneID, attempt, startBusyRetries)
+		} else {
+			m.logf("start %s: pane %s busy (attempt %d/%d), retrying", name, paneID, attempt, startBusyRetries)
+		}
 		if serr := m.sleep(ctx, startBusyDelay); serr != nil {
 			break
 		}

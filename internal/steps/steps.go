@@ -52,14 +52,21 @@ func failpoint(ctx context.Context, subject, name string, at Point) error {
 	return nil
 }
 
+// ErrStopped marks a step's error as a normal stop rather than a failure:
+// the job ended because its subject moved on (the whiteboard job's wait
+// when the PR's head moves or the PR closes). An error that is ErrStopped
+// (errors.Is) gets its fail row at level "info", "stopped".
+var ErrStopped = errors.New("stopped")
+
 // Step runs fn once per subject generation. If (subject, name) already has
 // an ok row in the current generation, fn is skipped and Step returns nil.
 // Otherwise it writes a begin row, runs fn and writes an ok row, or a fail
 // row (message redacted with execx.Redact) and returns fn's error. Rows are
 // written even when ctx is cancelled during fn. A fail row caused by context
 // cancellation (daemon shutdown) is logged at level "warn" as "interrupted"
-// instead of level "error"; it is still a fail row, so the step is not done and
-// runs again on resume.
+// instead of level "error", and one of a normal stop (ErrStopped) at level
+// "info" as "stopped"; either is still a fail row, so the step is not done
+// and runs again on resume.
 func Step(ctx context.Context, st *store.Store, subject, name string, fn func(ctx context.Context) error) error {
 	done, err := st.StepDone(ctx, subject, name)
 	if err != nil {
@@ -78,8 +85,11 @@ func Step(ctx context.Context, st *store.Store, subject, name string, fn func(ct
 	bookkeeping := context.WithoutCancel(ctx)
 	if runErr != nil {
 		level, verb := "error", "failed"
-		if errors.Is(runErr, context.Canceled) {
+		switch {
+		case errors.Is(runErr, context.Canceled):
 			level, verb = "warn", "interrupted"
+		case errors.Is(runErr, ErrStopped):
+			level, verb = "info", "stopped"
 		}
 		msg := execx.Redact(fmt.Sprintf("%s %s: %v", name, verb, runErr))
 		if err := record(bookkeeping, st, subject, name, store.PhaseFail, level, msg); err != nil {

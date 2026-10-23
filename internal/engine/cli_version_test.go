@@ -654,3 +654,28 @@ func TestAVersionReadFailingForAnotherCauseWarnsAgain(t *testing.T) {
 		t.Fatalf("kind.version_unknown events = %d, want 1: the causes do not restart the count", len(evs))
 	}
 }
+
+// Four daemon stops from 2026-10-20 to 10-22 each cut the health check's
+// read of the recorded CLI version, and each logged "read the recorded CLI
+// version" at warn for "context canceled". A read a stop cuts logs nothing
+// at warn, records nothing and is tried again at the next start.
+func TestTheCLIVersionReadAStopCutsLogsNoWarning(t *testing.T) {
+	cli := newFakeCLIs(t)
+	logs := &syncBuffer{}
+	h := newHarness(t, cli.install, func(h *harness) { h.d.Logger = newTeeLogger(h.t, logs) })
+	codex := cli.binary("codex", time.Date(2026, 10, 9, 21, 20, 0, 0, time.Local))
+	cli.prints(codex, "codex-cli 0.162.1\n")
+	ctx, cancel := context.WithCancel(h.ctx)
+	cancel()
+	h.e.checkCLIVersion(ctx, "codex")
+	if n := logLines(logs, "WARN", ""); n != 0 {
+		t.Fatalf("warnings at a stop = %d, want none\n%s", n, logs.String())
+	}
+	if _, ok, _ := readKVJSON[KindVersion](h.ctx, h.e, KVKindVersion("codex"), "kind version"); ok {
+		t.Fatal("a version was recorded by a read the stop cut")
+	}
+	h.e.checkCLIVersion(h.ctx, "codex")
+	if v := kindVersion(h, "codex"); v.Version != "codex-cli 0.162.1" {
+		t.Fatalf("codex at the next check: %+v", v)
+	}
+}

@@ -132,6 +132,20 @@ const (
 	PromptTakenWait = 10 * time.Second
 )
 const (
+	EventFirstPromptUnready = "agents.first_prompt_unready"
+	EventFirstPromptStalled = "agents.first_prompt_stalled"
+)
+    EventFirstPromptUnready is recorded (warn, the PR's subject) when a
+    Codex session's first prompt goes out after CodexReadyTimeout of a
+    screen that never showed the composer with no startup dialog, and
+    EventFirstPromptStalled when herdr saw no turn start from a first prompt
+    and the check that Codex took it found neither a sign it did nor a dialog
+    that ate it (the run is observed as before). Twice on 2026-10-23 the cause
+    was unknown, so each carries what the screen showed then (data: role, run,
+    agent, pane, screen: screenTail's lines; Codex's start screen, never PR
+    text).
+
+const (
 	// CompactTimeout bounds Compact's wait for the compaction turn to end.
 	CompactTimeout = 10 * time.Minute
 )
@@ -328,6 +342,12 @@ const EventDefaultModelRestored = "agent.default_model_restored"
     EventDefaultModelRestored is recorded when SwitchModel put the Claude
     settings' default model back (data: session, role, file, model, found;
     model and found are null when the key was absent).
+
+const EventHerdrIDsReused = "agents.herdr_ids_reused"
+    EventHerdrIDsReused is recorded (info, the PR's subject) when retired
+    sessions of the PR record herdr ids that live sessions of other PRs use now:
+    their herdr ids are dropped and nothing of theirs is closed (data: sessions,
+    the rows; panes and workspaces, the ids dropped).
 
 const EventHooksTrustUnsaved = "agents.hooks_trust_unsaved"
     EventHooksTrustUnsaved is recorded (warn, subject tool:<kind>) when magnum
@@ -1433,15 +1453,19 @@ func (m *Manager) ClearDeadLaunch(ctx context.Context, s store.Session) (bool, e
 
 func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
     CloseRetiredPanes closes the panes of the PR's parked, closed and lost
-    sessions that herdr still has (a park, a hard park or an agent that went
-    away leaves its session's pane as an idle shell, and the next workspace
-    splits a new pane for every role, so a PR's workspace grew by a pane per
-    role and start: 21 for 4 live sessions on talkable#11932). A pane is closed
-    only when its foreground process is the shell and no agent herdr lists there
-    works or is blocked, and never when a starting or live session of the PR
-    records it; a pane no session records (a shell the operator opened) is never
-    one. A workspace the closes leave without a pane is closed too. A parked
-    or lost session keeps its conversation: the role's next start resumes it
+    sessions that herdr still has (a park, a hard park or an agent that
+    went away leaves its session's pane as an idle shell, and the next
+    workspace splits a new pane for every role, so a PR's workspace grew by
+    a pane per role and start: 21 for 4 live sessions on talkable#11932).
+    A pane is closed only when its foreground process is the shell and no
+    agent herdr lists there works or is blocked, and never when a starting
+    or live session of the PR or of another PR records it or its workspace;
+    a pane no session records (a shell the operator opened) is never one.
+    A retired session whose pane or workspace a starting or live session of
+    another PR records (herdr numbers them again after a restart) has its
+    herdr ids dropped, with one EventHerdrIDsReused, and nothing of it closes.
+    A workspace the closes leave without a pane is closed too. A parked or
+    lost session keeps its conversation: the role's next start resumes it
     in a new pane. One EventPanesClosed names the count and the roles, and,
     of a lost session's pane that showed one, the CLI's last error line by role
     (last_lines; when two closed panes of a role show one, the newer session's);
@@ -1538,7 +1562,10 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
       - The workspace of the PR's newest starting/live/lost session is reused
         while herdr still has it and its checkout equals slotPath. Live panes
         are kept wherever they are; a missing role pane is re-split (a lost
-        session's surviving pane is reused).
+        session's surviving pane is reused). A workspace or a pane a starting or
+        live session of another PR records is never reused (herdr numbers them
+        again after a restart; the PR's retired rows that record one drop their
+        herdr ids, EventHerdrIDsReused).
       - If that workspace belongs to another checkout, the PR is parked first
         (ErrBusy while an agent works) and MovedFrom is set.
       - Otherwise a new workspace is created (cwd slotPath, label, no focus):
@@ -1684,20 +1711,23 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         started or became live too close to capturedAt (LostGrace).
 
 func (m *Manager) Park(ctx context.Context, pr store.PR) error
-    Park releases a PR's panes while keeping its conversations resumable.
-    It refuses with ErrBusy while a run of the PR is pending/submitted/working,
-    an agent is working or blocked, a shell role's pane runs a command, or any
-    pane of a workspace it would close runs something other than an idle shell
-    or an idle agent (a lost session's pane where the user started a build,
-    say). Session ids visible in herdr are recorded first. A workspace of the
-    PR's live or lost sessions that holds only the PR's own panes is closed;
-    one with foreign panes (the user split it) stays, and only the PR's live
-    agents are quit. Live sessions with a session_id become parked, the rest
-    closed (see Quit); lost sessions stay lost. A quit that fails does not stop
-    the others: the PR's other live agents are still quit and the failures come
-    back joined (the stuck agent's session stays live, so ErrBusy and herdr's
-    timeout are in the chain as for one failure). No live or lost sessions:
-    no-op.
+    Park releases a PR's panes while keeping its conversations resumable. It
+    refuses with ErrBusy while a run of the PR is pending/submitted/working, an
+    agent is working or blocked, a shell role's pane runs a command, or any pane
+    of a workspace it would close runs something other than an idle shell or
+    an idle agent (a lost session's pane where the user started a build, say).
+    Session ids visible in herdr are recorded first. A workspace of the PR's
+    live or lost sessions that holds only the PR's own panes is closed; one with
+    foreign panes (the user split it) stays, and only the PR's live agents are
+    quit. A pane or a workspace another PR's starting or live session records is
+    never the PR's (herdr numbers them again after a restart): the PR's retired
+    sessions that record one drop their herdr ids first (EventHerdrIDsReused),
+    and no such workspace is closed. Live sessions with a session_id become
+    parked, the rest closed (see Quit); lost sessions stay lost. A quit that
+    fails does not stop the others: the PR's other live agents are still quit
+    and the failures come back joined (the stuck agent's session stays live,
+    so ErrBusy and herdr's timeout are in the chain as for one failure). No live
+    or lost sessions: no-op.
 
 func (m *Manager) ParkClosingPanes(ctx context.Context, pr store.PR) error
     ParkClosingPanes is Park, then, once the park worked, CloseRetiredPanes:
@@ -2001,6 +2031,20 @@ func (m *Manager) Tell(ctx context.Context, run store.Run, text string) error
     last_prompt_at set (so the turn the text starts is not taken for someone
     typing). A run without a live agent session fails with ErrNoSession
     (ErrNotAgent for a shell role's pane).
+
+func (m *Manager) TookNoPrompt(ctx context.Context, s store.Session) bool
+    TookNoPrompt reports whether live Codex session s never took a prompt
+    (DECISIONS "A Codex judge that never took a prompt starts fresh"):
+    Codex writes a session's rollout at its first prompt, and the observer
+    gives a session herdr reports without an id the id of its rollout from
+    RecoverIDAfter after its start, so a session that still has no id longer
+    than RecoverIDAfter after its last prompt went out, and whose Codex home
+    holds no rollout of its checkout and start (cliRolloutIDs, read now), has
+    none: no turn ever ran in it, so none runs now. A session of another kind,
+    one with an id, never prompted or prompted within RecoverIDAfter, one whose
+    checkout or Codex home is unknown, and a read that fails or finds a rollout
+    (two Codex sessions started in one checkout keep their ids unknown) answer
+    false.
 
 func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool)
     TurnError reads the error the turn of run ended with from its Codex
@@ -7518,9 +7562,9 @@ type Agents interface {
 	// failures of the others.
 	ParkSessions(ctx context.Context, pr store.PR, ids []int64) ([]store.Session, error)
 	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
-	// and lost sessions that no starting or live session of the PR
-	// records, after every park that worked and a session marked lost
-	// (closeRetiredPanes, closePanesJob).
+	// and lost sessions that no starting or live session of the PR or of
+	// another PR records, after every park that worked and a session
+	// marked lost (closeRetiredPanes, closePanesJob).
 	CloseRetiredPanes(ctx context.Context, pr store.PR) error
 	// CloseRetiredPanesIn is CloseRetiredPanes over a snapshot the
 	// reconcile took once for every PR with a pane (closeLeftoverPanes).
@@ -7533,6 +7577,10 @@ type Agents interface {
 	// ReloadsProject reports whether a session's agent reloads the
 	// checkout's project config it loaded while it runs (parkReloading).
 	ReloadsProject(ctx context.Context, s store.Session) bool
+	// TookNoPrompt reports whether a live Codex session never took a
+	// prompt: no id and no rollout longer than agents.RecoverIDAfter after
+	// its last prompt (coldJudge).
+	TookNoPrompt(ctx context.Context, s store.Session) bool
 	// ClearDeadLaunch closes the pane of a launch that never came up which
 	// herdr lists under the agent name of session s over an idle shell,
 	// replacing s's pane when it is that one, and reports whether the name
@@ -17819,6 +17867,15 @@ fn must be idempotent or prechecked (at-least-once).
 Subjects are free-form strings such as "pr:123" or "slot:review3"; they are also
 the events.subject that `magnum logs` filters on.
 
+VARIABLES
+
+var ErrStopped = errors.New("stopped")
+    ErrStopped marks a step's error as a normal stop rather than a failure: the
+    job ended because its subject moved on (the whiteboard job's wait when the
+    PR's head moves or the PR closes). An error that is ErrStopped (errors.Is)
+    gets its fail row at level "info", "stopped".
+
+
 FUNCTIONS
 
 func Done(ctx context.Context, st *store.Store, subject, name string) (bool, error)
@@ -17835,8 +17892,9 @@ func Step(ctx context.Context, st *store.Store, subject, name string, fn func(ct
     row (message redacted with execx.Redact) and returns fn's error. Rows are
     written even when ctx is cancelled during fn. A fail row caused by context
     cancellation (daemon shutdown) is logged at level "warn" as "interrupted"
-    instead of level "error"; it is still a fail row, so the step is not done
-    and runs again on resume.
+    instead of level "error", and one of a normal stop (ErrStopped) at level
+    "info" as "stopped"; either is still a fail row, so the step is not done and
+    runs again on resume.
 
 func WithFailpoint(ctx context.Context, fp Failpoint) context.Context
     WithFailpoint returns a context whose Step calls consult fp.

@@ -119,9 +119,9 @@ type Agents interface {
 	// failures of the others.
 	ParkSessions(ctx context.Context, pr store.PR, ids []int64) ([]store.Session, error)
 	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
-	// and lost sessions that no starting or live session of the PR
-	// records, after every park that worked and a session marked lost
-	// (closeRetiredPanes, closePanesJob).
+	// and lost sessions that no starting or live session of the PR or of
+	// another PR records, after every park that worked and a session
+	// marked lost (closeRetiredPanes, closePanesJob).
 	CloseRetiredPanes(ctx context.Context, pr store.PR) error
 	// CloseRetiredPanesIn is CloseRetiredPanes over a snapshot the
 	// reconcile took once for every PR with a pane (closeLeftoverPanes).
@@ -134,6 +134,10 @@ type Agents interface {
 	// ReloadsProject reports whether a session's agent reloads the
 	// checkout's project config it loaded while it runs (parkReloading).
 	ReloadsProject(ctx context.Context, s store.Session) bool
+	// TookNoPrompt reports whether a live Codex session never took a
+	// prompt: no id and no rollout longer than agents.RecoverIDAfter after
+	// its last prompt (coldJudge).
+	TookNoPrompt(ctx context.Context, s store.Session) bool
 	// ClearDeadLaunch closes the pane of a launch that never came up which
 	// herdr lists under the agent name of session s over an idle shell,
 	// replacing s's pane when it is that one, and reports whether the name

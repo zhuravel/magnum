@@ -225,3 +225,31 @@ func TestStepRealFailureStaysErrorLevel(t *testing.T) {
 		t.Fatalf("deadline row level = %q, want error", level)
 	}
 }
+
+// stopped is a job's normal stop, as the whiteboard job's wait returns when
+// the PR's head moves.
+type stopped struct{ why string }
+
+func (s *stopped) Error() string        { return s.why }
+func (s *stopped) Is(target error) bool { return target == ErrStopped }
+
+// A whiteboard whose PR's head moved stops its wait: a normal end the fail
+// row logged at level error ("whiteboard.wait failed: the head moved to
+// …"). An error that is ErrStopped writes its fail row at info, "stopped";
+// the step is still not done, and the error comes back as it was.
+func TestStepNormalStopIsInfoLevel(t *testing.T) {
+	st := newStore(t)
+	why := &stopped{why: "the head moved to b2b2b2b"}
+	err := Step(context.Background(), st, "pr:5", "whiteboard.wait", func(context.Context) error { return fmt.Errorf("wait: %w", why) })
+	var got *stopped
+	if !errors.As(err, &got) || got != why {
+		t.Fatalf("err = %v, want the stop", err)
+	}
+	level, msg := failRow(t, st, "pr:5")
+	if level != "info" || msg != "whiteboard.wait stopped: wait: the head moved to b2b2b2b" {
+		t.Fatalf("stop row = level %q msg %q, want info and stopped", level, msg)
+	}
+	if done, err := Done(context.Background(), st, "pr:5", "whiteboard.wait"); err != nil || done {
+		t.Fatalf("stopped step Done = %v %v, want false", done, err)
+	}
+}

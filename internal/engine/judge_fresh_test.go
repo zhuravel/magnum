@@ -42,7 +42,17 @@ func judgeRunEnded(h *harness, n int, at time.Time, sent *time.Time) {
 // resume) and runs the re-review.
 func coldRereview(t *testing.T, h *harness, idle time.Duration, parked bool) pipeline.RoundInput {
 	t.Helper()
+	return coldRereviewAfter(t, h, idle, parked, nil)
+}
+
+// coldRereviewAfter is coldRereview with edit run once the first review
+// left its sessions (nil: none).
+func coldRereviewAfter(t *testing.T, h *harness, idle time.Duration, parked bool, edit func()) pipeline.RoundInput {
+	t.Helper()
 	h.reviewedPR(2, "b1")
+	if edit != nil {
+		edit()
+	}
 	if parked {
 		parkSessions(h, 2)
 		h.ag.mu.Lock()
@@ -408,6 +418,71 @@ func TestAContinueKeepsAColdJudgesConversation(t *testing.T) {
 	rs := &roundSetup{toRun: h.cfg.RolesFor(nil)}
 	if cold, why, err := h.e.coldJudge(h.ctx, job, rs); cold || err != nil {
 		t.Fatalf("a continue starts the judge fresh: %s %v", why, err)
+	}
+}
+
+// On 2026-10-23 the first prompts of four Codex judges stalled with no
+// rollout and no id, and talkable#12080's next round reused one 84 minutes
+// on, under judge_fresh_after, and failed the same way although ids were
+// back. A live Codex judge that never took a prompt (no id, no rollout long
+// after its last prompt) is cold whatever its idle time, even with
+// judge_fresh_after 0: the round quits it and starts a fresh one. A judge
+// with an id keeps the idle rule.
+func TestACodexJudgeThatNeverTookAPromptStartsFreshWhateverItsIdle(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sessionID  string
+		freshAfter time.Duration
+		fresh      bool
+	}{
+		{"no id and no rollout", "", 90 * time.Minute, true},
+		{"no id and no rollout, judge_fresh_after 0", "", 0, true},
+		{"an id keeps the idle rule", "uuid-judge", 90 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(h *harness) { h.cfg.Pipeline.JudgeFreshAfter.Duration = tc.freshAfter })
+			h.ag.mu.Lock()
+			h.ag.noPrompt = map[string]bool{store.RoleJudge: true}
+			h.ag.mu.Unlock()
+			var judge store.Session
+			in := coldRereviewAfter(t, h, 10*time.Minute, false, func() {
+				pr := h.pr(2)
+				s, err := h.st.LiveSessionByPRRole(h.ctx, pr.ID, store.RoleJudge)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sent := h.clock.Now()
+				if err := h.st.UpdateSession(h.ctx, s.ID, func(u *store.SessionUpdate) {
+					u.Set("last_prompt_at", sent)
+					if tc.sessionID != "" {
+						u.Set("session_id", tc.sessionID)
+					}
+				}); err != nil {
+					t.Fatal(err)
+				}
+				judge = s
+			})
+			pr := h.pr(2)
+			quit := slices.Contains(h.ag.all(), fmt.Sprintf("quit:%d:%s", pr.ID, store.RoleJudge))
+			cold := approvalEvents(t, h, 2, "round.judge_fresh_cold")
+			starts := agentStarts(h)
+			if !tc.fresh {
+				if quit || len(cold) != 0 || in.Kind != pipeline.KindRereview || len(starts) != 0 {
+					t.Fatalf("quit %v, cold events %+v, kind %s, starts %v: want the judge kept for the re-review", quit, cold, in.Kind, starts)
+				}
+				return
+			}
+			if !quit || in.Kind != pipeline.KindRecovery || !in.ColdJudge || !slices.Equal(starts, []string{"codex-judge:high:"}) {
+				t.Fatalf("quit %v, kind %s, cold %v, starts %v: want the judge quit and a recovery with a fresh judge", quit, in.Kind, in.ColdJudge, starts)
+			}
+			want := "the judge starts in a fresh session: its Codex session never took a prompt (no session id and no rollout 35m after its last prompt)"
+			if len(cold) != 1 || cold[0].Message != want {
+				t.Fatalf("round.judge_fresh_cold events %+v, want %q", cold, want)
+			}
+			if data := eventData(t, cold[0]); data["reason"] != "no_rollout" || data["session"] != float64(judge.ID) {
+				t.Fatalf("event data %v", data)
+			}
+		})
 	}
 }
 

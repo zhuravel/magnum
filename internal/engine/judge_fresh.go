@@ -40,9 +40,15 @@ import (
 // (judgeEffort, pipeline.RoundInput.ColdJudge). why says why, for
 // checkFresh; the decision is a round.judge_fresh_cold event with the idle
 // time.
+//
+// A live Codex judge that never took a prompt (agents' TookNoPrompt: no
+// session id and no rollout longer than agents.RecoverIDAfter after its
+// last prompt) is cold whatever its idle time and judge_fresh_after
+// (DECISIONS "A Codex judge that never took a prompt starts fresh"): its
+// prompts stall the same way again, and with no rollout no turn runs in it
+// that the quit could cut. Its event says why, with reason no_rollout.
 func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (cold bool, why string, err error) {
-	after := e.cfg.Pipeline.JudgeFreshAfter.Duration
-	if after <= 0 || job.kind == kindContinue || e.d.Agents == nil {
+	if job.kind == kindContinue || e.d.Agents == nil {
 		return false, "", nil
 	}
 	i := slices.IndexFunc(rs.toRun, func(r config.Role) bool { return r.Judge && r.IsAgent() })
@@ -50,13 +56,20 @@ func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (
 		return false, "", nil
 	}
 	judge, pr := rs.toRun[i], job.pr
+	live, err := e.st.LiveSessionByPRRole(ctx, pr.ID, judge.Name)
+	isLive := err == nil && live.State == store.SessionLive && deref(live.AgentName) != ""
+	if isLive && e.d.Agents.TookNoPrompt(ctx, live) {
+		return e.blindJudge(ctx, job, live)
+	}
+	after := e.cfg.Pipeline.JudgeFreshAfter.Duration
+	if after <= 0 {
+		return false, "", nil
+	}
 	last := e.judgeLastTurn(ctx, pr.ID, judge)
 	idle := e.now().Sub(last)
 	if last.IsZero() || idle <= after {
 		return false, "", nil
 	}
-	live, err := e.st.LiveSessionByPRRole(ctx, pr.ID, judge.Name)
-	isLive := err == nil && live.State == store.SessionLive && deref(live.AgentName) != ""
 	if !isLive {
 		if id, _ := e.d.Agents.ResumeID(ctx, pr.ID, agents.Role(judge.Name)); id == "" {
 			return false, "", nil // nothing to resume: the judge starts fresh anyway
@@ -70,6 +83,22 @@ func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (
 		map[string]any{"idle_seconds": int64(idle.Seconds()), "last_turn_at": last.UTC().Format(time.RFC3339),
 			"fresh_after": after.String(), "kind": job.kind, "was_live": isLive})
 	return true, "the judge's " + ended, nil
+}
+
+// blindJudge is coldJudge for live judge session s, which never took a
+// prompt: it is quit (quitToRenew; a refusal keeps it for the round, as a
+// cold judge's) and the round starts a fresh one.
+func (e *Engine) blindJudge(ctx context.Context, job *roundJob, s store.Session) (bool, string, error) {
+	if quit, err := e.quitToRenew(ctx, s, "cold judge"); !quit || err != nil {
+		return false, "", err
+	}
+	sent := e.now().Sub(*s.LastPromptAt)
+	e.event(ctx, "info", prSubject(job.repo, job.pr.Number), "round.judge_fresh_cold",
+		fmt.Sprintf("the judge starts in a fresh session: its Codex session never took a prompt (no session id and no rollout %s after its last prompt)",
+			humanDuration(sent.Round(time.Minute))),
+		map[string]any{"reason": "no_rollout", "session": s.ID, "last_prompt_at": s.LastPromptAt.UTC().Format(time.RFC3339),
+			"kind": job.kind, "was_live": true})
+	return true, "the judge's Codex session never took a prompt", nil
 }
 
 // quitToRenew quits the live agent of session s so that its role starts in

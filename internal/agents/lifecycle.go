@@ -208,8 +208,12 @@ func (m *Manager) ParkHard(ctx context.Context, pr store.PR) error {
 // build, say). Session ids visible in herdr are recorded first. A workspace
 // of the PR's live or lost sessions that holds only the PR's own panes is
 // closed; one with foreign panes (the user split it) stays, and only the
-// PR's live agents are quit. Live sessions with a session_id become parked,
-// the rest closed (see Quit); lost sessions stay lost. A quit that fails
+// PR's live agents are quit. A pane or a workspace another PR's starting or
+// live session records is never the PR's (herdr numbers them again after a
+// restart): the PR's retired sessions that record one drop their herdr ids
+// first (EventHerdrIDsReused), and no such workspace is closed. Live
+// sessions with a session_id become parked, the rest closed (see Quit);
+// lost sessions stay lost. A quit that fails
 // does not stop the others: the PR's other live agents are still quit and
 // the failures come back joined (the stuck agent's session stays live, so
 // ErrBusy and herdr's timeout are in the chain as for one failure). No
@@ -220,14 +224,14 @@ func (m *Manager) Park(ctx context.Context, pr store.PR) error {
 
 // park is Park; hard quits as ParkHard does.
 func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
-	sessions, err := m.d.Store.SessionsByPR(ctx, pr.ID)
+	sessions, others, err := m.sessionsBesideOthers(ctx, pr)
 	if err != nil {
 		return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
 	}
 	var live, lost []store.Session
-	ours := map[string]bool{}
+	ours := map[string]bool{} // never a pane another PR's starting or live session records
 	for _, s := range sessions {
-		if p := store.Deref(s.HerdrPaneID); p != "" {
+		if p := store.Deref(s.HerdrPaneID); p != "" && !others.pane(p) {
 			ours[p] = true
 		}
 		switch {
@@ -252,7 +256,8 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 	}
 
 	// Workspaces of live and lost sessions: one holding only the PR's panes
-	// is closed, once none of its panes is busy.
+	// is closed, once none of its panes is busy; never one another PR's
+	// starting or live session records.
 	byWS := map[string][]store.Session{}
 	for _, s := range append(append([]store.Session(nil), live...), lost...) {
 		if ws := store.Deref(s.HerdrWorkspaceID); ws != "" && hasWorkspace(snap, ws) {
@@ -262,7 +267,8 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 	wsIDs := slices.Sorted(maps.Keys(byWS))
 	closing := map[string]bool{}
 	for _, ws := range wsIDs {
-		closing[ws] = !slices.ContainsFunc(snap.Panes, func(p herdr.Pane) bool { return p.WorkspaceID == ws && !ours[p.ID] })
+		closing[ws] = !others.workspace(ws) &&
+			!slices.ContainsFunc(snap.Panes, func(p herdr.Pane) bool { return p.WorkspaceID == ws && !ours[p.ID] })
 	}
 	for _, p := range snap.Panes {
 		if closing[p.WorkspaceID] {

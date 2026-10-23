@@ -154,7 +154,10 @@ func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cli
 	key := KVKindVersion(kind)
 	prev, had, err := readKVJSON[KindVersion](ctx, e, key, "kind version")
 	if err != nil {
-		e.log.Warn("read the recorded CLI version", "kind", kind, "err", err)
+		e.warnUnlessStopped(ctx, err, "read the recorded CLI version", "kind", kind)
+		if isStop(ctx, err) {
+			return // a stop cut the read: the next start reads it again
+		}
 	}
 	if had && prev.Path == stamp.path && prev.MTime.Equal(stamp.mtime) {
 		e.cliRead[kind] = stamp

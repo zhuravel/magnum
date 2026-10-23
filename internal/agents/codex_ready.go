@@ -24,12 +24,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -64,6 +67,27 @@ const (
 // it (data: role, run, agent, pane, dialog).
 const EventPromptRetried = "agents.prompt_retried"
 
+// EventFirstPromptUnready is recorded (warn, the PR's subject) when a Codex
+// session's first prompt goes out after CodexReadyTimeout of a screen that
+// never showed the composer with no startup dialog, and
+// EventFirstPromptStalled when herdr saw no turn start from a first prompt
+// and the check that Codex took it found neither a sign it did nor a
+// dialog that ate it (the run is observed as before). Twice on 2026-10-23
+// the cause was unknown, so each carries what the screen showed then
+// (data: role, run, agent, pane, screen: screenTail's lines; Codex's start
+// screen, never PR text).
+const (
+	EventFirstPromptUnready = "agents.first_prompt_unready"
+	EventFirstPromptStalled = "agents.first_prompt_stalled"
+)
+
+const (
+	// screenTailLines bounds the screen lines a first-prompt warning
+	// carries, and screenLineBytes each line.
+	screenTailLines = 12
+	screenLineBytes = 200
+)
+
 // optionText is the text of a dialog's option line after its cursor mark
 // ("1. Review hooks"), which composerLine's mark also starts.
 var optionText = regexp.MustCompile(`^\d+[.)]\s`)
@@ -73,7 +97,12 @@ var optionText = regexp.MustCompile(`^\d+[.)]\s`)
 // composerScan non-blank lines, which is no dialog's option line (a
 // dialog's cursor carries the same mark). What it holds does not matter.
 func codexComposer(text string) bool {
-	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
+	return composerAt(strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")) >= 0
+}
+
+// composerAt is the index of the Codex composer's line in lines
+// (codexComposer's rule); -1 when they show none.
+func composerAt(lines []string) int {
 	seen := 0
 	for i := len(lines) - 1; i >= 0 && seen < composerScan; i-- {
 		t := stripBox(lines[i])
@@ -82,10 +111,50 @@ func codexComposer(text string) bool {
 		}
 		seen++
 		if m := composerLine.FindStringSubmatch(t); m != nil {
-			return !optionText.MatchString(strings.TrimSpace(m[1]))
+			if optionText.MatchString(strings.TrimSpace(m[1])) {
+				return -1
+			}
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// screenTail is what a first-prompt warning carries of a Codex screen: of
+// the lines above its composer (all of them when it shows none), the last
+// screenTailLines that are not blank, each trimmed at the right, redacted
+// (execx.Redact) and cut to screenLineBytes on a rune. The composer, which
+// holds a prompt typed into it, and what is below it stay out.
+func screenTail(text string) []string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
+	if i := composerAt(lines); i >= 0 {
+		lines = lines[:i]
+	}
+	var out []string
+	for i := len(lines) - 1; i >= 0 && len(out) < screenTailLines; i-- {
+		line := strings.TrimRightFunc(lines[i], unicode.IsSpace)
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		line = execx.Redact(line)
+		if len(line) > screenLineBytes {
+			line = line[:screenLineBytes]
+			for !utf8.ValidString(line) {
+				line = line[:len(line)-1]
+			}
+		}
+		out = append(out, line)
+	}
+	slices.Reverse(out)
+	return out
+}
+
+// firstPromptWarning records kind (EventFirstPromptUnready or
+// EventFirstPromptStalled) for run's first prompt to sess at ref, with msg
+// and the screen's lines (screenTail of screen, the last read).
+func (m *Manager) firstPromptWarning(ctx context.Context, kind string, run store.Run, sess store.Session, ref paneRef, screen, msg string) {
+	m.event(ctx, m.prSubject(ctx, run.PRID), "warn", kind, msg,
+		map[string]any{"role": sess.Role, "run": run.ID, "agent": ref.name, "pane": ref.pane, "screen": screenTail(screen)})
 }
 
 // startupDialog names the Codex startup dialog on a screen: the hooks review
@@ -108,13 +177,18 @@ func startupDialog(text string) string {
 // the way is answered by the rules that answer it elsewhere (answerTrust
 // with the session's gate, which also opens a restricted folder at any
 // time, then answerHooks), at most codexReadyAnswers times, and the wait
-// starts again. After CodexReadyTimeout, or when ctx ends, it gives up and
-// the prompt goes out as before; that is logged.
+// starts again. When ctx ends it gives up and the prompt goes out as
+// before; after CodexReadyTimeout too, which EventFirstPromptUnready
+// records with the screen's last read.
 func (m *Manager) codexPromptReady(ctx context.Context, run store.Run, sess store.Session, ref paneRef) {
 	settle := int(CodexPromptSettle / codexReadyPoll)
 	ready, answers := 0, 0 // ready: consecutive reads that showed the composer and no dialog
+	last := ""             // the screen's last read
 	for range int(CodexReadyTimeout / codexReadyPoll) {
 		text, err := m.readVisible(ctx, ref)
+		if err == nil {
+			last = text
+		}
 		switch {
 		case err != nil:
 			ready = 0
@@ -137,8 +211,9 @@ func (m *Manager) codexPromptReady(ctx context.Context, run store.Run, sess stor
 			return
 		}
 	}
-	m.logAt(slog.LevelWarn, "agents: submit %s: %s's screen did not show its composer with no startup dialog for %s within %s; "+
-		"sending the first prompt anyway", run.ID, sess.Role, CodexPromptSettle, CodexReadyTimeout)
+	m.firstPromptWarning(ctx, EventFirstPromptUnready, run, sess, ref, last,
+		fmt.Sprintf("submit %s: %s's screen did not show its composer with no startup dialog for %s within %s; sending the first prompt anyway",
+			run.ID, sess.Role, CodexPromptSettle, CodexReadyTimeout))
 }
 
 // answerStartup answers the Codex startup dialog on ref's screen, as
@@ -169,20 +244,22 @@ func (m *Manager) answerStartup(ctx context.Context, run store.Run, sess store.S
 // (codexPromptLogged), or its screen shows the composer free of the
 // prompt (composerEmpty) and no dialog. A startup dialog on the screen
 // ends the check at once: not taken, and dialog names it. Not taken with
-// no dialog ("" after the bound) is no evidence either way.
-func (m *Manager) codexPromptTaken(ctx context.Context, run store.Run, sess store.Session, ref paneRef) (taken bool, dialog string) {
+// no dialog ("" after the bound) is no evidence either way. screen is the
+// screen's last read.
+func (m *Manager) codexPromptTaken(ctx context.Context, run store.Run, sess store.Session, ref paneRef) (taken bool, dialog, screen string) {
 	for poll := 0; ; poll++ {
 		text, err := m.readVisible(ctx, ref)
 		if err == nil {
+			screen = text
 			if d := startupDialog(text); d != "" {
-				return false, d
+				return false, d, screen
 			}
 		}
 		sid := store.Deref(sess.SessionID)
 		if snap, serr := m.d.Herdr.Snapshot(ctx); serr == nil {
 			if a, ok := findAgent(snap, sess); ok {
 				if a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked {
-					return true, ""
+					return true, "", screen
 				}
 				if a.AgentSession != nil && a.AgentSession.Value != "" {
 					sid = a.AgentSession.Value
@@ -190,13 +267,13 @@ func (m *Manager) codexPromptTaken(ctx context.Context, run store.Run, sess stor
 			}
 		}
 		if m.codexPromptLogged(ctx, sess, sid, run.CreatedAt.Add(-transcriptSkew)) {
-			return true, ""
+			return true, "", screen
 		}
 		if err == nil && !dialogShown(text) && codexComposer(text) && composerEmpty(text) {
-			return true, ""
+			return true, "", screen
 		}
 		if time.Duration(poll+1)*codexReadyPoll > PromptTakenWait || m.sleep(ctx, codexReadyPoll) != nil {
-			return false, ""
+			return false, "", screen
 		}
 	}
 }
@@ -257,14 +334,20 @@ func userMessageSince(path string, since time.Time) (bool, error) {
 // codexRetry sends the first prompt of run again, once, when Codex session
 // sess did not take it because a startup dialog ate it: perr is the stall
 // herdr reported. Without a dialog on screen (codexPromptTaken) the prompt
-// stays as herdr left it (perr, the run observed as before). With one, it
-// records EventPromptRetried, waits for the composer again
-// (codexPromptReady, which answers the dialog) and sends the prompt once
-// more; a second stall that the check does not find taken fails the run
-// with ErrNotTaken.
+// stays as herdr left it (perr, the run observed as before), and when the
+// check found no sign that Codex took it either, EventFirstPromptStalled
+// records the screen. With a dialog, it records EventPromptRetried, waits
+// for the composer again (codexPromptReady, which answers the dialog) and
+// sends the prompt once more; a second stall that the check does not find
+// taken fails the run with ErrNotTaken.
 func (m *Manager) codexRetry(ctx context.Context, run store.Run, sess store.Session, ref paneRef, text string, wait *herdr.PromptWait,
 	perr error) (herdr.AgentInfo, error) {
-	taken, dialog := m.codexPromptTaken(ctx, run, sess, ref)
+	taken, dialog, screen := m.codexPromptTaken(ctx, run, sess, ref)
+	if !taken && dialog == "" && ctx.Err() == nil {
+		m.firstPromptWarning(ctx, EventFirstPromptStalled, run, sess, ref, screen,
+			fmt.Sprintf("%s in %s showed no sign of taking the first prompt of run %s within %s, and no startup dialog was on screen; "+
+				"the run is observed as before", sess.Role, ref, run.ID, PromptTakenWait))
+	}
 	if taken || dialog == "" || ctx.Err() != nil {
 		return herdr.AgentInfo{}, perr
 	}
@@ -280,7 +363,7 @@ func (m *Manager) codexRetry(ctx context.Context, run store.Run, sess store.Sess
 	if err == nil || ctx.Err() != nil || !herdr.IsCode(err, herdr.CodeAgentPromptStalled) {
 		return info, err
 	}
-	if taken, _ := m.codexPromptTaken(ctx, run, sess, ref); taken {
+	if taken, _, _ := m.codexPromptTaken(ctx, run, sess, ref); taken {
 		return info, err
 	}
 	return info, fmt.Errorf("%s did not take the prompt (%w)", KindName(KindCodex), ErrNotTaken)

@@ -273,3 +273,24 @@ func readRolloutHead(path string) (rolloutHead, bool, error) {
 	_ = json.Unmarshal(p.Source, &source) // a helper's source is an object: ""
 	return rolloutHead{id: p.ID, started: p.Timestamp, cwd: p.Cwd, source: source, parent: p.ParentThreadID}, true, nil
 }
+
+// TookNoPrompt reports whether live Codex session s never took a prompt
+// (DECISIONS "A Codex judge that never took a prompt starts fresh"): Codex
+// writes a session's rollout at its first prompt, and the observer gives a
+// session herdr reports without an id the id of its rollout from
+// RecoverIDAfter after its start, so a session that still has no id longer
+// than RecoverIDAfter after its last prompt went out, and whose Codex home
+// holds no rollout of its checkout and start (cliRolloutIDs, read now), has
+// none: no turn ever ran in it, so none runs now. A session of another kind,
+// one with an id, never prompted or prompted within RecoverIDAfter, one
+// whose checkout or Codex home is unknown, and a read that fails or finds a
+// rollout (two Codex sessions started in one checkout keep their ids
+// unknown) answer false.
+func (m *Manager) TookNoPrompt(ctx context.Context, s store.Session) bool {
+	if !isLive(s) || m.sessionKind(s) != KindCodex || store.Deref(s.SessionID) != "" || s.LastPromptAt == nil ||
+		m.now().Sub(*s.LastPromptAt) <= RecoverIDAfter || store.Deref(s.Cwd) == "" || m.codexHome(s) == "" {
+		return false
+	}
+	ids, err := m.cliRolloutIDs(ctx, s)
+	return err == nil && len(ids) == 0
+}

@@ -980,6 +980,12 @@ recorded, stays, and a workspace left with no pane at all is closed. A
 CLI printed before it died (`last_lines`, by role; a line that starts at column 0 with error, fatal or panic,
 redacted), read before the pane closes; a reconcile with nothing to close records nothing.
 A parked or lost conversation is kept: the role's next start resumes it in a new pane.
+herdr numbers its workspaces and panes from the start again after it restarts, so old sessions' ids can
+name the new panes of another PR. Magnum never closes, reuses or parks away a pane or a workspace that a
+starting or live session of another PR records (of two live sessions with one pane, the newer owns it): an
+old parked, closed or lost session of the PR that records one has its herdr ids dropped, which one
+`agents.herdr_ids_reused` event says, and nothing of it is closed; its conversation still resumes, in a new
+pane.
 
 An agent CLI that dies as it starts can leave herdr listing the launch under the role's agent name
 (`launch_pending`, status unknown) on a pane that shows only a shell prompt, and herdr refuses that name to
@@ -1045,7 +1051,10 @@ the same head runs with a fresh judge at its `rereview_effort` too. A judge stil
 first, which parks its conversation (history kept), and the fresh one starts once herdr no longer lists it.
 A continue finishes its paused turn in the old conversation. Each such start is a `round.judge_fresh_cold`
 event with the idle time. A session that has served its role's `max_session_rounds` (the judge's 6) starts
-fresh the same way, however recent its last turn (see Roles and kinds).
+fresh the same way, however recent its last turn (see Roles and kinds). So does a live Codex judge that never
+took a prompt, whatever its idle time and `judge_fresh_after`: one with no session id and no rollout (Codex
+writes it at the first prompt) more than a minute after its last prompt went out, whose prompts would stall
+the same way again; its `round.judge_fresh_cold` event says so (`reason` `no_rollout`).
 
 ### Review status comment
 
@@ -4112,7 +4121,10 @@ anyway); a dialog that comes meanwhile is answered first and the wait starts aga
 Codex take that prompt, Magnum looks for 10 seconds more: herdr showing the agent working, a user message in
 its rollout or its composer free of the prompt means Codex took it; a startup dialog on its screen means the
 dialog ate it, so Magnum answers it, records an `agents.prompt_retried` event and sends the prompt once more,
-and a second loss fails the run "Codex did not take the prompt (a startup dialog ate it)". After a "Trust
+and a second loss fails the run "Codex did not take the prompt (a startup dialog ate it)". A first prompt sent
+after the 30 seconds anyway (`agents.first_prompt_unready`) and one that shows no sign either way
+(`agents.first_prompt_stalled`, the run observed as before) are warnings that carry the screen's last 12
+lines above the composer (`screen`; Codex's start screen then, redacted, 200 bytes a line). After a "Trust
 all", Magnum checks that Codex saved the trust (its `config.toml` changed); when it did not, every new Codex
 session will ask again, and Magnum says so once per `hooks.json` (an `agents.hooks_trust_unsaved` warning and a
 toast): run `codex` once in a terminal and choose Trust all. Magnum never edits the hook trust itself.

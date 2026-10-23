@@ -430,6 +430,12 @@ func TestAPushEndsTheWhiteboardJob(t *testing.T) {
 	if !ok || !strings.Contains(ev.Message, "the head moved to b2b2b2b") {
 		t.Errorf("whiteboard.stopped = %+v, %v", ev, ok)
 	}
+	// The wait's step ends as a normal stop, never at error.
+	var level, msg string
+	if err := w.st.DB().QueryRowContext(w.ctx, "SELECT level, message FROM events WHERE kind = ? AND step = 'whiteboard.wait' AND phase = ?",
+		store.KindStep, store.PhaseFail).Scan(&level, &msg); err != nil || level != "info" || msg != "whiteboard.wait stopped: the head moved to b2b2b2b" {
+		t.Errorf("whiteboard.wait's fail row = %q %q, %v; want info, stopped", level, msg, err)
+	}
 	if runs := w.wbRuns(pr.ID); len(runs) != 1 || runs[0].State != store.RunAbandoned {
 		t.Errorf("whiteboard runs = %+v", runs)
 	}

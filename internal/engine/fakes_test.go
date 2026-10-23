@@ -872,6 +872,9 @@ type fakeAgents struct {
 	// reloads names the roles whose sessions ReloadsProject reports (an
 	// agent that reloads the checkout's project config it loaded).
 	reloads map[string]bool
+	// noPrompt names the roles whose live sessions with no id and a prompt
+	// sent TookNoPrompt reports (a Codex session that never took one).
+	noPrompt map[string]bool
 	// parkHardErr, when set, is what ParkHard returns (else it parks as
 	// Park does without an error).
 	parkHardErr error
@@ -1192,6 +1195,15 @@ func (f *fakeAgents) ReloadsProject(_ context.Context, s store.Session) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reloads[s.Role]
+}
+
+// TookNoPrompt answers for the roles noPrompt names whose session has no
+// id, as agents.Manager.TookNoPrompt does for one with no rollout long
+// after its last prompt.
+func (f *fakeAgents) TookNoPrompt(_ context.Context, s store.Session) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.noPrompt[s.Role] && deref(s.SessionID) == "" && s.LastPromptAt != nil
 }
 
 func (f *fakeAgents) Quit(ctx context.Context, s store.Session) error {

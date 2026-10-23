@@ -424,6 +424,36 @@ func TestStartAgentRetriesPaneBusyKeepingResume(t *testing.T) {
 	}
 }
 
+// herdr refuses to type a launch line longer than the terminal's canonical
+// line while the shell has not drawn its prompt yet (agent_start_input_failed:
+// "wait for the shell prompt and retry", one setup failed on it on
+// 2026-10-23): the same shell-startup race as agent_pane_busy, retried the
+// same way, resume id kept, logged as such.
+func TestStartAgentRetriesAStartInputTheShellWasNotReadyFor(t *testing.T) {
+	e := newEnv(t)
+	e.h.busyStarts = 2
+	e.h.busyErr = &herdr.Error{Method: "agent.start", Code: "agent_start_input_failed",
+		Message: "input contains a 1560-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt and retry"}
+	ws := e.workspace()
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], "01a0-uuid"); err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	if len(e.h.starts) != 3 || !strings.Contains(strings.Join(e.h.starts[2].Args, " "), "resume 01a0-uuid") {
+		t.Fatalf("starts = %+v, want two refused and one with the resume id", e.h.starts)
+	}
+	if s := e.session(RoleJudge); s.State != store.SessionLive {
+		t.Fatalf("session = %+v, want live", s)
+	}
+	if recs := e.logs.records("did not take its launch line (attempt 1/"); len(recs) != 1 {
+		t.Fatalf("logs %q, want the first retry said", e.logs.all())
+	}
+	e.h.busyStarts = startBusyRetries + 1
+	err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], "")
+	if err == nil || !herdr.IsCode(err, codeAgentStartInputFailed) {
+		t.Fatalf("err = %v, want agent_start_input_failed after %d retries", err, startBusyRetries)
+	}
+}
+
 // A fresh start that cannot read the PR's sessions cannot tell whether the
 // agent herdr lists carries a conversation magnum parked: it refuses
 // (ErrBusy: the round retries) rather than adopt it.

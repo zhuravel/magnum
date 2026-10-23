@@ -457,6 +457,10 @@ type whiteboardStopped struct{ why string }
 
 func (s *whiteboardStopped) Error() string { return s.why }
 
+// Is makes the stop a step's normal one (steps.ErrStopped): its fail row
+// is at info, never at error.
+func (s *whiteboardStopped) Is(target error) bool { return target == steps.ErrStopped }
+
 // runWhiteboard runs the job under its reservation: guard, start and wait,
 // then the settle. `magnum abort` cancels ctx and leaves its orders on the
 // reservation, a review, fix or open request its yield (yieldWhiteboard), a

@@ -2,7 +2,9 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -259,5 +261,111 @@ func TestAStalledFirstCodexPromptCodexTookIsNotSentAgain(t *testing.T) {
 				t.Fatalf("retried %+v", evs)
 			}
 		})
+	}
+}
+
+// codexStartLines is a Codex start screen 17 lines long above its composer:
+// tips, a blank, a warning that names a token and a 300-byte line.
+func codexStartLines() []string {
+	var lines []string
+	for i := 1; i <= 14; i++ {
+		lines = append(lines, fmt.Sprintf("  tip %d: something to try   ", i))
+	}
+	return append(lines, "", "⚠ MCP client for `docs` failed: token ghp_abcdefghij0123456789", strings.Repeat("€", 100))
+}
+
+// wantScreen is what a first-prompt warning carries of codexStartLines: the
+// last 12 lines that are not blank, trimmed at the right, redacted and cut
+// to 200 bytes on a rune.
+var wantScreen = []string{"  tip 5: something to try", "  tip 6: something to try", "  tip 7: something to try",
+	"  tip 8: something to try", "  tip 9: something to try", "  tip 10: something to try", "  tip 11: something to try",
+	"  tip 12: something to try", "  tip 13: something to try", "  tip 14: something to try",
+	"⚠ MCP client for `docs` failed: token <redacted>", strings.Repeat("€", 66)}
+
+func screenOf(t *testing.T, ev store.Event) []string {
+	t.Helper()
+	var data struct {
+		Screen []string `json:"screen"`
+	}
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	return data.Screen
+}
+
+// Twice on 2026-10-23 a Codex judge's first prompt went out after the
+// readiness wait ("sending the first prompt anyway") and stalled with no
+// dialog on screen, and what the screen showed is unknown. The warning of a
+// prompt sent anyway carries the last 12 lines of the screen, which holds
+// Codex's start screen then (no composer here: all of it), redacted and
+// cut to 200 bytes each.
+func TestAFirstCodexPromptSentAnywayCarriesTheScreenLines(t *testing.T) {
+	e, name := codexFirstPrompt(t)
+	e.h.mu.Lock()
+	e.h.reads[name] = strings.Join(codexStartLines(), "\n") + "\n"
+	e.h.mu.Unlock()
+	if _, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if n := len(e.h.prompts); n != 1 {
+		t.Fatalf("prompts = %d, want the one sent anyway", n)
+	}
+	evs := e.eventsOf(EventFirstPromptUnready)
+	if len(evs) != 1 || evs[0].Level != "warn" || !strings.Contains(evs[0].Message, "sending the first prompt anyway") {
+		t.Fatalf("%s events %+v, want one warning", EventFirstPromptUnready, evs)
+	}
+	if got := screenOf(t, evs[0]); !slices.Equal(got, wantScreen) {
+		t.Fatalf("screen = %q, want %q", got, wantScreen)
+	}
+	if strings.Contains(string(evs[0].Data), "ghp_") {
+		t.Fatalf("the event carries the token: %s", evs[0].Data)
+	}
+}
+
+// A first prompt that stalls with no dialog on screen is observed as before,
+// and its warning carries the screen above the composer only: the composer
+// holds the prompt typed into it, and the footer below it.
+func TestAFirstCodexPromptThatStallsWithNoDialogCarriesTheScreenAboveItsComposer(t *testing.T) {
+	e, name := codexFirstPrompt(t)
+	e.h.mu.Lock()
+	e.h.onPrompt = func() {
+		e.h.reads[name] = strings.Join(codexStartLines(), "\n") + "\n\n› review https://github.com/talkable/talkable/pull/11920 at abc1234\n\n  100% context left\n"
+		e.h.errs["AgentPrompt"] = codexStalled
+	}
+	e.h.mu.Unlock()
+	id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review")
+	if !errors.Is(err, ErrStalled) {
+		t.Fatalf("Prompt = %v, want the stall as before", err)
+	}
+	if r := e.run1(id); r.State != store.RunSubmitted || len(e.h.prompts) != 1 {
+		t.Fatalf("run = %+v after %d prompts, want it submitted (observed) after one", r, len(e.h.prompts))
+	}
+	evs := e.eventsOf(EventFirstPromptStalled)
+	if len(evs) != 1 || evs[0].Level != "warn" {
+		t.Fatalf("%s events %+v, want one warning", EventFirstPromptStalled, evs)
+	}
+	if got := screenOf(t, evs[0]); !slices.Equal(got, wantScreen) {
+		t.Fatalf("screen = %q, want %q", got, wantScreen)
+	}
+	if evs := e.retriedEvents(); len(evs) != 0 {
+		t.Fatalf("retried %+v", evs)
+	}
+	// A stall a dialog explains is retried, with no such warning.
+	e2, name2 := codexFirstPrompt(t)
+	e2.h.mu.Lock()
+	e2.h.onPrompt = func() {
+		if len(e2.h.prompts) == 1 {
+			e2.h.reads[name2] = codexHooksScreen
+			e2.h.errs["AgentPrompt"] = codexStalled
+			return
+		}
+		delete(e2.h.errs, "AgentPrompt")
+	}
+	e2.h.mu.Unlock()
+	if _, err := e2.m.Prompt(e2.ctx, e2.pr, RoleJudge, store.RunInitial, "review"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if evs := e2.eventsOf(EventFirstPromptStalled); len(evs) != 0 {
+		t.Fatalf("%s events %+v after a retried stall, want none", EventFirstPromptStalled, evs)
 	}
 }

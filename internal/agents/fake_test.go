@@ -47,8 +47,10 @@ type fakeHerdr struct {
 	startStatus herdr.Status
 	startErr    error
 	// busyStarts makes that many AgentStart calls fail with agent_pane_busy
-	// before one succeeds (the idle-shell race StartAgent retries through).
+	// (or busyErr, when set) before one succeeds (the shell-startup race
+	// StartAgent retries through).
 	busyStarts int
+	busyErr    *herdr.Error
 	// onKeys runs (with f.mu held) after every send-keys call.
 	onKeys func(f *fakeHerdr, target string, keys []string)
 	// onRead runs (with f.mu held) after every agent read took its text.
@@ -456,6 +458,9 @@ func (f *fakeHerdr) AgentStart(ctx context.Context, o herdr.AgentStartOptions) (
 	}
 	if f.busyStarts > 0 {
 		f.busyStarts--
+		if f.busyErr != nil {
+			return herdr.AgentStarted{}, f.busyErr
+		}
 		return herdr.AgentStarted{}, &herdr.Error{Method: "agent.start", Code: "agent_pane_busy", Message: "agent target pane " + o.PaneID + " is not an available shell"}
 	}
 	// herdr keeps a name for as long as an agent holds it: one in another

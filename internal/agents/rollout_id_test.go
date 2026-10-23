@@ -216,3 +216,70 @@ func TestTheRolloutRecoveryReadsABoundedNumberOfFirstLines(t *testing.T) {
 		t.Fatal("a limit that takes in the oldest candidate read no directory: the bound is not what decides")
 	}
 }
+
+// On 2026-10-23 four Codex judges whose first prompt stalled got no rollout
+// and no id (sessions 1760, 1763, 1767, 1771), and a later round of
+// talkable#12080 prompted one again 84 minutes on, under judge_fresh_after:
+// it failed the same way. Codex writes a session's rollout at its first
+// prompt, so a live Codex session with no id longer than RecoverIDAfter
+// after its last prompt, whose Codex home holds no rollout of its checkout
+// and start, never took a prompt: no turn ever ran in it. One with an id,
+// one prompted within RecoverIDAfter or never, one with a rollout (two
+// sessions in one checkout keep their ids unknown), one whose Codex home is
+// unknown and a Claude session did, or cannot tell.
+func TestACodexSessionWithNoIDAndNoRolloutLongAfterItsPromptTookNoPrompt(t *testing.T) {
+	prompted := func(e *env, s store.Session, ago time.Duration) store.Session {
+		at := e.clock.Now().Add(-ago)
+		if err := e.st.UpdateSession(e.ctx, s.ID, func(u *store.SessionUpdate) { u.Set("last_prompt_at", at) }); err != nil {
+			t.Fatal(err)
+		}
+		return e.session(Role(s.Role))
+	}
+	for name, tc := range map[string]struct {
+		edit func(e *env, home string, s store.Session) store.Session
+		want bool
+	}{
+		"no id, no rollout, prompted long ago": {func(e *env, _ string, s store.Session) store.Session {
+			return prompted(e, s, RecoverIDAfter+time.Second)
+		}, true},
+		"an id": {func(e *env, _ string, s store.Session) store.Session {
+			if err := e.st.UpdateSession(e.ctx, s.ID, func(u *store.SessionUpdate) { u.Set("session_id", "01a16446-c221-7073-b0fd-8609589b9a77") }); err != nil {
+				t.Fatal(err)
+			}
+			return prompted(e, s, time.Hour)
+		}, false},
+		"prompted within RecoverIDAfter": {func(e *env, _ string, s store.Session) store.Session {
+			return prompted(e, s, RecoverIDAfter)
+		}, false},
+		"never prompted": {func(_ *env, _ string, s store.Session) store.Session { return s }, false},
+		"a rollout of its checkout and start": {func(e *env, home string, s store.Session) store.Session {
+			metaRollout(t, home, "01a16446-c221-7073-b0fd-8609589b9a77", store.Deref(s.Cwd), "cli", "", s.StartedAt.Add(2*time.Second))
+			metaRollout(t, home, "01a16446-d000-7000-8000-000000000001", store.Deref(s.Cwd), "cli", "", s.StartedAt.Add(9*time.Second))
+			return prompted(e, s, time.Hour)
+		}, false},
+		"no Codex home": {func(e *env, _ string, s store.Session) store.Session {
+			e.m.d.CodexHome = ""
+			return prompted(e, s, time.Hour)
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			home := t.TempDir()
+			e.m.d.CodexHome = home
+			s := e.codexWithoutID(t.TempDir())
+			e.clock.Add(2 * time.Hour)
+			s = tc.edit(e, home, s)
+			if got := e.m.TookNoPrompt(e.ctx, s); got != tc.want {
+				t.Fatalf("TookNoPrompt = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	e := newEnv(t)
+	e.m.d.CodexHome = t.TempDir()
+	e.started()
+	claude := e.session(RoleClaude)
+	e.clock.Add(time.Hour)
+	if e.m.TookNoPrompt(e.ctx, prompted(e, claude, 30*time.Minute)) {
+		t.Fatal("a Claude session took no prompt")
+	}
+}

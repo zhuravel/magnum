@@ -35,14 +35,25 @@ const EventTrustDialogAnswered = "agents.trust_dialog_answered"
 // name herdr has not registered as an active agent.
 const codeAgentNotReady = herdr.CodeAgentNotReady
 
-// herdr's agent.start error when the pane is not an available shell yet; the
-// idle-shell check can pass a moment before herdr agrees, so StartAgent
-// retries the same start (resume included) startBusyRetries times.
+// herdr's agent.start errors while the pane's shell is still starting: the
+// pane is not an available shell yet (agent_pane_busy; the idle-shell check
+// can pass a moment before herdr agrees), or the shell has not drawn its
+// prompt, so the terminal is still in canonical mode and herdr refuses,
+// before typing anything, a launch line longer than its 1024-byte limit
+// (agent_start_input_failed). StartAgent retries the same start (resume
+// included) startBusyRetries times on either.
 const (
-	codeAgentPaneBusy = "agent_pane_busy"
-	startBusyRetries  = 5
-	startBusyDelay    = 2 * time.Second
+	codeAgentPaneBusy         = "agent_pane_busy"
+	codeAgentStartInputFailed = "agent_start_input_failed"
+	startBusyRetries          = 5
+	startBusyDelay            = 2 * time.Second
 )
+
+// shellStarting reports whether agent.start refused with one of the
+// shell-startup errors StartAgent retries.
+func shellStarting(err error) bool {
+	return herdr.IsCode(err, codeAgentPaneBusy) || herdr.IsCode(err, codeAgentStartInputFailed)
+}
 
 // trustSpec is one of the folder dialogs magnum answers, as Codex 0.160 and
 // Claude Code render them: the title on a line of its own, then (codex's

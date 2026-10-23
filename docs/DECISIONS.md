@@ -2293,6 +2293,88 @@ skill versions); people add theirs to the sections before it, at the end of the 
   prompt to a dialog that comes later); editing config.toml to trust the hooks (the trust is the
   operator's to give, and magnum never writes Codex's hook trust); Claude now (out of scope); retrying
   the rounds that already failed.
+- **A PR never closes, reuses or retires what another PR's live session records** (2026-10-23, spec 04
+  of the 2026-10-23 run, item 1). herdr restarted at 08:37:24Z and numbered new workspaces from wMW
+  again, and a pane id is its workspace's id and a number (`wN9:p1`), so wN9, wNA, wNB and wN3 named both
+  the new workspaces of PRs whose sessions were starting and the parked, closed and lost session rows of
+  the day before. Since then 22 of the 23 `agent.lost` events, all 12 `pr.panes_closed` events and two
+  parks' workspace closes traced to it: at 13:26:13Z the retired-pane closes of talkable#12058 (4 panes)
+  and #12075 (3) took the new workspaces of three other PRs, whose panes were idle shells before their
+  agents started, so three setups failed and eleven sessions were lost, and a lost codex-review became
+  `no_session`, after which auto-approval refused its PR ("did not hear every reviewer"). The three places
+  that read only the PR's own sessions were the retired-pane close (`retiredPanes`' in-use set), Park's
+  workspace close (its `ours` and the close) and the workspace reuse (`reusableWorkspace` and the lost
+  pane a missing role takes). Now each also reads, in one registry query (`store.LiveSessions`), the panes
+  and workspaces that starting or live sessions of other PRs record (`othersLive`,
+  internal/agents/herdr_ids.go) and never closes, reuses or takes them: the close skips such a pane and
+  any pane in such a workspace (herdr may have split it a moment before its row), Park counts such a pane
+  as foreign and never closes such a workspace (its live agents are still quit as before), and
+  EnsureWorkspace reuses no such workspace, keeps no such pane for a live session (it is marked lost) and
+  takes no such pane for a lost one. Of two live rows of two PRs that record one id, the newer row owns it
+  (the older is one herdr restarted under, which the observer marks lost), so a stale live row never keeps
+  the owner from its own panes. A retired (parked, closed or lost) row of the PR whose pane or workspace
+  such a session records is stale: its herdr pane, workspace and tab ids are dropped, compare-and-set on
+  the ids read and its state kept (`dropStale`; a parked or lost conversation still resumes, in a new
+  pane), with one info `agents.herdr_ids_reused` event under the PR naming the rows and the ids, and
+  nothing of it is closed; the engine's reconcile, which asks `store.PRsWithPanes` for the panes herdr has,
+  then no longer finds the PR. Skipping leaves no pane that no row owns open for good: what is skipped is
+  recorded by the other PR's own session, which retires it, and a pane of the PR in such a workspace is
+  closed once no other PR's session lives there. Tests:
+  TestAStaleRowsHerdrIDsThatAnotherPRUsesNowAreNeverClosedOrReused (the retire, park and reuse paths),
+  TestTwoPRsOldRowsCloseNoneOfTheNewWorkspacesHerdrNumberedAgain (the 13:26:13Z case over one snapshot)
+  and TestAnOlderLiveRowOfAnotherPRLeavesTheNewerOwnerItsPanes. Rejected: telling a reused id by herdr's
+  restart (magnum does not see one, and the ids collide until herdr's counter passes the old ones);
+  dropping the ids of every row at a herdr restart (it would forget the panes of sessions that survive
+  it); a migration with a stale state (the dropped ids say it, and the row keeps its own state).
+- **A Codex judge that never took a prompt starts fresh** (2026-10-23, spec 04 of the 2026-10-23 run, item
+  2). A second hooks-review wave (09:06 to 09:55Z) left Codex judges whose first prompt stalled with no
+  rollout and no session id (registry sessions 1760, 1763, 1767, 1771): 6 own passes `missing` and three
+  PRs in needs_attention. talkable#12080's round 2 reused session 1763 84 minutes after its last turn
+  ended, under judge_fresh_after's 90, and failed the same way in 14 minutes although ids were back. The
+  cold-judge rule read only the idle time, and a stalled first prompt still sets last_prompt_at, which
+  ends the first-prompt wait. Codex writes a session's rollout at its first prompt, and the observer gives
+  a session herdr reports without an id its rollout's id from `agents.RecoverIDAfter` after its start, so
+  now `agents.Manager.TookNoPrompt` answers true for a live Codex session with no id longer than
+  RecoverIDAfter after its last prompt whose Codex home holds no rollout of its checkout and start
+  (`cliRolloutIDs`, read then; a read error, an unknown home or checkout, and a rollout found, one or two,
+  answer false), and `coldJudge` makes such a judge cold whatever its idle time and judge_fresh_after (0
+  included: this is no cache question): it is quit (`quitToRenew`, which keeps a judge herdr shows working
+  or blocked) and the round starts a fresh one through the recovery, with one `round.judge_fresh_cold`
+  event, `reason` `no_rollout`, "its Codex session never took a prompt (no session id and no rollout 35m
+  after its last prompt)". It cannot cut a turn: with no rollout no turn ever ran in the session, and a
+  continue never takes the rule. A judge with an id keeps the idle rule. Tests:
+  TestACodexSessionWithNoIDAndNoRolloutLongAfterItsPromptTookNoPrompt and
+  TestACodexJudgeThatNeverTookAPromptStartsFreshWhateverItsIdle. Rejected: deciding by the id alone (two
+  Codex sessions started in one checkout keep their ids unknown with a rollout each, and one may have
+  worked); calling RestartJudge when the own pass ends `missing` for such a judge (05's part c, not in
+  this spec).
+- **A first Codex prompt sent anyway or stalled with no dialog says what the screen showed** (2026-10-23,
+  spec 04 of the 2026-10-23 run, item 3). Twice the cause of a stalled first prompt stayed unknown: magnum
+  logged "sending the first prompt anyway" after the 30-second readiness wait, and spec 124's check after
+  the stall found no dialog on screen and recorded nothing. Now both are warn events under the PR,
+  `agents.first_prompt_unready` (the log line it replaces) and `agents.first_prompt_stalled` (no sign that
+  Codex took the prompt and no dialog after `PromptTakenWait`; the run is observed as before), with role,
+  run, agent, pane and `screen`: of the last screen read, the lines above the composer (all of them when
+  it shows none), the last 12 that are not blank, trimmed at the right, redacted (`execx.Redact`) and cut
+  to 200 bytes on a rune (`screenTail`). At that moment the screen holds Codex's start screen, not PR text;
+  the composer, which holds the typed prompt, and what is below it stay out. Tests:
+  TestAFirstCodexPromptSentAnywayCarriesTheScreenLines and
+  TestAFirstCodexPromptThatStallsWithNoDialogCarriesTheScreenAboveItsComposer.
+- **agent_start_input_failed is retried as agent_pane_busy is** (2026-10-23, spec 04 of the 2026-10-23
+  run, item 4). Another repository's #62 failed its setup at 09:54:20Z on herdr's "input contains a
+  1560-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt
+  and retry": the shell had not drawn its prompt, the same startup race as agent_pane_busy (61 such retries
+  in 2.4 days), and herdr refuses before it types anything. StartAgent now retries the same start (resume
+  kept) on either code, `startBusyRetries` times `startBusyDelay` apart after an idle-shell wait, and logs
+  the launch line it could not type. Test: TestStartAgentRetriesAStartInputTheShellWasNotReadyFor.
+- **A stop's cut CLI-version read and a whiteboard's normal stop are no warnings or errors** (2026-10-23,
+  spec 04 of the 2026-10-23 run, item 5). Four daemon stops (2026-10-20 to 10-22) each logged "read the
+  recorded CLI version" at warn for "context canceled": the read now goes through `warnUnlessStopped` and a
+  read a stop cut returns, recording nothing (the next start reads it). `steps.Step` wrote a whiteboard
+  job's normal stop (its wait's whiteboardStopped: the head moved, the PR closed) as a fail row at level
+  error; `steps.ErrStopped` now marks such an error (whiteboardStopped is it, by errors.Is), whose fail
+  row is at info, "stopped" (still not done). Tests: TestTheCLIVersionReadAStopCutsLogsNoWarning,
+  TestStepNormalStopIsInfoLevel and TestAPushEndsTheWhiteboardJob's step row.
 
 ## Screens and commands
 
