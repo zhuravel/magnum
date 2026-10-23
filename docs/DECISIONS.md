@@ -12912,6 +12912,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
   failing first: TestRoutesToNotesTakesEveryLessonVerdictOfScopeRepo and
   TestAWrongDeclineOfScopeRepoBecomesARepoMissForTheCuration in engine.
 
+- **A skill proposal that master moved under expires by itself** (2026-10-23, spec 03 of the 2026-10-23 run).
+  Three of the six skill proposals so far ended stale against master. Proposal 6 (candidate 0654ebc3 on base
+  901b9651) had been `held` since 2026-10-20 13:20 UTC and no longer applied: `git apply --check` failed on
+  `SKILL.md` and on all three judge prompts, a 3-way merge conflicted in three `SKILL.md` hunks, and the
+  simplify clause it edits had moved into `prompts/judge-shared.md`. While it was held `magnum learn --propose`
+  refused and the scheduled editor did not run (`editWait` waits while a proposal is gating, passed or held),
+  although the retro had queued 25 new general inputs; the operator's two exits were `n` (an input is
+  dismissed only on its second rejection) and the 7-day expiry. A proposal that can no longer land holds a
+  decision for nobody, so `expireLearnProposals` (the loop's scan, every 10 minutes) now also tries every
+  `held` and `passed` proposal that is not 7 days old against the checkout's master (`masterMoved`): the
+  change its branch's tip makes from its parent is replayed onto master with the new
+  `gitx.Client.ReplayConflicts`, which is `git merge-tree --write-tree --name-only -z --no-messages
+  --merge-base=<tip>^ <master> <tip>`, run in the proposal's own worktree (git 2.40 or later). It is the
+  merge a rebase of that one commit does, which is how the landing replays it, but it writes objects only: no
+  branch, index or work tree moves, in the worktree or in the operator's checkout. A conflict (exit 1) expires
+  the proposal at once, by the same compare-and-set from `held` and `passed` as the week's expiry: the reason
+  and the `learn.expired` event say "master moved: <files>" (at most six named, then "and N more"; the event
+  data carries all in `moved`), the worktree and branch go (`dropCandidate`), and its inputs stay `new`
+  (`DecideLearnProposal` moves none for this state, so nothing is dismissed). The scan runs `maybeEdit` right
+  after the expiry, so the editor starts in that same scan when new evidence waits. A `gating` proposal stays
+  with its gate; a branch master holds already is recorded as landed first (`landedAlready`), as at the week's
+  expiry; a revert proposal expires like an edit (a revert whose files the operator edited since would undo
+  that edit, and `magnum learn --revert` refuses to start one then). A check that cannot be made (git older
+  than 2.40 or any other failure, logged once an hour; a branch or a worktree that is gone) tells nothing and
+  leaves the proposal waiting, as before. No race with a landing: the scan, `maybeLearnLand` and the
+  operator's land request (`requestLearnLand`, through `handleRequests`) all run one after the other on the
+  tick's goroutine, and every decision is a compare-and-set, so an expiry never begins in the middle of a
+  rebase or a fast-forward. Rejected: a real `git rebase` as the dry run (a clean one moves the branch and the
+  worktree, so the check would put them back, and one cut short by a stop leaves a rebase in progress that the
+  landing takes for a moved candidate); `git apply --check` (it needs master's tree, which only the operator's
+  checkout has); checking in the checkout; expiring only `held` proposals; a toast for each expiry (the
+  `learn.expired` event says it, and nobody had a decision to make); rejecting proposal 6 by hand (the
+  operator's call: it expires at the first scan after the daemon restarts on this build). Tests, failing first:
+  TestAProposalMasterMovedUnderExpiresAtTheScan (held and passed expire with the files named, a young one that
+  applies and a gating one stay, each check runs in the proposal's own worktree against master, inputs stay
+  `new`), TestAProposalMasterHoldsAlreadyIsLandedNotExpiredAsMoved, TestAProposalWhoseCheckCannotBeMadeStaysWaiting
+  (git refuses, no branch, no worktree) and TestAHeldProposalMasterMovedUnderExpiresAndTheEditorStartsTheSameDay
+  (a real repository and real `git merge-tree`: a commit elsewhere leaves it held, a commit on the lines it
+  edits expires it and the editor starts in the same scan) in engine, with the existing week-long tests
+  unchanged; TestReplayConflictsNamesWhereACommitNoLongerAppliesAndMovesNothing in gitx.
+
+- **The reply classifier reads a repeated agent tag and bare declines** (2026-10-23, spec 03 of the 2026-10-23
+  run). Of the 196 replies of the window, 12 were `other` where a person reads a fix or a decline. Three were
+  "(Claude) (Claude) Added in <sha>" and "Applied in <sha>" on one PR: `classifyReply` stripped the agent tag
+  once (two other fixes, phrased without a verdict word, stay). Seven were bare declines no pattern took: "Not
+  changed here." four times on one PR, "but not changing it here", "No change." and "Still open, with no fix in
+  this PR". Replayed over the 1,111 stored replies,
+  the change moves 3 of the 123 `other` rows to `fixed` and 10 to `won't fix` and no row of another class. The
+  tag is now stripped in a loop. "Not added", "Not changed" and "No change", each alone in its clause, join
+  the `won't fix` verdict patterns; "not changed here" (also "not changing it here", after "I'm" or "we are"
+  too) and "no fix in this PR" (push, round) join the clauses that decline a fix (`replyDeclines`, read in any
+  clause, which is where "with no fix in this PR" after "Still open," is found). The two replies the notes
+  pinned stay `other` ("Not added yet.", "Still open, will look later."), and so do "Not changed yet.", "No
+  change needed in the helper." and a question ("Why is this not changed here?"); a fixed or not-a-bug clause
+  said first still wins. The class stays a hint for the judge. Tests, failing first:
+  TestClassifyReplyReadsADoubledAgentTagAndBareDeclines.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -2343,9 +2343,10 @@ first. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
 risk", declines it, as do "Low priority" with no fix after it, "Deferred", "left open", "not adding it",
-"No guard for now", "I did not make this change", "we are not patching them here" and a clause that ends
-"as a separate follow-up", also in a later paragraph after "Confirmed" or "Thanks"; "added in", "removed
-in", "closed by … in" and "follow-up in" with a commit are `fixed`); the
+"No guard for now", "I did not make this change", "we are not patching them here", "Not changed here",
+"Not added", "No change", "no fix in this PR" and a clause that ends "as a separate follow-up", also in a
+later paragraph after "Confirmed" or "Thanks"; "added in", "removed in", "closed by … in" and "follow-up in"
+with a commit are `fixed`, whatever the number of times the agent repeats its "(Claude)" tag); the
 judge decides a reply by what it does, not by that hint, accepts a fix
 only when the code shows it (a defect that is an end state only when every write that reaches it is
 covered, with a probe of one the fix left untouched; a fix that rests on what another part writes, such as
@@ -3802,7 +3803,14 @@ rejected proposals is `dismissed`, and the learned eval corpus is rewritten at o
 case is gone from the next `magnum eval run`; anything else leaves it. A `held` or `passed` proposal
 nobody decided within 7 days of becoming so (a gate that waited days for the budget does not shorten your
 week) expires at the loop's scan, as a notes proposal does (`learn.expired`): its worktree and branch go,
-and its inputs stay `new` for a later edit.
+and its inputs stay `new` for a later edit. So does one that master moved under, at once and however young:
+at each scan (every 10 minutes) the daemon replays the commit of every `held` or `passed` proposal onto
+`master` with `git merge-tree` (git 2.40 or later) in the proposal's own worktree, which moves no branch and
+nothing in your checkout, and a commit that no longer applies (you edited the lines it changes, or the
+text around them) expires the proposal with `master moved: <files>` as its reason and in its
+`learn.expired` event, so a proposal that can no longer land does not hold the editor, which can start in
+that same scan. A `gating` proposal stays with its gate, one `master` holds already is recorded as landed,
+and a check git cannot make (older git, a worktree or branch that is gone) leaves the proposal waiting.
 
 A landed version that made things worse is reverted only with you. `magnum learn --revert <version>`
 (`--reason` says why; it goes into the design log and the commit's subject, so no pull request, link,

@@ -487,3 +487,65 @@ func TestRestoreFromBringsBackTheEarlierText(t *testing.T) {
 		t.Fatal("a restore of no path was taken")
 	}
 }
+
+// Whether a candidate still applies is read without a rebase: the paths
+// where its change conflicts with master, from `git merge-tree`, which
+// moves no branch, work tree or index (the proposal's worktree is as it
+// was, and so is master's checkout).
+func TestReplayConflictsNamesWhereACommitNoLongerAppliesAndMovesNothing(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	dir := learnWorktree(t, fx, "learn/a")
+	fx.write(dir, "docs/a.md", "the candidate\n")
+	fx.write(dir, "README.md", "hello, branch\n")
+	fx.git(dir, "add", "--", "docs/a.md", "README.md")
+	fx.git(dir, "commit", "--quiet", "-m", "the candidate")
+	candidate := fx.git(dir, "rev-parse", "HEAD")
+	fx.commit(fx.clone, "docs/main.md", "main moves\n", "main moves elsewhere")
+
+	if got, err := fx.c.ReplayConflicts(ctx, dir, "main", candidate); err != nil || got != nil {
+		t.Fatalf("a candidate beside a main that changed other files = %v, %v; want none", got, err)
+	}
+
+	fx.commit(fx.clone, "README.md", "hello, main\n", "main edits the readme")
+	main := fx.git(fx.clone, "rev-parse", "main")
+	if got, err := fx.c.ReplayConflicts(ctx, dir, "main", candidate); err != nil || !slices.Equal(got, []string{"README.md"}) {
+		t.Fatalf("a candidate whose line main changed = %v, %v; want [README.md]", got, err)
+	}
+
+	// Nothing moved: the branch, the worktree, the index, main and its checkout.
+	if got := fx.git(dir, "rev-parse", "HEAD"); got != candidate {
+		t.Fatalf("the worktree's HEAD = %s, want %s", got, candidate)
+	}
+	if got := fx.git(dir, "status", "--porcelain"); got != "" {
+		t.Fatalf("the worktree after the check: %q", got)
+	}
+	if p, err := fx.c.InProgress(ctx, dir); err != nil || p != "" {
+		t.Fatalf("in progress after the check = %q, %v", p, err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "main"); got != main {
+		t.Fatalf("main moved to %s", got)
+	}
+	if got := fx.git(fx.clone, "status", "--porcelain"); got != "" {
+		t.Fatalf("main's checkout after the check: %q", got)
+	}
+
+	// The change replayed is the commit's own: the same edit on main is no conflict.
+	fx.git(fx.clone, "reset", "--quiet", "--hard", "HEAD~1")
+	fx.commit(fx.clone, "README.md", "hello, branch\n", "main makes the same edit")
+	if got, err := fx.c.ReplayConflicts(ctx, dir, "main", candidate); err != nil || got != nil {
+		t.Fatalf("a candidate main made the same edit as = %v, %v; want none", got, err)
+	}
+
+	// A rev or a target that looks like an option is refused, and a commit
+	// with no parent has no change to replay.
+	if _, err := fx.c.ReplayConflicts(ctx, dir, "-x", candidate); err == nil {
+		t.Fatal("an option as the target was taken")
+	}
+	if _, err := fx.c.ReplayConflicts(ctx, dir, "main", "--stdin"); err == nil {
+		t.Fatal("an option as the commit was taken")
+	}
+	if got, err := fx.c.ReplayConflicts(ctx, dir, "main", fx.base); err == nil {
+		t.Fatalf("the root commit = %v, nil; want an error", got)
+	}
+}

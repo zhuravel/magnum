@@ -55,12 +55,17 @@ type fakeLearnGit struct {
 	rebaseErr, mergeErr   error
 	discardErr, statusErr map[string]error
 	onRebase, onMerge     func(context.Context)
+	// conflicts says where each commit conflicts with the commit it is
+	// replayed onto (ReplayConflicts; none when absent), replayErr fails
+	// the check.
+	conflicts map[string][]string
+	replayErr error
 }
 
 func newFakeLearnGit() *fakeLearnGit {
 	return &fakeLearnGit{refs: map[string]string{}, branch: map[string]string{}, op: map[string]string{}, dirty: map[string][]string{},
 		parent: map[string]string{}, second: map[string]string{}, patch: map[string]string{}, worktree: map[string][2]string{},
-		discardErr: map[string]error{}, statusErr: map[string]error{}}
+		discardErr: map[string]error{}, statusErr: map[string]error{}, conflicts: map[string][]string{}}
 }
 
 func (g *fakeLearnGit) set(dir, ref, sha string) {
@@ -218,6 +223,18 @@ func (g *fakeLearnGit) RebaseOnto(ctx context.Context, dir, onto, upstream strin
 		g.refs[wt[0]+"|refs/heads/"+wt[1]] = sha
 	}
 	return nil
+}
+
+// ReplayConflicts answers from conflicts, changing nothing (it records the
+// directory it ran in, which must be the proposal's worktree).
+func (g *fakeLearnGit) ReplayConflicts(_ context.Context, dir, onto, rev string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.record("replay %s %s %s", dir, onto, rev)
+	if g.replayErr != nil {
+		return nil, g.replayErr
+	}
+	return slices.Clone(g.conflicts[rev]), nil
 }
 
 func (g *fakeLearnGit) DirtyPaths(_ context.Context, dir string, paths ...string) ([]string, error) {

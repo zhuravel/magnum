@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -93,8 +95,8 @@ func (e *Engine) learnOneAtATime() string {
 }
 
 // maybeLearnScan is the loop's scan, at most every learnCheckEvery: the
-// proposals nobody decided within ProposalTTL expire
-// (expireLearnProposals), a version that regressed gets a revert
+// proposals nobody decided within ProposalTTL, or that master moved under,
+// expire (expireLearnProposals), a version that regressed gets a revert
 // (maybeRegression, learn_revert.go), then the scheduled editor
 // (maybeEdit). A dry run and `magnum daemon --once` scan nothing.
 func (e *Engine) maybeLearnScan(ctx context.Context) {
@@ -111,14 +113,26 @@ func (e *Engine) maybeLearnScan(ctx context.Context) {
 	e.maybeEdit(ctx)
 }
 
+// movedListed bounds the paths a proposal's expiry names when master moved
+// under it (movedWords).
+const movedListed = 6
+
 // expireLearnProposals expires the proposals held for the operator or
-// passed for the landing that nobody decided within ProposalTTL of when
-// they began to wait so (store.LearnProposal.WaitingSince; their making
-// when later or unknown), as a notes proposal expires: learn.expired, the
-// worktree and the branch go, and the inputs stay as they are (new, for a
-// later edit). A gating one is the gate's to decide; the registry keeps
-// them all. One whose branch master holds already (a landing cut short
-// after the fast-forward) is recorded as landed instead (learn_land.go).
+// passed for the landing that nobody can use any more, as a notes proposal
+// expires: learn.expired, the worktree and the branch go, and the inputs
+// stay as they are (new, for a later edit). Two things end one: nobody
+// decided it within ProposalTTL of when it began to wait so
+// (store.LearnProposal.WaitingSince; its making when later or unknown), and
+// a master that moved under it, so that its commit no longer applies
+// (masterMoved). The second expires it at this scan however young, with the
+// conflicting files as its reason and in its event ("master moved:
+// <files>"): the landing could only hold it again, and while it waits the
+// editor does not run. A gating one is the gate's to decide; the registry
+// keeps them all. One whose branch master holds already (a landing cut short
+// after the fast-forward) is recorded as landed instead (learn_land.go). The
+// scan, the landing tick and the operator's land request all run on the
+// tick's goroutine, one after the other, so an expiry never cuts a landing
+// short.
 func (e *Engine) expireLearnProposals(ctx context.Context) {
 	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnHeld, store.LearnPassed})
 	if err != nil {
@@ -131,8 +145,14 @@ func (e *Engine) expireLearnProposals(ctx context.Context) {
 		if p.WaitingSince != nil && p.WaitingSince.After(since) {
 			since = *p.WaitingSince
 		}
+		reason, words := "nobody decided it within 7 days", p.State+" for 7 days and nobody decided it"
+		var moved []string
 		if now.Sub(since) < ProposalTTL {
-			continue
+			if moved = e.masterMoved(ctx, p); len(moved) == 0 {
+				continue
+			}
+			reason = movedWords(moved)
+			words = reason + "; its commit no longer applies"
 		}
 		if landed, ok, err := e.landedAlready(ctx, p); err != nil {
 			e.warnUnlessStopped(ctx, err, "skill proposals: is an expiring one on master", "proposal", p.ID)
@@ -143,8 +163,7 @@ func (e *Engine) expireLearnProposals(ctx context.Context) {
 			}
 			continue
 		}
-		got, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnHeld, store.LearnPassed}, store.LearnExpired,
-			"nobody decided it within 7 days", now, nil)
+		got, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnHeld, store.LearnPassed}, store.LearnExpired, reason, now, nil)
 		if err != nil {
 			if !errors.Is(err, store.ErrConflict) {
 				e.log.Warn("skill proposals: expire one", "proposal", p.ID, "err", err)
@@ -152,9 +171,61 @@ func (e *Engine) expireLearnProposals(ctx context.Context) {
 			continue
 		}
 		e.dropCandidate(ctx, p.Scratch, p.Branch)
-		e.event(ctx, "info", learnSubject, "learn.expired", fmt.Sprintf("skill proposal %d expired: %s for 7 days and nobody decided it",
-			p.ID, p.State), map[string]any{"proposal": got.ID, "was": p.State})
+		data := map[string]any{"proposal": got.ID, "was": p.State}
+		if moved != nil {
+			data["moved"] = moved
+		}
+		e.event(ctx, "info", learnSubject, "learn.expired", fmt.Sprintf("skill proposal %d expired: %s", p.ID, words), data)
 	}
+}
+
+// masterMoved lists the paths where p's commit (its branch's tip) no longer
+// applies to the checkout's master: the change it makes from its parent,
+// replayed onto master, conflicts there (gitx.Client.ReplayConflicts, which
+// moves no branch, index or work tree). The check runs in p's own worktree,
+// never in the checkout. What it cannot try tells nothing about p: a
+// worktree the loop does not own or that is gone, a branch that is not the
+// loop's or is gone, and a check git fails (logged once an hour, as git
+// older than 2.40 fails it); all give nil, as a proposal that still applies
+// does.
+func (e *Engine) masterMoved(ctx context.Context, p store.LearnProposal) []string {
+	if e.landUnavailable() != "" || !e.ownWorktree(p.Scratch) || !strings.HasPrefix(p.Branch, learnBranchPrefix) {
+		return nil
+	}
+	if _, err := os.Stat(p.Scratch); err != nil {
+		return nil
+	}
+	git, checkout := e.d.LearnGit, e.d.Checkout
+	tip, err := git.RevParse(ctx, checkout, "refs/heads/"+p.Branch)
+	if errors.Is(err, gitx.ErrNoSuchRef) {
+		return nil
+	}
+	var master string
+	if err == nil {
+		master, err = git.RevParse(ctx, checkout, "refs/heads/"+learnBase)
+	}
+	var files []string
+	if err == nil {
+		files, err = git.ReplayConflicts(ctx, p.Scratch, master, tip)
+	}
+	if err != nil {
+		if e.logOnce("learn-moved-"+p.Branch, err.Error(), e.now()) {
+			e.warnUnlessStopped(ctx, err, "skill proposals: does a waiting one still apply to master", "proposal", p.ID)
+		}
+		return nil
+	}
+	return files
+}
+
+// movedWords says that master moved under files, naming at most movedListed
+// of them: "master moved: a, b" ("and N more" after the last named).
+func movedWords(files []string) string {
+	shown := files[:min(len(files), movedListed)]
+	s := "master moved: " + strings.Join(shown, ", ")
+	if more := len(files) - len(shown); more > 0 {
+		s += fmt.Sprintf(" and %d more", more)
+	}
+	return s
 }
 
 // maybeEdit starts the scheduled editor when editWait lets it: it records

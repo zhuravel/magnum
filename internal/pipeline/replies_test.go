@@ -418,6 +418,58 @@ func TestAnAcceptedGapDeferredToAFollowUpIsAWontFix(t *testing.T) {
 	}
 }
 
+// 12 of the 196 replies of the 2026-10-23 window were `other` where a person
+// reads a fix or a decline: three "(Claude) (Claude) Added in <sha>" and
+// "Applied in <sha>" on one PR (the tag was stripped once), and bare
+// declines, "Not changed here." four times on one PR, "but not changing it
+// here", "No change." and "Still open, with no fix in this PR". An agent
+// tag, however often it repeats, is dropped before the first word. "Not
+// added" and "Not changed" (alone), "No change" (alone), "not changed here"
+// ("not changing it here", after "I'm" or "we are" too) and "no fix in this
+// PR" (push, round) decline the fix; "Not added yet." and "Still open, will
+// look later." claim nothing, as before.
+func TestClassifyReplyReadsADoubledAgentTagAndBareDeclines(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		// The tag more than once, in any mix.
+		{"(Claude) (Claude) Added in 3f9e2a1: the guard now runs first.", ReplyFixed},
+		{"(Claude) (Claude) Applied in 3f9e2a1.", ReplyFixed},
+		{"(Claude) (Claude) Good catch, added in 3f9e2a1.", ReplyFixed},
+		{"[Codex] (Claude): Fixed in 3f9e2a1.", ReplyFixed},
+		{"(Claude) (Claude) (Claude) Not changed here.", ReplyWontFix},
+		{"(Claude) (Claude) The tag twice and no verdict.", ReplyOther},
+		// Bare declines.
+		{"Not changed here.", ReplyWontFix},
+		{"(Claude) Not changed here. None of the 11 notification entries contains an HTML entity.", ReplyWontFix},
+		{"Not changed.", ReplyWontFix},
+		{"Not added.", ReplyWontFix},
+		{"Not added", ReplyWontFix},
+		{"No change.", ReplyWontFix},
+		{"(Claude) No change.", ReplyWontFix},
+		{"Valid, but not changing it here.", ReplyWontFix},
+		{"Good point, but I'm not changing it here: the helper is going away.", ReplyWontFix},
+		{"We are not changing it here.", ReplyWontFix},
+		{"Still open, with no fix in this PR.", ReplyWontFix},
+		{"Confirmed. No fix in this push.", ReplyWontFix},
+		{"Valid; there is no fix in this round.", ReplyWontFix},
+		// Claims nothing: pinned before, and the near misses.
+		{"Not added yet.", ReplyOther},
+		{"Still open, will look later.", ReplyOther},
+		{"Not changed yet.", ReplyOther},
+		{"No change needed in the helper.", ReplyOther},
+		{"Why is this not changed here?", ReplyOther},
+		{"The fix is in this PR.", ReplyOther},
+		{"Nothing changed here.", ReplyOther},
+		// A fix or a not-a-bug said first still wins.
+		{"Fixed in 3f9e2a1. Not changed here: the second path.", ReplyFixed},
+		{"(Claude) (Claude) Fixed in 3f9e2a1; no fix in this PR for the docs.", ReplyFixed},
+		{"Not a bug: not changing it here, the caller retries.", ReplyNotABug},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestExcerpt(t *testing.T) {
 	if s, cut := excerpt("  short  ", 600); s != "short" || cut {
 		t.Fatalf("short = %q, %v", s, cut)

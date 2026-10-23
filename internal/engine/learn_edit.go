@@ -134,6 +134,7 @@ type LearnGit interface {
 	InProgress(ctx context.Context, repo string) (string, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+	ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]string, error)
 	PatchID(ctx context.Context, dir, rev string) (string, error)
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, base, branch string) error

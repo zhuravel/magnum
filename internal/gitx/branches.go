@@ -216,6 +216,44 @@ func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) err
 	return fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict)
 }
 
+// ReplayConflicts says where the change commit rev makes from its first
+// parent would conflict if replayed onto onto, as RebaseOnto would replay
+// it, without replaying it: the conflicting paths, sorted, nil when it
+// applies. It is `git merge-tree --write-tree --merge-base=<rev>^ onto rev`
+// (git 2.40 or later), which writes the merge's objects and no ref, index or
+// work tree, so dir, any work tree of the repository, is left exactly as it
+// was and a conflict leaves nothing to abort. An error for a commit with no
+// parent, for revisions git does not know and for an answer it cannot read.
+func (c *Client) ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]string, error) {
+	if err := errors.Join(checkRev("onto", onto), checkRev("rev", rev)); err != nil {
+		return nil, err
+	}
+	res, err := c.git(ctx, dir, call{label: "merge-tree " + onto + " " + rev, noExit: 1, timeout: commitTimeout},
+		"merge-tree", "--write-tree", "--name-only", "-z", "--no-messages", "--merge-base="+rev+"^", onto, rev)
+	if err == nil {
+		return nil, nil
+	}
+	if code, ok := exitCode(err); !ok || code != 1 {
+		return nil, err
+	}
+	// "<tree>\0<path>\0<path>\0": the merged tree, then each conflicted path once.
+	fields := strings.Split(string(res.Stdout), "\x00")
+	if !isOID(fields[0]) {
+		return nil, fmt.Errorf("gitx: merge-tree %s %s: unreadable answer %.40q", onto, rev, res.Stdout)
+	}
+	var paths []string
+	for _, f := range fields[1:] {
+		if f != "" {
+			paths = append(paths, f)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("gitx: merge-tree %s %s: conflicts, but names no path", onto, rev)
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
+}
+
 // PatchID is the stable patch id of commit rev's change from its first
 // parent (`git diff-tree --patch --unified=0 rev | git patch-id --stable`):
 // with no context lines, a commit rebased onto a branch that changed lines

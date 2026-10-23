@@ -51,6 +51,11 @@ func newLearnCmd(c *Context) *cobra.Command {
 			"with their reasons, and when the editor runs next. --json prints the same.\n\n"+
 			"--propose asks the daemon for a skill edit now, whatever [learn] editor says; it is refused while one runs, "+
 			"while a proposal is gating, passed or held (the refusal names it), or when nothing new is left to learn from.\n\n"+
+			"A held or passed proposal expires at the daemon's scan (every 10 minutes) when nobody decided it within 7 days "+
+			"of becoming so, and at once when master moved under it: its commit no longer applies to master (the daemon "+
+			"tries it with git merge-tree in the proposal's own worktree, git 2.40 or later; the learn.expired event and the "+
+			"proposal's reason name the files that conflict, \"master moved: <files>\"). Its worktree and branch go and its "+
+			"inputs stay new, so the editor can run again the same day.\n\n"+
 			"--review shows the oldest held proposal: the inputs it answers with what it did with each, the diff of every "+
 			"file it changes, its design-log entry and the gate's table, and asks y/N on a terminal: y asks the daemon to "+
 			"land it at once (the answer says why when it stays held), n rejects it (--reason says why, and the next edit reads it; an input in two rejected proposals is "+

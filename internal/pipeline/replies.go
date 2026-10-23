@@ -90,6 +90,7 @@ var (
 			`(?:incorrect|moot(?:\s+point)?|not\s+applicable)$|(?:(?:this|the)\s+(?:concern|finding|comment|issue)\s+)?does(?:\s+not|n't)\s+apply\b)`)},
 		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:(?:won't\s+fix|wont\s+fix|will\s+not\s+fix|wontfix|out\s+of\s+scope|follow[- ]?up|declined|deprioriti[sz]ed|` +
 			`left\s+open|deferred|not\s+(?:fixed|changed)\s+in\s+this\s+(?:pr|push|round))\b|` +
+			`(?:not\s+(?:added|changed)|no\s+change)$|` +
 			`(?:(?:i|we)(?:'m)?\s+)?(?:not\s+adding|(?:won't|wont|will\s+not)\s+add)(?:$|\s+(?:it|this|that|them|a|an|the|any|more)\b)|` +
 			`(?:kept|keeping|left|leaving)(?:\s+(?:it|this|that))?\s+as[- ]is\b|kept$|` +
 			`.*\bstay(?:s|ing)?\s+as(?:\s+it\s+|[- ])is\b|(?:no|not|nothing|none|kept|keeping|left|leaving)\b.*\bfor\s+now$)`)},
@@ -109,11 +110,15 @@ var (
 	// fix: "we accept the risk", "not worth it", "but not worth the cost", "I
 	// did not make this change" (or "we didn't apply the suggested change",
 	// alone or before "here", "because", "since" or "in this PR"), "<…> we
-	// are not patching them here" (or "I'm not patching", "not patching").
+	// are not patching them here" (or "I'm not patching", "not patching"),
+	// "Not changed here" (or "but not changing it here", "I'm not changing it
+	// here") and "<…> with no fix in this PR" (or push, round).
 	replyDeclines = regexp.MustCompile(`(?i)^(?:(?:we\s+accept\s+(?:the|this)\s+risk|not\s+worth\s+(?:it|the))\b|` +
 		`(?:i|we)\s+(?:did\s+not|didn't)\s+(?:make|apply|take)\s+(?:this|that|the)\s+(?:(?:suggested|proposed)\s+)?changes?` +
 		`(?:$|\s+(?:here|because|since|in\s+this\s+(?:pr|push|round))\b)|` +
-		`(?:.*\b(?:i|we)(?:'m|'re|\s+am|\s+are)\s+)?not\s+patching\b)`)
+		`(?:.*\b(?:i|we)(?:'m|'re|\s+am|\s+are)\s+)?not\s+patching\b|` +
+		`(?:(?:i|we)(?:'m|'re|\s+am|\s+are)\s+)?not\s+(?:changed|changing\s+it)\s+here\b|` +
+		`.*\bno\s+fix\s+in\s+this\s+(?:pr|push|round)\b)`)
 	// replyAsFollowUp is a clause (replyClauseLead dropped) that ends in the
 	// follow-up its fix goes to: "Backend fix as a separate follow-up", "We'll
 	// raise them as one templates follow-up", "tracking it as a follow-up PR".
@@ -134,7 +139,10 @@ var (
 // (ReplyNotABug); "won't fix", "declined", "out of scope", "follow-up", "kept
 // as is", "<it> stays as is", "left open", "deferred", "not fixed in this
 // PR" (or push, round; or "not changed"), "No guard for now", "not adding
-// it", "won't add" (ReplyWontFix). A "follow-up" with no commit after it
+// it", "won't add", "Not added", "Not changed" and "No change" (each alone in
+// its clause; "Not added yet." claims nothing) (ReplyWontFix); "Not changed
+// here", "not changing it here" and "no fix in this PR" in any clause decline
+// the fix too (replyDeclines). A "follow-up" with no commit after it
 // ("follow-up PR", "follow-up later", "deferred to a follow-up") is a
 // deferral; "followed up" with no commit is no verdict. A clause that ends
 // in the follow-up its fix goes to ("Backend fix as a separate follow-up",
@@ -158,8 +166,9 @@ var (
 // ReplyWontFix), or says "by design" or "by decision" anywhere and no clause
 // names a verdict (ReplyNotABug: "…, so such a behaviour is by design"). The
 // class is a hint for the judge, not a verdict. Case does not matter; leading
-// quoted lines (">"), markup, emoji, an agent's "(Claude)" tag and the
-// comment it answers ("Re 4100000001:") are skipped, and a verdict may follow
+// quoted lines (">"), markup, emoji, an agent's "(Claude)" tag (however often
+// it repeats) and the comment it answers ("Re 4100000001:") are skipped, and a
+// verdict may follow
 // "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
 // intentional").
 func classifyReply(body string) string {
@@ -176,7 +185,11 @@ func classifyReply(body string) string {
 		s = rest
 	}
 	s = trimReplyLead(s)
-	if loc := replyAgentPrefix.FindStringIndex(s); loc != nil {
+	for { // however often the agent repeats its tag
+		loc := replyAgentPrefix.FindStringIndex(s)
+		if loc == nil {
+			break
+		}
 		s = trimReplyLead(s[loc[1]:])
 	}
 	if loc := replyRe.FindStringIndex(s); loc != nil {

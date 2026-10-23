@@ -8741,6 +8741,7 @@ type LearnGit interface {
 	InProgress(ctx context.Context, repo string) (string, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+	ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]string, error)
 	PatchID(ctx context.Context, dir, rev string) (string, error)
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, base, branch string) error
@@ -11743,6 +11744,16 @@ func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) err
 func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error)
     RemoteURL returns the URL of origin in dir. Credentials embedded in the URL
     are stripped (see stripUserinfo) so the value is safe to log.
+
+func (c *Client) ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]string, error)
+    ReplayConflicts says where the change commit rev makes from its first
+    parent would conflict if replayed onto onto, as RebaseOnto would replay it,
+    without replaying it: the conflicting paths, sorted, nil when it applies.
+    It is `git merge-tree --write-tree --merge-base=<rev>^ onto rev` (git 2.40
+    or later), which writes the merge's objects and no ref, index or work tree,
+    so dir, any work tree of the repository, is left exactly as it was and a
+    conflict leaves nothing to abort. An error for a commit with no parent,
+    for revisions git does not know and for an answer it cannot read.
 
 func (c *Client) ResetPlaceholder(ctx context.Context, dir, branch, base string) error
     ResetPlaceholder points the slot's placeholder branch at origin/<base>
