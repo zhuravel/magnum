@@ -71,6 +71,14 @@ type Input struct {
 	// finding is one of that run's (OwnThreads). A finding's review, and so
 	// the time it was judged at, is the one its RunID is bound to here.
 	ReviewRuns map[int64]string
+	// Targets names, by run id, the commit each of magnum's runs on the
+	// pull request reviewed (runs.target_sha): a finding is of its run's
+	// head. A posted finding catches a comment measured against that head
+	// or a later one (postedNear); a rejected finding links only a comment
+	// of its head, or of a later reviewed head the commented file did not
+	// change since (rejectedNear). A finding whose run is not in it is near
+	// none.
+	Targets map[string]string
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
 	MinChars int
@@ -120,7 +128,8 @@ type Candidate struct {
 	Side      string `json:"side,omitempty"` // the diff side: RIGHT, or LEFT for deleted lines
 	// ReviewedSHA is the commit magnum reviewed that the comment applies
 	// to: the comment's own commit, or a reviewed commit since which the
-	// commented file did not change. CommentSHA is the commit the comment
+	// commented file did not change (for an outside comment, the review
+	// before it, else its own commit). CommentSHA is the commit the comment
 	// was made on.
 	ReviewedSHA string    `json:"reviewed_sha"`
 	CommentSHA  string    `json:"comment_sha,omitempty"`
@@ -140,6 +149,11 @@ type Candidate struct {
 	// fills both.
 	File        string `json:"file,omitempty"`
 	FileSkipped string `json:"file_skipped,omitempty"`
+
+	// OutsideReason says why Build put the comment in Result.Outside
+	// (store.MissOutside*); "" for a candidate. The classifier never sees
+	// an outside comment, so it is not in the candidates file.
+	OutsideReason string `json:"-"`
 }
 
 // Lines is the candidate's line range as [from, to] (nil without a line).
@@ -178,48 +192,42 @@ type Result struct {
 // (OwnThreads).
 //
 // A comment shorter than MinChars without its quotes and code blocks, or
-// that only approves, is dropped. One near a finding magnum posted on the
-// same path is caught; one near a rejected finding is raised (a comment on
-// deleted lines has no line, so neither), until the classifier names
-// another (Result.Rejected lists them). The exception is a finding
-// rejected as a duplicate (reasonDuplicate: an existing thread already
-// covers it) when the comment was made before the review that rejected it
+// that only approves, is dropped. A comment made on a reviewed commit
+// applies to it; an inline comment on another commit applies to the newest
+// commit magnum reviewed before the comment when that commit descends from
+// the reviewed one and the commented file did not change between the two
+// (Compare), and is outside otherwise, as is a review body on a commit
+// magnum did not review; an outside comment says why (OutsideReason). Only
+// a failing Compare is an error; one GitHub answers with a 404
+// (github.ErrNotFound: a commit it no longer has) proves nothing, so the
+// comment is outside and the build goes on.
+//
+// A comment within NearLines of a finding magnum posted on the same path,
+// at the reviewed commit the comment applies to (for an outside one, the
+// review before it) or at one reviewed before that, is caught (postedNear):
+// the finding stays open as a thread on the later heads, so the comment
+// repeats magnum's own finding, whatever changed in the file. One near a
+// rejected finding is raised (a comment on deleted lines has no line, so
+// neither), until the classifier names another (Result.Rejected lists
+// them); near here counts only the findings of the commit the comment
+// applies to and of the earlier reviewed commits the file did not change
+// since (rejectedNear), since a line number of another version of the file
+// names other code, and an outside comment's lines hold at no reviewed
+// commit, so it raises nothing. The exception is a finding rejected as a
+// duplicate (reasonDuplicate: an existing thread already covers it) when
+// the comment was made before the review that rejected it
 // (rejectedAsDuplicate): the judge read the comment and agreed, so it is
 // caught. A rejection for any other reason says the judge disagreed, and a
-// comment made after the review was never read by it. A comment made on a
-// reviewed commit applies to it; an inline comment on another commit
-// applies to the newest commit magnum reviewed before the comment when that
-// commit descends from the reviewed one and the commented file did not
-// change between the two (Compare), and is outside otherwise, as is a review
-// body on a commit magnum did not review. Only a failing Compare is an
-// error; one GitHub answers with a 404 (github.ErrNotFound: a commit it no
-// longer has) proves nothing, so the comment is outside and the build goes
-// on.
+// comment made after the review was never read by it.
 func Build(in Input) (Result, error) {
 	res := Result{Rejected: rejectedRows(in.Findings), Threads: OwnThreads(in)}
-	reviewed := map[string]bool{}
+	b := builder{in: in, reviewed: map[string]time.Time{}, compared: map[[2]string]compared{}}
 	for _, r := range in.Reviewed {
-		reviewed[r.SHA] = true
+		if at, ok := b.reviewed[r.SHA]; !ok || r.At.Before(at) {
+			b.reviewed[r.SHA] = r.At
+		}
 	}
 	postedAt := in.postedAt()
-	compared := map[[2]string]Comparison{}
-	unchanged := func(from, to, path string) (bool, error) {
-		if in.Compare == nil {
-			return false, nil
-		}
-		key := [2]string{from, to}
-		cmpd, ok := compared[key]
-		if !ok {
-			var err error
-			// GitHub cannot compare a commit it no longer has (a force
-			// push, a deleted branch): a comparison that proves nothing.
-			if cmpd, err = in.Compare(from, to); err != nil && !errors.Is(err, github.ErrNotFound) {
-				return false, fmt.Errorf("compare %s...%s: %w", short(from), short(to), err)
-			}
-			compared[key] = cmpd
-		}
-		return cmpd.Descendant && cmpd.Complete && !slices.Contains(cmpd.Paths, path), nil
-	}
 
 	for _, t := range in.Threads {
 		if len(t.Comments) == 0 {
@@ -243,34 +251,31 @@ func Build(in Input) (Result, error) {
 		if t.DiffSide == "LEFT" { // deleted lines: numbered in the old file, not the reviewed one
 			c.Line, c.StartLine = 0, 0
 		}
-		if near(in.Findings, store.FindingPosted, c) != nil {
+		base := in.reviewedBefore(cm.CreatedAt)
+		why, err := b.place(&c, base)
+		if err != nil {
+			return Result{}, err
+		}
+		// A comment outside is measured against the review before it.
+		if b.postedNear(c, cmp.Or(c.ReviewedSHA, base)) {
 			res.Caught++
 			continue
 		}
-		if f := near(in.Findings, store.FindingRejected, c); f != nil {
+		if why != "" {
+			c.ReviewedSHA, c.OutsideReason = cmp.Or(base, c.CommentSHA, in.newest()), why
+			res.Outside = append(res.Outside, c)
+			continue
+		}
+		f, err := b.rejectedNear(c)
+		if err != nil {
+			return Result{}, err
+		}
+		if f != nil {
 			if rejectedAsDuplicate(*f, cm.CreatedAt, postedAt) {
 				res.Caught++
 				continue
 			}
 			c.Raised, c.FindingRef, c.ReasonCode = store.MissRaisedRejected, findingRef(*f), f.ReasonCode
-		}
-		base := in.reviewedBefore(cm.CreatedAt)
-		switch {
-		case c.CommentSHA != "" && reviewed[c.CommentSHA]:
-			c.ReviewedSHA = c.CommentSHA
-		case c.CommentSHA != "" && base != "":
-			same, err := unchanged(base, c.CommentSHA, c.Path)
-			if err != nil {
-				return Result{}, err
-			}
-			if same {
-				c.ReviewedSHA = base // the file is as magnum saw it, so the comment's lines hold there too
-			}
-		}
-		if c.ReviewedSHA == "" {
-			c.ReviewedSHA = cmp.Or(base, c.CommentSHA, in.newest())
-			res.Outside = append(res.Outside, c)
-			continue
 		}
 		res.Candidates = append(res.Candidates, c)
 	}
@@ -288,15 +293,149 @@ func Build(in Input) (Result, error) {
 		}
 		c := Candidate{ID: fmt.Sprintf("r%d", r.DatabaseID), Kind: KindReview, URL: r.URL, Reviewer: who,
 			CommentSHA: r.CommitOid, Body: r.Body, CreatedAt: r.SubmittedAt, Raised: store.MissRaisedNone}
-		if r.CommitOid != "" && reviewed[r.CommitOid] {
+		if _, ok := b.reviewed[r.CommitOid]; ok && r.CommitOid != "" {
 			c.ReviewedSHA = r.CommitOid
 			res.Candidates = append(res.Candidates, c)
 			continue
 		}
-		c.ReviewedSHA = cmp.Or(in.reviewedBefore(r.SubmittedAt), r.CommitOid, in.newest())
+		// A body has no file to compare: one after a review is on a commit
+		// magnum did not review.
+		base := in.reviewedBefore(r.SubmittedAt)
+		c.ReviewedSHA, c.OutsideReason = cmp.Or(base, r.CommitOid, in.newest()), store.MissOutsideBodyUnreviewed
+		if base == "" {
+			c.OutsideReason = store.MissOutsideBeforeReview
+		}
 		res.Outside = append(res.Outside, c)
 	}
 	return res, nil
+}
+
+// builder is Build's state: the reviewed commits with when magnum reviewed
+// each (the earliest when one was reviewed twice), and GitHub's
+// comparisons, each asked once.
+type builder struct {
+	in       Input
+	reviewed map[string]time.Time
+	compared map[[2]string]compared
+}
+
+// compared is one comparison's answer; gone when GitHub could not make it
+// (a 404).
+type compared struct {
+	Comparison
+	gone bool
+}
+
+// changed says what GitHub's comparison of from with a later commit to
+// shows of path: "" when to descends from from and path did not change
+// between them, else why the code at to is not the code magnum saw at from
+// (store.MissOutsideFileChanged, MissOutsideNotDescendant, or
+// MissOutsideNoCompare when no comparison could tell: no Compare, a 404, a
+// file list GitHub cut).
+func (b *builder) changed(from, to, path string) (string, error) {
+	if b.in.Compare == nil {
+		return store.MissOutsideNoCompare, nil
+	}
+	key := [2]string{from, to}
+	cmpd, ok := b.compared[key]
+	if !ok {
+		c, err := b.in.Compare(from, to)
+		// GitHub cannot compare a commit it no longer has (a force push, a
+		// deleted branch): a comparison that proves nothing.
+		if err != nil && !errors.Is(err, github.ErrNotFound) {
+			return "", fmt.Errorf("compare %s...%s: %w", short(from), short(to), err)
+		}
+		cmpd = compared{Comparison: c, gone: err != nil}
+		b.compared[key] = cmpd
+	}
+	switch {
+	case cmpd.gone:
+		return store.MissOutsideNoCompare, nil
+	case !cmpd.Descendant:
+		return store.MissOutsideNotDescendant, nil
+	case !cmpd.Complete:
+		return store.MissOutsideNoCompare, nil
+	case slices.Contains(cmpd.Paths, path):
+		return store.MissOutsideFileChanged, nil
+	}
+	return "", nil
+}
+
+// place sets the reviewed commit inline comment c applies to: its own
+// commit when magnum reviewed it, else base, the newest commit magnum
+// reviewed before the comment, when the file there is as at the comment's
+// commit (changed). It returns why c is outside instead ("" once placed):
+// made before magnum's first review, on no commit, or what the comparison
+// with base showed.
+func (b *builder) place(c *Candidate, base string) (string, error) {
+	if _, ok := b.reviewed[c.CommentSHA]; ok && c.CommentSHA != "" {
+		c.ReviewedSHA = c.CommentSHA
+		return "", nil
+	}
+	switch {
+	case base == "":
+		return store.MissOutsideBeforeReview, nil
+	case c.CommentSHA == "":
+		return store.MissOutsideNoCompare, nil
+	}
+	why, err := b.changed(base, c.CommentSHA, c.Path)
+	if why == "" && err == nil {
+		c.ReviewedSHA = base // the file is as magnum saw it, so the comment's lines hold there too
+	}
+	return why, err
+}
+
+// postedNear reports whether magnum posted a finding within NearLines of
+// c's line range on c's path at ref, the reviewed commit the comment is
+// measured against, or at a commit it reviewed before ref (its run's head
+// in Targets), whatever changed in the file since: a posted finding stays
+// open as a thread on the later heads, so a comment that repeats it there
+// repeats magnum's own finding. A finding of a later review, or of a run
+// Targets does not name, catches nothing, and nothing does when ref is no
+// reviewed commit (a comment made before magnum's first review).
+func (b *builder) postedNear(c Candidate, ref string) bool {
+	at, ok := b.reviewed[ref]
+	if !ok || ref == "" {
+		return false
+	}
+	for _, f := range nearby(b.in.Findings, store.FindingPosted, c) {
+		head := b.in.Targets[f.RunID]
+		if headAt, ok := b.reviewed[head]; ok && head != "" && !headAt.After(at) {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectedNear is the finding the judge rejected nearest to c's line range
+// on c's path, within NearLines, at the commit c applies to (c.ReviewedSHA,
+// its run's head in Targets) or at an earlier reviewed commit the file did
+// not change since (changed), where its line numbers name the same code;
+// nil when none. A finding of a later review, or of a run Targets does not
+// name, is near nothing. It compares only for the findings near by line,
+// the nearest first, until one holds.
+func (b *builder) rejectedNear(c Candidate) (*store.Finding, error) {
+	at, ok := b.reviewed[c.ReviewedSHA]
+	if !ok {
+		return nil, nil
+	}
+	for _, f := range nearby(b.in.Findings, store.FindingRejected, c) {
+		head := b.in.Targets[f.RunID]
+		if head != "" && head == c.ReviewedSHA {
+			return f, nil
+		}
+		if headAt, ok := b.reviewed[head]; !ok || head == "" || !headAt.Before(at) {
+			continue
+		}
+		why, err := b.changed(head, c.ReviewedSHA, c.Path)
+		if err != nil {
+			return nil, err
+		}
+		if why == "" {
+			return f, nil
+		}
+	}
+	return nil, nil
 }
 
 // other reports whether login (Account form) is another reviewer: not the
@@ -370,9 +509,20 @@ func (in Input) newest() string {
 }
 
 // near is the finding of verdict on c's path whose line is nearest to c's
-// range, within NearLines (nil when none). Review bodies and file comments
-// have no line, so nothing is near them.
+// range, within NearLines, by line alone (nil when none): for findings of
+// one run (OwnThreads). Review bodies and file comments have no line, so
+// nothing is near them.
 func near(fs []store.Finding, verdict string, c Candidate) *store.Finding {
+	if all := nearby(fs, verdict, c); len(all) > 0 {
+		return all[0]
+	}
+	return nil
+}
+
+// nearby are the findings of verdict on c's path within NearLines of c's
+// range, by line alone, the nearest first (in fs's order for the same
+// distance).
+func nearby(fs []store.Finding, verdict string, c Candidate) []*store.Finding {
 	if c.Path == "" || c.Line <= 0 {
 		return nil
 	}
@@ -380,8 +530,11 @@ func near(fs []store.Finding, verdict string, c Candidate) *store.Finding {
 	if c.StartLine == 0 {
 		from = c.Line
 	}
-	var best *store.Finding
-	bestD := NearLines + 1
+	type hit struct {
+		f *store.Finding
+		d int
+	}
+	var hits []hit
 	for i := range fs {
 		f := &fs[i]
 		if f.Verdict != verdict || f.Path != c.Path || f.Line <= 0 {
@@ -394,11 +547,16 @@ func near(fs []store.Finding, verdict string, c Candidate) *store.Finding {
 		case f.Line > c.Line:
 			d = f.Line - c.Line
 		}
-		if d < bestD {
-			best, bestD = f, d
+		if d <= NearLines {
+			hits = append(hits, hit{f, d})
 		}
 	}
-	return best
+	slices.SortStableFunc(hits, func(a, b hit) int { return a.d - b.d })
+	out := make([]*store.Finding, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, h.f)
+	}
+	return out
 }
 
 // tooShort reports whether a comment says too little to be a miss: its

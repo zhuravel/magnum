@@ -40,6 +40,18 @@ const (
 	MissRaisedRejected = "rejected"
 )
 
+// Why a comment is outside (misses.outside_reason, class outside only): the
+// retro's candidate builder (learn.Build) found it on code magnum did not
+// review, or the classifier said so.
+const (
+	MissOutsideBeforeReview   = "before_review"   // made before magnum's first review of the PR
+	MissOutsideFileChanged    = "file_changed"    // on a later commit whose file changed since the review before it
+	MissOutsideNotDescendant  = "not_descendant"  // on a commit that does not descend from the review before it
+	MissOutsideNoCompare      = "no_compare"      // no comparison could tell: a 404, a file list GitHub cut, no commit
+	MissOutsideBodyUnreviewed = "body_unreviewed" // a review body on a commit magnum did not review, after one it did
+	MissOutsideClassifier     = "classifier"      // the classifier's answer for a candidate
+)
+
 // Miss states (misses.state): new until a lesson was drawn from it (used) or
 // someone dropped it (dismissed).
 const (
@@ -63,6 +75,10 @@ var (
 	missRaised    = []string{MissRaisedNone, MissRaisedRejected}
 	missStates    = []string{MissNew, MissUsed, MissDismissed}
 	missScopes    = []string{MissScopeRepo, MissScopeGeneral}
+	// The outside reasons have no CHECK (migration 0029), so a new one
+	// needs no rebuild of the table notes_proposal_misses references.
+	missOutsideReasons = []string{MissOutsideBeforeReview, MissOutsideFileChanged, MissOutsideNotDescendant, MissOutsideNoCompare,
+		MissOutsideBodyUnreviewed, MissOutsideClassifier}
 )
 
 // oneOf returns an error unless v is one of allowed.
@@ -143,6 +159,15 @@ type Miss struct {
 	State       string    `json:"state"`           // MissNew | MissUsed | MissDismissed
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+
+	// CommentSHA is the commit the comment was made on, which ReviewedSHA
+	// is not when the comment moved to a reviewed commit whose file it did
+	// not change, or is outside ("" in rows stored before migration 0029,
+	// and for a decline routed to the notes).
+	CommentSHA string `json:"comment_sha,omitempty"`
+	// OutsideReason says why a comment of class outside is (MissOutside*;
+	// "" for every other class, and in rows stored before migration 0029).
+	OutsideReason string `json:"outside_reason,omitempty"`
 	// Repo ("owner/name") and Number name the miss's PR; Misses fills them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
@@ -160,7 +185,7 @@ type Miss struct {
 
 var missColumns = []string{"id", "pr_id", "source_url", "source_kind", "reviewer", "path", "line", "reviewed_sha",
 	"class", "severity", "raised", "finding_ref", "reason_code", "title", "lesson", "scope", "lines_json",
-	"match_json", "state", "created_at", "updated_at"}
+	"match_json", "state", "created_at", "updated_at", "comment_sha", "outside_reason"}
 
 // missListColumns follow missColumns in a listing (Misses): the PR's
 // repository and number, the latest proposal the miss was given to with its
@@ -194,7 +219,7 @@ func scanMiss(sc scanner, withPR bool) (Miss, error) {
 	dest := []any{&m.ID, &m.PRID, &m.SourceURL, &m.SourceKind, &m.Reviewer, textCol(&m.Path), &line, &m.ReviewedSHA,
 		&m.Class, textCol(&m.Severity), &m.Raised, textCol(&m.FindingRef), textCol(&m.ReasonCode), textCol(&m.Title),
 		textCol(&m.Lesson), textCol(&m.Scope), jsonCol(&m.Lines), jsonCol(&m.Match), &m.State,
-		timeCol(&m.CreatedAt), timeCol(&m.UpdatedAt)}
+		timeCol(&m.CreatedAt), timeCol(&m.UpdatedAt), textCol(&m.CommentSHA), textCol(&m.OutsideReason)}
 	if withPR {
 		dest = append(dest, &m.Repo, &m.Number, &m.ProposalID, &proposalState, textCol(&m.Dismissed), &m.DismissedBy)
 	}
@@ -211,10 +236,12 @@ func scanMiss(sc scanner, withPR bool) (Miss, error) {
 // brings back a dismissed or used miss. Every other column takes m's value,
 // except that an unclassified m (a retro whose classifier failed) never
 // replaces a class an earlier retro set, nor what came with it (severity,
-// title, lesson, scope, lines, match).
+// title, lesson, scope, lines, match, the outside reason).
 // Empty Class is MissUnclassified, empty Raised is MissRaisedNone, nil Lines
 // and Match are empty lists, and "" or 0 in an optional column is stored as
-// NULL. PRID, SourceURL, SourceKind, Reviewer and ReviewedSHA are required.
+// NULL. PRID, SourceURL, SourceKind, Reviewer and ReviewedSHA are required;
+// an OutsideReason must be one of the MissOutside* reasons, and only class
+// outside has one.
 func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error) {
 	if m.PRID == 0 || m.SourceURL == "" || m.SourceKind == "" || m.Reviewer == "" || m.ReviewedSHA == "" {
 		return Miss{}, fmt.Errorf("upsert miss %q: pr_id, source_url, source_kind, reviewer and reviewed_sha are required", m.SourceURL)
@@ -242,6 +269,14 @@ func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error) {
 			return Miss{}, fmt.Errorf("upsert miss %s: %w", m.SourceURL, err)
 		}
 	}
+	if m.OutsideReason != "" {
+		if err := oneOf("outside_reason", m.OutsideReason, missOutsideReasons); err != nil {
+			return Miss{}, fmt.Errorf("upsert miss %s: %w", m.SourceURL, err)
+		}
+		if m.Class != MissOutside {
+			return Miss{}, fmt.Errorf("upsert miss %s: outside_reason %q on class %s: only an outside miss has one", m.SourceURL, m.OutsideReason, m.Class)
+		}
+	}
 	if m.Lines == nil {
 		m.Lines = []int{}
 	}
@@ -259,18 +294,21 @@ func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error) {
 	now := FormatTime(s.now())
 	got, err := scanMiss(s.db.QueryRowContext(ctx, `
 INSERT INTO misses (pr_id, source_url, source_kind, reviewer, path, line, reviewed_sha, class, severity, raised,
-  finding_ref, reason_code, title, lesson, scope, lines_json, match_json, state, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  finding_ref, reason_code, title, lesson, scope, lines_json, match_json, state, created_at, updated_at, comment_sha,
+  outside_reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source_url) DO UPDATE SET pr_id = excluded.pr_id, source_kind = excluded.source_kind,
   reviewer = excluded.reviewer, path = excluded.path, line = excluded.line, reviewed_sha = excluded.reviewed_sha,
-  raised = excluded.raised, finding_ref = excluded.finding_ref, reason_code = excluded.reason_code,
-  class = `+keepClass("class")+`, severity = `+keepClass("severity")+`, title = `+keepClass("title")+`,
-  lesson = `+keepClass("lesson")+`, scope = `+keepClass("scope")+`, lines_json = `+keepClass("lines_json")+`,
-  match_json = `+keepClass("match_json")+`, updated_at = excluded.updated_at
+  comment_sha = excluded.comment_sha, raised = excluded.raised, finding_ref = excluded.finding_ref,
+  reason_code = excluded.reason_code, class = `+keepClass("class")+`, severity = `+keepClass("severity")+`,
+  title = `+keepClass("title")+`, lesson = `+keepClass("lesson")+`, scope = `+keepClass("scope")+`,
+  lines_json = `+keepClass("lines_json")+`, match_json = `+keepClass("match_json")+`,
+  outside_reason = `+keepClass("outside_reason")+`, updated_at = excluded.updated_at
 RETURNING `+cols("", missColumns),
 		m.PRID, m.SourceURL, m.SourceKind, m.Reviewer, nullString(m.Path), nullInt(m.Line), m.ReviewedSHA, m.Class,
 		nullString(m.Severity), m.Raised, nullString(m.FindingRef), nullString(m.ReasonCode), nullString(m.Title),
-		nullString(m.Lesson), nullString(m.Scope), string(lines), string(match), m.State, now, now), false)
+		nullString(m.Lesson), nullString(m.Scope), string(lines), string(match), m.State, now, now, nullString(m.CommentSHA),
+		nullString(m.OutsideReason)), false)
 	if err != nil {
 		return Miss{}, fmt.Errorf("upsert miss %s: %w", m.SourceURL, mapErr(err))
 	}

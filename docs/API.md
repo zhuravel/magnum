@@ -13566,7 +13566,8 @@ type Candidate struct {
 	Side      string `json:"side,omitempty"` // the diff side: RIGHT, or LEFT for deleted lines
 	// ReviewedSHA is the commit magnum reviewed that the comment applies
 	// to: the comment's own commit, or a reviewed commit since which the
-	// commented file did not change. CommentSHA is the commit the comment
+	// commented file did not change (for an outside comment, the review
+	// before it, else its own commit). CommentSHA is the commit the comment
 	// was made on.
 	ReviewedSHA string    `json:"reviewed_sha"`
 	CommentSHA  string    `json:"comment_sha,omitempty"`
@@ -13586,6 +13587,11 @@ type Candidate struct {
 	// fills both.
 	File        string `json:"file,omitempty"`
 	FileSkipped string `json:"file_skipped,omitempty"`
+
+	// OutsideReason says why Build put the comment in Result.Outside
+	// (store.MissOutside*); "" for a candidate. The classifier never sees
+	// an outside comment, so it is not in the candidates file.
+	OutsideReason string `json:"-"`
 }
     Candidate is one comment of another reviewer for the classifier: the root
     comment of a review thread ("t<comment id>") or the body of a review
@@ -13796,6 +13802,14 @@ type Input struct {
 	// finding is one of that run's (OwnThreads). A finding's review, and so
 	// the time it was judged at, is the one its RunID is bound to here.
 	ReviewRuns map[int64]string
+	// Targets names, by run id, the commit each of magnum's runs on the
+	// pull request reviewed (runs.target_sha): a finding is of its run's
+	// head. A posted finding catches a comment measured against that head
+	// or a later one (postedNear); a rejected finding links only a comment
+	// of its head, or of a later reviewed head the commented file did not
+	// change since (rejectedNear). A finding whose run is not in it is near
+	// none.
+	Targets map[string]string
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
 	MinChars int
@@ -13930,23 +13944,32 @@ func Build(in Input) (Result, error)
     are never candidates. A thread magnum started that someone answered is not a
     candidate either: it goes to Result.Threads (OwnThreads).
 
-    A comment shorter than MinChars without its quotes and code blocks,
-    or that only approves, is dropped. One near a finding magnum posted on the
-    same path is caught; one near a rejected finding is raised (a comment on
-    deleted lines has no line, so neither), until the classifier names another
-    (Result.Rejected lists them). The exception is a finding rejected as a
-    duplicate (reasonDuplicate: an existing thread already covers it) when the
-    comment was made before the review that rejected it (rejectedAsDuplicate):
-    the judge read the comment and agreed, so it is caught. A rejection for any
-    other reason says the judge disagreed, and a comment made after the review
-    was never read by it. A comment made on a reviewed commit applies to it;
-    an inline comment on another commit applies to the newest commit magnum
+    A comment shorter than MinChars without its quotes and code blocks, or that
+    only approves, is dropped. A comment made on a reviewed commit applies to
+    it; an inline comment on another commit applies to the newest commit magnum
     reviewed before the comment when that commit descends from the reviewed
-    one and the commented file did not change between the two (Compare),
-    and is outside otherwise, as is a review body on a commit magnum did not
-    review. Only a failing Compare is an error; one GitHub answers with a 404
-    (github.ErrNotFound: a commit it no longer has) proves nothing, so the
-    comment is outside and the build goes on.
+    one and the commented file did not change between the two (Compare), and is
+    outside otherwise, as is a review body on a commit magnum did not review;
+    an outside comment says why (OutsideReason). Only a failing Compare is an
+    error; one GitHub answers with a 404 (github.ErrNotFound: a commit it no
+    longer has) proves nothing, so the comment is outside and the build goes on.
+
+    A comment within NearLines of a finding magnum posted on the same path, at
+    the reviewed commit the comment applies to (for an outside one, the review
+    before it) or at one reviewed before that, is caught (postedNear): the
+    finding stays open as a thread on the later heads, so the comment repeats
+    magnum's own finding, whatever changed in the file. One near a rejected
+    finding is raised (a comment on deleted lines has no line, so neither),
+    until the classifier names another (Result.Rejected lists them); near here
+    counts only the findings of the commit the comment applies to and of the
+    earlier reviewed commits the file did not change since (rejectedNear),
+    since a line number of another version of the file names other code, and an
+    outside comment's lines hold at no reviewed commit, so it raises nothing.
+    The exception is a finding rejected as a duplicate (reasonDuplicate:
+    an existing thread already covers it) when the comment was made before the
+    review that rejected it (rejectedAsDuplicate): the judge read the comment
+    and agreed, so it is caught. A rejection for any other reason says the judge
+    disagreed, and a comment made after the review was never read by it.
 
 type Reviewed struct {
 	SHA string
@@ -18146,6 +18169,18 @@ const (
     it, or raised it and the judge rejected it.
 
 const (
+	MissOutsideBeforeReview   = "before_review"   // made before magnum's first review of the PR
+	MissOutsideFileChanged    = "file_changed"    // on a later commit whose file changed since the review before it
+	MissOutsideNotDescendant  = "not_descendant"  // on a commit that does not descend from the review before it
+	MissOutsideNoCompare      = "no_compare"      // no comparison could tell: a 404, a file list GitHub cut, no commit
+	MissOutsideBodyUnreviewed = "body_unreviewed" // a review body on a commit magnum did not review, after one it did
+	MissOutsideClassifier     = "classifier"      // the classifier's answer for a candidate
+)
+    Why a comment is outside (misses.outside_reason, class outside only):
+    the retro's candidate builder (learn.Build) found it on code magnum did not
+    review, or the classifier said so.
+
+const (
 	MissNew       = "new"
 	MissUsed      = "used"
 	MissDismissed = "dismissed"
@@ -19289,6 +19324,15 @@ type Miss struct {
 	State       string    `json:"state"`           // MissNew | MissUsed | MissDismissed
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+
+	// CommentSHA is the commit the comment was made on, which ReviewedSHA
+	// is not when the comment moved to a reviewed commit whose file it did
+	// not change, or is outside ("" in rows stored before migration 0029,
+	// and for a decline routed to the notes).
+	CommentSHA string `json:"comment_sha,omitempty"`
+	// OutsideReason says why a comment of class outside is (MissOutside*;
+	// "" for every other class, and in rows stored before migration 0029).
+	OutsideReason string `json:"outside_reason,omitempty"`
 	// Repo ("owner/name") and Number name the miss's PR; Misses fills them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
@@ -20787,10 +20831,12 @@ func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error)
     brings back a dismissed or used miss. Every other column takes m's value,
     except that an unclassified m (a retro whose classifier failed) never
     replaces a class an earlier retro set, nor what came with it (severity,
-    title, lesson, scope, lines, match). Empty Class is MissUnclassified,
-    empty Raised is MissRaisedNone, nil Lines and Match are empty lists, and ""
-    or 0 in an optional column is stored as NULL. PRID, SourceURL, SourceKind,
-    Reviewer and ReviewedSHA are required.
+    title, lesson, scope, lines, match, the outside reason). Empty Class is
+    MissUnclassified, empty Raised is MissRaisedNone, nil Lines and Match
+    are empty lists, and "" or 0 in an optional column is stored as NULL.
+    PRID, SourceURL, SourceKind, Reviewer and ReviewedSHA are required;
+    an OutsideReason must be one of the MissOutside* reasons, and only class
+    outside has one.
 
 func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, error)
     UpsertPRFromGitHub inserts a PR (state InitialState, head_changed_at now)

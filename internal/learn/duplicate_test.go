@@ -93,7 +93,7 @@ func TestADuplicateRejectionCountsOnlyWhenTheReviewIsKnown(t *testing.T) {
 		"no run bound to the review": func(in *Input) { in.ReviewRuns = nil },
 		"the review is not listed":   func(in *Input) { in.Reviews = nil },
 		"the review has no time":     func(in *Input) { in.Reviews[0].SubmittedAt = time.Time{} },
-		"a finding of another run":   func(in *Input) { in.Findings[0].RunID = "r-9" },
+		"a finding of another run":   func(in *Input) { in.Findings[0].RunID, in.Targets["r-9"] = "r-9", shaA },
 	} {
 		in := duplicateCase(t0.Add(time.Hour), t0.Add(2*time.Hour), "duplicate")
 		mutate(&in)

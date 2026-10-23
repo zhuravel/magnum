@@ -6,8 +6,11 @@ package engine
 // someone answered (learn.OwnThread) becomes a declines row with the run
 // that posted the review, its findings row and the skill copy the round ran
 // with. A finding the author declined because the repository does it
-// otherwise (verdict missing_context, scope repo) is also a miss for the
-// repository's notes, so the notes curation takes it unchanged. A thread
+// otherwise (verdict missing_context, scope repo), or that was wrong or
+// ranked too high for a reason of the repository's (wrong or over_ranked,
+// scope repo; "Wrong and over-ranked declines of the repository go to its
+// notes"), is also a miss for the repository's notes, so the notes
+// curation takes it unchanged. A thread
 // only magnum's fixer answered (learn.OwnThread.Fixer) is stored with its
 // outcome and verdict alone: the classifier's answer for it carries no
 // lesson (learn's checkThread), so it makes no learned case and no miss.
@@ -85,10 +88,17 @@ func reviewRunsOf(runs []store.Run, findings []store.Finding) map[int64]reviewRu
 }
 
 // routesToNotes reports whether a thread item is also a miss for the
-// repository's notes: magnum was right in general, wrong for this
-// repository, and the lesson is the repository's.
+// repository's notes: its lesson is the repository's (scope repo) and its
+// verdict carries one. magnum was right in general and wrong for this
+// repository (missing_context), or its finding was wrong or ranked too high
+// there, which reads as one of the repository's standing decisions; the
+// skill editor takes only scope general, so nothing else would read it.
 func routesToNotes(it learn.ThreadItem) bool {
-	return it.Verdict == store.VerdictMissingContext && it.Scope == store.MissScopeRepo
+	switch it.Verdict {
+	case store.VerdictMissingContext, store.VerdictWrong, store.VerdictOverRanked:
+		return it.Scope == store.MissScopeRepo
+	}
+	return false
 }
 
 // storeDeclines stores the classifier's answer for each of pr's own
@@ -98,8 +108,8 @@ func routesToNotes(it learn.ThreadItem) bool {
 // among in.Findings (none when the run recorded no findings), and the
 // lesson scrubbed of the PR's author, the repliers and magnum's logins
 // (in.Own, learn.ScrubLesson; a dropped lesson is a retro.lesson_rejected
-// event, never its text). A missing-context item of scope repo is also
-// upserted as a miss for the notes (routeDecline); any other answer
+// event, never its text). An item routesToNotes takes is also upserted as
+// a miss for the notes (routeDecline); any other answer
 // withdraws the miss an earlier retro routed for the thread while it is
 // still new (unrouteDecline). It returns how many declines it stored and
 // how many of them the author declined or argued; the error joins the rows
@@ -181,21 +191,21 @@ func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, in learn.Input,
 }
 
 // unrouteDecline withdraws m, the miss an earlier retro routed for own
-// thread t (routeDecline), now that the classifier answers t with anything
-// but missing_context and scope repo: m, still new, is upserted as
-// not_issue without its severity, title, lesson, scope, lines and patterns,
-// so the notes curation no longer takes a lesson the classifier dropped.
-// UpsertMiss keeps its state, so an answer of missing_context and scope
-// repo again makes it a miss again; a used miss is left alone (its note is
-// written), as is a dismissed one.
+// thread t (routeDecline), now that the classifier answers t with what
+// routesToNotes does not take: m, still new, is upserted as not_issue
+// without its severity, title, lesson, scope, lines and patterns, so the
+// notes curation no longer takes a lesson the classifier dropped.
+// UpsertMiss keeps its state, so an answer routesToNotes takes again makes
+// it a miss again; a used miss is left alone (its note is written), as is
+// a dismissed one.
 func (e *Engine) unrouteDecline(ctx context.Context, pr store.PR, t learn.OwnThread, m store.Miss) error {
 	_, err := e.st.UpsertMiss(ctx, store.Miss{PRID: pr.ID, SourceURL: t.URL, SourceKind: store.MissSourceThread, Reviewer: m.Reviewer,
 		Path: t.Path, Line: t.Line, ReviewedSHA: t.ReviewedSHA, Class: store.MissNotIssue})
 	return err
 }
 
-// routeDecline upserts own thread t, answered missing_context with scope
-// repo, as a miss for the repository's notes: class miss, scope repo, the
+// routeDecline upserts own thread t, answered with a verdict routesToNotes
+// takes, as a miss for the repository's notes: class miss, scope repo, the
 // finding's priority, title (clipped to learn.TitleMax), path and line,
 // the item's lesson and patterns, and as its reviewer the first person who
 // answered (a bot only with [learn] include_bots; never magnum or its

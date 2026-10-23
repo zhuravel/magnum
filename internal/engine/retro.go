@@ -859,12 +859,13 @@ func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (
 		Author:   github.Account(deref(pr.AuthorLogin), deref(pr.AuthorType)),
 		Own:      e.retroOwnLogins(pr, runs),
 		Findings: findings, MinChars: e.cfg.Learn.MinCommentChars, IncludeBots: e.cfg.Learn.IncludeBots,
-		ReviewRuns: make(map[int64]string, len(reviews)),
+		ReviewRuns: make(map[int64]string, len(reviews)), Targets: make(map[string]string, len(runs)),
 	}
 	for id, rr := range reviews {
 		in.ReviewRuns[id] = rr.ID
 	}
 	for _, r := range runs {
+		in.Targets[r.ID] = r.TargetSHA
 		if r.ReviewID == nil {
 			continue
 		}
@@ -1040,12 +1041,17 @@ func (e *Engine) storeCandidates(ctx context.Context, subject string, repo store
 }
 
 // storeMiss upserts candidate c as classified by it and returns the stored
-// row.
+// row, with the commit the comment was made on and, for an outside one,
+// why: Build's reason (learn.Candidate.OutsideReason), else the
+// classifier's answer.
 func (e *Engine) storeMiss(ctx context.Context, subject string, pr store.PR, c learn.Candidate, it learn.Item) (store.Miss, bool) {
 	m := store.Miss{
 		PRID: pr.ID, SourceURL: c.URL, SourceKind: c.Kind, Reviewer: c.Reviewer, Path: c.Path, Line: c.Line,
-		ReviewedSHA: c.ReviewedSHA, Class: it.Class, Raised: c.Raised, FindingRef: c.FindingRef, ReasonCode: c.ReasonCode,
-		Lines: c.Lines(),
+		ReviewedSHA: c.ReviewedSHA, CommentSHA: c.CommentSHA, Class: it.Class, Raised: c.Raised, FindingRef: c.FindingRef,
+		ReasonCode: c.ReasonCode, Lines: c.Lines(),
+	}
+	if it.Class == store.MissOutside {
+		m.OutsideReason = cmp.Or(c.OutsideReason, store.MissOutsideClassifier)
 	}
 	if it.Class == store.MissMiss {
 		m.Severity, m.Title, m.Lesson, m.Scope, m.Lines, m.Match = it.Severity, it.Title, it.Lesson, it.Scope, it.Lines, it.Match

@@ -45,7 +45,7 @@ var missesClasses = []missesClass{
 	{store.MissMiss, "a real defect a careful reviewer should have reported"},
 	{store.MissNotIssue, "the comment is wrong, already handled or a question"},
 	{store.MissStyle, "taste or naming, no effect on behaviour"},
-	{store.MissOutside, "about code the PR did not change, or a product decision"},
+	{store.MissOutside, "about code magnum did not review or the PR did not change, or a product choice"},
 	{store.MissUnclassified, "stored without a classifier"},
 }
 
@@ -62,8 +62,13 @@ func newMissesCmd(c *Context) *cobra.Command {
 			"\"dismissed: found at the baseline (skill proposal 12)\", as a decline's does); a miss of class miss and scope repo goes to its "+
 			"repository's next notes curation. PROPOSAL, when one is, is the latest notes proposal a miss was given to "+
 			"and where that stands (`magnum notes <repo> --review`). RAISED says what magnum did with the point: rejected:<reason> when its judge "+
-			"raised a similar finding and rejected it, blank when it never raised it. WHERE is path:line, or - for a "+
-			"review summary. The lesson is cut to fit the terminal.\n\n"+
+			"raised a similar finding and rejected it, blank when it never raised it. CLASS says why a comment is outside: "+
+			"outside:before_review (made before magnum's first review of the PR), :file_changed (on a later push that "+
+			"changed its file), :not_descendant (on a commit that does not descend from the one magnum reviewed), "+
+			":no_compare (GitHub could not compare the two), :body_unreviewed (a review summary on a commit magnum did "+
+			"not review) or :classifier (the retro's agent said so); --json has it as outside_reason, with comment_sha, "+
+			"the commit the comment was made on. WHERE is path:line, or - for a review summary. The lesson is cut to fit "+
+			"the terminal.\n\n"+
 			"--declines lists instead how the authors answered magnum's own findings, as the retro classified their "+
 			"replies: by default the findings they declined or argued that no lesson was drawn from yet (state new), "+
 			"with --all every answer in every state. PRIO is the finding's priority as posted; OUTCOME is fixed, "+
@@ -221,7 +226,7 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, state
 			actRefLabel(defRepo, m.Repo, m.Number),
 			inspOrDash(statusSafe(m.Reviewer, 0)),
 			missesWhere(m),
-			statusSafe(m.Class, 0),
+			missesClassCell(m),
 			inspOrDash(statusSafe(m.Severity, 0)),
 		}
 		if states {
@@ -368,6 +373,15 @@ func missesTable(w io.Writer, header []string, rows [][]string, lessons []string
 		fmt.Fprintln(tw, strings.Join(r, "\t")+"\t"+inspOrDash(textx.Clip(lessons[i], budget)))
 	}
 	_ = tw.Flush()
+}
+
+// missesClassCell is a row's CLASS: its class, and for an outside comment
+// why it is outside (outside:before_review), when the row says.
+func missesClassCell(m store.Miss) string {
+	if m.OutsideReason == "" {
+		return statusSafe(m.Class, 0)
+	}
+	return statusSafe(m.Class, 0) + ":" + statusSafe(m.OutsideReason, 0)
 }
 
 // missesRaised is what magnum did with the point: rejected:<reason>, or

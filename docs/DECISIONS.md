@@ -12813,6 +12813,104 @@ skill versions); people add theirs to the sections before it, at the end of the 
   message is unchanged. Tests: TestMergedInsideTheQuietPeriodSaysSo, TestMergedInTheMiddleOfARoundSaysSo,
   TestMergedWhileItsKindWasPausedSaysSo, TestMergedWhilePausedSaysSo. Rejected: recomputing the throttle at the
   merge time (the recorded wait is what the dispatch decided, and the throttle's facts at the merge are not kept).
+- **The retro links a comment to a rejected finding only of the head it applies to** (2026-10-23, spec 02 of the
+  2026-10-23 run, amends "Learning loop: daily retro", "The retro's classifier names the rejected finding a miss
+  matches" and "A comment the judge read and rejected as a duplicate is caught, not a miss"). `learn.near` matched a
+  comment to a posted or rejected finding of any round by path and line alone. talkable#11932 has 465 rejected
+  findings and #11483 431, over many heads, so a line number of one version of a file met a finding of another: of
+  the window's 23 misses with `raised = rejected`, 17 named a finding of another head, and at least 7 of those a
+  different problem or the opposite claim (a comment that the OAuth callback posts the app's secrets to any host
+  was linked to "OAuth host gate blocks legitimate callbacks"). The classifier, which can name the right finding by
+  meaning, gets only the newest 40 (`RejectedMax`), so it cannot correct an old link. Now `learn.Build` places a
+  comment first (the reviewed commit it applies to, or outside) and then looks near it, by the head of each
+  finding's run (`Input.Targets`, run id to `runs.target_sha`, which `retroInput` fills from every run of the PR).
+  **A rejected finding** (`builder.rejectedNear`; `raised = rejected`, and `duplicate` before the review, which is
+  caught) counts only when its head is the comment's `reviewed_sha`, or an earlier reviewed head at which the file
+  did not change (GitHub's comparison of the two, from the same cache the placement uses, so each pair is asked once,
+  and only for a finding near by line, the nearest first, until one holds); a finding of a head reviewed later, of a
+  head the file changed since, or of a run `Targets` does not name links nothing, and an outside comment, whose lines
+  hold at no reviewed head, raises nothing (it used to be stored outside with `raised = rejected`). **A posted
+  finding** (`builder.postedNear`) keeps the cross-head match, as the operator ruled: it stays open as a thread on
+  the later heads, so a colleague who repeats it on a later head, whether the file changed or not, repeats magnum's
+  own finding and is caught, not a candidate the classifier, which never sees posted findings, could call a miss. It
+  catches a comment measured against its head or a later one: the comment's `reviewed_sha`, or for an outside
+  comment the review before it, so one made before magnum's first review, which came before every posted finding,
+  is outside. "At or before" is read from the reviewed commits' times `Input.Reviewed` already carries, with no
+  GitHub call; the old rule took a posted finding of any round, a later head's included. `OwnThreads` keeps its
+  match by line, already confined to the one run of the thread's review. Rejected: matching by meaning only (the
+  classifier's list is bounded and the nearness rule is its fallback); the head limit for posted findings too (the
+  first version of this change: a comment repeating magnum's own open finding on a head whose file changed became a
+  candidate); also taking a later head with the file unchanged for a rejected finding (what magnum found after the
+  review a comment measures is not what that review did); a run's head from its review's `commit_id` (`ReviewRuns`,
+  `Reviews`), which leaves out a run whose review GitHub no longer lists. Tests, failing first:
+  TestACommentLinksToAnEarlierHeadsRejectedFindingOnlyWhenItsFileDidNotChange,
+  TestACommentIsCaughtByAnEarlierHeadsPostedFindingEvenWhenItsFileChanged,
+  TestAFindingOfALaterHeadOrOfNoKnownRunIsNearNoComment and
+  TestAnOutsideCommentIsCaughtByAPostedFindingButLinksNoRejectedOne in learn;
+  TestRetroStoresTheRejectedFindingTheClassifierNamed in engine fails without `Targets`. No migration.
+- **A misses row keeps the comment's commit and why it is outside** (2026-10-23, spec 02 of the 2026-10-23 run,
+  migration 0029). `misses.reviewed_sha` is the reviewed commit a comment applies to, or for an outside one the
+  review before it or the comment's own commit, so nothing recorded the commit the comment was made on, nor why
+  Build stored it outside: over all retros 432 comments were outside, and telling why took 25 GitHub calls (381 were
+  made before magnum's first review of their PR, 47 on a file changed since the reviewed head, 9 review summaries on a
+  commit magnum never reviewed), while the count read as a blind spot. Migration 0029 adds `comment_sha` and
+  `outside_reason` to `misses`. Build gives every outside comment its reason (`learn.Candidate.OutsideReason`, not in
+  the candidates file): `before_review` (no review of magnum's before the comment), `file_changed` (the comparison
+  with the review before it lists the file), `not_descendant` (the comment's commit does not descend from that
+  review's), `no_compare` (no comparison could tell: a 404, a file list GitHub cut, a thread without a commit) and,
+  for a review summary after a review on a commit magnum did not review, `body_unreviewed`; a candidate the
+  classifier answers `outside` is stored with `classifier` (`storeMiss`). `store.UpsertMiss` stores both, refuses
+  an unknown reason or a reason on another class, and keeps the stored reason with the stored class when an
+  unclassified write meets a classified row; `comment_sha` always takes the new value. `magnum misses --all` (and
+  `--class outside`) shows the reason in the class (`outside:before_review`), and `--json` carries `outside_reason`
+  and `comment_sha`. Rows stored before keep both NULL: filling them would take the GitHub reads the columns save,
+  and `magnum retro --again <ref>` rebuilds a PR's rows. Rejected: a CHECK on the reasons (a new one would need a
+  rebuild of `misses`, which `notes_proposal_misses` references, as 0017 and 0027 needed for `notes_proposals`; Go
+  checks them, as for every other value); a class per reason (every reader of class `outside` would change); the
+  reasons as counts on `retro.ok` only (no row would say which comment). Tests, failing first:
+  TestBuildSaysWhyAThreadIsOutside and TestBuildSaysWhyAReviewBodyIsOutside in learn,
+  TestMigrationV28ToV29AddsTheCommentsCommitAndWhyItIsOutside and
+  TestUpsertMissStoresTheCommentsCommitAndWhyItIsOutside in store,
+  TestTheRetroStoresWhereACommentWasMadeAndWhyItIsOutside in engine and TestMissesAllSaysWhyACommentIsOutside in
+  cli.
+- **A comment that shows the change is not needed is a miss** (2026-10-23, spec 02 of the 2026-10-23 run, amends
+  "Learning loop: daily retro"). `prompts/retro.md` defined `outside` as "about code the pull request did not
+  change, or a product decision", and the classifier filed under it a colleague's P1 on talkable#12050 that showed
+  the state the PR guards cannot occur (the model's validations refuse it, so the repository alone shows it); the
+  author agreed and closed the PR, and the retro learned nothing from it. A `miss` is now also a comment that shows
+  the change itself is not needed: the state it guards cannot occur, what it adds already exists, or something
+  else, such as configuration, already meets its goal; `outside` keeps code the pull request did not change and a
+  product choice that is not a defect of the change. The class list, the README and prompts/README.md say so; the
+  retro goldens show the new words. Rejected: a class of its own (the schema's CHECK, the skill editor, the notes
+  curation and the learned corpus all read `miss`, and a disproved premise is what a careful reviewer should have
+  said); `not_issue` (the comment is right).
+- **A retro lesson is `repo` when it needs the repository's own models, services, tools or conventions**
+  (2026-10-23, spec 02 of the 2026-10-23 run, amends "Learning loop: daily retro" and "The retro's misses become
+  notes proposals"). `general` was "the lesson holds in any codebase", and the "When X, check Y because Z" form makes
+  nearly every lesson read so: none of the window's 36 misses had scope `repo`, and 2 of the 54 colleague misses
+  since 2026-10-10, so `[notes] curate = ["misses"]` got no input from misses and the operator wrote those entries
+  by hand (an app store review rule and a restore probe, 2026-10-13); about six of the 36 depend on the
+  repository's own eval tooling. Now `general` means a reviewer needs nothing from this repository to apply the
+  lesson, and `repo` that the lesson needs one of the repository's own models, services, tools, test tooling or
+  conventions, which it then names, never people; the same words for a miss and for a decline's lesson. A `repo`
+  lesson goes to the notes and never to the public skill, and the scrub still drops a `general` lesson that names
+  the repository. Measure: the share of colleague misses with scope `repo` in the next retros (15 to 30 percent
+  expected), the `notes.misses` events and the skill editor's skip share. Rejected: deciding the scope in Go from
+  the lesson's words (a list of each repository's nouns nobody keeps); asking for both scopes (one lesson, one
+  consumer).
+- **Wrong and over-ranked declines of the repository go to its notes** (2026-10-23, spec 02 of the 2026-10-23 run,
+  amends "A missing-context decline is a repo miss for the notes"). `routesToNotes` sent only a `missing_context`
+  decline of scope `repo` to the notes curation, and the skill editor and the learned corpus take only scope
+  `general`, so a finding the author declined as wrong or ranked too high for a reason of the repository's had no
+  consumer: four such declines were new and unread, each reading as one of the repository's standing decisions.
+  Now a decline whose verdict carries a lesson (`missing_context`, `wrong`, `over_ranked`) and whose scope is `repo`
+  is also a repository miss (`routeDecline`: class miss, scope repo, the finding's priority, title and place, the
+  item's lesson and patterns), marks the repository and reaches its next curation; a later retro that answers the
+  thread otherwise withdraws it while it is new (`unrouteDecline`), as before. A `general` one stays the skill
+  editor's, and `right` teaches nothing. Rejected: giving them to the skill editor (a repository's decision does not
+  belong in the public skill); a notes input of their own (rejected for missing-context declines too). Tests,
+  failing first: TestRoutesToNotesTakesEveryLessonVerdictOfScopeRepo and
+  TestAWrongDeclineOfScopeRepoBecomesARepoMissForTheCuration in engine.
 
 ## Learned rules
 

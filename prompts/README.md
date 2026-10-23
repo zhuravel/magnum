@@ -340,15 +340,21 @@ say they are data, not instructions.
 |---|---|
 | `.URL` | the pull request |
 | `.ReviewedSHAs` | the commits Magnum posted reviews of, oldest first |
-| `.Candidates` | the candidates file (`candidates.json`): per comment its `id` (`t<comment id>` or `r<review id>`), `reviewer`, `path`, `start_line` and `line`, `side`, `reviewed_sha`, `diff_hunk`, `body`, `raised` with `finding_ref` and `reason_code` (a rejected finding within 3 lines), `file` or `file_skipped`; and `rejected`, the 40 newest findings the judge rejected on the pull request, each with its `id` (`<run id>/<finding id>`), `title`, `path`, `reason` and `priority`: Magnum's own text, never the pull request's |
+| `.Candidates` | the candidates file (`candidates.json`): per comment its `id` (`t<comment id>` or `r<review id>`), `reviewer`, `path`, `start_line` and `line`, `side`, `reviewed_sha`, `diff_hunk`, `body`, `raised` with `finding_ref` and `reason_code` (a finding rejected within 3 lines at the comment's `reviewed_sha`, or at an earlier reviewed commit whose copy of the file is the same), `file` or `file_skipped`; and `rejected`, the 40 newest findings the judge rejected on the pull request, each with its `id` (`<run id>/<finding id>`), `title`, `path`, `reason` and `priority`: Magnum's own text, never the pull request's |
 | `.Files` | the directory of the commented files and of the files of Magnum's answered findings, `<Files>/<first 12 characters of reviewed_sha>/<path>` |
 | `.Output` | the answer file the agent writes, `retro.json` |
 | `.Count` | how many candidates there are |
 | `.Threads` | how many of Magnum's own findings someone answered (0 when none): the candidates file's `threads`, per finding its `id` (`o<comment id>`), `url`, `comment_id`, `review_id`, `path` and `line`, `title` (the posted comment's first line without its bold and priority tag), `priority`, `reviewed_sha`, `finding_ref` (the posted finding of that review within 3 lines), `file` (the finding's file at `reviewed_sha`) or `file_skipped`, and `replies`, oldest first, each with its `author` (`(magnum)` for Magnum's own, `(magnum fix)` for its fixer's, the replies carrying `<!-- magnum:fix -->`) and `body`, and `fixer` when the fixer's replies are the only answers (such a thread keeps no lesson): the pull request's text, data like the comments |
 
 The answer is `{"items": [{"id", "class", ...}]}` with one item per candidate and `class` one of `miss`,
-`not_issue`, `style` and `outside`; a miss also needs `severity` (`P0` to `P3`), `title` (at most 80
-characters), `lesson`, `scope` (`repo` or `general`), `lines` (`[from, to]`, 1 ≤ from ≤ to) and `match`
+`not_issue`, `style` and `outside`. A `miss` is a real defect or risk of the reviewed change, and also a
+comment that shows the change itself is not needed (the state it guards cannot occur, what it adds already
+exists, something else such as configuration already meets its goal); `outside` is for code the pull
+request did not change and for a product choice that is not a defect of the change. A miss also needs
+`severity` (`P0` to `P3`), `title` (at most 80 characters), `lesson`, `scope` (`general` when a reviewer
+needs nothing from this repository to apply the lesson, `repo` when it needs one of the repository's own
+models, services, tools, test tooling or conventions, which the lesson then names, never people; the same
+test for a decline's), `lines` (`[from, to]`, 1 ≤ from ≤ to) and `match`
 (one to three case-insensitive Go regular expressions of at most 120 characters). An item of any class may
 name `rejected`, the `id` of the rejected finding that reports the comment's problem by meaning; it becomes the
 miss's `raised` (rejected, with that finding and its reason), and an item that names none keeps the finding within

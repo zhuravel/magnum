@@ -33,6 +33,7 @@ func input(threads []github.Thread, reviews []github.Review) Input {
 	return Input{
 		Author:   "alice",
 		Reviewed: []Reviewed{{SHA: shaA, At: t0}},
+		Targets:  map[string]string{"r-1": shaA}, // the findings' run reviewed shaA
 		Own:      []string{"talkable[bot]", "zhuravel"},
 		Threads:  threads, Reviews: reviews, MinChars: 20,
 	}

@@ -499,3 +499,41 @@ func TestMissesSayWhyASkillGateDismissedAnInput(t *testing.T) {
 		t.Fatalf("--json = %+v", ms)
 	}
 }
+
+// TestMissesAllSaysWhyACommentIsOutside: with --all (or --class outside)
+// an outside comment's CLASS says why it is outside, as RAISED says why
+// the judge rejected a point, and --json carries the reason and the commit
+// the comment was made on; a row stored before the reason existed says
+// only outside.
+func TestMissesAllSaysWhyACommentIsOutside(t *testing.T) {
+	f := newInspFixture(t)
+	st := f.store()
+	_, pr := inspSeedPR(t, st, "talkable/talkable", 101, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
+	missSeed(t, st, pr, store.Miss{SourceURL: "https://example.com/c/1", Path: "a.rb", Line: 4, Class: store.MissOutside, Title: "Old code",
+		CommentSHA: "0123456789abcdef0123456789abcdef01234567", OutsideReason: store.MissOutsideBeforeReview})
+	missSeed(t, st, pr, store.Miss{SourceURL: "https://example.com/c/2", Path: "b.rb", Line: 9, Class: store.MissOutside, Title: "Unknown why"})
+	st.Close()
+	for _, args := range [][]string{{"--all"}, {"--class", "outside"}} {
+		out := missesRun(t, f, args...)
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		if len(lines) != 3 {
+			t.Fatalf("misses %v:\n%s", args, out)
+		}
+		if got := strings.Fields(lines[2])[3]; got != "outside:before_review" {
+			t.Errorf("misses %v: CLASS = %q, want outside:before_review\n%s", args, got, out)
+		}
+		if got := strings.Fields(lines[1])[3]; got != "outside" {
+			t.Errorf("misses %v: CLASS of a row without a reason = %q\n%s", args, got, out)
+		}
+	}
+	var ms []map[string]any
+	if err := json.Unmarshal([]byte(missesRun(t, f, "--json", "--all")), &ms); err != nil || len(ms) != 2 {
+		t.Fatalf("--json: %v, %v", ms, err)
+	}
+	if ms[1]["outside_reason"] != store.MissOutsideBeforeReview || ms[1]["comment_sha"] != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("--json row = %v", ms[1])
+	}
+	if _, ok := ms[0]["outside_reason"]; ok {
+		t.Errorf("a row without a reason names one: %v", ms[0])
+	}
+}
