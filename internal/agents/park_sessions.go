@@ -144,8 +144,9 @@ const parkEndTimeout = 10 * time.Second
 // (parkEndTimeout), so a stop never lands between them; a crash after the
 // close leaves a live row without a pane, which the observer turns into an
 // ordinary lost session, still resumable. A close the check refuses
-// (something runs there) or herdr fails parks s all the same, its pane left
-// for a later CloseRetiredPanes, as after the PR's park; note says so for
+// (something runs there, or herdr shows the pane as no longer the
+// session's) or herdr fails parks s all the same, its pane left for a later
+// CloseRetiredPanes, as after the PR's park; note says so for
 // the ok event, and how the agent quit when its exit keys quit it.
 func (m *Manager) parkOne(ctx context.Context, snap herdr.Snapshot, s store.Session, a herdr.AgentInfo, listed bool) (note string, err error) {
 	if listed {
@@ -347,13 +348,22 @@ func dialogShown(text string) bool {
 // closeOwnPane closes session s's own pane, never another, once a fresh
 // look finds only the shell in its foreground (CloseRetiredPanes' check),
 // and a workspace the close leaves without a pane (closeEmptied over snap,
-// the park's snapshot). closed is false when s records no pane or herdr no
-// longer has it; err says why a pane was left (something runs there, or
-// herdr failed).
+// the park's snapshot). The pane is the one the row records, so snap must
+// show it is still the session's (herdrView.paneReason: an agent under the
+// row's agent name, or no agent and the session's checkout): after herdr's
+// restart its id may name another agent's pane or the operator's shell.
+// closed is false when s records no pane or herdr no longer has it; err
+// says why a pane was left (it is not the session's, something runs there,
+// or herdr failed).
 func (m *Manager) closeOwnPane(ctx context.Context, snap herdr.Snapshot, s store.Session) (closed bool, err error) {
 	pane := store.Deref(s.HerdrPaneID)
 	if pane == "" {
 		return false, nil
+	}
+	if p, ok := paneIndex(snap)[pane]; ok {
+		if why := m.viewOf(ctx, s.PRID, snap, []store.Session{s}).paneReason(p, s); why != "" {
+			return false, fmt.Errorf("pane %s is not the session's: %s", pane, notTheirs(why))
+		}
 	}
 	pi, err := m.d.Herdr.PaneProcessInfo(ctx, pane)
 	switch {

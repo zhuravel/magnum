@@ -345,9 +345,14 @@ const EventDefaultModelRestored = "agent.default_model_restored"
 
 const EventHerdrIDsReused = "agents.herdr_ids_reused"
     EventHerdrIDsReused is recorded (info, the PR's subject) when retired
-    sessions of the PR record herdr ids that live sessions of other PRs use now:
-    their herdr ids are dropped and nothing of theirs is closed (data: sessions,
-    the rows; panes and workspaces, the ids dropped).
+    sessions of the PR record herdr ids that are no longer theirs: their herdr
+    ids are dropped and nothing of theirs is closed. One event per reason (data:
+    reason; sessions, the rows; panes and workspaces, the ids dropped):
+    "other_pr", live sessions of other PRs use them now; "another_agent",
+    herdr shows another agent in the pane (or in the workspace) they record;
+    "outside_checkout", herdr shows a pane without their agent that works
+    outside their checkout there. It names ids, never a pane's text or
+    directory.
 
 const EventHooksTrustUnsaved = "agents.hooks_trust_unsaved"
     EventHooksTrustUnsaved is recorded (warn, subject tool:<kind>) when magnum
@@ -1505,20 +1510,23 @@ func (m *Manager) ClearDeadLaunch(ctx context.Context, s store.Session) (bool, e
 
 func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
     CloseRetiredPanes closes the panes of the PR's parked, closed and lost
-    sessions that herdr still has (a park, a hard park or an agent that
-    went away leaves its session's pane as an idle shell, and the next
-    workspace splits a new pane for every role, so a PR's workspace grew by
-    a pane per role and start: 21 for 4 live sessions on talkable#11932).
-    A pane is closed only when its foreground process is the shell and no
-    agent herdr lists there works or is blocked, and never when a starting
-    or live session of the PR or of another PR records it or its workspace;
-    a pane no session records (a shell the operator opened) is never one.
-    A retired session whose pane or workspace a starting or live session of
-    another PR records (herdr numbers them again after a restart) has its
-    herdr ids dropped, with one EventHerdrIDsReused, and nothing of it closes.
-    A workspace the closes leave without a pane is closed too. A parked or
-    lost session keeps its conversation: the role's next start resumes it
-    in a new pane. One EventPanesClosed names the count and the roles, and,
+    sessions that herdr still has (a park, a hard park or an agent that went
+    away leaves its session's pane as an idle shell, and the next workspace
+    splits a new pane for every role, so a PR's workspace grew by a pane per
+    role and start: 21 for 4 live sessions on talkable#11932). A pane is closed
+    only when its foreground process is the shell and no agent herdr lists there
+    works or is blocked, and never when a starting or live session of the PR
+    or of another PR records it or its workspace; a pane no session records (a
+    shell the operator opened) is never one. A retired session whose pane or
+    workspace a starting or live session of another PR records (herdr numbers
+    them again after a restart), or whose pane (its workspace, when the pane is
+    gone) herdr shows as no longer its own (an agent there that does not carry
+    the row's agent name, or a pane without it that works outside the session's
+    checkout: an eval replay's or the operator's, which no row records), has
+    its herdr ids dropped, with one EventHerdrIDsReused per reason, and nothing
+    of it closes. A workspace the closes leave without a pane is closed too. A
+    parked or lost session keeps its conversation: the role's next start resumes
+    it in a new pane. One EventPanesClosed names the count and the roles, and,
     of a lost session's pane that showed one, the CLI's last error line by role
     (last_lines; when two closed panes of a role show one, the newer session's);
     a pane herdr refuses to close is logged, and the first such failure returned
@@ -1617,7 +1625,14 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
         session's surviving pane is reused). A workspace or a pane a starting or
         live session of another PR records is never reused (herdr numbers them
         again after a restart; the PR's retired rows that record one drop their
-        herdr ids, EventHerdrIDsReused).
+        herdr ids, EventHerdrIDsReused), nor is one herdr shows as no longer the
+        PR's: a pane must show the agent under its row's agent name, or no agent
+        and the session's checkout, and a workspace must hold no other pane than
+        such panes, agents under the PR's agent names and panes in the checkout
+        (an eval replay's or the operator's workspace, which no row records,
+        may hold the id now). A live row whose pane fails is marked lost;
+        a lost row whose pane, or workspace when the pane is gone, fails drops
+        its herdr ids.
       - If that workspace belongs to another checkout, the PR is parked first
         (ErrBusy while an agent works) and MovedFrom is set.
       - Otherwise a new workspace is created (cwd slotPath, label, no focus):
@@ -1774,12 +1789,16 @@ func (m *Manager) Park(ctx context.Context, pr store.PR) error
     quit. A pane or a workspace another PR's starting or live session records is
     never the PR's (herdr numbers them again after a restart): the PR's retired
     sessions that record one drop their herdr ids first (EventHerdrIDsReused),
-    and no such workspace is closed. Live sessions with a session_id become
-    parked, the rest closed (see Quit); lost sessions stay lost. A quit that
-    fails does not stop the others: the PR's other live agents are still quit
-    and the failures come back joined (the stuck agent's session stays live,
-    so ErrBusy and herdr's timeout are in the chain as for one failure). No live
-    or lost sessions: no-op.
+    and no such workspace is closed. Nor is one with a pane herdr shows
+    as no longer its session's (another agent than the row's agent name,
+    or a pane without it outside the session's checkout: an eval replay's or the
+    operator's, which no row records); the PR's retired sessions whose pane,
+    or workspace when the pane is gone, herdr shows so drop their herdr ids too.
+    Live sessions with a session_id become parked, the rest closed (see Quit);
+    lost sessions stay lost. A quit that fails does not stop the others:
+    the PR's other live agents are still quit and the failures come back joined
+    (the stuck agent's session stays live, so ErrBusy and herdr's timeout are in
+    the chain as for one failure). No live or lost sessions: no-op.
 
 func (m *Manager) ParkClosingPanes(ctx context.Context, pr store.PR) error
     ParkClosingPanes is Park, then, once the park worked, CloseRetiredPanes:

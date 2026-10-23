@@ -2459,6 +2459,65 @@ skill versions); people add theirs to the sections before it, at the end of the 
   before its once-a-minute throttle, now after it; its `os.Stat` failure of `hooks.json`, logged with the
   Codex home's path (a pane env value), now names `~/.codex` or `$CODEX_HOME` (`codexHomeErr`, shared with
   the read error of spec 122's check). The existing composer, rollout and turn tests cover them.
+- **magnum closes or reuses a pane or a workspace by a recorded id only while herdr shows it is still the
+  session's** (2026-10-23, spec 08 of the 2026-10-23 run). Spec 04's check sees only what the registry
+  holds. At 15:10:53Z the live daemon, still on the code before spec 04, set up talkable#12069 and logged
+  `closed 1 panes of retired sessions (codex-review)` (`pr.panes_closed`); herdr's server log shows request
+  `magnum-2241-5125`, `pane.close`, pane 145, and one second later an eval replay reported `codex-review
+  session lost (pane or agent gone)`. The replay ran in its own workspace ("eval talkable#11932", agents
+  tagged eval-8cd077) and keeps its sessions in a scratch registry the live daemon cannot see, as it cannot
+  see any pane the operator opens; herdr numbers workspaces and panes from the start again after every
+  restart, so a stale row could still close such a pane after spec 04. Now a pane or a workspace a session
+  recorded is closed, parked away or reused only while herdr's snapshot shows it is still the session's
+  (`herdrView`, internal/agents/herdr_ids.go): a pane with an agent must carry the row's agent name
+  (`another_agent` otherwise; a CLI herdr detected but names not, since herdr names only what agent.start or
+  a rename named, is no agent magnum started, and is let through only for a row without an agent name, a
+  shell role whose command runs a CLI such as `codex review`, by the directory); a pane without one must
+  work in the session's checkout, the row's cwd, else the path of the PR's slot (`outside_checkout`, also
+  when herdr or the row does not say where); a workspace must hold only panes that pass for a row of the PR
+  that records them, and a pane no row records must carry one of the PR's agent names or work in the
+  checkout of a row that records the workspace. The places: the retired-pane close, Park's workspace close
+  and the workspace reuse (`inHerdr` before `retiredPanes`, Park's `closing` and `reusableWorkspace`; a live
+  row's pane EnsureWorkspace's first pass keeps elsewhere is marked lost when it fails), the early park's
+  close of the session's own pane (`closeOwnPane` leaves it, the session parked, the note saying it
+  stays), and every key a park, a retire or a quit sends by a recorded id: the ctrl+c of Quit, Park,
+  ParkHard and the early park (`ctrlC`, which no longer reads the session id from such a pane either:
+  `RecordSessionID` ran before the ctrl+c and would have recorded the other agent's conversation) and the
+  hard park's exit keys and close (`forceQuit`). Each looks at a fresh snapshot first (`beforeKeys`); a
+  pane that fails gets nothing, with a warn log line naming the session and the ids: when herdr lists the
+  session's agent nowhere, its agent is gone, which counts as quit (the session is retired, the pane left,
+  and its ids dropped as a retired row's), and when herdr shows the agent in another pane the quit fails
+  with ErrBusy and the session stays live (the observer moves the row to its agent's pane at its next
+  tick, so the next park quits it there; Recover sends no key). The early park's exit keys were already
+  held to the conversation the park found. A retired row whose pane, or its
+  workspace when the pane is gone, fails is stale as spec 04's are: its herdr ids are dropped
+  compare-and-set, state and session_id kept, with one info `agents.herdr_ids_reused` event per PR and
+  reason (its data gains `reason`, `other_pr` for spec 04's), naming the ids, never a pane's screen or
+  directory; a live row keeps its ids (Park retires it, and the next retired-pane close drops them). herdr's
+  snapshot gives the agent's name and the pane's working directory (`agents[].name`, `panes[].cwd`, else
+  `foreground_cwd`), which the eval's leftover close and the slot guard already read, and a session row
+  records its checkout as its cwd (EnsureWorkspace's slot path). A shell the operator `cd`s elsewhere in a
+  PR's workspace now keeps that workspace from reuse: the next round lays out its own. Tests:
+  TestARetiredRowNeverClosesAPaneHerdrShowsAsSomeoneElses (an eval agent, the eval's codex-review shell, the
+  operator's shell, the operator's CLI in the checkout and where a shell role's pane was),
+  TestARetiredRowsPaneHerdrStillShowsAsTheSessionsCloses (a parked row's shell in the checkout, a lost
+  row's agent anywhere, a shell role's detected CLI, a row without a cwd in the PR's slot),
+  TestParkAndTheReuseRefuseAWorkspaceWithAPaneThatIsNotThePRs (both paths: both panes the replay's, one
+  still the PR's, one the operator's shell, a row's pane gone),
+  TestParkNeverClosesAWorkspaceItsLiveRowsRecordWhereHerdrShowsAReplay,
+  TestAReusedWorkspaceKeepsNoLivePaneHerdrShowsAsSomeoneElses,
+  TestAnEarlyParkLeavesARecordedPaneHerdrShowsAsSomeoneElses,
+  TestAParkSendsNoKeyToARecordedPaneThatCarriesAnotherAgent (the plain and the hard park),
+  TestAQuitSendsNoKeyToARecordedPaneHerdrGaveToSomeoneElse and
+  TestAHardParkForcesNothingOnAPaneHerdrGaveAwayDuringItsQuit. Rejected: the workspace label as the
+  identity (Park and the retired-pane close do not know it, a retro pane's workspace has its own, and it
+  says nothing of the panes); the pane label "PR #N <role>" (it names no repository and stays whatever runs
+  in the pane); taking a CLI herdr names not as the session's in any shell role's pane wherever it works
+  (the operator's codex where a closed codex-review row's pane was); dropping a live row's ids (spec 04's
+  rule stands); sending the ctrl+c to the agent by its name instead (the wait for an idle shell and the
+  hard park's close would still go to the recorded pane); counting a quit as done while herdr shows the
+  session's agent in another pane (it would park a session whose agent goes on under its name, which a
+  fresh start then refuses).
 
 ## Screens and commands
 

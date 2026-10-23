@@ -69,7 +69,14 @@ func roleNames(roles []config.Role) []Role {
 //     session's surviving pane is reused). A workspace or a pane a starting
 //     or live session of another PR records is never reused (herdr numbers
 //     them again after a restart; the PR's retired rows that record one drop
-//     their herdr ids, EventHerdrIDsReused).
+//     their herdr ids, EventHerdrIDsReused), nor is one herdr shows as no
+//     longer the PR's: a pane must show the agent under its row's agent
+//     name, or no agent and the session's checkout, and a workspace must
+//     hold no other pane than such panes, agents under the PR's agent names
+//     and panes in the checkout (an eval replay's or the operator's
+//     workspace, which no row records, may hold the id now). A live row
+//     whose pane fails is marked lost; a lost row whose pane, or workspace
+//     when the pane is gone, fails drops its herdr ids.
 //   - If that workspace belongs to another checkout, the PR is parked first
 //     (ErrBusy while an agent works) and MovedFrom is set.
 //   - Otherwise a new workspace is created (cwd slotPath, label, no focus):
@@ -114,9 +121,12 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 	if err != nil {
 		return Workspace{}, fmt.Errorf("agents: workspace pr %d: %w", pr.Number, err)
 	}
+	// A lost row whose pane herdr shows as no longer its own drops its ids
+	// here, so Pass 2 never takes that pane.
+	sessions, view := m.inHerdr(ctx, pr, snap, sessions)
 
 	ws := Workspace{Panes: map[Role]string{}, Roles: roleNames(roles)}
-	wsID, tabID, cwd := reusableWorkspace(snap, sessions, others)
+	wsID, tabID, cwd := reusableWorkspace(view, others)
 	if wsID != "" && cwd != "" && !samePath(cwd, slotPath) {
 		if err := m.Park(ctx, pr); err != nil {
 			return Workspace{}, fmt.Errorf("agents: pr %d moved from %s to %s: %w", pr.Number, cwd, slotPath, err)
@@ -142,8 +152,9 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 			}
 			// The pane may sit in another workspace when StartAgent adopted a
 			// conversation herdr restored elsewhere; it still serves the role,
-			// unless a newer session of another PR records it.
-			if p, ok := panes[store.Deref(live.HerdrPaneID)]; ok && !others.pane(p.ID) {
+			// unless a newer session of another PR records it or herdr shows
+			// it as no longer the session's.
+			if p, ok := panes[store.Deref(live.HerdrPaneID)]; ok && !others.pane(p.ID) && view.paneReason(p, live) == "" {
 				ws.Panes[role] = p.ID
 				continue
 			}
@@ -482,15 +493,17 @@ func (m *Manager) markLost(ctx context.Context, s store.Session) error {
 }
 
 // reusableWorkspace picks the workspace of the newest starting/live/lost
-// session that herdr still has and that no starting or live session of
+// session of view that herdr still has, that no starting or live session of
 // another PR records (others: herdr numbers workspaces again after a
-// restart).
-func reusableWorkspace(snap herdr.Snapshot, sessions []store.Session, others herdrOwners) (wsID, tabID, cwd string) {
-	for _, s := range slices.Backward(sessions) {
+// restart) and whose every pane herdr shows as the PR's
+// (herdrView.workspaceReason: an eval replay's or the operator's workspace,
+// which no row records, may hold that id now).
+func reusableWorkspace(view herdrView, others herdrOwners) (wsID, tabID, cwd string) {
+	for _, s := range slices.Backward(view.sessions) {
 		if !isLive(s) && s.State != store.SessionLost {
 			continue
 		}
-		if id := store.Deref(s.HerdrWorkspaceID); id != "" && hasWorkspace(snap, id) && !others.workspace(id) {
+		if id := store.Deref(s.HerdrWorkspaceID); id != "" && hasWorkspace(view.snap, id) && !others.workspace(id) && view.workspaceReason(id) == "" {
 			return id, store.Deref(s.HerdrTabID), store.Deref(s.Cwd)
 		}
 	}

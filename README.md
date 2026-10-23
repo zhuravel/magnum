@@ -985,7 +985,18 @@ name the new panes of another PR. Magnum never closes, reuses or parks away a pa
 starting or live session of another PR records (of two live sessions with one pane, the newer owns it): an
 old parked, closed or lost session of the PR that records one has its herdr ids dropped, which one
 `agents.herdr_ids_reused` event says, and nothing of it is closed; its conversation still resumes, in a new
-pane.
+pane. What no registry row records, an eval replay's panes (a replay keeps its sessions in a registry of its
+own) or your own, can take an old id too, so magnum closes, parks or reuses a pane by the id a session
+recorded, or sends it a key there (a park's or a quit's ctrl+c, a hard park's exit keys), only while herdr
+shows it is still that session's: the agent there carries the session's agent name, or, with no agent, the
+pane works in the PR's checkout (the slot the session ran in). A quit that finds its pane someone else's
+sends nothing and logs it: it counts as done when herdr lists the session's agent nowhere, and waits for
+the next try (busy) when herdr shows that agent in another pane, where magnum moves the session. A workspace is
+closed or reused only while every pane in it is the PR's that way (a pane no session records must carry one
+of the PR's agents or work in its checkout, so a shell you `cd` elsewhere in a PR's workspace makes the next
+round lay out a workspace of its own). A pane or a workspace that fails is left alone, and the old
+session that recorded it has its herdr ids dropped, one `agents.herdr_ids_reused` event per reason
+(`other_pr`, `another_agent`, `outside_checkout`) naming the ids, never a pane's text or directory.
 
 An agent CLI that dies as it starts can leave herdr listing the launch under the role's agent name
 (`launch_pending`, status unknown) on a pane that shows only a shell prompt, and herdr refuses that name to

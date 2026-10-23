@@ -23,11 +23,12 @@ import (
 
 // retiredPanes are the panes of the PR's parked, closed and lost sessions
 // in snap that no starting or live session records, of the PR or of another
-// (others), in session order. A pane counts only while it sits in the
-// workspace its session recorded (when it recorded one): an id herdr shows
-// in another workspace is no longer that session's pane; nor does one in a
-// workspace another PR's starting or live session records (herdr may have
-// split it for that session a moment before its row). roles names the role
+// (others), in session order; the rows whose pane herdr shows as no longer
+// theirs have their ids dropped already (inHerdr). A pane counts only while
+// it sits in the workspace its session recorded (when it recorded one): an
+// id herdr shows in another workspace is no longer that session's pane; nor
+// does one in a workspace another PR's starting or live session records
+// (herdr may have split it for that session a moment before its row). roles names the role
 // of the newest such session of each pane, and lost the panes whose newest
 // such session is lost (its agent went away, as against one magnum parked
 // or closed).
@@ -89,8 +90,12 @@ const EventPanesClosed = "pr.panes_closed"
 // session of the PR or of another PR records it or its workspace; a pane no
 // session records (a shell the operator opened) is never one. A retired
 // session whose pane or workspace a starting or live session of another
-// PR records (herdr numbers them again after a restart) has its herdr ids
-// dropped, with one EventHerdrIDsReused, and nothing of it closes. A
+// PR records (herdr numbers them again after a restart), or whose pane (its
+// workspace, when the pane is gone) herdr shows as no longer its own (an
+// agent there that does not carry the row's agent name, or a pane without
+// it that works outside the session's checkout: an eval replay's or the
+// operator's, which no row records), has its herdr ids dropped, with one
+// EventHerdrIDsReused per reason, and nothing of it closes. A
 // workspace the closes leave without a pane is closed too. A parked or lost session keeps its conversation: the
 // role's next start resumes it in a new pane. One EventPanesClosed names
 // the count and the roles, and, of a lost session's pane that showed one,
@@ -115,6 +120,7 @@ func (m *Manager) CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap her
 	if err != nil {
 		return fmt.Errorf("agents: close the retired panes of pr %d: %w", pr.Number, err)
 	}
+	sessions, _ = m.inHerdr(ctx, pr, snap, sessions) // what herdr shows as no longer theirs drops its ids: none of it closes
 	panes, roleOf, lostPane := retiredPanes(snap, sessions, others)
 	var closed, roles []string
 	lastLines := map[string]string{}

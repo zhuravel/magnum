@@ -72,12 +72,24 @@ func (m *Manager) interrupt(ctx context.Context, s *store.Session) (waited, err 
 // ctrlC records the session id of s first (s.SessionID too), then sends n
 // ctrl+c 1 s apart to its pane, or to its agent when it records no pane
 // (interrupt, the early park's earlyQuit). gone: herdr no longer has the
-// pane or the agent, which counts as quit.
+// pane or the agent, which counts as quit. The pane is the one the row
+// records, so before both a fresh snapshot must show it is still the
+// session's (beforeKeys): otherwise nothing is read from it or sent to it,
+// and the quit counts as done when herdr lists the session's agent nowhere,
+// or fails with ErrBusy when it shows the agent in another pane.
 func (m *Manager) ctrlC(ctx context.Context, s *store.Session, n int) (gone bool, err error) {
+	pane := store.Deref(s.HerdrPaneID)
+	if pane != "" {
+		if gone, err := m.beforeKeys(ctx, *s, pane); err != nil || gone {
+			if err != nil {
+				return false, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+			}
+			return true, nil
+		}
+	}
 	if sid, err := m.RecordSessionID(ctx, *s); err == nil && sid != "" {
 		s.SessionID = &sid
 	}
-	pane := store.Deref(s.HerdrPaneID)
 	for i := range n {
 		if i > 0 {
 			if err := m.sleep(ctx, time.Second); err != nil {
@@ -115,8 +127,20 @@ func quitBusy(s store.Session, waited error) error {
 // no session owns shared the PR's), and the session becomes closed, never
 // parked, with one EventParkForced. A pane herdr refuses to close fails
 // with ErrBusy and herdr's timeout, the session unchanged, as Quit's wait
-// does.
+// does. The keys and the close go to the pane the row records, so first a
+// fresh snapshot must show it is still the session's (beforeKeys: herdr
+// may have restarted during the wait and given the id to another agent):
+// otherwise nothing is sent or closed; a session whose agent herdr lists
+// nowhere is retired as by Quit, and one it shows in another pane, or a
+// snapshot herdr cannot give, fails the quit with ErrBusy, the session
+// unchanged.
 func (m *Manager) forceQuit(ctx context.Context, s store.Session, pane string, waited error) error {
+	switch gone, err := m.beforeKeys(ctx, s, pane); {
+	case err != nil:
+		return fmt.Errorf("agents: quit session %d: %w: %w; %w", s.ID, ErrBusy, waited, err)
+	case gone:
+		return m.retire(ctx, s)
+	}
 	if k, ok := m.kindSpec(m.sessionKind(s)); ok && len(k.ExitKeys) > 0 {
 		sent, timedOut, err := m.sendExitKeys(ctx, pane, k.ExitKeys)
 		switch {
@@ -211,7 +235,12 @@ func (m *Manager) ParkHard(ctx context.Context, pr store.PR) error {
 // PR's live agents are quit. A pane or a workspace another PR's starting or
 // live session records is never the PR's (herdr numbers them again after a
 // restart): the PR's retired sessions that record one drop their herdr ids
-// first (EventHerdrIDsReused), and no such workspace is closed. Live
+// first (EventHerdrIDsReused), and no such workspace is closed. Nor is one
+// with a pane herdr shows as no longer its session's (another agent than
+// the row's agent name, or a pane without it outside the session's
+// checkout: an eval replay's or the operator's, which no row records);
+// the PR's retired sessions whose pane, or workspace when the pane is
+// gone, herdr shows so drop their herdr ids too. Live
 // sessions with a session_id become parked, the rest closed (see Quit);
 // lost sessions stay lost. A quit that fails
 // does not stop the others: the PR's other live agents are still quit and
@@ -228,6 +257,17 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 	if err != nil {
 		return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
 	}
+	if !slices.ContainsFunc(sessions, func(s store.Session) bool { return isLive(s) || s.State == store.SessionLost }) {
+		return nil
+	}
+	if err := m.parkCheckRuns(ctx, pr); err != nil {
+		return err
+	}
+	snap, err := m.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
+	}
+	sessions, view := m.inHerdr(ctx, pr, snap, sessions)
 	var live, lost []store.Session
 	ours := map[string]bool{} // never a pane another PR's starting or live session records
 	for _, s := range sessions {
@@ -241,23 +281,14 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 			lost = append(lost, s)
 		}
 	}
-	if len(live) == 0 && len(lost) == 0 {
-		return nil
-	}
-	if err := m.parkCheckRuns(ctx, pr); err != nil {
-		return err
-	}
-	snap, err := m.d.Herdr.Snapshot(ctx)
-	if err != nil {
-		return fmt.Errorf("agents: park pr %d: %w", pr.Number, err)
-	}
 	if err := m.parkCheckLive(ctx, pr, snap, live); err != nil {
 		return err
 	}
 
-	// Workspaces of live and lost sessions: one holding only the PR's panes
-	// is closed, once none of its panes is busy; never one another PR's
-	// starting or live session records.
+	// Workspaces of live and lost sessions: one holding only the PR's panes,
+	// each of which herdr shows as still its session's, is closed, once none
+	// of its panes is busy; never one another PR's starting or live session
+	// records.
 	byWS := map[string][]store.Session{}
 	for _, s := range append(append([]store.Session(nil), live...), lost...) {
 		if ws := store.Deref(s.HerdrWorkspaceID); ws != "" && hasWorkspace(snap, ws) {
@@ -267,7 +298,7 @@ func (m *Manager) park(ctx context.Context, pr store.PR, hard bool) error {
 	wsIDs := slices.Sorted(maps.Keys(byWS))
 	closing := map[string]bool{}
 	for _, ws := range wsIDs {
-		closing[ws] = !others.workspace(ws) &&
+		closing[ws] = !others.workspace(ws) && view.workspaceReason(ws) == "" &&
 			!slices.ContainsFunc(snap.Panes, func(p herdr.Pane) bool { return p.WorkspaceID == ws && !ours[p.ID] })
 	}
 	for _, p := range snap.Panes {
