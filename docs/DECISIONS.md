@@ -12361,6 +12361,106 @@ skill versions); people add theirs to the sections before it, at the end of the 
     reentrant, and the next scan does it); the notes lock in `syncNotes` (a judge holds it while it edits the notes, which takes minutes, and
     the reconcile and the start's import must not wait for it; the claim says an apply is in flight); skipping `pending` proposals too (see
     above); sweeping by age alone, without the lock; removing a leftover that cannot be removed by changing its mode.
+- **A change the base does not need is a finding** (2026-10-23, spec 05 of the 2026-10-23 run, item 1, approved
+  by the operator that day). On talkable/wordpress#48 the PR rewrote the tools' event transport because GTM
+  "ignores gtag("event")". Round 1's own pass took the PR's new checks failing on the base as proof, though they
+  assert the new shape and fail on the base by construction; the judge's own probe then proved that the base's
+  `gtag('event')` commands reach the GTM container with every parameter (`eventModel.*`, fresh per event).
+  SKILL.md section 2 counted a false claim as a finding only "with impact", which the judge read as a runtime
+  failure: it posted a `Description: ✗` body line, rejected claude-review's matching candidate as `speculative`
+  ("no demonstrated runtime failure"), and the re-review said LGTM. The team closed the PR as not needed: a GTM
+  trigger, the `eventModel.*` variables and one GA4 tag were enough. talkable#12050 closed the same way: site
+  validations refuse the blank or non-positive rate the PR guards and production held none, while magnum's
+  rounds had those facts, built the bad rows only through a raw writer and posted P3s. Of 312 review bodies since
+  10-14, 49 carry a `Description: ✗` line, and one of them disproves the PR's stated reason; of the 7 reviewed PRs
+  that closed unmerged, these two closed as not needed. After "a false claim is a finding unless you proved it has
+  none." section 2 now says: "At `base_sha`, check the failure the PR says it fixes by its effect, not by the PR's
+  new tests: when the base does not fail so, or code, configuration or a validation every writer passes already
+  meets its goal (stored rows: give the query that counts them), the change is not needed: one finding naming what
+  does it, P2 when merging leaves code or steps to maintain or hides an error the base reports, else P3; **Fix**:
+  close the PR, or keep it with the true reason. This is the author's call." (494 bytes). P2 rather than always P3:
+  section 6 honours every decline of a P3, so "the change itself stays" would still end in LGTM, while a P2's
+  decline gets its reason checked at the base, and a product decision is still honoured. The next run counts the
+  findings that say a change is not needed and their replies; the target for `Description: ✗` lines that dispute a
+  stated reason is none. Test: TestSkillSaysWhenTheBaseDoesNotNeedTheChange. Rejected: merging section 2's claim
+  list into one sentence to save 67 bytes (it moved four pins).
+- **The repository notes record nothing that only the PR's head holds** (2026-10-23, spec 05 of the 2026-10-23
+  run, item 2). Round 2 of talkable/wordpress#48 added two notes lines (notes version 527) that point to a README
+  recipe only the PR's head held ("the committed guide now provides it"); the PR closed unmerged, so the notes
+  said something false about the repository. Of the 7 reviewed PRs that closed unmerged, 5 wrote notes, and #48
+  and talkable#12050 left lines that are now false. Section 2's content paragraph never said that the notes
+  describe the base, the judge works in the head's checkout, and the curator cannot read the repository. Its
+  sentence now reads "Never one PR's findings, code or probes (nor a file, doc or step only its head holds),
+  secrets, …" (46 bytes). Test: TestSkillNotesRecordNothingOnlyThePRsHeadHolds. Left for a later run: rechecking,
+  when a PR closes unmerged, the notes lines its rounds wrote (an engine and registry change); the false lines
+  themselves are the operator's to correct.
+- **`pre_existing` never covers an incomplete fix of the class the PR claims to fix** (2026-10-23, spec 05 of the
+  2026-10-23 run, item 3; amends "A security fix secures the whole request" of 2026-10-07, which narrowed
+  `pre_existing` by the request a security fix secures: now by any class a PR claims to fix). On talkable#12043, "Escape merchant text in campaign
+  warnings", claude-review and the own pass proved two raw-HTML sinks of the same merchant text (the amount
+  warning's custom description and the wizard's `.html()`; the own pass swept 28 constructors to find them), and
+  the judge rejected both as `pre_existing` ("the same producer… exist on the base"), reading section 3's "nor
+  secures the request it is on" as an HTTP request only. A colleague posted both as critical, and the author fixed
+  both in the next commit. talkable-integration#864, "treat guest null/undefined emails as empty", shows the same
+  over three rounds: the placeholders still sent from session storage, another page value, the stored customer and
+  purchase or event payloads were raised in rounds 1 and 2, rejected as `pre_existing`, not re-derived in round 3,
+  and three people's comments (P1 and P2) followed. Section 3 now reads "`pre_existing`: the base has the same
+  problem and this PR neither makes it worse nor claims to fix it (a request it secures, text it escapes, a value
+  it treats as empty: a site of that class left failing is its incomplete fix);", and section 2's "; a hole left
+  on that request is this PR's finding", which it covers, is gone (113 bytes added, 50 cut). The claude reviewer
+  prompts (claude-review.md, claude-rereview.md, claude-restart.md) widen their clause of the same meaning: "since
+  a hole left on that request is this PR's, not a pre-existing one, as is any site of a class the PR claims to fix
+  (text it escapes, a value it treats as empty) left failing;". The 2026-10-07 decision rejected posting every
+  older hole near a security fix, and that stands: only a site of the class the PR or its description says it
+  fixes is the PR's. Tests: TestPreExistingNeverCoversAnIncompleteFixOfThePRsOwnClass, the moved pins of
+  TestSkillCarriesTheRulesFromMisses and TestClaudeReviewPromptsCheckChangedBehaviour, and the reviewer goldens.
+- **A rescue that replaces a raise is a swapped mechanism, and a rollback is what the raise did** (2026-10-23, spec
+  05 of the 2026-10-23 run, item 4). On open talkable#12053 magnum posted a P3, a blocked opt-in showing a server
+  error; the author fixed it with a `rescue` in the action, inside a transactional wrapper, which now commits a
+  member saved without its campaign that the raise used to roll back. Magnum's re-review called the thread fixed
+  and posted a clean review; a colleague posted the commit as blocking on the same head. Section 2's mechanism
+  sentence now reads "(DELETE for TRUNCATE, a rescue for a raise)", and what the old mechanism did implicitly
+  gains "rollbacks" (33 bytes); the claude reviewer prompts carry the same two edits. Tests:
+  TestSkillTakesARescueForARaiseAsASwappedMechanism and TestClaudeReviewPromptsCheckChangedBehaviour. Left for a
+  replay first: a rule for hooks and callbacks that write past a rollback (talkable#11483's day-one misses).
+- **The review asks what one person can take from a self-serve flow** (2026-10-23, spec 05 of the 2026-10-23
+  run, item 5). On talkable#11932 a colleague found that a personal code is the shopper's typed name, so anyone
+  can squat common words (P1), that a claim without an email drops the once-per-person limit, so every visitor
+  gets a fresh discount code (P2), and that every free development store gets the full token budget (P2). No role
+  raised them, and both blind replays of 2026-10-12, before and after that day's rules, missed the code
+  squatting, which meets the replay-first condition of 2026-10-21. Section 2's security list is now followed by
+  "what one person can take from a self-serve flow (codes, discounts, credits, accounts): its per-person limit, a
+  guessable value, the cost per free account" (155 bytes), as the next item after its parenthesis, whose closing
+  words "one tenant's data its own)" are a pin. Section 4's reachability ranks still size each finding. Test:
+  TestSkillAsksWhatOnePersonCanTakeFromASelfServeFlow.
+- **A proven nearby security problem is listed in a private repository** (2026-10-23, spec 05 of the 2026-10-23
+  run, item 6; narrows "Bugs found next door are kept, and listed apart" of 2026-10-06, which sent a security one
+  only to the result file "since the repository may be public"). Since 10-14, 6 nearby security P2s the judge
+  proved on talkable/talkable, a private repository, reached no review body: on #12043 the merchant HTML in the
+  amount warning (the own pass wrote "Keep this out of the public nearby block"), on #12014 staff CSV listings
+  that expose other accounts' download links and staff row counts that omit account and personal-data grants, on
+  #12042 a points history readable by email alone, and on #11932 a read-role request that persists a platform
+  change before its refusal and a shop redact that keeps the store's data. Section 7 now reads "A security one (an
+  authorization bypass, data exposure, injection) goes only to the result file unless `base.repo.private`
+  (section 1) is true." (47 bytes): the field of section 1's `gh api repos/{owner}/{repo}/pulls/{number}` read. In
+  a private repository it goes into the nearby block like any other, up to three, one line each, never counted;
+  "unless … is true" keeps the public rule when the read lacks the field. `magnum debt` lists them as before. Test:
+  TestSkillListsProvenProblemsNextDoorApart's moved pin. The next run counts the security lines in nearby blocks
+  on private repositories and the share their authors fix.
+- **A simplification removes or changes only what the PR added** (2026-10-23, spec 05 of the 2026-10-23 run, item
+  7). Two simplifications rewrote code that the PR touched only mechanically, and both authors declined them as
+  pre-existing code outside the PR's purpose: on talkable-esp#378 ("this PR only swapped `console.log` for
+  `log`") and talkable#12067. Both passed the prompts' "lines this PR added or modified" test. claude-simplify.md's
+  step 2 now keeps a proposal only when it "removes or changes only something this PR added, never a construct a
+  line already had before a mechanical edit (a renamed call, a swapped logger)", and the judge's `simplify` block
+  (judge-shared.md; the initial, rereview and recovery prompts) only when "what it removes or changes is something
+  this PR added, never a construct a line already had before a mechanical edit (a renamed call, a swapped
+  logger)". "Changes" where the approved text said "rewrites": a role prompt never says "rewrite"
+  (TestNotesParagraphInRolePrompts keeps the reviewers off the notes), and the judge's block uses the same word.
+  SKILL.md is unchanged by this item. Test: TestSimplificationsLeaveWhatALineHadBeforeAMechanicalEdit, and the
+  judge and simplify goldens. Rejected again: a per-author cap on simplifications, which the operator declined.
+  With items 1 to 6, SKILL.md goes from 37,927 to 38,765 bytes and `skillMaxBytes` with it, below the 39,000 at
+  which the spec asked for cuts of wording the code or a prompt already says; the ceiling stays 40,000.
 
 ## Learned rules
 

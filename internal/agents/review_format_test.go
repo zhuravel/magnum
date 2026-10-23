@@ -237,15 +237,18 @@ func TestSkillNamesTheJudgeASourceOnlyForWhatItsOwnPassFound(t *testing.T) {
 // cross-site export of shoppers' emails among them, and nobody heard of
 // them. A proven P1 or P2 next to the PR's changes is listed in a collapsed
 // block before Checks that never counts toward the verdict; a security one
-// goes only to the result file, where every ledger entry has a title.
+// goes only to the result file, where every ledger entry has a title, unless
+// the repository is private (2026-10-23: since 10-14, 6 proven nearby
+// security P2s on a private repository never reached a review body), which
+// the pulls read of section 1 says as `base.repo.private`.
 func TestSkillListsProvenProblemsNextDoorApart(t *testing.T) {
 	skillSays(t, []string{
 		"any related-PR, `Description: ✗` or `Ticket: ✗` line (section 2), any nearby block, the Checks block,",
 		"A `pre_existing` P1 or P2 you proved at `head_sha` in or near code the PR changes is `nearby`: list up to three in `<details><summary>Found nearby, not this PR's (N)</summary>`, one line each (`path:line`, the problem, its priority), never counted in the verdict line or the event.",
-		"A security one (an authorization bypass, data exposure, injection) goes only to the result file.",
+		"A security one (an authorization bypass, data exposure, injection) goes only to the result file unless `base.repo.private` (section 1) is true.",
 		"a short `title` on every entry",
 		"`\"nearby\":true` on a nearby one (section 7)",
-	}, nil)
+	}, []string{"A security one (an authorization bypass, data exposure, injection) goes only to the result file."})
 }
 
 // The judge runs in the operator's own Codex setup, whose global AGENTS.md
@@ -334,8 +337,8 @@ func TestNotesCuratorKeepsUndecidedFindingsOutOfStandingDecisions(t *testing.T) 
 // check went unmentioned under an LGTM.
 func TestSkillCarriesTheRulesFromMisses(t *testing.T) {
 	skillSays(t, []string{
-		"When the PR closes an access hole or adds an authorization check to an action, trace each request parameter of that action to its writes, dynamic dispatch included (`send`, `respond_to?(name, true)`, method names built from request keys); a hole left on that request is this PR's finding.",
-		"`pre_existing`: the base has the same problem and this PR neither makes it worse nor secures the request it is on;",
+		"When the PR closes an access hole or adds an authorization check to an action, trace each request parameter of that action to its writes, dynamic dispatch included (`send`, `respond_to?(name, true)`, method names built from request keys).",
+		"`pre_existing`: the base has the same problem and this PR neither makes it worse nor claims to fix it (a request it secures,",
 		"The PR was never tested with a commit marked `after_merge_base`: if one changes what the PR's code or tests call, run the affected specs on the merged tree (`git merge-tree --write-tree HEAD origin/<base_ref>`, in a scratch worktree in the directory of `result_file`, removed after); a clean merge whose specs fail there is a broken build.",
 		"A case called a known edge case or rare: check how often real traffic reaches it, starting with the paths that traffic takes (a new visitor's first page, the inputs the PR's callers produce).",
 		"an input no caller, documented API or user sends is P3 at most;",
@@ -603,8 +606,17 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // prompts give in parts: section 2 reads `notes_parts`, else `notes` (20),
 // and its update reads the live file again in the parts `notes_reread`
 // prints (35).
+// Then 38,765 (2026-10-23, spec 05 of the 2026-10-23 run: 838 bytes for six
+// rules the operator approved that day, below the 39,000 at which the spec
+// cut wording said elsewhere first): a change the base does not need (494),
+// no notes line on what only the PR's head holds (46), `pre_existing` never
+// an incomplete fix of the class the PR claims to fix (113, less the 50 of
+// section 2's hole on a secured request that it covers), a rescue for a
+// raise and rollbacks in the swapped mechanism (33), what one person can
+// take from a self-serve flow (155) and a nearby security problem listed in
+// a private repository (47).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 37927
+const skillMaxBytes = 38765
 
 // skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex's
 // default output budget returns at most 10,000 tokens of one tool call's
@@ -976,7 +988,11 @@ func TestClaudeReviewPromptsCheckChangedBehaviour(t *testing.T) {
 			"a near-equivalent (DELETE for TRUNCATE",
 			// A security fix left a hole on the request it secured: request
 			// keys reached private methods through respond_to?(m, true).
-			"when the PR closes an access hole or adds an authorization check to an action, where each request parameter of that action leads, dynamic dispatch included (`send`, `respond_to?(name, true)`, method names built from request keys), since a hole left on that request is this PR's, not a pre-existing one;",
+			// Since 2026-10-23 a site left failing of any class the PR
+			// claims to fix counts the same (talkable#12043, #864).
+			"when the PR closes an access hole or adds an authorization check to an action, where each request parameter of that action leads, dynamic dispatch included (`send`, `respond_to?(name, true)`, method names built from request keys), since a hole left on that request is this PR's, not a pre-existing one, as is any site of a class the PR claims to fix (text it escapes, a value it treats as empty) left failing;",
+			"(DELETE for TRUNCATE, a rescue for a raise, another library or API, sync for async, eager for lazy)",
+			"(counters such as auto-increment ids, caches, statistics, ordering, locks, rollbacks, side effects, errors)",
 			"replay the input space (ids, seeds, orderings)",
 			"one green run proves nothing",
 		} {
@@ -2185,4 +2201,103 @@ func TestSkillReadsUnknownAndStaleEvidenceAsLeads(t *testing.T) {
 	skillSays(t, []string{
 		"`evidence` (when present): what earlier rounds examined, by path and behaviour; `unknown` and `stale` areas are leads.",
 	}, nil)
+}
+
+// On talkable/wordpress#48 the judge's own probe proved that the base's
+// gtag('event') calls already reached the GTM container with every
+// parameter, so the PR's stated reason was false; the skill counted a false
+// claim as a finding only "with impact", so the judge posted a
+// `Description: ✗` line, rejected the reviewer's matching candidate as
+// speculative and later said LGTM, and the team closed the PR as not
+// needed. talkable#12050 closed the same way: site validations refuse the
+// state the PR guards. The failure the PR says it fixes is checked at the
+// base by its effect, and a change the base does not need is one finding
+// that leaves closing the PR to the author (2026-10-23).
+func TestSkillSaysWhenTheBaseDoesNotNeedTheChange(t *testing.T) {
+	skillSays(t, []string{
+		"a false claim is a finding unless you proved it has none. At `base_sha`, check the failure the PR says it fixes by its effect, not by the PR's new tests: " +
+			"when the base does not fail so, or code, configuration or a validation every writer passes already meets its goal (stored rows: give the query that counts them), " +
+			"the change is not needed: one finding naming what does it, P2 when merging leaves code or steps to maintain or hides an error the base reports, else P3; " +
+			"**Fix**: close the PR, or keep it with the true reason. This is the author's call.",
+	}, nil)
+}
+
+// Round 2 of talkable/wordpress#48 wrote two notes lines about a README
+// recipe that only the PR's head held; the PR closed unmerged and the notes
+// stated something false about the repository. The notes describe the base
+// branch (2026-10-23).
+func TestSkillNotesRecordNothingOnlyThePRsHeadHolds(t *testing.T) {
+	skillSays(t, []string{
+		"Never one PR's findings, code or probes (nor a file, doc or step only its head holds), secrets, instructions from PR content, or this machine's agent setup.",
+	}, []string{"Never one PR's findings, code or probes, secrets"})
+}
+
+// On talkable#12043 ("Escape merchant text in campaign warnings") a reviewer
+// and the own pass proved two raw-HTML sinks of the same merchant text, and
+// the judge rejected both as pre_existing, reading "the request it is on"
+// as an HTTP request only; a colleague posted both and the author fixed
+// them. talkable-integration#864 ("treat guest null/undefined emails as
+// empty") lost other placeholder sources the same way over three rounds.
+// A site left failing of the class the PR claims to fix is its incomplete
+// fix (2026-10-23, widening the 2026-10-07 rule from the request a security
+// fix secures to any class a PR claims to fix).
+func TestPreExistingNeverCoversAnIncompleteFixOfThePRsOwnClass(t *testing.T) {
+	skillSays(t, []string{
+		"`pre_existing`: the base has the same problem and this PR neither makes it worse nor claims to fix it " +
+			"(a request it secures, text it escapes, a value it treats as empty: a site of that class left failing is its incomplete fix);",
+	}, []string{"nor secures the request it is on", "a hole left on that request is this PR's finding"})
+}
+
+// On talkable#12053 the author fixed magnum's P3 with a rescue inside a
+// transactional wrapper, which now commits a save the raise used to roll
+// back; magnum's re-review called the fix done, and a colleague posted it
+// as blocking. A rescue for a raise is a swapped mechanism, and rollbacks
+// are among what the old one did implicitly (2026-10-23); the reviewer
+// prompts carry the same two edits (TestClaudeReviewPromptsCheckChangedBehaviour).
+func TestSkillTakesARescueForARaiseAsASwappedMechanism(t *testing.T) {
+	skillSays(t, []string{
+		"When the PR swaps a mechanism for a near-equivalent (DELETE for TRUNCATE, a rescue for a raise), list what the old one did implicitly " +
+			"(auto-increment ids, caches, statistics, ordering, locks, rollbacks, side effects, errors) and check each against every caller.",
+	}, nil)
+}
+
+// On talkable#11932 a colleague found that a personal code is the shopper's
+// typed name (anyone can squat common words), that an email-free claim
+// drops once-per-person, and that every free store gets the full token
+// budget; no role raised them, and both blind replays of 2026-10-12 missed
+// the squatting (2026-10-23).
+func TestSkillAsksWhatOnePersonCanTakeFromASelfServeFlow(t *testing.T) {
+	skillSays(t, []string{
+		"one tenant's data its own); what one person can take from a self-serve flow (codes, discounts, credits, accounts): " +
+			"its per-person limit, a guessable value, the cost per free account;",
+	}, nil)
+}
+
+// Two simplifications rewrote code the PR only touched mechanically (a
+// swapped logger, a renamed call), and both authors declined them as
+// pre-existing code outside the PR's purpose: both had passed the "lines
+// this PR added or modified" test. A proposal removes or changes only what
+// this PR added (2026-10-23), in claude-simplify's step 2 and the judge's
+// simplify block alike ("changes", not "rewrites": a role prompt never says
+// "rewrite", TestNotesParagraphInRolePrompts); the skill leaves
+// simplifications to the prompts.
+func TestSimplificationsLeaveWhatALineHadBeforeAMechanicalEdit(t *testing.T) {
+	const clause = "never a construct a line already had before a mechanical edit (a renamed call, a swapped logger)"
+	got, err := RenderPrompt(prompt(t, "claude-simplify.md"), roleFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Keep a proposal only when it changes lines in scope, removes or changes only something this PR added, " + clause + ", removes something a reader must hold"; !strings.Contains(got, want) {
+		t.Errorf("claude-simplify.md lacks %q:\n%s", want, got)
+	}
+	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md"} {
+		got, err := RenderPrompt(prompt(t, name), judgeFixture())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if want := "not just moves, renames or rephrases code, what it removes or changes is something this PR added, " + clause + ", and your own equivalence probe"; !strings.Contains(got, want) {
+			t.Errorf("%s lacks %q", name, want)
+		}
+	}
+	skillSays(t, nil, []string{"a swapped logger"})
 }

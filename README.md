@@ -86,9 +86,13 @@ re-decides the thread and answers there (an acknowledgement, one sentence with i
 to a question), or posts a new review when its verdict changes; after two rebuttals in one thread it
 stops arguing and leaves the call to the operator. A P1 or P2 problem the judge proved next to the PR's changes that the
 PR did not bring is not a finding: up to three go into a collapsed "Found nearby, not this PR's" block
-before Checks, one line each, never counted in the verdict (a security one only into `magnum debt`).
+before Checks, one line each, never counted in the verdict (a security one only into `magnum debt`,
+unless the repository is private).
 A false claim of the description that bears on risk (a ticked "Can be reverted easily" the previous
-release cannot keep) is a finding, or one `Description: ✗ <claim>: <why>` line when it harms nothing,
+release cannot keep) is a finding, or one `Description: ✗ <claim>: <why>` line when it harms nothing;
+a change the base does not need (the failure it names does not happen there, or code, configuration
+or a validation every writer passes already meets its goal) is one finding that names what does it and
+leaves closing the PR, or keeping it with the true reason, to the author;
 and with `[jira]` on a requirement of the PR's Jira issue it does not meet is one `Ticket: ✗ <what>: <why>`
 line, or a finding when it has impact. [The judge skill](#the-judge-skill) has the full format.
 
@@ -2210,15 +2214,18 @@ summary = "simplifications and refactors of the changed code"   # what the model
 report as a claim to prove or reject, attach findings to changed lines with reproduction and fix,
 post one review (`REQUEST_CHANGES`, `COMMENT` or the configured no-findings event), verify it, and
 write a machine-readable result. It reads every caller of a method whose behaviour changed, fixtures,
-generators and scripts included, lists what a replaced mechanism (DELETE for TRUNCATE, another library)
-did implicitly and checks each effect against those callers, probes the real engine while it looks,
+generators and scripts included, lists what a replaced mechanism (DELETE for TRUNCATE, a rescue for a
+raise, another library) did implicitly (a rollback among it) and checks each effect against those callers, probes the real engine while it looks,
 replays a chance test failure to state its rate, and
 counts developers' time (local runs that diverge from CI, a new flaky test) as harm. It reads the
 changed files' recent commits (`history`) and checks that the PR does not undo or re-break an earlier
 fix, and it verifies the description's claims that bear on risk (a ticked "Can be reverted easily",
 "No migrations" or "Covered by tests", a stated scope or behaviour) at the reviewed head. A PR that closes
 an access hole gets every parameter of that request traced to its writes, dynamic dispatch included, and
-a hole left there is the PR's finding, not a pre-existing one; parallel copies of the code the PR edits
+a hole left there, like any site left failing of a class the PR claims to fix (text it escapes, a value
+it treats as empty), is the PR's incomplete fix, not a pre-existing one; what one person can take from a
+self-serve flow (codes, discounts, credits, accounts) is checked for its per-person limit, a guessable
+value and the cost per free account; parallel copies of the code the PR edits
 (one file per client or provider) are compared for a guard one lacks; a delete of records thought
 unsaved is checked against every path that saves them; and a case called a known edge case or rare gets a
 check of how often real traffic reaches it, while an input no caller produces and no user can send is P3
@@ -2454,7 +2461,11 @@ What an author gets, every review alike:
 - **The description's claims checked**: a false claim that bears on risk (a ticked "Can be reverted
   easily" whose previous release cannot run on the new schema or the jobs queued meanwhile) is a finding
   at its priority; one without impact is one body line, `Description: ✗ <claim>: <why>`; a true claim
-  gets no line.
+  gets no line. The failure the PR says it fixes is checked at the base by its effect, not by the PR's new
+  tests: when the base does not fail so, or code, configuration or a validation every writer passes
+  already meets the goal, the change is not needed, one finding (P2 when merging leaves code or steps to
+  maintain or hides an error the base reports, else P3) whose **Fix** is to close the PR or keep it with
+  the true reason, the author's call.
 - **The PR checked against its ticket** (with `[jira]` on, see [Tickets](#roles-and-kinds-the-review-pipeline)):
   a requirement of the issue the PR does not meet, or a change the issue does not ask for that the
   description leaves unexplained, is a finding at its priority when it has impact, else one body line
@@ -2468,7 +2479,8 @@ What an author gets, every review alike:
   substantial, one comment per idea, titled
   "**Simplification** (optional, no reply needed)", each backed by an equivalence probe listed in Checks.
   Each removes something a reader must hold (a branch, helper, flag, duplicated block), never only renames
-  or moves code, and none touches authorization, sandboxing, money or usage recording, or concurrency code
+  or moves code, removes or changes only what the PR added, never a construct a line already had before a
+  mechanical edit (a renamed call, a swapped logger), and none touches authorization, sandboxing, money or usage recording, or concurrency code
   unless it removes a defect-prone construct; a re-review suggests them only on lines changed since the
   previous review.
 - **The identity's footer** last, appended by Magnum (`review_footer`, see Identities): the reviewed commit,
@@ -3769,7 +3781,8 @@ finding they confirmed but left undecided is open with the decision pending, nev
 the review machine (not a role's limits by design, such as codex-review's sandbox). The directory beside the file (the same name without `.md`), the harness, holds the QA scripts the notes name.
 The test for every line and script is whether it helps a review of another, future pull request: the
 judge keeps a probe written to verify one pull request in that round's report directory, never in the
-harness, and the notes never describe one pull request's findings or code. `magnum notes <repo>` prints
+harness, and the notes never describe one pull request's findings or code, nor a file, doc or step only
+its head holds (the judge works in the head's checkout, and the notes describe the base). `magnum notes <repo>` prints
 them, with their sizes on stderr. `magnum notes` lists every repository with notes:
 
 ```
