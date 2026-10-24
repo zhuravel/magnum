@@ -12987,3 +12987,18 @@ versions, newest last. People add their entries to the sections above, never her
   identity; the skill already states the key case. To make room, the skill shortens the prepass,
   readiness and evidence bullets (the prompts say the same), the machine-failure list, one verdict
   sentence and a section 7 clause that section 5 repeats; no rule was dropped.
+- **The judge ranks a rare precondition with a cheap repeat or a brief harm P3 (an outside actor
+  deleting what the code created, all probes failing, weeks of failures dropping an item from a
+  low-stakes sweep, a short race against a restore or import, a late write missing from an aggregate),
+  and the reviewers and the judge's own pass look for nine shapes the replays missed: consent read from
+  free text, a secret sent to a host built from request input, a find-or-create that adopts a record it
+  does not own, restore and bulk paths that skip the editor's guards, placeholder values, copied
+  templates and stale derived values, specs that assert a bound the change raises, stubs of the guarded
+  call, and error claims made without reading the call chain** (2026-10-24, the skill editor's proposal
+  for m548, m547, m546, m545, m544, m543, m542, m540, m539, m538, m506, m505, m504, m503, m502, m501,
+  m500, m499, m498, m497, m496, m331, m313, m281, m274, m273, m222, m217, m216, d701, d611, d596, d463,
+  d427, d400, d398, d261, d254, d242, d240). The simplify prompts drop a proposal whose saving the
+  author must re-verify. Why: the declined findings had a rare trigger or a cheap repeat; the misses
+  were shapes the skill covered only in part. The skill holds the priority rule; the checks sit in the
+  uncapped prompts. To make room the skill shortens the readiness, prepass and notes lines, the
+  machine-failure list, the Checks example and the reread clause; no rule was dropped.
