@@ -71,9 +71,12 @@ type PostedReview struct {
 	SHA      string // the reviewed head (target_sha)
 	ReviewID int64
 	// CreatedAt is when the run was created, RoundStart when the first run
-	// of its round was (a reviewer's, before the judge's).
-	CreatedAt  time.Time
-	RoundStart time.Time
+	// of its round was (a reviewer's, before the judge's), and RoundTarget
+	// that first run's head: the head the round started on, which SHA is
+	// not when a push restarted the round on a newer one.
+	CreatedAt   time.Time
+	RoundStart  time.Time
+	RoundTarget string
 	// Summary is what the judge's result says (ParseReviewResult); OK is
 	// false when the run stored no result that parses.
 	Summary ReviewSummary
@@ -112,14 +115,15 @@ func (s *Store) ReviewedPRs(ctx context.Context, since time.Time) ([]ReviewedPR,
      OR EXISTS (SELECT 1 FROM findings f WHERE f.pr_id = p.id AND f.created_at >= ?)
 ), r AS (
   SELECT id, pr_id, round, target_sha, review_id, outcome, result_json, created_at, rowid AS seq,
-         MIN(created_at) OVER (PARTITION BY pr_id, round) AS round_start
+         MIN(created_at) OVER (PARTITION BY pr_id, round) AS round_start,
+         FIRST_VALUE(target_sha) OVER (PARTITION BY pr_id, round ORDER BY created_at, rowid) AS round_target
   FROM runs WHERE pr_id IN (SELECT id FROM scope)
 ), posted AS (
   SELECT *, ROW_NUMBER() OVER (PARTITION BY pr_id, review_id ORDER BY created_at, seq) AS n
   FROM r WHERE outcome = 'posted' AND review_id IS NOT NULL
 )
 SELECT p.id, rp.owner || '/' || rp.name, p.number, COALESCE(p.author_login, ''), p.gh_state, p.merged_at, p.closed_at,
-  x.id, x.round, x.target_sha, x.review_id, x.created_at, x.round_start, COALESCE(x.result_json, '')
+  x.id, x.round, x.target_sha, x.review_id, x.created_at, x.round_start, x.round_target, COALESCE(x.result_json, '')
 FROM posted x JOIN prs p ON p.id = x.pr_id JOIN repos rp ON rp.id = p.repo_id
 WHERE x.n = 1
 ORDER BY p.id, x.created_at, x.seq`, GHOpen, at, at)
@@ -135,7 +139,7 @@ ORDER BY p.id, x.created_at, x.seq`, GHOpen, at, at)
 			result string
 		)
 		if err := rows.Scan(&p.ID, &p.Repo, &p.Number, &p.Author, &p.GHState, nullTime(&p.MergedAt), nullTime(&p.ClosedAt),
-			&r.RunID, &r.Round, &r.SHA, &r.ReviewID, timeCol(&r.CreatedAt), timeCol(&r.RoundStart), &result); err != nil {
+			&r.RunID, &r.Round, &r.SHA, &r.ReviewID, timeCol(&r.CreatedAt), timeCol(&r.RoundStart), &r.RoundTarget, &result); err != nil {
 			return nil, fmt.Errorf("reviewed prs: %w", err)
 		}
 		r.Summary = ReviewSummary{RunID: r.RunID, ReviewID: r.ReviewID, SHA: r.SHA}

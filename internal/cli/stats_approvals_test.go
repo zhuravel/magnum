@@ -80,6 +80,16 @@ func statsAutoApproval(t *testing.T, st *store.Store, pr store.PR, head string, 
 	return a
 }
 
+// statsMiss records a retro miss of class miss on pr at sourceURL, raised
+// by reviewer.
+func statsMiss(t *testing.T, st *store.Store, pr store.PR, sourceURL, reviewer string) {
+	t.Helper()
+	if _, err := st.UpsertMiss(context.Background(), store.Miss{PRID: pr.ID, SourceURL: sourceURL, SourceKind: store.MissSourceThread,
+		Reviewer: reviewer, ReviewedSHA: "h1", Class: store.MissMiss}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // For each repository magnum approves as the operator, the window's merges
 // that rest on magnum's approval alone: magnum's automatic approval stood
 // at the merge and no person approved, where a person's approval is one in
@@ -88,8 +98,11 @@ func statsAutoApproval(t *testing.T, st *store.Store, pr store.PR, head string, 
 // same login, the same head, submitted by the time magnum recorded it); the
 // operator's approval by hand (later than magnum's, or posted with
 // `magnum approve --as`) is a person's. Of those, the ones merged past the
-// approved head, the ones of them merged unreviewed, and the retro's misses
-// on them. A repository without auto_approve and a merge before the window
+// approved head, the ones of these merged unreviewed (a pr.merged_unreviewed
+// event; a later head magnum reviewed is not), and the retro's misses on
+// them: a miss on a PR a person approved, and magnum's own finding the
+// author declined that the retro routed to the notes as a miss, are not
+// counted. A repository without auto_approve and a merge before the window
 // are left out.
 func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	f, st := statsConvFixture(t)
@@ -103,21 +116,35 @@ func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	// A person and magnum.
 	pr401 := statsMergedPR(t, st, tk, 401, merged, "h1", []store.LatestReview{app, magnums, statsApproved("rev-ann", "h1", posted)}, nil)
 	statsAutoApproval(t, st, pr401, "h1", 4010, posted, store.AutoDismissed, store.AutoEndedClosed)
+	statsMiss(t, st, pr401, pr401.URL+"#discussion_r1", "bob-rev") // a person approved: no merge on magnum's alone
 	// Magnum only, at the merged head (its approval still standing: the
 	// daemon has not seen the merge yet).
 	pr402 := statsMergedPR(t, st, tk, 402, merged, "h1", []store.LatestReview{app, magnums}, nil)
 	statsAutoApproval(t, st, pr402, "h1", 4020, posted, store.AutoStanding, "")
+	// The author declined magnum's own finding on it as wrong for the
+	// repository, which the retro routes to the notes as a miss of the
+	// same link: magnum's false positive, no defect a reviewer caught.
+	declined := pr402.URL + "#discussion_r9"
+	if _, err := st.UpsertDecline(context.Background(), store.Decline{PRID: pr402.ID, SourceURL: declined, CommentID: 9, ReviewedSHA: "h1",
+		Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Lesson: "the cache is rebuilt nightly", Scope: store.MissScopeRepo}); err != nil {
+		t.Fatal(err)
+	}
+	statsMiss(t, st, pr402, declined, "alice")
 	// Magnum only, merged past the approved head, unreviewed; one retro
 	// miss on it (an outside comment is no miss).
 	pr403 := statsMergedPR(t, st, tk, 403, merged, "h2", []store.LatestReview{app, magnums}, []store.LatestReview{statsApproved("zhuravel", "h1", time.Time{})})
 	statsAutoApproval(t, st, pr403, "h1", 4030, posted, store.AutoDismissed, store.AutoEndedClosed)
 	statsEvent(t, st, merged.Add(time.Minute), "pr:"+tk+"#403", statsKindMergedUnreviewed, "merged before magnum reviewed its last push", "")
-	for i, class := range []string{store.MissMiss, store.MissOutside} {
-		if _, err := st.UpsertMiss(context.Background(), store.Miss{PRID: pr403.ID, SourceURL: pr403.URL + "#discussion_r" + string(rune('1'+i)),
-			SourceKind: store.MissSourceThread, Reviewer: "bob-rev", ReviewedSHA: "h1", Class: class}); err != nil {
-			t.Fatal(err)
-		}
+	statsMiss(t, st, pr403, pr403.URL+"#discussion_r1", "bob-rev")
+	if _, err := st.UpsertMiss(context.Background(), store.Miss{PRID: pr403.ID, SourceURL: pr403.URL + "#discussion_r2",
+		SourceKind: store.MissSourceThread, Reviewer: "bob-rev", ReviewedSHA: "h1", Class: store.MissOutside}); err != nil {
+		t.Fatal(err)
 	}
+	// Magnum only, merged past the approved head, but magnum reviewed the
+	// merged head (clean, so it had nothing to approve again): no
+	// pr.merged_unreviewed event.
+	pr410 := statsMergedPR(t, st, tk, 410, merged, "h2", []store.LatestReview{app, magnums}, nil)
+	statsAutoApproval(t, st, pr410, "h1", 4100, posted, store.AutoDismissed, store.AutoEndedClosed)
 	// The operator approved the head by hand after magnum, and the PR
 	// merged before magnum saw it: GitHub's latest review of theirs is the
 	// later one, a person's (the gate's opinion of the same login and head
@@ -155,8 +182,9 @@ func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 401 to 406 merged on magnum's approval; 402, 403 and 405 on it alone.
-	want := []statsApprovals{{Repo: tk, Merged: 8, AutoApproved: 6, MagnumOnly: 3, PastApproval: 1, Unreviewed: 1, Misses: 1}}
+	// 401 to 406 and 410 merged on magnum's approval; 402, 403, 405 and 410
+	// on it alone, 403 and 410 past its head, 403 unreviewed; one miss, 403's.
+	want := []statsApprovals{{Repo: tk, Merged: 9, AutoApproved: 7, MagnumOnly: 4, PastApproval: 2, Unreviewed: 1, Misses: 1}}
 	if got, w := statsJSON(t, r.Approvals), statsJSON(t, want); got != w {
 		t.Fatalf("approvals =\n%s\nwant\n%s", got, w)
 	}
@@ -167,7 +195,7 @@ func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	lines := statsLines(f.Out.String())
 	i := slices.Index(lines, "APPROVALS")
 	if i < 0 || len(lines) < i+3 || lines[i+1] != "REPO MERGED AUTO-APPROVED MAGNUM ONLY PAST APPROVAL UNREVIEWED MISSES" ||
-		lines[i+2] != "talkable/talkable 8 6 3 (50%) 1 1 1" {
+		lines[i+2] != "talkable/talkable 9 7 4 (57%) 2 1 1" {
 		t.Fatalf("approvals table in\n%s", f.Out.String())
 	}
 	if strings.Contains(f.Out.String(), "example/widgets") {

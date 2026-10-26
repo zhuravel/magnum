@@ -284,7 +284,7 @@ func TestStatsConvergenceSplitsReReviewFindingsByOrigin(t *testing.T) {
 	// earlier run of the round recorded findings the last one replaced.
 	statsConvStart(t, st, pr, tk, "h2", statsOct(2, 11, 59), false)
 	statsMkRun(t, st, statsRunSpec{pr: pr, round: 2, role: store.RoleClaude, kind: store.RunRereview, state: store.RunVerified, outcome: "ok",
-		created: statsOct(2, 12, 0)})
+		target: "h2", created: statsOct(2, 12, 0)})
 	stale := statsConvRun(t, st, pr, 2, "h2", statsOct(2, 12, 10), "", 0)
 	statsConvFindings(t, st, stale, statsOct(2, 12, 20), map[string]string{"Stale (missed earlier)": "P1"})
 	r2 := statsConvReview(t, st, pr, 2, "h2", statsOct(2, 12, 30), convNewP1)
@@ -296,7 +296,8 @@ func TestStatsConvergenceSplitsReReviewFindingsByOrigin(t *testing.T) {
 	}, "Rejected (missed earlier)")
 	// Round 3, a full pass.
 	statsConvStart(t, st, pr, tk, "h3", statsOct(2, 13, 59), true)
-	statsMkRun(t, st, statsRunSpec{pr: pr, round: 3, role: store.RoleClaude, state: store.RunVerified, outcome: "ok", created: statsOct(2, 14, 0)})
+	statsMkRun(t, st, statsRunSpec{pr: pr, round: 3, role: store.RoleClaude, state: store.RunVerified, outcome: "ok", target: "h3",
+		created: statsOct(2, 14, 0)})
 	r3 := statsConvReview(t, st, pr, 3, "h3", statsOct(2, 15, 0), convNewP1)
 	statsConvFindings(t, st, r3, statsOct(2, 15, 11), map[string]string{"Deep one (missed earlier)": "P1", "Another": "P2"})
 	// Round 4, a reply round of the same head after the full pass.
@@ -349,5 +350,89 @@ func TestStatsConvergenceSplitsReReviewFindingsByOrigin(t *testing.T) {
 		if !slices.Contains(lines, w) {
 			t.Errorf("missing line %q in\n%s", w, f.Out.String())
 		}
+	}
+}
+
+// A round is a full pass when its own engine.round_start says so, wherever
+// its head and the window moved: the start is the PR's last at or before
+// the round's first run, of that run's head. A push during the reviewers
+// restarts the round in place on a new head, so its review is of a head the
+// start does not name; the engine writes the start just before the round's
+// first run, so a round that began a minute before the window, or a paused
+// one continued in it (the continue keeps the round and its first run),
+// has its start before the window; and a round whose start the engine
+// failed to write takes no earlier round's.
+func TestStatsConvergenceTellsAFullPassByItsRoundsOwnStart(t *testing.T) {
+	const tk = "talkable/talkable"
+	since := statsNow.Add(-7 * 24 * time.Hour)
+	// first seeds pr's first review, of h1 at at, and its start.
+	first := func(t *testing.T, st *store.Store, pr store.PR, at time.Time) {
+		t.Helper()
+		statsConvStart(t, st, pr, tk, "h1", at.Add(-time.Minute), false)
+		statsConvReview(t, st, pr, 1, "h1", at, convNewP2)
+	}
+	// reviewer seeds a reviewer's run of pr's round on head sha at at.
+	reviewer := func(t *testing.T, st *store.Store, pr store.PR, round int, sha string, at time.Time) {
+		t.Helper()
+		statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: store.RoleClaude, kind: store.RunRereview, state: store.RunVerified,
+			outcome: "ok", target: sha, created: at})
+	}
+	for _, tc := range []struct {
+		name           string
+		seed           func(t *testing.T, st *store.Store, pr store.PR)
+		rereview, full statsOrigins
+	}{
+		{"a push restarted it on a new head", func(t *testing.T, st *store.Store, pr store.PR) {
+			t.Helper()
+			first(t, st, pr, statsOct(1, 10, 0))
+			statsConvStart(t, st, pr, tk, "h2", statsOct(1, 13, 59), true)
+			reviewer(t, st, pr, 2, "h2", statsOct(1, 14, 0))
+			reviewer(t, st, pr, 2, "h3", statsOct(1, 14, 20)) // after the restart
+			r := statsConvReview(t, st, pr, 2, "h3", statsOct(1, 15, 0), convNewP1)
+			statsConvFindings(t, st, r, statsOct(1, 15, 11), map[string]string{"Deep one (missed earlier)": "P1"})
+		}, statsOrigins{}, statsOrigins{MissedEarlier: 1, MissedShare: 1}},
+		{"it started a minute before the window", func(t *testing.T, st *store.Store, pr store.PR) {
+			t.Helper()
+			first(t, st, pr, statsAt(time.September, 20, 10, 0))
+			statsConvStart(t, st, pr, tk, "h2", since.Add(-2*time.Minute), true)
+			r := statsConvReview(t, st, pr, 2, "h2", since.Add(-time.Minute), convNewP2)
+			statsConvFindings(t, st, r, since.Add(10*time.Minute), map[string]string{"Another": "P2"})
+		}, statsOrigins{}, statsOrigins{New: 1}},
+		{"it was paused before the window and continued in it", func(t *testing.T, st *store.Store, pr store.PR) {
+			t.Helper()
+			first(t, st, pr, statsAt(time.September, 20, 10, 0))
+			statsConvStart(t, st, pr, tk, "h2", statsAt(time.September, 25, 9, 59), true)
+			reviewer(t, st, pr, 2, "h2", statsAt(time.September, 25, 10, 0))
+			statsConvStart(t, st, pr, tk, "h2", statsOct(2, 9, 59), true) // the continue's
+			r := statsConvReview(t, st, pr, 2, "h2", statsOct(2, 10, 0), convNewP2)
+			statsConvFindings(t, st, r, statsOct(2, 10, 11), map[string]string{"Fix broke it (in the fix for Deep one": "P2"})
+		}, statsOrigins{}, statsOrigins{Fallout: 1}},
+		{"its start was never written", func(t *testing.T, st *store.Store, pr store.PR) {
+			t.Helper()
+			first(t, st, pr, statsOct(1, 10, 0))
+			statsConvStart(t, st, pr, tk, "h2", statsOct(1, 11, 59), true)
+			statsConvReview(t, st, pr, 2, "h2", statsOct(1, 12, 0), convClean)
+			r := statsConvReview(t, st, pr, 3, "h3", statsOct(1, 14, 0), convNewP2)
+			statsConvFindings(t, st, r, statsOct(1, 14, 11), map[string]string{"Later (missed earlier)": "P2"})
+		}, statsOrigins{MissedEarlier: 1, MissedShare: 1}, statsOrigins{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, st := statsConvFixture(t)
+			tc.seed(t, st, statsConvPR(t, st, tk, 311, "alice", store.GHOpen, time.Time{}))
+			st.Close()
+			if err := f.Ctx.LoadConfig(); err != nil {
+				t.Fatal(err)
+			}
+			r, err := statsGather(context.Background(), f.store(), f.Ctx.Config, since, statsNow, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Convergence.Rereviews; got != tc.rereview {
+				t.Errorf("re-review findings = %+v, want %+v", got, tc.rereview)
+			}
+			if got := r.Convergence.FullPasses; got != tc.full {
+				t.Errorf("full pass findings = %+v, want %+v", got, tc.full)
+			}
+		})
 	}
 }

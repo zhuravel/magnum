@@ -42,7 +42,8 @@ const statsApprovalSlack = time.Minute
 // at the merge, MagnumOnly those of them no person approved, PastApproval
 // those of the latter merged at a head after the one magnum approved,
 // Unreviewed those of these with a pr.merged_unreviewed event, and Misses
-// the retro's misses (class miss) on the MagnumOnly ones.
+// the retro's misses (class miss) on the MagnumOnly ones, less the declines
+// of magnum's own findings it routed to the notes as misses.
 type statsApprovals struct {
 	Repo         string `json:"repo"`
 	Merged       int    `json:"merged"`
@@ -202,7 +203,9 @@ func statsGatherApprovals(ctx context.Context, st *store.Store, cfg *config.Conf
 	for _, ev := range unreviewed {
 		in.unreviewed[store.Deref(ev.Subject)] = true
 	}
-	misses, err := st.Misses(ctx, store.MissFilter{Classes: []string{store.MissMiss}})
+	// A decline the retro routed to the notes is magnum's own finding that
+	// its author declined: no defect a reviewer caught.
+	misses, err := st.Misses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, NoRoutedDeclines: true})
 	if err != nil {
 		return nil, err
 	}

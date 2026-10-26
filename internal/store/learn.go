@@ -330,6 +330,11 @@ type MissFilter struct {
 	Scopes  []string // empty = any scope, none included
 	PRID    int64    // 0 = every PR
 	RepoID  int64    // 0 = every repository
+	// NoRoutedDeclines leaves out the declines the retro routed to the
+	// notes as misses (engine routeDecline): magnum's own finding that its
+	// author declined, stored under its thread's link, which the declines
+	// row carries too, so no other reviewer raised it.
+	NoRoutedDeclines bool
 }
 
 // where renders the WHERE clause of f over misses aliased m ("" when f selects everything).
@@ -355,6 +360,9 @@ func (f MissFilter) where() (string, []any) {
 	if f.RepoID != 0 {
 		conds = append(conds, "m.pr_id IN (SELECT id FROM prs WHERE repo_id = ?)")
 		args = append(args, f.RepoID)
+	}
+	if f.NoRoutedDeclines {
+		conds = append(conds, "NOT EXISTS (SELECT 1 FROM declines d WHERE d.source_url = m.source_url)")
 	}
 	if len(conds) == 0 {
 		return "", nil

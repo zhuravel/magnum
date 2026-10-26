@@ -19390,6 +19390,11 @@ type MissFilter struct {
 	Scopes  []string // empty = any scope, none included
 	PRID    int64    // 0 = every PR
 	RepoID  int64    // 0 = every repository
+	// NoRoutedDeclines leaves out the declines the retro routed to the
+	// notes as misses (engine routeDecline): magnum's own finding that its
+	// author declined, stored under its thread's link, which the declines
+	// row carries too, so no other reviewer raised it.
+	NoRoutedDeclines bool
 }
     MissFilter selects misses; zero values select everything.
 
@@ -19788,9 +19793,12 @@ type PostedReview struct {
 	SHA      string // the reviewed head (target_sha)
 	ReviewID int64
 	// CreatedAt is when the run was created, RoundStart when the first run
-	// of its round was (a reviewer's, before the judge's).
-	CreatedAt  time.Time
-	RoundStart time.Time
+	// of its round was (a reviewer's, before the judge's), and RoundTarget
+	// that first run's head: the head the round started on, which SHA is
+	// not when a push restarted the round on a newer one.
+	CreatedAt   time.Time
+	RoundStart  time.Time
+	RoundTarget string
 	// Summary is what the judge's result says (ParseReviewResult); OK is
 	// false when the run stored no result that parses.
 	Summary ReviewSummary

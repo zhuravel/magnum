@@ -106,7 +106,8 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"the time magnum recorded its post; your approval by hand counts as a person's), with its share of "+
 			"AUTO-APPROVED; PAST APPROVAL, those of them merged at a head after the one magnum approved; UNREVIEWED, "+
 			"those of these merged with a push magnum never reviewed (pr.merged_unreviewed); MISSES, the retro's "+
-			"misses on the MAGNUM ONLY PRs (--json: approvals).\n\n"+
+			"misses on the MAGNUM ONLY PRs, less magnum's own findings their authors declined, which the retro "+
+			"routes to the notes as misses (--json: approvals).\n\n"+
 			"OPERATIONS counts model-limit switches, permission prompts magnum denied and round restarts (the PR "+
 			"head moved before the judge was prompted). The text report shows durations and sources over the "+
 			"whole window; --json has every day and repository.\n\n"+

@@ -284,7 +284,11 @@ func statsStartsBySubject(starts []store.Event) map[string][]store.Event {
 
 // statsFullPass reports whether the round of review r was a full pass: the
 // last start of a round of its PR (starts, by time) at or before the
-// round's first run says so, of r's head.
+// round's first run says so, of the head that run reviewed. Not r's head: a
+// push during the reviewers restarts the round in place on the new head
+// (pipeline restart), with no start of its own, and the judge's review is
+// of that one. A start of another head is an earlier round's: a round whose
+// own start was never written does not take it.
 func statsFullPass(starts []store.Event, r store.PostedReview) bool {
 	var last *store.Event
 	for i := range starts {
@@ -300,12 +304,20 @@ func statsFullPass(starts []store.Event, r store.PostedReview) bool {
 		FullPass bool   `json:"full_pass"`
 		Target   string `json:"target_sha"`
 	}
-	return json.Unmarshal(last.Data, &data) == nil && data.FullPass && data.Target == r.SHA
+	return json.Unmarshal(last.Data, &data) == nil && data.FullPass && data.Target == r.RoundTarget
 }
 
+// statsStartSlack is how much earlier than its round's first run
+// statsStartsSince reads a round's start: the engine writes it at the end of
+// its setup, seconds before the pipeline creates the round's runs, so a day
+// covers any delay at the cost of one more day of one indexed event kind.
+const statsStartSlack = 24 * time.Hour
+
 // statsStartsSince is how far back the round starts statsFullPass reads
-// go: the first run of the earliest round with a finding recorded in the
-// window, else since.
+// go: statsStartSlack before the earlier of since and the first run of the
+// earliest round with a finding recorded in the window. A round that began
+// before the window (a paused one continued in it keeps its round and first
+// run) has its start before it.
 func statsStartsSince(prs []store.ReviewedPR, findings []store.Finding, since time.Time) time.Time {
 	rounds := map[statsValueKey]bool{}
 	for _, f := range findings {
@@ -319,7 +331,7 @@ func statsStartsSince(prs []store.ReviewedPR, findings []store.Finding, since ti
 			}
 		}
 	}
-	return out
+	return out.Add(-statsStartSlack)
 }
 
 // statsRenderConvergence prints the convergence section: its table, the

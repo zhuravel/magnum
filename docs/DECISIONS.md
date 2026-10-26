@@ -12993,17 +12993,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   them, as the value section reads them) by the judge's title suffixes into new, missed earlier (with its
   share) and fallout of fixes, the rounds that were full passes apart (47 of 69 missed-earlier findings since
   10-12 came from full passes, which read the whole PR again by design): a round is a full pass when the last
-  `engine.round_start` event of its PR at or before its first run says `full_pass` of its head, the only
-  per-round record of one (`kvPRFullPass` keeps only the last). `titleFalloutMark`, `titleMissedMark` and
-  `splitFindingTitles` moved from the engine's fix loop to `store.FindingOrigin` and `store.SplitFindingTitles`,
-  so the fix cap's message and the stats read one definition. APPROVALS (`approvals`, `stats_approvals.go`):
+  `engine.round_start` event of its PR at or before its first run says `full_pass` of the head that first run
+  reviewed (`store.PostedReview.RoundTarget`), the only per-round record of one (`kvPRFullPass` keeps only the
+  last). Not the posted review's head: a push during the reviewers restarts the round in place on the new head
+  with no start of its own (14 of 108 full-pass starts since 10-12 were followed by a `round.restarted` before
+  the next start), and the judge's review is of that head. A start of another head is an earlier round's,
+  which a round whose start the engine failed to write does not inherit. The starts are read from a day before
+  the first run of the earliest round with a finding in the window: the engine writes a round's start seconds
+  before the pipeline creates its runs, so a round that began just before the window, or a paused full pass
+  continued in it (the continue keeps the round and its first run), has its start before the window.
+  `titleFalloutMark`, `titleMissedMark` and `splitFindingTitles` moved from the engine's fix loop to
+  `store.FindingOrigin` and `store.SplitFindingTitles`, so the fix cap's message and the stats read one
+  definition. APPROVALS (`approvals`, `stats_approvals.go`):
   for each repository with `auto_approve` (`config.AutoApproveFor`), never one share across repositories that
   enforce a review and ones that do not, the PRs merged in the window (MERGED); AUTO-APPROVED, those on which an
   approval magnum posted by itself stood at the merge (`store.AutoApproval.Stands`: posted, and not withdrawn or
   dismissed; one that ended with its PR, one being withdrawn and one whose withdrawal GitHub refused still
   stand); MAGNUM ONLY, those of them no person approved, shown with its share of AUTO-APPROVED; PAST APPROVAL,
   those of them merged at a head after the one magnum approved; UNREVIEWED, those of these with a
-  `pr.merged_unreviewed` event; MISSES, the retro's misses of class `miss` on the MAGNUM ONLY PRs. A person's
+  `pr.merged_unreviewed` event; MISSES, the retro's misses of class `miss` on the MAGNUM ONLY PRs, less the
+  declines it routed to the notes as misses (`store.MissFilter.NoRoutedDeclines`: magnum's own finding that
+  its author declined as wrong, over-ranked or missing the repository's context, stored as class `miss` under
+  its thread's link, which the `declines` row carries too; 16 of the 74 class-miss rows were such declines),
+  which would read as a defect another reviewer caught on a merge that rested on magnum alone. A person's
   approval is an `APPROVED` entry of `latest_reviews_json` or of `review_gate_json`'s opinions (each misses
   approvals the other has) whose login is not a bot's (`[bot]` or `-bot`), not the author's and not one of
   magnum's own automatic approvals; the operator's by hand counts. The join that tells magnum's approval from
@@ -13026,11 +13038,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   an earlier P2 still open that blocks, a second review of one head and a nudge of one review that add
   nothing, a round after the merge dropped, own PRs on their own rows, a PR that never passed, MERGED OPEN,
   the open PRs with five heads, `--repo`, the text and the JSON keys),
-  TestStatsConvergenceSplitsReReviewFindingsByOrigin and TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone
-  (a person and magnum; magnum only at the merged head; magnum only past the head with a merged_unreviewed
-  event and a miss; the operator's hand approval after magnum's, counted as a person's; bot and author
-  approvals ignored; an approval only in `review_gate_json` counted; a withdrawn approval and an approval by
-  hand through `magnum approve --as` that are not magnum's) in cli, TestStatsCommandJSON's key lists, and
+  TestStatsConvergenceSplitsReReviewFindingsByOrigin, TestStatsConvergenceTellsAFullPassByItsRoundsOwnStart (a
+  full pass a push restarted on a new head, one that started a minute before the window, one paused before it
+  and continued in it, a round whose start was never written) and
+  TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone (a person and magnum; magnum only at the merged head;
+  magnum only past the head with a merged_unreviewed event and a miss; magnum only past the head without one;
+  the operator's hand approval after magnum's, counted as a person's; bot and author approvals ignored; an
+  approval only in `review_gate_json` counted; a withdrawn approval and an approval by hand through
+  `magnum approve --as` that are not magnum's; a miss on a PR a person approved and a routed decline, not
+  counted) in cli, TestStatsCommandJSON's key lists, and
   TestFindingTitlesSplitByTheJudgesSuffixes moved to store. The improve loop's run log records PASS@1, 5+, the
   missed-earlier share and MAGNUM ONLY from `magnum stats --since <since> --json` each run (landing.md).
 

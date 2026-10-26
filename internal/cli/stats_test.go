@@ -31,6 +31,7 @@ type statsRunSpec struct {
 	pr                         store.PR
 	round                      int
 	role, state, kind          string // kind "" = initial
+	target                     string // "" = abcdef0123456789
 	created                    time.Time
 	submitted, ended, verified time.Time
 	outcome, result            string
@@ -53,7 +54,7 @@ func statsStrOpt(s string) *string {
 func statsMkRun(t *testing.T, st *store.Store, s statsRunSpec) store.Run {
 	t.Helper()
 	r, err := st.CreateRun(context.Background(), store.Run{PRID: s.pr.ID, Round: s.round, Role: s.role, Kind: cmp.Or(s.kind, store.RunInitial),
-		State: s.state, TargetSHA: "abcdef0123456789", Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "x",
+		State: s.state, TargetSHA: cmp.Or(s.target, "abcdef0123456789"), Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "x",
 		CreatedAt: s.created, SubmittedAt: statsOpt(s.submitted), EndedAt: statsOpt(s.ended), VerifiedAt: statsOpt(s.verified),
 		Outcome: statsStrOpt(s.outcome), ResultJSON: statsStrOpt(s.result)})
 	if err != nil {
