@@ -2,8 +2,11 @@ package cli
 
 // `magnum stats`: what the daemon did over a window, per local day and
 // repository. Everything is read from the registry: the runs of the rounds
-// that began in the window, the judge's per-finding provenance and a few audit
-// events. statsCompute is the pure part; statsGather reads the store.
+// that began in the window, the judge's per-finding provenance, a few audit
+// events, every posted review of the PRs that ended in it (convergence) and
+// its merges with magnum's approvals of them (approvals). statsCompute,
+// statsConvergenceOf and statsApprovalsOf are the pure parts; statsGather
+// reads the store.
 
 import (
 	"cmp"
@@ -61,7 +64,7 @@ var statsSeverities = []string{"P0", "P1", "P2", "P3"}
 func newStatsCmd(c *Context) *cobra.Command {
 	var f statsFlags
 	cmd := newCommand(groupInspect, "stats "+statsUsage,
-		"review statistics per day and repository: rounds, durations, findings, sources, operations",
+		"review statistics per day and repository: rounds, durations, findings, sources, convergence, approvals, operations",
 		"Summarise what the daemon did over a window (--since, default 7d), per local day and repository with a total. "+
 			"Durations count only work that has finished: a role's turn once its runs ended and a whole round once "+
 			"no run is still going.\n\n"+
@@ -86,6 +89,24 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"the retro classified their replies in the window (`magnum misses --declines` lists them): fixed, "+
 			"declined, deferred, argued, question or unrelated, under each source that raised the finding (unknown "+
 			"without its provenance) and under its priority (--json: answered).\n\n"+
+			"CONVERGENCE counts, over the PRs that merged or closed in the window with a review magnum posted (a young "+
+			"PR has had no time to need many), how many distinct heads magnum's posted reviews reviewed until one "+
+			"passed: no P0, P1 or P2 new or still open and a verdict that does not block (a review with only P3s "+
+			"passes; a second review of a head already counted and a round after the merge add nothing). A row per "+
+			"repository and in total, others' PRs and your own (the logins autofix = \"own\" reads) apart: PASS@1, "+
+			"PASS<=2, 5+ (passed at the fifth head or later, or reviewed at five without passing), NEVER, MEAN and P90 "+
+			"heads to pass of the PRs that passed, and MERGED OPEN (merged while the last review had a P0 to P2 new "+
+			"or open). A line counts the open PRs with 5 or more reviewed heads; two split the window's posted P0 to "+
+			"P2 findings of re-reviews by the judge's title suffixes into new, missed earlier and fallout of fixes, "+
+			"the rounds that were full passes apart (--json: convergence).\n\n"+
+			"APPROVALS counts, for each repository magnum approves as you (auto_approve), the PRs merged in the "+
+			"window: AUTO-APPROVED, those on which magnum's automatic approval stood at the merge; MAGNUM ONLY, those "+
+			"of them no person approved (GitHub's latest reviews and the merge gate's opinions as the last Details "+
+			"read them, less bots, the author and magnum's own approvals: the same login and head, submitted by "+
+			"the time magnum recorded its post; your approval by hand counts as a person's), with its share of "+
+			"AUTO-APPROVED; PAST APPROVAL, those of them merged at a head after the one magnum approved; UNREVIEWED, "+
+			"those of these merged with a push magnum never reviewed (pr.merged_unreviewed); MISSES, the retro's "+
+			"misses on the MAGNUM ONLY PRs (--json: approvals).\n\n"+
 			"OPERATIONS counts model-limit switches, permission prompts magnum denied and round restarts (the PR "+
 			"head moved before the judge was prompted). The text report shows durations and sources over the "+
 			"whole window; --json has every day and repository.\n\n"+
@@ -200,6 +221,14 @@ type statsReport struct {
 	// Answered is how authors answered magnum's posted findings (nil when
 	// the retro stored no answer in the window).
 	Answered *statsAnswered `json:"answered,omitempty"`
+	// Convergence is how many reviewed heads the PRs that merged or closed
+	// in the window took to pass, and where the window's re-review findings
+	// come from (stats_convergence.go).
+	Convergence statsConvergence `json:"convergence"`
+	// Approvals is, per repository magnum approves as the operator, how
+	// many of the window's merges rest on magnum's approval alone
+	// (stats_approvals.go).
+	Approvals []statsApprovals `json:"approvals"`
 }
 
 // statsUnknown is the source of an answered finding without a findings row
@@ -382,12 +411,26 @@ func statsGather(ctx context.Context, st *store.Store, cfg *config.Config, since
 	if err != nil {
 		return statsReport{}, err
 	}
+	reviewed, err := st.ReviewedPRs(ctx, since)
+	if err != nil {
+		return statsReport{}, err
+	}
+	starts, err := st.EventsOfKindsSince(ctx, statsStartsSince(reviewed, findings, since), statsKindRoundStart)
+	if err != nil {
+		return statsReport{}, err
+	}
+	approvals, err := statsGatherApprovals(ctx, st, cfg, since, repo)
+	if err != nil {
+		return statsReport{}, err
+	}
 	isJudge := func(role string) bool { return actIsJudge(cfg, role) }
 	rep := statsCompute(runs, findings, events, isJudge, since, now, repo)
 	var total time.Duration
 	rep.TopPRs, total = statsTop(times, repo)
 	rep.AgentSeconds = statsSeconds(total)
 	rep.Answered = answered
+	rep.Convergence = statsConvergenceOf(reviewed, findings, starts, cfg.SelfMatch(), since, repo)
+	rep.Approvals = approvals
 	return rep, nil
 }
 
@@ -436,7 +479,7 @@ func (a *statsAcc) finish(key statsKey) statsGroup {
 }
 
 // statsRank is the nearest-rank percentile pct (1..100) of sorted (not empty).
-func statsRank(sorted []time.Duration, pct int) time.Duration {
+func statsRank[T any](sorted []T, pct int) T {
 	rank := (pct*len(sorted) + 99) / 100
 	return sorted[min(max(rank, 1), len(sorted))-1]
 }
@@ -811,6 +854,9 @@ func statsRender(w io.Writer, r statsReport) {
 	fmt.Fprintf(w, "stats since %s (%s), %s\n", r.Since.Local().Format(statsTimeFmt), tui.HumanDuration(r.Until.Sub(r.Since)), scope)
 	if len(r.Groups) == 0 && len(r.TopPRs) == 0 {
 		fmt.Fprintf(w, "\nno rounds since %s\n", r.Since.Local().Format(statsTimeFmt))
+		// PRs reviewed before the window can still end in it.
+		statsRenderConvergence(w, r.Convergence)
+		statsRenderApprovals(w, r.Approvals)
 		return
 	}
 	statsTable(w, "ROUNDS", []string{"DAY", "REPO", "STARTED", "POSTED", "OTHER"},
@@ -840,6 +886,8 @@ func statsRender(w io.Writer, r statsReport) {
 			}
 			return row
 		}))
+	statsRenderConvergence(w, r.Convergence)
+	statsRenderApprovals(w, r.Approvals)
 
 	var durs [][]string
 	for _, role := range statsOrdered(r.Total.Durations, statsRoundRole) {

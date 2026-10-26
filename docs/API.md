@@ -18125,6 +18125,13 @@ const (
     Finding verdicts (findings.verdict).
 
 const (
+	OriginNew           = "new"            // new code, or nothing the judge's suffix says
+	OriginMissedEarlier = "missed_earlier" // the earlier reviews missed it
+	OriginFallout       = "fallout"        // in the fix of an earlier finding
+)
+    Where a finding comes from, by its title (FindingOrigin).
+
+const (
 	KVDaemonStartedAt     = "daemon.started_at"     // store.FormatTime
 	KVDaemonLastTick      = "daemon.last_tick"      // store.FormatTime
 	KVDaemonLastPoll      = "daemon.last_poll"      // store.FormatTime
@@ -18544,6 +18551,11 @@ func DayKey(t time.Time) string
 func Deref[T any](p *T) T
     Deref returns *p, or the zero value when p is nil.
 
+func FindingOrigin(title string) string
+    FindingOrigin is where the finding titled title comes from, by the judge's
+    suffix: OriginFallout, OriginMissedEarlier or OriginNew. The fix loop's cap
+    and `magnum stats` read this one definition.
+
 func FormatTime(t time.Time) string
     FormatTime renders t in UTC with TimeFormat. Every timestamp written to the
     database must go through it.
@@ -18723,6 +18735,10 @@ func RequiredNames(entry string, c CheckResult) bool
     file (Key), and the automatic approval holds such a PR before its CI gate
     reads them. A malformed glob names nothing.
 
+func SplitFindingTitles(titles []string) (fresh, missed, fallout int)
+    SplitFindingTitles counts titles by FindingOrigin: the new ones, the ones
+    the earlier reviews missed and the fallout of the fixes.
+
 
 TYPES
 
@@ -18769,6 +18785,13 @@ type AutoApproval struct {
 }
     AutoApproval is one approval magnum posted, or tries to post, as the
     operator's own account.
+
+func (a AutoApproval) Stands() bool
+    Stands reports whether a stands on GitHub as far as the registry knows:
+    it was posted (GitHub's review id is recorded) and nobody withdrew
+    or dismissed it since. One that ended with its PR (AutoEndedClosed),
+    one being withdrawn and one whose withdrawal GitHub kept refusing (failed,
+    with EndedBy set) still stand.
 
 type AutoApprovalPR struct {
 	AutoApproval
@@ -19759,6 +19782,24 @@ type PRUpsert struct {
 }
     PRUpsert reports what UpsertPRFromGitHub did.
 
+type PostedReview struct {
+	RunID    string
+	Round    int
+	SHA      string // the reviewed head (target_sha)
+	ReviewID int64
+	// CreatedAt is when the run was created, RoundStart when the first run
+	// of its round was (a reviewer's, before the judge's).
+	CreatedAt  time.Time
+	RoundStart time.Time
+	// Summary is what the judge's result says (ParseReviewResult); OK is
+	// false when the run stored no result that parses.
+	Summary ReviewSummary
+	OK      bool
+}
+    PostedReview is one review a PR's round posted, read from the earliest
+    run that carries its review id (outcome posted): a nudge, a continue or a
+    recovery that posted the same review adds nothing.
+
 type ProposalMiss struct {
 	MissID  int64  `json:"miss_id"`
 	Outcome string `json:"outcome"`           // MissNoted | MissSkipped
@@ -19933,6 +19974,21 @@ func (s ReviewSummary) VerdictWords() string
     the optional ones (P3s, new or still open, and simplifications) counted
     after a comma ("Fix 1 problem before merging, 4 optional"). The PR status
     comment's posted line carries it; it names no score and no event.
+
+type ReviewedPR struct {
+	ID       int64
+	Repo     string // owner/name
+	Number   int
+	Author   string // "" for a ghost
+	GHState  string // GHOpen, GHMerged or GHClosed
+	MergedAt *time.Time
+	ClosedAt *time.Time
+	Reviews  []PostedReview
+}
+    ReviewedPR is a PR with every review its rounds posted, oldest first.
+
+func (p ReviewedPR) End() *time.Time
+    End is when the PR ended: merged, else closed; nil while it is neither.
 
 type RoundRun struct {
 	Run
@@ -20136,6 +20192,10 @@ func (s *Store) AutoApprovalByID(ctx context.Context, id int64) (AutoApproval, e
 func (s *Store) AutoApprovalOfRun(ctx context.Context, prID int64, runID string) (AutoApproval, bool, error)
     AutoApprovalOfRun is the latest approval that followed run runID's review of
     the PR, if any.
+
+func (s *Store) AutoApprovalsByPR(ctx context.Context, prIDs []int64) (map[int64][]AutoApproval, error)
+    AutoApprovalsByPR is every approval of each of the PRs that have one,
+    oldest first.
 
 func (s *Store) AutoApproveCandidates(ctx context.Context) ([]RepoPR, error)
     AutoApproveCandidates lists the open PRs magnum may approve as the operator:
@@ -20473,6 +20533,10 @@ func (s *Store) MarkSlotDatabaseDropped(ctx context.Context, dbName, by string) 
     MarkSlotDatabaseDropped records that dbName was dropped (by = who: a cleanup
     plan id, "cleanup", "reconcile", …).
 
+func (s *Store) MergedPRsSince(ctx context.Context, since time.Time) ([]RepoPR, error)
+    MergedPRsSince lists the PRs merged at or after since, with their
+    repository, by repository and number.
+
 func (s *Store) MissRejections(ctx context.Context, ids []int64) (map[int64][]string, error)
     MissRejections returns, per miss of ids, the operator's reasons of the
     rejected proposals it was in, oldest first (an empty reason is left out).
@@ -20677,6 +20741,12 @@ func (s *Store) RetroSettling(ctx context.Context, q RetroQuery) (int, error)
     RetroSettling counts the PRs that would be due for q's retro but closed
     after q.Until: they wait for the settle delay. 0 without Until or with
     PRIDs.
+
+func (s *Store) ReviewedPRs(ctx context.Context, since time.Time) ([]ReviewedPR, error)
+    ReviewedPRs returns the PRs with at least one posted review that are open,
+    merged or closed at or after since, or have a finding recorded at or after
+    since, by id, each with every review its rounds posted (whenever they did)
+    in the order their runs were created.
 
 func (s *Store) RoleRanBefore(ctx context.Context, prID int64, role string) (bool, error)
     RoleRanBefore reports whether a PR already has an ended or verified run

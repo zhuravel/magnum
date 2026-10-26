@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -180,6 +181,54 @@ func scanFindingInto(sc scanner, f *Finding, extra ...any) error {
 		return fmt.Errorf("finding %d: sources: %w", f.ID, err)
 	}
 	return nil
+}
+
+// The judge ends the title of a re-review's finding in code written to fix
+// an earlier one with "(in the fix for <earlier title>)" and that of a
+// finding its earlier reviews missed with "(missed earlier)"
+// (skills/magnum-review/SKILL.md, section 6). The registry cuts a title at
+// 120 runes, so the first may lose its closing parenthesis; a P3's
+// "(optional, no reply needed)" follows the second.
+const (
+	titleFalloutMark = "(in the fix for"
+	titleMissedMark  = "(missed earlier)"
+)
+
+// Where a finding comes from, by its title (FindingOrigin).
+const (
+	OriginNew           = "new"            // new code, or nothing the judge's suffix says
+	OriginMissedEarlier = "missed_earlier" // the earlier reviews missed it
+	OriginFallout       = "fallout"        // in the fix of an earlier finding
+)
+
+// FindingOrigin is where the finding titled title comes from, by the
+// judge's suffix: OriginFallout, OriginMissedEarlier or OriginNew. The fix
+// loop's cap and `magnum stats` read this one definition.
+func FindingOrigin(title string) string {
+	switch {
+	case strings.Contains(title, titleFalloutMark):
+		return OriginFallout
+	case strings.Contains(title, titleMissedMark):
+		return OriginMissedEarlier
+	default:
+		return OriginNew
+	}
+}
+
+// SplitFindingTitles counts titles by FindingOrigin: the new ones, the ones
+// the earlier reviews missed and the fallout of the fixes.
+func SplitFindingTitles(titles []string) (fresh, missed, fallout int) {
+	for _, title := range titles {
+		switch FindingOrigin(title) {
+		case OriginFallout:
+			fallout++
+		case OriginMissedEarlier:
+			missed++
+		default:
+			fresh++
+		}
+	}
+	return fresh, missed, fallout
 }
 
 // nullString stores "" as NULL.

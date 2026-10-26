@@ -59,12 +59,25 @@ Append one entry to `~/.local/share/magnum/improve/runs.md` per run:
 
 - since: <the since this run used>
 - evidence: <rounds, posted reviews, misses, warn/error kinds: the headline numbers>
+- measures: <PASS@1, 5+, the missed-earlier share and MAGNUM ONLY over the run's window, and the last run's>
 - landed: <sha: one line each>
 - live since: <restart time>
 - waiting for the operator: <item: the question>
 - parked: <item: why, and what would justify it>
 - next run: <what to look at first, and the measurements to read>
 ```
+
+The `measures` line comes from `magnum stats --since <since> --json`, so every run reads one definition
+(DECISIONS "`magnum stats` counts the reviewed heads to a pass and the merges on magnum's approval alone"),
+never its own SQL: PASS@1 and 5+ of the others' PRs in total, the missed-earlier share of the re-reviews'
+P0-P2 (full passes apart) and MAGNUM ONLY of AUTO-APPROVED per repository:
+
+```bash
+magnum stats --since <since> --json | jq -r '(.convergence.rows[] | select(.repo == null and .authors == "others")) as $c
+  | "PASS@1 \($c.pass_at_1)/\($c.prs), 5+ \($c.five_plus)/\($c.prs), missed earlier \(.convergence.rereview_findings.missed_earlier_share * 100 | round)% of \(.convergence.rereview_findings | .new + .missed_earlier + .fallout) re-review P0-P2, MAGNUM ONLY \([.approvals[] | "\(.repo) \(.magnum_only)/\(.auto_approved)"] | join(", "))"'
+```
+
+Compare them with the last run's `measures` line; they are a trend to read next to the misses, never a target.
 
 Keep the run directory (`~/.local/share/magnum/improve/<run id>/`: evidence, plan, specs). It stays on this machine;
 never copy it into the repository.

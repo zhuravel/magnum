@@ -241,24 +241,14 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	}
 }
 
-// The judge ends the title of a finding in code written to fix an earlier
-// one with "(in the fix for <earlier title>)" and that of a finding its
-// earlier reviews missed with "(missed earlier)" (skills/magnum-review/
-// SKILL.md, section 6). The registry cuts a title at 120 runes, so the
-// first may lose its closing parenthesis; a P3's "(optional, no reply
-// needed)" follows the second.
-const (
-	titleFalloutMark = "(in the fix for"
-	titleMissedMark  = "(missed earlier)"
-)
-
 // capMessage is what a loop that reached its cap tells the operator: the
 // loop's fix cycles and, once earlier loops of the PR ran some too, all the
 // PR's ("5 fix cycles (14 on this PR)": a loop started by hand counts from
 // cycle 1 again), and the findings the last re-review left, split by where
-// they come from so that a loop converging reads differently from one
-// chasing its own fixes: "3 findings left: 1 new, 0 missed earlier, 2
-// fallout of the fixes", then the fixer's last report. found is the
+// they come from (store.FindingOrigin, the judge's title suffixes) so that
+// a loop converging reads differently from one chasing its own fixes: "3
+// findings left: 1 new, 0 missed earlier, 2 fallout of the fixes", then the
+// fixer's last report. found is the
 // review's finding count and left its words (findingsSplit adds the split).
 func (e *Engine) capMessage(ctx context.Context, job *fixJob, res pipeline.RoundResult, found int, left string) string {
 	st := job.state
@@ -315,25 +305,8 @@ func (e *Engine) findingsSplit(ctx context.Context, prID int64, round, found int
 	if len(titles) != found {
 		return ""
 	}
-	fresh, missed, fallout := splitFindingTitles(titles)
+	fresh, missed, fallout := store.SplitFindingTitles(titles)
 	return fmt.Sprintf("%d new, %d missed earlier, %d fallout of the fixes", fresh, missed, fallout)
-}
-
-// splitFindingTitles counts titles by the judge's suffixes: findings in the
-// fixes of earlier ones, findings the earlier reviews missed, and the new
-// rest.
-func splitFindingTitles(titles []string) (fresh, missed, fallout int) {
-	for _, title := range titles {
-		switch {
-		case strings.Contains(title, titleFalloutMark):
-			fallout++
-		case strings.Contains(title, titleMissedMark):
-			missed++
-		default:
-			fresh++
-		}
-	}
-	return fresh, missed, fallout
 }
 
 // loopMovedOn says why a loop's PR moved on after the re-review of head,

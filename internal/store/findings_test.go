@@ -259,3 +259,31 @@ func TestFindingsByPRReturnsOnlyThatPRsOldestFirst(t *testing.T) {
 		t.Fatalf("FindingsSince = %+v", all)
 	}
 }
+
+// Findings are told apart by the suffix the judge puts on a title: "(in the
+// fix for ...)" is fallout of the fixes (the registry cuts a long title, so
+// the suffix may lose its closing parenthesis), "(missed earlier)" a miss of
+// the earlier reviews (a P3 has "(optional, no reply needed)" after it), and
+// any other title is new. The fix loop's cap and `magnum stats` read this one
+// definition.
+func TestFindingTitlesSplitByTheJudgesSuffixes(t *testing.T) {
+	titles := map[string]string{
+		"Export skips the site check":                                                                                             OriginNew,
+		"Merchant restores enable staff-only options (missed earlier)":                                                            OriginMissedEarlier,
+		"Historical emails show today's points (missed earlier) (optional, no reply needed)":                                      OriginMissedEarlier,
+		"A partial refund extends the cutoff (in the fix for Later visits earn rewards)":                                          OriginFallout,
+		"Re-adding a reward prevents restoring its earlier version (in the fix for Undo is blocked after removing an unused A/B…": OriginFallout,
+		"Cleanup mentions that a fix was missed earlier in prose":                                                                 OriginNew,
+	}
+	var all []string
+	for title, want := range titles {
+		if got := FindingOrigin(title); got != want {
+			t.Errorf("FindingOrigin(%q) = %q, want %q", title, got, want)
+		}
+		all = append(all, title)
+	}
+	fresh, missed, fallout := SplitFindingTitles(all)
+	if fresh != 2 || missed != 2 || fallout != 2 {
+		t.Errorf("split = %d new, %d missed earlier, %d fallout; want 2, 2, 2", fresh, missed, fallout)
+	}
+}

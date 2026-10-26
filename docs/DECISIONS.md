@@ -12969,6 +12969,71 @@ skill versions); people add theirs to the sections before it, at the end of the 
   said first still wins. The class stays a hint for the judge. Tests, failing first:
   TestClassifyReplyReadsADoubledAgentTagAndBareDeclines.
 
+- **`magnum stats` counts the reviewed heads to a pass and the merges on magnum's approval alone** (2026-10-26,
+  spec 02 of the 2026-10-26 run; amends "Finding provenance, then `magnum stats`"). Every improve run computed
+  convergence again with its own definition and the answers disagreed: verdict `clean` at the first review gave
+  41%, "no new or open P0-P2" 61%, distinct heads on merged colleague PRs 52.5%; and the share of merged
+  auto-approved PRs whose only approval of a person was magnum's, in the operator's name, came out 14, 19, 20 or
+  26 of 40 on one repository, as each analysis counted the operator's hand approvals and bots its own way. One
+  definition now lives in code, read-only (no migration, no event, no gate; nothing changes in reviews).
+  CONVERGENCE (`convergence` in `--json`, `stats_convergence.go`): the cohort is the PRs that merged or closed
+  in the window (`merged_at`, else `closed_at`) with at least one posted review; the unit is a distinct reviewed
+  head (`target_sha`) of the PR's posted judge reviews (outcome `posted`, a review id, the earliest run per
+  review id: `store.ReviewedPRs`), in the order their runs were created, every review the PR ever had, less the
+  runs created after it ended (a post-merge review); a second review of a head already counted (a reply round,
+  a same-head re-review, a CI check) adds nothing, neither a head nor a pass. A review passes when it leaves no
+  P0, P1 or P2 new or still open (`previous_findings.open`, by `store.ParseReviewResult`; an open P3 stays
+  optional) and its verdict does not block; one whose result does not parse does not pass. Rows per repository
+  and in total, others' PRs and the operator's own apart (`config.SelfMatch`, the logins `autofix = "own"`
+  reads): PRS, PASS@1, PASS<=2, 5+ (passed at the fifth head or later, or five heads without passing), NEVER,
+  the mean (two decimals) and nearest-rank p90 of the heads to pass of the PRs that passed, and MERGED OPEN
+  (merged while the last review before the merge, a same-head one included, had a P0-P2 new or open). A line
+  counts the open PRs that already have five reviewed heads. Two more split the window's posted P0-P2 findings
+  of re-reviews (a round after the PR's first posted review; a round's findings by the last run that recorded
+  them, as the value section reads them) by the judge's title suffixes into new, missed earlier (with its
+  share) and fallout of fixes, the rounds that were full passes apart (47 of 69 missed-earlier findings since
+  10-12 came from full passes, which read the whole PR again by design): a round is a full pass when the last
+  `engine.round_start` event of its PR at or before its first run says `full_pass` of its head, the only
+  per-round record of one (`kvPRFullPass` keeps only the last). `titleFalloutMark`, `titleMissedMark` and
+  `splitFindingTitles` moved from the engine's fix loop to `store.FindingOrigin` and `store.SplitFindingTitles`,
+  so the fix cap's message and the stats read one definition. APPROVALS (`approvals`, `stats_approvals.go`):
+  for each repository with `auto_approve` (`config.AutoApproveFor`), never one share across repositories that
+  enforce a review and ones that do not, the PRs merged in the window (MERGED); AUTO-APPROVED, those on which an
+  approval magnum posted by itself stood at the merge (`store.AutoApproval.Stands`: posted, and not withdrawn or
+  dismissed; one that ended with its PR, one being withdrawn and one whose withdrawal GitHub refused still
+  stand); MAGNUM ONLY, those of them no person approved, shown with its share of AUTO-APPROVED; PAST APPROVAL,
+  those of them merged at a head after the one magnum approved; UNREVIEWED, those of these with a
+  `pr.merged_unreviewed` event; MISSES, the retro's misses of class `miss` on the MAGNUM ONLY PRs. A person's
+  approval is an `APPROVED` entry of `latest_reviews_json` or of `review_gate_json`'s opinions (each misses
+  approvals the other has) whose login is not a bot's (`[bot]` or `-bot`), not the author's and not one of
+  magnum's own automatic approvals; the operator's by hand counts. The join that tells magnum's approval from
+  the operator's own by the same login: neither GitHub's review id nor the body with the hidden
+  `magnum:auto-approval` marker is in the registry's review snapshots (the Details read neither), so it is the
+  head: the same login and the same commit as a posted `auto_approvals` row and, where the entry says when it
+  was submitted (`latest_reviews_json` does, the gate's opinions do not), no later than a minute after magnum
+  recorded its post. GitHub keeps one latest review per login, so an approval of that head by that login after
+  magnum's is the operator's by hand (their approval of the head after magnum's, and the PR merged before
+  magnum's follow-up saw it, is the case the time catches). A row the operator posted with `magnum approve --as`
+  or the board's `A` (a `review.manual_verdict_begin` event names its `approval_id`) is theirs by hand, not
+  magnum's automatic approval. The snapshot stops at the last Details read before the merge, so an approval
+  given in that last interval is missed. Rejected: verdict `clean` as the pass (it treats a review with only
+  P3s as a failure); cohorts by the first review (young PRs have had no time to need five heads, so the
+  newest cohort looks fastest: censoring); a per-PR counter in kv (the runs are the record, as for the fix
+  cap); any gate or regression signal on these numbers (fewer heads to pass can be bought with fewer findings;
+  they are a trend to read next to the misses, never a target); a store of review ids for the join (a
+  migration for a measurement the head already answers). Tests, failing first:
+  TestStatsConvergenceCountsHeadsUntilNoSeriousFindingIsLeft (a pass at head 1, a P3-only review that passes,
+  an earlier P2 still open that blocks, a second review of one head and a nudge of one review that add
+  nothing, a round after the merge dropped, own PRs on their own rows, a PR that never passed, MERGED OPEN,
+  the open PRs with five heads, `--repo`, the text and the JSON keys),
+  TestStatsConvergenceSplitsReReviewFindingsByOrigin and TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone
+  (a person and magnum; magnum only at the merged head; magnum only past the head with a merged_unreviewed
+  event and a miss; the operator's hand approval after magnum's, counted as a person's; bot and author
+  approvals ignored; an approval only in `review_gate_json` counted; a withdrawn approval and an approval by
+  hand through `magnum approve --as` that are not magnum's) in cli, TestStatsCommandJSON's key lists, and
+  TestFindingTitlesSplitByTheJudgesSuffixes moved to store. The improve loop's run log records PASS@1, 5+, the
+  missed-earlier share and MAGNUM ONLY from `magnum stats --since <since> --json` each run (landing.md).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -174,6 +174,37 @@ func (s *Store) LatestAutoApprovals(ctx context.Context, prIDs []int64) (map[int
 	return out, nil
 }
 
+// AutoApprovalsByPR is every approval of each of the PRs that have one,
+// oldest first.
+func (s *Store) AutoApprovalsByPR(ctx context.Context, prIDs []int64) (map[int64][]AutoApproval, error) {
+	out := map[int64][]AutoApproval{}
+	if len(prIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("", autoApprovalColumns)+" FROM auto_approvals WHERE pr_id IN ("+placeholders(len(prIDs))+
+		") ORDER BY pr_id, id", int64Args(prIDs)...)
+	if err != nil {
+		return nil, fmt.Errorf("auto approvals: %w", err)
+	}
+	list, err := collect(rows, scanAutoApproval)
+	if err != nil {
+		return nil, fmt.Errorf("auto approvals: %w", err)
+	}
+	for _, a := range list {
+		out[a.PRID] = append(out[a.PRID], a)
+	}
+	return out, nil
+}
+
+// Stands reports whether a stands on GitHub as far as the registry knows:
+// it was posted (GitHub's review id is recorded) and nobody withdrew or
+// dismissed it since. One that ended with its PR (AutoEndedClosed), one
+// being withdrawn and one whose withdrawal GitHub kept refusing (failed,
+// with EndedBy set) still stand.
+func (a AutoApproval) Stands() bool {
+	return a.ReviewID != 0 && (a.State != AutoDismissed || a.EndedBy == AutoEndedClosed)
+}
+
 // AutoApprovalPR is an approval with its PR and repository (owner/name).
 type AutoApprovalPR struct {
 	AutoApproval

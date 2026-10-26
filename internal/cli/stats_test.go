@@ -581,8 +581,28 @@ func TestStatsCommandJSON(t *testing.T) {
 	if err := json.Unmarshal(f.Out.Bytes(), &doc); err != nil {
 		t.Fatalf("%v\n%s", err, f.Out.String())
 	}
-	if got := statsKeys(doc); !slices.Equal(got, []string{"agent_seconds", "groups", "since", "top_prs", "total", "until", "value"}) {
+	if got := statsKeys(doc); !slices.Equal(got, []string{"agent_seconds", "approvals", "convergence", "groups", "since", "top_prs", "total",
+		"until", "value"}) {
 		t.Fatalf("top-level keys = %v", got)
+	}
+	// Convergence and approvals are there with nothing to count (the seed
+	// posted no review GitHub numbered, and no watch approves as the
+	// operator).
+	conv := statsObj(t, doc["convergence"])
+	if got := statsKeys(conv); !slices.Equal(got, []string{"full_pass_findings", "open_five_plus", "rereview_findings", "rows"}) {
+		t.Errorf("convergence keys = %v", got)
+	}
+	if got := statsKeys(statsObj(t, conv["rereview_findings"])); !slices.Equal(got, []string{"fallout", "missed_earlier", "missed_earlier_share", "new"}) {
+		t.Errorf("rereview_findings keys = %v", got)
+	}
+	if got := statsKeys(statsObj(t, conv["open_five_plus"])); !slices.Equal(got, []string{"others", "own"}) {
+		t.Errorf("open_five_plus keys = %v", got)
+	}
+	if rows, ok := conv["rows"].([]any); !ok || len(rows) != 0 {
+		t.Errorf("convergence rows = %v, want []", conv["rows"])
+	}
+	if a, ok := doc["approvals"].([]any); !ok || len(a) != 0 {
+		t.Errorf("approvals = %v, want []", doc["approvals"])
 	}
 	if since, err := time.Parse(time.RFC3339, doc["since"].(string)); err != nil || !since.Equal(statsNow.Add(-7*24*time.Hour)) {
 		t.Fatalf("since = %v (%v)", doc["since"], err)

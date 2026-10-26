@@ -138,25 +138,6 @@ func TestTheCapNamesNoSplitTheRegistryCannotBack(t *testing.T) {
 	}
 }
 
-// Findings are told apart by the suffix the judge puts on a title: "(in the
-// fix for ...)" is fallout of the fixes (the registry cuts a long title, so
-// the suffix may lose its closing parenthesis), "(missed earlier)" a miss of
-// the earlier reviews (a P3 has "(optional, no reply needed)" after it), and
-// any other title is new.
-func TestFindingTitlesSplitByTheJudgesSuffixes(t *testing.T) {
-	fresh, missed, fallout := splitFindingTitles([]string{
-		"Export skips the site check",
-		"Merchant restores enable staff-only options (missed earlier)",
-		"Historical emails show today's points (missed earlier) (optional, no reply needed)",
-		"A partial refund extends the cutoff (in the fix for Later visits earn rewards)",
-		"Re-adding a reward prevents restoring its earlier version (in the fix for Undo is blocked after removing an unused A/B…",
-		"Cleanup mentions that a fix was missed earlier in prose",
-	})
-	if fresh != 2 || missed != 2 || fallout != 2 {
-		t.Errorf("split = %d new, %d missed earlier, %d fallout; want 2, 2, 2", fresh, missed, fallout)
-	}
-}
-
 // A loop that waited for its re-review while the daemon was down gets the
 // cap's account from the review as the registry holds it: the recovered
 // result names the round, so the titles of the posted findings are found.
