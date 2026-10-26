@@ -12,7 +12,8 @@ import (
 )
 
 // Case outcomes of a replay besides the round's (pipeline.Outcome*), which
-// evalrun.RunCase records and the daemon's gate of a skill proposal reads.
+// evalrun.RunCase records (OutcomeSkipped: `magnum eval run`) and the
+// daemon's gate of a skill proposal reads.
 const (
 	// OutcomeFlagged: the case is not replayed, since an earlier replay of
 	// it or of its PR was refused or the live registry holds a Codex flag
@@ -21,6 +22,10 @@ const (
 	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft; no
 	// later case should start either.
 	OutcomeBudget = "budget"
+	// OutcomeSkipped: the case is not replayed, since an earlier case of the
+	// run hit a usage limit, needed a login or reached the Codex budget, or
+	// the run was interrupted; `magnum eval run` records it so.
+	OutcomeSkipped = "skipped"
 )
 
 // RunIDFormat is a run id's time part: sortable, to the second.

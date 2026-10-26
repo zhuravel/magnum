@@ -302,9 +302,9 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		}
 		switch {
 		case stopped != "":
-			cr.Outcome, cr.Error = "skipped", stopped
+			cr.Outcome, cr.Error = eval.OutcomeSkipped, stopped
 		case ctx.Err() != nil:
-			cr.Outcome, cr.Error = "skipped", "interrupted"
+			cr.Outcome, cr.Error = eval.OutcomeSkipped, "interrupted"
 		case refused != "":
 			cr.Outcome, cr.Error = evalFlagged, refused
 			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s refused: %s\n", i+1, len(cases), ec.Name, ec.PR, cr.Error)
@@ -323,7 +323,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		if err := eval.SaveRun(dir, run); err != nil {
 			fmt.Fprintf(c.Stderr, "magnum eval run: saving the run: %v\n", err)
 		}
-		if cr.Outcome != "skipped" && cr.Outcome != evalFlagged {
+		if cr.Outcome != eval.OutcomeSkipped && cr.Outcome != evalFlagged {
 			fmt.Fprintf(c.Stdout, "      %s\n", evalCaseLine(cr))
 		}
 	}

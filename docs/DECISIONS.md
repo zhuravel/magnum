@@ -13161,7 +13161,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   replay before the proposal in any run: a gate replays its guards only as its candidate's first and second
   replays (the base only for one the candidate lost twice), so without them a guard's last replay would never
   move after a gate that passes, and every later gate would take the same least recently replayed guards
-  again. A replay not made by a gate's candidate can still have read a skill that never landed: an operator's
+  again. The order counts every replay attempt, scored or not (`learn.lastReplayed`): a gate goes on past a
+  guard's candidate replay that ends with an error, a refusal or a cut (a guard is no target), and if only
+  scored replays counted, a case that never scores (its head gone, say) would keep its place, and waste a
+  replay, in every later gate; a case a stopped `magnum eval run` lists as skipped (`eval.OutcomeSkipped`)
+  was not replayed and does not count. A replay not made by a gate's candidate can still have read a skill that never landed: an operator's
   `magnum eval run --candidate` and eval-at.sh's "after" replay at an unlanded builder commit carry no gate's
   label and can make a guard. That case is accepted: when the next candidate loses such a guard twice, the
   gate replays the base, the base's replay (a baseline run, which counts) is then the case's newest replay
@@ -13222,7 +13226,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAGuardComesOnlyFromReplaysNotMadeByAGatesCandidate (another proposal's candidate and second replays left out,
   an older operator's or base's replay still guarding),
   TestSuccessiveGatesTakeTurnsThroughTheGuardsTheyReplayed (two gates' candidate and second replays move the
-  order, the baselines stay the operator's), TestJudgeFailsAGuardTheCandidateLostTwiceAndTheBaseFinds, TestAGuardTheBaseAlsoLosesIsSkippedNotARegression
+  order, the baselines stay the operator's), TestAGuardWhoseCandidateReplayEndedWithoutAScoreGoesToTheBackOfTheNextGate
+  (an unscored replay moves the order, a skipped one does not),
+  TestJudgeFailsAGuardTheCandidateLostTwiceAndTheBaseFinds, TestAGuardTheBaseAlsoLosesIsSkippedNotARegression
   and TestJudgePassesAMissWinOnlyWhenTheSecondReplayFindsItToo, with TestSelectCasesPutsTargetsFirstAndCapsTheRest
   extended; in eval TestNewestReplayIsTheNewestScoredReplayAtTheHead, TestNewestReplayIsTheLatestReplayNotTheLatestRun
   and TestRunsBeforeKeepsOnlyTheReplaysMadeBeforeATime; in engine

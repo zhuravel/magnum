@@ -9541,9 +9541,14 @@ const (
 	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft; no
 	// later case should start either.
 	OutcomeBudget = "budget"
+	// OutcomeSkipped: the case is not replayed, since an earlier case of the
+	// run hit a usage limit, needed a login or reached the Codex budget, or
+	// the run was interrupted; `magnum eval run` records it so.
+	OutcomeSkipped = "skipped"
 )
     Case outcomes of a replay besides the round's (pipeline.Outcome*), which
-    evalrun.RunCase records and the daemon's gate of a skill proposal reads.
+    evalrun.RunCase records (OutcomeSkipped: `magnum eval run`) and the daemon's
+    gate of a skill proposal reads.
 
 const FlaggedFile = "flagged.json"
     FlaggedFile holds the flagged cases (Flagged by case name) under the runs'
@@ -13905,28 +13910,32 @@ type Guards struct {
 
 func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers string) Guards
     GuardsFrom are n guard places over the stored runs (oldest first:
-    eval.ListRuns), which the gate and `magnum eval guards` both take: a case
-    guards when its newest scored replay at its head (eval.NewestReplay, the one
-    replayed last) not made by a gate's candidate found a defect, and is ordered
-    by when it was replayed last in any run. Both read only the replays made
-    before since (eval.RunsBefore; zero = every replay: `magnum eval guards`):
-    the gate's proposal's creation, so every gate of one proposal takes the
-    same guards with the same baselines whatever was replayed since (the gate's
-    own replays of the base, an improve run's eval-at.sh). Which cases guard,
-    and their baselines (Replay), come only from replays not made by a
-    gate's candidate: every gate's replays of its candidate, of any proposal
-    (candidateRun), are left out, since one that found a defect master's
-    skill does not would make a guard that the next proposal's candidate
-    "loses" and its base loses too. The order (Last) counts those replays too:
-    a gate replays its guards only as its candidate's first and second replays
-    (the base only for one the candidate lost twice), so without them a guard's
-    last replay would never move and every gate would take the same guards.
-    Both leave out the runs with inputs skip (the gate's candidate's own;
-    "" = none). reviewers, for a judge-only gate, are its candidate's reviewer
-    inputs (eval.Run.ReviewerInputs): its judge reads the reports of a full
-    replay whose reviewers read them, and none is made for a guard, so a case
-    guards it only with such a full replay among the replays that decide which
-    cases guard (eval.FullReplayFor); "" for a gate of every role.
+    eval.ListRuns), which the gate and `magnum eval guards` both take:
+    a case guards when its newest scored replay at its head (eval.NewestReplay,
+    the one replayed last among those replays) not made by a gate's candidate
+    found a defect, and is ordered by when it was replayed last in any run,
+    scored or not (lastReplayed). Both read only the replays made before since
+    (eval.RunsBefore; zero = every replay: `magnum eval guards`): the gate's
+    proposal's creation, so every gate of one proposal takes the same guards
+    with the same baselines whatever was replayed since (the gate's own replays
+    of the base, an improve run's eval-at.sh). Which cases guard, and their
+    baselines (Replay), come only from replays not made by a gate's candidate:
+    every gate's replays of its candidate, of any proposal (candidateRun),
+    are left out, since one that found a defect master's skill does not would
+    make a guard that the next proposal's candidate "loses" and its base loses
+    too. The order (Last) counts those replays too: a gate replays its guards
+    only as its candidate's first and second replays (the base only for one
+    the candidate lost twice), so without them a guard's last replay would
+    never move and every gate would take the same guards; and it counts a
+    replay that ended without a score (an error, a refusal, a cut replay), so
+    a case that never scores goes to the back instead of taking a guard place,
+    and a replay, in every later gate. Both leave out the runs with inputs skip
+    (the gate's candidate's own; "" = none). reviewers, for a judge-only gate,
+    are its candidate's reviewer inputs (eval.Run.ReviewerInputs): its judge
+    reads the reports of a full replay whose reviewers read them, and none is
+    made for a guard, so a case guards it only with such a full replay among the
+    replays that decide which cases guard (eval.FullReplayFor); "" for a gate of
+    every role.
 
 type Input struct {
 	// Author is the pull request's author in Account form

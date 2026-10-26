@@ -154,8 +154,9 @@ type Guards struct {
 // GuardsFrom are n guard places over the stored runs (oldest first:
 // eval.ListRuns), which the gate and `magnum eval guards` both take: a case
 // guards when its newest scored replay at its head (eval.NewestReplay, the
-// one replayed last) not made by a gate's candidate found a defect, and is
-// ordered by when it was replayed last in any run. Both read only the
+// one replayed last among those replays) not made by a gate's candidate
+// found a defect, and is ordered by when it was replayed last in any run,
+// scored or not (lastReplayed). Both read only the
 // replays made before since (eval.RunsBefore; zero = every replay: `magnum
 // eval guards`): the gate's proposal's creation, so every gate of one
 // proposal takes the same guards with the same baselines whatever was
@@ -168,7 +169,10 @@ type Guards struct {
 // counts those replays too: a gate replays its guards only as its
 // candidate's first and second replays (the base only for one the
 // candidate lost twice), so without them a guard's last replay would never
-// move and every gate would take the same guards. Both leave out the runs
+// move and every gate would take the same guards; and it counts a replay
+// that ended without a score (an error, a refusal, a cut replay), so a case
+// that never scores goes to the back instead of taking a guard place, and a
+// replay, in every later gate. Both leave out the runs
 // with inputs skip (the gate's candidate's own; "" = none). reviewers, for
 // a judge-only gate, are its candidate's reviewer inputs
 // (eval.Run.ReviewerInputs): its judge reads the reports of a full replay
@@ -190,11 +194,32 @@ func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers 
 			_, fc, ok := eval.FullReplayFor(nonCandidate, c.Name, c.Head, &eval.Run{ReviewerInputs: reviewers})
 			return ok && fc.ReportDir != ""
 		},
-		Last: func(c eval.Case) time.Time {
-			r, _ := eval.NewestReplay(before, c, skip)
-			return r.At
-		},
+		Last: func(c eval.Case) time.Time { return lastReplayed(before, c, skip) },
 	}
+}
+
+// lastReplayed is when c was replayed last at the head the corpus pins
+// (eval.ReplayedAt), in any run but those with inputs skip ("" = none),
+// whatever the replay ended (scored, an error, a refusal, a cut replay): a
+// case whose replays never score is still replayed. A case a run recorded
+// without replaying it (eval.OutcomeSkipped) does not count. Zero when it
+// never was.
+func lastReplayed(runs []eval.Run, c eval.Case, skip string) time.Time {
+	var last time.Time
+	for _, r := range runs {
+		if skip != "" && r.Inputs == skip {
+			continue
+		}
+		for _, cr := range r.Cases {
+			if cr.Case != c.Name || cr.Head != c.Head || cr.Outcome == eval.OutcomeSkipped {
+				continue
+			}
+			if at := eval.ReplayedAt(r, cr); at.After(last) {
+				last = at
+			}
+		}
+	}
+	return last
 }
 
 // pick is g's guard places among cases, none of them seen (a target)

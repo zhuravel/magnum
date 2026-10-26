@@ -20,9 +20,10 @@ func newEvalGuardsCmd(c *Context) *cobra.Command {
 	var n int
 	cmd := newCommand("", "guards "+evalGuardsUsage, "the cases the skill gate would guard now",
 		"Print, one per line, the cases the skill gate would replay now as its guards (the [learn] gate_guards "+
-			"places, chosen as a gate of every role chooses them): cases whose newest stored replay at the head the corpus pins "+
+			"places, chosen as a gate of every role chooses them): cases whose newest scored replay at the head the corpus pins "+
 			"found a defect, of the replays not made by a gate's candidate (a gate's replays of a proposal's skill make no "+
-			"guard), the least recently replayed first (those replays included), of a pull request a watch covers that no refused replay "+
+			"guard), the least recently replayed first (counting every replay, scored or not, a gate's replays of its candidate "+
+			"included), of a pull request a watch covers that no refused replay "+
 			"or Codex flag marks. An improve run passes them to eval-at.sh with the cases a change targets, so the "+
 			"replays show what the change loses as well as what it finds. It only reads: nothing is written or replayed. "+
 			"--n is how many (default 2); --corpus reads that file alone instead of both corpora the gate reads.",

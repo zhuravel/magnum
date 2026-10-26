@@ -365,6 +365,40 @@ func TestSuccessiveGatesTakeTurnsThroughTheGuardsTheyReplayed(t *testing.T) {
 	}
 }
 
+// A gate's candidate replay of a guard that ends without a score (an error,
+// a refusal, a cut replay: the case's head gone, say) is still a replay of
+// it, so the next gate takes the other guards first instead of spending a
+// replay on the same case again; the case still guards on its operator's
+// replay. A case a run recorded without replaying it (eval.OutcomeSkipped:
+// `magnum eval run` stopped by an earlier case's usage limit) keeps its
+// place.
+func TestAGuardWhoseCandidateReplayEndedWithoutAScoreGoesToTheBackOfTheNextGate(t *testing.T) {
+	corpus := gateCorpus()
+	at := func(d, h int) time.Time { return time.Date(2026, 10, d, h, 0, 0, 0, time.UTC) }
+	race, coupon, six := caseNamed(corpus, "old-race"), caseNamed(corpus, "coupon-scope"), caseNamed(corpus, "miss-6")
+	// Proposal 1's gate on the 5th: the candidate finds old-race, and its
+	// replay of miss-6 ends with an error.
+	candidate := replayOf("20261005-090000", "in-p1", at(5, 9), race, 1)
+	candidate.Label = GateRunLabel(1, GateRunCandidate)
+	candidate.Cases = append(candidate.Cases, eval.CaseRun{Case: six.Name, PR: six.PR, Head: six.Head,
+		Outcome: "error", Error: "the head is gone", Started: at(5, 10)})
+	stopped := eval.Run{ID: "20261005-120000", Inputs: "in-master", Started: at(5, 12), Cases: []eval.CaseRun{{Case: coupon.Name,
+		PR: coupon.PR, Head: coupon.Head, Outcome: eval.OutcomeSkipped, Error: "an earlier case hit usage_limit", Started: at(5, 12)}}}
+	runs := []eval.Run{
+		replayOf("20261001-090000", "in-master", at(1, 9), race, 1),
+		replayOf("20261002-090000", "in-master", at(2, 9), six, 1),
+		replayOf("20261003-090000", "in-master", at(3, 9), coupon, 1),
+		candidate, stopped,
+	}
+	g := GuardsFrom(runs, 3, "in-p2", at(6, 9), "")
+	if got := guardNames(corpus, g); !slices.Equal(got, []string{"coupon-scope", "old-race", "miss-6"}) {
+		t.Fatalf("proposal 2's guards = %q, want coupon-scope, old-race, miss-6: proposal 1's gate tried miss-6 last", got)
+	}
+	if r, ok := g.Replay(six); !ok || r.Run != "20261002-090000" {
+		t.Fatalf("miss-6's baseline = %+v, %v; want the operator's run 20261002-090000", r, ok)
+	}
+}
+
 // fullReplayOf is replayOf a full replay whose reviewers read reviewer, with
 // its reports.
 func fullReplayOf(id, reviewer string, at time.Time, c eval.Case, found int) eval.Run {
