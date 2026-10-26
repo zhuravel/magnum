@@ -21,8 +21,8 @@ func newEvalGuardsCmd(c *Context) *cobra.Command {
 	cmd := newCommand("", "guards "+evalGuardsUsage, "the cases the skill gate would guard now",
 		"Print, one per line, the cases the skill gate would replay now as its guards (the [learn] gate_guards "+
 			"places, chosen as a gate of every role chooses them): cases whose newest stored replay at the head the corpus pins "+
-			"found a defect (your own runs and the gates' replays of master; a gate's replays of a proposal's skill do not "+
-			"count), the least recently replayed first, of a pull request a watch covers that no refused replay "+
+			"found a defect, of the replays not made by a gate's candidate (a gate's replays of a proposal's skill make no "+
+			"guard), the least recently replayed first (those replays included), of a pull request a watch covers that no refused replay "+
 			"or Codex flag marks. An improve run passes them to eval-at.sh with the cases a change targets, so the "+
 			"replays show what the change loses as well as what it finds. It only reads: nothing is written or replayed. "+
 			"--n is how many (default 2); --corpus reads that file alone instead of both corpora the gate reads.",
@@ -42,9 +42,9 @@ func newEvalGuardsCmd(c *Context) *cobra.Command {
 }
 
 // runEvalGuards prints the guard places learn.SelectCases gives a gate
-// of every role with no target (learn.GuardsFrom over every stored run but
-// the gates' replays of their candidates: no candidate's inputs to leave
-// out, no proposal to date; eval-at.sh replays
+// of every role with no target (learn.GuardsFrom over every stored run, the
+// gates' replays of their candidates for the order alone: no candidate's
+// inputs to leave out, no proposal to date; eval-at.sh replays
 // every role, so no judge-only rule), over the corpora the gate
 // reads (cli.daemonGate's: a default corpus file that is not there is
 // none) or --corpus alone, the gate's watches and its flags (a refused

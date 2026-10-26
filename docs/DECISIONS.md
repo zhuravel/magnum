@@ -13150,14 +13150,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   same guards with the same baselines whatever was replayed since (the gate's own replays of the base, an
   improve run's eval-at.sh), and a resumed gate cannot drop a guard whose base replay showed a regression; it
   leaves out the candidate's own replays (a gate that stops short after its candidate lost a guard keeps
-  guarding it), and every gate's replays of its candidate, any proposal's: a guard and its baseline come only
-  from replays with inputs some master had, the operator's own runs and the gates' base runs. A stored run
-  says what it replayed only by its label, `learn.GateRunLabel` ("learn gate of proposal N: candidate",
+  guarding it), and, for which cases guard and for their baselines, every gate's replays of its candidate,
+  any proposal's: a guard and its baseline come only from replays not made by a gate's candidate. A stored
+  run says what it replayed only by its label, `learn.GateRunLabel` ("learn gate of proposal N: candidate",
   "second", "baseline", "baseline judge", the same since the gate began), which the engine writes and
   `GuardsFrom` reads back. Another proposal's candidate run read a skill that may never land: one that found
   a defect master's skill does not would make the case a guard on that replay, the next candidate would lose
   it twice, the base would lose it too, and the gate would write a false `learn.guard_lost_at_base` warning
-  and toast after three wasted replays. A case's newest replay (`eval.NewestReplay`: scored, at the corpus's
+  and toast after three wasted replays. The order (`Guards.Last`) still counts those replays, the newest
+  replay before the proposal in any run: a gate replays its guards only as its candidate's first and second
+  replays (the base only for one the candidate lost twice), so without them a guard's last replay would never
+  move after a gate that passes, and every later gate would take the same least recently replayed guards
+  again. A replay not made by a gate's candidate can still have read a skill that never landed: an operator's
+  `magnum eval run --candidate` and eval-at.sh's "after" replay at an unlanded builder commit carry no gate's
+  label and can make a guard. That case is accepted: when the next candidate loses such a guard twice, the
+  gate replays the base, the base's replay (a baseline run, which counts) is then the case's newest replay
+  and found nothing, so the case leaves the guard pool, and its warning comes at most once per such case.
+  A case's newest replay (`eval.NewestReplay`: scored, at the corpus's
   head, full or judge-only, any inputs of those runs) is the one replayed last (`eval.ReplayedAt`: the case's
   start, else its run's), in whatever run:
   a gate's base run is made at its first baseline replay and takes a lost guard's base replay after the
@@ -13202,13 +13211,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   found); storing a gate's guard names for a resumed gate (the replays before the proposal give the same
   answer with no state); confirming a won target after a regression (a replay that changes no verdict); a
   field of its own for a gate run's kind (the runs stored so far carry the label alone, which has named the
-  kind since the gate began).
+  kind since the gate began); leaving the gates' replays of their candidates out of the order too (the guards
+  would stop taking turns); detecting the replays of an unlanded skill outside the gate, by their label
+  (eval-at.sh's labels are free text) or by walking master's history for their inputs hashes (the cost of
+  hashing every commit's prompts and skill at every gate).
   Tests, failing first: in learn TestSelectCasesReservesGuardPlacesPastTheTargets (32
   targets and 2 guards give 8 runnable cases), TestSelectCasesRotatesGuardsLeastRecentlyReplayedFirst,
   TestAProposalsGatesTakeTheGuardsOfTheReplaysMadeBeforeIt, TestAGuardWhoseBaseFoundWhatACandidateLostStaysAGuard,
   TestAJudgeOnlyGateGuardsOnlyCasesWithAFullReplayOfItsReviewers,
-  TestAGuardComesOnlyFromReplaysWithInputsAMasterHad (another proposal's candidate and second replays left out,
-  an older operator's or base's replay still guarding), TestJudgeFailsAGuardTheCandidateLostTwiceAndTheBaseFinds, TestAGuardTheBaseAlsoLosesIsSkippedNotARegression
+  TestAGuardComesOnlyFromReplaysNotMadeByAGatesCandidate (another proposal's candidate and second replays left out,
+  an older operator's or base's replay still guarding),
+  TestSuccessiveGatesTakeTurnsThroughTheGuardsTheyReplayed (two gates' candidate and second replays move the
+  order, the baselines stay the operator's), TestJudgeFailsAGuardTheCandidateLostTwiceAndTheBaseFinds, TestAGuardTheBaseAlsoLosesIsSkippedNotARegression
   and TestJudgePassesAMissWinOnlyWhenTheSecondReplayFindsItToo, with TestSelectCasesPutsTargetsFirstAndCapsTheRest
   extended; in eval TestNewestReplayIsTheNewestScoredReplayAtTheHead, TestNewestReplayIsTheLatestReplayNotTheLatestRun
   and TestRunsBeforeKeepsOnlyTheReplaysMadeBeforeATime; in engine

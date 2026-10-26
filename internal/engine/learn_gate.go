@@ -702,7 +702,7 @@ func (g *gateWork) baseline(gc learn.GateCase, row *GateCase) (bool, error) {
 // guards what master finds"): the replay learn.GuardsFrom chose the guard
 // by (Guards.Replay: the newest made before the proposal by the operator's
 // runs or a gate's base, no gate's replay of its candidate, so every gate of
-// the proposal takes the same one), of whatever inputs some master had,
+// the proposal takes the same one), of whatever inputs,
 // which the candidate must find again (Stored; the note
 // names the replay and its inputs). The base's score is taken only once
 // the candidate lost one of its defects twice (guardsAtBase). Judge-only,

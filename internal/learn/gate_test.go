@@ -172,8 +172,9 @@ func TestSelectCasesRotatesGuardsLeastRecentlyReplayedFirst(t *testing.T) {
 	if got := pick(runs, "", time.Time{}); !slices.Equal(got, []string{"old-race", "miss-6"}) {
 		t.Fatalf("guards = %q, want the two least recently replayed: old-race, miss-6", got)
 	}
-	// A gate replays them; the next takes coupon-scope, then the least
-	// recently replayed of the two.
+	// The operator replays them; the next gate takes coupon-scope, then the
+	// least recently replayed of the two (a gate's own replays of its guards:
+	// TestSuccessiveGatesTakeTurnsThroughTheGuardsTheyReplayed).
 	runs = append(runs, replayOf("20261006-090000", "in-b", day(6), byName("old-race"), 1),
 		replayOf("20261006-100000", "in-b", day(6).Add(time.Hour), byName("miss-6"), 1))
 	if got := pick(runs, "", time.Time{}); !slices.Equal(got, []string{"coupon-scope", "old-race"}) {
@@ -269,15 +270,17 @@ func TestAGuardWhoseBaseFoundWhatACandidateLostStaysAGuard(t *testing.T) {
 	}
 }
 
-// A guard comes only from replays with inputs some master had: the
-// operator's own runs and the gates' replays of their base. A gate's
-// replays of its candidate, of any proposal, read a skill that may never
-// land, so they are left out: a case whose newest replay is another
+// A guard comes only from replays not made by a gate's candidate: the
+// operator's runs and the gates' replays of their base. A gate's replays
+// of its candidate, of any proposal, read a skill that may never land, so
+// they make no guard and no baseline: a case whose newest replay is another
 // proposal's candidate replay that found a defect master's never did is no
 // guard (the next proposal's candidate would "lose" it, and its base too),
 // and one that found nothing, or a second replay that found nothing, leaves
-// a guard on its older replay by the operator or by a base.
-func TestAGuardComesOnlyFromReplaysWithInputsAMasterHad(t *testing.T) {
+// a guard on its older replay by the operator or by a base, ordered by its
+// last replay, the candidate's included (miss-6's on the 3rd, coupon-scope's
+// on the 4th).
+func TestAGuardComesOnlyFromReplaysNotMadeByAGatesCandidate(t *testing.T) {
 	corpus := gateCorpus()
 	day := func(d int) time.Time { return time.Date(2026, 10, d, 9, 0, 0, 0, time.UTC) }
 	labeled := func(r eval.Run, label string) eval.Run { r.Label = label; return r }
@@ -291,8 +294,8 @@ func TestAGuardComesOnlyFromReplaysWithInputsAMasterHad(t *testing.T) {
 		labeled(replayOf("20261004-100000", "in-p1", day(4).Add(time.Hour), coupon, 0), GateRunLabel(1, GateRunCandidate)),
 	}
 	g := GuardsFrom(runs, 3, "in-p2", day(5), "")
-	if got := guardNames(corpus, g); !slices.Equal(got, []string{"coupon-scope", "miss-6"}) {
-		t.Fatalf("proposal 2's guards = %q, want coupon-scope and miss-6 on the operator's and the base's replays, "+
+	if got := guardNames(corpus, g); !slices.Equal(got, []string{"miss-6", "coupon-scope"}) {
+		t.Fatalf("proposal 2's guards = %q, want miss-6 and coupon-scope on the base's and the operator's replays, "+
 			"not old-race on proposal 1's candidate's", got)
 	}
 	for _, want := range []struct {
@@ -303,8 +306,62 @@ func TestAGuardComesOnlyFromReplaysWithInputsAMasterHad(t *testing.T) {
 			t.Fatalf("%s's baseline = %+v, %v; want run %s", want.c.Name, r, ok, want.run)
 		}
 	}
-	if got := guardNames(corpus, GuardsFrom(runs, 3, "", time.Time{}, "")); !slices.Equal(got, []string{"coupon-scope", "miss-6"}) {
-		t.Fatalf("`magnum eval guards` = %q, want coupon-scope and miss-6 too", got)
+	if got := guardNames(corpus, GuardsFrom(runs, 3, "", time.Time{}, "")); !slices.Equal(got, []string{"miss-6", "coupon-scope"}) {
+		t.Fatalf("`magnum eval guards` = %q, want miss-6 and coupon-scope too", got)
+	}
+}
+
+// Successive gates take turns through the guards: a gate replays its guards
+// only as its candidate's first and second replays (the base only after the
+// candidate lost one twice), and those replays, which make no guard and no
+// baseline, still count as the case's last replay, so the next proposal's
+// gate takes the guards replayed longest ago. Each guard's baseline stays
+// the operator's replay.
+func TestSuccessiveGatesTakeTurnsThroughTheGuardsTheyReplayed(t *testing.T) {
+	corpus := gateCorpus()
+	at := func(d, h int) time.Time { return time.Date(2026, 10, d, h, 0, 0, 0, time.UTC) }
+	labeled := func(r eval.Run, label string) eval.Run { r.Label = label; return r }
+	race, coupon, six := caseNamed(corpus, "old-race"), caseNamed(corpus, "coupon-scope"), caseNamed(corpus, "miss-6")
+	runs := []eval.Run{
+		replayOf("20261001-090000", "in-master", at(1, 9), race, 1),
+		replayOf("20261002-090000", "in-master", at(2, 9), six, 1),
+		replayOf("20261003-090000", "in-master", at(3, 9), coupon, 1),
+	}
+	gate := func(id int64, kind, runID string, when time.Time, c eval.Case, found int) eval.Run {
+		return labeled(replayOf(runID, fmt.Sprintf("in-p%d", id), when, c, found), GateRunLabel(id, kind))
+	}
+	guards := func(since time.Time) []string {
+		return guardNames(corpus, GuardsFrom(runs, 2, "in-next", since, ""))
+	}
+	if got := guards(at(4, 9)); !slices.Equal(got, []string{"old-race", "miss-6"}) {
+		t.Fatalf("proposal 1's guards = %q, want old-race, miss-6", got)
+	}
+	// Proposal 1's gate on the 5th: the candidate finds old-race and loses
+	// miss-6, which its second replay finds.
+	candidate := gate(1, GateRunCandidate, "20261005-090000", at(5, 9), race, 1)
+	candidate.Cases = append(candidate.Cases, gate(1, GateRunCandidate, "", time.Time{}, six, 0).Cases[0])
+	candidate.Cases[1].Started = at(5, 10)
+	runs = append(runs, candidate, gate(1, GateRunSecond, "20261005-110000", at(5, 11), six, 1))
+	if got := guards(at(6, 9)); !slices.Equal(got, []string{"coupon-scope", "old-race"}) {
+		t.Fatalf("proposal 2's guards = %q, want coupon-scope, old-race: proposal 1's gate replayed old-race and miss-6", got)
+	}
+	// Proposal 2's gate on the 7th: the candidate loses old-race and finds
+	// coupon-scope, and its second replay finds old-race last.
+	candidate = gate(2, GateRunCandidate, "20261007-090000", at(7, 9), race, 0)
+	candidate.Cases = append(candidate.Cases, gate(2, GateRunCandidate, "", time.Time{}, coupon, 1).Cases[0])
+	candidate.Cases[1].Started = at(7, 10)
+	runs = append(runs, candidate, gate(2, GateRunSecond, "20261007-110000", at(7, 11), race, 1))
+	g := GuardsFrom(runs, 2, "in-next", at(8, 9), "")
+	if got := guardNames(corpus, g); !slices.Equal(got, []string{"miss-6", "coupon-scope"}) {
+		t.Fatalf("proposal 3's guards = %q, want miss-6, coupon-scope: old-race's second replay came last", got)
+	}
+	for _, want := range []struct {
+		c   eval.Case
+		run string
+	}{{race, "20261001-090000"}, {six, "20261002-090000"}, {coupon, "20261003-090000"}} {
+		if r, ok := g.Replay(want.c); !ok || r.Run != want.run {
+			t.Fatalf("%s's baseline = %+v, %v; want the operator's run %s", want.c.Name, r, ok, want.run)
+		}
 	}
 }
 

@@ -3707,14 +3707,15 @@ are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-
 compared yet, then the others, the misses first and the newest first), then up to `gate_guards` (2) guards,
 then the newest other cases of your corpus and the learned one, the targets and these up to `gate_cases`
 (6); a case whose pull request is in no watch or Codex-flagged is never replayed. A guard is a case of
-either corpus, never a target, whose newest stored replay (the one replayed last, in whatever run) found
-a defect, so it has something the candidate can lose (a target's baseline finds nothing yet, and the
-newest others are mostly declined findings, with nothing to find); its places come on top of
-`gate_cases`, so many targets never crowd it out, and the least recently replayed come first, so
-successive gates take turns through them. Only replays with prompts and a skill some master had count:
-your own eval runs and the gates' replays of their base. A gate's replays of its candidate, any
-proposal's, do not (a skill that may never land: a defect it found that master's skill does not would
-make a guard the next candidate loses and its base too); and a gate reads
+either corpus, never a target, whose newest stored replay not made by a gate's candidate (the one
+replayed last, in whatever other run) found a defect, so it has something the candidate can lose (a
+target's baseline finds nothing yet, and the newest others are mostly declined findings, with nothing to
+find); its places come on top of `gate_cases`, so many targets never crowd it out, and the least
+recently replayed come first, so successive gates take turns through them. A gate's replays of its
+candidate, any proposal's, make no guard and no guard's baseline (a skill that may never land: a defect
+it found that master's skill does not would make a guard the next candidate loses and its base too), but
+they count for the order, since a gate replays its guards only as its candidate (the base only for one
+the candidate lost twice). A gate reads
 only the replays made before its proposal, both for which cases guard and for their order, so every
 gate of one proposal takes the same guards with the same baselines whatever was replayed since (the
 gate's own replays of the base, an improve run's eval-at.sh). When only the judge replays, a guard also
@@ -4315,8 +4316,8 @@ next to the previous run, `notes differ from <run>: <case> (<file> changed)` whe
 notes change is not taken for a skill change. `magnum eval baseline [--case NAME]...` lists, without replaying
 anything, the stored replays of each case at its head whose `inputs` match what this binary and config would use
 now. `magnum eval guards [--n N]` prints, one per line and without writing or replaying anything, the N (2)
-guard cases the skill gate would take now: cases whose newest stored replay found a defect (a gate's replays of
-a proposal's skill left out), the least recently replayed first, of a watched pull request nobody flagged (`--corpus FILE` reads that file alone); an improve run
+guard cases the skill gate would take now: cases whose newest stored replay not made by a gate's candidate found
+a defect, the least recently replayed first (a gate's replays of its candidate included), of a watched pull request nobody flagged (`--corpus FILE` reads that file alone); an improve run
 passes them to eval-at.sh beside the cases a change targets, so its before and after show what the change loses
 too. `magnum eval run --candidate <dir>` measures a change kept in another checkout or worktree of magnum
 without touching yours: the replay reads `<dir>/prompts/` (a prompt missing there is the embedded one) and gives
