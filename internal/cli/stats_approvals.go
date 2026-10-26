@@ -37,7 +37,8 @@ const (
 const statsApprovalSlack = time.Minute
 
 // statsApprovals is one repository's row of the approvals section
-// (`magnum stats --json`'s approvals): of the PRs merged in the window,
+// (`magnum stats --json`'s approvals; zeros for one that merged nothing in
+// the window): of the PRs merged in the window,
 // AutoApproved are those on which an approval magnum posted by itself stood
 // at the merge, MagnumOnly those of them no person approved, PastApproval
 // those of the latter merged at a head after the one magnum approved,
@@ -55,11 +56,12 @@ type statsApprovals struct {
 }
 
 // statsApprovalInput is what the approvals section reads of the registry:
-// the PRs merged in the window, every approval magnum recorded on them
-// (by PR, oldest first), the ids of those the operator posted by hand
-// (`magnum approve --as`), the subjects of the PRs merged unreviewed and the
-// retro's misses per PR.
+// its repositories (owner/name, in its order), the PRs merged in the
+// window, every approval magnum recorded on them (by PR, oldest first), the
+// ids of those the operator posted by hand (`magnum approve --as`), the
+// subjects of the PRs merged unreviewed and the retro's misses per PR.
 type statsApprovalInput struct {
+	repos      []string
 	merged     []store.RepoPR
 	autos      map[int64][]store.AutoApproval
 	byHand     map[int64]bool
@@ -68,17 +70,31 @@ type statsApprovalInput struct {
 }
 
 // statsApprovalsOf counts the approvals section, a row per repository on
-// returns true for (auto_approve on), of repo when it is set, by repository.
+// returns true for (auto_approve on), of repo when it is set: one for each
+// of in.repos, so that a repository that merged nothing in the window reads
+// as zeros, not as one magnum does not approve as the operator.
 func statsApprovalsOf(in statsApprovalInput, on func(repo string) bool, repo string) []statsApprovals {
 	out := []statsApprovals{}
+	at := map[string]int{} // a repository's row in out
+	rowOf := func(name string) *statsApprovals {
+		i, ok := at[name]
+		if !ok {
+			i = len(out)
+			at[name] = i
+			out = append(out, statsApprovals{Repo: name})
+		}
+		return &out[i]
+	}
+	for _, name := range in.repos {
+		if (repo == "" || name == repo) && on(name) {
+			rowOf(name)
+		}
+	}
 	for _, rp := range in.merged {
 		if (repo != "" && rp.Repo != repo) || !on(rp.Repo) {
 			continue
 		}
-		if len(out) == 0 || out[len(out)-1].Repo != rp.Repo {
-			out = append(out, statsApprovals{Repo: rp.Repo})
-		}
-		row := &out[len(out)-1]
+		row := rowOf(rp.Repo)
 		row.Merged++
 		var auto []store.AutoApproval // magnum's own, posted by itself
 		for _, a := range in.autos[rp.PR.ID] {
@@ -138,34 +154,43 @@ func statsBotLogin(login string) bool {
 }
 
 // statsMagnums reports whether approval r is one of auto, magnum's own
-// posted approvals: by the same login, of the same head and, when r says
-// when it was submitted (GitHub's latest reviews do, the merge gate's
+// posted approvals: by the same login, of the same head (any, when r names
+// no commit: GitHub no longer has it, as after a force-push) and, when r
+// says when it was submitted (GitHub's latest reviews do, the merge gate's
 // opinions do not), submitted by the time magnum recorded its post. GitHub
-// keeps one latest review per login, so an approval of that head by that
-// login after magnum's is the operator's by hand. The registry keeps
-// neither the review's id nor its body (magnum's hidden marker), so the
-// head and the time are the join.
+// keeps one latest review per login, so an approval by that login after
+// magnum's is the operator's by hand. The registry keeps neither the
+// review's id nor its body (magnum's hidden marker), so the head and the
+// time are the join.
 func statsMagnums(r store.LatestReview, auto []store.AutoApproval) bool {
 	return slices.ContainsFunc(auto, func(a store.AutoApproval) bool {
-		return github.SameAccount(a.Login, r.Login) && a.HeadSHA == r.CommitSHA &&
+		return github.SameAccount(a.Login, r.Login) && (r.CommitSHA == "" || a.HeadSHA == r.CommitSHA) &&
 			(r.SubmittedAt == nil || a.PostedAt == nil || !r.SubmittedAt.After(a.PostedAt.Add(statsApprovalSlack)))
 	})
 }
 
-// statsGatherApprovals reads what the approvals section counts: the PRs
-// merged since on the repositories cfg approves as the operator (of repo
-// when it is set), magnum's approvals of them, the events and the misses.
+// statsGatherApprovals reads what the approvals section counts: the
+// registry's repositories, the PRs merged since on those cfg approves as
+// the operator (of repo when it is set), magnum's approvals of them, the
+// events and the misses.
 func statsGatherApprovals(ctx context.Context, st *store.Store, cfg *config.Config, since time.Time, repo string) ([]statsApprovals, error) {
 	if cfg == nil {
 		return []statsApprovals{}, nil
 	}
 	on := func(r string) bool { return cfg.AutoApproveFor(r) != nil }
+	repos, err := st.ListRepos(ctx)
+	if err != nil {
+		return nil, err
+	}
 	merged, err := st.MergedPRsSince(ctx, since)
 	if err != nil {
 		return nil, err
 	}
 	merged = slices.DeleteFunc(merged, func(rp store.RepoPR) bool { return (repo != "" && rp.Repo != repo) || !on(rp.Repo) })
 	in := statsApprovalInput{merged: merged, byHand: map[int64]bool{}, unreviewed: map[string]bool{}, misses: map[int64]int{}}
+	for _, r := range repos {
+		in.repos = append(in.repos, r.FullName())
+	}
 	if len(merged) == 0 {
 		return statsApprovalsOf(in, on, repo), nil
 	}

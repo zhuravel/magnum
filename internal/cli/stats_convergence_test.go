@@ -12,10 +12,11 @@ import (
 )
 
 // Judge results the convergence tests post: a clean review, one with only
-// P3s, a new P2, a new P1, an earlier P2 still open and an earlier P3 still
-// open.
+// P3s, one with only a P3 whose verdict blocks, a new P2, a new P1, an
+// earlier P2 still open and an earlier P3 still open.
 const (
 	convClean   = `{"verdict":"clean","findings":{"P0":0,"P1":0,"P2":0,"P3":0}}`
+	convBlockP3 = `{"verdict":"blocking","findings":{"P0":0,"P1":0,"P2":0,"P3":1}}`
 	convP3Only  = `{"verdict":"non_blocking","findings":{"P3":2}}`
 	convNewP2   = `{"verdict":"non_blocking","findings":{"P2":1}}`
 	convNewP1   = `{"verdict":"blocking","findings":{"P1":1}}`
@@ -95,8 +96,8 @@ func statsConvChain(t *testing.T, st *store.Store, pr store.PR, n int, at time.T
 
 // A PR's convergence is the number of distinct heads magnum reviewed until a
 // review left no P0, P1 or P2, new or still open, over the PRs that merged
-// or closed in the window: a P3-only review passes and an earlier P2 still
-// open does not; a second review of a head already counted (a reply round,
+// or closed in the window: a P3-only review passes, and an earlier P2 still
+// open and a blocking verdict without a P0-P2 counted do not; a second review of a head already counted (a reply round,
 // a nudge of the same review) adds nothing; a round after the merge is
 // dropped; a PR that ended before the window, or without a posted review,
 // is not in it. The operator's own PRs have their own rows, a PR that
@@ -148,6 +149,9 @@ func TestStatsConvergenceCountsHeadsUntilNoSeriousFindingIsLeft(t *testing.T) {
 	statsConvChain(t, st, statsConvPR(t, st, tk, 211, "zhuravel", store.GHOpen, time.Time{}), 2, day1, func(int) string { return convNewP2 })
 	// Merged without a posted review: its judge failed.
 	statsConvRun(t, st, statsConvPR(t, st, tk, 212, "alice", store.GHMerged, merged), 1, "h1", day1, "", 0)
+	// A blocking verdict with no P0-P2 counted, then clean: head 2.
+	statsConvChain(t, st, statsConvPR(t, st, tk, 213, "alice", store.GHMerged, merged), 2, day1,
+		func(k int) string { return []string{convBlockP3, convClean}[k-1] })
 	// Another repository: passes at head 2.
 	statsConvChain(t, st, statsConvPR(t, st, wd, 7, "alice", store.GHMerged, merged), 2, day1,
 		func(k int) string { return []string{convNewP2, convClean}[k-1] })
@@ -167,10 +171,11 @@ func TestStatsConvergenceCountsHeadsUntilNoSeriousFindingIsLeft(t *testing.T) {
 	}
 	want := []statsConvergenceRow{
 		row(wd, statsOthers, 1, 0, 1, 0, 0, 2, 2, 0),
-		// 201 and 202 at 1, 203 and 204 at 3, 208 at 5; 205 and 207 never.
-		row(tk, statsOthers, 7, 2, 2, 2, 2, 2.6, 5, 1),
+		// 201 and 202 at 1, 213 at 2, 203 and 204 at 3, 208 at 5; 205 and
+		// 207 never.
+		row(tk, statsOthers, 8, 2, 3, 2, 2, 2.5, 5, 1),
 		row(tk, statsOwn, 1, 1, 1, 0, 0, 1, 1, 0),
-		row("", statsOthers, 8, 2, 3, 2, 2, 2.5, 5, 1),
+		row("", statsOthers, 9, 2, 4, 2, 2, 2.43, 5, 1),
 		row("", statsOwn, 1, 1, 1, 0, 0, 1, 1, 0),
 	}
 	if got, w := statsJSON(t, r.Convergence.Rows), statsJSON(t, want); got != w {
@@ -201,9 +206,9 @@ func TestStatsConvergenceCountsHeadsUntilNoSeriousFindingIsLeft(t *testing.T) {
 		"CONVERGENCE",
 		"REPO AUTHORS PRS PASS@1 PASS<=2 5+ NEVER MEAN P90 MERGED OPEN",
 		"example/widgets others 1 0 (0%) 1 (100%) 0 (0%) 0 (0%) 2.00 2 0",
-		"talkable/talkable others 7 2 (29%) 2 (29%) 2 (29%) 2 (29%) 2.60 5 1",
+		"talkable/talkable others 8 2 (25%) 3 (38%) 2 (25%) 2 (25%) 2.50 5 1",
 		"talkable/talkable own 1 1 (100%) 1 (100%) 0 (0%) 0 (0%) 1.00 1 0",
-		"all others 8 2 (25%) 3 (38%) 2 (25%) 2 (25%) 2.50 5 1",
+		"all others 9 2 (22%) 4 (44%) 2 (22%) 2 (22%) 2.43 5 1",
 		"all own 1 1 (100%) 1 (100%) 0 (0%) 0 (0%) 1.00 1 0",
 		"open PRs with 5 or more reviewed heads: 1 others', 0 own",
 	}
@@ -234,6 +239,37 @@ func TestStatsConvergenceCountsHeadsUntilNoSeriousFindingIsLeft(t *testing.T) {
 	}
 	if got := statsKeys(statsObj(t, rows[3])); !slices.Equal(got, slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return k == "repo" })) {
 		t.Errorf("total row keys = %v", got)
+	}
+}
+
+// A window in which no round began still has its convergence: a PR that
+// magnum reviewed before the window and that merged in it ends in the
+// window, so the text report prints its rows after "no rounds since".
+func TestStatsPrintsConvergenceInAWindowWithoutRounds(t *testing.T) {
+	f, st := statsConvFixture(t)
+	pr := statsConvPR(t, st, "talkable/talkable", 221, "alice", store.GHMerged, statsOct(1, 12, 0))
+	statsConvReview(t, st, pr, 1, "h1", statsAt(time.September, 20, 10, 0), convNewP2)
+	statsConvReview(t, st, pr, 2, "h2", statsAt(time.September, 21, 10, 0), convClean)
+	st.Close()
+
+	if code := f.run("stats"); code != 0 {
+		t.Fatalf("code %d, stderr %s", code, f.Err.String())
+	}
+	lines := statsLines(f.Out.String())
+	wantLines := []string{
+		"no rounds since " + statsNow.Add(-7*24*time.Hour).Format(statsTimeFmt),
+		"CONVERGENCE",
+		"REPO AUTHORS PRS PASS@1 PASS<=2 5+ NEVER MEAN P90 MERGED OPEN",
+		"talkable/talkable others 1 0 (0%) 1 (100%) 0 (0%) 0 (0%) 2.00 2 0",
+		"all others 1 0 (0%) 1 (100%) 0 (0%) 0 (0%) 2.00 2 0",
+	}
+	at := 0
+	for _, w := range wantLines {
+		i := slices.Index(lines[at:], w)
+		if i < 0 {
+			t.Fatalf("missing line %q (after line %d) in\n%s", w, at, f.Out.String())
+		}
+		at += i + 1
 	}
 }
 

@@ -99,11 +99,12 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"or open). A line counts the open PRs with 5 or more reviewed heads; two split the window's posted P0 to "+
 			"P2 findings of re-reviews by the judge's title suffixes into new, missed earlier and fallout of fixes, "+
 			"the rounds that were full passes apart (--json: convergence).\n\n"+
-			"APPROVALS counts, for each repository magnum approves as you (auto_approve), the PRs merged in the "+
-			"window: AUTO-APPROVED, those on which magnum's automatic approval stood at the merge; MAGNUM ONLY, those "+
-			"of them no person approved (GitHub's latest reviews and the merge gate's opinions as the last Details "+
-			"read them, less bots, the author and magnum's own approvals: the same login and head, submitted by "+
-			"the time magnum recorded its post; your approval by hand counts as a person's), with its share of "+
+			"APPROVALS counts, for each repository magnum approves as you (auto_approve; zeros when none merged), "+
+			"the PRs merged in the window: AUTO-APPROVED, those on which magnum's automatic approval stood at the "+
+			"merge; MAGNUM ONLY, those of them no person approved (GitHub's latest reviews and the merge gate's "+
+			"opinions as the last Details read them, less bots, the author and magnum's own approvals: the same "+
+			"login and head, any head when GitHub no longer has the approved commit, submitted by the time magnum "+
+			"recorded its post; your approval by hand counts as a person's), with its share of "+
 			"AUTO-APPROVED; PAST APPROVAL, those of them merged at a head after the one magnum approved; UNREVIEWED, "+
 			"those of these merged with a push magnum never reviewed (pr.merged_unreviewed); MISSES, the retro's "+
 			"misses on the MAGNUM ONLY PRs, less magnum's own findings their authors declined, which the retro "+

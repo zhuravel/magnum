@@ -248,8 +248,8 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 // they come from (store.FindingOrigin, the judge's title suffixes) so that
 // a loop converging reads differently from one chasing its own fixes: "3
 // findings left: 1 new, 0 missed earlier, 2 fallout of the fixes", then the
-// fixer's last report. found is the
-// review's finding count and left its words (findingsSplit adds the split).
+// fixer's last report. found is the review's finding count and left its
+// words (findingsSplit adds the split).
 func (e *Engine) capMessage(ctx context.Context, job *fixJob, res pipeline.RoundResult, found int, left string) string {
 	st := job.state
 	cycles := textx.Count(st.Cycle, "fix cycle", "fix cycles")

@@ -13,8 +13,9 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// statsAutoApproveConfig makes the fixture's talkable watch approve
-// talkable/talkable as the operator (auto_approve_as = "zhuravel").
+// statsAutoApproveConfig makes the fixture's talkable watch cover
+// talkable/quiet too and approve both repositories as the operator
+// (auto_approve_as = "zhuravel").
 func statsAutoApproveConfig(t *testing.T, f *inspFixture) {
 	t.Helper()
 	path := filepath.Join(f.Home, "config.toml")
@@ -23,7 +24,8 @@ func statsAutoApproveConfig(t *testing.T, f *inspFixture) {
 		t.Fatal(err)
 	}
 	const watch = "include = [\"talkable\"]\nidentity = \"talkable-app\"\n"
-	cfg := strings.Replace(string(b), watch, watch+"auto_approve = [\"talkable\"]\nauto_approve_as = \"zhuravel\"\n", 1)
+	cfg := strings.Replace(string(b), watch, "include = [\"talkable\", \"quiet\"]\nidentity = \"talkable-app\"\n"+
+		"auto_approve = [\"talkable\", \"quiet\"]\nauto_approve_as = \"zhuravel\"\n", 1)
 	if cfg == string(b) {
 		t.Fatal("the fixture's talkable watch moved")
 	}
@@ -95,15 +97,17 @@ func statsMiss(t *testing.T, st *store.Store, pr store.PR, sourceURL, reviewer s
 // at the merge and no person approved, where a person's approval is one in
 // GitHub's latest reviews or the merge gate's opinions that is not a bot's,
 // not the author's and not one of magnum's own automatic approvals (the
-// same login, the same head, submitted by the time magnum recorded it); the
-// operator's approval by hand (later than magnum's, or posted with
-// `magnum approve --as`) is a person's. Of those, the ones merged past the
+// same login, the same head, submitted by the time magnum recorded it; the
+// login and the time alone when GitHub no longer has the approved commit,
+// after a force-push); the operator's approval by hand (later than magnum's,
+// or posted with `magnum approve --as`) is a person's. Of those, the ones merged past the
 // approved head, the ones of these merged unreviewed (a pr.merged_unreviewed
 // event; a later head magnum reviewed is not), and the retro's misses on
 // them: a miss on a PR a person approved, and magnum's own finding the
 // author declined that the retro routed to the notes as a miss, are not
-// counted. A repository without auto_approve and a merge before the window
-// are left out.
+// counted. A repository with auto_approve and no merge in the window has its
+// row of zeros; a repository without auto_approve and a merge before the
+// window are left out.
 func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	f, st := statsConvFixture(t)
 	statsAutoApproveConfig(t, f)
@@ -168,10 +172,22 @@ func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	byHand := statsAutoApproval(t, st, pr408, "h1", 4080, posted, store.AutoDismissed, store.AutoEndedClosed)
 	statsEvent(t, st, posted.Add(-time.Second), "pr:"+tk+"#408", statsKindManualApproval, "approving as zhuravel",
 		`{"event":"APPROVE","sha":"h1","identity":"zhuravel","approval_id":`+itoa(byHand.ID)+`}`)
-	// Merged before the window, and a merge in a repository without
-	// auto_approve.
+	// A force-push dropped the commit magnum approved, so GitHub's entries
+	// of its approval name no commit: magnum's by the login and the time
+	// alone, and magnum only, merged past the approved head; the
+	// operator's approval of a commit since dropped, an hour after magnum's,
+	// is a person's.
+	pr411 := statsMergedPR(t, st, tk, 411, merged, "h2", []store.LatestReview{app, statsApproved("zhuravel", "", posted.Add(-2*time.Second))},
+		[]store.LatestReview{statsApproved("zhuravel", "", time.Time{})})
+	statsAutoApproval(t, st, pr411, "h1", 4110, posted, store.AutoDismissed, store.AutoEndedClosed)
+	pr412 := statsMergedPR(t, st, tk, 412, merged, "h2", []store.LatestReview{app, statsApproved("zhuravel", "", posted.Add(time.Hour))}, nil)
+	statsAutoApproval(t, st, pr412, "h1", 4120, posted, store.AutoDismissed, store.AutoEndedClosed)
+	// Merged before the window, in talkable/quiet, which merged nothing in
+	// it; and a merge in a repository without auto_approve.
 	pr409 := statsMergedPR(t, st, tk, 409, statsAt(time.September, 20, 12, 0), "h1", []store.LatestReview{app, magnums}, nil)
 	statsAutoApproval(t, st, pr409, "h1", 4090, statsAt(time.September, 19, 12, 0), store.AutoDismissed, store.AutoEndedClosed)
+	const quiet = "talkable/quiet"
+	statsMergedPR(t, st, quiet, 1, statsAt(time.September, 20, 12, 0), "h1", []store.LatestReview{statsApproved("rev-ann", "h1", posted)}, nil)
 	statsMergedPR(t, st, "example/widgets", 9, merged, "h1", nil, nil)
 	st.Close()
 	if err := f.Ctx.LoadConfig(); err != nil {
@@ -182,11 +198,19 @@ func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 401 to 406 and 410 merged on magnum's approval; 402, 403, 405 and 410
-	// on it alone, 403 and 410 past its head, 403 unreviewed; one miss, 403's.
-	want := []statsApprovals{{Repo: tk, Merged: 9, AutoApproved: 7, MagnumOnly: 4, PastApproval: 2, Unreviewed: 1, Misses: 1}}
+	// 401 to 406 and 410 to 412 merged on magnum's approval; 402, 403, 405,
+	// 410 and 411 on it alone, 403, 410 and 411 past its head, 403
+	// unreviewed; one miss, 403's. talkable/quiet merged nothing.
+	want := []statsApprovals{{Repo: quiet}, {Repo: tk, Merged: 11, AutoApproved: 9, MagnumOnly: 5, PastApproval: 3, Unreviewed: 1, Misses: 1}}
 	if got, w := statsJSON(t, r.Approvals), statsJSON(t, want); got != w {
 		t.Fatalf("approvals =\n%s\nwant\n%s", got, w)
+	}
+	one, err := statsGather(context.Background(), f.store(), f.Ctx.Config, statsNow.Add(-7*24*time.Hour), statsNow, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, w := statsJSON(t, one.Approvals), statsJSON(t, want[:1]); got != w {
+		t.Errorf("--repo %s approvals =\n%s\nwant\n%s", quiet, got, w)
 	}
 
 	if code := f.run("stats"); code != 0 {
@@ -194,8 +218,8 @@ func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	}
 	lines := statsLines(f.Out.String())
 	i := slices.Index(lines, "APPROVALS")
-	if i < 0 || len(lines) < i+3 || lines[i+1] != "REPO MERGED AUTO-APPROVED MAGNUM ONLY PAST APPROVAL UNREVIEWED MISSES" ||
-		lines[i+2] != "talkable/talkable 9 7 4 (57%) 2 1 1" {
+	if i < 0 || len(lines) < i+4 || lines[i+1] != "REPO MERGED AUTO-APPROVED MAGNUM ONLY PAST APPROVAL UNREVIEWED MISSES" ||
+		lines[i+2] != "talkable/quiet 0 0 0 0 0 0" || lines[i+3] != "talkable/talkable 11 9 5 (56%) 3 1 1" {
 		t.Fatalf("approvals table in\n%s", f.Out.String())
 	}
 	if strings.Contains(f.Out.String(), "example/widgets") {
@@ -210,7 +234,7 @@ func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	approvals, _ := doc["approvals"].([]any)
-	if len(approvals) != 1 {
+	if len(approvals) != 2 {
 		t.Fatalf("approvals = %v", doc["approvals"])
 	}
 	keys := []string{"auto_approved", "magnum_only", "merged", "misses", "past_approval", "repo", "unreviewed"}
