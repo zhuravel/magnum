@@ -411,6 +411,49 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 	}
 }
 
+// The fixer fixed only the line a finding named, and the same defect came
+// back from its sibling lines: on the operator's PRs that ran the fix loop
+// (a mean of 12.2 rounds per PR, talkable#11483 47 rounds and 26 fix runs)
+// 37 findings were "in the fix for" another, 25 of them P1 or P2, and a
+// rule fixed in one place returned as a P2 for its sibling at round 4
+// (2026-10-26, a trial). Before it runs the specs it now looks for the same
+// defect in the rest of the PR's own lines and fixes each site the finding's
+// probe proves, in the same commit, leaving lines the PR did not add alone;
+// the scope rule says so, and the Fixed-in reply names each extra site after
+// its opening words, which the re-review and the reply classifier read. A
+// spec that fails because of an extra site undoes that site alone, which
+// the reply then leaves out, and never the named fix, which the whole change
+// is undone for only when it fails itself.
+func TestTheFixSkillFixesTheSameDefectInThePRsOwnLines(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"- Change only what a finding or an external item names, or the same defect in the PR's own lines: " +
+			"the code, or the PR description when a finding names it (section 5).",
+		"2. Before you run the specs, look for the same defect in the rest of this PR's own lines (`gh pr diff {number}`): " +
+			"the other members of the set the finding's code belongs to that the PR adds beside it",
+		"(sibling rules, call sites, branches, parallel copies and untested guards of the same kind).",
+		"Fix each one that the finding's own probe (its reproduction, run at that site) proves, in the same commit, " +
+			"and prove its guard as step 3 says. Leave lines the PR did not add alone.",
+		"3. Run the specs that cover the changed code through the db-lock line",
+		"4. If the specs fail because of an extra site (step 2), undo the change at that site only, leave the site out of the reply, " +
+			"and run the specs again.",
+		"Only when the specs fail because of the named fix itself and you cannot make them pass, undo the whole change: " +
+			"`git restore --staged --worktree <files>`, and delete the files you added.",
+		"For each other site of the same defect that the fix changed (section 5, step 2), add `, also at <path>:<line>` " +
+			"after `<what changed>`, so the reply still starts with `Fixed in <sha7>: `.",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+	if strings.Contains(skill, "- Change only what a finding or an external item names: the code,") {
+		t.Error("the fix skill still limits a fix to the line a finding names")
+	}
+	if strings.Contains(skill, "If the specs fail because of your change and you cannot make them pass, undo the change:") {
+		t.Error("the fix skill still undoes the named fix when only an extra site fails its specs")
+	}
+}
+
 // On talkable#12054 the fixer fixed magnum's four findings and never saw
 // another reviewer's open follow-up an hour older, since the skill had it
 // act only in the reviewer login's threads and never in one a human started

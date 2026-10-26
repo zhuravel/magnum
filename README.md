@@ -2682,7 +2682,13 @@ runs the specs the fix touches, pushes to the PR's branch, and replies in Magnum
 <sha>", "Already fixed", "Not a bug: <reason>" or "Won't fix: <reason>", the words the re-review already
 reads. It proves each guard, scope, permission or flag a fix adds, because the review counts a guard that no
 spec needs as untested: it deletes the guard once, runs the new spec, sees it fail, restores the guard, and
-its "Fixed in" reply names that spec ("`<spec>` fails without it"). Every reply ends with a hidden line,
+its "Fixed in" reply names that spec ("`<spec>` fails without it"). As a trial since 2026-10-26, it also
+fixes the same defect in the rest of the PR's own lines (`gh pr diff`: the sibling rules, call sites,
+branches, parallel copies and untested guards of the finding's set that the PR adds, each proved by the
+finding's own probe, in the same commit), never in a line the PR did not add, and names each extra site in
+its reply ("Fixed in <sha>: …, also at <path>:<line>"); the next improve run's evidence (its fixer trial
+line) counts those replies and the "(missed earlier)" and "(in the fix for" findings of the round after each
+fix run, and the step stays or goes on those numbers. Every reply ends with a hidden line,
 `<!-- magnum:fix -->`: the fixer replies as you, and the marker is how the retro tells its choices from yours
 (Learning from other reviewers, below). It resolves Magnum's threads it fixed. It answers an optional finding (a P3 or a simplification) that it
 declines. It does not answer a blocking finding (P0 to P2) that it declines, nor any finding it cannot decide

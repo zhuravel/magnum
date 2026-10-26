@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/postreview"
 )
 
 func TestClassifyReply(t *testing.T) {
@@ -466,6 +467,25 @@ func TestClassifyReplyReadsADoubledAgentTagAndBareDeclines(t *testing.T) {
 	} {
 		if got := classifyReply(tc.body); got != tc.want {
 			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
+// The fixer fixes the same defect in the PR's other lines too and names each
+// extra site after its Fixed-in opening (skills/magnum-fix/SKILL.md, section
+// 6, 2026-10-26): the reply is still fixed, with one extra site or several,
+// with a guard's spec after them, and with the fixer's marker after a blank
+// line.
+func TestClassifyReplyReadsAFixedInReplyThatNamesTheSameDefectsOtherSites(t *testing.T) {
+	for _, body := range []string{
+		"Fixed in 1a2b3c4: the session cookie now sets SameSite, also at app/models/session.rb:57, " +
+			"`bundle exec rspec spec/models/session_spec.rb` passed (8 examples, 0 failures)",
+		"Fixed in 1a2b3c4: the total now skips discounted items, also at app/models/order.rb:88, also at app/models/cart.rb:41, " +
+			"`bundle exec rspec spec/models/order_spec.rb` passed (12 examples, 0 failures); `spec/models/order_spec.rb:42` fails without it",
+		"Fixed in 1a2b3c4: the guard now runs first, also at lib/a.rb:3, `rake test` passed\n\n" + postreview.FixReplyMarker,
+	} {
+		if got := classifyReply(body); got != ReplyFixed {
+			t.Errorf("classifyReply(%q) = %q, want %q", body, got, ReplyFixed)
 		}
 	}
 }

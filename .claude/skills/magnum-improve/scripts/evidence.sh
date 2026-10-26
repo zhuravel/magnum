@@ -201,6 +201,25 @@ cls=${cls:-"(0,'')"}
 # findings.id).
 with_cls="with cls(id, c) as (values $cls)"
 
+# test_gap_posted is a CTE of the window's posted findings with their repository, their run's kind and tg, 1 for
+# the test-gap class: a missing or ineffective test, magnum's most repeated finding. A title states the wrong
+# result, so the class is matched by title words (globs on the lowercase title padded with a space at each end),
+# read before any "(in the fix for <other title>)" part, which names another finding. The words were checked
+# against the registry's titles: a bare "test" or "spec" is left out, since most titles with it name A/B tests,
+# test data or a test that fails, which is no gap. Older findings have no title, so the counts are a lower bound.
+test_gap_posted="test_gap_words(w) as (values ('*regression*'), ('*coverage*'), ('*untested*'), ('* no example*'),
+        ('*negative example*'), ('*without failing*'), ('*the new test*'), ('* no test *'), ('* no tests *'),
+        ('*missing test*'), ('*behavior test*'), ('* lack* test *'), ('* lack* tests *'), ('*tests miss*'),
+        ('*specs miss*'), ('*tests do not*'), ('*specs do not*'), ('*does not test*'), ('*tests allow*'),
+        ('*specs accept*'), ('*passes the tests*'), ('*removing * passes *'), ('*specs green*'), ('*tests green*'),
+        ('*suite green*'), ('*checks green*'), ('* stay* green*')),
+    test_gap_posted as (select f.id, f.pr_id, f.run_id, r.kind, rp.owner || '/' || rp.name as repo,
+            f.title is null as untitled,
+            exists (select 1 from test_gap_words where ' ' || lower(case when instr(f.title, ' (in the fix for') > 0
+                then substr(f.title, 1, instr(f.title, ' (in the fix for') - 1) else f.title end) || ' ' glob w) as tg
+        from findings f join runs r on r.id = f.run_id join prs p on p.id = f.pr_id join repos rp on rp.id = p.repo_id
+        where f.verdict = 'posted' and f.created_at >= '$since')"
+
 {
 	echo "# magnum since $since"
 	echo
@@ -236,6 +255,162 @@ with_cls="with cls(id, c) as (values $cls)"
 	echo "## Posted findings by source"
 	q "select sources_json as sources, coalesce(severity, '-') as pri, count(*) as n
 	   from findings where verdict = 'posted' and created_at >= '$since' group by 1, 2 order by 3 desc"
+	echo
+	echo "## Recurring posted classes per repository"
+	echo
+	echo "The test-gap class (test_gap_posted in evidence.sh: title words such as regression, coverage, no example,"
+	echo "without failing, specs green; a lower bound). \`first reviews\` is the class's share of the findings of initial"
+	echo "rounds, the measure of a rule at the source (lenses.md, lens 9). \`rounds of test gaps only\` are the rounds whose"
+	echo "posted findings all have a title and all are test gaps: a test written up front would have left them clean."
+	echo
+	q "with $test_gap_posted,
+	     rounds as (select repo, run_id, pr_id, count(*) = sum(tg) and sum(untitled) = 0 as only_tg
+	         from test_gap_posted group by 1, 2, 3)
+	   select p.repo as repository, count(distinct p.pr_id) as \"PRs with findings\", count(*) as posted,
+	          count(distinct case when p.tg then p.pr_id end) as \"test-gap PRs\", sum(p.tg) as \"test gaps\",
+	          sum(p.tg and p.kind = 'initial') || '/' || sum(p.kind = 'initial') as \"first reviews: test gaps/posted\",
+	          (select count(*) from rounds r where r.repo = p.repo and r.only_tg) as \"rounds of test gaps only\",
+	          (select count(distinct r.pr_id) from rounds r where r.repo = p.repo and r.only_tg) as \"their PRs\"
+	   from test_gap_posted p group by 1 order by 3 desc, 1"
+	echo
+	echo "How the authors answered the test gaps: the outcome of each finding's latest answer (declines.finding_row_id)."
+	echo
+	q "with $test_gap_posted,
+	     answers as (select d.finding_row_id as id, d.outcome from declines d
+	         where d.id = (select max(o.id) from declines o where o.finding_row_id = d.finding_row_id))
+	   select p.repo as repository, coalesce(a.outcome, 'no answer') as answer, count(*) as \"test gaps\"
+	   from test_gap_posted p left join answers a on a.id = p.id where p.tg group by 1, 2 order by 1, 3 desc, 2"
+	echo
+	echo "## Fixer trial"
+	echo
+	echo "The fixer fixes the same defect in the PR's own lines too and names each extra site with \", also at"
+	echo "<path>:<line>\" in its Fixed-in reply (skills/magnum-fix/SKILL.md, section 5, a trial since 2026-10-26). For each"
+	echo "fix run of the window that pushed: the \"Fixed in <sha7>\" replies to the commits its report lists under"
+	echo "\`## Pushed\`, read from the review-threads.json of the PR's next posted round (a reply is cut at 600 characters,"
+	echo "which may hide its \"also at\"), and that round's findings tagged \"(missed earlier)\" or \"(in the fix for\", with"
+	echo "those on a path a posted finding of the round the fix answered named: a repeat where the fix worked. The table"
+	echo "lists the runs with an \"also at\" reply or a tagged finding after them, and those with no posted round after them."
+	echo
+	python3 - "$db" "$since" <<'PY' || echo "(the fixer trial could not be read: see the error evidence.sh printed)"
+import json, os, re, subprocess, sys
+
+db, since = sys.argv[1:3]
+
+
+def sql(q):
+    res = subprocess.run(["sqlite3", "-readonly", "-json", db, q], capture_output=True, text=True, check=True)
+    return json.loads(res.stdout or "[]")
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except (OSError, TypeError):
+        return None
+
+
+SHA = re.compile(r"([0-9a-f]{7,40})\s")
+FIXED_IN = re.compile(r"\W*fixed in `?([0-9a-f]{7,40})\b", re.I)
+ALSO_AT = re.compile(r"\balso at\b", re.I)
+MISSED, FALLOUT = "(missed earlier)", "(in the fix for"
+
+
+def pushed(report):
+    """The commits a fix report lists under ## Pushed, by their first 7 characters."""
+    out, on = set(), False
+    for line in (report or "").splitlines():
+        if line.startswith("## "):
+            on = line.strip() == "## Pushed"
+        elif on and (m := SHA.match(line)):
+            out.add(m.group(1)[:7])
+    return out
+
+
+def replies(path, shas):
+    """The Fixed-in replies to one of shas in a threads file and those of them naming "also at", or None unread."""
+    try:
+        threads = json.loads(read(path) or "")
+    except ValueError:
+        return None
+    n = also = 0
+    for t in threads if isinstance(threads, list) else threads.get("threads", []):
+        for r in t.get("replies") or []:
+            m = FIXED_IN.match(r.get("body") or "")
+            if m and m.group(1)[:7] in shas:
+                n += 1
+                also += bool(ALSO_AT.search(r["body"]))
+    return n, also
+
+
+fixes = sql(f"""select r.id, r.pr_id, r.created_at, r.report_path, rp.owner || '/' || rp.name || '#' || p.number as pr
+                from runs r join prs p on p.id = r.pr_id join repos rp on rp.id = p.repo_id
+                where r.kind = 'fix' and r.created_at >= '{since.replace("'", "''")}' order by r.created_at""")
+prs = ",".join(sorted({str(int(f["pr_id"])) for f in fixes})) or "0"
+found = {}
+for f in sql(f"select run_id, title, path from findings where verdict = 'posted' and pr_id in ({prs})"):
+    found.setdefault(f["run_id"], []).append(f)
+# A round's nudge or model-fallback run is posted too, with its first run's review id and none of the findings,
+# which the round stores on its first run only: the runs of one review are one round, named by the earliest, with
+# the findings of all of them.
+judges, review = [], {}
+for j in sql(f"""select id, pr_id, round, created_at, report_path, review_id from runs
+                 where role like '%judge%' and outcome = 'posted' and pr_id in ({prs}) order by created_at, id"""):
+    key = j["id"] if j["review_id"] is None else (j["pr_id"], j["review_id"])
+    if key in review:
+        review[key]["findings"] += found.get(j["id"], [])
+        continue
+    review[key] = j | {"findings": list(found.get(j["id"], []))}
+    judges.append(review[key])
+
+rows, rounds = [], {}
+n_pushed = n_replies = n_also = unread = waiting = 0
+for fx in fixes:
+    shas = pushed(read(fx["report_path"]))
+    if not shas:
+        continue
+    n_pushed += 1
+    mine = [j for j in judges if j["pr_id"] == fx["pr_id"]]
+    nxt = next((j for j in mine if j["created_at"] > fx["created_at"]), None)
+    if nxt is None:
+        waiting += 1
+        rows.append([fx["pr"], fx["id"], fx["created_at"][:16], len(shas), "-", "-", "none yet", "-", "-", "-", "-"])
+        continue
+    prev = [j for j in mine if j["created_at"] < fx["created_at"]]
+    answered = {f["path"] for f in prev[-1]["findings"]} if prev else set()
+    new = nxt["findings"]
+    tagged = [f for f in new if MISSED in (f["title"] or "") or FALLOUT in (f["title"] or "")]
+    missed = sum(MISSED in f["title"] for f in tagged)
+    fallout = sum(FALLOUT in f["title"] for f in tagged)
+    same = sum(f["path"] in answered for f in tagged)
+    rounds[nxt["id"]] = (len(new), missed, fallout, same)
+    got = replies(os.path.join(os.path.dirname(nxt["report_path"] or ""), "review-threads.json"), shas)
+    if got is None:
+        unread += 1
+        n = also = "-"
+    else:
+        n, also = got
+        n_replies += n
+        n_also += also
+    if (got and also) or tagged:
+        rows.append([fx["pr"], fx["id"], fx["created_at"][:16], len(shas), n, also, f"{nxt['id']} (r{nxt['round']})",
+                     len(new), missed, fallout, same])
+
+total = [sum(r[i] for r in rounds.values()) for i in range(4)]
+note = f" ({unread} next rounds have no threads file)" if unread else ""
+print(f'Fixer trial: {len(fixes)} fix runs, {n_pushed} pushed. Fixed-in replies to their commits: {n_replies}, '
+      f'{n_also} naming "also at"{note}. The next posted rounds ({len(rounds)}): {total[0]} findings, {total[1]} '
+      f'"{MISSED}" and {total[2]} "{FALLOUT}", {total[3]} of those on a path a finding of the answered round named. '
+      f'Without a posted round after them: {waiting}.')
+print()
+if rows:
+    print("| PR | fix run | at | commits | Fixed-in replies | also at | next round | findings | missed earlier | in the fix for | on an answered path |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    for r in rows:
+        print("| " + " | ".join(str(x) for x in r) + " |")
+else:
+    print('No fix run of the window has an "also at" reply or a tagged finding after it.')
+PY
 	echo
 	echo "## claude-review alone: what its rejected findings are (priority)"
 	echo

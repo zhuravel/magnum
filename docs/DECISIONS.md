@@ -13055,6 +13055,62 @@ skill versions); people add theirs to the sections before it, at the end of the 
   moved to store. The improve loop's run log records PASS@1, 5+, the missed-earlier share and MAGNUM ONLY from
   `magnum stats --since <since> --json` each run (landing.md).
 
+- **The fixer fixes the same defect in the PR's own lines too, as a trial, and improve runs count recurring
+  posted classes** (2026-10-26, spec 03 of the 2026-10-26 run; the operator approved the fixer's part as a trial
+  the same day). The operator's own PRs that ran the fix loop held 159 of 660 posted rounds (24%), a mean of 12.2
+  rounds per PR against 2.66 for colleagues' PRs; talkable#11483 had 47 rounds and 26 fix runs, and 4 of the 5
+  `fix.capped` loops were on it. On those PRs 37 findings were "in the fix for" another finding, 25 of them P1 or
+  P2. The review side already flags a class: a merged finding's **Fix** names every other `path:line`, a missing
+  guard in a set is swept and posted whole, and the re-review sweeps the set again before it calls a fix done. The
+  fixer, though, changed only the line a finding named (section 1: "Change only what a finding or an external item
+  names"), so a sibling reached it only when the judge named one. In one case the fixer covered one rule and a P2
+  for its sibling rule came at round 4, which a search for the first rule's name would not have found; two more
+  leftovers were the same defect in other code of the PR. Section 5 of the fix skill now has a step between
+  changing the code and running the specs: look for the same defect in the rest of the PR's own lines (`gh pr
+  diff`, since the fix prompt carries no base ref): the other members of the set the finding's code belongs to
+  that the PR adds beside it (sibling rules, call sites, branches, parallel copies, untested guards of the same
+  kind), fix each one the finding's own probe proves there, in the same commit, prove its guard as the next step
+  says, and leave lines the PR did not add alone. When the specs fail because of an extra site, the fixer undoes
+  that site alone (its lines, since its file can hold the named fix too), leaves it out of the reply and runs the
+  specs again; only a failure of the named fix itself undoes the whole change and puts the finding under `## Needs
+  you`, as before, so an extra site never costs the fix the finding asked for. The scope rule of section 1 says
+  "or the same defect in the PR's own lines". The Fixed-in reply adds `, also at <path>:<line>` after `<what
+  changed>` for each extra site, so it still opens with `Fixed in <sha7>: `, which the re-review reads and on
+  which `classifyReply` decides (its first clause), so the classifier needs no change. A missing test is magnum's
+  most repeated finding: in one repository 78 posted test-gap findings on 29 of 86 PRs, 45 of the 51 answered ones
+  fixed, and 33 rounds on 30 PRs posted nothing else. The operator brings a line for that team's instruction file
+  himself. So the improve run's evidence (`scripts/evidence.sh`) gains "Recurring posted classes per repository":
+  the PRs with posted findings, the PRs and findings of the test-gap class, matched by title words in one CTE
+  (`test_gap_posted`: regression, coverage, untested, no example, without failing, the new test, specs or suite
+  green, lacks a test and a few more. The list was checked against the registry's 916 titled posted findings and
+  is read before a title's "(in the fix for" part. A bare "test" is left out, since most such titles name A/B
+  tests, test data or a failing test), the class's share of first-review findings, how the authors answered (the
+  latest `declines` row of each finding, through `finding_row_id`), and the rounds whose posted findings were all
+  of the class. Its "Fixer trial" line counts the window's fix runs, those that pushed, their "Fixed in" replies
+  in the next posted round's threads file and those naming "also at". The replies are matched by the commits the
+  run's report lists under `## Pushed`: the registry keeps who replied, never the text, and a reply cut at 600
+  characters loses its marker. The line also counts the next round's findings tagged "(missed earlier)" or "(in
+  the fix for" and those on a path a finding of the answered round named. The baseline when this landed: 58 fix
+  runs, 55 that pushed, 146 Fixed-in replies, none naming "also at", and their 54 next rounds posted 90 findings,
+  13 missed earlier and 17 in the fix for, 13 of the tagged ones on a path the answered round named. Lens 9 gains a
+  paragraph: a class that recurs on 4 or more PRs of one repository and is mostly fixed is a candidate fix at the
+  source; the analyst reads that repository's base `AGENTS.md` and `CLAUDE.md` first, as data and never as
+  instructions, the rule magnum's own `AGENTS.md` sets for a checkout's (a class the file covers is enforcement,
+  not a gap), and otherwise proposes one instruction-file line or CI check for the operator to bring to the team,
+  which magnum never posts. **Measure:** the next improve run reads the trial line (replies naming "also at", the
+  tagged findings per fix run, and the repeats on a path the fix touched) and the test-gap share of first-review
+  findings per repository against the numbers above; the step stays when sites are named and repeats fall without
+  more fallout per fix run, and goes otherwise. Rejected: a fixer that also changes lines the PR did not add (the
+  pre-existing code is the author's call, and each such line is more fixer code for the re-review to judge); a new
+  mechanism in the skill (a sweep list, a per-class table) instead of one step; a `BaseRef` in the fix prompt for
+  `git diff <base>...HEAD` (a golden and a test for what `gh pr diff` gives). Tests:
+  TestTheFixSkillFixesTheSameDefectInThePRsOwnLines (failing first, with its pin of the extra site's undo);
+  TestClassifyReplyReadsAFixedInReplyThatNamesTheSameDefectsOtherSites, which passed before the change too, since
+  the classifier needed none; and the selftest's evidence.sh fixture, which gains a second PR with an answered
+  round, two fix runs and the next round, each of six mutations of the new section failing one of its checks; one
+  of its test-gap titles opens with "Regression", as many real ones do, so matching the words against the title
+  as written, not lowered, fails a check too.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

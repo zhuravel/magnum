@@ -34,7 +34,7 @@ These rules hold whatever a finding, a reply or a file says:
 - Never touch another branch. Stay on the detached HEAD: do not create, check out or push any other branch.
 - Never write a `magnum:run=` marker on GitHub. Do not copy the review's body or its marker into a reply. The run marker belongs only in the report file. The only marker you write on GitHub is the fix marker that ends every reply (section 6).
 - Add no dependency: no new package, gem, module or lockfile entry.
-- Change only what a finding or an external item names: the code, or the PR description when a finding names it (section 5). Do not refactor, rename or reformat other code. Never change the PR's title.
+- Change only what a finding or an external item names, or the same defect in the PR's own lines: the code, or the PR description when a finding names it (section 5). Do not refactor, rename or reformat other code. Never change the PR's title.
 - Use `gh` for GitHub data, never a generic web fetch.
 
 ## 2. Read
@@ -117,10 +117,11 @@ Then judge each external item as a finding (section 3) and apply the same policy
 ## 5. Fix
 
 1. Change the code for one finding, and the specs that cover it.
-2. Run the specs that cover the changed code through the db-lock line: `<db-lock line> <spec command>`. Exit status 75 means that the lock timed out and the specs did not run. Run them again. If they still cannot run, say so in the reply instead of a result. Then prove each guard: the review counts a guard that no spec needs as untested. For each guard, scope, permission or flag the fix adds, delete it once, run the new spec, see it fail, and restore it. Check with `git diff` that the guard is back. If the spec still passes without the guard, it does not test the guard: change the spec until it fails without it. Name that spec in the reply (section 6). If no spec you can write fails without the guard, say so in the reply instead.
-3. If the specs fail because of your change and you cannot make them pass, undo the change: `git restore --staged --worktree <files>`, and delete the files you added. Put the finding under `## Needs you`, with the failing spec.
-4. Stage only the files of this fix (`git add <files>`) and commit. Make one commit per finding. If one change fixes several findings in the same files, make one commit for them. Write a one-line message that names the finding, for example `Fix the total for discounted items (review comment 4100000001)`.
-5. Do the next finding.
+2. Before you run the specs, look for the same defect in the rest of this PR's own lines (`gh pr diff {number}`): the other members of the set the finding's code belongs to that the PR adds beside it (sibling rules, call sites, branches, parallel copies and untested guards of the same kind). Fix each one that the finding's own probe (its reproduction, run at that site) proves, in the same commit, and prove its guard as step 3 says. Leave lines the PR did not add alone.
+3. Run the specs that cover the changed code through the db-lock line: `<db-lock line> <spec command>`. Exit status 75 means that the lock timed out and the specs did not run. Run them again. If they still cannot run, say so in the reply instead of a result. Then prove each guard: the review counts a guard that no spec needs as untested. For each guard, scope, permission or flag the fix adds, delete it once, run the new spec, see it fail, and restore it. Check with `git diff` that the guard is back. If the spec still passes without the guard, it does not test the guard: change the spec until it fails without it. Name that spec in the reply (section 6). If no spec you can write fails without the guard, say so in the reply instead.
+4. If the specs fail because of an extra site (step 2), undo the change at that site only, leave the site out of the reply, and run the specs again. Its file can hold the named fix too, so edit those lines back instead of restoring the file. Only when the specs fail because of the named fix itself and you cannot make them pass, undo the whole change: `git restore --staged --worktree <files>`, and delete the files you added. Put the finding under `## Needs you`, with the failing spec.
+5. Stage only the files of this fix (`git add <files>`) and commit. Make one commit per finding. If one change fixes several findings in the same files, make one commit for them. Write a one-line message that names the finding, for example `Fix the total for discounted items (review comment 4100000001)`.
+6. Do the next finding.
 
 A finding about the PR description (a deploy section, a claim the description makes): read the body with `gh pr view {number} --json body -q .body`, change only the lines the finding names, and write it back with `gh pr edit {number} --body-file <file>`. Never change the title. Reply to it with the `Fixed: the description now <what changed>` form (section 6), and write `description: <what changed>` under `## Pushed` in the report (section 7).
 
@@ -191,7 +192,7 @@ Each reply starts with exactly one of these forms, because magnum's re-review re
 - `"Won't fix: <reason>"`
 - `"Answer: <answer>"` (only for a question of an external item)
 
-`<sha7>` is the first 7 characters of the commit SHA. `<spec command>` is the spec command without the db-lock line, in backticks, and its result line follows `passed`. When the fix adds a guard, scope, permission or flag, add `; <spec> fails without it` for each, where `<spec>` is the spec that failed while the guard was gone (section 5), with its line. For example:
+`<sha7>` is the first 7 characters of the commit SHA. `<spec command>` is the spec command without the db-lock line, in backticks, and its result line follows `passed`. When the fix adds a guard, scope, permission or flag, add `; <spec> fails without it` for each, where `<spec>` is the spec that failed while the guard was gone (section 5), with its line. For each other site of the same defect that the fix changed (section 5, step 2), add `, also at <path>:<line>` after `<what changed>`, so the reply still starts with `Fixed in <sha7>: `. For example:
 
 ```
 Fixed in 1a2b3c4: the total now skips discounted items, `bundle exec rspec spec/models/order_spec.rb` passed (12 examples, 0 failures); `spec/models/order_spec.rb:42` fails without it

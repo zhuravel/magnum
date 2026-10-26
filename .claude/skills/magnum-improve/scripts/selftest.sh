@@ -19,7 +19,11 @@
 #     --fresh), and the report with the points it prints;
 #   - evidence.sh: against a registry with only the columns it reads, the rejected findings of claude-review
 #     alone split into those matching a finding of its report and those matching a bullet of its Rejected
-#     list (the self column and table), and a nudge run whose twin is listed left out of the posted reviews.
+#     list (the self column and table), a nudge run whose twin is listed left out of the posted reviews, the
+#     test-gap class per repository (its words matched in any case, a title's "(in the fix for" part not
+#     read, the latest answer of each finding, the rounds of test gaps only), and the fixer trial line (the
+#     replies to a fix run's own commits, those naming "also at", and the next round's tagged findings on the
+#     answered round's paths, read from the round's first run when its nudge twin is the later one).
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
 set -euo pipefail
@@ -413,6 +417,34 @@ A locale switch serves the page cached for the other language.
 - The retry loop sleeps too long: no impact, the sleep is capped at one second.
 - The token appears in the log: rejected, the log line holds only the id.
 MD
+# PR 2: a review whose two findings are test gaps (j1, with a nudge twin j1n that carries its review id and no
+# findings, as a nudged round's runs do), a fix run that pushed nothing (fx0; its Needs you entry,
+# written without its dash, starts with a comment id, which only the Pushed section would read as a commit) and one
+# that pushed two commits (fx1), and the next round (j2), whose threads file holds the replies to fx1's commits (one
+# naming "also at", one cut without the marker) and an older fix's reply.
+mkdir -p "$ev/reviews/example/app/2/aaa111aaa111" "$ev/reviews/example/app/2/bbb222bbb222" "$ev/reviews/example/app/2/000000000000"
+printf '%s\n' '<!-- magnum:run=fx0 -->' '## Pushed' 'nothing' '## Replied' '0 threads' '## Needs you' \
+    '4100000102 P2 app/region.rb:8: not fixed. The region list is a product call.' \
+    '## Other reviewers' 'none' >"$ev/reviews/example/app/2/000000000000/claude-fix.md"
+printf '%s\n' '<!-- magnum:run=fx1 -->' '## Pushed' '1a2b3c4 Cover the locale guard (review comment 101)' \
+    '5e6f7a8 Cover the region guard (review comment 102)' '## Replied' '2 threads (2 fixed)' '## Needs you' 'none' \
+    '## Other reviewers' 'none' >"$ev/reviews/example/app/2/aaa111aaa111/claude-fix.md"
+cat >"$ev/reviews/example/app/2/bbb222bbb222/review-threads.json" <<'JSON'
+[
+  {"id": "T1", "comment_id": 101, "url": "https://github.com/example/app/pull/2#discussion_r101", "finding": "**[P2] Regression test missing for the locale guard**",
+   "location": "app/locale.rb:5", "review_id": 91, "created_at": "2026-10-11T10:00:00Z", "resolved": true, "outdated": false,
+   "replies": [{"id": 201, "author": "alice", "class": "fixed",
+     "body": "Fixed in 1a2b3c4: the locale guard has an example, also at app/locale.rb:20, `rspec spec/locale_spec.rb` passed\n\n<!-- magnum:fix -->"}]},
+  {"id": "T2", "comment_id": 102, "url": "https://github.com/example/app/pull/2#discussion_r102", "finding": "**[P2] Region guard lacks regression coverage**",
+   "location": "app/region.rb:8", "review_id": 91, "created_at": "2026-10-11T10:00:00Z", "resolved": true, "outdated": false,
+   "replies": [{"id": 202, "author": "alice", "class": "fixed", "truncated": true,
+     "body": "Fixed in 5e6f7a8: the region guard has an example, `rspec spec/region_spec.rb` passed"}]},
+  {"id": "T3", "comment_id": 99, "url": "https://github.com/example/app/pull/2#discussion_r99", "finding": "**[P2] Old finding**",
+   "location": "app/old.rb:1", "review_id": 90, "created_at": "2026-10-09T10:00:00Z", "resolved": true, "outdated": false,
+   "replies": [{"id": 203, "author": "alice", "class": "fixed",
+     "body": "Fixed in 9d8c7b6: an older fix, also at app/old.rb:4\n\n<!-- magnum:fix -->"}]}
+]
+JSON
 sqlite3 "$ev/magnum.db" <<SQL
 create table repos (id integer primary key, owner text, name text);
 create table prs (id integer primary key, repo_id integer, number integer, gh_state text, state text, attempts integer, last_error text);
@@ -423,16 +455,31 @@ create table findings (id integer primary key, run_id text, pr_id integer, round
   path text, line integer, sources_json text, verdict text, reason_code text, created_at text, title text);
 create table misses (class text, scope text, severity text, raised text, state text, created_at text, source_url text,
   title text, lesson text);
-create table declines (source_url text);
+create table declines (id integer primary key, source_url text, finding_row_id integer, outcome text);
 create table events (level text, kind text, at text);
 create table requests (kind text, state text, created_at text);
 create table kv (key text primary key, value text);
 insert into repos values (1, 'example', 'app');
-insert into prs values (1, 1, 1, 'OPEN', 'reviewed', 0, null);
+insert into prs values (1, 1, 1, 'OPEN', 'reviewed', 0, null), (2, 1, 2, 'OPEN', 'reviewed', 0, null);
 insert into runs (id, pr_id, round, role, kind, state, outcome, report_path, review_id, review_event, created_at) values
   ('r1', 1, 1, 'codex-judge', 'initial', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 77, 'COMMENT', '2026-10-10T10:00:00Z'),
   ('r2', 1, 1, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 77, 'COMMENT', '2026-10-10T10:05:00Z'),
-  ('r3', 1, 2, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 88, 'COMMENT', '2026-10-10T11:00:00Z');
+  ('r3', 1, 2, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 88, 'COMMENT', '2026-10-10T11:00:00Z'),
+  ('fx0', 2, 1, 'claude-fix', 'fix', 'verified', 'needs_you', '$ev/reviews/example/app/2/000000000000/claude-fix.md', null, null, '2026-10-11T09:00:00Z'),
+  ('j1', 2, 1, 'codex-judge', 'initial', 'verified', 'posted', '$ev/reviews/example/app/2/aaa111aaa111/codex-judge.json', 91, 'COMMENT', '2026-10-11T10:00:00Z'),
+  ('j1n', 2, 1, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/2/aaa111aaa111/codex-judge.json', 91, 'COMMENT', '2026-10-11T10:05:00Z'),
+  ('fx1', 2, 1, 'claude-fix', 'fix', 'verified', 'pushed', '$ev/reviews/example/app/2/aaa111aaa111/claude-fix.md', null, null, '2026-10-11T10:30:00Z'),
+  ('j2', 2, 2, 'codex-judge', 'rereview', 'verified', 'posted', '$ev/reviews/example/app/2/bbb222bbb222/codex-judge.json', 92, 'COMMENT', '2026-10-11T11:00:00Z');
+insert into findings (id, run_id, pr_id, round, finding_id, severity, path, line, sources_json, verdict, created_at, title) values
+  (11, 'j1', 2, 1, 'F1', 'P2', 'app/locale.rb', 5, '["codex-review"]', 'posted', '2026-10-11T10:00:00Z', 'Regression test missing for the locale guard'),
+  (12, 'j1', 2, 1, 'F2', 'P2', 'app/region.rb', 8, '["codex-review"]', 'posted', '2026-10-11T10:00:00Z', 'Region guard lacks regression coverage'),
+  (13, 'j2', 2, 2, 'F1', 'P2', 'app/locale.rb', 9, '["codex-review"]', 'posted', '2026-10-11T11:00:00Z', 'Locale fallback skips the guard (missed earlier)'),
+  (14, 'j2', 2, 2, 'F2', 'P1', 'app/cache.rb', 3, '["codex-review"]', 'posted', '2026-10-11T11:00:00Z', 'Cache key drops the region (in the fix for Region guard lacks regression coverage)'),
+  (15, 'j2', 2, 2, 'F3', 'P3', 'app/locale.rb', 12, '["codex-review"]', 'posted', '2026-10-11T11:00:00Z', 'Fallback specs stay green without the guard');
+insert into declines (id, source_url, finding_row_id, outcome) values
+  (1, 'https://github.com/example/app/pull/2#discussion_r201', 11, 'fixed'),
+  (2, 'https://github.com/example/app/pull/2#discussion_r202', 12, 'fixed'),
+  (3, 'https://github.com/example/app/pull/2#discussion_r204', 12, 'declined');
 insert into findings (run_id, pr_id, round, finding_id, severity, path, line, sources_json, verdict, reason_code, created_at, title) values
   ('r1', 1, 1, 'F1', 'P2', 'app/cache.rb', 10, '["claude-review"]', 'posted', null, '2026-10-10T10:00:00Z', 'Cache key ignores the locale'),
   ('r1', 1, 1, 'F2', 'P3', 'app/retry.rb', 4, '["claude-review"]', 'rejected', 'speculative', '2026-10-10T10:00:00Z', 'Retry loop sleeps too long'),
@@ -460,8 +507,29 @@ grep -Fxq '| P2 | 1 | 1 | 0 | 0 | 0 |' <<<"$rows" &&
     grep -Fxq '| P3 | 0 | 0 | 1 | 0 | 0 |' <<<"$rows" ||
     fail "the claude-review table splits posted, reported, self and unmatched: $(sed -n '/^## claude-review alone/,/^## Role minutes/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
 sed -n '/^## Posted reviews/,/^## Findings/p' "$ev_md" >"$tmp/out"
-[[ $(grep -c '^| 2026' "$tmp/out") == 2 && $(grep -c '| nudge ' "$tmp/out") == 1 ]] ||
+[[ $(grep -c '^| 2026.* example/app#1 ' "$tmp/out") == 2 && $(grep -c '| nudge ' "$tmp/out") == 1 ]] ||
     fail "the nudge whose twin is listed has no row; the one whose review id is its own stays"
 ok "evidence.sh counts a claude-review report's own Rejected bullets apart and leaves out a nudge whose twin is listed"
+
+# PR 1's posted finding is no test gap; of PR 2's five, the two of its first review (one opening with "Regression",
+# the case of many real titles, so the words match the lowered title) and the one whose specs stay green are, and
+# the one whose "(in the fix for" part names a test gap is not. Of those three, one was fixed, one
+# fixed and then declined (the latest answer counts) and one has no answer; j1 posted only test gaps.
+grep -Fxq '| example/app | 2 | 6 | 1 | 3 | 2/3 | 1 | 1 |' <<<"$rows" ||
+    fail "the test-gap row per repository: $(sed -n '/^## Recurring posted classes/,/^## Fixer trial/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
+grep -Fxq '| example/app | fixed | 1 |' <<<"$rows" && grep -Fxq '| example/app | declined | 1 |' <<<"$rows" &&
+    grep -Fxq '| example/app | no answer | 1 |' <<<"$rows" ||
+    fail "the answers to the test gaps: $(sed -n '/^## Recurring posted classes/,/^## Fixer trial/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
+ok "evidence.sh counts the test-gap class per repository, its first-review share, its answers and its rounds"
+# fx0 pushed nothing; fx1's two commits have a reply each in j2's threads file (the one cut without the marker
+# too), the older fix's reply is not fx1's, and of j2's three findings one is missed earlier on a path j1 named
+# (j1n, the run before fx1, is j1's twin and names no path of its own) and one is in the fix for another, on a
+# path j1 did not name.
+grep -Fxq 'Fixer trial: 2 fix runs, 1 pushed. Fixed-in replies to their commits: 2, 1 naming "also at". The next posted rounds (1): 3 findings, 1 "(missed earlier)" and 1 "(in the fix for", 1 of those on a path a finding of the answered round named. Without a posted round after them: 0.' "$ev_md" ||
+    fail "the fixer trial line: $(grep '^Fixer trial' "$ev_md" || echo none)"
+grep -Fxq '| example/app#2 | fx1 | 2026-10-11T10:30 | 2 | 2 | 1 | j2 (r2) | 3 | 1 | 1 | 1 |' "$ev_md" ||
+    fail "the fixer trial's row of fx1: $(sed -n '/^## Fixer trial/,/^## Role minutes/p' "$ev_md" | tr '\n' ';')"
+! grep -q '^| example/app#2 | fx0 ' "$ev_md" || fail "a fix run that pushed nothing has no row"
+ok "evidence.sh's fixer trial counts the replies to a fix run's commits, \"also at\" and the next round's tagged findings"
 
 echo "selftest: $checks checks passed"
