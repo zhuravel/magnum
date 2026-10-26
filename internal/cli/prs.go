@@ -297,6 +297,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		}
 		notes := map[string]bool{}
 		required := map[string]store.RequiredChecks{} // per repository, for this load
+		ignored := map[string][]string{}              // per repository, for this load
 		trackers := map[string][]config.Tracker{}     // per repository, for this load
 		out := make([]tui.PRBoardRow, 0, len(rows))
 		ids := make([]int64, 0, len(rows))
@@ -315,7 +316,14 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				req, _ = st.RequiredChecks(ctx, full, configured)
 				required[full] = req
 			}
-			row.CI = prsCI(r.CI, r.HeadSHA, req)
+			ignore, ok := ignored[full]
+			if !ok && cfg != nil {
+				ignore = cfg.IgnoreChecks(full)
+				ignored[full] = ignore
+			}
+			// A check ignore_checks names is absent, as the approval's gates
+			// read the checks.
+			row.CI = prsCI(store.SeenCI(r.CI, r.HeadSHA, ignore), r.HeadSHA, req)
 			if cfg != nil {
 				row.Badges = prsBadges(r.Labels, cfg.Board.Badges)
 			}

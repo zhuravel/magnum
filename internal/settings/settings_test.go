@@ -93,7 +93,7 @@ func TestFieldsListTheV1SettingsOncePerID(t *testing.T) {
 	for _, id := range []FieldID{"pipeline.spend", "kinds.codex.spend", "kinds.claude.spend", "spend.burn.claude-review.model",
 		"spend.low.codex-judge.effort", "spend.high.claude-fix.rereview_effort", "role.claude-whiteboard.model", "usage.codex_soft",
 		"watch.roles", "watch.auto_approve_authors", "repo.required_checks", "daemon.quiet_hours", "daemon.park_idle_after",
-		"pipeline.judge_fallback"} {
+		"pipeline.judge_fallback", "watch.ignore_checks", "repo.ignore_checks"} {
 		if !seen[id] {
 			t.Errorf("no field %s", id)
 		}
@@ -162,6 +162,8 @@ func TestLoadReadsWhatTheFileSetsAndWhatApplies(t *testing.T) {
 		{Target{Field: "repo.stakes", Repo: "talkable/web"}, "payments and rewards", "payments and rewards", "your file, line 35", StateSet, 35},
 		{Target{Field: "repo.stakes", Repo: "talkable/api"}, "", "inherit (referral emails and rewards reach real customers)", "", StateDefault, 0},
 		{Target{Field: "repo.max_simplifications", Repo: "talkable/api"}, "", "inherit (5)", "", StateDefault, 0},
+		{Target{Field: "watch.ignore_checks", Watch: 1}, "", "none", "", StateDefault, 0},
+		{Target{Field: "repo.ignore_checks", Repo: "talkable/api"}, "", "none", "", StateDefault, 0},
 	} {
 		v := s.Value(c.t)
 		if v.Text != c.text || v.Effective != c.effective || v.State != c.state || v.Line != c.line ||

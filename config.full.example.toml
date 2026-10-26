@@ -79,6 +79,9 @@ skip_authors = ["dependabot"]
 # auto_approve_skip_authors = ["alice"] # logins whose PRs magnum never approves as you on its own (A still does)
 # auto_approve_authors = ["rev-ann"]    # when set, the only logins whose PRs magnum approves as you on its own
 #                                       # (the skip list still wins; a [[repo]] block's replaces it there)
+# ignore_checks = ["Vendor Gates"]      # checks magnum treats as absent wherever it reads CI (a third-party
+#                                       # app's check that fails on every PR); globs as required_checks
+#                                       # (default: none; a [[repo]] block's adds to it)
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every round role, the first judge only
 # judge_own_pass = "after"              # [pipeline]'s "parallel" (the judge's own pass with the reviewers) or "after"
 # related_lookback = "30d"              # [pipeline]'s 14d: how long a merged PR on the same paths stays related ("0s": none)
@@ -139,8 +142,8 @@ databases = [
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
 # block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
-# auto_approve_authors, allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready,
-# ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
+# auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers and the readiness keys
+# (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -158,6 +161,7 @@ databases = [
 #                                         # name, a commit status apart from a check run of its name; it never
 #                                         # approves a PR that changes .github/workflows/ or .github/actions/ on
 #                                         # its own
+# ignore_checks = ["Vendor Gates"]        # added to the watch's list for this repository's PRs alone
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

@@ -657,6 +657,8 @@ func (s *Snapshot) watchEffective(f Field, t Target, v Value) string {
 		return listText(w.AutoApproveSkipAuthors, "none")
 	case "watch.manual_repos":
 		return listText(w.ManualRepos, "none")
+	case "watch.ignore_checks":
+		return listText(w.IgnoreChecks, "none")
 	case "watch.include_drafts":
 		return strconv.FormatBool(w.DraftsIncluded())
 	case "watch.stakes":
@@ -707,6 +709,8 @@ func (s *Snapshot) repoEffective(f Field, t Target, v Value) string {
 		return listText(rr.AllowBotAuthors, "none")
 	case "repo.required_checks":
 		return listText(rr.RequiredChecks, "GitHub's required checks")
+	case "repo.ignore_checks":
+		return listText(rr.IgnoreChecks, "none")
 	}
 	return v.Text
 }

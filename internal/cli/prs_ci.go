@@ -1,8 +1,9 @@
 package cli
 
 // The board's CI and badges from the registry: the head commit's checks
-// (store.CIStatus, deduplicated per workflow and name by the poller), the
-// repository's required checks (GitHub's rulesets, or [[repo]]
+// (store.CIStatus, deduplicated per workflow and name by the poller, those
+// ignore_checks names left out by store.SeenCI before prsCI reads them),
+// the repository's required checks (GitHub's rulesets, or [[repo]]
 // required_checks), and the configured label badges ([board] badges).
 
 import (

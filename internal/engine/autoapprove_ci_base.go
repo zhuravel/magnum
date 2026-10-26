@@ -79,16 +79,19 @@ type ciAnswer struct {
 	base    string
 }
 
-// ciGateOf is the CI gate of c's head: where the repository sets
-// required_checks, the checks it names decide in place of the rollup
-// (requiredCIRefusal: one outside the list neither fails nor runs); else a
-// rollup that fails goes to the base-tip comparison (failingCIRefusal), one
-// that runs waits (ciRunsRefusal), and any other (passed, none) lets it
-// through. A rollup the registry never read (a NULL ci_state: the poll's CI
-// read failed, or the PR was never fetched in full) lets it through too, as
-// pipeline.CIUnknown, so that the judge's event can tell "never read" from
-// "passed".
+// ciGateOf is the CI gate of c's head, read as magnum sees its checks
+// (seenPR: a check the repository's ignore_checks names is absent, and the
+// rollup derived from the rest of the head's complete checks): where the
+// repository sets required_checks, the checks it names decide in place of
+// the rollup (requiredCIRefusal: one outside the list neither fails nor
+// runs); else a rollup that fails goes to the base-tip comparison
+// (failingCIRefusal), one that runs waits (ciRunsRefusal), and any other
+// (passed, none) lets it through. A rollup the registry never read (a NULL
+// ci_state: the poll's CI read failed, or the PR was never fetched in
+// full) lets it through too, as pipeline.CIUnknown, so that the judge's
+// event can tell "never read" from "passed".
 func (e *Engine) ciGateOf(ctx context.Context, c store.RepoPR) ciAnswer {
+	c.PR = e.seenPR(c.Repo, c.PR) // ignore_checks.go
 	pr := c.PR
 	if r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(c.Repo)); ok {
 		return e.requiredCIRefusal(ctx, c, r) // autoapprove_required.go: the rollup does not decide
@@ -107,7 +110,8 @@ func (e *Engine) ciGateOf(ctx context.Context, c store.RepoPR) ciAnswer {
 
 // failingCIRefusal is the CI gate's answer for c, whose head's rollup
 // fails: failsLikeTheBase for every check the head's stored checks (pr.CI,
-// read on the head, every one listed) fail and whether any of them still
+// read on the head, every one listed; those ignore_checks names left out
+// by ciGateOf) fail and whether any of them still
 // runs (GitHub's rollup fails as soon as one check fails); ciFailsRefusal
 // when it cannot tell (no checks stored for the head, or not every one).
 func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR) ciAnswer {

@@ -431,8 +431,9 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		}
 		// Every poll, not only one that read the Details: a check that
 		// failed during the review's round queues its judge check once the
-		// round posted, though CI did not change since.
-		if err == nil && !firstSync && !res.New && ciPollWorth(res.PR) {
+		// round posted, though CI did not change since. A check
+		// ignore_checks names is none (seenPR).
+		if err == nil && !firstSync && !res.New && ciPollWorth(e.seenPR(full, res.PR)) {
 			err = e.considerCIRed(ctx, repo, w, res.PR.ID, now) // ci_red.go
 		}
 		if err != nil {

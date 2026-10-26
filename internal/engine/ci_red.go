@@ -18,7 +18,8 @@ package engine
 // the same way starts nothing more; a rerun that turns them pending or
 // passes drops a follow-up still waiting, and a push supersedes it. The
 // checks' names are the PR's workflows' (PR content): they stay in the
-// registry, never in an event.
+// registry, never in an event. A check the repository's ignore_checks
+// names is no failure here (ciRedOf, ciPollWorth; ignore_checks.go).
 
 import (
 	"context"
@@ -86,16 +87,15 @@ func ciWatched(pr store.PR) bool {
 		pr.HeadSHA == deref(pr.ReviewedSHA) && pr.CI != nil && pr.CI.SHA == pr.HeadSHA
 }
 
-// ciPollWorth reports, from the row a poll upserted, whether considerCIRed
-// has anything to read: a watched head with a failed check, or one waiting
-// (a follow-up may drop).
+// ciPollWorth reports, from the row a poll upserted as magnum reads its
+// checks (seenPR: a check ignore_checks names is none), whether
+// considerCIRed has anything to read: a watched head with a failed check,
+// or one waiting (a follow-up may drop).
 func ciPollWorth(pr store.PR) bool {
 	if !ciWatched(pr) {
 		return false
 	}
-	return pr.State == store.PRRereviewPending || slices.ContainsFunc(pr.CI.Checks, func(c store.CheckResult) bool {
-		return c.State == store.CheckFailed
-	})
+	return pr.State == store.PRRereviewPending || slices.ContainsFunc(pr.CI.Checks, failedCheck)
 }
 
 // ciFollowupRecord reads the PR's record, whatever its head.
@@ -120,13 +120,20 @@ func (e *Engine) putCIFollowup(ctx context.Context, prID int64, rec ciFollowup) 
 	}
 }
 
-// ciRedOf reads what pr's CI says for its follow-up; ok is false when its
-// CI may call for none (ciWatched), no check failed and the record is
-// empty, or no review posted on the head has a prompt time (a push that
-// only merged the base kept an older head's review: magnum never reviewed
-// this one).
+// ciRedOf reads what pr's CI says for its follow-up, a check its
+// repository's ignore_checks names being none (seenFailures: it never
+// queues a judge check, never enters the record, and one the record holds
+// from before the key fails no longer); ok is false when its CI may call
+// for none (ciWatched), no check failed and the record is empty, no review
+// posted on the head has a prompt time (a push that only merged the base
+// kept an older head's review: magnum never reviewed this one), or the
+// PR's repository could not be read for its ignore_checks.
 func (e *Engine) ciRedOf(ctx context.Context, pr store.PR) (ciRed, bool) {
 	if !ciWatched(pr) {
+		return ciRed{}, false
+	}
+	pr, ok := e.seenFailures(ctx, pr)
+	if !ok {
 		return ciRed{}, false
 	}
 	rec, _ := e.ciFollowupRecord(ctx, pr.ID)
@@ -135,7 +142,7 @@ func (e *Engine) ciRedOf(ctx context.Context, pr store.PR) (ciRed, bool) {
 	}
 	var failed []ciFailure
 	for _, c := range pr.CI.Checks {
-		if c.State == store.CheckFailed {
+		if failedCheck(c) {
 			failed = append(failed, ciFailure{Workflow: c.Workflow, Name: c.Name, At: c.At.UTC()})
 		}
 	}

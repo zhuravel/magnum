@@ -423,10 +423,10 @@ so you do not have to open an editor:
   merges them, so which one to change is not clear.
 - **Usage caps:** `[usage] codex_soft` and `codex_hard`.
 - **Each `[[watch]]`:** `roles`, `auto_approve`, `auto_approve_authors`, `auto_approve_skip_authors`,
-  `manual_repos`, `include_drafts`, `stakes` and `own_min_rereview_interval`.
+  `manual_repos`, `ignore_checks`, `include_drafts`, `stakes` and `own_min_rereview_interval`.
 - **Each repository:** its `[[repo]]` block's `stakes`, `max_simplifications`, `auto_approve_authors`,
-  `auto_approve_skip_authors`, `allow_bot_authors` and `required_checks`. A watched repository without a
-  block gets a minimal one.
+  `auto_approve_skip_authors`, `allow_bot_authors`, `required_checks` and `ignore_checks`. A watched
+  repository without a block gets a minimal one.
 - **Schedule:** `quiet_hours`, `push_quiet_period`, `min_rereview_interval` and
   `own_min_rereview_interval`.
 - **Reviews & agents:** `[pipeline]` `status_comment`, `whiteboard`, `judge_fallback`, `fix_cycles`,
@@ -685,7 +685,8 @@ quiet periods, the re-review interval and the daily cap, counts against no cap a
 a snooze or a mute holds it. One judge check covers each failing check of a head: a rerun that fails the
 same way starts no other, a different check failing later does. A rerun that turns the checks pending,
 or passes, while it waits drops it (`pr.ci_red_dropped`, back to reviewed), and a push supersedes it.
-The poll reads a head's checks again when its CI rollup's state changes, and also when its counts of
+A check `ignore_checks` names is no failure here: it starts no judge check, and its record never names
+it. The poll reads a head's checks again when its CI rollup's state changes, and also when its counts of
 failed or pending checks do (a rollup stays FAILURE while an earlier failure is red); the counts come in
 the same rollup request, with more fields.
 
@@ -1304,6 +1305,19 @@ keeps `[pipeline] max_simplifications` (1 to 10, default 5), and a pooled reposi
 `auto_approve_skip_authors` on the `[[repo]]` adds logins to the watch's for that repository, and
 `auto_approve_authors` there replaces the watch's allowlist for it (Approving as you); a pooled
 repository may set both.
+`ignore_checks` on the `[[watch]]` (`["Vendor Gates"]`, say, a third-party app's check that fails on every
+PR), and on the `[[repo]]`, whose list adds to the watch's for that repository (a pooled one too), names
+checks Magnum treats as absent wherever it reads a PR's CI. Its entries are read as `required_checks`'
+are: globs (case-sensitive) over check run names and commit status contexts, or `workflow:<glob>` for
+every check of each GitHub Actions workflow whose file or declared name it matches; an empty or malformed
+entry fails to load. Such a check stays out of the judge's `failing_checks`, starts no CI follow-up
+(below), holds back neither the judge's approval nor the approval as you, and turns no row red on the
+board or in `magnum prs`. GitHub's rollup, which one that failed keeps at `FAILURE`, is decided again from
+the head's other checks: failed when one of them failed, running when one runs, green when they passed or
+skipped. Where Magnum cannot tell what the rest did, the rollup decides as before: the stored checks are
+an older head's, GitHub listed only part of them (it lists 100), or the rollup moved since they were read.
+It changes nothing GitHub enforces (a check its rules require still blocks the merge), and no event or log
+names a check for it. Default: none.
 `prepare` (such as `["bin/rails db:test:prepare"]`) and
 `ready` (probes, exit 0 = ready) on a `[[pool]]` or `[[repo]]` run in the checkout before the
 reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) together, followed by a
@@ -1455,7 +1469,10 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   posts, never stands for a check run, nor a check run for a status. When the head's stored checks cannot
   say (none read for the head, more than GitHub lists, an entry that names no check on the head, checks a
   build before this rule stored, which the poller reads again at once) every check counts, as without
-  the key; the list GitHub's rulesets declare does not change the gate;
+  the key; the list GitHub's rulesets declare does not change the gate. A check `ignore_checks` names
+  (Watches, pools and repos) is absent here as everywhere, before `required_checks` or the base tip's
+  comparison reads the checks: a head whose only failing check it names is approved once the others
+  pass, its rollup decided from them, and one where another check still runs waits for it;
 - on GitHub (read just before posting) you have not approved that head, have no review in progress, and
   have not reviewed the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
 
@@ -1473,8 +1490,8 @@ draft, a muted PR, one its watch would not review on its own, one that changes i
 actions or the review agents' instructions or hooks, one whose file list Magnum cannot read whole;
 every kind of round decides them from the PR as it is then, a continued one too, so a PR that turned into
 a draft while its round was paused comments), and to the CI gate when the judge's prompt is written,
-from the same read of the PR's checks as the prompt's `failing_checks` (a continued round's prompt decides
-it again): a head whose checks fail other than the way the base branch's tip fails them is refused, and
+from the same read of the PR's checks as the prompt's `failing_checks`, with the checks `ignore_checks`
+names left out of both (a continued round's prompt decides it again): a head whose checks fail other than the way the base branch's tip fails them is refused, and
 checks that still run, pass, or fail as the tip's do let the approval through (Magnum does not wait for
 them as it does before approving as you: the judge posts once). A refused round's no-findings event is
 `COMMENT` in the prompt and in its `post_review` line, and one `round.approval_refused` event per head and
@@ -1858,7 +1875,8 @@ review and one failed, writes `failing-checks.json` in the report directory (nam
 time of each failed check; the PR's workflows name them, so the names stay out of the prompt) and names
 it as `failing_checks`. The review's Checks then say for each one whether the PR causes it, from its log
 (`gh run view --log-failed`): one the PR causes is a P1 broken build, any other is named as unrelated. A
-blind replay never gets the file.
+check `ignore_checks` names is left out of the file, so a head whose only failed checks it names gets
+none, and its review says nothing of them. A blind replay never gets the file.
 
 A session role's turn ends when herdr shows its agent idle on two ticks in a row. The judge's ends as soon
 as its result file (`codex-judge.json`, the last thing its skill writes) parses with a final status
@@ -3290,7 +3308,9 @@ CI shows the head's checks: the repository's required checks when it has some (r
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the
 head, `⊘ Completion skipped`), else the counts (`✓ 65/65`, `✗ 2 failed`, `◌ 40/65`); the card lists the
 checks per workflow and names every failed job. `[[repo]] required_checks` also sets what the automatic
-approval waits for: only the checks it names hold it (see "Approving as you"). Rows the configuration skips read "skipped" with the
+approval waits for: only the checks it names hold it (see "Approving as you"). A check `ignore_checks`
+names is left out of all of it, here and in `magnum prs` (its CI cell and `--json`'s `ci`), so a head
+whose only failed check it names reads `✓`. Rows the configuration skips read "skipped" with the
 reason in a word: "skipped · bot", "· author" (`skip_authors`), "· label", "· draft", "· left org" (an
 author who left) or "· manual" (`manual_repos`); any other reason (a fork's PR, `skip_paths`,
 `include_own`, a base branch name Magnum does not pass to a shell) reads a plain "skipped", and the card

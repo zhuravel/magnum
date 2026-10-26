@@ -9,6 +9,8 @@ package pipeline
 // the report directory, named as `failing_checks`; the skill gives each one
 // a Checks line saying whether the PR causes it. The PR's workflows name
 // the checks, so the names stay in the file, never in a prompt or an event.
+// A check the repository's ignore_checks names (a third-party app's that
+// fails on every PR) is left out of the file (store.SeenCI).
 
 import (
 	"context"
@@ -55,13 +57,16 @@ func (rd *round) failingChecks(ci *store.CIStatus) FailingChecks {
 // go out and names it in jd, when a check of the head under review failed,
 // from pr, the registry's latest read of the PR (registryPR: the round's
 // input when that read fails), the read the approval's CI gate decides
-// from too (applyCIGate); a blind replay, which reads no CI result, gets
-// none. A failure to write leaves the prompt without it (a warning).
+// from too (applyCIGate); a check the repository's ignore_checks names is
+// not one (store.SeenCI, as the gate reads them), so a head whose only
+// failed checks it names gets none. A blind replay, which reads no CI
+// result, gets none either. A failure to write leaves the prompt without
+// it (a warning).
 func (rd *round) addFailingChecks(ctx context.Context, jd *agents.JudgeData, pr store.PR) {
 	if rd.in.Blind || rd.r.Store == nil {
 		return
 	}
-	fc := rd.failingChecks(pr.CI)
+	fc := rd.failingChecks(store.SeenCI(pr.CI, rd.in.TargetSHA, rd.r.Config.IgnoreChecks(rd.owner+"/"+rd.name)))
 	if len(fc.Checks) == 0 {
 		return
 	}

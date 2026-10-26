@@ -179,6 +179,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, w.validateAutoApprove(ids)...)
 		errs = append(errs, validateLogins("watch "+w.Owner+": ", "allow_bot_authors", w.AllowBotAuthors)...)
 		errs = append(errs, validateNoAppForm("watch "+w.Owner+": ", "skip_authors", w.SkipAuthors)...)
+		errs = append(errs, validateCheckGlobs("watch "+w.Owner, "ignore_checks", w.IgnoreChecks)...)
 		if err := validateStakes(w.Stakes); err != nil {
 			errs = append(errs, fmt.Errorf("watch %s: stakes %w", w.Owner, err))
 		}
@@ -420,9 +421,27 @@ func (c *Config) validatePoolSlots() []error {
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// validateCheckGlobs checks the entries of a list of checks under key
+// (required_checks, ignore_checks) of the block where names: check-name
+// globs, or RequiredWorkflowPrefix and a glob, none empty or malformed.
+func validateCheckGlobs(where, key string, entries []string) []error {
+	var errs []error
+	for _, g := range entries {
+		// A malformed glob would match no check; Match reports it even for "".
+		glob := strings.TrimPrefix(g, RequiredWorkflowPrefix)
+		if strings.TrimSpace(glob) == "" {
+			errs = append(errs, fmt.Errorf("%s: empty %s entry %q", where, key, g))
+		} else if _, err := path.Match(glob, ""); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %s pattern %q: %w", where, key, g, err))
+		}
+	}
+	return errs
+}
+
 // validateRepos checks the [[repo]] blocks: owner/name covered by a watch,
 // not a pool repository, no duplicates, shell-safe env keys, copy_files
-// that stay inside the clone and well-formed required_checks globs.
+// that stay inside the clone and well-formed required_checks and
+// ignore_checks globs.
 func (c *Config) validateRepos() []error {
 	var errs []error
 	seen := map[string]bool{}
@@ -441,17 +460,10 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: no [[watch]] covers it", r.Repo))
 		}
 		if c.PoolFor(r.Repo) != nil && r.worktreeKeys() {
-			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, auto_approve_authors, allow_bot_authors, required_checks and trackers apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, auto_approve_authors, allow_bot_authors, required_checks, ignore_checks and trackers apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
 		}
-		for _, g := range r.RequiredChecks {
-			// A malformed glob would match no check; Match reports it even for "".
-			glob := strings.TrimPrefix(g, RequiredWorkflowPrefix)
-			if strings.TrimSpace(glob) == "" {
-				errs = append(errs, fmt.Errorf("repo %s: empty required_checks entry %q", r.Repo, g))
-			} else if _, err := path.Match(glob, ""); err != nil {
-				errs = append(errs, fmt.Errorf("repo %s: required_checks pattern %q: %w", r.Repo, g, err))
-			}
-		}
+		errs = append(errs, validateCheckGlobs("repo "+r.Repo, "required_checks", r.RequiredChecks)...)
+		errs = append(errs, validateCheckGlobs("repo "+r.Repo, "ignore_checks", r.IgnoreChecks)...)
 		for _, msg := range trackerProblems("repo "+r.Repo, r.Trackers) {
 			errs = append(errs, errors.New(msg))
 		}

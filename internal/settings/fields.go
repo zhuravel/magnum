@@ -174,6 +174,9 @@ func Fields() []Field {
 		{ID: "watch.manual_repos", Section: SectionWatches, Label: "manual repos", Key: "watch.manual_repos", Scope: ScopeWatch,
 			Type: TypeRepos, ValidateList: validateRepoNames, DefaultText: "none",
 			Description: "repositories shown on the board but reviewed only when asked"},
+		{ID: "watch.ignore_checks", Section: SectionWatches, Label: "ignored checks", Key: "watch.ignore_checks", Scope: ScopeWatch,
+			Type: TypeChecks, ValidateList: validateChecks, DefaultText: "none",
+			Description: "checks magnum treats as absent wherever it reads CI (workflow:<glob> names a workflow)"},
 		{ID: "watch.include_drafts", Section: SectionWatches, Label: "include drafts", Key: "watch.include_drafts", Scope: ScopeWatch,
 			Type: TypeBool, Options: []string{"true", "false"}, DefaultText: "false",
 			Description: "false: a draft waits until it is ready or a review is requested"},
@@ -205,6 +208,9 @@ func Fields() []Field {
 		{ID: "repo.required_checks", Section: SectionRepos, Label: "required checks", Key: "repo.required_checks", Scope: ScopeRepo,
 			Type: TypeChecks, ValidateList: validateChecks, DefaultText: "GitHub's required checks",
 			Description: "checks that must pass before magnum approves (workflow:<glob> names a workflow)"},
+		{ID: "repo.ignore_checks", Section: SectionRepos, Label: "ignored checks", Key: "repo.ignore_checks", Scope: ScopeRepo,
+			Type: TypeChecks, ValidateList: validateChecks, DefaultText: "none (adds to the watch's)",
+			Description: "checks magnum treats as absent wherever it reads CI here; adds to the watch's list"},
 
 		// Schedule.
 		{ID: "daemon.quiet_hours", Section: SectionSchedule, Label: "quiet hours", Key: "daemon.quiet_hours", Type: TypeText,

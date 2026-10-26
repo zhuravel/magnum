@@ -103,9 +103,11 @@ const ignoredChecksShown = 5
 // required_checks: Terraform scripts / lint". It names a check as the board
 // does (its workflow, " / ", its name) when that is plain text
 // (shownCheckName), at most ignoredChecksShown of them, and counts the rest
-// ("and 2 more"): a workflow a PR adds names its own checks.
+// ("and 2 more"): a workflow a PR adds names its own checks. A check the
+// repository's ignore_checks names is no failing check here either, as the
+// gate reads them (seenPR): the note never names it.
 func (e *Engine) ignoredChecksNote(full string, pr store.PR) string {
-	r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(full))
+	r, ok := requiredCIOf(e.seenPR(full, pr), e.cfg.RequiredChecks(full))
 	if !ok || len(r.ignored) == 0 {
 		return ""
 	}

@@ -867,6 +867,12 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                       # auto_approve_skip_authors still wins; A still approves anyone's PR, an
 #                                       # approval standing from before stays (default: none = every author;
 #                                       # a [[repo]] block's replaces it for that repository)
+# ignore_checks = ["Vendor Gates"]      # checks magnum treats as absent wherever it reads the CI of the watch's
+#                                       # PRs (a third-party app's check that fails on every PR): left out of the
+#                                       # judge's failing checks, the CI-red follow-up, the approval gates and the
+#                                       # board, the rest deciding the head's state; name globs or
+#                                       # "workflow:<glob>", as [[repo]] required_checks; GitHub still enforces its
+#                                       # own required checks (default: none; a [[repo]] block's adds to it)
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every round role, the first judge only
 # trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key
 #                                       # prefix named here wins over [board]'s (another org's PR- in another tracker)
@@ -931,8 +937,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
 # block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
-# auto_approve_authors, allow_bot_authors, required_checks, trackers and the readiness keys (prepare, ready,
-# ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
+# auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers and the readiness keys
+# (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -963,6 +969,8 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 #                                         # workflow file and name, a commit status apart from a check run of its
 #                                         # name; it never approves a PR that changes .github/workflows/ or
 #                                         # .github/actions/ on its own
+# ignore_checks = ["Vendor Gates"]        # added to the watch's list for this repository's PRs alone: checks
+#                                         # magnum treats as absent wherever it reads their CI
 # trackers = ["https://your-org.atlassian.net/browse/APP-{num}"]   # [board] trackers for this repository's PRs;
 #                                         # its key prefixes win over the watch's and [board]'s
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]

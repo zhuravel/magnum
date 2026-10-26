@@ -4272,6 +4272,14 @@ func (c *Config) FixRoles() []Role
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
 
+func (c *Config) IgnoreChecks(fullName string) []string
+    IgnoreChecks returns the checks magnum treats as absent wherever it reads
+    the CI of repository fullName's PRs: the covering watch's ignore_checks and,
+    added to them, the [[repo]] block's (nil when neither sets any). Entries
+    are check-name globs and "workflow:<glob>", matched as required_checks' are
+    (store.RequiredNames); store.SeenCI and store.PR.IgnoringChecks leave the
+    checks they name out. The list is a copy when both set some.
+
 func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool)
     JudgeFallbackFor is the judge role that takes over a PR of watch w (nil:
     a PR no watch covers) after its judge's kind refused a round: the watch's
@@ -5665,6 +5673,12 @@ type Repo struct {
 	// status apart from a check run of its name.
 	RequiredChecks []string `toml:"required_checks"`
 
+	// IgnoreChecks adds checks to the covering watch's ignore_checks for
+	// this repository's PRs alone: checks magnum treats as absent wherever
+	// it reads their CI, named as RequiredChecks are (see
+	// Config.IgnoreChecks).
+	IgnoreChecks []string `toml:"ignore_checks"`
+
 	// Trackers are [board] trackers templates for this repository's PRs; an
 	// issue key prefix named here wins over its watch's and [board]'s (see
 	// Config.TrackersFor).
@@ -6181,6 +6195,14 @@ type Watch struct {
 	// shown, but eligibility.Classify rejects them, so no push, new PR or
 	// GitHub review request starts a round. See ManualRepo.
 	ManualRepos []string `toml:"manual_repos"`
+	// IgnoreChecks names checks magnum treats as absent wherever it reads
+	// the CI of the watch's PRs (a third-party app's check that fails on
+	// every PR), in required_checks' grammar: globs (path.Match,
+	// case-sensitive) over check run names and commit status contexts, or
+	// RequiredWorkflowPrefix and a glob over GitHub Actions workflows'
+	// files and declared names (store.RequiredNames). A [[repo]] block's
+	// list adds to it; see Config.IgnoreChecks. Empty = none (the default).
+	IgnoreChecks []string `toml:"ignore_checks"`
 }
 
 func (w Watch) BotsSkipped() bool
@@ -19102,6 +19124,22 @@ type CIStatus struct {
     trail prs.ci_state, which the radar refreshes, until the next Details fetch.
     A required check absent from Checks has no run on SHA (a repository whose CI
     runs only when the PR is opened): it is missing on this head, not pending.
+    It is stored as GitHub reported it; magnum's readers see it through SeenCI
+    (PR.IgnoringChecks), which leaves out the checks ignore_checks names.
+
+func SeenCI(ci *CIStatus, head string, ignore []string) *CIStatus
+    SeenCI is ci, the stored checks of a PR whose head is head, as magnum
+    reads them where ignore (config.Config.IgnoreChecks: check-name globs and
+    RequiredWorkflowPrefix entries, matched as RequiredNames matches) names
+    some of them: those left out, the counts tallied again (Tally) and Total
+    less them, and, when they are head's checks and every one (Complete), State
+    derived from the rest: FAILURE when one of them failed, PENDING when one
+    runs, SUCCESS when they passed or skipped, "" (no checks) when none is left;
+    an ignored check that failed no longer holds GitHub's rollup at FAILURE.
+    Checks of another commit, or a list GitHub cut at 100, keep GitHub's rollup
+    State: magnum cannot tell what the rest did. ci itself when ignore names
+    none of its checks (nil for nil); ci is never changed, and Rollup (GitHub's
+    own counts, which the poll compares to tell a change) stays as read.
 
 func (c *CIStatus) Tally()
     Tally sets Passed, Failed, Pending, Skipped and AllSkipped from Checks (and
@@ -19885,6 +19923,15 @@ func (p PR) Activity() *time.Time
 
 func (p PR) FlagDismissed() bool
     FlagDismissed is IsFlagDismissed for p.
+
+func (p PR) IgnoringChecks(ignore []string) PR
+    IgnoringChecks is p with its checks as magnum reads them where ignore names
+    some (SeenCI on p's head) and, when SeenCI derived their state again and
+    p's rollup (CIState, which the approval's CI gate reads) is the one the
+    checks were read with (a rollup that moved since, after a Details fetch
+    that failed, is newer than the checks: it stays), CIState that state too.
+    A rollup the registry never read stays unread. p itself when ignore names
+    none of its checks; p's CI and CIState are never changed.
 
 func (p PR) MergedUnreviewed() bool
     MergedUnreviewed is IsMergedUnreviewed for p.

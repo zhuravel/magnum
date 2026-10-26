@@ -488,6 +488,14 @@ type Watch struct {
 	// shown, but eligibility.Classify rejects them, so no push, new PR or
 	// GitHub review request starts a round. See ManualRepo.
 	ManualRepos []string `toml:"manual_repos"`
+	// IgnoreChecks names checks magnum treats as absent wherever it reads
+	// the CI of the watch's PRs (a third-party app's check that fails on
+	// every PR), in required_checks' grammar: globs (path.Match,
+	// case-sensitive) over check run names and commit status contexts, or
+	// RequiredWorkflowPrefix and a glob over GitHub Actions workflows'
+	// files and declared names (store.RequiredNames). A [[repo]] block's
+	// list adds to it; see Config.IgnoreChecks. Empty = none (the default).
+	IgnoreChecks []string `toml:"ignore_checks"`
 }
 
 // ManualRepo reports whether manual_repos names the repository name
@@ -726,6 +734,12 @@ type Repo struct {
 	// status apart from a check run of its name.
 	RequiredChecks []string `toml:"required_checks"`
 
+	// IgnoreChecks adds checks to the covering watch's ignore_checks for
+	// this repository's PRs alone: checks magnum treats as absent wherever
+	// it reads their CI, named as RequiredChecks are (see
+	// Config.IgnoreChecks).
+	IgnoreChecks []string `toml:"ignore_checks"`
+
 	// Trackers are [board] trackers templates for this repository's PRs; an
 	// issue key prefix named here wins over its watch's and [board]'s (see
 	// Config.TrackersFor).
@@ -740,7 +754,7 @@ const RequiredWorkflowPrefix = "workflow:"
 // worktreeKeys reports whether the block sets any per-PR worktree key
 // (everything but repo, the verdicts, readiness, keep_approvals, stakes,
 // max_simplifications, auto_approve_skip_authors, auto_approve_authors,
-// allow_bot_authors, required_checks and trackers).
+// allow_bot_authors, required_checks, ignore_checks and trackers).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }
@@ -1247,4 +1261,31 @@ func (c *Config) RequiredChecks(fullName string) []string {
 		return r.RequiredChecks
 	}
 	return nil
+}
+
+// IgnoreChecks returns the checks magnum treats as absent wherever it
+// reads the CI of repository fullName's PRs: the covering watch's
+// ignore_checks and, added to them, the [[repo]] block's (nil when
+// neither sets any). Entries are check-name globs and "workflow:<glob>",
+// matched as required_checks' are (store.RequiredNames); store.SeenCI and
+// store.PR.IgnoringChecks leave the checks they name out. The list is a
+// copy when both set some.
+func (c *Config) IgnoreChecks(fullName string) []string {
+	var watch, repo []string
+	if w := c.WatchFor(fullName); w != nil {
+		watch = w.IgnoreChecks
+	}
+	if r := c.RepoFor(fullName); r != nil {
+		repo = r.IgnoreChecks
+	}
+	switch {
+	case len(repo) == 0:
+		if len(watch) == 0 {
+			return nil
+		}
+		return watch
+	case len(watch) == 0:
+		return repo
+	}
+	return slices.Concat(watch, repo)
 }

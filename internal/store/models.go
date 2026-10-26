@@ -260,7 +260,9 @@ func (p PR) Activity() *time.Time {
 // trail prs.ci_state, which the radar refreshes, until the next Details
 // fetch. A required check absent from Checks has no run on SHA (a
 // repository whose CI runs only when the PR is opened): it is missing on
-// this head, not pending.
+// this head, not pending. It is stored as GitHub reported it; magnum's
+// readers see it through SeenCI (PR.IgnoringChecks), which leaves out the
+// checks ignore_checks names.
 type CIStatus struct {
 	SHA string `json:"sha"` // the commit the checks ran on
 	// State is GitHub's rollup (SUCCESS | FAILURE | PENDING | ERROR |

@@ -13245,6 +13245,64 @@ skill versions); people add theirs to the sections before it, at the end of the 
   by the confirmation; in cli
   TestEvalGuardsPrintsTheCasesTheGateWouldGuard and TestLearnReviewShowsTheGateAsATable extended; in config the
   range of `gate_guards`.
+- **`ignore_checks` makes magnum treat a named check as absent wherever it reads CI** (2026-10-26, spec 04 of
+  the 2026-10-26 run, asked for by the operator; amends "The judge sees the head's failing checks", "A head
+  whose CI turns red after the review gets a judge check", "The approval's CI gate counts only the checks
+  required_checks names" and "The judge's own approval passes the approval's gates"). A new check, "Entire
+  Gates", from a third-party app the team installed, appeared on talkable/talkable at 13:35Z; by the evening
+  it was on 28 PRs, 26 of them open, it failed on every one, and the operator says it always fails. On
+  talkable#12105 and talkable#12107 it was the only failed check and `prs.ci_json` read FAILURE: on #12105
+  the judge posted its clean verdict as a comment (the head's checks fail), on #12107 the CI-red follow-up
+  queued a judge-only round at 17:08Z whose `pr.413.ci_followup` record named only that check, every clean
+  review on such a head ended "CI is red: Entire Gates failed, unrelated" instead of LGTM (the skill's
+  section 7 reads `failing_checks`), and with no `required_checks` on the repository the automatic approval
+  counted every check and waited for one that never passes. The rule: `ignore_checks` on a `[[watch]]`, and
+  on a `[[repo]]`, whose list adds to its watch's (`config.Config.IgnoreChecks`, as
+  `auto_approve_skip_authors` does), in `required_checks`' grammar (name globs, `workflow:<glob>`,
+  `store.RequiredNames`; a bad entry fails to load through the shared `validateCheckGlobs`); default none.
+  One helper defines the checks magnum sees: `store.SeenCI` leaves the named checks out of a head's stored
+  checks, tallies the counts and Total again, and, when the checks are the head's and every one (Complete),
+  derives the state from the rest (FAILURE when one failed, PENDING when one runs, SUCCESS when they passed
+  or skipped, "" when none is left), so an ignored check that failed no longer holds GitHub's rollup at
+  FAILURE; checks of another head or a list GitHub cut at 100 keep the rollup, since magnum cannot tell what
+  the rest did, and a list that names none of the checks returns the stored CI itself, so nothing changes
+  without the key. `store.PR.IgnoringChecks` puts the derived state into `CIState` too (the rollup the
+  approval's CI gate reads) only when that rollup is the one the checks were read with: after a Details
+  fetch that failed, `ci_state` (the radar's) can be newer than `ci_json`, and a derived SUCCESS from older
+  checks would approve while a rerun runs, so the newer rollup decides as before. The readers: the judge's
+  `failing-checks.json` (`pipeline.addFailingChecks`: a head whose only failed checks are ignored gets no
+  file), the CI-red follow-up (`ciRedOf`, which reads the PR's repository from the registry only when a
+  stored check failed, and `ciPollWorth`: an ignored check queues no judge check and never enters the
+  record, and one a record holds from before the key counts as no longer failing, so its wait drops), the
+  approval's CI gate (`ciGateOf`, which the automatic approval, its standing re-gate and the judge's approval
+  gate share, so `failingCIRefusal`, the base tip's comparison and `requiredCIOf` read the seen checks: an
+  ignored check is never compared with the base tip, and a `required_checks` entry that names only ignored
+  checks names no check on the head, so the derived rollup decides), its ignored-checks note
+  (`ignoredChecksNote`, which never names an ignored check), and the board's and `magnum prs`'s CI
+  (`prsSource` passes the seen checks to `prsCI`, whose state, counts, workflows, failing jobs and required
+  checks follow). Left as they are: the poll's change detection (`fetchDetails` compares GitHub's own rollup
+  and counts with the stored ones, which stay as GitHub reported them, so a config change applies at once
+  and a failure beside an ignored one still reads the checks again), `ciStatus` and `fillDetails` (they
+  write the stored checks), `store.BoardRow.CIState` (no reader), the base tip's `CommitChecks` (only
+  matched against the head's seen failures), and the webhooks' check hints (change detection). A derived
+  state reads the latest run of each check, while GitHub's rollup also counts superseded runs: on a head
+  with an ignored check, a superseded failed run no longer holds the approval. It changes nothing GitHub
+  enforces, and the globs are the operator's configuration, never a PR's; no event, log or toast names a
+  check for them. Rejected: reusing `required_checks` (it narrows only the automatic approval's CI gate and
+  the board's readiness, and leaves the judge's `failing_checks`, its approval gate and the CI-red follow-up
+  reading the check); the base-match rule (it lets a check through only when it failed on the base tip too,
+  and this check need not run on the base branch); a sentence in the review skill (the skill is at its byte
+  cap, and the judge reads CI only through `failing_checks`, so a check magnum leaves out never reaches a
+  review). Tests, failing first: in config TestIgnoreChecksLoadsOnAWatchAndARepoWhoseListAddsToTheWatchs,
+  TestAMalformedIgnoreChecksEntryFailsValidation and TestIgnoreChecksIsValidOnAPooledRepository; in store
+  TestSeenCILeavesOutTheIgnoredChecksAndDerivesTheStateFromTheRest and
+  TestAPRIgnoringChecksTakesTheDerivedStateAsItsRollup; in pipeline TestFailingChecksLeaveOutAnIgnoredCheck;
+  in engine TestAnIgnoredCheckThatFailsAfterTheReviewQueuesNoJudgeCheck,
+  TestTheAutomaticApprovalPassesAHeadWhoseOnlyFailedCheckIsIgnored (the rollup FAILURE and the checks
+  complete; it waits while another check runs, a standing approval stays where without the key it is
+  withdrawn) and TestTheJudgesApprovalGateApprovesAHeadWhoseOnlyFailedCheckIsIgnored; in cli
+  TestTheBoardsCIIsNotRedWhenOnlyAnIgnoredCheckFailed; in settings the two fields (mutations that keep the
+  rollup, or take the derived state over a rollup that moved, each fail one).
 
 ## Learned rules
 

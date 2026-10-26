@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -113,4 +114,63 @@ func TestTheJudgeGetsTheHeadsFailingChecks(t *testing.T) {
 	none("another commit's checks", store.CIStatus{SHA: head2, State: "FAILURE", Total: 3, Complete: true, Checks: checks}, false)
 	none("the head's checks all passed", store.CIStatus{SHA: target, State: "SUCCESS", Total: 1, Complete: true, Checks: checks[1:2]}, false)
 	none("a blind replay", store.CIStatus{SHA: target, State: "FAILURE", Total: 3, Complete: true, Checks: checks}, true)
+}
+
+// A third-party app's check that fails on every PR ("Entire Gates" on
+// talkable/talkable, 2026-10-26) made every clean review end "CI is red:
+// ... failed, unrelated": the judge reads CI only through
+// failing-checks.json. A check ignore_checks names is left out of the file
+// (here a [[repo]] block's glob): a failed ignored check beside a failed
+// RSpec gives RSpec alone, and a head whose only failed check is ignored
+// gets no file and no `failing_checks` line.
+func TestFailingChecksLeaveOutAnIgnoredCheck(t *testing.T) {
+	at := t0.Add(-25 * time.Minute)
+	vendor := store.CheckResult{Name: "Vendor Gates", State: store.CheckFailed, At: at}
+	rspec := store.CheckResult{Name: "RSpec", State: store.CheckFailed, Workflow: "CI", WorkflowFile: "ci.yml", At: at}
+	lint := store.CheckResult{Name: "Lint", State: store.CheckPassed, Workflow: "CI", WorkflowFile: "ci.yml", At: at}
+	ignoring := func(t *testing.T) *env {
+		t.Helper()
+		e := newEnv(t)
+		e.cfg.Repos = append(e.cfg.Repos, config.Repo{Repo: "talkable/talkable", IgnoreChecks: []string{"Vendor *"}})
+		return e
+	}
+
+	e := ignoring(t)
+	e.setCI(store.CIStatus{SHA: target, State: "FAILURE", Total: 3, Complete: true, Checks: []store.CheckResult{vendor, rspec, lint}})
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(821, "COMMENTED", "COMMENT").behavior(t)}
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	path := filepath.Join(res.ReportDir, FailingChecksFile)
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "\nfailing_checks: "+path+"\n")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got FailingChecks
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("%s: %v\n%s", path, err, b)
+	}
+	want := FailingChecks{PR: "talkable/talkable#11920", HeadSHA: target, Complete: true, Checks: []store.CheckResult{rspec}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %+v\nwant %+v", FailingChecksFile, got, want)
+	}
+
+	alone := ignoring(t)
+	alone.setCI(store.CIStatus{SHA: target, State: "FAILURE", Total: 2, Complete: true, Checks: []store.CheckResult{vendor, lint}})
+	alone.ag.behaviors[agents.RoleJudge] = []behavior{alone.judgePosts(822, "COMMENTED", "COMMENT").behavior(t)}
+	res, err = alone.r.RunRound(alone.ctx, alone.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("an ignored check alone: RunRound = %+v, %v", res, err)
+	}
+	if p := alone.ag.submitsFor(agents.RoleJudge)[0].Text; strings.Contains(p, "failing_checks") {
+		t.Errorf("an ignored check alone: the judge prompt names failing checks:\n%s", p)
+	}
+	if _, err := os.Stat(filepath.Join(res.ReportDir, FailingChecksFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("an ignored check alone: %s: %v, want none", FailingChecksFile, err)
+	}
+	if evs := alone.eventsOf("round.failing_checks"); len(evs) != 0 {
+		t.Errorf("an ignored check alone: round.failing_checks events = %+v", evs)
+	}
 }
