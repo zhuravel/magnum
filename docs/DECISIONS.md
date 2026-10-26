@@ -13111,6 +13111,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   of its test-gap titles opens with "Regression", as many real ones do, so matching the words against the title
   as written, not lowered, fails a check too.
 
+- **One replay of a case at a time** (2026-10-26, spec 01 of the 2026-10-26 run, part A). On 2026-10-20 two
+  replays of one case ran at once: they shared the herdr workspace label `eval <repo>#<N>` and the worktree
+  `~/.local/state/magnum/eval/wt/<case>`, and each destroyed the other's. `magnum eval run` refuses to start
+  while the skill gate runs, but nothing kept two runs of the CLI apart (eval-at.sh before and after a change,
+  started side by side) or a gate that started during a run, and the gate's guard cases (the next entry) come
+  from the operator's corpus, the cases eval-at.sh replays in improve runs. `evalrun.RunCase` now takes an
+  exclusive lock per case name (`<eval root>/locks/<case>.lock`, a `dblock` flock with the holder's pid and run
+  written in, so a replay that crashes or is killed frees it) right after its option checks and holds it to the
+  end of its cleanup (the worktree's removal and the app's close run before the release); `Started` is when it
+  took the lock. A second replay of the case tries again every 5 seconds, honors its context between tries (a
+  cancelled wait ends the case with an error that says what it waited for), and says once, through
+  `Deps.Warn`, which run it waits for (the CLI's stderr, the daemon's log). Replays of different cases still
+  run side by side. The lock covers `magnum eval run`, eval-at.sh (which runs it) and the gate alike, since all
+  three replay through `RunCase`. Rejected: refusing the second replay (an improve run's eval-at.sh would fail
+  instead of measuring) and dblock's 100 ms polling (a replay waits for a review round, minutes). Left open:
+  two different cases of one PR still share the workspace label `eval <repo>#<N>`; the spec keeps different
+  cases running side by side. Tests, failing first: TestTwoReplaysOfOneCaseNeverOverlap (the second starts only after the first
+  ended, says once that it waits for the first's run, and a replay of another case runs meanwhile) and
+  TestAReplayWaitingForItsCaseStopsWhenCancelled in evalrun.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -121,7 +121,9 @@ func newEvalRunCmd(c *Context) *cobra.Command {
 			"skills/magnum-review/SKILL.md are read instead of the configured ones, and the run's inputs are theirs. --judge-only "+
 			"runs the judge alone on the reviewers' reports of each case's newest full replay at the same head whose reviewers read "+
 			"what this run's would, the same reviewer prompts and roles and the same --no-notes (a case without one fails before "+
-			"anything starts): a judge prompt or skill change costs one agent instead of a round. --no-notes "+
+			"anything starts): a judge prompt or skill change costs one agent instead of a round. One case replays once "+
+			"at a time, whoever starts it (this command, eval-at.sh, the daemon's skill gate): a case another replay holds "+
+			"waits for it to end (state/eval/locks/<case>.lock), saying so once. --no-notes "+
 			"withholds the repository notes from every role (by default each reads a scratch copy of them). --keep leaves "+
 			"each case's worktree in place. --force runs past the Codex soft cap.",
 		func(pos []string) int {

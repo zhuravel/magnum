@@ -27,6 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -62,6 +63,44 @@ var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports 
 // the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/)
 // (paths.Layout.Eval).
 func RunsRoot(l paths.Layout) string { return l.Eval() }
+
+// lockPoll is how often a replay waiting for another replay of its case
+// tries the case's lock again (lockCase).
+var lockPoll = 5 * time.Second
+
+// caseLock is the lock file of case name's replays: RunsRoot/locks/<name>.lock
+// (a case name is a file name: eval's idPattern).
+func caseLock(l paths.Layout, name string) string {
+	return filepath.Join(RunsRoot(l), "locks", name+".lock")
+}
+
+// lockCase takes the exclusive lock of case name's replays (caseLock, a
+// dblock flock, so a replay that crashes or is killed frees it) for the run
+// of o: two replays of one case share its herdr workspace label and, under
+// one runs root, its worktree, and destroy each other. While another
+// replay holds it, it tries again every lockPoll, saying once that it
+// waits and for whom (d.warn: the holder's pid and run); ctx ends the wait.
+func lockCase(ctx context.Context, d Deps, o Options, name string) (*dblock.Lock, error) {
+	path := caseLock(d.Layout, name)
+	me := dblock.Holder{Command: "run " + filepath.Base(o.RunDir), PID: os.Getpid()}
+	waiting := false
+	for {
+		l, err := dblock.Acquire(ctx, path, me, 0, nil)
+		var held *dblock.TimeoutError
+		if !errors.As(err, &held) {
+			return l, err
+		}
+		if !waiting {
+			d.warn("case %s: waiting for another replay of it to end (%s)", name, held.Holder)
+			waiting = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for another replay of case %s to end (%s): %w", name, held.Holder, ctx.Err())
+		case <-time.After(lockPoll):
+		}
+	}
+}
 
 // Deps is what a replay works with.
 type Deps struct {
@@ -169,10 +208,17 @@ func Refused(ctx context.Context, d Deps, ec eval.Case) string {
 // refused replay is flagged (eval.MarkFlagged) so that it never runs again.
 // It starts nothing for options without an absolute RunDir or an AgentTag
 // (checked first), for a case Refused names, of a repository no watch
-// covers, or whose candidate is no candidate.
+// covers, or whose candidate is no candidate. One replay of a case runs at
+// a time, whoever starts it (`magnum eval run`, eval-at.sh through it, the
+// daemon's gate): it holds the case's lock (lockCase) from its first check
+// to the end of its cleanup, a second replay of the case waiting for it, and
+// Started is when it took the lock.
 func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun) {
-	cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: d.now()}
+	cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head}
 	fail := func(outcome string, err error) eval.CaseRun {
+		if cr.Started.IsZero() {
+			cr.Started = d.now()
+		}
 		cr.Outcome, cr.Error = outcome, err.Error()
 		return cr
 	}
@@ -182,6 +228,12 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	case o.AgentTag == "":
 		return fail(OutcomeError, fmt.Errorf("evalrun: case %q needs its run's agent tag (Options.AgentTag), so its agents are never the PR's own", ec.Name))
 	}
+	lock, err := lockCase(ctx, d, o, ec.Name)
+	if err != nil {
+		return fail(OutcomeError, err)
+	}
+	defer lock.Release() // deferred first, so it runs after every other cleanup: the worktree's removal, the app's close
+	cr.Started = d.now()
 	if why := Refused(ctx, d, ec); why != "" {
 		return fail(OutcomeFlagged, errors.New(why))
 	}
