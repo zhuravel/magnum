@@ -13295,14 +13295,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   cap, and the judge reads CI only through `failing_checks`, so a check magnum leaves out never reaches a
   review). Tests, failing first: in config TestIgnoreChecksLoadsOnAWatchAndARepoWhoseListAddsToTheWatchs,
   TestAMalformedIgnoreChecksEntryFailsValidation and TestIgnoreChecksIsValidOnAPooledRepository; in store
-  TestSeenCILeavesOutTheIgnoredChecksAndDerivesTheStateFromTheRest and
-  TestAPRIgnoringChecksTakesTheDerivedStateAsItsRollup; in pipeline TestFailingChecksLeaveOutAnIgnoredCheck;
-  in engine TestAnIgnoredCheckThatFailsAfterTheReviewQueuesNoJudgeCheck,
+  TestSeenCILeavesOutTheIgnoredChecksAndDerivesTheStateFromTheRest (a failed check left decides before one
+  left that runs) and TestAPRIgnoringChecksTakesTheDerivedStateAsItsRollup; in pipeline
+  TestFailingChecksLeaveOutAnIgnoredCheck; in engine TestAnIgnoredCheckThatFailsAfterTheReviewQueuesNoJudgeCheck,
   TestTheAutomaticApprovalPassesAHeadWhoseOnlyFailedCheckIsIgnored (the rollup FAILURE and the checks
-  complete; it waits while another check runs, a standing approval stays where without the key it is
-  withdrawn) and TestTheJudgesApprovalGateApprovesAHeadWhoseOnlyFailedCheckIsIgnored; in cli
-  TestTheBoardsCIIsNotRedWhenOnlyAnIgnoredCheckFailed; in settings the two fields (mutations that keep the
-  rollup, or take the derived state over a rollup that moved, each fail one).
+  complete; it waits while another check runs, goes ahead on the base-match rule when another check fails on
+  the base tip too, and a standing approval stays where without the key it is withdrawn),
+  TestTheJudgesApprovalGateApprovesAHeadWhoseOnlyFailedCheckIsIgnored (red while another check fails and a
+  third runs, red like the base when the other check fails on the base tip too) and
+  TestRequiredChecksCountOnlyTheChecksMagnumSees (`required_checks` beside `ignore_checks`: the note names a
+  failing check outside the list and never the ignored one, `"*"` passes a head whose only failure is
+  ignored, and a list that names only the ignored check leaves the derived rollup to decide); in cli
+  TestTheBoardsCIIsNotRedWhenOnlyAnIgnoredCheckFailed; in settings the two fields. Mutations that keep the
+  rollup, take the derived state over a rollup that moved, put a check that runs before one that failed, or
+  give `requiredCIOf`, the base tip's comparison or the note the unfiltered checks each fail one.
 
 ## Learned rules
 

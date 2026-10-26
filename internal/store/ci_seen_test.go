@@ -25,30 +25,39 @@ func tallied(ci CIStatus) *CIStatus {
 // SeenCI is the one definition of the checks magnum sees: the checks
 // ignore_checks names leave the list, the counts and Total, and GitHub's
 // rollup, which an ignored check that failed holds at FAILURE, is derived
-// again from the rest: failed when one of them failed, pending when one
-// runs, success when they passed or skipped, none when nothing is left.
-// Checks of another head, or a list GitHub cut short, keep the rollup:
-// magnum cannot tell what the rest did. A list that ignores none of the
-// checks, or none at all, returns the stored CI itself.
+// again from the rest: failed when one of them failed, even while another
+// still runs (a pending state would let the judge's APPROVE through on a
+// head whose RSpec failed), pending when one runs and none failed, success
+// when they passed or skipped, none when nothing is left. Checks of
+// another head, or a list GitHub cut short, keep the rollup: magnum cannot
+// tell what the rest did. A list that ignores none of the checks, or none
+// at all, returns the stored CI itself.
 func TestSeenCILeavesOutTheIgnoredChecksAndDerivesTheStateFromTheRest(t *testing.T) {
 	ignore := []string{"Vendor *"}
 	for _, tc := range []struct {
 		name      string
 		rspec     string
+		lint      string
 		state     string
 		wantState string
 	}{
-		{"the rest passed", CheckPassed, "FAILURE", "SUCCESS"},
-		{"another check failed", CheckFailed, "FAILURE", "FAILURE"},
-		{"another check runs", CheckPending, "FAILURE", "PENDING"},
+		{"the rest passed", CheckPassed, CheckSkipped, "FAILURE", "SUCCESS"},
+		{"another check failed", CheckFailed, CheckSkipped, "FAILURE", "FAILURE"},
+		{"another check runs", CheckPending, CheckSkipped, "FAILURE", "PENDING"},
+		{"another check failed while a third runs", CheckFailed, CheckPending, "FAILURE", "FAILURE"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			checks := func() []CheckResult {
+				c := seenChecks(tc.rspec)
+				c[2].State = tc.lint
+				return c
+			}
 			ci := tallied(CIStatus{SHA: "h1", State: tc.state, Total: 3, Complete: true, ByWorkflowFile: true,
-				Checks: seenChecks(tc.rspec), Rollup: CheckCounts{Failed: 2, Passed: 1, Total: 3}})
+				Checks: checks(), Rollup: CheckCounts{Failed: 2, Passed: 1, Total: 3}})
 			before := *ci
 			got := SeenCI(ci, "h1", ignore)
 			want := tallied(CIStatus{SHA: "h1", State: tc.wantState, Total: 2, Complete: true, ByWorkflowFile: true,
-				Checks: seenChecks(tc.rspec)[1:], Rollup: CheckCounts{Failed: 2, Passed: 1, Total: 3}})
+				Checks: checks()[1:], Rollup: CheckCounts{Failed: 2, Passed: 1, Total: 3}})
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("SeenCI = %+v\nwant %+v", got, want)
 			}
