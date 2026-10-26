@@ -20,7 +20,7 @@ func newEvalGuardsCmd(c *Context) *cobra.Command {
 	var n int
 	cmd := newCommand("", "guards "+evalGuardsUsage, "the cases the skill gate would guard now",
 		"Print, one per line, the cases the skill gate would replay now as its guards (the [learn] gate_guards "+
-			"places, chosen as the gate chooses them): cases whose newest stored replay at the head the corpus pins "+
+			"places, chosen as a gate of every role chooses them): cases whose newest stored replay at the head the corpus pins "+
 			"found a defect, the least recently replayed first, of a pull request a watch covers that no refused replay "+
 			"or Codex flag marks. An improve run passes them to eval-at.sh with the cases a change targets, so the "+
 			"replays show what the change loses as well as what it finds. It only reads: nothing is written or replayed. "+
@@ -41,8 +41,9 @@ func newEvalGuardsCmd(c *Context) *cobra.Command {
 }
 
 // runEvalGuards prints the guard places learn.SelectCases gives a gate
-// with no target (learn.GuardsFrom over every stored run: no candidate's
-// replays to leave out, no proposal to date), over the corpora the gate
+// of every role with no target (learn.GuardsFrom over every stored run: no
+// candidate's replays to leave out, no proposal to date; eval-at.sh replays
+// every role, so no judge-only rule), over the corpora the gate
 // reads (cli.daemonGate's: a default corpus file that is not there is
 // none) or --corpus alone, the gate's watches and its flags (a refused
 // replay of a case of the PR, a Codex flag the registry holds:
@@ -78,7 +79,7 @@ func runEvalGuards(c *Context, corpusFlag string, n int) int {
 		repo, _, _ := strings.Cut(pr, "#")
 		return c.Config.WatchFor(repo) != nil
 	}
-	for _, gc := range learn.SelectCases(corpus, nil, watched, flagged, 0, learn.GuardsFrom(runs, n, "", time.Time{})) {
+	for _, gc := range learn.SelectCases(corpus, nil, watched, flagged, 0, learn.GuardsFrom(runs, n, "", time.Time{}, "")) {
 		if gc.Guard {
 			fmt.Fprintln(c.Stdout, gc.Case.Name)
 		}

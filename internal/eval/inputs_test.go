@@ -194,3 +194,59 @@ func TestNewestReplayIsTheNewestScoredReplayAtTheHead(t *testing.T) {
 		t.Fatalf("a case never replayed: %+v", r)
 	}
 }
+
+// A run lives for as long as its cases replay: the skill gate makes its base run at its first
+// baseline replay and replays a lost guard's base into it later, after the candidate's runs were
+// made. The newest replay of a case is the one that replayed last (the case's start, else its
+// run's), not the one in the newest run, and a run's stored replays say when they were made
+// (Baseline.At), so a replay of the base made since a guard's baseline is known as such.
+func TestNewestReplayIsTheLatestReplayNotTheLatestRun(t *testing.T) {
+	c := Case{Name: "geo", Head: sha}
+	found, missed := &Score{Found: 1, Total: 1}, &Score{Total: 1}
+	at := func(h int) time.Time { return time.Date(2026, 10, 20, h, 0, 0, 0, time.UTC) }
+	runs := []Run{
+		{ID: "20261020-090000", Inputs: "in-base", Started: at(9), Cases: []CaseRun{
+			{Case: "copy", Head: sha, Score: missed, Started: at(9)},
+			{Case: "geo", Head: sha, Score: found, Started: at(12)}}},
+		{ID: "20261020-100000", Inputs: "in-cand", Started: at(10), Cases: []CaseRun{{Case: "geo", Head: sha, Score: missed, Started: at(10)}}},
+		{ID: "20261020-110000", Inputs: "in-cand", Started: at(11), Cases: []CaseRun{{Case: "geo", Head: sha, Score: missed, Started: at(11)}}},
+	}
+	if r, ok := NewestReplay(runs, c, ""); !ok || r.Run != "20261020-090000" || r.Case.Score != found || !r.At.Equal(at(12)) {
+		t.Fatalf("NewestReplay = %+v, %v; want the base's replay of 12:00 in the run made at 9:00", r, ok)
+	}
+	if bs := Baselines(runs, "in-base", c); len(bs) != 1 || !bs[0].At.Equal(at(12)) {
+		t.Fatalf("Baselines = %+v, want the base's replay dated 12:00", bs)
+	}
+	// Two replays dated alike (neither recorded a start): the later run's is the newer.
+	same := []Run{{ID: "1", Cases: []CaseRun{{Case: "geo", Head: sha, Score: found}}}, {ID: "2", Cases: []CaseRun{{Case: "geo", Head: sha, Score: missed}}}}
+	if r, ok := NewestReplay(same, c, ""); !ok || r.Run != "2" {
+		t.Fatalf("NewestReplay of two undated replays = %+v, %v; want the later run's", r, ok)
+	}
+}
+
+// The replays a proposal's gate reads its guards from are those made before the proposal: a run
+// made before it keeps only the cases it replayed before it, and a run made since is left out; a
+// zero time keeps every run. The runs given are not changed.
+func TestRunsBeforeKeepsOnlyTheReplaysMadeBeforeATime(t *testing.T) {
+	at := func(h int) time.Time { return time.Date(2026, 10, 20, h, 0, 0, 0, time.UTC) }
+	runs := []Run{
+		{ID: "old", Started: at(8), Cases: []CaseRun{{Case: "geo"}, {Case: "copy", Started: at(11)}}},
+		{ID: "long", Started: at(9), Cases: []CaseRun{{Case: "geo", Started: at(9)}, {Case: "map", Started: at(12)}}},
+		{ID: "since", Started: at(11), Cases: []CaseRun{{Case: "geo"}}},
+	}
+	var names []string
+	for _, r := range RunsBefore(runs, at(10)) {
+		for _, c := range r.Cases {
+			names = append(names, r.ID+"/"+c.Case)
+		}
+	}
+	if !reflect.DeepEqual(names, []string{"old/geo", "long/geo"}) {
+		t.Fatalf("RunsBefore = %q, want the replays made before 10:00", names)
+	}
+	if len(runs[0].Cases) != 2 || len(runs[1].Cases) != 2 {
+		t.Fatalf("RunsBefore changed the runs given: %+v", runs)
+	}
+	if got := RunsBefore(runs, time.Time{}); len(got) != 3 || len(got[1].Cases) != 2 {
+		t.Fatalf("RunsBefore of a zero time = %+v, want every run", got)
+	}
+}

@@ -13144,28 +13144,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   fill, up to `[learn] gate_guards` (default 2, 0 to 10, 0 = none) cases whose newest stored replay found a
   defect, the least recently replayed first, so successive gates take turns through them; their places come on
   top of `gate_cases`, a guard is never a target, flagged and unwatched cases are skipped as before, and
-  `GateCase.Guard` and `GateRow.Guard` (JSON `guard`) mark them. `learn.GuardsFrom` builds them over the stored
-  runs (`eval.NewestReplay`: the newest scored replay at the corpus's head, full or judge-only, any inputs),
-  leaving out the candidate's own replays (a gate that stops short after its candidate lost a guard keeps
-  guarding it) and ordering by the replays before the proposal was made (every gate of one proposal takes the
-  same guards, so a resumed gate cannot drop a guard whose base replay showed a regression); the gate's
-  `learn.gate_start` event counts them (`guards`). A guard's baseline is lazy: the candidate replays first, and
-  one that finds every defect the newest stored replay found passes with that replay as its Before (`Stored`,
-  and a note naming its run and inputs), nothing of the base replayed; a loss is replayed again, and a second
-  loss takes the base's score: the newest replay itself when it has the base's inputs, else a replay of the
-  base now (an older replay of the base never stands in for a newer one that found more). A defect the base
-  finds and the candidate lost twice is a regression; one the base lost too skips the row (`lost at the base
-  too`) with one warn `learn.guard_lost_at_base` event (the proposal, the case, the run that last found it, the
-  base's inputs hash) and one toast, which name case and run ids only: the review at master no longer finds
-  what it did, the drift of a model, the notes, the code or a hand edit, and the signal a later canary would
-  be built on. `learn.Regressions` (Judge's fail rule) never counts a loss or a new hit against a `Stored`
-  baseline of other inputs. Judge-only, a guard reads the reports of a full replay whose reviewers read the
-  candidate's prompts and is left out without one (no full replay is made for a guard). A miss target whose
+  `GateCase.Guard` and `GateRow.Guard` (JSON `guard`) mark them. `learn.GuardsFrom` builds them over the
+  replays made before the proposal (`eval.RunsBefore`), for which cases guard as for their order, and the
+  gate takes the same replay as a guard's baseline (`Guards.Replay`), so every gate of one proposal takes the
+  same guards with the same baselines whatever was replayed since (the gate's own replays of the base, an
+  improve run's eval-at.sh), and a resumed gate cannot drop a guard whose base replay showed a regression; it
+  leaves out the candidate's own replays (a gate that stops short after its candidate lost a guard keeps
+  guarding it). A case's newest replay (`eval.NewestReplay`: scored, at the corpus's head, full or judge-only,
+  any inputs) is the one replayed last (`eval.ReplayedAt`: the case's start, else its run's), in whatever run:
+  a gate's base run is made at its first baseline replay and takes a lost guard's base replay after the
+  candidate's runs were made, so the newest run's replay would make every guard that caught a regression
+  leave the pool. The gate's `learn.gate_start` event counts the guards (`guards`). A guard's baseline is
+  lazy: the candidate replays first, and one that finds every defect that replay found passes with it as its
+  Before (`Stored`, and a note naming its run and inputs), nothing of the base replayed; a loss is replayed
+  again, and a second loss takes the base's score: the newest stored replay with the base's inputs that is
+  the guard's baseline or was made after it (`eval.Baseline.At`; one an earlier gate of the proposal made,
+  say), else a replay of the base now (an older replay of the base never stands in for a newer one that found
+  more). A defect the base finds and the candidate lost twice is a regression; one the base lost too skips
+  the row (`lost at the base too`) with one warn `learn.guard_lost_at_base` event (the proposal, the case, the
+  run that last found it, the base's inputs hash) and one toast per proposal and case (the registry reserves
+  the pair, since a resumed gate decides the guard again), which name case and run ids only: the review at
+  master no longer finds what it did, the drift of a model, the notes, the code or a hand edit, and the signal
+  a later canary would be built on. `learn.Regressions` (Judge's fail rule) never counts a loss or a new hit
+  against a `Stored` baseline of other inputs. Judge-only, a guard's judge reads the reports of a full replay
+  whose reviewers read the candidate's prompts, and none is made for a guard, so a case guards a judge-only
+  gate only with such a full replay made before the proposal (`learn.GuardsFrom`'s `reviewers`), its place
+  otherwise going to the next case that has one: the least recently replayed cases are the least likely to
+  have one at the reviewer prompts of the day, so a judge-only gate would leave both places out and never
+  rotate them. A miss target whose
   first candidate replay found more than its baseline (`GateRow.WonOnce`) gets one more replay, a stored
   second one of a gate that stopped short reused, and counts as improved only when that one finds more too
   (`GateRow.Confirm`, `Confirmed`, `GateCase.SecondRun`); otherwise it is not improved ("found by the first
   replay only") and the dismissal after two failed gates applies; a proposal that regressed already gets no
-  confirmation (it fails either way), and `RuleOnlyDeclines` does not change. `magnum learn --review` marks a
+  confirmation (it fails either way), and such a win counts neither way for its input (`GateRow.Rechecked`,
+  which `Confirm` sets: `TargetGate` gives no outcome for a win no second replay checked, since nothing showed
+  the candidate does not find it, so it never counts toward that dismissal), and `RuleOnlyDeclines` does not
+  change. `magnum learn --review` marks a
   guard `+` and shows each row's note. The improve run's hand path names the targets plus 2 guards:
   `magnum eval guards [--n N]` prints them with the gate's own selection (no candidate, no proposal), reading
   only, for eval-at.sh. Measure, per `learn.gate_done`: the compared rows with Before.Found above 0 (0 of 20;
@@ -13173,18 +13187,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   events per week, and the gate's duration (about 2 to 3 more rounds). Rejected: a threshold on the summed
   noise (a single-defect case counts true findings as noise, and per-case noise swung 13 to 6 and 5 to 10 in
   one gate); a daily canary before the guard event shows drift; guards inside `gate_cases` (32 targets crowd
-  them out); the CLI version in the inputs hash (no evidence of drift); reusing any stored replay with the
-  base's inputs as a lost guard's base score (a stale one would hide the drift the guard reports); counting a
-  gate's own replays in the guards' order (a gate resumed after a drain could take other guards and drop a
-  regression it had found). Tests, failing first: in learn TestSelectCasesReservesGuardPlacesPastTheTargets (32
+  them out); the CLI version in the inputs hash (no evidence of drift); reusing a stored replay with the base's
+  inputs older than the guard's baseline as a lost guard's base score (a stale one would hide the drift the
+  guard reports); counting the replays made since the proposal, a gate's own or eval-at.sh's, for which cases
+  guard or in their order (a gate resumed after a drain could take other guards and drop a regression it had
+  found); storing a gate's guard names for a resumed gate (the replays before the proposal give the same
+  answer with no state); confirming a won target after a regression (a replay that changes no verdict).
+  Tests, failing first: in learn TestSelectCasesReservesGuardPlacesPastTheTargets (32
   targets and 2 guards give 8 runnable cases), TestSelectCasesRotatesGuardsLeastRecentlyReplayedFirst,
+  TestAProposalsGatesTakeTheGuardsOfTheReplaysMadeBeforeIt, TestAGuardWhoseBaseFoundWhatACandidateLostStaysAGuard,
+  TestAJudgeOnlyGateGuardsOnlyCasesWithAFullReplayOfItsReviewers,
   TestJudgeFailsAGuardTheCandidateLostTwiceAndTheBaseFinds, TestAGuardTheBaseAlsoLosesIsSkippedNotARegression
   and TestJudgePassesAMissWinOnlyWhenTheSecondReplayFindsItToo, with TestSelectCasesPutsTargetsFirstAndCapsTheRest
-  extended; in eval TestNewestReplayIsTheNewestScoredReplayAtTheHead; in engine
+  extended; in eval TestNewestReplayIsTheNewestScoredReplayAtTheHead, TestNewestReplayIsTheLatestReplayNotTheLatestRun
+  and TestRunsBeforeKeepsOnlyTheReplaysMadeBeforeATime; in engine
   TestTheGateReplaysAGuardsBaseOnlyWhenTheCandidateLostItTwice (replays counted per run kind),
-  TestAGuardLostAtTheBaseWritesOneEventAndToast and TestAWonTargetIsReplayedAgainAndAStoredSecondReplayIsReused
-  (mutations of the guard places, the lazy baseline, the base's reuse, the report and the confirmation each fail
-  one), with the gate tests' replay counts raised by the confirmation; in cli
+  TestAGuardLostAtTheBaseWritesOneEventAndToast, TestAWonTargetIsReplayedAgainAndAStoredSecondReplayIsReused,
+  TestAWonTargetInAGateThatRegressedElsewhereCountsNeitherWay (two failed gates leave the input new),
+  TestAResumedGateKeepsItsGuardsAndTheBaseReplayItMade and
+  TestAJudgeOnlyGateGuardsCasesWithAFullReplayOfTheCandidatesReviewers (a guard kept, one lost twice that the
+  base's judge finds, one lost at the base, and a case without a full replay whose place goes to the next)
+  (mutations of the guard places, the lazy baseline, the base's reuse, the report, the confirmation, the
+  reservation of the warning and the judge-only rule each fail one), with the gate tests' replay counts raised
+  by the confirmation; in cli
   TestEvalGuardsPrintsTheCasesTheGateWouldGuard and TestLearnReviewShowsTheGateAsATable extended; in config the
   range of `gate_guards`.
 

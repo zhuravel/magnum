@@ -166,15 +166,8 @@ func TestSelectCasesRotatesGuardsLeastRecentlyReplayedFirst(t *testing.T) {
 		replayOf("20261004-100000", "in-a", day(4), byName("miss-3"), 1), // a target
 		replayOf("20261005-090000", "in-a", day(5), byName("miss-5"), 1), // flagged
 	}
-	flagged := func(pr string) bool { return strings.HasPrefix(pr, "example/flagged") }
 	pick := func(runs []eval.Run, skip string, since time.Time) []string {
-		var out []string
-		for _, c := range SelectCases(corpus, []string{"miss-3"}, watchedOnly("talkable/", "example/"), flagged, 1, GuardsFrom(runs, 2, skip, since)) {
-			if c.Guard {
-				out = append(out, c.Case.Name)
-			}
-		}
-		return out
+		return guardNames(corpus, GuardsFrom(runs, 2, skip, since, ""))
 	}
 	if got := pick(runs, "", time.Time{}); !slices.Equal(got, []string{"old-race", "miss-6"}) {
 		t.Fatalf("guards = %q, want the two least recently replayed: old-race, miss-6", got)
@@ -198,6 +191,112 @@ func TestSelectCasesRotatesGuardsLeastRecentlyReplayedFirst(t *testing.T) {
 	// The replays since the proposal was made do not move the order.
 	if got := pick(runs, "", day(6)); !slices.Equal(got, []string{"old-race", "miss-6"}) {
 		t.Fatalf("guards of a proposal made before the 6th = %q, want those its first gate took", got)
+	}
+}
+
+// guardNames are the guard places SelectCases gives a gate of corpus whose
+// target is miss-3, of the watched talkable/ and example/ PRs, example/flagged
+// flagged, with guards.
+func guardNames(corpus *eval.Corpus, guards Guards) []string {
+	flagged := func(pr string) bool { return strings.HasPrefix(pr, "example/flagged") }
+	var out []string
+	for _, c := range SelectCases(corpus, []string{"miss-3"}, watchedOnly("talkable/", "example/"), flagged, 1, guards) {
+		if c.Guard {
+			out = append(out, c.Case.Name)
+		}
+	}
+	return out
+}
+
+// caseNamed is corpus's case named name.
+func caseNamed(corpus *eval.Corpus, name string) eval.Case {
+	return corpus.Cases[slices.IndexFunc(corpus.Cases, func(c eval.Case) bool { return c.Name == name })]
+}
+
+// Every gate of one proposal takes the same guards with the same baselines:
+// GuardsFrom reads only the replays made before the proposal, for which
+// cases guard as for their order. A replay since that found nothing (an
+// improve run's eval-at.sh, the gate's own replay of the base) drops no
+// guard, a case first replayed since takes no place, and a guard's baseline
+// (Replay) stays the replay made before. `magnum eval guards`, with no
+// proposal, reads every replay.
+func TestAProposalsGatesTakeTheGuardsOfTheReplaysMadeBeforeIt(t *testing.T) {
+	corpus := gateCorpus()
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 9, 0, 0, 0, time.UTC) }
+	runs := []eval.Run{
+		replayOf("20261001-090000", "in-a", day(1), caseNamed(corpus, "old-race"), 1),
+		replayOf("20261003-090000", "in-a", day(3), caseNamed(corpus, "coupon-scope"), 1),
+		// Since the proposal, made on the 6th.
+		replayOf("20261007-090000", "in-x", day(7), caseNamed(corpus, "coupon-scope"), 0),
+		replayOf("20261007-100000", "in-x", day(7), caseNamed(corpus, "miss-6"), 1),
+	}
+	g := GuardsFrom(runs, 2, "in-cand", day(6), "")
+	if got := guardNames(corpus, g); !slices.Equal(got, []string{"old-race", "coupon-scope"}) {
+		t.Fatalf("guards of the proposal made on the 6th = %q, want old-race, coupon-scope: the replays before it", got)
+	}
+	if r, ok := g.Replay(caseNamed(corpus, "coupon-scope")); !ok || r.Run != "20261003-090000" || r.Case.Score.Found != 1 {
+		t.Fatalf("coupon-scope's baseline = %+v, %v; want the replay of the 3rd", r, ok)
+	}
+	if got := guardNames(corpus, GuardsFrom(runs, 2, "", time.Time{}, "")); !slices.Equal(got, []string{"old-race", "miss-6"}) {
+		t.Fatalf("guards with no proposal = %q, want old-race, miss-6: every replay", got)
+	}
+}
+
+// A guard that caught a regression stays a guard: proposal 1's base run was
+// made at its first baseline replay (9:00), before its candidate's runs
+// (10:00, 11:00) lost coupon-scope twice, and the base's replay of it at
+// 12:00, which found it, went into that run. That replay is coupon-scope's
+// newest, so proposal 2, made at 13:00, guards it again.
+func TestAGuardWhoseBaseFoundWhatACandidateLostStaysAGuard(t *testing.T) {
+	corpus := gateCorpus()
+	at := func(h int) time.Time { return time.Date(2026, 10, 20, h, 0, 0, 0, time.UTC) }
+	coupon, target := caseNamed(corpus, "coupon-scope"), caseNamed(corpus, "miss-3")
+	base := eval.Run{ID: "20261020-090000", Inputs: "in-master", Started: at(9), Cases: []eval.CaseRun{
+		replayOf("", "", time.Time{}, target, 0).Cases[0], replayOf("", "", time.Time{}, coupon, 1).Cases[0]}}
+	base.Cases[0].Started, base.Cases[1].Started = at(9), at(12)
+	runs := []eval.Run{
+		replayOf("20261019-090000", "in-old", at(9).AddDate(0, 0, -1), coupon, 1),
+		base,
+		replayOf("20261020-100000", "in-p1", at(10), coupon, 0),
+		replayOf("20261020-110000", "in-p1", at(11), coupon, 0),
+	}
+	g := GuardsFrom(runs, 2, "in-p2", at(13), "")
+	if got := guardNames(corpus, g); !slices.Contains(got, "coupon-scope") {
+		t.Fatalf("proposal 2's guards = %q, want coupon-scope: the base found it last", got)
+	}
+	if r, ok := g.Replay(coupon); !ok || r.Run != base.ID || !r.At.Equal(at(12)) {
+		t.Fatalf("coupon-scope's baseline = %+v, %v; want the base's replay of 12:00", r, ok)
+	}
+}
+
+// fullReplayOf is replayOf a full replay whose reviewers read reviewer, with
+// its reports.
+func fullReplayOf(id, reviewer string, at time.Time, c eval.Case, found int) eval.Run {
+	r := replayOf(id, "in-"+id, at, c, found)
+	r.ReviewerInputs, r.Cases[0].ReportDir = reviewer, "/eval/"+id+"/cases/"+c.Name
+	return r
+}
+
+// A judge-only gate's candidate judge reads the reports of a full replay
+// whose reviewers read the candidate's prompts, and the gate makes no full
+// replay for a guard: a case without one made before the proposal is no
+// guard of it, so its place goes to the next case that has one, and the
+// guards a judge-only gate replays still take turns.
+func TestAJudgeOnlyGateGuardsOnlyCasesWithAFullReplayOfItsReviewers(t *testing.T) {
+	corpus := gateCorpus()
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 9, 0, 0, 0, time.UTC) }
+	runs := []eval.Run{
+		fullReplayOf("20261001-090000", "rev-old", day(1), caseNamed(corpus, "old-race"), 1),
+		fullReplayOf("20261002-090000", "rev-cand", day(2), caseNamed(corpus, "miss-6"), 1),
+		fullReplayOf("20261003-090000", "rev-cand", day(3), caseNamed(corpus, "coupon-scope"), 1),
+		// Since the proposal, made on the 6th.
+		fullReplayOf("20261007-090000", "rev-cand", day(7), caseNamed(corpus, "old-race"), 1),
+	}
+	if got := guardNames(corpus, GuardsFrom(runs, 2, "in-cand", day(6), "rev-cand")); !slices.Equal(got, []string{"miss-6", "coupon-scope"}) {
+		t.Fatalf("judge-only guards = %q, want miss-6, coupon-scope: old-race had no full replay of the candidate's reviewers", got)
+	}
+	if got := guardNames(corpus, GuardsFrom(runs, 2, "in-cand", day(6), "")); !slices.Equal(got, []string{"old-race", "miss-6"}) {
+		t.Fatalf("guards of every role = %q, want old-race, miss-6", got)
 	}
 }
 
@@ -423,6 +522,12 @@ func TestJudgePassesAMissWinOnlyWhenTheSecondReplayFindsItToo(t *testing.T) {
 	}
 	if v := Judge([]GateRow{won}); v.State != GateFailed || !strings.Contains(v.Rule, "miss-3 found by the first replay only") {
 		t.Fatalf("a win no second replay confirmed: %+v, want failed naming it", v)
+	}
+	// A gate that regressed elsewhere makes no second replay: a win nothing
+	// checked again is recorded neither way, so it never counts toward the
+	// dismissal after two failed gates.
+	if got := won.TargetGate(); got != "" {
+		t.Fatalf("a win no second replay checked: TargetGate %q, want none", got)
 	}
 	again := won
 	again.Confirm(score([]string{"miss-3"}, nil))

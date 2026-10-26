@@ -3707,12 +3707,18 @@ are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-
 compared yet, then the others, the misses first and the newest first), then up to `gate_guards` (2) guards,
 then the newest other cases of your corpus and the learned one, the targets and these up to `gate_cases`
 (6); a case whose pull request is in no watch or Codex-flagged is never replayed. A guard is a case of
-either corpus, never a target, whose newest stored replay found a defect, so it has something the
-candidate can lose (a target's baseline finds nothing yet, and the newest others are mostly declined
-findings, with nothing to find); its places come on top of `gate_cases`, so many targets never crowd it out, and the
-least recently replayed come first, so successive gates take turns through them (the candidate's own
-replays do not count, and neither do the replays since the proposal was made in the order, so every gate
-of one proposal takes the same guards). `magnum eval guards` prints the ones a gate would take now. A
+either corpus, never a target, whose newest stored replay (the one replayed last, in whatever run) found
+a defect, so it has something the candidate can lose (a target's baseline finds nothing yet, and the
+newest others are mostly declined findings, with nothing to find); its places come on top of
+`gate_cases`, so many targets never crowd it out, and the least recently replayed come first, so
+successive gates take turns through them. The candidate's own replays do not count, and a gate reads
+only the replays made before its proposal, both for which cases guard and for their order, so every
+gate of one proposal takes the same guards with the same baselines whatever was replayed since (the
+gate's own replays of the base, an improve run's eval-at.sh). When only the judge replays, a guard also
+needs a full replay made before the proposal whose reviewers read the candidate's prompts (its judge
+reads those reports, and no full replay is made for a guard); a case without one takes no place, and
+the next case that has one guards instead. `magnum eval guards` prints the ones a gate of every role
+would take now. A
 target whose baseline already finds its missed finding, or no longer
 reports its declined one, is no target: the candidate is not replayed on it, the next target past the cap
 takes its place, and the input is `dismissed` ("found at the baseline", "not reported at the baseline"), so
@@ -3728,14 +3734,17 @@ baseline); the candidate replays with the worktree, and a case it lost is replay
 baseline is taken only when needed: the candidate replays first, and one that finds every defect the
 guard's newest stored replay found passes with that replay as its baseline, whatever prompts it ran with
 (the table's note names its run and inputs), and nothing of the base is replayed. A guard the candidate
-lost on both replays takes the base's score: that newest replay itself when it has the base's inputs,
-else a replay of the base now. A defect the base finds and the candidate lost twice fails the proposal;
+lost on both replays takes the base's score: the newest stored replay with the base's inputs that is
+that baseline or was made after it (one an earlier gate of the proposal made, say), else a replay of the
+base now. A defect the base finds and the candidate lost twice fails the proposal;
 one the base lost too is not the proposal's loss: the row is skipped ("lost at the base too"), and a
 `learn.guard_lost_at_base` warning (the case, the run that last found it, the base's inputs hash) and a
-toast say the review at master no longer finds what it did, a drift of a model, the notes, the code or a
-hand edit. A miss target the candidate found more of than the baseline is replayed once more too, and the
-win counts only when the second replay finds more than the baseline as well (one replay can find a defect
-by chance); a proposal that regressed already fails without it. It passes
+toast, once per proposal and case, say the review at master no longer finds what it did, a drift of a
+model, the notes, the code or a hand edit. A miss target the candidate found more of than the baseline is
+replayed once more too, and the win counts only when the second replay finds more than the baseline as
+well (one replay can find a defect by chance); a proposal that regressed already fails without it, and
+such a win counts neither way for its input (nothing showed the candidate does not find it, so it never
+counts toward "noted in 2 failed gates"). It passes
 when a missed finding of its targets is found more often on both replays and nothing regressed (no defect the baseline
 found lost, no declined finding reported that the baseline did not), fails when something regressed or
 no target improved (its worktree and branch go, its inputs stay `new`, but an input whose case two failed

@@ -138,9 +138,10 @@ func union(a, b map[string]string) map[string]string {
 
 // Baseline is a stored replay of a case that a run with the same inputs need not repeat.
 type Baseline struct {
-	Run    string  // the stored run's ID
-	Commit string  // magnum's commit that ran it
-	Case   CaseRun // the case as that run recorded it
+	Run    string    // the stored run's ID
+	Commit string    // magnum's commit that ran it
+	Case   CaseRun   // the case as that run recorded it
+	At     time.Time // when the run replayed the case (ReplayedAt)
 }
 
 // Baselines lists, newest run first, the stored replays of c that a run with inputs (Run.Inputs:
@@ -161,7 +162,7 @@ func Baselines(runs []Run, inputs string, c Case) []Baseline {
 		}
 		for _, cr := range r.Cases {
 			if cr.Case == c.Name && cr.Head == c.Head && cr.Score != nil && !cr.JudgeOnly {
-				out = append(out, Baseline{Run: r.ID, Commit: r.Commit, Case: cr})
+				out = append(out, Baseline{Run: r.ID, Commit: r.Commit, Case: cr, At: ReplayedAt(r, cr)})
 				break
 			}
 		}
@@ -189,7 +190,7 @@ func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baselin
 				continue
 			}
 			if cr.JudgeOnly && cr.ReportsRun == reports || !cr.JudgeOnly && r.ID == reports {
-				out = append(out, Baseline{Run: r.ID, Commit: r.Commit, Case: cr})
+				out = append(out, Baseline{Run: r.ID, Commit: r.Commit, Case: cr, At: ReplayedAt(r, cr)})
 				break
 			}
 		}
@@ -197,9 +198,36 @@ func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baselin
 	return out
 }
 
+// ReplayedAt is when run r replayed its case cr: the case's start, else the run's (zero when neither
+// was recorded). A run can outlive many of its cases' replays (the skill gate replays a lost guard's
+// base into the base run it made at its first baseline), so its own start dates only its first.
+func ReplayedAt(r Run, cr CaseRun) time.Time {
+	if !cr.Started.IsZero() {
+		return cr.Started
+	}
+	return r.Started
+}
+
+// RunsBefore is runs as they stood at t: each run with only the cases it replayed before t
+// (ReplayedAt; an undated replay counts as before), a run left with none dropped. A zero t keeps them
+// all. runs is not changed.
+func RunsBefore(runs []Run, t time.Time) []Run {
+	if t.IsZero() {
+		return runs
+	}
+	var out []Run
+	for _, r := range runs {
+		r.Cases = slices.DeleteFunc(slices.Clone(r.Cases), func(cr CaseRun) bool { return !ReplayedAt(r, cr).Before(t) })
+		if len(r.Cases) > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // Replay is a stored replay of a case (NewestReplay): the run that made it, the inputs that run
-// recorded (Run.Inputs, "" before they were), when the case started (its run's start when the case
-// recorded none) and the case as the run recorded it.
+// recorded (Run.Inputs, "" before they were), when it replayed the case (ReplayedAt) and the case as
+// the run recorded it.
 type Replay struct {
 	Run    string
 	Inputs string
@@ -209,23 +237,24 @@ type Replay struct {
 
 // NewestReplay is the newest stored replay of c at the head the corpus pins that has a score, a full
 // or a judge-only one, from a clean checkout or not, leaving out the runs that recorded inputs skip
-// ("" leaves none out; the skill gate leaves out its candidate's own). runs are oldest first
-// (ListRuns); ok is false when there is none.
+// ("" leaves none out; the skill gate leaves out its candidate's own): the one replayed last
+// (ReplayedAt), in whatever run, two dated alike ordered by their runs (oldest first: ListRuns) and
+// within a run by their order. ok is false when there is none.
 func NewestReplay(runs []Run, c Case, skip string) (Replay, bool) {
-	for _, r := range slices.Backward(runs) {
+	var out Replay
+	ok := false
+	for _, r := range runs {
 		if skip != "" && r.Inputs == skip {
 			continue
 		}
-		for _, cr := range slices.Backward(r.Cases) {
+		for _, cr := range r.Cases {
 			if cr.Case != c.Name || cr.Head != c.Head || cr.Score == nil {
 				continue
 			}
-			at := cr.Started
-			if at.IsZero() {
-				at = r.Started
+			if at := ReplayedAt(r, cr); !ok || !at.Before(out.At) {
+				out, ok = Replay{Run: r.ID, Inputs: r.Inputs, At: at, Case: cr}, true
 			}
-			return Replay{Run: r.ID, Inputs: r.Inputs, At: at, Case: cr}, true
 		}
 	}
-	return Replay{}, false
+	return out, ok
 }

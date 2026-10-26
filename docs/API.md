@@ -9594,6 +9594,12 @@ func NewRunDir(root string, now time.Time) (id, dir string, err error)
     with ErrExist), so no two runs share a directory, a record or an agent tag
     (AgentTag).
 
+func ReplayedAt(r Run, cr CaseRun) time.Time
+    ReplayedAt is when run r replayed its case cr: the case's start, else the
+    run's (zero when neither was recorded). A run can outlive many of its cases'
+    replays (the skill gate replays a lost guard's base into the base run it
+    made at its first baseline), so its own start dates only its first.
+
 func SaveRun(dir string, r Run) error
     SaveRun writes dir/run.json atomically (a temporary file in dir, then a
     rename), mode 0600; dir is created with mode 0700.
@@ -9620,9 +9626,10 @@ func WriteText(w io.Writer, r Run, prev *Run)
 TYPES
 
 type Baseline struct {
-	Run    string  // the stored run's ID
-	Commit string  // magnum's commit that ran it
-	Case   CaseRun // the case as that run recorded it
+	Run    string    // the stored run's ID
+	Commit string    // magnum's commit that ran it
+	Case   CaseRun   // the case as that run recorded it
+	At     time.Time // when the run replayed the case (ReplayedAt)
 }
     Baseline is a stored replay of a case that a run with the same inputs need
     not repeat.
@@ -9791,16 +9798,17 @@ type Replay struct {
 	Case   CaseRun
 }
     Replay is a stored replay of a case (NewestReplay): the run that made it,
-    the inputs that run recorded (Run.Inputs, "" before they were), when the
-    case started (its run's start when the case recorded none) and the case as
-    the run recorded it.
+    the inputs that run recorded (Run.Inputs, "" before they were), when it
+    replayed the case (ReplayedAt) and the case as the run recorded it.
 
 func NewestReplay(runs []Run, c Case, skip string) (Replay, bool)
     NewestReplay is the newest stored replay of c at the head the corpus pins
     that has a score, a full or a judge-only one, from a clean checkout or not,
     leaving out the runs that recorded inputs skip ("" leaves none out;
-    the skill gate leaves out its candidate's own). runs are oldest first
-    (ListRuns); ok is false when there is none.
+    the skill gate leaves out its candidate's own): the one replayed last
+    (ReplayedAt), in whatever run, two dated alike ordered by their runs (oldest
+    first: ListRuns) and within a run by their order. ok is false when there is
+    none.
 
 type Result struct {
 	Status   string
@@ -9868,6 +9876,11 @@ func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run
     result that cannot be read or parsed; either sets Error to say so when the
     case has a score or no other error. A rescore that succeeds clears an Error
     an earlier one set.
+
+func RunsBefore(runs []Run, t time.Time) []Run
+    RunsBefore is runs as they stood at t: each run with only the cases it
+    replayed before t (ReplayedAt; an undated replay counts as before), a run
+    left with none dropped. A zero t keeps them all. runs is not changed.
 
 func (r Run) ReviewedOtherwise(like Run) string
     ReviewedOtherwise says how r's reviewers read other inputs than like's
@@ -13809,6 +13822,7 @@ type GateRow struct {
 	After     *eval.Score `json:"after,omitempty"`
 	Stored    bool        `json:"stored,omitempty"`
 	Retried   bool        `json:"retried,omitempty"`
+	Rechecked bool        `json:"rechecked,omitempty"`
 	Confirmed bool        `json:"confirmed,omitempty"`
 	Skip      string      `json:"skip,omitempty"`
 	Note      string      `json:"note,omitempty"`
@@ -13818,10 +13832,11 @@ type GateRow struct {
     compared (Skip). Retried is set once the caller replayed a lost case again,
     After then being the second replay's: only then does a loss count.
     A guard (Guard) keeps the newest stored replay as its baseline (Stored),
-    of whatever inputs, while the candidate finds what that replay found;
-    one it lost twice takes the base's score (AtBase). A miss target won on one
-    replay counts once a second finds it too (Confirmed, Confirm). Note says,
-    for the operator, what a guard's baseline or a second replay was.
+    of whatever inputs, while the candidate finds what that replay found; one it
+    lost twice takes the base's score (AtBase). A miss target won on one replay
+    counts once a second finds it too (Confirmed, Confirm, which sets Rechecked:
+    a second replay was made). Note says, for the operator, what a guard's
+    baseline or a second replay was.
 
 func (r *GateRow) AtBase(base *eval.Score) bool
     AtBase gives guard row r, whose candidate lost a defect of its stored
@@ -13831,8 +13846,9 @@ func (r *GateRow) AtBase(base *eval.Score) bool
     finds and the candidate lost is a regression (Judge).
 
 func (r *GateRow) Confirm(second *eval.Score)
-    Confirm records the second candidate replay of row r (WonOnce): the win
-    counts (Confirmed) only when second finds more than the baseline too.
+    Confirm records the second candidate replay of row r (WonOnce, Rechecked):
+    the win counts (Confirmed) only when second finds more than the baseline
+    too.
 
 func (r GateRow) Lost() []string
     Lost names the defects the baseline found that the candidate did not.
@@ -13844,7 +13860,9 @@ func (r GateRow) NewHits() []string
 func (r GateRow) TargetGate() string
     TargetGate is what target row r says of its input's learned case
     (store.LearnTarget*): covered at the baseline, improved or not once
-    compared; "" for a row that is no target or was not compared.
+    compared; "" for a row that is no target, was not compared, or won on a
+    first replay that no second checked (unchecked: neither a win nor a loss,
+    so it never counts toward the dismissal after two failed gates).
 
 func (r GateRow) WonOnce() bool
     WonOnce reports whether target row r is a miss case its candidate's first
@@ -13853,9 +13871,10 @@ func (r GateRow) WonOnce() bool
     again.
 
 type Guards struct {
-	N     int
-	Found func(c eval.Case) bool
-	Last  func(c eval.Case) time.Time
+	N      int
+	Found  func(c eval.Case) bool
+	Last   func(c eval.Case) time.Time
+	Replay func(c eval.Case) (eval.Replay, bool)
 }
     Guards are a gate's guard places (SelectCases): up to N cases besides
     the targets whose newest stored replay found a defect (Found), the least
@@ -13863,17 +13882,25 @@ type Guards struct {
     so successive gates take turns through them: a gate always has cases whose
     baseline found something the candidate can lose, which its targets (their
     baseline finds nothing yet) and the newest others (mostly declined findings,
-    with nothing to find) seldom are. N = 0 or a nil Found gives none.
+    with nothing to find) seldom are. N = 0 or a nil Found gives none. Replay,
+    which GuardsFrom sets, is the stored replay Found and Last read, which the
+    gate takes as a guard's baseline.
 
-func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time) Guards
+func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers string) Guards
     GuardsFrom are n guard places over the stored runs (oldest first:
-    eval.ListRuns), which the gate and `magnum eval guards` both take: a case
-    guards when its newest scored replay at its head (eval.NewestReplay) found
-    a defect, the runs with inputs skip left out (the gate's candidate's own,
-    so a gate that stops short after its candidate lost a guard still guards it;
-    "" = none), and is ordered by its newest such replay among the runs started
-    before since (zero = every run; the gate's proposal's creation, so every
-    gate of one proposal takes the same guards whatever it replayed of them).
+    eval.ListRuns), which the gate and `magnum eval guards` both take:
+    a case guards when its newest scored replay at its head (eval.NewestReplay,
+    the one replayed last) found a defect, and is ordered by when that replay
+    was made. Both read only the replays made before since (eval.RunsBefore;
+    zero = every replay: `magnum eval guards`): the gate's proposal's creation,
+    so every gate of one proposal takes the same guards with the same
+    baselines whatever was replayed since (the gate's own replays of the base,
+    an improve run's eval-at.sh); and both leave out the runs with inputs skip
+    (the gate's candidate's own; "" = none). reviewers, for a judge-only gate,
+    are its candidate's reviewer inputs (eval.Run. ReviewerInputs): its judge
+    reads the reports of a full replay whose reviewers read them, and none is
+    made for a guard, so a case guards it only with such a full replay among
+    those same replays (eval.FullReplayFor); "" for a gate of every role.
 
 type Input struct {
 	// Author is the pull request's author in Account form

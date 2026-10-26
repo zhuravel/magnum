@@ -6,8 +6,9 @@ package engine
 // replays eval cases on it in its own goroutine, one at a time: the learned
 // cases of the inputs it noted (its targets, those no gate made anything of
 // yet first, then the newest: gateTargets), up to [learn] gate_guards
-// guards on top (cases whose newest stored replay found a defect, the least
-// recently replayed first: learn.GuardsFrom) and the newest other cases of
+// guards on top (cases whose newest replay made before the proposal found a
+// defect, the least recently replayed first: learn.GuardsFrom; judge-only,
+// those with a full replay of the candidate's reviewers) and the newest other cases of
 // both corpora, up to [learn] gate_cases (learn.SelectCases), the judge
 // alone when only the judge skill and the judge prompts changed
 // (learn.Mode). A guard's baseline is that newest replay while the
@@ -420,8 +421,12 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	if g.runs, err = e.d.EvalRuns(); err != nil {
 		return g.waits("the eval runs: " + oneLine(err.Error(), retroWhyRunes))
 	}
-	cases := learn.SelectCases(corpus, targets, e.gateWatched, flagged, e.cfg.Learn.GateCases,
-		learn.GuardsFrom(g.runs, e.cfg.Learn.GateGuards, g.candIn, p.CreatedAt))
+	reviewers := "" // judge-only, a guard needs a full replay whose reviewers read the candidate's prompts
+	if g.judgeOnly {
+		reviewers = g.candRev
+	}
+	g.guards = learn.GuardsFrom(g.runs, e.cfg.Learn.GateGuards, g.candIn, p.CreatedAt, reviewers)
+	cases := learn.SelectCases(corpus, targets, e.gateWatched, flagged, e.cfg.Learn.GateCases, g.guards)
 	guards := len(slices.DeleteFunc(slices.Clone(cases), func(gc learn.GateCase) bool { return !gc.Guard }))
 	e.event(ctx, "info", learnSubject, "learn.gate_start", fmt.Sprintf("the gate of skill proposal %d started: %s, %s (%s)", p.ID,
 		textx.Count(len(cases), "case", "cases"), strings.Join(targets, ", "), mode),
@@ -452,6 +457,7 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 
 // gateWork is one gate's state (runGate): the proposal, what its base and
 // its candidate replay with, the stored runs as the gate last read them,
+// its guard places (learn.GuardsFrom, over the runs as it first read them),
 // the eval runs it made, one per kind of replay, and its result so far.
 type gateWork struct {
 	e         *Engine
@@ -459,6 +465,7 @@ type gateWork struct {
 	p         store.LearnProposal
 	res       GateResult
 	runs      []eval.Run
+	guards    learn.Guards
 
 	corpusPath, baseDir              string
 	baseIn, baseRev, candIn, candRev string
@@ -691,18 +698,19 @@ func (g *gateWork) baseline(gc learn.GateCase, row *GateCase) (bool, error) {
 }
 
 // guardBaseline sets guard row's baseline lazily (DECISIONS "The gate
-// guards what master finds"): the newest stored replay of the case, the
-// candidate's own left out (eval.NewestReplay, as learn.GuardsFrom chose
-// it), of whatever inputs, which the candidate must find again (Stored; the
-// note names the replay and its inputs). The base's score is taken only
-// once the candidate lost one of its defects twice (guardsAtBase).
-// Judge-only, the candidate's judge reads the reviewer reports of the
-// case's newest full replay whose reviewers read the candidate's prompts;
-// a guard without one is left out (noFullReplay): no full replay is made
-// for a guard.
+// guards what master finds"): the replay learn.GuardsFrom chose the guard
+// by (Guards.Replay: the newest made before the proposal, the candidate's
+// own left out, so every gate of the proposal takes the same one), of
+// whatever inputs, which the candidate must find again (Stored; the note
+// names the replay and its inputs). The base's score is taken only once
+// the candidate lost one of its defects twice (guardsAtBase). Judge-only,
+// the candidate's judge reads the reviewer reports of the case's newest
+// full replay whose reviewers read the candidate's prompts (learn.GuardsFrom
+// took no case without one); a guard without one is left out
+// (noFullReplay): no full replay is made for a guard.
 func (g *gateWork) guardBaseline(gc learn.GateCase, row *GateCase) {
-	ref, ok := eval.NewestReplay(g.runs, gc.Case, g.candIn)
-	if !ok { // learn.GuardsFrom read the same runs
+	ref, ok := g.guards.Replay(gc.Case)
+	if !ok { // learn.GuardsFrom chose it by this replay
 		row.Skip = "no stored replay to guard"
 		return
 	}
@@ -782,15 +790,15 @@ func (g *gateWork) retryLost(cases []learn.GateCase) (bool, error) {
 
 // guardsAtBase decides each guard the candidate lost a defect of on both
 // replays against its stored baseline (learn.GateRow.Stored) on the base's
-// score: the stored baseline itself when the base made it (the newest
-// replay is one with the base's inputs: eval.Baselines, judge-only
-// eval.JudgeBaselines on the same reports), else a replay of the base now,
-// so an older replay of the base never stands in for a newer one that found
-// more. A defect the base finds and the candidate lost is a regression
-// (learn.Judge); a guard the base lost too is skipped (learn.GateRow.AtBase:
-// not the candidate's loss) with a learn.guard_lost_at_base warning and a
-// toast (lostAtBase). Stop when the gate ends there, with what runGate
-// returns.
+// score: a stored replay of the base made no earlier than that baseline
+// (storedBase: the baseline itself when the base made it, or one an earlier
+// gate of the proposal that stopped short made), else a replay of the base
+// now, so an older replay of the base never stands in for a newer one that
+// found more. A defect the base finds and the candidate lost is a
+// regression (learn.Judge); a guard the base lost too is skipped
+// (learn.GateRow.AtBase: not the candidate's loss) with a
+// learn.guard_lost_at_base warning and a toast (lostAtBase). Stop when the
+// gate ends there, with what runGate returns.
 func (g *gateWork) guardsAtBase(cases []learn.GateCase) (bool, error) {
 	for i := range g.res.Cases {
 		row := &g.res.Cases[i]
@@ -798,14 +806,8 @@ func (g *gateWork) guardsAtBase(cases []learn.GateCase) (bool, error) {
 			continue
 		}
 		c, ref := caseNamed(cases, row.Case), row.BaselineRun
-		bs := eval.Baselines(g.runs, g.baseIn, c)
-		if g.judgeOnly {
-			bs = eval.JudgeBaselines(g.runs, g.baseIn, c, row.ReportsRun)
-		}
-		base, run := (*eval.Score)(nil), ""
-		if len(bs) > 0 && bs[0].Run == ref {
-			base, run = trimScore(bs[0].Case.Score), ref
-		} else {
+		base, run := g.storedBase(c, row.ReportsRun)
+		if base == nil {
 			var rp gateReplay
 			if g.judgeOnly {
 				rp = g.replay(&g.baseJudge, "baseline judge", g.baseDir, true, g.baseIn, g.baseRev, c, row.ReportsRun)
@@ -832,13 +834,46 @@ func (g *gateWork) guardsAtBase(cases []learn.GateCase) (bool, error) {
 	return false, nil
 }
 
+// storedBase is the base's stored score of guard case c, which a guard
+// lost twice takes (guardsAtBase): the newest stored replay with the base's
+// inputs (eval.Baselines; judge-only, the base's judge on the reviewer
+// reports of run reports: eval.JudgeBaselines) that is the guard's stored
+// baseline (learn.Guards.Replay) or was made after it, and its run; nil
+// when there is none.
+func (g *gateWork) storedBase(c eval.Case, reports string) (*eval.Score, string) {
+	ref, _ := g.guards.Replay(c)
+	bs := eval.Baselines(g.runs, g.baseIn, c)
+	if g.judgeOnly {
+		bs = eval.JudgeBaselines(g.runs, g.baseIn, c, reports)
+	}
+	var best *eval.Baseline
+	for i := range bs { // newest run first: of two dated alike, the newer run's
+		if b := &bs[i]; (b.Run == ref.Run || b.At.After(ref.At)) && (best == nil || b.At.After(best.At)) {
+			best = b
+		}
+	}
+	if best == nil {
+		return nil, ""
+	}
+	return trimScore(best.Case.Score), best.Run
+}
+
 // lostAtBase says that guard case name, which run ref found, is lost at the
 // proposal's base too: the review at master no longer finds what it did,
 // whatever the proposal changes (a model, a notes or a code change, a hand
 // edit of a prompt). One warn event learn.guard_lost_at_base (the case, the
-// run, the base's inputs) and one toast; neither names more than the case.
+// run, the base's inputs) and one toast per proposal and case, the
+// registry reserving the pair (a gate resumed after a stop decides the
+// guard again); neither names more than the case.
 func (g *gateWork) lostAtBase(name, ref string) {
 	e := g.e
+	switch first, err := e.st.ShouldSend(g.octx, fmt.Sprintf("learn:guard-lost:%d:%s", g.p.ID, name), gateMaxAge); {
+	case err != nil:
+		e.warnUnlessStopped(g.ctx, err, "skill gate: the guard lost at the base", "proposal", g.p.ID, "case", name)
+		return
+	case !first:
+		return
+	}
 	e.event(g.octx, "warn", learnSubject, "learn.guard_lost_at_base", fmt.Sprintf("guard case %s: the candidate of skill proposal %d "+
 		"lost twice what run %s found, and the base lost it too (inputs %s): not the proposal's loss, but the review at master no longer "+
 		"finds it", name, g.p.ID, ref, g.baseIn), map[string]any{"proposal": g.p.ID, "case": name, "run": ref, "inputs": g.baseIn})
@@ -851,7 +886,9 @@ func (g *gateWork) lostAtBase(name, ref string) {
 // confirmWins replays a miss target the candidate found more of than the
 // baseline once more before the win counts (learn.GateRow.WonOnce, Confirm;
 // second): one replay can find a defect by chance. A proposal that regressed
-// already fails whatever it improved, so no second replay confirms its wins.
+// already fails whatever it improved, so no second replay confirms its wins,
+// which then count neither way (learn.GateRow.TargetGate: nothing showed the
+// candidate does not find them, so they never count toward a dismissal).
 // Stop when the gate ends there, with what runGate returns.
 func (g *gateWork) confirmWins(cases []learn.GateCase) (bool, error) {
 	rows := make([]learn.GateRow, len(g.res.Cases))

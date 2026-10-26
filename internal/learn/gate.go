@@ -112,34 +112,46 @@ type GateCase struct {
 // baseline found something the candidate can lose, which its targets
 // (their baseline finds nothing yet) and the newest others (mostly declined
 // findings, with nothing to find) seldom are. N = 0 or a nil Found gives
-// none.
+// none. Replay, which GuardsFrom sets, is the stored replay Found and Last
+// read, which the gate takes as a guard's baseline.
 type Guards struct {
-	N     int
-	Found func(c eval.Case) bool
-	Last  func(c eval.Case) time.Time
+	N      int
+	Found  func(c eval.Case) bool
+	Last   func(c eval.Case) time.Time
+	Replay func(c eval.Case) (eval.Replay, bool)
 }
 
 // GuardsFrom are n guard places over the stored runs (oldest first:
 // eval.ListRuns), which the gate and `magnum eval guards` both take: a case
-// guards when its newest scored replay at its head (eval.NewestReplay)
-// found a defect, the runs with inputs skip left out (the gate's
-// candidate's own, so a gate that stops short after its candidate lost a
-// guard still guards it; "" = none), and is ordered by its newest such
-// replay among the runs started before since (zero = every run; the gate's
-// proposal's creation, so every gate of one proposal takes the same guards
-// whatever it replayed of them).
-func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time) Guards {
-	older := runs
-	if !since.IsZero() {
-		older = slices.DeleteFunc(slices.Clone(runs), func(r eval.Run) bool { return !r.Started.Before(since) })
-	}
-	return Guards{N: n,
+// guards when its newest scored replay at its head (eval.NewestReplay, the
+// one replayed last) found a defect, and is ordered by when that replay
+// was made. Both read only the replays made before since (eval.RunsBefore;
+// zero = every replay: `magnum eval guards`): the gate's proposal's
+// creation, so every gate of one proposal takes the same guards with the
+// same baselines whatever was replayed since (the gate's own replays of
+// the base, an improve run's eval-at.sh); and both leave out the runs with
+// inputs skip (the gate's candidate's own; "" = none). reviewers, for a
+// judge-only gate, are its candidate's reviewer inputs (eval.Run.
+// ReviewerInputs): its judge reads the reports of a full replay whose
+// reviewers read them, and none is made for a guard, so a case guards it
+// only with such a full replay among those same replays (eval.FullReplayFor);
+// "" for a gate of every role.
+func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers string) Guards {
+	older := eval.RunsBefore(runs, since)
+	newest := func(c eval.Case) (eval.Replay, bool) { return eval.NewestReplay(older, c, skip) }
+	return Guards{N: n, Replay: newest,
 		Found: func(c eval.Case) bool {
-			r, ok := eval.NewestReplay(runs, c, skip)
-			return ok && r.Case.Score.Found > 0
+			if r, ok := newest(c); !ok || r.Case.Score.Found == 0 {
+				return false
+			}
+			if reviewers == "" {
+				return true
+			}
+			_, fc, ok := eval.FullReplayFor(older, c.Name, c.Head, &eval.Run{ReviewerInputs: reviewers})
+			return ok && fc.ReportDir != ""
 		},
 		Last: func(c eval.Case) time.Time {
-			r, _ := eval.NewestReplay(older, c, skip)
+			r, _ := newest(c)
 			return r.At
 		},
 	}
@@ -256,8 +268,8 @@ func Mode(files []string) string {
 // baseline (Stored), of whatever inputs, while the candidate finds what that
 // replay found; one it lost twice takes the base's score (AtBase). A miss
 // target won on one replay counts once a second finds it too (Confirmed,
-// Confirm). Note says, for the operator, what a guard's baseline or a
-// second replay was.
+// Confirm, which sets Rechecked: a second replay was made). Note says, for
+// the operator, what a guard's baseline or a second replay was.
 type GateRow struct {
 	Case      string      `json:"case"`
 	Target    bool        `json:"target,omitempty"`
@@ -266,6 +278,7 @@ type GateRow struct {
 	After     *eval.Score `json:"after,omitempty"`
 	Stored    bool        `json:"stored,omitempty"`
 	Retried   bool        `json:"retried,omitempty"`
+	Rechecked bool        `json:"rechecked,omitempty"`
 	Confirmed bool        `json:"confirmed,omitempty"`
 	Skip      string      `json:"skip,omitempty"`
 	Note      string      `json:"note,omitempty"`
@@ -296,11 +309,18 @@ func (r GateRow) WonOnce() bool {
 	return r.Target && r.compared() && strings.HasPrefix(r.Case, store.LearnInputMiss+"-") && r.After.Found > r.Before.Found
 }
 
-// Confirm records the second candidate replay of row r (WonOnce): the win
-// counts (Confirmed) only when second finds more than the baseline too.
+// Confirm records the second candidate replay of row r (WonOnce,
+// Rechecked): the win counts (Confirmed) only when second finds more than
+// the baseline too.
 func (r *GateRow) Confirm(second *eval.Score) {
+	r.Rechecked = true
 	r.Confirmed = second != nil && r.Before != nil && second.Found > r.Before.Found
 }
+
+// unchecked reports whether r's win (WonOnce) is one no second replay
+// checked: the gate makes none for a proposal that regressed already, which
+// fails whatever it improved.
+func (r GateRow) unchecked() bool { return r.WonOnce() && !r.Rechecked && !r.Confirmed }
 
 // Lost names the defects the baseline found that the candidate did not.
 func (r GateRow) Lost() []string {
@@ -349,14 +369,16 @@ func (r GateRow) improved() string {
 
 // TargetGate is what target row r says of its input's learned case
 // (store.LearnTarget*): covered at the baseline, improved or not once
-// compared; "" for a row that is no target or was not compared.
+// compared; "" for a row that is no target, was not compared, or won on a
+// first replay that no second checked (unchecked: neither a win nor a
+// loss, so it never counts toward the dismissal after two failed gates).
 func (r GateRow) TargetGate() string {
 	switch {
 	case !r.Target:
 		return ""
 	case atBaseline(r.Skip):
 		return store.LearnTargetBaseline
-	case !r.compared():
+	case !r.compared(), r.unchecked():
 		return ""
 	case r.improved() != "":
 		return store.LearnTargetImproved

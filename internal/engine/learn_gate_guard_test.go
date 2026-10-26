@@ -2,7 +2,12 @@ package engine
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +15,60 @@ import (
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/store"
 )
+
+// addCase adds an operator's case of talkable/talkable#n with one defect,
+// d, to the fixture's corpus.
+func (f *gateFixture) addCase(name string, n int) eval.Case {
+	f.h.t.Helper()
+	c := eval.Case{Name: name, PR: fmt.Sprintf("talkable/talkable#%d", n), Head: retroShaA,
+		Defects: []eval.Defect{{ID: "d", Title: "the defect", Paths: []string{"app/models/" + name + ".rb"}}}}
+	f.ev.mu.Lock()
+	f.ev.corpus.Cases = append(f.ev.corpus.Cases, c)
+	f.ev.mu.Unlock()
+	return c
+}
+
+// storedRunAt stores a scored full replay of cases started at with inputs
+// and reviewer inputs, as an earlier `magnum eval run` would.
+func (f *gateFixture) storedRunAt(id, inputs, reviewer string, at time.Time, cases ...scored) {
+	f.h.t.Helper()
+	r := eval.Run{ID: id, Inputs: inputs, ReviewerInputs: reviewer, Commit: "abc1234", Started: at}
+	for _, cs := range cases {
+		cs.s.Case = cs.c.Name
+		r.Cases = append(r.Cases, eval.CaseRun{Case: cs.c.Name, PR: cs.c.PR, Head: cs.c.Head, Outcome: "dry_run", Score: cs.s,
+			ReportDir: filepath.Join(f.h.layout.Eval(), id, "cases", cs.c.Name)})
+	}
+	if err := eval.SaveRun(filepath.Join(f.h.layout.Eval(), id), r); err != nil {
+		f.h.t.Fatal(err)
+	}
+}
+
+// nextProposal makes another gating proposal like the fixture's, named id,
+// that notes the fixture's miss too, with a worktree, a branch and inputs
+// (in) of its own, and points the fixture's wt and p at it.
+func (f *gateFixture) nextProposal(id, in string) {
+	f.h.t.Helper()
+	wt := filepath.Join(f.h.layout.LearnWorktrees(), id)
+	if err := os.MkdirAll(wt, 0o700); err != nil {
+		f.h.t.Fatal(err)
+	}
+	f.git.set(wt, "HEAD", learnCandidate)
+	f.git.mu.Lock()
+	f.git.worktree[wt] = [2]string{f.checkout, "learn/" + id}
+	f.git.mu.Unlock()
+	f.git.set(f.checkout, "refs/heads/learn/"+id, learnCandidate)
+	f.ev.mu.Lock()
+	f.ev.inputs[wt] = [2]string{in, f.ev.inputs[f.wt][1]}
+	f.ev.mu.Unlock()
+	p, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerRequest, BaseSHA: learnMaster,
+		Branch: "learn/" + id, CandidateSHA: learnCandidate, Files: f.p.Files, State: store.LearnGating, Model: "sonnet",
+		Scratch: wt, RunDir: filepath.Join(f.h.layout.LearnSkill(), id),
+		Inputs: []store.LearnInput{{Kind: store.LearnInputMiss, InputID: f.miss.ID, Outcome: store.MissNoted, Where: "SKILL.md section 4"}}})
+	if err != nil {
+		f.h.t.Fatal(err)
+	}
+	f.wt, f.p = wt, p
+}
 
 // replaysByKind counts the cases the gate's runs replayed, by the kind of
 // run (its label's end: candidate, second, baseline, baseline judge).
@@ -212,5 +271,144 @@ BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
 	}
 	if c := f2.gate().Cases[0]; !c.Confirmed || c.SecondRun == "" || c.SecondRun == c.CandidateRun {
 		t.Fatalf("the target's row = %+v, want confirmed by the stored second replay", c)
+	}
+}
+
+// A gate that regressed fails whatever its targets did, so it makes no
+// second replay of a miss target its candidate's first replay found: that
+// win is recorded neither way, never as not improved, so two such failed
+// gates do not dismiss the input as "noted in 2 failed gates" (no second
+// replay showed the candidate does not find it).
+func TestAWonTargetInAGateThatRegressedElsewhereCountsNeitherWay(t *testing.T) {
+	f := guardFixture(t, found(nil, "scope"))
+	f.ev.script(f.base, f.other.Name, found([]string{"scope"}))
+	for gate := 1; gate <= 2; gate++ {
+		if gate == 2 {
+			f.h.advance(time.Hour)
+			f.nextProposal("20261005-120000", "in-cand-2")
+			f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+			f.ev.script(f.wt, f.other.Name, found(nil, "scope"))
+		}
+		f.h.tick()
+		p := f.proposal()
+		if p.State != store.LearnFailed || !strings.Contains(p.Reason, f.other.Name+" lost scope after a second replay") {
+			t.Fatalf("gate %d: proposal %s %q, want failed on the guard", gate, p.State, p.Reason)
+		}
+		if c := f.gate().Cases[0]; c.Case != f.target.Name || !c.WonOnce() || c.Rechecked || c.SecondRun != "" {
+			t.Fatalf("gate %d: the target's row = %+v, want a first win no second replay checked", gate, c)
+		}
+		ins, err := f.h.st.LearnProposalInputs(f.h.ctx, p.ID)
+		if err != nil || len(ins) != 1 || ins[0].Gate != "" || ins[0].State != store.MissNew {
+			t.Fatalf("gate %d: inputs = %+v, %v; want the won target recorded neither way, its input new", gate, ins, err)
+		}
+	}
+	if m := f.missNow(); m.State != store.MissNew || m.Dismissed != "" {
+		t.Fatalf("the miss after two failed gates = %s %q, want new", m.State, m.Dismissed)
+	}
+}
+
+// Every gate of one proposal takes the same guards with the same
+// baselines: a gate that stopped short after a guard was lost at the base
+// too resumes with that guard and the replay its first gate took as its
+// baseline, whatever was replayed of it since (its own replay of the base,
+// an improve run's replay that found nothing), and takes the base's score
+// from the replay of the base that gate made, not from a new one; the
+// warning and the toast are written once.
+func TestAResumedGateKeepsItsGuardsAndTheBaseReplayItMade(t *testing.T) {
+	f := guardFixture(t, found(nil, "scope"))
+	f.ev.script(f.base, f.other.Name, found(nil, "scope"))
+	var once sync.Once
+	f.ev.after = func(c evalCall) { // the target's second replay meets the budget
+		if c.Case == f.target.Name && c.Opts.Candidate == f.wt {
+			once.Do(func() { f.ev.fail(f.wt, f.target.Name, eval.OutcomeBudget) })
+		}
+	}
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnGating || len(f.h.events("learn.guard_lost_at_base")) != 1 {
+		t.Fatalf("proposal %s, events %+v; want gating after one guard lost at the base", p.State, f.h.events("learn.guard_lost_at_base"))
+	}
+	// An improve run replays the guard meanwhile and finds nothing.
+	f.storedRunAt("20261005-110000", "in-x", "rev-x", f.h.clock.Now().Add(30*time.Minute), scored{f.other, found(nil, "scope")})
+	f.ev.fail(f.wt, f.target.Name, "")
+	f.h.advance(gateRetryAfter + time.Minute)
+	f.h.tick()
+	p := f.proposal()
+	if p.State != store.LearnPassed || !strings.Contains(p.Reason, f.target.Name+" found") {
+		t.Fatalf("proposal = %s %q, want passed on its target", p.State, p.Reason)
+	}
+	c := f.gate().Cases[1]
+	if c.Case != f.other.Name || !c.Guard || c.Skip != learn.SkipLostAtBase || !strings.Contains(c.Note, "20261002-120000") {
+		t.Fatalf("the resumed gate's guard row = %+v, want coupon-scope guarding as before, lost at the base too", c)
+	}
+	if base := f.ev.callsFor(f.base); len(base) != 1 {
+		t.Fatalf("base replays = %+v, want the first gate's alone", base)
+	}
+	if evs := f.h.events("learn.guard_lost_at_base"); len(evs) != 1 {
+		t.Fatalf("events = %+v, want one", evs)
+	}
+	if toasts := f.toasts(); strings.Count(toasts, f.other.Name+" is lost at master") != 1 {
+		t.Fatalf("toasts = %q, want one for %s", toasts, f.other.Name)
+	}
+}
+
+// A judge-only gate's guards are cases with a full replay whose reviewers
+// read the candidate's prompts, made before the proposal: the gate makes
+// none for a guard, so a case without one takes no place, and the next
+// least recently replayed case guards instead. Each guard's judges read
+// those reports: one the candidate's judge keeps passes on its stored
+// replay, and one it lost twice takes the score of the base's judge alone
+// on the same reports, a regression when that one finds it and skipped as
+// lost at the base too when it does not.
+func TestAJudgeOnlyGateGuardsCasesWithAFullReplayOfTheCandidatesReviewers(t *testing.T) {
+	f := newGateFixture(t, []string{learn.DecisionsFile, learn.SkillFile}, func(h *harness) { h.cfg.Learn.GateGuards, h.cfg.Learn.GateCases = 3, 1 })
+	nofull, kept, regress, atBase := f.addCase("no-full", 31), f.addCase("kept", 32), f.addCase("regress", 33), f.addCase("at-base", 34)
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 9, 0, 0, 0, time.Local) }
+	f.storedRunAt("20261001-090000", "in-master", "rev-master", day(1), scored{f.target, found(nil, f.target.Name)})
+	f.storedRunAt("20261001-100000", "in-old", "rev-old", day(1).Add(time.Hour), scored{nofull, found([]string{"d"})})
+	f.storedRunAt("20261002-090000", "in-other", "rev-master", day(2), scored{kept, found([]string{"d"})})
+	f.storedRunAt("20261003-090000", "in-other", "rev-master", day(3), scored{regress, found([]string{"d"})})
+	f.storedRunAt("20261004-090000", "in-other", "rev-master", day(4), scored{atBase, found([]string{"d"})})
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.wt, kept.Name, found([]string{"d"}))
+	f.ev.script(f.wt, regress.Name, found(nil, "d"))
+	f.ev.script(f.wt, atBase.Name, found(nil, "d"))
+	f.ev.script(f.base, regress.Name, found([]string{"d"}))
+	f.ev.script(f.base, atBase.Name, found(nil, "d"))
+	f.h.tick()
+
+	p := f.proposal()
+	if p.State != store.LearnFailed || !strings.Contains(p.Reason, regress.Name+" lost d after a second replay") {
+		t.Fatalf("proposal = %s %q, want failed on %s", p.State, p.Reason, regress.Name)
+	}
+	g := f.gate()
+	var guards []string
+	for _, c := range g.Cases {
+		if c.Guard {
+			guards = append(guards, c.Case)
+		}
+	}
+	if !slices.Equal(guards, []string{kept.Name, regress.Name, atBase.Name}) {
+		t.Fatalf("guards = %q, want kept, regress, at-base: no-full has no full replay of the candidate's reviewers", guards)
+	}
+	rows := map[string]GateCase{}
+	for _, c := range g.Cases {
+		rows[c.Case] = c
+	}
+	if c := rows[kept.Name]; !c.Stored || c.Skip != "" || c.BaselineRun != "20261002-090000" || c.ReportsRun != "20261002-090000" || c.After.Found != 1 {
+		t.Fatalf("the kept guard's row = %+v, want its stored replay as its baseline, on its reports", c)
+	}
+	if c := rows[regress.Name]; c.Stored || !c.Retried || c.Skip != "" || c.Before.Found != 1 || c.BaselineRun == "20261003-090000" ||
+		c.ReportsRun != "20261003-090000" {
+		t.Fatalf("the regressed guard's row = %+v, want the base's judge on its reports as its baseline", c)
+	}
+	if c := rows[atBase.Name]; c.Skip != learn.SkipLostAtBase || c.ReportsRun != "20261004-090000" {
+		t.Fatalf("the guard lost at the base = %+v", c)
+	}
+	cand, base := f.ev.callsFor(f.wt), f.ev.callsFor(f.base)
+	if len(cand) != 6 || len(base) != 2 || slices.ContainsFunc(append(cand, base...), func(c evalCall) bool { return !c.Opts.JudgeOnly }) {
+		t.Fatalf("replays: candidate %+v, base %+v; want 6 and 2, the judge alone", cand, base)
+	}
+	if evs := f.h.events("learn.guard_lost_at_base"); len(evs) != 1 || !strings.Contains(evs[0].Message, atBase.Name) {
+		t.Fatalf("events = %+v, want one for %s", evs, atBase.Name)
 	}
 }
