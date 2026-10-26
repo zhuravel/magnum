@@ -97,12 +97,13 @@ func statsConvChain(t *testing.T, st *store.Store, pr store.PR, n int, at time.T
 // A PR's convergence is the number of distinct heads magnum reviewed until a
 // review left no P0, P1 or P2, new or still open, over the PRs that merged
 // or closed in the window: a P3-only review passes, and an earlier P2 still
-// open and a blocking verdict without a P0-P2 counted do not; a second review of a head already counted (a reply round,
-// a nudge of the same review) adds nothing; a round after the merge is
-// dropped; a PR that ended before the window, or without a posted review,
-// is not in it. The operator's own PRs have their own rows, a PR that
-// merged while its last review left a P0-P2 is MERGED OPEN, and the open
-// PRs that already have five reviewed heads are counted apart.
+// open and a blocking verdict without a P0-P2 counted do not; a second
+// review of a head already counted (a reply round, a nudge of the same
+// review) adds nothing; a round after the merge is dropped; a PR that ended
+// before the window, or without a posted review, is not in it. The
+// operator's own PRs have their own rows, a PR that merged while its last
+// review left a P0-P2 is MERGED OPEN, and the open PRs that already have
+// five reviewed heads are counted apart.
 func TestStatsConvergenceCountsHeadsUntilNoSeriousFindingIsLeft(t *testing.T) {
 	f, st := statsConvFixture(t)
 	const tk, wd = "talkable/talkable", "example/widgets"

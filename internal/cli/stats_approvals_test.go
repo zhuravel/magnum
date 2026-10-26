@@ -100,14 +100,14 @@ func statsMiss(t *testing.T, st *store.Store, pr store.PR, sourceURL, reviewer s
 // same login, the same head, submitted by the time magnum recorded it; the
 // login and the time alone when GitHub no longer has the approved commit,
 // after a force-push); the operator's approval by hand (later than magnum's,
-// or posted with `magnum approve --as`) is a person's. Of those, the ones merged past the
-// approved head, the ones of these merged unreviewed (a pr.merged_unreviewed
-// event; a later head magnum reviewed is not), and the retro's misses on
-// them: a miss on a PR a person approved, and magnum's own finding the
-// author declined that the retro routed to the notes as a miss, are not
-// counted. A repository with auto_approve and no merge in the window has its
-// row of zeros; a repository without auto_approve and a merge before the
-// window are left out.
+// or posted with `magnum approve --as`) is a person's. Of those, the ones
+// merged past the approved head, the ones of these merged unreviewed (a
+// pr.merged_unreviewed event; a later head magnum reviewed is not), and the
+// retro's misses on them: a miss on a PR a person approved, and magnum's own
+// finding the author declined that the retro routed to the notes as a miss,
+// are not counted. A repository with auto_approve and no merge in the window
+// has its row of zeros; a repository without auto_approve and a merge before
+// the window are left out.
 func TestStatsApprovalsCountsMergesOnMagnumsApprovalAlone(t *testing.T) {
 	f, st := statsConvFixture(t)
 	statsAutoApproveConfig(t, f)

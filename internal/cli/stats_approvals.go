@@ -38,13 +38,13 @@ const statsApprovalSlack = time.Minute
 
 // statsApprovals is one repository's row of the approvals section
 // (`magnum stats --json`'s approvals; zeros for one that merged nothing in
-// the window): of the PRs merged in the window,
-// AutoApproved are those on which an approval magnum posted by itself stood
-// at the merge, MagnumOnly those of them no person approved, PastApproval
-// those of the latter merged at a head after the one magnum approved,
-// Unreviewed those of these with a pr.merged_unreviewed event, and Misses
-// the retro's misses (class miss) on the MagnumOnly ones, less the declines
-// of magnum's own findings it routed to the notes as misses.
+// the window): of the PRs merged in the window, AutoApproved are those on
+// which an approval magnum posted by itself stood at the merge, MagnumOnly
+// those of them no person approved, PastApproval those of the latter merged
+// at a head after the one magnum approved, Unreviewed those of these with a
+// pr.merged_unreviewed event, and Misses the retro's misses (class miss) on
+// the MagnumOnly ones, less the declines of magnum's own findings it routed
+// to the notes as misses.
 type statsApprovals struct {
 	Repo         string `json:"repo"`
 	Merged       int    `json:"merged"`
