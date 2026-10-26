@@ -129,3 +129,8 @@ config dirs in `~/.local/state/magnum`. `MAGNUM_HOME=<checkout>` keeps everythin
 - Screens: every action key asks y/N, only `y` confirms, frames are cached by fingerprint, mouse
   events never start an action without the same confirmation.
 - Tests name the behaviour they protect; when you fix a bug, write the failing test first.
+
+<!-- entire-agent:begin -->
+Read .entire/agent-guide.md for this repository's workflow, source inspection, and verification guidance.
+@.entire/agent-guide.md
+<!-- entire-agent:end -->
