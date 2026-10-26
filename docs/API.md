@@ -13374,6 +13374,16 @@ const (
     The gate's modes (Mode).
 
 const (
+	GateRunCandidate = "candidate"
+	GateRunSecond    = "second"
+	GateRunBase      = "baseline"
+	GateRunBaseJudge = "baseline judge"
+)
+    The kinds of eval run a gate makes, the end of their label (GateRunLabel):
+    the candidate's first and second replays, the base's full and judge-only
+    ones.
+
+const (
 	SkipNotInCorpus = "not in the corpus"
 	SkipFlagged     = "flagged: never replayed"
 	SkipNotWatched  = "not watched"
@@ -13515,6 +13525,12 @@ func FilePath(sha, p string) string
 func FormatPins(pins []string, limit int) []byte
     FormatPins renders the pins file (PinsSource): a comment, the skill's size
     cap, then one pinned sentence per line, sorted.
+
+func GateRunLabel(id int64, kind string) string
+    GateRunLabel is the label (eval.Run.Label) of the eval run of kind
+    (GateRunCandidate, GateRunSecond, GateRunBase, GateRunBaseJudge) that the
+    gate of proposal id makes. A stored run says what it replayed only by its
+    label, which GuardsFrom reads back (candidateRun).
 
 func Headline(decision string) (headline, rest string)
     Headline splits a decision into its first sentence (up to the first ".",
@@ -13831,12 +13847,13 @@ type GateRow struct {
     with master's prompts and skill) and with the candidate's, or why it was not
     compared (Skip). Retried is set once the caller replayed a lost case again,
     After then being the second replay's: only then does a loss count.
-    A guard (Guard) keeps the newest stored replay as its baseline (Stored),
-    of whatever inputs, while the candidate finds what that replay found; one it
-    lost twice takes the base's score (AtBase). A miss target won on one replay
-    counts once a second finds it too (Confirmed, Confirm, which sets Rechecked:
-    a second replay was made). Note says, for the operator, what a guard's
-    baseline or a second replay was.
+    A guard (Guard) keeps the newest stored replay with inputs some master had
+    as its baseline (Stored, GuardsFrom: an operator's run or a gate's base,
+    of whatever inputs), while the candidate finds what that replay found;
+    one it lost twice takes the base's score (AtBase). A miss target won on
+    one replay counts once a second finds it too (Confirmed, Confirm, which
+    sets Rechecked: a second replay was made). Note says, for the operator,
+    what a guard's baseline or a second replay was.
 
 func (r *GateRow) AtBase(base *eval.Score) bool
     AtBase gives guard row r, whose candidate lost a defect of its stored
@@ -13893,14 +13910,19 @@ func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers 
     the one replayed last) found a defect, and is ordered by when that replay
     was made. Both read only the replays made before since (eval.RunsBefore;
     zero = every replay: `magnum eval guards`): the gate's proposal's creation,
-    so every gate of one proposal takes the same guards with the same
-    baselines whatever was replayed since (the gate's own replays of the base,
-    an improve run's eval-at.sh); and both leave out the runs with inputs skip
-    (the gate's candidate's own; "" = none). reviewers, for a judge-only gate,
-    are its candidate's reviewer inputs (eval.Run. ReviewerInputs): its judge
-    reads the reports of a full replay whose reviewers read them, and none is
-    made for a guard, so a case guards it only with such a full replay among
-    those same replays (eval.FullReplayFor); "" for a gate of every role.
+    so every gate of one proposal takes the same guards with the same baselines
+    whatever was replayed since (the gate's own replays of the base, an improve
+    run's eval-at.sh). Both read only the replays with inputs some master had,
+    the operator's own runs and the gates' replays of their base: every gate's
+    replays of its candidate, of any proposal (candidateRun), are left out,
+    since one that found a defect master's skill does not would make a guard
+    that the next proposal's candidate "loses" and its base loses too; and both
+    leave out the runs with inputs skip (the gate's candidate's own; "" = none).
+    reviewers, for a judge-only gate, are its candidate's reviewer inputs
+    (eval.Run.ReviewerInputs): its judge reads the reports of a full replay
+    whose reviewers read them, and none is made for a guard, so a case guards it
+    only with such a full replay among those same replays (eval.FullReplayFor);
+    "" for a gate of every role.
 
 type Input struct {
 	// Author is the pull request's author in Account form

@@ -269,6 +269,45 @@ func TestAGuardWhoseBaseFoundWhatACandidateLostStaysAGuard(t *testing.T) {
 	}
 }
 
+// A guard comes only from replays with inputs some master had: the
+// operator's own runs and the gates' replays of their base. A gate's
+// replays of its candidate, of any proposal, read a skill that may never
+// land, so they are left out: a case whose newest replay is another
+// proposal's candidate replay that found a defect master's never did is no
+// guard (the next proposal's candidate would "lose" it, and its base too),
+// and one that found nothing, or a second replay that found nothing, leaves
+// a guard on its older replay by the operator or by a base.
+func TestAGuardComesOnlyFromReplaysWithInputsAMasterHad(t *testing.T) {
+	corpus := gateCorpus()
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 9, 0, 0, 0, time.UTC) }
+	labeled := func(r eval.Run, label string) eval.Run { r.Label = label; return r }
+	race, coupon, six := caseNamed(corpus, "old-race"), caseNamed(corpus, "coupon-scope"), caseNamed(corpus, "miss-6")
+	runs := []eval.Run{
+		labeled(replayOf("20261001-090000", "in-master", day(1), race, 0), "before spec 01"),
+		labeled(replayOf("20261001-100000", "in-master", day(1).Add(time.Hour), coupon, 1), ""),
+		labeled(replayOf("20261002-090000", "in-master", day(2), six, 1), GateRunLabel(1, GateRunBase)),
+		labeled(replayOf("20261003-090000", "in-p1", day(3), six, 0), GateRunLabel(1, GateRunSecond)),
+		labeled(replayOf("20261004-090000", "in-p1", day(4), race, 1), GateRunLabel(1, GateRunCandidate)),
+		labeled(replayOf("20261004-100000", "in-p1", day(4).Add(time.Hour), coupon, 0), GateRunLabel(1, GateRunCandidate)),
+	}
+	g := GuardsFrom(runs, 3, "in-p2", day(5), "")
+	if got := guardNames(corpus, g); !slices.Equal(got, []string{"coupon-scope", "miss-6"}) {
+		t.Fatalf("proposal 2's guards = %q, want coupon-scope and miss-6 on the operator's and the base's replays, "+
+			"not old-race on proposal 1's candidate's", got)
+	}
+	for _, want := range []struct {
+		c   eval.Case
+		run string
+	}{{coupon, "20261001-100000"}, {six, "20261002-090000"}, {race, "20261001-090000"}} {
+		if r, ok := g.Replay(want.c); !ok || r.Run != want.run {
+			t.Fatalf("%s's baseline = %+v, %v; want run %s", want.c.Name, r, ok, want.run)
+		}
+	}
+	if got := guardNames(corpus, GuardsFrom(runs, 3, "", time.Time{}, "")); !slices.Equal(got, []string{"coupon-scope", "miss-6"}) {
+		t.Fatalf("`magnum eval guards` = %q, want coupon-scope and miss-6 too", got)
+	}
+}
+
 // fullReplayOf is replayOf a full replay whose reviewers read reviewer, with
 // its reports.
 func fullReplayOf(id, reviewer string, at time.Time, c eval.Case, found int) eval.Run {

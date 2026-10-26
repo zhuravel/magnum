@@ -88,8 +88,9 @@ func (f *gateFixture) replaysByKind() map[string]int {
 }
 
 // guardFixture is a gate whose operator's case (coupon-scope) guards: its
-// newest stored replay, run 20261002-120000 with another proposal's inputs,
-// found its defect, and master's own replays never did. The target has a
+// newest stored replay, the operator's run 20261002-120000 with other inputs
+// (eval-at.sh of an older master, say), found its defect, and the current
+// master's own replays never did. The target has a
 // stored baseline that misses it, and the candidate finds it every time.
 func guardFixture(t *testing.T, candidate ...*eval.Score) *gateFixture {
 	t.Helper()
@@ -348,6 +349,47 @@ func TestAResumedGateKeepsItsGuardsAndTheBaseReplayItMade(t *testing.T) {
 	}
 	if toasts := f.toasts(); strings.Count(toasts, f.other.Name+" is lost at master") != 1 {
 		t.Fatalf("toasts = %q, want one for %s", toasts, f.other.Name)
+	}
+}
+
+// A gate's replays of its candidate never make a guard of a later gate, nor
+// its baseline: proposal 1's candidate found coupon-scope's defect, which
+// master's replays never did, and proposal 1 failed, so its skill never
+// landed. Proposal 2, at master's skill, does not guard coupon-scope on that
+// replay (it would lose it twice, replay the base, and warn that master
+// lost it); it compares coupon-scope with master's stored replay as any
+// other case. Where master's replay found the defect too, coupon-scope
+// guards on master's replay, not on proposal 1's newer one.
+func TestAnotherProposalsCandidateReplayIsNoGuardOfTheNextGate(t *testing.T) {
+	for _, masterFinds := range []bool{false, true} {
+		f := newGateFixture(t, gateFullFiles)
+		other := found(nil, "scope")
+		if masterFinds {
+			other = found([]string{"scope"})
+		}
+		f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name), f.other.Name: other})
+		f.ev.script(f.wt, f.target.Name, found(nil, f.target.Name))
+		f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+		f.h.tick()
+		if p := f.proposal(); p.State != store.LearnFailed || !strings.Contains(p.Reason, "no target improved") {
+			t.Fatalf("master finds it %v: proposal 1 = %s %q, want failed: its target did not improve", masterFinds, p.State, p.Reason)
+		}
+		f.h.advance(time.Hour)
+		f.nextProposal("20261005-120000", "in-cand-2")
+		f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+		f.ev.script(f.wt, f.other.Name, other)
+		f.ev.script(f.base, f.other.Name, found(nil, "scope"))
+		f.h.tick()
+		if p := f.proposal(); p.State != store.LearnPassed {
+			t.Fatalf("master finds it %v: proposal 2 = %s %q, want passed", masterFinds, p.State, p.Reason)
+		}
+		c := f.gate().Cases[1]
+		if c.Case != f.other.Name || c.Guard != masterFinds || c.Stored != masterFinds || c.BaselineRun != "20261001-120000" || c.Skip != "" {
+			t.Fatalf("master finds it %v: proposal 2's coupon-scope row = %+v, want guard %v on master's stored replay", masterFinds, c, masterFinds)
+		}
+		if evs, base := f.h.events("learn.guard_lost_at_base"), f.ev.callsFor(f.base); len(evs) != 0 || len(base) != 0 {
+			t.Fatalf("master finds it %v: guard warnings %+v, base replays %+v; want none", masterFinds, evs, base)
+		}
 	}
 }
 

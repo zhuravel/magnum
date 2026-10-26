@@ -6,8 +6,9 @@ package engine
 // replays eval cases on it in its own goroutine, one at a time: the learned
 // cases of the inputs it noted (its targets, those no gate made anything of
 // yet first, then the newest: gateTargets), up to [learn] gate_guards
-// guards on top (cases whose newest replay made before the proposal found a
-// defect, the least recently replayed first: learn.GuardsFrom; judge-only,
+// guards on top (cases whose newest replay made before the proposal, a gate's
+// replays of its candidate left out, found a defect, the least recently
+// replayed first: learn.GuardsFrom; judge-only,
 // those with a full replay of the candidate's reviewers) and the newest other cases of
 // both corpora, up to [learn] gate_cases (learn.SelectCases), the judge
 // alone when only the judge skill and the judge prompts changed
@@ -521,7 +522,7 @@ func (g *gateWork) mkRun(slot **gateRun, label, dir string, judgeOnly bool, in, 
 	if err != nil {
 		return nil, err
 	}
-	r := &gateRun{dir: rdir, tag: eval.AgentTag(id), run: eval.Run{ID: id, Label: fmt.Sprintf("learn gate of proposal %d: %s", g.p.ID, label),
+	r := &gateRun{dir: rdir, tag: eval.AgentTag(id), run: eval.Run{ID: id, Label: learn.GateRunLabel(g.p.ID, label),
 		Commit: commit, Dirty: dirty, Corpus: g.corpusPath, Started: e.now(), Cases: []eval.CaseRun{}, Inputs: in, ReviewerInputs: rev,
 		Candidate: dir}}
 	r.opts = EvalGateOptions{Candidate: dir, JudgeOnly: judgeOnly, RunDir: rdir, AgentTag: r.tag}
@@ -641,7 +642,7 @@ func (g *gateWork) caseRow(gc learn.GateCase) (GateCase, bool, error) {
 		return row, false, nil
 	}
 	if row.Skip == "" {
-		rp := g.replay(&g.cand, "candidate", g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, gc.Case, row.ReportsRun)
+		rp := g.replay(&g.cand, learn.GateRunCandidate, g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, gc.Case, row.ReportsRun)
 		if stop, err := g.halt(rp, gc.Target); stop {
 			return row, true, err
 		}
@@ -667,7 +668,7 @@ func (g *gateWork) baseline(gc learn.GateCase, row *GateCase) (bool, error) {
 			row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
 			return false, nil
 		}
-		rp := g.replay(&g.baseJudge, "baseline judge", g.baseDir, true, g.baseIn, g.baseRev, gc.Case, fr.ID)
+		rp := g.replay(&g.baseJudge, learn.GateRunBaseJudge, g.baseDir, true, g.baseIn, g.baseRev, gc.Case, fr.ID)
 		if stop, err := g.halt(rp, gc.Target); stop {
 			return true, err
 		}
@@ -681,7 +682,7 @@ func (g *gateWork) baseline(gc learn.GateCase, row *GateCase) (bool, error) {
 		row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
 		return false, nil
 	}
-	rp := g.replay(&g.base, "baseline", g.baseDir, false, g.baseIn, g.baseRev, gc.Case, "")
+	rp := g.replay(&g.base, learn.GateRunBase, g.baseDir, false, g.baseIn, g.baseRev, gc.Case, "")
 	if stop, err := g.halt(rp, gc.Target); stop {
 		return true, err
 	}
@@ -699,9 +700,10 @@ func (g *gateWork) baseline(gc learn.GateCase, row *GateCase) (bool, error) {
 
 // guardBaseline sets guard row's baseline lazily (DECISIONS "The gate
 // guards what master finds"): the replay learn.GuardsFrom chose the guard
-// by (Guards.Replay: the newest made before the proposal, the candidate's
-// own left out, so every gate of the proposal takes the same one), of
-// whatever inputs, which the candidate must find again (Stored; the note
+// by (Guards.Replay: the newest made before the proposal by the operator's
+// runs or a gate's base, no gate's replay of its candidate, so every gate of
+// the proposal takes the same one), of whatever inputs some master had,
+// which the candidate must find again (Stored; the note
 // names the replay and its inputs). The base's score is taken only once
 // the candidate lost one of its defects twice (guardsAtBase). Judge-only,
 // the candidate's judge reads the reviewer reports of the case's newest
@@ -759,7 +761,7 @@ func (g *gateWork) second(c eval.Case, row *GateCase) (score *eval.Score, run, s
 	if b, ok := g.storedCandidate(c, row.ReportsRun, row.CandidateRun); ok {
 		return trimScore(b.Case.Score), b.Run, "", false, nil
 	}
-	rp := g.replay(&g.retry, "second", g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, c, row.ReportsRun)
+	rp := g.replay(&g.retry, learn.GateRunSecond, g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, c, row.ReportsRun)
 	if stop, err := g.halt(rp, true); stop {
 		return nil, "", "", true, err
 	}
@@ -810,9 +812,9 @@ func (g *gateWork) guardsAtBase(cases []learn.GateCase) (bool, error) {
 		if base == nil {
 			var rp gateReplay
 			if g.judgeOnly {
-				rp = g.replay(&g.baseJudge, "baseline judge", g.baseDir, true, g.baseIn, g.baseRev, c, row.ReportsRun)
+				rp = g.replay(&g.baseJudge, learn.GateRunBaseJudge, g.baseDir, true, g.baseIn, g.baseRev, c, row.ReportsRun)
 			} else {
-				rp = g.replay(&g.base, "baseline", g.baseDir, false, g.baseIn, g.baseRev, c, "")
+				rp = g.replay(&g.base, learn.GateRunBase, g.baseDir, false, g.baseIn, g.baseRev, c, "")
 			}
 			if stop, err := g.halt(rp, true); stop { // without its score a loss could be the candidate's
 				return true, err
