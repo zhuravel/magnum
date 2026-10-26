@@ -37,7 +37,7 @@ import (
 )
 
 const (
-	evalUsage    = "run|score|list|show|baseline"
+	evalUsage    = "run|score|list|show|baseline|guards"
 	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--candidate DIR] [--judge-only] [--no-notes] [--keep] [--force]"
 	// evalCorpusFile is the default corpus, in the user config's directory
 	// (~/.config/magnum); evalLegacyCorpusFile its old place in a checkout.
@@ -101,7 +101,7 @@ func newEvalCmd(c *Context) *cobra.Command {
 			fmt.Fprintf(c.Stdout, "usage: magnum eval %s\n", evalUsage)
 			return 0
 		})
-	cmd.AddCommand(newEvalRunCmd(c), newEvalScoreCmd(c), newEvalListCmd(c), newEvalShowCmd(c), newEvalBaselineCmd(c))
+	cmd.AddCommand(newEvalRunCmd(c), newEvalScoreCmd(c), newEvalListCmd(c), newEvalShowCmd(c), newEvalBaselineCmd(c), newEvalGuardsCmd(c))
 	return cmd
 }
 

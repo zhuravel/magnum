@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func sum(s string) string {
@@ -164,5 +165,32 @@ func TestJudgeBaselinesTakeOnlyTheSameReports(t *testing.T) {
 	}
 	if got := JudgeBaselines(runs, "", c, "1-full"); len(got) != 0 {
 		t.Fatalf("unknown inputs reuse %+v", got)
+	}
+}
+
+// A case's newest replay, which the skill gate's guards read, is its newest scored replay at the
+// corpus's head of any kind (full or judge-only, any inputs, a dirty checkout too) but those whose
+// run recorded the inputs left out; it is dated by the case's start, else its run's.
+func TestNewestReplayIsTheNewestScoredReplayAtTheHead(t *testing.T) {
+	c := Case{Name: "geo", Head: sha}
+	found, missed := &Score{Found: 1, Total: 1}, &Score{Total: 1}
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 9, 0, 0, 0, time.UTC) }
+	runs := []Run{
+		{ID: "1-full", Inputs: "aaa", Started: day(1), Cases: []CaseRun{{Case: "geo", Head: sha, Score: missed}}},
+		{ID: "2-dirty-judge-only", Inputs: "bbb", Dirty: true, Started: day(2),
+			Cases: []CaseRun{{Case: "geo", Head: sha, Score: found, JudgeOnly: true, Started: day(2).Add(time.Hour)}}},
+		{ID: "3-candidate", Inputs: "cand", Started: day(3), Cases: []CaseRun{{Case: "geo", Head: sha, Score: missed}}},
+		{ID: "4-other-head", Inputs: "aaa", Cases: []CaseRun{{Case: "geo", Head: strings.Repeat("f", 40), Score: missed}}},
+		{ID: "5-unscored", Inputs: "aaa", Cases: []CaseRun{{Case: "geo", Head: sha, Outcome: "usage_limit"}}},
+		{ID: "6-other-case", Inputs: "aaa", Cases: []CaseRun{{Case: "copy", Head: sha, Score: found}}},
+	}
+	if r, ok := NewestReplay(runs, c, ""); !ok || r.Run != "3-candidate" || r.Inputs != "cand" || r.Case.Score != missed || !r.At.Equal(day(3)) {
+		t.Fatalf("NewestReplay = %+v, %v; want run 3, dated by its run", r, ok)
+	}
+	if r, ok := NewestReplay(runs, c, "cand"); !ok || r.Run != "2-dirty-judge-only" || r.Case.Score != found || !r.At.Equal(day(2).Add(time.Hour)) {
+		t.Fatalf("NewestReplay without the candidate's = %+v, %v; want run 2, dated by its case", r, ok)
+	}
+	if r, ok := NewestReplay(runs, Case{Name: "map", Head: sha}, ""); ok {
+		t.Fatalf("a case never replayed: %+v", r)
 	}
 }

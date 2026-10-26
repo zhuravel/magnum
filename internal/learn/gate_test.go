@@ -1,10 +1,12 @@
 package learn
 
 import (
+	"fmt"
 	"path"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/store"
@@ -33,6 +35,9 @@ func names(cs []GateCase) []string {
 		if c.Target {
 			s += "*"
 		}
+		if c.Guard {
+			s += "+"
+		}
 		if c.Skip != "" {
 			s += " (" + c.Skip + ")"
 		}
@@ -50,33 +55,155 @@ func watchedOnly(prs ...string) func(string) bool {
 func TestSelectCasesPutsTargetsFirstAndCapsTheRest(t *testing.T) {
 	all := func(string) bool { return true }
 	none := func(string) bool { return false }
-	got := names(SelectCases(gateCorpus(), []string{"decline-4", TargetName(store.LearnInputMiss, 3)}, all, none, 4))
+	got := names(SelectCases(gateCorpus(), []string{"decline-4", TargetName(store.LearnInputMiss, 3)}, all, none, 4, Guards{}))
 	// The targets first in their order, then the newest others (the end
 	// of the corpus first) up to the cap.
 	if want := []string{"decline-4*", "miss-3*", "miss-6", "miss-5"}; !slices.Equal(got, want) {
 		t.Fatalf("cases = %q, want %q", got, want)
 	}
 	// Others that cannot run take no place: they are left out.
-	got = names(SelectCases(gateCorpus(), []string{"miss-3"}, watchedOnly("talkable/"), none, 3))
+	got = names(SelectCases(gateCorpus(), []string{"miss-3"}, watchedOnly("talkable/"), none, 3, Guards{}))
 	if want := []string{"miss-3*", "miss-6", "decline-4"}; !slices.Equal(got, want) {
 		t.Fatalf("cases = %q, want %q", got, want)
 	}
 	// A target past the cap is listed, skipped, so the gate says it did not
 	// run.
-	got = names(SelectCases(gateCorpus(), []string{"miss-3", "decline-4"}, all, none, 1))
+	got = names(SelectCases(gateCorpus(), []string{"miss-3", "decline-4"}, all, none, 1, Guards{}))
 	if want := []string{"miss-3*", "decline-4* (" + skipOverCap(1) + ")"}; !slices.Equal(got, want) {
 		t.Fatalf("cases = %q, want %q", got, want)
 	}
 	// No corpus: the targets alone, each skipped.
-	got = names(SelectCases(nil, []string{"miss-3"}, all, none, 6))
+	got = names(SelectCases(nil, []string{"miss-3"}, all, none, 6, Guards{}))
 	if want := []string{"miss-3* (" + SkipNotInCorpus + ")"}; !slices.Equal(got, want) {
 		t.Fatalf("cases = %q, want %q", got, want)
+	}
+	// Guards come after the targets and before the newest others, on top of
+	// the cap: the targets and the others still take up to 4 places. A target
+	// is never a guard.
+	guards := Guards{N: 2, Found: func(c eval.Case) bool { return c.Name == "coupon-scope" || c.Name == "miss-3" }}
+	got = names(SelectCases(gateCorpus(), []string{"decline-4", "miss-3"}, all, none, 4, guards))
+	if want := []string{"decline-4*", "miss-3*", "coupon-scope+", "miss-6", "miss-5"}; !slices.Equal(got, want) {
+		t.Fatalf("cases with guards = %q, want %q", got, want)
+	}
+}
+
+// guardCorpus is the operator's two cases of gateCorpus, then n learned
+// miss cases, miss-1 to miss-n.
+func guardCorpus(n int) *eval.Corpus {
+	c := gateCorpus()
+	c.Cases = c.Cases[:2] // coupon-scope, old-race
+	for i := 1; i <= n; i++ {
+		name := fmt.Sprintf("miss-%d", i)
+		c.Cases = append(c.Cases, eval.Case{Name: name, PR: fmt.Sprintf("talkable/talkable#%d", 100+i), Head: gateHead,
+			Defects: []eval.Defect{{ID: name, Title: name, Paths: []string{"a.go"}}}})
+	}
+	return c
+}
+
+// Proposal 7 noted 32 inputs: 26 targets were left past gate_cases = 6 and
+// all 6 compared rows were targets, none of which the baseline found, so no
+// row could lose anything. The guard places come on top of gate_cases:
+// targets never crowd them out, and gate_guards = 0 turns them off.
+func TestSelectCasesReservesGuardPlacesPastTheTargets(t *testing.T) {
+	all, none := func(string) bool { return true }, func(string) bool { return false }
+	corpus := guardCorpus(34)
+	var targets []string
+	for i := 1; i <= 32; i++ {
+		targets = append(targets, fmt.Sprintf("miss-%d", i))
+	}
+	// The operator's two cases and miss-33 found a defect at their newest
+	// replay, miss-34 did not.
+	found := func(c eval.Case) bool { return !strings.HasPrefix(c.Name, "miss-") || c.Name == "miss-33" }
+	got := SelectCases(corpus, targets, all, none, 6, Guards{N: 2, Found: found})
+	runnable, guards := 0, []string{}
+	for i, c := range got {
+		if c.Skip == "" {
+			runnable++
+		}
+		if c.Guard {
+			guards = append(guards, c.Case.Name)
+			if c.Target || c.Skip != "" || i < len(targets) {
+				t.Errorf("guard %s: %+v at %d, want a runnable case that is no target, after the %d targets", c.Case.Name, c, i, len(targets))
+			}
+		}
+	}
+	if runnable != 8 || !slices.Equal(guards, []string{"coupon-scope", "old-race"}) {
+		t.Fatalf("cases = %q: %d runnable, guards %q; want the 6 targets under the cap and 2 guards", names(got), runnable, guards)
+	}
+	if over := slices.DeleteFunc(names(got), func(s string) bool { return !strings.Contains(s, skipOverCap(6)) }); len(over) != 26 {
+		t.Fatalf("targets past the cap: %d, want 26", len(over))
+	}
+	if got := SelectCases(corpus, targets, all, none, 6, Guards{Found: found}); slices.ContainsFunc(got, func(c GateCase) bool { return c.Guard }) {
+		t.Fatalf("gate_guards = 0: %q", names(got))
+	}
+}
+
+// replayOf is a stored run, started at at with inputs, of case c that found
+// found of its one defect.
+func replayOf(id, inputs string, at time.Time, c eval.Case, found int) eval.Run {
+	s := &eval.Score{Case: c.Name, Found: found, Total: 1, Defects: []eval.DefectResult{{ID: c.Name, Found: found > 0}}}
+	return eval.Run{ID: id, Inputs: inputs, Started: at, Cases: []eval.CaseRun{{Case: c.Name, PR: c.PR, Head: c.Head, Outcome: "dry_run", Score: s}}}
+}
+
+// A guard is a case whose newest stored replay found a defect; the gate
+// takes the least recently replayed first, so successive gates take turns
+// through them. A case whose newest replay found nothing, a flagged one and
+// a target are no guard. The candidate's own replays are left out (a gate
+// that stopped short after its candidate lost a guard keeps it), and so are
+// the replays since the proposal was made from the order (every gate of one
+// proposal takes the same guards).
+func TestSelectCasesRotatesGuardsLeastRecentlyReplayedFirst(t *testing.T) {
+	corpus := gateCorpus() // coupon-scope, old-race, miss-3, decline-4, miss-5, miss-6
+	byName := func(name string) eval.Case {
+		return corpus.Cases[slices.IndexFunc(corpus.Cases, func(c eval.Case) bool { return c.Name == name })]
+	}
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 9, 0, 0, 0, time.UTC) }
+	runs := []eval.Run{
+		replayOf("20261001-090000", "in-a", day(1), byName("old-race"), 1),
+		replayOf("20261002-090000", "in-a", day(2), byName("miss-6"), 1),
+		replayOf("20261003-090000", "in-a", day(3), byName("coupon-scope"), 1),
+		replayOf("20261004-090000", "in-a", day(4), byName("decline-4"), 0),
+		replayOf("20261004-100000", "in-a", day(4), byName("miss-3"), 1), // a target
+		replayOf("20261005-090000", "in-a", day(5), byName("miss-5"), 1), // flagged
+	}
+	flagged := func(pr string) bool { return strings.HasPrefix(pr, "example/flagged") }
+	pick := func(runs []eval.Run, skip string, since time.Time) []string {
+		var out []string
+		for _, c := range SelectCases(corpus, []string{"miss-3"}, watchedOnly("talkable/", "example/"), flagged, 1, GuardsFrom(runs, 2, skip, since)) {
+			if c.Guard {
+				out = append(out, c.Case.Name)
+			}
+		}
+		return out
+	}
+	if got := pick(runs, "", time.Time{}); !slices.Equal(got, []string{"old-race", "miss-6"}) {
+		t.Fatalf("guards = %q, want the two least recently replayed: old-race, miss-6", got)
+	}
+	// A gate replays them; the next takes coupon-scope, then the least
+	// recently replayed of the two.
+	runs = append(runs, replayOf("20261006-090000", "in-b", day(6), byName("old-race"), 1),
+		replayOf("20261006-100000", "in-b", day(6).Add(time.Hour), byName("miss-6"), 1))
+	if got := pick(runs, "", time.Time{}); !slices.Equal(got, []string{"coupon-scope", "old-race"}) {
+		t.Fatalf("the next gate's guards = %q, want coupon-scope, old-race", got)
+	}
+	// A newest replay that found nothing makes no guard, unless it is the
+	// candidate's own.
+	lost := append(slices.Clone(runs), replayOf("20261007-090000", "in-cand", day(7), byName("coupon-scope"), 0))
+	if got := pick(lost, "", time.Time{}); !slices.Equal(got, []string{"old-race", "miss-6"}) {
+		t.Fatalf("guards once coupon-scope's newest replay found nothing = %q, want old-race, miss-6", got)
+	}
+	if got := pick(lost, "in-cand", time.Time{}); !slices.Equal(got, []string{"coupon-scope", "old-race"}) {
+		t.Fatalf("the candidate's own replay of coupon-scope took its guard place: %q", got)
+	}
+	// The replays since the proposal was made do not move the order.
+	if got := pick(runs, "", day(6)); !slices.Equal(got, []string{"old-race", "miss-6"}) {
+		t.Fatalf("guards of a proposal made before the 6th = %q, want those its first gate took", got)
 	}
 }
 
 func TestSelectCasesSkipsAFlaggedOrUnwatchedTarget(t *testing.T) {
 	flagged := func(pr string) bool { return strings.HasPrefix(pr, "example/flagged") }
-	got := SelectCases(gateCorpus(), []string{"miss-5", "old-race", "miss-99", "miss-3"}, watchedOnly("talkable/", "example/flagged"), flagged, 6)
+	got := SelectCases(gateCorpus(), []string{"miss-5", "old-race", "miss-99", "miss-3"}, watchedOnly("talkable/", "example/flagged"), flagged, 6, Guards{})
 	want := []string{"miss-5* (" + SkipFlagged + ")", "old-race* (" + SkipNotWatched + ")", "miss-99* (" + SkipNotInCorpus + ")", "miss-3*",
 		"miss-6", "decline-4", "coupon-scope"}
 	if !slices.Equal(names(got), want) {
@@ -86,7 +213,7 @@ func TestSelectCasesSkipsAFlaggedOrUnwatchedTarget(t *testing.T) {
 		t.Fatalf("a target not in the corpus = %+v, want its name alone", got[2].Case)
 	}
 	// A flagged PR in no watch is flagged first: it is never replayed.
-	got = SelectCases(gateCorpus(), []string{"miss-5"}, func(string) bool { return false }, flagged, 6)
+	got = SelectCases(gateCorpus(), []string{"miss-5"}, func(string) bool { return false }, flagged, 6, Guards{})
 	if got[0].Skip != SkipFlagged {
 		t.Fatalf("a flagged unwatched target is skipped %q, want %q", got[0].Skip, SkipFlagged)
 	}
@@ -113,7 +240,7 @@ func score(found []string, missed []string, hits ...string) *eval.Score {
 
 func TestJudgePassesWhenATargetImprovesAndNothingIsLost(t *testing.T) {
 	rows := []GateRow{
-		{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil)},
+		{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil), Confirmed: true},
 		{Case: "coupon-scope", Before: score([]string{"a"}, []string{"b"}), After: score([]string{"a", "b"}, nil)},
 	}
 	v := Judge(rows)
@@ -141,7 +268,7 @@ func TestJudgeHoldsAProposalThatImprovesOnlyDeclinedFindings(t *testing.T) {
 			t.Errorf("%s: verdict = %+v, want held naming decline-4", name, v)
 		}
 	}
-	found := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil)}
+	found := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil), Confirmed: true}
 	if v := Judge([]GateRow{decline, found}); v.State != GatePassed || !strings.Contains(v.Rule, "decline-4") || !strings.Contains(v.Rule, "miss-3") {
 		t.Fatalf("a miss found too: %+v, want passed naming both", v)
 	}
@@ -176,7 +303,7 @@ func TestATargetTheBaselineCoversIsNoTarget(t *testing.T) {
 	}
 	covered := GateRow{Case: "miss-3", Target: true, Before: score([]string{"miss-3"}, nil), Skip: SkipFoundAtBaseline}
 	declined := GateRow{Case: "decline-4", Target: true, Before: score(nil, nil), Skip: SkipNotReportedAtBaseline}
-	found := GateRow{Case: "miss-6", Target: true, Before: score(nil, []string{"miss-6"}), After: score([]string{"miss-6"}, nil)}
+	found := GateRow{Case: "miss-6", Target: true, Before: score(nil, []string{"miss-6"}), After: score([]string{"miss-6"}, nil), Confirmed: true}
 	unmoved := GateRow{Case: "miss-6", Target: true, Before: score(nil, []string{"miss-6"}), After: score(nil, []string{"miss-6"})}
 	other := GateRow{Case: "coupon-scope", Before: score([]string{"a"}, nil), After: score([]string{"a"}, nil)}
 	if v := Judge([]GateRow{covered, declined, other}); v.State != GateFailed || !strings.Contains(v.Rule, "at the baseline") ||
@@ -207,7 +334,7 @@ func TestATargetTheBaselineCoversIsNoTarget(t *testing.T) {
 // the first target SelectCases left out over its cap.
 func TestPromoteTargetGivesACoveredTargetsPlaceToTheNext(t *testing.T) {
 	all, none := func(string) bool { return true }, func(string) bool { return false }
-	cases := SelectCases(gateCorpus(), []string{"miss-3", "decline-4", "miss-6"}, all, none, 1)
+	cases := SelectCases(gateCorpus(), []string{"miss-3", "decline-4", "miss-6"}, all, none, 1, Guards{})
 	if got := names(cases); !slices.Equal(got, []string{"miss-3*", "decline-4* (" + skipOverCap(1) + ")", "miss-6* (" + skipOverCap(1) + ")"}) {
 		t.Fatalf("cases = %q", got)
 	}
@@ -223,7 +350,7 @@ func TestPromoteTargetGivesACoveredTargetsPlaceToTheNext(t *testing.T) {
 }
 
 func TestJudgeFailsALostCaseOnlyAfterARetry(t *testing.T) {
-	target := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil)}
+	target := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil), Confirmed: true}
 	lost := GateRow{Case: "coupon-scope", Before: score([]string{"a", "b"}, nil), After: score([]string{"a"}, []string{"b"})}
 	if got := lost.Lost(); !slices.Equal(got, []string{"b"}) {
 		t.Fatalf("Lost() = %q, want [b]", got)
@@ -243,8 +370,82 @@ func TestJudgeFailsALostCaseOnlyAfterARetry(t *testing.T) {
 	}
 }
 
+// A guard's baseline is the newest stored replay (Stored), of whatever
+// inputs, until the candidate lost one of its defects on both replays: that
+// loss never counts against the stored replay (nor a declined finding it did
+// not report), only against the base's score (AtBase). A defect the base
+// finds and the candidate lost twice is a regression, as for any lost case.
+func TestJudgeFailsAGuardTheCandidateLostTwiceAndTheBaseFinds(t *testing.T) {
+	target := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil), Confirmed: true}
+	guard := GateRow{Case: "coupon-scope", Guard: true, Stored: true, Before: score([]string{"a"}, []string{"b"}),
+		After: score(nil, []string{"a", "b"}, "decline-9"), Retried: true}
+	if got := guard.Lost(); !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("Lost() = %q, want [a]", got)
+	}
+	if v := Judge([]GateRow{target, guard}); v.State != GatePassed {
+		t.Fatalf("a guard lost against the stored replay, before the base's score: %+v, want passed", v)
+	}
+	if lostAtBase := guard.AtBase(score([]string{"a", "b"}, nil)); lostAtBase || guard.Stored || guard.Skip != "" {
+		t.Fatalf("AtBase = %v, row %+v: want the base's score as the baseline, compared", lostAtBase, guard)
+	}
+	v := Judge([]GateRow{target, guard})
+	if v.State != GateFailed || !strings.Contains(v.Rule, "coupon-scope lost a, b after a second replay") ||
+		!strings.Contains(v.Rule, "decline-9") {
+		t.Fatalf("verdict = %+v, want failed: coupon-scope lost a and b, and a new hit", v)
+	}
+}
+
+// A guard the candidate lost twice that the base loses too is not the
+// candidate's loss: the row is skipped (SkipLostAtBase), so it is no
+// regression, and the gate says the review at the base no longer finds it.
+func TestAGuardTheBaseAlsoLosesIsSkippedNotARegression(t *testing.T) {
+	target := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil), Confirmed: true}
+	guard := GateRow{Case: "coupon-scope", Guard: true, Stored: true, Before: score([]string{"a"}, []string{"b"}),
+		After: score([]string{"b"}, []string{"a"}), Retried: true}
+	if lostAtBase := guard.AtBase(score([]string{"b"}, []string{"a"})); !lostAtBase || guard.Skip != SkipLostAtBase || guard.Stored {
+		t.Fatalf("AtBase = %v, row %+v: want it skipped as %q", lostAtBase, guard, SkipLostAtBase)
+	}
+	if v := Judge([]GateRow{target, guard}); v.State != GatePassed || len(guard.Lost()) != 0 {
+		t.Fatalf("verdict = %+v, want passed on miss-3: the loss is not the candidate's", v)
+	}
+}
+
+// A miss target the candidate found more of than the baseline is replayed
+// once more: the win counts (Confirmed) only when the second replay finds
+// more than the baseline too; otherwise the target did not improve, and the
+// dismissal after two failed gates applies to its input. A declined finding
+// no longer reported needs no second replay (the gate holds a proposal that
+// improves only those).
+func TestJudgePassesAMissWinOnlyWhenTheSecondReplayFindsItToo(t *testing.T) {
+	won := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil)}
+	if !won.WonOnce() {
+		t.Fatalf("a miss found by the first replay: WonOnce false: %+v", won)
+	}
+	if v := Judge([]GateRow{won}); v.State != GateFailed || !strings.Contains(v.Rule, "miss-3 found by the first replay only") {
+		t.Fatalf("a win no second replay confirmed: %+v, want failed naming it", v)
+	}
+	again := won
+	again.Confirm(score([]string{"miss-3"}, nil))
+	if v := Judge([]GateRow{again}); !again.Confirmed || v.State != GatePassed || !strings.Contains(v.Rule, "miss-3 found (0 → 1 of 1) on two replays") ||
+		again.TargetGate() != store.LearnTargetImproved {
+		t.Fatalf("a win the second replay found too: %+v (row %+v), want passed", v, again)
+	}
+	once := won
+	once.Confirm(score(nil, []string{"miss-3"}))
+	if v := Judge([]GateRow{once}); once.Confirmed || v.State != GateFailed || once.TargetGate() != store.LearnTargetNotImproved {
+		t.Fatalf("a win the second replay did not find: %+v (row %+v), want failed, not improved", v, once)
+	}
+	decline := GateRow{Case: "decline-4", Target: true, Before: score(nil, nil, "decline-4"), After: score(nil, nil)}
+	if decline.WonOnce() || (GateRow{Case: "coupon-scope", Before: score(nil, []string{"a"}), After: score([]string{"a"}, nil)}).WonOnce() {
+		t.Fatal("a decline target or a case that is no target is replayed again for its win")
+	}
+	if v := Judge([]GateRow{decline}); v.State != GateHeld {
+		t.Fatalf("a decline no longer reported: %+v, want held as before", v)
+	}
+}
+
 func TestJudgeFailsANewAbsentHit(t *testing.T) {
-	target := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil)}
+	target := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil), Confirmed: true}
 	hit := GateRow{Case: "decline-4", Before: score(nil, nil), After: score(nil, nil, "decline-4")}
 	if got := hit.NewHits(); !slices.Equal(got, []string{"decline-4"}) {
 		t.Fatalf("NewHits() = %q", got)

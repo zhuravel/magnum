@@ -5205,7 +5205,10 @@ type Learn struct {
 	EditorPrompt         string   `toml:"editor_prompt"`
 	EditorTimeout        Duration `toml:"editor_timeout"`
 	EditorFallbackModels []string `toml:"editor_fallback_models"`
-	// GateCases bounds the eval cases the gate of a proposal replays,
+	// GateCases bounds the eval cases the gate of a proposal replays, its
+	// targets and the newest others; GateGuards (0 to 10, 0 = none) adds
+	// that many guards on top, cases whose newest replay found a defect,
+	// which the candidate must find again (learn.SelectCases);
 	// LandPerDay the proposals that land per local day; Restart is idle
 	// (the daemon restarts on a landed change once nothing is in flight) or
 	// manual (it asks for `magnum daemon-restart --when-idle`). The newest
@@ -5215,6 +5218,7 @@ type Learn struct {
 	// proposal, which the gate holds for review (internal/engine
 	// learn_revert.go).
 	GateCases             int    `toml:"gate_cases"`
+	GateGuards            int    `toml:"gate_guards"`
 	LandPerDay            int    `toml:"land_per_day"`
 	Restart               string `toml:"restart"`
 	RegressionPoints      int    `toml:"regression_points"`
@@ -8482,11 +8486,14 @@ type GateCase struct {
 	learn.GateRow
 	BaselineRun  string `json:"baseline_run,omitempty"`
 	CandidateRun string `json:"candidate_run,omitempty"` // a second replay's when Retried
+	SecondRun    string `json:"second_run,omitempty"`    // a won miss target's second replay (learn.GateRow.Confirm)
 	ReportsRun   string `json:"reports_run,omitempty"`
 }
-    GateCase is one case of a gate's result: the row learn.Judge read, the
-    eval runs its two scores come from and, judge-only, the full replay whose
-    reviewer reports both judges read.
+    GateCase is one case of a gate's result: the row learn.Judge read,
+    the eval runs its two scores come from (a guard's stored baseline's run, or
+    the base's once the candidate lost it twice), the run of a won miss target's
+    second replay and, judge-only, the full replay whose reviewer reports both
+    judges read.
 
 type GateMark struct {
 	Proposal int64     `json:"proposal"`
@@ -9777,6 +9784,24 @@ func FlaggedCase(flagged map[string]Flagged, c Case) (Flagged, bool)
 func (f Flagged) Refusal() string
     Refusal says why the case is not replayed.
 
+type Replay struct {
+	Run    string
+	Inputs string
+	At     time.Time
+	Case   CaseRun
+}
+    Replay is a stored replay of a case (NewestReplay): the run that made it,
+    the inputs that run recorded (Run.Inputs, "" before they were), when the
+    case started (its run's start when the case recorded none) and the case as
+    the run recorded it.
+
+func NewestReplay(runs []Run, c Case, skip string) (Replay, bool)
+    NewestReplay is the newest stored replay of c at the head the corpus pins
+    that has a score, a full or a judge-only one, from a clean checkout or not,
+    leaving out the runs that recorded inputs skip ("" leaves none out;
+    the skill gate leaves out its candidate's own). runs are oldest first
+    (ListRuns); ok is false when there is none.
+
 type Result struct {
 	Status   string
 	Event    string
@@ -9996,7 +10021,11 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
     a refused replay is flagged (eval.MarkFlagged) so that it never runs again.
     It starts nothing for options without an absolute RunDir or an AgentTag
     (checked first), for a case Refused names, of a repository no watch covers,
-    or whose candidate is no candidate.
+    or whose candidate is no candidate. One replay of a case runs at a time,
+    whoever starts it (`magnum eval run`, eval-at.sh through it, the daemon's
+    gate): it holds the case's lock (lockCase) from its first check to the end
+    of its cleanup, a second replay of the case waiting for it, and Started is
+    when it took the lock.
 
 func RunsRoot(l paths.Layout) string
     RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/,
@@ -13339,6 +13368,10 @@ const (
 	// baseline covers already: its input retires (store.LearnTargetBaseline).
 	SkipFoundAtBaseline       = store.LearnDismissedFound
 	SkipNotReportedAtBaseline = store.LearnDismissedNotReported
+	// SkipLostAtBase is a guard the candidate lost a defect of on both
+	// replays that the base lost too (GateRow.AtBase): the loss is not the
+	// candidate's.
+	SkipLostAtBase = "lost at the base too"
 )
     Why SelectCases leaves a target out, and why the gate does once it has the
     target's baseline (AtBaseline).
@@ -13516,6 +13549,13 @@ func PromoteTarget(cases []GateCase, after int) bool
     PromoteTarget gives the place of the target at cases[after], which the
     baseline covers, to the first target after it that SelectCases left out over
     its cap, which becomes runnable; false when there is none.
+
+func Regressions(rows []GateRow) []string
+    Regressions names how rows regressed (none = they did not): a defect the
+    baseline found and the candidate lost, once replayed again (Retried), or a
+    declined finding the candidate reports and the baseline did not. A guard
+    compared with a stored replay of other inputs (Stored) counts for neither:
+    only the base's score may (AtBase).
 
 func RevertEntry(decision, day string) string
     RevertEntry is the design log's entry for a revert of a skill version:
@@ -13744,31 +13784,55 @@ type FileChange struct {
 type GateCase struct {
 	Case   eval.Case
 	Target bool
+	Guard  bool
 	Skip   string
 }
     GateCase is a case the gate replays, or a target it cannot (Skip says why;
-    Case has the target's name alone when the corpus lacks it).
+    Case has the target's name alone when the corpus lacks it). Guard marks a
+    guard place (Guards).
 
-func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int) []GateCase
+func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int, guards Guards) []GateCase
     SelectCases picks a proposal's cases from corpus (nil = none): every target,
     in its order, first (one the corpus lacks, whose PR is flagged or in no
-    watch is skipped with why, and one past limit too), then the newest other
-    cases (the corpus's last first: the learned ones come after the operator's,
-    oldest first) whose PR is watched and not flagged, until limit cases can
-    run. A flagged PR is never replayed, watched or not.
+    watch is skipped with why, and one past limit too), then the guard places
+    (guards, on top of limit, so targets never crowd them out; a guard is never
+    a target), then the newest other cases (the corpus's last first: the learned
+    ones come after the operator's, oldest first) whose PR is watched and not
+    flagged, until limit targets and others can run. A flagged PR is never
+    replayed, watched or not.
 
 type GateRow struct {
-	Case    string      `json:"case"`
-	Target  bool        `json:"target,omitempty"`
-	Before  *eval.Score `json:"before,omitempty"`
-	After   *eval.Score `json:"after,omitempty"`
-	Retried bool        `json:"retried,omitempty"`
-	Skip    string      `json:"skip,omitempty"`
+	Case      string      `json:"case"`
+	Target    bool        `json:"target,omitempty"`
+	Guard     bool        `json:"guard,omitempty"`
+	Before    *eval.Score `json:"before,omitempty"`
+	After     *eval.Score `json:"after,omitempty"`
+	Stored    bool        `json:"stored,omitempty"`
+	Retried   bool        `json:"retried,omitempty"`
+	Confirmed bool        `json:"confirmed,omitempty"`
+	Skip      string      `json:"skip,omitempty"`
+	Note      string      `json:"note,omitempty"`
 }
     GateRow is a case of the gate: its score at the baseline (the newest replay
     with master's prompts and skill) and with the candidate's, or why it was not
     compared (Skip). Retried is set once the caller replayed a lost case again,
     After then being the second replay's: only then does a loss count.
+    A guard (Guard) keeps the newest stored replay as its baseline (Stored),
+    of whatever inputs, while the candidate finds what that replay found;
+    one it lost twice takes the base's score (AtBase). A miss target won on one
+    replay counts once a second finds it too (Confirmed, Confirm). Note says,
+    for the operator, what a guard's baseline or a second replay was.
+
+func (r *GateRow) AtBase(base *eval.Score) bool
+    AtBase gives guard row r, whose candidate lost a defect of its stored
+    baseline on both replays, the base's score as its baseline, and reports
+    whether the base lost every such defect too: the row is then skipped
+    (SkipLostAtBase), the loss not the candidate's; otherwise a defect the base
+    finds and the candidate lost is a regression (Judge).
+
+func (r *GateRow) Confirm(second *eval.Score)
+    Confirm records the second candidate replay of row r (WonOnce): the win
+    counts (Confirmed) only when second finds more than the baseline too.
 
 func (r GateRow) Lost() []string
     Lost names the defects the baseline found that the candidate did not.
@@ -13781,6 +13845,35 @@ func (r GateRow) TargetGate() string
     TargetGate is what target row r says of its input's learned case
     (store.LearnTarget*): covered at the baseline, improved or not once
     compared; "" for a row that is no target or was not compared.
+
+func (r GateRow) WonOnce() bool
+    WonOnce reports whether target row r is a miss case its candidate's first
+    replay found more of than the baseline: the gate replays it again (Confirm)
+    before the win counts. A declined finding no longer reported is not replayed
+    again.
+
+type Guards struct {
+	N     int
+	Found func(c eval.Case) bool
+	Last  func(c eval.Case) time.Time
+}
+    Guards are a gate's guard places (SelectCases): up to N cases besides
+    the targets whose newest stored replay found a defect (Found), the least
+    recently replayed first (Last; zero = never, a nil Last orders none),
+    so successive gates take turns through them: a gate always has cases whose
+    baseline found something the candidate can lose, which its targets (their
+    baseline finds nothing yet) and the newest others (mostly declined findings,
+    with nothing to find) seldom are. N = 0 or a nil Found gives none.
+
+func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time) Guards
+    GuardsFrom are n guard places over the stored runs (oldest first:
+    eval.ListRuns), which the gate and `magnum eval guards` both take: a case
+    guards when its newest scored replay at its head (eval.NewestReplay) found
+    a defect, the runs with inputs skip left out (the gate's candidate's own,
+    so a gate that stops short after its candidate lost a guard still guards it;
+    "" = none), and is ordered by its newest such replay among the runs started
+    before since (zero = every run; the gate's proposal's creation, so every
+    gate of one proposal takes the same guards whatever it replayed of them).
 
 type Input struct {
 	// Author is the pull request's author in Account form
@@ -14019,16 +14112,15 @@ type Verdict struct {
     GateFailed), the Rule that decided it, as a sentence, and the rows it read.
 
 func Judge(rows []GateRow) Verdict
-    Judge decides a proposal on its rows. It fails one that regressed: a defect
-    the baseline found and the candidate lost, once replayed again (Retried),
-    or a declined finding the candidate reports and the baseline did not;
-    else it passes one whose targets include a miss that improved (improved),
-    and holds one whose improved targets are all declines (RuleOnlyDeclines:
-    one author's reply and one classifier's answer would otherwise remove a
-    class of findings from every review unseen); a target the baseline covers
-    (AtBaseline) is no target, so it fails one whose every target is so (nothing
-    to improve); else it holds one none of whose targets could be compared,
-    and fails the rest (no target improved).
+    Judge decides a proposal on its rows. It fails one that regressed
+    (Regressions); else it passes one whose targets include a miss that improved
+    on both replays (improved), and holds one whose improved targets are all
+    declines (RuleOnlyDeclines: one author's reply and one classifier's answer
+    would otherwise remove a class of findings from every review unseen);
+    a target the baseline covers (AtBaseline) is no target, so it fails one
+    whose every target is so (nothing to improve); else it holds one none of
+    whose targets could be compared, and fails the rest (no target improved,
+    a miss its second replay did not find again included).
 
 ```
 

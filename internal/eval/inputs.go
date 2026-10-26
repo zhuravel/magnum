@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // HashNotes is the SHA-256 (hex) of each notes file a replay gives the judge: the repository's
@@ -194,4 +195,37 @@ func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baselin
 		}
 	}
 	return out
+}
+
+// Replay is a stored replay of a case (NewestReplay): the run that made it, the inputs that run
+// recorded (Run.Inputs, "" before they were), when the case started (its run's start when the case
+// recorded none) and the case as the run recorded it.
+type Replay struct {
+	Run    string
+	Inputs string
+	At     time.Time
+	Case   CaseRun
+}
+
+// NewestReplay is the newest stored replay of c at the head the corpus pins that has a score, a full
+// or a judge-only one, from a clean checkout or not, leaving out the runs that recorded inputs skip
+// ("" leaves none out; the skill gate leaves out its candidate's own). runs are oldest first
+// (ListRuns); ok is false when there is none.
+func NewestReplay(runs []Run, c Case, skip string) (Replay, bool) {
+	for _, r := range slices.Backward(runs) {
+		if skip != "" && r.Inputs == skip {
+			continue
+		}
+		for _, cr := range slices.Backward(r.Cases) {
+			if cr.Case != c.Name || cr.Head != c.Head || cr.Score == nil {
+				continue
+			}
+			at := cr.Started
+			if at.IsZero() {
+				at = r.Started
+			}
+			return Replay{Run: r.ID, Inputs: r.Inputs, At: at, Case: cr}, true
+		}
+	}
+	return Replay{}, false
 }

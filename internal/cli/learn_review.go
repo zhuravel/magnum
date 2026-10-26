@@ -286,9 +286,10 @@ func learnPrintReview(w io.Writer, color bool, data learnReviewData) {
 }
 
 // learnPrintGate writes the gate's result as a table: the verdict, the mode
-// and the rule, then each case (a target starred) with what the baseline
-// and the candidate found of its defects, the declined findings each
-// reported, and why a case was not compared.
+// and the rule, then each case (a target starred, a guard marked +) with
+// what the baseline and the candidate found of its defects, the declined
+// findings each reported, and why a case was not compared, then what its
+// baseline or second replay was (learn.GateRow.Note).
 func learnPrintGate(w io.Writer, g engine.GateResult) {
 	head := strings.TrimSpace(strings.Join([]string{g.State, map[string]string{"": "", learn.GateJudgeOnly: "(the judge alone)",
 		learn.GateFull: "(every role)"}[g.Mode]}, " "))
@@ -311,11 +312,17 @@ func learnPrintGate(w io.Writer, g engine.GateResult) {
 	}
 	tw := inspTable(w)
 	fmt.Fprintln(tw, "  CASE\tBASELINE\tCANDIDATE\tNOTE")
+	guards := false
 	for _, c := range g.Cases {
-		name, note := c.Case, c.Skip
+		name := c.Case
 		if c.Target {
 			name += "*"
 		}
+		if c.Guard {
+			name += "+"
+			guards = true
+		}
+		note := strings.Join(slices.DeleteFunc([]string{c.Skip, c.Note}, func(s string) bool { return s == "" }), ": ")
 		if c.Retried && note == "" {
 			note = "replayed twice"
 		}
@@ -323,6 +330,9 @@ func learnPrintGate(w io.Writer, g engine.GateResult) {
 	}
 	_ = tw.Flush()
 	fmt.Fprintln(w, "  * a target: the learned case of an input the proposal noted")
+	if guards {
+		fmt.Fprintln(w, "  + a guard: a case whose newest replay found a defect, which the candidate must find again")
+	}
 }
 
 // learnPrintDiff writes a git diff, colored on a terminal, its text made

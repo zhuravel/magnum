@@ -72,7 +72,10 @@ type Learn struct {
 	EditorPrompt         string   `toml:"editor_prompt"`
 	EditorTimeout        Duration `toml:"editor_timeout"`
 	EditorFallbackModels []string `toml:"editor_fallback_models"`
-	// GateCases bounds the eval cases the gate of a proposal replays,
+	// GateCases bounds the eval cases the gate of a proposal replays, its
+	// targets and the newest others; GateGuards (0 to 10, 0 = none) adds
+	// that many guards on top, cases whose newest replay found a defect,
+	// which the candidate must find again (learn.SelectCases);
 	// LandPerDay the proposals that land per local day; Restart is idle
 	// (the daemon restarts on a landed change once nothing is in flight) or
 	// manual (it asks for `magnum daemon-restart --when-idle`). The newest
@@ -82,6 +85,7 @@ type Learn struct {
 	// proposal, which the gate holds for review (internal/engine
 	// learn_revert.go).
 	GateCases             int    `toml:"gate_cases"`
+	GateGuards            int    `toml:"gate_guards"`
 	LandPerDay            int    `toml:"land_per_day"`
 	Restart               string `toml:"restart"`
 	RegressionPoints      int    `toml:"regression_points"`
@@ -152,6 +156,7 @@ func DefaultLearn() Learn {
 		EditorPrompt:          DefaultEditorPrompt,
 		EditorTimeout:         Duration{45 * time.Minute},
 		GateCases:             6,
+		GateGuards:            2,
 		LandPerDay:            1,
 		Restart:               LearnRestartIdle,
 		RegressionPoints:      10,
@@ -277,7 +282,8 @@ func (c *Config) validateLearn() []error {
 // learn --propose` runs it whether or not editor is on): editor_kind is a
 // declared agent kind whose role (EditorRole) passes a [[role]]'s checks,
 // editor_prompt resolves and parses, the timeout and the gate's numbers are
-// positive, restart is idle or manual and regression_points is 1 to 100.
+// positive (gate_guards 0 to 10), restart is idle or manual and
+// regression_points is 1 to 100.
 func (c *Config) validateEditor() []error {
 	l := c.Learn
 	var errs []error
@@ -304,6 +310,9 @@ func (c *Config) validateEditor() []error {
 		if n.v <= 0 {
 			errs = append(errs, fmt.Errorf("learn.%s must be positive, got %d", n.key, n.v))
 		}
+	}
+	if l.GateGuards < 0 || l.GateGuards > 10 {
+		errs = append(errs, fmt.Errorf("learn.gate_guards must be 0 to 10, got %d", l.GateGuards))
 	}
 	if l.Restart != LearnRestartIdle && l.Restart != LearnRestartManual {
 		errs = append(errs, fmt.Errorf("learn.restart %q: want %s or %s", l.Restart, LearnRestartIdle, LearnRestartManual))

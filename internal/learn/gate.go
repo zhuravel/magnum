@@ -2,17 +2,20 @@ package learn
 
 // The gate of a skill proposal (DECISIONS "The gate replays the learned
 // cases"): the eval cases a proposal is scored on (SelectCases: the learned
-// cases of the inputs it noted, its targets, then the newest other cases
-// that can be replayed, up to [learn] gate_cases), whether the judge alone
-// replays them (Mode: only the judge skill and the judge prompts changed)
-// and what the replays say against the baseline's (Judge: passed, held or
-// failed). The engine runs the replays (internal/engine/learn_gate.go).
+// cases of the inputs it noted, its targets, then up to [learn] gate_guards
+// guards, cases whose newest replay found a defect, then the newest other
+// cases that can be replayed, the targets and the others up to [learn]
+// gate_cases), whether the judge alone replays them (Mode: only the judge
+// skill and the judge prompts changed) and what the replays say against the
+// baseline's (Judge: passed, held or failed). The engine runs the replays
+// (internal/engine/learn_gate.go).
 
 import (
 	"fmt"
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/store"
@@ -41,6 +44,10 @@ const (
 	// baseline covers already: its input retires (store.LearnTargetBaseline).
 	SkipFoundAtBaseline       = store.LearnDismissedFound
 	SkipNotReportedAtBaseline = store.LearnDismissedNotReported
+	// SkipLostAtBase is a guard the candidate lost a defect of on both
+	// replays that the base lost too (GateRow.AtBase): the loss is not the
+	// candidate's.
+	SkipLostAtBase = "lost at the base too"
 )
 
 // overCapPrefix opens skipOverCap's reason.
@@ -89,21 +96,94 @@ func PromoteTarget(cases []GateCase, after int) bool {
 func TargetName(kind string, id int64) string { return fmt.Sprintf("%s-%d", kind, id) }
 
 // GateCase is a case the gate replays, or a target it cannot (Skip says
-// why; Case has the target's name alone when the corpus lacks it).
+// why; Case has the target's name alone when the corpus lacks it). Guard
+// marks a guard place (Guards).
 type GateCase struct {
 	Case   eval.Case
 	Target bool
+	Guard  bool
 	Skip   string
+}
+
+// Guards are a gate's guard places (SelectCases): up to N cases besides the
+// targets whose newest stored replay found a defect (Found), the least
+// recently replayed first (Last; zero = never, a nil Last orders none), so
+// successive gates take turns through them: a gate always has cases whose
+// baseline found something the candidate can lose, which its targets
+// (their baseline finds nothing yet) and the newest others (mostly declined
+// findings, with nothing to find) seldom are. N = 0 or a nil Found gives
+// none.
+type Guards struct {
+	N     int
+	Found func(c eval.Case) bool
+	Last  func(c eval.Case) time.Time
+}
+
+// GuardsFrom are n guard places over the stored runs (oldest first:
+// eval.ListRuns), which the gate and `magnum eval guards` both take: a case
+// guards when its newest scored replay at its head (eval.NewestReplay)
+// found a defect, the runs with inputs skip left out (the gate's
+// candidate's own, so a gate that stops short after its candidate lost a
+// guard still guards it; "" = none), and is ordered by its newest such
+// replay among the runs started before since (zero = every run; the gate's
+// proposal's creation, so every gate of one proposal takes the same guards
+// whatever it replayed of them).
+func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time) Guards {
+	older := runs
+	if !since.IsZero() {
+		older = slices.DeleteFunc(slices.Clone(runs), func(r eval.Run) bool { return !r.Started.Before(since) })
+	}
+	return Guards{N: n,
+		Found: func(c eval.Case) bool {
+			r, ok := eval.NewestReplay(runs, c, skip)
+			return ok && r.Case.Score.Found > 0
+		},
+		Last: func(c eval.Case) time.Time {
+			r, _ := eval.NewestReplay(older, c, skip)
+			return r.At
+		},
+	}
+}
+
+// pick is g's guard places among cases, none of them seen (a target)
+// or skipped (skip: a flagged or unwatched PR), which it marks seen.
+func (g Guards) pick(cases []eval.Case, seen map[string]bool, skip func(eval.Case) string) []GateCase {
+	if g.N <= 0 || g.Found == nil {
+		return nil
+	}
+	type candidate struct {
+		c    eval.Case
+		last time.Time
+	}
+	var cands []candidate
+	for _, c := range cases {
+		if seen[c.Name] || skip(c) != "" || !g.Found(c) {
+			continue
+		}
+		cand := candidate{c: c}
+		if g.Last != nil {
+			cand.last = g.Last(c)
+		}
+		cands = append(cands, cand)
+	}
+	slices.SortStableFunc(cands, func(a, b candidate) int { return a.last.Compare(b.last) })
+	var out []GateCase
+	for _, cand := range cands[:min(g.N, len(cands))] {
+		seen[cand.c.Name] = true
+		out = append(out, GateCase{Case: cand.c, Guard: true})
+	}
+	return out
 }
 
 // SelectCases picks a proposal's cases from corpus (nil = none): every
 // target, in its order, first (one the corpus lacks, whose PR is flagged
 // or in no watch is skipped with why, and one past limit too), then the
-// newest other cases (the corpus's last first: the learned ones come
-// after the operator's, oldest first) whose PR is watched and not flagged,
-// until limit cases can run. A flagged PR is never replayed, watched or
-// not.
-func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int) []GateCase {
+// guard places (guards, on top of limit, so targets never crowd them out;
+// a guard is never a target), then the newest other cases (the corpus's
+// last first: the learned ones come after the operator's, oldest first)
+// whose PR is watched and not flagged, until limit targets and others can
+// run. A flagged PR is never replayed, watched or not.
+func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int, guards Guards) []GateCase {
 	var cases []eval.Case
 	if corpus != nil {
 		cases = corpus.Cases
@@ -137,6 +217,7 @@ func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) 
 		}
 		out = append(out, g)
 	}
+	out = append(out, guards.pick(cases, seen, skip)...)
 	for _, c := range slices.Backward(cases) {
 		if runnable >= limit {
 			break
@@ -171,18 +252,55 @@ func Mode(files []string) string {
 // replay with master's prompts and skill) and with the candidate's, or why
 // it was not compared (Skip). Retried is set once the caller replayed a
 // lost case again, After then being the second replay's: only then does a
-// loss count.
+// loss count. A guard (Guard) keeps the newest stored replay as its
+// baseline (Stored), of whatever inputs, while the candidate finds what that
+// replay found; one it lost twice takes the base's score (AtBase). A miss
+// target won on one replay counts once a second finds it too (Confirmed,
+// Confirm). Note says, for the operator, what a guard's baseline or a
+// second replay was.
 type GateRow struct {
-	Case    string      `json:"case"`
-	Target  bool        `json:"target,omitempty"`
-	Before  *eval.Score `json:"before,omitempty"`
-	After   *eval.Score `json:"after,omitempty"`
-	Retried bool        `json:"retried,omitempty"`
-	Skip    string      `json:"skip,omitempty"`
+	Case      string      `json:"case"`
+	Target    bool        `json:"target,omitempty"`
+	Guard     bool        `json:"guard,omitempty"`
+	Before    *eval.Score `json:"before,omitempty"`
+	After     *eval.Score `json:"after,omitempty"`
+	Stored    bool        `json:"stored,omitempty"`
+	Retried   bool        `json:"retried,omitempty"`
+	Confirmed bool        `json:"confirmed,omitempty"`
+	Skip      string      `json:"skip,omitempty"`
+	Note      string      `json:"note,omitempty"`
 }
 
 // compared reports whether r has both scores and was not skipped.
 func (r GateRow) compared() bool { return r.Skip == "" && r.Before != nil && r.After != nil }
+
+// AtBase gives guard row r, whose candidate lost a defect of its stored
+// baseline on both replays, the base's score as its baseline, and reports
+// whether the base lost every such defect too: the row is then skipped
+// (SkipLostAtBase), the loss not the candidate's; otherwise a defect the
+// base finds and the candidate lost is a regression (Judge).
+func (r *GateRow) AtBase(base *eval.Score) bool {
+	r.Before, r.Stored = base, false
+	if len(r.Lost()) > 0 {
+		return false
+	}
+	r.Skip = SkipLostAtBase
+	return true
+}
+
+// WonOnce reports whether target row r is a miss case its candidate's
+// first replay found more of than the baseline: the gate replays it again
+// (Confirm) before the win counts. A declined finding no longer reported is
+// not replayed again.
+func (r GateRow) WonOnce() bool {
+	return r.Target && r.compared() && strings.HasPrefix(r.Case, store.LearnInputMiss+"-") && r.After.Found > r.Before.Found
+}
+
+// Confirm records the second candidate replay of row r (WonOnce): the win
+// counts (Confirmed) only when second finds more than the baseline too.
+func (r *GateRow) Confirm(second *eval.Score) {
+	r.Confirmed = second != nil && r.Before != nil && second.Found > r.Before.Found
+}
 
 // Lost names the defects the baseline found that the candidate did not.
 func (r GateRow) Lost() []string {
@@ -214,15 +332,15 @@ func (r GateRow) NewHits() []string {
 }
 
 // improved says how target row r improved ("" = it did not): a missed
-// finding found more often (a miss- case), a declined finding reported
-// less (a decline- case).
+// finding found more often on both replays (a miss- case, Confirmed), a
+// declined finding reported less (a decline- case).
 func (r GateRow) improved() string {
 	if !r.Target || !r.compared() {
 		return ""
 	}
 	switch {
-	case strings.HasPrefix(r.Case, store.LearnInputMiss+"-") && r.After.Found > r.Before.Found:
-		return fmt.Sprintf("%s found (%d → %d of %d)", r.Case, r.Before.Found, r.After.Found, r.After.Total)
+	case r.WonOnce() && r.Confirmed:
+		return fmt.Sprintf("%s found (%d → %d of %d) on two replays", r.Case, r.Before.Found, r.After.Found, r.After.Total)
 	case strings.HasPrefix(r.Case, store.LearnInputDecline+"-") && len(r.After.AbsentHits) < len(r.Before.AbsentHits):
 		return fmt.Sprintf("%s no longer reported (%d → %d)", r.Case, len(r.Before.AbsentHits), len(r.After.AbsentHits))
 	}
@@ -259,19 +377,40 @@ type Verdict struct {
 // only targets it improved are declined findings (Judge).
 const RuleOnlyDeclines = "only declined findings improved: review the rule it adds"
 
-// Judge decides a proposal on its rows. It fails one that regressed: a
-// defect the baseline found and the candidate lost, once replayed again
-// (Retried), or a declined finding the candidate reports and the baseline
-// did not; else it passes one whose targets include a miss that improved
-// (improved), and holds one whose improved targets are all declines
-// (RuleOnlyDeclines: one author's reply and one classifier's answer would
-// otherwise remove a class of findings from every review unseen); a target
-// the baseline covers (AtBaseline) is no target, so it fails one whose every
-// target is so (nothing to improve); else it holds one none of whose targets
-// could be compared, and fails the rest (no target improved).
+// Regressions names how rows regressed (none = they did not): a defect the
+// baseline found and the candidate lost, once replayed again (Retried), or
+// a declined finding the candidate reports and the baseline did not. A
+// guard compared with a stored replay of other inputs (Stored) counts for
+// neither: only the base's score may (AtBase).
+func Regressions(rows []GateRow) []string {
+	var out []string
+	for _, r := range rows {
+		if r.Stored {
+			continue
+		}
+		if lost := r.Lost(); r.Retried && len(lost) > 0 {
+			out = append(out, fmt.Sprintf("%s lost %s after a second replay", r.Case, strings.Join(lost, ", ")))
+		}
+		if hits := r.NewHits(); len(hits) > 0 {
+			out = append(out, fmt.Sprintf("%s reports the declined %s the baseline did not (a new hit)", r.Case, strings.Join(hits, ", ")))
+		}
+	}
+	return out
+}
+
+// Judge decides a proposal on its rows. It fails one that regressed
+// (Regressions); else it passes one whose targets include a miss that
+// improved on both replays (improved), and holds one whose improved
+// targets are all declines (RuleOnlyDeclines: one author's reply and one
+// classifier's answer would otherwise remove a class of findings from every
+// review unseen); a target the baseline covers (AtBaseline) is no target,
+// so it fails one whose every target is so (nothing to improve); else it
+// holds one none of whose targets could be compared, and fails the rest (no
+// target improved, a miss its second replay did not find again included).
 func Judge(rows []GateRow) Verdict {
 	v := Verdict{Rows: rows}
-	var regressed, better, unchanged, covered []string
+	regressed := Regressions(rows)
+	var better, unchanged, once, covered []string
 	compared, targets, missBetter := 0, 0, false
 	for _, r := range rows {
 		switch {
@@ -280,22 +419,26 @@ func Judge(rows []GateRow) Verdict {
 		case r.Target:
 			targets++
 		}
-		if lost := r.Lost(); r.Retried && len(lost) > 0 {
-			regressed = append(regressed, fmt.Sprintf("%s lost %s after a second replay", r.Case, strings.Join(lost, ", ")))
-		}
-		if hits := r.NewHits(); len(hits) > 0 {
-			regressed = append(regressed, fmt.Sprintf("%s reports the declined %s the baseline did not (a new hit)", r.Case, strings.Join(hits, ", ")))
-		}
 		if !r.Target || !r.compared() {
 			continue
 		}
 		compared++
-		if s := r.improved(); s != "" {
+		switch s := r.improved(); {
+		case s != "":
 			better = append(better, s)
 			missBetter = missBetter || strings.HasPrefix(r.Case, store.LearnInputMiss+"-")
-		} else {
+		case r.WonOnce():
+			once = append(once, r.Case)
+		default:
 			unchanged = append(unchanged, r.Case)
 		}
+	}
+	var notImproved []string
+	if len(unchanged) > 0 {
+		notImproved = append(notImproved, strings.Join(unchanged, ", ")+" as at the baseline")
+	}
+	if len(once) > 0 {
+		notImproved = append(notImproved, strings.Join(once, ", ")+" found by the first replay only")
 	}
 	switch {
 	case len(regressed) > 0:
@@ -311,7 +454,7 @@ func Judge(rows []GateRow) Verdict {
 	case compared == 0:
 		v.State, v.Rule = GateHeld, "no target could be replayed"+skipped(rows)+", and nothing regressed"
 	default:
-		v.State, v.Rule = GateFailed, "no target improved ("+strings.Join(unchanged, ", ")+" as at the baseline)"
+		v.State, v.Rule = GateFailed, "no target improved ("+strings.Join(notImproved, "; ")+")"
 	}
 	return v
 }

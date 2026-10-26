@@ -75,8 +75,13 @@ Do without asking:
 A skill or prompt change made for a miss counts as visible to authors: ask, and propose to prove it with
 `MAGNUM_IMPROVE_RUN=<run-dir> scripts/eval-at.sh <sha> <label> <the miss's case>...` at master before and at the
 builder's commit after, in the background (it runs `magnum eval run` from a throwaway worktree at that sha and logs
-to `<run-dir>/tmp/`; each replayed case costs a review round of Codex usage). Name only the cases the change
-targets. A case a stored run replayed with the same skill, prompts and role config (run.json's `inputs`) is
+to `<run-dir>/tmp/`; each replayed case costs a review round of Codex usage). Name the cases the change targets
+plus 2 guard cases, picked as the skill gate picks its guards (cases whose newest replay found a defect, the least
+recently replayed first), so the proof shows what the change loses as well as what it finds: `magnum eval guards`
+prints them one per line and only reads, so take them once and pass the same ones before and after,
+`guards=$(magnum eval guards)`, then `scripts/eval-at.sh <sha> <label> <the miss's case>... $guards`. One case replays
+once at a time (a second replay of a case, the gate's included, waits for the first), so start the after once the
+before ended. A case a stored run replayed with the same skill, prompts and role config (run.json's `inputs`) is
 reused, not replayed, so the "before" usually costs nothing; one at a commit with other Go code is reused with a
 note that says so. The inputs leave magnum's code out: to measure a code change, pass `--fresh`, which replays
 every case. It prints the report with the Codex points each replayed case used (`codex: +2 points (…)`): record them in

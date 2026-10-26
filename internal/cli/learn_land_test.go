@@ -13,7 +13,8 @@ import (
 
 // TestLearnReviewShowsTheGateAsATable: the review prints the gate's
 // verdict, mode and rule, then each case with what the baseline and the
-// candidate found and why a case was not compared, a target starred.
+// candidate found and why a case was not compared, or what its baseline
+// was, a target starred and a guard marked.
 func TestLearnReviewShowsTheGateAsATable(t *testing.T) {
 	h := newLearnHarness(t)
 	g := engine.GateResult{State: store.LearnHeld, Mode: learn.GateJudgeOnly, Rule: "no target could be replayed (miss-3: no full replay)",
@@ -21,6 +22,10 @@ func TestLearnReviewShowsTheGateAsATable(t *testing.T) {
 			{GateRow: learn.GateRow{Case: "miss-3", Target: true, Skip: "no full replay"}},
 			{GateRow: learn.GateRow{Case: "coupon-scope", Before: &eval.Score{Found: 1, Total: 2}, After: &eval.Score{Found: 2, Total: 2,
 				AbsentHits: []eval.DefectResult{{ID: "decline-4"}}}, Retried: true}},
+			{GateRow: learn.GateRow{Case: "old-race", Guard: true, Stored: true, Before: &eval.Score{Found: 1, Total: 1}, After: &eval.Score{Found: 1, Total: 1},
+				Note: "a guard: its baseline is the newest stored replay, run 20261024-055716 with inputs 0123456789ab, not the base's"}},
+			{GateRow: learn.GateRow{Case: "geo", Guard: true, Before: &eval.Score{Total: 1}, After: &eval.Score{Total: 1}, Retried: true,
+				Skip: learn.SkipLostAtBase, Note: "a guard the candidate lost twice: run 20261024-055716 found what it lost, and the base's replay, run 20261026-100000, lost it too"}},
 		}}
 	b, err := json.Marshal(g)
 	if err != nil {
@@ -36,7 +41,9 @@ func TestLearnReviewShowsTheGateAsATable(t *testing.T) {
 	}
 	out := h.out.String()
 	actContains(t, out, "gate:\n  held (the judge alone): no target could be replayed (miss-3: no full replay)\n", "CASE", "BASELINE", "CANDIDATE",
-		"miss-3*", "no full replay", "coupon-scope", "1/2", "2/2, 1 declined reported", "replayed twice", "* a target")
+		"miss-3*", "no full replay", "coupon-scope", "1/2", "2/2, 1 declined reported", "replayed twice", "* a target",
+		"old-race+", "run 20261024-055716 with inputs 0123456789ab", "geo+", learn.SkipLostAtBase+": a guard the candidate lost twice",
+		"+ a guard: a case whose newest replay found a defect")
 	if strings.Contains(out, `"rule"`) {
 		t.Errorf("the gate is printed as JSON:\n%s", out)
 	}

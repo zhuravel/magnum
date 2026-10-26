@@ -605,45 +605,48 @@ func TestTheGatePassesACandidateThatFindsItsTarget(t *testing.T) {
 	f.h.tick()
 
 	p := f.proposal()
-	if p.State != store.LearnPassed || !strings.Contains(p.Reason, f.target.Name+" found (0 → 1 of 1)") || p.DecidedAt != nil {
+	if p.State != store.LearnPassed || !strings.Contains(p.Reason, f.target.Name+" found (0 → 1 of 1) on two replays") || p.DecidedAt != nil {
 		t.Fatalf("proposal = %s %q decided %v, want passed naming its target", p.State, p.Reason, p.DecidedAt)
 	}
 	base, cand := f.ev.callsFor(f.base), f.ev.callsFor(f.wt)
 	if len(base) != 1 || base[0].Case != f.other.Name || base[0].Opts.JudgeOnly {
 		t.Fatalf("baseline replays = %+v, want one full replay of %s", base, f.other.Name)
 	}
-	if len(cand) != 2 || cand[0].Case != f.target.Name || cand[1].Case != f.other.Name || cand[0].Opts.JudgeOnly {
-		t.Fatalf("candidate replays = %+v, want the target, then the other case, every role", cand)
+	// The target it found is replayed once more, in a run of its own, before
+	// the win counts.
+	if len(cand) != 3 || cand[0].Case != f.target.Name || cand[1].Case != f.other.Name || cand[2].Case != f.target.Name || cand[0].Opts.JudgeOnly ||
+		cand[2].Opts.RunDir == cand[0].Opts.RunDir {
+		t.Fatalf("candidate replays = %+v, want the target, then the other case, every role, then the target again", cand)
 	}
 	if cand[0].Opts.RunDir == base[0].Opts.RunDir || cand[0].Opts.AgentTag == base[0].Opts.AgentTag ||
 		!strings.HasPrefix(cand[0].Opts.AgentTag, "eval-") || !strings.HasPrefix(cand[0].Opts.RunDir, f.h.layout.Eval()+string(filepath.Separator)) {
 		t.Fatalf("the runs share a directory or a tag: %+v and %+v", cand[0].Opts, base[0].Opts)
 	}
 	g := f.gate()
-	if g.State != store.LearnPassed || g.Mode != learn.GateFull || len(g.Cases) != 2 || len(g.Runs) != 2 || g.Inputs != "in-cand" ||
+	if g.State != store.LearnPassed || g.Mode != learn.GateFull || len(g.Cases) != 2 || len(g.Runs) != 3 || g.Inputs != "in-cand" ||
 		g.BaselineInputs != "in-master" {
 		t.Fatalf("gate = %+v", g)
 	}
-	candRun, baseRun := g.Cases[0].CandidateRun, g.Cases[1].BaselineRun
-	if candRun == baseRun || !slices.Contains(g.Runs, candRun) || !slices.Contains(g.Runs, baseRun) {
-		t.Fatalf("runs %q: the candidate's %s, the baseline's %s", g.Runs, candRun, baseRun)
+	candRun, baseRun, secondRun := g.Cases[0].CandidateRun, g.Cases[1].BaselineRun, g.Cases[0].SecondRun
+	if candRun == baseRun || candRun == secondRun || !slices.Contains(g.Runs, candRun) || !slices.Contains(g.Runs, baseRun) || !slices.Contains(g.Runs, secondRun) {
+		t.Fatalf("runs %q: the candidate's %s, the baseline's %s, the second's %s", g.Runs, candRun, baseRun, secondRun)
 	}
 	if c := g.Cases[0]; c.Case != f.target.Name || !c.Target || c.BaselineRun != "20261001-120000" || c.Before == nil || c.After == nil ||
-		c.After.Found != 1 {
+		c.After.Found != 1 || !c.Confirmed {
 		t.Fatalf("the target's row = %+v", c)
 	}
-	if c := g.Cases[1]; c.Case != f.other.Name || c.Target || c.CandidateRun != candRun {
+	if c := g.Cases[1]; c.Case != f.other.Name || c.Target || c.Guard || c.CandidateRun != candRun {
 		t.Fatalf("the other case's row = %+v", c)
 	}
 	// Every replay is stored as `magnum eval run` stores one: a later gate
 	// takes the baseline, a judge-only replay the reports.
 	runs, err := eval.ListRuns(f.h.layout.Eval())
-	if err != nil || len(runs) != 3 {
+	if err != nil || len(runs) != 4 {
 		t.Fatalf("runs = %+v, %v", runs, err)
 	}
 	for _, r := range runs[1:] {
 		want := [2]string{"in-master", "rev-master"}
-		if r.ID == candRun {
+		if r.ID == candRun || r.ID == secondRun {
 			want = [2]string{"in-cand", "rev-cand"}
 		}
 		if r.Inputs != want[0] || r.ReviewerInputs != want[1] || r.NoNotes || r.Finished.IsZero() || r.ID == baseRun && len(r.Cases) != 1 {
@@ -664,7 +667,7 @@ func TestTheGatePassesACandidateThatFindsItsTarget(t *testing.T) {
 	}
 	// The next tick starts nothing more.
 	f.h.tick()
-	if n := len(f.ev.callsFor(f.wt)); n != 2 {
+	if n := len(f.ev.callsFor(f.wt)); n != 3 {
 		t.Fatalf("the gate ran again: %d candidate replays", n)
 	}
 }
@@ -709,7 +712,7 @@ func TestTheBaselineReplaysTheProposalsBaseNotTheCheckout(t *testing.T) {
 		t.Fatalf("the base's worktree outlived the gate: %v", err)
 	}
 	runs, err := eval.ListRuns(f.h.layout.Eval())
-	if err != nil || len(runs) != 3 {
+	if err != nil || len(runs) != 4 { // the stored baseline, the base's, the candidate's and its second replay's
 		t.Fatalf("runs = %+v, %v", runs, err)
 	}
 	baseRun, candRun := g.Cases[1].BaselineRun, g.Cases[0].CandidateRun
@@ -757,7 +760,7 @@ func TestTheGateReplaysALostCaseOnceBeforeFailing(t *testing.T) {
 	f2.ev.script(f2.wt, f2.target.Name, found([]string{f2.target.Name}))
 	f2.ev.script(f2.wt, f2.other.Name, found(nil, "scope"), found([]string{"scope"}))
 	f2.h.tick()
-	if p := f2.proposal(); p.State != store.LearnPassed || len(f2.ev.callsFor(f2.wt)) != 3 {
+	if p := f2.proposal(); p.State != store.LearnPassed || len(f2.ev.callsFor(f2.wt)) != 4 {
 		t.Fatalf("proposal = %s %q after the case was found again", p.State, p.Reason)
 	}
 }
@@ -796,7 +799,7 @@ func TestTheGateHoldsWhenTheTargetHasNoFullReplayForJudgeOnly(t *testing.T) {
 	f2.ev.script(f2.wt, f2.other.Name, found([]string{"scope"}))
 	f2.h.tick()
 	got := f2.ev.callsFor(f2.wt)
-	if len(got) != 2 || !got[0].Opts.JudgeOnly || f2.proposal().State != store.LearnPassed {
+	if len(got) != 3 || !got[0].Opts.JudgeOnly || !got[2].Opts.JudgeOnly || f2.proposal().State != store.LearnPassed {
 		t.Fatalf("judge-only replays = %+v, proposal %s", got, f2.proposal().State)
 	}
 }
@@ -807,7 +810,8 @@ func TestTheGateHoldsWhenTheTargetHasNoFullReplayForJudgeOnly(t *testing.T) {
 // the base's judge replayed alone on those reports, not an older full
 // replay whose reviewers happened to find less.
 func TestAJudgeOnlyGateComparesBothJudgesOnTheSameReports(t *testing.T) {
-	f := newGateFixture(t, []string{learn.DecisionsFile, learn.SkillFile})
+	// No guard: the other case takes the base's judge as its baseline too.
+	f := newGateFixture(t, []string{learn.DecisionsFile, learn.SkillFile}, func(h *harness) { h.cfg.Learn.GateGuards = 0 })
 	// An older full replay with the base's inputs, whose reviewers missed
 	// the target, and a newer one with the same reviewers and another judge
 	// (another proposal's), whose reviewers found it.
@@ -1035,8 +1039,8 @@ func TestAGateThatStopsShortReusesTheCandidateReplaysItMade(t *testing.T) {
 			other++
 		}
 	}
-	if target != 1 || other != 3 {
-		t.Fatalf("candidate replays: %d of the target, %d of the other case; want 1 and 3 (its first and lost one reused)", target, other)
+	if target != 2 || other != 3 {
+		t.Fatalf("candidate replays: %d of the target, %d of the other case; want 2 (its win confirmed) and 3 (its first and lost one reused)", target, other)
 	}
 	g := f.gate()
 	if c := g.Cases[1]; c.Case != f.other.Name || !c.Retried || c.After == nil || c.After.Found != 1 {
@@ -1205,11 +1209,11 @@ BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
 		t.Fatal(err)
 	}
 	f.h.tick()
-	if p, n := f.proposal(), len(f.ev.callsFor(f.wt)); p.State != store.LearnGating || n != 2 || !f.h.e.gateWaits() {
+	if p, n := f.proposal(), len(f.ev.callsFor(f.wt)); p.State != store.LearnGating || n != 3 || !f.h.e.gateWaits() {
 		t.Fatalf("proposal %s after %d candidate replays, waits %v", p.State, n, f.h.e.gateWaits())
 	}
 	f.h.tick()
-	if n := len(f.ev.callsFor(f.wt)); n != 2 {
+	if n := len(f.ev.callsFor(f.wt)); n != 3 {
 		t.Fatalf("the next tick replayed again: %d candidate replays", n)
 	}
 	if _, err := f.h.st.DB().ExecContext(f.h.ctx, "DROP TRIGGER fail_decide"); err != nil {
@@ -1367,8 +1371,8 @@ func TestTheGateRetiresATargetItsBaselineAlreadyFinds(t *testing.T) {
 	if p.State != store.LearnPassed || !strings.Contains(p.Reason, f.target.Name+" found") {
 		t.Fatalf("proposal = %s %q, want passed on %s", p.State, p.Reason, f.target.Name)
 	}
-	if got := f.ev.callsFor(f.wt); len(got) != 1 || got[0].Case != f.target.Name {
-		t.Fatalf("candidate replays = %+v, want %s alone", got, f.target.Name)
+	if got := f.ev.callsFor(f.wt); len(got) != 2 || got[0].Case != f.target.Name || got[1].Case != f.target.Name {
+		t.Fatalf("candidate replays = %+v, want %s alone, twice", got, f.target.Name)
 	}
 	g := f.gate()
 	if len(g.Cases) != 2 || g.Cases[0].Case != target2.Name || g.Cases[0].Skip != learn.SkipFoundAtBaseline || g.Cases[0].After != nil ||
@@ -1570,7 +1574,7 @@ func TestAJudgeOnlyGateWithNoStoredReplayMakesTheReportsWithTheBase(t *testing.T
 		t.Fatalf("proposal = %s %q", p.State, p.Reason)
 	}
 	base, cand := f.ev.callsFor(f.base), f.ev.callsFor(f.wt)
-	if len(base) != 2 || base[0].Opts.JudgeOnly || len(cand) != 2 || !cand[0].Opts.JudgeOnly {
+	if len(base) != 2 || base[0].Opts.JudgeOnly || len(cand) != 3 || !cand[0].Opts.JudgeOnly {
 		t.Fatalf("base replays %+v, candidate replays %+v", base, cand)
 	}
 	for _, c := range f.gate().Cases {

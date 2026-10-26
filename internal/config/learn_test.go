@@ -41,11 +41,11 @@ func TestLearnDefaults(t *testing.T) {
 
 // withEditorDefaults is l with the skill editor's built-in keys: off,
 // Claude sonnet editing skill-edit.md for at most 45 minutes, a gate of 6
-// cases, one landing a day, an idle restart, a regression of 10 points
-// over 20 findings.
+// cases and 2 guards, one landing a day, an idle restart, a regression of
+// 10 points over 20 findings.
 func withEditorDefaults(l Learn) Learn {
 	l.EditorKind, l.EditorModel, l.EditorPrompt, l.EditorTimeout = "claude", "sonnet", "skill-edit.md", Duration{45 * time.Minute}
-	l.GateCases, l.LandPerDay, l.Restart, l.RegressionPoints, l.RegressionMinFindings = 6, 1, "idle", 10, 20
+	l.GateCases, l.GateGuards, l.LandPerDay, l.Restart, l.RegressionPoints, l.RegressionMinFindings = 6, 2, 1, "idle", 10, 20
 	return l
 }
 
@@ -209,6 +209,10 @@ func TestValidateLearn(t *testing.T) {
 		}, want: "learn.editor_prompt broken.md"},
 		{name: "zero editor timeout", edit: func(c *Config) { c.Learn.EditorTimeout = Duration{} }, want: "learn.editor_timeout must be positive, got 0s"},
 		{name: "zero gate cases", edit: func(c *Config) { c.Learn.GateCases = 0 }, want: "learn.gate_cases must be positive, got 0"},
+		{name: "no gate guards", edit: func(c *Config) { c.Learn.GateGuards = 0 }},
+		{name: "ten gate guards", edit: func(c *Config) { c.Learn.GateGuards = 10 }},
+		{name: "negative gate guards", edit: func(c *Config) { c.Learn.GateGuards = -1 }, want: "learn.gate_guards must be 0 to 10, got -1"},
+		{name: "eleven gate guards", edit: func(c *Config) { c.Learn.GateGuards = 11 }, want: "learn.gate_guards must be 0 to 10, got 11"},
 		{name: "zero landings", edit: func(c *Config) { c.Learn.LandPerDay = 0 }, want: "learn.land_per_day must be positive, got 0"},
 		{name: "bad restart", edit: func(c *Config) { c.Learn.Restart = "now" }, want: `learn.restart "now": want idle or manual`},
 		{name: "zero regression points", edit: func(c *Config) { c.Learn.RegressionPoints = 0 }, want: "learn.regression_points must be 1 to 100, got 0"},
