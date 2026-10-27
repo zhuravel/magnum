@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -455,5 +456,60 @@ func TestTheSettleReadsTheThreadsOnce(t *testing.T) {
 		"resolve magnum's thread, already answered: " + prPage + "#discussion_r2101; details: " + report
 	if ev, ok := h.fixEvent("fix.needs_you"); !ok || ev.Message != want+"; the re-review of b2b2b2b runs first" {
 		t.Errorf("fix.needs_you =\n %q\nwant\n %q", ev.Message, want+"; the re-review of b2b2b2b runs first")
+	}
+}
+
+// The threads a cycle's settle found answered (FixState.Answered) belong
+// to that cycle's calls: a next cycle starts without them, as it starts
+// without the calls themselves (NeedsYou), so the row its fixer works
+// under carries none of the last cycle's record.
+func TestANextCycleStartsWithoutTheLastCyclesAnsweredThreads(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1})
+	h.gh.mu.Lock()
+	h.gh.threads = map[int][]github.Thread{2: {magnumsThread(4302866759, "app/models/offer.rb", 42, h.clock.Now().Add(-time.Hour), false,
+		"Fixed in e05fbde: the owner is checked before the total.")}}
+	h.gh.mu.Unlock()
+	var (
+		mu     sync.Mutex
+		during []FixState // the loop's row as each cycle's fixer starts
+	)
+	fixerBy(h, git, func(run store.Run) (string, string) {
+		st, _, err := h.e.fixState(h.ctx, pr.ID)
+		if err != nil {
+			t.Errorf("the loop's row: %v", err)
+		}
+		mu.Lock()
+		during = append(during, st)
+		cycle := len(during)
+		mu.Unlock()
+		if cycle == 1 {
+			writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{4302866759}, nil)
+			return fixPushed, fixReport(run.ID, "e05fbde Check the owner\nb2b2b2b Cover the nil owner", fixReplied,
+				"- 4302866759 P1 app/models/offer.rb:42: fixed in e05fbde. Resolving the thread failed.")
+		}
+		return fixPushed2, fixReport(run.ID, fixPushed2[:7]+" Fix the finding", fixReplied, "none")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	if st, ok := h.fixStateOf(2); !ok || !slices.Equal(st.Answered, []string{"4302866759"}) {
+		t.Fatalf("the first cycle's answered threads = %q, %v", st.Answered, ok)
+	}
+	// The operator resolves the thread by hand: its call settles at the
+	// loop's end, and the re-review's finding starts cycle 2.
+	h.gh.mu.Lock()
+	h.gh.threads[2][0].Resolved = true
+	h.gh.mu.Unlock()
+	reviewWith(h, findings(map[string]int{"P2": 1}, "COMMENTED"))
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(during) != 2 {
+		t.Fatalf("fix runs = %d, want 2", len(during))
+	}
+	if st := during[1]; st.Cycle != 2 || st.Phase != FixPhaseFixing || len(st.NeedsYou) != 0 || len(st.Answered) != 0 {
+		t.Errorf("cycle 2's row while its fixer works = %+v; want none of cycle 1's answered threads", st)
 	}
 }

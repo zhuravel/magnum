@@ -600,6 +600,14 @@ func DoneMarker(runID string) string
     DoneMarker is the line a shell role's line prints when its command finished,
     followed by the command's exit status ("<marker> 0").
 
+func FixReplyLine(magnum string) string
+    FixReplyLine is the line the fixer posts each of its replies through
+    (RoleData.FixReplyCommand): `magnum fix-reply` of the daemon's binary
+    (else magnum on PATH), shell-quoted; the fixer adds `--comment <id>` or
+    `--issue` and passes the reply on stdin. The command signs the reply with
+    postreview.FixReplyMarker, by which magnum tells the fixer's replies from
+    the author's own.
+
 func HasSessionID(s store.Session) bool
     HasSessionID reports whether session s has its CLI's session id.
 
@@ -1052,9 +1060,9 @@ type FallbackData struct {
     FallbackData feeds the model-fallback prompt.
 
 type FixPromptInput struct {
-	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand string
-	NoFindings                                                                 bool
-	NotesParts                                                                 NotesParts
+	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand, FixReplyCommand string
+	NoFindings                                                                                  bool
+	NotesParts                                                                                  NotesParts
 }
     FixPromptInput is what the fix job knows beyond the PR, the role and the
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
@@ -1062,11 +1070,12 @@ type FixPromptInput struct {
     posted it), the file of the other reviewers' open items (ExternalFile,
     external-threads.json beside the report; "" = none, the prompt then names
     no such file), the line the fixer runs its database commands through
-    (DBLockCommand, DBLockLine; "" = derived without a checkout), whether the
-    review found nothing, leaving the fixer the external file's items alone
-    (NoFindings), and the job's frozen copy of the repository notes in parts
-    (NotesParts, FreezeNotes beside the report; zero = none), which the fixer
-    reads and never edits.
+    (DBLockCommand, DBLockLine; "" = derived without a checkout), the line it
+    posts every reply through (FixReplyCommand, FixReplyLine; "" = magnum on
+    PATH), whether the review found nothing, leaving the fixer the external
+    file's items alone (NoFindings), and the job's frozen copy of the repository
+    notes in parts (NotesParts, FreezeNotes beside the report; zero = none),
+    which the fixer reads and never edits.
 
 type Health struct {
 	Kind    HealthKind
@@ -2494,6 +2503,10 @@ type RoleData struct {
 	// them); ReviewerLogin the login that posted the review, whose threads
 	// the fixer answers; SkillPath the fix skill's startup copy, absolute.
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, SkillPath string
+	// FixReplyCommand is the fix prompt's too: the line the fixer posts
+	// every reply through, `magnum fix-reply` (FixReplyLine, derived from
+	// Magnum when empty; the fix job passes its own).
+	FixReplyCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
 	// alone (the fix job starts on such a review only when one waits).
@@ -16677,6 +16690,64 @@ type Deps struct {
     Deps are Run's GitHub, as the judge's identity, and git in Dir, the checkout
     ("." = the current directory).
 
+type FixReplyGitHub interface {
+	AllReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, bool, error)
+	ReplyToReviewComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) (github.ReviewCommentReply, error)
+	IssueComments(ctx context.Context, owner, repo string, number int, stop func(github.PRComment) bool) ([]github.PRComment, bool, error)
+	CreateIssueComment(ctx context.Context, owner, repo string, number int, body string) (github.IssueComment, error)
+}
+    FixReplyGitHub is what RunFixReply reads and writes on GitHub
+    (*github.Client, as the fixer's gh login: the PR's author).
+
+type FixReplyOptions struct {
+	Owner, Repo string
+	Number      int
+	CommentID   int64
+	Issue       bool
+}
+    FixReplyOptions name what `magnum fix-reply` answers: the pull request (the
+    fixer's pane's MAGNUM_PR_URL) and either a review comment, whose thread
+    the reply goes into (CommentID: its first comment or any reply in it),
+    or the pull request's conversation (Issue).
+
+func (o FixReplyOptions) Check() error
+    Check reports what is wrong with o.
+
+type FixReplyOutcome struct {
+	Status   string   `json:"status"`
+	Message  string   `json:"message,omitempty"`  // what went wrong (error)
+	Problems []string `json:"problems,omitempty"` // why the reply was refused (invalid)
+	// Thread is the first comment of the thread the reply went into, 0 for
+	// a comment on the conversation; ID and URL are the reply's, posted or
+	// found already there.
+	Thread int64  `json:"thread,omitempty"`
+	ID     int64  `json:"id,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+    FixReplyOutcome is what RunFixReply printed: a status (StatusReplied,
+    StatusAlreadyPosted, StatusInvalid or StatusError) and its details.
+
+func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text []byte) FixReplyOutcome
+    RunFixReply posts text, one reply of the fixer, on the pull request o names,
+    as gh's login, which is the PR's author: the text, a blank line and
+    FixReplyMarker, by which magnum tells the fixer's replies from the author's
+    own (learn.OwnThreads, the fix job's external file). It refuses a reply
+    that is empty, carries a magnum marker of its own, names a local path or
+    is too long before it reads GitHub. With a comment id it reads the review
+    threads once, refuses a comment that is in none of them (one of another pull
+    request, or of none) and answers its thread's first comment, the only one
+    GitHub takes a reply to; with Issue it writes a comment on the conversation.
+    A thread, or the conversation, that already holds the same marked reply
+    gets nothing more (StatusAlreadyPosted), so a retry after an unclear failure
+    posts the reply once.
+
+func (o FixReplyOutcome) ExitCode() int
+    ExitCode is 0 for a reply posted or already there, 2 when the fixer must fix
+    its reply (or the comment it names), 1 otherwise.
+
+func (o FixReplyOutcome) Summary() string
+    Summary is the outcome in one line (ids and links, no reply text).
+
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
@@ -22111,7 +22182,8 @@ type PRBoardRow struct {
 	// pinned. Zero for a lasting pin, or no pin.
 	HeldUntil time.Time
 	// OpenRestores: o restores the PR in a slot (the role it opens has no
-	// live pane: its session is parked), so o asks first, saying for how
+	// live pane and its session is parked, or its session is gone and
+	// another role's parked one stands in for it), so o asks first, saying for how
 	// long the restore holds the PR: OpenHold, [daemon] open_hold (0: until
 	// `magnum unpin`).
 	OpenRestores bool

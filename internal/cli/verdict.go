@@ -109,7 +109,8 @@ var agentPaneEnv = []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL"}
 // agent reads the PR, whose text may steer it to approve, unapprove, mute or
 // pause for the operator. It is defense in depth on top of the agents running
 // with full permissions, since an agent could unset the variables; the
-// commands the roles run (post-review, db-lock) are never refused. The other
+// commands the roles run (post-review, db-lock, the fixer's fix-reply) are
+// never refused. The other
 // commands have no such guard (resume, snooze, star, release, unpin,
 // codex-flag and retro among them).
 func refuseInAgentPane(c *Context, name string) (code int, refused bool) {

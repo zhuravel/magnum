@@ -24,6 +24,7 @@ const (
 	reviews  = "repos/talkable/talkable/pulls/5/reviews"
 
 	threadComments = "repos/talkable/talkable/pulls/5/comments/"
+	convComments   = "repos/talkable/talkable/issues/5/comments"
 )
 
 func opts() Options {
@@ -78,6 +79,10 @@ type world struct {
 	// replyPosts answer the reply POSTs in order (nil: the default, which
 	// creates comment 5000+n as the judge's identity).
 	replyPosts []func(c execx.Cmd) (execx.Result, error)
+	// issueComments are the conversation comments GraphQL lists; a comment
+	// posted adds itself, as GitHub would, and its body to issuePosts.
+	issueComments []fakeComment
+	issuePosts    []string
 
 	fake    *execx.Fake
 	sent    []github.ReviewRequest
@@ -127,6 +132,9 @@ func (w *world) gh(c execx.Cmd) (execx.Result, error) {
 		if strings.Contains(string(c.Stdin), "reviewThreads") {
 			return w.listThreads()
 		}
+		if strings.Contains(string(c.Stdin), "comments(last:") {
+			return w.listIssueComments()
+		}
 		if w.listErr != nil {
 			return execx.Result{}, w.listErr
 		}
@@ -158,6 +166,9 @@ func (w *world) gh(c execx.Cmd) (execx.Result, error) {
 	}
 	if len(args) > 3 && args[1] == "-X" && args[2] == "POST" && strings.HasPrefix(args[3], threadComments) && strings.HasSuffix(args[3], "/replies") {
 		return w.postReply(c, args[3])
+	}
+	if len(args) > 3 && args[1] == "-X" && args[2] == "POST" && args[3] == convComments {
+		return w.postIssueComment(c)
 	}
 	path := args[1]
 	switch {
@@ -335,4 +346,36 @@ func (w *world) postReply(c execx.Cmd, path string) (execx.Result, error) {
 	}
 	return ok(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#discussion_r%d", newID),
 		"created_at": "2026-10-06T12:30:00Z", "in_reply_to_id": id})
+}
+
+// listIssueComments answers the conversation's GraphQL list: every comment
+// on one page.
+func (w *world) listIssueComments() (execx.Result, error) {
+	nodes := []map[string]any{}
+	for _, c := range w.issueComments {
+		typ := "User"
+		if c.Bot {
+			typ = "Bot"
+		}
+		nodes = append(nodes, map[string]any{"databaseId": c.ID, "body": c.Body,
+			"url":       fmt.Sprintf("https://github.com/talkable/talkable/pull/5#issuecomment-%d", c.ID),
+			"createdAt": "2026-10-06T12:00:00Z", "author": map[string]any{"login": c.Author, "__typename": typ}, "authorAssociation": "MEMBER"})
+	}
+	return ok(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+		"comments": map[string]any{"pageInfo": map[string]any{"hasPreviousPage": false, "startCursor": ""}, "nodes": nodes}}}}})
+}
+
+// postIssueComment answers POST issues/5/comments: comment 7000+n by the
+// author.
+func (w *world) postIssueComment(c execx.Cmd) (execx.Result, error) {
+	var req struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(c.Stdin, &req); err != nil {
+		w.t.Fatalf("comment POST without a JSON body on stdin: %v", err)
+	}
+	w.issuePosts = append(w.issuePosts, req.Body)
+	newID := int64(7000 + len(w.issuePosts))
+	w.issueComments = append(w.issueComments, human(newID, req.Body))
+	return ok(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#issuecomment-%d", newID)})
 }

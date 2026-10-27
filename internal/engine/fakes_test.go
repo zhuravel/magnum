@@ -1373,7 +1373,7 @@ func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in 
 	if ferr != nil {
 		return "", ferr
 	}
-	if in.HeadRef == "" || in.ReviewURL == "" || in.ReviewFile == "" || in.ReviewerLogin == "" || in.DBLockCommand == "" {
+	if in.HeadRef == "" || in.ReviewURL == "" || in.ReviewFile == "" || in.ReviewerLogin == "" || in.DBLockCommand == "" || in.FixReplyCommand == "" {
 		return "", fmt.Errorf("fake fix prompt of %s: an empty input %+v", run.ID, in)
 	}
 	return fmt.Sprintf("fix the findings of %s on %s; report to %s, first line %s", in.ReviewURL, pr.URL, deref(run.ReportPath), agents.ReportMarker(run.ID)), nil

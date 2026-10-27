@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -316,4 +317,178 @@ func (o Outcome) repliesSummary() string {
 		return fmt.Sprintf("%s already posted; nothing posted%s", textx.Count(already, "reply is", "replies are"), skipped)
 	}
 	return fmt.Sprintf("posted %s%s%s%s", replies, detail, tail, skipped)
+}
+
+// FixReplyOptions name what `magnum fix-reply` answers: the pull request
+// (the fixer's pane's MAGNUM_PR_URL) and either a review comment, whose
+// thread the reply goes into (CommentID: its first comment or any reply in
+// it), or the pull request's conversation (Issue).
+type FixReplyOptions struct {
+	Owner, Repo string
+	Number      int
+	CommentID   int64
+	Issue       bool
+}
+
+// Check reports what is wrong with o.
+func (o FixReplyOptions) Check() error {
+	switch {
+	case !ownerRe.MatchString(o.Owner) || !repoRe.MatchString(o.Repo) || o.Repo == "." || o.Repo == "..":
+		return fmt.Errorf("the repository %q is not owner/name", o.Owner+"/"+o.Repo)
+	case o.Number < 1:
+		return fmt.Errorf("the pull request number %d is not 1 or more", o.Number)
+	case o.CommentID < 0:
+		return fmt.Errorf("the comment id %d is not 1 or more", o.CommentID)
+	case o.Issue == (o.CommentID != 0):
+		return errors.New("give exactly one of --comment <id> and --issue")
+	}
+	return nil
+}
+
+// FixReplyGitHub is what RunFixReply reads and writes on GitHub
+// (*github.Client, as the fixer's gh login: the PR's author).
+type FixReplyGitHub interface {
+	AllReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, bool, error)
+	ReplyToReviewComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) (github.ReviewCommentReply, error)
+	IssueComments(ctx context.Context, owner, repo string, number int, stop func(github.PRComment) bool) ([]github.PRComment, bool, error)
+	CreateIssueComment(ctx context.Context, owner, repo string, number int, body string) (github.IssueComment, error)
+}
+
+// FixReplyOutcome is what RunFixReply printed: a status (StatusReplied,
+// StatusAlreadyPosted, StatusInvalid or StatusError) and its details.
+type FixReplyOutcome struct {
+	Status   string   `json:"status"`
+	Message  string   `json:"message,omitempty"`  // what went wrong (error)
+	Problems []string `json:"problems,omitempty"` // why the reply was refused (invalid)
+	// Thread is the first comment of the thread the reply went into, 0 for
+	// a comment on the conversation; ID and URL are the reply's, posted or
+	// found already there.
+	Thread int64  `json:"thread,omitempty"`
+	ID     int64  `json:"id,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+// ExitCode is 0 for a reply posted or already there, 2 when the fixer must
+// fix its reply (or the comment it names), 1 otherwise.
+func (o FixReplyOutcome) ExitCode() int {
+	switch o.Status {
+	case StatusReplied, StatusAlreadyPosted:
+		return 0
+	case StatusInvalid:
+		return 2
+	}
+	return 1
+}
+
+// Summary is the outcome in one line (ids and links, no reply text).
+func (o FixReplyOutcome) Summary() string {
+	where := "as a comment on the pull request"
+	if o.Thread != 0 {
+		where = fmt.Sprintf("in the thread of comment %d", o.Thread)
+	}
+	switch o.Status {
+	case StatusReplied:
+		return fmt.Sprintf("posted the reply %s: %s", where, o.URL)
+	case StatusAlreadyPosted:
+		if o.Thread == 0 {
+			where = "a comment on the pull request"
+		}
+		return fmt.Sprintf("the reply is already %s; nothing posted: %s", where, o.URL)
+	case StatusInvalid:
+		return fmt.Sprintf("the reply has %s; nothing posted: %s", textx.Count(len(o.Problems), "problem", "problems"), strings.Join(o.Problems, "; "))
+	}
+	return o.Message
+}
+
+// fixReplyBody is what the fixer's reply text becomes on GitHub: the text, a
+// blank line and FixReplyMarker.
+func fixReplyBody(text string) string {
+	return strings.TrimRight(text, " \t\r\n") + "\n\n" + FixReplyMarker
+}
+
+// sameFixReply reports whether a comment's body on GitHub is body, the
+// marked reply about to be posted, but for its line ends and the blanks
+// around it.
+func sameFixReply(onGitHub, body string) bool {
+	norm := func(s string) string { return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")) }
+	return norm(onGitHub) == norm(body)
+}
+
+// checkFixReply is what is wrong with text, the fixer's reply (nil: it can
+// go out once marked).
+func checkFixReply(text string) []string {
+	switch {
+	case strings.TrimSpace(text) == "":
+		return []string{"the reply is empty: pass it on standard input"}
+	case strings.Contains(text, anyMarker):
+		return []string{fmt.Sprintf("the reply carries a %s… marker: fix-reply appends the fix marker, leave it out", anyMarker)}
+	case localPath(text) != "":
+		return []string{strings.Replace(localPathProblem(text), "body", "the reply", 1)}
+	}
+	if n := utf8.RuneCountInString(fixReplyBody(text)); n > MaxBody {
+		return []string{fmt.Sprintf("the reply is %d characters (the fix marker included); GitHub takes at most %d", n, MaxBody)}
+	}
+	return nil
+}
+
+// RunFixReply posts text, one reply of the fixer, on the pull request o
+// names, as gh's login, which is the PR's author: the text, a blank line
+// and FixReplyMarker, by which magnum tells the fixer's replies from the
+// author's own (learn.OwnThreads, the fix job's external file). It refuses
+// a reply that is empty, carries a magnum marker of its own, names a local
+// path or is too long before it reads GitHub. With a comment id it reads
+// the review threads once, refuses a comment that is in none of them (one
+// of another pull request, or of none) and answers its thread's first
+// comment, the only one GitHub takes a reply to; with Issue it writes a
+// comment on the conversation. A thread, or the conversation, that already
+// holds the same marked reply gets nothing more (StatusAlreadyPosted), so
+// a retry after an unclear failure posts the reply once.
+func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text []byte) FixReplyOutcome {
+	if err := o.Check(); err != nil {
+		return FixReplyOutcome{Status: StatusError, Message: err.Error()}
+	}
+	if problems := checkFixReply(string(text)); len(problems) > 0 {
+		return FixReplyOutcome{Status: StatusInvalid, Problems: problems}
+	}
+	body := fixReplyBody(string(text))
+	same := func(c github.PRComment) bool { return sameFixReply(c.Body, body) }
+	if o.Issue {
+		// Read from the newest back until a page holds the reply.
+		comments, _, err := gh.IssueComments(ctx, o.Owner, o.Repo, o.Number, same)
+		if err != nil {
+			return FixReplyOutcome{Status: StatusError, Message: "read the pull request's comments: " + err.Error()}
+		}
+		if i := slices.IndexFunc(comments, same); i >= 0 {
+			return FixReplyOutcome{Status: StatusAlreadyPosted, ID: comments[i].ID, URL: comments[i].URL}
+		}
+		posted, err := gh.CreateIssueComment(ctx, o.Owner, o.Repo, o.Number, body)
+		if err != nil {
+			return FixReplyOutcome{Status: StatusError, Message: "post the comment: " + err.Error()}
+		}
+		return FixReplyOutcome{Status: StatusReplied, ID: posted.ID, URL: posted.URL}
+	}
+	threads, complete, err := gh.AllReviewThreads(ctx, o.Owner, o.Repo, o.Number)
+	if err != nil {
+		return FixReplyOutcome{Status: StatusError, Message: "read the review threads: " + err.Error()}
+	}
+	i := slices.IndexFunc(threads, func(t github.Thread) bool {
+		return slices.ContainsFunc(t.AllComments(), func(c github.ThreadComment) bool { return c.ID == o.CommentID })
+	})
+	if i < 0 {
+		problem := fmt.Sprintf("comment %d is no review comment of %s/%s#%d: answer a thread of this pull request", o.CommentID, o.Owner, o.Repo, o.Number)
+		if !complete {
+			problem = fmt.Sprintf("comment %d is in none of the first %d review threads of %s/%s#%d", o.CommentID, github.MaxReviewThreads, o.Owner, o.Repo, o.Number)
+		}
+		return FixReplyOutcome{Status: StatusInvalid, Problems: []string{problem}}
+	}
+	all := threads[i].AllComments()
+	first := all[0].ID
+	if j := slices.IndexFunc(all[1:], func(c github.ThreadComment) bool { return sameFixReply(c.Body, body) }); j >= 0 {
+		return FixReplyOutcome{Status: StatusAlreadyPosted, Thread: first, ID: all[1+j].ID, URL: all[1+j].URL}
+	}
+	posted, err := gh.ReplyToReviewComment(ctx, o.Owner, o.Repo, o.Number, first, body)
+	if err != nil {
+		return FixReplyOutcome{Status: StatusError, Thread: first, Message: fmt.Sprintf("post the reply to comment %d: %v", first, err)}
+	}
+	return FixReplyOutcome{Status: StatusReplied, Thread: first, ID: posted.ID, URL: posted.URL}
 }

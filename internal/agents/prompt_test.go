@@ -2,6 +2,7 @@ package agents
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -284,8 +285,8 @@ func TestAPromptTheSessionCannotRecordIsLogged(t *testing.T) {
 // The fix prompt is one paragraph of facts: it opens with the fix skill's
 // startup copy, then names the PR, its head and the branch to push to, the
 // posted review, its file and the login that posted it, the report path with
-// the run marker and the db-lock line. It carries no PR text: the title is
-// never in it.
+// the run marker, the db-lock line and the fix-reply line. It carries no PR
+// text: the title is never in it.
 func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 	e := newEnv(t)
 	skill := filepath.Join(e.cfg.Layout.Home, "skills", "magnum-fix", "SKILL.md")
@@ -303,12 +304,13 @@ func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := FixPromptInput{
-		HeadRef:       "feature/coupon-expiry",
-		ReviewURL:     "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
-		ReviewFile:    "/state/reviews/talkable/talkable/11920/abc1234/review.json",
-		ExternalFile:  "/state/reviews/talkable/talkable/11920/abc1234/external-threads.json",
-		ReviewerLogin: "talkable[bot]",
-		DBLockCommand: "/opt/magnum/bin/magnum db-lock --checkout /p/talkable.review3 --role claude-fix --",
+		HeadRef:         "feature/coupon-expiry",
+		ReviewURL:       "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
+		ReviewFile:      "/state/reviews/talkable/talkable/11920/abc1234/review.json",
+		ExternalFile:    "/state/reviews/talkable/talkable/11920/abc1234/external-threads.json",
+		ReviewerLogin:   "talkable[bot]",
+		DBLockCommand:   "/opt/magnum/bin/magnum db-lock --checkout /p/talkable.review3 --role claude-fix --",
+		FixReplyCommand: "/opt/magnum/bin/magnum fix-reply",
 	}
 	got, err := e.m.FixPrompt(e.pr, role, run, in)
 	if err != nil {
@@ -319,6 +321,7 @@ func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 	}
 	for _, want := range []string{e.pr.URL, "`" + e.pr.HeadSHA + "`", "HEAD:" + in.HeadRef, in.ReviewURL, in.ReviewFile,
 		"`" + in.ReviewerLogin + "`", store.Deref(run.ReportPath), ReportMarker(run.ID), "`" + in.DBLockCommand + " <command>`",
+		"`" + in.FixReplyCommand + " --comment <comment id>`", "`" + in.FixReplyCommand + " --issue`",
 		"The other reviewers' open threads, review bodies and comments on the PR are in " + in.ExternalFile +
 			": after the review's findings, handle each of its items that nobody answered."} {
 		if !strings.Contains(got, want) {
@@ -355,6 +358,33 @@ func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 	}
 }
 
+// On talkable#12112 the fixer posted two replies with `gh api` heredocs
+// that lacked the fix marker, and magnum read them as the operator's own.
+// The fix prompt names the line every reply goes through, `magnum
+// fix-reply` of the daemon's binary (FixReplyLine, derived from .Magnum
+// when the job passes none, as the db-lock line is), in its one paragraph:
+// the goldens fix and fix_no_findings hold the sentence.
+func TestTheFixPromptNamesTheFixReplyCommand(t *testing.T) {
+	const want = "Post every reply with `/Users/bohdan/Projects/magnum/bin/magnum fix-reply --comment <comment id>` (in a review thread) " +
+		"or `/Users/bohdan/Projects/magnum/bin/magnum fix-reply --issue` (a PR comment), the reply on standard input, never with `gh`: " +
+		"it signs the reply with the fix marker."
+	for _, golden := range []string{"fix", "fix_no_findings"} {
+		b, err := os.ReadFile(filepath.Join("testdata", golden+".golden"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the golden %s lacks %q:\n%s", golden, want, b)
+		}
+	}
+	if got := FixReplyLine(""); got != "magnum fix-reply" {
+		t.Errorf("FixReplyLine without a binary = %q", got)
+	}
+	if got := FixReplyLine("/opt/my magnum/bin/magnum"); got != "'/opt/my magnum/bin/magnum' fix-reply" {
+		t.Errorf("FixReplyLine = %q, want the binary shell-quoted", got)
+	}
+}
+
 // The fix skill is never rendered, and magnum reads what the fixer writes:
 // the re-review classifies its replies (pipeline's ClassifyReply) by their
 // first words and the fix job parses its report by its headings. The skill
@@ -365,7 +395,7 @@ func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
 		"name: magnum-fix",
 		`"Fixed in <sha7>: `, `"Already fixed in <sha7>"`, `"Fixed: the description now `, `"Not a bug: `, `"Won't fix: `,
 		"\n## Pushed\n", "\n## Replied\n", "\n## Needs you\n", "\n- <review id> description: <reason>\n",
-		"resolveReviewThread", "pulls/{number}/comments/{comment_id}/replies",
+		"resolveReviewThread", "<fix-reply line> --comment <comment_id> <<'REPLY'\n", "<fix-reply line> --issue <<'REPLY'\n",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("the fix skill lacks %q", want)
@@ -382,8 +412,9 @@ func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
 // behaviour without scoring it (a simplification nets 1 by construction, so
 // the bar of 3 declined four of five in a week) while a defect keeps its
 // scoring, and ends every reply with the fixer's marker, by which the retro
-// tells its replies from the author's (learn.OwnThreads): the reply command
-// carries it after the text.
+// tells its replies from the author's (learn.OwnThreads): every reply goes
+// through the fix-reply line, which appends it (on talkable#12112 two
+// replies posted with `gh api` heredocs lacked it).
 func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
@@ -395,8 +426,8 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 			"it is `won't fix` only with a concrete risk: it drops a guard, changes behaviour or reaches outside the PR. Do not score it. A defect keeps its scoring.",
 		"`fix` with a net score of 3 or more, a simplification that is `fix`, and each finding that section 3 always makes `fix`",
 		"`fix` with a net score below 3 that is no simplification: make it `won't fix`",
-		"<<'REPLY'\n<reply>\n\n" + postreview.FixReplyMarker + "\nREPLY\n",
-		"End every reply with a blank line and the line `" + postreview.FixReplyMarker + "`",
+		"<fix-reply line> --comment <comment_id> <<'REPLY'\n<reply>\nREPLY\n",
+		"The fix-reply line ends every reply with a blank line and the hidden line `" + postreview.FixReplyMarker + "`.",
 		// The engine reads these words to say what each finding left to the author asks of them.
 		"- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why it needs you>\n- <comment id> <priority> <path>:<line>: not fixed. <reason>\n",
 		"then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (its thread is answered already, or the reply failed) " +
@@ -408,6 +439,9 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 	}
 	if strings.Contains(skill, "a defect that the PR's diff introduced") {
 		t.Error("the fix skill still makes every finding of the PR's diff a fix whatever its score")
+	}
+	if strings.Contains(skill, "-F body=@-") || strings.Contains(skill, "\n"+postreview.FixReplyMarker+"\n") {
+		t.Error("the fix skill still posts a reply with gh api, or writes the fix marker itself")
 	}
 }
 
@@ -484,7 +518,7 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"An item that asks for nothing gets no verdict and no reply: a bot's status, CI or summary comment, a thanks, an approval.",
 		"Each external item that gets a reply gets exactly one, in its own thread, or for a review body or a comment one issue comment (section 6).",
 		"the threads of the external file that are not `answered`. Post the reply to the thread's first comment: the review comment, or an external thread's `comment_id`.",
-		"repos/{owner}/{repo}/issues/{number}/comments -F body=@- <<'REPLY'\n> <the item's first line>\n<the item's url>\n\n<reply>\n\n" + postreview.FixReplyMarker + "\nREPLY\n",
+		"<fix-reply line> --issue <<'REPLY'\n> <the item's first line>\n<the item's url>\n\n<reply>\nREPLY\n",
 		"Never resolve or minimize a thread someone else started, even one you fixed: its reviewer resolves it.",
 		"\n## Other reviewers\n",
 		// The author may answer while the fixer works: it looks again right before each reply.

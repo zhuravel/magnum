@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/github"
 )
 
 // rep renders one entry of a replies file.
@@ -573,6 +574,161 @@ func TestRunRepliesChecksTheOptions(t *testing.T) {
 	local.DryRun = false
 	if out := w.runReplies(local, file); out.Status != StatusError || out.ExitCode() != 1 {
 		t.Errorf("local base without a dry run: %+v", out)
+	}
+	if w.calls("gh") != 0 {
+		t.Errorf("gh ran for bad options: %d calls", w.calls("gh"))
+	}
+}
+
+// fixOpts names PR #5 and, with comment, the review comment a fixer reply
+// answers; without it, the PR's conversation.
+func fixOpts(comment int64) FixReplyOptions {
+	return FixReplyOptions{Owner: "talkable", Repo: "talkable", Number: 5, CommentID: comment, Issue: comment == 0}
+}
+
+// runFixReply runs `magnum fix-reply` on o with text on stdin, as the
+// fixer's gh login.
+func (w *world) runFixReply(o FixReplyOptions, text string) FixReplyOutcome {
+	return RunFixReply(context.Background(), &github.Client{Run: w.fake}, o, []byte(text))
+}
+
+// On talkable#12112 the fixer posted two of its replies with `gh api`
+// heredocs that lacked the fix marker, and magnum read them as the author's
+// own. `magnum fix-reply` posts each reply as the fixer writes it, a blank
+// line and the marker after it: in the thread of a review comment (a reply
+// to a reply goes to the thread's first comment, the only one GitHub takes
+// a reply to) and as a PR comment, the text on gh's stdin and never in argv.
+func TestFixReplyEndsTheBodyWithTheFixMarker(t *testing.T) {
+	w := newWorld(t)
+	w.threads = []fakeThread{thread(bot(11, "**[P2] wrong total**"), human(12, "Is it?"))}
+	out := w.runFixReply(fixOpts(12), "Fixed in a1b2c3d: the total skips discounted items, `bin/rspec spec/models/order_spec.rb` passed\n")
+	if out.Status != StatusReplied || out.ExitCode() != 0 || out.Thread != 11 || out.ID != 5001 ||
+		out.URL != "https://github.com/talkable/talkable/pull/5#discussion_r5001" {
+		t.Fatalf("thread reply: outcome = %+v", out)
+	}
+	want := "Fixed in a1b2c3d: the total skips discounted items, `bin/rspec spec/models/order_spec.rb` passed\n\n" + FixReplyMarker
+	if len(w.replies) != 1 || w.replies[0].CommentID != 11 || w.replies[0].Body != want {
+		t.Errorf("replies = %+v, want one to comment 11 with %q", w.replies, want)
+	}
+	if s := out.Summary(); s != "posted the reply in the thread of comment 11: https://github.com/talkable/talkable/pull/5#discussion_r5001" {
+		t.Errorf("summary = %q", s)
+	}
+
+	conv := "> Should this log the request?\nhttps://github.com/talkable/talkable/pull/5#issuecomment-77\n\nWon't fix: the request is logged at `app/a.rb:12`."
+	out = w.runFixReply(fixOpts(0), conv)
+	if out.Status != StatusReplied || out.Thread != 0 || out.ID != 7001 || out.URL != "https://github.com/talkable/talkable/pull/5#issuecomment-7001" {
+		t.Fatalf("PR comment: outcome = %+v", out)
+	}
+	if len(w.issuePosts) != 1 || w.issuePosts[0] != conv+"\n\n"+FixReplyMarker {
+		t.Errorf("PR comments posted = %q", w.issuePosts)
+	}
+	for _, post := range w.fake.CallsWithPrefix("gh", "api", "-X", "POST") {
+		if !post.Mutates || slices.ContainsFunc(post.Args, func(a string) bool { return strings.Contains(a, "Fixed in") || strings.Contains(a, "Won't fix") }) {
+			t.Errorf("POST = %+v: the reply's text in argv, or not marked as a write", post)
+		}
+	}
+}
+
+// A reply never carries a magnum marker of its own: the fixer would forge
+// the judge's reply or run marker, or sign its reply twice. fix-reply
+// refuses it, an empty reply and a local path before it asks GitHub
+// anything, and exit 2 tells the fixer to fix the reply.
+func TestFixReplyRefusesABodyWithAMagnumMarker(t *testing.T) {
+	for name, text := range map[string]string{
+		"the fix marker":   "Fixed in a1b2c3d.\n\n" + FixReplyMarker,
+		"a reply marker":   marked("Thanks.", runID, ReplyAck),
+		"a run marker":     "Fixed.\n" + RunMarker(runID, head),
+		"any magnum mark":  "Fixed. <!-- magnum:status -->",
+		"an empty reply":   " \n\t",
+		"a local path":     "Not a bug: see /Users/alice/Projects/talkable/app/a.rb:12.",
+		"an endless reply": strings.Repeat("x", MaxBody),
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.threads = []fakeThread{thread(bot(11, "**[P2] wrong total**"))}
+			for _, o := range []FixReplyOptions{fixOpts(11), fixOpts(0)} {
+				out := w.runFixReply(o, text)
+				if out.Status != StatusInvalid || out.ExitCode() != 2 || len(out.Problems) != 1 {
+					t.Errorf("issue %v: outcome = %+v, want invalid with one problem", o.Issue, out)
+				}
+			}
+			if w.calls("gh") != 0 {
+				t.Errorf("gh ran %d times for a refused reply", w.calls("gh"))
+			}
+		})
+	}
+	w := newWorld(t)
+	out := w.runFixReply(fixOpts(11), "Fixed. "+FixReplyMarker)
+	if want := "the reply carries a <!-- magnum:… marker: fix-reply appends the fix marker, leave it out"; len(out.Problems) != 1 || out.Problems[0] != want {
+		t.Errorf("problems = %q, want %q", out.Problems, want)
+	}
+}
+
+// A comment id the fixer names that is no review comment of the PR (one of
+// another PR, or of nothing at all) is refused with exit 2 and nothing
+// posted: a reply goes only into a thread of the PR the pane is for.
+func TestFixReplyRefusesACommentOfAnotherPR(t *testing.T) {
+	w := newWorld(t)
+	w.threads = []fakeThread{thread(bot(11, "**[P2] wrong total**"), human(12, "Is it?"))}
+	out := w.runFixReply(fixOpts(4100000001), "Fixed in a1b2c3d.")
+	if out.Status != StatusInvalid || out.ExitCode() != 2 || len(out.Problems) != 1 ||
+		out.Problems[0] != "comment 4100000001 is no review comment of talkable/talkable#5: answer a thread of this pull request" {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if w.postCount() != 0 {
+		t.Errorf("posted %d times", w.postCount())
+	}
+	w.threadsErr = errors.New("gh: network is down")
+	if out := w.runFixReply(fixOpts(11), "Fixed in a1b2c3d."); out.Status != StatusError || out.ExitCode() != 1 ||
+		!strings.HasPrefix(out.Message, "read the review threads: ") || w.postCount() != 0 {
+		t.Errorf("a failed read: outcome = %+v", out)
+	}
+}
+
+// A retry after an unclear failure posts the reply once: a thread, or the
+// conversation, that already holds the same reply with the fix marker gets
+// nothing more, and fix-reply says where it is (exit 0). The same words
+// without the marker (the author's own) are no such reply.
+func TestFixReplyPostsOnceWhenTheSameReplyExists(t *testing.T) {
+	w := newWorld(t)
+	w.threads = []fakeThread{thread(bot(11, "**[P2] wrong total**"), human(12, "Fixed in a1b2c3d: the total skips discounts."))}
+	text := "Fixed in a1b2c3d: the total skips discounts."
+	first := w.runFixReply(fixOpts(11), text)
+	again := w.runFixReply(fixOpts(12), text+"\n")
+	if first.Status != StatusReplied || again.Status != StatusAlreadyPosted || again.ExitCode() != 0 || again.ID != first.ID ||
+		again.URL != first.URL || again.Thread != 11 || w.postCount() != 1 {
+		t.Fatalf("first = %+v, again = %+v, %d posts", first, again, w.postCount())
+	}
+	if s := again.Summary(); s != "the reply is already in the thread of comment 11; nothing posted: "+first.URL {
+		t.Errorf("summary = %q", s)
+	}
+
+	w.issueComments = []fakeComment{human(77, "Won't fix: logged at `app/a.rb:12`.")}
+	conv := "Won't fix: logged at `app/a.rb:12`."
+	first = w.runFixReply(fixOpts(0), conv)
+	again = w.runFixReply(fixOpts(0), conv)
+	if first.Status != StatusReplied || again.Status != StatusAlreadyPosted || again.ID != first.ID || len(w.issuePosts) != 1 {
+		t.Fatalf("PR comment: first = %+v, again = %+v, posted %q", first, again, w.issuePosts)
+	}
+	if s := again.Summary(); s != "the reply is already a comment on the pull request; nothing posted: "+first.URL {
+		t.Errorf("summary = %q", s)
+	}
+}
+
+// The options come from the fixer's pane and flags: a PR and exactly one
+// of a comment id and --issue.
+func TestFixReplyChecksTheOptions(t *testing.T) {
+	w := newWorld(t)
+	for _, o := range []FixReplyOptions{
+		{Owner: "talkable", Repo: "talkable", Number: 5},
+		{Owner: "talkable", Repo: "talkable", Number: 5, CommentID: 11, Issue: true},
+		{Owner: "talkable", Repo: "talkable", Number: 0, Issue: true},
+		{Owner: "talkable", Repo: "..", Number: 5, Issue: true},
+		{Owner: "talkable", Repo: "talkable", Number: 5, CommentID: -1},
+	} {
+		if out := w.runFixReply(o, "Fixed."); out.Status != StatusError || out.ExitCode() != 1 {
+			t.Errorf("%+v: outcome = %+v", o, out)
+		}
 	}
 	if w.calls("gh") != 0 {
 		t.Errorf("gh ran for bad options: %d calls", w.calls("gh"))

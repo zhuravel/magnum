@@ -611,13 +611,8 @@ func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []s
 	if err != nil {
 		return entries
 	}
-	own := e.fixLogins(ctx, job)
-	author := github.Account(deref(job.pr.AuthorLogin), deref(job.pr.AuthorType))
-	byFixer := func(c github.ThreadComment) bool {
-		a := github.Account(c.AuthorLogin, c.AuthorType)
-		return postreview.IsFixReply(c.Body) && !c.CreatedAt.Before(job.started) &&
-			(github.SameAccount(a, author) || slices.ContainsFunc(own, func(o string) bool { return github.SameAccount(o, a) }))
-	}
+	asFixer := e.sinceFixStart(ctx, job)
+	byFixer := func(c github.ThreadComment) bool { return postreview.IsFixReply(c.Body) && asFixer(c) }
 	replied := map[int64]bool{}
 	for _, t := range threads {
 		if all := t.AllComments(); len(all) > 0 && look[all[0].ID] && slices.ContainsFunc(all[1:], byFixer) {
@@ -636,6 +631,58 @@ func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []s
 		"GitHub shows its reply there, so %s nothing", job.role.Name, textx.Count(n, "finding", "findings"), textx.Plural(n, "it asks", "they ask")),
 		map[string]any{"run": job.run.ID, "answered": n})
 	return kept
+}
+
+// sinceFixStart reports whether a thread comment is one the fixer could
+// have posted in the job's run: made since the run started, by the PR
+// author (whom the fixer posts as) or one of magnum's logins.
+func (e *Engine) sinceFixStart(ctx context.Context, job *fixJob) func(github.ThreadComment) bool {
+	own := e.fixLogins(ctx, job)
+	author := github.Account(deref(job.pr.AuthorLogin), deref(job.pr.AuthorType))
+	return func(c github.ThreadComment) bool {
+		a := github.Account(c.AuthorLogin, c.AuthorType)
+		return !c.CreatedAt.Before(job.started) &&
+			(github.SameAccount(a, author) || slices.ContainsFunc(own, func(o string) bool { return github.SameAccount(o, a) }))
+	}
+}
+
+// nameUnmarkedReplies names, in a fix.unmarked warning, each reply in a
+// review thread that the PR's author (or one of magnum's logins) made since
+// the job's run started and that carries no magnum marker (ownWord): the
+// fixer posts every reply through `magnum fix-reply`, which signs it with
+// the fix marker, but nothing forces a reply typed another way through it
+// (on talkable#12112 two went out with `gh api`), and magnum reads such a
+// reply as the author's own word (learn.OwnThreads, the external file's
+// answered). The event gives each reply's link and id, never its text, and
+// magnum edits no posted comment. The threads come from read, the settle's
+// one GitHub read (threadsReader); a read that fails names nothing. A
+// conversation comment is not looked at: that would be a read of its own.
+func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func() ([]github.Thread, error)) {
+	if job.started.IsZero() {
+		return
+	}
+	threads, err := read()
+	if err != nil {
+		return
+	}
+	asFixer := e.sinceFixStart(ctx, job)
+	var urls []string
+	var ids []int64
+	for _, t := range threads {
+		all := t.AllComments()
+		for _, c := range all[min(1, len(all)):] { // replies only: the fixer starts no thread
+			if asFixer(c) && ownWord(c.Body) {
+				urls, ids = append(urls, cmp.Or(c.URL, fmt.Sprintf("comment %d", c.ID))), append(ids, c.ID)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	n := len(ids)
+	e.event(ctx, "warn", job.subject(), "fix.unmarked", fmt.Sprintf("%s: %s by the PR's author since the fixer started %s no fix marker, so magnum reads %s as the author's own: %s",
+		job.role.Name, textx.Count(n, "reply", "replies"), textx.Plural(n, "carries", "carry"), textx.Plural(n, "it", "them"), strings.Join(urls, ", ")),
+		map[string]any{"run": job.run.ID, "unmarked": n, "comments": ids})
 }
 
 // fixedInExternal is the thread of entry when it is a fix the fixer says it

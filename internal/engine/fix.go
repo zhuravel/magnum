@@ -612,7 +612,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 		st.Cycle++
 	}
 	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseFixing, job.head, "", job.role.Name, nil, time.Time{}, false
-	st.Context, st.OthersUnread = "", ""
+	st.Answered, st.Context, st.OthersUnread = nil, "", "" // the last cycle's calls go with its NeedsYou
 	job.state = st
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, fix: true}) {
@@ -950,14 +950,15 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		}
 	}
 	text, err := e.d.Agents.FixPrompt(pr, agents.Role(job.role.Name), run, agents.FixPromptInput{
-		HeadRef:       deref(pr.HeadRef),
-		ReviewURL:     job.review.URL,
-		ReviewFile:    filepath.Join(e.d.Layout.ReviewDir(job.repo.Owner, job.repo.Name, pr.Number, job.review.SHA), agents.PostReviewFile),
-		ExternalFile:  external,
-		ReviewerLogin: job.login,
-		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
-		NoFindings:    job.alone,
-		NotesParts:    notesParts,
+		HeadRef:         deref(pr.HeadRef),
+		ReviewURL:       job.review.URL,
+		ReviewFile:      filepath.Join(e.d.Layout.ReviewDir(job.repo.Owner, job.repo.Name, pr.Number, job.review.SHA), agents.PostReviewFile),
+		ExternalFile:    external,
+		ReviewerLogin:   job.login,
+		DBLockCommand:   agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
+		FixReplyCommand: agents.FixReplyLine(e.d.Layout.Binary()),
+		NoFindings:      job.alone,
+		NotesParts:      notesParts,
 	})
 	if err != nil {
 		e.abandonFixRun(ctx, run, err.Error())

@@ -16,7 +16,7 @@ const operatorOnlyRefusal = "run this from your own terminal: a review agent's s
 // and MAGNUM_PR_URL, and it reads the PR, whose text may steer it. The
 // commands that act for the operator (approve --as, unapprove, mute,
 // ignore, pause) refuse to run there and queue nothing; the ones the roles
-// run (post-review, db-lock) are not refused.
+// run (post-review, db-lock) and the fixer's fix-reply are not refused.
 func TestAReviewAgentsShellCannotActForTheOperator(t *testing.T) {
 	for _, env := range []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL"} {
 		t.Run(env, func(t *testing.T) {
@@ -45,7 +45,7 @@ func TestAReviewAgentsShellCannotActForTheOperator(t *testing.T) {
 			if v, _, _ := h.st.GetKV(h.ctx, store.KVDaemonPaused); v != "" {
 				t.Fatalf("paused: %q", v)
 			}
-			for _, args := range [][]string{{"post-review"}, {"db-lock"}} {
+			for _, args := range [][]string{{"post-review"}, {"db-lock"}, {"fix-reply"}} {
 				h.errb.Reset()
 				h.cmd(args[0], args[1:]...)
 				if strings.Contains(h.errb.String(), operatorOnlyRefusal) {
