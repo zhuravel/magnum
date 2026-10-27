@@ -5,6 +5,8 @@ import (
 	"errors"
 	"slices"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // syncFixture is the fixture with the clone detached at PR 7's head (the
@@ -85,18 +87,40 @@ func TestOwnDiffIDKeepsThePRsDiffAcrossAMergeOfTheBase(t *testing.T) {
 		t.Fatalf("OwnDiffID(merge of the base) = %q, %v; want the start head's %s", after, err, before)
 	}
 
-	// A change slipped into the merge (`git merge --no-commit`, an edit, a commit).
+	// A change slipped into a merge of main (`git merge --no-commit`, an
+	// edit of the PR's app/a.rb, a commit), on a branch of its own from the
+	// clean merge: a line added, the PR's line re-indented (YAML, Haml or
+	// Python indentation means something), spaces changed inside it.
 	fx.commit(fx.origin, "docs/other.md", "more\n", "main moves on")
-	fx.git(fx.origin, "switch", "--quiet", "pr7")
-	fx.git(fx.origin, "merge", "--quiet", "--no-commit", "main")
-	fx.write(fx.origin, "app/a.rb", "a = 1\nb = 2\n")
-	fx.git(fx.origin, "add", "app/a.rb")
-	fx.git(fx.origin, "commit", "--quiet", "--no-edit")
-	evil := fx.git(fx.origin, "rev-parse", "HEAD")
-	fx.git(fx.origin, "switch", "--quiet", "main")
-	fx.fetchSync()
-	if got, err := fx.c.OwnDiffID(ctx, fx.clone, base, evil); err != nil || got == before {
-		t.Fatalf("OwnDiffID(a merge that changed the PR's line) = %q, %v; want other than %s", got, err, before)
+	fx.fetchSync() // the base as fetched, so only the merge's own change can differ
+	mergeChanging := func(branch, content string) string {
+		t.Helper()
+		fx.git(fx.origin, "switch", "--quiet", "-c", branch, merge)
+		fx.git(fx.origin, "merge", "--quiet", "--no-commit", "main")
+		fx.write(fx.origin, "app/a.rb", content)
+		fx.git(fx.origin, "add", "app/a.rb")
+		fx.git(fx.origin, "commit", "--quiet", "--no-edit")
+		sha := fx.git(fx.origin, "rev-parse", "HEAD")
+		fx.git(fx.origin, "switch", "--quiet", "main")
+		if err := fx.c.FetchBranch(ctx, fx.clone, branch); err != nil {
+			t.Fatal(err)
+		}
+		return sha
+	}
+	for _, tc := range []struct{ what, branch, content string }{
+		{"added a line beside the PR's", "pr7-added", "a = 1\nb = 2\n"},
+		{"re-indented the PR's line", "pr7-indented", "  a = 1\n"},
+		{"changed the spaces in the PR's line", "pr7-spaced", "a  = 1\n"},
+	} {
+		changed := mergeChanging(tc.branch, tc.content)
+		if got, err := fx.c.OwnDiffID(ctx, fx.clone, base, changed); err != nil || got == before {
+			t.Errorf("OwnDiffID(a merge that %s) = %q, %v; want other than %s", tc.what, got, err, before)
+		}
+	}
+	// A plain merge of the moved main still keeps it.
+	plain := mergeChanging("pr7-plain", "a = 1\n")
+	if got, err := fx.c.OwnDiffID(ctx, fx.clone, base, plain); err != nil || got != before {
+		t.Errorf("OwnDiffID(a plain merge of the moved main) = %q, %v; want %s", got, err, before)
 	}
 
 	// A merge of a branch the base lacks.
@@ -173,5 +197,47 @@ func TestReplayOntoReplaysTheCommitsAfterTheStartAndAbortsAConflict(t *testing.T
 	}
 	if _, err := fx.c.ReplayOnto(ctx, fx.clone, "-x", start); err == nil {
 		t.Fatal("an option as the target was taken")
+	}
+}
+
+// endsAfterRebase is a runner whose context ends (cancel) right after a
+// rebase command returns: a stop that lands while git stops on a conflict.
+type endsAfterRebase struct {
+	execx.Runner
+	cancel context.CancelFunc
+}
+
+func (r endsAfterRebase) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	res, err := r.Runner.Run(ctx, c)
+	if slices.Contains(c.Args, "rebase") && slices.Contains(c.Args, "--onto") {
+		r.cancel()
+	}
+	return res, err
+}
+
+// A stop that ends the context while the replay stops on a conflict still
+// aborts the rebase: the look at what is in progress and the abort run on
+// a context the stop does not end, so no rebase is left to hold the
+// checkout.
+func TestReplayOntoAbortsAConflictWhoseContextEnded(t *testing.T) {
+	fx, _ := syncFixture(t)
+	head := fx.commit(fx.clone, "app/a.rb", "a = 2\n", "the fixer changes a")
+	fx.git(fx.origin, "switch", "--quiet", "pr7")
+	fx.commit(fx.origin, "app/a.rb", "a = 3\n", "someone changes a")
+	fx.git(fx.origin, "switch", "--quiet", "main")
+	fx.fetchSync()
+	tip := fx.git(fx.clone, "rev-parse", "refs/remotes/origin/pr7")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := New(endsAfterRebase{Runner: fx.r, cancel: cancel})
+	paths, err := c.ReplayOnto(ctx, fx.clone, tip, fx.pr)
+	if !errors.Is(err, ErrRebaseConflict) || !slices.Equal(paths, []string{"app/a.rb"}) {
+		t.Errorf("a conflicting replay whose context ended = %v, %v; want ErrRebaseConflict in app/a.rb", paths, err)
+	}
+	if p, err := fx.c.InProgress(context.Background(), fx.clone); err != nil || p != "" {
+		t.Fatalf("in progress after the stop = %q, %v; want the rebase aborted", p, err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD = %s after the abort, want %s", got, head)
 	}
 }

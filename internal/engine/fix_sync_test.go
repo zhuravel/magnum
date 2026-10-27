@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -84,11 +85,12 @@ func TestAPushAfterAFixSyncSettles(t *testing.T) {
 	if cur.HeadSHA != synced || !cur.Forced {
 		t.Fatalf("PR head %s forced %v: want the synced push, forced", cur.HeadSHA, cur.Forced)
 	}
+	// Asked in the slot, which holds both: the fixer fetched the branch there.
 	git.mu.Lock()
-	asked := strings.Join(git.ancestry, " ")
+	asked := slices.Clone(git.ancestry)
 	git.mu.Unlock()
-	if !strings.Contains(asked, merge+".."+synced) {
-		t.Errorf("ancestry asked = %q, want whether the push descends from the merge", asked)
+	if want := h.slot("review1").Path + ":" + merge + ".." + synced; !slices.Contains(asked, want) {
+		t.Errorf("ancestry asked = %q, want %q: whether the push descends from the merge, in the slot", asked, want)
 	}
 
 	// The re-review runs on the pushed head; a next cycle's fixer pushes nothing.
@@ -134,5 +136,32 @@ func TestAFixPushNeverMovesTheRowBehindANewerHead(t *testing.T) {
 	h.settle()
 	if cur := h.pr(2); cur.HeadSHA != newer {
 		t.Errorf("PR head %s, want the newer %s kept", cur.HeadSHA, newer[:7])
+	}
+}
+
+// The prompt names a fix-sync line only when the job can fill it: the PR's
+// branch, and its base (else the repository's default branch) in
+// characters a shell does not read. Without one, the prompt names none and
+// the fixer stops at a rejected push as before.
+func TestTheFixSyncLineNeedsTheBranchAndASafeBase(t *testing.T) {
+	h, _ := fixHarness(t)
+	str := func(s string) *string { return &s }
+	bin := h.d.Layout.Binary()
+	for _, tc := range []struct {
+		name         string
+		branch, base *string
+		def, want    string
+	}{
+		{"the PR's base", str("feature"), str("release/1.0"), "main", agents.FixSyncLine(bin, fixHead, "feature", "release/1.0")},
+		{"the repository's default branch", str("feature"), nil, "main", agents.FixSyncLine(bin, fixHead, "feature", "main")},
+		{"no branch", nil, str("master"), "main", ""},
+		{"an empty branch", str(""), str("master"), "main", ""},
+		{"no base", str("feature"), nil, "", ""},
+		{"a base a shell would read", str("feature"), str("master$(touch x)"), "main", ""},
+	} {
+		job := &fixJob{pr: store.PR{HeadRef: tc.branch, BaseRef: tc.base}, repo: store.Repo{DefaultBranch: tc.def}, head: fixHead}
+		if got := h.e.fixSyncLine(job); got != tc.want {
+			t.Errorf("%s: fixSyncLine = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

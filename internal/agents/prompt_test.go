@@ -552,10 +552,11 @@ func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 // rebase left the fixer's commit unpushed. A push rejected because the
 // branch moved runs the fix-sync line once, with nothing uncommitted. After
 // a replay the fixer runs the specs of the changed files again and pushes
-// once more, never with force, and names the new SHAs; after a refusal, a
-// prompt without the line or a push that fails otherwise, it stops as
-// before. The replayed commits were never on GitHub, which the history
-// rule allows.
+// once more, never with force, and names the new SHAs; specs that fail
+// after the replay push nothing. After a refusal, a replay that changed the
+// checkout and could not be undone (exit 3), a prompt without the line or a
+// push that fails otherwise, it stops as before. The replayed commits were
+// never on GitHub, which the history rule allows.
 func TestTheFixSkillSyncsAPushTheBranchMovedPast(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
@@ -564,9 +565,15 @@ func TestTheFixSkillSyncsAPushTheBranchMovedPast(t *testing.T) {
 		"`replayed <N> commits onto <sha>; HEAD is <sha>`",
 		"After a replay, run the specs of the changed files again through the db-lock line, then push once more the same way, never with force.",
 		"Your commits have new SHAs after a replay: the replies and the report name those.",
-		"When it prints `refused: <reason>`, when the prompt names no fix-sync line, or when a push fails for any other reason, " +
+		// A replay the base merge broke never goes out.
+		"If those specs fail, push nothing: never push a replay the base merge broke. " +
+			"Write `push failed: <spec> fails after fix-sync` under `## Pushed`, put each finding you committed under `## Needs you`, and stop.",
+		// Exit 3: the checkout changed, nothing is pushed.
+		"When it prints `refused: <reason>` or `failed: <reason>` (exit status 3: the replay changed the checkout and could not be undone), " +
+			"when the prompt names no fix-sync line, or when a push fails for any other reason, push nothing more and " +
 			"do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings.",
-		"Write `push failed: <git's first error line>` under `## Pushed` in the report (and `; fix-sync refused: <reason>` after it when it refused)",
+		"Write `push failed: <git's first error line>` under `## Pushed` in the report (and `; fix-sync refused: <reason>` or " +
+			"`; fix-sync failed: <reason>` after it when the line printed one)",
 		"- the fix-sync line, which replays your commits when a rejected push finds that the branch gained only a merge of its base (section 5)",
 		"- Never force-push, rebase, amend or reset a commit that is on GitHub. The fix-sync line replays only your commits that are not on GitHub yet.",
 	} {

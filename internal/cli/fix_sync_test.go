@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,6 +102,23 @@ func (s *syncRepo) updateBranch(path, content string) string {
 	s.t.Helper()
 	s.commit(s.origin, path, content, "main moves on")
 	return s.onFeature(func() { s.git(s.origin, "merge", "--quiet", "--no-edit", "main") })
+}
+
+// mergeChangingThePR commits fixed in the slot (the fixer's fix), moves main
+// on and merges it into feature with the PR's first line of config.rb
+// changed to line in the merge (a conflict resolved on GitHub, a change
+// beside the merge); it returns the refusal fix-sync owes it.
+func (s *syncRepo) mergeChangingThePR(fixed, line string) string {
+	s.t.Helper()
+	s.commit(s.slot, "config.rb", fixed, "Fix the last line")
+	s.commit(s.origin, "docs/main.md", "main moves\n", "main moves on")
+	s.onFeature(func() {
+		s.git(s.origin, "merge", "--quiet", "--no-commit", "main")
+		s.write(s.origin, "config.rb", strings.Replace(syncConfig, "a\n", line, 1))
+		s.git(s.origin, "add", "config.rb")
+		s.git(s.origin, "commit", "--quiet", "--no-edit")
+	})
+	return "refused: the branch's merges changed the PR's own diff against main (a conflict resolved, or a change beside the merge): someone works on the branch"
 }
 
 // fixSync runs `magnum fix-sync` on the slot for the run's start head.
@@ -204,6 +223,34 @@ func TestFixSyncAbortsAConflictingReplay(t *testing.T) {
 	s.wantUnchanged(t, head)
 }
 
+// abortFails is a runner whose `git rebase --abort` fails: a replay that
+// conflicts cannot be undone.
+type abortFails struct{ execx.Runner }
+
+func (r abortFails) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	if slices.Contains(c.Args, "rebase") && slices.Contains(c.Args, "--abort") {
+		return execx.Result{}, errors.New("the abort fails")
+	}
+	return r.Runner.Run(ctx, c)
+}
+
+// Exit 1 tells the fixer that nothing changed. A replay that could not be
+// undone (its abort failed) did change the checkout: fix-sync exits 3 and
+// says what is in the way, never "refused".
+func TestFixSyncSaysWhenTheCheckoutChanged(t *testing.T) {
+	s := newSyncRepo(t)
+	fixSyncRunner = func() execx.Runner { return abortFails{s.r} }
+	s.commit(s.slot, "config.rb", strings.Replace(strings.Replace(syncConfig, "a\n", "A\n", 1), "h\n", "fixer\n", 1), "Fix the last line")
+	merge := s.updateBranch("config.rb", strings.Replace(syncConfig, "h\n", "main\n", 1))
+
+	code, out, _ := s.fixSync(t)
+	want := "failed: replaying your 1 commit onto " + textx.ShortSHA(merge) + " conflicts in config.rb; a rebase is still in progress: run `git rebase --abort`"
+	if code != 3 || out != want {
+		t.Fatalf("exit %d, stdout %q; want 3, %q", code, out, want)
+	}
+	s.git(s.slot, "rebase", "--abort")
+}
+
 // Anything but merges of the base on top of the start head, and anything
 // in the fixer's checkout that a replay could lose or misread, changes
 // nothing: a merge that changed the PR's own diff (a conflict resolved on
@@ -219,15 +266,29 @@ func TestFixSyncRefusesWhatIsNotABaseMergeOnTop(t *testing.T) {
 		setup func(s *syncRepo) string
 	}{
 		{"a merge that changed the PR's own diff", func(s *syncRepo) string {
+			return s.mergeChangingThePR(fixed, "AA\n")
+		}},
+		// Whitespace means something in YAML, Haml, Python and Makefiles.
+		{"a merge that re-indented the PR's line", func(s *syncRepo) string {
+			return s.mergeChangingThePR(fixed, "  A\n")
+		}},
+		{"a merge that changed the spaces in the PR's line", func(s *syncRepo) string {
+			return s.mergeChangingThePR(fixed, "A \n")
+		}},
+		// A merge of the PR into the base pushed as the branch (the base
+		// first): on a base made of merges alone, every commit the branch
+		// gained is a merge, but the chain does not start on the start head.
+		{"a reverse merge on a base of merges", func(s *syncRepo) string {
 			s.commit(s.slot, "config.rb", fixed, "Fix the last line")
-			s.commit(s.origin, "docs/main.md", "main moves\n", "main moves on")
-			s.onFeature(func() {
-				s.git(s.origin, "merge", "--quiet", "--no-commit", "main")
-				s.write(s.origin, "config.rb", strings.Replace(syncConfig, "a\n", "AA\n", 1))
-				s.git(s.origin, "add", "config.rb")
-				s.git(s.origin, "commit", "--quiet", "--no-edit")
-			})
-			return "refused: the branch's merges changed the PR's own diff against main (a conflict resolved, or a change beside the merge): someone works on the branch"
+			s.git(s.origin, "switch", "--quiet", "-c", "side", "main")
+			s.commit(s.origin, "docs/side.md", "side\n", "a change on a side branch")
+			s.git(s.origin, "switch", "--quiet", "main")
+			s.git(s.origin, "merge", "--quiet", "--no-ff", "--no-edit", "side")
+			s.git(s.origin, "merge", "--quiet", "--no-ff", "--no-edit", "feature")
+			reverse := s.git(s.origin, "rev-parse", "HEAD")
+			s.git(s.origin, "reset", "--quiet", "--hard", "HEAD~1")
+			s.git(s.origin, "branch", "--quiet", "--force", "feature", reverse)
+			return "refused: the branch's merges do not follow the start head " + textx.ShortSHA(s.start) + " on their first parent"
 		}},
 		{"a rewritten branch", func(s *syncRepo) string {
 			s.commit(s.slot, "config.rb", fixed, "Fix the last line")

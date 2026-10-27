@@ -29,6 +29,10 @@ const (
 	fixSyncRefused = 1
 	// fixSyncBadArgs: its flags are missing or wrong; it ran nothing.
 	fixSyncBadArgs = 2
+	// fixSyncChanged: the replay changed the checkout and could not be
+	// undone or confirmed (the line on stdout, "failed: ...", says what is
+	// in the way): the fixer pushes nothing.
+	fixSyncChanged = 3
 )
 
 // maxSyncPaths bounds the conflicting paths a refusal names.
@@ -55,9 +59,11 @@ func newFixSyncCmd(c *Context) *cobra.Command {
 			"the specs of the changed files again and pushes, never with force. Anything else changes nothing and prints "+
 			"\"refused: <reason>\": a commit that is not a merge (someone works on the branch), a merge that changed the PR's "+
 			"own diff, a rewritten branch, a merge among the fixer's own commits, uncommitted changes to tracked files, an "+
-			"operation in progress. A replay that conflicts is aborted, and the checkout is as it was.\n\n"+
-			"Exit statuses: 0 replayed; 1 refused, nothing changed; 2 wrong flags, nothing run. It reads no config and no "+
-			"registry and never talks to the daemon.",
+			"operation in progress. A replay that conflicts is aborted, and the checkout is as it was. A replay that "+
+			"cannot be undone (its abort failed) or confirmed (HEAD cannot be read after it) prints \"failed: <reason>\" "+
+			"with what is in the way: the checkout changed, and the fixer pushes nothing.\n\n"+
+			"Exit statuses: 0 replayed; 1 refused, nothing changed; 2 wrong flags, nothing run; 3 failed, the checkout "+
+			"changed. It reads no config and no registry and never talks to the daemon.",
 		func(args []string) int { return runFixSync(c, o, args) })
 	// The command needs no magnum layout: it runs wherever the fixer's pane is.
 	cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
@@ -101,53 +107,56 @@ func runFixSync(c *Context, o fixSyncOpts, args []string) int {
 	if err != nil {
 		return fixSyncBadUsage(c, "--from %s is no commit of the checkout (%v)", o.from, err)
 	}
-	done, refused := fixSync(ctx, g, dir, from, o.branch, o.base)
-	if refused != "" {
-		fmt.Fprintln(c.Stdout, execx.Redact("refused: "+refused))
-		return fixSyncRefused
+	msg, code := fixSync(ctx, g, dir, from, o.branch, o.base)
+	switch code {
+	case fixSyncRefused:
+		msg = "refused: " + msg
+	case fixSyncChanged:
+		msg = "failed: " + msg
 	}
-	fmt.Fprintln(c.Stdout, done)
-	return 0
+	fmt.Fprintln(c.Stdout, execx.Redact(msg))
+	return code
 }
 
 // fixSync replays the commits from..HEAD of the checkout at dir onto the
 // tip of origin's branch when every commit the branch gained since from is
 // a merge and the PR's own diff against base stayed the same (spec 5.7),
-// and says what it did; refused is why it changed nothing instead, "" when
-// it replayed.
-func fixSync(ctx context.Context, g *gitx.Client, dir, from, branch, base string) (done, refused string) {
+// and says what it did (code 0); otherwise msg is why it changed nothing
+// (fixSyncRefused), or what is in the way of a replay that changed the
+// checkout and could not be undone or confirmed (fixSyncChanged).
+func fixSync(ctx context.Context, g *gitx.Client, dir, from, branch, base string) (msg string, code int) {
 	switch op, err := g.InProgress(ctx, dir); {
 	case err != nil:
-		return "", fmt.Sprintf("could not read the checkout: %v", err)
+		return fmt.Sprintf("could not read the checkout: %v", err), fixSyncRefused
 	case op != "":
-		return "", fmt.Sprintf("the checkout is in the middle of a %s: finish or abort it first", op)
+		return fmt.Sprintf("the checkout is in the middle of a %s: finish or abort it first", op), fixSyncRefused
 	}
 	switch st, err := g.Status(ctx, dir); {
 	case err != nil:
-		return "", fmt.Sprintf("could not read the checkout: %v", err)
+		return fmt.Sprintf("could not read the checkout: %v", err), fixSyncRefused
 	case st.Tracked > 0:
-		return "", "the checkout has uncommitted changes to tracked files: commit what belongs to a fix and restore the rest first"
+		return "the checkout has uncommitted changes to tracked files: commit what belongs to a fix and restore the rest first", fixSyncRefused
 	}
 	head, err := g.RevParse(ctx, dir, "HEAD")
 	if err != nil {
-		return "", fmt.Sprintf("could not read HEAD: %v", err)
+		return fmt.Sprintf("could not read HEAD: %v", err), fixSyncRefused
 	}
 	still := "; HEAD is still " + textx.ShortSHA(head)
 	own, why := fixSyncOwn(ctx, g, dir, from, head)
 	if why != "" {
-		return "", why + still
+		return why + still, fixSyncRefused
 	}
 	for _, b := range []string{branch, base} {
 		if err := g.FetchBranch(ctx, dir, b); err != nil {
-			return "", fmt.Sprintf("could not fetch %s: %v%s", b, err, still)
+			return fmt.Sprintf("could not fetch %s: %v%s", b, err, still), fixSyncRefused
 		}
 	}
 	tip, err := g.RevParse(ctx, dir, "refs/remotes/origin/"+branch)
 	if err != nil {
-		return "", fmt.Sprintf("could not read the branch's tip: %v%s", err, still)
+		return fmt.Sprintf("could not read the branch's tip: %v%s", err, still), fixSyncRefused
 	}
 	if why := fixSyncGained(ctx, g, dir, from, head, tip, base); why != "" {
-		return "", why + still
+		return why + still, fixSyncRefused
 	}
 	paths, err := g.ReplayOnto(ctx, dir, tip, from)
 	if err != nil {
@@ -160,18 +169,26 @@ func fixSync(ctx context.Context, g *gitx.Client, dir, from, branch, base string
 		default:
 			what += fmt.Sprintf(" failed: %v", err)
 		}
-		return "", what + fixSyncLeft(ctx, g, dir, head)
+		left, undone := fixSyncLeft(ctx, g, dir, head)
+		if !undone {
+			return what + left, fixSyncChanged
+		}
+		return what + left, fixSyncRefused
 	}
+	// The replay changed the checkout from here on: a look that fails can no
+	// longer say "nothing changed".
 	now, err := g.RevParse(ctx, dir, "HEAD")
 	if err != nil {
-		return "", fmt.Sprintf("replayed your commits onto %s, but could not read HEAD: %v", textx.ShortSHA(tip), err)
+		return fmt.Sprintf("replayed your commits onto %s, but could not read HEAD: %v; it was %s", textx.ShortSHA(tip), err,
+			textx.ShortSHA(head)), fixSyncChanged
 	}
 	replayed, err := g.CommitsAfter(ctx, dir, tip, now, false)
 	if err != nil {
-		return "", fmt.Sprintf("replayed your commits onto %s, but could not count them: %v; HEAD is %s", textx.ShortSHA(tip), err, textx.ShortSHA(now))
+		return fmt.Sprintf("replayed your commits onto %s, but could not count them: %v; HEAD is %s, it was %s", textx.ShortSHA(tip), err,
+			textx.ShortSHA(now), textx.ShortSHA(head)), fixSyncChanged
 	}
 	return fmt.Sprintf("replayed %s onto %s; HEAD is %s", textx.Count(len(replayed), "commit", "commits"), textx.ShortSHA(tip),
-		textx.ShortSHA(now)), ""
+		textx.ShortSHA(now)), 0
 }
 
 // fixSyncOwn lists the fixer's commits, from..head, or says why they
@@ -248,22 +265,24 @@ func fixSyncGained(ctx context.Context, g *gitx.Client, dir, from, head, tip, ba
 }
 
 // fixSyncLeft is how a failed replay left the checkout at dir, whose HEAD
-// was head: "; HEAD is still <head>" when the replay was undone, else what
-// is in the way.
-func fixSyncLeft(ctx context.Context, g *gitx.Client, dir, head string) string {
+// was head: "; HEAD is still <head>" and undone when the replay was undone
+// (nothing in progress, HEAD where it was), else what is in the way.
+func fixSyncLeft(ctx context.Context, g *gitx.Client, dir, head string) (left string, undone bool) {
 	ctx = context.WithoutCancel(ctx)
-	op, err := g.InProgress(ctx, dir)
-	if err == nil && op != "" {
-		return fmt.Sprintf("; a %s is still in progress: run `git %s --abort`", op, op)
+	switch op, err := g.InProgress(ctx, dir); {
+	case err != nil:
+		return fmt.Sprintf("; the checkout cannot be read (%v): HEAD was %s", err, textx.ShortSHA(head)), false
+	case op != "":
+		return fmt.Sprintf("; a %s is still in progress: run `git %s --abort`", op, op), false
 	}
 	now, err := g.RevParse(ctx, dir, "HEAD")
 	switch {
 	case err != nil:
-		return fmt.Sprintf("; HEAD cannot be read (%v): it was %s", err, textx.ShortSHA(head))
+		return fmt.Sprintf("; HEAD cannot be read (%v): it was %s", err, textx.ShortSHA(head)), false
 	case now != head:
-		return fmt.Sprintf("; HEAD moved to %s: it was %s", textx.ShortSHA(now), textx.ShortSHA(head))
+		return fmt.Sprintf("; HEAD moved to %s: it was %s", textx.ShortSHA(now), textx.ShortSHA(head)), false
 	}
-	return "; HEAD is still " + textx.ShortSHA(head)
+	return "; HEAD is still " + textx.ShortSHA(head), true
 }
 
 // namePaths names at most maxSyncPaths of paths and counts the rest.

@@ -13625,24 +13625,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   repository's config says, since these are the fixer's commits) onto the branch's new tip only when every
   commit on the tip's first-parent chain since the start head is a merge, the oldest of them on top of the
   start head (`gitx.CommitsAfter`; a merge of the base is one commit there, without the base's commits it
-  brings), and the PR's own diff against the base is the same at both (`gitx.OwnDiffID`: the patch id of
-  `diff-tree --patch --unified=0 --full-index <merge base> <head>`, the PR as GitHub's base...head shows it,
-  with the base as fetched; without context lines a merge that changes other lines keeps the id, while one
-  that resolved a conflict in the PR's lines, slipped a change in or brought a branch the base lacks changes
-  it). It prints "replayed N commits onto <sha>; HEAD is <sha>" (exit 0), and the fixer runs the specs of
-  the changed files again and pushes once more, never with force, naming the new SHAs. Anything else changes
+  brings), and the PR's own diff against the base is the same at both (`gitx.OwnDiffID`: the `git patch-id
+  --verbatim` of `diff-tree --patch --unified=0 --full-index <merge base> <head>`, the PR as GitHub's
+  base...head shows it, with the base as fetched; without context lines a merge that changes other lines
+  keeps the id, as line numbers and the order of files do not count, while one that resolved a conflict in
+  the PR's lines, slipped a change in, re-indented a line or changed the spaces in it, or brought a branch
+  the base lacks changes it: `--stable`, which `PatchID` keeps for the skill editor's landing, ignores
+  whitespace, and YAML, Haml, Python and Makefiles read it). It prints "replayed N commits onto <sha>; HEAD
+  is <sha>" (exit 0), and the fixer runs the specs of the changed files again and pushes once more, never
+  with force, naming the new SHAs; specs that fail after the replay push nothing (a replay the base merge
+  broke never goes out), and the findings go under Needs you. Anything else changes
   nothing and prints "refused: <reason>" (exit 1): a commit that is not a merge, a merge that changed the
   PR's own diff, a rewritten branch, a branch that did not move, an operation in progress, uncommitted
   changes to tracked files (a rebase refuses them, and specs dirty tracked files such as a schema dump), no
   commit of the fixer's, and a merge among the fixer's own commits: the base merge of a conflicting PR
   (spec 5.6) would be made again by a replay without its resolutions, so that case is refused and the
   unpushed merge goes to the author as the failed push already sends it. A replay that conflicts is
-  aborted (the shared `rebase` helper of `RebaseOnto`, which now names the unmerged paths and aborts on a
-  context that outlives a stop), and the checkout is as it was. These commits were never on GitHub, so the
+  aborted (the shared `rebase` helper of `RebaseOnto`, which now names the unmerged paths and looks at what
+  is in progress and aborts on a context that outlives a stop), and the checkout is as it was. A replay that
+  changed the checkout and could not be undone (its abort failed) or confirmed (HEAD unreadable after it)
+  prints "failed: <reason>" with what is in the way (exit 3), never "refused", which tells the fixer that
+  nothing changed; the fixer pushes nothing. These commits were never on GitHub, so the
   skill's history rule allows the replay; it now says "never force-push, rebase, amend or reset a commit
   that is on GitHub", and its push rule runs the fix-sync line once on a push rejected because the branch
-  moved, with a clean work tree, and stops as before after a refusal, a prompt without the line or any
-  other failure (`push failed: …; fix-sync refused: <reason>`). The prompt names the line in its one
+  moved, with a clean work tree, and stops as before after a refusal, a failure, a prompt without the line
+  or any other push failure (`push failed: …; fix-sync refused: <reason>`, or `fix-sync failed: <reason>`).
+  The prompt names the line in its one
   paragraph (`FixPromptInput.FixSyncCommand`, `agents.FixSyncLine` with the job's start head, the PR's
   branch and base), never derived as the fix-reply line is, since only the job knows the base, and left
   out for a base a shell would read. The settle needed one change, in `recordFixPush` rather than
@@ -13664,7 +13672,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the commands an agent's pane may run; in engine TestAPushAfterAFixSyncSettles (the row stayed at the
   merge) with the guard TestAFixPushNeverMovesTheRowBehindANewerHead; in agents
   TestTheFixPromptNamesTheFixSyncCommand through the four fix goldens and
-  TestTheFixSkillSyncsAPushTheBranchMovedPast.
+  TestTheFixSkillSyncsAPushTheBranchMovedPast. The review's fixes, failing first: a re-indented and a
+  space-changed merge in TestOwnDiffIDKeepsThePRsDiffAcrossAMergeOfTheBase and
+  TestFixSyncRefusesWhatIsNotABaseMergeOnTop (one id under `--stable`, replayed with exit 0);
+  TestReplayOntoAbortsAConflictWhoseContextEnded (the in-progress look ran on the cancelled context and left
+  the rebase); TestFixSyncSaysWhenTheCheckoutChanged (an abort that fails said "refused", exit 1); the
+  specs-fail and exit-3 lines of TestTheFixSkillSyncsAPushTheBranchMovedPast. Guards: a reverse merge on a
+  base of merges in TestFixSyncRefusesWhatIsNotABaseMergeOnTop (fails without the first-parent check),
+  TestTheFixSyncLineNeedsTheBranchAndASafeBase, and the slot's path in TestAPushAfterAFixSyncSettles.
 
 ## Learned rules
 

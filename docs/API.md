@@ -11916,15 +11916,17 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
     holds.
 
 func (c *Client) OwnDiffID(ctx context.Context, dir, base, head string) (string, error)
-    OwnDiffID is the stable patch id of head's own diff against base:
+    OwnDiffID is the verbatim patch id of head's own diff against base:
     the change from their merge base to head (`git diff-tree --patch --unified=0
-    --full-index <merge base> head | git patch-id --stable`), the PR as GitHub's
-    base...head shows it. With no context lines, a merge of the base into head
-    that changes other lines, near the PR's own or not, leaves the id as it was;
-    one that changes a line of the PR's own (a conflict resolved, a change
-    slipped into the merge) or brings a branch the base lacks changes it.
-    A binary file counts by its blob ids. "" when head changes nothing against
-    base; ErrNoMergeBase for histories without a common commit.
+    --full-index <merge base> head | git patch-id --verbatim`), the PR as
+    GitHub's base...head shows it. With no context lines, a merge of the base
+    into head that changes other lines, near the PR's own or not, leaves the
+    id as it was, as line numbers and the order of files do not count; one that
+    changes a line of the PR's own (a conflict resolved, a change slipped into
+    the merge, its indentation or the spaces inside it, which --stable would not
+    see and YAML, Haml, Python or a Makefile read) or brings a branch the base
+    lacks changes it. A binary file counts by its blob ids. "" when head changes
+    nothing against base; ErrNoMergeBase for histories without a common commit.
 
 func (c *Client) OwnerUsesSSH(ctx context.Context, cloneRoot, owner string) (bool, error)
     OwnerUsesSSH reports whether a clone directly under cloneRoot of any

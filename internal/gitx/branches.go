@@ -229,12 +229,13 @@ func (c *Client) rebase(ctx context.Context, dir, onto, upstream string, config,
 	if err == nil {
 		return nil, nil
 	}
-	if p, perr := c.InProgress(ctx, dir); perr != nil || p != "rebase" {
+	// The look at what is in progress and the abort run whatever stopped the
+	// rebase, a cancelled ctx included: a rebase left in progress would hold
+	// the checkout.
+	actx := context.WithoutCancel(ctx)
+	if p, perr := c.InProgress(actx, dir); perr != nil || p != "rebase" {
 		return nil, errors.Join(err, perr)
 	}
-	// The abort runs whatever stopped the rebase, a cancelled ctx included:
-	// a rebase left in progress would hold the checkout.
-	actx := context.WithoutCancel(ctx)
 	paths, _ := c.unmergedPaths(actx, dir)
 	if _, aerr := c.git(actx, dir, call{label: "rebase --abort", mutates: true, timeout: commitTimeout}, "rebase", "--abort"); aerr != nil {
 		return paths, errors.Join(fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict), aerr)
@@ -335,23 +336,25 @@ func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error) {
 	if err := checkRev("rev", rev); err != nil {
 		return "", err
 	}
-	id, err := c.patchID(ctx, dir, rev, rev)
+	id, err := c.patchID(ctx, dir, patchIDStable, rev, rev)
 	if err == nil && id == "" {
 		err = fmt.Errorf("gitx: patch-id %s: no change to hash", rev)
 	}
 	return id, err
 }
 
-// OwnDiffID is the stable patch id of head's own diff against base: the
+// OwnDiffID is the verbatim patch id of head's own diff against base: the
 // change from their merge base to head (`git diff-tree --patch --unified=0
-// --full-index <merge base> head | git patch-id --stable`), the PR as
+// --full-index <merge base> head | git patch-id --verbatim`), the PR as
 // GitHub's base...head shows it. With no context lines, a merge of the base
 // into head that changes other lines, near the PR's own or not, leaves the
-// id as it was; one that changes a line of the PR's own (a conflict
-// resolved, a change slipped into the merge) or brings a branch the base
-// lacks changes it. A binary file counts by its blob ids. "" when head
-// changes nothing against base; ErrNoMergeBase for histories without a
-// common commit.
+// id as it was, as line numbers and the order of files do not count; one
+// that changes a line of the PR's own (a conflict resolved, a change slipped
+// into the merge, its indentation or the spaces inside it, which --stable
+// would not see and YAML, Haml, Python or a Makefile read) or brings a
+// branch the base lacks changes it. A binary file counts by its blob ids.
+// "" when head changes nothing against base; ErrNoMergeBase for histories
+// without a common commit.
 func (c *Client) OwnDiffID(ctx context.Context, dir, base, head string) (string, error) {
 	if err := errors.Join(checkRev("base", base), checkRev("head", head)); err != nil {
 		return "", err
@@ -360,12 +363,20 @@ func (c *Client) OwnDiffID(ctx context.Context, dir, base, head string) (string,
 	if err != nil {
 		return "", err
 	}
-	return c.patchID(ctx, dir, base+"..."+head, "--full-index", mb, head)
+	return c.patchID(ctx, dir, patchIDVerbatim, base+"..."+head, "--full-index", mb, head)
 }
 
-// patchID is the stable patch id of `git diff-tree --patch --unified=0
-// <args>` (what names it in the errors), "" for a diff with no change.
-func (c *Client) patchID(ctx context.Context, dir, what string, args ...string) (string, error) {
+// The modes of `git patch-id` patchID runs: both ignore line numbers and
+// the order of files; --stable also ignores whitespace, --verbatim keeps it.
+const (
+	patchIDStable   = "--stable"
+	patchIDVerbatim = "--verbatim"
+)
+
+// patchID is the patch id, in mode (patchIDStable or patchIDVerbatim), of
+// `git diff-tree --patch --unified=0 <args>` (what names it in the
+// errors), "" for a diff with no change.
+func (c *Client) patchID(ctx context.Context, dir, mode, what string, args ...string) (string, error) {
 	diff, err := c.git(ctx, dir, call{label: "diff-tree --patch " + what},
 		append([]string{"diff-tree", "--patch", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv"}, args...)...)
 	if err != nil {
@@ -374,7 +385,7 @@ func (c *Client) patchID(ctx context.Context, dir, what string, args ...string) 
 	if diff.Truncated {
 		return "", fmt.Errorf("gitx: patch-id %s: the diff is too large", what)
 	}
-	out, err := c.runStdin(ctx, dir, call{label: "patch-id"}, diff.Stdout, "patch-id", "--stable")
+	out, err := c.runStdin(ctx, dir, call{label: "patch-id"}, diff.Stdout, "patch-id", mode)
 	if err != nil || out == "" {
 		return "", err
 	}
