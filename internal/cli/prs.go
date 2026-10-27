@@ -469,7 +469,7 @@ func prsOpenFacts(ctx context.Context, st *store.Store, cfg *config.Config, rows
 			out[i].HeldUntil = openHoldEnd(ctx, st, d, h, r.PRID)
 		}
 		if ss, err := st.SessionsByPR(ctx, r.PRID); err == nil {
-			out[i].OpenRestores = openWouldRestore(ss, openRoleOf(ctx, st, cfg, r.PRID, r.Owner+"/"+r.Name))
+			out[i].OpenRestores = openWouldRestore(ss, openRoleOf(ctx, st, cfg, r.PRID, r.Owner+"/"+r.Name, ss))
 		}
 	}
 }

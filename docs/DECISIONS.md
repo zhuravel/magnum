@@ -3193,6 +3193,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
   two-step park makes quick, and the panes the operator is reading would close under them); keeping the
   lasting pin with a reminder toast (the round still waits until the operator acts, which is what the
   evidence shows they forget).
+- **`magnum open` restores through any parked session when the judge's is gone** (2026-10-27, wave 1 of the
+  fix loop's design, section 5.5, approved by the operator). A plain `magnum open` of a PR refused: "the
+  codex-judge session is closed: `magnum review` starts a new round with fresh sessions", while its
+  claude-review session was parked, and `magnum open --role claude-review` restored the PR at once. The
+  refusal knew only the role it opened, the judge's, and the parked conversation of another role was one flag
+  away. Now, without `--role`, when the role open would open has nothing to open (its newest session is
+  lost or closed, none of its sessions is parked or up) and no session of the PR is starting or live,
+  the newest parked session of any role by `started_at` (the later one of two that started together) takes
+  its place: `openMain` asks for that role's restore, so the request, the question on a terminal, the hold
+  and the wait are those of `--role <that role>`, and the answer line names the role it focused. The rule is
+  one function over the PR's sessions (openRestoreRole), and the board's `o` asks the same question:
+  openRoleOf names that role (the fixer's while its loop works, else the judge's, then the stand-in) and
+  openWouldRestore applies the rule to the role it is given, so the board says "restores" for exactly the
+  rows open restores, and `o` asks y/N first. A lost judge session counts as the closed one: openRestore's
+  refusal already treats both alike (the role's pane is gone with its session), and a lost session has no
+  conversation to restore either. Unchanged: a role named with `--role` is never replaced (its own refusal
+  stands, with a parked session of another role beside it); a live or starting session of the PR, of any
+  role, keeps today's focus of a live pane (the restore replaces the refusal, not the focus: `o` would
+  otherwise ask to claim a slot for a PR whose panes are up); a judge that never had a session still says
+  "has no session yet"; with no parked session the refusal is the same text. A parked role the watch no
+  longer runs keeps the judge's refusal in `magnum open` (the board's row may ask first and then refuse: a
+  config edit between two sessions, not worth a config read in the row's query). Rejected: restoring
+  through the judge's own parked session only (the case here has none); asking the operator which parked
+  role to restore (the newest is the one the PR was last worked in, and `--role` remains for another); the
+  daemon choosing the role (its open request already takes any role, and the CLI is the one that reads
+  the sessions to ask y/N). Tests, failing first: TestOpenWithoutARoleRestoresThroughAParkedSessionWhenTheJudgesIsClosed
+  (closed and lost judge, a newer claude-review and an older claude-simplify parked: one open request for
+  claude-review, no refusal), TestOpenOfAClosedJudgeRefusesWhenNoSessionIsParkedOrARoleIsNamed,
+  TestOpenOfAClosedJudgeFocusesALivePaneBeforeItRestoresAParkedOne and
+  TestTheBoardsOpenFollowsTheParkedSessionWhenTheJudgesIsGone.
 
 ## Operations
 

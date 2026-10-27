@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
@@ -271,5 +272,139 @@ func TestOpenFocusesTheFixerWhileItWorks(t *testing.T) {
 	}
 	if got := strings.Join(h.hd.focused, ","); got != "mg-talkable-5-fix,mg-talkable-5-judge,mg-talkable-5-fix" {
 		t.Fatalf("focused %v", h.hd.focused)
+	}
+}
+
+// openGoneFixture seeds talkable#5 with its judge's session in state (lost or
+// closed, its pane gone) and parked sessions of other roles, started the given
+// duration ago; a daemon (pid 99) answers, and the pane of the role asked to
+// restore comes up at the second poll.
+func (h *actHarness) openGoneFixture(judge string, parked map[string]time.Duration) store.PR {
+	h.t.Helper()
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.session(pr.ID, store.RoleJudge, judge, "mg-talkable-5-codex-judge", "", "")
+	for role, ago := range parked {
+		_, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: role, State: store.SessionParked,
+			SessionID: new("u-" + role), StartedAt: h.now.Add(-ago)})
+		if err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	h.pid = 99
+	h.onSleep = func(h *actHarness) {
+		for _, r := range h.requests() {
+			p := actDecode[engine.OpenPayload](h.t, r.Payload)
+			if live, err := h.st.LiveSessionByPRRole(h.ctx, pr.ID, p.Role); err != nil || store.Deref(live.HerdrPaneID) == "" {
+				h.session(pr.ID, p.Role, store.SessionLive, "mg-talkable-5-"+p.Role, "p_9", "w_9")
+			}
+		}
+	}
+	return pr
+}
+
+// `magnum open` of a PR whose judge's session is closed used to refuse and send
+// the operator to `magnum review`, with a parked conversation of another role
+// one `--role` away from a restore (2026-10-27, a PR whose claude-review
+// session was parked). Without --role it now restores through the newest
+// parked session of any role (by started_at), the judge's own session lost
+// as well as closed.
+func TestOpenWithoutARoleRestoresThroughAParkedSessionWhenTheJudgesIsClosed(t *testing.T) {
+	for _, judge := range []string{store.SessionClosed, store.SessionLost} {
+		t.Run(judge, func(t *testing.T) {
+			h := newActHarness(t)
+			h.openGoneFixture(judge, map[string]time.Duration{
+				store.RoleClaude:   10 * time.Minute, // the newest parked
+				store.RoleSimplify: time.Hour,
+			})
+			if code := h.cmd("open", "5", "--no-reveal"); code != 0 {
+				t.Fatalf("exit %d: %s", code, h.errb.String())
+			}
+			reqs := h.requests()
+			if len(reqs) != 1 || actDecode[engine.OpenPayload](t, reqs[0].Payload).Role != store.RoleClaude {
+				t.Fatalf("requests %+v, want one open of the newest parked role %s", reqs, store.RoleClaude)
+			}
+			actContains(t, h.out.String(), "talkable#5 claude-review: focused mg-talkable-5-claude-review")
+			actContains(t, h.errb.String(), "talkable#5 is parked; asked the daemon to restore its sessions")
+			if strings.Contains(h.errb.String(), "starts a new round with fresh sessions") {
+				t.Fatalf("refused anyway:\n%s", h.errb.String())
+			}
+		})
+	}
+}
+
+// Nothing parked, nothing to restore through: today's refusal, and no request.
+// A role named with --role is that role's own question: its closed session
+// refuses even beside a parked one of another role.
+func TestOpenOfAClosedJudgeRefusesWhenNoSessionIsParkedOrARoleIsNamed(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.openGoneFixture(store.SessionClosed, nil)
+	h.session(pr.ID, store.RoleClaude, store.SessionClosed, "mg-talkable-5-claude-review", "", "")
+	if code := h.cmd("open", "5", "--no-reveal"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	actContains(t, h.errb.String(), "the codex-judge session of talkable#5 is closed", "starts a new round with fresh sessions")
+
+	if _, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: store.RoleSimplify, State: store.SessionParked, SessionID: new("u-s")}); err != nil {
+		t.Fatal(err)
+	}
+	h.errb.Reset()
+	if code := h.cmd("open", "5", "--no-reveal", "--role", "codex-judge"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	actContains(t, h.errb.String(), "the codex-judge session of talkable#5 is closed", "starts a new round with fresh sessions")
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("requests %+v: nothing was to be restored", reqs)
+	}
+}
+
+// A live pane of the PR is what an open focuses, as before: the restore
+// replaces the refusal, not the focus.
+func TestOpenOfAClosedJudgeFocusesALivePaneBeforeItRestoresAParkedOne(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.openGoneFixture(store.SessionClosed, map[string]time.Duration{store.RoleClaude: time.Minute})
+	h.session(pr.ID, store.RoleSimplify, store.SessionLive, "mg-talkable-5-claude-simplify", "p_4", "w_1")
+	if code := h.cmd("open", "5", "--no-reveal"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if got := strings.Join(h.hd.focused, ","); got != "mg-talkable-5-claude-simplify" {
+		t.Fatalf("focused %v, want the live pane", h.hd.focused)
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("requests %+v: a live pane needs no restore", reqs)
+	}
+}
+
+// The board's o asks the question open decides: the parked session of another
+// role restores the PR when the judge's is gone, as open does without --role
+// (openRoleOf names that role, openWouldRestore says it restores); a live
+// session of the PR, no parked one and a judge that never had a session
+// restore nothing.
+func TestTheBoardsOpenFollowsTheParkedSessionWhenTheJudgesIsGone(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	judgeGone := store.Session{Role: store.RoleJudge, State: store.SessionClosed}
+	lost := store.Session{Role: store.RoleJudge, State: store.SessionLost}
+	older := store.Session{Role: store.RoleSimplify, State: store.SessionParked, StartedAt: h.now.Add(-time.Hour)}
+	claude := store.Session{Role: store.RoleClaude, State: store.SessionParked, StartedAt: h.now}
+	liveSimplify := store.Session{Role: store.RoleSimplify, State: store.SessionLive}
+	for _, tc := range []struct {
+		name string
+		all  []store.Session
+		role string // what the board's row says open opens
+		want bool
+	}{
+		{"closed judge, parked claude-review", []store.Session{judgeGone, claude}, store.RoleClaude, true},
+		{"the newest parked one, whatever the order", []store.Session{judgeGone, claude, older}, store.RoleClaude, true},
+		{"lost judge, parked claude-review", []store.Session{lost, claude}, store.RoleClaude, true},
+		{"a live session of the PR", []store.Session{judgeGone, claude, liveSimplify}, store.RoleJudge, false},
+		{"no parked session", []store.Session{judgeGone}, store.RoleJudge, false},
+		{"no judge session at all", []store.Session{claude}, store.RoleJudge, false},
+	} {
+		if got := openWouldRestore(tc.all, store.RoleJudge); got != tc.want {
+			t.Errorf("%s: openWouldRestore %v, want %v", tc.name, got, tc.want)
+		}
+		if got := openRoleOf(h.ctx, h.st, h.d.Cfg, pr.ID, "talkable/talkable", tc.all); got != tc.role {
+			t.Errorf("%s: openRoleOf %s, want %s", tc.name, got, tc.role)
+		}
 	}
 }
