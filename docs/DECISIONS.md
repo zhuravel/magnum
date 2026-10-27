@@ -13405,6 +13405,69 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheBoardsCIIsNotRedWhenOnlyAnIgnoredCheckFailed; in settings the two fields. Mutations that keep the
   rollup, take the derived state over a rollup that moved, put a check that runs before one that failed, or
   give `requiredCIOf`, the base tip's comparison or the note the unfiltered checks each fail one.
+- **A fix call for a thread of magnum's is read against the thread: resolved asks nothing, answered asks only
+  for the resolution** (2026-10-27, wave 1 item 2 of the companion-fix design,
+  docs/superpowers/specs/2026-10-27-companion-fix-design.md section 5.2; amends "A fix loop that needs you says
+  what to do per finding, with the thread's link" and "A fix job also answers what other reviewers wrote that
+  nobody answered"). On talkable#12112 the fixer replied in magnum's P1 thread and resolved it at 12:13 UTC
+  (the reply lacked the fix marker), yet listed the fix under `Needs you`; at the loop's end magnum raised
+  "reply fixed in e05fbde in magnum's thread and resolve it" from the entries the settle had stored hours
+  before. Now one helper, `freshNeedsYou` (`internal/engine/fix_calls.go`), runs at both places that raise
+  calls, the settle (after `dropFixerAnswered`, which stays as it is) and the loop's end
+  (`continueFixLoop`, for a re-review that posted or did not, not for one a pause continues). For each entry
+  with a call in one of magnum's threads (the files beside the report place it, `threadOwners`), it reads
+  the thread again: a resolved thread drops the entry (also from the loop's stored copy at the settle); an
+  open thread whose answer matches the call keeps it but turns the call into "resolve magnum's thread, already
+  answered: <link>" (`attention.ResolveCall`). A `Fixed in` answer matches a fix ("reply fixed"), `Won't fix`
+  or `Not a bug` a decline ("decide"), by the class `pipeline.ClassifyReply` gives (exported for this; the
+  threads file already carries it). The answer is the thread's latest reply that is not magnum's own, unless
+  magnum replied after it with anything but an acknowledgement (`answerOf`): a rebuttal argues the thread
+  again. Where the thread comes from: the re-review's `review-threads.json` (the round's `ReportDir`) when its
+  mtime is after the fixer's report's, both on the file system's clock, together with the judge's
+  `replies.json` of that round, whose replies came after the file's read and count as magnum's last word in
+  their threads; otherwise one `AllReviewThreads` read (`threadsNow`), where the replies of the login that
+  posts the PR's reviews and its former logins are magnum's own, as `isOwnHistory` marks them in the file. A
+  failed read, a thread the read does not list, an entry magnum cannot read, and every entry in another
+  reviewer's thread keep their call: magnum asks only for a reply there, never a resolution, which that
+  reviewer gives (the 2026-10-20 entry's rule). A `fix.calls_settled` info event counts what changed ("1
+  finding left to you is answered in magnum's thread and asks only for the resolution", data `resolved`,
+  `answered`, `read`: `github` or `threads file`). `attention`'s `fixCallRe` reads the new sentence back and
+  `fixCallsCause` counts it ("resolve 1 thread"), so the card, the board and `magnum status` keep the call.
+  When no call is left the loop goes on as if the fixer had left nothing: the push's re-review decides it.
+  The stored entries of a loop that waits for its re-review (`engine.FixCalls`, `magnum status` while it
+  waits) are not read again: that would cost a GitHub read per status call. Rejected: asking for the
+  resolution of another reviewer's thread too (the review on 2026-10-27 struck it); a GitHub read at the
+  loop's end always (the spec saves it when the re-review read the threads after the call); matching the
+  fixer's exact words in the engine (the operator's hand-typed "Done in <sha>" is a fix as the re-review
+  reads it). Tests, failing first: in engine
+  TestTheLoopsEndAsksNoReplyForAFixedFindingTheReReviewShowsAnswered (the re-review's file shows the thread
+  resolved: no call and the loop is done with no GitHub read; a file older than the report is not read; a
+  rebuttal in the judge's replies file keeps the call), TestAnAnsweredOpenThreadOfMagnumsReviewAsksOnlyToResolveIt
+  (at the settle and the loop's end, read from GitHub, and back through `attention.Explain`),
+  TestAThreadTheOperatorResolvedByHandDropsItsCall (a declined and a fixed finding dropped, an open thread
+  kept; with no call left, no needs-you toast and a clean re-review ends the loop as done) and
+  TestAnOtherReviewersThreadStillAsksOnlyForAReply; in attention TestAResolveCallReadsBackForTheCard.
+  Mutations that drop the mtime gate, ignore the judge's replies file, or take another reviewer's thread for
+  magnum's each fail one.
+- **The fix job's settle says when the operator typed into the fixer's pane during the run** (2026-10-27, wave
+  1 item 3 of the companion-fix design, section 5.3; amends "Magnum's own interrupted turn is no human
+  activity, and a new cooldown is an event"). On talkable#12112 the operator typed into the fixer's pane
+  while its run was in flight, and nothing the loop recorded said so: the observer sets `human_active_at`
+  only while no run is in flight (`agents/observe.go`), and per PR. Now the settle asks the fixer's
+  transcript (`engine.Agents.TypedDuringRun`, implemented by `agents.Manager.TypedDuringRun`): a claude
+  agent's run, read from its creation as the observer reads it while the run is in flight (`watch`, so a
+  restart reads the run's part again), ends in a turn that began with, or took in, a prompt typed after
+  magnum's last prompt to the session, the test `humanTurn` already used (now `typedAfterPrompt`, which both
+  share). Then `fix.replied` ends with "; the operator typed into the fixer's pane during the run" and its
+  data, and that of the settle's later events, carries `operator_typed: true`. Any other kind, a run without
+  a session or a Claude session id, and a transcript magnum cannot read give no flag, where `humanTurn`
+  counts such a pane as a human's. Nothing else changes: no toast, no hold, and typing after the run is
+  still `agent.human_active`. A turn a task notification began after the typed one hides it, as it does for
+  `humanTurn`. Tests, failing first: in engine TestSettlementSaysTheOperatorTypedIntoTheFixersPaneDuringTheRun
+  (the sentence and the flag; a run nobody typed into gets neither); in agents
+  TestTypedDuringRunReadsAPromptTypedAfterMagnumsPrompt (magnum's prompt alone is no typing; a turn typed
+  after it, and a prompt Claude Code took into magnum's turn, are, also after a restart; a codex agent never
+  is).
 
 ## Learned rules
 

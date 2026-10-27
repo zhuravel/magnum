@@ -349,7 +349,7 @@ func TestAnotherReviewersBodyOrCommentIsNamedInTheOlderWords(t *testing.T) {
 	report := filepath.Join(t.TempDir(), "claude-fix.md")
 	writeFixReviewFiles(t, report, nil, nil)
 	got := needsYouText([]string{"9003 review: not fixed. Which migration note?", "703 comment: not fixed. Keep the old flag?"},
-		report, prPage, "talkable/talkable#2", true)
+		nil, report, prPage, "talkable/talkable#2", true)
 	if want := "2 findings need your call (9003 review, 703 comment): " + report; got != want {
 		t.Errorf("needsYouText = %q, want %q", got, want)
 	}

@@ -2138,6 +2138,17 @@ func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool
     read (no session id: herdr's session hook off) is logged once, not at each
     of its turns.
 
+func (m *Manager) TypedDuringRun(ctx context.Context, run store.Run) bool
+    TypedDuringRun reports whether someone typed into the pane of run's session
+    while run was in flight, for the fix job's settle: the run's part of a
+    claude agent's transcript (from the run's creation, as the observer reads
+    it while the run is in flight) ends in a turn that began with, or took in,
+    a prompt typed after magnum's last prompt to the session, as humanTurn
+    reads it (a turn a task notification began after the typed one hides it).
+    Any other kind, a run without a session or a Claude session id, and a
+    transcript it cannot read report false: only Claude Code keeps a transcript
+    magnum reads.
+
 func (m *Manager) WhiteboardPrompt(pr store.PR, role Role, run store.Run, in WhiteboardPromptInput) (string, error)
     WhiteboardPrompt renders the whiteboard role's prompt (its initial prompt,
     whiteboard.md by default) for run, a run of that role on pr (NewRun,
@@ -2945,7 +2956,7 @@ type FixCall struct {
     FixCall is one finding a fix job's fixer left to the author that its message
     names with what to do (Reason.NeedsYou): the id of the comment that starts
     the finding's thread, the thread's link, and the sentence that says what to
-    do there (FixedCall, DeclinedCall).
+    do there (FixedCall, DeclinedCall, ResolveCall).
 
 func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCall
     DeclinedCall is the call of a finding the fixer did not fix and left to the
@@ -2964,6 +2975,13 @@ func FixedCall(thread, url, sha string, magnums bool) FixCall
     ("reply fixed in <sha7> in another reviewer's thread: <url>"). The words
     of the time when the fixer never wrote in a thread a human started, "in the
     thread a human started and resolve it", are still read.
+
+func ResolveCall(thread, url string) FixCall
+    ResolveCall is the call of a finding in one of magnum's threads that shows
+    the answer its call asked for (a "Fixed in" reply for a fix, "Won't fix"
+    or "Not a bug" for a decline) and is still open: the author resolves it
+    ("resolve magnum's thread, already answered: <url>"). Magnum never asks for
+    the resolution of a thread another reviewer started.
 
 type Reason struct {
 	Kind     string `json:"kind,omitempty"`
@@ -7738,6 +7756,10 @@ type Agents interface {
 	// compaction before a cycle that resumes the fixer (fix_compact.go).
 	ContextUsed(ctx context.Context, s store.Session) (int, bool)
 	Compact(ctx context.Context, s store.Session) error
+	// TypedDuringRun reports whether someone typed into the pane of run's
+	// session while run was in flight, as a claude agent's transcript shows
+	// it (false for any other kind): the fix job's settle says so.
+	TypedDuringRun(ctx context.Context, run store.Run) bool
 }
     Agents is the part of *agents.Manager the engine drives.
 
@@ -15620,6 +15642,47 @@ var PrepassTimeout = 60 * time.Second
 
 
 FUNCTIONS
+
+func ClassifyReply(body string) string
+    ClassifyReply says what a reply claims from its first clause: "fixed",
+    "done", "addressed", "applied", "already addressed", "<it> is covered in
+    <sha>", "(already) resolved by <sha>" (or "in"), "<it> is now on this branch
+    as <sha>", "added in <sha>", "removed in <sha>", "closed (or resolved) by
+    <what> in <sha>", "follow-up in <sha>" (or "follow up <sha>", "followed
+    up in <sha>") or a commit and a verb ("84c0b1e adds …") (ReplyFixed);
+    "not a bug", "incorrect", "moot", "by design", "intended", "intentional"
+    (ReplyNotABug); "won't fix", "declined", "out of scope", "follow-up", "kept
+    as is", "<it> stays as is", "left open", "deferred", "not fixed in this PR"
+    (or push, round; or "not changed"), "No guard for now", "not adding it",
+    "won't add", "Not added", "Not changed" and "No change" (each alone in its
+    clause; "Not added yet." claims nothing) (ReplyWontFix); "Not changed here",
+    "not changing it here" and "no fix in this PR" in any clause decline the fix
+    too (replyDeclines). A "follow-up" with no commit after it ("follow-up PR",
+    "follow-up later", "deferred to a follow-up") is a deferral; "followed up"
+    with no commit is no verdict. A clause that ends in the follow-up its fix
+    goes to ("Backend fix as a separate follow-up", replyDefers) is a deferral
+    too, in the first paragraph and, when the reply's first clause acknowledges
+    the finding ("Confirmed", "Thanks"), in a later one (replyDeferredLater: an
+    accepted gap whose reply ends where the fix goes). An acknowledgement ("Good
+    catch", "Valid", "Analyzed", "Noted", "Low priority", "Low priority (Net
+    0)", "Correction", "You're right") passes the verdict on to a later clause
+    of the first paragraph ("Good catch, fixed in <sha>", "Noted — left as is",
+    "Noted. <why>. Deferred.", "Correction: you're right. <where it landed>. The
+    same fix is now on this branch as <sha>"); a low priority acknowledgement
+    no verdict follows is ReplyWontFix ("Low priority (Net +1): not worth a
+    change on its own"; "Low priority — fixed in <sha>" stays ReplyFixed).
+    "Resolved", "added" or "closed" without a commit is no verdict. Anything
+    else is ReplyOther, as is another acknowledgement no verdict follows, unless
+    the paragraph declines the fix before any clause says fixed or not a bug
+    (replyDeclined: "Confirmed. Still open … so I score that fix at −8", "I did
+    not make this change", "we are not patching them here" are ReplyWontFix),
+    or says "by design" or "by decision" anywhere and no clause names a verdict
+    (ReplyNotABug: "…, so such a behaviour is by design"). The class is a hint
+    for the judge, not a verdict. Case does not matter; leading quoted lines
+    (">"), markup, emoji, an agent's "(Claude)" tag (however often it repeats)
+    and the comment it answers ("Re 4100000001:") are skipped, and a verdict may
+    follow "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
+    intentional").
 
 func EvidenceMapPath(l paths.Layout, owner, repo string, number int) string
     EvidenceMapPath is PR owner/repo#number's evidence map: EvidenceFile in the

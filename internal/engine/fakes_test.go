@@ -926,6 +926,9 @@ type fakeAgents struct {
 	contextUsed func(s store.Session) (int, bool)
 	onCompact   func(s store.Session)
 	compactErr  error
+	// typed names the roles whose runs TypedDuringRun reports someone
+	// typed into (a run with a session only, as the transcript needs).
+	typed map[string]bool
 }
 
 func (f *fakeAgents) record(s string) {
@@ -1318,6 +1321,15 @@ func (f *fakeAgents) ContextUsed(_ context.Context, s store.Session) (int, bool)
 		return 0, true
 	}
 	return hook(s)
+}
+
+// TypedDuringRun records the look ("typed:<role>:<run>") and answers typed
+// for the run's role, when the run names its session.
+func (f *fakeAgents) TypedDuringRun(_ context.Context, run store.Run) bool {
+	f.record("typed:" + run.Role + ":" + run.ID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return run.SessionID != nil && f.typed[run.Role]
 }
 
 // Compact records the compaction ("compact:<pr>:<role>"), runs onCompact

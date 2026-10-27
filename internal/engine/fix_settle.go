@@ -48,9 +48,12 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // kept for that round's end (spec: the push deserves its re-review);
 // findings left to the author without a push end the loop as needs
 // attention (a fix the fixer left as unanswered in another reviewer's
-// thread that GitHub shows its reply in is none: dropFixerAnswered);
-// replies alone end the loop with an info toast. The events name counts,
-// SHAs, the role and the report, never what the fixer wrote.
+// thread that GitHub shows its reply in is none: dropFixerAnswered; nor is a
+// finding whose thread of magnum's is resolved, and one answered there asks
+// only for the resolution: freshNeedsYou); replies alone end the loop with
+// an info toast. fix.replied says when the operator typed into the fixer's
+// pane during the run (operatorTyped). The events name counts, SHAs, the
+// role and the report, never what the fixer wrote.
 func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	ctx = github.WithOp(ctx, opFixSettle) // github_cost.go
 	subject, report := job.subject(), deref(job.run.ReportPath)
@@ -101,12 +104,17 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	if unread != "" {
 		replied += "; " + unread
 	}
+	if e.operatorTyped(ctx, job) {
+		replied, data["operator_typed"] = replied+"; the operator typed into the fixer's pane during the run", true
+	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
+	var answered map[string]bool
 	if len(rep.NeedsYou) > 0 {
-		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou) // fix_external.go
+		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou)                   // fix_external.go
+		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, report, "") // fix_calls.go: no re-review yet
 	}
 	n := len(rep.NeedsYou)
-	needs := "fix: " + needsYouText(rep.NeedsYou, report, job.pr.URL, job.label(), false)
+	needs := "fix: " + needsYouText(rep.NeedsYou, answered, report, job.pr.URL, job.label(), false)
 	attn := withUnread(needs, unread)
 	if n > 0 {
 		data["needs_you"] = n
@@ -149,6 +157,20 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		}
 		e.info(notify.Item{Key: "fix-replied:" + job.run.ID, Title: "magnum: " + what, Body: body, Line: line + " " + job.pr.URL, Kind: kindFixEnded})
 	}
+}
+
+// operatorTyped reports whether the operator typed into the fixer's pane
+// while the job's run was in flight (Agents.TypedDuringRun: a claude
+// fixer's transcript; any other kind says no). The observer's
+// human_active_at cannot tell: it is set only while no run is in flight.
+// The run is read again for its session, which Submit recorded.
+func (e *Engine) operatorTyped(ctx context.Context, job *fixJob) bool {
+	run, err := e.st.RunByID(ctx, job.run.ID)
+	if err != nil {
+		e.log.Warn("fix: the fixer's run, for typing in its pane", "subject", job.subject(), "err", err)
+		return false
+	}
+	return e.d.Agents.TypedDuringRun(ctx, run)
 }
 
 // fixReReview takes the loop to its re-review after a push: the row in

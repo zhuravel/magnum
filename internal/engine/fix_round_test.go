@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -339,5 +340,44 @@ func TestOpenRestoresAreNotReviewRounds(t *testing.T) {
 	}
 	if bar := h.e.tabBar(h.ctx); strings.Contains(bar, "reviewing") {
 		t.Fatalf("tab bar = %q", bar)
+	}
+}
+
+// On talkable#12112 the operator typed into the fixer's pane while its run
+// was in flight, and nothing the loop recorded said so: the observer sets
+// human_active_at only while no run is in flight. The settle now asks the
+// fixer's transcript (Agents.TypedDuringRun, which reads a claude fixer's)
+// and fix.replied says "the operator typed into the fixer's pane during the
+// run", with operator_typed in its data; a run nobody typed into adds
+// neither.
+func TestSettlementSaysTheOperatorTypedIntoTheFixersPaneDuringTheRun(t *testing.T) {
+	for _, typed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "typed", false: "not typed"}[typed], func(t *testing.T) {
+			h, git := fixHarness(t)
+			fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+			h.ag.mu.Lock()
+			h.ag.typed = map[string]bool{"claude-fix": typed}
+			h.ag.mu.Unlock()
+			fixer(h, git, fixPushed, func(run store.Run) string {
+				return fixReport(run.ID, "b2b2b2b Guard the nil owner", fixReplied, "none")
+			})
+			h.fix(FixPayload{})
+			h.handle()
+			ev, ok := h.fixEvent("fix.replied")
+			if !ok {
+				t.Fatal("no fix.replied event")
+			}
+			var data map[string]any
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatal(err)
+			}
+			const said = "claude-fix replied in 3 threads; the operator typed into the fixer's pane during the run"
+			switch {
+			case typed && (ev.Message != said || data["operator_typed"] != true):
+				t.Errorf("fix.replied = %q %s, want %q with operator_typed", ev.Message, ev.Data, said)
+			case !typed && (ev.Message != "claude-fix replied in 3 threads" || data["operator_typed"] != nil):
+				t.Errorf("fix.replied = %q %s, want no word of typing", ev.Message, ev.Data)
+			}
+		})
 	}
 }

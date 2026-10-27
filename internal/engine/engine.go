@@ -159,6 +159,10 @@ type Agents interface {
 	// compaction before a cycle that resumes the fixer (fix_compact.go).
 	ContextUsed(ctx context.Context, s store.Session) (int, bool)
 	Compact(ctx context.Context, s store.Session) error
+	// TypedDuringRun reports whether someone typed into the pane of run's
+	// session while run was in flight, as a claude agent's transcript shows
+	// it (false for any other kind): the fix job's settle says so.
+	TypedDuringRun(ctx context.Context, run store.Run) bool
 }
 
 // Rounds runs one review round (*pipeline.Runner, one per identity) and

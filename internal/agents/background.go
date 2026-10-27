@@ -193,17 +193,48 @@ func (m *Manager) humanTurn(s store.Session, sid string) bool {
 	if m.sessionKind(s) != KindClaude || sid == "" {
 		return true
 	}
-	w := m.turnWatch(s.ID)
+	typed, ok := m.typedAfterPrompt(s, sid, m.turnWatch(s.ID))
+	return typed || !ok
+}
+
+// typedAfterPrompt reads session s's transcript (Claude Code session sid)
+// into w and reports whether the turn it is in holds a prompt typed into
+// the pane after magnum's last prompt to the session (last_prompt_at, else
+// started_at, plus transcriptSkew): bgWatch.typed. ok is false when the
+// transcript cannot be read.
+func (m *Manager) typedAfterPrompt(s store.Session, sid string, w *bgWatch) (typed, ok bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !m.readTranscript(s, sid, w) {
-		return true
+		return false, false
 	}
 	last := s.StartedAt
 	if s.LastPromptAt != nil {
 		last = *s.LastPromptAt
 	}
-	return w.typed.After(last.Add(transcriptSkew))
+	return w.typed.After(last.Add(transcriptSkew)), true
+}
+
+// TypedDuringRun reports whether someone typed into the pane of run's
+// session while run was in flight, for the fix job's settle: the run's part
+// of a claude agent's transcript (from the run's creation, as the observer
+// reads it while the run is in flight) ends in a turn that began with, or
+// took in, a prompt typed after magnum's last prompt to the session, as
+// humanTurn reads it (a turn a task notification began after the typed one
+// hides it). Any other kind, a run without a session or a Claude session
+// id, and a transcript it cannot read report false: only Claude Code keeps a
+// transcript magnum reads.
+func (m *Manager) TypedDuringRun(ctx context.Context, run store.Run) bool {
+	if run.SessionID == nil {
+		return false
+	}
+	s, err := m.d.Store.SessionByID(ctx, *run.SessionID)
+	sid := store.Deref(s.SessionID)
+	if err != nil || m.sessionKind(s) != KindClaude || sid == "" {
+		return false
+	}
+	typed, _ := m.typedAfterPrompt(s, sid, m.watch(s.ID, run))
+	return typed
 }
 
 // Tell sends text to the agent of run's session within that run, without a

@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -154,7 +155,7 @@ func TestAnUnreadableNeedsYouBulletKeepsTheOldWords(t *testing.T) {
 		"2102 P2 app/lib/x.rb:7: not fixed. contested",
 		"see the thread",
 		"5485002407 description: not fixed. the Deploy section names two migrations",
-	}, report, prURL, ref, true)
+	}, nil, report, prURL, ref, true)
 	want := "decide magnum's P2 on app/lib/x.rb:7: the fixer declined it; reply won't fix at " + prURL + "#discussion_r2102, or `magnum fix " + ref +
 		"` sends it back; 3 more findings need your call (2101 P1 app/models/offer.rb:42, 5485002407 description, 1 entry magnum could not read); details: " + report
 	if got != want {
@@ -162,15 +163,15 @@ func TestAnUnreadableNeedsYouBulletKeepsTheOldWords(t *testing.T) {
 	}
 
 	old := []string{"2101 P1 app/models/offer.rb:42: wants a schema change", "2102 P2 app/lib/x.rb:7: contested"}
-	if got, want := needsYouText(old, report, prURL, ref, true), "2 findings need your call (2101 P1 app/models/offer.rb:42, 2102 P2 app/lib/x.rb:7): "+report; got != want {
+	if got, want := needsYouText(old, nil, report, prURL, ref, true), "2 findings need your call (2101 P1 app/models/offer.rb:42, 2102 P2 app/lib/x.rb:7): "+report; got != want {
 		t.Errorf("no call, named = %q, want %q", got, want)
 	}
-	if got, want := needsYouText(old, report, prURL, ref, false), "2 findings need your call: "+report; got != want {
+	if got, want := needsYouText(old, nil, report, prURL, ref, false), "2 findings need your call: "+report; got != want {
 		t.Errorf("no call, counted = %q, want %q", got, want)
 	}
 
 	bare := filepath.Join(t.TempDir(), "claude-fix.md")
-	if got, want := needsYouText([]string{"2103 P2 app/c.rb:9: fixed in c3c3c3c. replied nowhere"}, bare, prURL, ref, true),
+	if got, want := needsYouText([]string{"2103 P2 app/c.rb:9: fixed in c3c3c3c. replied nowhere"}, nil, bare, prURL, ref, true),
 		"1 finding needs your call (2103 P2 app/c.rb:9): "+bare; got != want {
 		t.Errorf("a thread magnum cannot place = %q, want %q", got, want)
 	}
@@ -189,11 +190,164 @@ func TestTheFixedReviewsOwnCommentsAreMagnumsThreads(t *testing.T) {
 	got := needsYouText([]string{
 		"2102 P2 app/lib/x.rb:7: fixed in b2b2b2b. The reply failed.",
 		"2103 P1 app/lib/x.rb:7: not fixed. Out of scope.",
-	}, report, prURL, ref, true)
+	}, nil, report, prURL, ref, true)
 	want := "reply fixed in b2b2b2b in magnum's thread and resolve it: " + prURL + "#discussion_r2102; " +
 		"decide another reviewer's P1 on app/lib/x.rb:7: the fixer declined it; reply won't fix at " + prURL + "#discussion_r2103, or `magnum fix " + ref +
 		"` sends it back; details: " + report
 	if got != want {
 		t.Errorf("needsYouText =\n %q\nwant\n %q", got, want)
+	}
+}
+
+// magnumsThread is a thread of magnum's review on PR #2 (its first comment
+// by the App's login, "talkable") with the given replies, each by the
+// author (zhuravel), and resolved when said.
+func magnumsThread(id int64, path string, line int, at time.Time, resolved bool, replies ...string) github.Thread {
+	authors := []string{"talkable"}
+	for range replies {
+		authors = append(authors, "zhuravel")
+	}
+	t := extThread(id, path, line, at, "**[P1] the owner can be nil**", authors...)
+	for i, body := range replies {
+		t.Comments[i+1].Body = body
+	}
+	t.Resolved = resolved
+	return t
+}
+
+// On talkable#12112 the fixer answered magnum's P1 thread and listed the fix
+// under Needs you all the same, and magnum asked the operator to "reply
+// fixed in e05fbde in magnum's thread and resolve it". A thread of magnum's
+// that GitHub shows open with the answer the call asks for ("Fixed in" for
+// a fix) now asks only for the resolution, at the settle and at the loop's
+// end alike (each reads the thread once from GitHub when no re-review read
+// it after the fixer's report), and the card reads that call back.
+func TestAnAnsweredOpenThreadOfMagnumsReviewAsksOnlyToResolveIt(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1})
+	h.gh.mu.Lock()
+	h.gh.threads = map[int][]github.Thread{2: {magnumsThread(4302866759, "app/models/offer.rb", 42, h.clock.Now().Add(-time.Hour), false,
+		"Fixed in e05fbde: the owner is checked before the total.")}}
+	h.gh.mu.Unlock()
+	fixer(h, git, fixPushed, func(run store.Run) string {
+		writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{4302866759}, nil)
+		return fixReport(run.ID, "e05fbde Check the owner\nb2b2b2b Cover the nil owner", fixReplied,
+			"- 4302866759 P1 app/models/offer.rb:42: fixed in e05fbde. Resolving the thread failed.")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	const url = prPage + "#discussion_r4302866759"
+	resolve := "resolve magnum's thread, already answered: " + url
+	want := "fix: " + resolve + "; details: " + report
+	if ev, ok := h.fixEvent("fix.needs_you"); !ok || ev.Message != want+"; the re-review of b2b2b2b runs first" {
+		t.Errorf("fix.needs_you at the settle = %q, want %q", ev.Message, want+"; the re-review of b2b2b2b runs first")
+	}
+	if ev, ok := h.fixEvent("fix.calls_settled"); !ok || ev.Message != "1 finding left to you is answered in magnum's thread and asks only for the resolution" {
+		t.Errorf("fix.calls_settled = %+v, %v", ev, ok)
+	}
+
+	reviewWith(h, findings(map[string]int{}, "COMMENTED"))
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if deref(cur.LastError) != want {
+		t.Errorf("last_error at the loop's end = %q\nwant %q", deref(cur.LastError), want)
+	}
+	why := attention.Explain(attention.KindFix, deref(cur.LastError), "talkable#2")
+	if calls := []attention.FixCall{{Thread: "4302866759", URL: url, Action: resolve}}; !slices.Equal(why.NeedsYou, calls) || why.Summary != "fix: resolve 1 thread" {
+		t.Errorf("the card: needs you %+v, summary %q", why.NeedsYou, why.Summary)
+	}
+}
+
+// A thread of magnum's that the operator resolved by hand, with no reply,
+// asks nothing any more: its call goes, for a finding the fixer declined as
+// for one it fixed, while a thread of magnum's still open without an answer
+// keeps its call. Once no call is left, the push's re-review decides the
+// loop alone.
+func TestAThreadTheOperatorResolvedByHandDropsItsCall(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
+	at := h.clock.Now().Add(-time.Hour)
+	h.gh.mu.Lock()
+	h.gh.threads = map[int][]github.Thread{2: {
+		magnumsThread(2101, "app/models/offer.rb", 42, at, true),
+		magnumsThread(2102, "app/lib/x.rb", 7, at, true),
+		magnumsThread(2103, "app/lib/y.rb", 9, at, false),
+	}}
+	h.gh.mu.Unlock()
+	fixer(h, git, fixPushed, func(run store.Run) string {
+		writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{2101, 2102, 2103}, nil)
+		return fixReport(run.ID, "b2b2b2b Guard the nil owner", fixReplied,
+			"- 2101 P1 app/models/offer.rb:42: not fixed. Which of the two owners wins?\n"+
+				"- 2102 P2 app/lib/x.rb:7: fixed in b2b2b2b. The reply failed.\n"+
+				"- 2103 P2 app/lib/y.rb:9: fixed in b2b2b2b. The reply failed.")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	want := "fix: reply fixed in b2b2b2b in magnum's thread and resolve it: " + prPage + "#discussion_r2103; details: " + report
+	if ev, ok := h.fixEvent("fix.needs_you"); !ok || ev.Message != want+"; the re-review of b2b2b2b runs first" {
+		t.Errorf("fix.needs_you = %q, want %q", ev.Message, want+"; the re-review of b2b2b2b runs first")
+	}
+	if st, ok := h.fixStateOf(2); !ok || !slices.Equal(st.NeedsYou, []string{"2103 P2 app/lib/y.rb:9: fixed in b2b2b2b. The reply failed."}) {
+		t.Errorf("the loop keeps %q for its end, want the open thread's entry alone", st.NeedsYou)
+	}
+	if ev, ok := h.fixEvent("fix.calls_settled"); !ok || ev.Message != "2 findings left to you are resolved in magnum's threads and ask nothing" {
+		t.Errorf("fix.calls_settled = %+v, %v", ev, ok)
+	}
+
+	t.Run("every call settled", func(t *testing.T) {
+		h, git := fixHarness(t)
+		fixablePR(h, "zhuravel", map[string]int{"P1": 1})
+		h.gh.mu.Lock()
+		h.gh.threads = map[int][]github.Thread{2: {magnumsThread(2101, "app/models/offer.rb", 42, h.clock.Now().Add(-time.Hour), true)}}
+		h.gh.mu.Unlock()
+		fixer(h, git, fixPushed, func(run store.Run) string {
+			writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{2101}, nil)
+			return fixReport(run.ID, "b2b2b2b Guard the nil owner", fixReplied, "- 2101 P1 app/models/offer.rb:42: not fixed. Which owner wins?")
+		})
+		h.fix(FixPayload{})
+		h.handle()
+		if _, ok := h.fixEvent("fix.needs_you"); ok {
+			t.Error("a fix.needs_you event for a call the operator settled")
+		}
+		h.flush()
+		h.wantToasts("needs attention", 0)
+		reviewWith(h, findings(map[string]int{}, "COMMENTED"))
+		h.advance(time.Minute)
+		reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+		h.wantState(2, store.PRReviewed)
+		if _, ok := h.fixEvent("fix.done"); !ok {
+			t.Error("no fix.done after a clean re-review with no call left")
+		}
+	})
+}
+
+// magnum asks for a reply in another reviewer's thread and never for its
+// resolution (that reviewer resolves it): a fix there that the author
+// answered by hand without the fixer's marker keeps the reply-only call,
+// whatever the thread shows.
+func TestAnOtherReviewersThreadStillAsksOnlyForAReply(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	other := extThread(4322458400, "app/b.rb", 9, h.clock.Now().Add(-time.Hour), "Rename this", "bob-rev", "zhuravel")
+	other.Comments[1].Body = "Fixed in b2b2b2b: renamed."
+	h.gh.mu.Lock()
+	h.gh.threads = map[int][]github.Thread{2: {other}}
+	h.gh.mu.Unlock()
+	fixer(h, git, fixPushed, func(run store.Run) string {
+		writeFixReviewFiles(h.t, deref(run.ReportPath), nil, nil)
+		return fixReport(run.ID, "b2b2b2b Rename the helper", fixReplied, "- 4322458400 app/b.rb:9: fixed in b2b2b2b. The author answered there already.")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	want := "fix: reply fixed in b2b2b2b in another reviewer's thread: " + prPage + "#discussion_r4322458400; details: " + report
+	if ev, ok := h.fixEvent("fix.needs_you"); !ok || ev.Message != want+"; the re-review of b2b2b2b runs first" {
+		t.Errorf("fix.needs_you = %q, want %q", ev.Message, want+"; the re-review of b2b2b2b runs first")
+	}
+	if _, ok := h.fixEvent("fix.calls_settled"); ok {
+		t.Error("another reviewer's thread settled a call")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,8 +19,10 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -419,6 +422,120 @@ func TestNeedsYouEndsTheLoopAfterItsReReview(t *testing.T) {
 				t.Errorf("event %s carries the fixer's words %q: %s %s", ev.Kind, reason, ev.Message, ev.Data)
 			}
 		}
+	}
+}
+
+// reReviewReads makes the reviews reviewWith posts read magnum's threads as
+// a re-review does: threads go to the threads file of a report directory of
+// their own (the round's ReportDir, with ThreadsRead), stamped mtime, and
+// replies, when any, to the judge's replies file there.
+func reReviewReads(h *harness, threads []agents.ReviewThread, mtime time.Time, replies []postreview.Reply) {
+	h.t.Helper()
+	dir := filepath.Join(h.t.TempDir(), "rereview")
+	h.rd.mu.Lock()
+	defer h.rd.mu.Unlock()
+	post := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		res, err := post(in)
+		if err != nil {
+			return res, err
+		}
+		files := map[string]any{pipeline.ThreadsFile: threads}
+		if replies != nil {
+			files[agents.PostRepliesFile] = postreview.RepliesFile{Replies: replies}
+		}
+		for name, v := range files {
+			b, err := json.Marshal(v)
+			if err == nil {
+				err = os.MkdirAll(dir, 0o755)
+			}
+			if err == nil {
+				err = os.WriteFile(filepath.Join(dir, name), b, 0o600)
+			}
+			if err == nil {
+				err = os.Chtimes(filepath.Join(dir, name), mtime, mtime)
+			}
+			if err != nil {
+				return failRound(h.t, err)
+			}
+		}
+		res.ReportDir, res.ThreadsRead = dir, true
+		return res, nil
+	}
+}
+
+// On talkable#12112 the fixer replied in magnum's P1 thread and resolved it
+// hours before the loop's end, which still asked for "reply fixed in e05fbde
+// in magnum's thread and resolve it" from the entries the settle kept. The
+// loop's end now reads magnum's threads again: the re-review's threads file
+// when it was written after the fixer's report (no GitHub read), else
+// GitHub once. A thread the file shows resolved asks nothing, and with no
+// call left the clean re-review ends the loop as done; a file older than the
+// report is not read, and a rebuttal the re-review's judge posted after its
+// read keeps the call.
+func TestTheLoopsEndAsksNoReplyForAFixedFindingTheReReviewShowsAnswered(t *testing.T) {
+	const url = prPage + "#discussion_r4302866759"
+	answered := func(resolved bool) []agents.ReviewThread {
+		return []agents.ReviewThread{{ID: "PRRT_1", CommentID: 4302866759, URL: url, Location: "app/models/offer.rb:42", Resolved: resolved,
+			Replies: []agents.ThreadReply{{ID: 4302866800, Author: "zhuravel", Class: pipeline.ReplyFixed, Body: "Fixed in e05fbde: the owner is checked."}}}}
+	}
+	for _, tc := range []struct {
+		name    string
+		threads []agents.ReviewThread
+		mtime   time.Time // the threads file's
+		replies []postreview.Reply
+		call    bool // the loop's end asks the operator
+		reads   int  // GitHub reads of the threads at the loop's end
+	}{
+		{name: "the re-review shows the thread resolved", threads: answered(true), mtime: time.Now().Add(time.Hour)},
+		{name: "a threads file older than the report", threads: answered(true), mtime: time.Now().Add(-time.Hour), call: true, reads: 1},
+		{name: "a rebuttal after the answer", threads: answered(false), mtime: time.Now().Add(time.Hour), call: true,
+			replies: []postreview.Reply{{CommentID: 4302866759, Kind: postreview.ReplyRebuttal, Body: "The owner is still nil on the import path."}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1})
+			h.gh.mu.Lock()
+			h.gh.threads = map[int][]github.Thread{2: {magnumsThread(4302866759, "app/models/offer.rb", 42, h.clock.Now().Add(-time.Hour), false)}}
+			h.gh.mu.Unlock()
+			fixer(h, git, fixPushed, func(run store.Run) string {
+				writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{4302866759}, nil)
+				return fixReport(run.ID, "e05fbde Check the owner\nb2b2b2b Cover the nil owner", fixReplied,
+					"- 4302866759 P1 app/models/offer.rb:42: fixed in e05fbde. The reply failed.")
+			})
+			h.fix(FixPayload{})
+			h.handle()
+			report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+			call := "fix: reply fixed in e05fbde in magnum's thread and resolve it: " + url + "; details: " + report
+			if ev, ok := h.fixEvent("fix.needs_you"); !ok || ev.Message != call+"; the re-review of b2b2b2b runs first" {
+				t.Fatalf("fix.needs_you at the settle = %q, want %q", ev.Message, call+"; the re-review of b2b2b2b runs first")
+			}
+
+			reviewWith(h, findings(map[string]int{}, "COMMENTED"))
+			reReviewReads(h, tc.threads, tc.mtime, tc.replies)
+			h.advance(time.Minute)
+			reads := h.gh.count("threads:talkable/talkable#2")
+			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+			if n := h.gh.count("threads:talkable/talkable#2") - reads; n != tc.reads {
+				t.Errorf("GitHub reads of the threads at the loop's end = %d, want %d", n, tc.reads)
+			}
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the loop goes on")
+			}
+			if !tc.call {
+				h.wantState(2, store.PRReviewed)
+				if n := h.eventCount("pr:talkable/talkable#2", "fix.needs_you"); n != 1 {
+					t.Errorf("fix.needs_you events = %d, want the settle's alone", n)
+				}
+				if _, ok := h.fixEvent("fix.done"); !ok {
+					t.Error("no fix.done after the clean re-review")
+				}
+				return
+			}
+			if cur := h.wantState(2, store.PRNeedsAttention); deref(cur.LastError) != call {
+				t.Errorf("last_error = %q\nwant %q", deref(cur.LastError), call)
+			}
+		})
 	}
 }
 

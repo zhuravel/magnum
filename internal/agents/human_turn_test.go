@@ -281,3 +281,67 @@ func TestObserveSaysWhenAHumanCooldownStarts(t *testing.T) {
 		t.Fatalf("after the cooldown ran out = kind %q cooldown until %v, want a new one", o.Kind, o.CooldownUntil)
 	}
 }
+
+// On talkable#12112 the operator typed into the fixer's pane while its run
+// was in flight, which human_active_at never shows (the observer sets it
+// only with no run in flight). TypedDuringRun reads the run's part of a
+// claude agent's transcript as humanTurn does: someone typed when the turn
+// the run ended in began with, or took in, a prompt typed after magnum's
+// prompt of the run; magnum's own prompt is nobody's typing, and an agent of
+// another kind, whose transcript magnum does not read, reports none.
+func TestTypedDuringRunReadsAPromptTypedAfterMagnumsPrompt(t *testing.T) {
+	const typed = "Also rename the helper while you are there."
+	for _, tc := range []struct {
+		name  string
+		write func(tr *transcript, at time.Time)
+		want  bool
+	}{
+		{"magnum's prompt alone", func(tr *transcript, at time.Time) {
+			tr.add(humanPrompt(at, reviewPrompt), assistantSays(at.Add(time.Minute), "Report written."), turnEnded(at.Add(time.Minute)))
+		}, false},
+		{"a turn the operator typed after magnum's", func(tr *transcript, at time.Time) {
+			tr.add(humanPrompt(at, reviewPrompt), assistantSays(at.Add(time.Minute), "Pushed."), turnEnded(at.Add(time.Minute)),
+				humanPrompt(at.Add(2*time.Minute), typed), assistantSays(at.Add(3*time.Minute), "Renamed."), turnEnded(at.Add(3*time.Minute)))
+		}, true},
+		{"a prompt typed into magnum's turn", func(tr *transcript, at time.Time) {
+			tr.add(humanPrompt(at, reviewPrompt))
+			tr.addAll(absorbed(at.Add(time.Minute), at.Add(70*time.Second), typed))
+			tr.add(assistantSays(at.Add(2*time.Minute), "Report written."), turnEnded(at.Add(2*time.Minute)))
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			tr := e.claudeTranscript()
+			id := e.promptClaude()
+			tc.write(tr, e.clock.Now())
+			e.clock.Add(4 * time.Minute)
+			if o := e.idleTicks(2); o.Kind != ObsCompleted || o.Run == nil || o.Run.ID != id {
+				t.Fatalf("the run's end = %+v, want completed", o)
+			}
+			if got := e.m.TypedDuringRun(e.ctx, e.run1(id)); got != tc.want {
+				t.Errorf("TypedDuringRun = %v, want %v", got, tc.want)
+			}
+			e.restartDaemon() // no transcript watch survives: the run's part is read again
+			if got := e.m.TypedDuringRun(e.ctx, e.run1(id)); got != tc.want {
+				t.Errorf("TypedDuringRun after a restart = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	t.Run("a codex agent", func(t *testing.T) {
+		e := newEnv(t)
+		tr := e.claudeTranscript()
+		e.started()
+		const judge = "mg-11920-codex-judge-5d01cf"
+		e.h.setAgentSession(judge, claudeSID)
+		e.clock.Add(3 * time.Minute)
+		id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review")
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := e.clock.Now()
+		tr.add(humanPrompt(at, "review"), humanPrompt(at.Add(2*time.Minute), typed))
+		if e.m.TypedDuringRun(e.ctx, e.run1(id)) {
+			t.Error("TypedDuringRun read a transcript for a codex agent")
+		}
+	})
+}

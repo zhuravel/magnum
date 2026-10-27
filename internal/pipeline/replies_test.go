@@ -46,8 +46,8 @@ func TestClassifyReply(t *testing.T) {
 		{"", ReplyOther},
 		{"(Claude)", ReplyOther},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -86,8 +86,8 @@ func TestClassifyReplyReadsTheFirstClause(t *testing.T) {
 		{"This is not intentional.", ReplyOther},
 		{"Thanks!\n\nFixed in the next PR, maybe.", ReplyOther},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -124,8 +124,8 @@ func TestClassifyReplyTakesADeclinedFixAsWontFix(t *testing.T) {
 		{"Is it worth it? The internet -3 dB loss is unrelated.", ReplyOther},
 		{"Noted.\n\nI score that fix at −8.", ReplyOther},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -180,8 +180,8 @@ func TestClassifyReplyReadsLowPriorityDeferralsAndCommitFixes(t *testing.T) {
 		{"(Claude) Low priority (Net -2): naming the check once is tidier, but it edits a check that waits on a separate review.", ReplyWontFix},
 		{"Net: −3. The helper would hide the retry.", ReplyWontFix},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -231,8 +231,8 @@ func TestClassifyReplyReadsResolvedByCommitAndFixOnThisBranch(t *testing.T) {
 		{"You're right, fixed in 64ecdcf.", ReplyFixed},
 		{"You're right, left as is for now.", ReplyWontFix},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -295,8 +295,8 @@ func TestClassifyReplyReadsAddedRemovedClosedByCommitAndNotAdding(t *testing.T) 
 		{"Good catch, added in 3f9e2a1. Not adding the second test.", ReplyFixed},
 		{"Won't fix: the feature is going away.", ReplyWontFix},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -332,8 +332,8 @@ func TestClassifyReplyReadsFollowUpInACommitAsFixed(t *testing.T) {
 		{"Followed up in the next PR.", ReplyOther},
 		{"Followed up with the author.", ReplyOther},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -364,8 +364,8 @@ func TestAReplyThatDidNotMakeTheChangeIsAWontFix(t *testing.T) {
 		{"Not a bug: I did not make this change because the lock is held.", ReplyNotABug},
 		{"Why did you not make this change?", ReplyOther},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -413,8 +413,8 @@ func TestAnAcceptedGapDeferredToAFollowUpIsAWontFix(t *testing.T) {
 		{"Why are we not patching this?", ReplyOther},
 		{"The migration is not patching the schema.", ReplyOther},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -465,8 +465,8 @@ func TestClassifyReplyReadsADoubledAgentTagAndBareDeclines(t *testing.T) {
 		{"(Claude) (Claude) Fixed in 3f9e2a1; no fix in this PR for the docs.", ReplyFixed},
 		{"Not a bug: not changing it here, the caller retries.", ReplyNotABug},
 	} {
-		if got := classifyReply(tc.body); got != tc.want {
-			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
 		}
 	}
 }
@@ -484,8 +484,8 @@ func TestClassifyReplyReadsAFixedInReplyThatNamesTheSameDefectsOtherSites(t *tes
 			"`bundle exec rspec spec/models/order_spec.rb` passed (12 examples, 0 failures); `spec/models/order_spec.rb:42` fails without it",
 		"Fixed in 1a2b3c4: the guard now runs first, also at lib/a.rb:3, `rake test` passed\n\n" + postreview.FixReplyMarker,
 	} {
-		if got := classifyReply(body); got != ReplyFixed {
-			t.Errorf("classifyReply(%q) = %q, want %q", body, got, ReplyFixed)
+		if got := ClassifyReply(body); got != ReplyFixed {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", body, got, ReplyFixed)
 		}
 	}
 }

@@ -356,7 +356,7 @@ func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
 }
 
 // The fix skill is never rendered, and magnum reads what the fixer writes:
-// the re-review classifies its replies (pipeline's classifyReply) by their
+// the re-review classifies its replies (pipeline's ClassifyReply) by their
 // first words and the fix job parses its report by its headings. The skill
 // spells out each of them and carries no template action.
 func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {

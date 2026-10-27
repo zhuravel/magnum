@@ -295,6 +295,39 @@ func TestTheFixRemedySaysWhatToDoPerThread(t *testing.T) {
 	}
 }
 
+// On talkable#12112 the fixer answered magnum's P1 thread but listed the fix
+// under Needs you, and the loop's end asked to "reply fixed in e05fbde in
+// magnum's thread and resolve it". A thread of magnum's that shows its
+// answer and is still open now asks only for the resolution: the call reads
+// back from the stored message beside the others, the card counts it as a
+// resolution, and its link is the thread's.
+func TestAResolveCallReadsBackForTheCard(t *testing.T) {
+	const (
+		report  = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+		magnums = "https://github.com/talkable/talkable/pull/2#discussion_r4302866759"
+		other   = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
+	)
+	resolve := ResolveCall("4302866759", magnums)
+	if want := "resolve magnum's thread, already answered: " + magnums; resolve.Action != want || resolve.Thread != "4302866759" || resolve.URL != magnums {
+		t.Fatalf("ResolveCall = %+v, want the action %q", resolve, want)
+	}
+	calls := []FixCall{FixedCall("4302616576", other, "e05fbde", false), resolve,
+		DeclinedCall("4302616576", other, "P2", "app/a.rb:3", "talkable/talkable#2", false)}
+	r := Explain(KindFix, "fix: "+FixCallsText(calls, "", report), "talkable#2")
+	if !slices.Equal(r.NeedsYou, calls) {
+		t.Errorf("needs you = %+v\nwant        %+v", r.NeedsYou, calls)
+	}
+	if r.Summary != "fix: reply in 1 thread, resolve 1 thread, decide 1 finding" {
+		t.Errorf("summary %q", r.Summary)
+	}
+	if want := []string{calls[0].Action, resolve.Action, calls[2].Action, "details: " + report}; !slices.Equal(r.Steps, want) {
+		t.Errorf("steps %q\nwant  %q", r.Steps, want)
+	}
+	if r := Explain(KindFix, "fix: "+FixCallsText([]FixCall{resolve}, "", report), "talkable#2"); r.Summary != "fix: resolve 1 thread" || len(r.NeedsYou) != 1 {
+		t.Errorf("a resolution alone: summary %q, needs you %+v", r.Summary, r.NeedsYou)
+	}
+}
+
 // A message stored before the fixer replied in other reviewers' threads
 // (spec 82's words: "in the thread a human started and resolve it", "a
 // human's") still reads as its calls, so a PR that needed attention then

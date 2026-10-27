@@ -2,7 +2,7 @@ package pipeline
 
 // The reply contract (skills/magnum-review/SKILL.md section 6): a re-review
 // reads the inline threads its reviewer login started on the PR, classifies
-// every reply by its first clause (classifyReply) and hands them to the judge
+// every reply by its first clause (ClassifyReply) and hands them to the judge
 // as a file next to the candidate reports. Replies are PR content, so the
 // prompt names the file and the counts, never the text.
 
@@ -129,7 +129,7 @@ var (
 	replyMadeVerb = regexp.MustCompile(`(?i)\b(?:pushed|landed|committed|merged|shipped|added|made|done|fixed|applied)\b`)
 )
 
-// classifyReply says what a reply claims from its first clause: "fixed",
+// ClassifyReply says what a reply claims from its first clause: "fixed",
 // "done", "addressed", "applied", "already addressed", "<it> is covered in
 // <sha>", "(already) resolved by <sha>" (or "in"), "<it> is now on this branch
 // as <sha>", "added in <sha>", "removed in <sha>", "closed (or resolved) by
@@ -171,7 +171,7 @@ var (
 // verdict may follow
 // "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
 // intentional").
-func classifyReply(body string) string {
+func ClassifyReply(body string) string {
 	s := strings.ReplaceAll(body, "’", "'")
 	for {
 		s = strings.TrimLeftFunc(s, unicode.IsSpace)
@@ -370,7 +370,7 @@ func (rd *round) ownThreads(ts []github.Thread) []agents.ReviewThread {
 			}
 			rep := agents.ThreadReply{ID: c.ID, Author: author, Own: rd.isOwnHistory(c.AuthorLogin, c.AuthorType)}
 			if !rep.Own {
-				rep.Class = classifyReply(c.Body)
+				rep.Class = ClassifyReply(c.Body)
 			} else if _, kind, ok := postreview.ParseReplyMarker(c.Body); ok {
 				rep.Kind = kind
 			}

@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -166,8 +167,10 @@ func (e *Engine) roundIgnored(ctx context.Context, job *fixJob, res pipeline.Rou
 
 // continueFixLoop takes a loop whose re-review ended (res) to its next
 // step: a re-review that did not post, or findings the fixer left to the
-// author when it pushed, end it as needs attention; a review that found
-// nothing ends it as done; findings start the next cycle (startFix) while
+// author when it pushed that still ask something of the author (magnum's
+// threads read again, from the re-review's threads file when it read them
+// after the fixer's report: freshNeedsYou), end it as needs attention; a
+// review that found nothing ends it as done; findings start the next cycle (startFix) while
 // cycles are left, and end it as needs attention at the cap, which says what
 // is left (capMessage); a next cycle that cannot start ends it as needs attention with why, unless the PR moved
 // on since the re-review (closed, or a newer head the operator pushed:
@@ -198,20 +201,25 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	default:
 		left = "earlier findings still open"
 	}
+	paused := e.pauseContinues(ctx, job.pr, res.Outcome)
+	needs, answered := st.NeedsYou, map[string]bool(nil)
+	if !paused && len(needs) > 0 { // what magnum's threads show now, the re-review's read of them first
+		needs, answered = e.freshNeedsYou(github.WithOp(ctx, opFix), job, needs, st.Report, res.ReportDir)
+	}
 	switch {
-	case e.pauseContinues(ctx, job.pr, res.Outcome):
+	case paused:
 		e.log.Info(fmt.Sprintf("fix: the re-review's turn continues after a %s pause; the loop waits for it", res.Outcome),
 			"subject", job.subject(), "cycle", st.Cycle)
 		e.event(ctx, "info", job.subject(), "fix.waiting",
 			fmt.Sprintf("the fix loop waits: the re-review's judge turn paused (%s) and continues after the pause", res.Outcome), job.loopData())
 	case res.Outcome != pipeline.OutcomePosted:
 		msg := fmt.Sprintf("fix loop ended: the re-review did not post (%s)", cmp.Or(res.Outcome, pipeline.OutcomeError))
-		if len(st.NeedsYou) > 0 {
-			msg += "; " + needsYouText(st.NeedsYou, st.Report, job.pr.URL, job.label(), true)
+		if len(needs) > 0 {
+			msg += "; " + needsYouText(needs, answered, st.Report, job.pr.URL, job.label(), true)
 		}
 		e.endLoopForAttention(ctx, job, raw, "fix.failed", msg)
-	case len(st.NeedsYou) > 0:
-		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+needsYouText(st.NeedsYou, st.Report, job.pr.URL, job.label(), true))
+	case len(needs) > 0:
+		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+needsYouText(needs, answered, st.Report, job.pr.URL, job.label(), true))
 	case !fixRemains(res):
 		e.fixLoopDone(ctx, job, raw, cmp.Or(res.TargetSHA, st.Head))
 	case st.Cycle >= st.Cap:

@@ -21,7 +21,7 @@ import (
 // FixCall is one finding a fix job's fixer left to the author that its
 // message names with what to do (Reason.NeedsYou): the id of the comment
 // that starts the finding's thread, the thread's link, and the sentence
-// that says what to do there (FixedCall, DeclinedCall).
+// that says what to do there (FixedCall, DeclinedCall, ResolveCall).
 type FixCall struct {
 	Thread string `json:"thread"`
 	URL    string `json:"url"`
@@ -60,6 +60,15 @@ func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCal
 		": the fixer declined it; reply won't fix at " + url + ", or `magnum fix " + ref + "` sends it back"}
 }
 
+// ResolveCall is the call of a finding in one of magnum's threads that shows
+// the answer its call asked for (a "Fixed in" reply for a fix, "Won't fix"
+// or "Not a bug" for a decline) and is still open: the author resolves it
+// ("resolve magnum's thread, already answered: <url>"). Magnum never asks
+// for the resolution of a thread another reviewer started.
+func ResolveCall(thread, url string) FixCall {
+	return FixCall{Thread: thread, URL: url, Action: "resolve magnum's thread, already answered: " + url}
+}
+
 // fixDetails starts the last part of a fix job's message with calls: where
 // the fixer's report is.
 const fixDetails = "details: "
@@ -80,14 +89,15 @@ func FixCallsText(calls []FixCall, more, report string) string {
 }
 
 var (
-	// fixCallRe finds a call FixedCall or DeclinedCall wrote, in today's
-	// words or the older ones ("the thread a human started", "a human's").
-	// Groups: the link and its comment id, of a fixed call (1, 2) or a
-	// declined one (3, 4).
+	// fixCallRe finds a call FixedCall, DeclinedCall or ResolveCall wrote,
+	// in today's words or the older ones ("the thread a human started", "a
+	// human's"). Groups: the link and its comment id, of a fixed call (1,
+	// 2), a declined one (3, 4) or a resolution (5, 6).
 	fixCallRe = regexp.MustCompile("reply fixed in [0-9a-f]{7} in (?:(?:the thread a human started|magnum's thread) and resolve it|another reviewer's thread): " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
 		"|decide (?:magnum's|a human's|another reviewer's) (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the fixer declined it; reply won't fix at " +
-		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or `magnum fix [^`\\s]+` sends it back")
+		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or `magnum fix [^`\\s]+` sends it back" +
+		"|resolve magnum's thread, already answered: (https://[^\\s#;,]+#discussion_r(\\d{1,20}))")
 	// fixMoreRe reads how many findings the older words after the calls name.
 	fixMoreRe = regexp.MustCompile(`^(\d+) more findings? needs? your call\b`)
 )
@@ -108,9 +118,12 @@ func fixCalls(line string) (prefix string, calls []FixCall, steps []string, ok b
 		if strings.Trim(line[end:l[0]], "; ") != "" {
 			break // the calls come together; a later match is not one of them
 		}
-		urlAt := 2 // the fixed call's groups, else the declined one's
-		if l[urlAt] < 0 {
+		urlAt := 2 // the fixed call's groups, else the declined one's or the resolution's
+		switch {
+		case l[6] >= 0:
 			urlAt = 6
+		case l[10] >= 0:
+			urlAt = 10
 		}
 		action := line[l[0]:l[1]]
 		calls = append(calls, FixCall{Thread: line[l[urlAt+2]:l[urlAt+3]], URL: line[l[urlAt]:l[urlAt+1]], Action: action})
@@ -130,21 +143,27 @@ func fixCalls(line string) (prefix string, calls []FixCall, steps []string, ok b
 }
 
 // fixCallsCause is the cause of a fix job's message with calls: what they
-// ask, counted ("reply in 1 thread, decide 2 findings", then "1 more needs
-// your call" for the findings in the older words), after the loop's own
-// words (prefix) when it ended for another reason.
+// ask, counted ("reply in 1 thread, resolve 1 thread, decide 2 findings",
+// then "1 more needs your call" for the findings in the older words), after
+// the loop's own words (prefix) when it ended for another reason.
 func fixCallsCause(prefix string, calls []FixCall, steps []string) string {
-	replies := 0
+	replies, resolves := 0, 0
 	for _, c := range calls {
-		if strings.HasPrefix(c.Action, "reply ") {
+		switch {
+		case strings.HasPrefix(c.Action, "reply "):
 			replies++
+		case strings.HasPrefix(c.Action, "resolve "):
+			resolves++
 		}
 	}
 	var parts []string
 	if replies > 0 {
 		parts = append(parts, "reply in "+textx.Count(replies, "thread", "threads"))
 	}
-	if decides := len(calls) - replies; decides > 0 {
+	if resolves > 0 {
+		parts = append(parts, "resolve "+textx.Count(resolves, "thread", "threads"))
+	}
+	if decides := len(calls) - replies - resolves; decides > 0 {
 		parts = append(parts, "decide "+textx.Count(decides, "finding", "findings"))
 	}
 	if len(steps) > len(calls) {
