@@ -20,10 +20,12 @@ import (
 
 // FixCall is one finding a fix job's fixer left to the author that its
 // message names with what to do (Reason.NeedsYou): the id of the comment
-// that starts the finding's thread, the thread's link, and the sentence
-// that says what to do there (FixedCall, DeclinedCall, ResolveCall).
+// that starts the finding's thread (none for a conflict with the base,
+// which has no thread), the thread's link (the PR's page for a conflict),
+// and the sentence that says what to do there (FixedCall, DeclinedCall,
+// ResolveCall, ConflictCall).
 type FixCall struct {
-	Thread string `json:"thread"`
+	Thread string `json:"thread,omitempty"`
 	URL    string `json:"url"`
 	Action string `json:"action"`
 }
@@ -69,6 +71,16 @@ func ResolveCall(thread, url string) FixCall {
 	return FixCall{Thread: thread, URL: url, Action: "resolve magnum's thread, already answered: " + url}
 }
 
+// ConflictCall is the call of a conflict with the PR's base that the fixer
+// left to the author: a product decision it would not make, so it aborted
+// its merge of the base. The author merges the base on the PR's page url
+// and decides the conflict in paths (plain path characters, which fixCallRe
+// reads back): "merge the base by hand and decide the conflict in
+// app/a.rb, db/schema.rb: <url>". It has no thread.
+func ConflictCall(paths []string, url string) FixCall {
+	return FixCall{URL: url, Action: "merge the base by hand and decide the conflict in " + strings.Join(paths, ", ") + ": " + url}
+}
+
 // fixDetails starts the last part of a fix job's message with calls: where
 // the fixer's report is.
 const fixDetails = "details: "
@@ -89,15 +101,17 @@ func FixCallsText(calls []FixCall, more, report string) string {
 }
 
 var (
-	// fixCallRe finds a call FixedCall, DeclinedCall or ResolveCall wrote,
-	// in today's words or the older ones ("the thread a human started", "a
-	// human's"). Groups: the link and its comment id, of a fixed call (1,
-	// 2), a declined one (3, 4) or a resolution (5, 6).
+	// fixCallRe finds a call FixedCall, DeclinedCall, ResolveCall or
+	// ConflictCall wrote, in today's words or the older ones ("the thread a
+	// human started", "a human's"). Groups: the link and its comment id, of a
+	// fixed call (1, 2), a declined one (3, 4) or a resolution (5, 6), and
+	// the PR's page of a conflict (7).
 	fixCallRe = regexp.MustCompile("reply fixed in [0-9a-f]{7} in (?:(?:the thread a human started|magnum's thread) and resolve it|another reviewer's thread): " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
 		"|decide (?:magnum's|a human's|another reviewer's) (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the fixer declined it; reply won't fix at " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or `magnum fix [^`\\s]+` sends it back" +
-		"|resolve magnum's thread, already answered: (https://[^\\s#;,]+#discussion_r(\\d{1,20}))")
+		"|resolve magnum's thread, already answered: (https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
+		"|merge the base by hand and decide the conflict in [A-Za-z0-9._/@+-]+(?:, [A-Za-z0-9._/@+-]+)*: (https://[^\\s#;,]+)")
 	// fixMoreRe reads how many findings the older words after the calls name.
 	fixMoreRe = regexp.MustCompile(`^(\d+) more findings? needs? your call\b`)
 )
@@ -118,15 +132,21 @@ func fixCalls(line string) (prefix string, calls []FixCall, steps []string, ok b
 		if strings.Trim(line[end:l[0]], "; ") != "" {
 			break // the calls come together; a later match is not one of them
 		}
-		urlAt := 2 // the fixed call's groups, else the declined one's or the resolution's
+		action := line[l[0]:l[1]]
+		urlAt := 2 // the fixed call's groups, else the declined one's, the resolution's or the conflict's
 		switch {
 		case l[6] >= 0:
 			urlAt = 6
 		case l[10] >= 0:
 			urlAt = 10
+		case l[14] >= 0:
+			urlAt = 14
 		}
-		action := line[l[0]:l[1]]
-		calls = append(calls, FixCall{Thread: line[l[urlAt+2]:l[urlAt+3]], URL: line[l[urlAt]:l[urlAt+1]], Action: action})
+		call := FixCall{URL: line[l[urlAt]:l[urlAt+1]], Action: action}
+		if urlAt != 14 { // a conflict has no thread
+			call.Thread = line[l[urlAt+2]:l[urlAt+3]]
+		}
+		calls = append(calls, call)
 		steps = append(steps, action)
 		end = l[1]
 	}
@@ -143,27 +163,33 @@ func fixCalls(line string) (prefix string, calls []FixCall, steps []string, ok b
 }
 
 // fixCallsCause is the cause of a fix job's message with calls: what they
-// ask, counted ("reply in 1 thread, resolve 1 thread, decide 2 findings",
-// then "1 more needs your call" for the findings in the older words), after
-// the loop's own words (prefix) when it ended for another reason.
+// ask, counted ("merge the base by hand, reply in 1 thread, resolve 1
+// thread, decide 2 findings", then "1 more needs your call" for the
+// findings in the older words), after the loop's own words (prefix) when it
+// ended for another reason.
 func fixCallsCause(prefix string, calls []FixCall, steps []string) string {
-	replies, resolves := 0, 0
+	replies, resolves, merges := 0, 0, 0
 	for _, c := range calls {
 		switch {
 		case strings.HasPrefix(c.Action, "reply "):
 			replies++
 		case strings.HasPrefix(c.Action, "resolve "):
 			resolves++
+		case strings.HasPrefix(c.Action, "merge the base "):
+			merges++
 		}
 	}
 	var parts []string
+	if merges > 0 {
+		parts = append(parts, "merge the base by hand")
+	}
 	if replies > 0 {
 		parts = append(parts, "reply in "+textx.Count(replies, "thread", "threads"))
 	}
 	if resolves > 0 {
 		parts = append(parts, "resolve "+textx.Count(resolves, "thread", "threads"))
 	}
-	if decides := len(calls) - replies - resolves; decides > 0 {
+	if decides := len(calls) - replies - resolves - merges; decides > 0 {
 		parts = append(parts, "decide "+textx.Count(decides, "finding", "findings"))
 	}
 	if len(steps) > len(calls) {

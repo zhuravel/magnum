@@ -1416,3 +1416,47 @@ func TestNeedsYourCallReadsADescriptionEntry(t *testing.T) {
 		}
 	}
 }
+
+// A conflict the fixer did not resolve (it needs a product decision, so the
+// fixer aborted its merge) is an entry under "Needs you" without a comment
+// id, "conflict: <paths>: <the decision>": magnum reads its paths, plain
+// path characters only, and turns it into a call with the PR's page,
+// beside the finding's own call. The fixer's words about the decision stay
+// in the report.
+func TestAConflictEntryUnderNeedsYouBecomesACall(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	git.conflict("app/models/offer.rb", "db/schema.rb")
+	fixer(h, git, "", func(run store.Run) string {
+		writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{2101}, nil)
+		return fixReport(run.ID, "nothing", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)",
+			"- conflict: app/models/offer.rb, db/schema.rb: both sides change the expiry rule, which wins is the author's call\n"+
+				"- 2101 P2 app/models/offer.rb:42: not fixed. It waits for the merge.")
+	})
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	const (
+		conflict = "merge the base by hand and decide the conflict in app/models/offer.rb, db/schema.rb: " + prPage
+		decline  = "decide magnum's P2 on app/models/offer.rb:42: the fixer declined it; reply won't fix at " + prPage + "#discussion_r2101" +
+			", or `magnum fix talkable/talkable#2` sends it back"
+	)
+	want := "fix: " + conflict + "; " + decline + "; details: " + report
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if deref(cur.LastError) != want {
+		t.Errorf("last_error = %q\nwant         %q", deref(cur.LastError), want)
+	}
+	why := attention.Explain(attention.KindFix, deref(cur.LastError), "talkable#2")
+	calls := []attention.FixCall{{URL: prPage, Action: conflict}, {Thread: "2101", URL: prPage + "#discussion_r2101", Action: decline}}
+	if !slices.Equal(why.NeedsYou, calls) || why.Summary != "fix: merge the base by hand, decide 1 finding" {
+		t.Errorf("the card: needs you %+v, summary %q", why.NeedsYou, why.Summary)
+	}
+	if strings.Contains(deref(cur.LastError), "expiry rule") {
+		t.Error("last_error carries the fixer's words")
+	}
+	if got := needsYourCall([]string{"conflict: app/a.rb, db/schema.rb: both sides change it", "conflict: my file.rb: spaces"}, "/state/claude-fix.md"); got !=
+		"2 findings need your call (conflict in app/a.rb, db/schema.rb, 1 entry magnum could not read): /state/claude-fix.md" {
+		t.Errorf("needsYourCall = %q", got)
+	}
+}

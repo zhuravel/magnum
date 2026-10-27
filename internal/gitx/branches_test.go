@@ -488,6 +488,57 @@ func TestRestoreFromBringsBackTheEarlierText(t *testing.T) {
 	}
 }
 
+// The fix job asks whether a merge of the PR's base into its head
+// conflicts, as GitHub's CONFLICTING does, without merging: `git merge-tree`
+// on the head and the base tip it fetched, which moves no branch, work tree
+// or index. A clean merge names nothing; a conflict names its paths, sorted.
+func TestMergeConflictsNamesThePathsAMergeOfTheBaseConflictsIn(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	fx.fetchPR7()
+	fx.commit(fx.origin, "docs/main.md", "main moves\n", "main moves elsewhere")
+	if err := fx.c.FetchBranch(ctx, fx.clone, "main"); err != nil {
+		t.Fatal(err)
+	}
+	base := fx.git(fx.clone, "rev-parse", "refs/remotes/origin/main")
+	if got, err := fx.c.MergeConflicts(ctx, fx.clone, fx.pr, base); err != nil || got != nil {
+		t.Fatalf("a base that changed other files = %v, %v; want a clean merge", got, err)
+	}
+
+	fx.commit(fx.origin, "db/schema.rb", "version 2\n", "main's migration")
+	fx.commit(fx.origin, "app/a.rb", "a = 2\n", "main adds a.rb too")
+	if err := fx.c.FetchBranch(ctx, fx.clone, "main"); err != nil {
+		t.Fatal(err)
+	}
+	base = fx.git(fx.clone, "rev-parse", "refs/remotes/origin/main")
+	head := fx.git(fx.clone, "rev-parse", "HEAD")
+	if got, err := fx.c.MergeConflicts(ctx, fx.clone, fx.pr, base); err != nil || !slices.Equal(got, []string{"app/a.rb", "db/schema.rb"}) {
+		t.Fatalf("a base that changed the PR's files = %v, %v; want [app/a.rb db/schema.rb]", got, err)
+	}
+
+	// Nothing moved: the checkout's HEAD, its work tree and index, the refs.
+	if got := fx.git(fx.clone, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD moved to %s", got)
+	}
+	if got := fx.git(fx.clone, "status", "--porcelain"); got != "" {
+		t.Fatalf("the checkout after the check: %q", got)
+	}
+	if p, err := fx.c.InProgress(ctx, fx.clone); err != nil || p != "" {
+		t.Fatalf("in progress after the check = %q, %v", p, err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "refs/remotes/origin/main"); got != base {
+		t.Fatalf("origin/main moved to %s", got)
+	}
+
+	// A revision that looks like an option is refused.
+	if _, err := fx.c.MergeConflicts(ctx, fx.clone, "-x", base); err == nil {
+		t.Fatal("an option as the head was taken")
+	}
+	if _, err := fx.c.MergeConflicts(ctx, fx.clone, fx.pr, "--stdin"); err == nil {
+		t.Fatal("an option as the base was taken")
+	}
+}
+
 // Whether a candidate still applies is read without a rebase: the paths
 // where its change conflicts with master, from `git merge-tree`, which
 // moves no branch, work tree or index (the proposal's worktree is as it

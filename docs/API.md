@@ -1063,6 +1063,8 @@ type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand, FixReplyCommand string
 	NoFindings                                                                                  bool
 	NotesParts                                                                                  NotesParts
+	ConflictBase, ConflictSHA                                                                   string
+	ConflictPaths                                                                               []string
 }
     FixPromptInput is what the fix job knows beyond the PR, the role and the
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
@@ -1073,9 +1075,12 @@ type FixPromptInput struct {
     (DBLockCommand, DBLockLine; "" = derived without a checkout), the line it
     posts every reply through (FixReplyCommand, FixReplyLine; "" = magnum on
     PATH), whether the review found nothing, leaving the fixer the external
-    file's items alone (NoFindings), and the job's frozen copy of the repository
-    notes in parts (NotesParts, FreezeNotes beside the report; zero = none),
-    which the fixer reads and never edits.
+    file's items and the base merge alone (NoFindings), the job's frozen copy
+    of the repository notes in parts (NotesParts, FreezeNotes beside the report;
+    zero = none), which the fixer reads and never edits, and the PR's conflict
+    with its base, which the fixer merges first: the base branch (ConflictBase),
+    the tip of it magnum fetched (ConflictSHA; "" = no conflict, or magnum could
+    not check) and the conflicting paths (ConflictPaths, as git names them).
 
 type Health struct {
 	Kind    HealthKind
@@ -2510,8 +2515,20 @@ type RoleData struct {
 	FixReplyCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
-	// alone (the fix job starts on such a review only when one waits).
+	// alone, and merges the base when the PR conflicts with it (the fix job
+	// starts on such a review only when one of the two waits).
 	NoFindings bool
+	// ConflictBase, ConflictSHA, ConflictPaths and ConflictFiles are the fix
+	// prompt's too (FixPrompt fills them from FixPromptInput): the PR
+	// conflicts with its base branch ConflictBase, whose tip magnum fetched
+	// is ConflictSHA, in ConflictFiles files, ConflictPaths the first of
+	// them in plain path characters (at most maxConflictPaths; a path with
+	// any other character is counted, never named); the fixer merges that
+	// tip first, as the fix skill's base merge says. "" and none when the PR
+	// merges its base cleanly, or magnum could not check.
+	ConflictBase, ConflictSHA string
+	ConflictPaths             []string
+	ConflictFiles             int
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -2963,14 +2980,24 @@ func OnMagnumsSide(kind string) bool
 TYPES
 
 type FixCall struct {
-	Thread string `json:"thread"`
+	Thread string `json:"thread,omitempty"`
 	URL    string `json:"url"`
 	Action string `json:"action"`
 }
-    FixCall is one finding a fix job's fixer left to the author that its message
-    names with what to do (Reason.NeedsYou): the id of the comment that starts
-    the finding's thread, the thread's link, and the sentence that says what to
-    do there (FixedCall, DeclinedCall, ResolveCall).
+    FixCall is one finding a fix job's fixer left to the author that its
+    message names with what to do (Reason.NeedsYou): the id of the comment
+    that starts the finding's thread (none for a conflict with the base,
+    which has no thread), the thread's link (the PR's page for a conflict),
+    and the sentence that says what to do there (FixedCall, DeclinedCall,
+    ResolveCall, ConflictCall).
+
+func ConflictCall(paths []string, url string) FixCall
+    ConflictCall is the call of a conflict with the PR's base that the fixer
+    left to the author: a product decision it would not make, so it aborted
+    its merge of the base. The author merges the base on the PR's page url
+    and decides the conflict in paths (plain path characters, which fixCallRe
+    reads back): "merge the base by hand and decide the conflict in app/a.rb,
+    db/schema.rb: <url>". It has no thread.
 
 func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCall
     DeclinedCall is the call of a finding the fixer did not fix and left to the
@@ -8605,6 +8632,12 @@ type Git interface {
 	// ChangedBetween names the files that differ between two heads: the
 	// PR's evidence map marks what they held stale (evidence.go).
 	ChangedBetween(ctx context.Context, dir, from, to string) ([]string, error)
+	// FetchBranch and MergeConflicts tell the fix job whether the head its
+	// fixer starts from conflicts with the PR's base (baseConflict): the
+	// base branch fetched into the slot's main clone, then `git merge-tree`
+	// of the head and that tip.
+	FetchBranch(ctx context.Context, mainClone, base string) error
+	MergeConflicts(ctx context.Context, dir, head, base string) ([]string, error)
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -11820,6 +11853,15 @@ func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error
     the checkout has not fetched yet, as a restart check asks about a head the
     poller saw before the checkout did) is an answer the caller reads from the
     error, so the command runs as a probe and a failure logs at Debug.
+
+func (c *Client) MergeConflicts(ctx context.Context, dir, head, base string) ([]string, error)
+    MergeConflicts says where merging base into head would conflict, as GitHub's
+    CONFLICTING does, without merging: the conflicting paths of `git merge-tree
+    --write-tree head base` (git 2.40 or later), sorted, nil for a clean merge.
+    As ReplayConflicts, it writes the merge's objects and no ref, index or
+    work tree, so dir, any work tree of the repository that has both commits,
+    is left exactly as it was. An error for revisions git does not know,
+    histories without a common commit and an answer it cannot read.
 
 func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) error
     MergeFFOnly fast-forwards base, the branch checked out in repo, to branch:

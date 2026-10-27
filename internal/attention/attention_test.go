@@ -1,6 +1,7 @@
 package attention
 
 import (
+	"encoding/json"
 	"os"
 	"slices"
 	"strings"
@@ -325,6 +326,38 @@ func TestAResolveCallReadsBackForTheCard(t *testing.T) {
 	}
 	if r := Explain(KindFix, "fix: "+FixCallsText([]FixCall{resolve}, "", report), "talkable#2"); r.Summary != "fix: resolve 1 thread" || len(r.NeedsYou) != 1 {
 		t.Errorf("a resolution alone: summary %q, needs you %+v", r.Summary, r.NeedsYou)
+	}
+}
+
+// A conflict with the base that the fixer left to the author (it needs a
+// product decision, so the fixer aborted its merge) is a call without a
+// thread: the PR's page, where the author merges the base, and the paths
+// that need the decision. It reads back for the card as the other calls do,
+// and the summary counts it first.
+func TestAConflictCallReadsBackForTheCard(t *testing.T) {
+	const (
+		report = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+		page   = "https://github.com/talkable/talkable/pull/2"
+		other  = "https://github.com/talkable/talkable/pull/2#discussion_r4302616576"
+	)
+	conflict := ConflictCall([]string{"app/models/offer.rb", "db/schema.rb"}, page)
+	if want := "merge the base by hand and decide the conflict in app/models/offer.rb, db/schema.rb: " + page; conflict.Action != want ||
+		conflict.Thread != "" || conflict.URL != page {
+		t.Fatalf("ConflictCall = %+v, want the action %q", conflict, want)
+	}
+	calls := []FixCall{conflict, DeclinedCall("4302616576", other, "P2", "app/a.rb:3", "talkable/talkable#2", false)}
+	r := Explain(KindFix, "fix: "+FixCallsText(calls, "", report), "talkable#2")
+	if !slices.Equal(r.NeedsYou, calls) {
+		t.Errorf("needs you = %+v\nwant        %+v", r.NeedsYou, calls)
+	}
+	if r.Summary != "fix: merge the base by hand, decide 1 finding" {
+		t.Errorf("summary %q", r.Summary)
+	}
+	if want := []string{conflict.Action, calls[1].Action, "details: " + report}; !slices.Equal(r.Steps, want) {
+		t.Errorf("steps %q\nwant  %q", r.Steps, want)
+	}
+	if b, err := json.Marshal(conflict); err != nil || strings.Contains(string(b), `"thread"`) {
+		t.Errorf("the conflict call's JSON = %s, %v; want no thread", b, err)
 	}
 }
 

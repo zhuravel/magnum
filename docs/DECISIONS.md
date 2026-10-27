@@ -13532,6 +13532,60 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Test, failing first: TestANextCycleStartsWithoutTheLastCyclesAnsweredThreads (cycle 1 leaves a resolve
   call, the operator resolves the thread by hand, the re-review's finding starts cycle 2, whose row has no
   answered thread while its fixer works).
+- **The fixer merges the base when the PR conflicts with it** (2026-10-27, wave 1 item 5 of the
+  companion-fix design, section 5.6; amends "A textual merge conflict is no finding"). On
+  talkable/talkable#12079 (2026-10-27) GitHub showed the PR as `CONFLICTING` and the fixer left it: the fix
+  skill forbade pull, merge and rebase and changed only what a finding names, the rule amended here kept the
+  conflict out of the findings, and magnum never read the merge state. The operator expects the fix session
+  to resolve it. A textual conflict is still no finding, but the fixer resolves it. The fix guard, once the
+  slot is the fixer's (after the claim of a PR without a slot), fetches the PR's base branch into the slot's
+  main clone, as a checkout does, and asks `git merge-tree --write-tree <head> <base tip>`
+  (`gitx.MergeConflicts` beside `ReplayConflicts`, which shares its reading; no ref, index or work tree
+  moves). GitHub's `mergeable` is not read: it answers `UNKNOWN` until its own computation ends. A conflict
+  becomes the job's (`fixJob.conflict`, `checkFixBase`): the prompt names, in its one paragraph, the base
+  branch, the tip it fetched and the conflicting paths (`FixPromptInput.ConflictBase`, `ConflictSHA`,
+  `ConflictPaths`; at most 20, plain path characters only, the rest counted, since a path is the PR's text;
+  a base a shell would read, or a tip that is no commit id, is refused at render), and the `fix.start`
+  event says "merges master at c0c0c0c (2 conflicting files), then ..." with the base, the tip and the
+  count in its data. The skill's base merge (section 2, before the findings) runs `git merge --no-edit
+  <sha>`, never a rebase, a pull or a force-push, resolves each conflict so that both sides keep their
+  intent, runs the resolved files' specs through the db-lock line, writes "not run: environment" when the
+  base's migrations or gems block them (it never migrates or installs; the re-review's readiness step loads
+  the merged schema), and names the merge commit first under `Pushed`, so `pushedHead` takes the pushed
+  head as for any listed commit. The rules "change only what a finding names" and "add no lockfile entry"
+  exempt the merge's own changes and the entries the base brings, and a rejected push still merges nothing.
+  A conflict that needs a product decision is aborted (`git merge --abort`) and listed as `conflict:
+  <paths>: <the decision it needs>`: `needsYouEntryRe` reads it without a comment id (the paths up to the
+  colon), and attention turns it into `attention.ConflictCall`, "merge the base by hand and decide the
+  conflict in <paths>: <the PR's link>", a call without a thread (`FixCall.Thread` is left out of the JSON)
+  that the card's summary counts first. A base that cannot be fetched, or a rev-parse or merge-tree that
+  fails, never blocks the fix: a `fix.conflict_unchecked` warning says why, and the fixer starts without
+  the merge step. A conflict counts as work in `prepareFix`: on a review that found nothing, with no other
+  reviewer's item waiting, `othersWaiting` asks for the check (in the PR's slot, else its pool's main clone
+  or its clone; a request only asked about checks the base as last fetched) before it refuses, so a
+  hand-started `magnum fix` on a conflicting PR runs ("claude-fix merges master at c0c0c0c (2 conflicting
+  files) in review1 (magnum's review of a1a1a1a found nothing)", `forMerge`), the prompt's no-findings
+  sentence names the external file only when there is one, and a check that failed ends the refusal with
+  why. A read of the other reviewers that GitHub refused for the rate limit asks for no check: the floor
+  holds the fix as before, and the held fix looks at the base when it starts. Such a job whose conflict the
+  guard finds gone fails its guard, with nothing left to do. Autofix
+  still starts only after a review with findings, and a re-review that finds nothing still ends a loop
+  clean: a conflict alone never starts a loop. The merge can bring the base's `AGENTS.md` or `.claude/`
+  into a running Claude fixer; those are the base's files, which the team owns, so this is accepted.
+  Rejected: GitHub's `mergeable` (`UNKNOWN` until computed); a rebase (it rewrites commits on GitHub and
+  needs a force-push); making the conflict a finding again (the 2026-10-08 rule stands). Tests, failing
+  first: in gitx TestMergeConflictsNamesThePathsAMergeOfTheBaseConflictsIn (real git: a clean merge, then
+  both paths, nothing moved, options refused); in engine
+  TestAHandStartedFixOnAConflictingPRWhoseReviewFoundNothingStartsAndNamesTheBase (its dry run fetches
+  nothing), TestAFailedBaseFetchRunsTheFixWithoutTheMergeStep (a fix with findings runs without the merge
+  step; a review that found nothing is refused with the cause), TestAPushWhoseFirstCommitMergesTheBaseSettles
+  (the merge alone was refused before), TestAConflictEntryUnderNeedsYouBecomesACall and TestFixRefusals (the
+  found-nothing refusal looks at the base once, the others never); in attention
+  TestAConflictCallReadsBackForTheCard; in agents TestTheFixPromptNamesTheConflictWithTheBase,
+  TestTheFixSkillMergesTheBaseWhenThePRConflicts and the goldens `fix_conflict` and `fix_merge_only`.
+  TestAutofixDoesNotStartForAConflictAlone guards what already held, and
+  TestAConflictDoesNotStartAFixWhoseOtherReviewersReadHitTheRateLimit fails when a rate-limited read asks
+  for the check anyway.
 
 ## Learned rules
 

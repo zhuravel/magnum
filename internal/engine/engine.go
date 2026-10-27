@@ -227,6 +227,12 @@ type Git interface {
 	// ChangedBetween names the files that differ between two heads: the
 	// PR's evidence map marks what they held stale (evidence.go).
 	ChangedBetween(ctx context.Context, dir, from, to string) ([]string, error)
+	// FetchBranch and MergeConflicts tell the fix job whether the head its
+	// fixer starts from conflicts with the PR's base (baseConflict): the
+	// base branch fetched into the slot's main clone, then `git merge-tree`
+	// of the head and that tip.
+	FetchBranch(ctx context.Context, mainClone, base string) error
+	MergeConflicts(ctx context.Context, dir, head, base string) ([]string, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom

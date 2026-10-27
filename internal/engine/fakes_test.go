@@ -2020,6 +2020,15 @@ func (fakeGit) ChangedBetween(_ context.Context, _, from, to string) ([]string, 
 	return nil, fmt.Errorf("fake git: no diff of %s..%s", from, to)
 }
 
+// FetchBranch fetches nothing and MergeConflicts finds every merge clean:
+// a fix job's check of its base finds no conflict unless a test's git
+// (fixGit) says otherwise.
+func (fakeGit) FetchBranch(context.Context, string, string) error { return nil }
+
+func (fakeGit) MergeConflicts(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (fakeGit) MergeBase(_ context.Context, _, a, _ string) (string, error) {
 	if strings.HasPrefix(a, "origin/") {
 		return "base0000", nil

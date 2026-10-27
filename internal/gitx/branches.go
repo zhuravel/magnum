@@ -228,8 +228,29 @@ func (c *Client) ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]
 	if err := errors.Join(checkRev("onto", onto), checkRev("rev", rev)); err != nil {
 		return nil, err
 	}
-	res, err := c.git(ctx, dir, call{label: "merge-tree " + onto + " " + rev, noExit: 1, timeout: commitTimeout},
-		"merge-tree", "--write-tree", "--name-only", "-z", "--no-messages", "--merge-base="+rev+"^", onto, rev)
+	return c.mergeTreeConflicts(ctx, dir, "merge-tree "+onto+" "+rev, "--merge-base="+rev+"^", onto, rev)
+}
+
+// MergeConflicts says where merging base into head would conflict, as
+// GitHub's CONFLICTING does, without merging: the conflicting paths of `git
+// merge-tree --write-tree head base` (git 2.40 or later), sorted, nil for a
+// clean merge. As ReplayConflicts, it writes the merge's objects and no ref,
+// index or work tree, so dir, any work tree of the repository that has both
+// commits, is left exactly as it was. An error for revisions git does not
+// know, histories without a common commit and an answer it cannot read.
+func (c *Client) MergeConflicts(ctx context.Context, dir, head, base string) ([]string, error) {
+	if err := errors.Join(checkRev("head", head), checkRev("base", base)); err != nil {
+		return nil, err
+	}
+	return c.mergeTreeConflicts(ctx, dir, "merge-tree "+head+" "+base, head, base)
+}
+
+// mergeTreeConflicts runs `git merge-tree --write-tree` with args (its
+// options, then the two revisions) in dir and returns the conflicting paths,
+// sorted, nil for a clean merge; what names the call in its errors.
+func (c *Client) mergeTreeConflicts(ctx context.Context, dir, what string, args ...string) ([]string, error) {
+	res, err := c.git(ctx, dir, call{label: what, noExit: 1, timeout: commitTimeout},
+		append([]string{"merge-tree", "--write-tree", "--name-only", "-z", "--no-messages"}, args...)...)
 	if err == nil {
 		return nil, nil
 	}
@@ -239,7 +260,7 @@ func (c *Client) ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]
 	// "<tree>\0<path>\0<path>\0": the merged tree, then each conflicted path once.
 	fields := strings.Split(string(res.Stdout), "\x00")
 	if !isOID(fields[0]) {
-		return nil, fmt.Errorf("gitx: merge-tree %s %s: unreadable answer %.40q", onto, rev, res.Stdout)
+		return nil, fmt.Errorf("gitx: %s: unreadable answer %.40q", what, res.Stdout)
 	}
 	var paths []string
 	for _, f := range fields[1:] {
@@ -248,7 +269,7 @@ func (c *Client) ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]
 		}
 	}
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("gitx: merge-tree %s %s: conflicts, but names no path", onto, rev)
+		return nil, fmt.Errorf("gitx: %s: conflicts, but names no path", what)
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths), nil

@@ -6,7 +6,10 @@ package engine
 //
 //	<!-- magnum:run=<run id> -->
 //	## Pushed
-//	<sha7> <message>              one line per commit on GitHub; or "nothing";
+//	<sha7> <message>              one line per commit on GitHub, the merge of
+//	                              the base first when the PR conflicted with
+//	                              it ("<sha7> Merge <base sha7>: <specs>");
+//	                              or "nothing";
 //	                              or "push failed: <git's first error line>";
 //	description: <what changed>   a change to the PR description, beside the
 //	                              commits or alone
@@ -20,6 +23,9 @@ package engine
 //	                              reviewer's item has no priority, and a
 //	                              review body's or comment's place is
 //	                              "review" or "comment"
+//	- conflict: <path>, <path>: <the decision it needs>
+//	                              a conflict of the base merge the fixer
+//	                              aborted: no id (needsYouEntryRe)
 //
 // A fourth section, "## Other reviewers", follows: one line per item of the
 // external file (fix_external.go) and what the fixer did with it, for the

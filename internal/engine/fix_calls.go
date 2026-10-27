@@ -13,7 +13,10 @@ package engine
 // the thread was answered before, where the fixer does not write) asks for
 // the reply alone, since that reviewer resolves it (one GitHub shows the
 // fixer's reply in after all is no entry by then: dropFixerAnswered); a
-// finding the fixer did not fix asks for the author's decision. Each is a
+// finding the fixer did not fix asks for the author's decision. A conflict
+// of the base merge that the fixer aborted ("conflict: <paths>: …", no id)
+// asks the author to merge the base by hand on the PR's page and decide it
+// (attention.ConflictCall). Each is a
 // call with the thread's link (attention.FixCall), and the message names the
 // calls one by one with the report last (needsYouText). An entry magnum
 // cannot read so (no such words, the description finding, another
@@ -49,26 +52,40 @@ import (
 // description finding), its priority ("" when it has none), its place
 // (path:line, or "description"), and what the fixer did: fixedIn is the
 // commit it says fixed it ("fixed in <sha>."), notFixed says it did not
-// ("not fixed."); neither when the entry does not say.
+// ("not fixed."); neither when the entry does not say. A conflict of the
+// base merge the fixer aborted has no id: its place is conflictPlace and
+// paths are the paths it names.
 type needsYouEntry struct {
 	id, priority, place string
 	fixedIn             string
 	notFixed            bool
+	paths               []string
 }
 
 // readNeedsYouEntry reads entry; ok is false when magnum cannot read its id
-// and place.
+// and place, or a conflict's paths.
 func readNeedsYouEntry(entry string) (needsYouEntry, bool) {
 	m := needsYouEntryRe.FindStringSubmatch(strings.TrimSpace(entry))
-	if m == nil {
+	switch {
+	case m == nil:
 		return needsYouEntry{}, false
+	case m[4] != "":
+		var paths []string
+		for p := range strings.SplitSeq(m[4], ",") {
+			paths = append(paths, strings.TrimSpace(p))
+		}
+		return needsYouEntry{place: conflictPlace, paths: paths}, true
 	}
-	return needsYouEntry{id: m[1], priority: m[2], place: m[3], fixedIn: strings.ToLower(m[4]), notFixed: m[5] != ""}, true
+	return needsYouEntry{id: m[1], priority: m[2], place: m[3], fixedIn: strings.ToLower(m[5]), notFixed: m[6] != ""}, true
 }
 
-// name is the entry in the older words: "2101 P1 app/models/offer.rb:42".
+// name is the entry in the older words: "2101 P1 app/models/offer.rb:42",
+// "conflict in app/a.rb, db/schema.rb".
 func (n needsYouEntry) name() string {
-	if n.priority == "" {
+	switch {
+	case n.place == conflictPlace:
+		return "conflict in " + strings.Join(n.paths, ", ")
+	case n.priority == "":
 		return n.id + " " + n.place
 	}
 	return n.id + " " + n.priority + " " + n.place
@@ -150,10 +167,11 @@ func (o threadOwners) owner(n needsYouEntry) (magnums, known bool) {
 
 // asks reports whether n says what the fixer did in a thread: fixed in a
 // commit or not fixed, of a finding with a thread (not the description, nor
-// another reviewer's review body or comment).
+// another reviewer's review body or comment, nor a conflict of the base
+// merge).
 func (n needsYouEntry) asks() bool {
 	switch n.place {
-	case "description", remarkReview, remarkComment:
+	case "description", remarkReview, remarkComment, conflictPlace:
 		return false
 	}
 	return n.fixedIn != "" || n.notFixed
@@ -164,8 +182,13 @@ func (n needsYouEntry) asks() bool {
 // review body or comment, which have no thread, or its thread cannot be
 // placed): the thread's link on the PR's page prURL, and `magnum fix ref`
 // to send a declined finding back to the fixer. answered (one of magnum's
-// threads that shows its answer, freshNeedsYou) asks only to resolve it.
+// threads that shows its answer, freshNeedsYou) asks only to resolve it. A
+// conflict of the base merge asks the author to merge the base on the PR's
+// page and decide the conflict (attention.ConflictCall).
 func (n needsYouEntry) call(o threadOwners, prURL, ref string, answered bool) (attention.FixCall, bool) {
+	if n.place == conflictPlace && prURL != "" {
+		return attention.ConflictCall(n.paths, prURL), true
+	}
 	if !n.asks() || prURL == "" {
 		return attention.FixCall{}, false
 	}

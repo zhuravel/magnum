@@ -402,24 +402,49 @@ func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, e
 // else the refusal: nothing to fix when GitHub listed every item, and a
 // word to answer them by hand when it cut a list short, which can hide one
 // (1,000 resolved threads, then an open one). A read that fails refuses
-// with its cause, since the job would have nothing to answer.
-func (e *Engine) othersWaiting(ctx context.Context, probe *fixJob, on string, carried *externalRead) (*externalRead, error) {
+// with its cause, since the job would have nothing to answer. Before it
+// refuses, it asks merges whether the head conflicts with the PR's base
+// (prepareFix's look, spec 5.6): a conflict is work enough, and the read,
+// whole, cut short or none when it failed, goes to the job, whose start
+// reads a failed one again; a look that failed ends the refusal with why
+// ("; its merge with master could not be checked: …"). A read GitHub
+// refused for the rate limit asks nothing: the floor may hold the job, and
+// the held fix looks at the base when it starts.
+func (e *Engine) othersWaiting(ctx context.Context, probe *fixJob, on string, carried *externalRead, merges func() (bool, error)) (*externalRead, error) {
 	read := carried
+	var readErr error
 	if read == nil || read.head != probe.pr.HeadSHA {
 		r, err := e.readExternal(ctx, probe)
 		if err != nil {
-			return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not be read: %w", probe.label(), on, err)
+			read, readErr = nil, err
+		} else {
+			read = &r
 		}
-		read = &r
 	}
-	switch threads, conversation := read.items.unanswered(); {
-	case threads+conversation > 0:
+	switch {
+	case read != nil:
+		if threads, conversation := read.items.unanswered(); threads+conversation > 0 {
+			return read, nil
+		}
+	case errors.Is(readErr, github.ErrRateLimited): // held as the floor holds it (othersBeforeStart), the merge looked at when it starts
+		return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not be read: %w", probe.label(), on, readErr)
+	}
+	merge, unchecked := merges()
+	if merge {
 		return read, nil
-	case len(read.cut) > 0:
-		return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not all be read (%s); answer them by hand",
-			probe.label(), on, strings.Join(read.cut, ", "))
 	}
-	return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and no other reviewer's thread or comment waits for an answer", on)
+	why := ""
+	if unchecked != nil {
+		why = "; " + oneLine(unchecked.Error(), 300)
+	}
+	switch {
+	case readErr != nil:
+		return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not be read: %w%s", probe.label(), on, readErr, why)
+	case len(read.cut) > 0:
+		return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not all be read (%s); answer them by hand%s",
+			probe.label(), on, strings.Join(read.cut, ", "), why)
+	}
+	return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and no other reviewer's thread or comment waits for an answer%s", on, why)
 }
 
 // othersBeforeStart reads the other reviewers' items of probe's PR (its
@@ -427,18 +452,20 @@ func (e *Engine) othersWaiting(ctx context.Context, probe *fixJob, on string, ca
 // the read the same request made at the same head before a whiteboard job
 // yielded to it (spec 102). alone, a new loop on a review that found
 // nothing and left nothing open (on: its short sha), has othersWaiting
-// decide, refusing when nothing waits or the read fails. A read GitHub
-// refuses for the rate limit, once the meter says the poll identity's
-// budget is below the floor, returns that low budget instead, for
-// prepareFix to hold the job. Any other failure of a job with findings
-// returns no read and no error: the job starts and writeExternal tries the
-// read once more (with the floor off, a rate limit too).
-func (e *Engine) othersBeforeStart(ctx context.Context, probe *fixJob, on string, alone bool, carried *externalRead) (*externalRead, *githubLowBudget, error) {
+// decide, refusing when nothing waits or the read fails, unless merges
+// finds a conflict with the base. A read GitHub refuses for the rate limit,
+// once the meter says the poll identity's budget is below the floor,
+// returns that low budget instead, for prepareFix to hold the job. Any
+// other failure of a job with findings returns no read and no error: the
+// job starts and writeExternal tries the read once more (with the floor
+// off, a rate limit too).
+func (e *Engine) othersBeforeStart(ctx context.Context, probe *fixJob, on string, alone bool, carried *externalRead,
+	merges func() (bool, error)) (*externalRead, *githubLowBudget, error) {
 	var read *externalRead
 	var err error
 	switch {
 	case alone:
-		read, err = e.othersWaiting(ctx, probe, on, carried)
+		read, err = e.othersWaiting(ctx, probe, on, carried, merges)
 	case carried != nil && carried.head == probe.pr.HeadSHA:
 		read = carried
 	default:
@@ -495,7 +522,10 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) (pa
 		}
 		if ctx.Err() == nil {
 			then := job.role.Name + " answers magnum's findings alone"
-			if job.alone {
+			switch {
+			case job.alone && job.conflict.sha != "":
+				then = "the review found nothing, so " + job.role.Name + " only merges the base"
+			case job.alone:
 				then = "the review found nothing, so " + job.role.Name + " has nothing to answer"
 			}
 			e.event(ctx, "warn", job.subject(), "fix.external", fmt.Sprintf("could not list the other reviewers' open threads and comments; "+

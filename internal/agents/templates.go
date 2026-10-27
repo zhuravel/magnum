@@ -52,6 +52,9 @@ func RenderPrompt(p config.Prompt, data any) (string, error) {
 		base, data = d.BaseRef, d.completed()
 	case RoleData:
 		base, head, data = d.BaseRef, d.HeadRef, d.completed()
+		if err := checkConflict(name, d); err != nil {
+			return "", err
+		}
 	case ShellData:
 		q, err := d.shellSafe()
 		if err != nil {
@@ -92,6 +95,29 @@ var ErrUnsafeHeadRef = errors.New("head branch name has characters magnum does n
 func checkBaseRef(name, ref string) error {
 	if ref != "" && !gitx.ShellSafeRef(ref) {
 		return fmt.Errorf("agents: render %s: %w", name, ErrUnsafeBaseRef)
+	}
+	return nil
+}
+
+// commitIDRe is a commit id as the fix prompt's merge line takes it.
+var commitIDRe = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// checkConflict refuses a fix prompt's conflict that the prompt could not
+// name safely: a base branch a shell would read (ErrUnsafeBaseRef) or a base
+// tip that is no commit id, which the merge line puts, unquoted, into the
+// command the fixer runs. Neither is quoted in the error.
+func checkConflict(name string, d RoleData) error {
+	if d.ConflictSHA == "" {
+		return nil
+	}
+	if d.ConflictBase == "" {
+		return fmt.Errorf("agents: render %s: a conflict without its base branch", name)
+	}
+	if err := checkBaseRef(name, d.ConflictBase); err != nil {
+		return err
+	}
+	if !commitIDRe.MatchString(d.ConflictSHA) {
+		return fmt.Errorf("agents: render %s: the conflict's base tip is not a commit id", name)
 	}
 	return nil
 }
@@ -763,8 +789,20 @@ type RoleData struct {
 	FixReplyCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
-	// alone (the fix job starts on such a review only when one waits).
+	// alone, and merges the base when the PR conflicts with it (the fix job
+	// starts on such a review only when one of the two waits).
 	NoFindings bool
+	// ConflictBase, ConflictSHA, ConflictPaths and ConflictFiles are the fix
+	// prompt's too (FixPrompt fills them from FixPromptInput): the PR
+	// conflicts with its base branch ConflictBase, whose tip magnum fetched
+	// is ConflictSHA, in ConflictFiles files, ConflictPaths the first of
+	// them in plain path characters (at most maxConflictPaths; a path with
+	// any other character is counted, never named); the fixer merges that
+	// tip first, as the fix skill's base merge says. "" and none when the PR
+	// merges its base cleanly, or magnum could not check.
+	ConflictBase, ConflictSHA string
+	ConflictPaths             []string
+	ConflictFiles             int
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -799,13 +837,39 @@ func FixReplyLine(magnum string) string {
 // through (DBLockCommand, DBLockLine; "" = derived without a checkout),
 // the line it posts every reply through (FixReplyCommand, FixReplyLine;
 // "" = magnum on PATH), whether the review found nothing, leaving the
-// fixer the external file's items alone (NoFindings), and the job's frozen
-// copy of the repository notes in parts (NotesParts, FreezeNotes beside
-// the report; zero = none), which the fixer reads and never edits.
+// fixer the external file's items and the base merge alone (NoFindings),
+// the job's frozen copy of the repository notes in parts (NotesParts,
+// FreezeNotes beside the report; zero = none), which the fixer reads and
+// never edits, and the PR's conflict with its base, which the fixer merges
+// first: the base branch (ConflictBase), the tip of it magnum fetched
+// (ConflictSHA; "" = no conflict, or magnum could not check) and the
+// conflicting paths (ConflictPaths, as git names them).
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand, FixReplyCommand string
 	NoFindings                                                                                  bool
 	NotesParts                                                                                  NotesParts
+	ConflictBase, ConflictSHA                                                                   string
+	ConflictPaths                                                                               []string
+}
+
+// maxConflictPaths bounds the conflicting paths the fix prompt names: the
+// prompt is one paragraph, and the fixer reads the rest from `git status`.
+const maxConflictPaths = 20
+
+// plainPathRe is a path the fix prompt may name: plain path characters
+// only, so nothing of a file's name but the name reaches the prompt.
+var plainPathRe = regexp.MustCompile(`^[A-Za-z0-9._/@+-]{1,200}$`)
+
+// conflictPaths are the paths of paths the fix prompt names: the first
+// maxConflictPaths in plain path characters (plainPathRe).
+func conflictPaths(paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		if len(out) < maxConflictPaths && plainPathRe.MatchString(p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // FixPrompt renders the fix role's prompt (its initial prompt, fix.md by
@@ -824,12 +888,17 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 	if report == "" {
 		return "", fmt.Errorf("agents: fix prompt pr %d: run %s has no report path", pr.Number, run.ID)
 	}
-	return m.RolePrompt(spec, config.PromptInitial, RoleData{
+	d := RoleData{
 		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, FixReplyCommand: in.FixReplyCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
 		NoFindings: in.NoFindings, NotesParts: in.NotesParts,
-	})
+	}
+	if in.ConflictSHA != "" {
+		d.ConflictBase, d.ConflictSHA = in.ConflictBase, in.ConflictSHA
+		d.ConflictPaths, d.ConflictFiles = conflictPaths(in.ConflictPaths), max(len(in.ConflictPaths), 1)
+	}
+	return m.RolePrompt(spec, config.PromptInitial, d)
 }
 
 // WhiteboardPromptInput is what the whiteboard job knows beyond the PR, the

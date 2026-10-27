@@ -32,18 +32,57 @@ const (
 	fixReplied = "3 threads (2 fixed, 0 already fixed, 1 not a bug, 0 won't fix)"
 )
 
+// fixBaseTip is the tip of the PR's base branch the fix job fetches.
+const fixBaseTip = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+
 // fixGit is the engine's git for the fix job's tests: HEAD in the slot is
-// head (the reviewed head until the fake fixer commits), every other ref
-// fakeGit's. lostPush makes the pushes the fake fixer reports never reach
-// GitHub; LsRemote answers remote (lsErr fails it) and records its calls.
+// head (the reviewed head until the fake fixer commits), origin/<base> is
+// fixBaseTip, every other ref fakeGit's. lostPush makes the pushes the fake
+// fixer reports never reach GitHub; LsRemote answers remote (lsErr fails
+// it) and records its calls. FetchBranch fails with fetchErr and records
+// its calls ("<main clone>:<base>"); MergeConflicts answers conflicts (nil:
+// a clean merge) and records its calls ("<dir>:<head>:<base>").
 type fixGit struct {
 	fakeGit
-	mu       sync.Mutex
-	head     string
-	lostPush bool
-	remote   string
-	lsErr    error
-	lsCalls  []string
+	mu        sync.Mutex
+	head      string
+	lostPush  bool
+	remote    string
+	lsErr     error
+	lsCalls   []string
+	fetchErr  error
+	fetches   []string
+	conflicts []string
+	merges    []string
+}
+
+func (g *fixGit) FetchBranch(_ context.Context, mainClone, base string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.fetches = append(g.fetches, mainClone+":"+base)
+	return g.fetchErr
+}
+
+func (g *fixGit) MergeConflicts(_ context.Context, dir, head, base string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.merges = append(g.merges, dir+":"+head+":"+base)
+	return slices.Clone(g.conflicts), nil
+}
+
+// conflict makes the head conflict with the base in paths (none: a clean
+// merge).
+func (g *fixGit) conflict(paths ...string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.conflicts = paths
+}
+
+// calls are the fetches and merge checks so far.
+func (g *fixGit) calls() (fetches, merges []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.fetches), slices.Clone(g.merges)
 }
 
 // LsRemote answers `git ls-remote origin patterns...` in dir.
@@ -70,8 +109,11 @@ func (g *fixGit) RevParse(ctx context.Context, dir, ref string) (string, error) 
 	g.mu.Lock()
 	head := g.head
 	g.mu.Unlock()
-	if ref == "HEAD" && head != "" {
+	switch {
+	case ref == "HEAD" && head != "":
 		return head, nil
+	case strings.HasPrefix(ref, "refs/remotes/origin/"):
+		return fixBaseTip, nil
 	}
 	return g.fakeGit.RevParse(ctx, dir, ref)
 }
@@ -404,7 +446,7 @@ func TestFixRefusals(t *testing.T) {
 		}, want: "the fix role's identity talkable-app is an App; name a gh identity"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := fixHarness(t)
+			h, git := fixHarness(t)
 			pr := fixablePR(h, tc.author, tc.findings)
 			if tc.mod != nil {
 				tc.mod(h, pr)
@@ -416,6 +458,13 @@ func TestFixRefusals(t *testing.T) {
 			}
 			if h.ag.count("submit:") != 0 {
 				t.Error("a refused request started the fixer")
+			}
+			// A conflict with the base would be work (fix_merge_test.go):
+			// the review that found nothing is refused once the PR merges
+			// its base cleanly, and no other refusal looks at the base.
+			fetches, merges := git.calls()
+			if want := tc.want == othersOnly; (len(fetches) == 1 && len(merges) == 1) != want || len(fetches) > 1 || len(merges) > 1 {
+				t.Errorf("fetches %v, merge checks %v; want one of each only for the review that found nothing", fetches, merges)
 			}
 		})
 	}

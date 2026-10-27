@@ -11,7 +11,9 @@ package engine
 // are refused. The job's steps are begin/ok/fail steps on the PR's subject
 // (package steps): claim (only for a PR whose slot the pool took back: a
 // slot at the reviewed head, as `magnum open` claims one), guard (the slot
-// is the PR's, nobody else is in it, it holds the reviewed head), start (the
+// is the PR's, nobody else is in it, it holds the reviewed head; then the
+// base is fetched and a conflict with it becomes the fixer's to merge
+// first, checkFixBase), start (the
 // fixer's session in the PR's workspace, a run of kind fix, its prompt) and
 // wait (the run's end; the time-up line on timeout); the settle
 // (fix_settle.go) reads the report, puts the slot back in order and ends the
@@ -32,6 +34,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
@@ -135,6 +138,29 @@ type fixJob struct {
 	// the schema of …", or why it could not; "" for none, and for a slot the
 	// PR had): fixClaim sets it, the fix.start event says it.
 	schema string
+	// conflict is the PR's base whose tip conflicts with the head the fixer
+	// starts from (baseConflict), which the fixer merges first: prepareFix
+	// looks for a job on a review that found nothing, whose work it may be,
+	// and the guard looks again for every job, in the slot the fixer works
+	// in (checkFixBase). Zero for a clean merge, or when nobody could check.
+	// forMerge: the merge is all the job starts for (a review that found
+	// nothing, and no other reviewer's item waits).
+	conflict fixConflict
+	forMerge bool
+}
+
+// fixConflict is a merge of the PR's base into its head that conflicts:
+// the base branch, the tip of it magnum fetched and the conflicting paths,
+// sorted (zero: none).
+type fixConflict struct {
+	base, sha string
+	paths     []string
+}
+
+// words say what the fixer does about c: "merges master at c0c0c0c (2
+// conflicting files)".
+func (c fixConflict) words() string {
+	return fmt.Sprintf("merges %s at %s (%s)", c.base, textx.ShortSHA(c.sha), textx.Count(len(c.paths), "conflicting file", "conflicting files"))
 }
 
 func (j *fixJob) label() string   { return fmt.Sprintf("%s#%d", j.repo.FullName(), j.pr.Number) }
@@ -157,8 +183,22 @@ func (j *fixJob) asRound() *roundJob {
 // job on a review that found nothing (others) "answers the other
 // reviewers' 2 unanswered threads and comments in review1 (magnum's review
 // of b2b2b2b found nothing)". A job whose PR has no slot yet works "in a
-// slot it claims" (fixClaim).
+// slot it claims" (fixClaim). A job whose head conflicts with its base
+// starts with "merges master at c0c0c0c (2 conflicting files), then ", and
+// one that starts for the merge alone (forMerge) "merges master at c0c0c0c
+// (2 conflicting files) in review1 (magnum's review of b2b2b2b found
+// nothing)".
 func (j *fixJob) fixes() string {
+	s := j.work()
+	if j.conflict.sha != "" && !j.forMerge {
+		s = j.conflict.words() + ", then " + s
+	}
+	return s
+}
+
+// work is fixes() without the merge a job with findings or other
+// reviewers' items starts with.
+func (j *fixJob) work() string {
 	sha, kept := textx.ShortSHA(j.review.SHA), ""
 	if j.head != "" && j.head != j.review.SHA {
 		kept = fmt.Sprintf("the head %s kept its verdict", textx.ShortSHA(j.head))
@@ -168,18 +208,20 @@ func (j *fixJob) fixes() string {
 	if j.slot.ID == 0 {
 		where = "a slot it claims"
 	}
+	note := "magnum's review of " + textx.ShortSHA(j.review.SHA) + " found nothing"
+	if kept != "" {
+		note += "; " + kept
+	}
 	open := j.review.OpenProblems()
 	n := j.review.Findings() + open
 	switch {
+	case j.forMerge && j.conflict.sha != "":
+		return fmt.Sprintf("%s in %s (%s)", j.conflict.words(), where, note)
 	case j.alone && j.othersDeferred:
 		return fmt.Sprintf("answers what the other reviewers left unanswered, read once the GitHub budget recovers, in %s (magnum's review of %s found nothing)",
 			where, textx.ShortSHA(j.review.SHA))
 	case j.alone && j.others != nil:
 		threads, conversation := j.others.items.unanswered()
-		note := "magnum's review of " + textx.ShortSHA(j.review.SHA) + " found nothing"
-		if kept != "" {
-			note += "; " + kept
-		}
 		return fmt.Sprintf("answers the other reviewers' %s in %s (%s)",
 			textx.Count(threads+conversation, "unanswered thread or comment", "unanswered threads and comments"), where, note)
 	case n == 0:
@@ -318,7 +360,10 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 // other refusal passed, and before the pin goes, it reads the other
 // reviewers' items for every job (othersBeforeStart, spec 102), which the
 // job's external file gets: a review that found nothing is refused when
-// none waits for an answer or the read fails (othersWaiting). carried is
+// none waits for an answer or the read fails (othersWaiting), unless the
+// head conflicts with the PR's base (baseConflict in the PR's slot, else
+// in its clone; fetched first but for a request only asked about), which
+// the job then merges first and alone (forMerge). carried is
 // the other reviewers' items the same request read before (nil = none),
 // used instead of reading GitHub again at the same head. Below the GitHub
 // floor of the identity the job reads as (github_floor.go), or when GitHub
@@ -431,10 +476,26 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// read GitHub refuses for the rate limit holds the job as the floor does.
 	alone := prev.Cycle == 0 && sum.Findings()+sum.OpenProblems() == 0
 	var others *externalRead
+	// A conflict with the base is work too (spec 5.6): othersWaiting asks
+	// for it only when nothing else would start the job, and a request only
+	// asked about (fixPinWouldUnpin) looks at the base as last fetched.
+	var conflict fixConflict
+	merges := func() (bool, error) {
+		dir, clone := slot.Path, slot.MainClone
+		if !has {
+			dir = e.cloneOf(repo)
+			clone = dir
+		}
+		var err error
+		if conflict, err = e.baseConflict(ctx, repo, pr, dir, clone, pr.HeadSHA, pin != fixPinWouldUnpin); err != nil {
+			err = fmt.Errorf("its merge with %s could not be checked: %w", cmp.Or(deref(pr.BaseRef), repo.DefaultBranch, "its base"), err)
+		}
+		return conflict.sha != "", err
+	}
 	if !isLow {
 		var held *githubLowBudget
 		probe := &fixJob{repo: repo, watch: *w, pr: pr, login: src.Login()}
-		if others, held, err = e.othersBeforeStart(ctx, probe, on, alone, carried); err != nil { // fix_external.go
+		if others, held, err = e.othersBeforeStart(ctx, probe, on, alone, carried, merges); err != nil { // fix_external.go
 			return nil, err
 		}
 		if held != nil {
@@ -465,7 +526,10 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		notes = append(notes, note)
 	}
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
-		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone}
+		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone, conflict: conflict}
+	if conflict.sha != "" { // asked only when nothing else waits: the merge is the job's whole work
+		job.forMerge = true
+	}
 	if isLow { // the other reviewers' items are read when the held fix starts
 		job.budget, job.othersDeferred = &low, true
 	}
@@ -823,7 +887,8 @@ func (e *Engine) fixClaim(ctx context.Context, job *fixJob) error {
 // within human_cooldown, and Slots.Guard finds no person in the slot (their
 // agent or process, their changes) and no HEAD drift. From then on the slot
 // is the fixer's: its last_used_at moves, so a person who types into the
-// PR's panes during the fix is told apart from the fixer.
+// PR's panes during the fix is told apart from the fixer, and checkFixBase
+// looks there whether the head conflicts with the PR's base.
 func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
@@ -859,7 +924,92 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	if err := e.d.Slots.Guard(ctx, slot); err != nil {
 		return err
 	}
-	return e.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("last_used_at", e.now()) })
+	if err := e.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("last_used_at", e.now()) }); err != nil {
+		return err
+	}
+	return e.checkFixBase(ctx, job)
+}
+
+// checkFixBase looks, in the job's slot, whether the head the fixer starts
+// from conflicts with the PR's base, the base fetched first (baseConflict,
+// spec 5.6): a conflict becomes the job's, which the prompt names and the
+// fixer merges before the findings, and a clean merge clears what
+// prepareFix found. A look that fails never blocks the fix: a
+// fix.conflict_unchecked warning says why, and the fixer starts without the
+// merge step, or, for a job that starts for the merge alone (forMerge),
+// with the tip prepareFix fetched moments before. Such a job whose conflict
+// is gone has nothing left to do, and the guard fails it. A shutdown or a
+// stop during the fetch ends the guard with its cause.
+func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
+	if e.d.Git == nil {
+		return nil
+	}
+	c, err := e.baseConflict(ctx, job.repo, job.pr, job.slot.Path, job.slot.MainClone, job.head, true)
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil:
+		then := job.role.Name + " starts without the merge step"
+		if job.conflict.sha != "" {
+			then = fmt.Sprintf("%s merges the tip %s that the request fetched", job.role.Name, textx.ShortSHA(job.conflict.sha))
+		}
+		base := cmp.Or(deref(job.pr.BaseRef), job.repo.DefaultBranch)
+		e.event(ctx, "warn", job.subject(), "fix.conflict_unchecked", fmt.Sprintf("could not check %s for a conflict with its base %s: %s; %s",
+			job.label(), base, oneLine(err.Error(), 300), then), map[string]any{"role": job.role.Name, "base": base, "cycle": job.state.Cycle})
+		return nil
+	case c.sha == "" && job.forMerge:
+		return fmt.Errorf("nothing to fix: the head %s merges %s cleanly now, and the review on %s found nothing",
+			textx.ShortSHA(job.head), job.conflict.base, textx.ShortSHA(job.review.SHA))
+	}
+	job.conflict = c
+	return nil
+}
+
+// baseConflict says whether merging the tip of pr's base branch into head
+// conflicts (fixConflict with the paths; zero for a clean merge): with fetch,
+// the base is fetched into mainClone first, as a slot's checkout fetches
+// it, then its tip (origin/<base>) is merged with head by `git merge-tree`
+// in dir, which writes no ref, index or work tree (Git.MergeConflicts).
+// GitHub's mergeable is not read: it answers UNKNOWN until its own
+// computation ends. The error says why it could not tell: no git or
+// checkout, a base not known yet or one whose name a shell would read
+// (the prompt names it), a failed fetch or a revision git does not know.
+func (e *Engine) baseConflict(ctx context.Context, repo store.Repo, pr store.PR, dir, mainClone, head string, fetch bool) (fixConflict, error) {
+	base := cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)
+	switch {
+	case e.d.Git == nil:
+		return fixConflict{}, errors.New("no git to look with")
+	case dir == "":
+		return fixConflict{}, errors.New("no checkout of the repository to look in")
+	case base == "":
+		return fixConflict{}, errors.New("its base branch is not known yet")
+	case !gitx.ShellSafeRef(base):
+		return fixConflict{}, errors.New("the base branch's name has characters magnum does not pass to a shell")
+	}
+	if fetch {
+		if err := e.d.Git.FetchBranch(ctx, cmp.Or(mainClone, dir), base); err != nil {
+			return fixConflict{}, err
+		}
+	}
+	tip, err := e.d.Git.RevParse(ctx, dir, "refs/remotes/origin/"+base)
+	if err != nil {
+		return fixConflict{}, err
+	}
+	paths, err := e.d.Git.MergeConflicts(ctx, dir, head, tip)
+	if err != nil || len(paths) == 0 {
+		return fixConflict{}, err
+	}
+	return fixConflict{base: base, sha: tip, paths: paths}, nil
+}
+
+// cloneOf is a checkout of repo that shares the objects of its slots, for a
+// look at a PR without a slot: its pool's main clone, else the clone magnum
+// found for it (repos.clone_path); "" for none.
+func (e *Engine) cloneOf(repo store.Repo) string {
+	if pool := e.cfg.PoolFor(repo.FullName()); pool != nil && pool.MainClone != "" {
+		return pool.MainClone
+	}
+	return deref(repo.ClonePath)
 }
 
 // fixStart starts or resumes the fixer in the PR's workspace (its pane gets
@@ -934,7 +1084,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			e.log.Warn("fix: record the other reviewers' items as unread", "subject", job.subject(), "err", err)
 		}
 	}
-	if external == "" && job.alone { // the other reviewers' items are the job's whole work
+	if external == "" && job.alone && job.conflict.sha == "" { // the other reviewers' items are the job's whole work
 		err := errors.New("the review found nothing, and the file of the other reviewers' threads and comments, all the fixer would answer, could not be written beside the report")
 		e.abandonFixRun(ctx, run, err.Error())
 		return err
@@ -959,6 +1109,9 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		FixReplyCommand: agents.FixReplyLine(e.d.Layout.Binary()),
 		NoFindings:      job.alone,
 		NotesParts:      notesParts,
+		ConflictBase:    job.conflict.base,
+		ConflictSHA:     job.conflict.sha,
+		ConflictPaths:   job.conflict.paths,
 	})
 	if err != nil {
 		e.abandonFixRun(ctx, run, err.Error())
@@ -987,6 +1140,9 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	if job.schema != "" { // fixClaim: what the claim did to the slot's databases
 		msg += "; " + job.schema
 		data["schema"] = job.schema
+	}
+	if c := job.conflict; c.sha != "" { // checkFixBase: the fixer merges the base first, as fixes says
+		data["conflict_base"], data["conflict_sha"], data["conflict_files"] = c.base, c.sha, len(c.paths)
 	}
 	e.event(ctx, "info", job.subject(), "fix.start", msg, data)
 	return nil

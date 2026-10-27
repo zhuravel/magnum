@@ -47,11 +47,19 @@ const autofixBy = "autofix"
 // the external file, fix_external.go), the place in plain path characters
 // only, so no control character or other text of the fixer's reaches a
 // message, and the words the fix skill starts the reason with: "fixed in
-// <sha>." (group 4: the commit) or "not fixed." (group 5), as fix_calls.go
-// reads them (readNeedsYouEntry). The reason is the fixer's own words about
-// the PR, so it is never read.
-var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description|review|comment)(?::|\s|$)` +
+// <sha>." (group 5: the commit) or "not fixed." (group 6), as fix_calls.go
+// reads them (readNeedsYouEntry). A conflict of the base merge that the
+// fixer aborted has no comment id: "conflict: app/a.rb, db/schema.rb:
+// <the decision it needs>" (group 4: the paths, plain path characters
+// joined by ", ", up to the colon). The reason is the fixer's own words
+// about the PR, so it is never read.
+var needsYouEntryRe = regexp.MustCompile(`^(?:(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description|review|comment)(?::|\s|$)` +
+	`|` + conflictPlace + `: +([A-Za-z0-9._/@+-]+(?:, *[A-Za-z0-9._/@+-]+)*)(?::|$))` +
 	`(?:\s*(?i:fixed in ([0-9a-f]{7,40})|(not fixed))(?:[.,;:]|\s|$))?`)
+
+// conflictPlace is the place of a "## Needs you" entry for a conflict of the
+// base merge (needsYouEntryRe), which has no comment id.
+const conflictPlace = "conflict"
 
 // fixAfterRound decides what the end of a review round (rj, as dispatch
 // launched it) means for the PR's fix loop: a loop waiting for this

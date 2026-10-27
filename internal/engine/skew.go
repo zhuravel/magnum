@@ -73,6 +73,7 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 			for _, mode := range []string{agents.ModeInitial, agents.ModeRereview, agents.ModeRestart} {
 				d := sampleData[agents.RoleData](true)
 				d.Mode = mode
+				d.ConflictSHA = "0123456789abcdef0123456789abcdef01234567" // the fix prompt's merge line takes a commit id only
 				render(what, p, d)
 			}
 			render(what, p, agents.RoleData{})

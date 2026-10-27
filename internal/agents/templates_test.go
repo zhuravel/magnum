@@ -597,6 +597,17 @@ func TestRenderGolden(t *testing.T) {
 	// reviewers' unanswered items alone (spec 96).
 	fixNoFindings := fixFixture()
 	fixNoFindings.NoFindings = true
+	// A fix on a PR that conflicts with its base (spec 5.6): the fixer
+	// merges the base's tip first. Three files conflict, two of them named;
+	// a review that found nothing on a PR no other reviewer waits on (no
+	// external file) leaves the fixer the merge alone.
+	fixConflict := fixFixture()
+	fixConflict.ConflictBase, fixConflict.ConflictSHA = "master", "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912"
+	fixConflict.ConflictPaths, fixConflict.ConflictFiles = []string{"app/models/offer.rb", "db/schema.rb"}, 3
+	fixMergeOnly := fixFixture()
+	fixMergeOnly.NoFindings, fixMergeOnly.ExternalFile = true, ""
+	fixMergeOnly.ConflictBase, fixMergeOnly.ConflictSHA = "master", "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912"
+	fixMergeOnly.ConflictPaths, fixMergeOnly.ConflictFiles = []string{"Gemfile.lock"}, 1
 
 	cases := []struct {
 		golden, name string
@@ -710,6 +721,8 @@ func TestRenderGolden(t *testing.T) {
 		{"simplify_notes", "claude-simplify.md", simplifyData(roleHistory(roleFixture()))},
 		{"fix", "fix.md", fixFixture()},
 		{"fix_no_findings", "fix.md", fixNoFindings},
+		{"fix_conflict", "fix.md", fixConflict},
+		{"fix_merge_only", "fix.md", fixMergeOnly},
 		{"whiteboard", "whiteboard.md", whiteboardFixture("")},
 		{"whiteboard_update", "whiteboard.md", whiteboardFixture("6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b")},
 		{"model_fallback", FallbackPromptName, FallbackData{Model: "opus", Previous: "fable", Role: "claude-review",
