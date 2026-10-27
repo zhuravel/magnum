@@ -109,7 +109,7 @@ const (
 	AgentStartTimeout   = 120 * time.Second // agent.start timeout_ms
 	PromptAckTimeout    = 60 * time.Second  // agent.prompt --wait --until working|blocked
 	IdleShellTimeout    = 60 * time.Second  // a fresh pane's shell (oh-my-zsh + mise) must be idle by then
-	QuitIdleTimeout     = 10 * time.Second  // after two ctrl+c (and again after a hard quit's exit keys) the pane must be a shell again
+	QuitIdleTimeout     = 10 * time.Second  // after a quit's keys (two ctrl+c, or one and the exit keys; again after a hard quit's exit keys) the pane must be a shell again
 	PreflightTimeout    = 30 * time.Second
 	WrapperProbeTimeout = 20 * time.Second
 )
@@ -1868,11 +1868,16 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
 func (m *Manager) Quit(ctx context.Context, s store.Session) error
     Quit stops a session's agent the way a human would: ctrl+c, 1 s, ctrl+c,
     then waits up to QuitIdleTimeout for the pane to be an idle shell again
-    (ErrBusy otherwise, session unchanged, herdr's timeout in the chain). The
-    session id is captured first (RecordSessionID); the session becomes parked
-    when it is resumable (an agent session with a session id whose kind reports
-    ids), else closed. A pane or agent that is already gone counts as quit.
-    For a shell role's pane this interrupts the running command.
+    (ErrBusy otherwise, session unchanged, herdr's timeout in the chain). An
+    agent of a kind with exit keys that herdr lists for a session with a pane is
+    quit as the early park quits it (earlyQuit: one ctrl+c, then its exit keys,
+    each after the look at a bare composer, ErrBusy with no key sent otherwise):
+    two ctrl+c did not quit Claude 2.1.303 nor 2.1.311 at its idle prompt,
+    and the quit before a checkout that changed AGENTS.md failed every attempt.
+    The session id is captured first (RecordSessionID); the session becomes
+    parked when it is resumable (an agent session with a session id whose kind
+    reports ids), else closed. A pane or agent that is already gone counts as
+    quit. For a shell role's pane this interrupts the running command.
 
 func (m *Manager) ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
     ReadRecent returns the last lines of a session's pane output (unwrapped
@@ -5030,12 +5035,13 @@ type Kind struct {
 	// the agent is still the pane's foreground process two ctrl+c after
 	// magnum asked it to quit; the pane is closed alone when it is still
 	// not an idle shell after them (agents.Manager.ParkHard). The idle
-	// park's early park (agents.Manager.ParkSessions) sends them a second
-	// after one ctrl+c, only when herdr shows the session's own
-	// conversation idle in the pane and its screen a bare prompt and no
-	// dialog, and closes nothing they leave running. claude: "/exit" then
-	// enter, one key each (send-keys takes no word). Empty = the hard quit
-	// goes straight to the close, and the early park sends two ctrl+c.
+	// park's early park (agents.Manager.ParkSessions) and the quit of one
+	// session (agents.Manager.Quit) send them a second after one ctrl+c,
+	// only when herdr shows the session's own conversation idle in the pane
+	// and its screen a bare prompt and no dialog, and close nothing they
+	// leave running. claude: "/exit" then enter, one key each (send-keys
+	// takes no word). Empty = the hard quit goes straight to the close, and
+	// the early park and Quit send two ctrl+c.
 	ExitKeys []string `toml:"exit_keys"`
 	// ContextPattern reads how full a session's context is from its pane's
 	// status lines (agents.Manager.ContextUsed): a Go regexp with a capture

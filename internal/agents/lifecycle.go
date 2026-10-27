@@ -24,14 +24,50 @@ const parkForcedCause = "no idle shell after ctrl+c and the exit keys; pane clos
 
 // Quit stops a session's agent the way a human would: ctrl+c, 1 s, ctrl+c,
 // then waits up to QuitIdleTimeout for the pane to be an idle shell again
-// (ErrBusy otherwise, session unchanged, herdr's timeout in the chain). The
-// session id is captured first (RecordSessionID); the session becomes
-// parked when it is resumable (an agent session with a session id whose
-// kind reports ids), else closed. A pane or agent that is already gone
-// counts as quit. For a shell role's pane this interrupts the running
-// command.
+// (ErrBusy otherwise, session unchanged, herdr's timeout in the chain). An
+// agent of a kind with exit keys that herdr lists for a session with a pane
+// is quit as the early park quits it (earlyQuit: one ctrl+c, then its exit
+// keys, each after the look at a bare composer, ErrBusy with no key sent
+// otherwise): two ctrl+c did not quit Claude 2.1.303 nor 2.1.311 at its
+// idle prompt, and the quit before a checkout that changed AGENTS.md failed
+// every attempt. The session id is captured first (RecordSessionID); the
+// session becomes parked when it is resumable (an agent session with a
+// session id whose kind reports ids), else closed. A pane or agent that is
+// already gone counts as quit. For a shell role's pane this interrupts the
+// running command.
 func (m *Manager) Quit(ctx context.Context, s store.Session) error {
-	return m.quit(ctx, s, false)
+	a, ok, err := m.exitKeysAgent(ctx, s)
+	switch {
+	case err != nil:
+		return err
+	case !ok:
+		return m.quit(ctx, s, false)
+	}
+	_, waited, err := m.earlyQuit(ctx, &s, a)
+	switch {
+	case err != nil:
+		return err
+	case waited != nil:
+		return quitBusy(s, waited)
+	}
+	return m.retire(ctx, s)
+}
+
+// exitKeysAgent is the agent Quit quits with its kind's exit keys
+// (earlyQuit), from a fresh snapshot: ok only for a session with a pane
+// whose kind has exit keys and whose agent herdr lists with a conversation
+// it or the row names (earlyQuit's look sends nothing without one).
+func (m *Manager) exitKeysAgent(ctx context.Context, s store.Session) (a herdr.AgentInfo, ok bool, err error) {
+	if k, has := m.kindSpec(m.sessionKind(s)); !has || len(k.ExitKeys) == 0 || store.Deref(s.HerdrPaneID) == "" {
+		return a, false, nil
+	}
+	snap, err := m.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		return a, false, fmt.Errorf("agents: quit session %d: %w", s.ID, err)
+	}
+	a, ok = findAgent(snap, s)
+	named := store.Deref(s.SessionID) != "" || (a.AgentSession != nil && a.AgentSession.Value != "")
+	return a, ok && named, nil
 }
 
 // quit is Quit; hard goes on where Quit waits (forceQuit).

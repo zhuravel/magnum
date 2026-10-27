@@ -65,7 +65,7 @@ const (
 	AgentStartTimeout   = 120 * time.Second // agent.start timeout_ms
 	PromptAckTimeout    = 60 * time.Second  // agent.prompt --wait --until working|blocked
 	IdleShellTimeout    = 60 * time.Second  // a fresh pane's shell (oh-my-zsh + mise) must be idle by then
-	QuitIdleTimeout     = 10 * time.Second  // after two ctrl+c (and again after a hard quit's exit keys) the pane must be a shell again
+	QuitIdleTimeout     = 10 * time.Second  // after a quit's keys (two ctrl+c, or one and the exit keys; again after a hard quit's exit keys) the pane must be a shell again
 	PreflightTimeout    = 30 * time.Second
 	WrapperProbeTimeout = 20 * time.Second
 )

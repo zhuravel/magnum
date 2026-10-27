@@ -2195,7 +2195,9 @@ session); a gitignored `settings.local.json`, skill or anything else still decli
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
 Claude session that started with the project config loaded is quit (its conversation parked) before
 Magnum moves the checkout to a new head that changes it, at a round's start and at a restart after a push,
-and resumed once the new head is checked out; one that works or is blocked holds the round instead. The
+and resumed once the new head is checked out; one that works or is blocked holds the round instead. The quit
+works as the early park's does. It sends one ctrl+c and a second later the kind's `exit_keys` (Claude:
+`/exit`), each after the same look at a bare prompt. Claude ignores two ctrl+c at its idle prompt. The
 checkout's fetch runs first, and the head it fetched decides: by the PR's file list when the list is
 complete and of that head, else (a PR of more files than the list holds) by git, the files that head
 changes there since its merge base with the base branch; a git that cannot tell quits the session. Not

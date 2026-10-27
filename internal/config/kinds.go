@@ -206,12 +206,13 @@ type Kind struct {
 	// the agent is still the pane's foreground process two ctrl+c after
 	// magnum asked it to quit; the pane is closed alone when it is still
 	// not an idle shell after them (agents.Manager.ParkHard). The idle
-	// park's early park (agents.Manager.ParkSessions) sends them a second
-	// after one ctrl+c, only when herdr shows the session's own
-	// conversation idle in the pane and its screen a bare prompt and no
-	// dialog, and closes nothing they leave running. claude: "/exit" then
-	// enter, one key each (send-keys takes no word). Empty = the hard quit
-	// goes straight to the close, and the early park sends two ctrl+c.
+	// park's early park (agents.Manager.ParkSessions) and the quit of one
+	// session (agents.Manager.Quit) send them a second after one ctrl+c,
+	// only when herdr shows the session's own conversation idle in the pane
+	// and its screen a bare prompt and no dialog, and close nothing they
+	// leave running. claude: "/exit" then enter, one key each (send-keys
+	// takes no word). Empty = the hard quit goes straight to the close, and
+	// the early park and Quit send two ctrl+c.
 	ExitKeys []string `toml:"exit_keys"`
 	// ContextPattern reads how full a session's context is from its pane's
 	// status lines (agents.Manager.ContextUsed): a Go regexp with a capture

@@ -187,8 +187,8 @@ func (m *Manager) parkOne(ctx context.Context, snap herdr.Snapshot, s store.Sess
 // agent gone before the ctrl+c gets none, and one the ctrl+c quit no exit
 // keys. Nothing is forced: a pane still no idle shell after them comes back
 // as waited, as interrupt's. A kind without exit keys, or a session that
-// records no pane, is quit as Quit does (interrupt). exitKeys: the exit
-// keys quit it.
+// records no pane, is quit with two ctrl+c (interrupt). exitKeys: the exit
+// keys quit it. Quit quits a listed agent of a kind with exit keys here too.
 func (m *Manager) earlyQuit(ctx context.Context, s *store.Session, a herdr.AgentInfo) (exitKeys bool, waited, err error) {
 	k, ok := m.kindSpec(m.sessionKind(*s))
 	pane := store.Deref(s.HerdrPaneID)

@@ -60,6 +60,72 @@ func TestQuitAgentStillRunning(t *testing.T) {
 	}
 }
 
+// Quit stops a Claude agent the way the early park does: Claude 2.1.311
+// ignored two ctrl+c 1 s apart at its idle prompt, so the quit before a
+// checkout that changes AGENTS.md failed every attempt, while one ctrl+c
+// and its exit keys quit it within seconds. The same look runs before each
+// key: a composer that is not bare gets no key, and the session stays live
+// with ErrBusy and no timeout. Quit closes no pane.
+func TestQuitQuitsClaudeWithItsExitKeys(t *testing.T) {
+	t.Run("they quit it", func(t *testing.T) {
+		e, ws := parkSessionsEnv(t)
+		pane := ws.Panes[RoleClaude]
+		e.atPrompt(pane)
+		e.h.onKeys = deafToCtrlC(pane)
+		claude := e.session(RoleClaude)
+		if err := e.m.Quit(e.ctx, claude); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := e.keysTo(pane), [][]string{{"ctrl+c"}, e.exitKeys(KindClaude)}; !slices.EqualFunc(got, want, slices.Equal) {
+			t.Fatalf("keys to the claude pane = %q, want %q: one ctrl+c, then the exit keys", got, want)
+		}
+		if !slices.Equal(e.slept, []time.Duration{time.Second}) {
+			t.Fatalf("slept %v, want the pause between the ctrl+c and the exit keys", e.slept)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionParked || store.Deref(got.SessionID) != "claude-id" {
+			t.Fatalf("claude session = %+v, want parked with its id", got)
+		}
+		if len(e.h.paneCloses) != 0 || len(e.h.closed) != 0 {
+			t.Fatalf("pane closes %v, workspace closes %v: want none", e.h.paneCloses, e.h.closed)
+		}
+	})
+	t.Run("a draft in the composer", func(t *testing.T) {
+		e, ws := parkSessionsEnv(t)
+		pane := ws.Panes[RoleClaude]
+		e.atPrompt(pane)
+		e.h.reads[pane] = strings.Replace(claudeAtPrompt, "❯ \n", "❯ say banana\n", 1)
+		e.h.onKeys = deafToCtrlC(pane)
+		claude := e.session(RoleClaude)
+		err := e.m.Quit(e.ctx, claude)
+		if !errors.Is(err, ErrBusy) || herdr.IsTimeout(err) {
+			t.Fatalf("err = %v, want ErrBusy without herdr's timeout", err)
+		}
+		if got := e.keysTo(pane); len(got) != 0 {
+			t.Fatalf("keys to the claude pane = %q, want none", got)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionLive {
+			t.Fatalf("state = %s, want still live", got.State)
+		}
+	})
+	t.Run("no conversation named", func(t *testing.T) {
+		e := newEnv(t)
+		ws := e.started()
+		pane := ws.Panes[RoleClaude]
+		e.atPrompt(pane)
+		e.h.onKeys = quitsOnCtrlC
+		claude := e.session(RoleClaude)
+		if err := e.m.Quit(e.ctx, claude); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := e.keysTo(pane), [][]string{{"ctrl+c"}, {"ctrl+c"}}; !slices.EqualFunc(got, want, slices.Equal) {
+			t.Fatalf("keys to the claude pane = %q, want %q: the look has no conversation to find", got, want)
+		}
+		if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionClosed {
+			t.Fatalf("state = %s, want closed: nothing to resume", got.State)
+		}
+	})
+}
+
 func TestParkClosesIdleWorkspace(t *testing.T) {
 	e := newEnv(t)
 	ws := e.started()

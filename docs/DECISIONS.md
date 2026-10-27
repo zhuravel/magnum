@@ -2519,6 +2519,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   session's agent in another pane (it would park a session whose agent goes on under its name, which a
   fresh start then refuses).
 
+- **Quit stops an agent with its kind's exit keys, as the early park does** (2026-10-27, amends "An early park
+  quits an agent with its kind's exit keys, so Claude agents park" and "A Claude session is quit before the
+  checkout moves only when the new head changes its project config, and a quit that fails is charged"). On
+  2026-10-27 a PR got three new heads that changed its root `AGENTS.md`. Before each checkout, parkReloading quit
+  the idle claude-review session with `Agents.Quit`: two ctrl+c 1 s apart, then a wait of up to 10 s for an idle
+  shell. Claude 2.1.311 stayed in the foreground every time ("shell not idle after 10s (foreground: 2.1.311)").
+  The round's setup failed six times from 09:32 to 09:58 UTC, and the PR needed attention twice. The idle park
+  did not take the PR. It waited behind the 15-minute push quiet period, which is not longer than
+  `park_idle_after`, and a PR that needs attention keeps its agents. Then `magnum restart-sessions --tool claude
+  --pr` parked the PR's three Claude sessions through the early park, and each one quit with its exit keys in
+  about 2 s. The 10-19 entry found this flaw and left `Quit` unchanged "for a follow-up with measurements". These
+  are the measurements. The 10-07 entry blamed the MCP servers in the pane's foreground, which was probably the
+  same flaw. Now `Quit` reads a fresh snapshot first. When the session records a pane, its kind has exit keys,
+  herdr lists its agent and herdr or the row names its conversation, `Quit` uses `earlyQuit`: the look, one
+  ctrl+c, 1 s, the look again, the exit keys and the wait. A composer that is not bare gets no key, and the quit
+  fails with `ErrBusy` and no timeout. Any other session gets the two ctrl+c as before, so Codex keeps them. A
+  session whose conversation nobody names keeps them too, because the look refuses every key without one. This
+  reaches every caller of `Quit`: parkReloading, quitToRenew (the cold-judge rule and the rotation, for a Claude
+  judge), `magnum restart-sessions` for a session without a session id, and the retro pane after a failed park.
+  Nothing is forced. The 10-07 entry rejected a close of the pane, and that rule stands, and a quit that fails
+  stays charged. Test: TestQuitQuitsClaudeWithItsExitKeys. An agent deaf to ctrl+c quits with one ctrl+c and the
+  exit keys and parks, and nothing is closed. A draft gets no key, `ErrBusy` without a timeout, and stays live. A
+  session with no conversation named gets two ctrl+c. The first two cases failed first with the production error,
+  and the third fails when the conversation condition is dropped. Rejected: a hard quit at the round's last
+  attempt (it closes the pane, which the 10-07 entry rejected, and the exit keys quit Claude every time so far);
+  a change in parkReloading alone (the other callers of `Quit` have the same flaw).
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

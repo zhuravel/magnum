@@ -569,10 +569,11 @@ status_comment_note = ""          # a line of yours under the status comment whi
 #                                     # them when Claude is still its pane's foreground process after two ctrl+c,
 #                                     # waits 10s more, then closes that pane alone (never the workspace) and the
 #                                     # session; [] = the hard park closes the pane straight away. The idle park's
-#                                     # early park quits with one ctrl+c and them a second later, only when herdr
-#                                     # shows the session's own conversation idle in the pane and the screen an
-#                                     # bare prompt and no dialog, never closing a pane they leave running;
-#                                     # [] = two ctrl+c there
+#                                     # early park, and the quit of one idle session (before a checkout that
+#                                     # changes its project config, a judge started fresh), quit with one ctrl+c
+#                                     # and them a second later, only when herdr shows the session's own
+#                                     # conversation idle in the pane and the screen a bare prompt and no dialog,
+#                                     # never closing a pane they leave running; [] = two ctrl+c there
 # context_pattern = '(?:\((?P<used>\d{1,3})%\)|Context left until auto-compact: (?P<left>\d{1,3})%)'
 #                                     # how full a session's context is, read from the newest match in the last
 #                                     # status lines of its pane: a Go regexp with a group named used (percent
