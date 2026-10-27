@@ -99,7 +99,7 @@ func runDBLock(c *Context, o dbLockOpts, args []string) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	checkout, err := dbLockCheckout(ctx, o.checkout)
+	checkout, err := gitWorkTree(ctx, dbLockRunner(), o.checkout)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -127,12 +127,12 @@ func runDBLock(c *Context, o dbLockOpts, args []string) int {
 	return runLocked(c, args)
 }
 
-// dbLockCheckout is dir (else the git work tree of the current directory),
-// absolute and with its symlinks resolved, so every role's spelling of one
-// checkout names one lock.
-func dbLockCheckout(ctx context.Context, dir string) (string, error) {
+// gitWorkTree is dir (else the git work tree of the current directory, as
+// r's git names it), absolute and with its symlinks resolved, so every
+// role's spelling of one checkout names one lock.
+func gitWorkTree(ctx context.Context, r execx.Runner, dir string) (string, error) {
 	if dir == "" {
-		res, err := dbLockRunner().Run(ctx, execx.Cmd{Name: "git", Args: []string{"rev-parse", "--show-toplevel"},
+		res, err := r.Run(ctx, execx.Cmd{Name: "git", Args: []string{"rev-parse", "--show-toplevel"},
 			Timeout: 30 * time.Second, Label: "git top level", Probe: true})
 		if err != nil || res.Out() == "" {
 			return "", fmt.Errorf("no --checkout and no git work tree here (%v)", err)

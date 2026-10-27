@@ -109,7 +109,7 @@ func notesPartsFixture() NotesParts {
 
 // fixFixture is the fix job's data: the reviewer fields the fix prompt uses,
 // the fix skill's startup copy, the posted review it fixes and the job's
-// frozen copy of the notes.
+// frozen copy of the notes, and its fix-sync line.
 func fixFixture() RoleData {
 	d := roleFixture()
 	d.NotesParts = notesPartsFixture()
@@ -121,6 +121,7 @@ func fixFixture() RoleData {
 	d.ReviewFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review.json"
 	d.ExternalFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/external-threads.json"
 	d.ReviewerLogin = "talkable[bot]"
+	d.FixSyncCommand = FixSyncLine(d.Magnum, d.HeadSHA, d.HeadRef, "master")
 	return d
 }
 

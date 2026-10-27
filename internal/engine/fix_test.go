@@ -46,7 +46,9 @@ const fixBaseTip = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
 // and waits for the gate or its context. RevParse of origin/<base> fails
 // with baseErr. MergeConflicts answers mergeAnswers in order, then
 // conflicts (nil: a clean merge), fails with mergeErr and records its
-// calls ("<dir>:<head>:<base>").
+// calls ("<dir>:<head>:<base>"). IsAncestor answers ancestors
+// ("<ancestor>..<rev>"; any other pair is no) and records its calls
+// (ancestry, "<dir>:<ancestor>..<rev>").
 type fixGit struct {
 	fakeGit
 	mu           sync.Mutex
@@ -66,6 +68,8 @@ type fixGit struct {
 	mergeAnswers [][]string
 	mergeErr     error
 	merges       []string
+	ancestors    map[string]bool
+	ancestry     []string
 }
 
 func (g *fixGit) FetchBranch(ctx context.Context, mainClone, base string) error {

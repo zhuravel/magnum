@@ -787,6 +787,13 @@ type RoleData struct {
 	// every role, as DBLockCommand is; the fix job passes its own): only the
 	// fix prompt names it.
 	FixReplyCommand string
+	// FixSyncCommand is the fix prompt's too: the line the fixer runs once
+	// when GitHub rejects its push because the branch moved, `magnum
+	// fix-sync` with the run's start head, the PR's branch and its base
+	// (FixSyncLine), which replays the fixer's commits onto a merge of the
+	// base the branch gained. Never derived, since only the fix job knows
+	// the PR's base: "" = the prompt names no fix-sync.
+	FixSyncCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
 	// alone, and merges the base when the PR conflicts with it (the fix job
@@ -828,6 +835,16 @@ func FixReplyLine(magnum string) string {
 	return shellLine([]string{cmp.Or(magnum, "magnum"), "fix-reply"})
 }
 
+// FixSyncLine is the line the fixer runs when GitHub rejects its push
+// because the branch moved (RoleData.FixSyncCommand): `magnum fix-sync`
+// of the daemon's binary (else magnum on PATH) with the run's start head
+// (from), the PR's branch and its base branch, each shell-quoted. The
+// command replays the fixer's commits onto the branch's new tip when the
+// branch gained only merges of the base, and changes nothing otherwise.
+func FixSyncLine(magnum, from, branch, base string) string {
+	return shellLine([]string{cmp.Or(magnum, "magnum"), "fix-sync", "--from", from, "--branch", branch, "--base", base})
+}
+
 // FixPromptInput is what the fix job knows beyond the PR, the role and the
 // run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
 // (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
@@ -836,7 +853,9 @@ func FixReplyLine(magnum string) string {
 // names no such file), the line the fixer runs its database commands
 // through (DBLockCommand, DBLockLine; "" = derived without a checkout),
 // the line it posts every reply through (FixReplyCommand, FixReplyLine;
-// "" = magnum on PATH), whether the review found nothing, leaving the
+// "" = magnum on PATH), the line it runs when a push is rejected because
+// the branch moved (FixSyncCommand, FixSyncLine; "" = none, the prompt
+// then names no such line), whether the review found nothing, leaving the
 // fixer the external file's items and the base merge alone (NoFindings),
 // the job's frozen copy of the repository notes in parts (NotesParts,
 // FreezeNotes beside the report; zero = none), which the fixer reads and
@@ -846,6 +865,7 @@ func FixReplyLine(magnum string) string {
 // conflicting paths (ConflictPaths, as git names them).
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand, FixReplyCommand string
+	FixSyncCommand                                                                              string
 	NoFindings                                                                                  bool
 	NotesParts                                                                                  NotesParts
 	ConflictBase, ConflictSHA                                                                   string
@@ -892,7 +912,7 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, FixReplyCommand: in.FixReplyCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
-		NoFindings: in.NoFindings, NotesParts: in.NotesParts,
+		FixSyncCommand: in.FixSyncCommand, NoFindings: in.NoFindings, NotesParts: in.NotesParts,
 	}
 	if in.ConflictSHA != "" {
 		d.ConflictBase, d.ConflictSHA = in.ConflictBase, in.ConflictSHA

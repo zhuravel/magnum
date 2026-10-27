@@ -104,7 +104,7 @@ func newRoot(c *Context) *cobra.Command {
 	root.AddCommand(
 		newSnoozeCmd(c), newStarCmd(c), newCodexFlagCmd(c), newAbortCmd(c), newIgnoreCmd(c), newApproveCmd(c), newRequestChangesCmd(c), newUnapproveCmd(c),
 		newAttentionCmd(c), newPickCmd(c), newCleanupCmd(c), newKickCmd(c),
-		newPauseCmd(c), newResumeCmd(c), newRestartSessionsCmd(c), newSettingsCmd(c), newUICmd(c), newPostReviewCmd(c), newDBLockCmd(c), newFixReplyCmd(c),
+		newPauseCmd(c), newResumeCmd(c), newRestartSessionsCmd(c), newSettingsCmd(c), newUICmd(c), newPostReviewCmd(c), newDBLockCmd(c), newFixReplyCmd(c), newFixSyncCmd(c),
 		// Daemon
 		newDaemonCmd(c), newDaemonRestartCmd(c), newDaemonStopCmd(c), newInstallCmd(c), newUninstallCmd(c),
 	)

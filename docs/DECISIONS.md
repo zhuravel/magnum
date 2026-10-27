@@ -13613,6 +13613,59 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAFailedConflictCheckAfterTheFetchRunsTheFixWithoutTheMergeStep (rev-parse, merge-tree) and
   TestAStopDuringTheBaseFetchStopsTheFixQuietly (fails when the guard ignores a stop).
 
+- **The fixer replays its commits when the branch gained only a base merge** (2026-10-27, wave 1 item 6 of
+  the companion-fix design, section 5.7). On talkable#12114 GitHub's "Update branch" merged master into the
+  PR's branch while the fixer worked; its push was rejected ("fetch first"), and the skill's rule against
+  pull, merge and rebase left its commit unpushed. The operator asked that the fixer go on when the only
+  change on GitHub is a merge of the base. A new command, `magnum fix-sync --from <start head> --branch
+  <branch> --base <base> [--checkout DIR]` (`internal/cli/fix_sync.go`), runs in the fixer's checkout with
+  local git alone, like `magnum db-lock`: no config, no registry, no daemon, and no pane guard, since it is
+  the fixer's own. It fetches the branch and the base from origin and replays the fixer's commits
+  (`--from..HEAD`, `gitx.ReplayOnto`: `git rebase --onto <tip> <from> --no-update-refs`, signed as the
+  repository's config says, since these are the fixer's commits) onto the branch's new tip only when every
+  commit on the tip's first-parent chain since the start head is a merge, the oldest of them on top of the
+  start head (`gitx.CommitsAfter`; a merge of the base is one commit there, without the base's commits it
+  brings), and the PR's own diff against the base is the same at both (`gitx.OwnDiffID`: the patch id of
+  `diff-tree --patch --unified=0 --full-index <merge base> <head>`, the PR as GitHub's base...head shows it,
+  with the base as fetched; without context lines a merge that changes other lines keeps the id, while one
+  that resolved a conflict in the PR's lines, slipped a change in or brought a branch the base lacks changes
+  it). It prints "replayed N commits onto <sha>; HEAD is <sha>" (exit 0), and the fixer runs the specs of
+  the changed files again and pushes once more, never with force, naming the new SHAs. Anything else changes
+  nothing and prints "refused: <reason>" (exit 1): a commit that is not a merge, a merge that changed the
+  PR's own diff, a rewritten branch, a branch that did not move, an operation in progress, uncommitted
+  changes to tracked files (a rebase refuses them, and specs dirty tracked files such as a schema dump), no
+  commit of the fixer's, and a merge among the fixer's own commits: the base merge of a conflicting PR
+  (spec 5.6) would be made again by a replay without its resolutions, so that case is refused and the
+  unpushed merge goes to the author as the failed push already sends it. A replay that conflicts is
+  aborted (the shared `rebase` helper of `RebaseOnto`, which now names the unmerged paths and aborts on a
+  context that outlives a stop), and the checkout is as it was. These commits were never on GitHub, so the
+  skill's history rule allows the replay; it now says "never force-push, rebase, amend or reset a commit
+  that is on GitHub", and its push rule runs the fix-sync line once on a push rejected because the branch
+  moved, with a clean work tree, and stops as before after a refusal, a prompt without the line or any
+  other failure (`push failed: …; fix-sync refused: <reason>`). The prompt names the line in its one
+  paragraph (`FixPromptInput.FixSyncCommand`, `agents.FixSyncLine` with the job's start head, the PR's
+  branch and base), never derived as the fix-reply line is, since only the job knows the base, and left
+  out for a base a shell would read. The settle needed one change, in `recordFixPush` rather than
+  `pushedHead`: `pushedHead` already takes any listed commit at HEAD that GitHub shows, and the report
+  lists the replayed commits; but when the poller saw the merge during the run, the PR row's head was the
+  merge, `recordFixPush` left it there, and the forced re-review would review the merge alone. A pushed
+  head that descends from the row's head (`Git.IsAncestor` in the slot, `fixPushDescends`) now moves the
+  row as any push of the fixer's; one that does not leaves it. Rejected: deciding through GitHub's compare
+  API as `checkDelta` does (the fixer's pane has no engine; local git answers with what it fetched);
+  `git pull --rebase` or a merge of the branch (a merge commit of the fixer's own, or a rebase that would
+  also replay the base merge's commits); replaying a fixer's merge with `--rebase-merges` (it drops the
+  conflict resolutions). Tests, failing first: in gitx (real git)
+  TestCommitsAfterReadsAMergeOfTheBaseAsOneCommit, TestOwnDiffIDKeepsThePRsDiffAcrossAMergeOfTheBase and
+  TestReplayOntoReplaysTheCommitsAfterTheStartAndAbortsAConflict; in cli (real git)
+  TestFixSyncReplaysTheFixersCommitOntoABaseMergeTheBranchGained (the rejected push then goes out),
+  TestFixSyncRefusesWhenTheBranchGainedACommitOfItsOwn, TestFixSyncAbortsAConflictingReplay,
+  TestFixSyncRefusesWhatIsNotABaseMergeOnTop (an own-diff change, a rewritten branch, the fixer's own merge,
+  uncommitted changes, no commit, a branch that did not move), TestFixSyncChecksItsFlags and fix-sync among
+  the commands an agent's pane may run; in engine TestAPushAfterAFixSyncSettles (the row stayed at the
+  merge) with the guard TestAFixPushNeverMovesTheRowBehindANewerHead; in agents
+  TestTheFixPromptNamesTheFixSyncCommand through the four fix goldens and
+  TestTheFixSkillSyncsAPushTheBranchMovedPast.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

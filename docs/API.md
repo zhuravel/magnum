@@ -608,6 +608,14 @@ func FixReplyLine(magnum string) string
     postreview.FixReplyMarker, by which magnum tells the fixer's replies from
     the author's own.
 
+func FixSyncLine(magnum, from, branch, base string) string
+    FixSyncLine is the line the fixer runs when GitHub rejects its push because
+    the branch moved (RoleData.FixSyncCommand): `magnum fix-sync` of the
+    daemon's binary (else magnum on PATH) with the run's start head (from),
+    the PR's branch and its base branch, each shell-quoted. The command replays
+    the fixer's commits onto the branch's new tip when the branch gained only
+    merges of the base, and changes nothing otherwise.
+
 func HasSessionID(s store.Session) bool
     HasSessionID reports whether session s has its CLI's session id.
 
@@ -1061,6 +1069,7 @@ type FallbackData struct {
 
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand, FixReplyCommand string
+	FixSyncCommand                                                                              string
 	NoFindings                                                                                  bool
 	NotesParts                                                                                  NotesParts
 	ConflictBase, ConflictSHA                                                                   string
@@ -1074,7 +1083,9 @@ type FixPromptInput struct {
     no such file), the line the fixer runs its database commands through
     (DBLockCommand, DBLockLine; "" = derived without a checkout), the line it
     posts every reply through (FixReplyCommand, FixReplyLine; "" = magnum on
-    PATH), whether the review found nothing, leaving the fixer the external
+    PATH), the line it runs when a push is rejected because the branch moved
+    (FixSyncCommand, FixSyncLine; "" = none, the prompt then names no such
+    line), whether the review found nothing, leaving the fixer the external
     file's items and the base merge alone (NoFindings), the job's frozen copy
     of the repository notes in parts (NotesParts, FreezeNotes beside the report;
     zero = none), which the fixer reads and never edits, and the PR's conflict
@@ -2513,6 +2524,13 @@ type RoleData struct {
 	// every role, as DBLockCommand is; the fix job passes its own): only the
 	// fix prompt names it.
 	FixReplyCommand string
+	// FixSyncCommand is the fix prompt's too: the line the fixer runs once
+	// when GitHub rejects its push because the branch moved, `magnum
+	// fix-sync` with the run's start head, the PR's branch and its base
+	// (FixSyncLine), which replays the fixer's commits onto a merge of the
+	// base the branch gained. Never derived, since only the fix job knows
+	// the PR's base: "" = the prompt names no fix-sync.
+	FixSyncCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
 	// alone, and merges the base when the PR conflicts with it (the fix job
@@ -8638,6 +8656,10 @@ type Git interface {
 	// of the head and that tip.
 	FetchBranch(ctx context.Context, mainClone, base string) error
 	MergeConflicts(ctx context.Context, dir, head, base string) ([]string, error)
+	// IsAncestor tells the fix job's settle whether the head the fixer
+	// pushed descends from the PR row's head, a push the poller saw during
+	// the run (the base merge `magnum fix-sync` replayed onto: recordFixPush).
+	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -11732,6 +11754,13 @@ func (c *Client) CommitAll(ctx context.Context, dir, message string, paths ...st
     with message, unsigned (commit.gpgsign=false whatever the repository says),
     and returns the new commit's id. Nothing to commit is an error.
 
+func (c *Client) CommitsAfter(ctx context.Context, dir, from, to string, firstParent bool) ([]ListedCommit, error)
+    CommitsAfter lists the commits of to that from lacks (`git rev-list
+    --parents from..to`), newest first, each with its parents. With firstParent,
+    only to's first-parent chain (--first-parent): a merge is then one commit,
+    without the commits it brought in, as GitHub's "Update branch" adds one
+    merge to a PR's branch. Nothing when from has every commit of to.
+
 func (c *Client) CurrentBranch(ctx context.Context, repo string) (string, error)
     CurrentBranch is the branch checked out in repo, "" when its HEAD is
     detached (a rebase in progress included).
@@ -11886,6 +11915,17 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
     of (a rename counts as the deletion of its old path), whose history the base
     holds.
 
+func (c *Client) OwnDiffID(ctx context.Context, dir, base, head string) (string, error)
+    OwnDiffID is the stable patch id of head's own diff against base:
+    the change from their merge base to head (`git diff-tree --patch --unified=0
+    --full-index <merge base> head | git patch-id --stable`), the PR as GitHub's
+    base...head shows it. With no context lines, a merge of the base into head
+    that changes other lines, near the PR's own or not, leaves the id as it was;
+    one that changes a line of the PR's own (a conflict resolved, a change
+    slipped into the merge) or brings a branch the base lacks changes it.
+    A binary file counts by its blob ids. "" when head changes nothing against
+    base; ErrNoMergeBase for histories without a common commit.
+
 func (c *Client) OwnerUsesSSH(ctx context.Context, cloneRoot, owner string) (bool, error)
     OwnerUsesSSH reports whether a clone directly under cloneRoot of any
     github.com/<owner>/* repository has an SSH origin. Directories are read as
@@ -11921,6 +11961,17 @@ func (c *Client) ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]
     so dir, any work tree of the repository, is left exactly as it was and a
     conflict leaves nothing to abort. An error for a commit with no parent,
     for revisions git does not know and for an answer it cannot read.
+
+func (c *Client) ReplayOnto(ctx context.Context, dir, onto, from string) ([]string, error)
+    ReplayOnto replays the commits from..HEAD of the checkout at dir (a detached
+    HEAD, or a branch, which then moves) onto onto (`git rebase --onto onto
+    from`): only those, as RebaseOnto, and no other branch moves with them
+    (--no-update-refs). Unlike RebaseOnto's, the commits are signed as the
+    repository's config says: the fixer, whose commits these are, made them
+    with that config (`magnum fix-sync`). A replay that stops (a conflict) is
+    aborted, so HEAD, the index and the work tree are as they were; the error
+    is then ErrRebaseConflict, with the paths that conflicted in the commit it
+    stopped at, sorted.
 
 func (c *Client) ResetPlaceholder(ctx context.Context, dir, branch, base string) error
     ResetPlaceholder points the slot's placeholder branch at origin/<base>
@@ -12081,6 +12132,15 @@ type Hunk struct {
     <count>" of its header): the Count lines from line Start (1-based).
     A hunk that only removes lines has Count 0 and sits after line Start (0:
     at the top of the file).
+
+type ListedCommit struct {
+	SHA     string
+	Parents []string
+}
+    ListedCommit is one commit CommitsAfter lists: its id and its parents'.
+
+func (l ListedCommit) Merge() bool
+    Merge reports whether the commit has more than one parent.
 
 type Remote struct {
 	Host  string // lower-cased, e.g. github.com

@@ -2029,6 +2029,11 @@ func (fakeGit) MergeConflicts(context.Context, string, string, string) ([]string
 	return nil, nil
 }
 
+// IsAncestor says no: a fix push leaves a PR row whose head the poller
+// moved during the run as it is, unless a test's git (fixGit) says the
+// push descends from it.
+func (fakeGit) IsAncestor(context.Context, string, string, string) (bool, error) { return false, nil }
+
 func (fakeGit) MergeBase(_ context.Context, _, a, _ string) (string, error) {
 	if strings.HasPrefix(a, "origin/") {
 		return "base0000", nil

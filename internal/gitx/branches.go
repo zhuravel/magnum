@@ -6,6 +6,9 @@ package gitx
 // checkout's branch, a rebase that aborts itself on a conflict, a commit's
 // patch id, which of some paths are dirty, the branches under a prefix, the
 // branch checked out and the operation a repository is in the middle of.
+// And the fixer's `magnum fix-sync`: the commits a branch gained, a head's
+// own diff against its base as one patch id, and a replay of a checkout's
+// own commits onto a branch's new tip that aborts itself on a conflict.
 // Like every gitx command they run none of the clone's hooks (hooksOff).
 
 import (
@@ -196,24 +199,64 @@ func (c *Client) headRef(ctx context.Context, repo string) (string, error) {
 // them. A rebase that stops (a conflict) is aborted, so the branch and its
 // work tree are as they were, and the error is ErrRebaseConflict.
 func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error {
-	if err := checkRev("onto", onto); err != nil {
-		return err
+	_, err := c.rebase(ctx, dir, onto, upstream, []string{"-c", "commit.gpgsign=false"}, nil)
+	return err
+}
+
+// ReplayOnto replays the commits from..HEAD of the checkout at dir (a
+// detached HEAD, or a branch, which then moves) onto onto (`git rebase
+// --onto onto from`): only those, as RebaseOnto, and no other branch moves
+// with them (--no-update-refs). Unlike RebaseOnto's, the commits are signed
+// as the repository's config says: the fixer, whose commits these are,
+// made them with that config (`magnum fix-sync`). A replay that stops (a
+// conflict) is aborted, so HEAD, the index and the work tree are as they
+// were; the error is then ErrRebaseConflict, with the paths that conflicted
+// in the commit it stopped at, sorted.
+func (c *Client) ReplayOnto(ctx context.Context, dir, onto, from string) ([]string, error) {
+	return c.rebase(ctx, dir, onto, from, nil, []string{"--no-update-refs"})
+}
+
+// rebase is `git <config> rebase --quiet --no-autostash <opts> --onto onto
+// upstream` in dir: a rebase that stops is aborted, and the error is
+// ErrRebaseConflict with the paths unmerged when it stopped.
+func (c *Client) rebase(ctx context.Context, dir, onto, upstream string, config, opts []string) ([]string, error) {
+	if err := errors.Join(checkRev("onto", onto), checkRev("upstream", upstream)); err != nil {
+		return nil, err
 	}
-	if err := checkRev("upstream", upstream); err != nil {
-		return err
-	}
-	_, err := c.git(ctx, dir, call{label: "rebase --onto " + onto + " " + upstream, mutates: true, timeout: commitTimeout},
-		"-c", "commit.gpgsign=false", "rebase", "--quiet", "--no-autostash", "--onto", onto, upstream)
+	args := append(slices.Clone(config), "rebase", "--quiet", "--no-autostash")
+	args = append(append(args, opts...), "--onto", onto, upstream)
+	_, err := c.git(ctx, dir, call{label: "rebase --onto " + onto + " " + upstream, mutates: true, timeout: commitTimeout}, args...)
 	if err == nil {
-		return nil
+		return nil, nil
 	}
 	if p, perr := c.InProgress(ctx, dir); perr != nil || p != "rebase" {
-		return errors.Join(err, perr)
+		return nil, errors.Join(err, perr)
 	}
-	if _, aerr := c.git(ctx, dir, call{label: "rebase --abort", mutates: true, timeout: commitTimeout}, "rebase", "--abort"); aerr != nil {
-		return errors.Join(fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict), aerr)
+	// The abort runs whatever stopped the rebase, a cancelled ctx included:
+	// a rebase left in progress would hold the checkout.
+	actx := context.WithoutCancel(ctx)
+	paths, _ := c.unmergedPaths(actx, dir)
+	if _, aerr := c.git(actx, dir, call{label: "rebase --abort", mutates: true, timeout: commitTimeout}, "rebase", "--abort"); aerr != nil {
+		return paths, errors.Join(fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict), aerr)
 	}
-	return fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict)
+	return paths, fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict)
+}
+
+// unmergedPaths are the paths of dir's index with a conflict (`git diff
+// --name-only --diff-filter=U`), sorted, nil for none.
+func (c *Client) unmergedPaths(ctx context.Context, dir string) ([]string, error) {
+	res, err := c.git(ctx, dir, call{label: "unmerged paths"}, "diff", "--name-only", "--diff-filter=U", "-z", "--no-color")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
 }
 
 // MergeAbort ends the merge dir is in the middle of (`git merge --abort`):
@@ -292,23 +335,100 @@ func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error) {
 	if err := checkRev("rev", rev); err != nil {
 		return "", err
 	}
-	diff, err := c.git(ctx, dir, call{label: "diff-tree --patch " + rev},
-		"diff-tree", "--patch", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", rev)
+	id, err := c.patchID(ctx, dir, rev, rev)
+	if err == nil && id == "" {
+		err = fmt.Errorf("gitx: patch-id %s: no change to hash", rev)
+	}
+	return id, err
+}
+
+// OwnDiffID is the stable patch id of head's own diff against base: the
+// change from their merge base to head (`git diff-tree --patch --unified=0
+// --full-index <merge base> head | git patch-id --stable`), the PR as
+// GitHub's base...head shows it. With no context lines, a merge of the base
+// into head that changes other lines, near the PR's own or not, leaves the
+// id as it was; one that changes a line of the PR's own (a conflict
+// resolved, a change slipped into the merge) or brings a branch the base
+// lacks changes it. A binary file counts by its blob ids. "" when head
+// changes nothing against base; ErrNoMergeBase for histories without a
+// common commit.
+func (c *Client) OwnDiffID(ctx context.Context, dir, base, head string) (string, error) {
+	if err := errors.Join(checkRev("base", base), checkRev("head", head)); err != nil {
+		return "", err
+	}
+	mb, err := c.MergeBase(ctx, dir, base, head)
+	if err != nil {
+		return "", err
+	}
+	return c.patchID(ctx, dir, base+"..."+head, "--full-index", mb, head)
+}
+
+// patchID is the stable patch id of `git diff-tree --patch --unified=0
+// <args>` (what names it in the errors), "" for a diff with no change.
+func (c *Client) patchID(ctx context.Context, dir, what string, args ...string) (string, error) {
+	diff, err := c.git(ctx, dir, call{label: "diff-tree --patch " + what},
+		append([]string{"diff-tree", "--patch", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv"}, args...)...)
 	if err != nil {
 		return "", err
 	}
 	if diff.Truncated {
-		return "", fmt.Errorf("gitx: patch-id %s: the diff is too large", rev)
+		return "", fmt.Errorf("gitx: patch-id %s: the diff is too large", what)
 	}
 	out, err := c.runStdin(ctx, dir, call{label: "patch-id"}, diff.Stdout, "patch-id", "--stable")
-	if err != nil {
+	if err != nil || out == "" {
 		return "", err
 	}
 	id, _, _ := strings.Cut(out, " ")
 	if !isOID(id) {
-		return "", fmt.Errorf("gitx: patch-id %s: no change to hash", rev)
+		return "", fmt.Errorf("gitx: patch-id %s: unreadable answer %.60q", what, out)
 	}
 	return id, nil
+}
+
+// ListedCommit is one commit CommitsAfter lists: its id and its parents'.
+type ListedCommit struct {
+	SHA     string
+	Parents []string
+}
+
+// Merge reports whether the commit has more than one parent.
+func (l ListedCommit) Merge() bool { return len(l.Parents) > 1 }
+
+// CommitsAfter lists the commits of to that from lacks (`git rev-list
+// --parents from..to`), newest first, each with its parents. With
+// firstParent, only to's first-parent chain (--first-parent): a merge is
+// then one commit, without the commits it brought in, as GitHub's "Update
+// branch" adds one merge to a PR's branch. Nothing when from has every
+// commit of to.
+func (c *Client) CommitsAfter(ctx context.Context, dir, from, to string, firstParent bool) ([]ListedCommit, error) {
+	if err := errors.Join(checkRev("from", from), checkRev("to", to)); err != nil {
+		return nil, err
+	}
+	args := []string{"rev-list", "--parents"}
+	if firstParent {
+		args = append(args, "--first-parent")
+	}
+	res, err := c.git(ctx, dir, call{label: "rev-list " + from + ".." + to}, append(args, "^"+from, to, "--")...)
+	if err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: rev-list %s..%s: too many commits", from, to)
+	}
+	var out []ListedCommit
+	for line := range strings.Lines(res.Out()) {
+		ids := strings.Fields(line)
+		if len(ids) == 0 {
+			continue
+		}
+		for _, id := range ids {
+			if !isOID(id) {
+				return nil, fmt.Errorf("gitx: rev-list %s..%s: unreadable line %.100q", from, to, line)
+			}
+		}
+		out = append(out, ListedCommit{SHA: ids[0], Parents: ids[1:]})
+	}
+	return out, nil
 }
 
 // DirtyPaths returns the paths among paths (relative to the top of the

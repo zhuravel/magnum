@@ -1164,6 +1164,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		ReviewerLogin:   job.login,
 		DBLockCommand:   agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
 		FixReplyCommand: agents.FixReplyLine(e.d.Layout.Binary()),
+		FixSyncCommand:  e.fixSyncLine(job),
 		NoFindings:      job.alone,
 		NotesParts:      notesParts,
 		ConflictBase:    job.conflict.base,
@@ -1203,6 +1204,20 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	}
 	e.event(ctx, "info", job.subject(), "fix.start", msg, data)
 	return nil
+}
+
+// fixSyncLine is the line the fix prompt names for a push GitHub rejects
+// because the branch moved (agents.FixSyncLine, spec 5.7): `magnum
+// fix-sync` of the daemon's binary with the head the fixer starts from,
+// the PR's branch and its base. "" (the prompt names none) for a PR whose
+// branch or base magnum does not know, or whose base's name a shell would
+// read.
+func (e *Engine) fixSyncLine(job *fixJob) string {
+	branch, base := deref(job.pr.HeadRef), cmp.Or(deref(job.pr.BaseRef), job.repo.DefaultBranch)
+	if branch == "" || !gitx.ShellSafeRef(base) {
+		return ""
+	}
+	return agents.FixSyncLine(e.d.Layout.Binary(), job.head, branch, base)
 }
 
 // fixWait waits for the fixer's run to end, as the pipeline waits for a

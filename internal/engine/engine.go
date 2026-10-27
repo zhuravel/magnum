@@ -233,6 +233,10 @@ type Git interface {
 	// of the head and that tip.
 	FetchBranch(ctx context.Context, mainClone, base string) error
 	MergeConflicts(ctx context.Context, dir, head, base string) ([]string, error)
+	// IsAncestor tells the fix job's settle whether the head the fixer
+	// pushed descends from the PR row's head, a push the poller saw during
+	// the run (the base merge `magnum fix-sync` replayed onto: recordFixPush).
+	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom

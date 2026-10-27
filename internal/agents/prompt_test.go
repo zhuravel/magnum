@@ -386,6 +386,56 @@ func TestTheFixPromptNamesTheFixReplyCommand(t *testing.T) {
 	}
 }
 
+// On talkable#12114 GitHub's "Update branch" merged master into the PR's
+// branch while the fixer worked, the push was rejected, and the skill's
+// rule against pull, merge and rebase stopped the fixer. The fix prompt
+// names the line that replays the fixer's commits onto such a merge,
+// `magnum fix-sync` of the daemon's binary with the run's start head, the
+// branch and the base (FixSyncLine), in its one paragraph: the goldens of
+// the fix prompt hold the sentence. Only the job knows the PR's base, so
+// the line is never derived: a prompt without it names no fix-sync.
+func TestTheFixPromptNamesTheFixSyncCommand(t *testing.T) {
+	const want = " If GitHub rejects the push because the branch moved, run `/Users/bohdan/Projects/magnum/bin/magnum fix-sync " +
+		"--from d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --branch feature/coupon-expiry --base master` once, as the skill's push (section 5) says."
+	for _, golden := range []string{"fix", "fix_no_findings", "fix_conflict", "fix_merge_only"} {
+		b, err := os.ReadFile(filepath.Join("testdata", golden+".golden"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the golden %s lacks %q:\n%s", golden, want, b)
+		}
+	}
+	const head = "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"
+	if got := FixSyncLine("", head, "feature/coupon-expiry", "master"); got != "magnum fix-sync --from "+head+" --branch feature/coupon-expiry --base master" {
+		t.Errorf("FixSyncLine without a binary = %q", got)
+	}
+	if got := FixSyncLine("/opt/my magnum/bin/magnum", head, "fix", "release/1.0"); got != "'/opt/my magnum/bin/magnum' fix-sync --from "+head+" --branch fix --base release/1.0" {
+		t.Errorf("FixSyncLine = %q, want the binary shell-quoted", got)
+	}
+
+	e := newEnv(t)
+	role := Role(config.RoleClaudeFix)
+	run, err := e.m.NewRun(e.ctx, e.pr, role, store.RunFix, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := FixPromptInput{
+		HeadRef: "feature/coupon-expiry", ReviewURL: "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
+		ReviewFile: "/state/review.json", ReviewerLogin: "talkable[bot]",
+		DBLockCommand: "/opt/magnum/bin/magnum db-lock --", FixReplyCommand: "/opt/magnum/bin/magnum fix-reply",
+		FixSyncCommand: FixSyncLine("/opt/magnum/bin/magnum", e.pr.HeadSHA, "feature/coupon-expiry", "master"),
+	}
+	got, err := e.m.FixPrompt(e.pr, role, run, in)
+	if err != nil || !strings.Contains(got, "run `"+in.FixSyncCommand+"` once") {
+		t.Errorf("the fix prompt = %q, %v; want the fix-sync line", got, err)
+	}
+	in.FixSyncCommand = ""
+	if got, err := e.m.FixPrompt(e.pr, role, run, in); err != nil || strings.Contains(got, "fix-sync") || strings.Contains(got, "branch moved") {
+		t.Errorf("the fix prompt without a fix-sync line = %q, %v", got, err)
+	}
+}
+
 // On talkable#12079 GitHub showed the PR as CONFLICTING and the fixer left
 // it: the prompt named no conflict and the skill forbade a merge. When the
 // fix job finds that the head conflicts with its base, the prompt names the
@@ -474,7 +524,7 @@ func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 		"- Merge nothing but the base's tip that the prompt names, and only as the base merge says (section 2). Never pull, and never rebase onto the base.",
 		"The entries that the base merge brings in are the base's, not yours.",
 		"The base merge's own changes and its conflict resolutions are exempt (section 2).",
-		"If the push fails, do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings.",
+		"do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings.",
 		// A merge-only run whose checkout is not at the reviewed head still
 		// leaves the conflict to the author, never "nothing" and "none".
 		"When the prompt names a conflict with the base, list it under `## Needs you` too: `- conflict: <path>, <path>: the checkout is not at the reviewed head`.",
@@ -494,6 +544,35 @@ func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 	}
 	if i, j := strings.Index(skill, "### The base merge"), strings.Index(skill, "## 3. Judge each finding"); i < 0 || j < i {
 		t.Error("the base merge does not come before the findings")
+	}
+}
+
+// On talkable#12114 GitHub's "Update branch" merged master into the PR's
+// branch while the fixer worked, and the rule against pull, merge and
+// rebase left the fixer's commit unpushed. A push rejected because the
+// branch moved runs the fix-sync line once, with nothing uncommitted. After
+// a replay the fixer runs the specs of the changed files again and pushes
+// once more, never with force, and names the new SHAs; after a refusal, a
+// prompt without the line or a push that fails otherwise, it stops as
+// before. The replayed commits were never on GitHub, which the history
+// rule allows.
+func TestTheFixSkillSyncsAPushTheBranchMovedPast(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"If GitHub rejects the push because the branch moved (`fetch first`, `non-fast-forward`), run the fix-sync line of the prompt once",
+		"`git status --porcelain --untracked-files=no` prints nothing",
+		"`replayed <N> commits onto <sha>; HEAD is <sha>`",
+		"After a replay, run the specs of the changed files again through the db-lock line, then push once more the same way, never with force.",
+		"Your commits have new SHAs after a replay: the replies and the report name those.",
+		"When it prints `refused: <reason>`, when the prompt names no fix-sync line, or when a push fails for any other reason, " +
+			"do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings.",
+		"Write `push failed: <git's first error line>` under `## Pushed` in the report (and `; fix-sync refused: <reason>` after it when it refused)",
+		"- the fix-sync line, which replays your commits when a rejected push finds that the branch gained only a merge of its base (section 5)",
+		"- Never force-push, rebase, amend or reset a commit that is on GitHub. The fix-sync line replays only your commits that are not on GitHub yet.",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
 	}
 }
 

@@ -254,10 +254,14 @@ func (e *Engine) seeFixPush(ctx context.Context, job *fixJob, prID int64) {
 // head_changed_at and the activity time), so the forced re-review targets
 // it and the poller's own sight of it later changes nothing. A row whose
 // head is no longer the reviewed one (the poller saw this push already, or
-// a newer one) is left as it is. It returns the PR and whether its head
-// moved; the caller lets onHeadChange see the push.
+// a newer one) is left as it is, unless the pushed head descends from it
+// (fixPushDescends): the poller saw the base merge the branch gained during
+// the run, which `magnum fix-sync` replayed the fixer's commits onto (spec
+// 5.7), and the row would otherwise send the forced re-review to the merge
+// alone. It returns the PR and whether its head moved; the caller lets
+// onHeadChange see the push.
 func (e *Engine) recordFixPush(ctx context.Context, job *fixJob, pr store.PR, head string) (store.PR, bool, error) {
-	if pr.HeadSHA != job.head || head == pr.HeadSHA {
+	if head == pr.HeadSHA || (pr.HeadSHA != job.head && !e.fixPushDescends(ctx, job, pr.HeadSHA, head)) {
 		return pr, false, nil
 	}
 	res, err := e.st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: pr.RepoID, NodeID: pr.NodeID, Number: pr.Number, URL: pr.URL,
@@ -266,6 +270,22 @@ func (e *Engine) recordFixPush(ctx context.Context, job *fixJob, pr store.PR, he
 		return pr, false, err
 	}
 	return res.PR, res.HeadChanged, nil
+}
+
+// fixPushDescends reports whether head, the push the settle confirmed on
+// GitHub, descends from seen, the PR row's head the poller recorded during
+// the run, in the job's slot, which holds both (the fixer fetched the
+// branch to replay onto it). A look that fails says no and logs why: the
+// row then waits for the poller, as before.
+func (e *Engine) fixPushDescends(ctx context.Context, job *fixJob, seen, head string) bool {
+	if e.d.Git == nil || seen == "" {
+		return false
+	}
+	ok, err := e.d.Git.IsAncestor(ctx, job.slot.Path, seen, head)
+	if err != nil {
+		e.log.Warn("fix: whether the push descends from the PR's head", "subject", job.subject(), "head", textx.ShortSHA(seen), "err", err)
+	}
+	return ok && err == nil
 }
 
 // eventData is the data every fix event carries: the run, the role, the

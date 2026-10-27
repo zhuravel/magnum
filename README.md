@@ -2739,7 +2739,7 @@ from the code, which a finding whose **Fix** ends "This is the author's call." a
 picks one of its options, and its entry asks which to take. Those go under `Needs you` in its report, so
 the call stays yours, and so does a finding it fixed and pushed but could not answer (its thread is answered already, or its reply failed); each entry
 says `fixed in <sha7>.` or `not fixed.` after the finding's place. It never resolves or minimizes a thread
-someone else started, never force-pushes or rebases, never touches another branch, merges nothing but the base's tip when the PR conflicts with it (below), and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
+someone else started, never force-pushes or rebases what is on GitHub (`magnum fix-sync` replays only its own commits, below), never touches another branch, merges nothing but the base's tip when the PR conflicts with it (below), and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
 
 **What other reviewers wrote.** Each cycle the fixer also answers what other reviewers wrote on the PR that
 nobody answered yet, people and bots alike: a colleague, another review tool, a code-review bot. Before it
@@ -2831,6 +2831,24 @@ review with findings, so a conflict alone never starts a loop, and a loop whose 
 clean whatever GitHub says of the merge. The merge can bring the base's `AGENTS.md` or `.claude/` into a
 running Claude fixer: those are the base's files, which the team owns, so that is accepted.
 
+**A branch that moved while the fixer worked.** GitHub's "Update branch" button, pressed during a fix run,
+adds a merge of the base to the PR's branch, and GitHub then rejects the fixer's push ("fetch first"). The
+prompt names `magnum fix-sync` with the head the fixer started from, the PR's branch and its base, and the
+fixer runs it once. The command decides with local git alone, in the fixer's checkout: it fetches the branch
+and the base, and replays the fixer's commits, which are on no remote yet, onto the branch's new tip only
+when every commit the branch gained is a merge on its first-parent chain and the PR's own diff against the
+base (from their merge base to the head, as one patch id without context lines) is the same at the start
+head and at the tip. It prints "replayed N commits onto <sha>; HEAD is <sha>", and the fixer runs the specs
+of the changed files again and pushes once more, never with force; its replies and report name the new
+SHAs. Anything else changes nothing and prints "refused: <reason>": a commit that is not a merge (someone
+works on the branch), a merge that changed the PR's own diff (a conflict resolved on GitHub, a change
+beside the merge), a rewritten branch, a merge among the fixer's own commits (the base merge above, which a
+replay would redo without its resolutions), uncommitted changes to tracked files. A replay that conflicts
+is aborted, and the checkout is as it was. After a refusal the fixer stops as before, its push failed
+(`push failed: …; fix-sync refused: <reason>`). When the poller saw the merge during the run, the settle
+still moves the PR row to the fixer's push, which descends from it, so the loop's re-review reviews the
+push, never the merge alone.
+
 The report is `claude-fix.md` in the head's report directory. Its first line is the run's marker. Then come
 four sections: `Pushed`, `Replied`, `Needs you` and `Other reviewers` (one line per item of
 `external-threads.json`; Magnum does not read it). To use another policy, point the role's `skill` at your
@@ -2857,8 +2875,9 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   replies in its usual reply round.
 - **Needs you.** The fixer left findings under `Needs you`, or the cap was reached with findings left, or a
   run failed. A failed run is no report, a report of another run, a failed push (yours, made while the fixer
-  worked, makes its push fail), a push GitHub does not show ("push not confirmed on GitHub"), a timeout, or a
-  daemon restart in the middle of the run ("fix run lost in a daemon restart"). When your own push came in
+  worked, makes its push fail, unless it only merged the base: `magnum fix-sync` above), a push GitHub does
+  not show ("push not confirmed on GitHub"), a timeout, or a daemon restart in the middle of the run ("fix
+  run lost in a daemon restart"). When your own push came in
   while the fixer worked, the PR keeps waiting for the re-review of your head: the urgent toast tells you
   about the fixer, and the PR does not go to needs attention. An urgent toast names the reason and the
   report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list the
@@ -3218,6 +3237,7 @@ owners = ["talkable"]                # the watch owners the App is installed on;
 | `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE \| --replies FILE)` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back; with `--replies` (a reply round's `post_replies`), post its answers in its own threads instead, skipping a reply to a thread someone else started (see The judge skill). Exit 2 means the file needs fixing. |
 | `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] -- COMMAND [ARG]...` | For the review roles and the fixer, which run the `db_lock` line of their prompts: run COMMAND under the checkout's database lock, so the roles sharing a slot's databases take turns (see The judge skill). Exits with COMMAND's status; 75 means it waited `--timeout` and the command did not run, 125 that db-lock itself failed. |
 | `magnum fix-reply (--comment ID \| --issue)` | For the fixer, which posts every reply through the fix-reply line of its prompt, the reply on stdin: it reads the PR from the pane's `MAGNUM_PR_URL` and posts as the pane's gh login, in the thread of review comment `ID` (after checking that it is the PR's) or, with `--issue`, as a comment on the PR. It refuses a reply that is empty, carries a `<!-- magnum:` marker of its own, names a local path or is too long, appends `<!-- magnum:fix -->`, and posts nothing when the same signed reply is there already with nobody else's comment after it (see Fixing your own PRs). Exit 2 means the reply needs fixing; exit 1 that it could not be confirmed, so the fixer runs the same line with the same reply once more. |
+| `magnum fix-sync --from SHA --branch BRANCH --base BRANCH [--checkout DIR]` | For the fixer, which runs the fix-sync line of its prompt once when GitHub rejects its push because the PR's branch moved: in its checkout (default: the git work tree here) it fetches the branch and the base, and replays the fixer's commits since `--from` onto the branch's new tip when every commit the branch gained is a merge that left the PR's own diff against `--base` as it was; anything else changes nothing, and a replay that conflicts is aborted (see Fixing your own PRs). Exit 0 means replayed ("replayed N commits onto <sha>; HEAD is <sha>"), 1 refused ("refused: <reason>"; nothing changed), 2 wrong flags. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. On a terminal the plan opens in a review screen: space toggles an action, `a`/`n` select all or none, enter confirms (`y`, or the slug typed when another slug's databases would be dropped) and applies the selection, `q` cancels. With `--yes`, `--dry-run` or `--json`, or off a terminal, the plan is printed instead and it asks its y/N and typed-slug questions on stderr, only when stdin and stderr are both terminals; otherwise it applies nothing unless you pass `--yes`. `--wait` follows the daemon while it applies the plan, `--shrink --idle` removes only free slots idle longer than `pool.idle_remove_after`, `--slot <name> --remove` removes a managed slot instead of releasing it, and `--force` discards tracked changes, accepts unpushed commits on `--external` and releases inside the close grace. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
