@@ -379,8 +379,9 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 // (fixJob.budget) for startFix to hold it, and the other reviewers' items
 // are read when the held fix starts (othersDeferred). A PR whose slot the
 // pool took back gets a job without a slot, which claims one when it runs
-// (fixClaim); a pool without a free slot refuses it before the pin goes
-// (fixSlotFree).
+// (fixClaim); a pool without a free slot refuses it before anything reads
+// GitHub or fetches the base, which the daemon's tick would wait for, and
+// before the pin goes (fixSlotFree reads the registry alone).
 func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin, carried *externalRead, fetch bool) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
@@ -476,6 +477,11 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	if kind, why := e.pausedKind(ctx, []string{role.AgentKind()}); why != "" {
 		return nil, &kindPausedError{kind: kind, text: fmt.Sprintf("%s: %s", label, why)}
 	}
+	// Before anything reads GitHub or fetches the base, in the daemon's
+	// tick: the look for a free slot reads the registry alone.
+	if err := e.fixSlotFree(ctx, repo, pr, label, has, isLow, pin); err != nil {
+		return nil, err
+	}
 	// The other reviewers' items, read before the start (spec 102): a
 	// review that found nothing and left nothing open leaves the fixer only
 	// what waits for an answer there (spec 96; a next cycle's changes
@@ -496,9 +502,6 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		if held != nil {
 			low, isLow = *held, true
 		}
-	}
-	if err := e.fixSlotFree(ctx, repo, pr, label, has, isLow, pin); err != nil {
-		return nil, err
 	}
 	var notes []string
 	switch {
@@ -1208,16 +1211,17 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 
 // fixSyncLine is the line the fix prompt names for a push GitHub rejects
 // because the branch moved (agents.FixSyncLine, spec 5.7): `magnum
-// fix-sync` of the daemon's binary with the head the fixer starts from,
-// the PR's branch and its base. "" (the prompt names none) for a PR whose
-// branch or base magnum does not know, or whose base's name a shell would
-// read.
+// fix-sync` of the daemon's binary with the slot's checkout (as the
+// db-lock line names it: the fixer's shell may stand anywhere), the head
+// the fixer starts from, the PR's branch and its base. "" (the prompt names
+// none) for a PR whose branch or base magnum does not know, or whose base's
+// name a shell would read.
 func (e *Engine) fixSyncLine(job *fixJob) string {
 	branch, base := deref(job.pr.HeadRef), cmp.Or(deref(job.pr.BaseRef), job.repo.DefaultBranch)
 	if branch == "" || !gitx.ShellSafeRef(base) {
 		return ""
 	}
-	return agents.FixSyncLine(e.d.Layout.Binary(), job.head, branch, base)
+	return agents.FixSyncLine(e.d.Layout.Binary(), job.slot.Path, job.head, branch, base)
 }
 
 // fixWait waits for the fixer's run to end, as the pipeline waits for a

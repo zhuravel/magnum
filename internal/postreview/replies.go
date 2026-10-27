@@ -330,19 +330,25 @@ type FixReplyOptions struct {
 	Issue       bool
 }
 
-// Check reports what is wrong with o.
-func (o FixReplyOptions) Check() error {
+// Check is the outcome RunFixReply refuses o with (ok false; `magnum
+// fix-reply` asks it before it reads the reply too). A pull request the
+// fixer's pane names wrongly (its MAGNUM_PR_URL) is StatusError, exit 1:
+// nothing the fixer types mends it. What the fixer's line got wrong, a
+// comment id below 1, or both or neither of --comment and --issue, is
+// StatusInvalid, exit 2, the fixer's to fix: exit 1 would tell it that the
+// reply could not be confirmed and to run the same line once more.
+func (o FixReplyOptions) Check() (out FixReplyOutcome, ok bool) {
 	switch {
 	case !ownerRe.MatchString(o.Owner) || !repoRe.MatchString(o.Repo) || o.Repo == "." || o.Repo == "..":
-		return fmt.Errorf("the repository %q is not owner/name", o.Owner+"/"+o.Repo)
+		return FixReplyOutcome{Status: StatusError, Message: fmt.Sprintf("the repository %q is not owner/name", o.Owner+"/"+o.Repo)}, false
 	case o.Number < 1:
-		return fmt.Errorf("the pull request number %d is not 1 or more", o.Number)
+		return FixReplyOutcome{Status: StatusError, Message: fmt.Sprintf("the pull request number %d is not 1 or more", o.Number)}, false
 	case o.CommentID < 0:
-		return fmt.Errorf("the comment id %d is not 1 or more", o.CommentID)
+		return FixReplyOutcome{Status: StatusInvalid, Problems: []string{fmt.Sprintf("the comment id %d is not 1 or more", o.CommentID)}}, false
 	case o.Issue == (o.CommentID != 0):
-		return errors.New("give exactly one of --comment <id> and --issue")
+		return FixReplyOutcome{Status: StatusInvalid, Problems: []string{"give exactly one of --comment <id> and --issue"}}, false
 	}
-	return nil
+	return FixReplyOutcome{}, true
 }
 
 // FixReplyGitHub is what RunFixReply reads and writes on GitHub
@@ -369,7 +375,8 @@ type FixReplyOutcome struct {
 }
 
 // ExitCode is 0 for a reply posted or already there, 2 when the fixer must
-// fix its reply (or the comment it names), 1 otherwise.
+// fix its reply or its line (the comment it names, its flags), 1
+// otherwise.
 func (o FixReplyOutcome) ExitCode() int {
 	switch o.Status {
 	case StatusReplied, StatusAlreadyPosted:
@@ -395,7 +402,7 @@ func (o FixReplyOutcome) Summary() string {
 		}
 		return fmt.Sprintf("the reply is already %s; nothing posted: %s", where, o.URL)
 	case StatusInvalid:
-		return fmt.Sprintf("the reply has %s; nothing posted: %s", textx.Count(len(o.Problems), "problem", "problems"), strings.Join(o.Problems, "; "))
+		return fmt.Sprintf("refused (%s); nothing posted: %s", textx.Count(len(o.Problems), "problem", "problems"), strings.Join(o.Problems, "; "))
 	}
 	return o.Message
 }
@@ -467,8 +474,8 @@ func checkFixReply(text string) []string {
 // unclear failure posts the reply once, while the same answer to new
 // pushback goes out.
 func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text []byte) FixReplyOutcome {
-	if err := o.Check(); err != nil {
-		return FixReplyOutcome{Status: StatusError, Message: err.Error()}
+	if out, ok := o.Check(); !ok {
+		return out
 	}
 	if problems := checkFixReply(string(text)); len(problems) > 0 {
 		return FixReplyOutcome{Status: StatusInvalid, Problems: problems}

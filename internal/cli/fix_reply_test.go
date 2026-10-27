@@ -97,10 +97,14 @@ func TestFixReplyPostsFromTheFixersPane(t *testing.T) {
 	}
 }
 
-// Without MAGNUM_PR_URL (not the fixer's pane), with a URL that names no
-// pull request, or with both or neither of --comment and --issue,
-// fix-reply posts nothing and exits 1; a refused reply exits 2.
+// Without MAGNUM_PR_URL (not the fixer's pane), or with a URL that names no
+// pull request, fix-reply posts nothing and exits 1. A refused reply exits
+// 2, and so does a line the fixer got wrong: both or neither of --comment
+// and --issue, a thread's node id for --comment, a flag it does not have,
+// an argument. Exit 1 tells the fixer that the reply could not be confirmed
+// and to run the same line once more, which never helps a wrong line.
 func TestFixReplyRefusesWhatIsNotAFixersReply(t *testing.T) {
+	const pr = "https://github.com/talkable/talkable/pull/5"
 	for _, tc := range []struct {
 		name, url string
 		args      []string
@@ -109,9 +113,12 @@ func TestFixReplyRefusesWhatIsNotAFixersReply(t *testing.T) {
 	}{
 		{"no pane", "", []string{"--issue"}, 1, "MAGNUM_PR_URL is not set: fix-reply runs in the fixer's pane, which magnum starts with the PR's URL"},
 		{"no PR", "https://github.com/talkable/talkable", []string{"--issue"}, 1, "MAGNUM_PR_URL"},
-		{"both", "https://github.com/talkable/talkable/pull/5", []string{"--issue", "--comment", "11"}, 1, "give exactly one of --comment <id> and --issue"},
-		{"neither", "https://github.com/talkable/talkable/pull/5", nil, 1, "give exactly one of --comment <id> and --issue"},
-		{"a marker", "https://github.com/talkable/talkable/pull/5", []string{"--issue"}, 2, "the reply has 1 problem; nothing posted"},
+		{"both", pr, []string{"--issue", "--comment", "11"}, 2, "nothing posted: give exactly one of --comment <id> and --issue"},
+		{"neither", pr, nil, 2, "nothing posted: give exactly one of --comment <id> and --issue"},
+		{"a thread's node id", pr, []string{"--comment", "PRRT_kwDOAbCd"}, 2, "--comment takes the number id of a review comment"},
+		{"an unknown flag", pr, []string{"--thread", "11"}, 2, "nothing posted: unknown flag: --thread"},
+		{"an argument", pr, []string{"--issue", "extra"}, 2, "nothing posted: unexpected arguments: extra"},
+		{"a marker", pr, []string{"--issue"}, 2, "refused (1 problem); nothing posted"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("MAGNUM_PR_URL", tc.url)
@@ -122,6 +129,10 @@ func TestFixReplyRefusesWhatIsNotAFixersReply(t *testing.T) {
 			}
 			if !strings.Contains(errb.String(), tc.stderr) {
 				t.Errorf("stderr = %q, want %q in it", errb, tc.stderr)
+			}
+			var got struct{ Status string }
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Status != map[int]string{1: "error", 2: "invalid"}[tc.code] {
+				t.Errorf("stdout = %s (%v), want the status of exit %d", out, err, tc.code)
 			}
 			if len(f.Calls) != 0 {
 				t.Errorf("calls = %+v", f.Calls)

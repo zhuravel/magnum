@@ -76,10 +76,20 @@ func ResolveCall(thread, url string) FixCall {
 // its merge of the base. The author merges the base on the PR's page url
 // and decides the conflict in paths (plain path characters, which fixCallRe
 // reads back): "merge the base by hand and decide the conflict in
-// app/a.rb, db/schema.rb: <url>". It has no thread.
+// app/a.rb, db/schema.rb: <url>", the first 20 named and the rest counted
+// ("… and 5 more: <url>"), as the fix prompt names them. It has no thread.
 func ConflictCall(paths []string, url string) FixCall {
-	return FixCall{URL: url, Action: "merge the base by hand and decide the conflict in " + strings.Join(paths, ", ") + ": " + url}
+	named := strings.Join(paths[:min(len(paths), maxConflictPaths)], ", ")
+	if more := len(paths) - maxConflictPaths; more > 0 {
+		named += " and " + strconv.Itoa(more) + " more"
+	}
+	return FixCall{URL: url, Action: "merge the base by hand and decide the conflict in " + named + ": " + url}
 }
+
+// maxConflictPaths bounds the paths a conflict call names, as the fix
+// prompt bounds its own: the call is one sentence of the message, the card
+// and `magnum status`.
+const maxConflictPaths = 20
 
 // fixDetails starts the last part of a fix job's message with calls: where
 // the fixer's report is.
@@ -111,7 +121,7 @@ var (
 		"|decide (?:magnum's|a human's|another reviewer's) (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the fixer declined it; reply won't fix at " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or `magnum fix [^`\\s]+` sends it back" +
 		"|resolve magnum's thread, already answered: (https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
-		"|merge the base by hand and decide the conflict in [A-Za-z0-9._/@+-]+(?:, [A-Za-z0-9._/@+-]+)*: (https://[^\\s#;,]+)")
+		"|merge the base by hand and decide the conflict in [A-Za-z0-9._/@+-]+(?:, [A-Za-z0-9._/@+-]+)*(?: and \\d{1,9} more)?: (https://[^\\s#;,]+)")
 	// fixMoreRe reads how many findings the older words after the calls name.
 	fixMoreRe = regexp.MustCompile(`^(\d+) more findings? needs? your call\b`)
 )

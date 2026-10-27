@@ -3262,6 +3262,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   claude-review, no refusal), TestOpenOfAClosedJudgeRefusesWhenNoSessionIsParkedOrARoleIsNamed,
   TestOpenOfAClosedJudgeFocusesALivePaneBeforeItRestoresAParkedOne and
   TestTheBoardsOpenFollowsTheParkedSessionWhenTheJudgesIsGone.
+- **`magnum open` stands in only with a role the daemon restores** (2026-10-27, the wave 1 review; amends
+  "`magnum open` restores through any parked session when the judge's is gone"). Park parks every session
+  with a session id, the fixer's (claude-fix), the whiteboard writer's and a judge's in reserve too, and
+  the daemon's open takes only the roles the watch runs (`RolesFor`): the newest parked session of any role
+  could be claude-fix, which the CLI accepted (its fix-role fallback), asked y/N for and sent, and the
+  daemon refused with `unknown role "claude-fix"`; a parked whiteboard or reserve judge session kept the
+  judge's refusal beside an older parked claude-review, while the board's `o` said "restores". The stand-in
+  is now the newest parked session of a role the daemon's open restores (`openRestorable`, over
+  `cfg.RolesFor(cfg.WatchFor(repo))`), in `openMain`, `openRoleOf` and `openWouldRestore` alike; without a
+  config any role may, as before. Test, failing first: TestOpenStandsInOnlyWithARoleTheDaemonRestores (a
+  newer parked claude-fix, claude-whiteboard and claude-judge beside an older parked claude-review: the
+  open, and the board, pick claude-review; with only the fixer's and the writer's parked, the judge's
+  refusal and no request).
 
 ## Operations
 
@@ -13680,6 +13693,62 @@ skill versions); people add theirs to the sections before it, at the end of the 
   specs-fail and exit-3 lines of TestTheFixSkillSyncsAPushTheBranchMovedPast. Guards: a reverse merge on a
   base of merges in TestFixSyncRefusesWhatIsNotABaseMergeOnTop (fails without the first-parent check),
   TestTheFixSyncLineNeedsTheBranchAndASafeBase, and the slot's path in TestAPushAfterAFixSyncSettles.
+- **A slot's resync and release abort whatever is left in progress, a rebase as a merge** (2026-10-27, the
+  wave 1 review; amends "The fixer merges the base when the PR conflicts with it" and "The fixer replays its
+  commits when the branch gained only a base merge"). The `abort_merge` step aborted a merge alone, so a
+  rebase `magnum fix-sync` left in progress (its abort failed, or it was killed mid-replay: exit 3) held
+  the slot: the skill forbade the fixer to rebase, and the settle's `Slots.Resync` failed at its switch
+  ("cannot switch branch while rebasing"), as every later checkout and release did, until someone aborted
+  by hand. The step is now `abort_in_progress` (`slots.abortInProgress`): it aborts what `gitx.InProgress`
+  names, a rebase, merge, cherry-pick or revert (`gitx.AbortOperation`, `git <op> --abort`, which replaces
+  `MergeAbort` and refuses any other op before git runs), with a `slot.aborted` event that names it (it
+  replaces `slot.merge_aborted`), after a `slot.discarded` event for the tracked changes the abort drops
+  (the switch's own event found none left). It runs where it ran, after the resync's and the release's
+  guard, so never over a person's changes. The skill now says that exit 3 means the replay changed the
+  checkout and fix-sync could not undo it or could not confirm what it made, and lets the fixer run `git
+  rebase --abort` once when the line says a rebase is still in progress, its only rebase command. Tests,
+  failing first: in slots (real git) TestResyncAbortsARebaseOrACherryPickLeftInProgress ("cannot switch
+  branch while rebasing", "while cherry-picking"); in gitx TestAbortOperationEndsWhatInProgressNames; the
+  exit-3 and `git rebase --abort` lines of TestTheFixSkillSyncsAPushTheBranchMovedPast.
+- **`magnum fix-reply` exits 2 for a line the fixer got wrong** (2026-10-27, the wave 1 review; amends "Every
+  reply of the fixer goes through `magnum fix-reply`, which signs it"). A non-numeric `--comment` (a
+  thread's `PRRT_` node id), an unknown flag, an argument, and both or neither of `--comment` and `--issue`
+  exited 1, which the skill reads as "could not confirm: run the same line once more", so the fixer ran
+  the wrong line again. They are `invalid` now, exit 2, the fixer's to fix (`FixReplyOptions.Check` returns
+  the outcome: a pull request the pane's `MAGNUM_PR_URL` names wrongly stays an error, exit 1, since
+  nothing the fixer types mends it), a `--comment` that does not parse says that it takes a review
+  comment's number id, and the skill says that exit 2 refuses the reply or the line. An invalid outcome's
+  line reads "refused (N problems); nothing posted: …". Accepted, and not mended: someone else's comment
+  between a lost answer and its retry makes the retry post a second copy, since `postedLast` takes the
+  same reply only when nobody else wrote after it (the rule that lets the same answer to new pushback go
+  out). Tests, failing first: TestFixReplyChecksTheOptions (postreview) and
+  TestFixReplyRefusesWhatIsNotAFixersReply (cli: a thread's node id, an unknown flag, an argument, both and
+  neither exit 2 with status invalid), and the exit-2 line of
+  TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies.
+- **The fix-sync line names the slot's checkout** (2026-10-27, the wave 1 review; amends "The fixer replays
+  its commits when the branch gained only a base merge"). The line took the checkout from the fixer's
+  current directory, so a fixer whose shell stood elsewhere (a subproject, a temporary directory) ran
+  nothing (exit 2) or ran in another repository. `agents.FixSyncLine` takes the checkout and the fix job
+  passes the slot's path, as the db-lock line does (`--checkout <slot path>`; "" leaves it out). Tests,
+  failing first: TestTheFixSyncLineReplaysInTheCheckoutItNamesFromAnyDirectory (cli, real git: the line
+  run from a directory outside any work tree replays in the slot) and the slot's path in
+  TestAPushAfterAFixSyncSettles, TestTheFixSyncLineNeedsTheBranchAndASafeBase,
+  TestTheFixPromptNamesTheFixSyncCommand and the four fix goldens.
+- **A slotless fix request looks for a free slot before it reads GitHub or fetches** (2026-10-27, the wave 1
+  review). `prepareFix` runs in the daemon's tick, and for a PR whose slot the pool took back it read the
+  other reviewers' items on GitHub, and on a review that found nothing fetched the base (up to 30
+  seconds), before `fixSlotFree`, which reads the registry alone, refused it for no free slot. The look
+  comes first now, after the other cheap refusals. A request it refuses has its slot freed for the retry
+  (`needSlot`) before the later refusals run, so a slotless request that would be refused for nothing to
+  answer may free a slot first; the retry then says why. Before, a rate-limited read of the other
+  reviewers held such a request instead of refusing it for no free slot; now it is refused, and the retry
+  goes on. Test, failing first: TestAFixWithoutAFreeSlotRefusesBeforeItReadsGitHubOrFetchesTheBase (three
+  GitHub reads, and a fetch on a review that found nothing).
+- **A conflict call names 20 paths and counts the rest** (2026-10-27, the wave 1 review; amends "The fixer
+  merges the base when the PR conflicts with it"). `attention.ConflictCall` joined every path the fixer
+  listed under Needs you into the message, the card and `magnum status`; the prompt names at most 20. It
+  names the first 20 too, then "and N more", which `fixCallRe` reads back. Test, failing first:
+  TestAConflictCallNamesTwentyPathsAndCountsTheRest.
 
 ## Learned rules
 

@@ -1,6 +1,7 @@
 package slots
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -353,7 +354,7 @@ func wantNoMerge(t *testing.T, dir string) {
 // merging"): the settle's Resync, and every later checkout or release of
 // the slot, failed until someone aborted the merge by hand. Resync aborts a
 // merge it finds in progress before its switch, in a step of its own with a
-// slot.merge_aborted event, and the slot resyncs to the reviewed head. A
+// slot.aborted event, and the slot resyncs to the reviewed head. A
 // slot in no merge runs no abort.
 func TestResyncAbortsAMergeTheFixerLeftInProgress(t *testing.T) {
 	h := newHarness(t)
@@ -365,15 +366,15 @@ func TestResyncAbortsAMergeTheFixerLeftInProgress(t *testing.T) {
 	}
 	wantNoMerge(t, sl.Path)
 	h.wantResynced(sl.Name, h.shaPR8)
-	if done, err := h.st.StepDone(h.ctx, "slot:"+sl.Name+":resync:"+h.shaPR8[:7], "abort_merge"); err != nil || !done {
-		t.Fatalf("step abort_merge done = %v, %v", done, err)
+	if done, err := h.st.StepDone(h.ctx, "slot:"+sl.Name+":resync:"+h.shaPR8[:7], "abort_in_progress"); err != nil || !done {
+		t.Fatalf("step abort_in_progress done = %v, %v", done, err)
 	}
 	evs, err := h.st.EventsBySubject(h.ctx, "slot:"+sl.Name, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(slices.DeleteFunc(evs, func(e store.Event) bool { return e.Kind != "slot.merge_aborted" })); n != 1 {
-		t.Fatalf("slot.merge_aborted events = %d, want 1", n)
+	if n := len(slices.DeleteFunc(evs, func(e store.Event) bool { return e.Kind != "slot.aborted" })); n != 1 {
+		t.Fatalf("slot.aborted events = %d, want 1", n)
 	}
 
 	h.run.reset()
@@ -406,5 +407,82 @@ func TestReleaseAbortsAMergeLeftInProgress(t *testing.T) {
 	}
 	if head := gitT(t, sl.Path, "rev-parse", "HEAD"); head != h.shaMaster {
 		t.Fatalf("HEAD = %s, want master", head)
+	}
+}
+
+// midOperation leaves dir in the middle of op, a rebase or a cherry-pick
+// stopped at a conflict, as `magnum fix-sync` leaves a slot whose replay's
+// abort failed or that was killed mid-replay (exit 3): HEAD at head with a
+// fixer's commit on top, replayed onto (rebase) or picking (cherry-pick) a
+// commit on base that changed README as the fixer's did.
+func midOperation(t *testing.T, dir, op, base, head string) {
+	t.Helper()
+	gitT(t, dir, "switch", "--quiet", "--detach", base)
+	tip := fixerCommit(t, dir, "on the base")
+	gitT(t, dir, "switch", "--quiet", "--detach", head)
+	fixerCommit(t, dir, "the fixer's")
+	args := []string{"cherry-pick", tip}
+	if op == "rebase" {
+		args = []string{"rebase", "--onto", tip, head}
+	}
+	if _, err := gitRun(dir, args...); err == nil {
+		t.Fatalf("the %s applied cleanly; the test needs a conflict", op)
+	}
+	if got := inProgressOf(t, dir); got != op {
+		t.Fatalf("in progress: %q, want %q", got, op)
+	}
+}
+
+// inProgressOf names the operation dir is in the middle of ("" for none).
+func inProgressOf(t *testing.T, dir string) string {
+	t.Helper()
+	for _, p := range []struct{ op, path string }{
+		{"rebase", "rebase-merge"}, {"rebase", "rebase-apply"}, {"merge", "MERGE_HEAD"}, {"cherry-pick", "CHERRY_PICK_HEAD"},
+	} {
+		if _, err := os.Lstat(gitT(t, dir, "rev-parse", "--path-format=absolute", "--git-path", p.path)); err == nil {
+			return p.op
+		}
+	}
+	return ""
+}
+
+// A rebase fix-sync left in progress (its abort failed, or it was killed
+// mid-replay: exit 3) held the slot: the step that ended a merge left the
+// rebase alone, the skill forbade the fixer to rebase, and the settle's
+// Resync failed at its switch ("cannot switch branch while rebasing"), as
+// every later checkout and release did, until someone aborted by hand. The
+// step aborts whatever is in progress, a rebase or a cherry-pick as a
+// merge, with an event that names it, after a slot.discarded event for the
+// tracked changes the abort drops; the slot resyncs to the reviewed head.
+func TestResyncAbortsARebaseOrACherryPickLeftInProgress(t *testing.T) {
+	for _, op := range []string{"rebase", "cherry-pick"} {
+		t.Run(op, func(t *testing.T) {
+			h := newHarness(t)
+			sl, _ := h.claimedCheckout(8, h.shaPR8)
+			midOperation(t, sl.Path, op, h.shaMaster, h.shaPR8)
+
+			if err := h.m.Resync(h.ctx, sl, h.shaPR8); err != nil {
+				t.Fatalf("Resync: %v", err)
+			}
+			if got := inProgressOf(t, sl.Path); got != "" {
+				t.Fatalf("a %s is still in progress", got)
+			}
+			h.wantResynced(sl.Name, h.shaPR8)
+			evs, err := h.st.EventsBySubject(h.ctx, "slot:"+sl.Name, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			aborted := slices.DeleteFunc(slices.Clone(evs), func(e store.Event) bool { return e.Kind != "slot.aborted" })
+			if len(aborted) != 1 || !strings.Contains(aborted[0].Message, "aborted a "+op+" left in progress") {
+				t.Fatalf("slot.aborted events = %+v, want one that names the %s", aborted, op)
+			}
+			// Newest first: the abort's event comes after the one that names
+			// what it drops.
+			if discarded := slices.IndexFunc(evs, func(e store.Event) bool {
+				return e.Kind == "slot.discarded" && strings.Contains(e.Message, "README") && e.ID < aborted[0].ID
+			}); discarded < 0 {
+				t.Fatalf("events %+v: want a slot.discarded naming README before the abort", evs)
+			}
+		})
 	}
 }

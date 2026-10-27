@@ -785,18 +785,27 @@ func TestFixReplyPostsTheSameAnswerAgainAfterPushback(t *testing.T) {
 }
 
 // The options come from the fixer's pane and flags: a PR and exactly one
-// of a comment id and --issue.
+// of a comment id and --issue. Exit 1 tells the fixer that the reply could
+// not be confirmed and to run the same line once more, which cannot help a
+// line that names no target, or two: what the fixer's line got wrong is
+// invalid (exit 2: fix the line), and only a pull request the pane names
+// wrongly is an error.
 func TestFixReplyChecksTheOptions(t *testing.T) {
 	w := newWorld(t)
-	for _, o := range []FixReplyOptions{
-		{Owner: "talkable", Repo: "talkable", Number: 5},
-		{Owner: "talkable", Repo: "talkable", Number: 5, CommentID: 11, Issue: true},
-		{Owner: "talkable", Repo: "talkable", Number: 0, Issue: true},
-		{Owner: "talkable", Repo: "..", Number: 5, Issue: true},
-		{Owner: "talkable", Repo: "talkable", Number: 5, CommentID: -1},
+	for _, tc := range []struct {
+		o      FixReplyOptions
+		status string
+	}{
+		{FixReplyOptions{Owner: "talkable", Repo: "talkable", Number: 5}, StatusInvalid},
+		{FixReplyOptions{Owner: "talkable", Repo: "talkable", Number: 5, CommentID: 11, Issue: true}, StatusInvalid},
+		{FixReplyOptions{Owner: "talkable", Repo: "talkable", Number: 5, CommentID: -1}, StatusInvalid},
+		{FixReplyOptions{Owner: "talkable", Repo: "talkable", Number: 0, Issue: true}, StatusError},
+		{FixReplyOptions{Owner: "talkable", Repo: "..", Number: 5, Issue: true}, StatusError},
 	} {
-		if out := w.runFixReply(o, "Fixed."); out.Status != StatusError || out.ExitCode() != 1 {
-			t.Errorf("%+v: outcome = %+v", o, out)
+		out := w.runFixReply(tc.o, "Fixed.")
+		want := map[string]int{StatusInvalid: 2, StatusError: 1}[tc.status]
+		if out.Status != tc.status || out.ExitCode() != want {
+			t.Errorf("%+v: outcome = %+v, want %s (exit %d)", tc.o, out, tc.status, want)
 		}
 	}
 	if w.calls("gh") != 0 {

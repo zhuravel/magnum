@@ -400,7 +400,7 @@ func TestTheBoardsOpenFollowsTheParkedSessionWhenTheJudgesIsGone(t *testing.T) {
 		{"no parked session", []store.Session{judgeGone}, store.RoleJudge, false},
 		{"no judge session at all", []store.Session{claude}, store.RoleJudge, false},
 	} {
-		if got := openWouldRestore(tc.all, store.RoleJudge); got != tc.want {
+		if got := openWouldRestore(tc.all, store.RoleJudge, openRestorable(h.d.Cfg, "talkable/talkable")); got != tc.want {
 			t.Errorf("%s: openWouldRestore %v, want %v", tc.name, got, tc.want)
 		}
 		if got := openRoleOf(h.ctx, h.st, h.d.Cfg, pr.ID, "talkable/talkable", tc.all); got != tc.role {
@@ -417,11 +417,66 @@ func TestOpenRestoreRoleTakesTheLaterOfTwoParkedSessionsThatStartedTogether(t *t
 	judge := store.Session{ID: 1, Role: store.RoleJudge, State: store.SessionClosed, StartedAt: at.Add(-time.Hour)}
 	claude := store.Session{ID: 2, Role: store.RoleClaude, State: store.SessionParked, StartedAt: at}
 	simplify := store.Session{ID: 3, Role: store.RoleSimplify, State: store.SessionParked, StartedAt: at}
-	if got := openRestoreRole([]store.Session{judge, claude, simplify}, store.RoleJudge); got != store.RoleSimplify {
+	if got := openRestoreRole([]store.Session{judge, claude, simplify}, store.RoleJudge, anyRole); got != store.RoleSimplify {
 		t.Errorf("claude-review (id 2) and claude-simplify (id 3) parked together: %s, want %s", got, store.RoleSimplify)
 	}
 	simplify.ID, claude.ID = 2, 3
-	if got := openRestoreRole([]store.Session{judge, simplify, claude}, store.RoleJudge); got != store.RoleClaude {
+	if got := openRestoreRole([]store.Session{judge, simplify, claude}, store.RoleJudge, anyRole); got != store.RoleClaude {
 		t.Errorf("claude-simplify (id 2) and claude-review (id 3) parked together: %s, want %s", got, store.RoleClaude)
+	}
+}
+
+// anyRole lets any parked role stand in (openRestoreRole), as without a
+// config.
+func anyRole(string) bool { return true }
+
+// Park parks every session with a session id, the fixer's (claude-fix) and
+// the whiteboard writer's (claude-whiteboard) and a judge in reserve
+// (claude-judge) too, and the daemon's open restores only the roles the
+// watch runs (config.Config.RolesFor): the newest parked session of any role
+// made open ask y/N and then fail with "unknown role", or keep the judge's
+// refusal beside an older parked claude-review. Open, and the board's o,
+// stand in only with a role the daemon's open takes: claude-review here,
+// and with none parked the judge's refusal, no request and no question.
+func TestOpenStandsInOnlyWithARoleTheDaemonRestores(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.openGoneFixture(store.SessionClosed, map[string]time.Duration{
+		"claude-fix":        time.Minute,
+		"claude-whiteboard": 2 * time.Minute,
+		"claude-judge":      3 * time.Minute,
+		store.RoleClaude:    time.Hour, // the oldest parked, the only one the daemon restores
+	})
+	all, err := h.st.SessionsByPR(h.ctx, pr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := openRoleOf(h.ctx, h.st, h.d.Cfg, pr.ID, "talkable/talkable", all); got != store.RoleClaude {
+		t.Errorf("openRoleOf = %s, want %s", got, store.RoleClaude)
+	}
+	if code := h.cmd("open", "5", "--no-reveal"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	reqs := h.requests()
+	if len(reqs) != 1 || actDecode[engine.OpenPayload](t, reqs[0].Payload).Role != store.RoleClaude {
+		t.Fatalf("requests %+v, want one open of %s", reqs, store.RoleClaude)
+	}
+	actContains(t, h.out.String(), "talkable#5 claude-review: focused mg-talkable-5-claude-review")
+
+	h2 := newActHarness(t)
+	pr2 := h2.openGoneFixture(store.SessionClosed, map[string]time.Duration{"claude-fix": time.Minute, "claude-whiteboard": time.Hour})
+	all2, err := h2.st.SessionsByPR(h2.ctx, pr2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := openRoleOf(h2.ctx, h2.st, h2.d.Cfg, pr2.ID, "talkable/talkable", all2)
+	if restores := openWouldRestore(all2, role, openRestorable(h2.d.Cfg, "talkable/talkable")); role != store.RoleJudge || restores {
+		t.Errorf("openRoleOf = %s (restores %v), want %s and no restore", role, restores, store.RoleJudge)
+	}
+	if code := h2.cmd("open", "5", "--no-reveal"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	actContains(t, h2.errb.String(), "the codex-judge session of talkable#5 is closed", "starts a new round with fresh sessions")
+	if reqs := h2.requests(); len(reqs) != 0 {
+		t.Fatalf("requests %+v: no parked session the daemon restores", reqs)
 	}
 }

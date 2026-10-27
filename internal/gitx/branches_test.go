@@ -421,6 +421,38 @@ func TestInProgressSeesARebase(t *testing.T) {
 	}
 }
 
+// AbortOperation ends what InProgress names, a rebase as a merge (the
+// slot's abort step before a switch), and refuses anything else before git
+// runs: the op becomes git's subcommand.
+func TestAbortOperationEndsWhatInProgressNames(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	fx.git(fx.clone, "checkout", "--quiet", "-b", "side")
+	fx.commit(fx.clone, "README.md", "hello, side\n", "side")
+	fx.git(fx.clone, "checkout", "--quiet", "main")
+	fx.commit(fx.clone, "README.md", "hello, main\n", "main")
+	fx.git(fx.clone, "checkout", "--quiet", "side")
+	for _, op := range []string{"rebase", "merge"} {
+		if _, err := fx.r.Run(ctx, gitCmd(fx.clone, op, "main")); err == nil {
+			t.Fatalf("the %s did not stop", op)
+		}
+		if p, err := fx.c.InProgress(ctx, fx.clone); err != nil || p != op {
+			t.Fatalf("during the %s = %q, %v", op, p, err)
+		}
+		if err := fx.c.AbortOperation(ctx, fx.clone, op); err != nil {
+			t.Fatalf("AbortOperation(%s): %v", op, err)
+		}
+		if p, err := fx.c.InProgress(ctx, fx.clone); err != nil || p != "" {
+			t.Fatalf("after the %s's abort = %q, %v", op, p, err)
+		}
+	}
+	for _, op := range []string{"", "am", "--exec=true", "reset"} {
+		if err := fx.c.AbortOperation(ctx, fx.clone, op); err == nil || !strings.Contains(err.Error(), "no operation git keeps in progress") {
+			t.Errorf("AbortOperation(%q) = %v, want a refusal before git", op, err)
+		}
+	}
+}
+
 // The skill editor's orphan cleanup lists its own branches: the local
 // branches under a prefix, by their short names, sorted; a branch whose
 // name only starts like the prefix, a remote one and a tag are not listed.

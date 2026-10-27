@@ -818,6 +818,49 @@ func TestAFixWithoutAFreeSlotRefusesAndNamesTheRetry(t *testing.T) {
 	}
 }
 
+// The daemon answers `magnum fix` in its tick. A request for a PR without
+// a slot read the other reviewers' items on GitHub, and on a review that
+// found nothing fetched the base (up to fixRequestFetch, 30 seconds), before
+// the look for a free slot that reads nothing refused it. The look comes
+// first now: with no slot free the request reads nothing on GitHub and
+// fetches nothing, a review with findings or one that found nothing on a
+// PR that conflicts with its base alike.
+func TestAFixWithoutAFreeSlotRefusesBeforeItReadsGitHubOrFetchesTheBase(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		findings map[string]int
+	}{
+		{"findings", map[string]int{"P2": 2}},
+		{"found nothing, conflicting", map[string]int{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			fixablePR(h, "zhuravel", tc.findings)
+			git.conflict("app/models/offer.rb")
+			handBack(h)
+			takeOnlySlot(h)
+			reads := func() int {
+				return h.gh.count("threads:") + h.gh.count("issue_comments:") + h.gh.count("all_reviews:") + h.gh.count("reviews:")
+			}
+			readsBefore := reads()
+			fetchesBefore, _ := git.calls()
+
+			id := h.fix(FixPayload{})
+			h.handle()
+			want := "no free talkable/talkable slot right now; run `magnum fix talkable/talkable#2` again shortly"
+			if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+				t.Fatalf("%s %q, want failed %q", r.State, deref(r.Result), want)
+			}
+			if n := reads() - readsBefore; n != 0 {
+				t.Errorf("the refused request read GitHub %d times", n)
+			}
+			if fetches, _ := git.calls(); len(fetches) != len(fetchesBefore) {
+				t.Errorf("the refused request fetched %v", fetches[len(fetchesBefore):])
+			}
+		})
+	}
+}
+
 // A claim whose checkout fails after the reservation hands the slot back, as
 // a failed `magnum open` does: the slot is released and free again, no fixer
 // starts, and the loop ends failed with the claim's error.

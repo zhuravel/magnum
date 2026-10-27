@@ -121,7 +121,7 @@ func fixFixture() RoleData {
 	d.ReviewFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review.json"
 	d.ExternalFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/external-threads.json"
 	d.ReviewerLogin = "talkable[bot]"
-	d.FixSyncCommand = FixSyncLine(d.Magnum, d.HeadSHA, d.HeadRef, "master")
+	d.FixSyncCommand = FixSyncLine(d.Magnum, d.Checkout, d.HeadSHA, d.HeadRef, "master")
 	return d
 }
 

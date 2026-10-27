@@ -608,13 +608,16 @@ func FixReplyLine(magnum string) string
     postreview.FixReplyMarker, by which magnum tells the fixer's replies from
     the author's own.
 
-func FixSyncLine(magnum, from, branch, base string) string
-    FixSyncLine is the line the fixer runs when GitHub rejects its push because
-    the branch moved (RoleData.FixSyncCommand): `magnum fix-sync` of the
-    daemon's binary (else magnum on PATH) with the run's start head (from),
-    the PR's branch and its base branch, each shell-quoted. The command replays
-    the fixer's commits onto the branch's new tip when the branch gained only
-    merges of the base, and changes nothing otherwise.
+func FixSyncLine(magnum, checkout, from, branch, base string) string
+    FixSyncLine is the line the fixer runs when GitHub rejects its push
+    because the branch moved (RoleData.FixSyncCommand): `magnum fix-sync` of
+    the daemon's binary (else magnum on PATH) with the fixer's checkout (the
+    slot's path, so the line replays there wherever the fixer's shell stands,
+    as DBLockLine's does; "" leaves it out, and the command takes the git work
+    tree it runs in), the run's start head (from), the PR's branch and its base
+    branch, each shell-quoted. The command replays the fixer's commits onto the
+    branch's new tip when the branch gained only merges of the base, and changes
+    nothing otherwise.
 
 func HasSessionID(s store.Session) bool
     HasSessionID reports whether session s has its CLI's session id.
@@ -2526,10 +2529,10 @@ type RoleData struct {
 	FixReplyCommand string
 	// FixSyncCommand is the fix prompt's too: the line the fixer runs once
 	// when GitHub rejects its push because the branch moved, `magnum
-	// fix-sync` with the run's start head, the PR's branch and its base
-	// (FixSyncLine), which replays the fixer's commits onto a merge of the
-	// base the branch gained. Never derived, since only the fix job knows
-	// the PR's base: "" = the prompt names no fix-sync.
+	// fix-sync` with the slot's checkout, the run's start head, the PR's
+	// branch and its base (FixSyncLine), which replays the fixer's commits
+	// onto a merge of the base the branch gained. Never derived, since only
+	// the fix job knows the PR's base: "" = the prompt names no fix-sync.
 	FixSyncCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
@@ -3015,7 +3018,8 @@ func ConflictCall(paths []string, url string) FixCall
     its merge of the base. The author merges the base on the PR's page url
     and decides the conflict in paths (plain path characters, which fixCallRe
     reads back): "merge the base by hand and decide the conflict in app/a.rb,
-    db/schema.rb: <url>". It has no thread.
+    db/schema.rb: <url>", the first 20 named and the rest counted ("… and 5
+    more: <url>"), as the fix prompt names them. It has no thread.
 
 func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCall
     DeclinedCall is the call of a finding the fixer did not fix and left to the
@@ -11705,6 +11709,13 @@ type Client struct {
 func New(r execx.Runner) *Client
     New returns a Client that executes commands with r.
 
+func (c *Client) AbortOperation(ctx context.Context, dir, op string) error
+    AbortOperation ends op, the operation dir is in the middle of as InProgress
+    names it ("rebase", "merge", "cherry-pick" or "revert"), with `git <op>
+    --abort`: HEAD, the index and the work tree go back to where it started.
+    Callers ask InProgress first; with nothing in progress git fails, and any
+    other op is an error before git runs.
+
 func (c *Client) BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
     BranchDelete deletes a local branch (force = -D, otherwise -d). A branch
     that does not exist counts as deleted; git's refusal to delete an existing
@@ -11875,11 +11886,6 @@ func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, 
     (git grep -o). Binary files are left out. A word no file names is absent;
     nil when none is named or words is empty. rev must name a commit (no range,
     no "<rev>:<path>").
-
-func (c *Client) MergeAbort(ctx context.Context, dir string) error
-    MergeAbort ends the merge dir is in the middle of (`git merge --abort`):
-    HEAD, the index and the work tree go back to where the merge started.
-    Callers ask InProgress first; with no merge in progress git fails.
 
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
@@ -16820,8 +16826,14 @@ type FixReplyOptions struct {
     the reply goes into (CommentID: its first comment or any reply in it),
     or the pull request's conversation (Issue).
 
-func (o FixReplyOptions) Check() error
-    Check reports what is wrong with o.
+func (o FixReplyOptions) Check() (out FixReplyOutcome, ok bool)
+    Check is the outcome RunFixReply refuses o with (ok false; `magnum
+    fix-reply` asks it before it reads the reply too). A pull request the
+    fixer's pane names wrongly (its MAGNUM_PR_URL) is StatusError, exit 1:
+    nothing the fixer types mends it. What the fixer's line got wrong, a comment
+    id below 1, or both or neither of --comment and --issue, is StatusInvalid,
+    exit 2, the fixer's to fix: exit 1 would tell it that the reply could not be
+    confirmed and to run the same line once more.
 
 type FixReplyOutcome struct {
 	Status   string   `json:"status"`
@@ -16854,7 +16866,7 @@ func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text
 
 func (o FixReplyOutcome) ExitCode() int
     ExitCode is 0 for a reply posted or already there, 2 when the fixer must fix
-    its reply (or the comment it names), 1 otherwise.
+    its reply or its line (the comment it names, its flags), 1 otherwise.
 
 func (o FixReplyOutcome) Summary() string
     Summary is the outcome in one line (ids and links, no reply text).
@@ -18293,24 +18305,28 @@ func (m *Manager) RecordSchema(ctx context.Context, slot store.Slot, c SchemaChe
 func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
     Release hands a claimed or held pool slot back to the pool. Steps (subject
     "slot:<name>:release"): guard (Guard: pins, holds, a human's agent or
-    process, HEAD drift, tracked changes a human made), then the slot moves to
-    releasing, fetch_base, reset (placeholder branch → origin/<base>, tracked
-    changes discarded after a slot.discarded event, checked_out_sha cleared;
-    origin/<base>'s commit is written to the kv store first, as Checkout's
-    switch does, so a release interrupted after the reset is no head drift),
-    delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check (resetSchema:
-    a LazySchema pool keeps the databases unless MAX(schema_migrations.version)
-    of the development database differs from the version of the schema recorded
-    for them; otherwise when dirty_schema is set or that version differs from
-    db/schema.rb at HEAD: the slot moves to dirty_schema and pool.reset_db
-    runs through mise exec, 30m; a second failure in a row moves the slot to
-    broken, with its PR released unless it is pinned, and returns ErrBroken,
-    as does a slot whose readiness reset_db failed in BreakAfterResetFailures
-    rounds in a row) and mark_free (store.ReleaseSlot: free, pr_id cleared,
-    assignment closed with reason). A releasing or dirty_schema slot resumes
-    after its last completed step, after Guard ran again: whatever a human did
-    since the last attempt refuses the release before its next destructive step.
-    Per-PR slots are removed instead (RemovePRWorktree semantics).
+    process, HEAD drift, tracked changes a human made), then the slot moves
+    to releasing, fetch_base, abort_in_progress (a merge, rebase, cherry-pick
+    or revert left in progress, which git would refuse the reset over,
+    is aborted after a slot.discarded event for the tracked changes it drops,
+    with a slot.aborted event: abortInProgress), reset (placeholder branch
+    → origin/<base>, tracked changes discarded after a slot.discarded event,
+    checked_out_sha cleared; origin/<base>'s commit is written to the kv store
+    first, as Checkout's switch does, so a release interrupted after the reset
+    is no head drift), delete_ref (refs/magnum/pr/N), render_mise, deps,
+    schema_check (resetSchema: a LazySchema pool keeps the databases unless
+    MAX(schema_migrations.version) of the development database differs from
+    the version of the schema recorded for them; otherwise when dirty_schema
+    is set or that version differs from db/schema.rb at HEAD: the slot
+    moves to dirty_schema and pool.reset_db runs through mise exec, 30m;
+    a second failure in a row moves the slot to broken, with its PR released
+    unless it is pinned, and returns ErrBroken, as does a slot whose readiness
+    reset_db failed in BreakAfterResetFailures rounds in a row) and mark_free
+    (store.ReleaseSlot: free, pr_id cleared, assignment closed with reason).
+    A releasing or dirty_schema slot resumes after its last completed step,
+    after Guard ran again: whatever a human did since the last attempt refuses
+    the release before its next destructive step. Per-PR slots are removed
+    instead (RemovePRWorktree semantics).
 
 func (m *Manager) Remove(ctx context.Context, slot store.Slot, pool config.Pool, force bool) error
     Remove tears a pool slot down: steps of subject "slot:<name>:remove" are
@@ -18363,8 +18379,8 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
     starts clean. sha is the head the job settled on, a commit id: the one
     the fixer pushed, or the head the review ran on when nothing was pushed,
     in which case the fixer's local commits are left behind (the reflog keeps
-    them). It runs the steps guard, fetch, abort_merge and switch under the
-    subject "slot:<name>:resync:<sha7>", a new generation on every call,
+    them). It runs the steps guard, fetch, abort_in_progress and switch under
+    the subject "slot:<name>:resync:<sha7>", a new generation on every call,
     and ends with a slot.resync event:
       - guard is guardDiscard, not Guard: the slot is refused (ErrHold) when it
         is pinned or held, when a person's agent or process is in it, or when
@@ -18375,8 +18391,9 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
       - fetch looks sha up in the slot and fetches the commit by id into the
         main clone only when the slot lacks it (a head pushed from another
         clone);
-      - abort_merge ends a merge the fixer left in progress, which git would
-        refuse the switch over (abortMerge);
+      - abort_in_progress ends a merge, rebase, cherry-pick or revert left in
+        progress (the fixer's base merge, fix-sync's replay), which git would
+        refuse the switch over (abortInProgress);
       - switch notes the tracked changes it drops (a slot.discarded event) and
         records the resulting HEAD as checked_out_sha through the pending-switch
         key, as a checkout does. A HEAD that already is sha with no tracked

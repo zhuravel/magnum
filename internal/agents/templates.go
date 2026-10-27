@@ -789,10 +789,10 @@ type RoleData struct {
 	FixReplyCommand string
 	// FixSyncCommand is the fix prompt's too: the line the fixer runs once
 	// when GitHub rejects its push because the branch moved, `magnum
-	// fix-sync` with the run's start head, the PR's branch and its base
-	// (FixSyncLine), which replays the fixer's commits onto a merge of the
-	// base the branch gained. Never derived, since only the fix job knows
-	// the PR's base: "" = the prompt names no fix-sync.
+	// fix-sync` with the slot's checkout, the run's start head, the PR's
+	// branch and its base (FixSyncLine), which replays the fixer's commits
+	// onto a merge of the base the branch gained. Never derived, since only
+	// the fix job knows the PR's base: "" = the prompt names no fix-sync.
 	FixSyncCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
@@ -837,12 +837,19 @@ func FixReplyLine(magnum string) string {
 
 // FixSyncLine is the line the fixer runs when GitHub rejects its push
 // because the branch moved (RoleData.FixSyncCommand): `magnum fix-sync`
-// of the daemon's binary (else magnum on PATH) with the run's start head
-// (from), the PR's branch and its base branch, each shell-quoted. The
-// command replays the fixer's commits onto the branch's new tip when the
-// branch gained only merges of the base, and changes nothing otherwise.
-func FixSyncLine(magnum, from, branch, base string) string {
-	return shellLine([]string{cmp.Or(magnum, "magnum"), "fix-sync", "--from", from, "--branch", branch, "--base", base})
+// of the daemon's binary (else magnum on PATH) with the fixer's checkout
+// (the slot's path, so the line replays there wherever the fixer's shell
+// stands, as DBLockLine's does; "" leaves it out, and the command takes
+// the git work tree it runs in), the run's start head (from), the PR's
+// branch and its base branch, each shell-quoted. The command replays the
+// fixer's commits onto the branch's new tip when the branch gained only
+// merges of the base, and changes nothing otherwise.
+func FixSyncLine(magnum, checkout, from, branch, base string) string {
+	args := []string{cmp.Or(magnum, "magnum"), "fix-sync"}
+	if checkout != "" {
+		args = append(args, "--checkout", checkout)
+	}
+	return shellLine(append(args, "--from", from, "--branch", branch, "--base", base))
 }
 
 // FixPromptInput is what the fix job knows beyond the PR, the role and the

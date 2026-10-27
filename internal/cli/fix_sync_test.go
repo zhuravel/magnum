@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -338,6 +339,33 @@ func TestFixSyncRefusesWhatIsNotABaseMergeOnTop(t *testing.T) {
 				t.Errorf("the checkout after the refusal: %q, want %q", got, dirty)
 			}
 		})
+	}
+}
+
+// The fixer's shell may stand anywhere when its push is rejected (a `cd`
+// into a subproject, a temporary directory), and the line the prompt names
+// took the checkout from the current directory: outside the checkout it
+// ran nothing (exit 2), or in another repository. The line names the
+// slot's checkout, as the db-lock line does, and replays there from any
+// directory.
+func TestTheFixSyncLineReplaysInTheCheckoutItNamesFromAnyDirectory(t *testing.T) {
+	s := newSyncRepo(t)
+	s.commit(s.slot, "config.rb", strings.Replace(strings.Replace(syncConfig, "a\n", "A\n", 1), "h\n", "H\n", 1), "Fix the last line")
+	merge := s.updateBranch("docs/main.md", "main moves\n")
+	line := agents.FixSyncLine("magnum", s.slot, s.start, "feature", "main")
+	args := strings.Fields(line)
+	if strings.ContainsAny(line, `'"\`) || len(args) < 2 || args[0] != "magnum" {
+		t.Fatalf("the line %q needs no quoting here", line)
+	}
+	t.Chdir(t.TempDir()) // no git work tree here
+
+	c, out, errb := bareContext(t)
+	c.layoutErr = os.ErrPermission
+	if code := execute(c, args[1:]); code != 0 {
+		t.Fatalf("%s: exit %d\nstdout: %s\nstderr: %s", line, code, out, errb)
+	}
+	if got := s.git(s.slot, "rev-parse", "HEAD~1"); got != merge {
+		t.Errorf("HEAD~1 = %s, want the merge %s: the replay ran elsewhere", got, merge)
 	}
 }
 

@@ -2,6 +2,7 @@ package attention
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -358,6 +359,28 @@ func TestAConflictCallReadsBackForTheCard(t *testing.T) {
 	}
 	if b, err := json.Marshal(conflict); err != nil || strings.Contains(string(b), `"thread"`) {
 		t.Errorf("the conflict call's JSON = %s, %v; want no thread", b, err)
+	}
+}
+
+// A conflict call named every path the fixer listed, however many, in the
+// message, the card and `magnum status`; the fix prompt names at most 20 and
+// counts the rest. The call does the same ("and 5 more"), and reads back.
+func TestAConflictCallNamesTwentyPathsAndCountsTheRest(t *testing.T) {
+	const page = "https://github.com/talkable/talkable/pull/2"
+	var paths []string
+	for i := range 25 {
+		paths = append(paths, fmt.Sprintf("app/models/m%02d.rb", i))
+	}
+	conflict := ConflictCall(paths, page)
+	if want := "merge the base by hand and decide the conflict in " + strings.Join(paths[:20], ", ") + " and 5 more: " + page; conflict.Action != want {
+		t.Fatalf("ConflictCall = %q\nwant           %q", conflict.Action, want)
+	}
+	if got := ConflictCall(paths[:20], page).Action; strings.Contains(got, "more") || !strings.Contains(got, paths[19]+": ") {
+		t.Errorf("twenty paths = %q, want all of them named and none counted", got)
+	}
+	r := Explain(KindFix, "fix: "+FixCallsText([]FixCall{conflict}, "", "/state/claude-fix.md"), "talkable#2")
+	if !slices.Equal(r.NeedsYou, []FixCall{conflict}) || r.Summary != "fix: merge the base by hand" {
+		t.Errorf("read back: needs you %+v, summary %q", r.NeedsYou, r.Summary)
 	}
 }
 

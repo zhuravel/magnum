@@ -49,14 +49,21 @@ func newFixReplyCmd(c *Context) *cobra.Command {
 			"same reply; the same answer after someone else's comment (new pushback) goes out.\n\n"+
 			"It prints one JSON object on stdout (status: replied, already_posted, invalid or error, with the thread, the "+
 			"reply's id and url, or the problems) and one line on stderr. Exit 0: the reply is on GitHub; 2: fix the reply "+
-			"(or the comment id) and run it again; 1: anything else, the reply could not be confirmed (it may have gone out "+
+			"or the line (the comment id, both or neither of --comment and --issue, a flag or an argument it does not take) and "+
+			"run it again; 1: anything else, the reply could not be confirmed (it may have gone out "+
 			"with its answer lost): run it again with the same reply. It reads no config and no registry, never talks to the "+
 			"daemon and writes no file.",
 		func(pos []string) int { return runFixReply(c, comment, issue, pos) })
 	// The command needs no magnum layout: it runs wherever the fixer's pane is.
 	cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
-		return exitCode(fixReplyPrint(c, postreview.FixReplyOutcome{Status: postreview.StatusError, Message: err.Error()}))
+		// The fixer's line is wrong: exit 2, never 1, which asks it to run
+		// the same line once more.
+		problem := err.Error()
+		if strings.Contains(problem, `"--comment" flag`) {
+			problem += "; --comment takes the number id of a review comment (its databaseId), not a thread's node id"
+		}
+		return exitCode(fixReplyInvalid(c, problem))
 	})
 	fs := cmd.Flags()
 	fs.Int64Var(&comment, "comment", 0, "the review comment whose thread the reply answers")
@@ -69,7 +76,7 @@ func runFixReply(c *Context, comment int64, issue bool, pos []string) int {
 		return fixReplyPrint(c, postreview.FixReplyOutcome{Status: postreview.StatusError, Message: fmt.Sprintf(format, args...)})
 	}
 	if len(pos) > 0 {
-		return fail("unexpected arguments: %s", strings.Join(pos, " "))
+		return fixReplyInvalid(c, "unexpected arguments: "+strings.Join(pos, " "))
 	}
 	url := os.Getenv("MAGNUM_PR_URL")
 	if url == "" {
@@ -80,8 +87,8 @@ func runFixReply(c *Context, comment int64, issue bool, pos []string) int {
 		return fail("MAGNUM_PR_URL %q names no pull request: %v", url, err)
 	}
 	o := postreview.FixReplyOptions{Owner: owner, Repo: repo, Number: number, CommentID: comment, Issue: issue}
-	if err := o.Check(); err != nil {
-		return fail("%v", err)
+	if out, ok := o.Check(); !ok {
+		return fixReplyPrint(c, out)
 	}
 	text, err := io.ReadAll(io.LimitReader(fixReplyStdin(), maxFixReplyRead))
 	if err != nil {
@@ -99,4 +106,11 @@ func fixReplyPrint(c *Context, out postreview.FixReplyOutcome) int {
 	_ = writeJSON(c.Stdout, out)
 	fmt.Fprintln(c.Stderr, "magnum fix-reply:", execx.Redact(out.Summary()))
 	return out.ExitCode()
+}
+
+// fixReplyInvalid prints the refusal of a line the fixer got wrong (a flag,
+// an argument) as invalid, exit 2: the fixer fixes the line, where exit 1
+// would ask it to run the same line once more.
+func fixReplyInvalid(c *Context, problem string) int {
+	return fixReplyPrint(c, postreview.FixReplyOutcome{Status: postreview.StatusInvalid, Problems: []string{execx.Redact(problem)}})
 }

@@ -390,13 +390,15 @@ func TestTheFixPromptNamesTheFixReplyCommand(t *testing.T) {
 // branch while the fixer worked, the push was rejected, and the skill's
 // rule against pull, merge and rebase stopped the fixer. The fix prompt
 // names the line that replays the fixer's commits onto such a merge,
-// `magnum fix-sync` of the daemon's binary with the run's start head, the
-// branch and the base (FixSyncLine), in its one paragraph: the goldens of
+// `magnum fix-sync` of the daemon's binary with the slot's checkout (the
+// fixer's shell may stand anywhere), the run's start head, the branch and
+// the base (FixSyncLine), in its one paragraph: the goldens of
 // the fix prompt hold the sentence. Only the job knows the PR's base, so
 // the line is never derived: a prompt without it names no fix-sync.
 func TestTheFixPromptNamesTheFixSyncCommand(t *testing.T) {
 	const want = " If GitHub rejects the push because the branch moved, run `/Users/bohdan/Projects/magnum/bin/magnum fix-sync " +
-		"--from d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --branch feature/coupon-expiry --base master` once, as the skill's push (section 5) says."
+		"--checkout /Users/bohdan/Projects/talkable.review3 --from d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --branch feature/coupon-expiry " +
+		"--base master` once, as the skill's push (section 5) says."
 	for _, golden := range []string{"fix", "fix_no_findings", "fix_conflict", "fix_merge_only"} {
 		b, err := os.ReadFile(filepath.Join("testdata", golden+".golden"))
 		if err != nil {
@@ -407,11 +409,12 @@ func TestTheFixPromptNamesTheFixSyncCommand(t *testing.T) {
 		}
 	}
 	const head = "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"
-	if got := FixSyncLine("", head, "feature/coupon-expiry", "master"); got != "magnum fix-sync --from "+head+" --branch feature/coupon-expiry --base master" {
-		t.Errorf("FixSyncLine without a binary = %q", got)
+	if got := FixSyncLine("", "", head, "feature/coupon-expiry", "master"); got != "magnum fix-sync --from "+head+" --branch feature/coupon-expiry --base master" {
+		t.Errorf("FixSyncLine without a binary or a checkout = %q", got)
 	}
-	if got := FixSyncLine("/opt/my magnum/bin/magnum", head, "fix", "release/1.0"); got != "'/opt/my magnum/bin/magnum' fix-sync --from "+head+" --branch fix --base release/1.0" {
-		t.Errorf("FixSyncLine = %q, want the binary shell-quoted", got)
+	if got := FixSyncLine("/opt/my magnum/bin/magnum", "/slots/talkable review3", head, "fix", "release/1.0"); got !=
+		"'/opt/my magnum/bin/magnum' fix-sync --checkout '/slots/talkable review3' --from "+head+" --branch fix --base release/1.0" {
+		t.Errorf("FixSyncLine = %q, want the binary and the checkout shell-quoted", got)
 	}
 
 	e := newEnv(t)
@@ -424,7 +427,7 @@ func TestTheFixPromptNamesTheFixSyncCommand(t *testing.T) {
 		HeadRef: "feature/coupon-expiry", ReviewURL: "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
 		ReviewFile: "/state/review.json", ReviewerLogin: "talkable[bot]",
 		DBLockCommand: "/opt/magnum/bin/magnum db-lock --", FixReplyCommand: "/opt/magnum/bin/magnum fix-reply",
-		FixSyncCommand: FixSyncLine("/opt/magnum/bin/magnum", e.pr.HeadSHA, "feature/coupon-expiry", "master"),
+		FixSyncCommand: FixSyncLine("/opt/magnum/bin/magnum", "/slots/talkable.review3", e.pr.HeadSHA, "feature/coupon-expiry", "master"),
 	}
 	got, err := e.m.FixPrompt(e.pr, role, run, in)
 	if err != nil || !strings.Contains(got, "run `"+in.FixSyncCommand+"` once") {
@@ -554,9 +557,11 @@ func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 // a replay the fixer runs the specs of the changed files again and pushes
 // once more, never with force, and names the new SHAs; specs that fail
 // after the replay push nothing. After a refusal, a replay that changed the
-// checkout and could not be undone (exit 3), a prompt without the line or a
-// push that fails otherwise, it stops as before. The replayed commits were
-// never on GitHub, which the history rule allows.
+// checkout and could not be undone or confirmed (exit 3), a prompt without
+// the line or a push that fails otherwise, it stops as before; a rebase
+// fix-sync left in progress is the one it aborts (`git rebase --abort`),
+// since nothing else ends it before the slot's resync. The replayed commits
+// were never on GitHub, which the history rule allows.
 func TestTheFixSkillSyncsAPushTheBranchMovedPast(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
@@ -569,9 +574,13 @@ func TestTheFixSkillSyncsAPushTheBranchMovedPast(t *testing.T) {
 		"If those specs fail, push nothing: never push a replay the base merge broke. " +
 			"Write `push failed: <spec> fails after fix-sync` under `## Pushed`, put each finding you committed under `## Needs you`, and stop.",
 		// Exit 3: the checkout changed, nothing is pushed.
-		"When it prints `refused: <reason>` or `failed: <reason>` (exit status 3: the replay changed the checkout and could not be undone), " +
-			"when the prompt names no fix-sync line, or when a push fails for any other reason, push nothing more and " +
-			"do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings.",
+		"When it prints `refused: <reason>` or `failed: <reason>` (exit status 3: the replay changed the checkout, and fix-sync " +
+			"could not undo it or could not confirm what it made), when the prompt names no fix-sync line, or when a push fails for " +
+			"any other reason, push nothing more and do not pull, merge or rebase: the base merge (section 2) is the only merge you " +
+			"make, and only before the findings.",
+		// A rebase left in progress is aborted, the one rebase command allowed.
+		"When `failed: <reason>` says that a rebase is still in progress, run `git rebase --abort` once: " +
+			"it is the only rebase command you run, and it puts HEAD back on your commits.",
 		"Write `push failed: <git's first error line>` under `## Pushed` in the report (and `; fix-sync refused: <reason>` or " +
 			"`; fix-sync failed: <reason>` after it when the line printed one)",
 		"- the fix-sync line, which replays your commits when a rejected push finds that the branch gained only a merge of its base (section 5)",
@@ -628,6 +637,9 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 		"The fix-reply line ends every reply with a blank line and the hidden line `" + postreview.FixReplyMarker + "`.",
 		// A lost answer may hide a reply that went out: the same line again finds it, and posts nothing.
 		"Any other status means the command could not confirm the reply: run the same line with the same reply text once more",
+		// A wrong line is exit 2 too: running it again never helps.
+		"Exit status 2 means the command refused the reply or your line (a comment id that is not a review comment's number on this PR, " +
+			"both or neither of `--comment` and `--issue`, a flag it does not have), and the line it prints says why: fix the reply or the line and run it again.",
 		// The engine reads these words to say what each finding left to the author asks of them.
 		"- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why it needs you>\n- <comment id> <priority> <path>:<line>: not fixed. <reason>\n",
 		"then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (its thread is answered already, or the reply failed) " +

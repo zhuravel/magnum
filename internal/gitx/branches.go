@@ -260,11 +260,16 @@ func (c *Client) unmergedPaths(ctx context.Context, dir string) ([]string, error
 	return slices.Compact(paths), nil
 }
 
-// MergeAbort ends the merge dir is in the middle of (`git merge --abort`):
-// HEAD, the index and the work tree go back to where the merge started.
-// Callers ask InProgress first; with no merge in progress git fails.
-func (c *Client) MergeAbort(ctx context.Context, dir string) error {
-	_, err := c.git(ctx, dir, call{label: "merge --abort", mutates: true, timeout: commitTimeout}, "merge", "--abort")
+// AbortOperation ends op, the operation dir is in the middle of as
+// InProgress names it ("rebase", "merge", "cherry-pick" or "revert"), with
+// `git <op> --abort`: HEAD, the index and the work tree go back to where it
+// started. Callers ask InProgress first; with nothing in progress git
+// fails, and any other op is an error before git runs.
+func (c *Client) AbortOperation(ctx context.Context, dir, op string) error {
+	if !slices.ContainsFunc(inProgress, func(p struct{ name, file string }) bool { return p.name == op }) {
+		return fmt.Errorf("gitx: abort: %q is no operation git keeps in progress", op)
+	}
+	_, err := c.git(ctx, dir, call{label: op + " --abort", mutates: true, timeout: commitTimeout}, op, "--abort")
 	return err
 }
 

@@ -43,7 +43,7 @@ func TestAPushAfterAFixSyncSettles(t *testing.T) {
 	h.fix(FixPayload{})
 	h.e.handleRequests(h.ctx)
 	h.awaitSubmit()
-	if in := h.fixInputsOf(); len(in) != 1 || in[0].FixSyncCommand != agents.FixSyncLine(h.d.Layout.Binary(), fixHead, "feature", "master") {
+	if in := h.fixInputsOf(); len(in) != 1 || in[0].FixSyncCommand != agents.FixSyncLine(h.d.Layout.Binary(), h.slot("review1").Path, fixHead, "feature", "master") {
 		t.Fatalf("the fix prompt's fix-sync line = %+v", in)
 	}
 
@@ -146,20 +146,21 @@ func TestAFixPushNeverMovesTheRowBehindANewerHead(t *testing.T) {
 func TestTheFixSyncLineNeedsTheBranchAndASafeBase(t *testing.T) {
 	h, _ := fixHarness(t)
 	str := func(s string) *string { return &s }
-	bin := h.d.Layout.Binary()
+	bin, slotPath := h.d.Layout.Binary(), "/slots/talkable review1" // the fixer's shell may stand anywhere: the line names the checkout
 	for _, tc := range []struct {
 		name         string
 		branch, base *string
 		def, want    string
 	}{
-		{"the PR's base", str("feature"), str("release/1.0"), "main", agents.FixSyncLine(bin, fixHead, "feature", "release/1.0")},
-		{"the repository's default branch", str("feature"), nil, "main", agents.FixSyncLine(bin, fixHead, "feature", "main")},
+		{"the PR's base", str("feature"), str("release/1.0"), "main", agents.FixSyncLine(bin, slotPath, fixHead, "feature", "release/1.0")},
+		{"the repository's default branch", str("feature"), nil, "main", agents.FixSyncLine(bin, slotPath, fixHead, "feature", "main")},
 		{"no branch", nil, str("master"), "main", ""},
 		{"an empty branch", str(""), str("master"), "main", ""},
 		{"no base", str("feature"), nil, "", ""},
 		{"a base a shell would read", str("feature"), str("master$(touch x)"), "main", ""},
 	} {
-		job := &fixJob{pr: store.PR{HeadRef: tc.branch, BaseRef: tc.base}, repo: store.Repo{DefaultBranch: tc.def}, head: fixHead}
+		job := &fixJob{pr: store.PR{HeadRef: tc.branch, BaseRef: tc.base}, repo: store.Repo{DefaultBranch: tc.def}, head: fixHead,
+			slot: store.Slot{Path: slotPath}}
 		if got := h.e.fixSyncLine(job); got != tc.want {
 			t.Errorf("%s: fixSyncLine = %q, want %q", tc.name, got, tc.want)
 		}

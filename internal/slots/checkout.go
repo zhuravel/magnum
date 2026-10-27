@@ -320,9 +320,9 @@ func (m *Manager) switchTo(ctx context.Context, sl store.Slot, ref, sha string) 
 // starts clean. sha is the head the job settled on, a commit id: the one the
 // fixer pushed, or the head the review ran on when nothing was pushed, in
 // which case the fixer's local commits are left behind (the reflog keeps
-// them). It runs the steps guard, fetch, abort_merge and switch under the subject
-// "slot:<name>:resync:<sha7>", a new generation on every call, and ends with
-// a slot.resync event:
+// them). It runs the steps guard, fetch, abort_in_progress and switch under
+// the subject "slot:<name>:resync:<sha7>", a new generation on every call,
+// and ends with a slot.resync event:
 //   - guard is guardDiscard, not Guard: the slot is refused (ErrHold) when it
 //     is pinned or held, when a person's agent or process is in it, or when
 //     someone typed into the PR's magnum panes since its checkout and the
@@ -332,8 +332,9 @@ func (m *Manager) switchTo(ctx context.Context, sl store.Slot, ref, sha string) 
 //   - fetch looks sha up in the slot and fetches the commit by id into the
 //     main clone only when the slot lacks it (a head pushed from another
 //     clone);
-//   - abort_merge ends a merge the fixer left in progress, which git would
-//     refuse the switch over (abortMerge);
+//   - abort_in_progress ends a merge, rebase, cherry-pick or revert left in
+//     progress (the fixer's base merge, fix-sync's replay), which git would
+//     refuse the switch over (abortInProgress);
 //   - switch notes the tracked changes it drops (a slot.discarded event) and
 //     records the resulting HEAD as checked_out_sha through the pending-switch
 //     key, as a checkout does. A HEAD that already is sha with no tracked
@@ -374,8 +375,8 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
 	}); err != nil {
 		return err
 	}
-	if err := m.step(ctx, subject, "abort_merge", func(ctx context.Context) error {
-		return m.abortMerge(ctx, sl)
+	if err := m.step(ctx, subject, "abort_in_progress", func(ctx context.Context) error {
+		return m.abortInProgress(ctx, sl)
 	}); err != nil {
 		return err
 	}
@@ -400,23 +401,30 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
 	return nil
 }
 
-// abortMerge is a step of a resync and of a release, before their switch: a
-// merge left in progress in the slot (a fixer stopped in the middle of the
-// fix skill's base merge: a timeout, `magnum abort`, a crash) makes git
-// refuse every switch ("cannot switch branch while merging"), so it is
-// aborted first (`git merge --abort`), with a slot.merge_aborted event. Its
-// guard is InProgress: a slot in no merge is left alone, and a resumed step
-// finds no merge once its abort took. The changes the merge brought go with
-// it; the switch then drops what else the tree holds, as it always does.
-func (m *Manager) abortMerge(ctx context.Context, sl store.Slot) error {
+// abortInProgress is a step of a resync and of a release, after their
+// guard and before their switch: an operation left in progress in the slot
+// makes git refuse every switch ("cannot switch branch while merging", or
+// rebasing, cherry-picking, reverting), so it is aborted first (`git <op>
+// --abort`, gitx.AbortOperation), with a slot.aborted event that names it.
+// A fixer stopped in the middle of the fix skill's base merge (a timeout,
+// `magnum abort`, a crash) leaves a merge; `magnum fix-sync` whose replay
+// could not be undone, or that was killed mid-replay (its exit 3), leaves
+// a rebase. Its guard is InProgress: a slot in nothing is left alone, and
+// a resumed step finds nothing once its abort took. The tracked changes
+// the abort drops get their slot.discarded event first (discarding), as a
+// switch's do; the switch then drops what else the tree holds, as it
+// always does. The step runs only where the caller's guard let the slot
+// go: never over a person's changes.
+func (m *Manager) abortInProgress(ctx context.Context, sl store.Slot) error {
 	op, err := m.git.InProgress(ctx, sl.Path)
-	if err != nil || op != "merge" {
+	if err != nil || op == "" {
 		return err
 	}
-	if err := m.git.MergeAbort(ctx, sl.Path); err != nil {
+	m.discarding(ctx, sl)
+	if err := m.git.AbortOperation(ctx, sl.Path, op); err != nil {
 		return err
 	}
-	m.event(ctx, "slot:"+sl.Name, "info", "slot.merge_aborted", sl.Name+": aborted a merge left in progress before the switch")
+	m.event(ctx, "slot:"+sl.Name, "info", "slot.aborted", fmt.Sprintf("%s: aborted a %s left in progress before the switch", sl.Name, op))
 	return nil
 }
 
@@ -477,8 +485,12 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // Release hands a claimed or held pool slot back to the pool. Steps (subject
 // "slot:<name>:release"): guard (Guard: pins, holds, a human's agent or
 // process, HEAD drift, tracked changes a human made), then the slot moves to
-// releasing, fetch_base, reset (placeholder branch → origin/<base>, tracked
-// changes discarded after a slot.discarded event, checked_out_sha cleared;
+// releasing, fetch_base, abort_in_progress (a merge, rebase, cherry-pick or
+// revert left in progress, which git would refuse the reset over, is
+// aborted after a slot.discarded event for the tracked changes it drops,
+// with a slot.aborted event: abortInProgress), reset (placeholder branch →
+// origin/<base>, tracked changes discarded after a slot.discarded event,
+// checked_out_sha cleared;
 // origin/<base>'s commit is written to the kv store first, as Checkout's
 // switch does, so a release interrupted after the reset is no head drift),
 // delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check
@@ -536,17 +548,17 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
 }
 
 // releaseSteps are the release's steps after its guard, from releasing (or
-// dirty_schema) to free. abort_merge ends a merge left in progress, which
-// would make git refuse the reset (abortMerge). delete_ref deletes its
-// PR's refs/magnum/pr/N.
+// dirty_schema) to free. abort_in_progress ends an operation left in
+// progress, which would make git refuse the reset (abortInProgress).
+// delete_ref deletes its PR's refs/magnum/pr/N.
 func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slot, pool config.Pool, reason string) error {
 	if err := m.step(ctx, subject, "fetch_base", func(ctx context.Context) error {
 		return m.git.FetchBranch(ctx, sl.MainClone, pool.Base)
 	}); err != nil {
 		return err
 	}
-	if err := m.step(ctx, subject, "abort_merge", func(ctx context.Context) error {
-		return m.abortMerge(ctx, sl)
+	if err := m.step(ctx, subject, "abort_in_progress", func(ctx context.Context) error {
+		return m.abortInProgress(ctx, sl)
 	}); err != nil {
 		return err
 	}
