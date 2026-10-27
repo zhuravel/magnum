@@ -9,13 +9,14 @@ package engine
 // fixer works (phase fixing) dispatch holds the PR's rounds (fixHolds,
 // WaitFixing), and while the row exists `magnum review` and a second loop
 // are refused. The job's steps are begin/ok/fail steps on the PR's subject
-// (package steps): guard (the slot is the PR's, nobody else is in it, it
-// holds the reviewed head), start (the fixer's session in the PR's
-// workspace, a run of kind fix, its prompt) and wait (the run's end; the
-// time-up line on timeout); the settle (fix_settle.go) reads the report,
-// puts the slot back in order and ends the cycle. A daemon that stops while
-// the fixer works leaves the row in phase fixing, and the next start ends
-// that loop (recoverFixes).
+// (package steps): claim (only for a PR whose slot the pool took back: a
+// slot at the reviewed head, as `magnum open` claims one), guard (the slot
+// is the PR's, nobody else is in it, it holds the reviewed head), start (the
+// fixer's session in the PR's workspace, a run of kind fix, its prompt) and
+// wait (the run's end; the time-up line on timeout); the settle
+// (fix_settle.go) reads the report, puts the slot back in order and ends the
+// cycle. A daemon that stops while the fixer works leaves the row in phase
+// fixing, and the next start ends that loop (recoverFixes).
 
 import (
 	"cmp"
@@ -31,6 +32,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -148,19 +150,24 @@ func (j *fixJob) asRound() *roundJob {
 // head the fixer starts from adds "(the head c3c3c3c kept its verdict)". A
 // job on a review that found nothing (others) "answers the other
 // reviewers' 2 unanswered threads and comments in review1 (magnum's review
-// of b2b2b2b found nothing)".
+// of b2b2b2b found nothing)". A job whose PR has no slot yet works "in a
+// slot it claims" (fixClaim).
 func (j *fixJob) fixes() string {
 	sha, kept := textx.ShortSHA(j.review.SHA), ""
 	if j.head != "" && j.head != j.review.SHA {
 		kept = fmt.Sprintf("the head %s kept its verdict", textx.ShortSHA(j.head))
 		sha += " (" + kept + ")"
 	}
+	where := j.slot.Name
+	if j.slot.ID == 0 {
+		where = "a slot it claims"
+	}
 	open := j.review.OpenProblems()
 	n := j.review.Findings() + open
 	switch {
 	case j.alone && j.othersDeferred:
 		return fmt.Sprintf("answers what the other reviewers left unanswered, read once the GitHub budget recovers, in %s (magnum's review of %s found nothing)",
-			j.slot.Name, textx.ShortSHA(j.review.SHA))
+			where, textx.ShortSHA(j.review.SHA))
 	case j.alone && j.others != nil:
 		threads, conversation := j.others.items.unanswered()
 		note := "magnum's review of " + textx.ShortSHA(j.review.SHA) + " found nothing"
@@ -168,14 +175,14 @@ func (j *fixJob) fixes() string {
 			note += "; " + kept
 		}
 		return fmt.Sprintf("answers the other reviewers' %s in %s (%s)",
-			textx.Count(threads+conversation, "unanswered thread or comment", "unanswered threads and comments"), j.slot.Name, note)
+			textx.Count(threads+conversation, "unanswered thread or comment", "unanswered threads and comments"), where, note)
 	case n == 0:
-		return fmt.Sprintf("fixes the open earlier findings of the review on %s in %s", sha, j.slot.Name)
+		return fmt.Sprintf("fixes the open earlier findings of the review on %s in %s", sha, where)
 	case open == 0:
-		return fmt.Sprintf("fixes the %s of the review on %s in %s", textx.Count(n, "finding", "findings"), sha, j.slot.Name)
+		return fmt.Sprintf("fixes the %s of the review on %s in %s", textx.Count(n, "finding", "findings"), sha, where)
 	}
 	return fmt.Sprintf("fixes the %s of the review on %s, %d of them open from earlier reviews, in %s",
-		textx.Count(n, "finding", "findings"), sha, open, j.slot.Name)
+		textx.Count(n, "finding", "findings"), sha, open, where)
 }
 
 // fixPin is what prepareFix does about a pinned PR or slot.
@@ -312,7 +319,10 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 // refuses that read for the rate limit and the meter then says the budget
 // is below it, it takes no pin off: the job carries the low budget
 // (fixJob.budget) for startFix to hold it, and the other reviewers' items
-// are read when the held fix starts (othersDeferred).
+// are read when the held fix starts (othersDeferred). A PR whose slot the
+// pool took back gets a job without a slot, which claims one when it runs
+// (fixClaim); a pool without a free slot refuses it before the pin goes
+// (fixSlotFree).
 func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin, carried *externalRead) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
@@ -395,7 +405,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	if err != nil {
 		return nil, err
 	}
-	if err := fixSlotRefusal(label, slot, has, pin, stood, pr.HeadSHA, on); err != nil {
+	if err := fixSlotRefusal(label, pr, slot, has, pin, stood, on); err != nil {
 		return nil, err
 	}
 	now := e.now()
@@ -425,17 +435,20 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 			low, isLow = *held, true
 		}
 	}
+	if err := e.fixSlotFree(ctx, repo, pr, label, has, isLow, pin); err != nil {
+		return nil, err
+	}
 	var notes []string
 	switch {
-	case pin == fixPinRefuses || !isPinned(pr, slot, true):
+	case pin == fixPinRefuses || !isPinned(pr, slot, has):
 	case pin == fixPinWouldUnpin:
-		what, origin := e.pinnedWhat(ctx, repo, pr, slot, true)
+		what, origin := e.pinnedWhat(ctx, repo, pr, slot, has)
 		notes = append(notes, "would unpin "+what+origin+" to fix it")
 	case isLow: // the pin goes when the held fix starts
-		what, origin := e.pinnedWhat(ctx, repo, pr, slot, true)
+		what, origin := e.pinnedWhat(ctx, repo, pr, slot, has)
 		notes = append(notes, "unpins "+what+origin+" once it starts")
 	default:
-		note, held, err := e.unpinFor(ctx, repo, pr, slot, true, fixBy, "fix") // review_unpin.go
+		note, held, err := e.unpinFor(ctx, repo, pr, slot, has, fixBy, "fix") // review_unpin.go
 		switch {
 		case err != nil:
 			return nil, fmt.Errorf("%s: %w", label, err)
@@ -459,15 +472,19 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	return job, nil
 }
 
-// fixSlotRefusal is prepareFix's refusal of the PR's slot (has false: it
-// has none), nil when the fixer may work in it: one handed back, broken,
-// lost or in another state, pinned where pin refuses, held by a guard, or
-// one whose checkout is not the head that kept the verdict of the review on
-// on (stood; head is the PR's).
-func fixSlotRefusal(label string, slot store.Slot, has bool, pin fixPin, stood bool, head, on string) error {
+// fixSlotRefusal is prepareFix's refusal of pr's slot (has false: it has
+// none), nil when the fixer may work in it, or, for a PR the pool took its
+// slot from, in one the job claims at the reviewed head (fixClaim; prepareFix
+// refuses a slotless PR whose review does not stand on its head before):
+// a slot broken, lost or in another state, a slot, or a PR without one,
+// pinned where pin refuses, a slot held by a guard, or one whose checkout is
+// not the PR's head that kept the verdict of the review on on (stood).
+func fixSlotRefusal(label string, pr store.PR, slot store.Slot, has bool, pin fixPin, stood bool, on string) error {
 	switch {
+	case !has && pr.Pinned && pin == fixPinRefuses:
+		return fmt.Errorf("%s is pinned (magnum unpin)", label)
 	case !has:
-		return fmt.Errorf("%s has no checkout of its reviewed head: its slot was handed back", label)
+		return nil
 	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
 		return fmt.Errorf("%s: %s", label, unusableSlotSentence(slot))
 	case slot.State != store.SlotClaimed && slot.State != store.SlotHeld:
@@ -476,11 +493,40 @@ func fixSlotRefusal(label string, slot store.Slot, has bool, pin fixPin, stood b
 		return fmt.Errorf("%s: slot %s is pinned (magnum unpin)", label, slot.Name)
 	case slot.HoldReason != nil:
 		return fmt.Errorf("%s: %s", label, slotHeldReason(slot))
-	case stood && deref(slot.CheckedOutSHA) != head: // a push that only merged the base moves no checkout
+	case stood && deref(slot.CheckedOutSHA) != pr.HeadSHA: // a push that only merged the base moves no checkout
 		return fmt.Errorf("%s: slot %s holds %s, not its head %s, which kept the verdict of the review on %s; `magnum review %s` reviews it first",
-			label, slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), textx.ShortSHA(head), on, label)
+			label, slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), textx.ShortSHA(pr.HeadSHA), on, label)
 	}
 	return nil
+}
+
+// fixSlotFree refuses a fix on pr while it has no slot (has false) and its
+// pool has none free, as `magnum open` is refused: a slot is provisioned or
+// evicted for it meanwhile (needSlot), and the answer names the retry. A PR
+// with a slot, a repository without a pool (a per-PR worktree is made for
+// it), a job held for the GitHub budget (held: the held fix asks again when
+// it starts) and a job only asked about (fixPinWouldUnpin: a dry run, a
+// hold) pass.
+func (e *Engine) fixSlotFree(ctx context.Context, repo store.Repo, pr store.PR, label string, has, held bool, pin fixPin) error {
+	pool := e.cfg.PoolFor(repo.FullName())
+	if has || held || pin == fixPinWouldUnpin || pool == nil {
+		return nil
+	}
+	free, err := e.st.FreeSlots(ctx, pool.Repo, pr.ID)
+	switch {
+	case err != nil:
+		return err
+	case len(free) > 0:
+		return nil
+	}
+	e.needSlot(ctx, *pool, prSubject(repo, pr.Number))
+	return errNoFreeFixSlot(*pool, label)
+}
+
+// errNoFreeFixSlot is the refusal of a fix whose PR has no slot while the
+// pool has none free: the retry it names finds the one freed meanwhile.
+func errNoFreeFixSlot(pool config.Pool, label string) error {
+	return fmt.Errorf("no free %s slot right now; run `magnum fix %s` again shortly", pool.Repo, label)
 }
 
 // reviewStood reports whether the PR's head kept the verdict of sum, its
@@ -615,26 +661,31 @@ func sameWaitingLoop(cur, prev FixState) bool {
 	return cur.Phase == FixPhaseReviewing && cur.Cycle == prev.Cycle && cur.StartedAt.Equal(prev.StartedAt)
 }
 
-// runFix runs one fix cycle under its reservation: guard, start and wait,
-// then the settle (fix_settle.go). `magnum abort` cancels ctx and leaves
-// its orders on the reservation: the fixer is stopped and the loop ends
-// quietly (stopFix). A daemon shutdown cancels ctx with no order: the
-// loop's row stays in phase fixing, which the next start ends
-// (recoverFixes).
+// runFix runs one fix cycle under its reservation: claim (a job whose PR
+// has no slot), guard, start and wait, then the settle (fix_settle.go).
+// `magnum abort` cancels ctx and leaves its orders on the reservation: the
+// fixer is stopped and the loop ends quietly (stopFix). A daemon shutdown
+// cancels ctx with no order: the loop's row stays in phase fixing, which
+// the next start ends (recoverFixes).
 func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 	ctx = github.WithOp(ctx, opFix) // github_cost.go
 	subject := job.subject()
 	if err := steps.ResetSubject(ctx, e.st, subject); err != nil {
 		e.log.Warn("fix: new step generation", "subject", subject, "err", err)
 	}
+	var err error
 	failed := ""
-	err := steps.Step(ctx, e.st, subject, "fix.guard", func(ctx context.Context) error { return e.fixGuard(ctx, job) })
-	if err != nil {
-		failed = "fix guard failed: "
-	} else if err = steps.Step(ctx, e.st, subject, "fix.start", func(ctx context.Context) error { return e.fixStart(ctx, job) }); err != nil {
-		failed = "fix run failed: "
-	} else if err = steps.Step(ctx, e.st, subject, "fix.wait", func(ctx context.Context) error { return e.fixWait(ctx, job) }); err != nil {
-		failed = "fix run failed: "
+	if job.slot.ID == 0 { // the pool took the PR's slot back
+		failed, err = "fix claim failed: ", steps.Step(ctx, e.st, subject, "fix.claim", func(ctx context.Context) error { return e.fixClaim(ctx, job) })
+	}
+	if err == nil {
+		if err = steps.Step(ctx, e.st, subject, "fix.guard", func(ctx context.Context) error { return e.fixGuard(ctx, job) }); err != nil {
+			failed = "fix guard failed: "
+		} else if err = steps.Step(ctx, e.st, subject, "fix.start", func(ctx context.Context) error { return e.fixStart(ctx, job) }); err != nil {
+			failed = "fix run failed: "
+		} else if err = steps.Step(ctx, e.st, subject, "fix.wait", func(ctx context.Context) error { return e.fixWait(ctx, job) }); err != nil {
+			failed = "fix run failed: "
+		}
 	}
 	fctx := context.WithoutCancel(ctx)
 	if orders := e.closeFixHandle(job.pr.ID); len(orders) > 0 {
@@ -697,13 +748,46 @@ func (e *Engine) closeFixHandle(prID int64) []stopOrder {
 	return slices.Clone(h.stop.reqs)
 }
 
+// fixClaim gives a job whose PR has no slot (the pool took it back after
+// the review) one at the reviewed head, as `magnum open` claims one, without
+// its pin and hold (claimAtReviewedHead); fixGuard then takes it as the
+// job's. The slot is held, as a round leaves one: the job's reservation keeps
+// eviction off it while the fixer works, and the pool can take it back once
+// the loop let go of the PR. A claim that failed hands back the pool slot it
+// reserved (released, as after a failed open), but one a stop or a shutdown
+// cut short leaves it held too, never claimed for good. A pool slot another
+// round took since prepareFix found it free refuses as prepareFix does
+// (errNoFreeFixSlot), and the loop ends with that sentence.
+func (e *Engine) fixClaim(ctx context.Context, job *fixJob) error {
+	slot, err := e.claimAtReviewedHead(ctx, job.pr, job.repo)
+	fctx := context.WithoutCancel(ctx)
+	switch {
+	case errors.Is(err, slots.ErrNoFreeSlot) && job.pool != nil:
+		return errNoFreeFixSlot(*job.pool, job.label())
+	case slot.ID == 0:
+		return err
+	case err != nil && ctx.Err() == nil && job.pool != nil:
+		if rerr := e.releaseSlot(fctx, slot, *job.pool, "fix failed"); rerr != nil {
+			e.event(fctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after a failed claim of magnum fix: "+rerr.Error(), nil)
+		} else {
+			e.event(fctx, "info", "slot:"+slot.Name, "slot.released", slot.Name+" released after a failed claim of magnum fix", nil)
+		}
+		return err
+	}
+	if terr := e.st.TransitionSlot(fctx, slot.ID, []string{store.SlotClaimed}, store.SlotHeld, nil); terr != nil && !errors.Is(terr, store.ErrConflict) {
+		e.log.Warn("fix: hold the claimed slot", "subject", job.subject(), "slot", slot.Name, "err", terr)
+	}
+	return err
+}
+
 // fixGuard checks that the fixer may work in the job's slot: the slot is
-// still the PR's, no round is in flight, the head is still the reviewed one
-// and the slot holds it, nobody typed into the PR's panes within
-// human_cooldown, and Slots.Guard finds no person in the slot (their agent
-// or process, their changes) and no HEAD drift. From then on the slot is
-// the fixer's: its last_used_at moves, so a person who types into the PR's
-// panes during the fix is told apart from the fixer.
+// still the PR's (for a job that claimed one, fixClaim, the slot the PR now
+// has becomes the job's), no round is in flight, the head is still the
+// reviewed one and the slot holds it, nobody typed into the PR's panes
+// within human_cooldown, and Slots.Guard finds no person in the slot (their
+// agent or process, their changes) and no HEAD drift. From then on the slot
+// is the fixer's: its last_used_at moves, so a person who types into the
+// PR's panes during the fix is told apart from the fixer.
 func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
@@ -714,7 +798,9 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	switch {
 	case err != nil:
 		return err
-	case !has || slot.ID != job.slot.ID:
+	case !has && job.slot.ID == 0:
+		return errors.New("the PR has no slot")
+	case !has || (job.slot.ID != 0 && slot.ID != job.slot.ID):
 		return fmt.Errorf("slot %s is no longer the PR's", job.slot.Name)
 	case slot.State != store.SlotClaimed && slot.State != store.SlotHeld:
 		return fmt.Errorf("slot %s is %s", slot.Name, slot.State)

@@ -592,6 +592,197 @@ func TestAFixRefusedForABrokenSlotNamesTheRepair(t *testing.T) {
 	}
 }
 
+// handBack takes PR #2's slot back, as the pool does when another PR needs
+// it: a release parks the PR's sessions and review1 is free again, while the
+// PR stays reviewed.
+func handBack(h *harness) {
+	h.t.Helper()
+	rel := h.enqueue(ReqRelease, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.tick()
+	if r := h.request(rel); r.State != store.RequestDone {
+		h.t.Fatalf("release: %s %q", r.State, deref(r.Result))
+	}
+	if sl := h.slot("review1"); sl.State != store.SlotFree || sl.PRID != nil {
+		h.t.Fatalf("slot not handed back: %+v", sl)
+	}
+	h.wantState(2, store.PRReviewed)
+}
+
+// slotClaims are the calls among calls that give a PR a slot (a free pool
+// slot reserved or claimed, a per-PR worktree made) or check one out.
+func slotClaims(calls []string) (claims, checkouts []string) {
+	for _, c := range calls {
+		switch {
+		case strings.HasPrefix(c, "reserve:"), strings.HasPrefix(c, "claim:"), strings.HasPrefix(c, "worktree:"):
+			claims = append(claims, c)
+		case strings.HasPrefix(c, "checkout:"):
+			checkouts = append(checkouts, c)
+		}
+	}
+	return claims, checkouts
+}
+
+// `magnum fix` on a reviewed PR whose slot the pool took back (on 2026-10-27
+// talkable#11907 was refused: "has no checkout of its reviewed head: its slot
+// was handed back") claims a free slot at the reviewed head, as `magnum open`
+// does, and the fixer works there: one reservation, one checkout of the
+// reviewed head, the slot's databases made to fit it, and no pin. The answer
+// says it claims a slot and the fix.start event names it; once the loop let
+// go of the PR the slot is held, so the pool can take it back again.
+func TestAFixOnAPRWhoseSlotWasHandedBackClaimsOneAtTheReviewedHead(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	before := len(h.sl.all())
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	if res := h.wantDone(id); !strings.Contains(res, "claude-fix fixes the 2 findings of the review on a1a1a1a in a slot it claims, cycle 1 of 3") {
+		t.Errorf("answer = %q", res)
+	}
+	if n := h.ag.count("submit:claude-fix:"); n != 1 {
+		t.Fatalf("fixer prompts = %d, want 1: %v", n, h.ag.all())
+	}
+	calls := h.sl.all()[before:]
+	claims, checkouts := slotClaims(calls)
+	if want := []string{"reserve:" + itoa(pr.ID)}; !slices.Equal(claims, want) {
+		t.Errorf("claims = %v, want %v (all: %v)", claims, want, calls)
+	}
+	if want := []string{"checkout:review1:" + itoa(pr.ID) + ":" + fixHead}; !slices.Equal(checkouts, want) {
+		t.Errorf("checkouts = %v, want %v (all: %v)", checkouts, want, calls)
+	}
+	if !slices.Contains(calls, "ensure_schema:review1") {
+		t.Errorf("slot calls %v lack the schema load of the claimed slot", calls)
+	}
+	if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "pin:") }) {
+		t.Errorf("the claim pinned the slot: %v", calls)
+	}
+	if ev, ok := h.fixEvent("fix.start"); !ok || !strings.Contains(ev.Message, "in review1 (run ") {
+		t.Errorf("fix.start = %q, %v; want it to name review1", ev.Message, ok)
+	}
+	sl := h.slot("review1")
+	if deref(sl.PRID) != pr.ID || sl.Pinned || sl.State != store.SlotHeld || deref(sl.CheckedOutSHA) != fixHead {
+		t.Errorf("slot = %s pr %v pinned %v at %s, want held for PR %d, unpinned, at %s",
+			sl.State, deref(sl.PRID), sl.Pinned, deref(sl.CheckedOutSHA), pr.ID, fixHead)
+	}
+	if cur := h.pr(2); cur.Pinned {
+		t.Error("the claim pinned the PR")
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on after a fixer that pushed nothing")
+	}
+}
+
+// With no slot free, `magnum fix` on a PR whose slot was handed back is
+// refused as `magnum open` is: a slot is freed for it (an idle held slot is
+// evicted), the answer names the retry, and no fixer starts and nothing is
+// claimed. The retry claims the slot freed.
+func TestAFixWithoutAFreeSlotRefusesAndNamesTheRetry(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	// Another PR takes the only slot.
+	h.advance(31 * time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel"}, prSpec{n: 3, head: "c1"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.wantState(3, store.PRReviewed)
+	h.advance(31 * time.Minute) // #3's slot is past min_warm: evictable
+	before := len(h.sl.all())
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	want := "no free talkable/talkable slot right now; run `magnum fix talkable/talkable#2` again shortly"
+	if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+		t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+	}
+	if h.ag.count("submit:") != 0 {
+		t.Error("a refused request started the fixer")
+	}
+	calls := h.sl.all()[before:]
+	if claims, checkouts := slotClaims(calls); len(claims)+len(checkouts) != 0 {
+		t.Errorf("a refused request claimed %v and checked out %v", claims, checkouts)
+	}
+	if !slices.Contains(calls, "release:review1:evicted") {
+		t.Errorf("no slot was freed for the fix: %v", calls)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("a refused request left a loop")
+	}
+
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	again := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(again)
+	if n := h.ag.count("submit:claude-fix:"); n != 1 {
+		t.Errorf("fixer prompts after the retry = %d, want 1", n)
+	}
+	if sl := h.slot("review1"); deref(sl.PRID) != pr.ID || deref(sl.CheckedOutSHA) != fixHead {
+		t.Errorf("slot after the retry = pr %v at %s, want PR %d at %s", deref(sl.PRID), deref(sl.CheckedOutSHA), pr.ID, fixHead)
+	}
+}
+
+// A claim whose checkout fails after the reservation hands the slot back, as
+// a failed `magnum open` does: the slot is released and free again, no fixer
+// starts, and the loop ends failed with the claim's error.
+func TestAFixWhoseClaimFailsHandsTheSlotBack(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	h.sl.holdErr = errors.New("checkout failed")
+	before := len(h.sl.all())
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id) // the claim runs with the job, after the answer
+	calls := h.sl.all()[before:]
+	if !slices.Contains(calls, "reserve:"+itoa(pr.ID)) || !slices.Contains(calls, "release:review1:fix failed") {
+		t.Errorf("slot calls %v lack the reservation and its release", calls)
+	}
+	if sl := h.slot("review1"); sl.State != store.SlotFree || sl.PRID != nil {
+		t.Errorf("slot = %s for PR %v, want free", sl.State, deref(sl.PRID))
+	}
+	if h.ag.count("submit:") != 0 {
+		t.Error("the fixer started without a checkout")
+	}
+	want := "fix claim failed: check out a1a1a1a in review1: checkout failed"
+	if ev, ok := h.fixEvent("fix.failed"); !ok || ev.Message != want {
+		t.Errorf("fix.failed = %q, %v; want %q", ev.Message, ok, want)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on after a failed claim")
+	}
+}
+
+// A PR without a slot whose head moved since the review has nothing to fix:
+// `magnum fix` refuses as before and claims no slot for it.
+func TestAFixOnASlotlessPRWhoseHeadMovedRefusesAndClaimsNothing(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("head_sha", fixPushed) }); err != nil {
+		t.Fatal(err)
+	}
+	before := len(h.sl.all())
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	if r, want := h.request(id), "nothing to fix: no review on b2b2b2b"; r.State != store.RequestFailed || deref(r.Result) != want {
+		t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+	}
+	if h.ag.count("submit:") != 0 {
+		t.Error("a refused request started the fixer")
+	}
+	if claims, checkouts := slotClaims(h.sl.all()[before:]); len(claims)+len(checkouts) != 0 {
+		t.Errorf("a refused request claimed %v and checked out %v", claims, checkouts)
+	}
+	if sl := h.slot("review1"); sl.State != store.SlotFree || sl.PRID != nil {
+		t.Errorf("slot = %s for PR %v, want free", sl.State, deref(sl.PRID))
+	}
+}
+
 // A fixer that pushed with nobody needed counts the cycle: the slot is put
 // back in order at the pushed head, the push is recorded on the PR row as
 // the poller records one (so the poller's own sight of it changes nothing),

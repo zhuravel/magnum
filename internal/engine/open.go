@@ -94,18 +94,19 @@ func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 }
 
 // openPR gives pr a checkout and live sessions again for a human: its own
-// claimed/held slot, else a free pool slot (Reserve; none free → a slot is
-// provisioned or evicted and the request fails with "try again") or a
-// per-PR worktree; reviewed_sha (else the head) is checked out when the slot
-// does not hold the PR's code yet; the workspace gets a pane per role that
-// runs every round (runs = "always") and one for role when it runs on
-// demand; the judge, role's agent and every other agent with a
-// conversation to resume (ResumeID; never for session_source "none") are
-// started or resumed; the PR and the slot are pinned and the slot is held.
-// Unless open_hold is 0 or a lasting pin keeps the PR already, the pin is a
-// hold that ends by itself (holdOpened, open_hold.go). A failure after a
-// fresh Reserve parks what started and releases that slot again (a claimed
-// slot is neither evictable nor reclaimed otherwise).
+// claimed/held slot, where reviewed_sha (else the head) is checked out when
+// the slot holds no checkout yet, else a slot claimed at that commit
+// (claimFor: a free pool slot, none free → a slot is provisioned or evicted
+// and the request fails with "try again", or a per-PR worktree); the
+// workspace gets a pane per role that runs every round (runs = "always") and
+// one for role when it runs on demand; the judge, role's agent and every
+// other agent with a conversation to resume (ResumeID; never for
+// session_source "none") are started or resumed; the PR and the slot are
+// pinned and the slot is held. Unless open_hold is 0 or a lasting pin keeps
+// the PR already, the pin is a hold that ends by itself (holdOpened,
+// open_hold.go). A failure after a fresh Reserve parks what started and
+// releases that slot again (a claimed slot is neither evictable nor
+// reclaimed otherwise).
 func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, role config.Role) (res string, err error) {
 	full := repo.FullName()
 	label := fmt.Sprintf("%s#%d", full, pr.Number)
@@ -114,10 +115,6 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 	if src == nil {
 		return "", fmt.Errorf("identity %q is not configured", pr.Identity)
 	}
-	target := deref(pr.ReviewedSHA)
-	if target == "" {
-		target = pr.HeadSHA
-	}
 	pool := e.cfg.PoolFor(full)
 
 	// 1. A checkout of the PR.
@@ -125,59 +122,32 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 	if err != nil {
 		return "", err
 	}
-	fresh := false // the slot held someone else's code a moment ago
+	schemaNote := ""
 	switch {
 	case has && (slot.State == store.SlotClaimed || slot.State == store.SlotHeld):
+		// The PR's own slot keeps its databases as they are: a person may
+		// have migrated them on purpose.
+		if deref(slot.CheckedOutSHA) == "" {
+			if slot, err = e.checkoutAt(ctx, slot, pr, pool, reviewedTarget(pr)); err != nil {
+				return "", err
+			}
+		}
 	case has && !(slot.Kind == store.SlotKindPerPR && slot.State == store.SlotProvisioning):
 		return "", fmt.Errorf("%s: slot %s is %s; try again once it settles (`magnum slots list`)", label, slot.Name, slot.State)
-	case pool == nil:
-		if slot, err = e.d.Slots.CreatePRWorktree(ctx, w, full, pr, target); err != nil {
-			return "", fmt.Errorf("per-PR worktree: %w", err)
-		}
 	default:
-		slot, err = e.d.Slots.Reserve(ctx, pr, *pool)
-		if errors.Is(err, slots.ErrNoFreeSlot) {
-			e.needSlot(ctx, *pool, subject)
-			return "", fmt.Errorf("no free %s slot right now; one is being provisioned or freed, run `magnum open %s` again shortly", pool.Repo, label)
+		slot, schemaNote, err = e.claimFor(ctx, pr, repo, "magnum open")
+		if pool != nil && slot.ID != 0 { // a free pool slot reserved just now
+			defer func() {
+				if err != nil && ctx.Err() == nil { // on shutdown the request is replayed and Reserve finds the slot
+					e.releaseReserved(context.WithoutCancel(ctx), pr, slot, *pool, subject)
+				}
+			}()
 		}
-		if err != nil {
-			return "", err
-		}
-		fresh = true
-		e.event(ctx, "info", subject, "slot.claimed", "reserved "+slot.Name+" for magnum open", nil)
-		defer func() {
-			if err != nil && ctx.Err() == nil { // on shutdown the request is replayed and Reserve finds the slot
-				e.releaseReserved(context.WithoutCancel(ctx), pr, slot, *pool, subject)
-			}
-		}()
-	}
-	if fresh || deref(slot.CheckedOutSHA) == "" {
-		var pl config.Pool
-		if pool != nil {
-			pl = *pool
-		}
-		if err := e.d.Slots.Checkout(ctx, slot, pr, pl, target); err != nil {
-			return "", fmt.Errorf("check out %s in %s: %w", textx.ShortSHA(target), slot.Name, err)
-		}
-	}
-	if slot, err = e.st.SlotByID(ctx, slot.ID); err != nil {
-		return "", err
-	}
-	// A free pool slot just reserved carries the schema its last PR loaded
-	// (slots.LazySchema): its databases are made to fit the checkout handed
-	// over. The PR's own slot is left as it is: a person may have migrated
-	// its databases on purpose.
-	schemaNote := ""
-	if pool != nil && fresh {
-		note, err := e.d.Slots.EnsureSchema(ctx, slot, *pool)
 		switch {
-		case err != nil && ctx.Err() != nil:
-			return "", err
+		case errors.Is(err, slots.ErrNoFreeSlot) && pool != nil:
+			return "", fmt.Errorf("no free %s slot right now; one is being provisioned or freed, run `magnum open %s` again shortly", pool.Repo, label)
 		case err != nil:
-			schemaNote = "; its databases' schema could not be loaded (the next round reloads it): " + err.Error()
-			e.event(ctx, "warn", "slot:"+slot.Name, "slot.schema_reset_failed", "magnum open: "+err.Error(), nil)
-		case strings.HasPrefix(note, "loaded"):
-			schemaNote = "; " + note
+			return "", err
 		}
 	}
 
@@ -255,6 +225,94 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 	e.event(ctx, "info", subject, evPROpened, fmt.Sprintf("magnum open: restored in %s at %s, %s", slot.Name, textx.ShortSHA(at), pinned), data)
 	return fmt.Sprintf("restored %s in %s at %s (%s); %s pane %s%s",
 		label, slot.Name, textx.ShortSHA(at), kept, role.Name, pane, schemaNote), nil
+}
+
+// claimAtReviewedHead gives pr, which holds no slot (the pool took it back),
+// a checkout of its reviewed head for the fix job (fixClaim), as `magnum
+// open` claims one: claimFor, whose events name `magnum fix`. It never pins
+// and never holds.
+func (e *Engine) claimAtReviewedHead(ctx context.Context, pr store.PR, repo store.Repo) (store.Slot, error) {
+	slot, _, err := e.claimFor(ctx, pr, repo, fixBy)
+	return slot, err
+}
+
+// claimFor claims a slot for pr, which holds none, at its reviewed head
+// (reviewedTarget) for by ("magnum open", "magnum fix"), the command its
+// events name: a free pool slot (Reserve and a slot.claimed event; none free
+// → a slot is provisioned or evicted, needSlot, and the error is
+// slots.ErrNoFreeSlot) or, for a repository without a pool, a per-PR
+// worktree (CreatePRWorktree). The commit is checked out (a per-PR worktree
+// made at it holds it already), and a pool slot's databases are made to fit
+// the checkout (EnsureSchema), since a free slot carries the schema its last
+// PR loaded (slots.LazySchema). schemaNote is what that did, for the
+// caller's answer ("; loaded the schema of …", or why it could not; ""
+// otherwise): a load that fails is no failure, the next round reloads it. It
+// never pins and never holds. A failure after the Reserve returns the slot
+// reserved with the error, for the caller to hand back: a claimed slot is
+// neither evictable nor reclaimed otherwise.
+func (e *Engine) claimFor(ctx context.Context, pr store.PR, repo store.Repo, by string) (slot store.Slot, schemaNote string, err error) {
+	full := repo.FullName()
+	target := reviewedTarget(pr)
+	pool := e.cfg.PoolFor(full)
+	if pool == nil {
+		w := e.cfg.WatchFor(full)
+		if w == nil {
+			return store.Slot{}, "", fmt.Errorf("%s is not watched (no [[watch]] covers it)", full)
+		}
+		if slot, err = e.d.Slots.CreatePRWorktree(ctx, *w, full, pr, target); err != nil {
+			return store.Slot{}, "", fmt.Errorf("per-PR worktree: %w", err)
+		}
+		if deref(slot.CheckedOutSHA) != "" {
+			return slot, "", nil
+		}
+		slot, err = e.checkoutAt(ctx, slot, pr, nil, target)
+		return slot, "", err
+	}
+	subject := prSubject(repo, pr.Number)
+	if slot, err = e.d.Slots.Reserve(ctx, pr, *pool); err != nil {
+		if errors.Is(err, slots.ErrNoFreeSlot) {
+			e.needSlot(ctx, *pool, subject)
+		}
+		return store.Slot{}, "", err
+	}
+	e.event(ctx, "info", subject, "slot.claimed", "reserved "+slot.Name+" for "+by, nil)
+	reserved := slot
+	if slot, err = e.checkoutAt(ctx, reserved, pr, pool, target); err != nil {
+		return reserved, "", err
+	}
+	note, lerr := e.d.Slots.EnsureSchema(ctx, slot, *pool)
+	switch {
+	case lerr != nil && ctx.Err() != nil:
+		return slot, "", lerr
+	case lerr != nil:
+		schemaNote = "; its databases' schema could not be loaded (the next round reloads it): " + lerr.Error()
+		e.event(ctx, "warn", "slot:"+slot.Name, "slot.schema_reset_failed", by+": "+lerr.Error(), nil)
+	case strings.HasPrefix(note, "loaded"):
+		schemaNote = "; " + note
+	}
+	return slot, schemaNote, nil
+}
+
+// reviewedTarget is the commit a checkout of pr for a person or its fixer
+// holds: the reviewed one, else the head.
+func reviewedTarget(pr store.PR) string {
+	if sha := deref(pr.ReviewedSHA); sha != "" {
+		return sha
+	}
+	return pr.HeadSHA
+}
+
+// checkoutAt checks target out in slot, pr's (pool nil for a per-PR
+// worktree), and returns the slot's row as it is then.
+func (e *Engine) checkoutAt(ctx context.Context, slot store.Slot, pr store.PR, pool *config.Pool, target string) (store.Slot, error) {
+	var pl config.Pool
+	if pool != nil {
+		pl = *pool
+	}
+	if err := e.d.Slots.Checkout(ctx, slot, pr, pl, target); err != nil {
+		return store.Slot{}, fmt.Errorf("check out %s in %s: %w", textx.ShortSHA(target), slot.Name, err)
+	}
+	return e.st.SlotByID(ctx, slot.ID)
 }
 
 // releaseReserved hands back the slot a failed `magnum open` reserved: the

@@ -46,7 +46,9 @@ func newFixCmd(c *Context) *cobra.Command {
 	var o fixOpts
 	cmd := newCommand(groupAct, fixUsage, "fix magnum's findings on your own PR now (--wait follows the loop to its end)",
 		"Fix magnum's findings on your own PR now. A fixer agent (the fix role, claude-fix by default) fixes the findings "+
-			"of magnum's review on the PR's current head, in the PR's slot and as you: it pushes, answers the review threads "+
+			"of magnum's review on the PR's current head, in the PR's slot and as you (when the pool took that slot back, the fix "+
+			"claims one at the reviewed head first, as magnum open does but without the pin; with no slot free it refuses and "+
+			"says to run it again shortly): it pushes, answers the review threads "+
 			"and what other reviewers wrote that nobody answered, and writes a report. A review that found nothing and left "+
 			"nothing open starts a fix only when another reviewer's open thread, review body or comment waits for an answer: "+
 			"the fixer then answers those alone. Magnum then reviews what it pushed and, while findings are left, starts the next cycle, up "+
