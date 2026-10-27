@@ -229,11 +229,11 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 
 // claimAtReviewedHead gives pr, which holds no slot (the pool took it back),
 // a checkout of its reviewed head for the fix job (fixClaim), as `magnum
-// open` claims one: claimFor, whose events name `magnum fix`. It never pins
-// and never holds.
-func (e *Engine) claimAtReviewedHead(ctx context.Context, pr store.PR, repo store.Repo) (store.Slot, error) {
-	slot, _, err := e.claimFor(ctx, pr, repo, fixBy)
-	return slot, err
+// open` claims one: claimFor, whose events name `magnum fix`, with what it
+// did to a pool slot's databases (schemaNote). It never pins and never takes
+// an open hold.
+func (e *Engine) claimAtReviewedHead(ctx context.Context, pr store.PR, repo store.Repo) (slot store.Slot, schemaNote string, err error) {
+	return e.claimFor(ctx, pr, repo, fixBy)
 }
 
 // claimFor claims a slot for pr, which holds none, at its reviewed head
@@ -247,9 +247,9 @@ func (e *Engine) claimAtReviewedHead(ctx context.Context, pr store.PR, repo stor
 // PR loaded (slots.LazySchema). schemaNote is what that did, for the
 // caller's answer ("; loaded the schema of …", or why it could not; ""
 // otherwise): a load that fails is no failure, the next round reloads it. It
-// never pins and never holds. A failure after the Reserve returns the slot
-// reserved with the error, for the caller to hand back: a claimed slot is
-// neither evictable nor reclaimed otherwise.
+// never pins and never takes an open hold. A failure after the Reserve
+// returns the slot reserved with the error, for the caller to hand back: a
+// claimed slot is neither evictable nor reclaimed otherwise.
 func (e *Engine) claimFor(ctx context.Context, pr store.PR, repo store.Repo, by string) (slot store.Slot, schemaNote string, err error) {
 	full := repo.FullName()
 	target := reviewedTarget(pr)

@@ -1570,8 +1570,13 @@ type fakeSlots struct {
 	// schema_paths: the slot becomes dirty_schema, as slots.Checkout's
 	// schema step marks it.
 	schemaChange bool
-	// ensureNote is what EnsureSchema answers (magnum open).
+	// ensureNote is what EnsureSchema answers (magnum open); ensureErr makes
+	// it fail instead.
 	ensureNote string
+	ensureErr  error
+	// reserveErr makes Reserve fail with it, after recording the call: a
+	// free slot another round took first.
+	reserveErr error
 	// resyncErr is what Resync fails with, after recording the call.
 	resyncErr error
 	// heads is the HEAD of each slot's folder by slot name: Unpin takes it as
@@ -1852,6 +1857,9 @@ func (f *fakeSlots) EnsureSchema(_ context.Context, slot store.Slot, _ config.Po
 	f.record("ensure_schema:" + slot.Name)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.ensureErr != nil {
+		return "", f.ensureErr
+	}
 	return f.ensureNote, nil
 }
 
@@ -1876,6 +1884,12 @@ func (f *fakeSlots) Pin(ctx context.Context, slot store.Slot) error {
 
 func (f *fakeSlots) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error) {
 	f.record(fmt.Sprintf("reserve:%d", pr.ID))
+	f.mu.Lock()
+	rerr := f.reserveErr
+	f.mu.Unlock()
+	if rerr != nil {
+		return store.Slot{}, rerr
+	}
 	if sl, err := f.st.SlotByPR(ctx, pr.ID); err == nil && (sl.State == store.SlotClaimed || sl.State == store.SlotHeld) {
 		return sl, nil
 	}

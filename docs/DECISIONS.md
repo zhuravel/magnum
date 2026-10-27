@@ -356,28 +356,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   does. The part of openPR that reserves a free pool slot (or makes a per-PR worktree), checks out the
   reviewed head and loads that head's schema into a fresh pool slot moved into claimFor, which openPR calls
   with its own words and the fix job's claimAtReviewedHead with `magnum fix`'s; it never pins and never
-  holds, and openPR keeps its pin, hold, sessions, answers, events and release reason as they were.
-  prepareFix lets a PR without a slot through once its review stands on the head (a head that moved still
-  gets "nothing to fix", and nothing is claimed), refuses one that is pinned where a pin refuses (autofix, a
-  next cycle), and, for a job that will start, refuses while the pool has no free slot: needSlot starts
-  freeing one, as for an open, and the answer is "no free <repo> slot right now; run `magnum fix <pr>` again
-  shortly". runFix runs a new `fix.claim` step before the guard for a job without a slot (fixClaim), and
-  fixGuard takes the slot the PR then has as the job's. The claimed slot moves to held, as a round leaves
-  one: the job's reservation keeps eviction off it while the fixer works, and the pool can take it back once
-  the loop ends, where a claimed slot would stay out of eviction until a restart. A claim that fails releases
-  the slot it reserved ("fix failed", as a failed open releases with "open failed") and ends the loop as a
-  failed fix; one a stop or a shutdown cut short leaves the slot held. The free-slot check reads the pool
-  before the answer, because the fix job answers its request before it runs, where an open answers from its
-  own goroutine; a slot another round takes between that check and the claim ends the loop with the same
-  sentence. The whiteboard job keeps its refusal of a PR without a slot. Rejected: claiming in the request
-  (the checkout and a schema load take minutes on the tick's goroutine), reserving the slot in the request
-  and checking it out in the job (two reservations for one claim, and a reserved slot to hand back when the
-  loop's row cannot be written), and answering the request after the claim (the CLI waits for a fix's
-  answer only briefly). Tests, failing first: TestAFixOnAPRWhoseSlotWasHandedBackClaimsOneAtTheReviewedHead
-  and TestAFixWithoutAFreeSlotRefusesAndNamesTheRetry; with them TestAFixWhoseClaimFailsHandsTheSlotBack
-  and TestAFixOnASlotlessPRWhoseHeadMovedRefusesAndClaimsNothing (green before the change, it keeps the
-  refusal and the claim apart). Mutations that drop the free-slot check, the move to held or the release
-  each fail one.
+  takes an open hold, and openPR keeps its pin, hold, sessions, answers, events and release reason as they
+  were. prepareFix lets a PR without a slot through once its review stands on the head (a head that moved
+  still gets "nothing to fix", before any slot is looked for, so nothing is claimed or evicted), refuses one
+  that is pinned where a pin refuses (autofix, a next cycle), and, for a job that will start, refuses while
+  the pool has no free slot: needSlot starts freeing one, as for an open, and the answer is "no free <repo>
+  slot right now; run `magnum fix <pr>` again shortly". runFix runs a new `fix.claim` step before the guard
+  for a job without a slot (fixClaim), and fixGuard takes the slot the PR then has as the job's. The claimed
+  slot moves to held, as a round leaves one: the job's reservation keeps eviction off it while the fixer
+  works, and the pool can take it back once the loop ends, where a claimed slot would stay out of eviction
+  until a restart. What the claim did to the slot's databases goes into the fix.start event (its message and
+  `schema` in its data): a schema that could not be loaded is no failure, as for an open, but the fixer's
+  specs then run on the last PR's, and the answer, given before the claim runs, cannot say it. A claim that
+  fails releases the slot it reserved ("fix failed", as a failed open releases with "open failed") and ends
+  the loop as a failed fix. So does one that `magnum abort` (or an ignore) cuts short, released as "fix
+  stopped": kept, the slot would carry the last PR's checkout record, which a later `magnum open` takes as the
+  PR's own and does not check out again. One a shutdown cuts short leaves the slot held. The free-slot check
+  reads the pool before the answer, because the fix job answers its request before it runs, where an open
+  answers from its own goroutine; a slot another round takes between that check and the claim ends the loop
+  quietly with the same sentence (fix.ended and an info toast, as a stop ends one: nothing failed, and the
+  sentence names the retry). The whiteboard job keeps its refusal of a PR without a slot. Rejected: claiming
+  in the request (the checkout and a schema load take minutes on the tick's goroutine), reserving the slot in
+  the request and checking it out in the job (two reservations for one claim, and a reserved slot to hand
+  back when the loop's row cannot be written), and answering the request after the claim (the CLI waits for
+  a fix's answer only briefly). Tests, failing first: TestAFixOnAPRWhoseSlotWasHandedBackClaimsOneAtTheReviewedHead,
+  TestAFixWithoutAFreeSlotRefusesAndNamesTheRetry, TestAFixWhoseClaimCouldNotLoadTheSchemaSaysSo,
+  TestAFixThatLosesItsFreeSlotEndsQuietly and TestAnAbortDuringTheClaimHandsTheSlotBack; with them
+  TestAFixWhoseClaimFailsHandsTheSlotBack, TestAPinnedPRWithoutASlotHoldsAutofixButNotMagnumFix,
+  TestAFixOnASlotlessPRWhoseHeadKeptTheVerdictClaimsAtItsHead and
+  TestAFixOnASlotlessPRWhoseHeadMovedRefusesAndClaimsNothing (its pool's only slot evictable, so an eviction
+  started before the refusal would show). Mutations that drop the free-slot check, the move to held, the
+  release, the pinned refusal or the stood claim, or that look for a slot before the head check, each fail
+  one.
 
 ## Scheduling
 

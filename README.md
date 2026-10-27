@@ -2635,11 +2635,14 @@ One cycle of a loop has four steps.
    the reviewed head, the gems and the databases, so the fixer runs specs through `magnum db-lock` like a
    reviewer. If the pool took the PR's slot back after the review, the fix claims one first, as `magnum open`
    does: a free pool slot (or a new per-PR worktree), the reviewed head checked out in it and its databases
-   loaded with that head's schema, but no pin. The answer says the fixer works "in a slot it claims", and the
-   `fix.start` event names the slot. With no slot free, `magnum fix` starts freeing one and refuses with "no
-   free <repo> slot right now; run `magnum fix <pr>` again shortly". A claim that fails ends the loop and
-   hands the slot back. The claimed slot stays the PR's, unpinned, so the pool can take it back again once
-   the loop ends. Magnum holds the PR for the whole run, so no round, release or `magnum open` touches the
+   loaded with that head's schema, but no pin. The answer says the fixer works "in a slot it claims". The
+   `fix.start` event names the slot and says what happened to its databases, including a schema that could
+   not be loaded, which leaves the fixer's specs on the slot's last PR's schema until the next round reloads
+   it. With no slot free, `magnum fix` starts freeing one and refuses with "no free <repo> slot right now;
+   run `magnum fix <pr>` again shortly". If another round takes the free slot first, the loop ends quietly
+   with the same sentence (a `fix.ended` event and a toast, no attention). A claim that fails, or that
+   `magnum abort` cuts short, ends the loop and hands the slot back. The claimed slot stays the PR's,
+   unpinned, so the pool can take it back again once the loop ends. Magnum holds the PR for the whole run, so no round, release or `magnum open` touches the
    checkout meanwhile. The PR stays `reviewed`. The fixer's conversation persists across cycles and loops until you
    park it, so it remembers what it declined and why. A fix role takes no `max_session_rounds`: a fix job is
    no review round, and the configuration refuses the key there. A conversation that is nearly full is

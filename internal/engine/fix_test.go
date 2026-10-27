@@ -594,11 +594,12 @@ func TestAFixRefusedForABrokenSlotNamesTheRepair(t *testing.T) {
 
 // handBack takes PR #2's slot back, as the pool does when another PR needs
 // it: a release parks the PR's sessions and review1 is free again, while the
-// PR stays reviewed.
+// PR stays reviewed. No poll runs, so a head the test set on the PR's row
+// stays.
 func handBack(h *harness) {
 	h.t.Helper()
 	rel := h.enqueue(ReqRelease, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
-	h.tick()
+	h.handle()
 	if r := h.request(rel); r.State != store.RequestDone {
 		h.t.Fatalf("release: %s %q", r.State, deref(r.Result))
 	}
@@ -682,14 +683,7 @@ func TestAFixWithoutAFreeSlotRefusesAndNamesTheRetry(t *testing.T) {
 	h, git := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 	handBack(h)
-	// Another PR takes the only slot.
-	h.advance(31 * time.Minute)
-	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel"}, prSpec{n: 3, head: "c1"})
-	h.tick()
-	h.advance(5 * time.Minute)
-	h.tick()
-	h.wantState(3, store.PRReviewed)
-	h.advance(31 * time.Minute) // #3's slot is past min_warm: evictable
+	takeOnlySlot(h)
 	before := len(h.sl.all())
 
 	id := h.fix(FixPayload{})
@@ -756,12 +750,192 @@ func TestAFixWhoseClaimFailsHandsTheSlotBack(t *testing.T) {
 	}
 }
 
+// A claim whose schema load fails is no failure (the next round reloads the
+// schema), but the fixer's specs then run on the databases of the slot's
+// last PR: the fix.start event says so, as `magnum open`'s answer does.
+func TestAFixWhoseClaimCouldNotLoadTheSchemaSaysSo(t *testing.T) {
+	h, git := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	h.sl.ensureErr = errors.New("reset_db failed")
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	if n := h.ag.count("submit:claude-fix:"); n != 1 {
+		t.Fatalf("fixer prompts = %d, want 1", n)
+	}
+	note := "its databases' schema could not be loaded (the next round reloads it): reset_db failed"
+	ev, ok := h.fixEvent("fix.start")
+	if !ok || !strings.HasSuffix(ev.Message, "; "+note) {
+		t.Errorf("fix.start = %q, %v; want it to end with %q", ev.Message, ok, note)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil || data["schema"] != note {
+		t.Errorf("fix.start data = %s, want schema %q", ev.Data, note)
+	}
+}
+
+// A free slot another round takes between the request's check and the
+// claim ends the loop quietly with the refusal's sentence, which names the
+// retry: a fix.ended event and an info toast, no failure, no attention.
+func TestAFixThatLosesItsFreeSlotEndsQuietly(t *testing.T) {
+	h, _ := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	h.sl.reserveErr = fmt.Errorf("slots: reserve for PR #2 in talkable/talkable: %w", slots.ErrNoFreeSlot)
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id) // the check found review1 free
+	sentence := "no free talkable/talkable slot right now; run `magnum fix talkable/talkable#2` again shortly"
+	if ev, ok := h.fixEvent("fix.ended"); !ok || ev.Message != "the fix loop ends: "+sentence {
+		t.Errorf("fix.ended = %q, %v; want %q", ev.Message, ok, "the fix loop ends: "+sentence)
+	}
+	if ev, ok := h.fixEvent("fix.failed"); ok {
+		t.Errorf("fix.failed = %q: a lost slot is no failure", ev.Message)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on without a slot")
+	}
+	if h.ag.count("submit:") != 0 {
+		t.Error("the fixer started without a slot")
+	}
+	h.wantState(2, store.PRReviewed)
+	h.flush()
+	if got := toastsWith(h, sentence); len(got) != 1 {
+		t.Errorf("toasts = %v, want one that says %q", h.nh.shown(), sentence)
+	}
+	h.wantToasts("needs attention", 0)
+}
+
+// `magnum abort` while the claim checks the slot out stops the job and hands
+// the slot it reserved back, as a failed claim does: a slot left to the PR
+// would keep the last PR's checkout record, and a later `magnum open` would
+// take it as the PR's own.
+func TestAnAbortDuringTheClaimHandsTheSlotBack(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	h.sl.mu.Lock()
+	h.sl.checkoutGate = make(chan struct{})
+	h.sl.checkoutStarted = make(chan struct{}, 1)
+	started := h.sl.checkoutStarted
+	h.sl.mu.Unlock()
+	before := len(h.sl.all())
+
+	id := h.fix(FixPayload{})
+	h.e.handleRequests(h.ctx)
+	h.wantDone(id)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the claim never reached its checkout")
+	}
+	abort := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(abort); r.State != store.RequestDone {
+		t.Errorf("abort: %s %q", r.State, deref(r.Result))
+	}
+	calls := h.sl.all()[before:]
+	if !slices.Contains(calls, "reserve:"+itoa(pr.ID)) || !slices.Contains(calls, "release:review1:fix stopped") {
+		t.Errorf("slot calls %v lack the reservation and its release", calls)
+	}
+	if sl := h.slot("review1"); sl.State != store.SlotFree || sl.PRID != nil {
+		t.Errorf("slot = %s for PR %v, want free", sl.State, deref(sl.PRID))
+	}
+	if h.ag.count("submit:") != 0 {
+		t.Error("the fixer started after the abort")
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on after the abort")
+	}
+}
+
+// A PR without a slot that is pinned holds autofix and a loop's next cycle
+// as a pin holds every automatic round: they refuse it and claim nothing,
+// while `magnum fix` takes the pin off and claims a slot.
+func TestAPinnedPRWithoutASlotHoldsAutofixButNotMagnumFix(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	handBack(h)
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", true) }); err != nil {
+		t.Fatal(err)
+	}
+	before := len(h.sl.all())
+
+	_, err := h.e.startFix(h.ctx, h.pr(2), autofixBy, FixState{}, nil)
+	if want := "talkable/talkable#2 is pinned (magnum unpin)"; err == nil || err.Error() != want {
+		t.Errorf("autofix: %v, want %q", err, want)
+	}
+	if claims, checkouts := slotClaims(h.sl.all()[before:]); len(claims)+len(checkouts) != 0 {
+		t.Errorf("a refused autofix claimed %v and checked out %v", claims, checkouts)
+	}
+
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	if res := h.wantDone(id); !strings.Contains(res, "unpinned the PR") {
+		t.Errorf("answer = %q, want it to say it unpinned the PR", res)
+	}
+	if claims, _ := slotClaims(h.sl.all()[before:]); !slices.Equal(claims, []string{"reserve:" + itoa(pr.ID)}) {
+		t.Errorf("claims = %v, want one reservation", claims)
+	}
+	if h.pr(2).Pinned {
+		t.Error("the PR is still pinned")
+	}
+}
+
+// A PR without a slot whose head kept the verdict of the last review (a push
+// that only merged the base, then a round whose judge only replied) claims
+// its slot at that head, the reviewed one, and the fixer works there.
+func TestAFixOnASlotlessPRWhoseHeadKeptTheVerdictClaimsAtItsHead(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := stoodPR(h, git, "replied")
+	handBack(h)
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	before := len(h.sl.all())
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	want := "the review on a1a1a1a (the head d4d4d4d kept its verdict), 1 of them open from earlier reviews, in a slot it claims"
+	if res := h.wantDone(id); !strings.Contains(res, want) {
+		t.Errorf("answer = %q, want it to say %q", res, want)
+	}
+	if _, checkouts := slotClaims(h.sl.all()[before:]); !slices.Equal(checkouts, []string{"checkout:review1:" + itoa(pr.ID) + ":" + keptHead}) {
+		t.Errorf("checkouts = %v, want one of %s", checkouts, keptHead)
+	}
+	if runs := h.fixRuns(pr.ID); len(runs) != 1 || runs[0].TargetSHA != keptHead {
+		t.Errorf("fix runs = %+v, want one on %s", runs, keptHead)
+	}
+}
+
+// takeOnlySlot has PR #3 reviewed in the pool's only slot after PR #2's was
+// handed back, and its slot then idle past min_warm: evictable, so a fix
+// that asks for a slot starts that eviction.
+func takeOnlySlot(h *harness) {
+	h.t.Helper()
+	h.advance(31 * time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel"}, prSpec{n: 3, head: "c1"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.wantState(3, store.PRReviewed)
+	if sl := h.slot("review1"); deref(sl.PRID) != h.pr(3).ID {
+		h.t.Fatalf("review1 holds PR %v, want #3", deref(sl.PRID))
+	}
+	h.advance(31 * time.Minute)
+}
+
 // A PR without a slot whose head moved since the review has nothing to fix:
-// `magnum fix` refuses as before and claims no slot for it.
+// `magnum fix` refuses as before, before it looks for a slot, so it claims
+// none and frees none (the pool's only slot is another PR's and evictable).
 func TestAFixOnASlotlessPRWhoseHeadMovedRefusesAndClaimsNothing(t *testing.T) {
 	h, _ := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 	handBack(h)
+	takeOnlySlot(h)
 	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("head_sha", fixPushed) }); err != nil {
 		t.Fatal(err)
 	}
@@ -775,11 +949,15 @@ func TestAFixOnASlotlessPRWhoseHeadMovedRefusesAndClaimsNothing(t *testing.T) {
 	if h.ag.count("submit:") != 0 {
 		t.Error("a refused request started the fixer")
 	}
-	if claims, checkouts := slotClaims(h.sl.all()[before:]); len(claims)+len(checkouts) != 0 {
+	calls := h.sl.all()[before:]
+	if claims, checkouts := slotClaims(calls); len(claims)+len(checkouts) != 0 {
 		t.Errorf("a refused request claimed %v and checked out %v", claims, checkouts)
 	}
-	if sl := h.slot("review1"); sl.State != store.SlotFree || sl.PRID != nil {
-		t.Errorf("slot = %s for PR %v, want free", sl.State, deref(sl.PRID))
+	if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "release:") }) {
+		t.Errorf("a refused request freed a slot: %v", calls)
+	}
+	if sl := h.slot("review1"); deref(sl.PRID) != h.pr(3).ID {
+		t.Errorf("review1 holds PR %v, want #3 still", deref(sl.PRID))
 	}
 }
 

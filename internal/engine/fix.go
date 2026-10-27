@@ -26,11 +26,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
@@ -129,6 +131,10 @@ type fixJob struct {
 	// touched: the fixer may have changed the slot (its prompt was sent), so
 	// the settle and a stop put the slot back in order.
 	touched bool
+	// schema is what the job's claim did to the slot's databases ("loaded
+	// the schema of …", or why it could not; "" for none, and for a slot the
+	// PR had): fixClaim sets it, the fix.start event says it.
+	schema string
 }
 
 func (j *fixJob) label() string   { return fmt.Sprintf("%s#%d", j.repo.FullName(), j.pr.Number) }
@@ -520,14 +526,20 @@ func (e *Engine) fixSlotFree(ctx context.Context, repo store.Repo, pr store.PR, 
 		return nil
 	}
 	e.needSlot(ctx, *pool, prSubject(repo, pr.Number))
-	return errNoFreeFixSlot(*pool, label)
+	return noFreeFixSlot{repo: pool.Repo, label: label}
 }
 
-// errNoFreeFixSlot is the refusal of a fix whose PR has no slot while the
-// pool has none free: the retry it names finds the one freed meanwhile.
-func errNoFreeFixSlot(pool config.Pool, label string) error {
-	return fmt.Errorf("no free %s slot right now; run `magnum fix %s` again shortly", pool.Repo, label)
+// noFreeFixSlot is the refusal of a fix whose PR has no slot while the pool
+// has none free: the retry it names finds the one freed meanwhile. It is
+// slots.ErrNoFreeSlot (errors.Is), so a claim that lost its free slot ends
+// the loop quietly with it (runFix, endFixUnclaimed).
+type noFreeFixSlot struct{ repo, label string }
+
+func (e noFreeFixSlot) Error() string {
+	return fmt.Sprintf("no free %s slot right now; run `magnum fix %s` again shortly", e.repo, e.label)
 }
+
+func (noFreeFixSlot) Unwrap() error { return slots.ErrNoFreeSlot }
 
 // reviewStood reports whether the PR's head kept the verdict of sum, its
 // last posted review, made on an older commit: the head is the reviewed one
@@ -696,15 +708,30 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 		e.log.Info("fix interrupted by a shutdown; the next start ends its loop", "subject", subject)
 		return
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, slots.ErrNoFreeSlot): // the claim lost its free slot (fixClaim): nothing failed
+		e.endFixUnclaimed(fctx, job, err.Error())
+	case err != nil:
 		msg := failed + err.Error()
 		if job.touched {
 			msg += e.putFixSlotBack(fctx, job)
 		}
 		e.failFix(fctx, job, msg, "")
-		return
+	default:
+		e.settleFix(fctx, job)
 	}
-	e.settleFix(fctx, job)
+}
+
+// endFixUnclaimed ends the loop of a job whose claim found no free slot
+// after all (a round took the one the request saw free) quietly, as a stop
+// does: nothing failed and why names the retry, so the loop's row goes, a
+// fix.ended event and an info toast say why, and nobody is called.
+func (e *Engine) endFixUnclaimed(ctx context.Context, job *fixJob, why string) {
+	e.endFixState(ctx, job)
+	e.event(ctx, "info", job.subject(), "fix.ended", "the fix loop ends: "+why, job.eventData())
+	title := fmt.Sprintf("magnum: fix not started: %s#%d", job.repo.Name, job.pr.Number)
+	e.info(notify.Item{Key: fmt.Sprintf("fix-unclaimed:%d:%s:%d", job.pr.ID, store.FormatTime(job.state.StartedAt), job.state.Cycle), Title: title,
+		Body: job.pr.URL + "\n" + why, Line: strings.TrimPrefix(title, "magnum: ") + ": " + why + " " + job.pr.URL, Kind: kindFixEnded})
 }
 
 // putFixSlotBack stops a fixer whose run failed, timed out or panicked and
@@ -750,33 +777,42 @@ func (e *Engine) closeFixHandle(prID int64) []stopOrder {
 
 // fixClaim gives a job whose PR has no slot (the pool took it back after
 // the review) one at the reviewed head, as `magnum open` claims one, without
-// its pin and hold (claimAtReviewedHead); fixGuard then takes it as the
-// job's. The slot is held, as a round leaves one: the job's reservation keeps
-// eviction off it while the fixer works, and the pool can take it back once
-// the loop let go of the PR. A claim that failed hands back the pool slot it
-// reserved (released, as after a failed open), but one a stop or a shutdown
-// cut short leaves it held too, never claimed for good. A pool slot another
-// round took since prepareFix found it free refuses as prepareFix does
-// (errNoFreeFixSlot), and the loop ends with that sentence.
+// its pin or open hold (claimAtReviewedHead); fixGuard then takes it as the
+// job's, and the fix.start event says what the claim did to the slot's
+// databases (fixJob.schema): a schema that could not be loaded leaves the
+// fixer's specs on the last PR's. The slot moves to held, as a round leaves
+// one: the job's reservation keeps eviction off it while the fixer works,
+// and the pool can take it back once the loop let go of the PR. A claim that
+// failed, or that `magnum abort` (an ignore) cut short, hands back the pool
+// slot it reserved, released as after a failed open: kept, it would carry the
+// last PR's checkout record, which a later open takes as the PR's own. One a
+// shutdown cut short leaves it held, never claimed for good. A pool slot
+// another round took since prepareFix found it free fails as prepareFix
+// refuses (noFreeFixSlot), and runFix ends the loop quietly with it.
 func (e *Engine) fixClaim(ctx context.Context, job *fixJob) error {
-	slot, err := e.claimAtReviewedHead(ctx, job.pr, job.repo)
+	slot, note, err := e.claimAtReviewedHead(ctx, job.pr, job.repo)
 	fctx := context.WithoutCancel(ctx)
 	switch {
 	case errors.Is(err, slots.ErrNoFreeSlot) && job.pool != nil:
-		return errNoFreeFixSlot(*job.pool, job.label())
+		return noFreeFixSlot{repo: job.pool.Repo, label: job.label()}
 	case slot.ID == 0:
 		return err
-	case err != nil && ctx.Err() == nil && job.pool != nil:
-		if rerr := e.releaseSlot(fctx, slot, *job.pool, "fix failed"); rerr != nil {
-			e.event(fctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after a failed claim of magnum fix: "+rerr.Error(), nil)
+	case err != nil && job.pool != nil && (ctx.Err() == nil || e.stopOrdered(job.pr.ID)):
+		reason, what := "fix failed", "a failed claim of magnum fix"
+		if ctx.Err() != nil {
+			reason, what = "fix stopped", "a claim of magnum fix that a stop cut short"
+		}
+		if rerr := e.releaseSlot(fctx, slot, *job.pool, reason); rerr != nil {
+			e.event(fctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after "+what+": "+rerr.Error(), nil)
 		} else {
-			e.event(fctx, "info", "slot:"+slot.Name, "slot.released", slot.Name+" released after a failed claim of magnum fix", nil)
+			e.event(fctx, "info", "slot:"+slot.Name, "slot.released", slot.Name+" released after "+what, nil)
 		}
 		return err
 	}
 	if terr := e.st.TransitionSlot(fctx, slot.ID, []string{store.SlotClaimed}, store.SlotHeld, nil); terr != nil && !errors.Is(terr, store.ErrConflict) {
 		e.log.Warn("fix: hold the claimed slot", "subject", job.subject(), "slot", slot.Name, "err", terr)
 	}
+	job.schema = strings.TrimPrefix(note, "; ")
 	return err
 }
 
@@ -944,10 +980,14 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		// in the agent, so the run is observed, never sent again.
 		e.log.Warn("fix: prompt not acknowledged as working; waiting for the run", "subject", job.subject(), "run", run.ID, "err", serr)
 	}
-	e.event(ctx, "info", job.subject(), "fix.start", fmt.Sprintf("%s %s (run %s, cycle %d of %d)",
-		job.role.Name, job.fixes(), run.ID, job.state.Cycle, job.state.Cap),
-		map[string]any{"run": run.ID, "role": job.role.Name, "slot": job.slot.Name, "report": job.state.Report,
-			"cycle": job.state.Cycle, "cap": job.state.Cap, "by": job.state.By})
+	msg := fmt.Sprintf("%s %s (run %s, cycle %d of %d)", job.role.Name, job.fixes(), run.ID, job.state.Cycle, job.state.Cap)
+	data := map[string]any{"run": run.ID, "role": job.role.Name, "slot": job.slot.Name, "report": job.state.Report,
+		"cycle": job.state.Cycle, "cap": job.state.Cap, "by": job.state.By}
+	if job.schema != "" { // fixClaim: what the claim did to the slot's databases
+		msg += "; " + job.schema
+		data["schema"] = job.schema
+	}
+	e.event(ctx, "info", job.subject(), "fix.start", msg, data)
 	return nil
 }
 
