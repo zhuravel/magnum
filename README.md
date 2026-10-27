@@ -2652,8 +2652,9 @@ One cycle of a loop has four steps.
    branch). Magnum then puts the slot on the pushed head, or back on the reviewed head when nothing was
    pushed. The fixer's local commits survive only on GitHub. When you typed into the fixer's pane while its
    run was in flight (a Claude fixer's transcript shows a prompt typed after Magnum's), the `fix.replied`
-   event ends with "the operator typed into the fixer's pane during the run" and carries `operator_typed`;
-   other kinds never say so.
+   event ends with "the operator typed into the fixer's pane during the run" and carries `operator_typed`,
+   as does `fix.failed` (and the attention it leaves) when the settle fails, a run that wrote no report
+   among them; other kinds never say so.
 3. **Re-review.** A push gets a forced re-review. It skips the throttle and does not count against the daily
    cap, because the loop has its own cap. Unlike a `magnum review` you ask for, it is no act of yours, so
    the threads Magnum stopped arguing in stay flagged for you.
@@ -2825,7 +2826,7 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   the fixer's reasons stay. A fix in another reviewer's thread that GitHub shows the fixer's reply in after
   all (the reply took though the fixer saw it fail) asks nothing of you and is not counted: Magnum looks
   once when the run ends, and a `fix.external` event says so. Magnum's own threads are read again before
-  each call goes out, when the run ends and again at the loop's end: a finding whose thread of Magnum's is
+  each call goes out, when the run ends (the same single read as that look) and again at the loop's end: a finding whose thread of Magnum's is
   resolved asks nothing, and one whose thread shows the answer its call asks for ("Fixed in" for a fix,
   "Won't fix" or "Not a bug" for a declined one) but is still open asks only "resolve magnum's thread,
   already answered: <link>"; a `fix.calls_settled` event counts them. At the loop's end the re-review's
@@ -2834,11 +2835,14 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   Another reviewer's thread keeps its call, since Magnum asks only for a reply there and never for a
   resolution.
   `magnum status <ref>` prints them one per line under the fix line, also while the loop waits for the
-  re-review of the fixer's push, and `--json` gives them as `fix.needs_you` (`thread`, `url`, `action`). A
+  re-review of the fixer's push (a thread the run's end found answered shows its resolve call there, as in
+  the toast, from the loop's own record: status reads no thread), and `--json` gives them as
+  `fix.needs_you` (`thread`, `url`, `action`). A
   finding whose entry does not say `fixed in` or `not fixed`, the description finding, another reviewer's
   review body or comment (`<id> review`, `<id> comment`), and one whose thread Magnum cannot place keep the
   older words ("1 more finding needs your call (2101 P1 app/models/offer.rb:42)"). When the fixer pushed and also left findings, the push still gets its re-review first, and the loop ends
-  after it. The urgent toast comes at once, with the fixer's push, not after the re-review (which can wait
+  after it, unless Magnum's threads show every call settled by then: the re-review then decides the loop as
+  for a push that left nothing to you. The urgent toast comes at once, with the fixer's push, not after the re-review (which can wait
   or run for an hour): you can act on the findings meanwhile. The loop's end after the re-review asks for the
   same call and toasts it no second time (one toast per loop cycle); the PR goes to needs attention then.
 - **Ended.** GitHub closed the PR, or you pushed a newer head, before the next cycle started. The loop ends

@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
@@ -233,10 +234,45 @@ func needsYouText(entries []string, answered map[string]bool, report, prURL, ref
 // the author when it pushed (FixState.NeedsYou, kept while the loop waits
 // for the re-review of its push), as the loop's end names them: the files
 // beside its report place their threads, prURL is the PR's page and ref how
-// `magnum fix` names it. None for entries magnum cannot read so.
+// `magnum fix` names it, and a thread the settle found answered
+// (FixState.Answered) asks only for the resolution, as the settle's toast
+// said: no thread is read again here. None for entries magnum cannot read
+// so.
 func FixCalls(st FixState, prURL, ref string) []attention.FixCall {
-	calls, _ := needsYouCalls(st.NeedsYou, nil, st.Report, prURL, ref)
+	calls, _ := needsYouCalls(st.NeedsYou, st.answered(), st.Report, prURL, ref)
 	return calls
+}
+
+// answeredBy reports whether a thread whose answer has class (answerOf)
+// answers what n's call asks: "Fixed in" a fix, "Won't fix" or "Not a bug"
+// a decline.
+func (n needsYouEntry) answeredBy(class string) bool {
+	switch class {
+	case pipeline.ReplyFixed:
+		return n.fixedIn != ""
+	case pipeline.ReplyWontFix, pipeline.ReplyNotABug:
+		return n.notFixed
+	}
+	return false
+}
+
+// threadsReader reads the review threads of the job's PR from GitHub once,
+// however often it is called, so the settle's two looks at them
+// (dropFixerAnswered, freshNeedsYou) share one read. A job without a reader
+// or a read that fails (logged once) gives an error, and each look then
+// keeps its entries.
+func (e *Engine) threadsReader(ctx context.Context, job *fixJob) func() ([]github.Thread, error) {
+	return sync.OnceValues(func() ([]github.Thread, error) {
+		_, rd, ok := e.fixReader(job)
+		if !ok {
+			return nil, fmt.Errorf("no GitHub client that reads review threads for poll identity %q", job.watch.PollIdentity)
+		}
+		threads, _, err := rd.AllReviewThreads(ctx, job.repo.Owner, job.repo.Name, job.pr.Number) // a thread past the list keeps its entry
+		if err != nil {
+			e.log.Warn("fix: the PR's review threads, for what the fixer left to the author", "subject", job.subject(), "err", err)
+		}
+		return threads, err
+	})
 }
 
 // threadNow is one of magnum's threads as freshNeedsYou reads it: whether
@@ -267,18 +303,22 @@ func answerOf(replies []agents.ThreadReply) string {
 // settle's, or the loop's copy at its end), as magnum's own threads show
 // them now, and the threads among them (by comment id) whose call asks only
 // for the resolution. An entry with a call in one of magnum's threads (the
-// files beside report place it, threadOwners) whose thread is resolved asks
-// nothing and is left out; one whose thread is open with the answer its call
-// asks for (a "Fixed in" reply for a fix, "Won't fix" or "Not a bug" for a
-// decline: the class answerOf reads) asks only to resolve it
-// (attention.ResolveCall). Every other entry keeps its call, those in other
-// reviewers' threads among them: magnum asks for a reply there and never
-// for a resolution, and dropFixerAnswered has looked at them. The threads
-// come from the threads file in dir when a re-review wrote it after the
-// fixer's report, else from one GitHub read (threadsNow); nothing to look
-// at, a read that fails, or a thread the read does not list keeps the
-// entries as they are. A fix.calls_settled event counts what changed.
-func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []string, report, dir string) ([]string, map[string]bool) {
+// files beside the job's report place it, threadOwners) whose thread is
+// resolved asks nothing and is left out; one whose thread is open with the
+// answer its call asks for (answeredBy the class answerOf reads) asks only
+// to resolve it (attention.ResolveCall). Every other entry keeps its call,
+// those in other reviewers' threads among them: magnum asks for a reply
+// there and never for a resolution, and dropFixerAnswered has looked at
+// them. The threads come from the threads file in dir when a re-review wrote
+// it after the fixer's report, else from read, GitHub's once (threadsNow);
+// nothing to look at, a read that fails, or a thread the read does not list
+// keeps the entries as they are, and known, the threads found answered
+// before (the loop's row at its end; nil at the settle), stays what is
+// known when no read was made or it failed. A fix.calls_settled event
+// counts what changed.
+func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []string, known map[string]bool, dir string,
+	read func() ([]github.Thread, error)) ([]string, map[string]bool) {
+	report := job.state.Report
 	owners := readThreadOwners(filepath.Dir(report))
 	magnums := func(entry string) (needsYouEntry, int64, bool) {
 		n, ok := readNeedsYouEntry(entry)
@@ -290,11 +330,11 @@ func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []strin
 		return n, id, err == nil && mine
 	}
 	if !slices.ContainsFunc(entries, func(entry string) bool { _, _, ok := magnums(entry); return ok }) {
-		return entries, nil
+		return entries, known
 	}
-	threads, from, ok := e.threadsNow(ctx, job, report, dir)
+	threads, from, ok := e.threadsNow(ctx, job, dir, read)
 	if !ok {
-		return entries, nil
+		return entries, known
 	}
 	kept, answered, resolved := []string{}, map[string]bool{}, 0
 	for _, entry := range entries {
@@ -305,8 +345,7 @@ func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []strin
 		case t.resolved:
 			resolved++
 			continue
-		case n.fixedIn != "" && t.answer == pipeline.ReplyFixed,
-			n.notFixed && (t.answer == pipeline.ReplyWontFix || t.answer == pipeline.ReplyNotABug):
+		case n.answeredBy(t.answer):
 			answered[n.id] = true
 		}
 		kept = append(kept, entry)
@@ -332,24 +371,27 @@ func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []strin
 // threadsNow reads magnum's threads on the job's PR as they are now, by the
 // id of each one's first comment, and says where from ("threads file",
 // "github"): the threads file in dir, a re-review's, when it was written
-// after the fixer's report (threadsFileNow), else GitHub once, where the
-// replies of the login that posts the PR's reviews and of its former ones
-// are magnum's own, as a round's threads file marks them. ok is false when
-// neither can be read.
-func (e *Engine) threadsNow(ctx context.Context, job *fixJob, report, dir string) (map[int64]threadNow, string, bool) {
-	if threads, ok := threadsFileNow(dir, report); ok {
+// after the fixer's report (threadsFileNow), else read's threads. Their
+// replies are magnum's own by the rule a round's threads file marks them
+// with (pipeline.OwnHistory): the login of the PR's identity, an App's when
+// that identity is one, and the PR's former logins. The login that posted
+// the review the fixer fixed (fixJob.login, unset at the loop's end) is not
+// added: it is the PR's identity's then, or a former one since. ok is false
+// when neither can be read.
+func (e *Engine) threadsNow(ctx context.Context, job *fixJob, dir string, read func() ([]github.Thread, error)) (map[int64]threadNow, string, bool) {
+	if threads, ok := threadsFileNow(dir, job.state.Report); ok {
 		return threads, "threads file", true
 	}
-	_, rd, ok := e.fixReader(job)
-	if !ok {
-		return nil, "", false
-	}
-	threads, _, err := rd.AllReviewThreads(ctx, job.repo.Owner, job.repo.Name, job.pr.Number) // a thread past the list keeps its entry
+	threads, err := read()
 	if err != nil {
-		e.log.Warn("fix: magnum's threads, for the calls left to the author", "subject", job.subject(), "err", err)
 		return nil, "", false
 	}
-	own := append([]string{job.login, e.reviewerLogin(cmp.Or(job.pr.Identity, job.watch.Identity))}, e.formerLogins(ctx, job.pr)...)
+	name := cmp.Or(job.pr.Identity, job.watch.Identity)
+	reviewer, former := e.reviewerLogin(name), e.formerLogins(ctx, job.pr)
+	bot := strings.HasSuffix(strings.ToLower(reviewer), "[bot]")
+	if id := e.cfg.IdentityByName(name); id != nil && id.Kind == "app" {
+		bot = true // as the round's expectBot
+	}
 	out := make(map[int64]threadNow, len(threads))
 	for _, t := range threads {
 		all := t.AllComments()
@@ -358,8 +400,7 @@ func (e *Engine) threadsNow(ctx context.Context, job *fixJob, report, dir string
 		}
 		replies := make([]agents.ThreadReply, 0, len(all)-1)
 		for _, c := range all[1:] {
-			a := github.Account(c.AuthorLogin, c.AuthorType)
-			r := agents.ThreadReply{Own: slices.ContainsFunc(own, func(o string) bool { return github.SameAccount(o, a) })}
+			r := agents.ThreadReply{Own: pipeline.OwnHistory(c.AuthorLogin, c.AuthorType, reviewer, bot, former)}
 			if r.Own {
 				_, r.Kind, _ = postreview.ParseReplyMarker(c.Body)
 			} else {

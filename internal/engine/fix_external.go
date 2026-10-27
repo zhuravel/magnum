@@ -590,9 +590,10 @@ func readExternalFile(dir string) (externalItems, bool) {
 // started (a comment with the fixer's marker by the PR author or one of
 // magnum's logins: the reply took though the fixer saw it fail). The skill
 // lists a fix there only for its missing reply, so such an entry asks
-// nothing of the operator, and a fix.external event counts them. Nothing to
-// look at, or a read that fails, keeps every entry.
-func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []string) []string {
+// nothing of the operator, and a fix.external event counts them. The
+// threads come from read, the settle's one GitHub read (threadsReader).
+// Nothing to look at, or a read that fails, keeps every entry.
+func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []string, read func() ([]github.Thread, error)) []string {
 	x, ok := readExternalFile(filepath.Dir(deref(job.run.ReportPath)))
 	if !ok {
 		return entries
@@ -606,13 +607,8 @@ func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []s
 	if len(look) == 0 {
 		return entries
 	}
-	_, rd, ok := e.fixReader(job)
-	if !ok {
-		return entries
-	}
-	threads, _, err := rd.AllReviewThreads(ctx, job.repo.Owner, job.repo.Name, job.pr.Number) // a thread past the list keeps its entry
+	threads, err := read() // a thread past the list keeps its entry
 	if err != nil {
-		e.log.Warn("fix: the threads the fixer may have answered", "subject", job.subject(), "err", err)
 		return entries
 	}
 	own := e.fixLogins(ctx, job)

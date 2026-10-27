@@ -471,8 +471,9 @@ func reReviewReads(h *harness, threads []agents.ReviewThread, mtime time.Time, r
 // when it was written after the fixer's report (no GitHub read), else
 // GitHub once. A thread the file shows resolved asks nothing, and with no
 // call left the clean re-review ends the loop as done; a file older than the
-// report is not read, and a rebuttal the re-review's judge posted after its
-// read keeps the call.
+// report is not read, a rebuttal the re-review's judge posted after its read
+// keeps the call, and the judge's acknowledgement of the answer leaves only
+// the resolution to ask for.
 func TestTheLoopsEndAsksNoReplyForAFixedFindingTheReReviewShowsAnswered(t *testing.T) {
 	const url = prPage + "#discussion_r4302866759"
 	answered := func(resolved bool) []agents.ReviewThread {
@@ -485,12 +486,15 @@ func TestTheLoopsEndAsksNoReplyForAFixedFindingTheReReviewShowsAnswered(t *testi
 		mtime   time.Time // the threads file's
 		replies []postreview.Reply
 		call    bool // the loop's end asks the operator
+		resolve bool // and asks only for the resolution
 		reads   int  // GitHub reads of the threads at the loop's end
 	}{
 		{name: "the re-review shows the thread resolved", threads: answered(true), mtime: time.Now().Add(time.Hour)},
 		{name: "a threads file older than the report", threads: answered(true), mtime: time.Now().Add(-time.Hour), call: true, reads: 1},
 		{name: "a rebuttal after the answer", threads: answered(false), mtime: time.Now().Add(time.Hour), call: true,
 			replies: []postreview.Reply{{CommentID: 4302866759, Kind: postreview.ReplyRebuttal, Body: "The owner is still nil on the import path."}}},
+		{name: "an acknowledgement after the answer", threads: answered(false), mtime: time.Now().Add(time.Hour), call: true, resolve: true,
+			replies: []postreview.Reply{{CommentID: 4302866759, Kind: postreview.ReplyAck, Body: "Confirmed: the owner is checked now."}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, git := fixHarness(t)
@@ -531,6 +535,9 @@ func TestTheLoopsEndAsksNoReplyForAFixedFindingTheReReviewShowsAnswered(t *testi
 					t.Error("no fix.done after the clean re-review")
 				}
 				return
+			}
+			if tc.resolve {
+				call = "fix: resolve magnum's thread, already answered: " + url + "; details: " + report
 			}
 			if cur := h.wantState(2, store.PRNeedsAttention); deref(cur.LastError) != call {
 				t.Errorf("last_error = %q\nwant %q", deref(cur.LastError), call)

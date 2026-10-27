@@ -7355,7 +7355,9 @@ func FixCalls(st FixState, prURL, ref string) []attention.FixCall
     author when it pushed (FixState.NeedsYou, kept while the loop waits for the
     re-review of its push), as the loop's end names them: the files beside its
     report place their threads, prURL is the PR's page and ref how `magnum fix`
-    names it. None for entries magnum cannot read so.
+    names it, and a thread the settle found answered (FixState.Answered) asks
+    only for the resolution, as the settle's toast said: no thread is read again
+    here. None for entries magnum cannot read so.
 
 func GitHubOpWords(op string) string
     GitHubOpWords is op in the words `magnum status` shows: an engine label
@@ -8492,6 +8494,7 @@ type FixState struct {
 	Report       string    `json:"report"`
 	StartedAt    time.Time `json:"started_at"`
 	NeedsYou     []string  `json:"needs_you,omitempty"`
+	Answered     []string  `json:"answered,omitempty"`
 	Role         string    `json:"role,omitempty"`
 	ForcedAt     time.Time `json:"forced_at,omitzero"`
 	Held         bool      `json:"held,omitempty"`
@@ -8501,28 +8504,34 @@ type FixState struct {
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
     cycle fixes (in phase reviewing, the head the fixer pushed). By says who
-    started it ("magnum fix", "autofix"), Role is the fix role whose fixer runs
-    the current cycle, Report is the path of the report the fixer writes, and
-    StartedAt is when the loop started. NeedsYou are the findings a fixer that
-    pushed left to the author (its report's "## Needs you" entries, in its own
-    words, so never put in an event or a log; FixCalls reads what each asks):
-    the push is re-reviewed first, and the loop ends after that round as needs
-    attention. ForcedAt is when the loop forced the re-review of its push (phase
-    reviewing): its re-review is the forced round dispatched at or after it, and
-    every other round that ends while the loop waits is ignored (fixAfterRound;
-    zero in a row written before it was recorded, where any forced round is).
-    Held says that re-review ended and called for a next cycle a drain for a
-    restart refused: no round that ends afterwards is the loop's re-review, and
-    the restart's recovery, or the drain's end without one, starts that cycle
-    (recoverReviewingLoop). Context is what the current cycle did to the fixer's
-    conversation it resumed before its prompt, in a few words (fixCompact:
-    "compacted 82% → 31%", "compacted from 82%" when the pane shows no figure
-    after it, "fresh session (82% after /compact)", "fresh session (/compact
-    failed)"); "" when it resumed it as it was or started a fresh fixer anyway.
-    OthersUnread says that the current cycle's fixer did not get all the other
-    reviewers' items (writeExternal): "not read (HTTP 502)", "not all read (over
-    1000 review threads)", a short cause and never PR text; the loop's end says
-    so (othersUnread). "" when it got them.
+    started it ("magnum fix", "autofix"), Role is the fix role whose fixer
+    runs the current cycle, Report is the path of the report the fixer writes,
+    and StartedAt is when the loop started. NeedsYou are the findings a fixer
+    that pushed left to the author (its report's "## Needs you" entries,
+    in its own words, so never put in an event or a log; FixCalls reads what
+    each asks): the push is re-reviewed first, and the loop ends after that
+    round as needs attention, unless magnum's threads show every call settled
+    by then (freshNeedsYou), when the round decides the loop as for a push that
+    left nothing to the author. Answered are the comment ids of the threads
+    of magnum's among them that showed their answer at the settle, whose
+    calls ask only for the resolution; fixReReview writes it with NeedsYou,
+    and an id whose entry is gone asks nothing. ForcedAt is when the loop forced
+    the re-review of its push (phase reviewing): its re-review is the forced
+    round dispatched at or after it, and every other round that ends while the
+    loop waits is ignored (fixAfterRound; zero in a row written before it was
+    recorded, where any forced round is). Held says that re-review ended and
+    called for a next cycle a drain for a restart refused: no round that ends
+    afterwards is the loop's re-review, and the restart's recovery, or the
+    drain's end without one, starts that cycle (recoverReviewingLoop). Context
+    is what the current cycle did to the fixer's conversation it resumed before
+    its prompt, in a few words (fixCompact: "compacted 82% → 31%", "compacted
+    from 82%" when the pane shows no figure after it, "fresh session (82% after
+    /compact)", "fresh session (/compact failed)"); "" when it resumed it as
+    it was or started a fresh fixer anyway. OthersUnread says that the current
+    cycle's fixer did not get all the other reviewers' items (writeExternal):
+    "not read (HTTP 502)", "not all read (over 1000 review threads)", a short
+    cause and never PR text; the loop's end says so (othersUnread). "" when it
+    got them.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
@@ -15711,6 +15720,14 @@ func KVMissingReports(prID int64) string
     a MissingReports for each of its latest judged rounds (missingRecords),
     as a JSON list by round; one written before the record kept every round is a
     lone object.
+
+func OwnHistory(login, typ, reviewer string, reviewerBot bool, former []string) bool
+    OwnHistory reports whether an author (login, GraphQL __typename typ) is
+    reviewer, an App's when reviewerBot, or one of former, a bot's when it
+    ends in "[bot]": the same login ignoring "[bot]" and the same kind of
+    account (github.IsAccount). It is what a re-review's threads file marks own
+    (agents.ThreadReply.Own), and the engine reads magnum's threads from GitHub
+    by it too.
 
 func RolesToRun(ctx context.Context, st *store.Store, cfg *config.Config, pr store.PR, roles []config.Role, requested []string, kind string) ([]config.Role, error)
     RolesToRun returns the roles a round of kind runs for pr, in the order

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -50,14 +51,16 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // attention (a fix the fixer left as unanswered in another reviewer's
 // thread that GitHub shows its reply in is none: dropFixerAnswered; nor is a
 // finding whose thread of magnum's is resolved, and one answered there asks
-// only for the resolution: freshNeedsYou); replies alone end the loop with
-// an info toast. fix.replied says when the operator typed into the fixer's
-// pane during the run (operatorTyped). The events name counts, SHAs, the
-// role and the report, never what the fixer wrote.
+// only for the resolution: freshNeedsYou; both looks share one GitHub read,
+// threadsReader); replies alone end the loop with an info toast. fix.replied,
+// or fix.failed for a settle that fails, says when the operator typed into
+// the fixer's pane during the run (operatorTyped). The events name counts,
+// SHAs, the role and the report, never what the fixer wrote.
 func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	ctx = github.WithOp(ctx, opFixSettle) // github_cost.go
 	subject, report := job.subject(), deref(job.run.ReportPath)
 	rep, rerr := e.readFixReport(job)
+	typed := e.operatorTyped(ctx, job) // a run that failed too: one the operator drove without a report matters most
 	pushed := rerr == nil && len(rep.Pushed) > 0 && !rep.PushFailed
 	target := job.head
 	var headErr error
@@ -71,16 +74,16 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	})
 	switch {
 	case err != nil:
-		e.failFix(ctx, job, "fix settle failed: "+err.Error(), "")
+		e.failFixTyped(ctx, job, "fix settle failed: "+err.Error(), "", typed)
 		return
 	case headErr != nil:
-		e.failFix(ctx, job, "fix settle failed: "+headErr.Error(), "")
+		e.failFixTyped(ctx, job, "fix settle failed: "+headErr.Error(), "", typed)
 		return
 	case rerr != nil:
-		e.failFix(ctx, job, "fix run failed: "+rerr.Error(), "")
+		e.failFixTyped(ctx, job, "fix run failed: "+rerr.Error(), "", typed)
 		return
 	case rep.PushFailed:
-		e.failFix(ctx, job, "fix run failed: the fixer's push failed: "+report, "")
+		e.failFixTyped(ctx, job, "fix run failed: the fixer's push failed: "+report, "", typed)
 		return
 	}
 	data := job.eventData()
@@ -104,14 +107,15 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	if unread != "" {
 		replied += "; " + unread
 	}
-	if e.operatorTyped(ctx, job) {
-		replied, data["operator_typed"] = replied+"; the operator typed into the fixer's pane during the run", true
+	if typed {
+		replied, data["operator_typed"] = replied+typedSentence, true
 	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
 	var answered map[string]bool
 	if len(rep.NeedsYou) > 0 {
-		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou)                   // fix_external.go
-		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, report, "") // fix_calls.go: no re-review yet
+		read := e.threadsReader(ctx, job)                                               // fix_calls.go: one GitHub read for both looks
+		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou, read)                // fix_external.go
+		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, nil, "", read) // no re-review yet
 	}
 	n := len(rep.NeedsYou)
 	needs := "fix: " + needsYouText(rep.NeedsYou, answered, report, job.pr.URL, job.label(), false)
@@ -123,12 +127,12 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	case pushed && n > 0:
 		e.event(ctx, "warn", subject, "fix.needs_you", needs+"; the re-review of "+textx.ShortSHA(target)+" runs first", data)
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
-		if e.fixReReview(ctx, job, target, rep.NeedsYou) {
+		if e.fixReReview(ctx, job, target, rep.NeedsYou, answered) {
 			e.fixCallToast(job, attn) // the operator can act on it while the re-review runs
 		}
 	case pushed:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
-		e.fixReReview(ctx, job, target, nil)
+		e.fixReReview(ctx, job, target, nil, nil)
 	case n > 0:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
@@ -137,20 +141,20 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	default:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
-		answered := "the findings"
+		repliedTo := "the findings"
 		switch {
 		case job.alone && counted: // a review that found nothing: the fixer answered the other reviewers alone
-			answered = textx.Count(threads, "thread or comment", "threads and comments") + " of other reviewers"
+			repliedTo = textx.Count(threads, "thread or comment", "threads and comments") + " of other reviewers"
 		case job.alone:
-			answered = "the other reviewers"
+			repliedTo = "the other reviewers"
 		case counted:
-			answered = textx.Count(threads, "finding", "findings")
+			repliedTo = textx.Count(threads, "finding", "findings")
 		}
 		did := "pushed nothing"
 		if described {
 			did = "updated the description"
 		}
-		what := fmt.Sprintf("PR #%d: %s %s, replied to %s", job.pr.Number, job.role.Name, did, answered)
+		what := fmt.Sprintf("PR #%d: %s %s, replied to %s", job.pr.Number, job.role.Name, did, repliedTo)
 		body, line := job.pr.URL+"\nthe fix loop ends; the report: "+report, what
 		if unread != "" {
 			body, line = body+"\n"+unread, line+"; "+unread
@@ -158,6 +162,10 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.info(notify.Item{Key: "fix-replied:" + job.run.ID, Title: "magnum: " + what, Body: body, Line: line + " " + job.pr.URL, Kind: kindFixEnded})
 	}
 }
+
+// typedSentence ends what the settle says of a run the operator typed into
+// (operatorTyped): fix.replied, or fix.failed and its attention.
+const typedSentence = "; the operator typed into the fixer's pane during the run"
 
 // operatorTyped reports whether the operator typed into the fixer's pane
 // while the job's run was in flight (Agents.TypedDuringRun: a claude
@@ -188,7 +196,9 @@ func (e *Engine) operatorTyped(ctx context.Context, job *fixJob) bool {
 // way (the poller, which finds the head already moved, would never queue
 // it). A PR GitHub closed meanwhile ends the loop instead. It reports whether
 // the loop goes on to its re-review (false: the loop ended, closed or failed).
-func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, needs []string) bool {
+// answered are the threads among needs that ask only for the resolution
+// (freshNeedsYou), kept beside them (FixState.Answered).
+func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, needs []string, answered map[string]bool) bool {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err == nil && pr.GHState != store.GHOpen {
 		e.endFixState(ctx, job)
@@ -197,6 +207,7 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, need
 	}
 	st := job.state
 	st.Phase, st.Head, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseReviewing, head, needs, e.now().UTC(), false
+	st.Answered = slices.Sorted(maps.Keys(answered))
 	if err == nil {
 		err = e.setFixState(ctx, pr.ID, st)
 	}
@@ -428,6 +439,17 @@ func fixThreads(line string) (int, bool) {
 // the loop's row goes, a fix.failed event names msg and the report (report,
 // "" = the run's), and the operator is told (fixAttention).
 func (e *Engine) failFix(ctx context.Context, job *fixJob, msg, report string) {
+	e.failFixTyped(ctx, job, msg, report, false)
+}
+
+// failFixTyped is failFix for a settle that knows whether the operator
+// typed into the fixer's pane during the run (typed, operatorTyped): when
+// so, msg ends with typedSentence for the event and the attention alike,
+// and the event's data carries operator_typed.
+func (e *Engine) failFixTyped(ctx context.Context, job *fixJob, msg, report string, typed bool) {
+	if typed {
+		msg += typedSentence
+	}
 	if job.run.ID != "" {
 		e.finishFixRun(ctx, job.run, store.RunFailed, "failed", msg)
 	}
@@ -435,6 +457,9 @@ func (e *Engine) failFix(ctx context.Context, job *fixJob, msg, report string) {
 	data := job.eventData()
 	if report != "" {
 		data["report"] = report
+	}
+	if typed {
+		data["operator_typed"] = true
 	}
 	e.event(ctx, "warn", job.subject(), "fix.failed", msg, data)
 	e.fixAttention(ctx, job, msg)

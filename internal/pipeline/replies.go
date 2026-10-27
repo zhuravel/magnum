@@ -452,15 +452,20 @@ func threadSummary(ts []agents.ReviewThread) string {
 }
 
 // isOwnHistory reports whether a comment or review author is the round's
-// reviewer login or one of the PR's former logins (same login ignoring
-// "[bot]", and the same kind of account: a login ending in "[bot]" is a
-// bot's). Only history reads use it; verification accepts the reviewer
-// login alone (isReviewer).
+// reviewer login or one of the PR's former logins (OwnHistory). Only history
+// reads use it; verification accepts the reviewer login alone (isReviewer).
 func (rd *round) isOwnHistory(login, typ string) bool {
-	if rd.isReviewer(login, typ) {
-		return true
-	}
-	return login != "" && slices.ContainsFunc(rd.in.FormerLogins, func(f string) bool {
+	return OwnHistory(login, typ, rd.login, rd.expectBot, rd.in.FormerLogins)
+}
+
+// OwnHistory reports whether an author (login, GraphQL __typename typ) is
+// reviewer, an App's when reviewerBot, or one of former, a bot's when it
+// ends in "[bot]": the same login ignoring "[bot]" and the same kind of
+// account (github.IsAccount). It is what a re-review's threads file marks
+// own (agents.ThreadReply.Own), and the engine reads magnum's threads from
+// GitHub by it too.
+func OwnHistory(login, typ, reviewer string, reviewerBot bool, former []string) bool {
+	return github.IsAccount(login, typ, reviewer, reviewerBot) || slices.ContainsFunc(former, func(f string) bool {
 		return github.IsAccount(login, typ, f, strings.HasSuffix(strings.ToLower(f), "[bot]"))
 	})
 }

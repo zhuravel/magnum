@@ -380,4 +380,31 @@ func TestSettlementSaysTheOperatorTypedIntoTheFixersPaneDuringTheRun(t *testing.
 			}
 		})
 	}
+	// A run the operator drove that wrote no report matters most: its
+	// fix.failed says so too, and so does the attention it leaves.
+	t.Run("a run that wrote no report", func(t *testing.T) {
+		h, git := fixHarness(t)
+		fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+		h.ag.mu.Lock()
+		h.ag.typed = map[string]bool{"claude-fix": true}
+		h.ag.mu.Unlock()
+		fixer(h, git, "", func(store.Run) string { return "" })
+		h.fix(FixPayload{})
+		h.handle()
+		ev, ok := h.fixEvent("fix.failed")
+		if !ok {
+			t.Fatal("no fix.failed event")
+		}
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		const said = "; the operator typed into the fixer's pane during the run"
+		if !strings.HasPrefix(ev.Message, "fix run failed: ") || !strings.HasSuffix(ev.Message, said) || data["operator_typed"] != true {
+			t.Errorf("fix.failed = %q %s, want the run's failure, then %q, with operator_typed", ev.Message, ev.Data, said)
+		}
+		if cur := h.wantState(2, store.PRNeedsAttention); !strings.HasSuffix(deref(cur.LastError), said) {
+			t.Errorf("last_error = %q, want it to end %q", deref(cur.LastError), said)
+		}
+	})
 }

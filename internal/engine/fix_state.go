@@ -41,7 +41,12 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // pushed left to the author (its report's "## Needs you" entries, in its own
 // words, so never put in an event or a log; FixCalls reads what each asks):
 // the push is re-reviewed first, and the loop ends after that round as
-// needs attention. ForcedAt is when
+// needs attention, unless magnum's threads show every call settled by then
+// (freshNeedsYou), when the round decides the loop as for a push that left
+// nothing to the author. Answered are the comment ids of the threads of
+// magnum's among them that showed their answer at the settle, whose calls
+// ask only for the resolution; fixReReview writes it with NeedsYou, and an
+// id whose entry is gone asks nothing. ForcedAt is when
 // the loop forced the re-review of its push (phase reviewing): its
 // re-review is the forced round dispatched at or after it, and every other
 // round that ends while the loop waits is ignored (fixAfterRound; zero in a
@@ -68,11 +73,24 @@ type FixState struct {
 	Report       string    `json:"report"`
 	StartedAt    time.Time `json:"started_at"`
 	NeedsYou     []string  `json:"needs_you,omitempty"`
+	Answered     []string  `json:"answered,omitempty"`
 	Role         string    `json:"role,omitempty"`
 	ForcedAt     time.Time `json:"forced_at,omitzero"`
 	Held         bool      `json:"held,omitempty"`
 	Context      string    `json:"context,omitempty"`
 	OthersUnread string    `json:"others_unread,omitempty"`
+}
+
+// answered is Answered as a set (nil for none), as needsYouCalls reads it.
+func (s FixState) answered() map[string]bool {
+	if len(s.Answered) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(s.Answered))
+	for _, id := range s.Answered {
+		set[id] = true
+	}
+	return set
 }
 
 // FixOff is a PR's opt-out of the fix job: when it was set and by whom

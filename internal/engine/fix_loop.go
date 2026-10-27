@@ -202,9 +202,10 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 		left = "earlier findings still open"
 	}
 	paused := e.pauseContinues(ctx, job.pr, res.Outcome)
-	needs, answered := st.NeedsYou, map[string]bool(nil)
+	needs, answered := st.NeedsYou, st.answered()
 	if !paused && len(needs) > 0 { // what magnum's threads show now, the re-review's read of them first
-		needs, answered = e.freshNeedsYou(github.WithOp(ctx, opFix), job, needs, st.Report, res.ReportDir)
+		fctx := github.WithOp(ctx, opFix)
+		needs, answered = e.freshNeedsYou(fctx, job, needs, answered, res.ReportDir, e.threadsReader(fctx, job))
 	}
 	switch {
 	case paused:
