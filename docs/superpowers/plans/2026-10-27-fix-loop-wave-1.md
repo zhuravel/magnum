@@ -226,3 +226,35 @@ This task starts after tasks 2 and 4 land.
     "Needs you".
 - [ ] **Step 4: Run `-race` on gitx, engine and agents, then `make test`, `make lint` and `make api-doc`.**
 - [ ] **Step 5: Update the README, prompts/README.md and DECISIONS, and commit.**
+
+### Task 6: The fixer replays its commits when the branch gained only a base merge (spec 5.7)
+
+This task starts after task 5 lands.
+
+**Files:**
+- Create: `internal/cli/fix_sync.go`, modelled on `internal/cli/db_lock.go` (no config, no registry)
+- Modify: `internal/gitx` (a replay helper and the own-diff comparison, with `PatchID` in `branches.go`)
+- Modify: `internal/agents/templates.go` (`FixPromptInput` gets `FixSyncCommand string`), `prompts/fix.md`,
+  `skills/magnum-fix/SKILL.md` (the rejected-push rule at ~134)
+- Modify: `internal/engine/fix_settle.go` (`pushedHead` accepts a head that descends from the merge that the
+  branch gained)
+- Test: `internal/gitx` and `internal/cli` (real git), `internal/engine/fix_test.go`, the goldens
+- Docs: README "Fixing your own PRs", prompts/README.md, a DECISIONS entry
+
+**Interfaces:**
+- Produces: `magnum fix-sync --from <start head> --branch <ref> --base <base>`. It prints `replayed N commits
+  onto <sha>` or `refused: <reason>`, and exits non-zero on a refusal.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `TestFixSyncReplaysTheFixersCommitOntoABaseMergeTheBranchGained`: the remote branch gained one merge of
+    the base. Assert the new `HEAD` descends from it and holds the fixer's change.
+  - `TestFixSyncRefusesWhenTheBranchGainedACommitOfItsOwn`: assert the refusal and an unchanged `HEAD`.
+  - `TestFixSyncAbortsAConflictingReplay`: assert the refusal and a clean checkout at the old `HEAD`.
+  - `TestAPushAfterAFixSyncSettles`: the engine accepts the pushed head.
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Implement** the helper, the command, the prompt field, the skill rule and the settlement
+  change. The skill says: on a rejected push, run `magnum fix-sync` once. After a replay, run the specs
+  of the changed files again and push once more, never with force. After a refusal, stop as today.
+- [ ] **Step 4: Run `-race` on gitx, cli, agents and engine, then `make test`, `make lint` and
+  `make api-doc`.**
+- [ ] **Step 5: Update the README, prompts/README.md and DECISIONS, and commit.**

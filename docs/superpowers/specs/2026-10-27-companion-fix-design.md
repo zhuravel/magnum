@@ -234,6 +234,31 @@ session to resolve the conflict.
 
 First failing test: `TestAHandStartedFixOnAConflictingPRWhoseReviewFoundNothingStartsAndNamesTheBase`.
 
+### 5.7 The fixer replays its commits when the branch gained only a base merge
+
+On talkable/talkable#12114 (2026-10-27) GitHub rejected the fixer's push. During the run, a commit "Merge
+branch 'master' into ..." landed on the PR's branch, as GitHub's "Update branch" button makes. The skill
+forbids pull, merge and rebase, so the fixer stopped. The operator asked for this: if the only change on
+GitHub is a merge of the base, the fixer goes on. (Requested on 2026-10-27, the shape is my call.)
+
+- A new command, `magnum fix-sync`, runs in the fixer's checkout. It needs no config and no registry, like
+  `magnum db-lock`. The prompt gives its command line, with the run's start head, the branch and the base.
+- It fetches the PR's branch and the base. It compares the PR's own diff against the base at the start
+  head and at the new remote head, by patch id.
+- Every commit that the branch gained must be a merge, and the PR's own diff must stay the same. Then the
+  command replays the fixer's own commits (the start head to `HEAD`) onto the remote head and prints the
+  new `HEAD`. These commits are not on GitHub, so the history rule allows the replay.
+- If the branch gained anything else, the command changes nothing and says why. A person works on the
+  branch then. If the replay conflicts, it aborts and leaves the checkout as it was.
+- The skill: if a push is rejected because the branch moved, run `magnum fix-sync` once. After a replay,
+  run the specs of the changed files again, then push once more, never with force. After a refusal, stop
+  as today.
+- Settlement accepts a pushed head that descends from the merge that the branch gained.
+
+First failing tests: `TestFixSyncReplaysTheFixersCommitOntoABaseMergeTheBranchGained`,
+`TestFixSyncRefusesWhenTheBranchGainedACommitOfItsOwn` and `TestFixSyncAbortsAConflictingReplay`, on real
+git.
+
 ## 6. The companion design
 
 ### 6.1 The declaration
