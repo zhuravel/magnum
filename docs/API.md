@@ -2503,9 +2503,10 @@ type RoleData struct {
 	// them); ReviewerLogin the login that posted the review, whose threads
 	// the fixer answers; SkillPath the fix skill's startup copy, absolute.
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, SkillPath string
-	// FixReplyCommand is the fix prompt's too: the line the fixer posts
-	// every reply through, `magnum fix-reply` (FixReplyLine, derived from
-	// Magnum when empty; the fix job passes its own).
+	// FixReplyCommand is the line the fixer posts every reply through,
+	// `magnum fix-reply` (FixReplyLine, derived from Magnum when empty for
+	// every role, as DBLockCommand is; the fix job passes its own): only the
+	// fix prompt names it.
 	FixReplyCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
@@ -16738,8 +16739,9 @@ func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text
     request, or of none) and answers its thread's first comment, the only one
     GitHub takes a reply to; with Issue it writes a comment on the conversation.
     A thread, or the conversation, that already holds the same marked reply
-    gets nothing more (StatusAlreadyPosted), so a retry after an unclear failure
-    posts the reply once.
+    with nobody else's comment after it gets nothing more (StatusAlreadyPosted,
+    postedLast), so a retry after an unclear failure posts the reply once,
+    while the same answer to new pushback goes out.
 
 func (o FixReplyOutcome) ExitCode() int
     ExitCode is 0 for a reply posted or already there, 2 when the fixer must fix

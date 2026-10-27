@@ -715,6 +715,75 @@ func TestFixReplyPostsOnceWhenTheSameReplyExists(t *testing.T) {
 	}
 }
 
+// A POST whose answer is lost (GitHub made the comment, then the call
+// failed) exits 1; the fixer runs the same line again and the retry finds
+// the reply and posts nothing, in a thread and on the conversation alike.
+func TestFixReplyRetryAfterALostAnswerPostsNothing(t *testing.T) {
+	w := newWorld(t)
+	w.threads = []fakeThread{thread(bot(11, "**[P2] wrong total**"))}
+	w.replyPosts = []func(c execx.Cmd) (execx.Result, error){func(c execx.Cmd) (execx.Result, error) {
+		var req struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(c.Stdin, &req); err != nil {
+			t.Fatal(err)
+		}
+		w.threads[0].Comments = append(w.threads[0].Comments, human(5001, req.Body))
+		return apiFail(c, 502, "Bad Gateway")
+	}}
+	text := "Fixed in a1b2c3d: the total skips discounts."
+	if out := w.runFixReply(fixOpts(11), text); out.Status != StatusError || out.ExitCode() != 1 {
+		t.Fatalf("lost answer: outcome = %+v", out)
+	}
+	again := w.runFixReply(fixOpts(11), text)
+	if again.Status != StatusAlreadyPosted || again.ExitCode() != 0 || again.ID != 5001 || w.postCount() != 1 {
+		t.Fatalf("retry: outcome = %+v after %d posts", again, w.postCount())
+	}
+
+	w.issueAnswerLost = true
+	if out := w.runFixReply(fixOpts(0), text); out.Status != StatusError || out.ExitCode() != 1 {
+		t.Fatalf("lost answer on the conversation: outcome = %+v", out)
+	}
+	again = w.runFixReply(fixOpts(0), text)
+	if again.Status != StatusAlreadyPosted || again.ID != 7001 || len(w.issuePosts) != 1 {
+		t.Fatalf("retry on the conversation: outcome = %+v, posted %q", again, w.issuePosts)
+	}
+}
+
+// The same reply is a retry only when nobody else wrote after it: in a
+// later cycle the fixer may give the same answer again to new pushback
+// (another reviewer's, the judge's rebuttal), and that one goes out. The
+// fixer's own replies after it (it answers several items in a row) keep
+// it a retry.
+func TestFixReplyPostsTheSameAnswerAgainAfterPushback(t *testing.T) {
+	text := "Won't fix: the caller checks it at `app/a.rb:12`."
+	signed := text + "\n\n" + FixReplyMarker
+	w := newWorld(t)
+	w.threads = []fakeThread{
+		thread(bot(11, "**[P2] the caller skips the check**"), human(12, signed),
+			bot(13, marked("Still a bug: jobs call it without the check.", runID, ReplyRebuttal))),
+		thread(bot(21, "**[P3] a name**"), human(22, signed), human(23, "Fixed in a1b2c3d: renamed.\n\n"+FixReplyMarker)),
+	}
+	if out := w.runFixReply(fixOpts(11), text); out.Status != StatusReplied || out.ID != 5001 {
+		t.Errorf("after pushback: outcome = %+v, want the reply posted", out)
+	}
+	if out := w.runFixReply(fixOpts(21), text); out.Status != StatusAlreadyPosted || out.ID != 22 {
+		t.Errorf("after the fixer's own reply: outcome = %+v, want 22 found", out)
+	}
+	if w.postCount() != 1 {
+		t.Errorf("posted %d times, want once", w.postCount())
+	}
+
+	w.issueComments = []fakeComment{human(77, signed), {ID: 78, Author: "rev-ann", Body: "That check is gone in jobs."}}
+	if out := w.runFixReply(fixOpts(0), text); out.Status != StatusReplied {
+		t.Errorf("on the conversation after pushback: outcome = %+v, want the reply posted", out)
+	}
+	w.issueComments = []fakeComment{human(77, signed), human(79, "> x\nhttps://github.com/talkable/talkable/pull/5#issuecomment-70\n\nAnswer: y.\n\n"+FixReplyMarker)}
+	if out := w.runFixReply(fixOpts(0), text); out.Status != StatusAlreadyPosted || out.ID != 77 {
+		t.Errorf("on the conversation after the fixer's own comment: outcome = %+v, want 77 found", out)
+	}
+}
+
 // The options come from the fixer's pane and flags: a PR and exactly one
 // of a comment id and --issue.
 func TestFixReplyChecksTheOptions(t *testing.T) {

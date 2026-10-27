@@ -414,6 +414,27 @@ func sameFixReply(onGitHub, body string) bool {
 	return norm(onGitHub) == norm(body)
 }
 
+// postedLast is the index among n comments, oldest first (at(i) gives the
+// body and author, Account form, of comment i), of body posted already by a
+// retry's earlier run: the newest comment that is body, when nobody else
+// wrote after it (only its own author's comments follow, the fixer's other
+// replies); -1 when there is none. The same answer after someone else's
+// comment is a new reply, to new pushback, and goes out.
+func postedLast(n int, at func(int) (body, author string), body string) int {
+	var after []string // the authors of the comments after i
+	for i := n - 1; i >= 0; i-- {
+		b, a := at(i)
+		if sameFixReply(b, body) {
+			if slices.ContainsFunc(after, func(x string) bool { return !github.SameAccount(x, a) }) {
+				return -1
+			}
+			return i
+		}
+		after = append(after, a)
+	}
+	return -1
+}
+
 // checkFixReply is what is wrong with text, the fixer's reply (nil: it can
 // go out once marked).
 func checkFixReply(text string) []string {
@@ -441,8 +462,10 @@ func checkFixReply(text string) []string {
 // of another pull request, or of none) and answers its thread's first
 // comment, the only one GitHub takes a reply to; with Issue it writes a
 // comment on the conversation. A thread, or the conversation, that already
-// holds the same marked reply gets nothing more (StatusAlreadyPosted), so
-// a retry after an unclear failure posts the reply once.
+// holds the same marked reply with nobody else's comment after it gets
+// nothing more (StatusAlreadyPosted, postedLast), so a retry after an
+// unclear failure posts the reply once, while the same answer to new
+// pushback goes out.
 func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text []byte) FixReplyOutcome {
 	if err := o.Check(); err != nil {
 		return FixReplyOutcome{Status: StatusError, Message: err.Error()}
@@ -458,7 +481,9 @@ func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text
 		if err != nil {
 			return FixReplyOutcome{Status: StatusError, Message: "read the pull request's comments: " + err.Error()}
 		}
-		if i := slices.IndexFunc(comments, same); i >= 0 {
+		if i := postedLast(len(comments), func(i int) (string, string) {
+			return comments[i].Body, github.Account(comments[i].AuthorLogin, comments[i].AuthorType)
+		}, body); i >= 0 {
 			return FixReplyOutcome{Status: StatusAlreadyPosted, ID: comments[i].ID, URL: comments[i].URL}
 		}
 		posted, err := gh.CreateIssueComment(ctx, o.Owner, o.Repo, o.Number, body)
@@ -482,9 +507,11 @@ func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text
 		return FixReplyOutcome{Status: StatusInvalid, Problems: []string{problem}}
 	}
 	all := threads[i].AllComments()
-	first := all[0].ID
-	if j := slices.IndexFunc(all[1:], func(c github.ThreadComment) bool { return sameFixReply(c.Body, body) }); j >= 0 {
-		return FixReplyOutcome{Status: StatusAlreadyPosted, Thread: first, ID: all[1+j].ID, URL: all[1+j].URL}
+	first, replies := all[0].ID, all[1:]
+	if j := postedLast(len(replies), func(j int) (string, string) {
+		return replies[j].Body, github.Account(replies[j].AuthorLogin, replies[j].AuthorType)
+	}, body); j >= 0 {
+		return FixReplyOutcome{Status: StatusAlreadyPosted, Thread: first, ID: replies[j].ID, URL: replies[j].URL}
 	}
 	posted, err := gh.ReplyToReviewComment(ctx, o.Owner, o.Repo, o.Number, first, body)
 	if err != nil {

@@ -51,11 +51,13 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // attention (a fix the fixer left as unanswered in another reviewer's
 // thread that GitHub shows its reply in is none: dropFixerAnswered; nor is a
 // finding whose thread of magnum's is resolved, and one answered there asks
-// only for the resolution: freshNeedsYou; both looks share one GitHub read,
-// threadsReader, with the look for the author's replies without the fix
-// marker since the run started, which a fix.unmarked warning names when the
-// report says the fixer replied: nameUnmarkedReplies); replies alone end
-// the loop with an info toast. fix.replied,
+// only for the resolution: freshNeedsYou; both looks share one GitHub read
+// of the threads, threadsReader); replies alone end the loop with an info
+// toast. Before the report decides, and for a run that fails too, a
+// fix.unmarked warning names the author's replies without the fix marker
+// since the run started (nameUnmarkedReplies, on that same read and one of
+// the conversation) whenever the run may have replied: its report counts
+// replies or leaves calls, or there is no report to say. fix.replied,
 // or fix.failed for a settle that fails, says when the operator typed into
 // the fixer's pane during the run (operatorTyped). The events name counts,
 // SHAs, the role and the report, never what the fixer wrote.
@@ -75,6 +77,11 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		}
 		return e.resyncFixSlot(ctx, job, target)
 	})
+	read := e.threadsReader(ctx, job)           // fix_calls.go: one GitHub read for every look
+	threads, counted := fixThreads(rep.Replied) // not counted without a report: the run may have replied
+	if !counted || threads > 0 || len(rep.NeedsYou) > 0 {
+		e.nameUnmarkedReplies(ctx, job, read) // fix_external.go; a run that fails too, before it fails
+	}
 	switch {
 	case err != nil:
 		e.failFixTyped(ctx, job, "fix settle failed: "+err.Error(), "", typed)
@@ -101,7 +108,6 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.event(ctx, "info", subject, "fix.pushed", fmt.Sprintf("%s pushed %s: the head is %s", job.role.Name,
 			textx.Count(len(rep.Pushed), "commit", "commits"), textx.ShortSHA(target)), data)
 	}
-	threads, counted := fixThreads(rep.Replied)
 	replied := "replied"
 	if counted {
 		replied, data["threads"] = "replied in "+textx.Count(threads, "thread", "threads"), threads
@@ -114,10 +120,6 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		replied, data["operator_typed"] = replied+typedSentence, true
 	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
-	read := e.threadsReader(ctx, job) // fix_calls.go: one GitHub read for every look
-	if !counted || threads > 0 {      // a fixer that replied nowhere has no reply to look at
-		e.nameUnmarkedReplies(ctx, job, read) // fix_external.go
-	}
 	var answered map[string]bool
 	if len(rep.NeedsYou) > 0 {
 		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou, read)                // fix_external.go

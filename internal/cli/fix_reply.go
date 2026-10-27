@@ -45,11 +45,13 @@ func newFixReplyCmd(c *Context) *cobra.Command {
 			"It refuses a reply that is empty, carries a <!-- magnum: marker of its own, names a local path or is longer "+
 			"than GitHub takes, and appends a blank line and the fix marker <!-- magnum:fix -->, by which magnum tells the "+
 			"fixer's replies from the author's own. A thread, or the conversation, that already holds the same reply with the "+
-			"marker gets nothing more, so after an unclear failure run it again unchanged.\n\n"+
+			"marker and nobody else's comment after it gets nothing more, so after an unclear failure run it again with the "+
+			"same reply; the same answer after someone else's comment (new pushback) goes out.\n\n"+
 			"It prints one JSON object on stdout (status: replied, already_posted, invalid or error, with the thread, the "+
 			"reply's id and url, or the problems) and one line on stderr. Exit 0: the reply is on GitHub; 2: fix the reply "+
-			"(or the comment id) and run it again; 1: anything else, the reply did not go out. It reads no config and no "+
-			"registry, never talks to the daemon and writes no file.",
+			"(or the comment id) and run it again; 1: anything else, the reply could not be confirmed (it may have gone out "+
+			"with its answer lost): run it again with the same reply. It reads no config and no registry, never talks to the "+
+			"daemon and writes no file.",
 		func(pos []string) int { return runFixReply(c, comment, issue, pos) })
 	// The command needs no magnum layout: it runs wherever the fixer's pane is.
 	cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }

@@ -13492,27 +13492,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   pane's `MAGNUM_PR_URL`, needs no config and no registry, refuses a reply that is empty, carries any
   `<!-- magnum:` marker, names a local path or is too long (exit 2) before it asks GitHub anything, appends
   a blank line and the fix marker, and posts nothing when the thread, or the conversation, already holds
-  the same signed reply, so a retry after an unclear failure posts once. It posts as the pane's gh login
-  (the PR's author) and does not copy `refuseInAgentPane`, which keeps the operator's commands out of panes
-  that carry `MAGNUM_PR_URL`: the fixer's pane carries it too. Nothing forces a reply typed another way
-  through the command, and magnum edits no posted comment: when the report says the fixer replied (a
-  `## Replied` count above 0, or one the settle cannot read), the settle names in a `fix.unmarked` warning,
-  by link and id and never by text, each reply in a review thread by the PR's author (or one of magnum's
-  logins) since the run started that carries no magnum marker, from the settle's one read of the threads
-  (`threadsReader`, shared with `dropFixerAnswered` and `freshNeedsYou`). Rejected: refusing `gh api` in
-  the fixer's pane (the fixer reads GitHub with it, and an agent could post another way); adding the marker
-  to an unmarked reply (magnum never edits a posted comment); reading the conversation's comments at the
-  settle as well (a second read; a conversation reply also names its item on the line under its quote);
-  counting a reply that carries the judge's reply marker as unmarked (it is magnum's own word). Tests,
-  failing first: in postreview TestFixReplyEndsTheBodyWithTheFixMarker (a thread reply through a reply's id,
-  and a PR comment, the text never in argv), TestFixReplyRefusesABodyWithAMagnumMarker,
-  TestFixReplyRefusesACommentOfAnotherPR and TestFixReplyPostsOnceWhenTheSameReplyExists (the same words
-  without the marker are no such reply); in cli TestFixReplyPostsFromTheFixersPane and
+  the same signed reply with nobody else's comment after it (`postedLast`: only its own author's comments
+  follow), so a retry after an unclear failure, a lost POST answer included, posts once, while the same
+  answer to new pushback (another reviewer's comment, the judge's rebuttal) goes out. Exit 1 says the reply
+  could not be confirmed, and the skill runs the same line with the same text once more: the check matches
+  identical text only. It posts as the pane's gh login (the PR's author) and does not copy
+  `refuseInAgentPane`, which keeps the operator's commands out of panes that carry `MAGNUM_PR_URL`: the
+  fixer's pane carries it too. Nothing forces a reply typed another way through the command, and magnum
+  edits no posted comment. So the settle names in a `fix.unmarked` warning, by link and id and never by
+  text, each reply by the PR's author (or one of magnum's logins) since the run started that carries no
+  magnum marker: in a review thread, from the settle's one read of the threads (`threadsReader`, shared
+  with `dropFixerAnswered` and `freshNeedsYou`), and on the conversation, from one `IssueComments` read
+  newest first that stops at a page reaching back past the run's start (usually one page). The
+  conversation matters as much: an unsigned comment of the author's there is the author's own last word
+  (`externalOf`), which moves `since` and drops the other reviewers' earlier items from the next cycle's
+  external file. The settle looks whenever the run may have replied: its report counts replies (a
+  `## Replied` count above 0) or leaves calls (the threads are read for them anyway), or there is none;
+  it looks before the report decides, so a run that wrote no report or whose push failed is looked at too.
+  Rejected: refusing `gh api` in the fixer's pane (the fixer reads GitHub with it, and an agent could post
+  another way); adding the marker to an unmarked reply (magnum never edits a posted comment); counting a
+  reply that carries the judge's reply marker as unmarked (it is magnum's own word); matching an identical
+  reply anywhere in a thread's history (a later cycle's same answer to new pushback would post nothing
+  and exit 0). Tests, failing first: in postreview TestFixReplyEndsTheBodyWithTheFixMarker (a thread reply
+  through a reply's id, and a PR comment, the text never in argv), TestFixReplyRefusesABodyWithAMagnumMarker,
+  TestFixReplyRefusesACommentOfAnotherPR, TestFixReplyPostsOnceWhenTheSameReplyExists (the same words
+  without the marker are no such reply), TestFixReplyRetryAfterALostAnswerPostsNothing and
+  TestFixReplyPostsTheSameAnswerAgainAfterPushback; in cli TestFixReplyPostsFromTheFixersPane and
   TestFixReplyRefusesWhatIsNotAFixersReply; in agents TestTheFixPromptNamesTheFixReplyCommand through the
-  goldens `fix` and `fix_no_findings`; in engine TestSettlementNamesAnAuthorReplyWithoutTheMarker (a reply
-  with the fix marker, one from before the run, another reviewer's and the judge's marked reply are not
-  named; a fixer that replied nowhere costs no read). Mutations that count only the fix marker as a marker,
-  or look whatever the report says, each fail it.
+  goldens `fix` and `fix_no_findings`; in engine TestSettlementNamesAnAuthorReplyWithoutTheMarker (thread
+  and conversation replies; a reply with the fix marker, one from before the run, another reviewer's and
+  magnum's marked comments are not named; a run without a report and one that left calls are looked at; a
+  fixer that replied nowhere costs no read). Mutations that count only the fix marker as a marker, look
+  whatever the report says, or skip a report that left calls, each fail it.
 - **A next fix cycle starts without the last cycle's answered threads** (2026-10-27; amends "A fix call for
   a thread of magnum's is read against the thread: resolved asks nothing, answered asks only for the
   resolution"). `FixState.Answered`, the threads of magnum's that the settle found answered, stayed in the

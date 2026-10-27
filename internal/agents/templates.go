@@ -756,9 +756,10 @@ type RoleData struct {
 	// them); ReviewerLogin the login that posted the review, whose threads
 	// the fixer answers; SkillPath the fix skill's startup copy, absolute.
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, SkillPath string
-	// FixReplyCommand is the fix prompt's too: the line the fixer posts
-	// every reply through, `magnum fix-reply` (FixReplyLine, derived from
-	// Magnum when empty; the fix job passes its own).
+	// FixReplyCommand is the line the fixer posts every reply through,
+	// `magnum fix-reply` (FixReplyLine, derived from Magnum when empty for
+	// every role, as DBLockCommand is; the fix job passes its own): only the
+	// fix prompt names it.
 	FixReplyCommand string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items

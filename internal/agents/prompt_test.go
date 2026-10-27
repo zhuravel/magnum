@@ -428,6 +428,8 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 		"`fix` with a net score below 3 that is no simplification: make it `won't fix`",
 		"<fix-reply line> --comment <comment_id> <<'REPLY'\n<reply>\nREPLY\n",
 		"The fix-reply line ends every reply with a blank line and the hidden line `" + postreview.FixReplyMarker + "`.",
+		// A lost answer may hide a reply that went out: the same line again finds it, and posts nothing.
+		"Any other status means the command could not confirm the reply: run the same line with the same reply text once more",
 		// The engine reads these words to say what each finding left to the author asks of them.
 		"- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why it needs you>\n- <comment id> <priority> <path>:<line>: not fixed. <reason>\n",
 		"then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (its thread is answered already, or the reply failed) " +

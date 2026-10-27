@@ -83,6 +83,9 @@ type world struct {
 	// posted adds itself, as GitHub would, and its body to issuePosts.
 	issueComments []fakeComment
 	issuePosts    []string
+	// issueAnswerLost: the next comment POST makes the comment and then
+	// fails, as a call whose answer is lost does.
+	issueAnswerLost bool
 
 	fake    *execx.Fake
 	sent    []github.ReviewRequest
@@ -377,5 +380,9 @@ func (w *world) postIssueComment(c execx.Cmd) (execx.Result, error) {
 	w.issuePosts = append(w.issuePosts, req.Body)
 	newID := int64(7000 + len(w.issuePosts))
 	w.issueComments = append(w.issueComments, human(newID, req.Body))
+	if w.issueAnswerLost {
+		w.issueAnswerLost = false
+		return apiFail(c, 502, "Bad Gateway")
+	}
 	return ok(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#issuecomment-%d", newID)})
 }

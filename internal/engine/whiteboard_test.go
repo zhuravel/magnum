@@ -798,7 +798,9 @@ func TestAFixRequestStopsTheWhiteboardJob(t *testing.T) {
 // A fix request on a review that found nothing reads the other reviewers'
 // items before the whiteboard job yields (every other refusal must pass
 // first), and the same request, answered after the yield, runs its other
-// refusals again but starts on that read: one request reads GitHub once.
+// refusals again but starts on that read: one request reads GitHub once
+// before its fixer starts (the settle's look at the author's unsigned
+// replies is a read of its own, after the run).
 func TestAFixRequestThatAWhiteboardYieldsToReadsTheOtherReviewersOnce(t *testing.T) {
 	var kh *keyHerdr
 	w := wbHarness(t, false, withKeys(&kh))
@@ -813,11 +815,13 @@ func TestAFixRequestThatAWhiteboardYieldsToReadsTheOtherReviewersOnce(t *testing
 	}}
 	w.gh.mu.Unlock()
 	w.wbAtWork()
+	var started atomic.Int64 // the conversation's reads when the fixer starts, before the settle's own look
 	w.ag.mu.Lock()
 	w.ag.onSubmit = func(run store.Run, _ string) { // the fixer ends its run at once, with no report
 		if run.Kind != store.RunFix {
 			return
 		}
+		started.Store(int64(w.gh.count("issue_comments:talkable/talkable#2")))
 		if err := w.st.TransitionRun(w.ctx, run.ID, []string{store.RunWorking}, store.RunEnded, nil); err != nil {
 			t.Error(err)
 		}
@@ -832,7 +836,7 @@ func TestAFixRequestThatAWhiteboardYieldsToReadsTheOtherReviewersOnce(t *testing
 	if runs := w.fixRuns(pr.ID); len(runs) != 1 {
 		t.Errorf("fix runs = %+v, want the requested cycle's", runs)
 	}
-	if n := w.gh.count("issue_comments:talkable/talkable#2"); n != 1 {
+	if n := started.Load(); n != 1 {
 		t.Errorf("the conversation was read %d times for one request, want once", n)
 	}
 }

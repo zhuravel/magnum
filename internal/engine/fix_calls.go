@@ -257,10 +257,12 @@ func (n needsYouEntry) answeredBy(class string) bool {
 }
 
 // threadsReader reads the review threads of the job's PR from GitHub once,
-// however often it is called, so the settle's two looks at them
-// (dropFixerAnswered, freshNeedsYou) share one read. A job without a reader
-// or a read that fails (logged once) gives an error, and each look then
-// keeps its entries.
+// however often it is called, so the settle's looks at them (the author's
+// replies without the fix marker, nameUnmarkedReplies; the fixer's answers
+// in other reviewers' threads, dropFixerAnswered; magnum's own threads,
+// freshNeedsYou) share one read. A job without a reader or a read that
+// fails (logged once) gives an error: the first look then names nothing,
+// and the other two keep their entries.
 func (e *Engine) threadsReader(ctx context.Context, job *fixJob) func() ([]github.Thread, error) {
 	return sync.OnceValues(func() ([]github.Thread, error) {
 		_, rd, ok := e.fixReader(job)
@@ -269,7 +271,7 @@ func (e *Engine) threadsReader(ctx context.Context, job *fixJob) func() ([]githu
 		}
 		threads, _, err := rd.AllReviewThreads(ctx, job.repo.Owner, job.repo.Name, job.pr.Number) // a thread past the list keeps its entry
 		if err != nil {
-			e.log.Warn("fix: the PR's review threads, for what the fixer left to the author", "subject", job.subject(), "err", err)
+			e.log.Warn("fix: the PR's review threads, for the fixer's replies and what it left to the author", "subject", job.subject(), "err", err)
 		}
 		return threads, err
 	})

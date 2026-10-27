@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -467,14 +467,20 @@ func TestAFixInAnotherReviewersThreadAsksForAReplyOnlyWhereTheFixerDidNotAnswer(
 // heredocs that lacked the fix marker, and magnum read them as the
 // operator's own. Every reply now goes through `magnum fix-reply`, but
 // nothing forces one typed another way through it: the settle names, in a
-// fix.unmarked warning, each reply in a review thread that the PR's author
-// made since the job started without a magnum marker, by its link and never
-// its text, from the settle's one read of the threads. A reply with the fix
-// marker, one from before the job, another reviewer's and the judge's
-// marked reply are not named. A fixer whose report says it replied nowhere
-// costs no read.
+// fix.unmarked warning, each reply the PR's author made since the job
+// started without a magnum marker, by its link and never its text: in a
+// review thread, from the settle's one read of the threads, and on the
+// conversation (where an unmarked comment of the author's is the author's
+// own word, which drops the other reviewers' earlier items from the next
+// cycle's external file), from one read back to the job's start. A reply
+// with the fix marker, one from before the job, another reviewer's and
+// magnum's marked comments are not named. The settle looks whenever the
+// fixer may have replied: its report counts replies, or it wrote none, or
+// it left calls (the threads are read for them anyway); a report that
+// replied nowhere and left nothing costs no read.
 func TestSettlementNamesAnAuthorReplyWithoutTheMarker(t *testing.T) {
-	setup := func(t *testing.T, replied string) (*harness, func() int) {
+	type reads struct{ threads, conversation int }
+	setup := func(t *testing.T, report func(runID string) string) (*harness, func() reads) {
 		t.Helper()
 		h, git := fixHarness(t)
 		fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P3": 1})
@@ -485,8 +491,14 @@ func TestSettlementNamesAnAuthorReplyWithoutTheMarker(t *testing.T) {
 			magnumsThread(2201, "app/lib/x.rb", 7, at, false),
 			extThread(4322458400, "app/b.rb", 9, at, "Rename this", "bob-rev"),
 		}}
+		h.gh.prComments = map[int][]github.PRComment{2: {
+			{ID: 7001, URL: prPage + "#issuecomment-7001", Body: "Looking at it", CreatedAt: at, AuthorLogin: "zhuravel", AuthorType: "User"},
+		}}
 		h.gh.mu.Unlock()
-		var before atomic.Int64
+		var (
+			mu     sync.Mutex
+			before reads
+		)
 		fixer(h, git, fixPushed, func(run store.Run) string {
 			now := h.clock.Now()
 			h.gh.mu.Lock()
@@ -500,28 +512,45 @@ func TestSettlementNamesAnAuthorReplyWithoutTheMarker(t *testing.T) {
 			add(1, 2203, "talkable", "Bot", "Thanks.\n\n"+postreview.ReplyMarker("r-1", postreview.ReplyAck))
 			add(2, 4322458401, "bob-rev", "User", "Thanks!")
 			add(2, 4322458402, "zhuravel", "User", "Renamed in b2b2b2b.")
+			comment := func(id int64, login, typ, body string) github.PRComment {
+				return github.PRComment{ID: id, URL: prPage + "#issuecomment-" + itoa(id), Body: body, CreatedAt: now, AuthorLogin: login, AuthorType: typ}
+			}
+			h.gh.prComments[2] = append(h.gh.prComments[2],
+				comment(7101, "zhuravel", "User", "> Rename it?\n"+prPage+"#issuecomment-703\n\nRenamed.\n\n"+postreview.FixReplyMarker),
+				comment(7102, "zhuravel", "User", "> Keep the old flag?\n"+prPage+"#issuecomment-704\n\nWon't fix: the flag goes."),
+				comment(7103, "talkable", "Bot", "<!-- magnum:status -->\nreviewed"),
+				comment(7104, "rev-ann", "User", "Thanks"))
 			h.gh.mu.Unlock()
-			before.Store(int64(h.gh.count("threads:talkable/talkable#2")))
-			return fixReport(run.ID, "b2b2b2b Check the owner", replied, "none")
+			mu.Lock()
+			before = reads{h.gh.count("threads:talkable/talkable#2"), h.gh.count("issue_comments:talkable/talkable#2")}
+			mu.Unlock()
+			return report(run.ID)
 		})
 		h.fix(FixPayload{})
 		h.handle()
-		return h, func() int { return h.gh.count("threads:talkable/talkable#2") - int(before.Load()) }
+		return h, func() reads {
+			mu.Lock()
+			defer mu.Unlock()
+			return reads{h.gh.count("threads:talkable/talkable#2") - before.threads, h.gh.count("issue_comments:talkable/talkable#2") - before.conversation}
+		}
 	}
+	replied := func(line, needs string) func(string) string {
+		return func(runID string) string { return fixReport(runID, "b2b2b2b Check the owner", line, needs) }
+	}
+	const named = "claude-fix: 3 replies by the PR's author since the fixer started carry no fix marker, so magnum reads them as the author's own: " +
+		prPage + "#discussion_r2103, " + prPage + "#discussion_r4322458402, " + prPage + "#issuecomment-7102"
 
-	h, reads := setup(t, "3 threads (2 fixed, 0 already fixed, 0 not a bug, 1 won't fix)")
+	h, read := setup(t, replied("3 threads (2 fixed, 0 already fixed, 0 not a bug, 1 won't fix)", "none"))
 	ev, ok := h.fixEvent("fix.unmarked")
-	want := "claude-fix: 2 replies by the PR's author since the fixer started carry no fix marker, so magnum reads them as the author's own: " +
-		prPage + "#discussion_r2103, " + prPage + "#discussion_r4322458402"
-	if !ok || ev.Level != "warn" || ev.Message != want {
-		t.Fatalf("fix.unmarked = %+v, %v\nwant the warning %q", ev, ok, want)
+	if !ok || ev.Level != "warn" || ev.Message != named {
+		t.Fatalf("fix.unmarked = %+v, %v\nwant the warning %q", ev, ok, named)
 	}
-	if data := string(ev.Data); !strings.Contains(data, `"unmarked":2`) || !strings.Contains(data, `"comments":[2103,4322458402]`) ||
-		strings.Contains(data, "the owner is checked") {
+	if data := string(ev.Data); !strings.Contains(data, `"unmarked":3`) || !strings.Contains(data, `"comments":[2103,4322458402]`) ||
+		!strings.Contains(data, `"issue_comments":[7102]`) || strings.Contains(data, "the owner is checked") || strings.Contains(data, "the flag goes") {
 		t.Errorf("fix.unmarked data = %s", data)
 	}
-	if n := reads(); n != 1 {
-		t.Errorf("GitHub reads of the threads at the settle = %d, want 1", n)
+	if n := read(); n != (reads{1, 1}) {
+		t.Errorf("GitHub reads at the settle = %+v, want one of the threads and one of the conversation", n)
 	}
 	// The fixer's prompt names the daemon's own fix-reply line.
 	h.ag.mu.Lock()
@@ -531,13 +560,29 @@ func TestSettlementNamesAnAuthorReplyWithoutTheMarker(t *testing.T) {
 		t.Errorf("the fix prompts' inputs = %+v, want the fix-reply line %q", inputs, want)
 	}
 
+	t.Run("a fixer that wrote no report", func(t *testing.T) {
+		h, _ := setup(t, func(string) string { return "" })
+		if _, ok := h.fixEvent("fix.failed"); !ok {
+			t.Fatal("no fix.failed for a run without a report")
+		}
+		if ev, ok := h.fixEvent("fix.unmarked"); !ok || ev.Message != named {
+			t.Errorf("fix.unmarked = %+v, %v; want %q", ev, ok, named)
+		}
+	})
+	t.Run("a fixer that left calls", func(t *testing.T) {
+		h, _ := setup(t, replied("0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)",
+			"- 2101 P1 app/models/offer.rb:42: not fixed. Which owner wins?"))
+		if ev, ok := h.fixEvent("fix.unmarked"); !ok || ev.Message != named {
+			t.Errorf("fix.unmarked = %+v, %v; want %q", ev, ok, named)
+		}
+	})
 	t.Run("a fixer that replied nowhere", func(t *testing.T) {
-		h, reads := setup(t, "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)")
+		h, read := setup(t, replied("0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none"))
 		if ev, ok := h.fixEvent("fix.unmarked"); ok {
 			t.Errorf("fix.unmarked for a fixer that replied nowhere: %+v", ev)
 		}
-		if n := reads(); n != 0 {
-			t.Errorf("GitHub reads of the threads at the settle = %d, want none", n)
+		if n := read(); n != (reads{}) {
+			t.Errorf("GitHub reads at the settle = %+v, want none", n)
 		}
 	})
 }

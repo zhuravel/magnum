@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,7 +43,9 @@ func TestACleanReviewStartsAFixForAnotherReviewersUnansweredThread(t *testing.T)
 			if pushed {
 				head, commits = fixPushed, "b2b2b2b Log the sandbox's stderr (review comment 4322458360)"
 			}
+			var started atomic.Int64 // the conversation's reads when the fixer starts, before the settle's own look
 			fixer(h, git, head, func(run store.Run) string {
+				started.Store(int64(h.gh.count("issue_comments:talkable/talkable#2")))
 				return fixReport(run.ID, commits, "1 threads (1 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
 			})
 			id := h.fix(FixPayload{})
@@ -65,8 +68,8 @@ func TestACleanReviewStartsAFixForAnotherReviewersUnansweredThread(t *testing.T)
 			}) {
 				t.Errorf("the fix prompt does not say the review found nothing and name %s: %v", external, h.ag.all())
 			}
-			if n := h.gh.count("issue_comments:talkable/talkable#2"); n != 1 {
-				t.Errorf("the conversation was read %d times, want once: the job writes what the request read", n)
+			if n := started.Load(); n != 1 {
+				t.Errorf("the conversation was read %d times before the fixer started, want once: the job writes what the request read", n)
 			}
 			if ev, ok := h.fixEvent("fix.start"); !ok || !strings.Contains(ev.Message, "answers the other reviewers' 1 unanswered thread or comment") {
 				t.Errorf("fix.start = %q, %v", ev.Message, ok)

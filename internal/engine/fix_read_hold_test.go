@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,7 +61,9 @@ func TestAFixWhoseOtherReviewersReadIsRateLimitedIsHeldUntilTheBudgetRecovers(t 
 		pinnedFixablePR(h)
 		pr := h.pr(2)
 		colleaguesThread(h)
+		var started atomic.Int64 // the conversation's reads when the fixer starts, before the settle's own look
 		fixer(h, git, "", func(run store.Run) string {
+			started.Store(int64(h.gh.count("issue_comments:talkable/talkable#2")))
 			return fixReport(run.ID, "nothing", "2 threads (0 fixed, 0 already fixed, 2 not a bug, 0 won't fix)", "none")
 		})
 		until := h.clock.Now().Add(30 * time.Minute)
@@ -107,7 +110,7 @@ func TestAFixWhoseOtherReviewersReadIsRateLimitedIsHeldUntilTheBudgetRecovers(t 
 		}) {
 			t.Errorf("the fix prompt does not name %s: %v", external, h.ag.all())
 		}
-		if n := h.gh.count("issue_comments:talkable/talkable#2") - reads; n != 1 {
+		if n := int(started.Load()) - reads; n != 1 {
 			t.Errorf("the held fix's start read the conversation %d times, want once: the job writes what it read before the start", n)
 		}
 		if ev, ok := h.fixEvent("fix.dropped"); ok {
