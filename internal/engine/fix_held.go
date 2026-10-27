@@ -135,7 +135,7 @@ func (e *Engine) holdFix(ctx context.Context, pr store.PR, dry bool, by string, 
 	job := hold.job
 	if job == nil {
 		var err error
-		if job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, nil); err != nil {
+		if job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, nil, !dry); err != nil {
 			return "", err
 		}
 	}

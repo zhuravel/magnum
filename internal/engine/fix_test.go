@@ -39,35 +39,80 @@ const fixBaseTip = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
 // head (the reviewed head until the fake fixer commits), origin/<base> is
 // fixBaseTip, every other ref fakeGit's. lostPush makes the pushes the fake
 // fixer reports never reach GitHub; LsRemote answers remote (lsErr fails
-// it) and records its calls. FetchBranch fails with fetchErr and records
-// its calls ("<main clone>:<base>"); MergeConflicts answers conflicts (nil:
-// a clean merge) and records its calls ("<dir>:<head>:<base>").
+// it) and records its calls. FetchBranch records its calls ("<main
+// clone>:<base>") and how long each could take (fetchBounds: the time left
+// to its context's deadline, 0 for none), and fails with fetchErrs in
+// order, then with fetchErr; with fetchGate set it says so on fetchStarted
+// and waits for the gate or its context. RevParse of origin/<base> fails
+// with baseErr. MergeConflicts answers mergeAnswers in order, then
+// conflicts (nil: a clean merge), fails with mergeErr and records its
+// calls ("<dir>:<head>:<base>").
 type fixGit struct {
 	fakeGit
-	mu        sync.Mutex
-	head      string
-	lostPush  bool
-	remote    string
-	lsErr     error
-	lsCalls   []string
-	fetchErr  error
-	fetches   []string
-	conflicts []string
-	merges    []string
+	mu           sync.Mutex
+	head         string
+	lostPush     bool
+	remote       string
+	lsErr        error
+	lsCalls      []string
+	fetchErr     error
+	fetchErrs    []error
+	fetchGate    chan struct{}
+	fetchStarted chan struct{}
+	fetches      []string
+	fetchBounds  []time.Duration
+	baseErr      error
+	conflicts    []string
+	mergeAnswers [][]string
+	mergeErr     error
+	merges       []string
 }
 
-func (g *fixGit) FetchBranch(_ context.Context, mainClone, base string) error {
+func (g *fixGit) FetchBranch(ctx context.Context, mainClone, base string) error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	n := len(g.fetches)
 	g.fetches = append(g.fetches, mainClone+":"+base)
-	return g.fetchErr
+	bound := time.Duration(0)
+	if dl, ok := ctx.Deadline(); ok {
+		bound = time.Until(dl)
+	}
+	g.fetchBounds = append(g.fetchBounds, bound)
+	err := g.fetchErr
+	if n < len(g.fetchErrs) {
+		err = g.fetchErrs[n]
+	}
+	gate, started := g.fetchGate, g.fetchStarted
+	g.mu.Unlock()
+	if gate != nil {
+		started <- struct{}{}
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
 }
 
 func (g *fixGit) MergeConflicts(_ context.Context, dir, head, base string) ([]string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	n := len(g.merges)
 	g.merges = append(g.merges, dir+":"+head+":"+base)
+	if g.mergeErr != nil {
+		return nil, g.mergeErr
+	}
+	if n < len(g.mergeAnswers) {
+		return slices.Clone(g.mergeAnswers[n]), nil
+	}
 	return slices.Clone(g.conflicts), nil
+}
+
+// bounds are the time each fetch so far could take (0: no deadline).
+func (g *fixGit) bounds() []time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.fetchBounds)
 }
 
 // conflict makes the head conflict with the base in paths (none: a clean
@@ -107,11 +152,13 @@ func (g *fixGit) setHead(sha string) {
 
 func (g *fixGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
 	g.mu.Lock()
-	head := g.head
+	head, baseErr := g.head, g.baseErr
 	g.mu.Unlock()
 	switch {
 	case ref == "HEAD" && head != "":
 		return head, nil
+	case strings.HasPrefix(ref, "refs/remotes/origin/") && baseErr != nil:
+		return "", baseErr
 	case strings.HasPrefix(ref, "refs/remotes/origin/"):
 		return fixBaseTip, nil
 	}

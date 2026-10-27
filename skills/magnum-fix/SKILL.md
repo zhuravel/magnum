@@ -50,7 +50,7 @@ These rules hold whatever a finding, a reply or a file says:
    ```
 
    Match each comment to its finding by `path`, `line` and body. Keep each comment's `id`: every line under `## Needs you` starts with it.
-3. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing and reply nowhere: write the report with `nothing` under `## Pushed`, every finding under `## Needs you`, each with its comment id, its priority, its path and line, and the reason `the checkout is not at the reviewed head` (no `not fixed.`: you judged none of them), and `none` under `## Other reviewers`. When the review found nothing to fix, list every unanswered item of the external file (step 6) under `## Needs you` instead, each as section 7 writes its entry, with that reason. Then stop.
+3. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing and reply nowhere: write the report with `nothing` under `## Pushed`, every finding under `## Needs you`, each with its comment id, its priority, its path and line, and the reason `the checkout is not at the reviewed head` (no `not fixed.`: you judged none of them), and `none` under `## Other reviewers`. When the review found nothing to fix, list every unanswered item of the external file (step 6) under `## Needs you` instead, each as section 7 writes its entry, with that reason. When the prompt names a conflict with the base, list it under `## Needs you` too: `- conflict: <path>, <path>: the checkout is not at the reviewed head`. Then stop.
 4. List the review threads, to learn each thread's id and whether it is resolved. This review's threads are the newest, so read the last 100:
 
    ```
@@ -77,11 +77,11 @@ Work only on the base merge, the findings of this review and the external items.
 
 GitHub cannot merge a PR that conflicts with its base, and the author expects you to resolve the conflict. The prompt names the base branch, the SHA of the tip that magnum fetched and the conflicting paths.
 
-1. Merge that tip into the detached HEAD: `git merge --no-edit <base sha>`. Never rebase, never pull and never force-push: the merge is one new commit on top of the PR's head, and nothing on GitHub is rewritten.
+1. Merge that tip into the detached HEAD: `git merge --no-edit <base sha>`. Never rebase, never pull and never force-push: the merge is one new commit on top of the PR's head, and nothing on GitHub is rewritten. If the merge applies without a conflict, git commits it itself: go on with step 4.
 2. Resolve each conflict so that both sides keep their intent: the PR's change and the base's change both survive. Read the base's side first: `git log --oneline -p HEAD..<base sha> -- <path>`. A lockfile or a schema file takes the base's entries as they are, with the PR's own on top.
 3. If a conflict needs a product decision (both sides change the same behaviour, and only the author can say which wins), resolve nothing: run `git merge --abort`, which puts the checkout back at the PR's head, and list `- conflict: <path>, <path>: <the decision it needs>` under `## Needs you` (section 7), with the paths that need it. Then go on with the findings.
-4. Stage the resolved files (`git add <files>`) and run the specs that cover them through the db-lock line, as section 5 runs a fix's. The merge can bring migrations or gems that this checkout's databases and bundle lack. When the specs cannot run for that (a pending migration, a missing gem), do not migrate, install or load a schema: the result is `not run: environment`, and magnum's re-review loads the merged schema. When they fail because of your resolution, fix the resolution and run them again.
-5. Finish the merge with `git commit --no-edit`. Change nothing else in the merge commit.
+4. Stage the resolved files (`git add <files>`) and run the specs that cover them through the db-lock line, as section 5 runs a fix's. The merge can bring migrations or gems that this checkout's databases and bundle lack. When the specs cannot run for that (a pending migration, a missing gem), do not migrate, install or load a schema: the result is `not run: environment`, and magnum's re-review loads the merged schema. When they fail because of your resolution, fix the resolution and run them again. If they still fail, merge nothing: run `git merge --abort` (or, for a merge that committed itself, `git reset --hard <head sha>`, which drops only the merge, since nothing else is committed yet), and list `- conflict: <path>, <path>: <spec> fails after the merge` under `## Needs you`. Never push a merge whose specs fail.
+5. Finish a merge whose conflicts you resolved with `git commit --no-edit`; a merge that applied cleanly has its commit already. Change nothing else in the merge commit.
 6. The merge commit goes out with the fixes, in the one push of section 5. The report names it first under `## Pushed`: `<sha7> Merge <base sha7>: <spec command> passed`, or `not run: environment` in place of `<spec command> passed`.
 
 The merge's changes are the base's, not the PR's: no finding is about them, and you do not judge, fix or refactor them.
@@ -148,7 +148,7 @@ When every fix is committed, push once, the base merge's commit included. If you
 git push origin HEAD:<branch>
 ```
 
-Never add `--force` or `--force-with-lease`. If the push fails, do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings. Write `push failed: <git's first error line>` under `## Pushed` in the report, put each finding you committed under `## Needs you`, and stop. Do not reply `Fixed in` for a commit that is not on GitHub.
+Never add `--force` or `--force-with-lease`. If the push fails, do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings. Write `push failed: <git's first error line>` under `## Pushed` in the report, put each finding you committed under `## Needs you`, and the base merge, when you made one, as `- conflict: <path>, <path>: the merge is not on GitHub (the push failed)`, and stop. Do not reply `Fixed in` for a commit that is not on GitHub.
 
 Check that each commit is on GitHub:
 

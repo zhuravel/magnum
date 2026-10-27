@@ -2792,8 +2792,9 @@ them, the request is refused with the cause, since the fixer would have nothing 
 waiting is refused with what was cut ("... could not all be read (over 1000 review threads); answer them by
 hand"), and the `fix.external` event of any fix names the lists cut short. A request that a whiteboard writer
 yields to reads them once, before the yield. The board leaves the
-call to the daemon: on such a review `f` asks "Answer the other reviewers' open threads and comments on … as
-you (magnum's review of <sha> found nothing to fix)?" and the daemon's refusal shows in the footer.
+call to the daemon: on such a review `f` asks "Answer the other reviewers' open threads and comments on …, and
+merge its base if it conflicts, as you (magnum's review of <sha> found nothing to fix)?" and the daemon's refusal
+shows in the footer.
 
 **A PR that conflicts with its base.** GitHub cannot merge a PR that conflicts with its base, and the fixer
 resolves that too. Once the slot is the fixer's, each cycle fetches the PR's base branch into the slot's main
@@ -2809,13 +2810,21 @@ migrations or gems block them; the re-review's readiness step loads the merged s
 listed first under `Pushed`, so the settle takes the pushed head as for any listed commit and the re-review is
 forced as usual. A conflict that needs a product decision is aborted (`git merge --abort`) and listed under
 `Needs you` as `conflict: <paths>: <the decision it needs>`, which asks you to "merge the base by hand and
-decide the conflict in <paths>: <the PR's link>". A base that cannot be fetched never blocks the fix: a
-`fix.conflict_unchecked` warning says why, and the fixer starts without the merge step. A conflict is work
-enough for `magnum fix` and `f`: on a review that found nothing, with no other reviewer's item waiting, the
-request fetches the base and checks it (a dry run checks the base as last fetched), and the answer says
-"claude-fix merges master at c0c0c0c (2 conflicting files) in review1 (magnum's review of a1a1a1a found
-nothing)". When the PR merges its base cleanly the request is refused as before, and a check that failed ends
-the refusal with why ("; its merge with master could not be checked: …"). A read of the other reviewers'
+decide the conflict in <paths>: <the PR's link>"; so is a merge whose specs stay red after the resolution
+(the fixer never pushes it), and one a failed push left off GitHub. The older words count such an entry as
+a conflict ("1 finding and 1 conflict need your call"). A fixer stopped in the middle of the merge (a
+timeout, `magnum abort`, a crash) leaves it in progress, and git refuses every switch then, so the settle's
+resync of the slot and a release abort it first (`git merge --abort`, a `slot.merge_aborted` event). A base
+that cannot be fetched never blocks the fix: a `fix.conflict_unchecked` warning says why, and the fixer
+starts without the merge step (a fix that starts for the merge alone merges the tip its request fetched). A
+conflict is work enough for `magnum fix` and `f`: on a review that found nothing, with no other reviewer's
+item waiting, the request fetches the base, within 30 seconds since the daemon answers it in its tick (a
+slower fetch counts as a failed one), and checks it (a dry run checks the base as last fetched), and the
+answer says "claude-fix merges master at c0c0c0c (2 conflicting files) in review1 (magnum's review of
+a1a1a1a found nothing)". When the PR merges its base cleanly the request is refused as before, and a check
+that failed ends the refusal with why ("; its merge with master could not be checked: …"). Such a fix whose
+conflict is gone by the time it starts (the base moved) ends quietly, with an info `fix.ended` event and
+toast. A read of the other reviewers'
 items that GitHub refuses for its rate limit looks at no base: the fix is held as below the floor, and the
 held fix looks at the base when it starts. Autofix still starts only after a
 review with findings, so a conflict alone never starts a loop, and a loop whose re-review finds nothing ends

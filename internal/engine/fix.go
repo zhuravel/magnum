@@ -149,6 +149,12 @@ type fixJob struct {
 	forMerge bool
 }
 
+// fixRequestFetch bounds the fetch of the base a `magnum fix` request makes
+// for a review that found nothing (prepareFix): the request is answered in
+// the daemon's tick, so a slow remote must not stall the poll and dispatch;
+// past it the base counts as unchecked, as after a failed fetch.
+const fixRequestFetch = 30 * time.Second
+
 // fixConflict is a merge of the PR's base into its head that conflicts:
 // the base branch, the tip of it magnum fetched and the conflicting paths,
 // sorted (zero: none).
@@ -302,12 +308,12 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	case e.draining(ctx): // held for the restart (fix_held.go), which would end a fixer started now
 		return e.holdFix(ctx, pr, dry, fixBy, fixHold{})
 	case dry:
-		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried)
+		job, err = e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried, false)
 		if err == nil && job.budget != nil { // github_floor.go: it would be held
 			return e.holdFix(ctx, pr, true, fixBy, fixHold{low: job.budget, job: job})
 		}
 	case e.whiteboardHolds(pr.ID): // the job yields to the request once every other refusal passed (answerYielding)
-		pre, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried)
+		pre, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried, true)
 		if err != nil {
 			return "", err
 		}
@@ -362,8 +368,9 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 // job's external file gets: a review that found nothing is refused when
 // none waits for an answer or the read fails (othersWaiting), unless the
 // head conflicts with the PR's base (baseConflict in the PR's slot, else
-// in its clone; fetched first but for a request only asked about), which
-// the job then merges first and alone (forMerge). carried is
+// in its clone), which the job then merges first and alone (forMerge). The
+// base is fetched first, within fixRequestFetch, when fetch is set: false
+// only for a dry run, which looks at the base as last fetched. carried is
 // the other reviewers' items the same request read before (nil = none),
 // used instead of reading GitHub again at the same head. Below the GitHub
 // floor of the identity the job reads as (github_floor.go), or when GitHub
@@ -374,7 +381,7 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 // pool took back gets a job without a slot, which claims one when it runs
 // (fixClaim); a pool without a free slot refuses it before the pin goes
 // (fixSlotFree).
-func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin, carried *externalRead) (*fixJob, error) {
+func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin fixPin, carried *externalRead, fetch bool) (*fixJob, error) {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
 		return nil, err
@@ -477,21 +484,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	alone := prev.Cycle == 0 && sum.Findings()+sum.OpenProblems() == 0
 	var others *externalRead
 	// A conflict with the base is work too (spec 5.6): othersWaiting asks
-	// for it only when nothing else would start the job, and a request only
-	// asked about (fixPinWouldUnpin) looks at the base as last fetched.
+	// for it only when nothing else would start the job.
 	var conflict fixConflict
-	merges := func() (bool, error) {
-		dir, clone := slot.Path, slot.MainClone
-		if !has {
-			dir = e.cloneOf(repo)
-			clone = dir
-		}
-		var err error
-		if conflict, err = e.baseConflict(ctx, repo, pr, dir, clone, pr.HeadSHA, pin != fixPinWouldUnpin); err != nil {
-			err = fmt.Errorf("its merge with %s could not be checked: %w", cmp.Or(deref(pr.BaseRef), repo.DefaultBranch, "its base"), err)
-		}
-		return conflict.sha != "", err
-	}
+	merges := e.requestBaseCheck(ctx, repo, pr, slot, has, fetch, &conflict)
 	if !isLow {
 		var held *githubLowBudget
 		probe := &fixJob{repo: repo, watch: *w, pr: pr, login: src.Login()}
@@ -525,11 +520,10 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		pr.Pinned, slot.Pinned = false, false
 		notes = append(notes, note)
 	}
+	// The conflict is asked for only when nothing else waits: the merge is then the job's whole work.
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
-		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone, conflict: conflict}
-	if conflict.sha != "" { // asked only when nothing else waits: the merge is the job's whole work
-		job.forMerge = true
-	}
+		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone,
+		conflict: conflict, forMerge: conflict.sha != ""}
 	if isLow { // the other reviewers' items are read when the held fix starts
 		job.budget, job.othersDeferred = &low, true
 	}
@@ -659,7 +653,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	if e.draining(ctx) {
 		return nil, errFixDraining
 	}
-	job, err := e.prepareFix(ctx, pr, prev, pin, carried)
+	job, err := e.prepareFix(ctx, pr, prev, pin, carried, !e.d.DryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -772,9 +766,12 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 		e.log.Info("fix interrupted by a shutdown; the next start ends its loop", "subject", subject)
 		return
 	}
+	var gone fixConflictGone
 	switch {
 	case errors.Is(err, slots.ErrNoFreeSlot): // the claim lost its free slot (fixClaim): nothing failed
 		e.endFixUnclaimed(fctx, job, err.Error())
+	case errors.As(err, &gone): // a merge-only job whose conflict is gone (checkFixBase): nothing to do
+		e.endFixUnclaimed(fctx, job, gone.Error())
 	case err != nil:
 		msg := failed + err.Error()
 		if job.touched {
@@ -787,8 +784,10 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 }
 
 // endFixUnclaimed ends the loop of a job whose claim found no free slot
-// after all (a round took the one the request saw free) quietly, as a stop
-// does: nothing failed and why names the retry, so the loop's row goes, a
+// after all (a round took the one the request saw free), or that started
+// for the merge alone and whose guard found the conflict gone
+// (fixConflictGone), quietly, as a stop does: nothing failed and why says
+// what happened (the retry, for the claim), so the loop's row goes, a
 // fix.ended event and an info toast say why, and nobody is called.
 func (e *Engine) endFixUnclaimed(ctx context.Context, job *fixJob, why string) {
 	e.endFixState(ctx, job)
@@ -934,17 +933,19 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 // from conflicts with the PR's base, the base fetched first (baseConflict,
 // spec 5.6): a conflict becomes the job's, which the prompt names and the
 // fixer merges before the findings, and a clean merge clears what
-// prepareFix found. A look that fails never blocks the fix: a
+// prepareFix found. The fetch runs on the job's goroutine, so git's own
+// bound is its only one. A look that fails never blocks the fix: a
 // fix.conflict_unchecked warning says why, and the fixer starts without the
 // merge step, or, for a job that starts for the merge alone (forMerge),
 // with the tip prepareFix fetched moments before. Such a job whose conflict
-// is gone has nothing left to do, and the guard fails it. A shutdown or a
-// stop during the fetch ends the guard with its cause.
+// is gone has nothing left to do: the guard ends with errFixConflictGone,
+// and runFix ends the loop quietly. A shutdown or a stop during the fetch
+// ends the guard with its cause.
 func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 	if e.d.Git == nil {
 		return nil
 	}
-	c, err := e.baseConflict(ctx, job.repo, job.pr, job.slot.Path, job.slot.MainClone, job.head, true)
+	c, err := e.baseConflict(ctx, job.repo, job.pr, job.slot.Path, job.slot.MainClone, job.head, 0)
 	switch {
 	case ctx.Err() != nil:
 		return ctx.Err()
@@ -958,23 +959,36 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 			job.label(), base, oneLine(err.Error(), 300), then), map[string]any{"role": job.role.Name, "base": base, "cycle": job.state.Cycle})
 		return nil
 	case c.sha == "" && job.forMerge:
-		return fmt.Errorf("nothing to fix: the head %s merges %s cleanly now, and the review on %s found nothing",
-			textx.ShortSHA(job.head), job.conflict.base, textx.ShortSHA(job.review.SHA))
+		return fixConflictGone{head: job.head, base: job.conflict.base, review: job.review.SHA}
 	}
 	job.conflict = c
 	return nil
 }
 
+// fixConflictGone is the guard's end of a job that started for the merge
+// alone (forMerge) when the head merges its base cleanly by then (the base
+// moved): nothing failed and nothing is left to do, so runFix ends the loop
+// quietly with its sentence (endFixUnclaimed).
+type fixConflictGone struct{ head, base, review string }
+
+func (e fixConflictGone) Error() string {
+	return fmt.Sprintf("nothing to fix: the head %s merges %s cleanly now, and the review on %s found nothing",
+		textx.ShortSHA(e.head), e.base, textx.ShortSHA(e.review))
+}
+
 // baseConflict says whether merging the tip of pr's base branch into head
-// conflicts (fixConflict with the paths; zero for a clean merge): with fetch,
-// the base is fetched into mainClone first, as a slot's checkout fetches
-// it, then its tip (origin/<base>) is merged with head by `git merge-tree`
-// in dir, which writes no ref, index or work tree (Git.MergeConflicts).
-// GitHub's mergeable is not read: it answers UNKNOWN until its own
-// computation ends. The error says why it could not tell: no git or
-// checkout, a base not known yet or one whose name a shell would read
-// (the prompt names it), a failed fetch or a revision git does not know.
-func (e *Engine) baseConflict(ctx context.Context, repo store.Repo, pr store.PR, dir, mainClone, head string, fetch bool) (fixConflict, error) {
+// conflicts (fixConflict with the paths; zero for a clean merge). With
+// within at 0 or more, the base is fetched into mainClone first, as a
+// slot's checkout fetches it (within > 0 bounds that fetch: past it the
+// look fails as a failed fetch does); with within below 0 it is not
+// fetched, and its last fetched tip is taken. That tip (origin/<base>) is
+// merged with head by `git merge-tree` in dir, which writes no ref, index or
+// work tree (Git.MergeConflicts). GitHub's mergeable is not read: it answers
+// UNKNOWN until its own computation ends. The error says why it could not
+// tell: no git or checkout, a base not known yet or one whose name a shell
+// would read (the prompt names it), a failed or slow fetch, or a revision
+// git does not know.
+func (e *Engine) baseConflict(ctx context.Context, repo store.Repo, pr store.PR, dir, mainClone, head string, within time.Duration) (fixConflict, error) {
 	base := cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)
 	switch {
 	case e.d.Git == nil:
@@ -986,8 +1000,8 @@ func (e *Engine) baseConflict(ctx context.Context, repo store.Repo, pr store.PR,
 	case !gitx.ShellSafeRef(base):
 		return fixConflict{}, errors.New("the base branch's name has characters magnum does not pass to a shell")
 	}
-	if fetch {
-		if err := e.d.Git.FetchBranch(ctx, cmp.Or(mainClone, dir), base); err != nil {
+	if within >= 0 {
+		if err := e.fetchBase(ctx, cmp.Or(mainClone, dir), base, within); err != nil {
 			return fixConflict{}, err
 		}
 	}
@@ -1000,6 +1014,49 @@ func (e *Engine) baseConflict(ctx context.Context, repo store.Repo, pr store.PR,
 		return fixConflict{}, err
 	}
 	return fixConflict{base: base, sha: tip, paths: paths}, nil
+}
+
+// requestBaseCheck is prepareFix's look at whether pr's head conflicts with
+// its base, for othersWaiting to ask when nothing else would start the job
+// (spec 5.6): in the PR's slot (has), else in its clone (cloneOf), the base
+// fetched first within fixRequestFetch (the request is answered in the
+// daemon's tick), but for a dry run (fetch false), which looks at the base
+// as last fetched. The conflict it finds lands in into; its error says that
+// the merge could not be checked, and why.
+func (e *Engine) requestBaseCheck(ctx context.Context, repo store.Repo, pr store.PR, slot store.Slot, has, fetch bool,
+	into *fixConflict) func() (bool, error) {
+	return func() (bool, error) {
+		dir, clone := slot.Path, slot.MainClone
+		if !has {
+			dir = e.cloneOf(repo)
+			clone = dir
+		}
+		within := time.Duration(-1) // no fetch
+		if fetch {
+			within = fixRequestFetch
+		}
+		c, err := e.baseConflict(ctx, repo, pr, dir, clone, pr.HeadSHA, within)
+		if err != nil {
+			err = fmt.Errorf("its merge with %s could not be checked: %w", cmp.Or(deref(pr.BaseRef), repo.DefaultBranch, "its base"), err)
+		}
+		*into = c
+		return c.sha != "", err
+	}
+}
+
+// fetchBase fetches base into mainClone (Git.FetchBranch), within that long
+// when within > 0: a fetch cut short says how long it was given.
+func (e *Engine) fetchBase(ctx context.Context, mainClone, base string, within time.Duration) error {
+	if within <= 0 {
+		return e.d.Git.FetchBranch(ctx, mainClone, base)
+	}
+	fctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
+	err := e.d.Git.FetchBranch(fctx, mainClone, base)
+	if err != nil && ctx.Err() == nil && errors.Is(fctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("the fetch of %s took over %s: %w", base, humanDuration(within), err)
+	}
+	return err
 }
 
 // cloneOf is a checkout of repo that shares the objects of its slots, for a

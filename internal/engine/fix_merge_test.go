@@ -196,6 +196,180 @@ func TestAFailedBaseFetchRunsTheFixWithoutTheMergeStep(t *testing.T) {
 	})
 }
 
+// A look at the base that fails after the fetch never blocks the fix either:
+// a rev-parse of origin/<base> or a merge-tree that git refuses leaves the
+// fixer without the merge step, and the warning says why.
+func TestAFailedConflictCheckAfterTheFetchRunsTheFixWithoutTheMergeStep(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(g *fixGit)
+		why  string
+	}{
+		{name: "rev-parse", set: func(g *fixGit) { g.baseErr = errors.New("gitx: rev-parse refs/remotes/origin/master: no such ref") },
+			why: "gitx: rev-parse refs/remotes/origin/master: no such ref"},
+		{name: "merge-tree", set: func(g *fixGit) {
+			g.mergeErr = errors.New("gitx: merge-tree: exit 128: fatal: refusing to merge unrelated histories")
+		},
+			why: "gitx: merge-tree: exit 128: fatal: refusing to merge unrelated histories"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+			git.conflict("app/models/offer.rb")
+			tc.set(git)
+			fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+			id := h.fix(FixPayload{})
+			h.handle()
+			h.wantDone(id)
+			want := "could not check talkable/talkable#2 for a conflict with its base master: " + tc.why + "; claude-fix starts without the merge step"
+			if ev, ok := h.fixEvent("fix.conflict_unchecked"); !ok || ev.Message != want {
+				t.Errorf("fix.conflict_unchecked = %q, %v\nwant %q", ev.Message, ok, want)
+			}
+			if inputs := h.fixInputsOf(); len(inputs) != 1 || inputs[0].ConflictSHA != "" {
+				t.Errorf("the fix prompt names a conflict: %+v", inputs)
+			}
+			if _, ok := h.fixEvent("fix.replied"); !ok {
+				t.Error("the fix did not run to its settle")
+			}
+		})
+	}
+}
+
+// A fix that starts for the merge alone keeps the tip its request fetched
+// when the guard's own fetch fails moments later: the fixer still merges
+// it, and the warning says so.
+func TestAMergeOnlyFixWhoseGuardFetchFailsMergesTheTipTheRequestFetched(t *testing.T) {
+	const fetchErr = "gitx: fetch master: exit 128: fatal: unable to access the remote"
+	h, git := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{})
+	git.conflict("app/models/offer.rb")
+	git.fetchErrs = []error{nil, errors.New(fetchErr)}
+	fixer(h, git, fixMergeHead, func(run store.Run) string {
+		return fixReport(run.ID, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+	})
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	want := "could not check talkable/talkable#2 for a conflict with its base master: " + fetchErr + "; claude-fix merges the tip c0c0c0c that the request fetched"
+	if ev, ok := h.fixEvent("fix.conflict_unchecked"); !ok || ev.Message != want {
+		t.Errorf("fix.conflict_unchecked = %q, %v\nwant %q", ev.Message, ok, want)
+	}
+	if inputs := h.fixInputsOf(); len(inputs) != 1 || inputs[0].ConflictSHA != fixBaseTip || !slices.Equal(inputs[0].ConflictPaths, []string{"app/models/offer.rb"}) {
+		t.Errorf("the fix prompt = %+v, want the conflict the request found", inputs)
+	}
+	if st, ok := h.fixStateOf(2); !ok || st.Phase != FixPhaseReviewing || st.Head != fixMergeHead {
+		t.Errorf("loop = %+v, %v; want it waiting for the re-review of the merge", st, ok)
+	}
+}
+
+// A fix that starts for the merge alone has nothing left to do when the
+// guard finds that the head merges its base cleanly after all (the base
+// moved in between): the loop ends quietly, with an info fix.ended event
+// and toast, and nobody is called.
+func TestAMergeOnlyFixWhoseConflictIsGoneEndsQuietly(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{})
+	git.mergeAnswers = [][]string{{"app/models/offer.rb"}, nil}
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	ev, ok := h.fixEvent("fix.ended")
+	if want := "the fix loop ends: nothing to fix: the head a1a1a1a merges master cleanly now, and the review on a1a1a1a found nothing"; !ok ||
+		ev.Level != "info" || ev.Message != want {
+		t.Errorf("fix.ended = %q (%s), %v\nwant %q", ev.Message, ev.Level, ok, want)
+	}
+	if ev, ok := h.fixEvent("fix.failed"); ok {
+		t.Errorf("fix.failed = %q: the loop calls the operator", ev.Message)
+	}
+	if cur := h.pr(pr.Number); cur.State == store.PRNeedsAttention {
+		t.Errorf("the PR needs attention: %q", deref(cur.LastError))
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop's row outlived its end")
+	}
+	if h.ag.count("submit:") != 0 {
+		t.Error("the fixer started with nothing to do")
+	}
+	h.flush()
+	h.wantToasts("needs attention", 0)
+}
+
+// `magnum fix` is answered in the daemon's tick, so the fetch of the base
+// it makes for a review that found nothing is bounded (fixRequestFetch): a
+// slow remote counts as a failed fetch instead of stalling the poll. A
+// request held for a drain looks at a freshly fetched base too, not at the
+// last one fetched (a stacked PR's parent may never have been fetched), and
+// the guard's own fetch runs on the job's goroutine with git's bound alone.
+func TestARequestFetchesTheBaseWithinItsBound(t *testing.T) {
+	t.Run("a drain", func(t *testing.T) {
+		h, git := fixHarness(t)
+		fixablePR(h, "zhuravel", map[string]int{})
+		git.conflict("app/models/offer.rb")
+		h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+		id := h.fix(FixPayload{})
+		h.handle()
+		if res := h.wantDone(id); !strings.HasPrefix(res, "held; the fix of talkable/talkable#2 starts after the restart") {
+			t.Errorf("answer = %q, want held for the restart", res)
+		}
+		if b := git.bounds(); len(b) != 1 || b[0] <= 0 || b[0] > fixRequestFetch {
+			t.Errorf("fetch bounds = %v, want one fetch within %s", b, fixRequestFetch)
+		}
+	})
+	t.Run("a start", func(t *testing.T) {
+		h, git := fixHarness(t)
+		fixablePR(h, "zhuravel", map[string]int{})
+		git.conflict("app/models/offer.rb")
+		fixer(h, git, "", func(run store.Run) string {
+			return fixReport(run.ID, "nothing", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+		})
+		id := h.fix(FixPayload{})
+		h.handle()
+		h.wantDone(id)
+		if b := git.bounds(); len(b) != 2 || b[0] <= 0 || b[0] > fixRequestFetch || b[1] != 0 {
+			t.Errorf("fetch bounds = %v, want the request's within %s, then the guard's without one", b, fixRequestFetch)
+		}
+	})
+}
+
+// A stop during the guard's fetch of the base (`magnum abort`) ends the job
+// as any stop does: no warning that the base could not be checked, no
+// fixer, no failure.
+func TestAStopDuringTheBaseFetchStopsTheFixQuietly(t *testing.T) {
+	h, git := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	git.mu.Lock()
+	git.fetchGate, git.fetchStarted = make(chan struct{}), make(chan struct{}, 1)
+	started := git.fetchStarted
+	git.mu.Unlock()
+	id := h.fix(FixPayload{})
+	h.e.handleRequests(h.ctx)
+	h.wantDone(id)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the guard never fetched the base")
+	}
+	abort := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(abort); r.State != store.RequestDone {
+		t.Errorf("abort: %s %q", r.State, deref(r.Result))
+	}
+	if _, ok := h.fixEvent("pr.aborted"); !ok {
+		t.Error("no pr.aborted event")
+	}
+	if done, err := h.st.StepDone(h.ctx, "pr:talkable/talkable#2", "fix.guard"); err != nil || done {
+		t.Errorf("the guard step done = %v, %v; want it ended by the stop", done, err)
+	}
+	for _, kind := range []string{"fix.conflict_unchecked", "fix.failed"} {
+		if ev, ok := h.fixEvent(kind); ok {
+			t.Errorf("%s = %q after a stop", kind, ev.Message)
+		}
+	}
+	if h.ag.count("submit:") != 0 {
+		t.Error("the fixer started after the abort")
+	}
+}
+
 // A conflicting PR whose review found nothing, and whose other reviewers'
 // read GitHub refused for the rate limit, is held as the floor holds a fix,
 // not started for the merge: the GitHub budget is spent, and the held fix

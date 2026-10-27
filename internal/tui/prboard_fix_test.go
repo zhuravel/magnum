@@ -97,11 +97,13 @@ func TestFRefusesBeforeAsking(t *testing.T) {
 
 // A review of magnum's that found nothing may still leave the fixer work:
 // another reviewer's thread or comment that waits for an answer (spec 96,
-// talkable#12054). Only the daemon can tell, so f asks, says what the fixer
-// would do, and sends the request; the daemon's refusal, when nothing
-// waits, shows in the footer as any other.
+// talkable#12054), or a conflict with the base (spec 5.6, talkable#12079).
+// Only the daemon can tell, so f asks, says what the fixer would do, both,
+// and sends the request; the daemon's refusal, when nothing waits, shows in
+// the footer as any other.
 func TestFOnAReviewThatFoundNothingAsksTheDaemon(t *testing.T) {
-	const want = "Answer the other reviewers' open threads and comments on talkable#5 as you (magnum's review of abcdef1 found nothing to fix)?"
+	const want = "Answer the other reviewers' open threads and comments on talkable#5, and merge its base if it conflicts, as you " +
+		"(magnum's review of abcdef1 found nothing to fix)?"
 	const refusal = "nothing to fix: the review on abcdef1 found nothing and no other reviewer's thread or comment waits for an answer"
 	for _, c := range []struct {
 		name string

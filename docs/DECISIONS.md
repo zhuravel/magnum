@@ -13562,13 +13562,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   fails, never blocks the fix: a `fix.conflict_unchecked` warning says why, and the fixer starts without
   the merge step. A conflict counts as work in `prepareFix`: on a review that found nothing, with no other
   reviewer's item waiting, `othersWaiting` asks for the check (in the PR's slot, else its pool's main clone
-  or its clone; a request only asked about checks the base as last fetched) before it refuses, so a
-  hand-started `magnum fix` on a conflicting PR runs ("claude-fix merges master at c0c0c0c (2 conflicting
-  files) in review1 (magnum's review of a1a1a1a found nothing)", `forMerge`), the prompt's no-findings
-  sentence names the external file only when there is one, and a check that failed ends the refusal with
-  why. A read of the other reviewers that GitHub refused for the rate limit asks for no check: the floor
-  holds the fix as before, and the held fix looks at the base when it starts. Such a job whose conflict the
-  guard finds gone fails its guard, with nothing left to do. Autofix
+  or its clone) before it refuses, so a hand-started `magnum fix` on a conflicting PR runs ("claude-fix
+  merges master at c0c0c0c (2 conflicting files) in review1 (magnum's review of a1a1a1a found nothing)",
+  `forMerge`), the prompt's no-findings sentence names the external file only when there is one, and a
+  check that failed ends the refusal with why. Every real request fetches the base first, those held for a
+  drain and those a whiteboard writer yields to included (`prepareFix`'s `fetch` flag, false only for a
+  dry run, which checks the base as last fetched: a stale ref, or none for a stacked PR's parent never
+  fetched, would answer wrong), and within `fixRequestFetch` (30 seconds): the daemon answers `magnum fix`
+  in its tick, under the clone's fetch lock, so a slow remote would stall polling and dispatch, and a fetch
+  past the bound counts as a failed one. The guard's fetch runs on the job's goroutine with git's own bound.
+  A read of the other reviewers that GitHub refused for the rate limit asks for no check: the floor holds
+  the fix as before, and the held fix looks at the base when it starts. A merge-only job whose guard fetch
+  fails merges the tip its request fetched, and one whose conflict the guard finds gone (the base moved)
+  ends quietly, as a claim that lost its free slot does (`fixConflictGone`, `endFixUnclaimed`: an info
+  `fix.ended` event and toast, nobody called). A fixer stopped in the middle of the merge (a timeout,
+  `magnum abort`, a crash, or one that never reached `--abort` or the commit) leaves `MERGE_HEAD` in the
+  slot, and git then refuses `switch --discard-changes` ("cannot switch branch while merging"), so the
+  settle's `Slots.Resync` and every later release failed until someone aborted by hand: Resync and the
+  release now run an `abort_merge` step before their switch (`slots.abortMerge`: `gitx.InProgress` is its
+  guard, then `gitx.MergeAbort` and a `slot.merge_aborted` event; begin, ok and fail rows as every step).
+  The skill also lists the conflict under Needs you when the checkout is not at the reviewed head, merges
+  nothing whose specs stay red after the resolution (`git merge --abort`, or `git reset --hard <head>` for
+  a merge that committed itself), commits by hand only a merge whose conflicts it resolved, and lists a
+  merge a failed push left off GitHub; the older words count such an entry as a conflict ("1 finding and 1
+  conflict need your call"), and the board's `f` on a review that found nothing asks to answer the other
+  reviewers "and merge its base if it conflicts". Autofix
   still starts only after a review with findings, and a re-review that finds nothing still ends a loop
   clean: a conflict alone never starts a loop. The merge can bring the base's `AGENTS.md` or `.claude/`
   into a running Claude fixer; those are the base's files, which the team owns, so this is accepted.
@@ -13585,7 +13603,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFixSkillMergesTheBaseWhenThePRConflicts and the goldens `fix_conflict` and `fix_merge_only`.
   TestAutofixDoesNotStartForAConflictAlone guards what already held, and
   TestAConflictDoesNotStartAFixWhoseOtherReviewersReadHitTheRateLimit fails when a rate-limited read asks
-  for the check anyway.
+  for the check anyway. The review's fixes, failing first: in slots (real git)
+  TestResyncAbortsAMergeTheFixerLeftInProgress and TestReleaseAbortsAMergeLeftInProgress ("cannot switch
+  branch while merging" before); in engine TestARequestFetchesTheBaseWithinItsBound (a drain's request
+  fetched nothing, a request's fetch had no bound), TestAMergeOnlyFixWhoseConflictIsGoneEndsQuietly
+  (fix.failed and needs attention before), and the conflict count of TestAConflictEntryUnderNeedsYouBecomesACall;
+  in agents the new lines of TestTheFixSkillMergesTheBaseWhenThePRConflicts; in tui
+  TestFOnAReviewThatFoundNothingAsksTheDaemon. Guards of what held: TestAMergeOnlyFixWhoseGuardFetchFailsMergesTheTipTheRequestFetched,
+  TestAFailedConflictCheckAfterTheFetchRunsTheFixWithoutTheMergeStep (rev-parse, merge-tree) and
+  TestAStopDuringTheBaseFetchStopsTheFixQuietly (fails when the guard ignores a stop).
 
 ## Learned rules
 

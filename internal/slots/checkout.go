@@ -320,7 +320,7 @@ func (m *Manager) switchTo(ctx context.Context, sl store.Slot, ref, sha string) 
 // starts clean. sha is the head the job settled on, a commit id: the one the
 // fixer pushed, or the head the review ran on when nothing was pushed, in
 // which case the fixer's local commits are left behind (the reflog keeps
-// them). It runs the steps guard, fetch and switch under the subject
+// them). It runs the steps guard, fetch, abort_merge and switch under the subject
 // "slot:<name>:resync:<sha7>", a new generation on every call, and ends with
 // a slot.resync event:
 //   - guard is guardDiscard, not Guard: the slot is refused (ErrHold) when it
@@ -332,6 +332,8 @@ func (m *Manager) switchTo(ctx context.Context, sl store.Slot, ref, sha string) 
 //   - fetch looks sha up in the slot and fetches the commit by id into the
 //     main clone only when the slot lacks it (a head pushed from another
 //     clone);
+//   - abort_merge ends a merge the fixer left in progress, which git would
+//     refuse the switch over (abortMerge);
 //   - switch notes the tracked changes it drops (a slot.discarded event) and
 //     records the resulting HEAD as checked_out_sha through the pending-switch
 //     key, as a checkout does. A HEAD that already is sha with no tracked
@@ -372,6 +374,11 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
 	}); err != nil {
 		return err
 	}
+	if err := m.step(ctx, subject, "abort_merge", func(ctx context.Context) error {
+		return m.abortMerge(ctx, sl)
+	}); err != nil {
+		return err
+	}
 	if err := m.step(ctx, subject, "switch", func(ctx context.Context) error {
 		var err error
 		if was, err = m.git.RevParse(ctx, sl.Path, "HEAD"); err != nil {
@@ -390,6 +397,26 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
 	}
 	m.event(ctx, "slot:"+sl.Name, "info", "slot.resync",
 		fmt.Sprintf("%s resynced to %s (HEAD was %s)", sl.Name, textx.ShortSHA(full), textx.ShortSHA(was)))
+	return nil
+}
+
+// abortMerge is a step of a resync and of a release, before their switch: a
+// merge left in progress in the slot (a fixer stopped in the middle of the
+// fix skill's base merge: a timeout, `magnum abort`, a crash) makes git
+// refuse every switch ("cannot switch branch while merging"), so it is
+// aborted first (`git merge --abort`), with a slot.merge_aborted event. Its
+// guard is InProgress: a slot in no merge is left alone, and a resumed step
+// finds no merge once its abort took. The changes the merge brought go with
+// it; the switch then drops what else the tree holds, as it always does.
+func (m *Manager) abortMerge(ctx context.Context, sl store.Slot) error {
+	op, err := m.git.InProgress(ctx, sl.Path)
+	if err != nil || op != "merge" {
+		return err
+	}
+	if err := m.git.MergeAbort(ctx, sl.Path); err != nil {
+		return err
+	}
+	m.event(ctx, "slot:"+sl.Name, "info", "slot.merge_aborted", sl.Name+": aborted a merge left in progress before the switch")
 	return nil
 }
 
@@ -509,10 +536,17 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
 }
 
 // releaseSteps are the release's steps after its guard, from releasing (or
-// dirty_schema) to free. delete_ref deletes its PR's refs/magnum/pr/N.
+// dirty_schema) to free. abort_merge ends a merge left in progress, which
+// would make git refuse the reset (abortMerge). delete_ref deletes its
+// PR's refs/magnum/pr/N.
 func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slot, pool config.Pool, reason string) error {
 	if err := m.step(ctx, subject, "fetch_base", func(ctx context.Context) error {
 		return m.git.FetchBranch(ctx, sl.MainClone, pool.Base)
+	}); err != nil {
+		return err
+	}
+	if err := m.step(ctx, subject, "abort_merge", func(ctx context.Context) error {
+		return m.abortMerge(ctx, sl)
 	}); err != nil {
 		return err
 	}

@@ -240,7 +240,8 @@ func needsYouCalls(entries []string, answered map[string]bool, report, prURL, re
 // (attention.FixCallsText); prURL is the PR's page and ref how `magnum fix`
 // names it. When magnum can read no call, the older words alone: each
 // finding named (needsYourCall) when named, else counted ("2 findings need
-// your call: <report>", the settle's).
+// your call: <report>", the settle's; a conflict counts as one,
+// needYourCall).
 func needsYouText(entries []string, answered map[string]bool, report, prURL, ref string, named bool) string {
 	calls, more := needsYouCalls(entries, answered, report, prURL, ref)
 	switch {
@@ -249,8 +250,7 @@ func needsYouText(entries []string, answered map[string]bool, report, prURL, ref
 	case named:
 		return needsYourCall(entries, report)
 	}
-	n := len(entries)
-	return fmt.Sprintf("%s %s your call: %s", textx.Count(n, "finding", "findings"), textx.Plural(n, "needs", "need"), report)
+	return needYourCall(entries) + ": " + report
 }
 
 // FixCalls are the calls of the findings the fixer of the loop st left to

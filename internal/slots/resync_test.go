@@ -2,6 +2,7 @@ package slots
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -320,4 +321,90 @@ func TestResyncDropsTrackedChangesWhenTheActivityPredatesTheCheckout(t *testing.
 		t.Fatalf("Resync: %v", err)
 	}
 	h.wantResynced(sl.Name, h.shaPR8)
+}
+
+// midMerge leaves dir in the middle of a merge, as a fixer stopped during
+// the fix skill's base merge (a timeout, `magnum abort`, a crash) leaves its
+// slot: HEAD at head, and a commit on base that changed README as head
+// changed it merged into it, the conflict unresolved, so MERGE_HEAD is there.
+func midMerge(t *testing.T, dir, base, head string) {
+	t.Helper()
+	gitT(t, dir, "switch", "--quiet", "--detach", base)
+	tip := fixerCommit(t, dir, "on the base")
+	gitT(t, dir, "switch", "--quiet", "--detach", head)
+	if _, err := gitRun(dir, "merge", "--no-edit", tip); err == nil {
+		t.Fatal("the merge applied cleanly; the test needs a conflict")
+	}
+	if _, err := gitRun(dir, "rev-parse", "--quiet", "--verify", "MERGE_HEAD"); err != nil {
+		t.Fatalf("no merge in progress: %v", err)
+	}
+}
+
+// wantNoMerge fails while dir is in the middle of a merge.
+func wantNoMerge(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := gitRun(dir, "rev-parse", "--quiet", "--verify", "MERGE_HEAD"); err == nil {
+		t.Fatal("the merge is still in progress")
+	}
+}
+
+// A fixer stopped in the middle of the base merge leaves MERGE_HEAD in the
+// slot, and git refuses every switch then ("cannot switch branch while
+// merging"): the settle's Resync, and every later checkout or release of
+// the slot, failed until someone aborted the merge by hand. Resync aborts a
+// merge it finds in progress before its switch, in a step of its own with a
+// slot.merge_aborted event, and the slot resyncs to the reviewed head. A
+// slot in no merge runs no abort.
+func TestResyncAbortsAMergeTheFixerLeftInProgress(t *testing.T) {
+	h := newHarness(t)
+	sl, _ := h.claimedCheckout(8, h.shaPR8)
+	midMerge(t, sl.Path, h.shaMaster, h.shaPR8)
+
+	if err := h.m.Resync(h.ctx, sl, h.shaPR8); err != nil {
+		t.Fatalf("Resync: %v", err)
+	}
+	wantNoMerge(t, sl.Path)
+	h.wantResynced(sl.Name, h.shaPR8)
+	if done, err := h.st.StepDone(h.ctx, "slot:"+sl.Name+":resync:"+h.shaPR8[:7], "abort_merge"); err != nil || !done {
+		t.Fatalf("step abort_merge done = %v, %v", done, err)
+	}
+	evs, err := h.st.EventsBySubject(h.ctx, "slot:"+sl.Name, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(slices.DeleteFunc(evs, func(e store.Event) bool { return e.Kind != "slot.merge_aborted" })); n != 1 {
+		t.Fatalf("slot.merge_aborted events = %d, want 1", n)
+	}
+
+	h.run.reset()
+	if err := h.m.Resync(h.ctx, h.slot(sl.Name), h.shaPR8); err != nil {
+		t.Fatalf("Resync again: %v", err)
+	}
+	if ab := h.run.gitCalls("merge", "--abort"); len(ab) != 0 {
+		t.Fatalf("merge --abort calls = %v on a slot in no merge", ab)
+	}
+}
+
+// The release of a slot a fixer left in the middle of a merge aborts the
+// merge before it resets the placeholder branch, which git would refuse
+// too, and the slot is free on the base.
+func TestReleaseAbortsAMergeLeftInProgress(t *testing.T) {
+	h := newHarness(t)
+	sl, _ := h.claimedCheckout(8, h.shaPR8)
+	if err := h.st.TransitionSlot(h.ctx, sl.ID, []string{store.SlotClaimed}, store.SlotHeld, nil); err != nil {
+		t.Fatal(err)
+	}
+	midMerge(t, sl.Path, h.shaMaster, h.shaPR8)
+	h.clearScripts()
+
+	if err := h.m.Release(h.ctx, h.slot(sl.Name), h.pool, "pr_closed"); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	wantNoMerge(t, sl.Path)
+	if got := h.slot(sl.Name); got.State != store.SlotFree {
+		t.Fatalf("released slot = %+v", got)
+	}
+	if head := gitT(t, sl.Path, "rev-parse", "HEAD"); head != h.shaMaster {
+		t.Fatalf("HEAD = %s, want master", head)
+	}
 }

@@ -675,15 +675,40 @@ func roundFindings(res pipeline.RoundResult) int {
 // needsYourCall says which findings the fixer left to the author and where
 // its report is: "2 findings need your call (2101 P1 app/a.rb:42, 2102 P2
 // app/b.rb:7): <report>". Each entry is named by its comment id, priority
-// and place alone (needsYouEntryRe); an entry magnum cannot read so is only
-// counted ("1 entry magnum could not read").
+// and place alone (needsYouEntryRe), a conflict of the base merge by its
+// paths ("1 finding and 1 conflict need your call (conflict in app/a.rb,
+// 2101 P1 app/b.rb:3)"); an entry magnum cannot read so is only counted
+// ("1 entry magnum could not read").
 func needsYourCall(entries []string, report string) string {
-	n := len(entries)
-	s := textx.Count(n, "finding", "findings") + " " + textx.Plural(n, "needs", "need") + " your call"
+	s := needYourCall(entries)
 	if names := needsYouNames(entries); len(names) > 0 {
 		s += " (" + strings.Join(names, ", ") + ")"
 	}
 	return s + ": " + report
+}
+
+// needYourCall counts entries as findings and conflicts of the base merge
+// (needsYouEntryRe), with the verb: "2 findings need your call", "1
+// conflict needs your call", "1 finding and 1 conflict need your call". An
+// entry magnum cannot read counts as a finding.
+func needYourCall(entries []string) string {
+	conflicts := 0
+	for _, entry := range entries {
+		if n, ok := readNeedsYouEntry(entry); ok && n.place == conflictPlace {
+			conflicts++
+		}
+	}
+	findings := len(entries) - conflicts
+	var s string
+	switch {
+	case conflicts == 0:
+		s = textx.Count(findings, "finding", "findings")
+	case findings == 0:
+		s = textx.Count(conflicts, "conflict", "conflicts")
+	default:
+		s = textx.Count(findings, "finding", "findings") + " and " + textx.Count(conflicts, "conflict", "conflicts")
+	}
+	return s + " " + textx.Plural(len(entries), "needs", "need") + " your call"
 }
 
 // needsYouNames names the entries by what magnum can read of them (their

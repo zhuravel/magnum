@@ -1455,8 +1455,16 @@ func TestAConflictEntryUnderNeedsYouBecomesACall(t *testing.T) {
 	if strings.Contains(deref(cur.LastError), "expiry rule") {
 		t.Error("last_error carries the fixer's words")
 	}
-	if got := needsYourCall([]string{"conflict: app/a.rb, db/schema.rb: both sides change it", "conflict: my file.rb: spaces"}, "/state/claude-fix.md"); got !=
-		"2 findings need your call (conflict in app/a.rb, db/schema.rb, 1 entry magnum could not read): /state/claude-fix.md" {
-		t.Errorf("needsYourCall = %q", got)
+	// The older words count a conflict as a conflict, not as a finding.
+	for entries, want := range map[string]string{
+		"conflict: app/a.rb, db/schema.rb: both sides change it|conflict: my file.rb: spaces": "1 finding and 1 conflict need your call " +
+			"(conflict in app/a.rb, db/schema.rb, 1 entry magnum could not read): /state/claude-fix.md",
+		"conflict: app/a.rb: both sides change it": "1 conflict needs your call (conflict in app/a.rb): /state/claude-fix.md",
+		"conflict: app/a.rb: both sides change it|conflict: db/schema.rb: the merge is not on GitHub (the push failed)|2101 P1 app/b.rb:3: not fixed. A call.": "1 finding and 2 conflicts need your call " +
+			"(conflict in app/a.rb, conflict in db/schema.rb, 2101 P1 app/b.rb:3): /state/claude-fix.md",
+	} {
+		if got := needsYourCall(strings.Split(entries, "|"), "/state/claude-fix.md"); got != want {
+			t.Errorf("needsYourCall(%q) = %q\nwant %q", entries, got, want)
+		}
 	}
 }

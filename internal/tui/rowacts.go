@@ -494,9 +494,10 @@ func actionQuestion(a rowAct, r actRow) string {
 	case actFix:
 		q, notes := "Fix the findings of "+l+" as you", []string(nil)
 		// A review that found nothing leaves the fixer the other reviewers'
-		// items alone, when one waits for an answer (the daemon looks).
+		// items and a conflict with the base alone, when one of them waits
+		// (the daemon looks; the board knows neither).
 		if f := r.findings; f != nil && f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3]+f.OpenProblems == 0 {
-			q = "Answer the other reviewers' open threads and comments on " + l + " as you"
+			q = "Answer the other reviewers' open threads and comments on " + l + ", and merge its base if it conflicts, as you"
 			notes = append(notes, "magnum's review of "+textx.ShortSHA(f.SHA)+" found nothing to fix")
 		}
 		if r.pinKnown && r.pinned { // the daemon unpins it, as for a review (its slot's guards still hold a person's changes)

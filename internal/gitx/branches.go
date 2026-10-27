@@ -216,6 +216,14 @@ func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) err
 	return fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict)
 }
 
+// MergeAbort ends the merge dir is in the middle of (`git merge --abort`):
+// HEAD, the index and the work tree go back to where the merge started.
+// Callers ask InProgress first; with no merge in progress git fails.
+func (c *Client) MergeAbort(ctx context.Context, dir string) error {
+	_, err := c.git(ctx, dir, call{label: "merge --abort", mutates: true, timeout: commitTimeout}, "merge", "--abort")
+	return err
+}
+
 // ReplayConflicts says where the change commit rev makes from its first
 // parent would conflict if replayed onto onto, as RebaseOnto would replay
 // it, without replaying it: the conflicting paths, sorted, nil when it

@@ -11847,6 +11847,11 @@ func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, 
     nil when none is named or words is empty. rev must name a commit (no range,
     no "<rev>:<path>").
 
+func (c *Client) MergeAbort(ctx context.Context, dir string) error
+    MergeAbort ends the merge dir is in the middle of (`git merge --abort`):
+    HEAD, the index and the work tree go back to where the merge started.
+    Callers ask InProgress first; with no merge in progress git fails.
+
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
     It is a question: a non-zero exit (1: no common ancestor; 128: a revision
@@ -18290,15 +18295,15 @@ func (m *Manager) ResetFailed(ctx context.Context, slot store.Slot, cause string
     so `magnum slots repair` takes it; the round itself goes on.
 
 func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
-    Resync puts a slot back in order after a run that committed in it (the
-    fix job's fixer): it switches the slot, detached, to sha and records
-    sha as checked_out_sha, so Guard sees no head drift and the next round's
-    checkout starts clean. sha is the head the job settled on, a commit id:
-    the one the fixer pushed, or the head the review ran on when nothing was
-    pushed, in which case the fixer's local commits are left behind (the reflog
-    keeps them). It runs the steps guard, fetch and switch under the subject
-    "slot:<name>:resync:<sha7>", a new generation on every call, and ends with a
-    slot.resync event:
+    Resync puts a slot back in order after a run that committed in it (the fix
+    job's fixer): it switches the slot, detached, to sha and records sha as
+    checked_out_sha, so Guard sees no head drift and the next round's checkout
+    starts clean. sha is the head the job settled on, a commit id: the one
+    the fixer pushed, or the head the review ran on when nothing was pushed,
+    in which case the fixer's local commits are left behind (the reflog keeps
+    them). It runs the steps guard, fetch, abort_merge and switch under the
+    subject "slot:<name>:resync:<sha7>", a new generation on every call,
+    and ends with a slot.resync event:
       - guard is guardDiscard, not Guard: the slot is refused (ErrHold) when it
         is pinned or held, when a person's agent or process is in it, or when
         someone typed into the PR's magnum panes since its checkout and the tree
@@ -18308,6 +18313,8 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
       - fetch looks sha up in the slot and fetches the commit by id into the
         main clone only when the slot lacks it (a head pushed from another
         clone);
+      - abort_merge ends a merge the fixer left in progress, which git would
+        refuse the switch over (abortMerge);
       - switch notes the tracked changes it drops (a slot.discarded event) and
         records the resulting HEAD as checked_out_sha through the pending-switch
         key, as a checkout does. A HEAD that already is sha with no tracked

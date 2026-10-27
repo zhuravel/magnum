@@ -475,6 +475,18 @@ func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 		"The entries that the base merge brings in are the base's, not yours.",
 		"The base merge's own changes and its conflict resolutions are exempt (section 2).",
 		"If the push fails, do not pull, merge or rebase: the base merge (section 2) is the only merge you make, and only before the findings.",
+		// A merge-only run whose checkout is not at the reviewed head still
+		// leaves the conflict to the author, never "nothing" and "none".
+		"When the prompt names a conflict with the base, list it under `## Needs you` too: `- conflict: <path>, <path>: the checkout is not at the reviewed head`.",
+		// Specs that stay red after the resolution never go out as a merge.
+		"If they still fail, merge nothing: run `git merge --abort` (or, for a merge that committed itself, `git reset --hard <head sha>`, " +
+			"which drops only the merge, since nothing else is committed yet), and list `- conflict: <path>, <path>: <spec> fails after the merge` " +
+			"under `## Needs you`. Never push a merge whose specs fail.",
+		// A merge without a conflict commits itself.
+		"If the merge applies without a conflict, git commits it itself: go on with step 4.",
+		"5. Finish a merge whose conflicts you resolved with `git commit --no-edit`; a merge that applied cleanly has its commit already.",
+		// A failed push leaves the base merge off GitHub: it goes to the author.
+		"and the base merge, when you made one, as `- conflict: <path>, <path>: the merge is not on GitHub (the push failed)`",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("the fix skill lacks %q", want)
