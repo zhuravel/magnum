@@ -191,7 +191,8 @@ type PRBoardRow struct {
 	// pinned. Zero for a lasting pin, or no pin.
 	HeldUntil time.Time
 	// OpenRestores: o restores the PR in a slot (the role it opens has no
-	// live pane: its session is parked), so o asks first, saying for how
+	// live pane and its session is parked, or its session is gone and
+	// another role's parked one stands in for it), so o asks first, saying for how
 	// long the restore holds the PR: OpenHold, [daemon] open_hold (0: until
 	// `magnum unpin`).
 	OpenRestores bool

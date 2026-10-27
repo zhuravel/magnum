@@ -453,7 +453,8 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 // prsOpenFacts fills what the board says of `magnum open` on each row: when
 // the hold an open set on a pinned PR ends (HeldUntil; every hold in one
 // read), whether o restores the PR, so it asks first (OpenRestores: the role
-// open opens has no live pane and one of its sessions is parked,
+// open opens has no live pane and one of its sessions is parked, or, when its
+// own session is gone, another role's is and stands in for it,
 // openWouldRestore), and for how long a restore holds it (OpenHold, [daemon]
 // open_hold). A registry that cannot say leaves them out rather than the
 // board.

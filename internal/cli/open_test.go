@@ -408,3 +408,20 @@ func TestTheBoardsOpenFollowsTheParkedSessionWhenTheJudgesIsGone(t *testing.T) {
 		}
 	}
 }
+
+// Two parked sessions that started together (the registry keeps seconds):
+// the later one, the higher id (SessionsByPR lists by id), stands in for the
+// judge's, whichever role it is.
+func TestOpenRestoreRoleTakesTheLaterOfTwoParkedSessionsThatStartedTogether(t *testing.T) {
+	at := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	judge := store.Session{ID: 1, Role: store.RoleJudge, State: store.SessionClosed, StartedAt: at.Add(-time.Hour)}
+	claude := store.Session{ID: 2, Role: store.RoleClaude, State: store.SessionParked, StartedAt: at}
+	simplify := store.Session{ID: 3, Role: store.RoleSimplify, State: store.SessionParked, StartedAt: at}
+	if got := openRestoreRole([]store.Session{judge, claude, simplify}, store.RoleJudge); got != store.RoleSimplify {
+		t.Errorf("claude-review (id 2) and claude-simplify (id 3) parked together: %s, want %s", got, store.RoleSimplify)
+	}
+	simplify.ID, claude.ID = 2, 3
+	if got := openRestoreRole([]store.Session{judge, simplify, claude}, store.RoleJudge); got != store.RoleClaude {
+		t.Errorf("claude-simplify (id 2) and claude-review (id 3) parked together: %s, want %s", got, store.RoleClaude)
+	}
+}

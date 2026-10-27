@@ -184,8 +184,9 @@ type actRow struct {
 	// know: only the board offers w), which w's question names.
 	whiteboard string
 	// restores says o restores the PR in a slot (PRBoardRow.OpenRestores:
-	// the role it opens has no live pane; false when it focuses one, or the
-	// screen does not know: only the board does), so o asks first, naming
+	// the role it opens has no live pane and a parked session of its own or,
+	// when its session is gone, of another role; false when it focuses one, or
+	// the screen does not know: only the board does), so o asks first, naming
 	// openHold, how long the restore holds the PR (PRBoardRow.OpenHold).
 	restores bool
 	openHold time.Duration
