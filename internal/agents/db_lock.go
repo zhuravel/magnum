@@ -12,12 +12,24 @@ import "cmp"
 // is left out (db-lock then takes the git work tree it runs in), and so is
 // an empty role.
 func DBLockLine(magnum, checkout, role string) string {
+	return ShellDBLockLine(magnum, checkout, role, "")
+}
+
+// ShellDBLockLine is DBLockLine with `--run <run>` before the `--`: the
+// line a shell role's command runs through (ShellData.DBLockCommand). The
+// run id is magnum's run token: StopShell signals a command in a shell
+// role's pane only when its db-lock names a run of that PR and role
+// (runToken). An empty run is left out, as DBLockLine leaves it.
+func ShellDBLockLine(magnum, checkout, role, run string) string {
 	args := []string{cmp.Or(magnum, "magnum"), "db-lock"}
 	if checkout != "" {
 		args = append(args, "--checkout", checkout)
 	}
 	if role != "" {
 		args = append(args, "--role", role)
+	}
+	if run != "" {
+		args = append(args, "--run", run)
 	}
 	return shellLine(append(args, "--"))
 }

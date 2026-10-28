@@ -71,7 +71,7 @@ func TestHappyPathInitialRound(t *testing.T) {
 	// starts with the run's marker, then codex review runs under the slot's
 	// db-lock; the done marker stays last.
 	if !strings.HasPrefix(cc.Script, `printf '\033]0;%s\007' 'PR #11920 codex-review - talkable'; DISABLE_AUTO_TITLE=true; set -o pipefail; `+
-		`{ printf '`+agents.ReportMarker(codexRun.ID)+`\n'; `+agents.DBLockLine(e.layout.Binary(), slotPath, string(agents.RoleCodexReview))+` codex review `) ||
+		`{ printf '`+agents.ReportMarker(codexRun.ID)+`\n'; `+agents.ShellDBLockLine(e.layout.Binary(), slotPath, string(agents.RoleCodexReview), codexRun.ID)+` codex review `) ||
 		!strings.HasSuffix(cc.Script, `; printf '\nMAGNUM_DONE_`+codexRun.ID+` %d\n' "$?"`) {
 		t.Errorf("codex script = %q", cc.Script)
 	}

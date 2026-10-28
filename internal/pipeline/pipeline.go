@@ -147,6 +147,11 @@ type Agents interface {
 	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
 	Submit(ctx context.Context, run store.Run, text string) error
 	RunShell(ctx context.Context, pr store.PR, role config.Role, paneID, line, marker string, timeout time.Duration) (int, error)
+	// StopShell stops the command a cut shell role's run left running in
+	// its pane after its last ctrl+c (round.stopShell), when it is proven
+	// magnum's own run (agents.ErrNotOwn otherwise, nothing sent); nil once
+	// the pane is an idle shell, or a new one took its place.
+	StopShell(ctx context.Context, run store.Run) error
 	ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
 	PreflightRole(ctx context.Context, role config.Role) error
 	RolePrompt(role config.Role, promptKind string, data any) (string, error)

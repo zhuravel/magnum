@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -200,6 +201,10 @@ type Deps struct {
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
 	Toast func(ctx context.Context, key, title, body string)
+	// Signal sends sig to process pid, or to the process group -pid when
+	// pid is negative; nil = syscall.Kill. Only StopShell signals, and only
+	// a command it proved an own run of magnum (ownShell).
+	Signal func(pid int, sig syscall.Signal) error
 }
 
 // Manager drives agent sessions. Safe for concurrent use: the daemon tick

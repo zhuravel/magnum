@@ -24,9 +24,9 @@ func TestCodexReviewRunsUnderTheDBLock(t *testing.T) {
 	role := e.spec(RoleCodexReview)
 	sh := role
 	sh.Command, sh.Prompt = "", "codex-review.sh"
-	lock := DBLockLine(e.cfg.Layout.Binary(), slot, string(RoleCodexReview))
-	if want := "db-lock --checkout '/slots/talkable review3' --role codex-review --"; !strings.HasSuffix(lock, want) {
-		t.Fatalf("DBLockLine = %s, want it to end with %s", lock, want)
+	lock := ShellDBLockLine(e.cfg.Layout.Binary(), slot, string(RoleCodexReview), "r-1")
+	if want := "db-lock --checkout '/slots/talkable review3' --role codex-review --run r-1 --"; !strings.HasSuffix(lock, want) {
+		t.Fatalf("ShellDBLockLine = %s, want it to end with %s", lock, want)
 	}
 	// The lock is the first word of the command, inside the braces that tee
 	// the report, after the report's run marker.
@@ -61,13 +61,13 @@ func TestShellDataDBLockCommandIsKeptOrDerived(t *testing.T) {
 	derived := base
 	derived.Magnum, derived.Checkout = "/opt/magnum dir/bin/magnum", "/slots/talkable.review3"
 	if got, err := ShellLine(role, derived); err != nil || !strings.Contains(got,
-		`; '/opt/magnum dir/bin/magnum' db-lock --checkout /slots/talkable.review3 --role codex-review -- codex review -c`) {
+		`; '/opt/magnum dir/bin/magnum' db-lock --checkout /slots/talkable.review3 --role codex-review --run r-1 -- codex review -c`) {
 		t.Errorf("a derived DBLockCommand: line = %q, %v", got, err)
 	}
 
 	// Without a checkout db-lock takes the git work tree it runs in; the
 	// check of the configuration (engine skew) renders the line this way.
-	if got, err := ShellLine(role, base); err != nil || !strings.Contains(got, "; magnum db-lock --role codex-review -- codex review -c") {
+	if got, err := ShellLine(role, base); err != nil || !strings.Contains(got, "; magnum db-lock --role codex-review --run r-1 -- codex review -c") {
 		t.Errorf("a derived DBLockCommand without a checkout: line = %q, %v", got, err)
 	}
 }

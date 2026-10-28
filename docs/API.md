@@ -280,6 +280,30 @@ const (
     The checks herdr's Codex session hook can fail (CodexHookProblem.Check).
 
 const (
+	// EventShellStopBegin (warn) is recorded before StopShell's first
+	// signal to an own run: the role, the pane, the run, the process group
+	// (pgid) and the tree under the run token's db-lock (tree: pid, pgid and
+	// name of each, never argv).
+	EventShellStopBegin = "pr.shell_stop_begin"
+	// EventShellStopped (info): the step that stopped it (term, kill,
+	// replace: the pane replaced, close: the pane closed without a
+	// replacement) and the seconds it took.
+	EventShellStopped = "pr.shell_stopped"
+	// EventShellStopFailed (warn): the cause, not_own (nothing was sent:
+	// the command is not proven an own run, or herdr shows another one now),
+	// signal (a signal was refused) or close (the pane would not close).
+	EventShellStopFailed = "pr.shell_stop_failed"
+	// EventShellMoveBegin (warn), EventShellMoved (info) and
+	// EventShellMoveFailed (warn, the cause split or registry): RunShell
+	// moves a shell role to a new pane, as something that is no run of
+	// magnum's keeps its pane busy; the busy pane gets nothing.
+	EventShellMoveBegin  = "pr.shell_move_begin"
+	EventShellMoved      = "pr.shell_moved"
+	EventShellMoveFailed = "pr.shell_move_failed"
+)
+    Events of StopShell and of RunShell's move to a new pane, on the PR.
+
+const (
 	PhaseOwnPass    = "own_pass"   // the judge's own pass, while the reviewers work
 	PhaseCandidates = "candidates" // the judge judges the reviewers' reports against its own pass
 )
@@ -526,6 +550,10 @@ var (
 
 var ErrNoModelSwitch = errors.New("agent kind cannot switch models")
     ErrNoModelSwitch: the session's kind has no switch_model command.
+
+var ErrNotOwn = errors.New("not magnum's own run")
+    ErrNotOwn: the command a shell role's pane runs is not proven an own run of
+    magnum's (ownShell), so StopShell sent it nothing.
 
 var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does not pass to a shell")
     ErrUnsafeBaseRef means a judge or reviewer prompt's base ref is not a
@@ -839,6 +867,13 @@ func SameModel(a, b string) bool
     messages and configs spell them: equal ignoring case, or one is a word of
     the other ("opus" and "claude-opus-4-5"). "" means UnknownModel.
 
+func ShellDBLockLine(magnum, checkout, role, run string) string
+    ShellDBLockLine is DBLockLine with `--run <run>` before the `--`: the line
+    a shell role's command runs through (ShellData.DBLockCommand). The run id is
+    magnum's run token: StopShell signals a command in a shell role's pane only
+    when its db-lock names a run of that PR and role (runToken). An empty run is
+    left out, as DBLockLine leaves it.
+
 func ShellLine(role config.Role, d ShellData) (string, error)
     ShellLine builds the one-line command typed into a shell role's pane (see
     RunShell). With role.Command set (the role's command template overridable by
@@ -1057,6 +1092,10 @@ type Deps struct {
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
 	Toast func(ctx context.Context, key, title, body string)
+	// Signal sends sig to process pid, or to the process group -pid when
+	// pid is negative; nil = syscall.Kill. Only StopShell signals, and only
+	// a command it proved an own run of magnum (ownShell).
+	Signal func(pid int, sig syscall.Signal) error
 }
     Deps are the Manager's collaborators.
 
@@ -1961,14 +2000,17 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
     RunShell types line (see ShellLine) into the pane of a shell role and blocks
     until the done marker (DoneMarker(runID)) appears on a line of its own,
     optionally followed by the command's exit status, or timeout (ErrTimeout).
-    It returns that status (ShellStatusUnknown without one). The pane must be an
-    idle shell (ErrBusy otherwise); like Submit it refuses with ErrHumanActive
-    inside daemon.human_cooldown after a human typed into the PR's panes. The
-    shell's line editor is cleared (ctrl+u) first, so text a human left there
-    never joins the command. The match is a line-anchored regex on unwrapped
-    output, so the echoed command line itself never matches. The role's session
-    (agent_kind "shell") becomes live with last_prompt_at; the run row is the
-    caller's. An agent role is refused with an error.
+    It returns that status (ShellStatusUnknown without one). The pane must be
+    an idle shell (readyShell): one an earlier run of the role still holds is
+    stopped at once (StopShell's steps), and one something else keeps busy past
+    IdleShellTimeout is left for a new pane with the session's environment,
+    where the line runs (ErrBusy without one). Like Submit it refuses with
+    ErrHumanActive inside daemon.human_cooldown after a human typed into the
+    PR's panes. The shell's line editor is cleared (ctrl+u) first, so text a
+    human left there never joins the command. The match is a line-anchored
+    regex on unwrapped output, so the echoed command line itself never matches.
+    The role's session (agent_kind "shell") becomes live with last_prompt_at;
+    the run row is the caller's. An agent role is refused with an error.
 
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error)
     ShellLine is ShellLine with the role's full-line template (role.Prompt)
@@ -2051,6 +2093,22 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
     started_at = the launch (an agent launched here) and state live. A fresh
     session's id appears only after the first prompt; Prompt, Observe and
     RecordSessionID record it then. Preflight is the caller's job.
+
+func (m *Manager) StopShell(ctx context.Context, run store.Run) error
+    StopShell stops the command a shell role's run (the cut run) left running
+    in its session's pane, when ownShell proves it an own run of magnum's (that
+    run, or a run of the role no longer in flight): SIGTERM to the job's process
+    group and to the tree under the run token's db-lock (execx.Descendants
+    of the process table, so a sandbox's child in a group of its own too),
+    then up to shellStopWait for an idle shell; SIGKILL the same way and
+    another wait; and when the pane is still busy, a replacement split with
+    the cwd and environment the sessions recorded, the session pointed at it,
+    and the old pane closed (without a recorded environment the pane closes
+    all the same and the session is lost, as clearDeadLaunch does). herdr is
+    asked again before each signal and the close: a job group or a db-lock that
+    changed gets nothing. An idle shell, or a pane that is gone, is nil at once.
+    Not own is ErrNotOwn, nothing sent. Records EventShellStopBegin before the
+    first signal, then EventShellStopped or EventShellStopFailed.
 
 func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error
     Submit sends text to the live agent of run's role and records the
@@ -2633,8 +2691,10 @@ type ShellData struct {
 	// layout when empty). Not a template variable.
 	Magnum string
 	// DBLockCommand is the line a command that touches the checkout's
-	// databases runs through, as RoleData's (DBLockLine from Magnum,
-	// Checkout and the role's name when empty): codex-review's command runs
+	// databases runs through, as RoleData's, with the run (ShellDBLockLine
+	// from Magnum, Checkout, the role's name and RunID when empty:
+	// `magnum db-lock --checkout <slot> --role <role> --run <run> --`, the
+	// run token StopShell looks for): codex-review's command runs
 	// `{{.DBLockCommand}} codex review ...`, so its sandboxed specs take
 	// turns with the other roles'. It is a ready shell line: nothing quotes
 	// it again.
@@ -6368,6 +6428,7 @@ TYPES
 
 type Holder struct {
 	Role    string    `json:"role,omitempty"` // the magnum role, e.g. claude-review ("" = not given)
+	Run     string    `json:"run,omitempty"`  // the magnum run of a shell role's line (db-lock --run; "" = not given)
 	Command string    `json:"command"`        // the command it runs under the lock
 	PID     int       `json:"pid"`
 	Start   time.Time `json:"start"` // when it took the lock
@@ -10445,6 +10506,27 @@ type Logger interface {
 	Printf(format string, args ...any)
 }
     Logger receives one line per finished command (already redacted).
+
+type Process struct {
+	PID  int    `json:"pid"`
+	PPID int    `json:"-"`
+	PGID int    `json:"pgid"`
+	Name string `json:"name"`
+}
+    Process is one row of the process table (ProcessTable): its id, its
+    parent's, its process group's and its executable's base name (ps's comm,
+    never its arguments).
+
+func Descendants(table []Process, pid int) []Process
+    Descendants are the processes of table under pid: its children, theirs and
+    so on, parents before their children; pid itself is not one. A process that
+    left pid's process group (a sandbox's child in a session of its own) is
+    still one while its parent is.
+
+func ProcessTable(ctx context.Context, r Runner) ([]Process, error)
+    ProcessTable reads the process table through r (`ps -A -o
+    pid=,ppid=,pgid=,comm=`, on macOS and Linux alike). A line it cannot read is
+    skipped.
 
 type Real struct {
 	// Log, when set, receives a redacted one-line transcript per command:
@@ -15907,6 +15989,11 @@ type Agents interface {
 	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
 	Submit(ctx context.Context, run store.Run, text string) error
 	RunShell(ctx context.Context, pr store.PR, role config.Role, paneID, line, marker string, timeout time.Duration) (int, error)
+	// StopShell stops the command a cut shell role's run left running in
+	// its pane after its last ctrl+c (round.stopShell), when it is proven
+	// magnum's own run (agents.ErrNotOwn otherwise, nothing sent); nil once
+	// the pane is an idle shell, or a new one took its place.
+	StopShell(ctx context.Context, run store.Run) error
 	ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
 	PreflightRole(ctx context.Context, role config.Role) error
 	RolePrompt(role config.Role, promptKind string, data any) (string, error)

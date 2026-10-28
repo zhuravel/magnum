@@ -230,12 +230,13 @@ func TestARefusalInterruptsTheRefusedKindsTurnsFirst(t *testing.T) {
 // A push cuts codex-review while its command runs: the command ignores the
 // interrupt's ctrl+c (Codex may ask for a second), so after shellStopWait it
 // gets another and stops, and the restart's line finds an idle shell: the
-// restarted round has codex-review's report. A command that ignores all
-// shellStopPresses presses is named in a round.warning, and the restart's
-// line is refused as busy, as before. The presses do not wait for
-// claude-review's settle (its background work runs 2 more minutes here):
-// the cut settles its turns side by side, so claude-review's stop message,
-// which waits for the presses here, does not hold them back.
+// restarted round has codex-review's report, and magnum never had to stop
+// the command itself (StopShell). A command that ignores all
+// shellStopPresses presses is TestARestartKillsACodexReviewThatOutlivesItsCtrlC's.
+// The presses do not wait for claude-review's settle (its background work
+// runs 2 more minutes here): the cut settles its turns side by side, so
+// claude-review's stop message, which waits for the presses here, does not
+// hold them back.
 func TestACutShellCommandIsPressedUntilItStops(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -245,7 +246,6 @@ func TestACutShellCommandIsPressedUntilItStops(t *testing.T) {
 		status  string
 	}{
 		{"stops at the second ctrl+c", 2, 2, false, ReportOK},
-		{"ignores three", 4, shellStopPresses, true, ReportBusy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
@@ -308,7 +308,117 @@ func TestACutShellCommandIsPressedUntilItStops(t *testing.T) {
 			if warned != tc.warn {
 				t.Errorf("warning about codex-review = %t, want %t: %q", warned, tc.warn, res.Warnings)
 			}
+			if got := e.ag.stopped(); len(got) != 0 {
+				t.Errorf("StopShell calls = %d, want none for a command its ctrl+c ended", len(got))
+			}
 		})
+	}
+}
+
+// pressedTo counts the ctrl+c codex-review's pane got.
+func (e *env) pressedTo(role agents.Role) int {
+	n := 0
+	for _, s := range e.keySends() {
+		if strings.HasPrefix(s.to, "pane:"+e.pane(role)+":") {
+			n++
+		}
+	}
+	return n
+}
+
+// codex review went on after the restart's three ctrl+c, 10 seconds apart
+// (12 codex-review runs ended busy from 2026-10-16 to 2026-10-28, and their
+// clean reviews lost their approvals): after the last press the restart
+// has magnum stop its own run (Agents.StopShell, which signals the job of
+// the run's token), and the restarted codex-review's line finds an idle
+// shell. Its report on the new head is ok, and no warning says it still
+// runs.
+func TestARestartKillsACodexReviewThatOutlivesItsCtrlC(t *testing.T) {
+	e := newEnv(t)
+	in := e.input(KindInitial)
+	sw := e.withRestarts(&in, 2)
+	e.codexUntilCut(sw, shellStopPresses+1, head2) // no ctrl+c ends it
+	pane := e.pane(agents.RoleCodexReview)
+	e.ag.onStopShell = func(f *fakeAgents, run store.Run) error {
+		if n := e.pressedTo(agents.RoleCodexReview); n != shellStopPresses {
+			t.Errorf("StopShell after %d ctrl+c, want after the last of %d", n, shellStopPresses)
+		}
+		e.keys.run(pane, 0) // the kill ends it
+		return nil
+	}
+	atPush := func(f *fakeAgents, run store.Run, text string) error {
+		e.waitHead(head2)
+		return nil
+	}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{atPush, writeReport("## P2 on the new head\n")}
+	post := e.judgePosts(902, "COMMENTED", "COMMENT")
+	post.commit = head2
+	e.ag.behaviors[agents.RoleJudge] = []behavior{post.behavior(t)}
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if res.Outcome != OutcomePosted || res.Restarts != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	stops := e.ag.stopped()
+	if len(stops) != 1 || stops[0].Role != "codex-review" || stops[0].TargetSHA != target {
+		t.Fatalf("StopShell calls = %+v, want the cut codex-review run on %s", stops, target)
+	}
+	if rep := res.Reports[agents.RoleCodexReview]; rep.Status != ReportOK {
+		t.Errorf("codex-review on the new head = %+v, want ok", rep)
+	}
+	for _, ev := range e.eventsOf("round.warning") {
+		if strings.Contains(ev.Message, "codex-review still runs") {
+			t.Errorf("warning %q, want none once StopShell stopped it", ev.Message)
+		}
+	}
+	if got := sw.asked(); !slices.Equal(got, []string{head2}) {
+		t.Errorf("switches = %v, want %s", got, head2)
+	}
+}
+
+// A cut command that still runs after StopShell (it is not proven magnum's
+// own run, say a line from before the run token) runs in the checkout: the
+// restart never switches the checkout under it. The round ends failed with
+// that cause, a warning names the role, and the normal retry takes the PR
+// later.
+func TestARestartNeverSwitchesTheCheckoutUnderARunningCommand(t *testing.T) {
+	e := newEnv(t)
+	in := e.input(KindInitial)
+	sw := e.withRestarts(&in, 2)
+	e.codexUntilCut(sw, shellStopPresses+1, head2)
+	e.ag.onStopShell = func(f *fakeAgents, run store.Run) error {
+		return fmt.Errorf("agents: stop codex-review in pane %s: it runs no db-lock with a run token: %w", e.pane(agents.RoleCodexReview), agents.ErrNotOwn)
+	}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{pushThen(e, head2, hang())}
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err == nil || res.Outcome != OutcomeError {
+		t.Fatalf("result = %+v, %v; want the round failed", res, err)
+	}
+	mustContain(t, "the round's error", res.Error, "restart on "+textx.ShortSHA(head2), "codex-review still runs")
+	if got := sw.asked(); len(got) != 0 {
+		t.Errorf("switches = %v, want none under the running command", got)
+	}
+	if n := len(e.ag.submitsFor(agents.RoleJudge)); n != 0 {
+		t.Errorf("judge prompted %d times", n)
+	}
+	warned := false
+	for _, ev := range e.eventsOf("round.warning") {
+		if strings.Contains(ev.Message, "codex-review still runs") {
+			warned = true
+			mustContain(t, "warning", ev.Message, fmt.Sprintf("after %d ctrl+c", shellStopPresses), "for the restart", "not magnum's own run")
+		}
+	}
+	if !warned {
+		t.Errorf("warnings = %q, want one that codex-review still runs", res.Warnings)
+	}
+	for _, r := range e.runs() {
+		if r.State == store.RunPending || r.State == store.RunWorking || r.State == store.RunSubmitted {
+			t.Errorf("run %s %s left %s", r.ID, r.Role, r.State)
+		}
 	}
 }
 

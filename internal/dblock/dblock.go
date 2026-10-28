@@ -22,6 +22,7 @@ import (
 // Holder is who holds a checkout's database lock.
 type Holder struct {
 	Role    string    `json:"role,omitempty"` // the magnum role, e.g. claude-review ("" = not given)
+	Run     string    `json:"run,omitempty"`  // the magnum run of a shell role's line (db-lock --run; "" = not given)
 	Command string    `json:"command"`        // the command it runs under the lock
 	PID     int       `json:"pid"`
 	Start   time.Time `json:"start"` // when it took the lock

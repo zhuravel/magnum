@@ -13901,6 +13901,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the same libc as its own (its GitLab issue #177). Rejected: keeping `go = "1.27"` and bumping the cache
   prefix (the next patch release would go stale the same way); a `toolchain` line (go.mod and mise already
   agree).
+- **A cut shell command is killed, and a review that missed a reviewer is completed** (2026-10-28,
+  docs/superpowers/specs/2026-10-28-busy-shell-self-healing-design.md, parts A and B: the kill, the run token
+  and the move to a new pane; part C, the completion, lands with its own entry; amends "A cut shell command is
+  pressed until it stops"). From 2026-10-16 to 2026-10-28, 12 codex-review runs ended `busy`; in 11 of them a
+  push restarted the round, the restart's three ctrl+c 10 s apart did not end `codex review` ("codex-review
+  still runs 10s after 3 ctrl+c for the restart"), and the next run waited a minute for an idle shell and failed
+  ("shell not idle after 1m0s (foreground: codex,magnum)"). The round went on without codex-review, and
+  auto-approval refused its clean review because it did not hear every reviewer: 6 approvals lost from
+  2026-10-25 to 2026-10-28 (talkable#12092 is one), and on talkable#12079 two runs 5 minutes apart both found
+  the pane busy. db-lock started codex in the job's process group, passed each signal on (so each ctrl+c reached
+  codex twice) and blocked in `cmd.Wait()`; why codex goes on after SIGINT is still unknown, and the design works
+  without that answer. Part A: db-lock's `runLocked` (`escalate`) sends a command that still runs
+  `dbLockKillAfter` (10 s) after the first SIGINT, SIGTERM or SIGHUP it passed on SIGTERM, and one still running
+  `dbLockKillGrace` (5 s) later SIGKILL, each to the child and to every process under it in the process table at
+  that moment (`execx.ProcessTable`, `execx.Descendants`: a sandbox's child in a group of its own too, and one an
+  earlier signal left without its parent), prints "db-lock: <command> still runs 10s after SIGINT; sent SIGTERM"
+  and exits 128 plus the last signal it sent; the agent roles' spec runs get the same grace. A command that ends
+  on its interrupt gets nothing more. db-lock's own lines and a piped stderr write through one lock. Part B: the
+  shell line's db-lock carries the run (`--run <run id>`, `agents.ShellDBLockLine`, which db-lock records in its
+  holder and never acts on), the run token. A process counts as magnum's own run only when its argv is magnum's
+  binary with `db-lock`, this role, this checkout (the session's cwd) and a run; the pane is the live shell
+  session pane of the PR's role; the run is a run of this PR and role in the registry; and it is the cut run or
+  no longer in flight (`ownShell`). `human_active_at` is never set for shell panes, so ownership rests on the
+  token, never on the cooldown. `agents.Manager.StopShell` sends SIGTERM to the job's process group and to the
+  tree under the token's db-lock, waits up to 5 s for an idle shell, sends SIGKILL the same way and waits 5 s
+  more, and when the pane is still busy splits a replacement with the recorded cwd and environment, points the
+  session at it and closes the old pane (`splitReplacement`, `afterClear`). Before each signal and the close it
+  asks herdr again and sends nothing when the process group or the token's process changed. Events, on the PR:
+  `pr.shell_stop_begin` (role, pane, run, process group, the tree as pid, group and name, never argv),
+  `pr.shell_stopped` (the step: term, kill, replace or close, and the seconds), `pr.shell_stop_failed` (cause
+  `not_own`, `signal` or `close`). The pipeline's `stopShell` calls it after its last ctrl+c; a failure is a
+  warning, and when the cut command still runs the restart does not switch (nor restore) the checkout: the round
+  fails with that cause ("codex-review still runs in the checkout after magnum tried to stop it, so the checkout
+  stays on <sha>") and the normal retry takes the PR later. `RunShell` (`readyShell`) stops at once an own run
+  that is no longer in flight and runs the line in the same pane; anything else gets `IdleShellTimeout` as before
+  (a fresh shell needs it), and a pane still busy then is left for a new one split with the session's
+  environment (`moveShell`: `pr.shell_move_begin`, `pr.shell_moved`, `pr.shell_move_failed`); the busy pane gets
+  no key, no signal and no close, and a closed row of the role records it, so `CloseRetiredPanes` closes it once
+  it is an idle shell. Without a recorded environment the run is `busy`, as before; runs from before the token go
+  through that path. `Deps.Signal` (nil: `syscall.Kill`, never in a test binary) is the only way the manager
+  signals. Rejected: closing the pane first (its SIGHUP, which codex outlives, leaves orphans); new herdr
+  ownership APIs with launch ids and quarantined slots (the Codex design: no new herdr API, and the run token
+  proves ownership with what herdr shows today); signalling whatever process group is in the foreground, or
+  trusting "codex", the cwd or the role alone; a full re-review instead of the kill. Risks: a process id can be
+  reused between the look and the signal, which the look before each signal keeps small; a sandbox child that
+  left the session before the tree was read can still touch the databases after the lock ends. Tests, failing
+  first: TestDBLockKillsACommandThatTrapsSIGINT (a real `sh -c 'trap "" INT; sleep 60'` child, ended within
+  16 s), TestDBLockSendsNoSIGTERMToACommandThatEndsOnItsInterrupt, TestDBLockRecordsTheRunInItsHolder,
+  TestStopShellTermsTheProcessGroupOfItsOwnRun, TestStopShellKillsWhenTermIsIgnored,
+  TestStopShellNeverSignalsACommandWithoutItsRunToken, TestStopShellNeverSignalsAnotherPRsOrAnInFlightRun,
+  TestStopShellRechecksTheProcessGroupBeforeEachSignal, TestStopShellKillsDescendantsThatLeftTheGroup,
+  TestStopShellReplacesThePaneWhenKillLeavesItBusy, TestARestartKillsACodexReviewThatOutlivesItsCtrlC,
+  TestARestartNeverSwitchesTheCheckoutUnderARunningCommand, TestRunShellReclaimsAPaneItsEarlierRunHolds,
+  TestRunShellMovesToANewPaneWhenSomethingElseRuns, TestRunShellStaysBusyWithoutAnEnvironmentToMoveWith,
+  TestAFreshPaneStillGetsItsMinuteToStart, TestALeftBusyPaneClosesOnlyOnceIdle and
+  TestTheShellLineCarriesTheRunInItsDBLockLine. The "ignores three" case of TestACutShellCommandIsPressedUntilItStops
+  (busy and a warning) became TestARestartKillsACodexReviewThatOutlivesItsCtrlC.
 
 ## Learned rules
 

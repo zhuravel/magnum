@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -69,6 +70,18 @@ type fakeHerdr struct {
 	onIdleShell func(pane string)
 	// onPaneGet runs (with f.mu held) as every PaneGet call starts.
 	onPaneGet func(f *fakeHerdr, pane string)
+	// procs is what PaneProcessInfo and WaitIdleShell answer for a pane
+	// (busy then means not herdr.IdleShell of it); a WaitIdleShell on such
+	// a pane that stays busy moves clock by its whole timeout.
+	// onProcInfo runs (with f.mu held) before PaneProcessInfo answers for
+	// such a pane, n counting its reads; onWaitIdle before WaitIdleShell
+	// does (it may end the command, and move clock).
+	procs      map[string]herdr.ProcessInfo
+	procReads  map[string]int
+	onProcInfo func(f *fakeHerdr, pane string, n int)
+	onWaitIdle func(f *fakeHerdr, pane string, timeout time.Duration)
+	idleWaits  []time.Duration // the timeout of each WaitIdleShell
+	clock      *storetest.Clock
 
 	calls    []string
 	creates  []herdr.WorkspaceCreateOptions
@@ -109,6 +122,8 @@ func newFakeHerdr() *fakeHerdr {
 		nextPane:     map[string]int{},
 		errs:         map[string]error{},
 		busy:         map[string]bool{},
+		procs:        map[string]herdr.ProcessInfo{},
+		procReads:    map[string]int{},
 		reads:        map[string]string{},
 		renames:      map[string]string{},
 		promptStatus: herdr.StatusWorking,
@@ -310,6 +325,7 @@ func (f *fakeHerdr) PaneClose(ctx context.Context, paneID string) error {
 	f.panes = slices.DeleteFunc(f.panes, func(p herdr.Pane) bool { return p.ID == paneID })
 	f.agents = slices.DeleteFunc(f.agents, func(a herdr.AgentInfo) bool { return a.PaneID == paneID })
 	delete(f.busy, paneID)
+	delete(f.procs, paneID)
 	return nil
 }
 
@@ -425,6 +441,13 @@ func (f *fakeHerdr) PaneProcessInfo(ctx context.Context, paneID string) (herdr.P
 	if err := f.err("PaneProcessInfo"); err != nil {
 		return herdr.ProcessInfo{}, err
 	}
+	if _, ok := f.procs[paneID]; ok {
+		f.procReads[paneID]++
+		if f.onProcInfo != nil {
+			f.onProcInfo(f, paneID, f.procReads[paneID])
+		}
+		return f.procs[paneID], nil
+	}
 	if f.busy[paneID] {
 		return herdr.ProcessInfo{PaneID: paneID, ShellPID: 10, ForegroundPGID: 20}, nil
 	}
@@ -435,8 +458,25 @@ func (f *fakeHerdr) WaitIdleShell(ctx context.Context, paneID string, timeout ti
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("WaitIdleShell %s", paneID)
+	f.idleWaits = append(f.idleWaits, timeout)
 	if err := f.err("WaitIdleShell"); err != nil {
 		return herdr.ProcessInfo{}, err
+	}
+	if _, ok := f.procs[paneID]; ok {
+		if f.onWaitIdle != nil {
+			f.onWaitIdle(f, paneID, timeout)
+		}
+		pi := f.procs[paneID]
+		if herdr.IdleShell(pi) {
+			if f.onIdleShell != nil {
+				f.onIdleShell(paneID)
+			}
+			return pi, nil
+		}
+		if f.clock != nil {
+			f.clock.Add(timeout)
+		}
+		return pi, fmt.Errorf("herdr pane %s: shell not idle after %s: %w", paneID, timeout, herdr.ErrTimeout)
 	}
 	if f.busy[paneID] {
 		return herdr.ProcessInfo{PaneID: paneID, ShellPID: 10, ForegroundPGID: 20},
@@ -579,6 +619,41 @@ type env struct {
 	logs                      *logSink
 	// toasts are the toasts the manager sent (Deps.Toast), "<key>|<title>|<body>".
 	toasts *toastSink
+	// sigs are the signals the manager sent (Deps.Signal).
+	sigs *signalSink
+}
+
+// signalSink collects Deps.Signal calls; on, when set, is what the signal
+// does (it may end a fake pane's command).
+type signalSink struct {
+	mu    sync.Mutex
+	clock *storetest.Clock
+	sent  []sentSignal
+	on    func(pid int, sig syscall.Signal) error
+}
+
+// sentSignal is one Deps.Signal call, at the clock's time.
+type sentSignal struct {
+	pid int
+	sig syscall.Signal
+	at  time.Time
+}
+
+func (s *signalSink) send(pid int, sig syscall.Signal) error {
+	s.mu.Lock()
+	s.sent = append(s.sent, sentSignal{pid, sig, s.clock.Now()})
+	on := s.on
+	s.mu.Unlock()
+	if on != nil {
+		return on(pid, sig)
+	}
+	return nil
+}
+
+func (s *signalSink) all() []sentSignal {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.sent)
 }
 
 // toastSink collects Deps.Toast calls.
@@ -631,6 +706,7 @@ func newEnv(t *testing.T) *env {
 	cfg.Layout = layout
 
 	h := newFakeHerdr()
+	h.clock = clk
 	run := &execx.Fake{Rules: []execx.Rule{
 		{Prefix: []string{"zsh", "-ic", "whence -w codex"}, Result: execx.Result{Stdout: []byte("codex: function\n")}},
 		{Prefix: []string{"zsh", "-ic", "whence -w claude"}, Result: execx.Result{Stdout: []byte("claude: function\n")}},
@@ -638,9 +714,10 @@ func newEnv(t *testing.T) *env {
 	cliDir := t.TempDir()
 	e := &env{t: t, ctx: ctx, st: st, clock: clk, h: h, run: run, cfg: cfg, repo: repo, pr: up.PR,
 		codexConfig: filepath.Join(cliDir, "codex", "config.toml"), claudeConfig: filepath.Join(cliDir, "claude.json"), logs: &logSink{},
-		toasts: &toastSink{}}
+		toasts: &toastSink{}, sigs: &signalSink{clock: clk}}
+	// Signal is always the sink's: no test signals a real process.
 	e.m = New(Deps{Herdr: h, Store: st, Runner: run, Config: cfg, Layout: layout, Clock: clk.Now,
-		CodexConfig: e.codexConfig, ClaudeConfig: e.claudeConfig, Log: e.logs, Toast: e.toasts.toast})
+		CodexConfig: e.codexConfig, ClaudeConfig: e.claudeConfig, Log: e.logs, Toast: e.toasts.toast, Signal: e.sigs.send})
 	e.m.sleep = func(ctx context.Context, d time.Duration) error {
 		e.slept = append(e.slept, d)
 		if e.onSleep != nil {

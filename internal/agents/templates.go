@@ -1025,8 +1025,10 @@ type ShellData struct {
 	// layout when empty). Not a template variable.
 	Magnum string
 	// DBLockCommand is the line a command that touches the checkout's
-	// databases runs through, as RoleData's (DBLockLine from Magnum,
-	// Checkout and the role's name when empty): codex-review's command runs
+	// databases runs through, as RoleData's, with the run (ShellDBLockLine
+	// from Magnum, Checkout, the role's name and RunID when empty:
+	// `magnum db-lock --checkout <slot> --role <role> --run <run> --`, the
+	// run token StopShell looks for): codex-review's command runs
 	// `{{.DBLockCommand}} codex review ...`, so its sandboxed specs take
 	// turns with the other roles'. It is a ready shell line: nothing quotes
 	// it again.
@@ -1077,9 +1079,8 @@ var markerSafe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // filled completes d from the role: Command, Args and Capture when unset,
 // Marker/RunID/ExtraArgs from each other and DBLockCommand from Magnum,
-// Checkout and the role's name.
+// Checkout, the role's name and RunID (ShellDBLockLine: the run token).
 func (d ShellData) filled(role config.Role) ShellData {
-	d.DBLockCommand = cmp.Or(d.DBLockCommand, DBLockLine(d.Magnum, d.Checkout, role.Name))
 	if d.Command == "" {
 		d.Command = role.Command
 	}
@@ -1104,6 +1105,7 @@ func (d ShellData) filled(role config.Role) ShellData {
 	if d.ExtraArgs == nil {
 		d.ExtraArgs = d.Args
 	}
+	d.DBLockCommand = cmp.Or(d.DBLockCommand, ShellDBLockLine(d.Magnum, d.Checkout, role.Name, d.RunID))
 	return d
 }
 

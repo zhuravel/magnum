@@ -117,6 +117,31 @@ type fakeAgents struct {
 	// obedient agent writes it (writeReport), a shell line prints it before
 	// the command's output (RunShell).
 	marks map[agents.Role]string
+	// stopShells are the StopShell calls (the run of each); onStopShell is
+	// what the stop does (nil: it stops nothing, and says it stopped).
+	stopShells  []store.Run
+	onStopShell func(f *fakeAgents, run store.Run) error
+}
+
+// StopShell records the call (the real one signals the run's own job in
+// its pane) and runs onStopShell.
+func (f *fakeAgents) StopShell(ctx context.Context, run store.Run) error {
+	f.mu.Lock()
+	f.stopShells = append(f.stopShells, run)
+	f.order = append(f.order, "stop:"+run.Role)
+	hook := f.onStopShell
+	f.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(f, run)
+}
+
+// stopped are the StopShell calls.
+func (f *fakeAgents) stopped() []store.Run {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.stopShells)
 }
 
 // reportMark finds the run marker a prompt or a shell line names.

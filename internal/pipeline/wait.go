@@ -278,31 +278,34 @@ func (rd *round) waitIdle(ctx context.Context, role config.Role, run store.Run, 
 // pane stopped after its interrupt (one ctrl+c): it waits up to
 // shellStopWait for an idle shell (Keys.WaitIdleShell) and presses ctrl+c
 // again while the command runs, shellStopPresses in all (a command may go
-// on after one). Left running, it would hold the pane: the restart's line
-// would find it busy. It reports false when the command still runs after
-// the last press; true when the shell is idle or nothing says otherwise (no
-// Keys or pane, an error that is no timeout: a pane that is gone).
-func (rd *round) stopShell(ctx context.Context, run store.Run) bool {
+// on after one). A command still running after the last press is stopped
+// by magnum when it is its own run (Agents.StopShell: SIGTERM, SIGKILL, a
+// new pane; codex review went on after three ctrl+c). Left running, it
+// would hold the pane, and the restart's line would find it busy. It
+// returns why the command still runs (StopShell's error) when it does; nil
+// when the shell is idle or nothing says otherwise (no Keys or pane, an
+// error that is no timeout: a pane that is gone).
+func (rd *round) stopShell(ctx context.Context, run store.Run) error {
 	s, ok := rd.session(ctx, run)
 	pane := store.Deref(s.HerdrPaneID)
 	if rd.r.Keys == nil || !ok || pane == "" {
-		return true
+		return nil
 	}
 	ctx = context.WithoutCancel(ctx)
 	for press := 1; ; press++ {
 		_, err := rd.r.Keys.WaitIdleShell(ctx, pane, shellStopWait)
 		switch {
 		case err == nil:
-			return true
+			return nil
 		case !herdr.IsTimeout(err):
 			rd.logErr(ctx, err, "pipeline: %s: wait for an idle shell in pane %s: %v", run.Role, pane, err)
-			return true
+			return nil
 		case press == shellStopPresses:
-			return false
+			return rd.r.Agents.StopShell(ctx, run)
 		}
 		if err := rd.r.Keys.PaneSendKeys(ctx, pane, "ctrl+c"); err != nil {
 			rd.warn(ctx, "interrupt %s: %v", run.Role, err)
-			return true
+			return nil
 		}
 	}
 }

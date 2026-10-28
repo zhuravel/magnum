@@ -362,7 +362,11 @@ const ShellStatusUnknown = -1
 // blocks until the done marker (DoneMarker(runID)) appears on a line of its
 // own, optionally followed by the command's exit status, or timeout
 // (ErrTimeout). It returns that status (ShellStatusUnknown without one).
-// The pane must be an idle shell (ErrBusy otherwise); like Submit it refuses
+// The pane must be an idle shell (readyShell): one an earlier run of the
+// role still holds is stopped at once (StopShell's steps), and one
+// something else keeps busy past IdleShellTimeout is left for a new pane
+// with the session's environment, where the line runs (ErrBusy without
+// one). Like Submit it refuses
 // with ErrHumanActive inside daemon.human_cooldown after a human typed into
 // the PR's panes. The shell's line editor is cleared (ctrl+u) first, so text
 // a human left there never joins the command. The match is a line-anchored
@@ -385,11 +389,9 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 			return fail(fmt.Errorf("until %s: %w", until.Format(time.RFC3339), ErrHumanActive))
 		}
 	}
-	if _, err := m.d.Herdr.WaitIdleShell(ctx, paneID, IdleShellTimeout); err != nil {
-		if herdr.IsTimeout(err) {
-			return fail(fmt.Errorf("pane %s: %w: %w", paneID, ErrBusy, err))
-		}
-		return fail(fmt.Errorf("pane %s: %w", paneID, err))
+	paneID, err := m.readyShell(ctx, pr, role, paneID, strings.TrimPrefix(marker, donePrefix))
+	if err != nil {
+		return fail(err)
 	}
 	if err := m.d.Herdr.PaneSendKeys(ctx, paneID, "ctrl+u"); err != nil {
 		return fail(fmt.Errorf("clear the line of pane %s: %w", paneID, err))

@@ -206,9 +206,17 @@ func TestRunShell(t *testing.T) {
 	if _, err := e.m.RunShell(e.ctx, e.pr, role, pane, line, DoneMarker("r-1"), time.Minute); !errors.Is(err, ErrTimeout) {
 		t.Fatalf("timeout: err = %v, want ErrTimeout", err)
 	}
-	e.h.busy[pane] = true
-	if _, err := e.m.RunShell(e.ctx, e.pr, role, pane, line, DoneMarker("r-2"), time.Minute); !errors.Is(err, ErrBusy) {
+	// A busy pane that is not the role's session pane is never left for a
+	// new one (TestRunShellMovesToANewPaneWhenSomethingElseRuns moves the
+	// role's own): busy, as before.
+	other := ws.Panes[RoleClaude]
+	e.h.busy[other] = true
+	splits := len(e.h.splits)
+	if _, err := e.m.RunShell(e.ctx, e.pr, role, other, line, DoneMarker("r-2"), time.Minute); !errors.Is(err, ErrBusy) {
 		t.Fatalf("busy shell: err = %v, want ErrBusy", err)
+	}
+	if len(e.h.splits) != splits {
+		t.Fatalf("splits = %+v, want none for a pane that is not the role's", e.h.splits[splits:])
 	}
 	if _, err := e.m.RunShell(e.ctx, e.pr, e.spec(RoleClaude), pane, line, DoneMarker("r-3"), time.Minute); err == nil {
 		t.Fatal("an agent role: want an error")

@@ -35,7 +35,7 @@ func TestEveryReviewerIsAskedForItsRunMarker(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("codex-review lines: %+v", calls)
 	}
-	mustContain(t, "codex-review line", calls[0].Script, "{ printf '"+agents.ReportMarker(codex.ID)+`\n'; `+agents.DBLockLine(e.layout.Binary(), slotPath, string(agents.RoleCodexReview))+" codex review", "; } | tee ")
+	mustContain(t, "codex-review line", calls[0].Script, "{ printf '"+agents.ReportMarker(codex.ID)+`\n'; `+agents.ShellDBLockLine(e.layout.Binary(), slotPath, string(agents.RoleCodexReview), codex.ID)+" codex review", "; } | tee ")
 	if got := res.Reports[agents.RoleCodexReview]; got.Status != ReportOK {
 		t.Errorf("codex-review report = %+v, want ok", got)
 	}

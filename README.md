@@ -324,8 +324,9 @@ role's command with ctrl+c, and the judge's own pass with one ctrl+c, which abor
 the session with its context (two quit Codex, as for a judge that timed out). All of them get their keys
 at once, before Magnum waits for any of them, and then Magnum waits for all of them side by side, so the
 restart waits for the slowest turn, not for each in turn. A shell role's command that still runs 10 seconds
-after its ctrl+c gets another, three in all, and a warning names the role when it runs on, since the
-restart's line would find its pane busy. An agent gets up to a minute after its interrupt to go idle, and a
+after its ctrl+c gets another, three in all, and then Magnum stops it itself (see below). The checkout never
+switches under a command that still runs: when Magnum cannot stop it, a warning names the role and the
+round fails with that cause, and the PR's next round takes it up again. An agent gets up to a minute after its interrupt to go idle, and a
 warning names it when it does not. A claude reviewer still at work 10 seconds after its esc whose
 transcript shows background work it started still running (a test run in the background keeps it at work
 after an interrupt) is told then to stop that work, which is what ends it, rather than at the end of the
@@ -333,6 +334,28 @@ minute; one idle within the 10 seconds gets no message then, only the one about 
 shows once it is idle. A stop that worked is an info event (`round.cut_settled`, with the seconds the agent
 took to go idle), not a warning. When a refusal or a lost judge ends the round instead, the turns still at
 work are stopped the same way.
+
+`codex review` sometimes goes on after its ctrl+c, and its pane stays busy. Two things end it. First,
+`magnum db-lock`, which every shell role's command runs through, passes the interrupt on, and a command that
+still runs 10 seconds later gets SIGTERM, and 5 seconds after that SIGKILL, together with every process under
+it (a sandbox's child in a process group of its own too). db-lock says so on stderr and exits with 128 plus
+that signal. Second, Magnum stops the command itself after the restart's last ctrl+c, but only its own run:
+the shell line's db-lock names the run (`--run <run>`), and Magnum signals a pane's command only when that
+argv names a run of the PR's role in this checkout, in the role's own pane, and the run is the one cut or no
+longer in flight. It asks herdr what the pane runs again before each signal and sends nothing when the job or
+its db-lock changed. It sends SIGTERM to the job's process group and to the processes under its db-lock,
+then SIGKILL 5 seconds later, and when SIGKILL leaves the pane busy it splits a new pane with the session's
+working directory and environment, moves the role there and closes the old one. Each stop writes
+`pr.shell_stop_begin` (the process group and the tree as pid, group and name, never arguments),
+`pr.shell_stopped` (the step that worked and the seconds) or `pr.shell_stop_failed` (`not_own`, `signal` or
+`close`). A shell role whose pane is still busy when its next run starts does the same: an earlier run of its
+own that is over is stopped at once, and the line runs. Anything else gets the minute a fresh pane's shell has
+to start. When the pane is still busy then, Magnum splits a new pane with the session's environment, moves the
+role there (`pr.shell_move_begin`, then `pr.shell_moved` or `pr.shell_move_failed`) and runs the line in it. It
+never sends the busy pane a key, a signal or a close: the pane stays on a closed row of the role and closes
+with the other retired panes once it is an idle shell. Without a recorded environment the run fails as busy,
+as before.
+
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the
 posted review and queues the re-review without waiting for `min_rereview_interval`. A PR whose head changed `burst_pushes` times (default 3) within `burst_window`
@@ -2507,15 +2530,17 @@ waiting role prints once `db-lock: waiting for <role> (<command>) since <time>`.
 (default 20m) it gives up with exit 75 and `db-lock: waited <timeout> for <role> (<command>); the check
 did not run`, which the skill treats as a check that did not run, never a finding. Exit 125 is db-lock's
 own failure (no command, a checkout it cannot find), 126 and 127 a command it cannot start, 128+n one a
-signal ended. Without `--checkout` it locks the git work tree it runs in. Like `post-review` it reads no
+signal ended. A command that still runs 10 seconds after the first SIGINT, SIGTERM or SIGHUP db-lock passed
+on gets SIGTERM, then SIGKILL 5 seconds later, with the processes under it, so an interrupted spec run ends
+too. Without `--checkout` it locks the git work tree it runs in. Like `post-review` it reads no
 config and no registry. The lock covers one command: the claude prompts ask for one spec command per call
 (never a batch or a loop of them) and for each mutant or overlay run to take the lock on its own, so the other
 roles get their turn between commands. codex-review takes its turn on the databases like the others: it is sandboxed
 without Redis and the network, but its workspace-write sandbox still reaches MySQL and Postgres on
 localhost, and its sessions ran specs on the slot's test databases (Rails boots and truncates them) while
 the other roles did, which lost their fixture rows. Its shell line therefore runs `codex review` through
-the same line (`{{.DBLockCommand}}` in the role's `command`, so a `command` of your own that leaves it out
-runs unlocked), holding the lock for the whole review (about 2.5 to 6 minutes, 17 at most), and `codex`
+the same line, with `--run <run>` added (`{{.DBLockCommand}}` in the role's `command`, so a `command` of your
+own that leaves it out runs unlocked, and Magnum never stops it, see the restarts), holding the lock for the whole review (about 2.5 to 6 minutes, 17 at most), and `codex`
 itself comes from `PATH`, not from your shell function. A wait of more than the default 20m ends in exit 75
 and fails the role. The skill does not count the checks it could not run in its sandbox (Redis, the
 network) as machine failures.
@@ -3271,7 +3296,7 @@ owners = ["talkable"]                # the watch owners the App is installed on;
 | `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines (and the archive's size) and the harness's files and size (`!` marks what is past a `[notes]` limit, a hint to organize them), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, critic running (its model and for how long), proposal N to review, or proposal N stale (the notes changed since it was made), with `[notes] critic` on also whether the critic stepped back or left the proposal to you (and when it expires); a hint under the table says what to run for each (see Repository notes). |
 | `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version> \| --recover \| --decisions [N]] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` limits, the archive's size (the lines curations retired, word for word), the unused harness files, a waiting proposal (marked when stale) and the last decision of a proposal (who, when and why). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while the daemon drains for a restart, a round of the repository is in its judge stage or another learn job runs: a curation, a critique, the retro, a skill edit or gate), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version, the archive with it, `--recover` proposes, once, an archive of every line earlier versions held and the notes lack, and `--decisions` lists who decided each proposal, when and why, while `--decisions N` prints the notes critic's record of proposal N from the registry: every critique with its model, outcome, decision, reason, `checked` and `losses` (see Repository notes). |
 | `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE \| --replies FILE)` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back; with `--replies` (a reply round's `post_replies`), post its answers in its own threads instead, skipping a reply to a thread someone else started (see The judge skill). Exit 2 means the file needs fixing. |
-| `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] -- COMMAND [ARG]...` | For the review roles and the fixer, which run the `db_lock` line of their prompts: run COMMAND under the checkout's database lock, so the roles sharing a slot's databases take turns (see The judge skill). Exits with COMMAND's status; 75 means it waited `--timeout` and the command did not run, 125 that db-lock itself failed. |
+| `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] [--run ID] -- COMMAND [ARG]...` | For the review roles and the fixer, which run the `db_lock` line of their prompts: run COMMAND under the checkout's database lock, so the roles sharing a slot's databases take turns (see The judge skill). Exits with COMMAND's status; 75 means it waited `--timeout` and the command did not run, 125 that db-lock itself failed. A COMMAND still running 10 s after an interrupt gets SIGTERM, then SIGKILL. `--run` is a shell role's run, which db-lock only records. |
 | `magnum fix-reply (--comment ID \| --issue)` | For the fixer, which posts every reply through the fix-reply line of its prompt, the reply on stdin: it reads the PR from the pane's `MAGNUM_PR_URL` and posts as the pane's gh login, in the thread of review comment `ID` (after checking that it is the PR's) or, with `--issue`, as a comment on the PR. It refuses a reply that is empty, carries a `<!-- magnum:` marker of its own, names a local path or is too long, appends `<!-- magnum:fix -->`, and posts nothing when the same signed reply is there already with nobody else's comment after it (see Fixing your own PRs). Exit 2 means the reply or the line needs fixing (the comment id, both or neither of `--comment` and `--issue`, a flag or an argument it does not take); exit 1 that it could not be confirmed, so the fixer runs the same line with the same reply once more. |
 | `magnum fix-sync --from SHA --branch BRANCH --base BRANCH [--checkout DIR]` | For the fixer, which runs the fix-sync line of its prompt once when GitHub rejects its push because the PR's branch moved: in its checkout (default: the git work tree here) it fetches the branch and the base, and replays the fixer's commits since `--from` onto the branch's new tip when every commit the branch gained is a merge that left the PR's own diff against `--base` as it was; anything else changes nothing, and a replay that conflicts is aborted (see Fixing your own PRs). Exit 0 means replayed ("replayed N commits onto <sha>; HEAD is <sha>"), 1 refused ("refused: <reason>"; nothing changed), 2 wrong flags, 3 failed ("failed: <reason>": the replay changed the checkout and could not be undone or confirmed; the fixer pushes nothing). |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. On a terminal the plan opens in a review screen: space toggles an action, `a`/`n` select all or none, enter confirms (`y`, or the slug typed when another slug's databases would be dropped) and applies the selection, `q` cancels. With `--yes`, `--dry-run` or `--json`, or off a terminal, the plan is printed instead and it asks its y/N and typed-slug questions on stderr, only when stdin and stderr are both terminals; otherwise it applies nothing unless you pass `--yes`. `--wait` follows the daemon while it applies the plan, `--shrink --idle` removes only free slots idle longer than `pool.idle_remove_after`, `--slot <name> --remove` removes a managed slot instead of releasing it, and `--force` discards tracked changes, accepts unpushed commits on `--external` and releases inside the close grace. |

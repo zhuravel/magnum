@@ -16,6 +16,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -289,9 +290,17 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 	// The sessions are prompted again on the new head: the judge's own pass
 	// is interrupted with one ctrl+c, which keeps its session, and a
 	// reviewer's background work is stopped with headMovedStopText.
-	cut := rd.cut(ctx, turns, cutBy{what: "the restart", status: ReportHeadMoved,
+	cut, running := rd.cut(ctx, turns, cutBy{what: "the restart", status: ReportHeadMoved,
 		why: "the PR head moved to " + textx.ShortSHA(head), stop: headMovedStopText, keep: true})
 	rd.finishRun(ctx, judgeRun.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
+	// A command still running works in the checkout: the checkout never
+	// switches (nor is restored) under it. The round fails, and the PR's
+	// next round finds the pane (RunShell stops an earlier run of its own,
+	// or moves to a new pane).
+	if len(running) > 0 {
+		return nil, nil, fmt.Errorf("pipeline: restart on %s: %s still runs in the checkout after magnum tried to stop it, so the checkout stays on %s",
+			textx.ShortSHA(head), strings.Join(running, ", "), textx.ShortSHA(from))
+	}
 	// The push skipped the check after the stage it cut short; its roles are
 	// settled now, so a stray edit is caught before the checkout switches.
 	if err := rd.checkTree(ctx, ran); err != nil {
@@ -413,15 +422,16 @@ type cutBy struct {
 // recorded and every cut run ended in the turns' order, shell roles first,
 // as before: abandoned with c.status and c.why, an own pass the round's
 // end cut failed. A finished run keeps its state. It returns the names of
-// the turns it ended.
-func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) []string {
+// the turns it ended, and of those whose command still runs (a shell
+// role's that magnum could not stop: settled.running).
+func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) (names, running []string) {
 	type cutting struct {
 		cutTurn
 		cur         store.Run
 		interrupted time.Time // when it got its interrupt keys (zero: none, no turn in flight)
 	}
 	var cuts []cutting
-	names := []string{}
+	names = []string{}
 	for _, t := range turns {
 		cur, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), t.run.ID)
 		if err != nil {
@@ -462,22 +472,27 @@ func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) []string {
 			rd.event(ctx, "info", "round.cut_settled", s.info,
 				map[string]any{"run": t.cur.ID, "role": t.role.Name, "seconds": int(s.took / time.Second)})
 		}
+		if said[i].running {
+			running = append(running, t.name())
+		}
 		to, why := store.RunAbandoned, c.why
 		if t.own && !c.keep && t.cur.State != store.RunPending {
 			to, why = store.RunFailed, "the round ended before the own pass did: "+c.why
 		}
 		rd.finishRun(ctx, t.cur.ID, to, c.status, why)
 	}
-	return names
+	return names, running
 }
 
 // settled is what settle says about a cut turn: a warning (warn), or a
 // line for an info event (info, round.cut_settled) with the time its agent
 // took to be seen idle after the interrupt (took, whole seconds); neither
-// when there is nothing to say.
+// when there is nothing to say. running is a shell role's command that
+// still runs in the checkout after magnum tried to stop it.
 type settled struct {
 	warn, info string
 	took       time.Duration
+	running    bool
 }
 
 // settleSafely is settle on the cut's goroutine for the turn, whose panic
@@ -509,14 +524,16 @@ func (rd *round) settleSafely(ctx context.Context, role config.Role, run store.R
 // never told.
 func (rd *round) settle(ctx context.Context, role config.Role, run store.Run, c cutBy, since time.Time) settled {
 	if role.IsShell() {
-		msg := ""
-		if !rd.stopShell(ctx, run) {
-			msg = fmt.Sprintf("%s still runs %s after %d ctrl+c for %s", role.Name, shellStopWait, shellStopPresses, c.what)
+		msg, running := "", false
+		if err := rd.stopShell(ctx, run); err != nil {
+			msg = fmt.Sprintf("%s still runs %s after %d ctrl+c for %s, and magnum could not stop it: %s",
+				role.Name, shellStopWait, shellStopPresses, c.what, execx.Redact(err.Error()))
+			running = true
 		}
 		if bg := rd.stopBackground(ctx, role, run, c.stop, false); bg.note != "" {
 			msg = cmp.Or(msg, fmt.Sprintf("interrupted %s for %s", role.Name, c.what)) + "; " + bg.note
 		}
-		return settled{warn: msg}
+		return settled{warn: msg, running: running}
 	}
 	n, bg := 0, bgStop{}
 	idle := rd.waitIdle(ctx, role, run, since.Add(cutGrace))

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -236,4 +237,107 @@ func resolvedDir(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// signalDBLock makes the signals db-lock passes on come from the channel it
+// returns instead of the test process's own (dbLockSignals), so a test
+// interrupts one db-lock run without signalling itself.
+func signalDBLock(t *testing.T) chan<- os.Signal {
+	t.Helper()
+	sigs := make(chan os.Signal, 1)
+	prev := dbLockSignals
+	dbLockSignals = func() (<-chan os.Signal, func()) { return sigs, func() {} }
+	t.Cleanup(func() { dbLockSignals = prev })
+	return sigs
+}
+
+// waitForFile waits until path exists: the command db-lock runs started.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	for range 1000 {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s never appeared", path)
+}
+
+// codex review went on after its ctrl+c (12 codex-review runs ended busy
+// from 2026-10-16 to 2026-10-28: the restart's three ctrl+c, 10 seconds
+// apart, did not end it): db-lock passes the interrupt on, and a command
+// that still runs dbLockKillAfter later gets SIGTERM, with its descendants
+// (the sleep here holds db-lock's output open, so db-lock's wait ends only
+// once it is gone too). db-lock says so in one line on stderr and exits
+// 128+SIGTERM, so the pane's shell is idle again within 16 seconds of the
+// interrupt.
+func TestDBLockKillsACommandThatTrapsSIGINT(t *testing.T) {
+	c, _, _ := bareContext(t)
+	sigs := signalDBLock(t)
+	checkout := checkoutDir(t)
+	started := filepath.Join(t.TempDir(), "started")
+	run := startDBLock(t, c, "--checkout", checkout, "--role", "codex-review", "--run", "r-1", "--",
+		"sh", "-c", `trap "" INT; touch "$0"; sleep 60`, started)
+	waitForFile(t, started)
+	began := time.Now()
+	sigs <- os.Interrupt
+	code := run.wait(t)
+	took := time.Since(began)
+	if code != 128+int(syscall.SIGTERM) {
+		t.Errorf("exit %d, want %d (128+SIGTERM); stderr %s", code, 128+int(syscall.SIGTERM), run.err)
+	}
+	if took < dbLockKillAfter || took > 16*time.Second {
+		t.Errorf("db-lock ended %s after the interrupt, want between %s and 16s", took.Round(time.Millisecond), dbLockKillAfter)
+	}
+	if got := run.err.String(); strings.Count(got, "\n") != 1 || !strings.HasPrefix(got, "db-lock: sh -c trap ") ||
+		!strings.HasSuffix(got, " still runs 10s after SIGINT; sent SIGTERM\n") {
+		t.Errorf("stderr = %q, want the one line that says db-lock sent SIGTERM", got)
+	}
+	if h, ok := dblock.ReadHolder(c.Layout.DBLock(checkout)); ok {
+		t.Errorf("the lock file still names %+v", h)
+	}
+}
+
+// A command that ends on its interrupt is left to end as it does: no
+// SIGTERM follows, and db-lock exits with the command's own status at once.
+func TestDBLockSendsNoSIGTERMToACommandThatEndsOnItsInterrupt(t *testing.T) {
+	c, _, _ := bareContext(t)
+	sigs := signalDBLock(t)
+	checkout := checkoutDir(t)
+	dir := t.TempDir()
+	started, termed := filepath.Join(dir, "started"), filepath.Join(dir, "termed")
+	run := startDBLock(t, c, "--checkout", checkout, "--role", "codex-review", "--",
+		"sh", "-c", `trap 'touch "$1"; exit 9' TERM; trap 'kill $! 2>/dev/null; exit 3' INT; touch "$0"; sleep 60 & wait`,
+		started, termed)
+	waitForFile(t, started)
+	began := time.Now()
+	sigs <- os.Interrupt
+	if code := run.wait(t); code != 3 {
+		t.Errorf("exit %d, want the command's 3; stderr %s", code, run.err)
+	}
+	if took := time.Since(began); took >= dbLockKillAfter {
+		t.Errorf("db-lock ended %s after the interrupt, want at once", took.Round(time.Millisecond))
+	}
+	if run.err.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing", run.err)
+	}
+	if _, err := os.Stat(termed); !os.IsNotExist(err) {
+		t.Error("the command got SIGTERM after it ended on its interrupt")
+	}
+}
+
+// A shell role's line names its run (--run, the run token magnum's
+// StopShell looks for): db-lock records it in its holder and does nothing
+// else with it.
+func TestDBLockRecordsTheRunInItsHolder(t *testing.T) {
+	c, out, errb := bareContext(t)
+	checkout := checkoutDir(t)
+	lock := c.Layout.DBLock(checkout)
+	if code := execute(c, []string{"db-lock", "--checkout", checkout, "--role", "codex-review", "--run", "r-20261028T101500-3", "--",
+		"cat", lock}); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	if !strings.Contains(out.String(), `"role":"codex-review"`) || !strings.Contains(out.String(), `"run":"r-20261028T101500-3"`) {
+		t.Errorf("the holder = %q, want the role and the run", out)
+	}
 }
