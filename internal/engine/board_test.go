@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -243,8 +244,11 @@ func TestDepartedAuthorsAreNotReviewed(t *testing.T) {
 }
 
 // compareRange makes GitHub compare key ("base...head") with cs as its
-// size and, unless set, no file: the since-review size reads the range
-// with ComparePush (the trivial-delta check's call).
+// size and, unless set, cs.Files files that change one code line each (none
+// for a count of 0 or a cut listing): the since-review size reads the range
+// with ComparePush (the trivial-delta check's call), whose file list is what
+// the stats count; a range with commits and no file is an empty push (the
+// class empty, delta_empty_test.go).
 func compareRange(h *harness, key string, cs github.CompareStats) {
 	h.gh.mu.Lock()
 	defer h.gh.mu.Unlock()
@@ -253,7 +257,11 @@ func compareRange(h *harness, key string, cs github.CompareStats) {
 		h.gh.files = map[string][]github.FileDelta{}
 	}
 	if _, ok := h.gh.files[key]; !ok {
-		h.gh.files[key] = []github.FileDelta{}
+		files := []github.FileDelta{}
+		for i := range max(cs.Files, 0) {
+			files = append(files, github.FileDelta{Path: fmt.Sprintf("app/models/file_%d.rb", i), Status: "modified", Patch: "@@ -1 +1 @@\n-old = 1\n+old = 2"})
+		}
+		h.gh.files[key] = files
 	}
 }
 

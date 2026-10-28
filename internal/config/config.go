@@ -179,7 +179,7 @@ type Daemon struct {
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
 	// without a re-review (TrivialDeltaClasses: comments, whitespace,
-	// docs, base; default all four, [] = re-review every push): the review
+	// docs, base, empty; default all five, [] = re-review every push): the review
 	// of the earlier commit then stands for the new head. A [[watch]] may
 	// override it (Config.TrivialDeltas).
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
@@ -255,8 +255,9 @@ func (d Daemon) CooldownUntil(at *time.Time) time.Time {
 // only changes comment lines, only whitespace (blank lines, re-indented
 // code where indentation carries no meaning), only documentation files, or
 // only merges the base branch (or rebases onto it) and leaves the PR's own
-// diff against its base as it was (base).
-var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
+// diff against its base as it was (base), or consists of commits that change
+// no file, an empty commit to re-run CI (empty).
+var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base", "empty"}
 
 // Usage is the [usage] section: subscription budgets the scheduler watches.
 // Codex's budget is read from Codex's own session files (internal/usage).

@@ -31,6 +31,12 @@ const (
 	// as it was (base_merge.go). TrivialDelta never returns it: checkDelta
 	// does, from the PR's own diff.
 	DeltaBase = "base"
+	// DeltaEmpty is a push of at least one commit, ahead of the reviewed
+	// commit, that changes no file: an empty commit (re-running CI), or
+	// commits whose changes cancel out. Its head has the reviewed commit's
+	// tree. TrivialDelta never returns it (it has no files to read):
+	// checkDelta does, from GitHub's comparison.
+	DeltaEmpty = "empty"
 )
 
 // DeltaClasses lists every class, the default of skip_trivial_deltas
@@ -123,8 +129,13 @@ func assessDelta(files []github.FileDelta, allowed []string, steers func(path st
 // only", "whitespace only", "docs only", "base merge only", "comments and
 // whitespace only", "comments, whitespace and docs only". The order is
 // always comments, whitespace, docs, base, whatever the order given;
-// unknown classes are left out and no known class at all is "".
+// unknown classes are left out and no known class at all is "". The class
+// empty stands alone (checkDelta never combines it) and is "no file
+// changes".
 func DeltaLabel(classes []string) string {
+	if slices.Contains(classes, DeltaEmpty) {
+		return "no file changes"
+	}
 	var names []string
 	for _, c := range DeltaClasses {
 		if slices.Contains(classes, c) {

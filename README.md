@@ -204,7 +204,7 @@ Mac is on and the daemon runs, and they spend your own budget.
 The defaults keep that down: a draft waits until it is ready for review or a review is requested, a push
 waits for 5 quiet minutes (15 after a burst), a PR gets at most one round per 30 minutes (2 hours for a
 draft a watch includes) and 12 automatic rounds a day, a push that only touches
-comments, whitespace or docs, or only merges the base branch, is not re-reviewed, and a change under 30
+comments, whitespace or docs, only merges the base branch, or changes no file at all, is not re-reviewed, and a change under 30
 code lines since the last review gets a check by the judge alone. With 80% of the Codex budget used,
 full re-reviews wait; at 95%, rounds that need Codex wait. `magnum status` shows how fast that budget goes,
 `magnum stats` lists the PRs that took the most agent time, and
@@ -566,9 +566,10 @@ A push whose changes since the last review are only comment lines, whitespace or
 re-reviewed: Magnum compares the reviewed commit with the new head (one GitHub call), moves the review
 to the new head with its verdict, keeps an App's approval and records `pr.trivial_delta`. When such a
 commit arrived during the judge's turn, the note on the review says "(comments only), no re-review
-needed" instead. `[daemon] skip_trivial_deltas` (default `["comments", "whitespace", "docs", "base"]`,
-`[]` = re-review every push) picks the kinds, a `[[watch]]` can override it, and `magnum review` always
-runs. A file that steers the review agents (an `AGENTS.md`, `CLAUDE.md` or `CLAUDE.local.md` in any
+needed" instead. `[daemon] skip_trivial_deltas` (default
+`["comments", "whitespace", "docs", "base", "empty"]`, `[]` = re-review every push) picks the kinds, a
+`[[watch]]` can override it, and `magnum review` always runs. A list you wrote before `empty` existed
+replaces the default and so keeps it off. A file that steers the review agents (an `AGENTS.md`, `CLAUDE.md` or `CLAUDE.local.md` in any
 directory, anything under `.claude/` or `.codex/`, `.mcp.json`) never counts as documentation for this. A
 comment line that holds its language's interpolation counts as code, because in a heredoc, a template or a
 `run:` block it runs: `#{` in Ruby and ERB, `{` in Python, `${` in JavaScript, TypeScript, Kotlin, shell and
@@ -585,6 +586,13 @@ changes unchanged)". A file without a complete patch, or a diff over GitHub's 30
 comparison incomplete, and the push is measured as any other. A daemon that starts on this rule checks
 the PRs already waiting for a re-review once more, on its first poll, and settles those a base merge
 queued.
+
+A push of commits that change no file (an empty commit to re-run CI) is the kind `empty`: when GitHub
+compares the reviewed commit with the new head as ahead of it, with at least one commit and no changed
+file, the head has the reviewed commit's tree, so the review stands and `pr.trivial_delta` says "changes no
+file (1 commit)". A head behind the reviewed commit (a force push back to an ancestor) or a diverged range
+with no file is not that, and is handled as before. A watch whose `skip_trivial_deltas` leaves out `empty`
+re-reviews such a push.
 
 Any other push is measured by the same GitHub call: the changed lines that are code (not comments,
 blank lines, whitespace moves or documentation) since the reviewed commit; after a base merge or a

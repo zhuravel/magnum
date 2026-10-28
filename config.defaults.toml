@@ -75,11 +75,13 @@ model_limit_cooldown = "5h"       # a model capped on its own (health pattern mo
                                   # waiting PR's when its round is held by a pause, a drain or the daily cap, or is
                                   # more than this far off; the next round resumes them; pinned or held slots,
                                   # needs_attention and recent human activity keep them
-# skip_trivial_deltas = ["comments", "whitespace", "docs", "base"]   # a push that changes only these since
+# skip_trivial_deltas = ["comments", "whitespace", "docs", "base", "empty"]   # a push that changes only these since
                                   # the review is not re-reviewed: the review stands for the new head; "base" is a
                                   # push that merges the base branch (or rebases onto it) and leaves the PR's own
-                                  # diff against it as it was ([] = re-review every push; a list without "base"
-                                  # re-reviews base merges; [[watch]] may override; `magnum review` always runs)
+                                  # diff against it as it was; "empty" is a push of commits that change no file (an
+                                  # empty commit to re-run CI) ([] = re-review every push; a list without "base"
+                                  # re-reviews base merges, one without "empty" such commits; [[watch]] may
+                                  # override; `magnum review` always runs)
 # quiet_hours = "01:00-07:00"     # local "HH:MM-HH:MM" (start included, end excluded; "22:00-06:00" crosses
                                   # midnight): inside it first reviews, full re-reviews (a review request's too)
                                   # and continues of a paused turn wait for its end; a round of the judge alone (a

@@ -4154,12 +4154,13 @@ var ErrSharedPrompt = errors.New("holds the blocks the judge prompts share and i
 var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
 
-var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
+var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base", "empty"}
     TrivialDeltaClasses are the values of skip_trivial_deltas: a push that only
     changes comment lines, only whitespace (blank lines, re-indented code where
     indentation carries no meaning), only documentation files, or only merges
     the base branch (or rebases onto it) and leaves the PR's own diff against
-    its base as it was (base).
+    its base as it was (base), or consists of commits that change no file,
+    an empty commit to re-run CI (empty).
 
 
 FUNCTIONS
@@ -4870,7 +4871,7 @@ type Daemon struct {
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
 	// without a re-review (TrivialDeltaClasses: comments, whitespace,
-	// docs, base; default all four, [] = re-review every push): the review
+	// docs, base, empty; default all five, [] = re-review every push): the review
 	// of the earlier commit then stands for the new head. A [[watch]] may
 	// override it (Config.TrivialDeltas).
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
@@ -7127,6 +7128,12 @@ const (
 	// as it was (base_merge.go). TrivialDelta never returns it: checkDelta
 	// does, from the PR's own diff.
 	DeltaBase = "base"
+	// DeltaEmpty is a push of at least one commit, ahead of the reviewed
+	// commit, that changes no file: an empty commit (re-running CI), or
+	// commits whose changes cancel out. Its head has the reviewed commit's
+	// tree. TrivialDelta never returns it (it has no files to read):
+	// checkDelta does, from GitHub's comparison.
+	DeltaEmpty = "empty"
 )
     Delta classes ([daemon] skip_trivial_deltas).
 
@@ -7543,7 +7550,8 @@ func DeltaLabel(classes []string) string
     only", "whitespace only", "docs only", "base merge only", "comments and
     whitespace only", "comments, whitespace and docs only". The order is always
     comments, whitespace, docs, base, whatever the order given; unknown classes
-    are left out and no known class at all is "".
+    are left out and no known class at all is "". The class empty stands alone
+    (checkDelta never combines it) and is "no file changes".
 
 func DrainerAlive(pid int) bool
     DrainerAlive reports whether the drainer pid still runs as a magnum process.

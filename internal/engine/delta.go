@@ -59,6 +59,8 @@ func (t TrivialSkip) Note() string {
 		what = "docs-only"
 	case len(t.Classes) == 1 && t.Classes[0] == DeltaBase:
 		what = "base-merge"
+	case len(t.Classes) == 1 && t.Classes[0] == DeltaEmpty:
+		what = "empty-commit"
 	}
 	return fmt.Sprintf("%s push skipped (%s → %s)", what, textx.ShortSHA(t.From), textx.ShortSHA(t.To))
 }
@@ -102,8 +104,11 @@ type deltaCheck struct {
 
 // change says what a trivial push did, for events: "changes comments only
 // (1 file)", "only merges master (13 commits, the PR's own changes
-// unchanged)".
+// unchanged)", "changes no file (1 commit)".
 func (dc deltaCheck) change() string {
+	if slices.Contains(dc.classes, DeltaEmpty) {
+		return fmt.Sprintf("changes no file (%d %s)", dc.commits, textx.Plural(dc.commits, "commit", "commits"))
+	}
 	if slices.Contains(dc.classes, DeltaBase) {
 		verb := "merges " + dc.base
 		if dc.rebased {
@@ -127,6 +132,8 @@ func (dc deltaCheck) change() string {
 // its own files stands as it is; otherwise an unchanged own diff is the
 // class DeltaBase, a changed one gives the size of that change, and an
 // incomplete comparison keeps the size of from...to.
+// A push of commits that change no file (emptyPush) is the class DeltaEmpty
+// when the watch allows it, ahead of the own-diff comparison.
 // A failure of the first call measures nothing, and nor does a head GitHub
 // finds behind the reviewed commit (a force push back to an ancestor: no
 // commit and no file to measure, while the review discusses code the push
@@ -166,6 +173,10 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 	}
 	dc := deltaCheck{measured: true, files: len(pc.Files), commits: pc.Commits}
 	dc.size, dc.classes, dc.trivial = assessDelta(pc.Files, allowed, steers)
+	if emptyPush(pc) && slices.Contains(allowed, DeltaEmpty) {
+		// No file listed, so none that steers the agents either.
+		dc.trivial, dc.classes = true, []string{DeltaEmpty}
+	}
 	switch {
 	case dc.trivial || !m.ownOK:
 	case len(m.own.changed) > 0:
@@ -178,6 +189,16 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 			"from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "path", steering)
 	}
 	return dc
+}
+
+// emptyPush reports whether GitHub's comparison of the reviewed commit with
+// a head says the head has the reviewed commit's tree: the head is ahead of
+// the reviewed commit (so the merge base is the reviewed commit and the
+// comparison lists exactly what changed since), has at least one commit
+// since, and no file changed. A diverged range lists the merge base's
+// changes and a behind one nothing it can measure, so neither counts.
+func emptyPush(pc github.PushComparison) bool {
+	return pc.Status == "ahead" && pc.Commits > 0 && len(pc.Files) == 0
 }
 
 // recordDelta keeps a measured delta from...to for the re-review threshold

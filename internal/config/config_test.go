@@ -162,7 +162,7 @@ func TestSkipTrivialDeltasDefaultsToEveryClassButKeepsAnExplicitList(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.TrivialDeltas(nil); !slices.Equal(got, []string{"comments", "whitespace", "docs", "base"}) {
+	if got := cfg.TrivialDeltas(nil); !slices.Equal(got, []string{"comments", "whitespace", "docs", "base", "empty"}) {
 		t.Fatalf("default skip_trivial_deltas = %q", got)
 	}
 	cfg, err = loadCommittedWithLocal(t, testLocalConfig+"\n[daemon]\nskip_trivial_deltas = [\"comments\", \"docs\"]\n")
@@ -172,8 +172,16 @@ func TestSkipTrivialDeltasDefaultsToEveryClassButKeepsAnExplicitList(t *testing.
 	if got := cfg.TrivialDeltas(nil); !slices.Equal(got, []string{"comments", "docs"}) {
 		t.Fatalf("explicit skip_trivial_deltas = %q", got)
 	}
+	// A list written before empty existed keeps it off; one that names it is valid, in the daemon and in a watch.
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+"\n[daemon]\nskip_trivial_deltas = [\"empty\"]\n")
+	if err != nil {
+		t.Fatalf("skip_trivial_deltas = [\"empty\"]: %v", err)
+	}
+	if got := cfg.TrivialDeltas(nil); !slices.Equal(got, []string{"empty"}) {
+		t.Fatalf("skip_trivial_deltas = [\"empty\"] gave %q", got)
+	}
 	if _, err := loadCommittedWithLocal(t, testLocalConfig+"\n[daemon]\nskip_trivial_deltas = [\"base\", \"merges\"]\n"); err == nil ||
-		!strings.Contains(err.Error(), `"merges" is not one of comments, whitespace, docs, base`) {
+		!strings.Contains(err.Error(), `"merges" is not one of comments, whitespace, docs, base, empty`) {
 		t.Fatalf("an unknown class: %v", err)
 	}
 }

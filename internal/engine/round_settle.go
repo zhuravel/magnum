@@ -346,7 +346,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	}
 	// reviewed is the commit the review stands for: the round's target, or
 	// the head that moved during the round when the delta is trivial
-	// (comments, whitespace, docs, a base merge: no re-review follows).
+	// (comments, whitespace, docs, a base merge, no file: no re-review follows).
 	reviewed := target
 	var trivial []string
 	var settled deltaCheck
@@ -501,7 +501,7 @@ type headSettle struct {
 
 // settleHead settles a round on target whose PR's head may have moved
 // while it ran (a posted round and a reply round alike): a trivial delta
-// since target (checkDelta: comments, whitespace, docs, a base merge) leaves
+// since target (checkDelta: comments, whitespace, docs, a base merge, no file) leaves
 // the review standing for the head, reviewed; any other is recorded for the
 // re-review's threshold and delta check (recordDelta), and the PR waits in
 // rereview_pending until rereviewAt. A head still at target stays

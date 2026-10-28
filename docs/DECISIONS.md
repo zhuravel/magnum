@@ -14072,6 +14072,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   case of TestInterruptShellKeysOnlyItsOwnRunsCommand. TestTheFixerSeesTheShellHold now refuses the fixer's
   prompt, so it fails at once when the guard lets the fixer start.
 
+- **A push of commits that change no file is not re-reviewed: the trivial class `empty`** (2026-10-28, after
+  an author pushed an empty commit to re-run CI on a reviewed PR: the log said "small delta 0/30 lines
+  since the review", the status comment "scheduled (re-review of 93cd40a)", and the head counted as
+  unreviewed for auto-approval until a re-review of an unchanged tree ran). **Why it was missed**:
+  `assessDelta` starts with `trivial = len(files) > 0`, because a delta with no file to read has nothing to
+  prove it harmless, so a comparison that lists no file was never trivial and, measured as 0 lines, only
+  waited for the small-delta threshold. **Why no file is enough**: when GitHub compares the reviewed commit
+  with the head as `ahead` (the head descends from it, so the merge base is the reviewed commit and the
+  three-dot file list is exactly what changed since) with at least one commit and no file, the head's tree
+  is the reviewed commit's tree. That holds for an empty commit and for commits that cancel out, and it
+  holds whatever the commits say, so nothing that steers the agents (`AGENTS.md`, `.claude/`) can have
+  changed either: no file means none. `checkDelta` (`emptyPush`) settles such a push as the class `empty`,
+  through the path every trivial push takes (`reviewed_sha` moves to the head with the last verdict, an
+  App's approval stands, `pr.trivial_delta` says "changes no file (1 commit)", the card's note is
+  "empty-commit push skipped", a commit that arrives during the judge's turn is noted "(no file changes), no
+  re-review needed"). It is checked before the own-diff comparison a merge commit asks for, so an empty
+  merge commit is `empty`, not `base`. **Not skipped**: `behind` (a force push back to an ancestor: the
+  review discusses code the push dropped; it keeps its re-review) and `diverged` (a rebase or a force push:
+  the three-dot list starts at the merge base and an empty list does not say the tree is the reviewed one;
+  the base-merge rule still judges it by the PR's own diff). **Config**: `empty` joins
+  `config.TrivialDeltaClasses`, so the default `skip_trivial_deltas` contains it and a watch's explicit list
+  that leaves it out re-reviews such a push as before; a list written before the class existed replaces the
+  default and so keeps it off, as it did `base`. Tests, failing first:
+  TestAnEmptyCommitAfterAReviewIsNotReReviewed, TestAnEmptyCommitKeepsTheAppApproval,
+  TestAnEmptyCommitDuringTheReviewNeedsNoReReview, TestTheLabelOfAnEmptyPushNamesNoFileChanges and the
+  `empty` row of TestTrivialSkipNote, with the default list and the accepted `empty` of
+  TestSkipTrivialDeltasDefaultsToEveryClassButKeepsAnExplicitList. The guards
+  TestAnEmptyCommitIsReReviewedWhenTheWatchLeavesOutTheClass and TestADivergedRangeWithNoFileIsNotEmpty fail
+  under the mutation of what each protects (the allowed list ignored, the status ignored);
+  TestAnEmptyRangeThatIsNotAheadKeepsItsReReview pins the `behind` and no-commit ranges, which the
+  earlier checks of `checkDelta` already send to a re-review.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
