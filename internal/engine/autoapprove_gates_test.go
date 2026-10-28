@@ -397,11 +397,20 @@ func approvedThenReviewedOn(t *testing.T, next prSpec, r autoRound, mods ...func
 	return h
 }
 
+// The words a withdrawal as zhuravel says of each class of the gates'
+// refusals (publicReason), in place of the gate's own.
+const (
+	withdrawnAgentConfig = "the PR changes the instructions or configuration of the AI review agents, so zhuravel must review and approve it in person"
+	withdrawnWorkflows   = "the PR changes its own CI workflows or actions, so zhuravel must review and approve it in person"
+	withdrawnUnheard     = "one of Magnum's reviewers did not finish on this head, and Magnum approves only a complete review"
+	withdrawnCIFails     = "some checks of this head fail, and Magnum approves as zhuravel only once they pass"
+)
+
 // wantGateWithdrawal fails unless the operator's approval of PR #2's b1
 // was withdrawn once, by magnum, after its clean review of b2 (review 502),
-// for the gate's reason want: in the dismissal's message, the row's end
-// reason, the withdrawn event and one toast. auto-approval of the PR does
-// not stop.
+// for the gate's class, whose words are want: in the dismissal's message,
+// the row's end reason, the withdrawn event and one toast. auto-approval of
+// the PR does not stop.
 func (h *harness) wantGateWithdrawal(want string) {
 	h.t.Helper()
 	d := h.ghCalls("dismiss:")
@@ -428,23 +437,24 @@ func (h *harness) wantGateWithdrawal(want string) {
 // A standing approval of b1 is checked again when magnum reviews a new
 // head: a clean review of b2 that a new approval's gates would refuse (b2
 // adds AGENTS.md, its review went without codex-review, its checks fail)
-// withdraws the operator's approval with the gate's reason, and the card
-// then says why magnum does not approve b2.
+// withdraws the operator's approval in the words of the gate's class, and
+// the card then says the gate's own why magnum does not approve b2.
 func TestAStandingApprovalIsWithdrawnWhenTheGatesRefuseANewHead(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		next  prSpec
-		round autoRound
-		want  string
+		name   string
+		next   prSpec
+		round  autoRound
+		want   string // the card's
+		public string // the withdrawal's
 	}{
 		{"b2 adds AGENTS.md", prSpec{n: 2, head: "b2", files: []string{"app/models/order.rb", "AGENTS.md"}}, cleanRound,
-			"it changes the review agents' instructions or hooks (AGENTS.md)"},
-		{"b2 reviewed without codex-review", prSpec{n: 2, head: "b2"}, withoutCodexReview, heardNothingReason},
-		{"b2's checks fail", prSpec{n: 2, head: "b2", ci: "FAILURE"}, cleanRound, "its head's checks fail"},
+			"it changes the review agents' instructions or hooks (AGENTS.md)", withdrawnAgentConfig},
+		{"b2 reviewed without codex-review", prSpec{n: 2, head: "b2"}, withoutCodexReview, heardNothingReason, withdrawnUnheard},
+		{"b2's checks fail", prSpec{n: 2, head: "b2", ci: "FAILURE"}, cleanRound, "its head's checks fail", withdrawnCIFails},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := approvedThenReviewedOn(t, tc.next, tc.round)
-			h.wantGateWithdrawal(tc.want)
+			h.wantGateWithdrawal(tc.public)
 			if got := h.autoRefused(2); !strings.Contains(got, tc.want) {
 				t.Fatalf("the card says %q, want %q", got, tc.want)
 			}
@@ -471,7 +481,7 @@ func TestAStandingApprovalWaitsWhileTheNewHeadsChecksRun(t *testing.T) {
 
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "FAILURE"})
 	h.flush()
-	h.wantGateWithdrawal("its head's checks fail")
+	h.wantGateWithdrawal(withdrawnCIFails)
 
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "SUCCESS"})
 	h.flush()
@@ -503,7 +513,7 @@ func TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead(t *testing.T) {
 	}
 	h.reviewTo(2, "b2")
 	h.tick()
-	h.wantGateWithdrawal("it changes the review agents' instructions or hooks (AGENTS.md)")
+	h.wantGateWithdrawal(withdrawnAgentConfig)
 }
 
 // The gates decide once on each round, as before a new approval: once

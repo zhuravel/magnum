@@ -79,6 +79,19 @@ type ciAnswer struct {
 	base    string
 }
 
+// refusal is a as auto-approval's refusal (autoGateRefusal), with its class:
+// checks that run (ciRunsRefusal) or fail (ciFailsRefusal).
+func (a ciAnswer) refusal() autoRefusal {
+	r := autoRefusal{why: a.why, waits: a.waits}
+	switch a.why {
+	case ciRunsRefusal:
+		r.public = publicCIRuns
+	case ciFailsRefusal:
+		r.public = publicCIFails
+	}
+	return r
+}
+
 // ciGateOf is the CI gate of c's head, read as magnum sees its checks
 // (seenPR: a check the repository's ignore_checks names is absent, and the
 // rollup derived from the rest of the head's complete checks): where the

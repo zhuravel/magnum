@@ -7833,6 +7833,10 @@ type AutoApproveRefused struct {
 	RunID  string    `json:"run_id"`
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at"`
+	// Public is the refusal's class (publicRefusal), which the PR's status
+	// comment says in its fixed words; "" for one GitHub hears nothing of,
+	// and in a record an older build wrote.
+	Public string `json:"public,omitempty"`
 }
     AutoApproveRefused is why auto-approval holds a PR back (autoGateRefusal),
     for the head (Head) and magnum's latest posted round (RunID) it decided

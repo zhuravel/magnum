@@ -89,12 +89,12 @@ func TestAnAuthorOutsideTheAllowlistIsNeverAutoApproved(t *testing.T) {
 func TestAnUnknownAuthorIsNotOnTheAllowlist(t *testing.T) {
 	h, _ := newAutoHarness(t, allowBobRev)
 	unknown := store.RepoPR{Repo: "talkable/talkable", PR: store.PR{Number: 2}}
-	if got := h.e.authorRefusal(unknown); got != notAllowedReason {
-		t.Fatalf("an unknown author with an allowlist: %q, want %q", got, notAllowedReason)
+	if got := h.e.authorRefusal(unknown); got != (autoRefusal{why: notAllowedReason}) {
+		t.Fatalf("an unknown author with an allowlist: %+v, want %q of no class", got, notAllowedReason)
 	}
 	h.cfg.Watches[0].AutoApproveAuthors = nil
-	if got := h.e.authorRefusal(unknown); got != "" {
-		t.Fatalf("an unknown author without an allowlist: %q", got)
+	if got := h.e.authorRefusal(unknown); got != (autoRefusal{}) {
+		t.Fatalf("an unknown author without an allowlist: %+v", got)
 	}
 }
 

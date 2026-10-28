@@ -1127,6 +1127,25 @@ link that turned up, your note) leaves it. The first line says where the review 
   Re-reviews) reads "Review of `54fc258` posted 18:52 UTC: No problems found. <link>. A full pass follows
   before approval." while its full pass waits; the full pass then shows as "Full pass before approval of
   `54fc258`" with "In progress (full pass) since 18:53 UTC", and its posted line replaces it.
+- **Why no approval came**, on a repository Magnum [approves as you](#approving-as-you): under the posted
+  line of a review that left nothing to fix, one line says why Magnum did not approve the head as
+  `auto_approve_as`, naming its login as plain text (never `@alice`, which would notify it at every edit),
+  in the third person and in fixed words for each kind of reason: "Not approved as alice: the PR changes
+  its own CI workflows or actions, so alice must review and approve it in person." (and the same for a PR
+  that changes the instructions or configuration of the AI review agents, or more files than Magnum can
+  check); "Not approved as alice: one of Magnum's reviewers did not finish on this head, and Magnum
+  approves only a complete review. The next review, or a review by alice, decides."; "Approval as alice
+  waits for the checks of this head to pass." (with "Some fail now." when they fail); "Magnum stopped
+  approving this PR as alice. A review by alice decides." once your review by hand, a dismissal or
+  `magnum unapprove` stopped it; and "The approval as alice did not post. Magnum told alice." when its
+  last attempt failed. It never names a path, a reviewer, a check or the reason's own words. It says
+  nothing, and the comment reads as on a watch without auto-approval, for the author lists
+  (`auto_approve_skip_authors`, `auto_approve_authors`), the watch's filters (a manual repository, a bot,
+  a label, `skip_paths`, a Codex flag), your own PR, a head the login already approved on GitHub, your
+  review in progress, a reason the next poll mends or that carries an error (a file list or a round record
+  Magnum cannot read, a post it tries again), and while a held review's full pass follows. The line comes
+  a tick after auto-approval decides, goes when the approval posts and changes with the kind of reason; a
+  reason that changes within its kind (another file of the agents' configuration) edits nothing.
 - A [fix loop](#fixing-your-own-prs) shows as its own line: "Applying automatic fixes, cycle 1 of 3"
   under the posted line while the fixer works, and "Reviewing the fixes in `b2c3d4e`" for its re-review of
   what the fixer pushed, from the loop's state (never the fixer's words).
@@ -1478,7 +1497,10 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
 
 When the review, the watch, the agents' files, the workflows or the checks hold a PR back, the card says
 why ("magnum does not approve it as you: its head's checks fail …"; `auto_approve_refused` in
-`magnum tui --json`) and a `review.auto_approve_refused` event records each reason once. They do not
+`magnum tui --json`) and a `review.auto_approve_refused` event records each reason once. The PR's
+[status comment](#review-status-comment), where it has one, tells its people the kind of reason under the
+posted review, naming your login, in fixed words that never carry the card's (nothing for the author lists
+or the watch's filters). They do not
 refuse the board's `A` (or `magnum approve --as`) on a row that needs you: there you decide by hand.
 `magnum stats` (APPROVALS) counts, per repository, the window's merges that rested on these approvals
 alone, with no person's approval beside them, and those merged past the head Magnum approved.
@@ -1536,14 +1558,19 @@ The body is one line, `Auto-approved: Magnum's review of `<sha7>` found no block
 `<!-- magnum:auto-approval head=<sha7> -->` marker Magnum knows its approvals by. One approval per review:
 a post GitHub refuses (403, 422) is not tried again for that review, another failure is tried again after
 5 minutes (three posts at most), and one whose answer was lost is found on GitHub instead of posted twice.
+Once a review's last post failed, the card says "its approval did not post, and magnum does not try it again
+for this review", and the status comment that it did not post and that you were told.
 
 New commits alone leave the approval standing (the repository decides about stale approvals): the next
 review decides. One that leaves something to fix, on any head, withdraws it (Magnum dismisses it as you:
 "Magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn ([review](<url>))."),
 and a clean one of the PR's head is held to the reviewers, watch, agents' files, workflows and checks
-conditions above as a new approval is: one they refuse withdraws it too ("Magnum's review of <sha7> found nothing to fix, but
-it changes the review agents' instructions or hooks (AGENTS.md); this automatic approval is withdrawn
-([review](<url>)).") with the same event and toast, while the head's checks still run Magnum waits, and a
+conditions above as a new approval is: one they refuse withdraws it too, in the status comment's words for
+the kind of reason, never the card's ("Magnum's review of <sha7> found nothing to fix, but the PR changes
+the instructions or configuration of the AI review agents, so alice must review and approve it in person;
+this automatic approval is withdrawn ([review](<url>)).", and "… but Magnum no longer approves it
+automatically; …" for the watch's filters and a file list Magnum cannot read), with the same event and
+toast, while the head's checks still run Magnum waits, and a
 head it has not reviewed yet changes nothing. A clean review they let through leaves the approval standing
 without a second one, and they decide once per review: checks that fail afterwards do not withdraw it before
 the next review. A clean review after a withdrawal approves again (a head whose checks pass later included).

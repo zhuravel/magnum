@@ -345,11 +345,11 @@ func TestAutoApprovalWaitsForAHeldReviewsFullPass(t *testing.T) {
 	h.e.setKV(h.ctx, KVPRApprovalHold(pr.ID), `{"review_id":501,"round":4,"target":"b1"}`)
 	c := store.RepoPR{PR: pr, Repo: "talkable/talkable"}
 	held := store.ReviewSummary{ReviewID: 501, SHA: "b1", Verdict: store.VerdictClean}
-	if why, waits := h.e.autoGateRefusal(h.ctx, c, held); why != approvalHoldRefusal || !waits {
-		t.Fatalf("the held review: refusal %q (waits %v), want %q as a wait", why, waits, approvalHoldRefusal)
+	if r := h.e.autoGateRefusal(h.ctx, c, held); r.why != approvalHoldRefusal || !r.waits || r.public != "" {
+		t.Fatalf("the held review: refusal %+v, want %q as a wait of no class", r, approvalHoldRefusal)
 	}
 	full := store.ReviewSummary{ReviewID: 502, SHA: "b1", Verdict: store.VerdictClean}
-	if why, _ := h.e.autoGateRefusal(h.ctx, c, full); why == approvalHoldRefusal {
+	if r := h.e.autoGateRefusal(h.ctx, c, full); r.why == approvalHoldRefusal {
 		t.Fatal("the full pass's review is refused as the held one")
 	}
 }

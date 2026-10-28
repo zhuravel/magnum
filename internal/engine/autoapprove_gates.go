@@ -12,9 +12,11 @@ package engine
 // the checks required_checks names, where it is set:
 // autoapprove_required.go) are not approved; the card says why (KVPRAutoApproveRefused) and a
 // review.auto_approve_refused event records it once per head, round and
-// reason. A later round of magnum's on the head of a PR it approved as the
-// operator is held to them too: one they refuse withdraws the approval
-// (standingGateRefusal). Before them, a PR whose author
+// reason, while the PR's status comment says only the refusal's class in
+// fixed words (publicRefusal, approvalLine). A later round of magnum's on
+// the head of a PR it approved as the operator is held to them too: one
+// they refuse withdraws the approval with the class's words
+// (standingGateRefusal, standingWithdrawal). Before them, a PR whose author
 // auto_approve_skip_authors lists, or the auto_approve_authors that applies
 // does not, is refused (authorRefusal), recorded once per head whatever
 // round reviewed it; a standing approval is not held to that one, so an
@@ -53,6 +55,48 @@ type AutoApproveRefused struct {
 	RunID  string    `json:"run_id"`
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at"`
+	// Public is the refusal's class (publicRefusal), which the PR's status
+	// comment says in its fixed words; "" for one GitHub hears nothing of,
+	// and in a record an older build wrote.
+	Public string `json:"public,omitempty"`
+}
+
+// publicRefusal is the class of a refusal of auto-approval that GitHub may
+// hear of: the status comment's line (approvalLine) and the dismissal
+// message of a withdrawal (standingWithdrawal) say its fixed words
+// (publicText, publicReason), never the refusal's own, which can name a
+// path, a reviewer role and its status, a filter or an author list. ""
+// says nothing in the status comment, and in a withdrawal only that magnum
+// no longer approves the PR automatically: the author lists, the watch's
+// filters, a reason that carries an error's text or heals at the next
+// poll, and a gate added later without a class.
+type publicRefusal string
+
+const (
+	publicWorkflows    publicRefusal = "workflows"      // changesWorkflow
+	publicAgentConfig  publicRefusal = "agent_config"   // agentConfigRefusal
+	publicTooManyFiles publicRefusal = "too_many_files" // more files than GitHub lists
+	publicUnheard      publicRefusal = "unheard"        // missingReports: a reviewer's report missing
+	publicCIRuns       publicRefusal = "ci_runs"        // ciRunsRefusal
+	publicCIFails      publicRefusal = "ci_fails"       // ciFailsRefusal
+	publicStopped      publicRefusal = "stopped"        // a held stop (store.AutoApproveHold), never recorded here
+	publicPostFailed   publicRefusal = "post_failed"    // the last failed post of the approval (postFailedRefusal)
+)
+
+// autoRefusal is why auto-approval holds a PR back: why, the card's and the
+// event's words ("" = it does not); public, its class GitHub may hear of
+// (publicRefusal); waits, that it is only what a standing approval waits
+// out (checks that still run, a held review's full pass).
+type autoRefusal struct {
+	why    string
+	public publicRefusal
+	waits  bool
+}
+
+// fingerprint is what noteAutoRefused compares a refusal recorded for the
+// card by: its head, round, reason and class.
+func (r AutoApproveRefused) fingerprint() string {
+	return r.Head + "|" + r.RunID + "|" + r.Reason + "|" + r.Public
 }
 
 // ParseAutoApproveRefused reads a KVPRAutoApproveRefused value.
@@ -75,7 +119,7 @@ var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.
 // author the auto_approve_authors that applies does not list
 // (authorRefusal; the card's words, which name the key the board reads
 // them by). They name nobody: the event and the card read them, never
-// GitHub.
+// GitHub (their refusal has no class).
 const (
 	skipAuthorRefusal       = "the author is in auto_approve_skip_authors"
 	notAllowedAuthorRefusal = "the author is not in auto_approve_authors"
@@ -92,15 +136,15 @@ const (
 // a new approval only: a standing one is not held to it
 // (standingGateRefusal runs autoGateRefusal alone), nor is the operator's
 // A (OperatorApprovalRefusal).
-func (e *Engine) authorRefusal(c store.RepoPR) string {
+func (e *Engine) authorRefusal(c store.RepoPR) autoRefusal {
 	login := deref(c.PR.AuthorLogin)
 	switch {
 	case e.cfg.AutoApproveSkipsAuthor(c.Repo, login):
-		return skipAuthorRefusal
+		return autoRefusal{why: skipAuthorRefusal}
 	case !e.cfg.AutoApproveAllowsAuthor(c.Repo, login):
-		return notAllowedAuthorRefusal
+		return autoRefusal{why: notAllowedAuthorRefusal}
 	}
-	return ""
+	return autoRefusal{}
 }
 
 // autoGateRefusal says why auto-approval holds c back after magnum's round
@@ -120,28 +164,30 @@ func (e *Engine) authorRefusal(c store.RepoPR) string {
 // names decide in place of the rollup (requiredCIRefusal: one outside the
 // list neither fails nor runs). waits says the refusal is only checks that
 // still run, which a standing approval waits out (standingGateRefusal). A
-// reason never carries an error's text: a withdrawal posts it on GitHub.
-// The judge's own approval is held to the same gates, but for the review's
+// reason never carries an error's text, and its class (publicRefusal) is
+// all GitHub hears of it: the status comment and a withdrawal say the
+// class's words; a held review's and the watch's refusals have none. The
+// judge's own approval is held to the same gates, but for the review's
 // (approval_gates.go).
-func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
+func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) autoRefusal {
 	pr := c.PR
 	if _, held := e.heldReviewOf(ctx, pr.ID, sum.ReviewID); held {
-		return approvalHoldRefusal, true // approval_hold.go: the full pass after it decides
+		return autoRefusal{why: approvalHoldRefusal, waits: true} // approval_hold.go: the full pass after it decides
 	}
-	if why := e.missingReports(ctx, pr.ID, sum); why != "" {
-		return why, false
+	if r := e.missingReports(ctx, pr.ID, sum); r.why != "" {
+		return r
 	}
 	if why, _ := e.watchRefusal(ctx, c); why != "" {
-		return why, false
+		return autoRefusal{why: why} // a filter's: nothing on GitHub names it
 	}
-	if why, _ := e.changedFilesRefusal(ctx, pr); why != "" {
-		return why, false
+	if r, _ := e.changedFilesRefusal(ctx, pr); r.why != "" {
+		return r
 	}
 	ci := e.ciGateOf(ctx, c) // autoapprove_ci_base.go
 	if ci.state == pipeline.CIRedLikeBase && ci.why == "" {
 		e.noteCIBase(ctx, c, sum, ci.failing, ci.base) // the approval goes ahead on checks the base fails too
 	}
-	return ci.why, ci.waits
+	return ci.refusal()
 }
 
 // watchRefusal says why no approval goes to c, a PR its watch would not
@@ -189,25 +235,25 @@ func kvAutoApprovalGated(prID int64) string { return fmt.Sprintf("pr.%d.auto_app
 // decides), sum leaves something to fix (that withdraws a anyway), the
 // head's checks still run (magnum waits for them, asked again every tick),
 // or the gates let sum's round through already (kvAutoApprovalGated).
-func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR, sum *store.ReviewSummary) string {
+func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR, sum *store.ReviewSummary) autoRefusal {
 	if sum == nil || sum.RunID == a.RunID || sum.SHA != a.PR.HeadSHA {
-		return ""
+		return autoRefusal{}
 	}
 	if blocks, _ := roundBlocks(*sum, ""); blocks {
-		return ""
+		return autoRefusal{}
 	}
 	key, mark := kvAutoApprovalGated(a.PRID), fmt.Sprintf("%d|%s", a.ID, sum.RunID)
 	if v, _ := e.getKV(ctx, key); v == mark {
-		return ""
+		return autoRefusal{}
 	}
-	why, waits := e.autoGateRefusal(ctx, store.RepoPR{PR: a.PR, Repo: a.Repo}, *sum)
+	r := e.autoGateRefusal(ctx, store.RepoPR{PR: a.PR, Repo: a.Repo}, *sum)
 	switch {
-	case waits:
-		return ""
-	case why == "":
+	case r.waits:
+		return autoRefusal{}
+	case r.why == "":
 		e.setKV(ctx, key, mark)
 	}
-	return why
+	return r
 }
 
 // missingReports says why auto-approval refuses sum's review for the
@@ -217,22 +263,24 @@ func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR
 // builds on ("Magnum's review did not hear every reviewer: codex-review
 // (login_required)"). A round magnum has no record of (one before the
 // records, or a run that cannot be read) is refused too: nothing says it
-// heard every reviewer. "" when it heard every one.
-func (e *Engine) missingReports(ctx context.Context, prID int64, sum store.ReviewSummary) string {
+// heard every reviewer. None when it heard every one. A report missing is
+// of class publicUnheard, whose words never name the role; a run or a
+// record magnum cannot read has no class.
+func (e *Engine) missingReports(ctx context.Context, prID int64, sum store.ReviewSummary) autoRefusal {
 	const unknown = "Magnum cannot tell whether its review heard every reviewer: "
 	run, err := e.st.RunByID(ctx, sum.RunID)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "auto approval: the review's run", "pr", prID, "run", sum.RunID)
-		return unknown + "it cannot read the review's run"
+		return autoRefusal{why: unknown + "it cannot read the review's run"}
 	}
 	rec, ok := pipeline.ReadRoundMissingReports(ctx, e.st, prID, run.Round)
 	switch {
 	case !ok:
-		return fmt.Sprintf("%sit has no record of round %d's reports", unknown, run.Round)
+		return autoRefusal{why: fmt.Sprintf("%sit has no record of round %d's reports", unknown, run.Round)}
 	case len(rec.Unheard()) > 0:
-		return "Magnum's review did not hear every reviewer: " + rec.String()
+		return autoRefusal{why: "Magnum's review did not hear every reviewer: " + rec.String(), public: publicUnheard}
 	}
-	return ""
+	return autoRefusal{}
 }
 
 // agentConfigWhat is what agentConfigRefusal guards, as its refusals name
@@ -264,13 +312,15 @@ func changesWorkflow(p string) bool {
 // and a PR that edits the CI workflow controls it outright). A head magnum
 // has no whole list of files for is refused too: what it does not list may
 // be one of them. short is the judge prompt's fixed words for why, which
-// never name a path the PR chose (approvalGatesDue).
-func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (why, short string) {
+// never name a path the PR chose (approvalGatesDue). The refusal's class
+// is that of the files it found, or of a list GitHub cut short; a list
+// magnum cannot read or has none of has none (the next poll mends it).
+func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRefusal, short string) {
 	const unknown = "magnum cannot tell which files the PR changes"
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "auto approval: the PR's files", "pr", pr.ID)
-		return "Magnum cannot read the files it changes", unknown
+		return autoRefusal{why: "Magnum cannot read the files it changes"}, unknown
 	}
 	listed := ok && f.HeadSHA == pr.HeadSHA
 	var paths []string
@@ -278,19 +328,20 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (why, sho
 		paths = f.Paths
 	}
 	if why := e.agentConfigRefusal(ctx, pr, paths); why != "" {
-		return why, "the PR changes " + agentConfigWhat
+		return autoRefusal{why: why, public: publicAgentConfig}, "the PR changes " + agentConfigWhat
 	}
 	if slices.ContainsFunc(paths, changesWorkflow) {
-		return workflowsRefusal, "the PR changes its own workflows or actions"
+		return autoRefusal{why: workflowsRefusal, public: publicWorkflows}, "the PR changes its own workflows or actions"
 	}
 	const what = agentConfigWhat + ", or its own workflows or actions"
 	switch {
 	case !listed:
-		return "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files", unknown
+		return autoRefusal{why: "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files"}, unknown
 	case f.Truncated:
-		return fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths)), unknown
+		why := fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths))
+		return autoRefusal{why: why, public: publicTooManyFiles}, unknown
 	}
-	return "", ""
+	return autoRefusal{}, ""
 }
 
 // agentConfigRefusal says why auto-approval leaves pr to the operator for
@@ -391,17 +442,21 @@ func (e *Engine) projectKinds() []string {
 }
 
 // noteAutoRefused records why auto-approval holds c back after magnum's
-// posted round run (reason; "" clears it) for the card, and writes a
-// review.auto_approve_refused event for a reason new to the PR's head and
-// round. A run of "" is a refusal of the PR whatever round reviewed it
-// (authorRefusal): recorded once per head. e.autoRefused keeps what it
-// recorded, so an unchanged answer costs no registry write (after a
-// restart, one read).
-func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, run, reason string) {
+// posted round run (r; none clears it) for the card and, by its class, the
+// status comment (approvalLine), and writes a review.auto_approve_refused
+// event for a reason new to the PR's head and round. A run of "" is a
+// refusal of the PR whatever round reviewed it (authorRefusal): recorded
+// once per head. A record that differs in its class alone (one an older
+// build wrote) is rewritten as it stood, with no second event, and a
+// failed post (publicPostFailed) writes none: review.auto_approve_failed
+// records it. e.autoRefused keeps what it recorded, so an unchanged answer
+// costs no registry write (after a restart, one read).
+func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, run string, r autoRefusal) {
 	pr := c.PR
+	rec := AutoApproveRefused{Head: pr.HeadSHA, RunID: run, Reason: r.why, Public: string(r.public), At: e.now()}
 	fp := ""
-	if reason != "" {
-		fp = pr.HeadSHA + "|" + run + "|" + reason
+	if r.why != "" {
+		fp = rec.fingerprint()
 	}
 	if prev, known := e.autoRefused[pr.ID]; known && prev == fp {
 		return
@@ -409,24 +464,45 @@ func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, run, reaso
 	e.autoRefused[pr.ID] = fp
 	key := KVPRAutoApproveRefused(pr.ID)
 	cur, had := e.getKV(ctx, key)
-	if r, ok := ParseAutoApproveRefused(cur); ok && r.Head+"|"+r.RunID+"|"+r.Reason == fp {
+	old, ok := ParseAutoApproveRefused(cur)
+	if ok && old.fingerprint() == fp {
 		return
 	}
-	if reason == "" {
+	if r.why == "" {
 		if had {
 			e.delKV(ctx, key)
 		}
 		return
 	}
-	b, err := json.Marshal(AutoApproveRefused{Head: pr.HeadSHA, RunID: run, Reason: reason, At: e.now()})
+	reclassed := ok && old.Head == rec.Head && old.RunID == rec.RunID && old.Reason == rec.Reason
+	if reclassed {
+		rec.At = old.At
+	}
+	b, err := json.Marshal(rec)
 	if err != nil {
 		return
 	}
 	e.setKV(ctx, key, string(b))
+	if reclassed || r.public == publicPostFailed {
+		return
+	}
 	repo := repoOf(c.Repo)
 	e.event(ctx, "info", prSubject(repo, pr.Number), "review.auto_approve_refused",
-		fmt.Sprintf("magnum does not approve %s#%d as you: %s", repo.FullName(), pr.Number, reason),
-		map[string]any{"reason": reason, "head_sha": pr.HeadSHA, "run_id": run})
+		fmt.Sprintf("magnum does not approve %s#%d as you: %s", repo.FullName(), pr.Number, r.why),
+		map[string]any{"reason": r.why, "head_sha": pr.HeadSHA, "run_id": run})
+}
+
+// postFailedRefusal is the card's words for an approval whose last post
+// failed (notePostFailed).
+const postFailedRefusal = "its approval did not post, and magnum does not try it again for this review"
+
+// notePostFailed records, for the card and the status comment, that the
+// last attempt to post the approval of c's head after round run failed
+// (publicPostFailed), with no refusal event: the post's
+// review.auto_approve_failed says it. A later round of the head, or a new
+// head, decides again.
+func (e *Engine) notePostFailed(ctx context.Context, c store.RepoPR, run string) {
+	e.noteAutoRefused(ctx, c, run, autoRefusal{why: postFailedRefusal, public: publicPostFailed})
 }
 
 // forgetAutoRefused clears the card's reason (noteAutoRefused) when it
@@ -440,12 +516,12 @@ func (e *Engine) forgetAutoRefused(ctx context.Context, c store.RepoPR, sum stor
 	if !known {
 		v, _ := e.getKV(ctx, KVPRAutoApproveRefused(c.PR.ID))
 		if r, ok := ParseAutoApproveRefused(v); ok {
-			fp = r.Head + "|" + r.RunID + "|" + r.Reason
+			fp = r.fingerprint()
 		}
 		e.autoRefused[c.PR.ID] = fp
 	}
 	if _, rest, ok := strings.Cut(fp, "|"); !ok || strings.HasPrefix(rest, sum.RunID+"|") {
 		return // none recorded, or it names sum's round
 	}
-	e.noteAutoRefused(ctx, c, sum.RunID, "")
+	e.noteAutoRefused(ctx, c, sum.RunID, autoRefusal{})
 }

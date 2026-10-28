@@ -75,7 +75,7 @@ func TestAPRThatChangesItsWorkflowsIsNotAutoApproved(t *testing.T) {
 // finds that b2 changes a workflow, as for any gate a new approval runs.
 func TestAStandingApprovalIsWithdrawnWhenTheNewHeadChangesAWorkflow(t *testing.T) {
 	h := approvedThenReviewedOn(t, prSpec{n: 2, head: "b2", files: []string{"app/models/order.rb", ".github/workflows/ci.yml"}}, cleanRound)
-	h.wantGateWithdrawal(workflowsWords)
+	h.wantGateWithdrawal(withdrawnWorkflows)
 }
 
 // Since spec 84 the stored checks kept one run per workflow name and check

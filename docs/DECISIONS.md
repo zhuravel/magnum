@@ -13749,6 +13749,54 @@ skill versions); people add theirs to the sections before it, at the end of the 
   listed under Needs you into the message, the card and `magnum status`; the prompt names at most 20. It
   names the first 20 too, then "and N more", which `fixCallRe` reads back. Test, failing first:
   TestAConflictCallNamesTwentyPathsAndCountsTheRest.
+- **The status comment says why a clean review brought no approval** (2026-10-28,
+  docs/superpowers/specs/2026-10-28-auto-approval-explained-design.md; amends "Auto-approval leaves the PRs of
+  listed authors to a person": "the status comment never spoke of auto-approval"). On talkable#12092 one
+  reviewer did not finish ("codex-review (busy)") and on talkable#12100 the PR edited
+  `.github/workflows/ci.yml`: both reviews were clean, no approval came, and the author and the operator
+  asked why, which only the operator's card and a `review.auto_approve_refused` event said. Every refusal of
+  the gates now has a class (`publicRefusal` in `autoapprove_gates.go`; `autoRefusal` carries `why`, the
+  class and `waits` through `authorRefusal`, `autoGateRefusal`, `missingReports`, `changedFilesRefusal`,
+  `ciAnswer.refusal` and `standingGateRefusal`), and the refusal record (`AutoApproveRefused`) keeps it as
+  `public`. Under the posted line of the status comment one line (`approvalLine`, `publicText`) names the
+  `auto_approve_as` login as plain text, in the third person, and gives the class's fixed words, never the
+  record's reason: `workflows`, `agent_config` and `too_many_files` say that the login must review and
+  approve the PR in person; `unheard` that one of Magnum's reviewers did not finish and that the next
+  review or the login's decides; `ci_runs` and `ci_fails` that the approval waits for the head's checks
+  ("Some fail now."); `stopped`, from the PR's held stop, which wins over the record, that Magnum stopped
+  approving it; and `post_failed`, which the last failed post writes with no refusal event
+  (`review.auto_approve_failed` says it; the card then reads "its approval did not post, …"), that it did
+  not post and that the login was told. The line shows only in the posted stage, not while a held review's
+  full pass follows, when the login is set, the record's head is the PR's and its run the last posted
+  round, whose review is the PR's last, the round left nothing to fix, the PR is open and not the login's,
+  and GitHub's latest reviews hold no approval of the head by the login. `noteStatusComments` reads the
+  records and the holds once a tick (where a watch auto-approves), and the line goes into the view's body
+  and its state, so it moves the header's time; it lags auto-approval by a tick, and a reason that changes
+  within its class edits nothing. Silent, the comment reading as on a watch without `auto_approve`: both
+  author lists (the operator kept the rule of 2026-10-16 on 2026-10-28), every watch filter of a forced
+  round, the operator's own PR, their review in progress, a head the login approved, a reason that carries
+  an error's text or heals at the next poll (an unreadable run or round record, a missing or unreadable
+  file list, an incomplete review list, a retried post), the states the stage already shows, and any gate
+  added later without a class. A record written before the class existed gains it on the next pass,
+  rewritten as it stood (its time kept), with no second event. A withdrawal's dismissal message uses the
+  class's clause (`publicReason`) in place of the gate's raw reason ("found nothing to fix, but the PR
+  changes its own CI workflows or actions, so alice must review and approve it in person"), and "Magnum no
+  longer approves it automatically" for a gate without a class; that message is also the row's end reason,
+  the withdrawn event's and the toast's (the card keeps the gate's own words). Nothing changes when Magnum
+  approves, it reads nothing new from GitHub, and no migration. Rejected: the review body (it posts before
+  the gates decide, and checks and stops change after it); a comment of its own (each notifies people and
+  repeats the status comment's lifecycle), so no line where `status_comment` is off; an `@` mention (it
+  notifies at every edit, and the operator already has the card, the event and the toast); moving
+  `noteStatusComments` after `autoApprove` in the tick (the one-tick lag is accepted); a stored basis hash
+  of the facts (the line is rebuilt each tick from the head, the round, the stop and GitHub's latest
+  reviews). Tests, failing first (engine, the login `alice`): TestACleanReviewOfAWorkflowChangeSaysWhoMustApprove,
+  TestAReviewThatMissedAReviewerSaysSoWithoutTheRole, TestTheApprovalLineGoesWhenTheChecksPassAndTheApprovalPosts,
+  TestALaterRoundsWithdrawalBringsTheLineBackOnTheNewHead, TestAnUnchangedClassEditsNothing,
+  TestAStoppedAutoApprovalSpeaksInTheThirdPerson, TestNoApprovalLineOnceTheLoginApprovedTheHead,
+  TestTheAuthorListsAndFiltersLeaveTheCommentAsWithoutAutoApproval, TestNoApprovalLineWithoutAutoApproveOrALogin,
+  TestAnOldRefusalRecordGainsItsClassWithoutASecondEvent, TestAFinalPostFailureSaysTheLoginWasTold,
+  TestTheWithdrawalMessageUsesThePublicWords and TestApprovalLineNeverCarriesTheRecordsWords; the
+  withdrawal tests of the gates, the workflows and ignore_checks now expect the class's words.
 
 ## Learned rules
 

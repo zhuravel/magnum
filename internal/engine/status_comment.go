@@ -18,7 +18,9 @@ package engine
 // turns it to the line that magnum is not reviewing the PR. The text is
 // magnum's own: a head's short sha, times in UTC, the posted review's
 // verdict in a few words and fixed words for the waits, never a PR's text
-// nor an error's, and never why a PR is left out.
+// nor an error's, and never why a PR is left out. Of auto-approval it says
+// only approvalLine's fixed words: the login magnum approves as and the
+// class of why a clean review brought no approval, never the gate's own.
 
 import (
 	"cmp"
@@ -179,6 +181,10 @@ type statusView struct {
 	// whole PR follows before the approval (approval_hold.go): the posted
 	// line says so, and the full pass is no review someone asked for.
 	held bool
+	// approval is statusPosted's line under the posted one: why the clean
+	// review brought no approval as the auto_approve_as login (approvalLine;
+	// "" = nothing to say).
+	approval string
 }
 
 // opens reports whether the stage posts a comment where none stands: a
@@ -191,10 +197,10 @@ func (v statusView) opens() bool {
 // what is the view's subject for an event: "review of a1b2c3d".
 func (v statusView) what() string { return v.kind + " of " + textx.ShortSHA(v.head) }
 
-// state fingerprints what moves the header's time: the stage, the review
-// and its wait.
+// state fingerprints what moves the header's time: the stage, the review,
+// its wait and the approval line.
 func (v statusView) state() string {
-	return statusSum(strings.Join([]string{v.stage, v.kind, v.head, v.wait}, "\x00"))
+	return statusSum(strings.Join([]string{v.stage, v.kind, v.head, v.wait, v.approval}, "\x00"))
 }
 
 // label leads the checklist: the review to come, in plain words.
@@ -245,10 +251,10 @@ func (v statusView) postedLine(now time.Time) string {
 // body is the comment below its header: the checklist (ticked down to the
 // stage) for a review to come or under way, with the earlier review a
 // re-review follows, the two fixed sentences and the operator's note; one
-// line for a posted review and for a last edit; one line and the note when
-// magnum will not review the head, failed to, or answers a review request
-// it declines (no reason named: a mute's or a filter's would tell a public
-// repository who is reviewed).
+// line for a posted review (and the approval line under it) and for a last
+// edit; one line and the note when magnum will not review the head, failed
+// to, or answers a review request it declines (no reason named: a mute's or
+// a filter's would tell a public repository who is reviewed).
 func (v statusView) body(note string, now time.Time) string {
 	sha := "`" + textx.ShortSHA(v.head) + "`"
 	var lines, tail []string
@@ -269,6 +275,9 @@ func (v statusView) body(note string, now time.Time) string {
 		lines = []string{"Not reviewing: the PR is a draft."}
 	case statusPosted:
 		lines = []string{v.postedLine(now)}
+		if v.approval != "" {
+			lines = append(lines, v.approval)
+		}
 	case statusFixing:
 		lines = []string{"- [x] " + v.postedLine(now), fmt.Sprintf("- [ ] Applying automatic fixes, cycle %d of %d", v.cycle, v.cycles)}
 		tail = []string{statusUpdates, note}
@@ -452,6 +461,11 @@ func (e *Engine) noteStatusComments(ctx context.Context) {
 		e.warnUnlessStopped(ctx, err, "status comments: review summaries")
 		return
 	}
+	refusals, holds, err := e.autoApprovalReads(ctx, reviewed)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "status comments: auto-approval")
+		return
+	}
 	repos := map[int64]store.Repo{}
 	writes := 0
 	for _, pr := range prs {
@@ -471,6 +485,9 @@ func (e *Engine) noteStatusComments(ctx context.Context) {
 		}
 		_, unwritten := e.unwrittenFlag(pr.ID)
 		reads := statusReads{flagged: flagged[pr.ID] || unwritten, last: sums[pr.ID], declined: declined[pr.ID]}
+		if id := e.cfg.AutoApproveFor(repo.FullName()); id != nil {
+			reads.approval = approvalReads{login: id.Login, refused: refusals[pr.ID], hold: holdOf(holds, pr.ID)}
+		}
 		if e.writeStatus(ctx, repo, pr, reads, now) {
 			writes++
 		}
@@ -479,13 +496,129 @@ func (e *Engine) noteStatusComments(ctx context.Context) {
 
 // statusReads is what noteStatusComments reads once a tick for all PRs and
 // hands each PR's comment: whether the PR holds a Codex flag, the summary
-// of its last posted review (store.LastReviewSummaries; zero = none), and
-// the time of the review request on it its mute or the filters declined
-// (kvPRRequestDeclined; zero = none).
+// of its last posted review (store.LastReviewSummaries; zero = none), the
+// time of the review request on it its mute or the filters declined
+// (kvPRRequestDeclined; zero = none), and what auto-approval recorded of
+// it where its repository is auto-approved (zero = it is not).
 type statusReads struct {
 	flagged  bool
 	last     store.ReviewSummary
 	declined time.Time
+	approval approvalReads
+}
+
+// approvalReads is what approvalLine decides from: the auto_approve_as
+// login of the PR's repository ("" = none), and the PR's refusal record
+// (KVPRAutoApproveRefused; nil = none) and auto-approval hold (nil = none).
+type approvalReads struct {
+	login   string
+	refused *AutoApproveRefused
+	hold    *store.AutoApproveHold
+}
+
+// autoApprovalReads reads, in one query each, the refusal records of every
+// PR (KVPRAutoApproveRefused) and the auto-approval holds of prIDs, the PRs
+// with a review: nothing when no watch auto-approves.
+func (e *Engine) autoApprovalReads(ctx context.Context, prIDs []int64) (map[int64]*AutoApproveRefused, map[int64]store.AutoApproveHold, error) {
+	if !e.cfg.AutoApproves() {
+		return nil, nil, nil
+	}
+	rows, err := e.st.KVValues(ctx, "pr.*.auto_approve_refused")
+	if err != nil {
+		return nil, nil, err
+	}
+	refusals := map[int64]*AutoApproveRefused{}
+	for key, v := range rows {
+		var id int64
+		if _, err := fmt.Sscanf(key, "pr.%d.auto_approve_refused", &id); err != nil || KVPRAutoApproveRefused(id) != key {
+			continue
+		}
+		if r, ok := ParseAutoApproveRefused(v); ok {
+			refusals[id] = &r
+		}
+	}
+	holds, err := e.st.AutoApproveHolds(ctx, prIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return refusals, holds, nil
+}
+
+// approvalLine is the line under a posted review of pr (last: its summary)
+// on why it brought no approval as a.login, in fixed words (publicText);
+// "" when there is none to say: no login, a PR GitHub closed or that is
+// the login's own, a review after magnum's round (a manual verdict), an
+// approval of the head by the login on GitHub (GitHub's latest reviews),
+// and a refusal record of another head or round or without a class. A stop
+// of auto-approval of the PR wins over the record, unless the round left
+// something to fix or cannot tell.
+func approvalLine(pr store.PR, last store.ReviewSummary, a approvalReads) string {
+	switch {
+	case a.login == "", pr.GHState != store.GHOpen,
+		github.SameAccount(github.Account(deref(pr.AuthorLogin), deref(pr.AuthorType)), a.login),
+		last.ReviewID == 0, last.ReviewID != deref(pr.LastReviewID), loginApproved(pr, a.login):
+		return ""
+	}
+	if a.hold != nil && a.hold.Held {
+		if blocks, known := roundBlocks(last, ""); blocks || !known {
+			return ""
+		}
+		return publicText(publicStopped, a.login)
+	}
+	if r := a.refused; r != nil && r.Head == pr.HeadSHA && r.RunID == last.RunID {
+		return publicText(publicRefusal(r.Public), a.login)
+	}
+	return ""
+}
+
+// loginApproved reports whether GitHub's latest reviews of pr (as the poller
+// last read them) hold login's approval of its head.
+func loginApproved(pr store.PR, login string) bool {
+	return slices.ContainsFunc(pr.LatestReviews, func(r store.LatestReview) bool {
+		return github.SameAccount(r.Login, login) && strings.EqualFold(r.State, "APPROVED") && r.CommitSHA == pr.HeadSHA
+	})
+}
+
+// publicText is what the status comment says of a refusal of class p as
+// login (plain text: an @ would notify them at every edit), in the third
+// person; "" for a class it has no words for, which says nothing.
+func publicText(p publicRefusal, login string) string {
+	switch p {
+	case publicWorkflows, publicAgentConfig, publicTooManyFiles:
+		return "Not approved as " + login + ": " + publicReason(p, login) + "."
+	case publicUnheard:
+		return "Not approved as " + login + ": " + publicReason(p, login) + ". The next review, or a review by " + login + ", decides."
+	case publicCIRuns:
+		return "Approval as " + login + " waits for the checks of this head to pass."
+	case publicCIFails:
+		return "Approval as " + login + " waits for the checks of this head to pass. Some fail now."
+	case publicStopped:
+		return "Magnum stopped approving this PR as " + login + ". A review by " + login + " decides."
+	case publicPostFailed:
+		return "The approval as " + login + " did not post. Magnum told " + login + "."
+	}
+	return ""
+}
+
+// publicReason is why a refusal of class p holds back the approval as
+// login, as one clause: the status comment's line after "Not approved as
+// <login>:" (publicText), and a withdrawal's dismissal message
+// (standingWithdrawal); "" for a class a withdrawal never has.
+func publicReason(p publicRefusal, login string) string {
+	inPerson := ", so " + login + " must review and approve it in person"
+	switch p {
+	case publicWorkflows:
+		return "the PR changes its own CI workflows or actions" + inPerson
+	case publicAgentConfig:
+		return "the PR changes the instructions or configuration of the AI review agents" + inPerson
+	case publicTooManyFiles:
+		return "the PR changes more files than Magnum can check" + inPerson
+	case publicUnheard:
+		return "one of Magnum's reviewers did not finish on this head, and Magnum approves only a complete review"
+	case publicCIFails:
+		return "some checks of this head fail, and Magnum approves as " + login + " only once they pass"
+	}
+	return ""
 }
 
 // declinedRequests reads every PR's declined review request
@@ -771,6 +904,8 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, r
 			v.at, v.held, v.verdict = deref(pr.ReviewedAt), held, postedVerdict(pr, reads.last)
 			if st, ok := e.statusFix(ctx, pr.ID); ok && st.Phase == FixPhaseFixing {
 				v.stage, v.cycle, v.cycles = statusFixing, st.Cycle, st.Cap
+			} else if !held {
+				v.approval = approvalLine(pr, reads.last, reads.approval) // the posted line says that a held one's full pass follows
 			}
 			return v, true
 		}

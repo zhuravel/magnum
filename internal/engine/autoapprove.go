@@ -25,6 +25,7 @@ package engine
 // and the approval of a merged or closed PR ends as history.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -452,13 +453,13 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	if hasPrior && (prior.State != store.AutoFailed || prior.Attempts >= autoApproveAttempts || e.now().Before(prior.UpdatedAt.Add(autoApproveRetry))) {
 		return
 	}
-	why, run := e.authorRefusal(c), "" // the PR's, whatever round reviewed it: once per head
-	if why == "" {
-		why, _ = e.autoGateRefusal(ctx, c, *sum)
+	refusal, run := e.authorRefusal(c), "" // the PR's, whatever round reviewed it: once per head
+	if refusal.why == "" {
+		refusal = e.autoGateRefusal(ctx, c, *sum)
 		run = sum.RunID
 	}
-	e.noteAutoRefused(ctx, c, run, why)
-	if why != "" {
+	e.noteAutoRefused(ctx, c, run, refusal)
+	if refusal.why != "" {
 		return
 	}
 	since := resumedSince(hold)
@@ -512,7 +513,9 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 // configured body and the marker: the row goes posting (a new one, or the
 // failed prior one), then standing with GitHub's review, or failed (a 403 or
 // 422 for good) with review.auto_approve_begin, review.auto_approved or
-// review.auto_approve_failed; a posted one is toasted. The post is pending
+// review.auto_approve_failed; a posted one is toasted, and the last one
+// that failed is recorded for the card and the status comment
+// (notePostFailed). The post is pending
 // (kvAutoApprovePending) from before it goes until its outcome is known, is
 // work in flight a restart waits for, and a stop gives it its grace
 // (writeContext); a stop starts none.
@@ -596,6 +599,7 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 		if final || a.Attempts >= autoApproveAttempts {
 			again = "not tried again for this review"
 			e.dropPending(ctx, pending, pr.HeadSHA) // nothing settles it now: an approval found later is not taken for this one
+			e.notePostFailed(ctx, store.RepoPR{PR: pr, Repo: full}, sum.RunID)
 		}
 		e.event(ctx, "warn", subject, "review.auto_approve_failed", fmt.Sprintf("could not approve %s as %s: %v; %s",
 			textx.ShortSHA(pr.HeadSHA), id.Login, err, again), data)
@@ -764,6 +768,9 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 		again := fmt.Sprintf("tried again in %s", humanDuration(autoApproveRetry))
 		if a.Attempts >= autoApproveAttempts {
 			again = "not tried again for this review"
+			pr := a.PR
+			pr.HeadSHA = a.HeadSHA // the head it approved: a PR that moved on since has nothing to say of it
+			e.notePostFailed(ctx, store.RepoPR{PR: pr, Repo: a.Repo}, a.RunID)
 		}
 		e.event(ctx, "warn", prSubject(repo, a.PR.Number), "review.auto_approve_failed", fmt.Sprintf("could not approve %s as %s: %s, and GitHub lists "+
 			"no approval of it; %s", textx.ShortSHA(a.HeadSHA), a.Login, why, again), data)
@@ -790,7 +797,7 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 	}
 	gate := e.standingGateRefusal(ctx, a, sum)
 	fp := runID + "|" + timeKey(a.PR.GHUpdatedAt)
-	if (gate == "" && e.autoFollow[a.ID] == fp) || e.autoReadHeld(a.Identity, a.PRID) {
+	if (gate.why == "" && e.autoFollow[a.ID] == fp) || e.autoReadHeld(a.Identity, a.PRID) {
 		return
 	}
 	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, a.PR.Number)
@@ -807,7 +814,7 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 		}
 	}
 	if sum != nil && sum.RunID != a.RunID {
-		if msg := standingWithdrawal(*sum, reviewBody(reviews, sum.ReviewID), gate); msg != "" {
+		if msg := standingWithdrawal(*sum, reviewBody(reviews, sum.ReviewID), gate, a.Login); msg != "" {
 			if err := e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, store.AutoEndedMagnum, msg); err == nil {
 				delete(e.autoFollow, a.ID)
 			}
@@ -836,20 +843,22 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 }
 
 // standingWithdrawal is the message that withdraws a standing automatic
-// approval after sum, a later round of magnum's (body: its review's, ""
-// when not read), and that GitHub shows on the dismissal; "" when the
-// approval stands. A round that leaves something to fix (or cannot tell)
-// withdraws it, and so does one the gates refuse (gate:
-// standingGateRefusal).
-func standingWithdrawal(sum store.ReviewSummary, body, gate string) string {
+// approval as login after sum, a later round of magnum's (body: its
+// review's, "" when not read), and that GitHub shows on the dismissal; ""
+// when the approval stands. A round that leaves something to fix (or
+// cannot tell) withdraws it, and so does one the gates refuse (gate:
+// standingGateRefusal), in its class's words (publicReason), never the
+// gate's own: "Magnum no longer approves it automatically" for a gate
+// without a class.
+func standingWithdrawal(sum store.ReviewSummary, body string, gate autoRefusal, login string) string {
 	var what string
 	switch blocks, known := roundBlocks(sum, body); {
 	case blocks:
 		what = "found blocking problems"
 	case !known:
 		what = "left earlier findings open"
-	case gate != "":
-		what = "found nothing to fix, but " + gate
+	case gate.why != "":
+		what = "found nothing to fix, but " + cmp.Or(publicReason(gate.public, login), "Magnum no longer approves it automatically")
 	default:
 		return ""
 	}
