@@ -14177,6 +14177,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestCompletionHandsTheJudgeTheOtherReportsOfItsRound, and the goldens judge_rereview_complete_simplify and
   judge_recovery_complete_simplify_first. TestAPushDropsTheCompletion now checks that the record moved to the new
   head with nothing waiting.
+  The re-reviews of those fixes, and the controller's rulings. A stop of the daemon during the head's last
+  completion round, before its judge was prompted, left a completion that waited with no round left, and the
+  restart's round of the head was an ordinary same-head review, which dropped the late reports it existed to
+  deliver. Such a completion is recognized first (`completion.interrupted`) and resumes its round
+  (`pipeline.Completion.Resume`): no role runs again, the judge gets the late reports that round verified and
+  the standing ones, and with none verified the round ends unheard and magnum gives up. An abort stops the
+  head's completions only when one waited or ran (`waitsFor`), and `stopPR` stops it before the PR leaves the
+  line. A completion that ended unheard keeps what each late role ended on as the record's causes, and the
+  next completion of that review runs only when they all pass by themselves: a usage limit or a logout gives
+  up instead of spending the second completion on the first review's stale "busy". The base of the head's
+  earlier completions stands in only for a completion's own round, so a later round of every reviewer on the
+  head is the base of its own completion. Past keeps only the heads that spent a round, gave up or were
+  stopped, and carries the stop. The re-review interval goes back to the start of the round the completion
+  completes (`completion.Anchor`), also after a retried or continued completion round. The race of the
+  abort with an auto-approval pass in between has no test: the harness has no seam between the two store
+  writes. Tests, failing first: TestAnInterruptedLastCompletionResumesWithItsVerifiedLateReport (a restart
+  after the second completion's late report verified, before its judge's prompt),
+  TestAResumedCompletionJudgesTheLateReportItsRoundVerified, TestAnAbortOfAnOrdinaryRoundLeavesTheHeadsCompletions,
+  TestAnUnheardCompletionOnAUsageLimitQueuesNoOther, TestACompletionOfAFullRoundRestsOnThatRound,
+  TestPastKeepsTheHeadsThatSpentOrStoppedTheirCompletions and TestARetriedCompletionKeepsTheReReviewIntervalOfItsRound.
 
 ## Learned rules
 

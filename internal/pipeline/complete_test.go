@@ -134,3 +134,59 @@ func TestACompletionWhoseLateReportsAreAllMissingPromptsNoJudge(t *testing.T) {
 		t.Fatal("the completion recorded its missing reports: nothing was judged")
 	}
 }
+
+// Codex's N1: a completion round a stop cut short before its judge's
+// prompt, on a head with no completion round left, resumes in that round
+// (Completion.Resume): codex-review does not run again; the judge gets the
+// late report the round's run verified and claude-review's standing one.
+// With no verified late report the round ends unheard, posting nothing.
+func TestAResumedCompletionJudgesTheLateReportItsRoundVerified(t *testing.T) {
+	for _, verified := range []bool{true, false} {
+		t.Run(map[bool]string{true: "verified", false: "not verified"}[verified], func(t *testing.T) {
+			e := newEnv(t)
+			dir := e.reportDir()
+			claude, in := completedRound(t, e)
+			in.Complete.Resume = true
+			codex := filepath.Join(dir, "codex-review.md")
+			state, outcome := store.RunAbandoned, ReportCancelled
+			if verified {
+				state, outcome = store.RunVerified, ReportOK
+				if err := os.WriteFile(codex, []byte(agents.ReportMarker("r-late")+"\n[P2] codex's late finding\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := e.st.CreateRun(e.ctx, store.Run{PRID: e.pr.ID, Round: 2, Role: string(agents.RoleCodexReview), Kind: store.RunRereview,
+				TargetSHA: target, State: state, Outcome: new(outcome), ReportPath: new(codex)}); err != nil {
+				t.Fatal(err)
+			}
+			fa := captureJudge(e)
+			e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(602, "COMMENTED", "COMMENT").behavior(t)}
+			res, err := e.r.RunRound(e.ctx, in)
+			if n := len(e.ag.shellCallsFor(agents.RoleCodexReview)); n != 0 {
+				t.Fatalf("codex-review ran %d times, want none: its round ran it", n)
+			}
+			if !verified {
+				if err != nil || res.Outcome != OutcomeUnheard || len(e.ag.submitsFor(agents.RoleJudge)) != 0 {
+					t.Fatalf("RunRound = %+v, %v, judge prompts %d: want it unheard, no judge", res, err, len(e.ag.submitsFor(agents.RoleJudge)))
+				}
+				return
+			}
+			if err != nil || res.Outcome != OutcomePosted {
+				t.Fatalf("RunRound = %+v, %v", res, err)
+			}
+			if _, err := os.Stat(codex + ".prev"); err == nil {
+				t.Fatal("the verified late report was set aside")
+			}
+			jd := fa.data(t)
+			want := map[string]string{string(agents.RoleClaude): claude, string(agents.RoleCodexReview): codex}
+			if len(jd.Reports) != 2 {
+				t.Fatalf("reports %+v", jd.Reports)
+			}
+			for _, r := range jd.Reports {
+				if r.Missing || r.Path != want[r.Role] || r.Late != (r.Role == string(agents.RoleCodexReview)) {
+					t.Errorf("report %+v, want %s", r, want[r.Role])
+				}
+			}
+		})
+	}
+}

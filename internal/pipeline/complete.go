@@ -49,6 +49,12 @@ type Completion struct {
 	// ForcePushed: Since is no longer in the branch; BaseMerged: the
 	// commits since it merged a branch in (RoundInput's, for Since).
 	ForcePushed, BaseMerged bool
+	// Resume: the round resumes the completion round RoundInput.Round, which
+	// a stop of the daemon cut short before its judge was prompted, when the
+	// head has no completion round left: no role runs again, and the judge
+	// gets the late reports that round's runs verified and the standing ones
+	// (none verified: the round ends unheard).
+	Resume bool
 }
 
 // completes is in's completion: a same-head re-review or recovery that
@@ -97,14 +103,26 @@ func CompletionRoles(roles, toRun []config.Role, names []string) []config.Role {
 	return out
 }
 
-// lateUnheard reports whether every role the completion runs left no
-// usable report again: its judge has nothing new to decide.
+// reruns names the roles c's round runs again: its Roles, none when it
+// resumes a round that ran them (Resume).
+func (c *Completion) reruns() []string {
+	if c.Resume {
+		return nil
+	}
+	return c.Roles
+}
+
+// lateUnheard reports whether every late role of the completion (one it
+// runs, or, resumed, one its round ran) left no usable report: its judge
+// has nothing new to decide.
 func (rd *round) lateUnheard() bool {
-	running := rd.running()
-	if rd.completion() == nil || rd.in.Kind == KindContinue || len(running) == 0 {
+	if rd.completion() == nil || rd.in.Kind == KindContinue {
 		return false
 	}
-	for _, role := range running {
+	for _, role := range rd.order {
+		if !rd.late(role.Name) {
+			continue
+		}
 		if rep, ok := rd.report(role); ok && rep.Status == ReportOK {
 			return false
 		}

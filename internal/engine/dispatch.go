@@ -584,7 +584,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	}
 	switch {
 	case job.complete != nil:
-		toRun = pipeline.CompletionRoles(roles, toRun, job.complete.Roles)
+		toRun = pipeline.CompletionRoles(roles, toRun, job.complete.rerun())
 	case job.deltaCheck || job.sameHead:
 		toRun = judgeAlone(toRun)
 	}

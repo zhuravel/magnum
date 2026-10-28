@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -615,5 +616,217 @@ func TestACompletionsRoundIsOnRecordFromItsStart(t *testing.T) {
 	ins := h.rd.all()
 	if len(ins) != 3 || ins[2].Complete == nil || ins[2].Complete.Base != 1 || ins[2].Complete.Round != 2 {
 		t.Fatalf("rounds = %d, the second completion %+v: want it to complete round 2 on round 1's reports", len(ins), ins[len(ins)-1].Complete)
+	}
+}
+
+// completionCalls has the auto harness's completion rounds end, in turn,
+// as ends say (the last one repeats; "" = as the plan posts), each through
+// completionRounds' script.
+func completionCalls(h *harness, ends ...string) {
+	var mu sync.Mutex
+	n := 0
+	scripts := map[string]func(pipeline.RoundInput) (pipeline.RoundResult, error){}
+	base := h.rd.script
+	for _, end := range ends {
+		if _, ok := scripts[end]; ok {
+			continue
+		}
+		h.rd.script = base
+		completionRounds(h, end)
+		scripts[end] = h.rd.script
+	}
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if in.Complete == nil {
+			return base(in)
+		}
+		mu.Lock()
+		end := ends[min(n, len(ends)-1)]
+		n++
+		mu.Unlock()
+		return scripts[end](in)
+	}
+}
+
+// Codex's N1: the daemon stopped during the head's second completion,
+// after its late codex-review report verified and before its judge was
+// prompted. The restart's round of the head is that completion again, in
+// the same round: no third reviewer attempt, its judge gets the verified
+// late report and the standing ones, and its clean review is approved.
+// An ordinary same-head round would have posted a review without them.
+func TestAnInterruptedLastCompletionResumesWithItsVerifiedLateReport(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, cleanRound)
+	completionCalls(h, pipeline.OutcomeUnheard, "")
+	h.firstRound("b1")
+	h.tick() // completion 1 hears no one
+	resumeAt := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if in.Complete == nil {
+			return resumeAt(in)
+		}
+		// codex-review's late report verifies; the daemon stops before the judge's prompt.
+		for _, r := range []store.Run{
+			{Role: "codex-review", State: store.RunVerified, Outcome: new(pipeline.ReportOK)},
+			{Role: store.RoleJudge, State: store.RunPending},
+		} {
+			r.PRID, r.Round, r.Kind, r.TargetSHA, r.Identity, r.ReviewerLogin, r.PromptText = in.PR.ID, in.Round, store.RunRereview,
+				in.TargetSHA, in.PR.Identity, "talkable[bot]", "p"
+			if _, err := h.st.CreateRun(h.ctx, r); err != nil {
+				return failRound(h.t, err)
+			}
+		}
+		if err := shutDown(h, in.PR.ID); err != nil {
+			return failRound(h.t, err)
+		}
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeStopped, Round: in.Round, Error: "pipeline: round cancelled: context canceled"}, nil
+	}
+	h.tick() // completion 2, cut short
+	second := h.rd.all()[2]
+	h.rd.script = resumeAt
+	h.e = New(h.d) // the restart
+	h.startup()
+	h.wantState(2, store.PRRereviewPending)
+	h.tick()
+	ins := h.rd.all()
+	if len(ins) != 4 {
+		t.Fatalf("rounds = %d, want the review, two completions and the resumed one", len(ins))
+	}
+	in := ins[3]
+	if c := in.Complete; c == nil || !c.Resume || in.Round != second.Round || !slices.Equal(c.Roles, []string{"codex-review"}) {
+		t.Fatalf("the round after the restart: round %d (second completion's %d), completion %+v: want the second completion resumed",
+			in.Round, second.Round, in.Complete)
+	}
+	if got := h.workspaceRoles(in.PR.ID); !slices.Equal(got, []string{"codex-judge"}) {
+		t.Fatalf("workspace roles = %v, want the judge alone: no third codex-review", got)
+	}
+	if rec := h.e.completionOf(h.ctx, in.PR.ID); len(rec.Rounds) != 2 {
+		t.Fatalf("completion rounds %v, want the head's two", rec.Rounds)
+	}
+	h.flush()
+	if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
+		t.Fatalf("posted = %q, want the approval of b1", got)
+	}
+}
+
+// The reviewer's N1: an abort of an ordinary round leaves the head's
+// completions alone: the review the operator asks for next, which misses a
+// reviewer, gets its completion.
+func TestAnAbortOfAnOrdinaryRoundLeavesTheHeadsCompletions(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, cleanRound, missedBusy, cleanRound)
+	h.firstRound("b1")
+	h.tick() // the completion of b1, clean
+	h.flush()
+	h.moveTo(prSpec{head: "b2"})
+	h.tick()
+	h.wantState(2, store.PRRereviewPending)
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestDone {
+		t.Fatalf("abort: %s %q", r.State, deref(r.Result))
+	}
+	if rec := h.e.completionOf(h.ctx, h.pr(2).ID); rec.Stopped {
+		t.Fatalf("record after the abort of b2's ordinary re-review: %+v, want its completions on", rec)
+	}
+	h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	for range 4 {
+		h.flush()
+	}
+	if q := completeQueued(t, h); len(q) != 2 || q[1]["head"] != "b2" {
+		t.Fatalf("pr.complete_queued events = %+v, want b2's", q)
+	}
+}
+
+// The reviewer's N2: a completion whose late codex-review hit its usage
+// limit heard no one, and the second completion was queued on the first
+// review's stale "busy". The completion's own causes decide: one that
+// passes nothing by itself gives up, and the refusal stands.
+func TestAnUnheardCompletionOnAUsageLimitQueuesNoOther(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy)
+	script := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if in.Complete == nil {
+			return script(in)
+		}
+		reset := h.clock.Now().Add(48 * time.Hour)
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeUnheard, Round: in.Round, TargetSHA: in.TargetSHA,
+			Reports: map[agents.Role]pipeline.RoleReport{"codex-review": {Role: "codex-review", Kind: "codex",
+				Status: string(agents.HealthUsageLimit), Health: &agents.Health{Kind: agents.HealthUsageLimit, ResetAt: &reset}}}}, nil
+	}
+	h.firstRound("b1")
+	h.tick() // completion 1: codex-review is at its usage limit
+	h.flush()
+	if q := completeQueued(t, h); len(q) != 1 {
+		t.Fatalf("pr.complete_queued events = %+v, want the first alone", q)
+	}
+	if evs := approvalEvents(t, h, 2, "pr.complete_gave_up"); len(evs) != 1 {
+		t.Fatalf("pr.complete_gave_up events = %+v, want one", evs)
+	}
+	h.wantState(2, store.PRReviewed)
+	h.advance(statusEvery)
+	h.e.noteStatusComments(h.ctx)
+	h.wantApprovalLine(aliceUnheard)
+}
+
+// The reviewer's N3: a later review of the head that ran every reviewer (a
+// forced round in fresh sessions) is the base of its own completion, not
+// the head's first one: its late reviewer re-reviews what that round asked.
+func TestACompletionOfAFullRoundRestsOnThatRound(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy)
+	completionCalls(h, pipeline.OutcomeUnheard)
+	h.firstRound("b1")
+	h.tick() // completion 1 hears no one: attempt 2 waits
+	h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}, Fresh: true})
+	h.tick() // the forced round, every reviewer: codex-review misses again
+	h.tick() // its completion
+	ins := h.rd.all()
+	if len(ins) != 4 || ins[2].Complete != nil || ins[3].Complete == nil {
+		t.Fatalf("rounds = %d, want the review, a completion, the forced round and its completion", len(ins))
+	}
+	if c := ins[3].Complete; c.Round != 3 || c.Base != 3 {
+		t.Fatalf("the forced round's completion: %+v, want round 3 on its own reports (base 3)", c)
+	}
+}
+
+// The reviewer's N5: the record keeps an earlier head only when it spent a
+// completion or the operator stopped them, so heads that spent nothing never
+// push a spent one out, and a push back to a stopped head finds it stopped.
+func TestPastKeepsTheHeadsThatSpentOrStoppedTheirCompletions(t *testing.T) {
+	rec := completion{Head: "a", Rounds: []int{2, 3}, GaveUp: true}
+	for _, head := range []string{"b", "c", "d", "e", "f", "g", "h"} {
+		rec = rec.forHead(head)
+	}
+	if back := rec.forHead("a"); !slices.Equal(back.Rounds, []int{2, 3}) || !back.GaveUp {
+		t.Fatalf("back on a after seven heads that spent nothing: %+v, want its two rounds", back)
+	}
+	stopped := completion{Head: "s", Stopped: true}.forHead("t").forHead("s")
+	if !stopped.Stopped {
+		t.Fatalf("back on a stopped head: %+v, want it stopped", stopped)
+	}
+	if fresh := (completion{Head: "x"}).forHead("y"); len(fresh.Past) != 0 {
+		t.Fatalf("a head that spent nothing is kept: %+v", fresh.Past)
+	}
+}
+
+// The reviewer's N6: a completion whose first round timed out and whose
+// retry posted gives the re-review interval back to the round it
+// completes, not to the first completion round's start.
+func TestARetriedCompletionKeepsTheReReviewIntervalOfItsRound(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, cleanRound)
+	completionCalls(h, pipeline.OutcomeTimeout, "")
+	h.firstRound("b1")
+	start := deref(h.pr(2).LastRoundStartedAt)
+	h.advance(10 * time.Minute)
+	h.tick() // completion round 1 times out
+	h.advance(5 * time.Minute)
+	h.tick() // its retry posts
+	if n := len(h.rd.all()); n != 3 {
+		t.Fatalf("rounds = %d, want the review, the completion and its retry", n)
+	}
+	if pr := h.wantState(2, store.PRReviewed); !deref(pr.LastRoundStartedAt).Equal(start) {
+		t.Fatalf("last_round_started_at = %v, want the completed round's start %v", deref(pr.LastRoundStartedAt), start)
 	}
 }

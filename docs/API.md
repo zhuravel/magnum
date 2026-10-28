@@ -16229,6 +16229,12 @@ type Completion struct {
 	// ForcePushed: Since is no longer in the branch; BaseMerged: the
 	// commits since it merged a branch in (RoundInput's, for Since).
 	ForcePushed, BaseMerged bool
+	// Resume: the round resumes the completion round RoundInput.Round, which
+	// a stop of the daemon cut short before its judge was prompted, when the
+	// head has no completion round left: no role runs again, and the judge
+	// gets the late reports that round's runs verified and the standing ones
+	// (none verified: the round ends unheard).
+	Resume bool
 }
     Completion is what a completion round completes (RoundInput.Complete): the
     clean review of round Round, whose judge went without the reports of Roles.

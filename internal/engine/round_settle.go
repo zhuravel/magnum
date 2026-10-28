@@ -387,6 +387,10 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 		u.Set("reviewed_at", now)
 		u.Set("last_review_login", login)
 	}
+	var completed completion
+	if in.Complete != nil {
+		completed = e.completionOf(ctx, pr.ID) // complete.go: a completion keeps the re-review interval of its round
+	}
 	// set reads pr, to and next when it runs: the head-moved retry below
 	// reassigns them.
 	set := func(u *store.PRUpdate) {
@@ -395,7 +399,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 		}
 		recordReview(u)
 		if in.Complete != nil {
-			giveBackStart(u, job, pr) // complete.go: a completion keeps the re-review interval of its round
+			giveBackStart(u, pr, completed)
 		}
 		u.Set("attempts", 0)
 		u.Set("next_attempt_at", nil)

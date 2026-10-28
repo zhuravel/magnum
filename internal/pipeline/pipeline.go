@@ -839,7 +839,7 @@ func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
 		toRun = []config.Role{judge} // the reviewers' reports are stored: none of them runs
 	}
 	if c := completes(in); c != nil && in.Kind != KindContinue {
-		toRun = CompletionRoles(in.Roles, toRun, c.Roles) // the judge and the roles the review went without
+		toRun = CompletionRoles(in.Roles, toRun, c.reruns()) // the judge and the roles the review went without
 	}
 	rd.plan(toRun)
 	rd.res = RoundResult{Round: in.Round, ReportDir: rd.dir, TargetSHA: in.TargetSHA, Reports: map[agents.Role]RoleReport{}}
@@ -1120,7 +1120,7 @@ func (rd *round) setAsideStale() error {
 	if rd.in.Kind != KindContinue {
 		if !rd.in.StoredReports {
 			for _, role := range rd.order {
-				if rd.completion() == nil || rd.late(role.Name) {
+				if c := rd.completion(); c == nil || slices.Contains(c.reruns(), role.Name) {
 					files = append(files, role.ReportFile())
 				}
 			}
@@ -1168,8 +1168,8 @@ func (rd *round) existingReports(ctx context.Context) {
 	var stopped time.Time           // the latest end of the paused round's runs on this head
 	from, to := rd.in.Round, rd.in.Round
 	if c := rd.completion(); c != nil {
-		from = c.Base // the round whose reviewers' reports the completed review rests on
-		if rd.in.Kind != KindContinue {
+		from = c.Base                                // the round whose reviewers' reports the completed review rests on
+		if rd.in.Kind != KindContinue && !c.Resume { // a continue, or a resume, reads its own round too
 			to = c.Round
 		}
 	}

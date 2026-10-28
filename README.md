@@ -408,7 +408,8 @@ triage and no restarts. The judge gets the other reports of that round and the l
 decides the findings of the late ones while the others stand (a late finding the last review already
 posted is that finding, not a new one), and posts a new review, whose record lists only what it still went
 without: auto-approval decides on it as on any review. When every late reviewer misses again, the judge is
-not prompted and nothing is posted (`pr.complete_unheard`). A completion waits for what any automatic round
+not prompted and nothing is posted (`pr.complete_unheard`), and the next completion runs only when what each
+of them missed for passes by itself (a usage limit or a logout gives up). A completion waits for what any automatic round
 waits for (capacity, its slot or pin, the GitHub budget, the pause of a kind it needs, quiet hours, a
 snooze), but not for the push quiet period, the re-review interval or the daily cap. It never holds its
 approval for a full pass, and counts neither toward the daily cap, nor toward the re-reviews of a full
@@ -421,11 +422,15 @@ run or an eval replay. Nor does a delta check of a small push after the incomple
 missing reports of the older head, which a completion of the new one cannot complete, so its refusal stands
 until a full re-review (a limit of the design). A push or the close of the PR drops a completion that
 waits, and `magnum abort` (or the board's take-back) of one that waits or runs stops the head's
-completions (`pr.complete_stopped`); a new head gets its own. Each head gets 2 completion rounds, counted as
-they start, a failed round's retry included, and kept across a restart, a close and reopen, and a push
-back to the head; after them `pr.complete_gave_up` says so once and the refusal stands. A completion whose
-round fails writes `pr.complete_failed` and retries as a failed round does while the head has a round
-left.
+completions (`pr.complete_stopped`), also after a push back to the head; a new head gets its own, and an
+abort of any other round leaves them alone. Each head gets 2 completion rounds, counted as they start, a
+failed round's retry included, and kept across a restart, a close and reopen, and a push back to the
+head; after them `pr.complete_gave_up` says so once and the refusal stands. A completion whose round fails
+writes `pr.complete_failed` and retries as a failed round does while the head has a round left. A stop of
+the daemon during the head's last completion round, before its judge was prompted, resumes that round
+after the restart: no reviewer runs again, and the judge gets the late reports the round verified and the
+standing ones (with none verified, nothing is posted and Magnum gives up). The re-review interval a
+completion gives back is the one of the round it completes, also after a retried or continued round.
 
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the

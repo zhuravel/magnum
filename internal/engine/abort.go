@@ -417,6 +417,13 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, 
 		done = append(done, "sessions parked")
 	}
 
+	// An abort or an ignore stops the head's completion that waits or runs
+	// (a close only drops the one that waits), before the PR leaves the
+	// line: an auto-approval pass in between would queue it again.
+	stoppedCompletion := ""
+	if closed == nil {
+		stoppedCompletion = e.stopCompletion(ctx, repo, pr) // complete.go
+	}
 	to, err := e.settleStopped(ctx, pr, ignore)
 	switch {
 	case err != nil:
@@ -424,10 +431,8 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, 
 	case to != "":
 		done = append(done, "PR "+to)
 	}
-	if closed == nil { // an abort or an ignore stops the head's completions; a close only drops the one that waits
-		if note := e.stopCompletion(ctx, repo, pr); note != "" { // complete.go
-			done = append(done, note)
-		}
+	if stoppedCompletion != "" {
+		done = append(done, stoppedCompletion)
 	}
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID),
 		kvPRGateReason(pr.ID), KVPRWait(pr.ID))

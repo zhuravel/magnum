@@ -233,7 +233,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		// A completion: the judge and the roles the review it completes went
 		// without, no triage; the watch's other roles stay the round's
 		// candidates, whose reports of that review stand.
-		rs.toRun = pipeline.CompletionRoles(rs.roles, rs.toRun, rs.complete.Roles)
+		rs.toRun = pipeline.CompletionRoles(rs.roles, rs.toRun, rs.complete.rerun())
 	case rs.judgeOnly():
 		// A delta check, or a re-review of the same head: the judge alone,
 		// no triage.
