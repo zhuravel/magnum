@@ -385,24 +385,34 @@ func TestAHoldOnAPRTheListsOrFiltersKeepSaysNothing(t *testing.T) {
 // A PR that turns into a draft, or is muted, on the head its line spoke of
 // leaves auto-approval (it no longer decides on it, so its record stands
 // as it was): the line goes, though the posted line stays, and does not
-// come back while it stays a draft or muted, its checks passing or not.
+// come back while it stays a draft or muted, its checks passing or not. A
+// watch that reviews drafts (include_drafts) would review the draft on its
+// own, so its filters do not silence the line: the draft does.
 func TestAStaleLineGoesOnADraftOrAMutedPR(t *testing.T) {
+	toDraft := func(h *harness) { h.moveTo(prSpec{head: "b1", ci: "FAILURE", draft: true}) }
 	for _, tc := range []struct {
-		name string
-		turn func(h *harness)
+		name  string
+		mod   func(h *harness)
+		turn  func(h *harness)
+		draft bool
 	}{
-		{"a draft", func(h *harness) { h.moveTo(prSpec{head: "b1", ci: "FAILURE", draft: true}) }},
-		{"muted", func(h *harness) { h.muteRequest(ReqMute, 2) }},
+		{"a draft", nil, toDraft, true},
+		{"a draft on a watch that reviews drafts", func(h *harness) { h.cfg.Watches[0].IncludeDrafts = new(true) }, toDraft, true},
+		{"muted", nil, func(h *harness) { h.muteRequest(ReqMute, 2) }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newAutoHarness(t, approvesAsAlice)
+			mods := []func(*harness){approvesAsAlice}
+			if tc.mod != nil {
+				mods = append(mods, tc.mod)
+			}
+			h, _ := newAutoHarness(t, mods...)
 			h.reviewedFor(prSpec{head: "b1", ci: "FAILURE"})
 			h.wantApprovalLine(aliceCIFails)
 			tc.turn(h)
 			h.flush()
 			h.flush()
 			h.wantNoApprovalLine()
-			h.moveTo(prSpec{head: "b1", ci: "SUCCESS", draft: tc.name == "a draft"})
+			h.moveTo(prSpec{head: "b1", ci: "SUCCESS", draft: tc.draft})
 			h.flush()
 			h.flush()
 			h.wantNoApprovalLine()
@@ -611,6 +621,64 @@ func TestAWithdrawalKeepsItsDetailLocalAndItsGitHubWordsPublic(t *testing.T) {
 	}
 	if toasts := toastsWith(h, "withdrew your approval: talkable#2"); len(toasts) != 1 || !strings.Contains(toasts[0], local) {
 		t.Fatalf("toasts = %q", toasts)
+	}
+}
+
+// The note a withdrawal keeps for its later attempts (kvAutoWithdrawNote)
+// goes with it at each of its ends: GitHub took a later attempt
+// (dismissed), refused every one (failed for good), or the PR was merged
+// before one went through.
+func TestEveryEndOfAWithdrawalDropsItsNote(t *testing.T) {
+	failing := &github.APIError{Op: "dismiss review", Status: 502, Message: "Bad Gateway"}
+	for _, tc := range []struct {
+		name  string
+		end   func(h *harness)
+		state string
+		by    string
+	}{
+		{"dismissed", func(h *harness) {
+			h.gh.dismissErr = nil
+			h.advance(autoApproveRetry)
+			h.tick()
+		}, store.AutoDismissed, store.AutoEndedMagnum},
+		{"failed for good", func(h *harness) {
+			for range autoApproveAttempts - 1 {
+				h.advance(autoApproveRetry)
+				h.tick()
+			}
+		}, store.AutoFailed, store.AutoEndedMagnum},
+		{"the PR merged", func(h *harness) {
+			h.advance(time.Minute)
+			h.open(prSpec{n: 1, head: "base1"}) // #2 left the OPEN list
+			h.gh.closed[2] = "MERGED"
+			for range 3 {
+				h.advance(30 * time.Second)
+				h.tick()
+			}
+		}, store.AutoDismissed, store.AutoEndedClosed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t, approvesAsAlice)
+			h.reviewedFor(prSpec{head: "b1"})
+			h.gh.dismissErr = failing
+			h.moveTo(prSpec{head: "b2", files: []string{"app/models/order.rb", "AGENTS.md"}})
+			h.reviewTo(2, "b2")
+			h.tick()
+			key := kvAutoWithdrawNote(h.pr(2).ID)
+			if a := h.autoApproval(2); a.State != store.AutoDismissing {
+				t.Fatalf("approval = %+v, want it being withdrawn", a)
+			}
+			if v, ok := h.kvOf(key); !ok || !strings.Contains(v, "(AGENTS.md)") {
+				t.Fatalf("%s = %q, %v: want the gate's words kept for the next attempt", key, v, ok)
+			}
+			tc.end(h)
+			if a := h.autoApproval(2); a.State != tc.state || a.EndedBy != tc.by {
+				t.Fatalf("approval = %+v, want %s by %s", a, tc.state, tc.by)
+			}
+			if v, ok := h.kvOf(key); ok {
+				t.Fatalf("%s = %q after the withdrawal ended", key, v)
+			}
+		})
 	}
 }
 
