@@ -98,3 +98,21 @@ func TestThrottleACIFollowUpWaitsOnlyForASnooze(t *testing.T) {
 	f.RequestedAt = ago(10 * time.Second)
 	wantDecision(t, Throttle(d, f, now), false, f.RequestedAt.Add(time.Minute), ReasonRequested)
 }
+
+// A completion of a clean review that went without a reviewer (CompleteAt)
+// runs that reviewer again on the head the review covered: no push came,
+// so the quiet period, the re-review interval and the daily cap do not
+// hold it; a snooze does.
+func TestThrottleACompletionWaitsOnlyForASnooze(t *testing.T) {
+	d := replyDaemon()
+	d.MaxRoundsPerPRPerDay = 2
+	f := PRFacts{ReviewedSHA: reviewed, HeadChangedAt: ago(time.Minute), PendingSince: ago(time.Minute),
+		LastRoundStartedAt: ago(5 * time.Minute), RoundsToday: 2}
+	if got := Throttle(d, f, now); got.Ready {
+		t.Fatalf("without a completion: %+v, want the quiet period, the interval or the cap", got)
+	}
+	f.CompleteAt = ago(30 * time.Second)
+	wantDecision(t, Throttle(d, f, now), true, now, "")
+	f.SnoozedUntil = now.Add(time.Hour)
+	wantDecision(t, Throttle(d, f, now), false, now.Add(time.Hour), ReasonSnoozed)
+}

@@ -299,7 +299,7 @@ func (e *Engine) dropCIRed(ctx context.Context, repo store.Repo, pr store.PR, st
 // waitsForCIRedAlone reports whether pr waits in rereview_pending at the
 // head magnum reviewed (not forced, open) for nothing but its judge check
 // of red CI: no review request waiting for its round, no replies to
-// re-decide, and no retry of another round (a retry is the follow-up's own
+// re-decide, no completion of its review, and no retry of another round (a retry is the follow-up's own
 // when it started the PR's last round, rec.Started).
 func (e *Engine) waitsForCIRedAlone(ctx context.Context, pr store.PR, rec ciFollowup) bool {
 	if pr.State != store.PRRereviewPending || pr.Forced || pr.GHState != store.GHOpen || postMerge(pr) ||
@@ -311,6 +311,9 @@ func (e *Engine) waitsForCIRedAlone(ctx context.Context, pr store.PR, rec ciFoll
 	}
 	if _, _, ok := e.replyTrigger(ctx, pr); ok {
 		return false
+	}
+	if _, ok := e.completionWait(ctx, pr); ok {
+		return false // a completion of its review (complete.go)
 	}
 	retry := pr.Attempts > 0 || pr.NextAttemptAt != nil || pr.LastError != nil
 	own := !rec.Started.IsZero() && pr.LastRoundStartedAt != nil && !rec.Started.Before(pr.LastRoundStartedAt.Add(-time.Second))

@@ -510,22 +510,24 @@ type statusReads struct {
 // approvalReads is what approvalLine decides from: the PR's repository
 // ("owner/name") and the auto_approve_as login it is approved as ("" =
 // none), and the PR's refusal record (KVPRAutoApproveRefused; nil = none),
-// auto-approval hold (nil = none) and latest automatic approval (nil =
-// none).
+// auto-approval hold (nil = none), latest automatic approval (nil = none)
+// and record of completions (kvPRComplete; nil = none).
 type approvalReads struct {
 	repo, login string
 	refused     *AutoApproveRefused
 	hold        *store.AutoApproveHold
 	approval    *store.AutoApproval
+	completion  *completion
 }
 
 // approvalTick is what noteStatusComments reads of auto-approval once a
-// tick (autoApprovalReads), by PR: the refusal records, the holds and the
-// latest automatic approvals.
+// tick (autoApprovalReads), by PR: the refusal records, the holds, the
+// latest automatic approvals and the records of completions.
 type approvalTick struct {
-	refusals  map[int64]*AutoApproveRefused
-	holds     map[int64]store.AutoApproveHold
-	approvals map[int64]store.AutoApproval
+	refusals    map[int64]*AutoApproveRefused
+	holds       map[int64]store.AutoApproveHold
+	approvals   map[int64]store.AutoApproval
+	completions map[int64]completion
 }
 
 // of is PR prID's share of t, for repository repo approved as login.
@@ -534,13 +536,17 @@ func (t approvalTick) of(repo, login string, prID int64) approvalReads {
 	if a, ok := t.approvals[prID]; ok {
 		r.approval = &a
 	}
+	if c, ok := t.completions[prID]; ok {
+		r.completion = &c
+	}
 	return r
 }
 
-// autoApprovalReads reads, in one query each, the refusal records of every
-// PR (KVPRAutoApproveRefused), and the auto-approval holds and the latest
-// automatic approvals of prIDs, the PRs with a review: nothing when no
-// watch auto-approves.
+// autoApprovalReads reads, in one query each, the refusal records and the
+// records of completions of every PR (KVPRAutoApproveRefused,
+// kvPRComplete), and the auto-approval holds and the latest automatic
+// approvals of prIDs, the PRs with a review: nothing when no watch
+// auto-approves.
 func (e *Engine) autoApprovalReads(ctx context.Context, prIDs []int64) (approvalTick, error) {
 	if !e.cfg.AutoApproves() {
 		return approvalTick{}, nil
@@ -549,7 +555,7 @@ func (e *Engine) autoApprovalReads(ctx context.Context, prIDs []int64) (approval
 	if err != nil {
 		return approvalTick{}, err
 	}
-	t := approvalTick{refusals: map[int64]*AutoApproveRefused{}}
+	t := approvalTick{refusals: map[int64]*AutoApproveRefused{}, completions: map[int64]completion{}}
 	for key, v := range rows {
 		var id int64
 		if _, err := fmt.Sscanf(key, "pr.%d.auto_approve_refused", &id); err != nil || KVPRAutoApproveRefused(id) != key {
@@ -558,6 +564,17 @@ func (e *Engine) autoApprovalReads(ctx context.Context, prIDs []int64) (approval
 		if r, ok := ParseAutoApproveRefused(v); ok {
 			t.refusals[id] = &r
 		}
+	}
+	if rows, err = e.st.KVValues(ctx, "pr.*.complete"); err != nil {
+		return approvalTick{}, err
+	}
+	for key, v := range rows {
+		var id int64
+		var c completion
+		if _, err := fmt.Sscanf(key, "pr.%d.complete", &id); err != nil || kvPRComplete(id) != key || json.Unmarshal([]byte(v), &c) != nil {
+			continue
+		}
+		t.completions[id] = c
 	}
 	if t.holds, err = e.st.AutoApproveHolds(ctx, prIDs); err != nil {
 		return approvalTick{}, err
@@ -597,10 +614,15 @@ func (e *Engine) approvalLineFor(ctx context.Context, pr store.PR, reads statusR
 // as the login that stands on it (approvalStands); a round that left
 // something to fix or cannot tell; and a refusal record of another head or
 // round, or without a class. A stop of auto-approval of the PR wins over
-// the record.
+// the record. While the completion of a review that did not hear every
+// reviewer waits or runs (completion.dueFor; the PR waits in line or a
+// round runs), the line says that magnum runs the missing reviewer again
+// (completingText).
 func approvalLine(pr store.PR, last store.ReviewSummary, a approvalReads) string {
+	completing := a.completion != nil && a.completion.dueFor(pr) &&
+		(pr.State == store.PRReviewed || pr.State == store.PRRereviewPending || pr.State == store.PRClaiming || slices.Contains(statusRoundStates, pr.State))
 	switch {
-	case a.login == "", pr.GHState != store.GHOpen, pr.State != store.PRReviewed, pr.IsDraft, pr.Muted,
+	case a.login == "", pr.GHState != store.GHOpen, pr.State != store.PRReviewed && !completing, pr.IsDraft, pr.Muted,
 		github.SameAccount(github.Account(deref(pr.AuthorLogin), deref(pr.AuthorType)), a.login),
 		last.ReviewID == 0, last.ReviewID != deref(pr.LastReviewID), loginApproved(pr, a.login),
 		approvalStands(a.approval, pr.HeadSHA, a.login):
@@ -613,9 +635,21 @@ func approvalLine(pr store.PR, last store.ReviewSummary, a approvalReads) string
 		return publicText(publicStopped, a.login)
 	}
 	if r := a.refused; r != nil && r.Head == pr.HeadSHA && r.RunID == last.RunID {
+		if p := publicRefusal(r.Public); p == publicUnheard && completing {
+			return completingText(a.login)
+		}
 		return publicText(publicRefusal(r.Public), a.login)
 	}
 	return ""
+}
+
+// completingText is what the status comment says, as login (plain text, in
+// the third person), of a clean review that did not hear every reviewer
+// while magnum runs the missing one again (complete.go): never the role
+// nor its status.
+func completingText(login string) string {
+	return "Not approved as " + login + " yet: one of Magnum's reviewers did not finish on this head, and Magnum runs it again. " +
+		"Magnum approves only a complete review."
 }
 
 // loginApproved reports whether GitHub's latest reviews of pr (as the poller

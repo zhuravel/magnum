@@ -47,3 +47,24 @@ func (e *Engine) confirmSameHead(ctx context.Context, job *roundJob, target stri
 		map[string]any{"reviewed_sha": reviewed, "target_sha": target})
 	return false
 }
+
+// noteSameHead completes, for job's round rs on the reviewed head, its
+// start event's name (what) and data: a re-review of the same head says so
+// (same_head) with a round.same_head event; a completion (complete.go)
+// names the round it completes (completes) and is named "completion of
+// round N" unless it continues a paused one, with no round.same_head (its
+// judge decides the late reports, not the threads alone).
+func (e *Engine) noteSameHead(ctx context.Context, job *roundJob, rs roundSetup, what string, data map[string]any) string {
+	switch {
+	case rs.complete != nil:
+		data["completes"], data["same_head"] = rs.complete.Round, rs.sameHead
+		if rs.kind != kindContinue {
+			what = completionWords(rs.complete)
+		}
+	case rs.sameHead:
+		data["same_head"] = true
+		e.event(ctx, "info", prSubject(job.repo, job.pr.Number), "round.same_head",
+			"same head: the judge re-decides the threads (no commits since "+textx.ShortSHA(rs.target)+")", map[string]any{"kind": rs.kind, "target_sha": rs.target})
+	}
+	return what
+}

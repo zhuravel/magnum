@@ -1245,7 +1245,13 @@ type JudgeData struct {
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
 	Reports         []Report // one per non-judge role of the round, in pipeline order
-	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
+	// LateReports are the labels of the Reports marked Late (always
+	// derived): a completion's judge (SameHead) went without them in its
+	// last review and decides their findings now, while the other reports
+	// stand as that review judged them. Rendered as one instruction by the
+	// rereview and recovery prompts, only then.
+	LateReports []string
+	ResultFile  string // <report dir>/<the judge's output>, e.g. codex-judge.json
 	// Magnum is the magnum executable the judge's post_review line runs
 	// (the daemon's own, absolute; "" = magnum on PATH). ReviewFile is
 	// where the judge writes the review it posts (<report dir>/review.json,
@@ -2498,7 +2504,11 @@ type Report struct {
 	Path    string // the report file (absolute); "" when Missing
 	Status  string // the role's outcome this round (ok, failed, timeout, ...); informational
 	Missing bool   // no usable report this round
-	Detail  string // why it is missing, e.g. "timed out after 40m"
+	// Late: a completion's report of a role the review it completes went
+	// without (pipeline.Completion), rendered as `<label> (late)` in
+	// `reports` and named in JudgeData.LateReports.
+	Late   bool
+	Detail string // why it is missing, e.g. "timed out after 40m"
 	// Reason is Detail under its older name, for prompt files that still
 	// render `missing ({{.Reason}})`.
 	Reason string
@@ -6696,6 +6706,11 @@ type PRFacts struct {
 	// Throttle then holds the PR only for its snooze: CI has finished, and
 	// no code changed.
 	CIRedAt time.Time
+	// CompleteAt is when the completion of magnum's clean review of the head
+	// it reviewed (no push since), which went without some reviewers'
+	// reports, was queued; zero = none is due. Throttle then holds the PR
+	// only for its snooze, as for CIRedAt: no code changed.
+	CompleteAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
 	// (config.SelfLogins, the board's "mine"): include_own = false skips it
@@ -6798,6 +6813,9 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
         above but the snooze is skipped, the reply debounce and interval too,
         so the PR is ready (the caller sets CIRedAt only while no push came
         since the review).
+      - A completion (CompleteAt set, no request): the clean review of the
+        reviewed head went without some reviewers' reports, which run again on
+        that head: as for CI red, only the snooze holds it.
       - Forced bypasses all of it: always ready.
 
     A zero timestamp or zero duration never blocks. When several rules hold
@@ -9670,6 +9688,10 @@ type Wait struct {
 	// CIRed: the round it waits for is a judge check of the reviewed head's
 	// CI, which turned red after the review (ciRedWait).
 	CIRed bool `json:"ci_red,omitempty"`
+	// Complete: the round it waits for completes the clean review of the
+	// reviewed head, which went without some reviewers' reports
+	// (completionWait, complete.go).
+	Complete bool `json:"complete,omitempty"`
 }
     Wait is why a PR waiting for a round has none yet (KVPRWait).
 
@@ -16181,6 +16203,29 @@ type CIGateResult struct {
     cannot approve in a few fixed words ("" = it may), and State, the CI state
     it decided by.
 
+type Completion struct {
+	Round int
+	Base  int
+	Roles []string
+	// Since is the head the reviewers of Base re-reviewed from; "" = they
+	// reviewed the whole PR (a first review, a recovery).
+	Since string
+	// ForcePushed: Since is no longer in the branch; BaseMerged: the
+	// commits since it merged a branch in (RoundInput's, for Since).
+	ForcePushed, BaseMerged bool
+}
+    Completion is what a completion round completes (RoundInput.Complete): the
+    clean review of round Round, whose judge went without the reports of Roles.
+    Base is the round whose reviewers' reports that review rests on: Round
+    itself, the round a round of the judge alone carried the missing reports
+    from, or, for a later completion, the first one's Base. The completion runs
+    Roles alone, with the reviewer prompts Base gave them: a re-review of the
+    commits since Since (with ForcePushed and BaseMerged of those commits),
+    or of the whole PR when Since is "". The judge gets the reports of Base's
+    other roles (their latest runs of rounds Base to Round on the head), and the
+    late ones. A continue of a paused completion carries it too (KindContinue):
+    its judge's reports come from rounds Base to the paused round.
+
 type DeltaCheck struct {
 	Lines int         `json:"lines"`
 	Files []DeltaFile `json:"files"`
@@ -16646,6 +16691,15 @@ type RoundInput struct {
 	// posts no review: the round ends OutcomeReplied, verified by the
 	// replies carrying its run's reply marker. 0 = an ordinary round.
 	Replies int
+	// Complete (rereview, recovery; with SameHead): the round completes the
+	// clean review of an earlier round whose judge went without some
+	// reviewers' reports for a cause that passes (complete.go): Roles hold
+	// the round's candidates, of which the judge and the roles Complete
+	// names run, with the reviewer prompts of the round it completes; the
+	// judge gets the other roles' reports of that round and the late ones,
+	// marked late. A continue of a paused completion (KindContinue) carries
+	// it too, so its judge's reports are the same. nil = no completion.
+	Complete *Completion
 	// CIRed (with SameHead): the round is a CI follow-up: a check of the
 	// head failed after the judge of its last review was prompted, so that
 	// review did not see it. The judge decides each failed check of the

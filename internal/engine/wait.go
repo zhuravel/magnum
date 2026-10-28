@@ -95,6 +95,10 @@ type Wait struct {
 	// CIRed: the round it waits for is a judge check of the reviewed head's
 	// CI, which turned red after the review (ciRedWait).
 	CIRed bool `json:"ci_red,omitempty"`
+	// Complete: the round it waits for completes the clean review of the
+	// reviewed head, which went without some reviewers' reports
+	// (completionWait, complete.go).
+	Complete bool `json:"complete,omitempty"`
 }
 
 // ParseWait reads a KVPRWait value; ok is false for "" or a value it cannot
@@ -113,6 +117,8 @@ func (w Wait) kind() string {
 		return "post-merge review"
 	case w.DeltaCheck:
 		return "delta check"
+	case w.Complete:
+		return "completion"
 	case w.CIRed:
 		return "CI check"
 	case w.Replies > 0:
@@ -357,11 +363,12 @@ func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *W
 // retry backoff, then the timing rules
 // (eligibility.Throttle, unless forced), then a mute, quiet hours (unless
 // the round runs the judge alone: a delta check, or a re-review of the same
-// head, a reply round's included; quietHoursGate), what holds every PR
-// (global), and finally the reason the last dispatch gave (store.KVPRGate);
-// with none of them it starts at the next dispatch (a judge check of red CI
-// says so: WaitCIRed). The wait says whether the round is a delta check
-// (deltaCheckDue) or a judge check of red CI (ciRedWait).
+// head, a reply round's included, but no completion; quietHoursGate), what
+// holds every PR (global), and finally the reason the last dispatch gave
+// (store.KVPRGate); with none of them it starts at the next dispatch (a
+// judge check of red CI says so: WaitCIRed). The wait says whether the
+// round is a delta check (deltaCheckDue), a completion (completionWait) or
+// a judge check of red CI (ciRedWait).
 func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now time.Time) Wait {
 	base := Wait{Rereview: deref(pr.ReviewedSHA) != "", Forced: pr.Forced, PostMerge: postMerge(pr)}
 	repo, _ := e.st.RepoByID(ctx, pr.RepoID)
@@ -374,10 +381,10 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	if !f.RepliedAt.IsZero() {
 		_, base.Replies, _ = e.replyTrigger(ctx, pr)
 	}
-	base.CIRed = !f.CIRedAt.IsZero()
+	base.CIRed, base.Complete = !f.CIRedAt.IsZero(), !f.CompleteAt.IsZero()
 	with := func(w Wait) Wait {
 		w.Rereview, w.Forced, w.PostMerge, w.DeltaCheck, w.Replies = base.Rereview, base.Forced, base.PostMerge, base.DeltaCheck, base.Replies
-		w.CIRed = base.CIRed
+		w.CIRed, w.Complete = base.CIRed, base.Complete
 		return w
 	}
 	if fw, ok := e.fixWaitOf(ctx, pr.ID); ok {
@@ -399,7 +406,7 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	if pr.Muted && !pr.Forced {
 		return with(Wait{Reason: WaitMuted, Detail: "nothing: the PR is muted"})
 	}
-	if spec := e.cfg.Daemon.QuietHours; !pr.Forced && quietHoursHold(spec, now, base.DeltaCheck || e.sameHeadDue(ctx, pr)) {
+	if spec := e.cfg.Daemon.QuietHours; !pr.Forced && quietHoursHold(spec, now, base.DeltaCheck || e.sameHeadDue(ctx, pr) && !base.Complete) {
 		return with(Wait{Reason: WaitQuietHours, Until: quietHoursEnd(spec, now), Detail: "the end of quiet hours (" + spec + ")"})
 	}
 	if global != nil {

@@ -73,6 +73,11 @@ type PRFacts struct {
 	// Throttle then holds the PR only for its snooze: CI has finished, and
 	// no code changed.
 	CIRedAt time.Time
+	// CompleteAt is when the completion of magnum's clean review of the head
+	// it reviewed (no push since), which went without some reviewers'
+	// reports, was queued; zero = none is due. Throttle then holds the PR
+	// only for its snooze, as for CIRedAt: no code changed.
+	CompleteAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
 	// (config.SelfLogins, the board's "mine"): include_own = false skips it

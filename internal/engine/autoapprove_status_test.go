@@ -129,13 +129,16 @@ func TestACleanReviewOfAWorkflowChangeSaysWhoMustApprove(t *testing.T) {
 
 // On talkable#12092 codex-review did not finish ("codex-review (busy)"):
 // the line says that one of Magnum's reviewers did not finish, never which
-// role nor its status.
+// role nor its status. Here it stays busy through both completions of the
+// head (complete_test.go), after which the line is the refusal's.
 func TestAReviewThatMissedAReviewerSaysSoWithoutTheRole(t *testing.T) {
 	h, plan := newAutoHarness(t, approvesAsAlice)
 	plan.set(2, autoRound{findings: map[string]int{}, verdict: store.VerdictClean, line: "No problems found. LGTM :shipit:",
 		missing: []pipeline.MissingReport{{Role: "codex-review", Status: pipeline.ReportBusy}}})
 	h.reviewedFor(prSpec{head: "b1"})
-	h.wantRefused(2, "codex-review (busy)")
+	if got := h.autoRefused(2); !strings.Contains(got, "codex-review (busy)") {
+		t.Fatalf("held back for %q, want the reviewer it did not hear", got)
+	}
 	h.wantApprovalLine(aliceUnheard)
 	body := h.statusComment(2).body
 	for _, bad := range []string{"codex-review", "busy", "claude-review"} {

@@ -183,7 +183,7 @@ func setAside(path string) error {
 // has one. The effort is the role's for the round (config.Role.EffortFor).
 func (rd *round) roleData(role config.Role, runID, path string) (string, agents.RoleData) {
 	in := rd.in
-	prev := rd.previousHead()
+	prev, forcePushed, baseMerged := rd.reviewersSince()
 	rereview := rd.reviewersRereview()
 	effort := role.EffortFor(rereview)
 	d := agents.RoleData{
@@ -197,7 +197,7 @@ func (rd *round) roleData(role config.Role, runID, path string) (string, agents.
 	}
 	kind := config.PromptInitial
 	if rereview {
-		kind, d.Mode, d.PreviousHeadSHA, d.ForcePushed, d.BaseMerged = config.PromptRereview, agents.ModeRereview, prev, in.ForcePushed, in.BaseMerged
+		kind, d.Mode, d.PreviousHeadSHA, d.ForcePushed, d.BaseMerged = config.PromptRereview, agents.ModeRereview, prev, forcePushed, baseMerged
 		if !in.Since.IsZero() {
 			d.Since = in.Since.UTC().Format(time.RFC3339)
 		}
@@ -679,8 +679,12 @@ func (rd *round) timeout(role config.Role) time.Duration { return role.Timeout.D
 // commits since the previous review (their rereview prompts and effort): a
 // re-review, or a recovery whose judge alone started fresh on purpose (its
 // prompt cache was cold, or its session served its max_session_rounds:
-// RoundInput.ColdJudge), with a previous head.
+// RoundInput.ColdJudge), with a previous head; a completion's reviewers
+// re-review as the round it completes had them (Completion.Since).
 func (rd *round) reviewersRereview() bool {
+	if c := rd.completion(); c != nil && rd.in.Kind != KindContinue {
+		return c.Since != ""
+	}
 	k := rd.in.Kind
 	return (k == KindRereview || k == KindRecovery && rd.in.ColdJudge) && rd.previousHead() != ""
 }

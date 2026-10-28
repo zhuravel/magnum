@@ -30,10 +30,11 @@ func (job *roundJob) judgeOnly() bool {
 // quietHoursGate is why [daemon] quiet_hours hold job now (the zero gate =
 // go): a round nobody forced waits inside them, unless it is a re-review of
 // the judge alone that continues no paused turn
-// (eligibility.QuietHoursHold).
+// (eligibility.QuietHoursHold); a completion runs reviewers too, so it
+// waits.
 func (e *Engine) quietHoursGate(job *roundJob) gate {
 	spec := e.cfg.Daemon.QuietHours
-	if job.pr.Forced || !quietHoursHold(spec, e.now(), job.judgeOnly() && !job.continued) {
+	if job.pr.Forced || !quietHoursHold(spec, e.now(), job.judgeOnly() && job.complete == nil && !job.continued) {
 		return gate{}
 	}
 	return gate{reason: WaitQuietHours,

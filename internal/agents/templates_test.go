@@ -467,6 +467,15 @@ func TestRenderGolden(t *testing.T) {
 	// the post_replies line. An ordinary re-review names a stopped thread too.
 	replies := sameHead
 	replies.Replies, replies.StopThreads = 2, 1
+	// A completion: the review of the head went without codex-review's
+	// report (its pane was busy), so magnum ran it again on the same head;
+	// the judge gets claude-review's report of that round and codex-review's
+	// late one, marked late, and decides the late report's findings, in its
+	// session or a fresh one. claude-simplify's report of that round stands
+	// too: no simplification rules, its proposals were posted already.
+	complete := sameHead
+	complete.Reports = []Report{{Role: "claude-review", Path: "/r/claude-review.md"},
+		{Role: "codex-review", Path: "/r/codex-review.md", Late: true}, {Role: "claude-simplify", Path: "/r/claude-simplify.md"}}
 	stopped := withNotes
 	stopped.StopThreads = 2
 
@@ -679,6 +688,8 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_same_head", "judge-recovery.md", sameHead},
 		{"judge_rereview_ci_red", "judge-rereview.md", ciRed},
 		{"judge_recovery_ci_red", "judge-recovery.md", ciRed},
+		{"judge_rereview_complete", "judge-rereview.md", complete},
+		{"judge_recovery_complete", "judge-recovery.md", complete},
 		{"judge_rereview_replies", "judge-rereview.md", replies},
 		{"judge_recovery_replies", "judge-recovery.md", replies},
 		{"judge_continue_replies", "judge-continue.md", replies},

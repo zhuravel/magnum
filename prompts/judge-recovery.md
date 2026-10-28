@@ -23,6 +23,7 @@ Only the commits since your last review (`{{.PreviousHeadShort}}`) changed ({{.D
 {{- if .SameHead}}
 The head is unchanged (`{{.PreviousHeadShort}}`): re-read the replies and the comments since your last review, re-decide each earlier finding under the reply contract, and run no check your last review already ran on this head.{{template "replies" .}}
 {{- template "ci-red" .}}
+{{- template "late-reports" .}}
 {{- end}}
 {{- if .FormerLogins}}
 {{template "former-logins" .}} {{template "post-as-reviewer" .}}

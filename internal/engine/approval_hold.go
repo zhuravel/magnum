@@ -18,8 +18,10 @@ package engine
 // whole diff, whose clean verdict approves and which is the PR's new
 // baseline. The hold applies to automatic and requested rounds alike (a
 // delta check, a recovery, an audit pass, a re-review of the same head); a
-// full pass, a post-merge review, a reply round, a CI check, a dry run and
-// an eval replay never hold, nor does a round in a repository whose clean
+// full pass, a post-merge review, a reply round, a CI check, a completion
+// (complete.go: it completes a review that did not hold, which the
+// re-reviews since the baseline now count), a dry run and an eval replay
+// never hold, nor does a round in a repository whose clean
 // review cannot lead to an approval (approvalPath: it comments anyway and
 // nothing approves as the operator). Auto-approval as the operator waits
 // for the full pass too (autoGateRefusal), and the status comment's posted
@@ -83,7 +85,7 @@ func (h heldReview) reason() string {
 // it may): approve_after_full_pass is set, the round is a re-review (a
 // delta check, a recovery, an audit pass, a re-review of the same head, a
 // round someone asked for), not a full pass, a post-merge review, an eval
-// replay, a dry run, a reply round or a CI check, the repository has an
+// replay, a dry run, a reply round, a CI check or a completion, the repository has an
 // approval to hold (approvalPath), and the PR had that many re-reviews or
 // more since its last full pass, else its first review
 // (rereviewsSinceFullPass).
@@ -91,7 +93,7 @@ func (e *Engine) approvalHoldDue(ctx context.Context, job *roundJob, rs *roundSe
 	after := e.cfg.Pipeline.ApproveAfterFullPass
 	switch {
 	case after <= 0, job.kind != pipeline.KindRereview, rs.fullPass, job.postMerge, job.evalHead != "", dryRun, rs.replies > 0, rs.ciRed,
-		!e.approvalPath(job, rs):
+		rs.complete != nil, !e.approvalPath(job, rs):
 		return ""
 	}
 	n, last := e.rereviewsSinceFullPass(ctx, job.pr.ID)

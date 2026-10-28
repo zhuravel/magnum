@@ -276,7 +276,8 @@ func (e *Engine) considerReplies(ctx context.Context, repo store.Repo, w config.
 // its round, no longer a reply round, would post a review of the unchanged
 // head. A review request
 // waiting for its round keeps the PR in line, so does a judge check of its
-// red CI (ciRedHolds; considerCIRed drops that one itself), and so does the
+// red CI (ciRedHolds; considerCIRed drops that one itself) and a completion
+// of its review (completionWait), and so does the
 // retry of a round that was not a reply round (a failed requested one):
 // attempts, a retry time or an error, and no reply round on the head since
 // the last round start (continuedReplies).
@@ -290,6 +291,9 @@ func (e *Engine) dropReplyWait(ctx context.Context, repo store.Repo, pr store.PR
 	}
 	if e.ciRedHolds(ctx, pr) {
 		return nil // a judge check of its red CI: considerCIRed keeps or drops it (ci_red.go)
+	}
+	if _, ok := e.completionWait(ctx, pr); ok {
+		return nil // a completion of its review (complete.go)
 	}
 	retry := pr.Attempts > 0 || pr.NextAttemptAt != nil || pr.LastError != nil
 	if retry && e.continuedReplies(ctx, pr, pr.HeadSHA) == 0 {

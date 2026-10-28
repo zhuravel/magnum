@@ -189,7 +189,11 @@ type Report struct {
 	Path    string // the report file (absolute); "" when Missing
 	Status  string // the role's outcome this round (ok, failed, timeout, ...); informational
 	Missing bool   // no usable report this round
-	Detail  string // why it is missing, e.g. "timed out after 40m"
+	// Late: a completion's report of a role the review it completes went
+	// without (pipeline.Completion), rendered as `<label> (late)` in
+	// `reports` and named in JudgeData.LateReports.
+	Late   bool
+	Detail string // why it is missing, e.g. "timed out after 40m"
 	// Reason is Detail under its older name, for prompt files that still
 	// render `missing ({{.Reason}})`.
 	Reason string
@@ -302,7 +306,13 @@ type JudgeData struct {
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
 	Reports         []Report // one per non-judge role of the round, in pipeline order
-	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
+	// LateReports are the labels of the Reports marked Late (always
+	// derived): a completion's judge (SameHead) went without them in its
+	// last review and decides their findings now, while the other reports
+	// stand as that review judged them. Rendered as one instruction by the
+	// rereview and recovery prompts, only then.
+	LateReports []string
+	ResultFile  string // <report dir>/<the judge's output>, e.g. codex-judge.json
 	// Magnum is the magnum executable the judge's post_review line runs
 	// (the daemon's own, absolute; "" = magnum on PATH). ReviewFile is
 	// where the judge writes the review it posts (<report dir>/review.json,
@@ -654,7 +664,7 @@ const OwnFindingsFile = "judge-own.md"
 // (JudgeData.EvidenceMap).
 const EvidenceFile = "evidence.json"
 
-// completed is d with its Reports, notes fields, PreviousHeadShort,
+// completed is d with its Reports (and LateReports), notes fields, PreviousHeadShort,
 // post-review line, RelatedStack and simplification cap
 // (MaxSimplifications) completed (a copy; d is not modified).
 func (d *JudgeData) completed() JudgeData {
@@ -675,8 +685,12 @@ func (d *JudgeData) completed() JudgeData {
 		out.PostRepliesCommand = PostRepliesLine(out)
 	}
 	out.Reports = make([]Report, len(d.Reports))
+	out.LateReports = nil
 	for i, r := range d.Reports {
 		out.Reports[i] = r.completed()
+		if r.Late {
+			out.LateReports = append(out.LateReports, out.Reports[i].Label)
+		}
 	}
 	if out.NotesPath != "" {
 		dir, lock := NotesFiles(out.NotesPath)

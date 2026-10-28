@@ -16,6 +16,7 @@ Work at {{.Effort}} reasoning effort for this re-review.
 {{- if .SameHead}}
 The head is unchanged: re-read the replies and the comments since your last review, re-decide each earlier finding under the reply contract, and run no check your last review already ran on this head.{{template "replies" .}}
 {{- template "ci-red" .}}
+{{- template "late-reports" .}}
 {{- else if .ForcePushed}}
 {{template "force-pushed" .}}
 {{- else if .BaseMerged}}

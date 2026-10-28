@@ -12,7 +12,7 @@ includes it changes; prompts/README.md lists the blocks and their prompts.
 {{- end}}
 
 {{define "simplify"}}
-{{- range .Reports}}{{if and (eq .Role "claude-simplify") (not .Missing)}}
+{{- range .Reports}}{{if and (eq .Role "claude-simplify") (not .Missing) (or .Late (not $.LateReports))}}
 
 {{.Label}}'s report holds optional simplification proposals, each with its current and replacement lines, no defect claims: never judge them by the defect standard or put them in the ledger. Keep a proposal when all hold: its current lines match `{{$.HeadSHA}}` and are lines this PR added or modified (in a re-review, lines changed since the previous review), it removes something a reader must hold (a branch, helper, mode, flag, duplicated block, allocation or control-flow trap), not just moves, renames or rephrases code, what it removes or changes is something this PR added, never a construct a line already had before a mechanical edit (a renamed call, a swapped logger), and your own equivalence probe proves it preserves behaviour: a focused test, or a command that runs the old and the new code on the same inputs. Give each probe one line in Checks: the command, marked `(equivalence probe)`, and its result. Drop a proposal without one, and any that edits authorization, sandboxing, money or usage recording, or concurrency code, unless it removes a defect-prone construct. Drop a proposal whose saving the author must re-verify, or that gains one or two lines: an assertion that guards a path its neighbours do not (a serialized form another consumer renders), a condition whose implication is only how one caller builds the value, not the type's contract, a constant folded into a list whose name then no longer fits every member, named steps or one line per item folded into one expression, a shared helper for a job that runs once and is removed, a hot path, a run that doubles as a check, a sourced file, a stub an example asserts on, a name that fits one branch, a value chosen another way without a test. One comment per idea: a proposal becomes a ```suggestion at its first site plus "Same change at L…" for the others. Its first line is the title alone, `**Simplification** (optional, no reply needed)`, then a blank line, one sentence on what it removes, and the suggestion. Post at most {{$.MaxSimplifications}}, the most substantial, ordered by what they remove, most first. They never affect the verdict. Add `"candidates":{"{{.Role}}":{"suggested":N}}` to the result file, N the ones you post.
 {{- end}}{{end}}
@@ -103,7 +103,13 @@ Read the new commits with `git log --oneline {{.PreviousHeadSHA}}..{{.HeadSHA}}`
 
 {{define "replies" -}}
 {{if .Replies}}
-{{.Replies}} {{if eq .Replies 1}}reply{{else}}replies{{end}} came on your review since you last read the threads. If your verdict and event stay those of your last review, post no review: answer in the threads. Write `{"replies":[{"comment_id":<the thread's comment_id>,"kind":"ack|rebuttal|answer","body":"…"}]}` to the file after `--replies` in `post_replies` and run that line: `ack`, one short sentence, for a reason you accept (resolving the thread is the author's); `rebuttal`, one sentence with its evidence, for a reason you prove wrong; `answer`, as deep as the question asks; nothing where a reply needs none. A thread another reviewer or the author started is theirs, never answered inline; a reply round with nothing of yours to answer ends `replied` with no replies, never `blocked`. Then write `result_file` with `"status":"replied"` and the `replies` it printed (`[]` for none). If the verdict or the event changes, post one short review instead.{{else}} Post one short review.{{end}}
+{{.Replies}} {{if eq .Replies 1}}reply{{else}}replies{{end}} came on your review since you last read the threads. If your verdict and event stay those of your last review, post no review: answer in the threads. Write `{"replies":[{"comment_id":<the thread's comment_id>,"kind":"ack|rebuttal|answer","body":"…"}]}` to the file after `--replies` in `post_replies` and run that line: `ack`, one short sentence, for a reason you accept (resolving the thread is the author's); `rebuttal`, one sentence with its evidence, for a reason you prove wrong; `answer`, as deep as the question asks; nothing where a reply needs none. A thread another reviewer or the author started is theirs, never answered inline; a reply round with nothing of yours to answer ends `replied` with no replies, never `blocked`. Then write `result_file` with `"status":"replied"` and the `replies` it printed (`[]` for none). If the verdict or the event changes, post one short review instead.{{else if not .LateReports}} Post one short review.{{end}}
+{{- end}}
+
+{{define "late-reports"}}
+{{- with .LateReports}}
+Your last review went without {{range $i, $r := .}}{{if $i}} and {{end}}{{$r}}'s{{end}} {{if eq (len .) 1}}report{{else}}reports{{end}}: magnum ran {{if eq (len .) 1}}that reviewer{{else}}those reviewers{{end}} again on this head, and `reports` marks {{if eq (len .) 1}}its report{{else}}their reports{{end}} `(late)`. Decide each candidate of a late report as you decide fresh candidates, and word a security candidate as the skill's section 4 says, not as its report does. The other reports stand as your last review judged them: do not judge them again.
+{{- end}}
 {{- end}}
 
 {{define "ci-red"}}
@@ -169,7 +175,7 @@ self_authored: {{.SelfAuthored}}
 {{define "review-fields" -}}
 reports:
 {{- range .Reports}}
-  - {{.Label}}: {{if .Missing}}missing ({{.Detail}}){{else}}{{.Path}}{{end}}
+  - {{.Label}}{{if .Late}} (late){{end}}: {{if .Missing}}missing ({{.Detail}}){{else}}{{.Path}}{{end}}
 {{- end}}
 {{- template "readiness-field" .}}
 {{- if .NotesPath}}

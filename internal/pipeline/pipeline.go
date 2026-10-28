@@ -349,6 +349,15 @@ type RoundInput struct {
 	// posts no review: the round ends OutcomeReplied, verified by the
 	// replies carrying its run's reply marker. 0 = an ordinary round.
 	Replies int
+	// Complete (rereview, recovery; with SameHead): the round completes the
+	// clean review of an earlier round whose judge went without some
+	// reviewers' reports for a cause that passes (complete.go): Roles hold
+	// the round's candidates, of which the judge and the roles Complete
+	// names run, with the reviewer prompts of the round it completes; the
+	// judge gets the other roles' reports of that round and the late ones,
+	// marked late. A continue of a paused completion (KindContinue) carries
+	// it too, so its judge's reports are the same. nil = no completion.
+	Complete *Completion
 	// CIRed (with SameHead): the round is a CI follow-up: a check of the
 	// head failed after the judge of its last review was prompted, so that
 	// review did not see it. The judge decides each failed check of the
@@ -825,6 +834,9 @@ func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
 	if in.StoredReports {
 		toRun = []config.Role{judge} // the reviewers' reports are stored: none of them runs
 	}
+	if c := completes(in); c != nil && in.Kind != KindContinue {
+		toRun = completionRoles(in.Roles, toRun, c) // the judge and the roles the review went without
+	}
 	rd.plan(toRun)
 	rd.res = RoundResult{Round: in.Round, ReportDir: rd.dir, TargetSHA: in.TargetSHA, Reports: map[agents.Role]RoleReport{}}
 	return rd, nil
@@ -974,7 +986,7 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 	if err != nil {
 		return rd.failed(ctx, err)
 	}
-	if in.Kind == KindContinue || in.StoredReports {
+	if in.Kind == KindContinue || in.StoredReports || rd.completion() != nil {
 		rd.existingReports(ctx)
 	}
 	// The judge's own pass, created after its run: the run the review's
@@ -1091,16 +1103,19 @@ func (rd *round) newRun(ctx context.Context, role config.Role, kind string) (*st
 // setAsideStale renames report files a previous attempt on the same head left
 // behind to <name>.prev, so they are never read as this round's output, the
 // judge's own-pass file included. A continued round keeps the other roles'
-// reports, and so does a round on stored reports (StoredReports). A file it
-// cannot move (or
-// even stat) fails the round before anything is prompted: a role that then
-// wrote nothing would pass the old file off as its report.
+// reports, and so does a round on stored reports (StoredReports) and a
+// completion (Completion: only the roles it runs write theirs again). A
+// file it cannot move (or even stat) fails the round before anything is
+// prompted: a role that then wrote nothing would pass the old file off as
+// its report.
 func (rd *round) setAsideStale() error {
 	files := []string{rd.judge.ReportFile()}
 	if rd.in.Kind != KindContinue {
 		if !rd.in.StoredReports {
 			for _, role := range rd.order {
-				files = append(files, role.ReportFile())
+				if rd.completion() == nil || rd.late(role.Name) {
+					files = append(files, role.ReportFile())
+				}
 			}
 		}
 		files = append(files, agents.OwnFindingsFile) // the judge's own pass (ownpass.go)
@@ -1121,10 +1136,12 @@ func (rd *round) setAsideStale() error {
 	return nil
 }
 
-// existingReports fills Reports for a continued round, or a round on stored
-// reports (StoredReports), from the files on disk that the paused round, or
-// the stored runs, verified (its role's latest run on this head ended
-// verified). A role the paused round ran (it has a run of the round on
+// existingReports fills Reports for a continued round, a round on stored
+// reports (StoredReports), or the roles a completion does not run (from
+// rounds Completion.Base to the round it completes, or to a continue's
+// paused round), from the files on disk that the paused round, or the
+// stored runs, verified (its role's latest run of those rounds on this head
+// ended verified). A role the paused round ran (it has a run of the round on
 // this head) is listed as missing when its file is absent or was not
 // verified, as is one the paused round's judge went without (the PR's
 // MissingReports of the round, with its status: a role skipped as logged
@@ -1142,14 +1159,25 @@ func (rd *round) existingReports(ctx context.Context) {
 	ran := map[string]bool{}        // role -> the paused round ran it on this head
 	ended := map[string]time.Time{} // role -> its latest run of the paused round on this head ended then (zero: not yet)
 	var stopped time.Time           // the latest end of the paused round's runs on this head
+	from, to := rd.in.Round, rd.in.Round
+	if c := rd.completion(); c != nil {
+		from = c.Base // the round whose reviewers' reports the completed review rests on
+		if rd.in.Kind != KindContinue {
+			to = c.Round
+		}
+	}
+	running := map[string]bool{} // a completion's roles, which write theirs now
+	for _, x := range rd.running() {
+		running[x.Name] = true
+	}
 	runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID)
 	unchecked := err != nil
 	if unchecked {
 		rd.warn(ctx, "runs of round %d could not be read (%v); its reports on disk are read without checking that the round verified them",
-			rd.in.Round, err)
+			to, err)
 	}
 	for _, r := range runs {
-		if r.Round == rd.in.Round && r.TargetSHA == rd.in.TargetSHA {
+		if r.Round >= from && r.Round <= to && r.TargetSHA == rd.in.TargetSHA {
 			verified[r.Role] = r.State == store.RunVerified
 			ran[r.Role] = true
 			ended[r.Role] = store.Deref(r.EndedAt)
@@ -1159,18 +1187,21 @@ func (rd *round) existingReports(ctx context.Context) {
 		}
 	}
 	without := map[string]string{} // role -> why the paused round's judge went without its report
-	if rec, ok := ReadMissingReports(ctx, rd.r.Store, rd.in.PR.ID); ok && rec.Round == rd.in.Round {
+	if rec, ok := ReadRoundMissingReports(ctx, rd.r.Store, rd.in.PR.ID, to); ok {
 		for _, m := range rec.Missing {
 			without[m.Role] = m.Status
 		}
 	}
 	for _, role := range rd.order {
+		if running[role.Name] {
+			continue
+		}
 		p := filepath.Join(rd.dir, role.ReportFile())
 		st, err := os.Stat(p)
 		present := err == nil && st.Size() > 0
 		if present && !unchecked && !verified[role.Name] {
 			rd.warn(ctx, "%s: %s is not round %d's report (no run of the round verified it, so it was written after its run ended); not read",
-				role.Name, role.ReportFile(), rd.in.Round)
+				role.Name, role.ReportFile(), to)
 			present = false
 		}
 		rep := rd.newReport(role, "")
@@ -1213,7 +1244,7 @@ func (rd *round) report(role config.Role) (RoleReport, bool) {
 
 // judgeReports lists the candidate reports for the judge prompt: every
 // non-judge role of the round in stage order, missing (with its status) when
-// it produced nothing usable.
+// it produced nothing usable; a completion's roles' reports are late.
 func (rd *round) judgeReports() []agents.Report {
 	var out []agents.Report
 	for _, role := range rd.order {
@@ -1221,11 +1252,12 @@ func (rd *round) judgeReports() []agents.Report {
 		if !ok {
 			continue
 		}
+		late := rd.late(role.Name)
 		if rep.Status == ReportOK {
-			out = append(out, agents.Report{Role: role.Name, Path: rep.Path, Status: rep.Status})
+			out = append(out, agents.Report{Role: role.Name, Path: rep.Path, Status: rep.Status, Late: late})
 			continue
 		}
-		out = append(out, agents.Report{Role: role.Name, Status: rep.Status, Missing: true, Detail: rep.Status})
+		out = append(out, agents.Report{Role: role.Name, Status: rep.Status, Missing: true, Detail: rep.Status, Late: late})
 	}
 	return out
 }

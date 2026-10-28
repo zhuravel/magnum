@@ -189,6 +189,9 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		result["tool"] = res.Pause.Tool // whose overload other PRs' overloads share (overloadedRounds)
 	}
 	e.event(ctx, "info", subject, eventRoundResult, fmt.Sprintf("round %d: %s %s", res.Round, outcome, res.Event), result)
+	// complete.go: a completion's round is one of its head's, and one that
+	// failed says so.
+	e.settleCompletion(ctx, job, in, res, outcome, cancelled)
 	if !cancelled { // a judge a shutdown left working records its notes with the round that continues it
 		e.recordRoundNotes(ctx, job, in, res) // notes_record.go
 	}

@@ -871,6 +871,7 @@ func (e *Engine) onHeadChange(ctx context.Context, repo store.Repo, w config.Wat
 	e.recordPush(ctx, pr.ID, now)
 	e.event(ctx, "info", subject, "pr.head_changed", "new head "+textx.ShortSHA(pr.HeadSHA), map[string]any{"head_sha": pr.HeadSHA, "state": pr.State})
 	e.supersedeCIRed(ctx, repo, pr) // ci_red.go
+	e.supersedeCompletion(ctx, pr)  // complete.go
 	switch pr.State {
 	case store.PRBaseline, store.PRIneligible, store.PRNeedsAttention, store.PRReviewed,
 		store.PRQueued, store.PRRereviewPending:
@@ -1040,6 +1041,7 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 					errs = append(errs, err)
 					continue
 				}
+				e.dropCompletion(ctx, pr.ID) // complete.go: a closed PR completes nothing
 				cur, curErr := e.st.PRByID(ctx, pr.ID)
 				if curErr != nil {
 					cur = pr

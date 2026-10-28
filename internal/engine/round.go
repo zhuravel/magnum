@@ -216,7 +216,8 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	case kindContinue:
 		rs.fullPass = e.fullPassRunning(ctx, pr.ID) // a paused full pass goes on as one
 	}
-	e.planAudit(ctx, job, &rs) // audit.go
+	e.planCompletion(ctx, job, &rs) // complete.go
+	e.planAudit(ctx, job, &rs)      // audit.go
 	if job.kind != kindContinue && job.evalHead == "" && !rs.judgeOnly() {
 		rs.requested = append(rs.requested, e.rerunRoles(ctx, job, rs.roles, rs.target)...)
 	}
@@ -227,6 +228,11 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		return fail(fmt.Errorf("watch %s has no judge among its roles", job.watch.Owner))
 	}
 	switch {
+	case rs.reruns():
+		// A completion: the judge and the roles the review it completes went
+		// without, no triage; the watch's other roles stay the round's
+		// candidates, whose reports of that review stand.
+		rs.toRun = completionRoles(rs.roles, rs.toRun, rs.complete.Roles)
 	case rs.judgeOnly():
 		// A delta check, or a re-review of the same head: the judge alone,
 		// no triage.
@@ -260,7 +266,8 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if rs.kind != kindContinue {
 		e.noteDeltaCheckRound(ctx, pr.ID, rs.delta, rs.target) // a continue keeps the paused round's
 		e.noteFullPassRound(ctx, pr.ID, rs.fullPass)
-		e.noteAuditRound(ctx, pr.ID, rs.auditPass) // audit.go
+		e.noteAuditRound(ctx, pr.ID, rs.auditPass)                    // audit.go
+		e.noteCompletionStart(ctx, pr.ID, rs.complete, job.startedAt) // complete.go
 	}
 	switch {
 	case rs.kind == kindContinue:
@@ -293,11 +300,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 			data["delta_partial"] = true
 		}
 	}
-	if rs.sameHead {
-		data["same_head"] = true
-		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.same_head",
-			"same head: the judge re-decides the threads (no commits since "+textx.ShortSHA(rs.target)+")", map[string]any{"kind": rs.kind, "target_sha": rs.target})
-	}
+	what = e.noteSameHead(ctx, job, rs, what, data)
 	if rs.replies > 0 && rs.kind != kindContinue {
 		what, data["replies"] = replyLabel(rs.replies), rs.replies
 	}
@@ -344,8 +347,12 @@ type roundSetup struct {
 	// round of every role that runs.
 	delta *pipeline.DeltaCheck
 	// sameHead: the round re-reviews the reviewed head, the judge alone
-	// (confirmSameHead).
+	// (confirmSameHead), or with the roles a completion runs.
 	sameHead bool
+	// complete: the round completes a clean review that went without some
+	// reviewers' reports (roundJob.complete; pipeline.RoundInput.Complete),
+	// or continues such a round.
+	complete *completion
 	// freshJudge: the judge alone started in a fresh session on purpose,
 	// because its prompt cache was cold (coldJudge) or its session served
 	// its max_session_rounds (renewRoles); the reviewers kept theirs.
@@ -533,8 +540,10 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		rs.delta, rs.sameHead, rs.roles, full = nil, false, e.rolesForPR(ctx, &job.watch, pr.ID), true
 	}
 	if full {
-		// The continued round (or the judge alone) became a full one: the
-		// other roles that run need their panes and agents too.
+		// The continued round (or the judge alone, or a completion) became a
+		// full one: the other roles that run need their panes and agents
+		// too, and it completes nothing.
+		rs.complete, job.complete = nil, nil
 		all, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, rs.roles, rs.requested, rs.kind)
 		if err != nil {
 			return fail(err)
@@ -563,9 +572,10 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 // throttle (last_round_started_at; a reply round that ends replied gives
 // it back, onReplied), and an automatic one (neither forced
 // nor requested nor a reply round, which reply_min_interval spaces, nor a
-// judge check of red CI, one per failed check and head) counts against the
-// daily cap (rounds_today), unless it continues a round that counted
-// already (roundJob.continued).
+// judge check of red CI, one per failed check and head, nor a completion,
+// at most maxCompletions per head) counts against the daily cap
+// (rounds_today), unless it continues a round that counted already
+// (roundJob.continued).
 func (e *Engine) enterReviewing(ctx context.Context, job *roundJob, kind string) *setupError {
 	pr := job.pr
 	if err := e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotHeld, store.SlotBusy}, store.SlotBusy, nil); err != nil {
@@ -573,7 +583,7 @@ func (e *Engine) enterReviewing(ctx context.Context, job *roundJob, kind string)
 	}
 	now := e.now()
 	day := store.DayKey(now)
-	counted := kind != kindContinue && !job.continued && !pr.Forced && !job.requested && job.replies == 0 && !job.ciRed
+	counted := kind != kindContinue && !job.continued && !pr.Forced && !job.requested && job.replies == 0 && !job.ciRed && job.complete == nil
 	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRClaiming}, store.PRReviewing, func(u *store.PRUpdate) {
 		u.Set("last_error", nil)
 		if kind != kindContinue {
@@ -622,6 +632,9 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 	}
 	if job.ciGated {
 		in.CIGate = e.judgeCIGate(job)
+	}
+	if rs.complete != nil {
+		in.Complete = e.completionInput(ctx, job, rs, base) // complete.go
 	}
 	if job.evalHead != "" {
 		in.Blind = true

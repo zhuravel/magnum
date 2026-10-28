@@ -14104,6 +14104,51 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAnEmptyRangeThatIsNotAheadKeepsItsReReview pins the `behind` and no-commit ranges, which the
   earlier checks of `checkDelta` already send to a re-review.
 
+- **A review that missed a reviewer is completed** (2026-10-28,
+  docs/superpowers/specs/2026-10-28-busy-shell-self-healing-design.md, part C; amends "Auto-approval hears every
+  reviewer" and "The status comment says why a clean review brought no approval"). The evidence is the parts A
+  and B entry's: from 2026-10-25 to 2026-10-28 six clean reviews went without codex-review, which a cut `codex
+  review` kept busy, and auto-approval refused each until the operator or the next push. Now, when auto-approval
+  refuses a clean review for the reports it went without (the `unheard` class) and every one of them is missing
+  for a cause that passes by itself (busy, timeout, lost, no_session, failed, stalled, overloaded, cancelled,
+  human_active, missing), the engine queues a completion of the head (internal/engine/complete.go, kv
+  `pr.<id>.complete`; `pr.complete_queued` with the round, the head, the roles, the causes and the attempt). The
+  PR waits in rereview_pending as for a CI follow-up, held only by a snooze, quiet hours and the pause of a kind
+  it needs (`eligibility.PRFacts.CompleteAt`), and its round is a same-head re-review that runs the judge in its
+  session and only the missing roles (`pipeline.RoundInput.Complete`), with no triage, no reruns and no
+  restarts. The late reviewers get the prompts of the round whose reports the review rests on
+  (`Completion.Base`, and `Since`: the head reviewed before it when it was a re-review, else the whole PR).
+  The judge gets that round's other reports (their latest verified runs, read as a continue reads its paused
+  round's, never set aside) and the late ones, marked `(late)` in `reports`, with one instruction
+  (`late-reports`, `JudgeData.LateReports`) to decide the late reports' findings while the others stand; the
+  simplification rules come only with a late claude-simplify report (a standing one's proposals were posted
+  already). The round's record of missing reports lists only what it still went without, so the gates decide
+  as after any review, and the completion posts a new review: it never edits the earlier one. It counts against neither the
+  daily cap nor a full pass's re-reviews (a round of the reviewed head), and it never holds its approval: it
+  completes a review that did not, which now counts toward approve_after_full_pass and would otherwise hold
+  its completion. It wins over a reply round and a CI check of the head, whose threads and checks its judge
+  reads anyway. Quiet hours hold it (it runs a reviewer); the soft Codex cap does not (it is no full
+  re-review). Not completed: a refusal, a logged-out CLI and a usage limit (the pauses wait for them), a review
+  that held its approval (the gate refuses it first and its full pass follows), a post-merge review, a dry run
+  and an eval replay. A push or the close of the PR drops a completion that waits. Each head gets 2
+  completions; after them `pr.complete_gave_up` once, and the refusal stands. A completion whose round ends
+  without a review writes `pr.complete_failed` and retries as a failed round does; the continue of a paused
+  one goes on as one (`completion.Rounds`). While a completion waits or runs, the status comment's `unheard`
+  line reads "Not approved as <login> yet: one of Magnum's reviewers did not finish on this head, and Magnum
+  runs it again. Magnum approves only a complete review.", and the refusal's words again once magnum gave up.
+  The trigger is the auto-approval pass (the round's end, then every tick), not the round's settle: the PR
+  must still be reviewed when auto-approval records its refusal, and only the pass knows that the reports it
+  went without are all that holds the approval back. Rejected: a continue (it runs no reviewer), a forced
+  review with roles (every requested role in full, and a forced round's toasts, quiet hours and close rules),
+  a full pass (every role fresh, the most cost) and an edit of the earlier review. Tests, failing first:
+  TestACleanReviewThatMissedABusyReviewerIsCompleted, TestCompletionHandsTheJudgeTheOtherReportsOfItsRound,
+  TestCompletionGivesUpAfterTwoAttemptsOnAHead, TestAPushDropsTheCompletion,
+  TestCompletionCountsNeitherTodayNorTowardTheFullPass, TestTheStatusLineSaysMagnumRunsTheReviewerAgainUntilItGivesUp
+  and TestThrottleACompletionWaitsOnlyForASnooze; under the mutation of what they protect:
+  TestCompletionIsNotForARefusedOrLoggedOutReviewer, TestAHeldReviewGetsItsFullPassNotACompletion and
+  TestACompletionNeverHoldsItsApproval. TestAReviewThatMissedAReviewerSaysSoWithoutTheRole now goes through
+  the head's two completions before its line.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

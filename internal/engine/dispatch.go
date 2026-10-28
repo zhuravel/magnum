@@ -62,6 +62,13 @@ type roundJob struct {
 	// same) and counts against no cap; a checkout that finds a newer head
 	// clears it (prepare).
 	ciRed bool
+	// complete: the same-head re-review completes a clean review that went
+	// without some reviewers' reports (completionDue, complete.go): the
+	// judge and those roles run, counting against no cap; a continue of a
+	// paused completion goes on as one (prepare). It wins over a reply
+	// round and a CI check, whose replies and checks its judge reads too; a
+	// checkout that finds a newer head clears it (prepare).
+	complete *completion
 	// fullPass says why the re-review runs as a scheduled full pass
 	// (fullPassDue, fullpass.go): every role in a fresh session, the whole
 	// PR reviewed again; "" = it does not. fullPassRule names the rule that
@@ -313,9 +320,10 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 // backstop (the daemon's quiet period, re-review interval and daily cap)
 // holds back although the throttle lets them through, and that the
 // candidates in have lack: a requested round (pendingRequest) skips all of
-// those rules, and so do a reply round (replyTrigger) and a judge check of
-// red CI (ciRedWait), while a head that arrived during the PR's last review
-// (arrivedDuringReview) skips the interval. They are read again without the
+// those rules, and so do a reply round (replyTrigger), a judge check of
+// red CI (ciRedWait) and a completion (completionWait), while a head that
+// arrived during the PR's last review (arrivedDuringReview) skips the
+// interval. They are read again without the
 // backstop and kept when eligibility.Throttle, under their watch, says ready.
 func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams, have []store.PR, now time.Time) []store.PR {
 	if p.QuietPeriod == 0 && p.MinInterval == 0 && p.DraftMinInterval == 0 && p.MaxRoundsPerDay <= 0 {
@@ -334,7 +342,8 @@ func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams,
 		}
 		if _, requested := e.pendingRequest(ctx, pr); !requested && !arrivedDuringReview(pr) {
 			_, _, replied := e.replyTrigger(ctx, pr)
-			if _, red := e.ciRedWait(ctx, pr); !replied && !red {
+			_, red := e.ciRedWait(ctx, pr)
+			if _, completes := e.completionWait(ctx, pr); !replied && !red && !completes {
 				continue
 			}
 		}
@@ -511,8 +520,10 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		e.deltaFacts(ctx, pr, &f)
 		job.deltaCheck = e.deltaCheckDue(ctx, *w, pr, f, job.requested)
 		job.sameHead = e.sameHeadDue(ctx, pr)
-		if job.ciRed = e.ciRedDue(ctx, pr, job.sameHead, job.requested); !job.ciRed {
-			job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
+		if job.complete = e.completionDue(ctx, pr, job.sameHead, job.requested); job.complete == nil { // complete.go
+			if job.ciRed = e.ciRedDue(ctx, pr, job.sameHead, job.requested); !job.ciRed {
+				job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
+			}
 		}
 		e.planFullPass(ctx, job)         // fullpass.go: a due full pass clears the delta check
 		job.audit = e.auditDue(ctx, job) // audit.go: never with a full pass
@@ -563,13 +574,18 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	}
 
 	// The roles the round runs decide which pauses and Codex limit apply
-	// (the judge alone of a delta check or a re-review of the same head).
-	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.rolesForPR(ctx, w, pr.ID), e.requestedRoles(ctx, pr.ID), job.kind)
+	// (the judge alone of a delta check or a re-review of the same head, and
+	// the roles a completion runs with it).
+	roles := e.rolesForPR(ctx, w, pr.ID)
+	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, roles, e.requestedRoles(ctx, pr.ID), job.kind)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "dispatch: roles", "subject", subject)
 		return false, 0, gate{}
 	}
-	if job.deltaCheck || job.sameHead {
+	switch {
+	case job.complete != nil:
+		toRun = completionRoles(roles, toRun, job.complete.Roles)
+	case job.deltaCheck || job.sameHead:
 		toRun = judgeAlone(toRun)
 	}
 	if kind, why := e.kindPause(ctx, agentKinds(toRun)); why != "" { // the wait's sentence names the command (Wait.Sentence)
@@ -768,6 +784,8 @@ func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) b
 	switch {
 	case job.deltaCheck:
 		what = "delta check"
+	case job.complete != nil:
+		what = completionWords(job.complete)
 	case job.ciRed:
 		what = "judge check of the red CI (the judge alone)"
 	case job.replies > 0:

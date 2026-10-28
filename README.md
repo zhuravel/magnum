@@ -397,6 +397,25 @@ your own leaves `{{.DBLockCommand}}` out carries no run token: its interrupts ar
 always got, Magnum never signals or closes its command, a restart that finds it still running ends the
 round, as above, and the next checkout waits for it.
 
+A clean review that went without a reviewer is completed on a repository Magnum [approves as
+you](#approving-as-you). When auto-approval refuses a review that left nothing to fix because a reviewer
+of its round left no report, and every such report is missing for a cause that passes by itself (`busy`,
+`timeout`, `lost`, `no_session`, `failed`, `stalled`, `overloaded`, `cancelled`, `human_active`,
+`missing`), Magnum queues a completion of that head (`pr.complete_queued`, with the round, the head, the
+roles, the causes and the attempt). The completion is a re-review of the same head that runs the judge in
+its session and only the roles the review went without, with the prompts their round gave them, and no
+triage and no restarts. The judge gets the other reports of that round and the late ones, marked `(late)`,
+decides the findings of the late ones while the others stand, and posts a new review, whose record lists
+only what it still went without: auto-approval decides on it as on any review. A completion waits only for
+a snooze, quiet hours and the pause of a kind it needs, never holds its approval for a full pass, and
+counts neither toward the daily cap nor toward the re-reviews of a full pass (`engine.round_start` names
+the round it completes as `completes`). A reviewer that refused, is logged out or hit its usage limit gets
+no completion (that needs you or time), and neither does a review that held its approval (its full pass
+follows), a post-merge review, a dry run or an eval replay. A push or the close of the PR drops a
+completion that waits. Each head gets 2 completions; after them `pr.complete_gave_up` says so once and the
+refusal stands. A completion whose round fails writes `pr.complete_failed` and retries as a failed round
+does.
+
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the
 posted review and queues the re-review without waiting for `min_rereview_interval`. A PR whose head changed `burst_pushes` times (default 3) within `burst_window`
@@ -1206,7 +1225,10 @@ link that turned up, your note) leaves it. The first line says where the review 
   its own CI workflows or actions, so alice must review and approve it in person." (and the same for a PR
   that changes the instructions or configuration of the AI review agents, or more files than Magnum can
   check); "Not approved as alice: one of Magnum's reviewers did not finish on this head, and Magnum
-  approves only a complete review. The next review, or a review by alice, decides."; "Approval as alice
+  approves only a complete review. The next review, or a review by alice, decides."; while Magnum runs
+  that reviewer again (a completion, described with a round's restarts under Configuration) "Not approved as
+  alice yet: one of Magnum's reviewers did not finish on this head, and Magnum runs it again. Magnum
+  approves only a complete review.", and the line before once it gives up on the head; "Approval as alice
   waits for the checks of this head to pass." (with "Some fail now." when they fail); "Magnum stopped
   approving this PR as alice. A review by alice decides." once your review by hand, a dismissal or
   `magnum unapprove` stopped it; and "The approval as alice did not post. Magnum told alice." when its
@@ -1526,7 +1548,10 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   round continued after a pause counts only the roles its paused round ran; a round of the judge alone (a
   delta check, a same-head re-review, a reply round) counts what the round before it went without, since
   its review builds on that one. Magnum keeps the record of each round's reports, and a review whose round
-  it has no record of (one posted before Magnum kept them) is not approved;
+  it has no record of (one posted before Magnum kept them) is not approved. A review that missed a
+  reviewer for a cause that passes by itself (a busy pane, a timeout, ...) is completed on its head: the
+  missing reviewer runs again, at most twice per head, and the completion's review is approved when it
+  heard everyone (see the completion paragraph under Configuration);
 - the PR is open, not a draft, not muted, not yours, and no round is due or running on it; a dry run or
   a post-merge review never approves;
 - its watch would review it on its own: a `magnum review` of a PR the watch's filters leave out (a

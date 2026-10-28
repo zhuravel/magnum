@@ -58,7 +58,8 @@ func (e *Engine) throttle(ctx context.Context, w config.Watch, pr store.PR, f el
 
 // throttleFacts completes f with what the registry's kv holds for pr: its
 // recent pushes, its snooze (snoozeOf), a pending review request
-// (pendingRequest; none for a forced PR), else a due judge check of the
+// (pendingRequest; none for a forced PR), else a due completion of the
+// reviewed head's review (completionWait), else a due judge check of the
 // reviewed head's red CI (ciRedWait), else the replies to re-decide
 // (replyTrigger), and the measured delta since the reviewed commit
 // (deltaFacts).
@@ -75,6 +76,8 @@ func (e *Engine) throttleFacts(ctx context.Context, pr store.PR, f eligibility.P
 	}
 	if req, ok := e.pendingRequest(ctx, pr); ok && !f.Forced {
 		f.RequestedAt = req.At
+	} else if at, ok := e.completionWait(ctx, pr); ok && !f.Forced {
+		f.CompleteAt = at // complete.go: it wins over CI red and replies, whose checks and threads its judge reads
 	} else if at, ok := e.ciRedWait(ctx, pr); ok && !f.Forced {
 		f.CIRedAt = at // ci_red.go: it wins over replies, whose round it is not
 	} else if at, _, ok := e.replyTrigger(ctx, pr); ok && !f.Forced {

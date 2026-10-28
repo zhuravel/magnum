@@ -427,7 +427,8 @@ func (e *Engine) autoClient(id *config.Identity) (GitHub, autoApproveGitHub) {
 // approval followed its latest review yet (one whose post failed is tried
 // again after autoApproveRetry, autoApproveAttempts times), nothing holds
 // it back (its author, authorRefusal, then autoGateRefusal: recorded for
-// the card), and GitHub's reviews, all of them, agree: none of the
+// the card; a review it refuses for the reviewers it did not hear gets its
+// completion, considerCompletion), and GitHub's reviews, all of them, agree: none of the
 // operator's by hand (else auto-approval of the PR stops), none in
 // progress, no approval of the head of theirs, and
 // a verdict line that leaves nothing to fix when the result cannot tell. An
@@ -460,6 +461,9 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	}
 	e.noteAutoRefused(ctx, c, run, refusal)
 	if refusal.why != "" {
+		if refusal.public == publicUnheard {
+			e.considerCompletion(ctx, c, *sum) // complete.go: a reviewer missed for a cause that passes runs again
+		}
 		return
 	}
 	since := resumedSince(hold)
