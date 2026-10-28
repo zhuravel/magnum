@@ -150,10 +150,23 @@ Tests first:
 - docs/DECISIONS.md, at the end of `## Operations`: "A cut shell command is killed, and a review that missed a reviewer is completed".
   It gives the evidence above and the rejected options: closing the pane first (SIGHUP, which codex outlives, leaves orphans), new herdr ownership APIs (the Codex design), and a full re-review.
 
+## Part D: a restart that launchd cannot spawn heals itself
+
+On 2026-10-28 at 17:29 a drain restart stopped the daemon, and launchd then failed every spawn of the rebuilt binary with exit 78 (EX_CONFIG).
+The binary wrote nothing, `magnum config` with the same binary passed, and the job showed "needs LWCR update".
+`daemon-restart` printed only a hint ("then `magnum daemon-restart` again (or `magnum install` to reload the job)"), and the daemon stayed down for about 10 minutes.
+`magnum install --now`, which unloads and loads the job again, started the daemon at once.
+
+The fix: if no new daemon runs after the restart and launchd reports a spawn failure, `daemon-restart` reloads the job itself, as `install` does, once.
+It waits past launchd's throttle (10 seconds) before it decides, so the known false alarm "no new daemon was running after 5s" goes away too.
+If the reload also fails, it says so with launchd's exit code, and the daemon is down, as today.
+
+Tests first: a fake launchd that reports `spawn scheduled` with exit 78 gets exactly one reload, and a running daemon after it ends the restart with success. A fake throttle of 10 seconds gets no reload.
+
 ## Build order
 
 1. Parts A and B, one builder.
-2. Part C, a second builder, after A and B land.
+2. Part C, a second builder, after A and B land. Part D goes with Part C. If Part D is ready first, it goes alone.
 
 ## Risks
 
