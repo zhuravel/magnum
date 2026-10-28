@@ -193,6 +193,33 @@ func wantReloadEvents(t *testing.T, dt *daemonGroupTest, want ...string) {
 	}
 }
 
+// reloadMessages are the messages of the reload's events, in order.
+func reloadMessages(t *testing.T, dt *daemonGroupTest) []string {
+	t.Helper()
+	st, err := store.Open(dt.ctx.Layout.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.DB().Query("SELECT message FROM events WHERE kind LIKE 'daemon.reload%' ORDER BY rowid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var msg string
+		if err := rows.Scan(&msg); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, msg)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 // On 2026-10-28 launchd failed every spawn of the rebuilt binary with exit
 // 78 after a restart, and only `magnum install --now` (unload, load) brought
 // the daemon back. daemon-restart now reloads the job itself, once, after
@@ -325,36 +352,50 @@ func TestDaemonRestartReloadsNothingForADaemonThatExitsAtStart(t *testing.T) {
 // before the bootout: a daemon that runs by then, whether launchd's own
 // retry started it while the event waited on a busy registry or someone
 // started one by hand, is not booted out, and the restart ends with success
-// and an event that says the reload was skipped.
+// and an event that says the reload was skipped. A plist the reload cannot
+// use does not hide a daemon launchd started meanwhile. The line that
+// announces the reload says that a last check may cancel it.
 func TestDaemonRestartReloadsNothingOnceADaemonRunsAfterTheWait(t *testing.T) {
-	t.Run("launchd's retry starts it while the begin event waits", func(t *testing.T) {
-		f := newFakeLaunchd()
-		f.spawnFails = true
-		f.healAt = 16 * time.Second // the attempts at 0 s and 10 s fail; the one at 20 s succeeds
-		dt, path, plist := restartSetup(t, f)
-		storetest.Seed(t, dt.ctx.Layout.DB())
-		daemonSys.RestartEvent = func(ctx context.Context, c *Context, level, kind, msg string) {
-			c.writeRestartEvent(ctx, level, kind, msg)
-			if kind == "daemon.reload_begin" {
-				f.clock += 10 * time.Second // the registry was busy
+	for _, plistGone := range []bool{false, true} {
+		name := "launchd's retry starts it while the begin event waits"
+		if plistGone {
+			name += ", and the plist is gone"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFakeLaunchd()
+			f.spawnFails = true
+			f.healAt = 16 * time.Second // the attempts at 0 s and 10 s fail; the one at 20 s succeeds
+			dt, path, plist := restartSetup(t, f)
+			storetest.Seed(t, dt.ctx.Layout.DB())
+			if plistGone {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
-		if code := dt.run("daemon-restart"); code != 0 {
-			t.Fatalf("exit %d, stdout: %s\nstderr: %s", code, dt.stdout, dt.stderr)
-		}
-		if f.bootouts != 0 || f.bootstraps != 0 {
-			t.Fatalf("bootouts %d, bootstraps %d with launchd's daemon running", f.bootouts, f.bootstraps)
-		}
-		actContains(t, dt.stdout.String(), "launchd started zhuravel.magnum meanwhile; the job was not reloaded",
-			"restarted zhuravel.magnum via launchd (running, pid 200)")
-		if s := dt.stderr.String(); s != "" {
-			t.Fatalf("stderr: %s", s)
-		}
-		if got, _ := os.ReadFile(path); !bytes.Equal(got, plist) {
-			t.Fatalf("the plist changed:\n%s", got)
-		}
-		wantReloadEvents(t, dt, "daemon.reload_begin warn", "daemon.reload_skipped info")
-	})
+			daemonSys.RestartEvent = func(ctx context.Context, c *Context, level, kind, msg string) {
+				c.writeRestartEvent(ctx, level, kind, msg)
+				if kind == "daemon.reload_begin" {
+					f.clock += 10 * time.Second // the registry was busy
+				}
+			}
+			if code := dt.run("daemon-restart"); code != 0 {
+				t.Fatalf("exit %d, stdout: %s\nstderr: %s", code, dt.stdout, dt.stderr)
+			}
+			if f.bootouts != 0 || f.bootstraps != 0 {
+				t.Fatalf("bootouts %d, bootstraps %d with launchd's daemon running", f.bootouts, f.bootstraps)
+			}
+			actContains(t, dt.stdout.String(), "unless a last check finds a daemon running or a reason not to",
+				"launchd started zhuravel.magnum meanwhile; the job was not reloaded",
+				"restarted zhuravel.magnum via launchd (running, pid 200)")
+			if s := dt.stderr.String(); s != "" {
+				t.Fatalf("stderr: %s", s)
+			}
+			if got, _ := os.ReadFile(path); !plistGone && !bytes.Equal(got, plist) {
+				t.Fatalf("the plist changed:\n%s", got)
+			}
+			wantReloadEvents(t, dt, "daemon.reload_begin warn", "daemon.reload_skipped info")
+		})
+	}
 	t.Run("a daemon started by hand holds the pidfile", func(t *testing.T) {
 		f := newFakeLaunchd()
 		f.spawnFails = true
@@ -377,8 +418,44 @@ func TestDaemonRestartReloadsNothingOnceADaemonRunsAfterTheWait(t *testing.T) {
 		if s := dt.stderr.String(); s != "" {
 			t.Fatalf("stderr: %s", s)
 		}
-		wantReloadEvents(t, dt, "daemon.reload_begin warn", "daemon.reload_skipped info")
+		// launchd's job still cannot spawn: the event, the trace that stays,
+		// warns and says so.
+		wantReloadEvents(t, dt, "daemon.reload_begin warn", "daemon.reload_skipped warn")
+		if msgs := reloadMessages(t, dt); !strings.Contains(msgs[1], "launchd still reports spawn scheduled, last exit code 78") {
+			t.Fatalf("skip event %q does not say that the job still cannot spawn", msgs[1])
+		}
 	})
+}
+
+// The command line of a process that holds a recycled pid is not magnum's to
+// keep (it can carry a password): a refusal names the pid and the
+// executable's base name, never its arguments, in the event and the output.
+func TestARefusedReloadNamesAStrangerByItsExecutableAlone(t *testing.T) {
+	f := newFakeLaunchd()
+	f.spawnFails = true
+	comm, args := daemonRulePS("/usr/local/bin/mysql", "/usr/local/bin/mysql -uroot -pHUNTER2 talkable")
+	dt, _, _ := restartSetup(t, f, comm, args)
+	storetest.Seed(t, dt.ctx.Layout.DB())
+	daemonSys.DaemonPID = func(paths.Layout) (int, error) {
+		if f.clock >= launchdStartWait {
+			return 250, nil
+		}
+		return f.pid, nil
+	}
+	if code := dt.run("daemon-restart"); code != 1 {
+		t.Fatalf("exit %d, want 1; stdout: %s", code, dt.stdout)
+	}
+	actContains(t, dt.stderr.String(), "pid 250 holds the daemon's pidfile", "is not a magnum daemon (mysql)")
+	wantReloadEvents(t, dt, "daemon.reload_begin warn", "daemon.reload_refused warn")
+	msgs := reloadMessages(t, dt)
+	if !strings.Contains(msgs[1], "is not a magnum daemon (mysql)") {
+		t.Fatalf("refusal event %q does not name the executable", msgs[1])
+	}
+	for _, out := range append(msgs, dt.stdout.String(), dt.stderr.String()) {
+		if strings.Contains(out, "HUNTER2") || strings.Contains(out, "-uroot") || strings.Contains(out, "/usr/local/bin") {
+			t.Fatalf("the stranger's command line got out: %q", out)
+		}
+	}
 }
 
 // A reload that does not run says why in an event, after its begin event,
@@ -420,7 +497,10 @@ func TestDaemonRestartRecordsWhyItDidNotReload(t *testing.T) {
 		if f.bootouts != 0 || !f.loaded {
 			t.Fatalf("bootouts %d, loaded %v without a plist to load it from", f.bootouts, f.loaded)
 		}
-		actContains(t, dt.stderr.String(), "the job was not reloaded: launchd reload: the job was left as it was: open "+path, "magnum install")
+		actContains(t, dt.stderr.String(), "the job was not reloaded: launchd reload: read the job's plist: open "+path, "magnum install")
+		if strings.Contains(dt.stderr.String(), "left as it was") {
+			t.Fatalf("the refusal says it twice: %s", dt.stderr)
+		}
 		wantReloadEvents(t, dt, "daemon.reload_begin warn", "daemon.reload_refused warn")
 	})
 }

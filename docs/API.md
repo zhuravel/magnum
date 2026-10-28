@@ -13380,8 +13380,9 @@ const LogName = "launchd.log"
 VARIABLES
 
 var ErrNotReloaded = errors.New("the job was left as it was")
-    ErrNotReloaded marks a Reload that stopped before the bootout: the job was
-    left as it was.
+    ErrNotReloaded marks a Reload that stopped before the bootout: the job
+    was left as it was. The error says only why (errors.Is finds the mark),
+    since the caller says that the job was not reloaded.
 
 
 FUNCTIONS

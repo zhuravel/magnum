@@ -99,8 +99,17 @@ func install(ctx context.Context, run execx.Runner, uid int, path string, plist 
 }
 
 // ErrNotReloaded marks a Reload that stopped before the bootout: the job was
-// left as it was.
+// left as it was. The error says only why (errors.Is finds the mark), since
+// the caller says that the job was not reloaded.
 var ErrNotReloaded = errors.New("the job was left as it was")
+
+// notReloaded is an error before the bootout: err's words, ErrNotReloaded's
+// mark.
+type notReloaded struct{ err error }
+
+func (e notReloaded) Error() string        { return e.err.Error() }
+func (e notReloaded) Unwrap() error        { return e.err }
+func (e notReloaded) Is(target error) bool { return target == ErrNotReloaded }
 
 // Reload unloads the job label and loads it again from the plist already at
 // path, as Install does once it has written the file (bootout, the wait for
@@ -118,25 +127,25 @@ func Reload(ctx context.Context, run execx.Runner, uid int, label, path string, 
 func reload(ctx context.Context, run execx.Runner, uid int, label, path string, ready func(context.Context) error, tm timing) error {
 	plist, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("launchd reload: %w: %w", ErrNotReloaded, err)
+		return notReloaded{fmt.Errorf("launchd reload: read the job's plist: %w", err)}
 	}
 	named, err := labelFromPlist(plist)
 	if err != nil {
-		return fmt.Errorf("launchd reload: %w: %s: %w", ErrNotReloaded, path, err)
+		return notReloaded{fmt.Errorf("launchd reload: %s: %w", path, err)}
 	}
 	if named != label {
-		return fmt.Errorf("launchd reload: %w: %s names the job %q, not %q", ErrNotReloaded, path, named, label)
+		return notReloaded{fmt.Errorf("launchd reload: %s names the job %q, not %q", path, named, label)}
 	}
 	return load(ctx, run, uid, label, path, "reload", ready, tm)
 }
 
 // load runs Install's launchctl sequence on the plist at path: ready (when
-// not nil; its error wraps ErrNotReloaded), then bootout, the wait for the
-// job to unload, enable, bootstrap. op names the caller in its errors.
+// not nil; its error is marked ErrNotReloaded), then bootout, the wait for
+// the job to unload, enable, bootstrap. op names the caller in its errors.
 func load(ctx context.Context, run execx.Runner, uid int, label, path, op string, ready func(context.Context) error, tm timing) error {
 	if ready != nil {
 		if err := ready(ctx); err != nil {
-			return fmt.Errorf("launchd %s: %w: %w", op, ErrNotReloaded, err)
+			return notReloaded{fmt.Errorf("launchd %s: %w", op, err)}
 		}
 	}
 	// Both are best effort; bootstrap below is the arbiter.

@@ -621,6 +621,10 @@ func TestReloadRefusesAPlistItCannotLoadTheJobFromBeforeTheBootout(t *testing.T)
 			if !errors.Is(err, ErrNotReloaded) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want ErrNotReloaded naming %s", err, tc.want)
 			}
+			// The caller says the job was not reloaded; the error says why, once.
+			if strings.Contains(err.Error(), ErrNotReloaded.Error()) {
+				t.Fatalf("err = %q repeats %q", err, ErrNotReloaded)
+			}
 			if len(f.Calls) != 0 || asked {
 				t.Fatalf("launchctl ran (%q) or the guard was asked (%v) for a plist it cannot load", argvs(f), asked)
 			}

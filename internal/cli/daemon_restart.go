@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -301,14 +302,16 @@ func reloadGuard(ctx context.Context, run execx.Runner, layout paths.Layout, uid
 }
 
 // notADaemon says why pid is not a magnum daemon, as ps sees it ("" when it
-// is one): the pidfile may name a recycled pid.
+// is one): the pidfile may name a recycled pid. It names the process by its
+// executable's base name alone: the command line of someone else's process
+// can carry a password, and the reason goes into the registry.
 func notADaemon(ctx context.Context, run execx.Runner, pid int) string {
 	comm, args, err := engine.ProcessCommand(ctx, run, pid)
 	switch {
 	case err != nil:
 		return fmt.Sprintf("ps cannot tell what it is (%v)", err)
 	case !engine.LooksLikeDaemon(comm, args):
-		return fmt.Sprintf("is not a magnum daemon (%q), so the pidfile is stale: remove it", execx.Redact(args))
+		return fmt.Sprintf("is not a magnum daemon (%s), so the pidfile is stale: remove it", filepath.Base(comm))
 	}
 	return ""
 }
@@ -319,11 +322,13 @@ func notADaemon(ctx context.Context, run execx.Runner, pid int) string {
 // reloads the job once as `magnum install` loads it: launchd.Reload of the
 // plist on disk, which checks the plist is the job's and asks reloadGuard
 // right before the bootout, with no registry write or other wait between
-// them. It waits for the new daemon again. One event ends every begin:
-// daemon.reloaded, daemon.reload_failed, daemon.reload_skipped (a daemon runs
-// by the guard's look: success, the job left as it was) or
-// daemon.reload_refused (the job left as it was, and why); nothing tries it
-// twice.
+// them; a plist it cannot use stops the reload before that, and the guard
+// then looks once, only to tell a healed restart from a refusal. It waits
+// for the new daemon again. One event ends every begin: daemon.reloaded,
+// daemon.reload_failed, daemon.reload_skipped (a daemon runs by the guard's
+// look: success, the job left as it was; at warn for a daemon outside
+// launchd, whose job still cannot spawn) or daemon.reload_refused (the job
+// left as it was, and why); nothing tries it twice.
 func reloadUnspawnable(ctx context.Context, c *Context, run execx.Runner, uid int, label string, oldPID int, first launchd.Info) int {
 	state := describeLaunchdState(first)
 	notStarted := fmt.Sprintf("launchd restarted %s, but no new daemon was running after %s (%s)", label, launchdStartWait, state)
@@ -339,8 +344,8 @@ func reloadUnspawnable(ctx context.Context, c *Context, run execx.Runner, uid in
 			"fix: %s, then `magnum daemon-restart` again (or `magnum install` to reload the job)\n", notStarted, why, logs)
 		return 1
 	}
-	skip := func(why string) {
-		daemonSys.restartEvent(ctx, c, "info", "daemon.reload_skipped", fmt.Sprintf("%s: %s was not reloaded", why, label))
+	skip := func(level, why string) {
+		daemonSys.restartEvent(ctx, c, level, "daemon.reload_skipped", fmt.Sprintf("%s: %s was not reloaded", why, label))
 	}
 	userHome, err := daemonSys.UserHome()
 	if err != nil {
@@ -348,32 +353,45 @@ func reloadUnspawnable(ctx context.Context, c *Context, run execx.Runner, uid in
 	}
 	path := launchd.AgentPath(userHome, label)
 	fmt.Fprintf(c.Stdout, "launchd could not spawn %s after the restart (%s); reloading the job once, as `magnum install` does "+
-		"(launchctl bootout, then bootstrap %s)\n", label, state, path)
+		"(launchctl bootout, then bootstrap %s), unless a last check finds a daemon running or a reason not to\n", label, state, path)
 	var chk reloadCheck
+	asked := false
 	err = launchd.Reload(ctx, run, uid, label, path, func(ctx context.Context) error {
+		asked = true
 		if chk = reloadGuard(ctx, run, c.Layout, uid, label, oldPID); !chk.reload() {
 			return errReloadHeld
 		}
 		return nil
 	})
+	notReloaded := errors.Is(err, launchd.ErrNotReloaded)
+	plistRefused := notReloaded && !asked
+	if plistRefused {
+		// The plist stopped the reload before the guard looked: a daemon
+		// running by now is still a healed restart. Nothing is booted out
+		// after this look.
+		chk = reloadGuard(ctx, run, c.Layout, uid, label, oldPID)
+	}
 	switch {
-	case errors.Is(err, launchd.ErrNotReloaded) && chk.started:
-		skip(fmt.Sprintf("launchd started %s meanwhile (pid %d)", label, chk.st.PID))
+	case notReloaded && chk.started:
+		skip("info", fmt.Sprintf("launchd started %s meanwhile (pid %d)", label, chk.st.PID))
 		fmt.Fprintf(c.Stdout, "launchd started %s meanwhile; the job was not reloaded\nrestarted %s via launchd (%s); logs: %s\n",
 			label, label, describeLaunchdState(chk.st), c.Layout.DaemonLog())
 		return 0
-	case errors.Is(err, launchd.ErrNotReloaded) && chk.held > 0:
+	case notReloaded && chk.held > 0:
 		if why := notADaemon(ctx, run, chk.held); why != "" {
 			return refuse(fmt.Sprintf("pid %d holds the daemon's pidfile %s but %s", chk.held, c.Layout.Pid(), why))
 		}
-		skip(fmt.Sprintf("a magnum daemon runs outside launchd (pid %d)", chk.held))
+		// The restart is over, but launchd's job still cannot spawn: the event,
+		// the trace that stays, warns and says so.
+		skip("warn", fmt.Sprintf("a magnum daemon runs outside launchd (pid %d), and launchd still reports %s",
+			chk.held, describeLaunchdState(chk.st)))
 		fmt.Fprintf(c.Stdout, "a magnum daemon runs outside launchd (pid %d); the job was not reloaded, and launchd still reports %s; logs: %s\n",
 			chk.held, describeLaunchdState(chk.st), c.Layout.DaemonLog())
 		return 0
-	case errors.Is(err, launchd.ErrNotReloaded) && chk.refused != "":
-		return refuse(chk.refused)
-	case errors.Is(err, launchd.ErrNotReloaded):
+	case plistRefused:
 		return refuse(err.Error()) // the plist: missing, without a label, another job's
+	case notReloaded:
+		return refuse(chk.refused)
 	case err != nil:
 		now := "its state unreadable"
 		if st, serr := launchd.Status(ctx, run, uid, label); serr == nil {

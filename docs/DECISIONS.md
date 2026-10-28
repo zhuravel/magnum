@@ -13844,10 +13844,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   live pid in the pidfile), runs right before the bootout, with no registry write or other wait between
   them. A write of the begin event can wait up to 5 s on a busy registry, and launchd retries the spawn
   every 10 s, so a guard read before it could be stale by the bootout. Every stop before the bootout wraps
-  `launchd.ErrNotReloaded`, and the job is left as it was. One event ends every begin: a new daemon of
-  launchd's, or a magnum daemon started by hand that holds the pidfile (ps confirms it, as the stop does),
-  is success with `daemon.reload_skipped` (info) and no reload; a pidfile naming another process (a recycled
-  pid), a state that cannot be read, a failure launchd no longer reports or a plist it cannot use is
+  `launchd.ErrNotReloaded` (as a mark: the error says only why), and the job is left as it was. One event
+  ends every begin: a new daemon of launchd's, or a magnum daemon started by hand that holds the pidfile (ps
+  confirms it, as the stop does), is success with `daemon.reload_skipped` and no reload, at info for
+  launchd's and at warn, with launchd's state, for the one by hand, since the job still cannot spawn; a
+  plist it cannot use stops the reload before the guard, which then looks once so that a daemon launchd
+  started meanwhile is still a success; a pidfile naming another process (a recycled pid, named by the pid
+  and its executable's base name alone: its command line can carry a password, and the reason goes into the
+  registry), a state that cannot be read, a failure launchd no longer reports or a plist it cannot use is
   `daemon.reload_refused` (warn) with why, and the restart's error; after the reload it waits 15 s again:
   `daemon.reloaded` (info) and success when a daemon runs, else `daemon.reload_failed` (error) and the
   restart's error with launchd's state and exit code both times and `magnum install --now` as the fix. The
@@ -13873,7 +13877,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestDaemonRestartReloadKeepsTheRegistryAsItIs (none, read-only, busy, an older schema built from this
   build's migrations), TestDaemonRestartWaitsForADaemonLaunchdStartsAfterTheReload (a bootstrap that spawns
   10 s later), TestDaemonRestartReloadsThePlistInstallWrote (install's own plist, mise's prefix, a pinned
-  config) and TestTheRestartWaitsInTheHelpAndTheREADMEFollowTheConstants.
+  config) and TestTheRestartWaitsInTheHelpAndTheREADMEFollowTheConstants. The re-reviews added, failing
+  first: TestARefusedReloadNamesAStrangerByItsExecutableAlone (a `mysql -p<password>` command line reaches
+  neither the event nor the output), the case of TestDaemonRestartReloadsNothingOnceADaemonRunsAfterTheWait
+  where the plist is gone as launchd's retry starts the daemon, its warn-level skip for the daemon started
+  by hand, its stdout line that says a last check may cancel the reload, and the check that a refusal says
+  its reason once (TestReloadRefusesAPlistItCannotLoadTheJobFromBeforeTheBootout,
+  TestDaemonRestartRecordsWhyItDidNotReload).
 
 ## Learned rules
 
