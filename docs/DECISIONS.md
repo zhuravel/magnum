@@ -14198,6 +14198,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAnUnheardCompletionOnAUsageLimitQueuesNoOther, TestACompletionOfAFullRoundRestsOnThatRound,
   TestPastKeepsTheHeadsThatSpentOrStoppedTheirCompletions and TestARetriedCompletionKeepsTheReReviewIntervalOfItsRound.
 
+- **A re-review that waited for a small delta measures the push again before it starts** (2026-10-29, after
+  the empty commit of 2026-10-28: a build without the class `empty` queued its re-review as a 0-line small
+  delta, the build that replaced it knew the class and still ran the re-review when the two-hour wait ended).
+  **Why**: the poller measures a push once, when it sees the head (`checkDelta`, `settlePush`), and a queued
+  re-review kept that decision for as long as it waited, so a class added, a setting changed or a comparison
+  that failed since the push changed nothing. A decision made before a restart is as old as the queue.
+  **What**: right before dispatch starts such a round (`startRound`, after the quiet hours and the GitHub
+  budget gates, before the slot and the reservation: `settleSmallDelta`), it measures the reviewed commit
+  against the head once more with `checkDelta` (one comparison as the watch's poll identity, the same
+  function and the watch's classes). A push that is trivial now settles as the poller settles one
+  (`settleTrivial`, the code `settlePush` shares: `reviewed_sha` moves to the head with the last verdict,
+  `pr.trivial_delta` with "rereview_pending → reviewed: …", the card's note, no approval dismissed, and
+  auto-approval reads the head as reviewed), and no round starts, takes a slot or counts against the cap. Any other result, and a comparison that fails, start the
+  round as before; the delta record is not rewritten. **Which rounds**: only the re-review the threshold held
+  (`eligibility.SmallDeltaHold`, the predicate `Throttle` holds it by, now exported so the two cannot
+  differ), so a delta check, a forced or requested round, a full or audit pass, a reply round, a CI check, a
+  completion, a re-review of the same head, a post-merge review, a continued round and a dry run are left
+  alone. **Once**: each head is measured at most once per daemon run (`deltaLooked`, by PR and head, set
+  before the comparison), also when something else keeps the round from starting, so a Codex pause or a full
+  pool costs one call, not one a tick; a new head is measured again, and a failed settle clears the mark.
+  **Not done**: a re-review the older build queued for another reason (the quiet period, the interval, the
+  cap) is not measured again, because no threshold held it; an App's approval the older build dismissed at
+  the push stays dismissed. Tests, failing first:
+  TestAQueuedSmallDeltaThatIsAnEmptyPushSettlesAtDispatch, TestAQueuedSmallDeltaThatChangesCodeStartsItsRound
+  (one second look, made before the round), TestAFailedSecondLookStartsTheRound,
+  TestTheSecondLookAtASmallDeltaIsMadeOncePerHead and TestAnotherHeadOfASmallDeltaGetsItsOwnSecondLook; the
+  guard TestAReviewSomeoneAskedForDoesNotMeasureThePushAgain (a review request, `magnum review`) passed
+  before the change and fails under the mutation of what it protects.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

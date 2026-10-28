@@ -260,6 +260,13 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 		e.recordDelta(ctx, pr.ID, from, pr.HeadSHA, dc, e.now())
 		return false, nil
 	}
+	return true, e.settleTrivial(ctx, repo, pr, from, dc)
+}
+
+// settleTrivial settles pr, whose head is a trivial push (dc) since its
+// reviewed commit from: reviewed at the head with the last verdict, nothing
+// queued, with the pr.trivial_delta event and the note for the card.
+func (e *Engine) settleTrivial(ctx context.Context, repo store.Repo, pr store.PR, from string, dc deltaCheck) error {
 	err := e.st.TransitionPR(ctx, pr.ID, []string{pr.State}, store.PRReviewed, func(u *store.PRUpdate) {
 		u.Where("head_sha", pr.HeadSHA)
 		u.Where("reviewed_sha", from)
@@ -272,12 +279,49 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 		u.Set("last_error", nil)
 	})
 	if err != nil {
-		return true, err
+		return err
 	}
 	e.recordTrivial(ctx, repo, pr, TrivialSkip{From: from, To: pr.HeadSHA, Classes: dc.classes, Files: dc.files, At: e.now()},
 		fmt.Sprintf("%s → reviewed: the push to %s %s since the review of %s; no re-review, the review stands",
 			pr.State, textx.ShortSHA(pr.HeadSHA), dc.change(), textx.ShortSHA(from)))
-	return true, nil
+	return nil
+}
+
+// settleSmallDelta is dispatch's second look at a re-review that waited for
+// a small delta (job.smallDelta: the threshold held it, rereview_min_lines
+// and rereview_max_wait), right before the round starts. The poller measured
+// the push when it saw the head, and the queued re-review kept that decision
+// for hours: a build that did not know a class of trivial push (empty), an
+// earlier configuration or a comparison that failed then decided it, and the
+// build that dispatches may decide otherwise. The push is measured again as
+// the poller measures it (checkDelta: one comparison as the watch's poll
+// identity, the same classes). When it is trivial now, the PR settles as it
+// settles when the poller sees such a push (settleTrivial) and no round
+// starts (true). Otherwise, or when the comparison fails, the round starts
+// as it would have (false); either way the head is not measured again in
+// this run (deltaLooked), whatever keeps the round from starting. A round
+// that is not that wait skips the look: a forced or requested one, a full
+// pass or an audit pass, a reply round, a CI check, a completion, a
+// re-review of the same head, a post-merge review, a continued round and a
+// dry run, which writes nothing.
+func (e *Engine) settleSmallDelta(ctx context.Context, job *roundJob) bool {
+	pr := job.pr
+	if !job.smallDelta || e.d.DryRun || pr.State != store.PRRereviewPending || pr.Forced || job.requested || job.postMerge ||
+		job.complete != nil || job.ciRed || job.replies > 0 || job.sameHead || job.fullPass != "" || job.audit != "" ||
+		e.deltaLooked[pr.ID] == pr.HeadSHA {
+		return false
+	}
+	e.deltaLooked[pr.ID] = pr.HeadSHA
+	from := deref(pr.ReviewedSHA)
+	dc := e.checkDelta(ctx, job.repo, job.watch, prBase(job.repo, pr), from, pr.HeadSHA)
+	if !dc.trivial {
+		return false
+	}
+	if err := e.settleTrivial(ctx, job.repo, pr, from, dc); err != nil {
+		delete(e.deltaLooked, pr.ID) // the next tick looks again
+		e.warnUnlessStopped(ctx, err, "dispatch: settle a small delta", "pr", pr.ID)
+	}
+	return true
 }
 
 // recordTrivial keeps a trivial skip for the card (KVPRTrivial) and records

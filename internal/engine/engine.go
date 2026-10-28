@@ -486,6 +486,9 @@ type Engine struct {
 	dryRounds     int // rounds a dry run planned this tick
 	lastSeen      map[string]string
 	cleanupTried  map[int64]time.Time // close-grace cleanup attempts per PR
+	// deltaLooked is, by PR, the head whose small delta dispatch measured
+	// again in this run (settleSmallDelta, delta.go). Tick goroutine only.
+	deltaLooked map[int64]string
 	// logged: when each repeating error was last logged (logOnce, util.go).
 	logged map[string]time.Time
 	// compares are this tick's GitHub comparisons (compare.go).
@@ -712,6 +715,7 @@ func New(d Deps) *Engine {
 		lastSeen:          map[string]string{},
 		logged:            map[string]time.Time{},
 		cleanupTried:      map[int64]time.Time{},
+		deltaLooked:       map[int64]string{},
 		curateTried:       map[int64]time.Time{},
 		criticTried:       map[int64]time.Time{},
 		netRuns:           map[string]netRun{},

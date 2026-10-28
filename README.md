@@ -636,7 +636,13 @@ period once that delta reaches `[daemon] rereview_min_lines` (default 30) or add
 delta waits for further pushes, at most `rereview_max_wait` (default `"2h"`) after its first push.
 `rereview_min_lines = 0` turns the threshold off, and a `[[watch]]` can override both. A force push back to
 an ancestor of the reviewed commit (GitHub: "behind") has nothing to measure, so the threshold does not hold
-its re-review.
+its re-review. A re-review that waited for a small delta is measured once more right before it starts,
+since the push was measured once, when the poller saw it, and a build that did not know a class of
+trivial push (or a setting changed) may have queued it: if the push is trivial now (one GitHub call, the
+same classes), the review stands for the head as above and no round starts, takes a slot or counts against
+the cap (`pr.trivial_delta` says so). Any other result, and a comparison that fails, start the round as
+before; each head is measured at most once per daemon run, and a delta check, a forced or requested round, a
+full pass, a reply round, a CI check or a completion is not measured again.
 
 Such a small delta (more than 0 and fewer than `rereview_min_lines` code lines, no added file) gets a
 delta check instead of that wait and a full round (`[daemon] delta_check`, default `true`; a `[[watch]]`

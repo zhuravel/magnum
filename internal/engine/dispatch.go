@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
@@ -47,6 +48,11 @@ type roundJob struct {
 	// it reviews no longer make one (confirmDeltaCheck). A due full pass
 	// clears it (planFullPass).
 	deltaCheck bool
+	// smallDelta: the re-review waited for a small delta, which the
+	// threshold held until rereview_max_wait (eligibility.SmallDeltaHold);
+	// dispatch measures the push once more before it starts the round
+	// (settleSmallDelta).
+	smallDelta bool
 	// sameHead: the re-review was dispatched with no commits since the
 	// reviewed one (sameHeadDue): only the judge runs, to re-decide its
 	// earlier findings, unless the checkout finds a newer head
@@ -519,6 +525,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		f := e.factsFor(ctx, pr, *w, e.now())
 		e.deltaFacts(ctx, pr, &f)
 		job.deltaCheck = e.deltaCheckDue(ctx, *w, pr, f, job.requested)
+		job.smallDelta = eligibility.SmallDeltaHold(e.cfg.ThrottleFor(w), f)
 		job.sameHead = e.sameHeadDue(ctx, pr)
 		if job.complete = e.completionDue(ctx, pr, job.sameHead, job.requested); job.complete == nil { // complete.go
 			if job.ciRed = e.ciRedDue(ctx, pr, job.sameHead, job.requested); !job.ciRed {
@@ -542,6 +549,9 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		if g := e.githubGate(job); g.text != "" {
 			return false, 0, g
 		}
+	}
+	if e.settleSmallDelta(ctx, job) { // delta.go: the push is trivial after all, nothing to review
+		return false, 0, gate{}
 	}
 
 	rctx, cancel := context.WithCancel(ctx)

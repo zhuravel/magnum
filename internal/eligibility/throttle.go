@@ -161,7 +161,7 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		if limit := d.MaxRoundsPerPRPerDay; limit > 0 && f.RoundsToday >= limit {
 			hold(nextMidnight(now), RuleCap, fmt.Sprintf("daily round cap reached (%d per day)", limit))
 		}
-		if smallDelta(d, f) && !DeltaCheck(d, f) && !f.DeltaSince.IsZero() {
+		if SmallDeltaHold(d, f) {
 			hold(f.DeltaSince.Add(d.RereviewMaxWait.Duration), RuleSmallDelta, fmt.Sprintf("%s %d/%d lines since the review (at most %s)",
 				ReasonSmallDelta, f.DeltaLines, d.RereviewMinLines, d.RereviewMaxWait.Duration))
 		}
@@ -187,6 +187,15 @@ const (
 // RereviewMinLines (0 = no threshold).
 func smallDelta(d config.Daemon, f PRFacts) bool {
 	return d.RereviewMinLines > 0 && f.DeltaKnown && f.DeltaAddedFiles == 0 && f.DeltaLines < d.RereviewMinLines
+}
+
+// SmallDeltaHold reports whether the re-review threshold holds a re-review
+// of f: its measured delta is small (smallDelta), gets no delta check
+// (DeltaCheck) and has the first push to count the wait from (DeltaSince).
+// Throttle holds such a PR until DeltaSince + RereviewMaxWait; the
+// dispatcher asks it to know that a re-review it starts is one that waited.
+func SmallDeltaHold(d config.Daemon, f PRFacts) bool {
+	return smallDelta(d, f) && !DeltaCheck(d, f) && !f.DeltaSince.IsZero()
 }
 
 // DeltaCheck reports whether a re-review's delta gets a delta check, a

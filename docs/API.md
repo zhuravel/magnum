@@ -6634,6 +6634,13 @@ func QuietHoursHold(spec string, now time.Time, judgeAlone bool) bool
     wait for their end. A forced round (`magnum review`) is never held, which
     the caller checks.
 
+func SmallDeltaHold(d config.Daemon, f PRFacts) bool
+    SmallDeltaHold reports whether the re-review threshold holds a re-review
+    of f: its measured delta is small (smallDelta), gets no delta check
+    (DeltaCheck) and has the first push to count the wait from (DeltaSince).
+    Throttle holds such a PR until DeltaSince + RereviewMaxWait; the dispatcher
+    asks it to know that a re-review it starts is one that waited.
+
 
 TYPES
 
