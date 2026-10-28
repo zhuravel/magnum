@@ -24,10 +24,13 @@ type Process struct {
 	Name   string `json:"name"`
 }
 
-// Same reports whether p and q are one process: the same id, process group
-// and start. A process without a start is never the same as another.
+// Same reports whether p and q are one process: the same id and start (its
+// lifetime identity). The process group is not part of it: a process may
+// move to another group or session (setsid) and stays itself; the group
+// only says what a group signal reaches. A process without a start is never
+// the same as another.
 func (p Process) Same(q Process) bool {
-	return p.PID == q.PID && p.PGID == q.PGID && p.Start != "" && p.Start == q.Start
+	return p.PID == q.PID && p.Start != "" && p.Start == q.Start
 }
 
 // Find is the process of table that is p (Same) and still runs (no

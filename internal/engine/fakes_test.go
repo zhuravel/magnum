@@ -891,8 +891,9 @@ type fakeAgents struct {
 	// whose quit agent herdr kept listing, and whether it cleared it.
 	clearLaunch func(store.Session) bool
 	// clearShell is what ClearShellPanes answers (nil: the slot's shell
-	// panes run nothing).
-	clearShell error
+	// panes run nothing); onClearShells runs as it is asked.
+	clearShell    error
+	onClearShells func()
 	// onStart, when set, runs as StartAgent starts, with the role and the
 	// conversation it resumes.
 	onStart func(role config.Role, resume string)
@@ -1244,8 +1245,12 @@ func (f *fakeAgents) CloseRetiredPanesIn(_ context.Context, pr store.PR, _ herdr
 func (f *fakeAgents) ClearShellPanes(_ context.Context, pr store.PR, checkout string) error {
 	f.record(fmt.Sprintf("clear_shells:%d:%s", pr.ID, checkout))
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.clearShell
+	hook, err := f.onClearShells, f.clearShell
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return err
 }
 
 // ClearDeadLaunch records the clear and answers with clearLaunch (false

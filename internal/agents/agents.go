@@ -256,8 +256,12 @@ type Manager struct {
 	// up to the pane that took its place (see replacement).
 	replaced map[string]string
 	// launched marks the shell runs whose line RunShell typed, or tried to
-	// (ShellLaunched): only their commands are keyed or stopped.
+	// (ShellLaunched), until their command ended or its stop was proven:
+	// only their commands are keyed or stopped. jobs is the job captured
+	// for a shell run (at its interrupt, or at a stop that did not finish),
+	// until every process of it is proven gone (remember, forget).
 	launched map[string]bool
+	jobs     map[string]ownedShell
 	// hooksTrustMu serializes the check that tells the operator once per
 	// hooks.json that Codex did not save a hook trust (hooksTrustSaved).
 	hooksTrustMu sync.Mutex
@@ -273,7 +277,8 @@ func New(d Deps) *Manager {
 		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{},
 		switching: map[int64]bool{}, compacting: map[int64]bool{}, sidMissing: map[string]bool{}, rolloutWarned: map[int64]bool{},
 		recovered: map[int64]string{}, recoverLogged: map[int64]bool{}, rolloutHeld: map[string]bool{},
-		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{}}
+		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{},
+		jobs: map[string]ownedShell{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

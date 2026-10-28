@@ -45,6 +45,7 @@ var attentionCases = []struct{ kind, word string }{
 	{attention.KindIdentityError, "identity"},
 	{attention.KindIdentityLeak, "identity"},
 	{attention.KindFix, "fix"},
+	{attention.KindShellHold, "shell"},
 	{attention.KindOverloaded, "overload"},
 	{attention.KindNoReview, "no review"},
 	{"", ""},

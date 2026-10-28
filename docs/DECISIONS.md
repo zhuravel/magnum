@@ -14001,6 +14001,47 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestStopShellNeverTouchesAPaneThatIsNotTheRolesLiveOne, TestStopShellClosesThePaneWithoutAnEnvironmentAndLosesTheSession,
   TestRunShellTypesIntoTheReplacementOfAPaneItsEarlierRunHeld and TestARestartGoesOnInTheReplacementPane.
   The real-signal db-lock tests kill in `t.Cleanup` what they started, matched by its identity.
+  The re-reviews of those fixes found that the cooldown did more harm than good, and the controller replaced
+  it. A shell cleanup never writes `human_active_at` any more: a not-own stop during a round set it, so
+  the round's judge prompt was refused, and the hold before the checkout re-armed it for magnum's own
+  commands too and held a PR forever in silence. The hold is its own state now (engine `clearShells`, kv
+  `pr.<id>.shell_hold`). `agents.ClearShellPanes` answers a `*ShellHoldError` (`ErrShellHold`): `Foreign`
+  for a command magnum did not start, else magnum's own command with why it cannot stop it, herdr unable to
+  say included. The hold costs no attempt and no round of the daily cap, and retries after 1, 2 and 5
+  minutes, then every 10. It writes `pr.shell_hold` once with one toast and `pr.shell_hold_ended` once.
+  After 15 minutes it moves the PR to needs_attention (`attention.KindShellHold`, the board's "shell")
+  with a plain reason: "a command magnum did not start keeps the shell pane of <slot> busy" or "magnum
+  cannot stop its own command in <slot>: <cause>". The reconcile then looks again every 10 minutes and puts
+  the PR back in line once the pane is free. The round's setup, the fixer's guard, `magnum open`'s checkout
+  and every release (`releaseSlot`) run the same check before they switch the slot. The round's setup
+  first closes the runs a crashed daemon left in flight (`finalizeStaleRuns`), so magnum's own leftover is
+  stopped, not held. The check acts only on panes herdr shows as the session's (`inHerdr`, `paneReason`),
+  skips another PR's, and marks lost a live row whose pane id herdr gave to another. A line of a role with
+  no run token (a custom `command` without the db-lock line) keeps its plain ctrl+c presses in the role's
+  own pane, and only the TERM/KILL escalation and the close need the token. A process's lifetime identity
+  is its pid and start (`execx.Process.Same`). The group only says what a group signal reaches, so a
+  captured child that calls setsid stays captured. db-lock notes its command's identity when it starts it,
+  and captures descendants (before it passes the first signal on) only from a table that still shows that
+  same command at its pid. After the group signal StopShell reads the table again before each process's
+  signal. A recheck that finds the job's group gone is the job's end, not another job. A ctrl+c captures the
+  job of an own command (`remember`), and a pane that goes idle is a stop only once that job is gone too
+  (`stopRemembered`, also from the pipeline's `stopShell`). The hold check keeps a failed stop as a hold
+  rather than trust a second idle read. Every wait has one deadline that each ps and herdr read and each
+  sleep share. The hold check's stop runs on a context that an abort or a shutdown cannot cut. A
+  replacement's session is marked live at the repoint, and `markLost` needs the row to still record the
+  pane it was judged by, so neither schedule of an observe tick loses it. A run leaves the launched list
+  once its command ended or its stop was proven. Tests, failing first under the mutation of what they
+  protect: TestAProcessIsItsIDAndStart, TestDBLockSignalsNoChildOfAPIDItsCommandNoLongerHas,
+  TestStopShellKeepsACapturedChildThatChangedItsGroup, TestStopShellReadsTheTableAgainAfterTheGroupSignal,
+  TestStopShellTakesAGroupThatEndedForTheEndOfTheJob, TestStopShellAfterAnIdlePaneStillStopsWhatItCapturedAtTheInterrupt,
+  TestTheStopsWaitIsBoundedByItsDeadline, TestClearShellPanesFinishesItsStopWhenItsCallerIsCut,
+  TestAnObserveTickNeverLosesARepointedShellSession, TestALaunchedRunIsForgottenOnceItEnds,
+  TestAnIdlePaneIsAStopOnlyOnceTheCapturedJobIsGone, TestAHoldOfFifteenMinutesNeedsAttentionWithItsReason,
+  TestStaleRunsAreClosedBeforeTheHoldLooks, TestAReleaseWaitsForTheShellHold, TestTheFixerSeesTheShellHold
+  and TestExplainsAShellHoldInItsPlainWords. The hold and pane-validity cases of
+  TestClearShellPanesStopsAnOwnLeftoverAndHoldsForAnythingElse, the backoff, the one event and the one toast
+  of TestARetryAfterAFailedStopHoldsBeforeItsCheckout, the token-less ctrl+c of
+  TestInterruptShellKeysOnlyItsOwnRunsCommand, and the no-human checks of the not-own tests are new too.
 
 ## Learned rules
 

@@ -303,13 +303,8 @@ const (
 	EventShellMoveBegin  = "pr.shell_move_begin"
 	EventShellMoved      = "pr.shell_moved"
 	EventShellMoveFailed = "pr.shell_move_failed"
-	// EventShellHold (warn): a round holds before its checkout, because a
-	// command magnum does not own keeps one of the PR's shell panes in the
-	// slot busy (ClearShellPanes): the role and the pane, never argv.
-	EventShellHold = "pr.shell_hold"
 )
-    Events of StopShell, of RunShell's move to a new pane and of the round's
-    hold before its checkout, on the PR.
+    Events of StopShell and of RunShell's move to a new pane, on the PR.
 
 const (
 	PhaseOwnPass    = "own_pass"   // the judge's own pass, while the reviewers work
@@ -563,6 +558,10 @@ var ErrNotOwn = errors.New("not magnum's own run")
     ErrNotOwn is StopShell's and InterruptShell's answer when the command a
     shell role's pane runs is not proven the run's own (ownShell): they sent
     nothing (more).
+
+var ErrShellHold = errors.New("a command keeps a shell pane in the checkout busy")
+    ErrShellHold is what a ShellHoldError is: a command keeps a shell pane in
+    the checkout busy, so nothing may switch it.
 
 var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does not pass to a shell")
     ErrUnsafeBaseRef means a judge or reviewer prompt's base ref is not a
@@ -1587,17 +1586,21 @@ func (m *Manager) ClearDeadLaunch(ctx context.Context, s store.Session) (bool, e
     its pane runs something, or the pane closed without a replacement.
 
 func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout string) error
-    ClearShellPanes makes sure, before a round's checkout switches the slot
-    at checkout, that no command runs in a shell pane of the PR's there (the
-    sessions, live or retired, whose cwd is checkout and whose pane herdr still
-    has): a command a restart could not stop, or one left in a pane the role
-    moved away from. A live session's pane busy with an own run of its role no
-    longer in flight is stopped (stopShell). A pane still busy then holds the
-    round: the PR's human cooldown starts (humanSeen, as for a command magnum
-    does not own), EventShellHold is recorded and the answer is ErrHumanActive,
-    which the round's setup retries after the cooldown without counting it.
-    An idle shell or a gone pane is no hold; herdr unable to say is an error
-    that holds the round as busy.
+    ClearShellPanes makes sure, before something switches the checkout of the
+    slot at checkout (a round's, the fixer's, magnum open's, a release), that
+    no command runs in a shell pane of the PR's there. First what is left of a
+    job magnum captured for one of the PR's runs is stopped (stopRemembered).
+    Then the PR's shell sessions, live or retired, whose cwd is checkout: only a
+    pane herdr still shows as the session's (the herdr id checks of the retired
+    panes, inHerdr, and paneReason for a live row, whose pane a herdr restart
+    gave to another becomes lost), and that no other PR's live session records.
+    A live session's pane busy with an own run of its role no longer in flight
+    (ownShell) is stopped (stopShell, on a context an abort or a shutdown cannot
+    cut between SIGTERM and SIGKILL; each step stays bounded). A pane still
+    busy holds the switch: a *ShellHoldError (ErrShellHold), Foreign for a
+    command magnum did not start, else magnum's own with why it cannot stop it,
+    herdr unable to say included. It never marks a human at work, and records no
+    event: the engine keeps the hold and says so.
 
 func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
     CloseRetiredPanes closes the panes of the PR's parked, closed and lost
@@ -1768,12 +1771,16 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
     is an error.
 
 func (m *Manager) InterruptShell(ctx context.Context, run store.Run) error
-    InterruptShell sends ctrl+c to the command a shell role's run left in
-    its pane: only once RunShell typed the run's line (ShellLaunched),
-    and only while the pane's foreground carries this run's own token (ownShell,
-    the run being the cut one). A line never typed, an idle shell and a gone
-    pane need nothing (nil). Anything else gets nothing: ErrNotOwn, or the error
-    that kept herdr from saying.
+    InterruptShell sends ctrl+c to the command a shell role's run left in its
+    pane, only once RunShell typed the run's line (ShellLaunched) and only
+    to the pane of the role's live session. A pane whose foreground carries
+    this run's own token (ownShell) has its job captured first (captureJob,
+    remembered), so a later idle shell is no proof while a captured process runs
+    on. A line of a role without the run token (a `command` of the operator's
+    that leaves the db-lock line out) gets the plain ctrl+c it always got.
+    A line never typed, an idle shell and a gone pane need nothing (nil); a pane
+    whose foreground carries another run's token, or that is not the role's,
+    gets nothing: ErrNotOwn, or the error that kept herdr from saying.
 
 func (m *Manager) LatestRound(ctx context.Context, prID int64) (int, error)
     LatestRound is the highest run round of a PR (0 when it has no runs).
@@ -2046,9 +2053,9 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 
 func (m *Manager) ShellLaunched(runID string) bool
     ShellLaunched reports whether RunShell typed, or tried to type, the line
-    of the shell role's run runID into its pane (in this daemon: an earlier
-    daemon's rounds ended with it). Only a launched run's command is keyed
-    (InterruptShell) or stopped (StopShell).
+    of the shell role's run runID into its pane and the command may still run
+    (in this daemon: an earlier daemon's rounds ended with it). Only a launched
+    run's command is keyed (InterruptShell) or stopped (StopShell).
 
 func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error)
     ShellLine is ShellLine with the role's full-line template (role.Prompt)
@@ -2134,24 +2141,22 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 
 func (m *Manager) StopShell(ctx context.Context, run store.Run) error
     StopShell stops the command a shell role's run (the cut run) left running
-    in its session's pane, when ownShell proves it an own run of magnum's
-    (that run, or a run of the role no longer in flight), and only once
-    RunShell typed the run's line (a line never typed: nil). It captures the
-    job (captureJob: the members of the job's process group and the tree under
-    the run token's db-lock, each with its identity, from the process table),
-    records EventShellStopBegin, and then for SIGTERM and SIGKILL in turn:
-    reads the process table again, asks herdr again (recheck: the job must still
-    be the foreground, led by a process it captured, with no other run's token),
-    sends the signal to the job's group and to each captured process the table
-    shows as itself right then (pid, group and start: execx.Find), and waits
-    up to shellStopWait for an idle shell and every captured process gone.
-    A pane SIGKILL leaves busy is replaced (replaceShell). Success (nil,
-    EventShellStopped) is a pane that is an idle shell or gone, or replaced,
-    with every captured process gone; anything else fails (EventShellStopFailed)
-    and the command counts as still running. A pane that runs a command magnum
-    does not own (no token, another PR's or role's line, another job by the
-    time of a signal) is the human's: humanSeen starts the PR's cooldown.
-    Without Deps.Signal nothing is signalled.
+    in its session's pane, when ownShell proves it an own run of magnum's (that
+    run, or a run of the role no longer in flight), and only once RunShell typed
+    the run's line (a line never typed: nil). It captures the job (captureJob:
+    the members of the job's process group and the tree under the run token's
+    db-lock, each with its identity, from the process table), records
+    EventShellStopBegin, and then for SIGTERM and SIGKILL in turn (escalate):
+    reads the process table again, asks herdr again (recheck), signals the
+    group, reads the table once more and signals each captured process it shows
+    as itself (pid and start: execx.Find), and waits up to shellStopWait for an
+    idle shell and every captured process gone. A pane SIGKILL leaves busy is
+    replaced (replaceShell). A pane that is an idle shell, or gone, is a stop
+    only once the job captured for the run (at its interrupt, or at an earlier
+    stop) is gone too (stopRemembered). Success is nil and EventShellStopped,
+    anything else fails (EventShellStopFailed) and the command counts as still
+    running. Without Deps.Signal nothing is signalled. It never marks a human at
+    work.
 
 func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error
     Submit sends text to the live agent of run's role and records the
@@ -2748,6 +2753,22 @@ type ShellData struct {
     when needed before it is substituted, because the result is typed into a
     shell.
 
+type ShellHoldError struct {
+	Role, Pane, Checkout string
+	Foreign              bool
+	Cause                string
+}
+    ShellHoldError is ClearShellPanes' answer while a command keeps one of the
+    PR's shell panes in the checkout busy: Foreign for a command magnum did not
+    start (no run token of the PR's role there), else magnum's own command it
+    could not stop, Cause saying why in plain words. It names the role and the
+    pane, never the command's argv.
+
+func (e *ShellHoldError) Error() string
+
+func (e *ShellHoldError) Is(target error) bool
+    Is makes a ShellHoldError match ErrShellHold.
+
 type ThreadReply struct {
 	ID     int64  `json:"id"` // REST comment id
 	Author string `json:"author"`
@@ -3043,6 +3064,13 @@ const (
 	// ("fix: reply fixed in <sha7> in … and resolve it: <url>; …; details:
 	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry.
 	KindFix = "fix"
+	// KindShellHold: a command keeps one of the PR's shell panes in its slot
+	// busy, so nothing switches the slot's checkout, and the hold lasted 15
+	// minutes. Its message is the hold's plain reason ("a command magnum did
+	// not start keeps the shell pane of review1 busy", "magnum cannot stop
+	// its own command in review1: …"); the reconcile looks again every 10
+	// minutes and puts the PR back in line once the pane is free.
+	KindShellHold = "shell_hold"
 )
     Kinds: why the engine parked the PR (engine needsAttention's why).
 
@@ -10585,8 +10613,11 @@ func ProcessTable(ctx context.Context, r Runner) ([]Process, error)
     alike). A line it cannot read is skipped.
 
 func (p Process) Same(q Process) bool
-    Same reports whether p and q are one process: the same id, process group and
-    start. A process without a start is never the same as another.
+    Same reports whether p and q are one process: the same id and start (its
+    lifetime identity). The process group is not part of it: a process may move
+    to another group or session (setsid) and stays itself; the group only says
+    what a group signal reaches. A process without a start is never the same as
+    another.
 
 type Real struct {
 	// Log, when set, receives a redacted one-line transcript per command:

@@ -52,6 +52,17 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 	if job.kind == kindContinue {
 		to = store.PRPaused
 	}
+	if h := se.shellHold; h != nil && h.attention {
+		// A shell hold that lasted 15 minutes: the operator's to see, with
+		// its plain reason and the hold's one toast; the reconcile looks
+		// again every 10 minutes (recheckShellHolds).
+		if hold, on := e.shellHoldOf(ctx, pr.ID); on {
+			hold.Attention = true
+			e.saveShellHold(ctx, pr.ID, hold)
+		}
+		e.needsAttentionKeyed(ctx, job, pr, []string{store.PRClaiming, store.PRReviewing}, attention.KindShellHold, h.reason, nil, h.key, shellHoldToastWindow)
+		return
+	}
 	e.retryOrAttention(ctx, job, pr, []string{store.PRClaiming, store.PRReviewing}, to, se.err.Error(), !se.noCharge, se.retryAt)
 	// Not charged is a wait (a person in the panes, a busy agent), not a
 	// failure; an infrastructure pause has its own toast.
@@ -301,14 +312,9 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		}
 		if errors.Is(runErr, pipeline.ErrShellRunning) {
 			// The restart kept the checkout under a command that still runs:
-			// not the PR's doing. It waits the PR's cooldown when magnum found
-			// a command it does not own there, else a minute; the next
-			// round's setup clears the slot's shell panes first.
-			retry := now.Add(busyRetry)
-			if until := e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt); until.After(retry) {
-				retry = until
-			}
-			e.retryOrAttention(ctx, job, pr, from, claimableState(pr), msg, false, retry)
+			// not the PR's doing. The next round's setup, a minute later,
+			// clears the slot's shell panes first, or holds (clearShells).
+			e.retryOrAttention(ctx, job, pr, from, claimableState(pr), msg, false, now.Add(busyRetry))
 			break
 		}
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)

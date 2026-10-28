@@ -483,9 +483,16 @@ func (m *Manager) namePane(ctx context.Context, pr store.PR, ws *Workspace, role
 }
 
 // markLost moves a starting/live session to lost (its pane or agent is gone),
-// keeping session_id for a later resume. A lost race is not an error.
+// keeping session_id for a later resume, only while the row still records
+// the pane s read (a shell stop or move that pointed it at a new pane since
+// keeps it live: the judgement was about the old pane). A lost race is not
+// an error.
 func (m *Manager) markLost(ctx context.Context, s store.Session) error {
-	err := m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLost, nil)
+	err := m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLost, func(u *store.SessionUpdate) {
+		if pane := store.Deref(s.HerdrPaneID); pane != "" {
+			u.Where("herdr_pane_id", pane)
+		}
+	})
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		return fmt.Errorf("agents: mark session %d lost: %w", s.ID, err)
 	}

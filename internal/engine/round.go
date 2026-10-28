@@ -114,6 +114,8 @@ type setupError struct {
 	// whose origin the probe asks.
 	infra    string
 	probeDir string
+	// shellHold is the shell hold that failed the setup (clearShells).
+	shellHold *shellHoldError
 }
 
 func (s *setupError) Error() string { return s.err.Error() }
@@ -180,12 +182,12 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		// Never switch the slot under a command that still runs in it (a
 		// cut command an earlier round's restart could not stop, one in a
 		// pane the role moved away from): an own leftover is stopped, and
-		// anything else holds the round under the PR's cooldown
-		// (agents.ErrHumanActive: no attempt; DECISIONS "A cut shell
-		// command is killed, and a review that missed a reviewer is
-		// completed").
+		// anything else holds the round (clearShells, shell_hold.go: no
+		// attempt). The runs a crashed daemon left in flight are closed
+		// first, so magnum's own leftover there is stopped, not held.
 		if job.hasSlot && job.checksOutInPlace() {
-			if err := e.d.Agents.ClearShellPanes(ctx, pr, job.slot.Path); err != nil {
+			e.finalizeStaleRuns(ctx, pr.ID)
+			if err := e.clearShells(ctx, pr, job.slot); err != nil {
 				return fail(err)
 			}
 		}
@@ -1162,7 +1164,12 @@ func (e *Engine) finalizeRuns(ctx context.Context, prID int64, why string) {
 // classifySetup maps a setup failure onto the retry policy.
 func classifySetup(err error, pr store.PR, cfg *config.Config, now time.Time) *setupError {
 	se := &setupError{err: err}
+	var hold *shellHoldError
 	switch {
+	case errors.As(err, &hold):
+		// A command keeps a shell pane in the slot busy: no attempt, the
+		// hold's own backoff, and needs_attention once it lasted 15 minutes.
+		se.noCharge, se.retryAt, se.shellHold = true, hold.retryAt, hold
 	case errors.Is(err, agents.ErrHumanActive):
 		// The cooldown's end, or a whole cooldown from now without a start.
 		se.noCharge, se.retryAt = true, cfg.Daemon.CooldownUntil(cmp.Or(pr.HumanActiveAt, &now))

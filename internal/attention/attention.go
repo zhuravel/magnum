@@ -37,12 +37,19 @@ const (
 	// ("fix: reply fixed in <sha7> in … and resolve it: <url>; …; details:
 	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry.
 	KindFix = "fix"
+	// KindShellHold: a command keeps one of the PR's shell panes in its slot
+	// busy, so nothing switches the slot's checkout, and the hold lasted 15
+	// minutes. Its message is the hold's plain reason ("a command magnum did
+	// not start keeps the shell pane of review1 busy", "magnum cannot stop
+	// its own command in review1: …"); the reconcile looks again every 10
+	// minutes and puts the PR back in line once the pane is free.
+	KindShellHold = "shell_hold"
 )
 
 // Kinds are every kind above: Explain reads each as a message's leading
 // "<kind>: ", and the PR board names each in its attention pill.
 func Kinds() []string {
-	return []string{KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak, KindFix}
+	return []string{KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak, KindFix, KindShellHold}
 }
 
 // OnMagnumsSide reports whether kind (a Reason's Kind) is a failure on
@@ -53,7 +60,7 @@ func Kinds() []string {
 // findings its fixer left, on the operator's own PR, and is not one.
 func OnMagnumsSide(kind string) bool {
 	switch kind {
-	case KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak:
+	case KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak, KindShellHold:
 		return true
 	}
 	return false
@@ -314,6 +321,9 @@ func cause(r Reason, chain, output string, lines []string, ref string) (string, 
 			" retries now, and `magnum open " + ref + "` shows the pane when it runs something"
 	}
 	switch r.Kind {
+	case KindShellHold:
+		return textx.FirstLine(chain), "`magnum open " + ref + "` shows the PR's panes: end the command that keeps the shell pane busy (or wait for magnum's own to end); " +
+			"magnum looks again every 10 minutes and reviews the PR once the pane is free"
 	case KindBlocked, KindNoReview, KindOverloaded:
 		c := strings.TrimSpace(strings.TrimPrefix(textx.FirstLine(chain), "judge blocked:"))
 		fix := "`magnum open " + ref + "` shows the judge's pane; fix what it reports, then " + retry
@@ -400,8 +410,8 @@ func summary(r Reason) string {
 	switch r.Kind {
 	case KindBlocked:
 		return "judge blocked: " + r.Cause
-	case KindNoReview:
-		return r.Cause // the pipeline's own sentence
+	case KindNoReview, KindShellHold:
+		return r.Cause // the pipeline's, or the hold's, own sentence
 	case KindOverloaded:
 		return "agent API overloaded: " + r.Cause
 	case KindIdentityError:

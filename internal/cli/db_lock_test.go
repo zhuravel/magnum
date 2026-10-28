@@ -3,10 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -484,6 +487,82 @@ func TestDBLockHoldsTheLockUntilWhatItCapturedIsGone(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(dir, "stderr")); !strings.Contains(got, "; sent SIGTERM\n") || !strings.Contains(got, "; sent SIGKILL\n") {
 		t.Errorf("stderr = %q, want the SIGTERM and the SIGKILL lines", got)
+	}
+}
+
+// db-lock notes its command's identity (pid and start) when it starts it,
+// and takes the processes under that pid only from a process table that
+// still shows the same command there: once the table shows another start
+// under the pid (the command ended and the pid went to another process),
+// the children listed under it are another's and get nothing. The victim
+// here is the test's own sleep, listed under the command's pid with
+// another start.
+func TestDBLockSignalsNoChildOfAPIDItsCommandNoLongerHas(t *testing.T) {
+	c, _, _ := bareContext(t)
+	fastKill(t, time.Second, time.Second)
+	sigs := signalDBLock(t)
+	checkout := checkoutDir(t)
+	victim := exec.Command("sleep", "30")
+	if err := victim.Start(); err != nil {
+		t.Fatal(err)
+	}
+	victimEnded := make(chan error, 1)
+	go func() { victimEnded <- victim.Wait() }()
+	t.Cleanup(func() { _ = victim.Process.Kill(); <-victimEnded })
+	pids := filepath.Join(t.TempDir(), "pids")
+	host := &execx.Real{}
+	var mu sync.Mutex
+	reads := 0
+	prev := dbLockRunner
+	dbLockRunner = func() execx.Runner {
+		return &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"ps"}, Fn: func(cmd execx.Cmd) (execx.Result, error) {
+			res, err := host.Run(context.Background(), cmd)
+			mu.Lock()
+			reads++
+			n := reads
+			mu.Unlock()
+			b, _ := os.ReadFile(pids)
+			root, _, _ := strings.Cut(strings.TrimSpace(string(b)), " ")
+			if err != nil || n == 1 || root == "" {
+				return res, err // the identity taken at the start is the command's own
+			}
+			var out strings.Builder
+			for line := range strings.SplitSeq(string(res.Stdout), "\n") {
+				if f := strings.Fields(line); len(f) > 0 && f[0] == root {
+					line = fmt.Sprintf("%s %s %s S Thu Jan  1 00:00:00 2099 /bin/other", f[0], f[1], f[2])
+				}
+				out.WriteString(line + "\n")
+			}
+			fmt.Fprintf(&out, "%d %s %d S Thu Jan  1 00:00:01 2099 /bin/sleep\n", victim.Process.Pid, root, victim.Process.Pid)
+			return execx.Result{Stdout: []byte(out.String())}, nil
+		}}}}
+	}
+	t.Cleanup(func() { dbLockRunner = prev })
+	// Files, not buffers: the command's own child, which db-lock no longer
+	// takes for the command's, keeps no pipe open that the wait drains.
+	out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = out.Close() })
+	cc := &Context{Version: c.Version, Layout: c.Layout, Stdout: out, Stderr: out}
+	codes := make(chan int, 1)
+	go func() {
+		codes <- execute(cc, []string{"db-lock", "--checkout", checkout, "--role", "codex-review", "--",
+			"sh", "-c", `trap "" INT; sleep 60 & echo $$ $! > "$0.tmp"; mv "$0.tmp" "$0"; wait`, pids})
+	}()
+	ownChildren(t, pids) // the real table: its own children, killed at the end
+	sigs <- os.Interrupt
+	select {
+	case <-codes:
+	case <-time.After(20 * time.Second):
+		t.Fatal("db-lock did not finish")
+	}
+	select {
+	case err := <-victimEnded:
+		victimEnded <- err // for the cleanup
+		t.Errorf("the process listed under the command's reused pid was signalled: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 

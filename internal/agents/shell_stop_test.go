@@ -404,22 +404,22 @@ func TestStopShellNeverSignalsACommandWithoutItsRunToken(t *testing.T) {
 			if b := e.eventsOf(EventShellStopBegin); len(b) != 0 {
 				t.Errorf("begin events = %+v", b)
 			}
-			if !e.humanActive() {
-				t.Error("a command magnum does not own in its pane did not start the human cooldown")
+			if e.humanActive() {
+				t.Error("a shell stop marked a human at work: the round's judge prompt would be refused")
 			}
 		})
 	}
 }
 
 // The run token must name a run of this PR and role, the cut run or one no
-// longer in flight: another PR's run and a run the registry does not know
-// are the human's (never signalled, the cooldown starts); another run of
-// the role still in flight is magnum's own, never signalled either.
+// longer in flight: another PR's run, a run the registry does not know and
+// another run of the role still in flight are never signalled, and none of
+// them marks a human at work.
 func TestStopShellNeverSignalsAnotherPRsOrAnInFlightRun(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		token   func(e *env) string
-		foreign bool
+		foreign bool // a command magnum did not start
 	}{
 		{"another PR's run", func(e *env) string {
 			other, err := e.st.UpsertPRFromGitHub(e.ctx, store.GitHubPR{RepoID: e.repo.ID, NodeID: "PR_11921", Number: 11921,
@@ -457,8 +457,8 @@ func TestStopShellNeverSignalsAnotherPRsOrAnInFlightRun(t *testing.T) {
 			if len(e.h.paneCloses) != 0 {
 				t.Errorf("closes = %v", e.h.paneCloses)
 			}
-			if got := e.humanActive(); got != tc.foreign {
-				t.Errorf("human cooldown = %t, want %t", got, tc.foreign)
+			if e.humanActive() {
+				t.Error("a shell stop marked a human at work")
 			}
 		})
 	}
@@ -506,8 +506,7 @@ func TestStopShellNeverTouchesAPaneThatIsNotTheRolesLiveOne(t *testing.T) {
 
 // herdr is asked again right before each signal: a process group or a
 // token process that changed since the last look (the command ended and
-// something else took the foreground) gets nothing more, and it is the
-// human's.
+// something else took the foreground) gets nothing more.
 func TestStopShellRechecksTheProcessGroupBeforeEachSignal(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -547,8 +546,8 @@ func TestStopShellRechecksTheProcessGroupBeforeEachSignal(t *testing.T) {
 			if len(e.h.paneCloses) != 0 {
 				t.Errorf("closes = %v", e.h.paneCloses)
 			}
-			if !e.humanActive() {
-				t.Error("another job in the pane did not start the human cooldown")
+			if e.humanActive() {
+				t.Error("a shell stop marked a human at work")
 			}
 		})
 	}
@@ -845,8 +844,8 @@ func TestStopShellRechecksThePaneBeforeItsClose(t *testing.T) {
 			if s := e.session(RoleCodexReview); store.Deref(s.HerdrPaneID) != pane {
 				t.Errorf("session in %s, want it kept in %s", store.Deref(s.HerdrPaneID), pane)
 			}
-			if !tc.ok && !e.humanActive() {
-				t.Error("another job in the pane did not start the human cooldown")
+			if e.humanActive() {
+				t.Error("a shell stop marked a human at work")
 			}
 		})
 	}
@@ -880,8 +879,8 @@ func TestRunShellReclaimsAPaneItsEarlierRunHolds(t *testing.T) {
 	if len(e.h.splits) != 0 || len(e.h.paneCloses) != 0 {
 		t.Errorf("splits %v, closes %v, want none", e.h.splits, e.h.paneCloses)
 	}
-	if !e.m.ShellLaunched("r-2") {
-		t.Error("the typed line's run is not marked launched")
+	if e.m.ShellLaunched("r-2") || e.m.ShellLaunched(earlier.ID) {
+		t.Error("a run whose command ended, or whose stop was proven, is still on the launched list")
 	}
 }
 
@@ -1019,26 +1018,32 @@ func TestAPushDuringTheWaitForABusyPaneSendsItNothing(t *testing.T) {
 	}
 }
 
-// The interrupt of a shell role's run is ctrl+c to its pane only while the
-// pane's foreground carries this run's token: a line never typed, an
-// earlier run's command, the operator's and an idle shell get nothing.
+// The interrupt of a shell role's run is ctrl+c to its pane once its line
+// was typed: to a command that carries this run's token (its job captured
+// first), and to a line without any token in the role's own pane (a
+// `command` of the operator's that leaves the db-lock line out, which got
+// its ctrl+c before the token existed). A line never typed, an earlier
+// run's command, a pane that is not the role's and an idle shell get
+// nothing.
 func TestInterruptShellKeysOnlyItsOwnRunsCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		launched bool
 		token    func(e *env, run store.Run) []string // nil: an idle shell
+		move     bool                                 // the session no longer the role's live one
 		keyed    bool
 		notOwn   bool
 	}{
-		{"its own command", true, func(e *env, run store.Run) []string { return e.dbLockArgv(RoleCodexReview, shellCheckout, run.ID) }, true, false},
-		{"never typed", false, func(e *env, run store.Run) []string { return e.dbLockArgv(RoleCodexReview, shellCheckout, run.ID) }, false, false},
+		{"its own command", true, func(e *env, run store.Run) []string { return e.dbLockArgv(RoleCodexReview, shellCheckout, run.ID) }, false, true, false},
+		{"never typed", false, func(e *env, run store.Run) []string { return e.dbLockArgv(RoleCodexReview, shellCheckout, run.ID) }, false, false, false},
 		{"an earlier run's command", true, func(e *env, _ store.Run) []string {
 			r, _ := e.m.NewRun(e.ctx, e.pr, RoleCodexReview, store.RunInitial, 1)
 			_ = e.st.TransitionRun(e.ctx, r.ID, nil, store.RunAbandoned, nil)
 			return e.dbLockArgv(RoleCodexReview, shellCheckout, r.ID)
-		}, false, true},
-		{"the operator's command", true, func(*env, store.Run) []string { return []string{"vim", "notes.md"} }, false, true},
-		{"an idle shell", true, nil, false, false},
+		}, false, false, true},
+		{"a line without the token", true, func(*env, store.Run) []string { return []string{"bin/lint", "--all"} }, false, true, false},
+		{"a line without the token in a pane no longer the role's", true, func(*env, store.Run) []string { return []string{"bin/lint", "--all"} }, true, false, true},
+		{"an idle shell", true, nil, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
@@ -1054,6 +1059,11 @@ func TestInterruptShellKeysOnlyItsOwnRunsCommand(t *testing.T) {
 			} else {
 				e.setProcs(pane, idlePane(pane))
 			}
+			if tc.move {
+				if err := e.st.TransitionSession(e.ctx, *run.SessionID, nil, store.SessionClosed, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
 			err := e.m.InterruptShell(e.ctx, run)
 			if errors.Is(err, ErrNotOwn) != tc.notOwn || (!tc.notOwn && err != nil) {
 				t.Fatalf("InterruptShell = %v, want not own %t", err, tc.notOwn)
@@ -1066,57 +1076,101 @@ func TestInterruptShellKeysOnlyItsOwnRunsCommand(t *testing.T) {
 	}
 }
 
-// Before a round's checkout switches the slot, the PR's shell panes there
+// Before something switches the slot's checkout, the PR's shell panes there
 // are made sure to run nothing: an own leftover (an earlier run of the role,
-// over) is stopped, and the round goes on; a command magnum does not own,
-// in the live pane or in one the role moved away from, holds the round
-// under the human cooldown (ErrHumanActive) with EventShellHold; an idle
-// pane, or a pane in another checkout, holds nothing.
+// over) is stopped, and the switch goes on; a command magnum did not start,
+// in the live pane or in one the role moved away from, holds it as foreign
+// (a *ShellHoldError), and an own command magnum cannot stop holds it as
+// its own, with why. A hold never marks a human at work, and sends a
+// foreign command nothing. An idle pane, a pane in another checkout, a
+// retired row whose pane herdr gave to another PR's agent, and a live row
+// whose pane is no longer its own (that row becomes lost, for the next
+// round to lay a pane out) hold nothing.
 func TestClearShellPanesStopsAnOwnLeftoverAndHoldsForAnythingElse(t *testing.T) {
+	const moved = "w1:p9"
+	retired := func(e *env, p herdr.Pane) {
+		s := e.session(RoleCodexReview)
+		if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: s.Role, AgentKind: new(KindShell),
+			HerdrWorkspaceID: s.HerdrWorkspaceID, HerdrPaneID: new(p.ID), Cwd: s.Cwd, State: store.SessionClosed}); err != nil {
+			e.t.Fatal(err)
+		}
+		e.h.addPane(p)
+	}
 	for _, tc := range []struct {
-		name string
-		set  func(e *env, pane string)
-		hold bool
+		name    string
+		set     func(e *env, pane string)
+		hold    bool
+		foreign bool
+		lost    bool // the live row is marked lost
 	}{
 		{"an own leftover", func(e *env, pane string) {
 			earlier, _ := e.shellRun(store.RunAbandoned)
 			e.world(pane).job(e.dbLockArgv(RoleCodexReview, shellCheckout, earlier.ID))
-		}, false},
-		{"the operator's command", func(e *env, pane string) { e.setProcs(pane, otherJob(pane)) }, true},
-		{"a pane the role moved away from", func(e *env, pane string) {
-			s := e.session(RoleCodexReview)
-			if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: s.Role, AgentKind: new(KindShell),
-				HerdrWorkspaceID: s.HerdrWorkspaceID, HerdrPaneID: new("w1:p9"), Cwd: s.Cwd, State: store.SessionClosed}); err != nil {
-				e.t.Fatal(err)
+		}, false, false, false},
+		{"an own leftover that outlives every signal", func(e *env, pane string) {
+			earlier, _ := e.shellRun(store.RunAbandoned)
+			w := e.world(pane)
+			w.job(e.dbLockArgv(RoleCodexReview, shellCheckout, earlier.ID))
+			w.set(anyProc, false, false, false)
+			for _, s := range e.sessions() { // no replacement: the close is the last step, and the row is lost
+				_ = e.st.UpdateSession(e.ctx, s.ID, func(u *store.SessionUpdate) { u.Set("env_json", map[string]string{}) })
 			}
-			e.setProcs("w1:p9", otherJob("w1:p9"))
-		}, true},
-		{"an idle pane", func(e *env, pane string) { e.setProcs(pane, idlePane(pane)) }, false},
+		}, true, false, true},
+		{"the operator's command", func(e *env, pane string) { e.setProcs(pane, otherJob(pane)) }, true, true, false},
+		{"a pane the role moved away from", func(e *env, pane string) {
+			retired(e, herdr.Pane{ID: moved, WorkspaceID: "w1", Cwd: shellCheckout})
+			e.setProcs(moved, otherJob(moved))
+		}, true, true, false},
+		{"a retired pane herdr gave to another PR's agent", func(e *env, pane string) {
+			retired(e, herdr.Pane{ID: moved, WorkspaceID: "w1", Cwd: "/Users/x/Projects/other"})
+			e.h.addAgent(herdr.AgentInfo{Name: "mg-11921-claude-review-aaaaaa", PaneID: moved, WorkspaceID: "w1", AgentStatus: herdr.StatusWorking})
+			e.setProcs(moved, otherJob(moved))
+		}, false, false, false},
+		{"a live row whose pane herdr gave to another", func(e *env, pane string) {
+			e.h.mu.Lock()
+			for i := range e.h.panes {
+				if e.h.panes[i].ID == pane {
+					e.h.panes[i].Cwd = "/Users/x/Projects/other"
+				}
+			}
+			e.h.mu.Unlock()
+			e.setProcs(pane, otherJob(pane))
+		}, false, false, true},
+		{"an idle pane", func(e *env, pane string) { e.setProcs(pane, idlePane(pane)) }, false, false, false},
 		{"another checkout", func(e *env, pane string) {
 			s := e.session(RoleCodexReview)
 			if err := e.st.UpdateSession(e.ctx, s.ID, func(u *store.SessionUpdate) { u.Set("cwd", "/Users/x/Projects/talkable.review2") }); err != nil {
 				e.t.Fatal(err)
 			}
 			e.setProcs(pane, otherJob(pane))
-		}, false},
+		}, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
 			e.shellWorkspace()
-			pane := store.Deref(e.session(RoleCodexReview).HerdrPaneID)
+			live := e.session(RoleCodexReview)
+			pane := store.Deref(live.HerdrPaneID)
 			tc.set(e, pane)
 			err := e.m.ClearShellPanes(e.ctx, e.pr, shellCheckout)
-			if tc.hold != errors.Is(err, ErrHumanActive) || (!tc.hold && err != nil) {
+			var hold *ShellHoldError
+			if got := errors.As(err, &hold); got != tc.hold || (!tc.hold && err != nil) {
 				t.Fatalf("ClearShellPanes = %v, want a hold %t", err, tc.hold)
 			}
-			if got := len(e.eventsOf(EventShellHold)) == 1; got != tc.hold {
-				t.Errorf("hold events = %+v, want %t", e.eventsOf(EventShellHold), tc.hold)
+			if tc.hold && (!errors.Is(err, ErrShellHold) || hold.Foreign != tc.foreign || (!hold.Foreign && hold.Cause == "")) {
+				t.Errorf("hold = %+v, want foreign %t (and a cause for magnum's own)", hold, tc.foreign)
 			}
-			if tc.hold && !e.humanActive() {
-				t.Error("the hold did not start the human cooldown")
+			if e.humanActive() {
+				t.Error("a shell hold marked a human at work")
 			}
-			if tc.hold && (len(e.signalsTo()) != 0 || len(e.keysSent()) != 0 || len(e.h.paneCloses) != 0) {
-				t.Errorf("signals %v, keys %v, closes %v to a command magnum does not own", e.signalsTo(), e.keysSent(), e.h.paneCloses)
+			if tc.foreign && (len(e.signalsTo()) != 0 || len(e.keysSent()) != 0 || len(e.h.paneCloses) != 0) {
+				t.Errorf("signals %v, keys %v, closes %v to a command magnum did not start", e.signalsTo(), e.keysSent(), e.h.paneCloses)
+			}
+			s, err := e.st.SessionByID(e.ctx, live.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := s.State == store.SessionLost; got != tc.lost {
+				t.Errorf("the live row is %s, want lost %t", s.State, tc.lost)
 			}
 		})
 	}

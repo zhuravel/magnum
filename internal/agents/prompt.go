@@ -417,6 +417,7 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 	if err != nil {
 		return fail(fmt.Errorf("wait for %s: %w", marker, mapHerdr(err)))
 	}
+	m.shellDone(strings.TrimPrefix(marker, donePrefix)) // its command ended
 	return doneStatus(match.MatchedLine, marker), nil
 }
 

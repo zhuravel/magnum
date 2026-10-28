@@ -345,21 +345,24 @@ in a process group of its own too). db-lock says so on stderr, keeps the lock un
 or SIGKILL went out, and exits with 128 plus that signal. Second, Magnum stops the command itself after the
 restart's last ctrl+c, but only its own run: the shell line's db-lock names the run (`--run <run>`), and
 Magnum keys or signals a pane's command only when that argv names a run of the PR's role in this checkout,
-in the role's own pane, and the run is the one cut or no longer in flight. Its ctrl+c too goes only to a
-pane whose command carries that run's token, and a run whose line was never typed (it still waited for a
-busy pane) gets nothing at all. Magnum notes the job's processes from the process table, each by its pid,
-process group and start time, and before each signal it reads the table and asks herdr again: a process
-whose identity changed gets nothing, and neither does a pane whose job changed. It sends SIGTERM to the
-job's process group and to each of those processes, then SIGKILL 5 seconds later. The stop counts only once
-the shell is idle and every noted process is gone; a process that outlives SIGKILL fails it. When SIGKILL
+in the role's own pane, and the run is the one cut or no longer in flight. Its ctrl+c goes only to the
+role's own pane, and only to a command that carries that run's token or no token at all; a run whose line
+was never typed (it still waited for a busy pane) gets nothing at all. Magnum notes the job's processes from
+the process table, each by its pid and start time (a process that moves to another process group stays the
+same process), and before each signal it reads the table and asks herdr again: a process whose identity
+changed gets nothing, and neither does a pane whose job changed. It sends SIGTERM to the job's process group,
+reads the table again, and sends SIGTERM to each of those processes, then SIGKILL the same way 5 seconds
+later. Each wait has one 5-second deadline that every read shares. The stop counts only once the shell is
+idle and every noted process is gone, so a pane that went idle after a ctrl+c is a stop only once the
+processes noted at that ctrl+c are gone too; a process that outlives SIGKILL fails it. When SIGKILL
 leaves the pane busy, Magnum splits a new pane with the session's working directory and environment, moves
 the role there, asks herdr once more and closes the old one. Without a recorded environment the old pane
 closes all the same and the session is lost, so the next round lays a new pane out. Each stop writes
 `pr.shell_stop_begin` (the process group and the processes as pid, group and name, never arguments),
 `pr.shell_stopped` (the step that worked and the seconds) or `pr.shell_stop_failed` (`not_own`, `signal` or
-`close`). A command in a shell pane that Magnum does not own (no run token, another PR's or role's line)
-counts as yours: the PR waits out `human_cooldown`. A shell reviewer that timed out, or whose wait failed,
-gets the same stop before its run ends. A shell role whose pane is still busy when its next run starts
+`close`). A stop never counts a command as yours: nothing during a round starts `human_cooldown` or keeps
+the judge from its prompt. A shell reviewer that timed out, or whose wait failed, gets the same stop before
+its run ends. A shell role whose pane is still busy when its next run starts
 does the same: an earlier run of its own that is over is stopped at once, and the line runs. Anything else
 gets the minute a fresh pane's shell has to start. When the pane is still busy then, Magnum splits a new pane
 with the session's environment, moves the role there (`pr.shell_move_begin`, then `pr.shell_moved` or
@@ -367,11 +370,21 @@ with the session's environment, moves the role there (`pr.shell_move_begin`, the
 the pane stays on a closed row of the role and closes with the other retired panes once it is an idle shell.
 The new line's db-lock then waits for the lock that the busy command may hold, up to its `--timeout` (20
 minutes) or the role's timeout, rather than failing as busy after a minute. Without a recorded environment
-the run fails as busy, as before. Before a round checks its PR out in a slot, Magnum looks at the PR's shell
-panes in that slot: an earlier run of its own is stopped, and a command it does not own holds the round
-under the PR's cooldown (`pr.shell_hold`), with no attempt counted, instead of switching the checkout under
-it. A shell role whose `command` of your own leaves `{{.DBLockCommand}}` out carries no run token: Magnum
-never stops its command, and a restart that finds it still running ends the round, as above.
+the run fails as busy, as before.
+
+Nothing switches a slot's checkout while a command still runs in a shell pane of its PR there. Before a
+round checks the PR out, before the fixer starts, before `magnum open` checks a PR out and before a release
+resets the slot, Magnum closes the runs a crashed daemon left open and looks at the PR's shell panes in that
+slot, only at panes herdr still shows as theirs. An earlier run of its own is stopped. A command Magnum did
+not start (no run token, or another PR's, role's or run's), or one of its own that it cannot stop, holds the
+switch. The hold costs no attempt and no round of the daily cap. Magnum looks again after about 1, 2 and 5
+minutes, then every 10 minutes. It writes one event when the hold starts (`pr.shell_hold`) and one when it ends
+(`pr.shell_hold_ended`), and shows one toast. After 15 minutes the PR shows under needs-attention with a plain
+reason: "a command magnum did not start keeps the shell pane of <slot> busy", or "magnum cannot stop its own
+command in <slot>: <cause>". The fixer and the other jobs that would switch that checkout see the same hold.
+The hold never marks you as at work. A shell role whose `command` of your own leaves `{{.DBLockCommand}}` out
+carries no run token: its interrupts are the plain ctrl+c presses it always got, Magnum never signals or
+closes its command, and a restart that finds it still running ends the round, as above.
 
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the

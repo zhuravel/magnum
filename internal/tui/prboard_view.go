@@ -909,7 +909,7 @@ func skipWord(r PRBoardRow) string {
 // which share the kind.
 var attentionCauses = map[string]string{
 	"failed": "failed", "overloaded": "overload", "blocked": "blocked", "needs_attention": "no review",
-	"identity_error": "identity", "identity_leak": "identity", "fix": "fix",
+	"identity_error": "identity", "identity_leak": "identity", "fix": "fix", "shell_hold": "shell",
 }
 
 // attentionCause is the word after the attention pill of r ("failed"): its

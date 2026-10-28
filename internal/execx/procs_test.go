@@ -42,18 +42,20 @@ func TestProcessTableAndTheTreeUnderAProcess(t *testing.T) {
 	}
 }
 
-// A process is the one captured only with the same id, group and start: a
-// later process that got its id (another start), one that moved to another
-// group, one without a start and a zombie are not it.
-func TestAProcessIsItsIDGroupAndStart(t *testing.T) {
+// A process is the one captured only with the same id and start: a later
+// process that got its id (another start), one without a start and a
+// zombie are not it. One that moved to another process group or session
+// (setsid after the capture) still is: the group only says what a group
+// signal reaches.
+func TestAProcessIsItsIDAndStart(t *testing.T) {
 	captured := Process{PID: 300, PGID: 300, Start: "Wed Oct 28 10:15:02 2026", Name: "sandbox-exec"}
 	for name, tc := range map[string]struct {
 		now  Process
 		same bool
 	}{
 		"itself, reparented":    {Process{PID: 300, PPID: 1, PGID: 300, Start: "Wed Oct 28 10:15:02 2026", Name: "sandbox-exec"}, true},
+		"itself, another group": {Process{PID: 300, PGID: 301, Start: "Wed Oct 28 10:15:02 2026", Name: "sandbox-exec"}, true},
 		"its id, a later start": {Process{PID: 300, PGID: 300, Start: "Wed Oct 28 10:15:07 2026", Name: "sandbox-exec"}, false},
-		"another group":         {Process{PID: 300, PGID: 301, Start: "Wed Oct 28 10:15:02 2026", Name: "sandbox-exec"}, false},
 		"no start":              {Process{PID: 300, PGID: 300, Name: "sandbox-exec"}, false},
 		"a zombie":              {Process{PID: 300, PGID: 300, Start: "Wed Oct 28 10:15:02 2026", Zombie: true}, false},
 	} {

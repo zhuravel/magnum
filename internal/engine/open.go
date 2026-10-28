@@ -309,6 +309,11 @@ func (e *Engine) checkoutAt(ctx context.Context, slot store.Slot, pr store.PR, p
 	if pool != nil {
 		pl = *pool
 	}
+	// Never under a command that still runs in a shell pane of the PR's
+	// there (the shell hold, as a round's setup sees it).
+	if err := e.clearShells(ctx, pr, slot); err != nil {
+		return store.Slot{}, err
+	}
 	if err := e.d.Slots.Checkout(ctx, slot, pr, pl, target); err != nil {
 		return store.Slot{}, fmt.Errorf("check out %s in %s: %w", textx.ShortSHA(target), slot.Name, err)
 	}

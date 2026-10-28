@@ -225,6 +225,29 @@ func TestTheRoundsEndStopsAShellCommandItCut(t *testing.T) {
 	}
 }
 
+// A cut command whose ctrl+c left the pane an idle shell is stopped only
+// once the manager finds what the interrupt captured of its job gone (a
+// sandbox child may outlive codex): while StopShell says a captured
+// process still runs, the restart keeps the checkout.
+func TestAnIdlePaneIsAStopOnlyOnceTheCapturedJobIsGone(t *testing.T) {
+	e := newEnv(t)
+	in := e.input(KindInitial)
+	sw := e.withRestarts(&in, 2)
+	e.codexUntilCut(sw, 1, head2) // the interrupt's ctrl+c leaves an idle shell
+	e.ag.onStopShell = func(*fakeAgents, store.Run) error {
+		return errors.New("agents: stop codex-review in pane p3: 1 processes of its job still run after SIGKILL (sandbox-exec)")
+	}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{pushThen(e, head2, hang())}
+
+	_, err := e.r.RunRound(e.ctx, in)
+	if got := sw.asked(); len(got) != 0 || !errors.Is(err, ErrShellRunning) {
+		t.Fatalf("switches %v, err %v: want the checkout kept while a captured process runs", got, err)
+	}
+	if n := len(e.ag.stopped()); n != 1 {
+		t.Errorf("StopShell calls = %d, want the one look after the idle shell", n)
+	}
+}
+
 // A restart whose stop replaced codex-review's pane (SIGKILL left it busy)
 // goes on there: the restarted line runs in the replacement the session
 // points at.

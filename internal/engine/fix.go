@@ -923,6 +923,12 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	if until := e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt); e.now().Before(until) {
 		return fmt.Errorf("someone typed into the PR's panes, which are theirs until %s (human_cooldown)", until.Local().Format("15:04"))
 	}
+	// The fixer works in the checkout and the settle moves it: never while
+	// a command still runs in a shell pane there (the shell hold, as a
+	// round's setup sees it; shell_hold.go).
+	if err := e.clearShells(ctx, pr, slot); err != nil {
+		return err
+	}
 	if err := e.d.Slots.Guard(ctx, slot); err != nil {
 		return err
 	}

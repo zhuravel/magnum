@@ -87,6 +87,23 @@ func TestExplainsTheOtherShapes(t *testing.T) {
 	}
 }
 
+// A shell hold's attention says the hold's plain reason as its summary, and
+// how to free the pane as its next step; it is on magnum's side, not the
+// author's.
+func TestExplainsAShellHoldInItsPlainWords(t *testing.T) {
+	msg := "a command magnum did not start keeps the shell pane of review1 busy"
+	r := Explain(KindShellHold, msg, "talkable#7")
+	if r.Summary != msg || r.Cause != msg {
+		t.Errorf("summary %q, cause %q, want the hold's words", r.Summary, r.Cause)
+	}
+	if !strings.Contains(r.Fix, "`magnum open talkable#7`") || !strings.Contains(r.Fix, "every 10 minutes") {
+		t.Errorf("fix = %q", r.Fix)
+	}
+	if !OnMagnumsSide(KindShellHold) {
+		t.Error("a shell hold is the author's to fix")
+	}
+}
+
 // Terminal escapes in an error (colors, a window-title OSC) never reach a
 // screen through the explanation.
 func TestExplainDropsTerminalEscapes(t *testing.T) {

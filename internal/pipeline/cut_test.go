@@ -310,8 +310,8 @@ func TestACutShellCommandIsPressedUntilItStops(t *testing.T) {
 			if warned != tc.warn {
 				t.Errorf("warning about codex-review = %t, want %t: %q", warned, tc.warn, res.Warnings)
 			}
-			if got := e.ag.stopped(); len(got) != 0 {
-				t.Errorf("StopShell calls = %d, want none for a command its ctrl+c ended", len(got))
+			if got := e.ag.stopped(); len(got) != 1 || e.pressedTo(agents.RoleCodexReview) != tc.keys {
+				t.Errorf("StopShell calls = %d after %d ctrl+c, want one look at the job once the shell is idle, no more keys", len(got), e.pressedTo(agents.RoleCodexReview))
 			}
 		})
 	}

@@ -311,6 +311,16 @@ const releaseGiveUpToastWindow = 24 * time.Hour
 // the reconcile never resumes a release whose steps are running in this
 // process, in the moment between two of them.
 func (e *Engine) releaseSlot(ctx context.Context, sl store.Slot, pool config.Pool, reason string) error {
+	// The release resets the checkout: never under a command that still
+	// runs in a shell pane of the slot's PR (the shell hold, as a round's
+	// setup sees it; the release is tried again later).
+	if sl.PRID != nil {
+		if pr, err := e.st.PRByID(ctx, *sl.PRID); err == nil {
+			if err := e.clearShells(ctx, pr, sl); err != nil {
+				return fmt.Errorf("release %s: %w", sl.Name, err)
+			}
+		}
+	}
 	e.heavyMu.Lock()
 	if e.releasing == nil {
 		e.releasing = map[int64]int{}

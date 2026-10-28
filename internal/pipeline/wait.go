@@ -293,10 +293,12 @@ func (rd *round) waitIdle(ctx context.Context, role config.Role, run store.Run, 
 // when it is its own run (Agents.StopShell: SIGTERM, SIGKILL, a new pane;
 // codex review went on after three ctrl+c). Left running, it would hold the
 // pane, and the restart's line would find it busy. Success (nil) is only a
-// line that was never typed (Agents.ShellLaunched), an idle shell, a pane
-// herdr confirms gone (Keys.PaneGet) or StopShell's verified stop; any
-// other answer (a wait or a key herdr failed on, no session or pane for a
-// typed line) is an error: the command may still run.
+// line that was never typed (Agents.ShellLaunched), or StopShell's verified
+// stop: an idle shell, or a pane herdr confirms gone (Keys.PaneGet), counts
+// only once StopShell finds every process the interrupt captured of the
+// command's job gone too (a sandbox child may outlive codex in an idle
+// pane). Any other answer (a wait or a key herdr failed on, no session or
+// pane for a typed line) is an error: the command may still run.
 func (rd *round) stopShell(ctx context.Context, run store.Run) error {
 	if !rd.r.Agents.ShellLaunched(run.ID) {
 		return nil
@@ -311,10 +313,10 @@ func (rd *round) stopShell(ctx context.Context, run store.Run) error {
 		_, err := rd.r.Keys.WaitIdleShell(ctx, pane, shellStopWait)
 		switch {
 		case err == nil:
-			return nil
+			return rd.r.Agents.StopShell(ctx, run) // the pane is idle: what the interrupt captured must be gone too
 		case !herdr.IsTimeout(err):
 			if rd.paneGone(ctx, pane) {
-				return nil
+				return rd.r.Agents.StopShell(ctx, run)
 			}
 			return fmt.Errorf("herdr cannot say whether pane %s still runs it: %w", pane, err)
 		case press == shellStopPresses:
@@ -322,7 +324,7 @@ func (rd *round) stopShell(ctx context.Context, run store.Run) error {
 		}
 		if err := rd.r.Agents.InterruptShell(ctx, run); err != nil && !errors.Is(err, agents.ErrNotOwn) {
 			if rd.paneGone(ctx, pane) {
-				return nil
+				return rd.r.Agents.StopShell(ctx, run)
 			}
 			return fmt.Errorf("ctrl+c to pane %s failed: %w", pane, err)
 		}
