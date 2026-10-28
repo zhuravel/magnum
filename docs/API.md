@@ -13422,6 +13422,14 @@ func Plist(opts Options) []byte
     byte-identical files. RunAtLoad is always true and ExitTimeOut is always
     ExitTimeOut seconds.
 
+func Reload(ctx context.Context, run execx.Runner, uid int, path string) error
+    Reload unloads the job and loads it again from the plist already at path,
+    as Install does once it has written the file (bootout, the wait for the job
+    to go, enable, bootstrap with its retries), and writes nothing. The label
+    is read from that plist; a plist that is missing or has no label is refused
+    before the bootout, so the job is never unloaded without a definition to
+    load again.
+
 func Uninstall(ctx context.Context, run execx.Runner, uid int, label, path string) error
     Uninstall unloads the job and deletes its plist at path. It is idempotent:
     a job that is not loaded and a missing file are not errors. If bootout fails
@@ -13441,6 +13449,9 @@ type Info struct {
 	// "(never exited)" or a non-numeric exit reason otherwise.
 	LastExitCode int
 	Exited       bool
+	// SpawnFailed is launchd's "job state = spawn failed": its last attempt
+	// to start the job failed before the program ran.
+	SpawnFailed bool
 }
     Info is the parsed result of `launchctl print gui/<uid>/<label>`.
     It deliberately carries no raw output: `print` echoes the job's arguments
@@ -13453,6 +13464,13 @@ func Status(ctx context.Context, run execx.Runner, uid int, label string) (Info,
     permission error, a missing binary, a timeout) is returned as an error,
     alongside NotLoaded as the zero Info: the job may well still be loaded,
     so callers such as Bootout and Uninstall must not read it as "gone".
+
+func (s Info) CannotSpawn() bool
+    CannotSpawn reports whether launchd says it cannot start the job: the job
+    is loaded with no process, and its last spawn failed (SpawnFailed) or it
+    last exited EX_CONFIG. On 2026-10-28 launchd failed every spawn of a rebuilt
+    binary so ("needs LWCR update"), and unloading and loading the job again
+    started it. A program that ran and exited is not that.
 
 func (s Info) Loaded() bool
     Loaded reports whether launchd knows the job.

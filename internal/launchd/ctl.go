@@ -95,12 +95,40 @@ func install(ctx context.Context, run execx.Runner, uid int, path string, plist 
 	if err := fsx.WriteFileAtomic(path, plist, 0o644); err != nil { // launchd reads it; never a partial plist
 		return fmt.Errorf("launchd install: write %s: %w", path, err)
 	}
+	return load(ctx, run, uid, label, path, "install", tm)
+}
 
+// Reload unloads the job and loads it again from the plist already at path,
+// as Install does once it has written the file (bootout, the wait for the job
+// to go, enable, bootstrap with its retries), and writes nothing. The label
+// is read from that plist; a plist that is missing or has no label is refused
+// before the bootout, so the job is never unloaded without a definition to
+// load again.
+func Reload(ctx context.Context, run execx.Runner, uid int, path string) error {
+	return reload(ctx, run, uid, path, realTiming)
+}
+
+func reload(ctx context.Context, run execx.Runner, uid int, path string, tm timing) error {
+	plist, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("launchd reload: %w", err)
+	}
+	label, err := labelFromPlist(plist)
+	if err != nil {
+		return fmt.Errorf("launchd reload: %s: %w", path, err)
+	}
+	return load(ctx, run, uid, label, path, "reload", tm)
+}
+
+// load runs Install's launchctl sequence on the plist at path: bootout, the
+// wait for the job to unload, enable, bootstrap. op names the caller in its
+// errors.
+func load(ctx context.Context, run execx.Runner, uid int, label, path, op string, tm timing) error {
 	// Both are best effort; bootstrap below is the arbiter.
 	_, _ = run.Run(ctx, launchctl("launchctl bootout", true, "bootout", target(uid, label)))
 	stillLoaded, err := waitUnloaded(ctx, run, uid, label, tm)
 	if err != nil {
-		return fmt.Errorf("launchd install: waiting for %s to unload: %w", label, err)
+		return fmt.Errorf("launchd %s: waiting for %s to unload: %w", op, label, err)
 	}
 	_, _ = run.Run(ctx, launchctl("launchctl enable", true, "enable", target(uid, label)))
 

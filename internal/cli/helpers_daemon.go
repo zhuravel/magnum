@@ -260,7 +260,7 @@ func magnumPlistOptions(layout paths.Layout, userHome string, prefix []string, h
 		StdoutPath:       launchd.LogPath(layout.Logs()),
 		StderrPath:       launchd.LogPath(layout.Logs()),
 		KeepAlive:        true,
-		ThrottleSeconds:  10,
+		ThrottleSeconds:  int(launchdThrottle / time.Second),
 	}
 }
 

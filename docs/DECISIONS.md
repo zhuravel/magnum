@@ -13820,6 +13820,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAWithdrawalKeepsItsDetailLocalAndItsGitHubWordsPublic; and guards that fail under the mutation of what
   they protect: TestTheExactWordsOfTheFileListAndTheFailingChecks (the `too_many_files` class) and
   TestALastAttemptTheNextDaemonSettlesAsFailedSaysTheLoginWasTold (`resumeAutoPost`'s failed last attempt).
+- **A restart that launchd cannot spawn reloads the job once** (2026-10-28,
+  docs/superpowers/specs/2026-10-28-busy-shell-self-healing-design.md, Part D; amends "daemon-restart: ctrl+c
+  ends its waits at once, …" (2026-10-09) for the start wait and restartStepBudget). On 2026-10-28 a
+  `daemon-restart --drain` stopped the daemon and launchd then failed every spawn of the rebuilt binary
+  (`state = spawn scheduled`, `job state = spawn failed`, `last exit code = 78: EX_CONFIG`, `runs` climbing,
+  "needs LWCR update"); the binary wrote nothing, `magnum config` with it passed, the restart printed only a
+  hint, and the daemon stayed down about 10 minutes until `magnum install --now` (unload, load) started it at
+  once. Every restart also printed "no new daemon was running after 5s" falsely: the plist's
+  ThrottleInterval is 10 s. Now (1) `launchdStartWait` is the throttle plus 5 s (15 s; `launchdThrottle` also
+  renders the plist's ThrottleInterval). (2) `launchd.Info` reads `job state = spawn failed` (`SpawnFailed`), and
+  `CannotSpawn` is a loaded job with no process whose last spawn failed or that last exited EX_CONFIG, the
+  code launchd records for a program it could not run; a program that ran and exited 1 is not that, and
+  reloading would not help it. (3) When the start wait ends with no new daemon and `CannotSpawn`,
+  `reloadUnspawnable` re-reads its guard right before it (`reloadGuard`: the job loaded, launchd running no
+  process for it and still reporting the failure, no live pid in the pidfile; a new daemon found there ends
+  the restart with success), writes `daemon.reload_begin` (warn), runs `launchd.Reload` (Install's bootout,
+  wait for the unload, enable and bootstrap with its EIO retries, on the plist already at
+  `~/Library/LaunchAgents/zhuravel.magnum.plist`, which it reads for the label and never rewrites; a
+  missing plist is refused before the bootout) and waits 15 s again: `daemon.reloaded` (info) and success when
+  a daemon runs, else `daemon.reload_failed` (error) and the restart's error with launchd's state and exit
+  code both times and `magnum install --now` as the fix. The reload runs at most once per restart, with no
+  loop. The events go into the registry the way the drain's do (`daemonEvent`, the columns every schema
+  has, the registry neither created nor migrated; a failed insert leaves the step without its record).
+  (4) restartStepBudget is 3 × daemonStopTimeout + 2 × launchdStartWait + 1 min (the reload's unload wait
+  is as long as a stop). Rejected: rewriting the plist on the reload (that is `install`'s job, and the
+  operator's fix stays `install --now` when the reload does not help); reloading on any start failure (a
+  daemon that refuses its configuration would only restart into the same refusal); retrying the reload. Tests,
+  failing first (a fake launchd on the clock `daemonSys.Sleep` moves):
+  TestDaemonRestartReloadsAJobLaunchdCannotSpawnOnce, TestDaemonRestartWaitsOutLaunchdsThrottleWithoutAWarning,
+  TestDaemonRestartReportsAReloadThatDidNotHelpAndStops, TestDaemonRestartReportsAFailedReload,
+  TestDaemonRestartReloadsNothingForADaemonThatExitsAtStart, TestReloadGuardRereadsTheStateRightBeforeTheReload;
+  in launchd TestCannotSpawnIsLaunchdsOwnFailure, the `spawn failed` case of TestStatusParsing,
+  TestReloadLoadsTheSamePlistAgainWithoutWritingIt, TestReloadRefusesAMissingPlistBeforeTheBootout and
+  TestReloadRetriesBootstrapOnEIOAndReportsOtherFailures.
 
 ## Learned rules
 

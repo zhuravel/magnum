@@ -40,10 +40,29 @@ type Info struct {
 	// "(never exited)" or a non-numeric exit reason otherwise.
 	LastExitCode int
 	Exited       bool
+	// SpawnFailed is launchd's "job state = spawn failed": its last attempt
+	// to start the job failed before the program ran.
+	SpawnFailed bool
 }
 
 // Loaded reports whether launchd knows the job.
 func (s Info) Loaded() bool { return s.State != NotLoaded }
+
+// exConfig is EX_CONFIG, the exit code launchd records for a job whose
+// program it could not run ("last exit code = 78: EX_CONFIG").
+const exConfig = 78
+
+// CannotSpawn reports whether launchd says it cannot start the job: the job
+// is loaded with no process, and its last spawn failed (SpawnFailed) or it
+// last exited EX_CONFIG. On 2026-10-28 launchd failed every spawn of a
+// rebuilt binary so ("needs LWCR update"), and unloading and loading the job
+// again started it. A program that ran and exited is not that.
+func (s Info) CannotSpawn() bool {
+	if !s.Loaded() || s.State == Running || s.PID > 0 {
+		return false
+	}
+	return s.SpawnFailed || s.Exited && s.LastExitCode == exConfig
+}
 
 // notFoundExit is the exit code `launchctl print` uses for an unknown service.
 const notFoundExit = 113
@@ -124,6 +143,8 @@ func parsePrint(out string) Info {
 			if n, ok := leadingInt(val); ok {
 				st.LastExitCode, st.Exited = n, true
 			}
+		case "job state":
+			st.SpawnFailed = val == "spawn failed"
 		}
 	}
 	return st

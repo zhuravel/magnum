@@ -550,3 +550,93 @@ func TestKickstart(t *testing.T) {
 		t.Fatalf("err = %v, want wrapped ExitError", err)
 	}
 }
+
+// Reload loads the job again from the plist already on disk, as Install does
+// after writing it: bootout, the wait for the job to go, enable, bootstrap.
+// The file is not written: the same plist, the same inode.
+func TestReloadLoadsTheSamePlistAgainWithoutWritingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), testLabel+".plist")
+	plist := testPlist()
+	if err := os.WriteFile(path, plist, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prints int
+	f := &execx.Fake{Rules: okRules(loadedFor(3, &prints))}
+	clk := newClock()
+	if err := reload(context.Background(), f, 501, path, clk.timing()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	want := []string{
+		"launchctl bootout gui/501/zhuravel.magnum",
+		"launchctl print gui/501/zhuravel.magnum",
+		"launchctl print gui/501/zhuravel.magnum",
+		"launchctl print gui/501/zhuravel.magnum",
+		"launchctl print gui/501/zhuravel.magnum", // gone: bootstrap may run
+		"launchctl enable gui/501/zhuravel.magnum",
+		"launchctl bootstrap gui/501 " + path,
+	}
+	if !reflect.DeepEqual(argvs(f), want) {
+		t.Fatalf("calls = %q\nwant   %q", argvs(f), want)
+	}
+	if clk.total() != 3*bootoutPoll {
+		t.Fatalf("slept %v, want %v while the job unloaded", clk.total(), 3*bootoutPoll)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if !os.SameFile(before, after) || string(got) != string(plist) {
+		t.Fatalf("the plist was written again (same file %v): %q", os.SameFile(before, after), got)
+	}
+}
+
+// Without its plist the job could be unloaded and never loaded again, so a
+// missing plist, or one without a label, is refused before the bootout.
+func TestReloadRefusesAMissingPlistBeforeTheBootout(t *testing.T) {
+	dir := t.TempDir()
+	noLabel := filepath.Join(dir, "nolabel.plist")
+	if err := os.WriteFile(noLabel, []byte("<plist><dict></dict></plist>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{"missing": filepath.Join(dir, testLabel+".plist"), "no label": noLabel} {
+		t.Run(name, func(t *testing.T) {
+			f := &execx.Fake{Rules: okRules()}
+			err := Reload(context.Background(), f, 501, path)
+			if err == nil || !strings.Contains(err.Error(), path) {
+				t.Fatalf("err = %v, want one naming %s", err, path)
+			}
+			if len(f.Calls) != 0 {
+				t.Fatalf("launchctl ran for a plist it cannot load: %q", argvs(f))
+			}
+		})
+	}
+}
+
+// A reload shares Install's bootstrap: the transient EIO is retried, any
+// other failure is returned at once.
+func TestReloadRetriesBootstrapOnEIOAndReportsOtherFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), testLabel+".plist")
+	if err := os.WriteFile(path, testPlist(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	f := &execx.Fake{Rules: okRules(eioThenOK(1, &n))}
+	if err := reload(context.Background(), f, 501, path, newClock().timing()); err != nil {
+		t.Fatalf("reload after one EIO: %v", err)
+	}
+	if got := len(f.CallsWithPrefix("launchctl", "bootstrap")); got != 2 {
+		t.Fatalf("bootstrap attempts = %d, want 2", got)
+	}
+	f = &execx.Fake{Rules: okRules(execx.Rule{Prefix: []string{"launchctl", "bootstrap"},
+		Result: execx.Result{Code: 37, Stderr: []byte("Bootstrap failed: 37: Operation already in progress")}})}
+	err := reload(context.Background(), f, 501, path, newClock().timing())
+	boots := len(f.CallsWithPrefix("launchctl", "bootstrap"))
+	if _, ok := errors.AsType[*execx.ExitError](err); !ok || boots != 1 {
+		t.Fatalf("err = %v after %d bootstraps, want the ExitError after one", err, boots)
+	}
+}

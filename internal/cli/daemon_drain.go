@@ -124,7 +124,7 @@ func (c *Context) startDrain(ctx context.Context, cmd string) (string, error) {
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, engine.KVDaemonDraining, value, at); err != nil {
 			return err
 		}
-		drainEvent(ctx, db, "daemon.drain_started",
+		daemonEvent(ctx, db, "info", "daemon.drain_started",
 			fmt.Sprintf("drain started by `magnum %s --drain` (pid %d): no new round starts until the restart", cmd, os.Getpid()))
 		return nil
 	})
@@ -141,7 +141,7 @@ func (c *Context) endDrain(ctx context.Context, value, why string) error {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
-			drainEvent(ctx, db, "daemon.drain_ended", "drain ended: "+why)
+			daemonEvent(ctx, db, "info", "daemon.drain_ended", "drain ended: "+why)
 		}
 		return nil
 	})
@@ -160,11 +160,21 @@ func (c *Context) withRegistry(ctx context.Context, fn func(context.Context, *sq
 	return fn(ctx, db)
 }
 
-// drainEvent appends a daemon-level event (the columns every schema has).
-// It is the record, not the drain: a failed insert is ignored.
-func drainEvent(ctx context.Context, db *sql.DB, kind, msg string) {
-	_, _ = db.ExecContext(ctx, "INSERT INTO events (at, level, kind, message) VALUES (?, 'info', ?, ?)",
-		store.FormatTime(time.Now()), kind, msg)
+// daemonEvent appends a daemon-level event (the columns every schema has).
+// It is the record, not the drain or the reload: a failed insert is ignored.
+func daemonEvent(ctx context.Context, db *sql.DB, level, kind, msg string) {
+	_, _ = db.ExecContext(ctx, "INSERT INTO events (at, level, kind, message) VALUES (?, ?, ?, ?)",
+		store.FormatTime(time.Now()), level, kind, msg)
+}
+
+// restartEvent records a step of daemon-restart (daemonEvent) in the registry,
+// opened without creating or migrating it; a registry it cannot open or
+// write leaves the step without its record.
+func (c *Context) restartEvent(ctx context.Context, level, kind, msg string) {
+	_ = c.withRegistry(ctx, func(ctx context.Context, db *sql.DB) error {
+		daemonEvent(ctx, db, level, kind, msg)
+		return nil
+	})
 }
 
 // drainRounds stops the daemon from starting new rounds, notes curations

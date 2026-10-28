@@ -85,6 +85,22 @@ const statusSpawnScheduled = `gui/501/zhuravel.magnum = {
 }
 `
 
+// statusSpawnFailed is the job on 2026-10-28 after a rebuild: launchd failed
+// every spawn of the new binary with EX_CONFIG and tried again each throttle.
+const statusSpawnFailed = `gui/501/zhuravel.magnum = {
+	active count = 0
+	path = /Users/me/Library/LaunchAgents/zhuravel.magnum.plist
+	type = LaunchAgent
+	state = spawn scheduled
+
+	domain = gui/501 [100002]
+	runs = 9
+	job state = spawn failed
+	properties = needs LWCR update | keepalive | runatload
+	last exit code = 78: EX_CONFIG
+}
+`
+
 func printFake(res execx.Result) *execx.Fake {
 	return &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"launchctl", "print"}, Result: res}}}
 }
@@ -99,6 +115,8 @@ func TestStatusParsing(t *testing.T) {
 		{"not running with exit code", statusNotRunning, Info{State: "not running", Runs: 750, LastExitCode: 78, Exited: true}},
 		{"exit reason instead of code", statusJetsam, Info{State: "not running", Runs: 3}},
 		{"spawn scheduled", statusSpawnScheduled, Info{State: "spawn scheduled", Runs: 12, LastExitCode: 1, Exited: true}},
+		{"spawn failed", statusSpawnFailed, Info{State: "spawn scheduled", Runs: 9, LastExitCode: 78, Exited: true, SpawnFailed: true}},
+		{"job state of a live job", "gui/501/x = {\n\tstate = running\n\tpid = 7\n\tjob state = running\n}\n", Info{State: Running, PID: 7}},
 		{"exit code zero", "gui/501/x = {\n\tstate = not running\n\truns = 1\n\tlast exit code = 0\n}\n", Info{State: "not running", Runs: 1, Exited: true}},
 		{"crlf line endings", "gui/501/x = {\r\n\tstate = running\r\n\tpid = 7\r\n}\r\n", Info{State: Running, PID: 7}},
 		{"no state line", "gui/501/x = {\n\tpath = /p\n}\n", Info{State: "unknown"}},
@@ -115,6 +133,36 @@ func TestStatusParsing(t *testing.T) {
 			}
 			if !got.Loaded() {
 				t.Fatal("Loaded() = false")
+			}
+		})
+	}
+}
+
+// launchd cannot start the job when it reports no process and either its
+// own spawn failure (job state) or EX_CONFIG (78), the exit code it gives a
+// job whose program it could not run. A program that ran and failed, a clean
+// exit and a running job are not that.
+func TestCannotSpawnIsLaunchdsOwnFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		st   Info
+		want bool
+	}{
+		{"job state spawn failed", parsePrint(statusSpawnFailed), true},
+		{"spawn scheduled after EX_CONFIG", Info{State: "spawn scheduled", Runs: 3, LastExitCode: 78, Exited: true}, true},
+		{"job state alone", Info{State: "spawn scheduled", SpawnFailed: true}, true},
+		{"not running after EX_CONFIG", parsePrint(statusNotRunning), true},
+		{"the program exited 1", parsePrint(statusSpawnScheduled), false},
+		{"a clean exit", Info{State: "spawn scheduled", Runs: 2, Exited: true}, false},
+		{"never exited", Info{State: "spawn scheduled", Runs: 1}, false},
+		{"running", parsePrint(statusRunning), false},
+		{"running after an old EX_CONFIG", Info{State: Running, PID: 7, LastExitCode: 78, Exited: true}, false},
+		{"not loaded", Info{State: NotLoaded}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.st.CannotSpawn(); got != tc.want {
+				t.Fatalf("CannotSpawn(%+v) = %v, want %v", tc.st, got, tc.want)
 			}
 		})
 	}
