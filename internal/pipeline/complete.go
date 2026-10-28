@@ -1,7 +1,7 @@
 package pipeline
 
-// Completions (DECISIONS "A cut shell command is killed, and a review that
-// missed a reviewer is completed"): from 2026-10-25 to 2026-10-28 six clean
+// Completions (DECISIONS "A review that missed a reviewer is completed"):
+// from 2026-10-25 to 2026-10-28 six clean
 // reviews went without codex-review, whose pane a cut `codex review` kept
 // busy, and auto-approval refused each for the reviewer it did not hear.
 // The engine now completes such a review on its head (its complete.go): a
@@ -14,10 +14,15 @@ package pipeline
 // (agents.Report.Late): it decides the late reports' findings, and the
 // others stand as its last review judged them. Its record of missing
 // reports lists what it still went without, so auto-approval's gates
-// decide as after any round.
+// decide as after any round. When every late role misses again, the judge
+// has nothing new to decide: it is not prompted, and the round ends
+// unheard (OutcomeUnheard) with nothing posted.
 
 import (
+	"context"
+	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
 )
@@ -71,10 +76,12 @@ func (rd *round) late(role string) bool {
 	return c != nil && slices.Contains(c.Roles, role)
 }
 
-// completionRoles is the roles a completion runs: the judge of toRun
-// (RolesToRun's) and the roles of roles (the round's candidates) that c
-// names, whatever their runs say: they ran in the round c completes.
-func completionRoles(roles, toRun []config.Role, c *Completion) []config.Role {
+// CompletionRoles is the roles a completion runs: the first judge of toRun
+// (RolesToRun's) and the roles of roles (the round's candidates) that names
+// lists (Completion.Roles), whatever their runs say: they ran in the round
+// it completes. The engine lays out the round's panes by it, and RunRound
+// runs it, so both agree.
+func CompletionRoles(roles, toRun []config.Role, names []string) []config.Role {
 	var out []config.Role
 	for _, r := range toRun {
 		if r.Judge {
@@ -83,11 +90,36 @@ func completionRoles(roles, toRun []config.Role, c *Completion) []config.Role {
 		}
 	}
 	for _, r := range roles {
-		if !r.Judge && slices.Contains(c.Roles, r.Name) {
+		if !r.Judge && slices.Contains(names, r.Name) {
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// lateUnheard reports whether every role the completion runs left no
+// usable report again: its judge has nothing new to decide.
+func (rd *round) lateUnheard() bool {
+	running := rd.running()
+	if rd.completion() == nil || rd.in.Kind == KindContinue || len(running) == 0 {
+		return false
+	}
+	for _, role := range running {
+		if rep, ok := rd.report(role); ok && rep.Status == ReportOK {
+			return false
+		}
+	}
+	return true
+}
+
+// unheard ends a completion whose late roles all missed again
+// (lateUnheard): its judge is not prompted, nothing is posted, and no
+// record of missing reports is written, so the review it completes keeps
+// its own (OutcomeUnheard).
+func (rd *round) unheard(ctx context.Context) (RoundResult, error) {
+	rd.event(ctx, "info", "round.unheard", fmt.Sprintf("round %d heard none of %s again: no judge prompt, nothing posted",
+		rd.in.Round, strings.Join(rd.in.Complete.Roles, ", ")), map[string]any{"roles": rd.in.Complete.Roles})
+	return rd.done(ctx, OutcomeUnheard, nil)
 }
 
 // reviewersSince is what the round's reviewers re-review from: the head the

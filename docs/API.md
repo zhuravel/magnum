@@ -1251,7 +1251,12 @@ type JudgeData struct {
 	// stand as that review judged them. Rendered as one instruction by the
 	// rereview and recovery prompts, only then.
 	LateReports []string
-	ResultFile  string // <report dir>/<the judge's output>, e.g. codex-judge.json
+	// LateSince is the head the late reports' round reviewed from
+	// (pipeline.Completion.Since): a late claude-simplify report's proposals
+	// keep to the lines changed since it; "" = the lines the whole PR added
+	// or modified (a first review's round). Only with LateReports.
+	LateSince  string
+	ResultFile string // <report dir>/<the judge's output>, e.g. codex-judge.json
 	// Magnum is the magnum executable the judge's post_review line runs
 	// (the daemon's own, absolute; "" = magnum on PATH). ReviewFile is
 	// where the judge writes the review it posts (<report dir>/review.json,
@@ -15899,6 +15904,10 @@ const (
 	OutcomeTimeout        = "timeout"         // judge_timeout passed without a result
 	OutcomeNeedsAttention = "needs_attention" // nothing posted after one nudge, or an inconsistent result
 	OutcomeError          = "error"           // the round could not run or be evaluated (RunRound's error is set)
+	// OutcomeUnheard: a completion (RoundInput.Complete) whose late roles
+	// all left no usable report again: its judge was not prompted, and
+	// nothing posted.
+	OutcomeUnheard = "unheard"
 	// OutcomeRefused: a role's turn (the judge's own pass, candidates,
 	// nudge or continue, a reviewer, a shell command's tool) ended on its
 	// provider's safety warning (health kind refused: Codex's
@@ -16075,6 +16084,13 @@ func ClassifyReply(body string) string
     and the comment it answers ("Re 4100000001:") are skipped, and a verdict may
     follow "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
     intentional").
+
+func CompletionRoles(roles, toRun []config.Role, names []string) []config.Role
+    CompletionRoles is the roles a completion runs: the first judge of toRun
+    (RolesToRun's) and the roles of roles (the round's candidates) that names
+    lists (Completion.Roles), whatever their runs say: they ran in the round it
+    completes. The engine lays out the round's panes by it, and RunRound runs
+    it, so both agree.
 
 func EvidenceMapPath(l paths.Layout, owner, repo string, number int) string
     EvidenceMapPath is PR owner/repo#number's evidence map: EvidenceFile in the

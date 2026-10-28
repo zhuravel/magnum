@@ -14148,6 +14148,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestCompletionIsNotForARefusedOrLoggedOutReviewer, TestAHeldReviewGetsItsFullPassNotACompletion and
   TestACompletionNeverHoldsItsApproval. TestAReviewThatMissedAReviewerSaysSoWithoutTheRole now goes through
   the head's two completions before its line.
+  Two reviews of the first build, and the controller's rulings. The cap counts rounds: each completion round is
+  numbered by the engine and recorded as it starts (`startCompletion`, `completion.Rounds`), so a failed
+  round's retry is one of the head's two, a crash or a restart takes none back, and the second that fails
+  sends the PR back to its review with `pr.complete_gave_up` (`endSpentCompletion`, also after a panic) instead
+  of a third. A crash after a completion's post no longer costs the next one the reports that stand: the
+  round is on record from its start, and a later completion rests on the head's first base. `magnum abort` (and
+  the board's take-back) of a completion that waits or runs stops the head's completions (`stopCompletion`,
+  `pr.complete_stopped`), where the next auto-approval pass used to queue it again; a new head clears it. The
+  close of the PR, and a push, drop only what waits: the head's spent rounds stay (`completion.Past` keeps
+  five earlier heads), so a reopen or a push back to the head gets no more than it had left. A head another
+  gate refuses for good (`refusesForGood`: its CI workflows, the agents' configuration, more files than GitHub
+  lists) gets that gate's refusal before the reports it went without, so its status line says those words and
+  no completion runs. A completion whose late roles all missed again prompts no judge and posts nothing
+  (`pipeline.OutcomeUnheard`, `pr.complete_unheard`); its round counts, and the status line keeps its words. A
+  completion gives the re-review interval back, as a reply round does. The late-reports instruction tells the
+  judge that a late candidate the last review already posted is that finding, never a new one, and a late
+  claude-simplify's proposals keep to the lines its round reviewed (`JudgeData.LateSince`), not to the same
+  head's empty delta. `pr.complete_failed` no longer promises a retry, the engine lays the completion's panes
+  out with the pipeline's `CompletionRoles`, and `considerCompletion` reads the PR again before it writes.
+  A delta check after the incomplete review still gets no completion, a limit of the design: it carries the
+  older head's missing reports, which a completion of the new head cannot complete. Tests, failing first:
+  TestAFailedCompletionsRetriesNeverPassTheHeadsTwo (with a restart), TestAnAbortOfAWaitingCompletionSticksForItsHead,
+  TestAnAbortOfARunningCompletionSticksForItsHead, TestNoCompletionForAHeadAnotherGateRefusesForGood,
+  TestACompletionWhoseLateReviewerMissesAgainPostsNoReview, TestACompletionWhoseLateReportsAreAllMissingPromptsNoJudge,
+  TestACompletionKeepsTheReReviewIntervalOfItsRound, TestAHeadKeepsItsCompletionsThroughACloseAndAPushBack,
+  TestACompletionsRoundIsOnRecordFromItsStart, the late-candidate clause of
+  TestCompletionHandsTheJudgeTheOtherReportsOfItsRound, and the goldens judge_rereview_complete_simplify and
+  judge_recovery_complete_simplify_first. TestAPushDropsTheCompletion now checks that the record moved to the new
+  head with nothing waiting.
 
 ## Learned rules
 

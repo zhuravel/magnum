@@ -1,33 +1,42 @@
 package engine
 
-// Completions (DECISIONS "A cut shell command is killed, and a review that
-// missed a reviewer is completed"): from 2026-10-25 to 2026-10-28 six clean
-// reviews went without codex-review, whose pane a cut `codex review` kept
-// busy, and auto-approval refused each for the reviewer it did not hear
-// (missingReports), so an approval waited for the operator or the next
-// push. Now, when auto-approval refuses a clean review of a repository it
-// approves for that alone (publicUnheard), and every report the review went
+// Completions (DECISIONS "A review that missed a reviewer is completed"):
+// from 2026-10-25 to 2026-10-28 six clean reviews went without codex-review,
+// whose pane a cut `codex review` kept busy, and auto-approval refused each
+// for the reviewer it did not hear (missingReports), so an approval waited
+// for the operator or the next push. Now, when auto-approval refuses a clean
+// review of a repository it approves for that alone (publicUnheard: no
+// other gate refuses the head for good), and every report the review went
 // without is missing for a cause that passes (passingCauses: a busy pane, a
 // timeout, a lost session, ...), magnum completes the review on its head:
 // the PR waits in rereview_pending as for a CI follow-up (ci_red.go), held
-// only by a snooze, quiet hours and the kinds' pauses, and its round is a
-// same-head re-review that runs the judge in its session and, besides it,
-// only the roles the review went without (pipeline.RoundInput.Complete),
-// with no triage, no reruns and no restarts. It counts against neither the
-// daily cap nor the full pass's re-reviews (a round of the reviewed head),
-// and it posts a new review, which auto-approval's gates decide on as on
-// any other. A refusal, a logged-out CLI and a usage limit need the
-// operator or time, which the pauses wait for: no completion. A review that
-// held its approval for a full pass gets the full pass (the gate refuses it
-// first, approval_hold.go). Each head gets maxCompletions; after them
-// pr.complete_gave_up says so once, and the refusal stands. A push or the
-// close of the PR drops a completion that waits (supersedeCompletion,
-// dropCompletion), and the status comment says, while one waits or runs,
-// that magnum runs the missing reviewer again (approvalLine).
+// by what holds any automatic round but the push quiet period, the
+// re-review interval and the daily cap, and its round is a same-head
+// re-review that runs the judge in its session and, besides it, only the
+// roles the review went without (pipeline.RoundInput.Complete), with no
+// triage, no reruns and no restarts. It counts against neither the daily
+// cap, nor the full pass's re-reviews (a round of the reviewed head), nor
+// the re-review interval (its start is given back), and it posts a new
+// review, which auto-approval's gates decide on as on any other, unless
+// every late role missed again (pipeline.OutcomeUnheard: no review). A
+// refusal, a logged-out CLI and a usage limit need the operator or time,
+// which the pauses wait for: no completion. A review that held its approval
+// for a full pass gets the full pass (the gate refuses it first,
+// approval_hold.go). Each head gets maxCompletions rounds, counted as they
+// start, retries of a failed one included, and kept across a restart, a
+// close and a push that went back to the head; after them
+// pr.complete_gave_up says so once, and the refusal stands. A push drops a
+// completion that waits (supersedeCompletion), and so does the close of the
+// PR (dropCompletion) and the operator's abort or ignore, which stops the
+// head's completions for good (stopCompletion). While one waits or runs, the
+// status comment says that magnum runs the missing reviewer again
+// (approvalLine).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -44,8 +53,12 @@ import (
 // JSON).
 func kvPRComplete(prID int64) string { return fmt.Sprintf("pr.%d.complete", prID) }
 
-// maxCompletions is how many completions one head gets.
+// maxCompletions is how many completion rounds one head gets.
 const maxCompletions = 2
+
+// pastHeads is how many earlier heads a PR's record keeps the spent
+// completions of (completion.Past).
+const pastHeads = 5
 
 // passingCauses are the report statuses a completion runs a role again
 // for: what passes by itself (a busy pane, a timeout, a lost or missing
@@ -59,30 +72,66 @@ var passingCauses = []string{pipeline.ReportBusy, pipeline.ReportTimeout, pipeli
 // review a completion waits to complete (ReviewID, of round Round; 0 =
 // none waits), the round whose reviewers' reports that review rests on
 // (Base), the roles it runs and why their reports were missing, which
-// completion of the head it is (Attempt), when it was queued and when its
-// round last started (zero: not yet), the completion rounds of the head
-// (Rounds: a later completion rests on Base too, and a continue of a
-// paused one goes on as one), and whether magnum gave up on the head.
+// completion of the head was queued last (Attempt), when it was queued and
+// when its round last started (zero: not yet), the completion rounds the
+// head started (Rounds, each recorded as it starts: their number is the
+// head's spent completions, and a continue of a paused one goes on as one),
+// whether magnum gave up on the head and whether the operator stopped its
+// completions (an abort or an ignore). Past keeps the spent completions of
+// the PR's earlier heads, so a push back to one of them gets no more.
 type completion struct {
-	Head     string    `json:"head"`
-	ReviewID int64     `json:"review_id,omitempty"`
-	Round    int       `json:"round,omitempty"`
-	Base     int       `json:"base,omitempty"`
-	Roles    []string  `json:"roles,omitempty"`
-	Causes   []string  `json:"causes,omitempty"`
-	Attempt  int       `json:"attempt,omitempty"`
-	Queued   time.Time `json:"queued,omitzero"`
-	Started  time.Time `json:"started,omitzero"`
-	Rounds   []int     `json:"rounds,omitempty"`
-	GaveUp   bool      `json:"gave_up,omitempty"`
+	Head     string       `json:"head"`
+	ReviewID int64        `json:"review_id,omitempty"`
+	Round    int          `json:"round,omitempty"`
+	Base     int          `json:"base,omitempty"`
+	Roles    []string     `json:"roles,omitempty"`
+	Causes   []string     `json:"causes,omitempty"`
+	Attempt  int          `json:"attempt,omitempty"`
+	Queued   time.Time    `json:"queued,omitzero"`
+	Started  time.Time    `json:"started,omitzero"`
+	Rounds   []int        `json:"rounds,omitempty"`
+	GaveUp   bool         `json:"gave_up,omitempty"`
+	Stopped  bool         `json:"stopped,omitempty"`
+	Past     []completion `json:"past,omitempty"`
 }
 
-// dueFor reports whether c waits, or runs, for pr: its review is pr's
-// latest on the head magnum reviewed, which is pr's head, and GitHub has
-// pr open.
-func (c completion) dueFor(pr store.PR) bool {
-	return c.ReviewID != 0 && !c.GaveUp && c.Head != "" && c.Head == pr.HeadSHA && c.Head == deref(pr.ReviewedSHA) &&
+// forHead is c as the record of head: c itself when it is head's, else
+// head's spent completions from Past (or none), with c's own moved to
+// Past. A completion that waited on the old head waits no more, and the
+// operator's stop of it does not reach the new head.
+func (c completion) forHead(head string) completion {
+	if c.Head == head {
+		return c
+	}
+	out := completion{Head: head}
+	past := c.Past
+	if c.Head != "" {
+		past = append(slices.Clone(past), completion{Head: c.Head, Base: c.Base, Attempt: c.Attempt, Rounds: c.Rounds, GaveUp: c.GaveUp})
+	}
+	for _, p := range past {
+		if p.Head == head {
+			out.Base, out.Attempt, out.Rounds, out.GaveUp = p.Base, p.Attempt, p.Rounds, p.GaveUp
+			continue
+		}
+		out.Past = append(out.Past, p)
+	}
+	out.Past = out.Past[max(0, len(out.Past)-pastHeads):]
+	return out
+}
+
+// waitsFor reports whether c waits, or runs, for pr: its review is pr's
+// latest on the head magnum reviewed, which is pr's head, GitHub has pr
+// open, magnum did not give up on the head and the operator did not stop
+// it.
+func (c completion) waitsFor(pr store.PR) bool {
+	return c.ReviewID != 0 && !c.GaveUp && !c.Stopped && c.Head != "" && c.Head == pr.HeadSHA && c.Head == deref(pr.ReviewedSHA) &&
 		c.ReviewID == deref(pr.LastReviewID) && pr.GHState == store.GHOpen && !postMerge(pr)
+}
+
+// dueFor reports whether c's next round may start for pr: it waits
+// (waitsFor) and the head has started fewer than maxCompletions.
+func (c completion) dueFor(pr store.PR) bool {
+	return c.waitsFor(pr) && len(c.Rounds) < maxCompletions
 }
 
 // completionOf is PR prID's record (the zero completion when it has none
@@ -104,28 +153,34 @@ func (e *Engine) saveCompletion(ctx context.Context, prID int64, c completion) {
 
 // considerCompletion queues the completion of sum, the clean review c's
 // round posted on c's head, which auto-approval refuses for the reports it
-// went without (missingReports, publicUnheard): the PR is reviewed at the
-// head sum covers, not forced, its watch would review it on its own, every
-// report the review went without is missing for a passing cause and names
-// a role of the watch, the round whose reports the review rests on
-// reviewed this head (completionBase), and fewer than maxCompletions ran on
-// it; after that many, pr.complete_gave_up once. A completion of sum queued
-// already is put back in line when the PR left it before its round
-// started; one whose round started and left the PR reviewed again (a
-// failed round the operator took out of needs_attention) was an attempt.
-// Run at every auto-approval pass (the round's end, each tick): what it
-// queued once it never queues again.
+// went without (missingReports, publicUnheard): the PR, read again, is
+// reviewed at the head sum covers, not forced, its watch would review it on
+// its own, every report the review went without is missing for a passing
+// cause and names a role of the watch, the round whose reports the review
+// rests on reviewed this head (completionBase), and the head started fewer
+// than maxCompletions; after that many, pr.complete_gave_up once. A
+// completion of sum queued already is put back in line when the PR left it
+// before its round started; one whose round started and left the PR
+// reviewed (a round that heard no late reviewer, a failed one the operator
+// took out of needs_attention) spent its attempt. Nothing is queued on a
+// head the operator stopped the completions of. Run at every auto-approval
+// pass (the round's end, each tick): what it queued once it never queues
+// again.
 func (e *Engine) considerCompletion(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) {
-	pr := c.PR
 	w := e.cfg.WatchFor(c.Repo)
-	if w == nil || e.d.Layout.Scratch != "" || pr.State != store.PRReviewed || pr.Forced || pr.DetailsAt == nil || sum.SHA != pr.HeadSHA {
+	if w == nil || e.d.Layout.Scratch != "" {
 		return
 	}
-	rec := e.completionOf(ctx, pr.ID)
-	if rec.Head != pr.HeadSHA {
-		rec = completion{Head: pr.HeadSHA}
+	pr, err := e.st.PRByID(ctx, c.PR.ID) // the PR now, not the pass's snapshot
+	if err != nil {
+		return
 	}
-	if rec.GaveUp {
+	c.PR = pr
+	if pr.State != store.PRReviewed || pr.Forced || pr.DetailsAt == nil || sum.SHA != pr.HeadSHA || sum.ReviewID != deref(pr.LastReviewID) {
+		return
+	}
+	rec := e.completionOf(ctx, pr.ID).forHead(pr.HeadSHA)
+	if rec.GaveUp || rec.Stopped {
 		return
 	}
 	now := e.now()
@@ -165,24 +220,16 @@ func (e *Engine) considerCompletion(ctx context.Context, c store.RepoPR, sum sto
 	if !ok {
 		return
 	}
-	ran := rec.Attempt
-	if rec.ReviewID != 0 && rec.Started.IsZero() {
-		ran-- // the one that waited never started: a later review took its place
-	}
-	if ran >= maxCompletions {
-		rec.GaveUp, rec.ReviewID, rec.Queued = true, 0, time.Time{}
-		e.saveCompletion(ctx, pr.ID, rec)
-		e.event(ctx, "warn", prSubject(repoOf(c.Repo), pr.Number), "pr.complete_gave_up",
-			fmt.Sprintf("round %d went without %s on %s too; no more completions of the head after %d: the refusal stands",
-				run.Round, strings.Join(roles, ", "), textx.ShortSHA(pr.HeadSHA), maxCompletions),
-			map[string]any{"round": run.Round, "head": pr.HeadSHA, "roles": roles, "causes": causes, "attempts": ran})
+	if ran := len(rec.Rounds); ran >= maxCompletions {
+		e.giveUpCompletion(ctx, repoOf(c.Repo), pr, rec, fmt.Sprintf("round %d went without %s on %s too", run.Round, strings.Join(roles, ", "),
+			textx.ShortSHA(pr.HeadSHA)), map[string]any{"round": run.Round, "roles": roles, "causes": causes})
 		return
 	}
 	if dec := e.classify(ctx, *w, pr, now); !dec.Eligible {
 		return
 	}
 	rec.ReviewID, rec.Round, rec.Base, rec.Roles, rec.Causes = sum.ReviewID, run.Round, base, roles, causes
-	rec.Attempt, rec.Queued, rec.Started = ran+1, now.UTC(), time.Time{}
+	rec.Attempt, rec.Queued, rec.Started = len(rec.Rounds)+1, now.UTC(), time.Time{}
 	e.saveCompletion(ctx, pr.ID, rec) // first: the throttle reads it
 	if !e.queueCompletion(ctx, c, *w, rec, now) {
 		return
@@ -195,6 +242,17 @@ func (e *Engine) considerCompletion(ctx context.Context, c store.RepoPR, sum sto
 		fmt.Sprintf("round %d's clean review of %s went without %s; completion %d of %d runs %s again with the judge",
 			run.Round, textx.ShortSHA(pr.HeadSHA), strings.Join(what, ", "), rec.Attempt, maxCompletions, textx.Plural(len(roles), "it", "them")),
 		map[string]any{"round": run.Round, "head": pr.HeadSHA, "roles": roles, "causes": causes, "attempt": rec.Attempt})
+}
+
+// giveUpCompletion records that the head of rec, pr's, gets no more
+// completions, with one pr.complete_gave_up (why, and data besides the
+// head and the rounds the head started).
+func (e *Engine) giveUpCompletion(ctx context.Context, repo store.Repo, pr store.PR, rec completion, why string, data map[string]any) {
+	rec.GaveUp, rec.ReviewID, rec.Queued = true, 0, time.Time{}
+	e.saveCompletion(ctx, pr.ID, rec)
+	data["head"], data["attempts"] = rec.Head, len(rec.Rounds)
+	e.event(ctx, "warn", prSubject(repo, pr.Number), "pr.complete_gave_up",
+		fmt.Sprintf("%s; no more completions of the head after %d: the refusal stands", why, maxCompletions), data)
 }
 
 // queueCompletion moves c's PR, reviewed, to rereview_pending for its
@@ -211,27 +269,27 @@ func (e *Engine) queueCompletion(ctx context.Context, c store.RepoPR, w config.W
 }
 
 // completionBase is the round whose reviewers' reports the review of round
-// (m: its record) rests on: round itself, the base of the completion that
-// round was (rec.Rounds), or, for a round of the judge alone, the round it
-// carried the missing reports from (or that round's base). ok is false
-// when the carried reports come from more than one round, or the base
-// round has no run on pr's head (a delta check's carried reports are of an
-// older head: a completion of this one would not complete it).
+// (m: its record) rests on: round itself, or, for a round of the judge
+// alone, the round it carried the missing reports from; either way the
+// base of the head's earlier completions when it is older (rec.Base: a
+// completion's round, or one after it, rests on the reports that stand
+// from it, and the pipeline reads each role's latest run of the rounds
+// from the base on). ok is false when the carried reports come from more
+// than one round, or the base round has no run on pr's head: a delta check
+// carries reports of an older head, which a completion of this one would
+// not complete (a limit of the design).
 func (e *Engine) completionBase(ctx context.Context, pr store.PR, rec completion, round int, m pipeline.MissingReports) (int, bool) {
 	base := round
-	switch {
-	case slices.Contains(rec.Rounds, round) && rec.Base > 0:
-		base = rec.Base
-	case len(m.Missing) == 0 && len(m.Carried) > 0:
+	if len(m.Missing) == 0 && len(m.Carried) > 0 {
 		base = m.Carried[0].Round
 		for _, r := range m.Carried {
 			if r.Round != base {
 				return 0, false
 			}
 		}
-		if slices.Contains(rec.Rounds, base) && rec.Base > 0 {
-			base = rec.Base
-		}
+	}
+	if rec.Base > 0 && rec.Base < base {
+		base = rec.Base
 	}
 	if base <= 0 {
 		return 0, false
@@ -303,79 +361,195 @@ func (e *Engine) planCompletion(ctx context.Context, job *roundJob, rs *roundSet
 // the reviewed head, not the continue of a paused one (its reviewers ran).
 func (rs *roundSetup) reruns() bool { return rs.complete != nil && rs.sameHead }
 
-// noteCompletionStart records that the PR's due completion c (nil = the
-// round is none) started its round at at: it waits no more.
-func (e *Engine) noteCompletionStart(ctx context.Context, prID int64, c *completion, at time.Time) {
-	if c == nil {
+// startCompletion numbers the completion round rs's round is (rs.round:
+// the PR's next round, which the pipeline takes as given) and records it,
+// as it starts, among the head's completion rounds, which no crash, retry
+// or restart takes back: each is one of the head's maxCompletions. A round
+// that is none (or a continue) is left alone.
+func (e *Engine) startCompletion(ctx context.Context, prID int64, rs *roundSetup, at time.Time) {
+	if !rs.reruns() || rs.kind == kindContinue {
 		return
 	}
-	rec := e.completionOf(ctx, prID)
-	if rec.ReviewID == 0 {
+	runs, err := e.st.RunsByPR(ctx, prID)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "completion: the PR's rounds", "pr", prID)
 		return
+	}
+	rs.round = 1
+	for _, r := range runs {
+		rs.round = max(rs.round, r.Round+1)
+	}
+	rec := e.completionOf(ctx, prID).forHead(rs.target)
+	if !slices.Contains(rec.Rounds, rs.round) {
+		rec.Rounds = append(rec.Rounds, rs.round)
 	}
 	rec.Queued, rec.Started = time.Time{}, at.UTC()
 	e.saveCompletion(ctx, prID, rec)
 }
 
-// settleCompletion records, at the end of a completion's round (in.Complete)
-// on target, its round among the head's completion rounds, and, when it
-// ended without a review or replies (not stopped by a shutdown, nor
-// paused), pr.complete_failed: the PR retries it as a failed round.
+// settleCompletion writes, at the end of a completion's round
+// (in.Complete), pr.complete_unheard when it heard none of its late roles
+// again (pipeline.OutcomeUnheard: no review), and pr.complete_failed when it
+// ended without a review for another reason (not stopped by a shutdown,
+// nor paused for a continue).
 func (e *Engine) settleCompletion(ctx context.Context, job *roundJob, in pipeline.RoundInput, res pipeline.RoundResult, outcome string, cancelled bool) {
-	if in.Complete == nil {
+	if in.Complete == nil || cancelled {
 		return
 	}
 	rec := e.completionOf(ctx, job.pr.ID)
-	if rec.Head == in.TargetSHA && res.Round > 0 && !slices.Contains(rec.Rounds, res.Round) {
-		rec.Rounds = append(rec.Rounds, res.Round)
-		e.saveCompletion(ctx, job.pr.ID, rec)
-	}
+	subject := prSubject(job.repo, job.pr.Number)
+	data := map[string]any{"round": in.Complete.Round, "head": in.TargetSHA, "attempt": len(rec.Rounds), "outcome": outcome}
 	switch outcome {
 	case pipeline.OutcomePosted, pipeline.OutcomeReplied, pipeline.OutcomeDryRun,
 		pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired, pipeline.OutcomeOverloaded:
-		return
+	case pipeline.OutcomeUnheard:
+		e.event(ctx, "info", subject, "pr.complete_unheard",
+			fmt.Sprintf("the completion of round %d (round %d) heard none of %s again; no review posted",
+				in.Complete.Round, res.Round, strings.Join(in.Complete.Roles, ", ")), data)
+	default:
+		data["stage"] = "round"
+		e.event(ctx, "warn", subject, "pr.complete_failed",
+			fmt.Sprintf("the completion of round %d ended %s in round %d (completion %d of %d of the head)",
+				in.Complete.Round, outcome, res.Round, len(rec.Rounds), maxCompletions), data)
 	}
-	if cancelled {
-		return
-	}
-	e.event(ctx, "warn", prSubject(job.repo, job.pr.Number), "pr.complete_failed",
-		fmt.Sprintf("the completion of round %d (round %d) ended %s; it retries as a failed round does", in.Complete.Round, res.Round, outcome),
-		map[string]any{"round": in.Complete.Round, "head": in.TargetSHA, "attempt": rec.Attempt, "outcome": outcome, "stage": "round"})
 }
 
-// supersedeCompletion deletes the record of an older head when pr's head
-// moved: the push's round reviews the new head in full, and a completion
-// that waited is dropped.
+// endSpentCompletion settles the failed round of a completion of round
+// completed (0 = the round was none) when it was the head's last
+// (maxCompletions started): a retry would be one more, so the PR goes back
+// to reviewed at the review it completes, with the re-review interval
+// given back and pr.complete_gave_up; false when the round was none, the
+// head has rounds left (the PR retries it as any failed round) or moved
+// (its round reviews the new head).
+func (e *Engine) endSpentCompletion(ctx context.Context, job *roundJob, pr store.PR, completed int, from []string, outcome string) bool {
+	if completed == 0 {
+		return false
+	}
+	rec := e.completionOf(ctx, pr.ID)
+	if rec.Head == "" || rec.Head != pr.HeadSHA || rec.Head != deref(pr.ReviewedSHA) || len(rec.Rounds) < maxCompletions {
+		return false
+	}
+	err := e.st.TransitionPR(ctx, pr.ID, from, store.PRReviewed, func(u *store.PRUpdate) {
+		u.Where("head_sha", rec.Head)
+		u.Where("reviewed_sha", rec.Head)
+		giveBackStart(u, job, pr)
+		u.Set("attempts", 0)
+		u.Set("next_attempt_at", nil)
+		u.Set("next_eligible_at", nil)
+		u.Set("last_error", nil)
+	})
+	if err != nil {
+		if !errors.Is(err, store.ErrConflict) {
+			e.log.Warn("completion: the PR back to reviewed", "pr", pr.ID, "err", err)
+		}
+		return false
+	}
+	e.giveUpCompletion(ctx, job.repo, pr, rec, fmt.Sprintf("the completion of round %d ended %s in its last round", completed, cmp.Or(outcome, "without a review")),
+		map[string]any{"round": completed, "outcome": outcome})
+	return true
+}
+
+// giveBackStart has u give back the start of job's round, a completion's,
+// to the throttle (last_round_started_at back to the start before it,
+// job.prevStart): a completion is no review of new code, so the re-review
+// interval of the next push runs from the round it completes. It leaves
+// the start alone when the round recorded none, or another round recorded
+// one since.
+func giveBackStart(u *store.PRUpdate, job *roundJob, pr store.PR) {
+	if job.started && pr.LastRoundStartedAt != nil && pr.LastRoundStartedAt.Equal(job.startedAt) {
+		u.Set("last_round_started_at", job.prevStart) // nil stores NULL
+	}
+}
+
+// onUnheard settles a completion's round that heard none of its late
+// roles again (pipeline.OutcomeUnheard): nothing posted, so the PR goes back
+// to reviewed at the review it completes (or waits for the re-review of a
+// head that moved meanwhile, settleHead), with the re-review interval given
+// back; its round is spent (startCompletion), and the next auto-approval
+// pass queues the next completion or gives up.
+func (e *Engine) onUnheard(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, from []string) {
+	now := e.now()
+	m := e.settleHead(ctx, job, pr, in.TargetSHA, now)
+	set := func(u *store.PRUpdate) {
+		if m.to == store.PRReviewed {
+			u.Where("head_sha", m.reviewed)
+			if m.trivial != nil {
+				u.Set("reviewed_sha", m.reviewed)
+			}
+			u.Set("next_eligible_at", nil)
+		} else {
+			u.Set("next_eligible_at", m.next)
+			if pr.PendingSince == nil {
+				u.Set("pending_since", pr.HeadChangedAt)
+			}
+		}
+		giveBackStart(u, job, pr)
+		u.Set("attempts", 0)
+		u.Set("next_attempt_at", nil)
+		u.Set("last_error", nil)
+	}
+	err := e.st.TransitionPR(ctx, pr.ID, from, m.to, set)
+	if errors.Is(err, store.ErrConflict) && m.to == store.PRReviewed {
+		// The head moved after the read: the PR waits for its re-review.
+		if cur, rerr := e.st.PRByID(ctx, pr.ID); rerr == nil && slices.Contains(from, cur.State) && cur.HeadSHA != m.reviewed {
+			pr, m.to, m.next, m.trivial = cur, store.PRRereviewPending, e.rereviewAt(ctx, cur, job.watch, in.TargetSHA, now), nil
+			err = e.st.TransitionPR(ctx, pr.ID, from, m.to, set)
+		}
+	}
+	if err != nil {
+		e.log.Info("completion heard no one: the PR moved on", "pr", pr.ID, "err", err)
+	}
+}
+
+// supersedeCompletion moves the PR's record to its new head when the head
+// moved: the push's round reviews the new head in full, a completion that
+// waited is dropped, and the old head's spent completions stay in Past.
 func (e *Engine) supersedeCompletion(ctx context.Context, pr store.PR) {
 	rec := e.completionOf(ctx, pr.ID)
 	if rec.Head == "" || rec.Head == pr.HeadSHA {
 		return
 	}
-	e.delKV(ctx, kvPRComplete(pr.ID))
-	if rec.ReviewID != 0 && !rec.GaveUp {
+	if rec.ReviewID != 0 && !rec.GaveUp && !rec.Stopped {
 		e.log.Info("completion dropped: a push", "pr", pr.ID, "head", textx.ShortSHA(pr.HeadSHA), "completed", textx.ShortSHA(rec.Head))
 	}
+	e.saveCompletion(ctx, pr.ID, rec.forHead(pr.HeadSHA))
 }
 
-// dropCompletion deletes PR prID's record as GitHub closed it: a
-// completion that waited is dropped.
+// dropCompletion drops the completion that waits on PR prID's head as
+// GitHub closed the PR; the head's spent completions stay, so a reopen
+// gets no more than the head had left.
 func (e *Engine) dropCompletion(ctx context.Context, prID int64) {
-	if _, ok := e.getKV(ctx, kvPRComplete(prID)); ok {
-		e.delKV(ctx, kvPRComplete(prID))
+	rec := e.completionOf(ctx, prID)
+	if rec.ReviewID == 0 {
+		return
 	}
+	rec.ReviewID, rec.Queued = 0, time.Time{}
+	e.saveCompletion(ctx, prID, rec)
 }
 
-// completionRoles is the roles a completion runs: the judge of toRun and
-// the roles of roles (the watch's) it names (pipeline.Completion.Roles),
-// whatever their runs say.
-func completionRoles(roles, toRun []config.Role, names []string) []config.Role {
-	out := judgeAlone(toRun)
-	for _, r := range roles {
-		if !r.Judge && slices.Contains(names, r.Name) {
-			out = append(out, r)
-		}
+// stopCompletion stops, at the operator's abort or ignore of pr, the
+// completions of its head: one that waits or runs is dropped and no later
+// auto-approval pass queues one there; a new head gets its own. It returns
+// what it did for the stop's result ("" = no completion waited or ran).
+func (e *Engine) stopCompletion(ctx context.Context, repo store.Repo, pr store.PR) string {
+	if cur, err := e.st.PRByID(ctx, pr.ID); err == nil {
+		pr = cur
 	}
-	return out
+	rec := e.completionOf(ctx, pr.ID)
+	if rec.Head == "" || rec.Head != pr.HeadSHA || rec.Stopped {
+		return ""
+	}
+	pending := rec.ReviewID != 0 && !rec.GaveUp
+	rec.Stopped, rec.ReviewID, rec.Queued = true, 0, time.Time{}
+	e.saveCompletion(ctx, pr.ID, rec)
+	if !pending {
+		return ""
+	}
+	note := "completions of " + textx.ShortSHA(pr.HeadSHA) + " stopped"
+	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.complete_stopped",
+		fmt.Sprintf("the completion of round %d stopped: no completion runs on %s, a new head gets its own", rec.Round, textx.ShortSHA(pr.HeadSHA)),
+		map[string]any{"round": rec.Round, "head": pr.HeadSHA, "attempts": len(rec.Rounds)})
+	return note
 }
 
 // completionInput is the pipeline's completion of rs's round: its review's

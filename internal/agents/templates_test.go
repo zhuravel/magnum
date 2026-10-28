@@ -476,6 +476,16 @@ func TestRenderGolden(t *testing.T) {
 	complete := sameHead
 	complete.Reports = []Report{{Role: "claude-review", Path: "/r/claude-review.md"},
 		{Role: "codex-review", Path: "/r/codex-review.md", Late: true}, {Role: "claude-simplify", Path: "/r/claude-simplify.md"}}
+	// A completion whose late report is claude-simplify's: its proposals keep
+	// to the lines the round it completes reviewed, the commits since that
+	// round's previous head (LateSince), or every line the PR added or
+	// modified after a first review, never the same head's empty delta.
+	completeSimplify := sameHead
+	completeSimplify.Reports = []Report{{Role: "claude-review", Path: "/r/claude-review.md"},
+		{Role: "claude-simplify", Path: "/r/claude-simplify.md", Late: true}}
+	completeSimplify.LateSince = "0011223344556677889900112233445566778899"
+	completeSimplifyFirst := completeSimplify
+	completeSimplifyFirst.LateSince = ""
 	stopped := withNotes
 	stopped.StopThreads = 2
 
@@ -690,6 +700,8 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_ci_red", "judge-recovery.md", ciRed},
 		{"judge_rereview_complete", "judge-rereview.md", complete},
 		{"judge_recovery_complete", "judge-recovery.md", complete},
+		{"judge_rereview_complete_simplify", "judge-rereview.md", completeSimplify},
+		{"judge_recovery_complete_simplify_first", "judge-recovery.md", completeSimplifyFirst},
 		{"judge_rereview_replies", "judge-rereview.md", replies},
 		{"judge_recovery_replies", "judge-recovery.md", replies},
 		{"judge_continue_replies", "judge-continue.md", replies},

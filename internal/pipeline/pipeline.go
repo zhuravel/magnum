@@ -79,6 +79,10 @@ const (
 	OutcomeTimeout        = "timeout"         // judge_timeout passed without a result
 	OutcomeNeedsAttention = "needs_attention" // nothing posted after one nudge, or an inconsistent result
 	OutcomeError          = "error"           // the round could not run or be evaluated (RunRound's error is set)
+	// OutcomeUnheard: a completion (RoundInput.Complete) whose late roles
+	// all left no usable report again: its judge was not prompted, and
+	// nothing posted.
+	OutcomeUnheard = "unheard"
 	// OutcomeRefused: a role's turn (the judge's own pass, candidates,
 	// nudge or continue, a reviewer, a shell command's tool) ended on its
 	// provider's safety warning (health kind refused: Codex's
@@ -835,7 +839,7 @@ func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
 		toRun = []config.Role{judge} // the reviewers' reports are stored: none of them runs
 	}
 	if c := completes(in); c != nil && in.Kind != KindContinue {
-		toRun = completionRoles(in.Roles, toRun, c) // the judge and the roles the review went without
+		toRun = CompletionRoles(in.Roles, toRun, c.Roles) // the judge and the roles the review went without
 	}
 	rd.plan(toRun)
 	rd.res = RoundResult{Round: in.Round, ReportDir: rd.dir, TargetSHA: in.TargetSHA, Reports: map[agents.Role]RoleReport{}}
@@ -1010,6 +1014,9 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 			return rd.refused(ctx, ref.r)
 		}
 		return rd.done(ctx, OutcomeError, err)
+	}
+	if rd.lateUnheard() {
+		return rd.unheard(ctx) // complete.go: nothing new for the judge to decide
 	}
 	return rd.runJudge(ctx, *judgeRun)
 }

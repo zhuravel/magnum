@@ -944,6 +944,9 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		EvidenceMap: rd.evidenceMap(), Stakes: rd.r.Config.StakesFor(rd.owner + "/" + rd.name),
 		MaxSimplifications: rd.r.Config.MaxSimplificationsFor(rd.owner + "/" + rd.name),
 	}
+	if c := rd.completion(); c != nil {
+		jd.LateSince = c.Since // a late simplifier's proposals keep to its round's lines (complete.go)
+	}
 	jd.EvidenceFile = filepath.Join(filepath.Dir(jd.ResultFile), EvidenceFile)
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {

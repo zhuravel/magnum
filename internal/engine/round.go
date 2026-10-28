@@ -140,8 +140,9 @@ func (e *Engine) runRound(ctx context.Context, job *roundJob) pipeline.RoundResu
 	}
 	res, err := e.d.Rounds(job.pr.Identity).RunRound(ctx, in)
 	e.finish(fctx, job, in, ws, res, err, ctx.Err() != nil)
-	if res.Outcome == pipeline.OutcomePosted && ctx.Err() == nil {
-		// A review auto-approval may act on: decide now, not at the next
+	if (res.Outcome == pipeline.OutcomePosted || res.Outcome == pipeline.OutcomeUnheard) && ctx.Err() == nil {
+		// A review auto-approval may act on (or, after a completion that
+		// heard no one, the next completion): decide now, not at the next
 		// tick (an abort or a shutdown cancelled ctx: the tick decides).
 		e.autoApproveRound(ctx, job.pr.ID)
 	}
@@ -232,7 +233,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		// A completion: the judge and the roles the review it completes went
 		// without, no triage; the watch's other roles stay the round's
 		// candidates, whose reports of that review stand.
-		rs.toRun = completionRoles(rs.roles, rs.toRun, rs.complete.Roles)
+		rs.toRun = pipeline.CompletionRoles(rs.roles, rs.toRun, rs.complete.Roles)
 	case rs.judgeOnly():
 		// A delta check, or a re-review of the same head: the judge alone,
 		// no triage.
@@ -266,8 +267,8 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if rs.kind != kindContinue {
 		e.noteDeltaCheckRound(ctx, pr.ID, rs.delta, rs.target) // a continue keeps the paused round's
 		e.noteFullPassRound(ctx, pr.ID, rs.fullPass)
-		e.noteAuditRound(ctx, pr.ID, rs.auditPass)                    // audit.go
-		e.noteCompletionStart(ctx, pr.ID, rs.complete, job.startedAt) // complete.go
+		e.noteAuditRound(ctx, pr.ID, rs.auditPass)        // audit.go
+		e.startCompletion(ctx, pr.ID, &rs, job.startedAt) // complete.go
 	}
 	switch {
 	case rs.kind == kindContinue:

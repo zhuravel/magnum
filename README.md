@@ -405,16 +405,27 @@ of its round left no report, and every such report is missing for a cause that p
 roles, the causes and the attempt). The completion is a re-review of the same head that runs the judge in
 its session and only the roles the review went without, with the prompts their round gave them, and no
 triage and no restarts. The judge gets the other reports of that round and the late ones, marked `(late)`,
-decides the findings of the late ones while the others stand, and posts a new review, whose record lists
-only what it still went without: auto-approval decides on it as on any review. A completion waits only for
-a snooze, quiet hours and the pause of a kind it needs, never holds its approval for a full pass, and
-counts neither toward the daily cap nor toward the re-reviews of a full pass (`engine.round_start` names
-the round it completes as `completes`). A reviewer that refused, is logged out or hit its usage limit gets
-no completion (that needs you or time), and neither does a review that held its approval (its full pass
-follows), a post-merge review, a dry run or an eval replay. A push or the close of the PR drops a
-completion that waits. Each head gets 2 completions; after them `pr.complete_gave_up` says so once and the
-refusal stands. A completion whose round fails writes `pr.complete_failed` and retries as a failed round
-does.
+decides the findings of the late ones while the others stand (a late finding the last review already
+posted is that finding, not a new one), and posts a new review, whose record lists only what it still went
+without: auto-approval decides on it as on any review. When every late reviewer misses again, the judge is
+not prompted and nothing is posted (`pr.complete_unheard`). A completion waits for what any automatic round
+waits for (capacity, its slot or pin, the GitHub budget, the pause of a kind it needs, quiet hours, a
+snooze), but not for the push quiet period, the re-review interval or the daily cap. It never holds its
+approval for a full pass, and counts neither toward the daily cap, nor toward the re-reviews of a full
+pass, nor toward the re-review interval of the next push (`engine.round_start` names the round it
+completes as `completes`). A reviewer that refused, is logged out or hit its usage limit gets no
+completion (that needs you or time), and neither does a review that held its approval (its full pass
+follows), a head another gate refuses for good (its own CI workflows, the review agents' configuration,
+more files than Magnum can check: the status comment says that gate's words), a post-merge review, a dry
+run or an eval replay. Nor does a delta check of a small push after the incomplete review: it carries the
+missing reports of the older head, which a completion of the new one cannot complete, so its refusal stands
+until a full re-review (a limit of the design). A push or the close of the PR drops a completion that
+waits, and `magnum abort` (or the board's take-back) of one that waits or runs stops the head's
+completions (`pr.complete_stopped`); a new head gets its own. Each head gets 2 completion rounds, counted as
+they start, a failed round's retry included, and kept across a restart, a close and reopen, and a push
+back to the head; after them `pr.complete_gave_up` says so once and the refusal stands. A completion whose
+round fails writes `pr.complete_failed` and retries as a failed round does while the head has a round
+left.
 
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the

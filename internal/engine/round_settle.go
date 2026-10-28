@@ -74,8 +74,13 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 // retryOrAttention charges one attempt (when charge) and moves the PR to to
 // with a backoff, or to needs_attention once the budget is spent; an agent
 // role's start that failed then names a recent change of its CLI
-// (cliChangeNote).
+// (cliChangeNote). The failure of the head's last completion round settles
+// it instead (endSpentCompletion): a retry would be one completion too many
+// (a paused one's continue goes on in the same round).
 func (e *Engine) retryOrAttention(ctx context.Context, job *roundJob, pr store.PR, from []string, to, msg string, charge bool, retryAt time.Time) {
+	if job.complete != nil && to != store.PRPaused && e.endSpentCompletion(ctx, job, pr, job.complete.Round, from, retryCause(msg)) {
+		return // complete.go: the head's last completion failed, and a retry would be one too many
+	}
 	now := e.now()
 	attempts := pr.Attempts
 	if charge {
@@ -253,6 +258,8 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		e.onPosted(ctx, job, pr, in, res, from)
 	case pipeline.OutcomeReplied:
 		e.onReplied(ctx, job, pr, in, res, from) // replies.go
+	case pipeline.OutcomeUnheard:
+		e.onUnheard(ctx, job, pr, in, from) // complete.go
 	case pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired:
 		why, retry := outcome+": "+msg, time.Time{}
 		if res.Pause != nil {
@@ -387,6 +394,9 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 			u.Where("head_sha", reviewed)
 		}
 		recordReview(u)
+		if in.Complete != nil {
+			giveBackStart(u, job, pr) // complete.go: a completion keeps the re-review interval of its round
+		}
 		u.Set("attempts", 0)
 		u.Set("next_attempt_at", nil)
 		u.Set("last_error", nil)

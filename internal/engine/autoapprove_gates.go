@@ -151,8 +151,9 @@ func (e *Engine) authorRefusal(c store.RepoPR) autoRefusal {
 // sum although the registry lets it approve (autoApproveRefusal); "" when
 // it does not. In order: the review held its approval for a full pass of
 // the whole PR (heldReviewOf, which waits: the full pass decides), the
-// review did not hear every reviewer
-// (missingReports), the PR's watch would not review it on its own
+// review did not hear every reviewer (missingReports; on a head whose files
+// refuse it for good, refusesForGood, that refusal instead: its words, and
+// no completion), the PR's watch would not review it on its own
 // (watchRefusal: classify, a manual repository's, a bot's, one skip_paths
 // leaves out, one Codex flagged; a forced round's included), it changes
 // what steers the review agents or its own workflows or actions, or magnum
@@ -175,6 +176,9 @@ func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.
 		return autoRefusal{why: approvalHoldRefusal, waits: true} // approval_hold.go: the full pass after it decides
 	}
 	if r := e.missingReports(ctx, pr.ID, sum); r.why != "" {
+		if f, _ := e.changedFilesRefusal(ctx, pr); refusesForGood(f.public) {
+			return f // the head is refused for good: its words, and no completion of the review (complete.go)
+		}
 		return r
 	}
 	if why, _ := e.watchRefusal(ctx, c); why != "" {
@@ -301,6 +305,15 @@ var workflowDirs = []string{".github/workflows/", ".github/actions/"}
 func changesWorkflow(p string) bool {
 	lower := strings.ToLower(p)
 	return slices.ContainsFunc(workflowDirs, func(dir string) bool { return strings.HasPrefix(lower, dir) })
+}
+
+// refusesForGood reports whether a refusal of class p holds the head back
+// whatever its review heard: its own workflows or actions, the review
+// agents' configuration, more files than GitHub lists. autoGateRefusal
+// gives such a class before the reports a review went without, so the
+// status comment says it, and no completion runs (complete.go).
+func refusesForGood(p publicRefusal) bool {
+	return p == publicWorkflows || p == publicAgentConfig || p == publicTooManyFiles
 }
 
 // changedFilesRefusal says why auto-approval leaves pr to the operator for

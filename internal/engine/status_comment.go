@@ -615,11 +615,11 @@ func (e *Engine) approvalLineFor(ctx context.Context, pr store.PR, reads statusR
 // something to fix or cannot tell; and a refusal record of another head or
 // round, or without a class. A stop of auto-approval of the PR wins over
 // the record. While the completion of a review that did not hear every
-// reviewer waits or runs (completion.dueFor; the PR waits in line or a
+// reviewer waits or runs (completion.waitsFor; the PR waits in line or a
 // round runs), the line says that magnum runs the missing reviewer again
 // (completingText).
 func approvalLine(pr store.PR, last store.ReviewSummary, a approvalReads) string {
-	completing := a.completion != nil && a.completion.dueFor(pr) &&
+	completing := a.completion != nil && a.completion.waitsFor(pr) &&
 		(pr.State == store.PRReviewed || pr.State == store.PRRereviewPending || pr.State == store.PRClaiming || slices.Contains(statusRoundStates, pr.State))
 	switch {
 	case a.login == "", pr.GHState != store.GHOpen, pr.State != store.PRReviewed && !completing, pr.IsDraft, pr.Muted,

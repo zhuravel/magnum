@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -180,8 +181,8 @@ func TestAPushDropsTheCompletion(t *testing.T) {
 	h.wantState(2, store.PRRereviewPending)
 	h.moveTo(prSpec{head: "b2"})
 	h.tick()
-	if _, ok := kvValue(h, kvPRComplete(h.pr(2).ID)); ok {
-		t.Fatal("the completion of b1 is still on record after the push of b2")
+	if rec := h.e.completionOf(h.ctx, h.pr(2).ID); rec.Head != "b2" || rec.ReviewID != 0 {
+		t.Fatalf("record after the push of b2: %+v, want b2's with no completion waiting", rec)
 	}
 	h.reviewTo(2, "b2")
 	ins := h.rd.all()
@@ -351,4 +352,268 @@ func TestTheStatusLineSaysMagnumRunsTheReviewerAgainUntilItGivesUp(t *testing.T)
 		t.Fatalf("pr.complete_gave_up events = %+v, want one", evs)
 	}
 	h.wantApprovalLine(aliceUnheard)
+}
+
+// completionRounds has the auto harness's completion rounds end as end says
+// (its outcome; "" = as the plan posts), each with the judge run a
+// pipeline round leaves, of the round the engine gave it.
+func completionRounds(h *harness, end string) {
+	script := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if in.Complete == nil || end == "" {
+			return script(in)
+		}
+		round := in.Round
+		if round == 0 {
+			round = len(h.rd.all())
+		}
+		if _, err := h.st.DB().ExecContext(h.ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login,
+  state, outcome, prompt_text, created_at) VALUES (?, ?, ?, 'codex-judge', 'rereview', ?, ?, 'talkable[bot]', 'abandoned', ?, 'p', ?)`,
+			"run-c"+strconv.Itoa(len(h.rd.all())), in.PR.ID, round, in.TargetSHA, in.PR.Identity, end, store.FormatTime(h.clock.Now())); err != nil {
+			return failRound(h.t, err)
+		}
+		return pipeline.RoundResult{Outcome: end, Round: round, TargetSHA: in.TargetSHA, Error: end}, nil
+	}
+}
+
+// The reviewer's Important finding: a completion whose round failed (its
+// judge timed out) was retried as a failed round, three times, all as
+// attempt 1. Each round a completion starts is one of the head's two, also
+// across a restart of the daemon: the second that fails ends them with
+// pr.complete_gave_up once, the PR back at its review, and the refusal
+// stands.
+func TestAFailedCompletionsRetriesNeverPassTheHeadsTwo(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy)
+	completionRounds(h, pipeline.OutcomeTimeout)
+	h.firstRound("b1")
+	h.tick() // completion round 1 times out
+	if n := len(h.rd.all()); n != 2 {
+		t.Fatalf("rounds = %d, want the review and the completion", n)
+	}
+	h.e = New(h.d) // a restart: the count is the registry's
+	h.startup()
+	for range 6 {
+		h.advance(5 * time.Minute)
+		h.tick()
+	}
+	if n := len(h.rd.all()); n != 3 {
+		t.Fatalf("rounds = %d, want the review and two completion rounds", n)
+	}
+	if evs := approvalEvents(t, h, 2, "pr.complete_gave_up"); len(evs) != 1 {
+		t.Fatalf("pr.complete_gave_up events = %+v, want one", evs)
+	}
+	if q := completeQueued(t, h); len(q) != 1 {
+		t.Fatalf("pr.complete_queued events = %+v, want the first alone", q)
+	}
+	h.wantState(2, store.PRReviewed)
+	if got := h.autoRefused(2); !strings.Contains(got, "codex-review (busy)") {
+		t.Fatalf("held back for %q, want the reviewer it did not hear", got)
+	}
+}
+
+// The reviewer's I1: `magnum abort` (the board's take-back) of a completion
+// that waits took it back, and the same tick's auto-approval pass queued it
+// again. An abort sticks for the head: no completion runs on it, and a new
+// head gets its own.
+func TestAnAbortOfAWaitingCompletionSticksForItsHead(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, missedBusy, cleanRound)
+	h.firstRound("b1")
+	h.wantState(2, store.PRRereviewPending)
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "took back") {
+		t.Fatalf("abort: %s %q", r.State, deref(r.Result))
+	}
+	for range 3 {
+		h.flush()
+	}
+	if n := len(h.rd.all()); n != 1 {
+		t.Fatalf("rounds = %d after the abort, want none more", n)
+	}
+	if q := completeQueued(t, h); len(q) != 1 {
+		t.Fatalf("pr.complete_queued events = %+v, want the one the abort took back", q)
+	}
+	h.wantState(2, store.PRReviewed)
+
+	h.moveTo(prSpec{head: "b2"})
+	h.reviewTo(2, "b2")
+	if q := completeQueued(t, h); len(q) != 2 || q[1]["head"] != "b2" {
+		t.Fatalf("pr.complete_queued events = %+v, want b2's completion", q)
+	}
+}
+
+// An abort of a completion that runs sticks too: no second completion
+// follows at once, and no later pass queues one.
+func TestAnAbortOfARunningCompletionSticksForItsHead(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy)
+	h.firstRound("b1")
+	h.rd.mu.Lock()
+	h.rd.gate = make(chan struct{}) // the completion waits in the pipeline
+	h.rd.mu.Unlock()
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitRound(1)
+	h.rd.mu.Lock()
+	h.rd.gate = nil // a round the abort lets through would run
+	h.rd.mu.Unlock()
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.tick()
+	if r := h.request(id); r.State != store.RequestDone {
+		t.Fatalf("abort: %s %q", r.State, deref(r.Result))
+	}
+	for range 3 {
+		h.flush()
+	}
+	if n := len(h.rd.all()); n != 2 {
+		t.Fatalf("rounds = %d after the abort, want the review and the aborted completion", n)
+	}
+	if q := completeQueued(t, h); len(q) != 1 {
+		t.Fatalf("pr.complete_queued events = %+v, want the first alone", q)
+	}
+	h.wantState(2, store.PRReviewed)
+}
+
+// The reviewer's M1: a head another gate refuses for good (its CI
+// workflows, the agents' configuration, more files than GitHub lists) gets
+// no completion, and the status comment says that gate's words, not that
+// Magnum runs the reviewer again.
+func TestNoCompletionForAHeadAnotherGateRefusesForGood(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, cleanRound)
+	h.reviewedFor(prSpec{head: "b1", files: aliceWorkflowFiles})
+	if q := completeQueued(t, h); len(q) != 0 {
+		t.Fatalf("pr.complete_queued events: %+v", q)
+	}
+	if n := len(h.rd.all()); n != 1 {
+		t.Fatalf("rounds = %d, want the review alone", n)
+	}
+	h.wantApprovalLine(aliceWorkflows)
+}
+
+// The reviewer's M2: a completion whose late reviewer misses again posted
+// a review that added nothing, twice per head. Now its round prompts no
+// judge and posts nothing (pipeline.OutcomeUnheard): the attempt counts,
+// the PR is back at its review, and the status comment keeps its line.
+func TestACompletionWhoseLateReviewerMissesAgainPostsNoReview(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy)
+	completionRounds(h, pipeline.OutcomeUnheard)
+	h.firstRound("b1")
+	review := deref(h.pr(2).LastReviewID)
+	h.tick() // completion 1: codex-review misses again
+	h.wantState(2, store.PRRereviewPending)
+	if q := completeQueued(t, h); len(q) != 2 || q[1]["attempt"] != float64(2) {
+		t.Fatalf("pr.complete_queued events = %+v, want attempt 2 queued", q)
+	}
+	h.advance(statusEvery)
+	h.e.noteStatusComments(h.ctx)
+	h.wantApprovalLine(aliceCompleting)
+	h.tick() // completion 2 misses too: magnum gives up
+	h.flush()
+	h.flush()
+	if evs := approvalEvents(t, h, 2, "pr.complete_gave_up"); len(evs) != 1 {
+		t.Fatalf("pr.complete_gave_up events = %+v, want one", evs)
+	}
+	if n := len(h.rd.all()); n != 3 {
+		t.Fatalf("rounds = %d, want the review and two completions", n)
+	}
+	if pr := h.wantState(2, store.PRReviewed); deref(pr.LastReviewID) != review {
+		t.Fatalf("last review %d, want round 1's %d: a completion that heard nobody posts nothing", deref(pr.LastReviewID), review)
+	}
+	h.wantApprovalLine(aliceUnheard)
+}
+
+// The reviewer's M4: a completion is no new review of the author's code, so
+// the re-review interval of the next push still runs from the round it
+// completes.
+func TestACompletionKeepsTheReReviewIntervalOfItsRound(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, cleanRound)
+	h.firstRound("b1")
+	start := deref(h.pr(2).LastRoundStartedAt)
+	h.advance(10 * time.Minute)
+	h.tick() // the completion
+	if n := len(h.rd.all()); n != 2 {
+		t.Fatalf("rounds = %d, want the completion", n)
+	}
+	if pr := h.wantState(2, store.PRReviewed); !deref(pr.LastRoundStartedAt).Equal(start) {
+		t.Fatalf("last_round_started_at = %v, want the completed round's start %v", deref(pr.LastRoundStartedAt), start)
+	}
+}
+
+// The reviewer's M6 and Codex's minor: a head keeps its completions across
+// the close and reopen of its PR, and across a push that went back to it
+// before its round: a head that had both gets none more.
+func TestAHeadKeepsItsCompletionsThroughACloseAndAPushBack(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy)
+	h.firstRound("b1")
+	h.tick() // completion 1
+	h.tick() // completion 2: magnum gives up
+	h.flush()
+	if n := len(h.rd.all()); n != 3 {
+		t.Fatalf("rounds = %d, want the review and two completions", n)
+	}
+	h.open(prSpec{n: 1, head: "base1"})
+	h.gh.mu.Lock()
+	h.gh.closed[2] = "CLOSED"
+	h.gh.mu.Unlock()
+	for range 3 {
+		h.advance(30 * time.Second)
+		h.tick()
+	}
+	h.wantState(2, store.PRClosed)
+	h.gh.mu.Lock()
+	delete(h.gh.closed, 2)
+	h.gh.mu.Unlock()
+	h.moveTo(prSpec{head: "b1"}) // reopened
+	h.tick()
+	h.flush()
+	h.flush()
+	if n := len(h.rd.all()); n != 3 {
+		t.Fatalf("rounds = %d after the reopen, want none more", n)
+	}
+	h.moveTo(prSpec{head: "b2"})
+	h.tick() // b2 waits for its quiet period
+	h.moveTo(prSpec{head: "b1"})
+	h.tick()
+	h.flush()
+	h.flush()
+	if n := len(h.rd.all()); n != 3 {
+		t.Fatalf("rounds = %d after the push back to b1, want none more", n)
+	}
+	if q := completeQueued(t, h); len(q) != 2 {
+		t.Fatalf("pr.complete_queued events = %+v, want the head's two", q)
+	}
+}
+
+// The reviewer's M7: the completion's round was on record only once it
+// settled, so a crash in between made the next completion rest on that
+// round alone, and its judge lost the reports that stand. The round is on
+// record from its start, and the next completion rests on the first base.
+func TestACompletionsRoundIsOnRecordFromItsStart(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, missedBusy, cleanRound)
+	script := h.rd.script
+	var recorded []int
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if in.Complete != nil && in.Complete.Round == 1 {
+			recorded = h.e.completionOf(h.ctx, in.PR.ID).Rounds // what a crash now leaves
+		}
+		return script(in)
+	}
+	h.firstRound("b1")
+	h.tick() // completion 1
+	if !slices.Contains(recorded, 2) {
+		t.Fatalf("the record held rounds %v while completion round 2 ran, want it", recorded)
+	}
+	h.tick() // completion 2
+	ins := h.rd.all()
+	if len(ins) != 3 || ins[2].Complete == nil || ins[2].Complete.Base != 1 || ins[2].Complete.Round != 2 {
+		t.Fatalf("rounds = %d, the second completion %+v: want it to complete round 2 on round 1's reports", len(ins), ins[len(ins)-1].Complete)
+	}
 }

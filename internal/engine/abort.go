@@ -298,6 +298,9 @@ func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (
 		what = "forced review"
 	}
 	res := fmt.Sprintf("took back the %s of %s before it started: PR %s", what, label, to)
+	if note := e.stopCompletion(ctx, repo, pr); note != "" { // complete.go: no later pass queues it again
+		res += ", " + note
+	}
 	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.aborted", res, map[string]any{"queued": true, "forced": pr.Forced, "state": to})
 	return res, nil
 }
@@ -420,6 +423,11 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, 
 		problems = append(problems, err)
 	case to != "":
 		done = append(done, "PR "+to)
+	}
+	if closed == nil { // an abort or an ignore stops the head's completions; a close only drops the one that waits
+		if note := e.stopCompletion(ctx, repo, pr); note != "" { // complete.go
+			done = append(done, note)
+		}
 	}
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID),
 		kvPRGateReason(pr.ID), KVPRWait(pr.ID))

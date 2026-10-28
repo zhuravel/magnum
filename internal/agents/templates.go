@@ -312,7 +312,12 @@ type JudgeData struct {
 	// stand as that review judged them. Rendered as one instruction by the
 	// rereview and recovery prompts, only then.
 	LateReports []string
-	ResultFile  string // <report dir>/<the judge's output>, e.g. codex-judge.json
+	// LateSince is the head the late reports' round reviewed from
+	// (pipeline.Completion.Since): a late claude-simplify report's proposals
+	// keep to the lines changed since it; "" = the lines the whole PR added
+	// or modified (a first review's round). Only with LateReports.
+	LateSince  string
+	ResultFile string // <report dir>/<the judge's output>, e.g. codex-judge.json
 	// Magnum is the magnum executable the judge's post_review line runs
 	// (the daemon's own, absolute; "" = magnum on PATH). ReviewFile is
 	// where the judge writes the review it posts (<report dir>/review.json,
