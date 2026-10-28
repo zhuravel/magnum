@@ -325,8 +325,10 @@ the session with its context (two quit Codex, as for a judge that timed out). Al
 at once, before Magnum waits for any of them, and then Magnum waits for all of them side by side, so the
 restart waits for the slowest turn, not for each in turn. A shell role's command that still runs 10 seconds
 after its ctrl+c gets another, three in all, and then Magnum stops it itself (see below). The checkout never
-switches under a command that still runs: when Magnum cannot stop it, a warning names the role and the
-round fails with that cause, and the PR's next round takes it up again. An agent gets up to a minute after its interrupt to go idle, and a
+switches, nor is restored, under a command that still runs, the command of a shell reviewer that timed out
+before the push included: when Magnum cannot stop it, a warning names the role and the round fails with
+that cause. That round costs the PR no attempt and no round of the daily cap, and the PR's next round takes
+it up again. An agent gets up to a minute after its interrupt to go idle, and a
 warning names it when it does not. A claude reviewer still at work 10 seconds after its esc whose
 transcript shows background work it started still running (a test run in the background keeps it at work
 after an interrupt) is told then to stop that work, which is what ends it, rather than at the end of the
@@ -336,25 +338,40 @@ took to go idle), not a warning. When a refusal or a lost judge ends the round i
 work are stopped the same way.
 
 `codex review` sometimes goes on after its ctrl+c, and its pane stays busy. Two things end it. First,
-`magnum db-lock`, which every shell role's command runs through, passes the interrupt on, and a command that
-still runs 10 seconds later gets SIGTERM, and 5 seconds after that SIGKILL, together with every process under
-it (a sandbox's child in a process group of its own too). db-lock says so on stderr and exits with 128 plus
-that signal. Second, Magnum stops the command itself after the restart's last ctrl+c, but only its own run:
-the shell line's db-lock names the run (`--run <run>`), and Magnum signals a pane's command only when that
-argv names a run of the PR's role in this checkout, in the role's own pane, and the run is the one cut or no
-longer in flight. It asks herdr what the pane runs again before each signal and sends nothing when the job or
-its db-lock changed. It sends SIGTERM to the job's process group and to the processes under its db-lock,
-then SIGKILL 5 seconds later, and when SIGKILL leaves the pane busy it splits a new pane with the session's
-working directory and environment, moves the role there and closes the old one. Each stop writes
-`pr.shell_stop_begin` (the process group and the tree as pid, group and name, never arguments),
+`magnum db-lock`, which the built-in shell line runs every command through, passes the interrupt on and
+notes the processes under the command. A command, or one of those processes, that still runs 10 seconds
+later gets SIGTERM, and 5 seconds after that SIGKILL, together with every process under it (a sandbox's child
+in a process group of its own too). db-lock says so on stderr, keeps the lock until those processes are gone
+or SIGKILL went out, and exits with 128 plus that signal. Second, Magnum stops the command itself after the
+restart's last ctrl+c, but only its own run: the shell line's db-lock names the run (`--run <run>`), and
+Magnum keys or signals a pane's command only when that argv names a run of the PR's role in this checkout,
+in the role's own pane, and the run is the one cut or no longer in flight. Its ctrl+c too goes only to a
+pane whose command carries that run's token, and a run whose line was never typed (it still waited for a
+busy pane) gets nothing at all. Magnum notes the job's processes from the process table, each by its pid,
+process group and start time, and before each signal it reads the table and asks herdr again: a process
+whose identity changed gets nothing, and neither does a pane whose job changed. It sends SIGTERM to the
+job's process group and to each of those processes, then SIGKILL 5 seconds later. The stop counts only once
+the shell is idle and every noted process is gone; a process that outlives SIGKILL fails it. When SIGKILL
+leaves the pane busy, Magnum splits a new pane with the session's working directory and environment, moves
+the role there, asks herdr once more and closes the old one. Without a recorded environment the old pane
+closes all the same and the session is lost, so the next round lays a new pane out. Each stop writes
+`pr.shell_stop_begin` (the process group and the processes as pid, group and name, never arguments),
 `pr.shell_stopped` (the step that worked and the seconds) or `pr.shell_stop_failed` (`not_own`, `signal` or
-`close`). A shell role whose pane is still busy when its next run starts does the same: an earlier run of its
-own that is over is stopped at once, and the line runs. Anything else gets the minute a fresh pane's shell has
-to start. When the pane is still busy then, Magnum splits a new pane with the session's environment, moves the
-role there (`pr.shell_move_begin`, then `pr.shell_moved` or `pr.shell_move_failed`) and runs the line in it. It
-never sends the busy pane a key, a signal or a close: the pane stays on a closed row of the role and closes
-with the other retired panes once it is an idle shell. Without a recorded environment the run fails as busy,
-as before.
+`close`). A command in a shell pane that Magnum does not own (no run token, another PR's or role's line)
+counts as yours: the PR waits out `human_cooldown`. A shell reviewer that timed out, or whose wait failed,
+gets the same stop before its run ends. A shell role whose pane is still busy when its next run starts
+does the same: an earlier run of its own that is over is stopped at once, and the line runs. Anything else
+gets the minute a fresh pane's shell has to start. When the pane is still busy then, Magnum splits a new pane
+with the session's environment, moves the role there (`pr.shell_move_begin`, then `pr.shell_moved` or
+`pr.shell_move_failed`) and runs the line in it. It never sends the busy pane a key, a signal or a close:
+the pane stays on a closed row of the role and closes with the other retired panes once it is an idle shell.
+The new line's db-lock then waits for the lock that the busy command may hold, up to its `--timeout` (20
+minutes) or the role's timeout, rather than failing as busy after a minute. Without a recorded environment
+the run fails as busy, as before. Before a round checks its PR out in a slot, Magnum looks at the PR's shell
+panes in that slot: an earlier run of its own is stopped, and a command it does not own holds the round
+under the PR's cooldown (`pr.shell_hold`), with no attempt counted, instead of switching the checkout under
+it. A shell role whose `command` of your own leaves `{{.DBLockCommand}}` out carries no run token: Magnum
+never stops its command, and a restart that finds it still running ends the round, as above.
 
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the
@@ -2532,7 +2549,7 @@ did not run`, which the skill treats as a check that did not run, never a findin
 own failure (no command, a checkout it cannot find), 126 and 127 a command it cannot start, 128+n one a
 signal ended. A command that still runs 10 seconds after the first SIGINT, SIGTERM or SIGHUP db-lock passed
 on gets SIGTERM, then SIGKILL 5 seconds later, with the processes under it, so an interrupted spec run ends
-too. Without `--checkout` it locks the git work tree it runs in. Like `post-review` it reads no
+too; db-lock holds the lock until the processes it noted under the command at the interrupt are gone. Without `--checkout` it locks the git work tree it runs in. Like `post-review` it reads no
 config and no registry. The lock covers one command: the claude prompts ask for one spec command per call
 (never a batch or a loop of them) and for each mutant or overlay run to take the lock on its own, so the other
 roles get their turn between commands. codex-review takes its turn on the databases like the others: it is sandboxed

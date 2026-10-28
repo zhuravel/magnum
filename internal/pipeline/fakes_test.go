@@ -121,12 +121,26 @@ type fakeAgents struct {
 	// what the stop does (nil: it stops nothing, and says it stopped).
 	stopShells  []store.Run
 	onStopShell func(f *fakeAgents, run store.Run) error
+	// launched marks the runs whose shell line RunShell "typed": all but
+	// those of a role in unsent (RunShell then waits for a busy pane and
+	// never types). foreign marks the panes whose command is not the run's
+	// own, which InterruptShell never keys (agents.ErrNotOwn). keys is the
+	// env's: InterruptShell's ctrl+c goes there.
+	launched map[string]bool
+	unsent   map[agents.Role]bool
+	foreign  map[string]bool
+	keys     *fakeKeys
 }
 
 // StopShell records the call (the real one signals the run's own job in
-// its pane) and runs onStopShell.
+// its pane) and runs onStopShell; a run whose line was never typed needs
+// no stop, as the real one's.
 func (f *fakeAgents) StopShell(ctx context.Context, run store.Run) error {
 	f.mu.Lock()
+	if !f.launched[run.ID] {
+		f.mu.Unlock()
+		return nil
+	}
 	f.stopShells = append(f.stopShells, run)
 	f.order = append(f.order, "stop:"+run.Role)
 	hook := f.onStopShell
@@ -135,6 +149,36 @@ func (f *fakeAgents) StopShell(ctx context.Context, run store.Run) error {
 		return nil
 	}
 	return hook(f, run)
+}
+
+// ShellLaunched reports whether RunShell "typed" the run's line.
+func (f *fakeAgents) ShellLaunched(runID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.launched[runID]
+}
+
+// InterruptShell presses ctrl+c in the run's pane (fakeKeys) once its line
+// was typed, unless the pane is foreign (agents.ErrNotOwn, nothing sent).
+func (f *fakeAgents) InterruptShell(ctx context.Context, run store.Run) error {
+	f.mu.Lock()
+	launched, keys := f.launched[run.ID], f.keys
+	f.mu.Unlock()
+	if !launched || keys == nil || run.SessionID == nil {
+		return nil
+	}
+	s, err := f.st.SessionByID(context.WithoutCancel(ctx), *run.SessionID)
+	if err != nil {
+		return err
+	}
+	pane := store.Deref(s.HerdrPaneID)
+	f.mu.Lock()
+	foreign := f.foreign[pane]
+	f.mu.Unlock()
+	if foreign {
+		return fmt.Errorf("fake: pane %s runs no db-lock with a run token: %w", pane, agents.ErrNotOwn)
+	}
+	return keys.PaneSendKeys(ctx, pane, "ctrl+c")
 }
 
 // stopped are the StopShell calls.
@@ -316,6 +360,12 @@ func (f *fakeAgents) RunShell(ctx context.Context, pr store.PR, role config.Role
 		fn = g
 	}
 	status := f.exitStatus[c.Role]
+	if !f.unsent[c.Role] {
+		if f.launched == nil {
+			f.launched = map[string]bool{}
+		}
+		f.launched[strings.TrimPrefix(marker, "MAGNUM_DONE_")] = true
+	}
 	f.mu.Unlock()
 	f.noteMark(c.Role, line)
 	if fn == nil {
@@ -1011,6 +1061,21 @@ type fakeKeys struct {
 	// waits its whole timeout on the clock for a pane whose command runs.
 	commands map[string]int
 	waits    []string // the pane of each WaitIdleShell
+	// waitErr fails a pane's WaitIdleShell, sendErr its PaneSendKeys, with
+	// an error that is no timeout; gone marks the panes PaneGet finds gone.
+	waitErr map[string]error
+	sendErr map[string]error
+	gone    map[string]bool
+}
+
+// PaneGet finds every pane but the gone ones.
+func (k *fakeKeys) PaneGet(ctx context.Context, paneID string) (herdr.Pane, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.gone[paneID] {
+		return herdr.Pane{}, &herdr.Error{Method: "pane.get", Code: herdr.CodePaneNotFound, Message: paneID}
+	}
+	return herdr.Pane{ID: paneID}, nil
 }
 
 func (k *fakeKeys) AgentSendKeys(ctx context.Context, target string, keys ...string) error {
@@ -1027,6 +1092,10 @@ func (k *fakeKeys) AgentSendKeys(ctx context.Context, target string, keys ...str
 
 func (k *fakeKeys) PaneSendKeys(ctx context.Context, paneID string, keys ...string) error {
 	k.mu.Lock()
+	if err := k.sendErr[paneID]; err != nil {
+		k.mu.Unlock()
+		return err
+	}
 	k.sends = append(k.sends, "pane:"+paneID+":"+strings.Join(keys, ","))
 	k.at = append(k.at, k.clock.Now())
 	if k.commands[paneID] > 0 && slices.Contains(keys, "ctrl+c") {
@@ -1046,6 +1115,9 @@ func (k *fakeKeys) WaitIdleShell(ctx context.Context, paneID string, timeout tim
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.waits = append(k.waits, paneID)
+	if err := k.waitErr[paneID]; err != nil {
+		return herdr.ProcessInfo{}, err
+	}
 	if k.commands[paneID] == 0 {
 		return herdr.ProcessInfo{PaneID: paneID}, nil
 	}
@@ -1182,6 +1254,7 @@ func newEnv(t *testing.T) *env {
 		preflight: map[string]error{}, refuse: map[agents.Role]error{}, blocked: map[agents.Role]int{}, notReady: map[agents.Role]int{},
 		exitStatus: map[agents.Role]int{},
 		m:          agents.New(agents.Deps{Store: st, Config: cfg, Layout: layout, Clock: clk.Now})}
+	e.ag.keys = e.keys
 
 	for _, role := range cfg.Roles {
 		e.addSession(role)

@@ -294,12 +294,15 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 		why: "the PR head moved to " + textx.ShortSHA(head), stop: headMovedStopText, keep: true})
 	rd.finishRun(ctx, judgeRun.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
 	// A command still running works in the checkout: the checkout never
-	// switches (nor is restored) under it. The round fails, and the PR's
-	// next round finds the pane (RunShell stops an earlier run of its own,
-	// or moves to a new pane).
+	// switches (nor is restored) under it, whether its run was cut now or
+	// ended before (timed out, its wait failed: unresolved). The round fails
+	// (ErrShellRunning: no attempt, no round of the daily cap), and the PR's
+	// next round stops what is magnum's in the slot's shell panes before its
+	// checkout, or waits (agents.Manager.ClearShellPanes).
+	running = append(running, rd.retryUnresolved(ctx)...)
 	if len(running) > 0 {
-		return nil, nil, fmt.Errorf("pipeline: restart on %s: %s still runs in the checkout after magnum tried to stop it, so the checkout stays on %s",
-			textx.ShortSHA(head), strings.Join(running, ", "), textx.ShortSHA(from))
+		return nil, nil, fmt.Errorf("pipeline: restart on %s: %s still runs in the checkout after magnum tried to stop it, so the checkout stays on %s: %w",
+			textx.ShortSHA(head), strings.Join(running, ", "), textx.ShortSHA(from), ErrShellRunning)
 	}
 	// The push skipped the check after the stage it cut short; its roles are
 	// settled now, so a stray edit is caught before the checkout switches.
@@ -359,6 +362,29 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 	}
 	own, err = rd.newRun(ctx, rd.judge, store.RunOwnPass)
 	return judgeRun, own, err
+}
+
+// retryUnresolved tries again to stop the shell commands the round's runs
+// left unresolved (endShell: magnum ended their runs before they stopped),
+// and returns the roles whose command still may run; a stop that worked
+// takes its run off the books. The runs keep their outcomes.
+func (rd *round) retryUnresolved(ctx context.Context) []string {
+	rd.mu.Lock()
+	left := maps.Clone(rd.unresolved)
+	rd.mu.Unlock()
+	var running []string
+	for _, role := range slices.Sorted(maps.Keys(left)) {
+		run := left[role]
+		if err := rd.stopShell(ctx, run); err != nil {
+			rd.warn(ctx, "%s (run %s, ended before) still runs in the checkout: %s", role, run.ID, execx.Redact(err.Error()))
+			running = append(running, role)
+			continue
+		}
+		rd.mu.Lock()
+		delete(rd.unresolved, role)
+		rd.mu.Unlock()
+	}
+	return running
 }
 
 // cutTurn is a turn the stages may have cut short: role's run, the latest
@@ -498,12 +524,13 @@ type settled struct {
 // settleSafely is settle on the cut's goroutine for the turn, whose panic
 // would take the daemon down with every round in flight: a settle that
 // panics is logged with its stack and said in a warning, and the cut ends
-// its run as any other.
+// its run as any other. A shell role's command whose settle panicked was
+// not proven stopped: it counts as still running.
 func (rd *round) settleSafely(ctx context.Context, role config.Role, run store.Run, c cutBy, since time.Time) (s settled) {
 	defer func() {
 		if r := recover(); r != nil {
 			rd.logAt(slog.LevelError, "pipeline: %s settling %s (run %s) panicked: %v\n%s", rd.subject, role.Name, run.ID, r, debug.Stack())
-			s = settled{warn: fmt.Sprintf("settling %s for %s panicked", role.Name, c.what)}
+			s = settled{warn: fmt.Sprintf("settling %s for %s panicked", role.Name, c.what), running: role.IsShell()}
 		}
 	}()
 	return rd.settle(ctx, role, run, c, since)

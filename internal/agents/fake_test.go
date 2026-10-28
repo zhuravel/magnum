@@ -82,6 +82,8 @@ type fakeHerdr struct {
 	onWaitIdle func(f *fakeHerdr, pane string, timeout time.Duration)
 	idleWaits  []time.Duration // the timeout of each WaitIdleShell
 	clock      *storetest.Clock
+	// onSplit runs (with f.mu held) after every PaneSplit made a pane.
+	onSplit func(f *fakeHerdr, from, newPane string)
 
 	calls    []string
 	creates  []herdr.WorkspaceCreateOptions
@@ -347,6 +349,9 @@ func (f *fakeHerdr) PaneSplit(ctx context.Context, paneID string, o herdr.SplitO
 	}
 	p := f.newPaneLocked(ws, o.Cwd)
 	f.splits = append(f.splits, splitCall{From: paneID, Opts: o, New: p.ID})
+	if f.onSplit != nil {
+		f.onSplit(f, paneID, p.ID)
+	}
 	return p, nil
 }
 
@@ -472,6 +477,9 @@ func (f *fakeHerdr) WaitIdleShell(ctx context.Context, paneID string, timeout ti
 				f.onIdleShell(paneID)
 			}
 			return pi, nil
+		}
+		if err := ctx.Err(); err != nil { // the wait was cut short
+			return pi, fmt.Errorf("herdr pane %s: wait for idle shell: %w", paneID, err)
 		}
 		if f.clock != nil {
 			f.clock.Add(timeout)

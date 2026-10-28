@@ -150,8 +150,14 @@ type Agents interface {
 	// StopShell stops the command a cut shell role's run left running in
 	// its pane after its last ctrl+c (round.stopShell), when it is proven
 	// magnum's own run (agents.ErrNotOwn otherwise, nothing sent); nil once
-	// the pane is an idle shell, or a new one took its place.
+	// the pane is an idle shell, or a new one took its place, and the
+	// command's processes are gone. InterruptShell is a shell role's ctrl+c,
+	// sent only to a pane whose foreground carries the run's own token; and
+	// ShellLaunched says whether RunShell typed the run's line at all (a
+	// run whose line was never typed gets no key and needs no stop).
 	StopShell(ctx context.Context, run store.Run) error
+	InterruptShell(ctx context.Context, run store.Run) error
+	ShellLaunched(runID string) bool
 	ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
 	PreflightRole(ctx context.Context, role config.Role) error
 	RolePrompt(role config.Role, promptKind string, data any) (string, error)
@@ -209,15 +215,23 @@ type Git interface {
 	FileAt(ctx context.Context, dir, rev, file string) (string, error)
 }
 
-// Keys interrupts a timed-out or cut role (esc to an agent, ctrl+c twice to
-// the judge, ctrl+c to a shell role's pane) and waits for a cut shell role's
-// pane to be an idle shell again (round.stopShell). *herdr.Client satisfies
-// it.
+// Keys interrupts a timed-out or cut agent role (esc to an agent, ctrl+c
+// twice to the judge; a shell role's ctrl+c is Agents.InterruptShell's),
+// waits for a cut shell role's pane to be an idle shell again
+// (round.stopShell) and, when that wait fails, asks herdr whether the pane
+// is gone (PaneGet). *herdr.Client satisfies it.
 type Keys interface {
 	AgentSendKeys(ctx context.Context, target string, keys ...string) error
 	PaneSendKeys(ctx context.Context, paneID string, keys ...string) error
 	WaitIdleShell(ctx context.Context, paneID string, timeout time.Duration) (herdr.ProcessInfo, error)
+	PaneGet(ctx context.Context, paneID string) (herdr.Pane, error)
 }
+
+// ErrShellRunning marks a round that ended because a shell role's command
+// still runs in the checkout after magnum tried to stop it: the restart
+// did not switch the checkout under it. It is not the PR's doing, so the
+// engine counts no attempt and no round of the daily cap for it.
+var ErrShellRunning = errors.New("a shell role's command still runs in the checkout")
 
 // Runner runs review rounds. One Runner serves one identity; it holds no
 // per-round state and is safe for concurrent RunRound calls.
@@ -685,6 +699,12 @@ type round struct {
 	// (modelFallback): the run a restart must settle in place of the one
 	// the stage started with. Guarded by mu; reset by a restart.
 	cont map[string]store.Run
+	// unresolved is each shell role's run whose command may still run in
+	// the checkout although magnum ended the run (it timed out, its wait
+	// failed): magnum could not prove it stopped (endShell). A restart tries
+	// again and does not switch the checkout while one is left. Guarded by
+	// mu.
+	unresolved map[string]store.Run
 	// marks is the run each role's report must name in its first line
 	// (agents.ReportMarker): the run whose prompt or shell line named that
 	// marker, also for its continuations on fallback models; a role
@@ -1046,7 +1066,11 @@ func (rd *round) rolePanicked(ctx context.Context, role config.Role, run store.R
 		map[string]any{"run": run.ID, "role": role.Name})
 	if cur, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), run.ID); err == nil &&
 		(cur.State == store.RunSubmitted || cur.State == store.RunWorking) {
-		rd.interrupt(ctx, role, cur, true)
+		if role.IsShell() {
+			rd.endShell(ctx, role, cur) // its command may run on: stopped, or kept on the books
+		} else {
+			rd.interrupt(ctx, role, cur, true)
+		}
 	}
 	rd.finishRun(ctx, run.ID, store.RunFailed, ReportFailed, detail)
 	return rep

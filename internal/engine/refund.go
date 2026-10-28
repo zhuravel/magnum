@@ -10,6 +10,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ const (
 	RefundRender      = "render"       // a prompt did not render (a prompt edited for another build)
 	RefundModelLimits = "model_limits" // every fallback model was limited too: the kind paused
 	RefundInfra       = "infra"        // an infrastructure failure paused dispatch
+	RefundShell       = "shell"        // a restart kept the checkout under a shell command that still runs
 )
 
 // recordStart remembers that enterReviewing recorded job's round start
@@ -37,17 +39,21 @@ func (job *roundJob) recordStart(day string, started time.Time, prev *time.Time,
 
 // refundReason says why a finished round must not count against the cap
 // ("" = it counts): stopped rounds, errors before any agent was prompted or
-// from a prompt that did not render, and a judge whose model and every
-// fallback were limited. Posted, needs-attention, blocked, timed-out and
-// other failed rounds count, and so does a round whose judge turn continues
-// later (finish asks turnContinues).
-func (e *Engine) refundReason(ctx context.Context, job *roundJob, res pipeline.RoundResult, outcome, msg string) string {
+// from a prompt that did not render, a restart that kept the checkout under
+// a shell command that still runs (pipeline.ErrShellRunning), and a judge
+// whose model and every fallback were limited. Posted, needs-attention,
+// blocked, timed-out and other failed rounds count, and so does a round
+// whose judge turn continues later (finish asks turnContinues).
+func (e *Engine) refundReason(ctx context.Context, job *roundJob, res pipeline.RoundResult, outcome, msg string, runErr error) string {
 	switch outcome {
 	case pipeline.OutcomeStopped:
 		return RefundStopped
 	case pipeline.OutcomeError:
 		if strings.Contains(msg, "agents: render ") {
 			return RefundRender
+		}
+		if errors.Is(runErr, pipeline.ErrShellRunning) {
+			return RefundShell
 		}
 		if !e.roundPrompted(ctx, job.pr.ID, res.Round) {
 			return RefundUnprompted
@@ -184,6 +190,8 @@ func refundWhy(reason string) string {
 		return "every fallback model was limited too"
 	case RefundInfra:
 		return "an infrastructure failure"
+	case RefundShell:
+		return "a shell command still ran in the checkout, so the restart could not switch it"
 	}
 	return reason
 }

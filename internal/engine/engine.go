@@ -126,6 +126,11 @@ type Agents interface {
 	// CloseRetiredPanesIn is CloseRetiredPanes over a snapshot the
 	// reconcile took once for every PR with a pane (closeLeftoverPanes).
 	CloseRetiredPanesIn(ctx context.Context, pr store.PR, snap herdr.Snapshot) error
+	// ClearShellPanes makes sure, before a round's checkout switches the
+	// slot at checkout, that no command runs in the PR's shell panes there:
+	// an own leftover is stopped, anything else holds the round
+	// (agents.ErrHumanActive, the PR's cooldown started; prepare).
+	ClearShellPanes(ctx context.Context, pr store.PR, checkout string) error
 	// Quit stops one session's agent and parks its conversation (a cold
 	// judge, coldJudge; a session that served its max_session_rounds,
 	// rotateSessions; a session parkReloading takes out of the checkout's

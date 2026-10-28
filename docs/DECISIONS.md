@@ -13940,8 +13940,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   environment (`moveShell`: `pr.shell_move_begin`, `pr.shell_moved`, `pr.shell_move_failed`); the busy pane gets
   no key, no signal and no close, and a closed row of the role records it, so `CloseRetiredPanes` closes it once
   it is an idle shell. Without a recorded environment the run is `busy`, as before; runs from before the token go
-  through that path. `Deps.Signal` (nil: `syscall.Kill`, never in a test binary) is the only way the manager
-  signals. Rejected: closing the pane first (its SIGHUP, which codex outlives, leaves orphans); new herdr
+  through that path. `Deps.Signal` (the daemon passes `syscall.Kill`; nil signals nothing, so a test's
+  Manager cannot reach a real process) is the only way the manager signals. Rejected: closing the pane first (its SIGHUP, which codex outlives, leaves orphans); new herdr
   ownership APIs with launch ids and quarantined slots (the Codex design: no new herdr API, and the run token
   proves ownership with what herdr shows today); signalling whatever process group is in the foreground, or
   trusting "codex", the cwd or the role alone; a full re-review instead of the kill. Risks: a process id can be
@@ -13958,6 +13958,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAFreshPaneStillGetsItsMinuteToStart, TestALeftBusyPaneClosesOnlyOnceIdle and
   TestTheShellLineCarriesTheRunInItsDBLockLine. The "ignores three" case of TestACutShellCommandIsPressedUntilItStops
   (busy and a warning) became TestARestartKillsACodexReviewThatOutlivesItsCtrlC.
+  Two reviews of the first build found ways to signal, key or close what was no longer proven magnum's, and
+  ways to switch the checkout under a command that still ran; the controller's rulings settled them. A process
+  is its pid, process group and start time (`execx.Process.Start`, ps's `lstart` in the C locale;
+  `execx.Find`), captured with the job (`captureJob`: the group's members and the tree under the token's
+  db-lock), and each step reads the process table, then asks herdr (`recheck`: the same shell and foreground
+  group, led by a captured process, no other run's token), then signals the group and each captured process
+  the table shows as itself; a process that got a captured pid is not it, a table that cannot be read sends
+  nothing more (no fallback to an older look), and the begin event comes before that last look. A stop
+  succeeds only once the shell is idle and every captured process is gone (a child that outlives SIGTERM
+  after its parent ended gets SIGKILL by its identity; one that outlives SIGKILL fails the stop).
+  `replaceShell` points the session at the replacement (compare-and-set on its live state and its old pane)
+  before the close, asks again right before `PaneClose`, and leaves a pane whose job changed (the session
+  back on it, the unused replacement closed, not own) or that went idle. db-lock captures the tree at the
+  first signal and keeps the lock and its escalation until what it captured is gone or SIGKILL went out (a
+  sandbox child that outlived codex worked on the databases without the lock before). Every shell interrupt
+  is guarded: `InterruptShell` sends ctrl+c only once RunShell typed the run's line (`ShellLaunched`) and
+  only to a pane whose foreground carries this run's token, so a push during RunShell's wait for a pane the
+  operator keeps busy sends it nothing. The pipeline's `stopShell` counts as stopped only an idle shell, a
+  pane herdr confirms gone (`Keys.PaneGet`) or a verified stop: a failed wait or ctrl+c, or a settle that
+  panics, is a command that still runs. A shell run that timed out, whose wait failed, whose goroutine
+  panicked or whose round ended on a refusal gets the same stop (`endShell`) before its run is finished, and
+  one still unresolved stays on the round's books, so a later restart tries again and keeps the checkout
+  (its run keeps its outcome). The barrier's error wraps `pipeline.ErrShellRunning`: no attempt, no round
+  of the daily cap (`RefundShell`). A not-own stop on a command magnum does not own (no token, another PR's,
+  role's or checkout's line, another job by the time of a signal) starts the PR's human cooldown
+  (`humanSeen`), and its event names nothing read from the argv. Before a round's checkout switches a slot,
+  `ClearShellPanes` stops an own leftover in the PR's shell panes there and holds the round under the
+  cooldown (`pr.shell_hold`, `agents.ErrHumanActive`, no attempt) while anything else keeps one busy.
+  Tests, failing first unless named a guard: TestAProcessIsItsIDGroupAndStart,
+  TestDBLockHoldsTheLockUntilWhatItCapturedIsGone (real file descriptors, so db-lock's wait ends with its
+  command), TestStopShellNeverSignalsAProcessThatTookACapturedPID,
+  TestStopShellKillsADescendantThatOutlivesSIGTERMAfterItsParentExits, TestStopShellSendsNothingWithoutAProcessTable,
+  TestStopShellSendsNothingWhenTheJobChangesDuringThePSRead, TestStopShellRechecksThePaneBeforeItsClose,
+  TestAPushDuringTheWaitForABusyPaneSendsItNothing, TestInterruptShellKeysOnlyItsOwnRunsCommand,
+  TestClearShellPanesStopsAnOwnLeftoverAndHoldsForAnythingElse, TestACutRunWhoseLineWasNeverTypedGetsNoKeys,
+  TestHerdrErrorsWhileTheCommandRunsKeepTheCheckout, TestAShellTimeoutThenAPushKeepsTheCheckout,
+  TestTheRoundsEndStopsAShellCommandItCut, TestARestartThatKeptTheCheckoutCostsNoAttemptOrCapRound and
+  TestARetryAfterAFailedStopHoldsBeforeItsCheckout; the cooldown and argv checks added to the not-own tests,
+  the session-before-close check to the replacement test and the no-restore check to the barrier test; and
+  the guards TestDBLockKillsACommandThatOutlivesSIGTERM, TestDBLockExitsWithTheSignalItSent,
+  TestStopShellNeverTouchesAPaneThatIsNotTheRolesLiveOne, TestStopShellClosesThePaneWithoutAnEnvironmentAndLosesTheSession,
+  TestRunShellTypesIntoTheReplacementOfAPaneItsEarlierRunHeld and TestARestartGoesOnInTheReplacementPane.
+  The real-signal db-lock tests kill in `t.Cleanup` what they started, matched by its identity.
 
 ## Learned rules
 

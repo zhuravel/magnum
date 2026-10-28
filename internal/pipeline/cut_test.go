@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -381,9 +383,10 @@ func TestARestartKillsACodexReviewThatOutlivesItsCtrlC(t *testing.T) {
 
 // A cut command that still runs after StopShell (it is not proven magnum's
 // own run, say a line from before the run token) runs in the checkout: the
-// restart never switches the checkout under it. The round ends failed with
-// that cause, a warning names the role, and the normal retry takes the PR
-// later.
+// restart never switches the checkout under it, nor restores the edits the
+// cut stage left (git reset and clean would run under it too). The round
+// ends failed with that cause (ErrShellRunning, which costs the PR no
+// attempt), a warning names the role, and the retry takes the PR later.
 func TestARestartNeverSwitchesTheCheckoutUnderARunningCommand(t *testing.T) {
 	e := newEnv(t)
 	in := e.input(KindInitial)
@@ -392,15 +395,24 @@ func TestARestartNeverSwitchesTheCheckoutUnderARunningCommand(t *testing.T) {
 	e.ag.onStopShell = func(f *fakeAgents, run store.Run) error {
 		return fmt.Errorf("agents: stop codex-review in pane %s: it runs no db-lock with a run token: %w", e.pane(agents.RoleCodexReview), agents.ErrNotOwn)
 	}
-	e.ag.behaviors[agents.RoleClaude] = []behavior{pushThen(e, head2, hang())}
+	e.restoreRules(false)
+	e.ag.behaviors[agents.RoleClaude] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+		e.git.mu.Lock()
+		e.git.status = gitx.Status{Tracked: 1} // the stage leaves an edit
+		e.git.mu.Unlock()
+		return pushThen(e, head2, hang())(f, run, text)
+	}}
 
 	res, err := e.r.RunRound(e.ctx, in)
-	if err == nil || res.Outcome != OutcomeError {
-		t.Fatalf("result = %+v, %v; want the round failed", res, err)
+	if err == nil || res.Outcome != OutcomeError || !errors.Is(err, ErrShellRunning) {
+		t.Fatalf("result = %+v, %v; want the round failed with ErrShellRunning", res, err)
 	}
 	mustContain(t, "the round's error", res.Error, "restart on "+textx.ShortSHA(head2), "codex-review still runs")
 	if got := sw.asked(); len(got) != 0 {
 		t.Errorf("switches = %v, want none under the running command", got)
+	}
+	if calls := e.exec.CallsWithPrefix("git", "-C", slotPath); len(calls) != 0 {
+		t.Errorf("checkout commands %v ran under the running command", calls)
 	}
 	if n := len(e.ag.submitsFor(agents.RoleJudge)); n != 0 {
 		t.Errorf("judge prompted %d times", n)

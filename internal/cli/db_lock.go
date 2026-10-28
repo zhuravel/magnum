@@ -160,8 +160,9 @@ func gitWorkTree(ctx context.Context, r execx.Runner, dir string) (string, error
 
 // dbLockKillAfter and dbLockKillGrace: a command that still runs
 // dbLockKillAfter after db-lock passed it the first signal gets SIGTERM;
-// one that still runs dbLockKillGrace after that, SIGKILL.
-const (
+// one that still runs dbLockKillGrace after that, SIGKILL. Variables only
+// so that tests of the later steps need not wait 15 seconds each.
+var (
 	dbLockKillAfter = 10 * time.Second
 	dbLockKillGrace = 5 * time.Second
 )
@@ -217,38 +218,82 @@ func runLocked(c *Context, args []string, command string) int {
 	return dbLockFailed
 }
 
+// capturedPoll is how often db-lock looks whether the processes it
+// captured under an interrupted command are gone, once the command ended.
+const capturedPoll = 100 * time.Millisecond
+
 // escalate passes each signal of sigs on to the command (p) until done
-// closes. A command that still runs dbLockKillAfter after the first one
-// gets SIGTERM, and one that still runs dbLockKillGrace after that SIGKILL,
-// each with the processes under it (signalTree), and stderr gets one line
-// for each. It returns the last signal it sent on its own (0: none).
+// closes, and ends a command that outlives its interrupt. At the first
+// signal it captures the processes under the command (execx.Descendants,
+// each with its identity: pid, group and start). A command, or a captured
+// process, that still runs dbLockKillAfter after that signal gets SIGTERM,
+// and one that still runs dbLockKillGrace later SIGKILL (signalTree); stderr
+// gets one line for each. It returns once the command ended and no captured
+// process runs any more, or once SIGKILL went out, so db-lock holds the
+// lock until then (a sandbox's child that outlived codex works on the
+// databases too). It returns the last signal it sent on its own (0: none).
 func escalate(stderr io.Writer, p *os.Process, command string, sigs <-chan os.Signal, done <-chan struct{}) syscall.Signal {
 	var (
-		first syscall.Signal
-		sent  syscall.Signal
-		timer <-chan time.Time
-		seen  []execx.Process
+		first, sent syscall.Signal
+		timer, poll <-chan time.Time
+		captured    []execx.Process
+		ended       bool // the command ended: its pid is no longer its own
 	)
 	for {
 		select {
 		case s := <-sigs:
-			_ = p.Signal(s)
+			if !ended {
+				_ = p.Signal(s)
+			}
 			if sig, ok := s.(syscall.Signal); ok && first == 0 {
 				first, timer = sig, time.After(dbLockKillAfter)
+				if table, err := execx.ProcessTable(context.Background(), dbLockRunner()); err == nil {
+					captured = execx.Descendants(table, p.Pid)
+				}
 			}
 		case <-timer:
-			if sent == 0 {
-				seen, sent, timer = signalTree(p, syscall.SIGTERM, nil), syscall.SIGTERM, time.After(dbLockKillGrace)
-				fmt.Fprintln(stderr, execx.Redact(fmt.Sprintf("db-lock: %s still runs %s after %s; sent SIGTERM", command, dbLockKillAfter, signalName(first))))
-				continue
+			sig, wait, after := syscall.SIGTERM, dbLockKillAfter, signalName(first)
+			if sent != 0 {
+				sig, wait, after = syscall.SIGKILL, dbLockKillGrace, "SIGTERM"
 			}
-			signalTree(p, syscall.SIGKILL, seen)
-			sent, timer = syscall.SIGKILL, nil
-			fmt.Fprintln(stderr, execx.Redact(fmt.Sprintf("db-lock: %s still runs %s after SIGTERM; sent SIGKILL", command, dbLockKillGrace)))
+			captured = signalTree(p, !ended, sig, captured)
+			sent, timer = sig, nil
+			if sig == syscall.SIGTERM {
+				timer = time.After(dbLockKillGrace)
+			}
+			fmt.Fprintln(stderr, execx.Redact(fmt.Sprintf("db-lock: %s still runs %s after %s; sent %s", command, wait, after, signalName(sig))))
+			if sig == syscall.SIGKILL && ended {
+				return sent
+			}
 		case <-done:
-			return sent
+			ended, done = true, nil
+			if sent == syscall.SIGKILL || !anyRunning(captured) {
+				return sent
+			}
+			poll = time.After(capturedPoll)
+		case <-poll:
+			if !anyRunning(captured) {
+				return sent
+			}
+			poll = time.After(capturedPoll)
 		}
 	}
+}
+
+// anyRunning reports whether one of captured still runs as itself (a
+// table that cannot be read: it may).
+func anyRunning(captured []execx.Process) bool {
+	if len(captured) == 0 {
+		return false
+	}
+	table, err := execx.ProcessTable(context.Background(), dbLockRunner())
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(captured, func(c execx.Process) bool {
+		_, ok := execx.Find(table, c)
+		return ok
+	})
 }
 
 // lockedWriter serializes the writes to w.
@@ -263,25 +308,37 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-// signalTree sends sig to the command (p) and to every process under it in
-// the process table now (execx.Descendants: one in a process group or a
-// session of its own, as a sandbox's, too), and to those of earlier (an
-// earlier signal's tree) the table still shows under the same name: a
-// child whose parent the earlier signal ended is no longer under p. It
-// returns the processes it signalled besides p. Never pid 1 nor db-lock.
-func signalTree(p *os.Process, sig syscall.Signal, earlier []execx.Process) []execx.Process {
+// signalTree sends sig to the command (p, through its own handle, while
+// alive says it has not ended) and to every process the process table
+// shows now as one of earlier (the processes captured before, by pid,
+// group and start: execx.Find; a child whose parent the earlier signal
+// ended is no longer under p, and a later process that got the pid of one
+// that ended is not it) or under the command (execx.Descendants: one in a
+// process group or a session of its own, as a sandbox's, too). A table it
+// cannot read signals the command alone: no process is signalled on an
+// older look. It returns what it captured now, earlier's still running
+// with the new ones. Never pid 1 nor db-lock.
+func signalTree(p *os.Process, alive bool, sig syscall.Signal, earlier []execx.Process) []execx.Process {
+	if alive {
+		_ = p.Signal(sig)
+	}
 	table, err := execx.ProcessTable(context.Background(), dbLockRunner())
 	if err != nil {
-		table = nil // the command alone, then
+		return earlier
 	}
-	tree := execx.Descendants(table, p.Pid)
+	var tree []execx.Process
 	for _, e := range earlier {
-		if slices.ContainsFunc(table, func(t execx.Process) bool { return t.PID == e.PID && t.Name == e.Name }) &&
-			!slices.ContainsFunc(tree, func(t execx.Process) bool { return t.PID == e.PID }) {
-			tree = append(tree, e)
+		if now, ok := execx.Find(table, e); ok {
+			tree = append(tree, now)
 		}
 	}
-	_ = p.Signal(sig)
+	if alive {
+		for _, d := range execx.Descendants(table, p.Pid) {
+			if !slices.ContainsFunc(tree, d.Same) && !d.Zombie {
+				tree = append(tree, d)
+			}
+		}
+	}
 	for _, d := range tree {
 		if d.PID > 1 && d.PID != os.Getpid() {
 			_ = syscall.Kill(d.PID, sig)
@@ -299,6 +356,8 @@ func signalName(s syscall.Signal) string {
 		return "SIGTERM"
 	case syscall.SIGHUP:
 		return "SIGHUP"
+	case syscall.SIGKILL:
+		return "SIGKILL"
 	}
 	return s.String()
 }

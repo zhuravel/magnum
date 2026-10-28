@@ -219,7 +219,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	if res.Pause != nil && res.Pause.Kind != string(agents.HealthOverloaded) && res.Pause.Kind != string(agents.HealthModelLimit) {
 		e.pauseTool(ctx, *res.Pause) // overload is a per-PR backoff (below)
 	}
-	if why := e.refundReason(ctx, job, res, outcome, msg); why != "" && !e.turnContinues(ctx, job, pr, outcome, cancelled) {
+	if why := e.refundReason(ctx, job, res, outcome, msg, runErr); why != "" && !e.turnContinues(ctx, job, pr, outcome, cancelled) {
 		e.refund(ctx, job, res.Round, why, outcome)
 	}
 	if cancelled && outcome == pipeline.OutcomeStopped {
@@ -297,6 +297,18 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	default: // timeout, error
 		if errors.Is(runErr, agents.ErrHumanActive) {
 			e.retryOrAttention(ctx, job, pr, from, claimableState(pr), msg, false, classifySetup(runErr, pr, e.cfg, now).retryAt)
+			break
+		}
+		if errors.Is(runErr, pipeline.ErrShellRunning) {
+			// The restart kept the checkout under a command that still runs:
+			// not the PR's doing. It waits the PR's cooldown when magnum found
+			// a command it does not own there, else a minute; the next
+			// round's setup clears the slot's shell panes first.
+			retry := now.Add(busyRetry)
+			if until := e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt); until.After(retry) {
+				retry = until
+			}
+			e.retryOrAttention(ctx, job, pr, from, claimableState(pr), msg, false, retry)
 			break
 		}
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)

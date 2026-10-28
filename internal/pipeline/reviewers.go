@@ -285,7 +285,13 @@ func (rd *round) shellTurn(ctx context.Context, role config.Role, run store.Run,
 		return turn{kind: waitCancelled, run: run, err: ctx.Err()}, anchor, nil
 	case ctx.Err() != nil:
 		// Nobody will read the command's output, and left running it would
-		// hold the pane: the next round's command would find it busy.
+		// hold the pane: the next round's command would find it busy. A
+		// round that ends itself (a refusal) stops it as a restart does;
+		// a shutdown or an abort leaves it its one ctrl+c.
+		if _, refused := errors.AsType[*refusedError](context.Cause(ctx)); refused {
+			stopped := rd.endShell(ctx, role, run)
+			return end(store.RunFailed, ReportCancelled, "round cancelled; "+stopped)
+		}
 		rd.interrupt(ctx, role, run, false)
 		return end(store.RunFailed, ReportCancelled, "round cancelled")
 	case errors.Is(err, agents.ErrBusy):
@@ -333,7 +339,12 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 			// A run failed externally after the report was written.
 			rep = r
 		}
-		rd.finishReviewerRun(ctx, role, run, rep, "")
+		stopped := ""
+		if _, exited := errors.AsType[*exitError](t.err); role.IsShell() && !exited {
+			// The wait failed, not the command: it may still run.
+			stopped = rd.endShell(ctx, role, run)
+		}
+		rd.finishReviewerRun(ctx, role, run, rep, stopped)
 		return rep
 	case waitTimeout, waitLost:
 		stopped := ""
@@ -375,12 +386,37 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 // work it left running (stopBackground, stopBackgroundText) and says what it
 // did for the run's event.
 func (rd *round) stopReviewer(ctx context.Context, role config.Role, run store.Run) string {
+	if role.IsShell() {
+		return rd.endShell(ctx, role, run)
+	}
 	rd.interrupt(ctx, role, run, false)
 	note := "interrupted " + role.Name
 	if bg := rd.stopBackground(ctx, role, run, stopBackgroundText, true); bg.note != "" {
 		note += "; " + bg.note
 	}
 	return note
+}
+
+// endShell stops the command of a shell role's run that magnum ends before
+// the command did (it timed out, its wait failed, its goroutine panicked):
+// the run's interrupt, then stopShell's waits, presses and StopShell, as a
+// cut gets. A command magnum cannot prove stopped stays on the round's
+// books (rd.unresolved): the restart tries again and does not switch the
+// checkout while it may run. The run keeps its outcome. It says what it
+// did for the run's event.
+func (rd *round) endShell(ctx context.Context, role config.Role, run store.Run) string {
+	rd.interrupt(ctx, role, run, false)
+	if err := rd.stopShell(ctx, run); err != nil {
+		rd.mu.Lock()
+		if rd.unresolved == nil {
+			rd.unresolved = map[string]store.Run{}
+		}
+		rd.unresolved[role.Name] = run
+		rd.mu.Unlock()
+		rd.warn(ctx, "%s still runs after magnum ended its run %s, and magnum could not stop it: %s", role.Name, run.ID, execx.Redact(err.Error()))
+		return "interrupted " + role.Name + "; it still runs"
+	}
+	return "interrupted " + role.Name
 }
 
 // bgStop is what was done about the background work an interrupted agent

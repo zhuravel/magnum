@@ -202,8 +202,10 @@ type Deps struct {
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
 	Toast func(ctx context.Context, key, title, body string)
 	// Signal sends sig to process pid, or to the process group -pid when
-	// pid is negative; nil = syscall.Kill. Only StopShell signals, and only
-	// a command it proved an own run of magnum (ownShell).
+	// pid is negative (the daemon passes syscall.Kill). Only StopShell
+	// signals, and only processes of a command it proved an own run of
+	// magnum (ownShell, captureJob). nil = nothing is ever signalled, so a
+	// Manager built without it (a test's) cannot reach a real process.
 	Signal func(pid int, sig syscall.Signal) error
 }
 
@@ -253,6 +255,9 @@ type Manager struct {
 	// replaced maps a pane magnum closed to clear a launch that never came
 	// up to the pane that took its place (see replacement).
 	replaced map[string]string
+	// launched marks the shell runs whose line RunShell typed, or tried to
+	// (ShellLaunched): only their commands are keyed or stopped.
+	launched map[string]bool
 	// hooksTrustMu serializes the check that tells the operator once per
 	// hooks.json that Codex did not save a hook trust (hooksTrustSaved).
 	hooksTrustMu sync.Mutex
@@ -268,7 +273,7 @@ func New(d Deps) *Manager {
 		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{},
 		switching: map[int64]bool{}, compacting: map[int64]bool{}, sidMissing: map[string]bool{}, rolloutWarned: map[int64]bool{},
 		recovered: map[int64]string{}, recoverLogged: map[int64]bool{}, rolloutHeld: map[string]bool{},
-		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}}
+		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

@@ -206,9 +206,22 @@ func (rd *round) session(ctx context.Context, run store.Run) (store.Session, boo
 // must not go on and post (stopJudge, and cut at the round's end). With keep
 // it gets ctrl+c once, which aborts Codex's turn and keeps the session: a
 // push cut its own pass short, and the restart prompts the same session,
-// with the context it built, on the new head (restart). A cut shell role's
-// command is then made sure to stop (stopShell).
+// with the context it built, on the new head (restart). A shell role's
+// ctrl+c is Agents.InterruptShell's: sent only once its line was typed,
+// and only to a pane whose foreground carries the run's own token, so a
+// pane the run waited for (the operator's command) gets nothing. A cut
+// shell role's command is then made sure to stop (stopShell).
 func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run, keep bool) {
+	ctx = context.WithoutCancel(ctx)
+	if role.IsShell() {
+		switch err := rd.r.Agents.InterruptShell(ctx, run); {
+		case errors.Is(err, agents.ErrNotOwn):
+			rd.logf("pipeline: %s: interrupt %s: %v", rd.subject, role.Name, err)
+		case err != nil:
+			rd.warn(ctx, "interrupt %s: %v", role.Name, execx.Redact(err.Error()))
+		}
+		return
+	}
 	if rd.r.Keys == nil {
 		return
 	}
@@ -216,7 +229,6 @@ func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run,
 	if !ok {
 		return
 	}
-	ctx = context.WithoutCancel(ctx)
 	var err error
 	if role.IsAgent() {
 		target := store.Deref(s.AgentName)
@@ -241,8 +253,6 @@ func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run,
 				break
 			}
 		}
-	} else if pane := store.Deref(s.HerdrPaneID); pane != "" {
-		err = rd.r.Keys.PaneSendKeys(ctx, pane, "ctrl+c")
 	}
 	if err != nil {
 		rd.warn(ctx, "interrupt %s: %v", role.Name, err)
@@ -277,37 +287,53 @@ func (rd *round) waitIdle(ctx context.Context, role config.Role, run store.Run, 
 // stopShell makes sure that the command a shell role ran for run in its
 // pane stopped after its interrupt (one ctrl+c): it waits up to
 // shellStopWait for an idle shell (Keys.WaitIdleShell) and presses ctrl+c
-// again while the command runs, shellStopPresses in all (a command may go
-// on after one). A command still running after the last press is stopped
-// by magnum when it is its own run (Agents.StopShell: SIGTERM, SIGKILL, a
-// new pane; codex review went on after three ctrl+c). Left running, it
-// would hold the pane, and the restart's line would find it busy. It
-// returns why the command still runs (StopShell's error) when it does; nil
-// when the shell is idle or nothing says otherwise (no Keys or pane, an
-// error that is no timeout: a pane that is gone).
+// again while the command runs (Agents.InterruptShell, which keys only the
+// run's own command), shellStopPresses in all (a command may go on after
+// one). A command still running after the last press is stopped by magnum
+// when it is its own run (Agents.StopShell: SIGTERM, SIGKILL, a new pane;
+// codex review went on after three ctrl+c). Left running, it would hold the
+// pane, and the restart's line would find it busy. Success (nil) is only a
+// line that was never typed (Agents.ShellLaunched), an idle shell, a pane
+// herdr confirms gone (Keys.PaneGet) or StopShell's verified stop; any
+// other answer (a wait or a key herdr failed on, no session or pane for a
+// typed line) is an error: the command may still run.
 func (rd *round) stopShell(ctx context.Context, run store.Run) error {
-	s, ok := rd.session(ctx, run)
-	pane := store.Deref(s.HerdrPaneID)
-	if rd.r.Keys == nil || !ok || pane == "" {
+	if !rd.r.Agents.ShellLaunched(run.ID) {
 		return nil
 	}
 	ctx = context.WithoutCancel(ctx)
+	s, ok := rd.session(ctx, run)
+	pane := store.Deref(s.HerdrPaneID)
+	if rd.r.Keys == nil || !ok || pane == "" {
+		return rd.r.Agents.StopShell(ctx, run)
+	}
 	for press := 1; ; press++ {
 		_, err := rd.r.Keys.WaitIdleShell(ctx, pane, shellStopWait)
 		switch {
 		case err == nil:
 			return nil
 		case !herdr.IsTimeout(err):
-			rd.logErr(ctx, err, "pipeline: %s: wait for an idle shell in pane %s: %v", run.Role, pane, err)
-			return nil
+			if rd.paneGone(ctx, pane) {
+				return nil
+			}
+			return fmt.Errorf("herdr cannot say whether pane %s still runs it: %w", pane, err)
 		case press == shellStopPresses:
 			return rd.r.Agents.StopShell(ctx, run)
 		}
-		if err := rd.r.Keys.PaneSendKeys(ctx, pane, "ctrl+c"); err != nil {
-			rd.warn(ctx, "interrupt %s: %v", run.Role, err)
-			return nil
+		if err := rd.r.Agents.InterruptShell(ctx, run); err != nil && !errors.Is(err, agents.ErrNotOwn) {
+			if rd.paneGone(ctx, pane) {
+				return nil
+			}
+			return fmt.Errorf("ctrl+c to pane %s failed: %w", pane, err)
 		}
 	}
+}
+
+// paneGone reports whether herdr confirms that pane is gone (pane.get's
+// pane_not_found); an error that says anything else is no proof.
+func (rd *round) paneGone(ctx context.Context, pane string) bool {
+	_, err := rd.r.Keys.PaneGet(ctx, pane)
+	return herdr.IsCode(err, herdr.CodePaneNotFound)
 }
 
 // classifyAfter classifies the pane text that follows the last occurrence

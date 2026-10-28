@@ -177,6 +177,18 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		if _, fetched, err = e.parkReloading(ctx, job, pr.HeadSHA); err != nil {
 			return fail(err)
 		}
+		// Never switch the slot under a command that still runs in it (a
+		// cut command an earlier round's restart could not stop, one in a
+		// pane the role moved away from): an own leftover is stopped, and
+		// anything else holds the round under the PR's cooldown
+		// (agents.ErrHumanActive: no attempt; DECISIONS "A cut shell
+		// command is killed, and a review that missed a reviewer is
+		// completed").
+		if job.hasSlot && job.checksOutInPlace() {
+			if err := e.d.Agents.ClearShellPanes(ctx, pr, job.slot.Path); err != nil {
+				return fail(err)
+			}
+		}
 	}
 	if rs.target, err = e.checkout(ctx, job, fetched); err != nil {
 		return pipeline.RoundInput{}, ws, e.checkoutFailed(err, job)

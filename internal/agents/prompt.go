@@ -396,6 +396,7 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 	if err := m.d.Herdr.PaneSendKeys(ctx, paneID, "ctrl+u"); err != nil {
 		return fail(fmt.Errorf("clear the line of pane %s: %w", paneID, err))
 	}
+	m.markLaunched(strings.TrimPrefix(marker, donePrefix)) // a run that failed may have typed it
 	if err := m.d.Herdr.PaneRun(ctx, paneID, line); err != nil {
 		return fail(err)
 	}
