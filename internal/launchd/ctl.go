@@ -95,35 +95,50 @@ func install(ctx context.Context, run execx.Runner, uid int, path string, plist 
 	if err := fsx.WriteFileAtomic(path, plist, 0o644); err != nil { // launchd reads it; never a partial plist
 		return fmt.Errorf("launchd install: write %s: %w", path, err)
 	}
-	return load(ctx, run, uid, label, path, "install", tm)
+	return load(ctx, run, uid, label, path, "install", nil, tm)
 }
 
-// Reload unloads the job and loads it again from the plist already at path,
-// as Install does once it has written the file (bootout, the wait for the job
-// to go, enable, bootstrap with its retries), and writes nothing. The label
-// is read from that plist; a plist that is missing or has no label is refused
-// before the bootout, so the job is never unloaded without a definition to
-// load again.
-func Reload(ctx context.Context, run execx.Runner, uid int, path string) error {
-	return reload(ctx, run, uid, path, realTiming)
+// ErrNotReloaded marks a Reload that stopped before the bootout: the job was
+// left as it was.
+var ErrNotReloaded = errors.New("the job was left as it was")
+
+// Reload unloads the job label and loads it again from the plist already at
+// path, as Install does once it has written the file (bootout, the wait for
+// the job to go, enable, bootstrap with its retries), and writes nothing. The
+// plist must be the job's: one that is missing, has no label or names
+// another job is refused, so the job is never unloaded without its own
+// definition to load again. ready, when not nil, runs after that check and
+// right before the bootout, with nothing between them: the caller's last
+// look at the job, whose error stops the reload. Every error before the
+// bootout wraps ErrNotReloaded.
+func Reload(ctx context.Context, run execx.Runner, uid int, label, path string, ready func(context.Context) error) error {
+	return reload(ctx, run, uid, label, path, ready, realTiming)
 }
 
-func reload(ctx context.Context, run execx.Runner, uid int, path string, tm timing) error {
+func reload(ctx context.Context, run execx.Runner, uid int, label, path string, ready func(context.Context) error, tm timing) error {
 	plist, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("launchd reload: %w", err)
+		return fmt.Errorf("launchd reload: %w: %w", ErrNotReloaded, err)
 	}
-	label, err := labelFromPlist(plist)
+	named, err := labelFromPlist(plist)
 	if err != nil {
-		return fmt.Errorf("launchd reload: %s: %w", path, err)
+		return fmt.Errorf("launchd reload: %w: %s: %w", ErrNotReloaded, path, err)
 	}
-	return load(ctx, run, uid, label, path, "reload", tm)
+	if named != label {
+		return fmt.Errorf("launchd reload: %w: %s names the job %q, not %q", ErrNotReloaded, path, named, label)
+	}
+	return load(ctx, run, uid, label, path, "reload", ready, tm)
 }
 
-// load runs Install's launchctl sequence on the plist at path: bootout, the
-// wait for the job to unload, enable, bootstrap. op names the caller in its
-// errors.
-func load(ctx context.Context, run execx.Runner, uid int, label, path, op string, tm timing) error {
+// load runs Install's launchctl sequence on the plist at path: ready (when
+// not nil; its error wraps ErrNotReloaded), then bootout, the wait for the
+// job to unload, enable, bootstrap. op names the caller in its errors.
+func load(ctx context.Context, run execx.Runner, uid int, label, path, op string, ready func(context.Context) error, tm timing) error {
+	if ready != nil {
+		if err := ready(ctx); err != nil {
+			return fmt.Errorf("launchd %s: %w: %w", op, ErrNotReloaded, err)
+		}
+	}
 	// Both are best effort; bootstrap below is the arbiter.
 	_, _ = run.Run(ctx, launchctl("launchctl bootout", true, "bootout", target(uid, label)))
 	stillLoaded, err := waitUnloaded(ctx, run, uid, label, tm)

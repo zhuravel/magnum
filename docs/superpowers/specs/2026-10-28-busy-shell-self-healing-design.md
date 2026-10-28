@@ -154,7 +154,7 @@ Tests first:
 
 On 2026-10-28 at 17:29 a drain restart stopped the daemon, and launchd then failed every spawn of the rebuilt binary with exit 78 (EX_CONFIG).
 The binary wrote nothing, `magnum config` with the same binary passed, and the job showed "needs LWCR update".
-`daemon-restart` printed only a hint ("then `magnum daemon-restart` again (or `magnum install` to reload the job)"), and the daemon stayed down for about 10 minutes.
+`daemon-restart` printed only a hint ("then `magnum daemon-restart` again (or `magnum install` to reload the job)"), and the daemon stayed down for about 5 minutes (stopped 17:29:57, started 17:35:04).
 `magnum install --now`, which unloads and loads the job again, started the daemon at once.
 
 The fix: if no new daemon runs after the restart and launchd reports a spawn failure, `daemon-restart` reloads the job itself, as `install` does, once.

@@ -567,7 +567,7 @@ func TestReloadLoadsTheSamePlistAgainWithoutWritingIt(t *testing.T) {
 	var prints int
 	f := &execx.Fake{Rules: okRules(loadedFor(3, &prints))}
 	clk := newClock()
-	if err := reload(context.Background(), f, 501, path, clk.timing()); err != nil {
+	if err := reload(context.Background(), f, 501, testLabel, path, nil, clk.timing()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 	want := []string{
@@ -595,25 +595,63 @@ func TestReloadLoadsTheSamePlistAgainWithoutWritingIt(t *testing.T) {
 	}
 }
 
-// Without its plist the job could be unloaded and never loaded again, so a
-// missing plist, or one without a label, is refused before the bootout.
-func TestReloadRefusesAMissingPlistBeforeTheBootout(t *testing.T) {
+// Without its plist the job could be unloaded and never loaded again, and a
+// plist of another job would unload a job nobody checked: a missing plist,
+// one without a label and one whose label is not the job's are refused
+// before the bootout, as not reloaded, and the guard is not asked.
+func TestReloadRefusesAPlistItCannotLoadTheJobFromBeforeTheBootout(t *testing.T) {
 	dir := t.TempDir()
 	noLabel := filepath.Join(dir, "nolabel.plist")
 	if err := os.WriteFile(noLabel, []byte("<plist><dict></dict></plist>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for name, path := range map[string]string{"missing": filepath.Join(dir, testLabel+".plist"), "no label": noLabel} {
+	other := filepath.Join(dir, "other.plist")
+	if err := os.WriteFile(other, Plist(Options{Label: "example.other", ProgramArguments: []string{"/bin/true"}}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ path, want string }{
+		"missing":       {filepath.Join(dir, testLabel+".plist"), filepath.Join(dir, testLabel+".plist")},
+		"no label":      {noLabel, noLabel},
+		"another job's": {other, `names the job "example.other", not "zhuravel.magnum"`},
+	} {
 		t.Run(name, func(t *testing.T) {
 			f := &execx.Fake{Rules: okRules()}
-			err := Reload(context.Background(), f, 501, path)
-			if err == nil || !strings.Contains(err.Error(), path) {
-				t.Fatalf("err = %v, want one naming %s", err, path)
+			asked := false
+			err := Reload(context.Background(), f, 501, testLabel, tc.path, func(context.Context) error { asked = true; return nil })
+			if !errors.Is(err, ErrNotReloaded) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want ErrNotReloaded naming %s", err, tc.want)
 			}
-			if len(f.Calls) != 0 {
-				t.Fatalf("launchctl ran for a plist it cannot load: %q", argvs(f))
+			if len(f.Calls) != 0 || asked {
+				t.Fatalf("launchctl ran (%q) or the guard was asked (%v) for a plist it cannot load", argvs(f), asked)
 			}
 		})
+	}
+}
+
+// The guard runs after the plist was read and checked and right before the
+// bootout, with no launchctl call between: its "no" stops the reload with
+// nothing changed and the guard's reason in the error.
+func TestReloadAsksItsGuardRightBeforeTheBootout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), testLabel+".plist")
+	if err := os.WriteFile(path, testPlist(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &execx.Fake{Rules: okRules()}
+	callsAtGuard := -1
+	if err := reload(context.Background(), f, 501, testLabel, path, func(context.Context) error {
+		callsAtGuard = len(f.Calls)
+		return nil
+	}, newClock().timing()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if calls := argvs(f); callsAtGuard != 0 || calls[0] != "launchctl bootout gui/501/zhuravel.magnum" {
+		t.Fatalf("guard asked after %d calls; calls %q, want the bootout first after it", callsAtGuard, calls)
+	}
+	no := errors.New("a daemon runs now")
+	f = &execx.Fake{Rules: okRules()}
+	err := reload(context.Background(), f, 501, testLabel, path, func(context.Context) error { return no }, newClock().timing())
+	if !errors.Is(err, ErrNotReloaded) || !errors.Is(err, no) || len(f.Calls) != 0 {
+		t.Fatalf("err = %v after %q, want ErrNotReloaded and the guard's reason, no launchctl call", err, argvs(f))
 	}
 }
 
@@ -626,7 +664,7 @@ func TestReloadRetriesBootstrapOnEIOAndReportsOtherFailures(t *testing.T) {
 	}
 	var n int
 	f := &execx.Fake{Rules: okRules(eioThenOK(1, &n))}
-	if err := reload(context.Background(), f, 501, path, newClock().timing()); err != nil {
+	if err := reload(context.Background(), f, 501, testLabel, path, nil, newClock().timing()); err != nil {
 		t.Fatalf("reload after one EIO: %v", err)
 	}
 	if got := len(f.CallsWithPrefix("launchctl", "bootstrap")); got != 2 {
@@ -634,9 +672,9 @@ func TestReloadRetriesBootstrapOnEIOAndReportsOtherFailures(t *testing.T) {
 	}
 	f = &execx.Fake{Rules: okRules(execx.Rule{Prefix: []string{"launchctl", "bootstrap"},
 		Result: execx.Result{Code: 37, Stderr: []byte("Bootstrap failed: 37: Operation already in progress")}})}
-	err := reload(context.Background(), f, 501, path, newClock().timing())
+	err := reload(context.Background(), f, 501, testLabel, path, nil, newClock().timing())
 	boots := len(f.CallsWithPrefix("launchctl", "bootstrap"))
-	if _, ok := errors.AsType[*execx.ExitError](err); !ok || boots != 1 {
+	if _, ok := errors.AsType[*execx.ExitError](err); !ok || boots != 1 || errors.Is(err, ErrNotReloaded) {
 		t.Fatalf("err = %v after %d bootstraps, want the ExitError after one", err, boots)
 	}
 }

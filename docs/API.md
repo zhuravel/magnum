@@ -13377,6 +13377,13 @@ const LogName = "launchd.log"
     fight over rotation). Only crashes and pre-logger output end up here.
 
 
+VARIABLES
+
+var ErrNotReloaded = errors.New("the job was left as it was")
+    ErrNotReloaded marks a Reload that stopped before the bootout: the job was
+    left as it was.
+
+
 FUNCTIONS
 
 func AgentPath(home, label string) string
@@ -13422,13 +13429,15 @@ func Plist(opts Options) []byte
     byte-identical files. RunAtLoad is always true and ExitTimeOut is always
     ExitTimeOut seconds.
 
-func Reload(ctx context.Context, run execx.Runner, uid int, path string) error
-    Reload unloads the job and loads it again from the plist already at path,
-    as Install does once it has written the file (bootout, the wait for the job
-    to go, enable, bootstrap with its retries), and writes nothing. The label
-    is read from that plist; a plist that is missing or has no label is refused
-    before the bootout, so the job is never unloaded without a definition to
-    load again.
+func Reload(ctx context.Context, run execx.Runner, uid int, label, path string, ready func(context.Context) error) error
+    Reload unloads the job label and loads it again from the plist already at
+    path, as Install does once it has written the file (bootout, the wait for
+    the job to go, enable, bootstrap with its retries), and writes nothing. The
+    plist must be the job's: one that is missing, has no label or names another
+    job is refused, so the job is never unloaded without its own definition to
+    load again. ready, when not nil, runs after that check and right before the
+    bootout, with nothing between them: the caller's last look at the job, whose
+    error stops the reload. Every error before the bootout wraps ErrNotReloaded.
 
 func Uninstall(ctx context.Context, run execx.Runner, uid int, label, path string) error
     Uninstall unloads the job and deletes its plist at path. It is idempotent:

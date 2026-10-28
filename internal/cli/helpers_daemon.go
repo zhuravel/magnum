@@ -54,6 +54,20 @@ type daemonGroupSys struct {
 	// RunEngine runs the daemon in the foreground (app.New + engine.Run);
 	// nil means runDaemonEngine, which reads daemonSys itself.
 	RunEngine func(ctx context.Context, c *Context, o daemonOptions) (daemonDryRunReport, error)
+	// RestartEvent records an event of daemon-restart's reload, best effort;
+	// nil means Context.writeRestartEvent, the registry's write (which may
+	// wait for a busy registry).
+	RestartEvent func(ctx context.Context, c *Context, level, kind, msg string)
+}
+
+// restartEvent records an event of daemon-restart's reload (RestartEvent,
+// else c.writeRestartEvent).
+func (s daemonGroupSys) restartEvent(ctx context.Context, c *Context, level, kind, msg string) {
+	if s.RestartEvent != nil {
+		s.RestartEvent(ctx, c, level, kind, msg)
+		return
+	}
+	c.writeRestartEvent(ctx, level, kind, msg)
 }
 
 var daemonSys = daemonGroupSys{

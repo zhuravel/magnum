@@ -108,9 +108,14 @@ func newBuildCheck(c *Context, run execx.Runner) func(ctx context.Context, bin s
 // or migrating it: --drain only sets one kv row of the running daemon's
 // registry, whatever schema version this binary expects.
 func registryWriteDSN(path string) string {
-	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: "mode=rw&_pragma=busy_timeout(5000)"}
+	q := fmt.Sprintf("mode=rw&_pragma=busy_timeout(%d)", registryWriteBusy.Milliseconds())
+	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: q}
 	return u.String()
 }
+
+// registryWriteBusy is how long a write of registryWriteDSN waits for
+// another writer to let go of the registry; a test shortens it.
+var registryWriteBusy = 5 * time.Second
 
 // startDrain sets engine.KVDaemonDraining to a drain owned by this process
 // (its pid: the daemon lifts the drain of a drainer that is gone) and records
@@ -167,10 +172,10 @@ func daemonEvent(ctx context.Context, db *sql.DB, level, kind, msg string) {
 		store.FormatTime(time.Now()), level, kind, msg)
 }
 
-// restartEvent records a step of daemon-restart (daemonEvent) in the registry,
-// opened without creating or migrating it; a registry it cannot open or
-// write leaves the step without its record.
-func (c *Context) restartEvent(ctx context.Context, level, kind, msg string) {
+// writeRestartEvent records a step of daemon-restart (daemonEvent) in the
+// registry, opened without creating or migrating it; a registry it cannot
+// open or write leaves the step without its record.
+func (c *Context) writeRestartEvent(ctx context.Context, level, kind, msg string) {
 	_ = c.withRegistry(ctx, func(ctx context.Context, db *sql.DB) error {
 		daemonEvent(ctx, db, level, kind, msg)
 		return nil
