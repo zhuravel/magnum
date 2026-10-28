@@ -1,9 +1,9 @@
 [tools]
-go = "1.27"
+go = "1.27.3"
 air = "latest"
 # `make lint`; CI installs the tools of this file (.github/actions/setup-environment), so both report
 # the same issues.
-golangci-lint = "2.14.0"
+golangci-lint = "2.15.0"
 
 [env]
 # Real values live in the gitignored mise.local.toml. App keys do not: an [[identity]] of kind "app"

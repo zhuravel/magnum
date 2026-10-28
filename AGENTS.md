@@ -55,7 +55,7 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
 make test        # gofmt, check-private, go mod verify and tidy, go vet, go test (hermetic)
 make build       # bin/magnum
 make api-doc     # regenerate docs/API.md after exported API changes (make api-doc-check diffs it)
-make lint        # golangci-lint (.golangci.yml; mise pins 2.14.0); make lint-fix applies only the safe fixes
+make lint        # golangci-lint (.golangci.yml; mise pins 2.15.0); make lint-fix applies only the safe fixes
 make vuln        # govulncheck, after a dependency or Go update
 ```
 

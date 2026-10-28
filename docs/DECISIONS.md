@@ -13885,6 +13885,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   its reason once (TestReloadRefusesAPlistItCannotLoadTheJobFromBeforeTheBootout,
   TestDaemonRestartRecordsWhyItDidNotReload).
 
+- **CI builds with the exact Go release mise.toml pins** (2026-10-28, amends "CI takes Go and golangci-lint
+  from mise.toml"). govulncheck failed the static job with GO-2026-6809 (crypto/x509 distrusts compromised
+  intermediate certificates; reached from fsx.ReadRegular), found in go1.27.2 and fixed in go1.27.3. `mise.toml`
+  pinned `go = "1.27"`, which mise resolves to the newest 1.27 it has installed, and mise-action keys its cache
+  of mise's installs on the hash of `mise.toml`, which a Go release does not change, so every run restored
+  go1.27.2. `mise.toml` now pins `go = "1.27.3"` and go.mod says `go 1.27.3` (no `toolchain` line: the two
+  agree), so a Go release reaches CI as a commit that changes the pin, and that commit changes the cache key.
+  The weekly leg on the newest Go (MISE_GO_VERSION=latest) no longer uses mise's install cache: mise resolves
+  "latest" to the newest version it has installed as well, so the leg's own restored cache kept testing an old
+  release for up to the 30 days of mise-action's cache period; it now installs its Go each week, and it still
+  never saves the cache the other runs restore. The relay's Dockerfile builds on `golang:1.27.3-alpine`
+  (GOTOOLCHAIN=local, so its Go must meet go.mod's). modernc.org/libc stays at v1.79.0, the version
+  modernc.org/sqlite v1.61.0 pins, rather than the newer v1.79.1: sqlite asks every downstream go.mod to pin
+  the same libc as its own (its GitLab issue #177). Rejected: keeping `go = "1.27"` and bumping the cache
+  prefix (the next patch release would go stale the same way); a `toolchain` line (go.mod and mise already
+  agree).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

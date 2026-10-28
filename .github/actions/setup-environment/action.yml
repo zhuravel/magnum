@@ -25,9 +25,11 @@ runs:
       id: mise
       uses: jdx/mise-action@v5
       with:
-        # Another Go gets a cache of mise's installs of its own, so the weekly run on the newest Go never saves
-        # the cache every other run restores.
-        cache_key_prefix: mise-v1${{ inputs.go-version != '' && format('-go-{0}', inputs.go-version) || '' }}
+        # mise.toml pins exact versions, and the cache key hashes mise.toml, so a new pin installs afresh. Another
+        # Go ("latest" for the weekly run) skips mise's install cache: mise resolves "latest" to the newest Go it
+        # has installed, so a restored cache would keep testing an old release, and the run never saves the cache
+        # every other run restores.
+        cache: ${{ inputs.go-version == '' }}
 
     - name: Go cache directories
       id: go-env

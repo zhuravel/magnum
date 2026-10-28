@@ -6,7 +6,7 @@
 # The binary is static (CGO off: modernc.org/sqlite is pure Go) and runs in an empty image as a non-root
 # user; /data holds the journal. The build copies only the relay's packages and the module files.
 
-ARG GO_VERSION=1.27.2
+ARG GO_VERSION=1.27.3
 
 FROM golang:${GO_VERSION}-alpine AS build
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath

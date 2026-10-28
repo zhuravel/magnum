@@ -4403,8 +4403,8 @@ keeps its entry, so Magnum cannot see it. Magnum never edits `hooks.json` or the
 ## Development
 
 Work on magnum from a checkout, and run that checkout's build instead of a Homebrew one (one or the other
-runs the daemon; both use the same files in `~/.config`, `~/.local/share` and `~/.local/state`). Go 1.27
-is needed:
+runs the daemon; both use the same files in `~/.config`, `~/.local/share` and `~/.local/state`). Go 1.27.3
+(mise.toml pins it) is needed:
 
 ```bash
 git clone https://github.com/zhuravel/magnum ~/Projects/magnum && cd ~/Projects/magnum
@@ -4418,7 +4418,7 @@ the link; `brew install zhuravel/tap/magnum && magnum install --plugin` switches
 
 ```bash
 make test        # gofmt, check-private, go mod verify and tidy, go vet, hermetic tests (fakes for git, gh, herdr, MySQL)
-make lint        # golangci-lint with .golangci.yml (mise pins 2.14.0); make lint-fix applies only the safe fixes
+make lint        # golangci-lint with .golangci.yml (mise pins 2.15.0); make lint-fix applies only the safe fixes
 make vuln        # govulncheck: known vulnerabilities the code reaches
 make api-doc     # regenerate docs/API.md; make api-doc-check fails when it differs from the exported API
 mise run dev     # air: rebuild and restart the foreground daemon on save (`magnum install` hands it back)
