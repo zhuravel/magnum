@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -224,11 +225,15 @@ func TestAReleaseWaitsForTheShellHold(t *testing.T) {
 }
 
 // The fixer works in the checkout and its settle moves it: its guard sees
-// the same hold, and no fixer starts.
+// the same hold, and no fixer starts (a fixer that did gets its prompt
+// refused, so the test fails at once instead of waiting on it).
 func TestTheFixerSeesTheShellHold(t *testing.T) {
 	h, _ := fixHarness(t)
 	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
 	holdShells(h, false)
+	h.ag.mu.Lock()
+	h.ag.submitErr = errors.New("the fixer started under the hold")
+	h.ag.mu.Unlock()
 	h.fix(FixPayload{})
 	h.tick()
 	cur := h.pr(2)
@@ -237,5 +242,215 @@ func TestTheFixerSeesTheShellHold(t *testing.T) {
 	}
 	if h.ag.count("submit:") != 0 {
 		t.Errorf("the fixer started: %v", h.ag.all())
+	}
+}
+
+// unreadShells makes herdr unable to say what the slot's shell panes run.
+func unreadShells(h *harness) {
+	h.ag.mu.Lock()
+	defer h.ag.mu.Unlock()
+	h.ag.clearShell = fmt.Errorf("agents: the shell panes of pr 2 in /slots/review1: %w (herdr: connection refused)", agents.ErrHerdrUnread)
+}
+
+// A herdr that cannot say what the slot's shell panes run is no hold: the
+// round waits a minute with no attempt, no hold event, no toast and no
+// hold record.
+func TestAHerdrOutageAtTheLookHoldsNothing(t *testing.T) {
+	h := newHarness(t)
+	before, _ := secondRound(t, h, barrierRound(t, h))
+	h.rd.script = nil
+	unreadShells(h)
+	h.clock.Set(deref(h.pr(2).NextAttemptAt).Add(time.Second))
+	h.tick()
+	pr := h.pr(2)
+	if pr.State == store.PRNeedsAttention || pr.Attempts != before.Attempts {
+		t.Errorf("state %s, attempts %d (want %d): a herdr outage is no failure", pr.State, pr.Attempts, before.Attempts)
+	}
+	if pr.NextAttemptAt == nil || pr.NextAttemptAt.Sub(h.clock.Now()).Round(time.Minute) != busyRetry {
+		t.Errorf("next_attempt_at = %v, want %s from now", pr.NextAttemptAt, busyRetry)
+	}
+	if evs := kindOf(subjectEvents(t, h, "pr:talkable/talkable#2"), eventShellHold); len(evs) != 0 {
+		t.Errorf("hold events = %+v, want none", evs)
+	}
+	if n := countToasts(h, "waits for a shell pane"); n != 0 {
+		t.Errorf("hold toasts = %d, want none", n)
+	}
+	if _, on := h.e.shellHoldOf(h.ctx, pr.ID); on {
+		t.Error("a hold record for a herdr outage")
+	}
+}
+
+// A `magnum open` whose claim's checkout could not look at the PR's shell
+// panes (herdr cannot say) hands the reserved slot back to the pool.
+func TestAHerdrOutageNeverKeepsTheSlotAFailedOpenReserved(t *testing.T) {
+	h := newHarness(t)
+	pr := h.parkedPR()
+	unreadShells(h)
+	id := h.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.tick()
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "herdr cannot say") {
+		t.Fatalf("open request: state=%s result=%q", r.State, deref(r.Result))
+	}
+	if sl := h.slot("review1"); sl.State != store.SlotFree || sl.PRID != nil {
+		t.Errorf("slot after the failed open: state=%s pr=%v, want it back in the pool", sl.State, sl.PRID)
+	}
+	if n := countToasts(h, "waits for a shell pane"); n != 0 {
+		t.Errorf("hold toasts = %d, want none", n)
+	}
+	if _, on := h.e.shellHoldOf(h.ctx, pr.ID); on {
+		t.Error("a hold record for a herdr outage")
+	}
+}
+
+// staleRun is a run of codex-review that a crashed daemon left in flight.
+func staleRun(t *testing.T, h *harness, pr store.PR) store.Run {
+	t.Helper()
+	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: pr.ID, Round: 1, Role: "codex-review", Kind: pipeline.KindInitial,
+		TargetSHA: pr.HeadSHA, Identity: pr.Identity, ReviewerLogin: "x", State: store.RunSubmitted, PromptText: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// stateAtLook records the state of run when the slot's shell panes are
+// looked at.
+func stateAtLook(h *harness, run store.Run) *string {
+	var state string
+	h.ag.mu.Lock()
+	defer h.ag.mu.Unlock()
+	h.ag.onClearShells = func() {
+		if r, err := h.st.RunByID(h.ctx, run.ID); err == nil {
+			state = r.State
+		}
+	}
+	return &state
+}
+
+// The fixer and a release close the runs a crashed daemon left in flight
+// before they look at the slot's shell panes, as a round's setup does:
+// magnum's own leftover there then counts as over, so it is stopped rather
+// than held for.
+func TestTheFixerAndAReleaseCloseACrashedDaemonsRunsBeforeTheirLook(t *testing.T) {
+	t.Run("the fixer", func(t *testing.T) {
+		h, _ := fixHarness(t)
+		pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+		state := stateAtLook(h, staleRun(t, h, pr))
+		h.ag.mu.Lock()
+		h.ag.submitErr = errors.New("the test ends at the fixer's prompt")
+		h.ag.mu.Unlock()
+		h.fix(FixPayload{})
+		h.tick()
+		if *state == "" || runInFlightState(*state) {
+			t.Errorf("the stale run was %q when the fixer's guard looked, want it closed", *state)
+		}
+	})
+	t.Run("a release", func(t *testing.T) {
+		h := newHarness(t)
+		pr := h.reviewedPR(2, "b1")
+		state := stateAtLook(h, staleRun(t, h, pr))
+		slot, _, err := h.e.slotOf(h.ctx, pr.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.e.releaseSlot(h.ctx, slot, h.cfg.Pools[0], "evicted"); err != nil {
+			t.Fatal(err)
+		}
+		if *state == "" || runInFlightState(*state) {
+			t.Errorf("the stale run was %q when the release looked, want it closed", *state)
+		}
+	})
+}
+
+// A hold the fixer's guard met is not a round's: the round that comes four
+// hours later, with the command still running, starts a hold of its own
+// (its event and its toast) and waits a minute, rather than going to
+// needs_attention at once for the fixer's old start.
+func TestARoundsFirstLookAtAHoldTheFixerLeftStartsAFreshOne(t *testing.T) {
+	h, _ := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	holdShells(h, true)
+	h.ag.mu.Lock()
+	h.ag.submitErr = errors.New("the fixer started under the hold")
+	h.ag.mu.Unlock()
+	h.fix(FixPayload{})
+	h.tick()
+	if evs := kindOf(subjectEvents(t, h, "pr:talkable/talkable#2"), eventShellHold); len(evs) != 1 {
+		t.Fatalf("hold events after the fixer = %+v, want one", evs)
+	}
+	h.advance(4 * time.Hour)
+	pollPR(h, 40*time.Minute, 2, "b2")
+	h.advance(5 * time.Minute)
+	h.tick()
+	pr := h.pr(2)
+	if pr.State == store.PRNeedsAttention {
+		t.Fatalf("state = %s at the round's first look, want a fresh hold", pr.State)
+	}
+	if evs := kindOf(subjectEvents(t, h, "pr:talkable/talkable#2"), eventShellHold); len(evs) != 2 {
+		t.Errorf("hold events = %d, want the round's own too", len(evs))
+	}
+	if n := countToasts(h, "waits for a shell pane"); n != 2 {
+		t.Errorf("hold toasts = %d, want the round's own too", n)
+	}
+	if hold, _ := h.e.shellHoldOf(h.ctx, pr.ID); hold.Origin != holdRound || !hold.Since.Equal(h.clock.Now()) {
+		t.Errorf("hold = %+v, want the round's, from now", hold)
+	}
+}
+
+// A round's look at a hold record whose last look is long past (the
+// command ended and came back while nothing looked) starts a fresh hold.
+func TestARoundsLookAtAStaleHoldStartsAFreshOne(t *testing.T) {
+	h := newHarness(t)
+	secondRound(t, h, barrierRound(t, h))
+	h.rd.script = nil
+	pr := h.pr(2)
+	old := h.clock.Now().Add(-4 * time.Hour)
+	h.e.saveShellHold(h.ctx, pr.ID, shellHold{Since: old, Last: old, Next: old.Add(time.Minute), Slot: "review1", Origin: holdRound, Tries: 9})
+	holdShells(h, true)
+	h.clock.Set(deref(pr.NextAttemptAt).Add(time.Second))
+	h.tick()
+	if pr := h.pr(2); pr.State == store.PRNeedsAttention {
+		t.Fatalf("state = %s at the look, want a fresh hold", pr.State)
+	}
+	if evs := kindOf(subjectEvents(t, h, "pr:talkable/talkable#2"), eventShellHold); len(evs) != 1 {
+		t.Errorf("hold events = %d, want the fresh hold's", len(evs))
+	}
+	if hold, _ := h.e.shellHoldOf(h.ctx, pr.ID); hold.Tries != 1 || !hold.Since.Equal(h.clock.Now()) {
+		t.Errorf("hold = %+v, want a fresh one", hold)
+	}
+}
+
+// A hold that started outside a round (here the fixer's, which does not try
+// again) ends once its panes are free: the reconcile looks again when its
+// next look is due, and the record goes with the hold's end event.
+func TestAHoldOutsideARoundEndsOnceItsPanesAreFree(t *testing.T) {
+	h, _ := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	holdShells(h, true)
+	h.ag.mu.Lock()
+	h.ag.submitErr = errors.New("the fixer started under the hold")
+	h.ag.mu.Unlock()
+	h.fix(FixPayload{})
+	h.tick()
+	pr := h.pr(2)
+	if _, on := h.e.shellHoldOf(h.ctx, pr.ID); !on {
+		t.Fatal("no hold record after the fixer's guard")
+	}
+	freeShells(h)
+	h.advance(11 * time.Minute)
+	_ = h.e.reconcile(h.ctx)
+	if _, on := h.e.shellHoldOf(h.ctx, pr.ID); on {
+		t.Error("the hold record outlived the hold")
+	}
+	if evs := kindOf(subjectEvents(t, h, "pr:talkable/talkable#2"), eventShellHoldEnded); len(evs) != 1 {
+		t.Errorf("hold end events = %+v, want one", evs)
+	}
+}
+
+// A custom role's line without the run token holds in its own words.
+func TestATokenlessHoldNamesItsRolesCommand(t *testing.T) {
+	got := shellHoldReason("review1", &agents.ShellHoldError{Role: "lint", Tokenless: true})
+	if want := "the lint command (no run token) still runs in the shell pane of review1"; got != want {
+		t.Errorf("reason = %q, want %q", got, want)
 	}
 }

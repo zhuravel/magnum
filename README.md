@@ -346,8 +346,10 @@ or SIGKILL went out, and exits with 128 plus that signal. Second, Magnum stops t
 restart's last ctrl+c, but only its own run: the shell line's db-lock names the run (`--run <run>`), and
 Magnum keys or signals a pane's command only when that argv names a run of the PR's role in this checkout,
 in the role's own pane, and the run is the one cut or no longer in flight. Its ctrl+c goes only to the
-role's own pane, and only to a command that carries that run's token or no token at all; a run whose line
-was never typed (it still waited for a busy pane) gets nothing at all. Magnum notes the job's processes from
+role's own pane, and only to a command that carries that run's token. A command without a token gets it only
+when the line Magnum typed carried none (a `command` of your own without `{{.DBLockCommand}}`) and herdr still
+shows the pane in the session's checkout, with no other PR's session in it. A run whose line was never typed
+(it still waited for a busy pane) gets nothing at all. Magnum notes the job's processes from
 the process table, each by its pid and start time (a process that moves to another process group stays the
 same process), and before each signal it reads the table and asks herdr again: a process whose identity
 changed gets nothing, and neither does a pane whose job changed. It sends SIGTERM to the job's process group,
@@ -375,16 +377,25 @@ the run fails as busy, as before.
 Nothing switches a slot's checkout while a command still runs in a shell pane of its PR there. Before a
 round checks the PR out, before the fixer starts, before `magnum open` checks a PR out and before a release
 resets the slot, Magnum closes the runs a crashed daemon left open and looks at the PR's shell panes in that
-slot, only at panes herdr still shows as theirs. An earlier run of its own is stopped. A command Magnum did
-not start (no run token, or another PR's, role's or run's), or one of its own that it cannot stop, holds the
+slot. It asks herdr only when the PR has a shell pane there. A pane herdr shows as another's (another agent,
+or a working directory outside the checkout) is left alone, unless its command carries Magnum's line for
+this checkout. A pane whose working directory herdr does not report stays in the look. An earlier run of
+its own is stopped. A command Magnum did not start (no run token, or another PR's, role's or run's), the
+command of a role of your own without the run token, or one of its own that it cannot stop, holds the
 switch. The hold costs no attempt and no round of the daily cap. Magnum looks again after about 1, 2 and 5
 minutes, then every 10 minutes. It writes one event when the hold starts (`pr.shell_hold`) and one when it ends
-(`pr.shell_hold_ended`), and shows one toast. After 15 minutes the PR shows under needs-attention with a plain
-reason: "a command magnum did not start keeps the shell pane of <slot> busy", or "magnum cannot stop its own
+(`pr.shell_hold_ended`), and shows one toast. After 15 minutes of a round's hold the PR shows under
+needs-attention with a plain reason: "a command magnum did not start keeps the shell pane of <slot> busy",
+"the <role> command (no run token) still runs in the shell pane of <slot>", or "magnum cannot stop its own
 command in <slot>: <cause>". The fixer and the other jobs that would switch that checkout see the same hold.
-The hold never marks you as at work. A shell role whose `command` of your own leaves `{{.DBLockCommand}}` out
-carries no run token: its interrupts are the plain ctrl+c presses it always got, Magnum never signals or
-closes its command, and a restart that finds it still running ends the round, as above.
+A hold that one of them meets is looked at again at each reconcile until it ends. The next round's first
+look starts a hold of its own, with its event and its toast, and so does a round's look at a hold that
+nothing looked at for 30 minutes. If herdr cannot say what the panes run, nothing is held: the round tries
+again a minute later, with no event and no toast, and a slot that a failed `magnum fix` or `magnum open`
+reserved still goes back to the pool. The hold never marks you as at work. A shell role whose `command` of
+your own leaves `{{.DBLockCommand}}` out carries no run token: its interrupts are the plain ctrl+c presses it
+always got, Magnum never signals or closes its command, a restart that finds it still running ends the
+round, as above, and the next checkout waits for it.
 
 A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the

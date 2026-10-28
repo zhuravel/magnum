@@ -257,7 +257,9 @@ type Manager struct {
 	replaced map[string]string
 	// launched marks the shell runs whose line RunShell typed, or tried to
 	// (ShellLaunched), until their command ended or its stop was proven:
-	// only their commands are keyed or stopped. jobs is the job captured
+	// only their commands are keyed or stopped. Its value says whether the
+	// line carried the run's token (a built-in role's line does; a custom
+	// role's without the db-lock line does not). jobs is the job captured
 	// for a shell run (at its interrupt, or at a stop that did not finish),
 	// until every process of it is proven gone (remember, forget).
 	launched map[string]bool

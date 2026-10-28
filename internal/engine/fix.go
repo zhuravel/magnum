@@ -868,7 +868,7 @@ func (e *Engine) fixClaim(ctx context.Context, job *fixJob) error {
 		if ctx.Err() != nil {
 			reason, what = "fix stopped", "a claim of magnum fix that a stop cut short"
 		}
-		if rerr := e.releaseSlot(fctx, slot, *job.pool, reason); rerr != nil {
+		if rerr := e.handBackSlot(fctx, slot, *job.pool, reason); rerr != nil {
 			e.event(fctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after "+what+": "+rerr.Error(), nil)
 		} else {
 			e.event(fctx, "info", "slot:"+slot.Name, "slot.released", slot.Name+" released after "+what, nil)
@@ -926,7 +926,7 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	// The fixer works in the checkout and the settle moves it: never while
 	// a command still runs in a shell pane there (the shell hold, as a
 	// round's setup sees it; shell_hold.go).
-	if err := e.clearShells(ctx, pr, slot); err != nil {
+	if err := e.clearShells(ctx, pr, slot, holdFix); err != nil {
 		return err
 	}
 	if err := e.d.Slots.Guard(ctx, slot); err != nil {

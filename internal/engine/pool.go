@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
@@ -311,12 +312,24 @@ const releaseGiveUpToastWindow = 24 * time.Hour
 // the reconcile never resumes a release whose steps are running in this
 // process, in the moment between two of them.
 func (e *Engine) releaseSlot(ctx context.Context, sl store.Slot, pool config.Pool, reason string) error {
+	return e.release(ctx, sl, pool, reason, false)
+}
+
+// handBackSlot is releaseSlot for a slot that a claim of magnum fix or
+// magnum open reserved and could not use: a herdr that cannot say what the
+// PR's shell panes there run does not keep it from the pool, since nothing
+// ran in it after the release that freed it looked.
+func (e *Engine) handBackSlot(ctx context.Context, sl store.Slot, pool config.Pool, reason string) error {
+	return e.release(ctx, sl, pool, reason, true)
+}
+
+func (e *Engine) release(ctx context.Context, sl store.Slot, pool config.Pool, reason string, handBack bool) error {
 	// The release resets the checkout: never under a command that still
 	// runs in a shell pane of the slot's PR (the shell hold, as a round's
 	// setup sees it; the release is tried again later).
 	if sl.PRID != nil {
 		if pr, err := e.st.PRByID(ctx, *sl.PRID); err == nil {
-			if err := e.clearShells(ctx, pr, sl); err != nil {
+			if err := e.clearShells(ctx, pr, sl, holdRelease); err != nil && !(handBack && errors.Is(err, agents.ErrHerdrUnread)) {
 				return fmt.Errorf("release %s: %w", sl.Name, err)
 			}
 		}

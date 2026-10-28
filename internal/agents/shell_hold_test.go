@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -293,5 +294,211 @@ func TestALaunchedRunIsForgottenOnceItEnds(t *testing.T) {
 	e.m.mu.Unlock()
 	if n != 0 || e.m.ShellLaunched(run.ID) || e.m.ShellLaunched("r-7") {
 		t.Errorf("launched runs = %d, want none once their commands ended", n)
+	}
+}
+
+// paneCwd sets where herdr's snapshot shows pane working, its cwd and its
+// foreground's ("" for both: herdr does not say).
+func (e *env) paneCwd(pane, cwd string) {
+	e.h.mu.Lock()
+	defer e.h.mu.Unlock()
+	for i := range e.h.panes {
+		if e.h.panes[i].ID == pane {
+			e.h.panes[i].Cwd, e.h.panes[i].ForegroundCwd = cwd, cwd
+		}
+	}
+}
+
+// lintJob is the process info of a pane whose foreground runs a line
+// without the run token.
+func lintJob(pane string) herdr.ProcessInfo {
+	return herdr.ProcessInfo{PaneID: pane, ShellPID: shellPID, ForegroundPGID: 500,
+		Foreground: []herdr.Process{{PID: 500, Name: "lint", Argv: []string{"bin/lint", "--all"}}}}
+}
+
+// The plain ctrl+c of a line without the run token goes only to the line of
+// a custom role (its command leaves the db-lock line out) that RunShell
+// typed, in a pane herdr still shows as the role's: in the session's
+// checkout, and recorded by no other PR's live session. A built-in line
+// whose token is gone from the pane, a pane herdr shows in another checkout
+// and a pane another PR's live session records get no key, no signal and
+// no close, though the live row still names the pane.
+func TestTheTokenlessCtrlCGoesOnlyToACustomLineInThePaneStillTheRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tagged bool // the line RunShell typed carries the run token, as a built-in role's does
+		set    func(e *env, pane string)
+		keyed  bool
+	}{
+		{"a custom line in the role's pane", false, nil, true},
+		{"a built-in line whose token is gone from the pane", true, nil, false},
+		{"a pane herdr shows in another checkout", false, func(e *env, pane string) { e.paneCwd(pane, "/Users/x/Projects/other") }, false},
+		{"a pane another PR's live session records", false, func(e *env, pane string) {
+			other := e.otherPR(11921)
+			if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: other.ID, Role: string(RoleCodexReview), AgentKind: new(KindShell),
+				HerdrPaneID: new(pane), Cwd: new(e.slotOf(other)), State: store.SessionLive}); err != nil {
+				e.t.Fatal(err)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.shellWorkspace()
+			run, pane := e.shellRun(store.RunSubmitted)
+			e.m.shellDone(run.ID) // RunShell types its line below
+			e.setProcs(pane, idlePane(pane))
+			line := "bin/lint --all"
+			if tc.tagged {
+				line = ShellDBLockLine(e.m.d.Layout.Binary(), shellCheckout, string(RoleCodexReview), run.ID) + " codex review"
+			}
+			e.h.errs["PaneWaitOutput"] = &herdr.Error{Method: "pane.wait_for_output", Code: herdr.CodeTimeout, Message: "t"}
+			if _, err := e.m.RunShell(e.ctx, e.pr, e.spec(RoleCodexReview), pane, line, DoneMarker(run.ID), time.Minute); err == nil {
+				t.Fatal("RunShell = nil, want its wait to time out with the line still running")
+			}
+			e.setProcs(pane, lintJob(pane))
+			if tc.set != nil {
+				tc.set(e, pane)
+			}
+			e.h.mu.Lock()
+			e.h.keys = nil // RunShell's ctrl+u
+			e.h.mu.Unlock()
+			err := e.m.InterruptShell(e.ctx, run)
+			if tc.keyed && err != nil || !tc.keyed && !errors.Is(err, ErrNotOwn) {
+				t.Errorf("InterruptShell = %v, want keyed %t (else ErrNotOwn)", err, tc.keyed)
+			}
+			if keyed := slices.Contains(e.keysSent(), pane+":ctrl+c"); keyed != tc.keyed || len(e.keysSent()) > 1 {
+				t.Errorf("keys = %v, want ctrl+c %t", e.keysSent(), tc.keyed)
+			}
+			if len(e.signalsTo()) != 0 || len(e.h.paneCloses) != 0 {
+				t.Errorf("signals %v, closes %v", e.signalsTo(), e.h.paneCloses)
+			}
+		})
+	}
+}
+
+// A shell pane herdr cannot place (its snapshot gives no cwd) stays in the
+// checkout barrier: a command that runs there holds the switch, and the
+// row is not marked lost (a retired row keeps its pane too). So does a pane
+// herdr shows outside the checkout whose foreground carries magnum's line
+// for this checkout. Nothing is signalled, and magnum remembers no job of
+// theirs (as after a daemon restart).
+func TestAShellPaneHerdrCannotPlaceStaysInTheCheckoutBarrier(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cwd     string
+		retired bool // the row that records the pane is retired
+		own     bool // the foreground runs magnum's line of an earlier run for the checkout
+	}{
+		{"no cwd, magnum's line", "", false, true},
+		{"no cwd, another command", "", false, false},
+		{"no cwd, a retired row", "", true, true},
+		{"outside the checkout, magnum's line for it", "/Users/x/Projects/other", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.shellWorkspace()
+			live := e.session(RoleCodexReview)
+			pane := store.Deref(live.HerdrPaneID)
+			w := e.world(pane)
+			if tc.own {
+				earlier, _ := e.shellRun(store.RunAbandoned)
+				w.job(e.dbLockArgv(RoleCodexReview, shellCheckout, earlier.ID))
+			} else {
+				e.setProcs(pane, otherJob(pane))
+			}
+			if tc.retired {
+				if err := e.st.TransitionSession(e.ctx, live.ID, nil, store.SessionClosed, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.paneCwd(pane, tc.cwd)
+			e.m.mu.Lock()
+			jobs := len(e.m.jobs)
+			e.m.mu.Unlock()
+			if jobs != 0 {
+				t.Fatalf("remembered jobs = %d, want none", jobs)
+			}
+			err := e.m.ClearShellPanes(e.ctx, e.pr, shellCheckout)
+			var hold *ShellHoldError
+			if !errors.As(err, &hold) {
+				t.Fatalf("ClearShellPanes = %v, want a hold while the command runs", err)
+			}
+			if hold.Foreign == tc.own {
+				t.Errorf("hold = %+v, want foreign %t", hold, !tc.own)
+			}
+			if len(e.signalsTo()) != 0 || len(e.keysSent()) != 0 || len(e.h.paneCloses) != 0 {
+				t.Errorf("signals %v, keys %v, closes %v", e.signalsTo(), e.keysSent(), e.h.paneCloses)
+			}
+			if tc.own && !w.alive(dbLockPID) {
+				t.Error("the command is gone")
+			}
+			s, err := e.st.SessionByID(e.ctx, live.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.State == store.SessionLost || store.Deref(s.HerdrPaneID) != pane {
+				t.Errorf("session = %s in %q, want it kept in pane %s", s.State, store.Deref(s.HerdrPaneID), pane)
+			}
+		})
+	}
+}
+
+// ClearShellPanes asks herdr nothing while the PR has no shell pane in the
+// checkout, so a herdr outage holds no checkout the PR's shell roles never
+// ran in. With one there, a herdr that cannot say is ErrHerdrUnread, never
+// a hold for magnum's own command.
+func TestClearShellPanesAsksHerdrOnlyForAShellPaneInTheCheckout(t *testing.T) {
+	e := newEnv(t)
+	e.shellWorkspace()
+	e.h.errs["Snapshot"] = errors.New("herdr: connection refused")
+	if err := e.m.ClearShellPanes(e.ctx, e.pr, "/Users/x/Projects/talkable.review2"); err != nil {
+		t.Errorf("ClearShellPanes in another checkout = %v, want nil", err)
+	}
+	if calls := e.h.callsWith("Snapshot"); len(calls) != 0 {
+		t.Errorf("herdr calls %v for a checkout without a shell pane of the PR", calls)
+	}
+	err := e.m.ClearShellPanes(e.ctx, e.pr, shellCheckout)
+	if !errors.Is(err, ErrHerdrUnread) || errors.Is(err, ErrShellHold) {
+		t.Errorf("ClearShellPanes = %v, want ErrHerdrUnread and no hold", err)
+	}
+}
+
+// tokenless makes role r a custom shell role whose command leaves the
+// db-lock line out: its lines carry no run token.
+func (e *env) tokenless(r Role) {
+	e.t.Helper()
+	for i := range e.cfg.Roles {
+		if e.cfg.Roles[i].Name == string(r) {
+			e.cfg.Roles[i].Command, e.cfg.Roles[i].Prompt = "bin/lint --all", ""
+		}
+	}
+	e.cfg.Normalize()
+}
+
+// A custom role's line without the run token, still running in the role's
+// live pane, holds the checkout as that role's command, never as one magnum
+// did not start; the same foreground in a built-in role's pane is foreign.
+func TestATokenlessRolesCommandHoldsAsItsOwn(t *testing.T) {
+	for _, custom := range []bool{true, false} {
+		t.Run(fmt.Sprintf("custom %t", custom), func(t *testing.T) {
+			e := newEnv(t)
+			if custom {
+				e.tokenless(RoleCodexReview)
+			}
+			e.shellWorkspace()
+			pane := store.Deref(e.session(RoleCodexReview).HerdrPaneID)
+			e.setProcs(pane, lintJob(pane))
+			err := e.m.ClearShellPanes(e.ctx, e.pr, shellCheckout)
+			var hold *ShellHoldError
+			if !errors.As(err, &hold) {
+				t.Fatalf("ClearShellPanes = %v, want a hold", err)
+			}
+			if hold.Tokenless != custom || hold.Foreign == custom {
+				t.Errorf("hold = %+v, want tokenless %t and foreign %t", hold, custom, !custom)
+			}
+			if len(e.signalsTo()) != 0 || len(e.keysSent()) != 0 {
+				t.Errorf("signals %v, keys %v", e.signalsTo(), e.keysSent())
+			}
+		})
 	}
 }

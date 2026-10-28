@@ -206,7 +206,7 @@ func (e *env) shellRun(state string) (store.Run, string) {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	e.m.markLaunched(run.ID)
+	e.m.markLaunched(run.ID, true)
 	return run, store.Deref(sess.HerdrPaneID)
 }
 
@@ -1020,11 +1020,11 @@ func TestAPushDuringTheWaitForABusyPaneSendsItNothing(t *testing.T) {
 
 // The interrupt of a shell role's run is ctrl+c to its pane once its line
 // was typed: to a command that carries this run's token (its job captured
-// first), and to a line without any token in the role's own pane (a
-// `command` of the operator's that leaves the db-lock line out, which got
-// its ctrl+c before the token existed). A line never typed, an earlier
-// run's command, a pane that is not the role's and an idle shell get
-// nothing.
+// first), and to a custom role's line without any token in the role's own
+// pane (a `command` of the operator's that leaves the db-lock line out,
+// which got its ctrl+c before the token existed). A line never typed, an
+// earlier run's command, a pane that is not the role's, a built-in line
+// whose token is gone from the pane and an idle shell get nothing.
 func TestInterruptShellKeysOnlyItsOwnRunsCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -1041,8 +1041,15 @@ func TestInterruptShellKeysOnlyItsOwnRunsCommand(t *testing.T) {
 			_ = e.st.TransitionRun(e.ctx, r.ID, nil, store.RunAbandoned, nil)
 			return e.dbLockArgv(RoleCodexReview, shellCheckout, r.ID)
 		}, false, false, true},
-		{"a line without the token", true, func(*env, store.Run) []string { return []string{"bin/lint", "--all"} }, false, true, false},
-		{"a line without the token in a pane no longer the role's", true, func(*env, store.Run) []string { return []string{"bin/lint", "--all"} }, true, false, true},
+		{"a custom line without the token", true, func(e *env, run store.Run) []string {
+			e.m.markLaunched(run.ID, false)
+			return []string{"bin/lint", "--all"}
+		}, false, true, false},
+		{"a custom line without the token in a pane no longer the role's", true, func(e *env, run store.Run) []string {
+			e.m.markLaunched(run.ID, false)
+			return []string{"bin/lint", "--all"}
+		}, true, false, true},
+		{"a built-in line whose token is gone", true, func(*env, store.Run) []string { return []string{"bin/lint", "--all"} }, false, false, true},
 		{"an idle shell", true, nil, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

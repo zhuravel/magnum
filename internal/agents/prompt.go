@@ -396,7 +396,8 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 	if err := m.d.Herdr.PaneSendKeys(ctx, paneID, "ctrl+u"); err != nil {
 		return fail(fmt.Errorf("clear the line of pane %s: %w", paneID, err))
 	}
-	m.markLaunched(strings.TrimPrefix(marker, donePrefix)) // a run that failed may have typed it
+	runID := strings.TrimPrefix(marker, donePrefix)
+	m.markLaunched(runID, lineTagged(line, runID)) // a run that failed may have typed it
 	if err := m.d.Herdr.PaneRun(ctx, paneID, line); err != nil {
 		return fail(err)
 	}
@@ -417,7 +418,7 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 	if err != nil {
 		return fail(fmt.Errorf("wait for %s: %w", marker, mapHerdr(err)))
 	}
-	m.shellDone(strings.TrimPrefix(marker, donePrefix)) // its command ended
+	m.shellDone(runID) // its command ended
 	return doneStatus(match.MatchedLine, marker), nil
 }
 

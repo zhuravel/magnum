@@ -14043,6 +14043,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   of TestARetryAfterAFailedStopHoldsBeforeItsCheckout, the token-less ctrl+c of
   TestInterruptShellKeysOnlyItsOwnRunsCommand, and the no-human checks of the not-own tests are new too.
 
+  The third round of review fixes (re-reviews of 60e81b49). The token-less ctrl+c goes only to a custom
+  role's line: RunShell records whether the line it typed carried the run token, and a built-in line whose
+  token is gone from the pane gets nothing. Before that key, `tokenlessPane` checks the pane as the herdr id
+  checks do: the role's live session records it, no other PR's live session does, and herdr's snapshot shows
+  it in the session's checkout. ClearShellPanes asks herdr only once the PR has a shell pane in the checkout.
+  A herdr read that fails is `ErrHerdrUnread`, not a hold. The engine then waits a minute as for a busy agent,
+  with no record, no event and no toast. A slot that a failed `magnum fix` or `magnum open` claim reserved
+  goes back to the pool all the same (`handBackSlot`), because nothing ran in it after the release that
+  freed it looked. A pane whose working directory herdr does not report stays in the barrier: a command
+  there holds, and its row keeps its pane (a retired row's ids are not dropped for it). A pane herdr shows
+  outside the checkout is left only when its foreground carries no own run token for this checkout. A
+  custom role's line without the token in its live pane holds as "the <role> command (no run token) still
+  runs in the shell pane of <slot>", not as a command magnum did not start. `clearShells` closes a crashed
+  daemon's runs itself (not those of a paused round), so the fixer, the claims and the releases stop that
+  leftover as a round's setup does. The hold record carries what started it and its last look. A hold that
+  started outside a round is looked at again at each reconcile until it ends, and its record goes with the
+  end event. A round's first look at such a record, or at one nothing looked at for 30 minutes
+  (`shellHoldStale`), starts a fresh hold with its event and its toast, and only a round's own hold moves the
+  PR to needs_attention. Rejected: a toast for every look of the fixer or a claim, and dropping the record at
+  the end of their attempt, because a release is tried again and would toast at every try. Tests, failing
+  first: TestTheTokenlessCtrlCGoesOnlyToACustomLineInThePaneStillTheRoles,
+  TestAShellPaneHerdrCannotPlaceStaysInTheCheckoutBarrier, TestClearShellPanesAsksHerdrOnlyForAShellPaneInTheCheckout,
+  TestATokenlessRolesCommandHoldsAsItsOwn, TestAHerdrOutageAtTheLookHoldsNothing,
+  TestAHerdrOutageNeverKeepsTheSlotAFailedOpenReserved, TestTheFixerAndAReleaseCloseACrashedDaemonsRunsBeforeTheirLook,
+  TestARoundsFirstLookAtAHoldTheFixerLeftStartsAFreshOne, TestARoundsLookAtAStaleHoldStartsAFreshOne,
+  TestAHoldOutsideARoundEndsOnceItsPanesAreFree and TestATokenlessHoldNamesItsRolesCommand, with the built-in
+  case of TestInterruptShellKeysOnlyItsOwnRunsCommand. TestTheFixerSeesTheShellHold now refuses the fixer's
+  prompt, so it fails at once when the guard lets the fixer start.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -183,11 +183,10 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		// cut command an earlier round's restart could not stop, one in a
 		// pane the role moved away from): an own leftover is stopped, and
 		// anything else holds the round (clearShells, shell_hold.go: no
-		// attempt). The runs a crashed daemon left in flight are closed
-		// first, so magnum's own leftover there is stopped, not held.
+		// attempt). clearShells closes the runs a crashed daemon left in
+		// flight first, so magnum's own leftover there is stopped, not held.
 		if job.hasSlot && job.checksOutInPlace() {
-			e.finalizeStaleRuns(ctx, pr.ID)
-			if err := e.clearShells(ctx, pr, job.slot); err != nil {
+			if err := e.clearShells(ctx, pr, job.slot, holdRound); err != nil {
 				return fail(err)
 			}
 		}

@@ -71,14 +71,21 @@ var ErrNotOwn = errors.New("not magnum's own run")
 // the checkout busy, so nothing may switch it.
 var ErrShellHold = errors.New("a command keeps a shell pane in the checkout busy")
 
+// ErrHerdrUnread is ClearShellPanes' answer when herdr cannot say what the
+// PR's shell panes in the checkout run: no hold of a command, only a look
+// that could not be made, which the caller tries again.
+var ErrHerdrUnread = errors.New("herdr cannot say what the shell panes run")
+
 // ShellHoldError is ClearShellPanes' answer while a command keeps one of
 // the PR's shell panes in the checkout busy: Foreign for a command magnum
-// did not start (no run token of the PR's role there), else magnum's own
-// command it could not stop, Cause saying why in plain words. It names the
-// role and the pane, never the command's argv.
+// did not start (no run token of the PR's role there), Tokenless for the
+// line of a custom role whose command carries no run token, still running
+// in the role's live pane, else magnum's own command it could not stop,
+// Cause saying why in plain words. It names the role and the pane, never
+// the command's argv.
 type ShellHoldError struct {
 	Role, Pane, Checkout string
-	Foreign              bool
+	Foreign, Tokenless   bool
 	Cause                string
 }
 
@@ -87,8 +94,11 @@ func (e *ShellHoldError) Error() string {
 	if e.Pane != "" {
 		where += " (" + e.Role + " pane " + e.Pane + ")"
 	}
-	if e.Foreign {
+	switch {
+	case e.Foreign:
 		return "a command magnum did not start keeps a shell pane in " + where + " busy"
+	case e.Tokenless:
+		return "the " + e.Role + " command (no run token) still runs in " + where
 	}
 	return "magnum cannot stop its own command in " + where + ": " + e.Cause
 }
@@ -265,11 +275,12 @@ func runInFlight(r store.Run) bool {
 }
 
 // markLaunched records that RunShell typed (or tried to type) the line of
-// run runID; ShellLaunched reports it, and ShellDone drops it. A line never
-// typed has nothing in a pane for magnum to key or stop.
-func (m *Manager) markLaunched(runID string) {
+// run runID, and whether the line carried the run's token (tagged);
+// ShellLaunched reports it, and ShellDone drops it. A line never typed has
+// nothing in a pane for magnum to key or stop.
+func (m *Manager) markLaunched(runID string, tagged bool) {
 	m.mu.Lock()
-	m.launched[runID] = true
+	m.launched[runID] = tagged
 	m.mu.Unlock()
 }
 
@@ -278,9 +289,23 @@ func (m *Manager) markLaunched(runID string) {
 // (in this daemon: an earlier daemon's rounds ended with it). Only a
 // launched run's command is keyed (InterruptShell) or stopped (StopShell).
 func (m *Manager) ShellLaunched(runID string) bool {
+	_, ok := m.launch(runID)
+	return ok
+}
+
+// launch is whether run runID's line carried the run's token (tagged),
+// and whether RunShell typed it at all (ok).
+func (m *Manager) launch(runID string) (tagged, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.launched[runID]
+	tagged, ok = m.launched[runID]
+	return tagged, ok
+}
+
+// lineTagged reports whether a shell line carries run runID's token (the
+// `--run <id>` of ShellDBLockLine).
+func lineTagged(line, runID string) bool {
+	return runID != "" && strings.Contains(line, shellLine([]string{"--run", runID}))
 }
 
 // shellDone drops run runID from the launched runs: its command ended (its
@@ -343,11 +368,13 @@ func (m *Manager) runSession(ctx context.Context, run store.Run) (store.PR, stor
 // carries this run's own token (ownShell) has its job captured first
 // (captureJob, remembered), so a later idle shell is no proof while a
 // captured process runs on. A line of a role without the run token (a
-// `command` of the operator's that leaves the db-lock line out) gets the
-// plain ctrl+c it always got. A line never typed, an idle shell and a gone
-// pane need nothing (nil); a pane whose foreground carries another run's
-// token, or that is not the role's, gets nothing: ErrNotOwn, or the error
-// that kept herdr from saying.
+// `command` of the operator's that leaves the db-lock line out: the line
+// RunShell typed carried none) gets the plain ctrl+c it always got, once
+// tokenlessPane finds the pane still the role's. A line never typed, an
+// idle shell and a gone pane need nothing (nil); a pane whose foreground
+// carries another run's token, one without a token where the typed line
+// carried it, and a pane that is not the role's get nothing: ErrNotOwn, or
+// the error that kept herdr from saying.
 func (m *Manager) InterruptShell(ctx context.Context, run store.Run) error {
 	if !m.ShellLaunched(run.ID) {
 		return nil
@@ -367,9 +394,14 @@ func (m *Manager) InterruptShell(ctx context.Context, run store.Run) error {
 		return nil
 	}
 	if !m.hasToken(pi) {
-		// A token-less line: only the role's own pane, as before the token.
-		if live, err := m.d.Store.LiveSessionByPRRole(ctx, pr.ID, run.Role); err != nil || live.ID != sess.ID || store.Deref(live.HerdrPaneID) != pane {
-			return fmt.Errorf("agents: interrupt %s: %w", run.Role, notOwn(false, "pane %s is not the %s pane of the PR", pane, run.Role))
+		// A line without the token gets the plain ctrl+c only as a custom
+		// role's (the line RunShell typed carried no token), in a pane
+		// still the role's.
+		if tagged, _ := m.launch(run.ID); tagged {
+			return fmt.Errorf("agents: interrupt %s: %w", run.Role, notOwn(true, "pane %s runs no db-lock with the run's token", pane))
+		}
+		if err := m.tokenlessPane(ctx, pr, sess, pane); err != nil {
+			return fmt.Errorf("agents: interrupt %s: %w", run.Role, err)
 		}
 	} else {
 		o, err := m.ownShell(ctx, pr, sess, pi, run.ID)
@@ -387,6 +419,41 @@ func (m *Manager) InterruptShell(ctx context.Context, run store.Run) error {
 	}
 	if err := m.d.Herdr.PaneSendKeys(ctx, pane, "ctrl+c"); err != nil {
 		return fmt.Errorf("agents: interrupt %s in pane %s: %w", run.Role, pane, err)
+	}
+	return nil
+}
+
+// tokenlessPane checks that pane, which shell session sess records, is
+// still the role's before it gets a key without the run token's proof:
+// the role's live session records it, no other PR's live session does,
+// and herdr's snapshot shows it in the session's checkout (paneReason).
+// Anything else is a *notOwnError (ErrNotOwn); a registry or herdr that
+// cannot say is its error.
+func (m *Manager) tokenlessPane(ctx context.Context, pr store.PR, sess store.Session, pane string) error {
+	if live, err := m.d.Store.LiveSessionByPRRole(ctx, pr.ID, sess.Role); err != nil || live.ID != sess.ID || store.Deref(live.HerdrPaneID) != pane {
+		return notOwn(false, "pane %s is not the %s pane of the PR", pane, sess.Role)
+	}
+	own, err := m.d.Store.SessionsByPR(ctx, pr.ID)
+	if err != nil {
+		return err
+	}
+	others, err := m.othersLive(ctx, pr, own)
+	if err != nil {
+		return err
+	}
+	if others.pane(pane) {
+		return notOwn(true, "pane %s is another PR's", pane)
+	}
+	snap, err := m.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("read herdr before a key to pane %s: %w", pane, err)
+	}
+	p, ok := paneIndex(snap)[pane]
+	if !ok {
+		return notOwn(false, "herdr no longer shows pane %s", pane)
+	}
+	if why := m.viewOf(ctx, pr.ID, snap, []store.Session{sess}).paneReason(p, sess); why != "" {
+		return notOwn(true, "pane %s is not the role's any more: %s", pane, notTheirs(why))
 	}
 	return nil
 }
@@ -1024,17 +1091,22 @@ func foregroundNames(pi herdr.ProcessInfo) []string {
 // that no command runs in a shell pane of the PR's there. First what is
 // left of a job magnum captured for one of the PR's runs is stopped
 // (stopRemembered). Then the PR's shell sessions, live or retired, whose
-// cwd is checkout: only a pane herdr still shows as the session's (the
-// herdr id checks of the retired panes, inHerdr, and paneReason for a live
-// row, whose pane a herdr restart gave to another becomes lost), and that
-// no other PR's live session records. A live session's pane busy with an
-// own run of its role no longer in flight (ownShell) is stopped (stopShell,
-// on a context an abort or a shutdown cannot cut between SIGTERM and
-// SIGKILL; each step stays bounded). A pane still busy holds the switch: a
-// *ShellHoldError (ErrShellHold), Foreign for a command magnum did not
-// start, else magnum's own with why it cannot stop it, herdr unable to say
-// included. It never marks a human at work, and records no event: the
-// engine keeps the hold and says so.
+// cwd is checkout; herdr is asked only once there is one. Their panes go
+// through the herdr id checks: a pane another PR's live session records is
+// left alone, and a pane herdr shows as another's (another agent there, or
+// a cwd outside the checkout) is left too, its live row lost for the next
+// round to lay a pane out, unless its foreground runs magnum's line for
+// this checkout (ownToken), which holds. A pane herdr cannot place (no cwd
+// in its snapshot) stays in the barrier: a command there holds. A live
+// session's pane busy with an own run of its role no longer in flight
+// (ownShell) is stopped (stopShell, on a context an abort or a shutdown
+// cannot cut between SIGTERM and SIGKILL; each step stays bounded). A pane
+// still busy holds the switch: a *ShellHoldError (ErrShellHold), Foreign
+// for a command magnum did not start, Tokenless for a custom role's line
+// without the run token in its live pane, else magnum's own with why it
+// cannot stop it. A herdr that cannot say is ErrHerdrUnread, no hold. It
+// never marks a human at work, and records no event: the engine keeps the
+// hold and says so.
 func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout string) error {
 	ctx = context.WithoutCancel(ctx)
 	hold := func(s store.Session, pane string, foreign bool, cause string) error {
@@ -1057,15 +1129,33 @@ func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout str
 	if err != nil {
 		return fmt.Errorf("agents: the shell panes of pr %d: %w", pr.Number, err)
 	}
+	here := func(s store.Session) bool {
+		return !m.isAgentSession(s) && store.Deref(s.HerdrPaneID) != "" && store.Deref(s.Cwd) != "" && samePath(store.Deref(s.Cwd), checkout)
+	}
+	if !slices.ContainsFunc(sessions, here) {
+		return nil // no shell pane of the PR's there: nothing to ask herdr
+	}
+	unread := func(err error) error {
+		return fmt.Errorf("agents: the shell panes of pr %d in %s: %w (%s)", pr.Number, checkout, ErrHerdrUnread, execx.Redact(err.Error()))
+	}
 	snap, err := m.d.Herdr.Snapshot(ctx)
 	if err != nil {
-		return hold(store.Session{}, "", false, "herdr cannot say what its shell panes run: "+execx.Redact(err.Error()))
+		return unread(err)
 	}
-	sessions, view := m.inHerdr(ctx, pr, snap, sessions)
+	// The herdr id checks of the retired rows (inHerdr), except that a
+	// shell pane herdr cannot place keeps its row's ids.
+	view := m.viewOf(ctx, pr.ID, snap, sessions)
+	sessions = m.dropStale(ctx, pr, sessions, func(s store.Session) string {
+		if p, ok := view.panes[store.Deref(s.HerdrPaneID)]; ok && here(s) && unplaced(p) && view.paneReason(p, s) == idsOutsideCheckout {
+			return ""
+		}
+		return view.stale(s)
+	})
+	view.sessions = sessions
 	seen := map[string]bool{}
 	for _, s := range slices.Backward(sessions) {
 		pane := store.Deref(s.HerdrPaneID)
-		if m.isAgentSession(s) || pane == "" || seen[pane] || store.Deref(s.Cwd) == "" || !samePath(store.Deref(s.Cwd), checkout) {
+		if !here(s) || seen[pane] {
 			continue
 		}
 		seen[pane] = true
@@ -1073,12 +1163,16 @@ func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout str
 		if !ok || others.pane(pane) {
 			continue // gone, or another PR's
 		}
-		if why := view.paneReason(p, s); why != "" {
-			if isLive(s) { // herdr gave the pane to another: the row is lost, for the next round to lay a pane out
+		why := view.paneReason(p, s)
+		lost := func() { // herdr gave the pane to another: the row is lost, for the next round to lay a pane out
+			if isLive(s) {
 				if err := m.markLost(ctx, s); err != nil {
 					m.logErr(ctx, err, "agents: %s session %d: %v", s.Role, s.ID, err)
 				}
 			}
+		}
+		if why == idsAnotherAgent {
+			lost()
 			continue
 		}
 		pi, err := m.d.Herdr.PaneProcessInfo(ctx, pane)
@@ -1086,8 +1180,23 @@ func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout str
 		case isGone(err):
 			continue
 		case err != nil:
-			return hold(s, pane, false, "herdr cannot say what the pane runs: "+execx.Redact(err.Error()))
-		case herdr.IdleShell(pi):
+			return unread(err)
+		}
+		busy := !herdr.IdleShell(pi)
+		switch {
+		case why == "":
+		case unplaced(p): // herdr does not say where the pane works: it stays in the barrier
+			if busy {
+				return hold(s, pane, !m.ownToken(ctx, pr, s, pi), "herdr does not say where its pane works, so magnum does not signal it")
+			}
+			continue
+		case busy && m.ownToken(ctx, pr, s, pi):
+			return hold(s, pane, false, "its pane works outside the checkout but runs magnum's line for it, so magnum does not signal it")
+		default:
+			lost()
+			continue
+		}
+		if !busy {
 			continue
 		}
 		if !isLive(s) {
@@ -1095,7 +1204,10 @@ func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout str
 		}
 		_, err = m.ownShell(ctx, pr, s, pi, "")
 		if no, ok := errors.AsType[*notOwnError](err); ok {
-			if no.foreign {
+			switch {
+			case no.foreign && !m.hasToken(pi) && m.tokenlessRole(s.Role):
+				return &ShellHoldError{Role: s.Role, Pane: pane, Checkout: checkout, Tokenless: true}
+			case no.foreign:
 				return hold(s, pane, true, "")
 			}
 			return hold(s, pane, false, no.why)
@@ -1105,6 +1217,33 @@ func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout str
 		}
 	}
 	return nil
+}
+
+// unplaced reports whether herdr's snapshot does not say where pane p
+// works (no cwd of its own nor of its foreground).
+func unplaced(p herdr.Pane) bool { return p.Cwd == "" && p.ForegroundCwd == "" }
+
+// tokenlessRole reports whether shell role r's command leaves the db-lock
+// line out (`{{.DBLockCommand}}`), so its lines carry no run token: a
+// custom role's. A role whose template cannot be read counts as one that
+// carries it.
+func (m *Manager) tokenlessRole(r string) bool {
+	spec, ok := m.roleSpec(Role(r))
+	if !ok || !spec.IsShell() {
+		return false
+	}
+	text := spec.Command
+	if text == "" {
+		if spec.Prompt == "" || m.d.Config == nil {
+			return false
+		}
+		p, err := m.d.Config.ResolvePrompt(spec.Prompt)
+		if err != nil {
+			return false
+		}
+		text = p.Text
+	}
+	return !strings.Contains(text, ".DBLockCommand")
 }
 
 // ownToken reports whether pi's foreground carries the run token of a run

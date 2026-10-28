@@ -551,6 +551,11 @@ var (
 )
     Sentinel errors; match with errors.Is.
 
+var ErrHerdrUnread = errors.New("herdr cannot say what the shell panes run")
+    ErrHerdrUnread is ClearShellPanes' answer when herdr cannot say what the
+    PR's shell panes in the checkout run: no hold of a command, only a look that
+    could not be made, which the caller tries again.
+
 var ErrNoModelSwitch = errors.New("agent kind cannot switch models")
     ErrNoModelSwitch: the session's kind has no switch_model command.
 
@@ -1590,17 +1595,22 @@ func (m *Manager) ClearShellPanes(ctx context.Context, pr store.PR, checkout str
     slot at checkout (a round's, the fixer's, magnum open's, a release), that
     no command runs in a shell pane of the PR's there. First what is left of a
     job magnum captured for one of the PR's runs is stopped (stopRemembered).
-    Then the PR's shell sessions, live or retired, whose cwd is checkout: only a
-    pane herdr still shows as the session's (the herdr id checks of the retired
-    panes, inHerdr, and paneReason for a live row, whose pane a herdr restart
-    gave to another becomes lost), and that no other PR's live session records.
-    A live session's pane busy with an own run of its role no longer in flight
-    (ownShell) is stopped (stopShell, on a context an abort or a shutdown cannot
-    cut between SIGTERM and SIGKILL; each step stays bounded). A pane still
-    busy holds the switch: a *ShellHoldError (ErrShellHold), Foreign for a
-    command magnum did not start, else magnum's own with why it cannot stop it,
-    herdr unable to say included. It never marks a human at work, and records no
-    event: the engine keeps the hold and says so.
+    Then the PR's shell sessions, live or retired, whose cwd is checkout; herdr
+    is asked only once there is one. Their panes go through the herdr id checks:
+    a pane another PR's live session records is left alone, and a pane herdr
+    shows as another's (another agent there, or a cwd outside the checkout) is
+    left too, its live row lost for the next round to lay a pane out, unless its
+    foreground runs magnum's line for this checkout (ownToken), which holds.
+    A pane herdr cannot place (no cwd in its snapshot) stays in the barrier:
+    a command there holds. A live session's pane busy with an own run of its
+    role no longer in flight (ownShell) is stopped (stopShell, on a context
+    an abort or a shutdown cannot cut between SIGTERM and SIGKILL; each step
+    stays bounded). A pane still busy holds the switch: a *ShellHoldError
+    (ErrShellHold), Foreign for a command magnum did not start, Tokenless for
+    a custom role's line without the run token in its live pane, else magnum's
+    own with why it cannot stop it. A herdr that cannot say is ErrHerdrUnread,
+    no hold. It never marks a human at work, and records no event: the engine
+    keeps the hold and says so.
 
 func (m *Manager) CloseRetiredPanes(ctx context.Context, pr store.PR) error
     CloseRetiredPanes closes the panes of the PR's parked, closed and lost
@@ -1777,10 +1787,12 @@ func (m *Manager) InterruptShell(ctx context.Context, run store.Run) error
     this run's own token (ownShell) has its job captured first (captureJob,
     remembered), so a later idle shell is no proof while a captured process runs
     on. A line of a role without the run token (a `command` of the operator's
-    that leaves the db-lock line out) gets the plain ctrl+c it always got.
-    A line never typed, an idle shell and a gone pane need nothing (nil); a pane
-    whose foreground carries another run's token, or that is not the role's,
-    gets nothing: ErrNotOwn, or the error that kept herdr from saying.
+    that leaves the db-lock line out: the line RunShell typed carried none) gets
+    the plain ctrl+c it always got, once tokenlessPane finds the pane still
+    the role's. A line never typed, an idle shell and a gone pane need nothing
+    (nil); a pane whose foreground carries another run's token, one without a
+    token where the typed line carried it, and a pane that is not the role's get
+    nothing: ErrNotOwn, or the error that kept herdr from saying.
 
 func (m *Manager) LatestRound(ctx context.Context, prID int64) (int, error)
     LatestRound is the highest run round of a PR (0 when it has no runs).
@@ -2755,14 +2767,15 @@ type ShellData struct {
 
 type ShellHoldError struct {
 	Role, Pane, Checkout string
-	Foreign              bool
+	Foreign, Tokenless   bool
 	Cause                string
 }
     ShellHoldError is ClearShellPanes' answer while a command keeps one of the
     PR's shell panes in the checkout busy: Foreign for a command magnum did not
-    start (no run token of the PR's role there), else magnum's own command it
-    could not stop, Cause saying why in plain words. It names the role and the
-    pane, never the command's argv.
+    start (no run token of the PR's role there), Tokenless for the line of a
+    custom role whose command carries no run token, still running in the role's
+    live pane, else magnum's own command it could not stop, Cause saying why in
+    plain words. It names the role and the pane, never the command's argv.
 
 func (e *ShellHoldError) Error() string
 

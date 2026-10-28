@@ -311,7 +311,7 @@ func (e *Engine) checkoutAt(ctx context.Context, slot store.Slot, pr store.PR, p
 	}
 	// Never under a command that still runs in a shell pane of the PR's
 	// there (the shell hold, as a round's setup sees it).
-	if err := e.clearShells(ctx, pr, slot); err != nil {
+	if err := e.clearShells(ctx, pr, slot, holdClaim); err != nil {
 		return store.Slot{}, err
 	}
 	if err := e.d.Slots.Checkout(ctx, slot, pr, pl, target); err != nil {
@@ -329,7 +329,7 @@ func (e *Engine) releaseReserved(ctx context.Context, pr store.PR, slot store.Sl
 	} else {
 		e.closeRetiredPanes(ctx, pr) // retired_panes.go
 	}
-	if err := e.releaseSlot(ctx, slot, pool, "open failed"); err != nil {
+	if err := e.handBackSlot(ctx, slot, pool, "open failed"); err != nil {
 		e.event(ctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after a failed magnum open: "+err.Error(), nil)
 		return
 	}
