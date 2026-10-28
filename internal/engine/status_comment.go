@@ -461,7 +461,7 @@ func (e *Engine) noteStatusComments(ctx context.Context) {
 		e.warnUnlessStopped(ctx, err, "status comments: review summaries")
 		return
 	}
-	refusals, holds, err := e.autoApprovalReads(ctx, reviewed)
+	approvals, err := e.autoApprovalReads(ctx, reviewed)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "status comments: auto-approval")
 		return
@@ -486,7 +486,7 @@ func (e *Engine) noteStatusComments(ctx context.Context) {
 		_, unwritten := e.unwrittenFlag(pr.ID)
 		reads := statusReads{flagged: flagged[pr.ID] || unwritten, last: sums[pr.ID], declined: declined[pr.ID]}
 		if id := e.cfg.AutoApproveFor(repo.FullName()); id != nil {
-			reads.approval = approvalReads{login: id.Login, refused: refusals[pr.ID], hold: holdOf(holds, pr.ID)}
+			reads.approval = approvals.of(repo.FullName(), id.Login, pr.ID)
 		}
 		if e.writeStatus(ctx, repo, pr, reads, now) {
 			writes++
@@ -507,62 +507,109 @@ type statusReads struct {
 	approval approvalReads
 }
 
-// approvalReads is what approvalLine decides from: the auto_approve_as
-// login of the PR's repository ("" = none), and the PR's refusal record
-// (KVPRAutoApproveRefused; nil = none) and auto-approval hold (nil = none).
+// approvalReads is what approvalLine decides from: the PR's repository
+// ("owner/name") and the auto_approve_as login it is approved as ("" =
+// none), and the PR's refusal record (KVPRAutoApproveRefused; nil = none),
+// auto-approval hold (nil = none) and latest automatic approval (nil =
+// none).
 type approvalReads struct {
-	login   string
-	refused *AutoApproveRefused
-	hold    *store.AutoApproveHold
+	repo, login string
+	refused     *AutoApproveRefused
+	hold        *store.AutoApproveHold
+	approval    *store.AutoApproval
+}
+
+// approvalTick is what noteStatusComments reads of auto-approval once a
+// tick (autoApprovalReads), by PR: the refusal records, the holds and the
+// latest automatic approvals.
+type approvalTick struct {
+	refusals  map[int64]*AutoApproveRefused
+	holds     map[int64]store.AutoApproveHold
+	approvals map[int64]store.AutoApproval
+}
+
+// of is PR prID's share of t, for repository repo approved as login.
+func (t approvalTick) of(repo, login string, prID int64) approvalReads {
+	r := approvalReads{repo: repo, login: login, refused: t.refusals[prID], hold: holdOf(t.holds, prID)}
+	if a, ok := t.approvals[prID]; ok {
+		r.approval = &a
+	}
+	return r
 }
 
 // autoApprovalReads reads, in one query each, the refusal records of every
-// PR (KVPRAutoApproveRefused) and the auto-approval holds of prIDs, the PRs
-// with a review: nothing when no watch auto-approves.
-func (e *Engine) autoApprovalReads(ctx context.Context, prIDs []int64) (map[int64]*AutoApproveRefused, map[int64]store.AutoApproveHold, error) {
+// PR (KVPRAutoApproveRefused), and the auto-approval holds and the latest
+// automatic approvals of prIDs, the PRs with a review: nothing when no
+// watch auto-approves.
+func (e *Engine) autoApprovalReads(ctx context.Context, prIDs []int64) (approvalTick, error) {
 	if !e.cfg.AutoApproves() {
-		return nil, nil, nil
+		return approvalTick{}, nil
 	}
 	rows, err := e.st.KVValues(ctx, "pr.*.auto_approve_refused")
 	if err != nil {
-		return nil, nil, err
+		return approvalTick{}, err
 	}
-	refusals := map[int64]*AutoApproveRefused{}
+	t := approvalTick{refusals: map[int64]*AutoApproveRefused{}}
 	for key, v := range rows {
 		var id int64
 		if _, err := fmt.Sscanf(key, "pr.%d.auto_approve_refused", &id); err != nil || KVPRAutoApproveRefused(id) != key {
 			continue
 		}
 		if r, ok := ParseAutoApproveRefused(v); ok {
-			refusals[id] = &r
+			t.refusals[id] = &r
 		}
 	}
-	holds, err := e.st.AutoApproveHolds(ctx, prIDs)
-	if err != nil {
-		return nil, nil, err
+	if t.holds, err = e.st.AutoApproveHolds(ctx, prIDs); err != nil {
+		return approvalTick{}, err
 	}
-	return refusals, holds, nil
+	if t.approvals, err = e.st.LatestAutoApprovals(ctx, prIDs); err != nil {
+		return approvalTick{}, err
+	}
+	return t, nil
+}
+
+// approvalLineFor is approvalLine of pr, and nothing where the author lists
+// or the watch's filters keep pr from auto-approval now (authorRefusal,
+// watchRefusal: the configuration's facts and the registry's), whatever
+// refusal auto-approval recorded or stop it holds: GitHub hears nothing of
+// them, so the comment reads as on a watch without auto-approval.
+func (e *Engine) approvalLineFor(ctx context.Context, pr store.PR, reads statusReads) string {
+	line := approvalLine(pr, reads.last, reads.approval)
+	if line == "" {
+		return ""
+	}
+	c := store.RepoPR{PR: pr, Repo: reads.approval.repo}
+	if e.authorRefusal(c).why != "" {
+		return ""
+	}
+	if why, _ := e.watchRefusal(ctx, c); why != "" {
+		return ""
+	}
+	return line
 }
 
 // approvalLine is the line under a posted review of pr (last: its summary)
 // on why it brought no approval as a.login, in fixed words (publicText);
-// "" when there is none to say: no login, a PR GitHub closed or that is
-// the login's own, a review after magnum's round (a manual verdict), an
-// approval of the head by the login on GitHub (GitHub's latest reviews),
-// and a refusal record of another head or round or without a class. A stop
-// of auto-approval of the PR wins over the record, unless the round left
-// something to fix or cannot tell.
+// "" when there is none to say: no login; a PR GitHub closed, that is not
+// reviewed (a round is due or runs on it), a draft, muted, or the login's
+// own; a review after magnum's round (a manual verdict); an approval of the
+// head by the login on GitHub (GitHub's latest reviews) or one of magnum's
+// as the login that stands on it (approvalStands); a round that left
+// something to fix or cannot tell; and a refusal record of another head or
+// round, or without a class. A stop of auto-approval of the PR wins over
+// the record.
 func approvalLine(pr store.PR, last store.ReviewSummary, a approvalReads) string {
 	switch {
-	case a.login == "", pr.GHState != store.GHOpen,
+	case a.login == "", pr.GHState != store.GHOpen, pr.State != store.PRReviewed, pr.IsDraft, pr.Muted,
 		github.SameAccount(github.Account(deref(pr.AuthorLogin), deref(pr.AuthorType)), a.login),
-		last.ReviewID == 0, last.ReviewID != deref(pr.LastReviewID), loginApproved(pr, a.login):
+		last.ReviewID == 0, last.ReviewID != deref(pr.LastReviewID), loginApproved(pr, a.login),
+		approvalStands(a.approval, pr.HeadSHA, a.login):
+		return ""
+	}
+	if blocks, known := roundBlocks(last, ""); blocks || !known {
 		return ""
 	}
 	if a.hold != nil && a.hold.Held {
-		if blocks, known := roundBlocks(last, ""); blocks || !known {
-			return ""
-		}
 		return publicText(publicStopped, a.login)
 	}
 	if r := a.refused; r != nil && r.Head == pr.HeadSHA && r.RunID == last.RunID {
@@ -577,6 +624,19 @@ func loginApproved(pr store.PR, login string) bool {
 	return slices.ContainsFunc(pr.LatestReviews, func(r store.LatestReview) bool {
 		return github.SameAccount(r.Login, login) && strings.EqualFold(r.State, "APPROVED") && r.CommitSHA == pr.HeadSHA
 	})
+}
+
+// approvalStands reports whether a, a PR's latest automatic approval (nil =
+// none), may stand on GitHub as login on head, as the registry has it: it
+// is live (being posted, standing, being withdrawn), or GitHub refused its
+// withdrawal for good (failed after it posted). GitHub's latest reviews may
+// list a later comment of the login's as their latest (a reply on a
+// thread, which stops auto-approval but leaves the approval standing).
+func approvalStands(a *store.AutoApproval, head, login string) bool {
+	if a == nil || a.HeadSHA != head || !github.SameAccount(a.Login, login) {
+		return false
+	}
+	return slices.Contains(store.AutoLiveStates, a.State) || (a.State == store.AutoFailed && a.ReviewID != 0)
 }
 
 // publicText is what the status comment says of a refusal of class p as
@@ -905,7 +965,7 @@ func (e *Engine) statusFor(ctx context.Context, pr store.PR, rec statusRecord, r
 			if st, ok := e.statusFix(ctx, pr.ID); ok && st.Phase == FixPhaseFixing {
 				v.stage, v.cycle, v.cycles = statusFixing, st.Cycle, st.Cap
 			} else if !held {
-				v.approval = approvalLine(pr, reads.last, reads.approval) // the posted line says that a held one's full pass follows
+				v.approval = e.approvalLineFor(ctx, pr, reads) // the posted line says that a held one's full pass follows
 			}
 			return v, true
 		}

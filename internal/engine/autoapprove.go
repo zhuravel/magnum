@@ -706,7 +706,7 @@ func (e *Engine) followAutoApproval(ctx context.Context, a store.AutoApprovalPR,
 		e.resumeAutoPost(ctx, repo, a, gh)
 	case store.AutoDismissing:
 		if !e.now().Before(a.UpdatedAt.Add(autoApproveRetry)) {
-			_ = e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, a.EndedBy, a.EndReason)
+			_ = e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, a.EndedBy, a.EndReason, "")
 		}
 	case store.AutoStanding:
 		e.followStanding(ctx, repo, a, sum, hold, gh, ag)
@@ -725,6 +725,7 @@ func (e *Engine) closeAutoApproval(ctx context.Context, repo store.Repo, a store
 	}
 	if e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding, store.AutoDismissing}, store.AutoEndedClosed, why) {
 		e.dropPending(ctx, kvAutoWithdrawPending(a.PRID), strconv.FormatInt(a.ReviewID, 10)) // a withdrawal under way is dropped
+		e.delKV(ctx, kvAutoWithdrawNote(a.PRID))
 	}
 	delete(e.autoFollow, a.ID)
 }
@@ -814,8 +815,8 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 		}
 	}
 	if sum != nil && sum.RunID != a.RunID {
-		if msg := standingWithdrawal(*sum, reviewBody(reviews, sum.ReviewID), gate, a.Login); msg != "" {
-			if err := e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, store.AutoEndedMagnum, msg); err == nil {
+		if msg, note := standingWithdrawal(*sum, reviewBody(reviews, sum.ReviewID), gate, a.Login); msg != "" {
+			if err := e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, store.AutoEndedMagnum, msg, note); err == nil {
 				delete(e.autoFollow, a.ID)
 			}
 			return
@@ -844,14 +845,15 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 
 // standingWithdrawal is the message that withdraws a standing automatic
 // approval as login after sum, a later round of magnum's (body: its
-// review's, "" when not read), and that GitHub shows on the dismissal; ""
-// when the approval stands. A round that leaves something to fix (or
+// review's, "" when not read), and that GitHub shows on the dismissal
+// (public; "" when the approval stands), and what the operator's events
+// and toast say of it (local). A round that leaves something to fix (or
 // cannot tell) withdraws it, and so does one the gates refuse (gate:
-// standingGateRefusal), in its class's words (publicReason), never the
-// gate's own: "Magnum no longer approves it automatically" for a gate
-// without a class.
-func standingWithdrawal(sum store.ReviewSummary, body string, gate autoRefusal, login string) string {
-	var what string
+// standingGateRefusal): public says the class's words (publicReason),
+// never the gate's own, "Magnum no longer approves it automatically" for a
+// gate without a class, and local says the gate's.
+func standingWithdrawal(sum store.ReviewSummary, body string, gate autoRefusal, login string) (public, local string) {
+	var what, own string
 	switch blocks, known := roundBlocks(sum, body); {
 	case blocks:
 		what = "found blocking problems"
@@ -859,10 +861,40 @@ func standingWithdrawal(sum store.ReviewSummary, body string, gate autoRefusal, 
 		what = "left earlier findings open"
 	case gate.why != "":
 		what = "found nothing to fix, but " + cmp.Or(publicReason(gate.public, login), "Magnum no longer approves it automatically")
+		own = "found nothing to fix, but " + gate.why
 	default:
-		return ""
+		return "", ""
 	}
-	return fmt.Sprintf("Magnum's review of %s %s; this automatic approval is withdrawn ([review](%s)).", textx.ShortSHA(sum.SHA), what, sum.URL)
+	say := func(what string) string {
+		return fmt.Sprintf("Magnum's review of %s %s; this automatic approval is withdrawn ([review](%s)).", textx.ShortSHA(sum.SHA), what, sum.URL)
+	}
+	return say(what), say(cmp.Or(own, what))
+}
+
+// kvAutoWithdrawNote holds "<approval id>|<words>" while magnum withdraws
+// that approval: what its local events and toast say (standingWithdrawal's
+// local), which the dismissal message GitHub gets, and the row's end
+// reason a later attempt sends again, never say; a later attempt, after a
+// restart too, says it as the first did. The withdrawal's end drops it.
+func kvAutoWithdrawNote(prID int64) string { return fmt.Sprintf("pr.%d.auto_withdraw_note", prID) }
+
+// withdrawalNote is what the withdrawal of approval approvalID of PR prID
+// says locally: note when given (recorded for a later attempt when it is
+// not message), else the one recorded for that approval, else message.
+func (e *Engine) withdrawalNote(ctx context.Context, prID, approvalID int64, message, note string) string {
+	key, id := kvAutoWithdrawNote(prID), strconv.FormatInt(approvalID, 10)+"|"
+	if note != "" {
+		if note != message {
+			e.setKV(ctx, key, id+note)
+		}
+		return note
+	}
+	if v, ok := e.getKV(ctx, key); ok {
+		if rest, ok := strings.CutPrefix(v, id); ok {
+			return rest
+		}
+	}
+	return message
 }
 
 // dismissedOnGitHub records standing approval a, which GitHub lists as
@@ -951,8 +983,12 @@ func (e *Engine) endAutoApproval(ctx context.Context, repo store.Repo, pr store.
 // such dismissal does (dismissalBy, stopForDismissal). A withdrawal of
 // magnum's own is toasted; one GitHub did not take stays dismissing, tried
 // again after autoApproveRetry, and after autoApproveAttempts it ends
-// failed with one urgent toast.
-func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, gh GitHub, by, message string) error {
+// failed with one urgent toast. message is all GitHub gets, and the row's
+// end reason, which a later attempt sends again; the events and the toast
+// say note (standingWithdrawal's local words; "" = message), which a later
+// attempt reads back (withdrawalNote).
+func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, gh GitHub, by, message,
+	note string) error {
 	if err := ctx.Err(); err != nil {
 		return err // the daemon is stopping: no write starts
 	}
@@ -966,7 +1002,10 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 			return fmt.Errorf("automatic approval %d moved on: %w", a.ID, err)
 		}
 		a.State, a.Attempts = store.AutoDismissing, 0
+	} else {
+		note = "" // a later attempt: the first one's
 	}
+	note = e.withdrawalNote(ctx, pr.ID, a.ID, message, note)
 	attempt := a.Attempts + 1
 	data := map[string]any{"approval_id": a.ID, "review_id": a.ReviewID, "head_sha": a.HeadSHA, "identity": a.Identity, "by": by, "attempt": attempt}
 	end := e.beginWork(fmt.Sprintf("withdrawal of approval %d of %s#%d by %s", a.ReviewID, repo.FullName(), pr.Number, a.Login))
@@ -974,7 +1013,7 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 	ctx, cancel := e.writeContext(ctx)
 	defer cancel()
 	e.event(ctx, "info", subject, "review.auto_approval_withdraw_begin",
-		fmt.Sprintf("withdrawing approval %d of %s by %s (attempt %d): %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, attempt, message), data)
+		fmt.Sprintf("withdrawing approval %d of %s by %s (attempt %d): %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, attempt, note), data)
 	pending, reviewID := kvAutoWithdrawPending(pr.ID), strconv.FormatInt(a.ReviewID, 10)
 	lost := e.pendingAutoWithdrawal(ctx, pr.ID, a.ReviewID) // an earlier dismissal of it went out unanswered
 	var err error
@@ -1046,8 +1085,9 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 	}); uerr != nil {
 		e.log.Warn("auto approval withdrawn and not recorded", "approval", a.ID, "err", uerr)
 	}
+	e.delKV(ctx, kvAutoWithdrawNote(pr.ID))
 	e.event(ctx, "info", subject, "review.auto_approval_withdrawn",
-		fmt.Sprintf("withdrew approval %d of %s by %s%s: %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, how, message), data)
+		fmt.Sprintf("withdrew approval %d of %s by %s%s: %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, how, note), data)
 	if theirs != "" {
 		e.stopForDismissal(ctx, repo, pr, a, ended, theirs)
 		return nil // not magnum's withdrawal: no toast says it was
@@ -1055,7 +1095,7 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 	if by == store.AutoEndedMagnum {
 		label := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
 		e.info(notify.Item{Key: fmt.Sprintf("auto-withdrawn:%d", a.ID), Title: "magnum: withdrew your approval: " + label,
-			Body: pr.URL + "\n" + message, Line: "withdrew your approval: " + label + " " + pr.URL, Kind: kindAutoWithdrawn, Window: autoToastWindow})
+			Body: pr.URL + "\n" + note, Line: "withdrew your approval: " + label + " " + pr.URL, Kind: kindAutoWithdrawn, Window: autoToastWindow})
 	}
 	return nil
 }
@@ -1107,6 +1147,7 @@ func (e *Engine) withdrawFailed(ctx context.Context, repo store.Repo, pr store.P
 		// Nothing settles it now: a dismissal found later is not taken for
 		// this one.
 		e.dropPending(ctx, kvAutoWithdrawPending(pr.ID), strconv.FormatInt(a.ReviewID, 10))
+		e.delKV(ctx, kvAutoWithdrawNote(pr.ID))
 	}
 	if uerr := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoDismissing}, to, func(u *store.AutoApprovalUpdate) {
 		u.Set("error", err.Error())
@@ -1171,7 +1212,7 @@ func (e *Engine) requestUnapprove(ctx context.Context, p UnapprovePayload) (stri
 	if gh == nil {
 		return "", fmt.Errorf("identity %q has no GitHub client: dismiss review %d of %s on GitHub", live.Identity, live.ReviewID, label)
 	}
-	if err := e.withdrawAutoApproval(ctx, repo, pr, live, gh, store.AutoEndedOperator, UnapproveMessage); err != nil {
+	if err := e.withdrawAutoApproval(ctx, repo, pr, live, gh, store.AutoEndedOperator, UnapproveMessage, ""); err != nil {
 		return "", fmt.Errorf("withdraw the automatic approval of %s: %w (magnum tries again)", label, err)
 	}
 	return fmt.Sprintf("withdrew the automatic approval of %s (review %d by %s); magnum will not approve it as you again", label, live.ReviewID, live.Login), nil

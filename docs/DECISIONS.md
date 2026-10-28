@@ -13751,7 +13751,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAConflictCallNamesTwentyPathsAndCountsTheRest.
 - **The status comment says why a clean review brought no approval** (2026-10-28,
   docs/superpowers/specs/2026-10-28-auto-approval-explained-design.md; amends "Auto-approval leaves the PRs of
-  listed authors to a person": "the status comment never spoke of auto-approval"). On talkable#12092 one
+  listed authors to a person" ("the status comment never spoke of auto-approval") and "Auto-approval can
+  trust only some authors" ("the status comment never speaks of auto-approval")). On talkable#12092 one
   reviewer did not finish ("codex-review (busy)") and on talkable#12100 the PR edited
   `.github/workflows/ci.yml`: both reviews were clean, no approval came, and the author and the operator
   asked why, which only the operator's card and a `review.auto_approve_refused` event said. Every refusal of
@@ -13767,23 +13768,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
   approving it; and `post_failed`, which the last failed post writes with no refusal event
   (`review.auto_approve_failed` says it; the card then reads "its approval did not post, …"), that it did
   not post and that the login was told. The line shows only in the posted stage, not while a held review's
-  full pass follows, when the login is set, the record's head is the PR's and its run the last posted
-  round, whose review is the PR's last, the round left nothing to fix, the PR is open and not the login's,
-  and GitHub's latest reviews hold no approval of the head by the login. `noteStatusComments` reads the
-  records and the holds once a tick (where a watch auto-approves), and the line goes into the view's body
-  and its state, so it moves the header's time; it lags auto-approval by a tick, and a reason that changes
-  within its class edits nothing. Silent, the comment reading as on a watch without `auto_approve`: both
-  author lists (the operator kept the rule of 2026-10-16 on 2026-10-28), every watch filter of a forced
-  round, the operator's own PR, their review in progress, a head the login approved, a reason that carries
-  an error's text or heals at the next poll (an unreadable run or round record, a missing or unreadable
-  file list, an incomplete review list, a retried post), the states the stage already shows, and any gate
-  added later without a class. A record written before the class existed gains it on the next pass,
-  rewritten as it stood (its time kept), with no second event. A withdrawal's dismissal message uses the
-  class's clause (`publicReason`) in place of the gate's raw reason ("found nothing to fix, but the PR
-  changes its own CI workflows or actions, so alice must review and approve it in person"), and "Magnum no
-  longer approves it automatically" for a gate without a class; that message is also the row's end reason,
-  the withdrawn event's and the toast's (the card keeps the gate's own words). Nothing changes when Magnum
-  approves, it reads nothing new from GitHub, and no migration. Rejected: the review body (it posts before
+  full pass follows, when the login is set, the PR is open, reviewed (a reply, CI-check or re-decision
+  round due or running takes it out of `reviewed`, and the line with it, until the round ends), not a
+  draft, not muted and not the login's, the review of the last posted round is the PR's last, that round
+  left nothing to fix and its result can tell (`roundBlocks` on the registry alone, asked before both the
+  stop and the record), GitHub's latest reviews hold no approval of the head by the login, no approval of
+  magnum's as the login may stand on the head (`approvalStands`: live, or failed after it posted; a reply
+  on a thread stops auto-approval and leaves the approval standing, while GitHub's latest reviews list the
+  reply), and the record names the PR's head and that round. Whatever refusal was recorded or stop is
+  held, `approvalLineFor` says nothing where the author lists or the watch's filters keep the PR from
+  auto-approval now (`authorRefusal`, `watchRefusal`: the configuration's and the registry's facts, no
+  GitHub read), since the gates may record a classed refusal (a reviewer who did not finish) before they
+  ask the watch, and a record or a hold outlives a change of the lists. `noteStatusComments` reads the
+  records, the holds and the latest automatic approvals once a tick (where a watch auto-approves), and the
+  line goes into the view's body and its state, so it moves the header's time; it lags auto-approval by a
+  tick, and a reason that changes within its class edits nothing. Silent, the comment reading as on a
+  watch without `auto_approve`: both author lists (the operator kept the rule of 2026-10-16 on
+  2026-10-28), every watch filter (a forced round's included), the operator's own PR, a head the login
+  approved, a reason that carries an error's text or heals at the next poll (an unreadable run or round
+  record, a missing or unreadable file list, an incomplete review list, a retried post), the states the
+  stage already shows, and any gate added later without a class; the operator's review in progress holds
+  an approval silently only where no gate refused (a gate's refusal is recorded before GitHub's reviews are
+  read). A record written before the class existed gains it on the next pass, rewritten as it stood (its
+  time kept), with no second event. A withdrawal's dismissal message uses the class's clause
+  (`publicReason`) in place of the gate's raw reason ("found nothing to fix, but the PR changes its own CI
+  workflows or actions, so alice must review and approve it in person"), and "Magnum no longer approves it
+  automatically" for a gate without a class; that message is all GitHub gets and the row's end reason,
+  which a later attempt sends again. The operator's withdrawal events and toast say the gate's own words
+  (`standingWithdrawal`'s local message, `withdrawAutoApproval`'s note), which kv
+  `pr.<id>.auto_withdraw_note` keeps for a later attempt, after a restart too, until the withdrawal ends.
+  Nothing changes when Magnum approves, it reads nothing new from GitHub, and no migration. Rejected: the review body (it posts before
   the gates decide, and checks and stops change after it); a comment of its own (each notifies people and
   repeats the status comment's lifecycle), so no line where `status_comment` is off; an `@` mention (it
   notifies at every edit, and the operator already has the card, the event and the toast); moving
@@ -13796,7 +13810,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheAuthorListsAndFiltersLeaveTheCommentAsWithoutAutoApproval, TestNoApprovalLineWithoutAutoApproveOrALogin,
   TestAnOldRefusalRecordGainsItsClassWithoutASecondEvent, TestAFinalPostFailureSaysTheLoginWasTold,
   TestTheWithdrawalMessageUsesThePublicWords and TestApprovalLineNeverCarriesTheRecordsWords; the
-  withdrawal tests of the gates, the workflows and ignore_checks now expect the class's words.
+  withdrawal tests of the gates, the workflows and ignore_checks now expect the class's words on GitHub and
+  the gate's own in the withdrawn event and the toast. The review of the first build added, failing first:
+  a manual repository's forced round that missed a reviewer in
+  TestTheAuthorListsAndFiltersLeaveTheCommentAsWithoutAutoApproval (it said `unheard`),
+  TestAHoldOnAPRTheListsOrFiltersKeepSaysNothing, TestAStaleLineGoesOnADraftOrAMutedPR,
+  TestAReplyRoundOnTheReviewedHeadHidesTheLineWhileItRuns, TestAnUnknownVerdictSaysNothingWhateverTheRecord,
+  TestNoStoppedLineWhileTheApprovalStands, TestAFailedPostSaysNothingOnceTheListsOrFiltersKeepThePR and
+  TestAWithdrawalKeepsItsDetailLocalAndItsGitHubWordsPublic; and guards that fail under the mutation of what
+  they protect: TestTheExactWordsOfTheFileListAndTheFailingChecks (the `too_many_files` class) and
+  TestALastAttemptTheNextDaemonSettlesAsFailedSaysTheLoginWasTold (`resumeAutoPost`'s failed last attempt).
 
 ## Learned rules
 

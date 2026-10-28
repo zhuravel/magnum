@@ -134,7 +134,7 @@ func TestTheAutomaticApprovalPassesAHeadWhoseOnlyFailedCheckIsIgnored(t *testing
 	})
 	t.Run("without the key it is withdrawn", func(t *testing.T) {
 		h := approvedThenReviewedOn(t, next, cleanRound)
-		h.wantGateWithdrawal(withdrawnCIFails)
+		h.wantGateWithdrawal(withdrawnCIFails, ciFailsWords)
 	})
 }
 

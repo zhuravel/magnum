@@ -149,7 +149,7 @@ func (e *Engine) withdrawForChanges(ctx context.Context, repo store.Repo, pr sto
 		return fmt.Errorf("identity %q has no GitHub client to withdraw your approval of %s (review %d): dismiss it on GitHub first", live.Identity,
 			label, live.ReviewID)
 	}
-	if err := e.withdrawAutoApproval(ctx, repo, pr, live, gh, store.AutoEndedOperator, RequestChangesMessage); err != nil {
+	if err := e.withdrawAutoApproval(ctx, repo, pr, live, gh, store.AutoEndedOperator, RequestChangesMessage, ""); err != nil {
 		return fmt.Errorf("withdraw your approval of %s first: %w; no changes were requested (magnum tries the withdrawal again)", label, err)
 	}
 	return nil

@@ -1138,14 +1138,18 @@ link that turned up, your note) leaves it. The first line says where the review 
   waits for the checks of this head to pass." (with "Some fail now." when they fail); "Magnum stopped
   approving this PR as alice. A review by alice decides." once your review by hand, a dismissal or
   `magnum unapprove` stopped it; and "The approval as alice did not post. Magnum told alice." when its
-  last attempt failed. It never names a path, a reviewer, a check or the reason's own words. It says
-  nothing, and the comment reads as on a watch without auto-approval, for the author lists
-  (`auto_approve_skip_authors`, `auto_approve_authors`), the watch's filters (a manual repository, a bot,
-  a label, `skip_paths`, a Codex flag), your own PR, a head the login already approved on GitHub, your
-  review in progress, a reason the next poll mends or that carries an error (a file list or a round record
-  Magnum cannot read, a post it tries again), and while a held review's full pass follows. The line comes
-  a tick after auto-approval decides, goes when the approval posts and changes with the kind of reason; a
-  reason that changes within its kind (another file of the agents' configuration) edits nothing.
+  last attempt failed. It never names a path, a reviewer, a check or the reason's own words. On a PR the
+  author lists (`auto_approve_skip_authors`, `auto_approve_authors`) or the watch's filters (a manual
+  repository, a bot, a label, `skip_paths`, a Codex flag) keep from auto-approval, it says nothing at all,
+  whatever else held the approval back or stopped it, and the comment reads as on a watch without
+  auto-approval. It says nothing either for your own PR, a head the login already approved on GitHub or
+  that Magnum's approval as the login still stands on, a review that left something to fix or whose result
+  cannot tell, a reason the next poll mends or that carries an error (a file list or a round record Magnum
+  cannot read, a post it tries again), while a held review's full pass follows, and while the PR is a
+  draft, muted, or not reviewed (a reply, CI-check or re-decision round is due or runs on it). Your review
+  in progress holds the approval silently only when nothing else does. The line comes a tick after
+  auto-approval decides, goes when the approval posts and changes with the kind of reason; a reason that
+  changes within its kind (another file of the agents' configuration) edits nothing.
 - A [fix loop](#fixing-your-own-prs) shows as its own line: "Applying automatic fixes, cycle 1 of 3"
   under the posted line while the fixer works, and "Reviewing the fixes in `b2c3d4e`" for its re-review of
   what the fixer pushed, from the loop's state (never the fixer's words).
@@ -1569,8 +1573,9 @@ conditions above as a new approval is: one they refuse withdraws it too, in the 
 the kind of reason, never the card's ("Magnum's review of <sha7> found nothing to fix, but the PR changes
 the instructions or configuration of the AI review agents, so alice must review and approve it in person;
 this automatic approval is withdrawn ([review](<url>)).", and "… but Magnum no longer approves it
-automatically; …" for the watch's filters and a file list Magnum cannot read), with the same event and
-toast, while the head's checks still run Magnum waits, and a
+automatically; …" for the watch's filters and a file list Magnum cannot read; a later attempt sends the
+same words), with the same events and toast, which say the card's words ("… but it changes the review
+agents' instructions or hooks (AGENTS.md); …"), while the head's checks still run Magnum waits, and a
 head it has not reviewed yet changes nothing. A clean review they let through leaves the approval standing
 without a second one, and they decide once per review: checks that fail afterwards do not withdraw it before
 the next review. A clean review after a withdrawal approves again (a head whose checks pass later included).

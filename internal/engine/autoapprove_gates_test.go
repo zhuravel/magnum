@@ -408,26 +408,29 @@ const (
 
 // wantGateWithdrawal fails unless the operator's approval of PR #2's b1
 // was withdrawn once, by magnum, after its clean review of b2 (review 502),
-// for the gate's class, whose words are want: in the dismissal's message,
-// the row's end reason, the withdrawn event and one toast. auto-approval of
-// the PR does not stop.
-func (h *harness) wantGateWithdrawal(want string) {
+// for a gate whose class's words are public and whose own words are local:
+// GitHub's dismissal message and the row's end reason (which a retried
+// withdrawal sends again) say public and never local, while the withdrawn
+// event and the one toast, the operator's, say local. auto-approval of the
+// PR does not stop.
+func (h *harness) wantGateWithdrawal(public, local string) {
 	h.t.Helper()
 	d := h.ghCalls("dismiss:")
 	if len(d) != 1 || !strings.HasPrefix(d[0], "dismiss:talkable/talkable#2:9001:Magnum's review of b2 found nothing to fix, but ") ||
-		!strings.Contains(d[0], want) || !strings.HasSuffix(d[0], "; this automatic approval is withdrawn ([review]("+prURL2+"#pullrequestreview-502)).") {
-		h.t.Fatalf("dismissals = %q, want one for %q", d, want)
+		!strings.Contains(d[0], public) || strings.Contains(d[0], local) ||
+		!strings.HasSuffix(d[0], "; this automatic approval is withdrawn ([review]("+prURL2+"#pullrequestreview-502)).") {
+		h.t.Fatalf("dismissals = %q, want one for %q without %q", d, public, local)
 	}
 	if a := h.autoApproval(2); a.State != store.AutoDismissed || a.EndedBy != store.AutoEndedMagnum || a.HeadSHA != "b1" ||
-		!strings.Contains(a.EndReason, want) || a.EndedAt == nil {
+		!strings.Contains(a.EndReason, public) || strings.Contains(a.EndReason, local) || a.EndedAt == nil {
 		h.t.Fatalf("approval = %+v", a)
 	}
-	if evs := h.events("review.auto_approval_withdrawn"); len(evs) != 1 || !strings.Contains(evs[0].Message, want) {
-		h.t.Fatalf("withdrawn events = %+v", evs)
+	if evs := h.events("review.auto_approval_withdrawn"); len(evs) != 1 || !strings.Contains(evs[0].Message, local) {
+		h.t.Fatalf("withdrawn events = %+v, want one with %q", evs, local)
 	}
 	h.flush()
-	if toasts := toastsWith(h, "withdrew your approval: talkable#2"); len(toasts) != 1 || !strings.Contains(toasts[0], want) {
-		h.t.Fatalf("toasts = %q (all %q)", toasts, h.nh.shown())
+	if toasts := toastsWith(h, "withdrew your approval: talkable#2"); len(toasts) != 1 || !strings.Contains(toasts[0], local) {
+		h.t.Fatalf("toasts = %q (all %q), want one with %q", toasts, h.nh.shown(), local)
 	}
 	if hd := h.hold(2); hd.Held {
 		h.t.Fatalf("magnum's own withdrawal stopped auto-approval: %+v", hd)
@@ -454,7 +457,7 @@ func TestAStandingApprovalIsWithdrawnWhenTheGatesRefuseANewHead(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := approvedThenReviewedOn(t, tc.next, tc.round)
-			h.wantGateWithdrawal(tc.public)
+			h.wantGateWithdrawal(tc.public, tc.want)
 			if got := h.autoRefused(2); !strings.Contains(got, tc.want) {
 				t.Fatalf("the card says %q, want %q", got, tc.want)
 			}
@@ -481,7 +484,7 @@ func TestAStandingApprovalWaitsWhileTheNewHeadsChecksRun(t *testing.T) {
 
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "FAILURE"})
 	h.flush()
-	h.wantGateWithdrawal(withdrawnCIFails)
+	h.wantGateWithdrawal(withdrawnCIFails, ciFailsWords)
 
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "SUCCESS"})
 	h.flush()
@@ -513,7 +516,7 @@ func TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead(t *testing.T) {
 	}
 	h.reviewTo(2, "b2")
 	h.tick()
-	h.wantGateWithdrawal(withdrawnAgentConfig)
+	h.wantGateWithdrawal(withdrawnAgentConfig, "it changes the review agents' instructions or hooks (AGENTS.md)")
 }
 
 // The gates decide once on each round, as before a new approval: once
