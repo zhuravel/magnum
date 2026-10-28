@@ -36,7 +36,7 @@ jobs:
   test:
     name: Test (Go ${{ matrix.go }})
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +52,8 @@ jobs:
 
       - name: gate under the race detector (gofmt, modules, vet, tests; the private-name checks skip without local patterns and registry)
         env:
-          GOFLAGS: -race -shuffle=on -timeout=20m
+          # The engine package alone takes 15-20 minutes here under -race (about 5 locally), so 20m failed it.
+          GOFLAGS: -race -shuffle=on -timeout=35m
         run: make test
 
       - name: build
