@@ -16,7 +16,12 @@ import (
 // priority, and the heading's title in one of its forms. A ranked finding
 // whose title starts with the word ("[P2] Simplification breaks the
 // empty-input fallback") keeps the ordinary verdicts, so an author who
-// disproves it still teaches a `wrong` lesson.
+// disproves it still teaches a `wrong` lesson. The risks are the author's
+// skill's words (2026-10-29): a fold in escaping or a URL check can pass
+// sample inputs and still open a hole, a change no spec or probe covers is
+// unproven, infrastructure applied by hand from a laptop is no laptop-only
+// script, and the skill's reply to a refusal without a risk, "the author's
+// choice", names none.
 func TestTheRetroCallsADeclinedOrArguedSimplificationThatNamesNoRiskRight(t *testing.T) {
 	threads := retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")
 	threads.Threads = 2
@@ -31,17 +36,28 @@ func TestTheRetroCallsADeclinedOrArguedSimplificationThatNamesNoRiskRight(t *tes
 		"- It changes behavior for a named input or caller.\n",
 		"- It drops a guard, a check or an assertion.\n",
 		"- It edits lines that the pull request did not add or change.\n",
-		"- It edits authorization, sandboxing, money or usage recording, or concurrency code.\n",
+		"- It edits authorization, sandboxing, escaping, URL checks, deletes, migrations, infrastructure or concurrency code, " +
+			"or code that records money or usage.\n",
 		"- It is out of date with the head, and its idea no longer fits.\n",
 		"- It conflicts with a repository rule or another open pull request.\n",
-		"- The specs fail after it.\n",
+		"- No spec or probe shows that the change keeps behavior, or the specs fail after the change.\n",
 		"A reply that gives only cost names no risk: few lines saved; a push, a CI run or a review round; an approved pull request; " +
-			"\"style only\"; code that only tests or runs locally; consistency without the lines it means. " +
+			"\"style only\"; test code, or a script that changes only the laptop; consistency without the lines it means. " +
+			"A reply that gives only \"the author's choice\" names no risk. " +
 			"A refusal for cost alone is the author's choice for one thread, no lesson. " +
 			"When a reply names a risk, judge the simplification like any other finding.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("retro.md lacks %q:\n%s", want, got)
+		}
+	}
+	for _, old := range []string{
+		"- It edits authorization, sandboxing, money or usage recording, or concurrency code.\n",
+		"- The specs fail after it.\n",
+		"code that only tests or runs locally",
+	} {
+		if strings.Contains(got, old) {
+			t.Errorf("retro.md still says %q", old)
 		}
 	}
 	// The rule is about the automated review's own threads: a retro of

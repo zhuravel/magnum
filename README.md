@@ -2702,7 +2702,8 @@ What an author gets, every review alike:
   the risk)", each backed by an equivalence probe listed in Checks.
   Each removes something a reader must hold (a branch, helper, flag, duplicated block), never only renames
   or moves code, removes or changes only what the PR added, never a construct a line already had before a
-  mechanical edit (a renamed call, a swapped logger), and none touches authorization, sandboxing, money or usage recording, or concurrency code
+  mechanical edit (a renamed call, a swapped logger), and none touches authorization, sandboxing, escaping,
+  URL checks, deletes, migrations, infrastructure or concurrency code, or code that records money or usage,
   unless it removes a defect-prone construct; a re-review suggests them only on lines changed since the
   previous review.
 - **The identity's footer** last, appended by Magnum (`review_footer`, see Identities): the reviewed commit,
@@ -3893,9 +3894,11 @@ lacked the repository's context (`missing_context`) or was `right`; and for the 
 scope and patterns, as for a miss. A declined or argued simplification (a thread with no priority whose
 title is `Simplification` or starts with it followed by `:`, ` (` or `*`; a ranked finding titled
 "Simplification breaks …" is none) is `right` unless a reply names a concrete risk of it, such as a behavior change for a named input or caller, a
-dropped guard or assertion, lines the pull request did not change, authorization, money or concurrency code,
-or specs that fail after it (`prompts/retro.md` lists them all): a refusal for cost alone (few lines saved, a
-push, a CI run or a review round, an approved pull request, code that only tests or runs locally) is the
+dropped guard or assertion, lines the pull request did not change, authorization, escaping, URL checks,
+deletes, migrations, infrastructure, concurrency, money or usage code, no spec or probe that shows the
+change keeps behavior, or specs that fail after it (`prompts/retro.md` lists them all, in the words of the
+author's skill): a refusal for cost alone (few lines saved, a push, a CI run or a review round, an approved
+pull request, test code or a script that changes only the laptop, or only "the author's choice") is the
 author's choice for that thread and teaches nothing, and the judge does not write it into the notes as a
 standing decision either. Each answer is one row of the registry's `declines` table, with the run
 that posted the review, the finding's provenance row and the hash of the review skill the round ran with,

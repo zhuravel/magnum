@@ -14328,6 +14328,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
   findings), and the simplification rows of TestLearnShowsAVersionsNumbers and
   TestStatsCountsHowAuthorsAnsweredBySourceAndPriority.
 
+- **The retro's risks and the simplify exclusion take the words of the author's skill** (2026-10-29, the
+  operator's approval; amends "A simplification's title and the footer ask for a named risk, not
+  "optional"" and "A declined or argued simplification that names no risk teaches nothing"). **Why**: the
+  retro's list of the risks that make a refused simplification teach a lesson copied the author's skill as
+  it was that morning, and a review of that skill changed it the same day. Its sensitive code now reads
+  "authorization, sandboxing, escaping, URL checks, deletes, migrations, infrastructure or concurrency code,
+  or code that records money or usage". Escaping and URL checks came from two simplifications magnum
+  posted: one reordered the escaping of an HTML string, one folded an SSRF URL guard, and a fold there can
+  pass sample inputs and still open a hole. Its last risk now reads "No spec or probe shows that the change
+  keeps behavior, or the specs fail after the change". Its cost list says "test code, and a script that
+  changes only the laptop", so infrastructure that someone applies by hand from a laptop is not exempt. A
+  user who drops a simplification with no risk gets the reply `Won't fix: the author's choice: <reason>`.
+  The judge and claude-simplify still dropped only authorization, sandboxing, money or usage recording and
+  concurrency code, so magnum kept posting folds in escaping, URL checks, deletes, migrations and
+  infrastructure code that the author's skill now refuses: tokens spent on a refusal. **What**: in
+  `prompts/retro.md`, risk 4 and risk 7 take the skill's words, the cost list takes "test code, or a script
+  that changes only the laptop", and a reply that gives only "the author's choice" names no risk. The
+  simplify block of `prompts/judge-shared.md` (the initial, re-review and recovery judge prompts) and
+  `prompts/claude-simplify.md` exclude the areas of risk 4, still unless the proposal removes a
+  defect-prone construct; nothing else in those blocks changes. The heading, the footer, the measures and
+  the review skill do not change. Tests, failing first:
+  TestTheRetroCallsADeclinedOrArguedSimplificationThatNamesNoRiskRight (the new risk 4, risk 7, cost
+  wording and "author's choice" sentence, and none of the old wording),
+  TestJudgePromptsPostAtMostTheConfiguredSimplificationsThatRemoveSomething (the new areas in the three
+  judge prompts, the old ones gone), TestSimplifyPromptIsReadOnlyWithFourAnglesAndRemovals (the same in
+  claude-simplify), and the 54 judge goldens, the 6 simplify goldens and the retro golden (the areas and
+  the risk list only).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

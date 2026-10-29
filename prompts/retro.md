@@ -45,12 +45,12 @@ A thread without a `priority` whose `title` is `Simplification`, or starts with 
 - It changes behavior for a named input or caller.
 - It drops a guard, a check or an assertion.
 - It edits lines that the pull request did not add or change.
-- It edits authorization, sandboxing, money or usage recording, or concurrency code.
+- It edits authorization, sandboxing, escaping, URL checks, deletes, migrations, infrastructure or concurrency code, or code that records money or usage.
 - It is out of date with the head, and its idea no longer fits.
 - It conflicts with a repository rule or another open pull request.
-- The specs fail after it.
+- No spec or probe shows that the change keeps behavior, or the specs fail after the change.
 
-A reply that gives only cost names no risk: few lines saved; a push, a CI run or a review round; an approved pull request; "style only"; code that only tests or runs locally; consistency without the lines it means. A refusal for cost alone is the author's choice for one thread, no lesson. When a reply names a risk, judge the simplification like any other finding.
+A reply that gives only cost names no risk: few lines saved; a push, a CI run or a review round; an approved pull request; "style only"; test code, or a script that changes only the laptop; consistency without the lines it means. A reply that gives only "the author's choice" names no risk. A refusal for cost alone is the author's choice for one thread, no lesson. When a reply names a risk, judge the simplification like any other finding.
 
 A `wrong`, `over_ranked` or `missing_context` verdict also needs:
 - `lesson`: one or two sentences that teach a reviewer to judge this kind of finding right next time: "When X, check Y because Z". No pull request or issue numbers, no names or logins, no URLs, no repository or file names.
