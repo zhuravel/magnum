@@ -352,6 +352,31 @@ func TestFindingTitleReadsASimplificationThread(t *testing.T) {
 	}
 }
 
+// A ranked finding whose title starts with the word is no simplification:
+// "**[P2] Simplification breaks the empty-input fallback**" reaches the
+// retro (the thread's title and priority) with priority P2, so the rule for
+// refused simplifications, which prompts/retro.md states as
+// store.Decline.IsSimplification checks it, leaves it to the ordinary
+// verdicts, and an author who disproves it still teaches a `wrong` lesson.
+// A simplification's heading, current or older, gives no priority and a
+// title the rule takes.
+func TestARankedFindingTitledSimplificationIsNoSimplification(t *testing.T) {
+	for name, c := range map[string]struct {
+		body string
+		want bool
+	}{
+		"a P2 whose title starts with the word": {"**[P2] Simplification breaks the empty-input fallback**\n\nThe early return skips the default.", false},
+		"a P3 whose title is a heading's":       {"**[P3] Simplification (optional)**\n\nThe flag is read once.", false},
+		"the current heading":                   {"**Simplification** (keeps behavior: apply it, or reply with the risk)\n\nThe helper duplicates `Foo`.", true},
+		"an older heading":                      {"**Simplification (optional)**\n\nThe flag is read once.", true},
+	} {
+		title, priority := findingTitle(c.body)
+		if got := (store.Decline{Title: title, Priority: priority}).IsSimplification(); got != c.want {
+			t.Errorf("%s: title %q, priority %q: a simplification %v, want %v", name, title, priority, got, c.want)
+		}
+	}
+}
+
 // TestFindingTitleStripsInnerMarkup: the bold and italic markers go from
 // the whole first line, not only its ends, with the "[P2]" tag in front;
 // what is no emphasis stays: an underscore inside a word, and anything in

@@ -9,7 +9,8 @@ package store
 // the version's skill copy, <state>/skill/<skill_sha>/: a skill changed
 // outside the loop runs other rounds); their reviews; their posted findings
 // by priority; how authors answered those findings (declines by outcome,
-// skill_sha = the version's); and what other reviewers caught that those
+// skill_sha = the version's, without the simplifications refused for cost
+// alone); and what other reviewers caught that those
 // runs missed (misses of class miss on a commit one of them reviewed, by
 // scope).
 
@@ -33,7 +34,11 @@ type VersionMeasure struct {
 	JudgeRuns  int            `json:"judge_runs"`
 	Posted     int            `json:"posted"`
 	ByPriority map[string]int `json:"by_priority"`
-	// Outcomes counts how authors answered those findings (Decline*).
+	// Outcomes counts how authors answered those findings (Decline*),
+	// without the simplifications declined or argued that the retro judged
+	// right: a refusal for cost alone is the author's choice for one
+	// thread, no answer against the version, so it moves neither Declined
+	// nor the regression check.
 	Outcomes map[string]int `json:"outcomes"`
 	// MissesGeneral and MissesRepo count what other reviewers caught on a
 	// commit those reviews covered, by the lesson's scope.
@@ -106,8 +111,13 @@ func (s *Store) VersionMeasure(ctx context.Context, v LearnVersion, next *LearnV
 	for _, n := range m.ByPriority {
 		m.Posted += n
 	}
+	// A simplification (simplificationSQL: Decline.IsSimplification in SQL)
+	// declined or argued and judged right is a refusal for cost alone
+	// (prompts/retro.md), no answer against the version. COALESCE keeps the
+	// NOT true for a row with no verdict, priority or title.
 	if err := counts(m.Outcomes, `SELECT d.outcome, COUNT(*) FROM declines d WHERE d.run_id IN (SELECT id FROM (`+window+`))
-  AND (?3 = '' OR d.skill_sha = ?3) GROUP BY d.outcome`, from, to, v.SkillSHA, v.SkillSHA); err != nil {
+  AND (?3 = '' OR d.skill_sha = ?3) AND NOT (d.outcome IN (?5, ?6) AND COALESCE(d.verdict, '') = ?7 AND `+simplificationSQL+`)
+  GROUP BY d.outcome`, from, to, v.SkillSHA, v.SkillSHA, DeclineDeclined, DeclineArgued, VerdictRight); err != nil {
 		return m, fmt.Errorf("measure version %d: declines: %w", v.ID, err)
 	}
 	scopes := map[string]int{}

@@ -455,8 +455,10 @@ func TestLearnRevertProposesThePreviousVersion(t *testing.T) {
 
 // The list shows what each landed version's reviews did since the daemon
 // restarted on it: the posted reviews, their posted findings, the authors'
-// fixes and declines (declined and argued, with their share) and the
-// misses other reviewers found; --json carries each version's measure.
+// fixes and declines (declined and argued, with their share, without a
+// simplification the retro judged right: a refusal for cost alone, which
+// the legend says) and the misses other reviewers found; --json carries
+// each version's measure.
 func TestLearnShowsAVersionsNumbers(t *testing.T) {
 	h := newActHarness(t)
 	pr := h.seedPR("talkable/talkable", 21, store.PRReviewed)
@@ -499,6 +501,11 @@ func TestLearnShowsAVersionsNumbers(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if _, err := h.st.UpsertDecline(h.ctx, store.Decline{PRID: pr.ID, SourceURL: pr.URL + "#s1", CommentID: 9, RunID: run.ID,
+			ReviewedSHA: run.TargetSHA, SkillSHA: "skill1", Title: "Simplification: A shared helper removes two copies.",
+			Outcome: store.DeclineDeclined, Verdict: store.VerdictRight}); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := h.st.UpsertMiss(h.ctx, store.Miss{PRID: pr.ID, SourceURL: pr.URL + "#m1", SourceKind: store.MissSourceThread,
 			Reviewer: "rev-ann", ReviewedSHA: run.TargetSHA, Class: store.MissMiss, Severity: "P1", Scope: store.MissScopeGeneral}); err != nil {
 			t.Fatal(err)
@@ -508,7 +515,7 @@ func TestLearnShowsAVersionsNumbers(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
 	}
 	out := h.out.String()
-	actContains(t, out, "ROUNDS", "POSTED", "FIXED", "DECLINED", "MISSES")
+	actContains(t, out, "ROUNDS", "POSTED", "FIXED", "DECLINED", "MISSES", "without the simplifications refused for cost alone")
 	rows := map[string][]string{}
 	for line := range strings.Lines(out) {
 		for _, sha := range []string{"aaaaaaa", "bbbbbbb"} {

@@ -49,8 +49,8 @@ func (f *editFixture) noCases() {
 
 // postedWith records a posted review of pr at at with n posted findings,
 // declined of which the author declined or argued, by a round that ran the
-// skill copy skill.
-func postedWith(h *harness, pr store.PR, at time.Time, n, declined int, skill string) {
+// skill copy skill, and returns its judge run.
+func postedWith(h *harness, pr store.PR, at time.Time, n, declined int, skill string) store.Run {
 	h.t.Helper()
 	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: pr.ID, Round: 1, Role: store.RoleJudge, Kind: store.RunInitial, State: store.RunVerified,
 		TargetSHA: "head-" + at.Format("0102"), Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "Read /state/skill/" + skill + "/SKILL.md.",
@@ -72,6 +72,26 @@ func postedWith(h *harness, pr store.PR, at time.Time, n, declined int, skill st
 		}
 		if _, err := h.st.UpsertDecline(h.ctx, store.Decline{PRID: pr.ID, SourceURL: pr.URL + "#r" + at.Format("0102") + strconv.Itoa(i),
 			CommentID: at.Unix() + int64(i), RunID: run.ID, ReviewedSHA: run.TargetSHA, SkillSHA: skill, Outcome: outcome}); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	return run
+}
+
+// refusedSimplifications records n simplifications of run's review (whose
+// round ran the skill copy skill) that the author declined or argued and
+// the retro judged `right`: refused for cost alone, with no risk named
+// (prompts/retro.md).
+func refusedSimplifications(h *harness, pr store.PR, run store.Run, skill string, n int) {
+	h.t.Helper()
+	for i := range n {
+		outcome := store.DeclineDeclined
+		if i%2 == 1 {
+			outcome = store.DeclineArgued
+		}
+		if _, err := h.st.UpsertDecline(h.ctx, store.Decline{PRID: pr.ID, SourceURL: pr.URL + "#s" + run.ID + strconv.Itoa(i),
+			CommentID: run.CreatedAt.Unix() + 100 + int64(i), RunID: run.ID, ReviewedSHA: run.TargetSHA, SkillSHA: skill,
+			Title: "Simplification: A shared helper removes two copies.", Outcome: outcome, Verdict: store.VerdictRight}); err != nil {
 			h.t.Fatal(err)
 		}
 	}
@@ -181,6 +201,34 @@ func TestARegressionMakesOneHeldRevertProposal(t *testing.T) {
 	f.scan()
 	if ps := f.proposals(); len(ps) != 1 {
 		t.Fatalf("a second revert for version %d: %+v", v.ID, ps)
+	}
+}
+
+// A simplification the author refused for cost alone, which the retro
+// judges `right`, is no answer against the version: two of them on a
+// version whose 20 posted findings no author declined, against none of 20
+// for the skill before it, propose no revert. Counted as declines, they
+// made it a 10-point regression and a revert of the version that posted
+// correct simplifications.
+func TestSimplificationsTheRetroJudgedRightMakeNoRegression(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	f.noCases()
+	f.h.cfg.Learn.RegressionMinFindings, f.h.cfg.Learn.RegressionPoints = 20, 10
+	now := f.h.clock.Now()
+	v := f.landVersion(editSkillText+editAddedRule, now.Add(-48*time.Hour))
+	pr := corpusPR(f.h, "talkable/talkable", 30)
+	postedWith(f.h, pr, now.Add(-72*time.Hour), 20, 0, "older")
+	refusedSimplifications(f.h, pr, postedWith(f.h, pr, now.Add(-24*time.Hour), 20, 0, v.SkillSHA), v.SkillSHA, 2)
+
+	f.scan()
+	if ps := f.proposals(); len(ps) != 0 {
+		t.Fatalf("proposals after the scan = %+v, want no revert", ps)
+	}
+	if got, _ := f.h.e.getKV(f.h.ctx, KVLearnRegression); got != "" {
+		t.Fatalf("regression mark = %q, want none", got)
+	}
+	if toasts := f.toasts(); strings.Contains(toasts, "regressed") {
+		t.Fatalf("toasts:\n%s", toasts)
 	}
 }
 

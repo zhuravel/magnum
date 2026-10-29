@@ -223,3 +223,112 @@ func TestVersionMeasureCountsANudgedReviewOnce(t *testing.T) {
 		}
 	}
 }
+
+// A simplification the author declined or argued and the retro judged
+// `right` (a refusal for cost alone: the author's choice for one thread) is
+// no answer against the version: its measure leaves it out, so a version
+// that posts correct simplifications does not look worse to the editor or
+// the regression check. A simplification judged wrong, an ordinary finding
+// judged right and a fixed simplification still count. The titles learn
+// wrote before 2026-10-12 ("Simplification (optional)", and the bold left
+// in "Simplification** (optional, no reply needed)") are simplifications
+// too: the registry holds 49 such rows.
+func TestVersionMeasureLeavesOutTheSimplificationsTheRetroJudgedRight(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	r1 := t0
+	v := measureVersion(t, st, 1, "aaaaaaaaaaaa", &r1)
+	run := postedRun(t, st, pr.ID, time.Hour, "h1", v.SkillSHA, true, "P1", "P2", "P2", "P3", "P1", "P2", "P2", "P3")
+	for i, d := range []struct{ title, priority, outcome, verdict string }{
+		{"Simplification: A shared helper removes two copies.", "", DeclineDeclined, VerdictRight},
+		{"Simplification", "", DeclineArgued, VerdictRight},
+		{"Simplification (optional)", "", DeclineDeclined, VerdictRight},
+		{"Simplification** (optional, no reply needed)", "", DeclineArgued, VerdictRight},
+		{"Simplification: An inline call removes the wrapper.", "", DeclineDeclined, VerdictWrong},
+		{"Simplification (optional)", "", DeclineDeclined, VerdictWrong},
+		{"Simplification** (optional, no reply needed)", "", DeclineArgued, VerdictOverRanked},
+		{"Simplification: A local removes the lookup.", "", DeclineFixed, ""},
+		{"Keep the guard on an empty list", "P2", DeclineDeclined, VerdictRight},
+	} {
+		if _, err := st.UpsertDecline(ctx, Decline{PRID: pr.ID, SourceURL: pr.URL + "#d" + strconv.Itoa(i), CommentID: int64(i + 1), RunID: run.ID,
+			Title: d.title, Priority: d.priority, ReviewedSHA: "h1", SkillSHA: v.SkillSHA, Outcome: d.outcome, Verdict: d.verdict}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.VersionMeasure(ctx, v, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(got.Outcomes, map[string]int{DeclineDeclined: 3, DeclineArgued: 1, DeclineFixed: 1}) || got.Declined() != 4 {
+		t.Fatalf("outcomes = %v, want the four right simplifications left out", got.Outcomes)
+	}
+	if share, ok := got.DeclinedShare(); !ok || share != 50 {
+		t.Fatalf("share = %v, %v; want 50", share, ok)
+	}
+}
+
+// The measure's SQL and Decline.IsSimplification say the same of every
+// title and priority: the three heading forms learn stored, each without a
+// priority, and never a finding with a priority, another casing, a longer
+// word or no title.
+func TestIsSimplificationAndItsSQLAgree(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	cases := []struct {
+		title, priority string
+		want            bool
+	}{
+		{"Simplification", "", true},
+		{"Simplification: A shared helper removes two copies.", "", true},
+		{"Simplification (optional)", "", true},
+		{"Simplification** (optional, no reply needed)", "", true},
+		{"Simplification (keeps behavior: apply it, or reply with the risk)", "", true},
+		{"Simplification", "P3", false},
+		{"Simplification: A shared helper removes two copies.", "P2", false},
+		{"Simplification (optional argument) breaks the caller", "P2", false},
+		{"simplification: a shared helper", "", false},
+		{"SIMPLIFICATION (optional)", "", false},
+		{"Simplifications are optional", "", false},
+		{"Simplification-only change", "", false},
+		{"", "", false},
+		{"Keep the guard on an empty list", "", false},
+	}
+	byURL := map[string]bool{}
+	for i, c := range cases {
+		url := pr.URL + "#d" + strconv.Itoa(i)
+		if _, err := st.UpsertDecline(ctx, Decline{PRID: pr.ID, SourceURL: url, CommentID: int64(i + 1), Title: c.title, Priority: c.priority,
+			ReviewedSHA: "h1", Outcome: DeclineDeclined, Verdict: VerdictRight}); err != nil {
+			t.Fatal(err)
+		}
+		byURL[url] = c.want
+	}
+	rows, err := st.db.QueryContext(ctx, `SELECT d.source_url FROM declines d WHERE `+simplificationSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	sql := map[string]bool{}
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			t.Fatal(err)
+		}
+		sql[url] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := st.Declines(ctx, DeclineFilter{PRID: pr.ID})
+	if err != nil || len(ds) != len(cases) {
+		t.Fatalf("Declines = %d rows, %v", len(ds), err)
+	}
+	for _, d := range ds {
+		if want := byURL[d.SourceURL]; d.IsSimplification() != want || sql[d.SourceURL] != want {
+			t.Errorf("title %q, priority %q: IsSimplification %v, SQL %v, want %v", d.Title, d.Priority, d.IsSimplification(), sql[d.SourceURL], want)
+		}
+	}
+}

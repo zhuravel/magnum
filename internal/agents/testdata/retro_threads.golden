@@ -41,6 +41,17 @@ A `declined` or `argued` finding also gets a `verdict`, your judgment of the fin
 - `missing_context`: the finding was right in general but wrong for this repository, because of a convention or context a reviewer could not know.
 - `right`: the finding stands, whatever the author answered.
 
+A thread without a `priority` whose `title` is `Simplification`, or starts with `Simplification` followed by `:`, ` (` or `*`, is a simplification; a thread with a `priority` is a ranked finding, whatever its title says. A declined or argued simplification is `right` when no reply names a concrete risk of it:
+- It changes behavior for a named input or caller.
+- It drops a guard, a check or an assertion.
+- It edits lines that the pull request did not add or change.
+- It edits authorization, sandboxing, money or usage recording, or concurrency code.
+- It is out of date with the head, and its idea no longer fits.
+- It conflicts with a repository rule or another open pull request.
+- The specs fail after it.
+
+A reply that gives only cost names no risk: few lines saved; a push, a CI run or a review round; an approved pull request; "style only"; code that only tests or runs locally; consistency without the lines it means. A refusal for cost alone is the author's choice for one thread, no lesson. When a reply names a risk, judge the simplification like any other finding.
+
 A `wrong`, `over_ranked` or `missing_context` verdict also needs:
 - `lesson`: one or two sentences that teach a reviewer to judge this kind of finding right next time: "When X, check Y because Z". No pull request or issue numbers, no names or logins, no URLs, no repository or file names.
 - `scope`: `general` when a reviewer needs nothing from this repository to apply the lesson; `repo` when the lesson needs one of the repository's own models, services, tools, test tooling or conventions, which it then names (never people).

@@ -309,7 +309,7 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 		}
 		_ = tw.Flush()
 		fmt.Fprintln(w, "  from the restart on a version to the next one's: ROUNDS the reviews posted, POSTED their findings, FIXED and "+
-			"DECLINED (or argued) the authors' answers, MISSES what other reviewers caught")
+			"DECLINED (or argued, without the simplifications refused for cost alone) the authors' answers, MISSES what other reviewers caught")
 		if n := data.Ahead; n != nil && *n > 0 {
 			fmt.Fprintf(w, "  %s not on origin/master: magnum pushes nothing, so push master when you want them there\n",
 				textx.Count(*n, "landed version is", "landed versions are"))

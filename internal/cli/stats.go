@@ -238,6 +238,12 @@ type statsReport struct {
 // the priority of one posted without a priority.
 const statsUnknown = "unknown"
 
+// statsSimplification is the source and the priority of an answer to a
+// simplification (store.Decline.IsSimplification), which has neither: a
+// raw answer, so a refusal for cost alone counts here, under its label,
+// and never against a skill version (store.VersionMeasure).
+const statsSimplification = "simplification"
+
 // statsOutcomes are the answers to a finding (store.Decline*), in the
 // order the tables show them.
 var statsOutcomes = []string{store.DeclineFixed, store.DeclineDeclined, store.DeclineDeferred, store.DeclineArgued,
@@ -268,8 +274,11 @@ func statsAnsweredOf(ds []store.Decline, findings map[int64]store.Finding, since
 			continue
 		}
 		n++
-		sources := []string{statsUnknown}
-		if d.FindingRowID != nil {
+		sources, priority := []string{statsUnknown}, cmp.Or(d.Priority, statsUnknown)
+		switch {
+		case d.IsSimplification():
+			sources, priority = []string{statsSimplification}, statsSimplification
+		case d.FindingRowID != nil:
 			if f, ok := findings[*d.FindingRowID]; ok && len(f.Sources) > 0 {
 				sources = slices.Compact(slices.Sorted(slices.Values(f.Sources)))
 			}
@@ -277,7 +286,7 @@ func statsAnsweredOf(ds []store.Decline, findings map[int64]store.Finding, since
 		for _, s := range sources {
 			add(a.BySource, s, d.Outcome)
 		}
-		add(a.ByPriority, cmp.Or(d.Priority, statsUnknown), d.Outcome)
+		add(a.ByPriority, priority, d.Outcome)
 	}
 	if n == 0 {
 		return nil
@@ -926,8 +935,10 @@ func statsRender(w io.Writer, r statsReport) {
 		for _, o := range statsOutcomes {
 			outcomes = append(outcomes, strings.ToUpper(o))
 		}
-		statsTable(w, "FINDINGS ANSWERED BY SOURCE", append([]string{"SOURCE"}, outcomes...), statsAnsweredRows(a.BySource, statsJudgeSource, statsUnknown))
-		statsTable(w, "FINDINGS ANSWERED BY PRIORITY", append([]string{"PRIORITY"}, outcomes...), statsAnsweredRows(a.ByPriority, statsUnknown))
+		statsTable(w, "FINDINGS ANSWERED BY SOURCE", append([]string{"SOURCE"}, outcomes...),
+			statsAnsweredRows(a.BySource, statsJudgeSource, statsSimplification, statsUnknown))
+		statsTable(w, "FINDINGS ANSWERED BY PRIORITY", append([]string{"PRIORITY"}, outcomes...),
+			statsAnsweredRows(a.ByPriority, statsSimplification, statsUnknown))
 	}
 
 	statsTable(w, "OPERATIONS", []string{"DAY", "REPO", "MODEL SWITCHES", "DENIES", "RESTARTS"},

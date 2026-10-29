@@ -1383,3 +1383,36 @@ func TestTheEditorReadsTheLastVersionsMeasures(t *testing.T) {
 		t.Fatalf("versions = %+v", in.Versions)
 	}
 }
+
+// The editor reads a version's answers without the simplifications the
+// retro judged `right` (refused for cost alone, with no risk named): two of
+// them beside one declined finding of four show as that one decline, 25%,
+// so a version that posted correct simplifications keeps the gain it
+// measured and the editor is not told to propose fewer.
+func TestTheEditorsMeasuresLeaveOutSimplificationsTheRetroJudgedRight(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	now := f.h.clock.Now()
+	pr := corpusPR(f.h, "talkable/talkable", 12)
+	restarted := now.Add(-48 * time.Hour)
+	v, err := f.h.st.CreateLearnVersion(f.h.ctx, store.LearnVersion{LandedSHA: strings.Repeat("a", 40), SkillSHA: "s", PromptsSHA: "p",
+		LandedAt: restarted.Add(-time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.st.MarkLearnRestarted(f.h.ctx, v.ID, restarted); err != nil {
+		t.Fatal(err)
+	}
+	refusedSimplifications(f.h, pr, postedWith(f.h, pr, now.Add(-time.Hour), 4, 1, "s"), "s", 2)
+	p := f.edit()
+	var in learn.EditInputs
+	b, err := os.ReadFile(filepath.Join(p.RunDir, learn.InputsFile))
+	if err != nil || json.Unmarshal(b, &in) != nil {
+		t.Fatalf("inputs.json: %v", err)
+	}
+	if len(in.Versions) != 1 || in.Versions[0].Posted != 4 || in.Versions[0].Declined() != 1 || len(in.Versions[0].Outcomes) != 1 {
+		t.Fatalf("versions = %+v, want one decline of 4 posted findings", in.Versions)
+	}
+	if share, ok := in.Versions[0].DeclinedShare(); !ok || share != 25 {
+		t.Fatalf("declined share = %v, %v; want 25", share, ok)
+	}
+}

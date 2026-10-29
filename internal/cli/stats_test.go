@@ -867,6 +867,24 @@ func TestStatsCountsHowAuthorsAnsweredBySourceAndPriority(t *testing.T) {
 	add(pr101, 4, statsOct(3, 9, 0), "", "", store.DeclineQuestion)     // no findings row, no priority
 	add(pr101, 5, statsAt(time.September, 20, 9, 0), "F1", "P2", store.DeclineDeclined)
 	add(pr7, 6, statsOct(3, 9, 0), "H1", "P2", store.DeclineDeferred) // claude-review
+	// A simplification refused for cost alone, linked by position to the
+	// claude-review finding F1, and two with the titles learn stored before
+	// 2026-10-12: raw answers, under their own label.
+	st.Clock = func() time.Time { return statsOct(3, 9, 0) }
+	f1 := rows["F1"]
+	for i, s := range []struct {
+		title, outcome, verdict string
+		row                     *int64
+	}{
+		{"Simplification: A shared helper removes two copies.", store.DeclineDeclined, store.VerdictRight, &f1},
+		{"Simplification (optional)", store.DeclineFixed, "", nil},
+		{"Simplification** (optional, no reply needed)", store.DeclineArgued, store.VerdictRight, nil},
+	} {
+		if _, err := st.UpsertDecline(ctx, store.Decline{PRID: pr101.ID, SourceURL: pr101.URL + "#discussion_r" + strconv.Itoa(7+i), CommentID: int64(7 + i),
+			FindingRowID: s.row, ReviewedSHA: "abcdef0123456789", Title: s.title, Outcome: s.outcome, Verdict: s.verdict}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	st.Close()
 
 	if code := f.run("stats", "--json"); code != 0 {
@@ -879,15 +897,17 @@ func TestStatsCountsHowAuthorsAnsweredBySourceAndPriority(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantSource := map[string]map[string]int{
-		"claude-review": {store.DeclineDeclined: 1, store.DeclineFixed: 1, store.DeclineDeferred: 1},
-		"codex-review":  {store.DeclineDeclined: 1},
-		"judge":         {store.DeclineArgued: 1},
-		"unknown":       {store.DeclineQuestion: 1},
+		"claude-review":  {store.DeclineDeclined: 1, store.DeclineFixed: 1, store.DeclineDeferred: 1},
+		"codex-review":   {store.DeclineDeclined: 1},
+		"judge":          {store.DeclineArgued: 1},
+		"simplification": {store.DeclineFixed: 1, store.DeclineDeclined: 1, store.DeclineArgued: 1},
+		"unknown":        {store.DeclineQuestion: 1},
 	}
 	wantPriority := map[string]map[string]int{
-		"P1":      {store.DeclineDeclined: 1},
-		"P2":      {store.DeclineFixed: 1, store.DeclineArgued: 1, store.DeclineDeferred: 1},
-		"unknown": {store.DeclineQuestion: 1},
+		"P1":             {store.DeclineDeclined: 1},
+		"P2":             {store.DeclineFixed: 1, store.DeclineArgued: 1, store.DeclineDeferred: 1},
+		"simplification": {store.DeclineFixed: 1, store.DeclineDeclined: 1, store.DeclineArgued: 1},
+		"unknown":        {store.DeclineQuestion: 1},
 	}
 	if !reflect.DeepEqual(doc.Answered.BySource, wantSource) || !reflect.DeepEqual(doc.Answered.ByPriority, wantPriority) {
 		t.Fatalf("answered = %+v\nwant by source %v, by priority %v", doc.Answered, wantSource, wantPriority)
@@ -904,11 +924,13 @@ func TestStatsCountsHowAuthorsAnsweredBySourceAndPriority(t *testing.T) {
 		"claude-review 1 1 0 0 0 0",
 		"codex-review 0 1 0 0 0 0",
 		"judge 0 0 0 1 0 0",
+		"simplification 1 1 0 1 0 0",
 		"unknown 0 0 0 0 1 0",
 		"FINDINGS ANSWERED BY PRIORITY",
 		"PRIORITY FIXED DECLINED DEFERRED ARGUED QUESTION UNRELATED",
 		"P1 0 1 0 0 0 0",
 		"P2 1 0 0 1 0 0",
+		"simplification 1 1 0 1 0 0",
 		"unknown 0 0 0 0 1 0",
 	}
 	at := 0

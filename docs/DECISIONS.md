@@ -14265,6 +14265,69 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestFindingTitleReadsASimplificationThread, which passed before, now reads the new heading and both old
   ones.
 
+- **A declined or argued simplification that names no risk teaches nothing** (2026-10-29, amends "The retro classifies
+  the replies to magnum's own findings", "A landed version is measured over its window" and the judge's notes
+  rule). **Why**: an author may refuse a
+  simplification for cost alone, and magnum learned from such refusals to propose fewer simplifications, in
+  two ways. The retro gave them `over_ranked` or `missing_context` with a `general` lesson, an input of the
+  skill editor: on 2026-10-29 the registry held 8 declined simplifications of talkable#12069 at
+  `over_ranked`, `general` and `new` ("check that the saving is more than a couple of lines", "check whether
+  it mirrors a sibling helper") and 1 of talkable#12071 at `missing_context`, `general` and `new`. A blind
+  check of those threads found 4 correct simplifications refused only for cost ("the gain is 2 words in a
+  spec helper, so it waits for the next edit", "a later example can need them"), and the 12071 row rests
+  on a false reason (the file did not tag every example). And the judge wrote 2 such refusals into a
+  repository's notes as standing decisions (a one-off URL builder kept for consistency where the existing
+  helper gives the same URL, fixture allocations kept because those examples run only locally), so later
+  rounds would hold the same ideas back. The author's skill now refuses a simplification only for a named
+  risk, and the operator approved the rule on 2026-10-29: a refusal for cost alone is the author's choice
+  for one thread, no lesson about the finding and no standing decision of the repository. **What**:
+  `prompts/retro.md` calls a thread a simplification as `Decline.IsSimplification` does (below): no
+  `priority`, and a `title` that is `Simplification` or starts with it followed by `:`, ` (` or `*`. A ranked
+  finding whose title starts with the word (`[P2] Simplification breaks the empty-input fallback`) is none,
+  so an author who disproves it still teaches a `wrong` lesson. A declined or argued simplification is `right`, so it keeps no lesson, scope or match, unless a reply names a concrete
+  risk of it (an argued one too: a dispute for cost alone teaches the skill editor the same wrong lesson): it changes behavior for a named input or caller; drops a guard, a check or an assertion; edits lines
+  the PR did not add or change; edits authorization, sandboxing, money or usage recording, or concurrency
+  code; is out of date with the head and its idea no longer fits; conflicts with a repository rule or
+  another open PR; or the specs fail after it. A reply that gives only cost names no risk: few lines saved,
+  a push, a CI run or a review round, an approved PR, "style only", code that only tests or runs locally,
+  consistency without the lines it means. A reply that names a risk is judged as before, so a refusal for a
+  real risk (the billing and trust-check lessons of talkable#11920) keeps its lesson. The review skill's
+  notes rule adds that a simplification declined for cost alone, with no risk named, is no standing
+  decision (103 bytes: the skill's cap goes from 38,765 to 38,854). The answer check (`checkThread`) needed
+  no change: it never compares a verdict with a title, and a `right` verdict already keeps no lesson.
+  **The measures**: a `right` verdict alone was not enough, because the outcome still counted. A version's
+  measure (`store.VersionMeasure`, from the restart on it to the next one's) counted every declined or
+  argued answer of its rounds, simplifications included, though a simplification has no findings row and is
+  not among the posted findings the share divides by. That share reaches the skill editor (inputs.json's
+  `versions`; `prompts/skill-edit.md` calls a fall of it a measured gain and tells the editor not to weaken
+  that version's rules) and the regression check (`maybeRegression`: a rise of `regression_points` over the
+  version before proposes a revert). With 20 posted findings, two refusals for cost alone made 0% into 10%
+  and a revert of the version that posted correct simplifications. Now `Outcomes` leaves out a declined or
+  argued simplification judged `right` (`Decline.IsSimplification`, and the same test in the measure's SQL:
+  no priority, which a finding always has, and a title that is `Simplification` or starts with it followed
+  by `:`, ` (` or `*`, case-sensitively, so the 49 rows stored before 2026-10-12 with the titles
+  `Simplification (optional)` and `Simplification** (optional, no reply needed)` count as simplifications
+  too), so `Declined`, the share, the editor's numbers, the regression check and `magnum learn`'s
+  DECLINED column (its legend says so) all leave it out. One judged `wrong`, a fixed one and an ordinary
+  finding judged `right` still count. `magnum stats`, which shows raw answers, keeps every simplification
+  answer under the source and priority `simplification` instead of `unknown` or the finding that its
+  position linked it to. A separate bucket in the measure was rejected: neither the editor nor the check
+  would read it, so it would only add a number to explain.
+  **Rejected**: dismissing such rows by hand in each run, as was done for 15 declined simplifications of
+  talkable#11920 and #11941 (among rows 12 to 34): every retro of a PR whose author answers this way makes them
+  again, and nothing dismisses a notes line. **Not done**: the rows and notes lines that exist now (the
+  operator runs the retro again on those PRs and edits the notes) and the skill editor's code. Tests,
+  failing first: TestTheRetroCallsADeclinedOrArguedSimplificationThatNamesNoRiskRight,
+  TestSkillKeepsADeclineOfASimplificationForCostAloneOutOfTheNotes (a pin),
+  TestVersionMeasureLeavesOutTheSimplificationsTheRetroJudgedRight (with both older titles),
+  TestIsSimplificationAndItsSQLAgree (the Go and SQL tests on every stored form and its near misses),
+  TestARankedFindingTitledSimplificationIsNoSimplification (the retro's input for a `[P2] Simplification
+  breaks …` finding carries P2, which the rule excludes),
+  TestTheEditorsMeasuresLeaveOutSimplificationsTheRetroJudgedRight and
+  TestSimplificationsTheRetroJudgedRightMakeNoRegression (no revert at 0% against two such refusals of 20
+  findings), and the simplification rows of TestLearnShowsAVersionsNumbers and
+  TestStatsCountsHowAuthorsAnsweredBySourceAndPriority.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -3890,14 +3890,22 @@ fixer's makes it a person's thread again. The agent
 says what the author did with the finding: `fixed`, `declined`, `deferred`, `argued`, `question` or
 `unrelated`; for a declined or argued one whether Magnum was `wrong`, ranked it too high (`over_ranked`),
 lacked the repository's context (`missing_context`) or was `right`; and for the first three a lesson, its
-scope and patterns, as for a miss. Each answer is one row of the registry's `declines` table, with the run
+scope and patterns, as for a miss. A declined or argued simplification (a thread with no priority whose
+title is `Simplification` or starts with it followed by `:`, ` (` or `*`; a ranked finding titled
+"Simplification breaks …" is none) is `right` unless a reply names a concrete risk of it, such as a behavior change for a named input or caller, a
+dropped guard or assertion, lines the pull request did not change, authorization, money or concurrency code,
+or specs that fail after it (`prompts/retro.md` lists them all): a refusal for cost alone (few lines saved, a
+push, a CI run or a review round, an approved pull request, code that only tests or runs locally) is the
+author's choice for that thread and teaches nothing, and the judge does not write it into the notes as a
+standing decision either. Each answer is one row of the registry's `declines` table, with the run
 that posted the review, the finding's provenance row and the hash of the review skill the round ran with,
 never a reply's text, and a re-run keeps its state. A finding declined with a lesson of scope `repo`
 (missing context, or a finding that was wrong or ranked too high for a reason of the repository's) is also
 a repository miss, so the next notes curation of that repository takes it like any other, until a later
 retro of the pull request answers it otherwise; the skill editor takes only the `general` ones. `magnum misses --declines` lists the findings authors
 declined or argued that no lesson was drawn from yet (`--all` every answer, `--json` the rows),
-`magnum stats` counts the answers by source and by priority, and `magnum status` adds how many declined
+`magnum stats` counts the answers by source and by priority (a simplification's, every one of them, under
+`simplification`), and `magnum status` adds how many declined
 findings wait.
 
 **The learned eval corpus.** Each retro ends by rewriting `~/.local/share/magnum/learn/corpus.toml`, which
@@ -4097,7 +4105,9 @@ are queued behind it; a queued retro goes before the curations, since it feeds t
 `magnum learn` is the window: the landed versions newest first, each with what its reviews did from the
 daemon's restart on it to the restart on the next version (the reviews posted, their posted findings, how
 many of those the authors fixed and declined or argued, with the declined share, and the misses other
-reviewers caught on the commits they reviewed; all of it counts only the rounds that ran that version's
+reviewers caught on the commits they reviewed; a simplification the retro judged `right`, refused for cost
+alone, is no decline there, so a version that posts correct simplifications does not look worse to you, the
+skill editor or the regression check below; all of it counts only the rounds that ran that version's
 skill, so a skill you changed by hand and restarted on is no version's, and a round that was nudged or fell
 back to another model counts as one review), the proposals that wait (`gating` for the gate, `passed` for the landing, `held` for you) with their
 inputs, the last failed and invalid proposals
@@ -4139,8 +4149,8 @@ It is refused while another learn job runs, when a waiting proposal already reve
 `master` changed one of those files since the version landed (the revert would undo that too: revert by
 hand then). The daemon proposes one by itself at the loop's scan, once per version (`learn.regression`
 remembers it), when the newest version the daemon restarted on and the version before it each posted at
-least `regression_min_findings` (20) findings and the share of them authors declined or argued grew by
-`regression_points` (10) or more; the version before the first is the skill before the loop, over a window
+least `regression_min_findings` (20) findings and the share of them authors declined or argued (as `magnum
+learn` counts it) grew by `regression_points` (10) or more; the version before the first is the skill before the loop, over a window
 as long as the first version's. It proposes none for a version a waiting or landed proposal reverts already
 (your `--revert` came first), and a revert that could not start (another learn job or a drain came first)
 is proposed at a later scan. A toast says the version regressed, and another when its revert waits for

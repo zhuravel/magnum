@@ -615,8 +615,12 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // raise and rollbacks in the swapped mechanism (33), what one person can
 // take from a self-serve flow (155) and a nearby security problem listed in
 // a private repository (47).
+// Then 38,854 (2026-10-29, spec 02 of the 2026-10-29 run: 103 bytes, less
+// the 14 the cap had left) for the operator's rule of that day that a
+// simplification declined for cost alone, with no risk named, is no
+// standing decision for the notes.
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 38765
+const skillMaxBytes = 38854
 
 // skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex's
 // default output budget returns at most 10,000 tokens of one tool call's

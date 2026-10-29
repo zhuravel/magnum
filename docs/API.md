@@ -19885,6 +19885,11 @@ type Decline struct {
     Decline is how an author answered one of magnum's posted findings
     (declines).
 
+func (d Decline) IsSimplification() bool
+    IsSimplification reports whether d answers a simplification: no priority (a
+    finding always has one), and a title learn gave one, in any of its stored
+    forms, matched case-sensitively. simplificationSQL says the same in SQL.
+
 type DeclineFilter struct {
 	Outcomes []string // empty = every outcome
 	Verdicts []string // empty = any verdict, none included
@@ -21828,7 +21833,11 @@ type VersionMeasure struct {
 	JudgeRuns  int            `json:"judge_runs"`
 	Posted     int            `json:"posted"`
 	ByPriority map[string]int `json:"by_priority"`
-	// Outcomes counts how authors answered those findings (Decline*).
+	// Outcomes counts how authors answered those findings (Decline*),
+	// without the simplifications declined or argued that the retro judged
+	// right: a refusal for cost alone is the author's choice for one
+	// thread, no answer against the version, so it moves neither Declined
+	// nor the regression check.
 	Outcomes map[string]int `json:"outcomes"`
 	// MissesGeneral and MissesRepo count what other reviewers caught on a
 	// commit those reviews covered, by the lesson's scope.

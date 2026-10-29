@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -79,6 +80,34 @@ type Decline struct {
 	Dismissed   string `json:"dismissed,omitempty"`
 	DismissedBy *int64 `json:"dismissed_by,omitempty"`
 }
+
+// simplificationTitle starts the title learn gives an own thread whose
+// root is a simplification (learn's findingTitle). It stands alone or is
+// followed by one of simplificationTails: ": " and the first sentence of
+// what the proposal removes (since 2026-10-12), and in rows stored before
+// that the heading's tag, " (optional)" or, with its bold left in,
+// "** (optional, no reply needed)".
+const simplificationTitle = "Simplification"
+
+var simplificationTails = []string{":", " (", "*"}
+
+// IsSimplification reports whether d answers a simplification: no
+// priority (a finding always has one), and a title learn gave one, in any
+// of its stored forms, matched case-sensitively. simplificationSQL says
+// the same in SQL.
+func (d Decline) IsSimplification() bool {
+	rest, ok := strings.CutPrefix(d.Title, simplificationTitle)
+	return d.Priority == "" && ok && (rest == "" || slices.ContainsFunc(simplificationTails, func(t string) bool {
+		return strings.HasPrefix(rest, t)
+	}))
+}
+
+// simplificationSQL is IsSimplification over a declines row named d.
+// GLOB is case-sensitive, as strings.HasPrefix is, and `[*]` is a literal
+// star.
+const simplificationSQL = `(COALESCE(d.priority, '') = '' AND (COALESCE(d.title, '') = 'Simplification'
+    OR COALESCE(d.title, '') GLOB 'Simplification:*' OR COALESCE(d.title, '') GLOB 'Simplification (*'
+    OR COALESCE(d.title, '') GLOB 'Simplification[*]*'))`
 
 var declineColumns = []string{"id", "pr_id", "source_url", "comment_id", "review_id", "run_id", "finding_row_id",
 	"path", "line", "title", "priority", "reviewed_sha", "skill_sha", "outcome", "verdict", "lesson", "scope",
