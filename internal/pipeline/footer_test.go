@@ -58,7 +58,7 @@ func TestVerifiedReviewGetsTheFooterOnceAfterABlankLine(t *testing.T) {
 	if !strings.HasPrefix(footer, "**Reviewed commit:** `"+target[:10]+"`\n\n<details><summary>ℹ️ About Magnum</summary>\n\n") ||
 		!strings.HasSuffix(footer, "New pushes are re-reviewed automatically. A thread reply gets an answer without a push, "+
 			"and a review request for `talkable[bot]` starts a round.\n\n</details>") ||
-		!strings.Contains(footer, "; simplifications are optional") {
+		!strings.Contains(footer, "; a simplification keeps behavior: apply it, or reply `won't fix: <the risk>`.") {
 		t.Fatalf("footer = %q", footer)
 	}
 	if strings.Count(got, footerMarker) != 1 {
@@ -122,7 +122,7 @@ func TestWithFooterReplacesItsOwnFooterAndIsIdempotent(t *testing.T) {
 }
 
 // A watch that runs no role aliased "simplify" never posts simplifications,
-// so its footer does not call them optional.
+// so its footer does not name them.
 func TestFooterLeavesSimplificationsOutWhenTheWatchRunsNoSimplifyRole(t *testing.T) {
 	e := newEnv(t)
 	e.cfg.Watches = []config.Watch{{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app",
@@ -132,7 +132,7 @@ func TestFooterLeavesSimplificationsOutWhenTheWatchRunsNoSimplifyRole(t *testing
 		t.Fatalf("RunRound = %+v, %v", res, err)
 	}
 	got := e.lastUpdate()
-	if !strings.Contains(got, footerMarker+"\n**Reviewed commit:**") || strings.Contains(got, "simplifications") {
+	if !strings.Contains(got, footerMarker+"\n**Reviewed commit:**") || strings.Contains(strings.ToLower(got), "simplification") {
 		t.Fatalf("footer without a simplify role: %q", got)
 	}
 }

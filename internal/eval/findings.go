@@ -59,12 +59,17 @@ type provenanceEntry struct {
 }
 
 var (
-	severityToken        = regexp.MustCompile(`\bP[0-3]\b`)
-	severityWindow       = 80  // characters of a comment body searched for a severity
-	simplificationWindow = 120 // characters of a comment body searched for the simplification marker
+	severityToken  = regexp.MustCompile(`\bP[0-3]\b`)
+	severityWindow = 80 // characters of a comment body searched for a severity
 )
 
-const simplificationMarker = "simplification (optional)"
+// simplificationHeading is a simplification comment's first line without its bold: one of the headings
+// the judge prompts have asked for, its tag closed, "Simplification (optional)" (also before a colon and a
+// sentence), then "**Simplification** (optional, no reply needed)" from 2026-10-05 and "**Simplification**
+// (keeps behavior: apply it, or reply with the risk)" from 2026-10-29. Anchored, so a finding's title,
+// which starts with its priority, never reads as one.
+var simplificationHeading = regexp.MustCompile(
+	`(?i)^simplification \((?:optional|optional, no reply needed|keeps behavior: apply it, or reply with the risk)\)(?::.*)?$`)
 
 // ParseResult reads the judge's result file. The inline comments of planned_review become findings
 // in order, followed by one InBody finding holding the review body when it is not empty.
@@ -114,8 +119,11 @@ func commentSeverity(c plannedComment, prov []provenanceEntry) string {
 	return severityToken.FindString(head(c.Body, severityWindow))
 }
 
+// isSimplification reports whether a comment's first line that is not blank, trimmed and without its
+// bold, is a simplification heading.
 func isSimplification(body string) bool {
-	return strings.Contains(strings.ToLower(head(body, simplificationWindow)), simplificationMarker)
+	first, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
+	return simplificationHeading.MatchString(strings.TrimSpace(strings.ReplaceAll(first, "*", "")))
 }
 
 // head returns the first n characters (runes) of s.

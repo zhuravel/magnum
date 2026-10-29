@@ -756,7 +756,9 @@ func TestSkillFindingsProveFiveFactsAndRankByReachability(t *testing.T) {
 // enforces trust checks. claude-simplify runs in about 4 of 100 rounds, so
 // the rules are in the posting judge prompts of a round with its report, not
 // in the skill every session reads. A JudgeData without the cap (0) renders
-// the default, never "at most 0".
+// the default, never "at most 0". The title asks for the risk a refusal
+// names (2026-10-29): under "(optional, no reply needed)" one author refused
+// 47 of 68 simplifications for their cost alone.
 func TestJudgePromptsPostAtMostTheConfiguredSimplificationsThatRemoveSomething(t *testing.T) {
 	want := []string{
 		"Post at most 5, the most substantial",
@@ -764,7 +766,7 @@ func TestJudgePromptsPostAtMostTheConfiguredSimplificationsThatRemoveSomething(t
 		"not just moves, renames or rephrases code",
 		"authorization, sandboxing, money or usage recording, or concurrency code, unless it removes a defect-prone construct",
 		"lines changed since the previous review",
-		"`**Simplification** (optional, no reply needed)`",
+		"`**Simplification** (keeps behavior: apply it, or reply with the risk)`",
 		"marked `(equivalence probe)`",
 		`Add ` + "`" + `"candidates":{"claude-simplify":{"suggested":N}}` + "`" + ` to the result file`,
 	}
@@ -785,6 +787,9 @@ func TestJudgePromptsPostAtMostTheConfiguredSimplificationsThatRemoveSomething(t
 			if strings.Contains(got, g) {
 				t.Errorf("%s still says %q", name, g)
 			}
+		}
+		if strings.Contains(got, "(optional, no reply needed)") {
+			t.Errorf("%s still titles a simplification optional", name)
 		}
 		for limit, says := range map[int]string{
 			0:  "Post at most 5, the most substantial",

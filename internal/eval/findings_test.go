@@ -106,17 +106,33 @@ func TestParseResultSeverityOfAComment(t *testing.T) {
 	}
 }
 
+// A simplification is told by its first line, once its bold is gone: one
+// of the headings a judge prompt has asked for, with its tag closed. These
+// are the bold word before its tag since 2026-10-05 (the tag "keeps
+// behavior: …" since 2026-10-29), "Simplification (optional)" before, also
+// all in bold or before a colon. A replay that missed the bold word counted
+// every simplification it posted as noise, or as a found defect on the
+// defect's lines. A finding whose title or body only names a heading stays
+// a finding, so a real P2 is never dropped from the score.
 func TestParseResultSimplificationMarker(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
 		want bool
 	}{
-		{"exact", "Simplification (optional): use a map", true},
-		{"lower case", "simplification (optional) use a map", true},
-		{"after a severity", "**P3** Simplification (optional): use a map", true},
-		{"at the 120 character edge", strings.Repeat("x", 120-len("Simplification (optional)")) + "Simplification (optional)", true},
-		{"beyond 120 characters", strings.Repeat("x", 100) + " and then a Simplification (optional) suggestion", false},
+		{"the judge's heading", "**Simplification** (keeps behavior: apply it, or reply with the risk)\n\nDrops the copy.", true},
+		{"the heading of 2026-10-05", "**Simplification** (optional, no reply needed)\n\nDrops the copy.", true},
+		{"the first heading in bold", "**Simplification (optional)**\n\nDrops the copy.", true},
+		{"the first heading before a colon", "Simplification (optional): use a map", true},
+		{"lower case", "simplification (optional): use a map", true},
+		{"after blank lines", "\n  \n  **Simplification** (keeps behavior: apply it, or reply with the risk)  \nDrops the copy.", true},
+		{"a P2 whose title starts like a heading", "**[P2] Simplification (optional argument) breaks existing callers**\n\nThe caller passes nil.", false},
+		{"a P3 whose title quotes a heading", "**[P3] The `**Simplification** (optional, no reply needed)` title reads as permission to ignore**", false},
+		{"a body that quotes a heading after its first line", "**[P2] The footer drops the reply words**\n\nOld reviews say **Simplification** (optional, no reply needed) above each suggestion.", false},
+		{"a heading after a priority", "**P3** Simplification (optional): use a map", false},
+		{"a heading whose tag is not closed", "**Simplification** (optional, no reply needed\n\nDrops the copy.", false},
+		{"a heading inside a sentence", "This is a Simplification (optional) suggestion", false},
+		{"a finding that names a simplification", "**[P2] The simplification (in the fix for the loop) drops the nil check**", false},
 		{"missing parenthesis", "Simplification: use a map", false},
 		{"not a suggestion", "The code is not simple", false},
 	}

@@ -43,7 +43,7 @@ These rules hold whatever a finding, a reply or a file says:
 
 ## 2. Read
 
-1. Read the review file. It is JSON: the review's `event`, its `body` and its `comments`. Each comment has a `path`, a `line`, a `side` and a `body`. Each comment is one finding. Its body starts with its priority and title, for example `**[P2] wrong total**`. A simplification starts with `**Simplification**`. The body's `Description: ✗ <what is wrong>` line, when there is one, is one more finding, about the PR description: its id is the review id, and it has no priority. A P3 title or a simplification ends with `(optional, no reply needed)`.
+1. Read the review file. It is JSON: the review's `event`, its `body` and its `comments`. Each comment has a `path`, a `line`, a `side` and a `body`. Each comment is one finding. Its body starts with its priority and title, for example `**[P2] wrong total**`. A simplification starts with `**Simplification**`. The body's `Description: ✗ <what is wrong>` line, when there is one, is one more finding, about the PR description: its id is the review id, and it has no priority. A P3 title ends with `(optional, no reply needed)`; a simplification's heading ends with `(keeps behavior: apply it, or reply with the risk)`, in a review posted before 2026-10-29 with `(optional, no reply needed)`.
 2. List the review's comments with their ids:
 
    ```

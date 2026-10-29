@@ -87,8 +87,10 @@ func TestReviewFooterMustBeATemplateThatRenders(t *testing.T) {
 }
 
 // The built-in footer names the reviewed commit and collapses the rest
-// under <details>; it says simplifications are optional only when the PR's
-// watch runs a simplify role.
+// under <details>; only when the PR's watch runs a simplify role does it
+// name simplifications, and then it asks for the risk a refusal names, no
+// longer calling them optional (2026-10-29: one author refused 47 of 68
+// for their cost alone).
 func TestDefaultFooterCollapsesAndNamesSimplificationsOnlyWhenSimplifyRuns(t *testing.T) {
 	d := FooterData{SHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", Short: "d4e5f6a7b8", Repo: "talkable/talkable", Number: 11920,
 		Login: "talkable[bot]", Event: "COMMENT"}
@@ -101,8 +103,8 @@ func TestDefaultFooterCollapsesAndNamesSimplificationsOnlyWhenSimplifyRuns(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	const phrase = "; simplifications are optional"
-	if strings.Contains(without, phrase) || !strings.Contains(with, phrase) {
+	const phrase = "`won't fix: <why>`; a simplification keeps behavior: apply it, or reply `won't fix: <the risk>`. New pushes"
+	if strings.Contains(without, "simplification") || !strings.Contains(with, phrase) || strings.Contains(with, "optional") {
 		t.Errorf("simplify phrase: without simplify %q, with %q", without, with)
 	}
 	for _, want := range []string{"**Reviewed commit:** `d4e5f6a7b8`\n\n<details><summary>",

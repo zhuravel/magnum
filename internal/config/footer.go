@@ -12,17 +12,18 @@ import (
 
 // DefaultReviewFooter is the footer template of every identity that sets no
 // review_footer: the reviewed commit, then what the review is, how to answer
-// a P0-P2 thread, in the words the reply classifier knows, and what starts a
-// round (a push, during the quiet hours only a small one, which gets a short
-// check, and not on a draft the watch skips; a thread reply; a review
-// request), collapsed under <details>
+// a P0-P2 thread, in the words the reply classifier knows, that a
+// simplification keeps behavior, so a refusal names its risk (when the
+// watch runs simplify), and what starts a round (a push, during the quiet
+// hours only a small one, which gets a short check, and not on a draft the
+// watch skips; a thread reply; a review request), collapsed under <details>
 // (config.defaults.toml documents it word for word).
 const DefaultReviewFooter = "**Reviewed commit:** `{{.Short}}`\n" +
 	"\n" +
 	"<details><summary>ℹ️ About Magnum</summary>\n" +
 	"\n" +
 	"Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`" +
-	"{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically" +
+	"{{if .Simplify}}; a simplification keeps behavior: apply it, or reply `won't fix: <the risk>`{{end}}. New pushes are re-reviewed automatically" +
 	"{{with .QuietHours}} (during {{.}} only small ones, by a short check){{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. " +
 	"A thread reply gets an answer without a push, and a review request for `{{.RequestLogin}}` starts a round.\n" +
 	"\n" +
@@ -40,7 +41,7 @@ type FooterData struct {
 	Number int    // the PR's number
 	Login  string // the login that posted the review
 	// Simplify: the PR's watch runs a role answering to the alias
-	// "simplify", so the review may carry optional simplifications.
+	// "simplify", so the review may carry simplifications.
 	Simplify bool
 	// Clean: the review has no findings (still-open earlier ones included)
 	// and no simplifications, by the judge's result counts.

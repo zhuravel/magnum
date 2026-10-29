@@ -621,6 +621,26 @@ func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
 	}
 }
 
+// The fixer tells a simplification by its heading, whose tag asks for the
+// risk a refusal names since 2026-10-29, and a review posted before that
+// carries the old one: the skill names both, and no longer says that a
+// simplification needs no reply.
+func TestTheFixSkillKnowsTheSimplificationHeadings(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"A simplification starts with `**Simplification**`.",
+		"A P3 title ends with `(optional, no reply needed)`; a simplification's heading ends with " +
+			"`(keeps behavior: apply it, or reply with the risk)`, in a review posted before 2026-10-29 with `(optional, no reply needed)`.",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+	if strings.Contains(skill, "A P3 title or a simplification ends with") {
+		t.Error("the fix skill still says a simplification needs no reply")
+	}
+}
+
 // The fixer proves each guard its fix adds with a spec that fails without
 // it, always fixes a regression (not every finding of the PR's diff, which
 // is every finding the review reports), applies a simplification that keeps

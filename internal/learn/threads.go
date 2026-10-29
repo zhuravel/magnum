@@ -182,8 +182,10 @@ func (in Input) fixerReply(who string, c github.ThreadComment) bool {
 }
 
 // simplificationRe is a simplification comment's heading once its bold is
-// gone: the word and the optional tag, "(optional, no reply needed)" in the
-// judge prompts, "(optional)" in the earlier ones.
+// gone: the word and any tag in parentheses, "(keeps behavior: apply it, or
+// reply with the risk)" in the judge prompts since 2026-10-29; stored rows
+// and posted threads carry the earlier "(optional, no reply needed)" and
+// "(optional)".
 var simplificationRe = regexp.MustCompile(`(?i)^simplification(?:\s*\(.*\))?$`)
 
 // findingTitle is a posted finding's title and priority from its comment:

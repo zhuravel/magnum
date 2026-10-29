@@ -311,26 +311,34 @@ func TestAFixedReplyNeedsNoLesson(t *testing.T) {
 }
 
 // TestFindingTitleReadsASimplificationThread: a simplification comment's
-// first line is the heading alone ("**Simplification** (optional, no reply
-// needed)", or the older "**Simplification (optional)**"), and what the
+// first line is the heading alone ("**Simplification** (keeps behavior:
+// apply it, or reply with the risk)" since 2026-10-29, and the stored rows
+// and posted threads carry the earlier "**Simplification** (optional, no
+// reply needed)" and "**Simplification (optional)**"), and what the
 // proposal removes is the sentence below it, so the title is that sentence
 // and not the heading with half its bold left on; a simplification has no
 // priority, and a heading with no sentence under it stays "Simplification".
 func TestFindingTitleReadsASimplificationThread(t *testing.T) {
-	const suggestion = "```suggestion\nreturn Foo(x)\n```"
+	const (
+		suggestion = "```suggestion\nreturn Foo(x)\n```"
+		heading    = "**Simplification** (keeps behavior: apply it, or reply with the risk)"
+	)
 	for name, c := range map[string]struct{ body, title string }{
-		"the current heading": {"**Simplification** (optional, no reply needed)\n\nThe helper duplicates `Foo`; call it instead.\n\n" + suggestion,
+		"the current heading": {heading + "\n\nThe helper duplicates `Foo`; call it instead.\n\n" + suggestion,
+			"Simplification: The helper duplicates `Foo`; call it instead."},
+		"the heading before 2026-10-29": {"**Simplification** (optional, no reply needed)\n\nThe helper duplicates `Foo`; call it instead.\n\n" + suggestion,
 			"Simplification: The helper duplicates `Foo`; call it instead."},
 		"the older heading": {"**Simplification (optional)**\n\nThe flag is read once and never changes.\n" + suggestion,
 			"Simplification: The flag is read once and never changes."},
-		"the first sentence of a paragraph": {"**Simplification** (optional, no reply needed)\n\nDrops the `a. b` copy. The rest is the same\nacross two lines.\n\n" + suggestion,
+		"the first sentence of a paragraph": {heading + "\n\nDrops the `a. b` copy. The rest is the same\nacross two lines.\n\n" + suggestion,
 			"Simplification: Drops the `a. b` copy."},
-		"a paragraph over two lines": {"**Simplification** (optional, no reply needed)\n\nRemoves the second pass\nover the rows.\n\n" + suggestion,
+		"a paragraph over two lines": {heading + "\n\nRemoves the second pass\nover the rows.\n\n" + suggestion,
 			"Simplification: Removes the second pass over the rows."},
-		"emphasis inside the sentence": {"**Simplification** (optional, no reply needed)\n\nThe **second** loop is _redundant_.\n\n" + suggestion,
+		"emphasis inside the sentence": {heading + "\n\nThe **second** loop is _redundant_.\n\n" + suggestion,
 			"Simplification: The second loop is redundant."},
-		"no sentence below the heading":          {"**Simplification** (optional, no reply needed)\n\n" + suggestion, "Simplification"},
-		"nothing below the heading":              {"**Simplification** (optional, no reply needed)", "Simplification"},
+		"no sentence below the heading":          {heading + "\n\n" + suggestion, "Simplification"},
+		"nothing below the heading":              {heading, "Simplification"},
+		"nothing below an older heading":         {"**Simplification** (optional, no reply needed)", "Simplification"},
 		"a title that only starts with the word": {"**Simplification of the retry loop**\n\nSomething.", "Simplification of the retry loop"},
 		"a title that is already a sentence":     {"**Simplification: drop the copy**\n\nSomething.", "Simplification: drop the copy"},
 	} {
@@ -338,7 +346,7 @@ func TestFindingTitleReadsASimplificationThread(t *testing.T) {
 			t.Errorf("%s: title %q priority %q; want %q and none", name, title, priority, c.title)
 		}
 	}
-	long := "**Simplification** (optional, no reply needed)\n\n" + strings.Repeat("word ", OwnTitleMax)
+	long := heading + "\n\n" + strings.Repeat("word ", OwnTitleMax)
 	if title, _ := findingTitle(long); utf8.RuneCountInString(title) != OwnTitleMax || !strings.HasPrefix(title, "Simplification: word ") || !strings.HasSuffix(title, "…") {
 		t.Errorf("a sentence of %d runes gives %q", len(long), title)
 	}

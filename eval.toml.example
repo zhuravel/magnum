@@ -20,7 +20,8 @@ why = "a human reviewer found the missing signature check on this head"
 # (case-insensitive regular expressions). `body = true` also accepts a
 # mention in the review body. `severity` is the weakest one that still counts
 # as right. Inline comments that match no defect count as noise;
-# "Simplification (optional)" suggestions are counted apart.
+# a comment whose first line is a simplification heading ("**Simplification**
+# (keeps behavior: …)", or an earlier "(optional…)" one) is counted apart.
 [[case.defect]]
 id = "signature-skip"
 title = "The callback accepts requests without verifying their signature"

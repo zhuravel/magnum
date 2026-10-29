@@ -1357,10 +1357,11 @@ after the PR was merged are never dismissed, and a dismissal that fails (a missi
 verified, there for the PR's author (the judge never writes it, and a dry run gets none). Without the key it
 is Magnum's: the reviewed commit, then, collapsed under "About Magnum", that the review is automated, that a
 P0-P2 thread is answered with `fixed`, `not a bug: <why>` or `won't fix: <why>` (the words the reply
-classifier knows; a P3's title says it needs no reply), that simplifications are optional (only when the
-watch runs a role aliased `simplify`), that new pushes are re-reviewed automatically (when
-`[daemon] quiet_hours` is set, during it only small ones by a short check, the window named with the
-daemon's offset from UTC, "03:00-12:00 UTC+3"; drafts only on request when the watch has
+classifier knows; a P3's title says it needs no reply), that a simplification keeps behavior, so it is
+applied or answered `won't fix: <the risk>` (only when the watch runs a role aliased `simplify`), that
+new pushes are re-reviewed automatically (when `[daemon] quiet_hours` is set, during it only small ones
+by a short check, the window named with the daemon's offset from UTC, "03:00-12:00 UTC+3"; drafts only
+on request when the watch has
 `include_drafts = false`, the default), that a thread reply gets an answer without a push,
 and whose review request starts a round (your login, as for review requests: the watch's poll login when
 that is a `gh` identity, else its `auto_approve_as` or the first `gh` identity; the posting login when no `gh`
@@ -1562,7 +1563,7 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   it (below);
 - its latest verified review is of the PR's current head and leaves nothing to fix before merging: no
   P0, P1 or P2 finding, still-open earlier ones included, by the priorities the judge's result gives them
-  (P3 findings and simplifications are optional). Only a result written before it gave them leaves the
+  (P3 findings and simplifications do not block it). Only a result written before it gave them leaves the
   still-open ones to the review's verdict line (`No blocking problems.`, `No problems found…`, `No new
   problems since…`); a line it does not know is not clean;
 - the review heard every reviewer of its round: none ran and left no report (wrote none, timed out,
@@ -2697,8 +2698,8 @@ What an author gets, every review alike:
   reaches, harming only that request, is P3, as is a harm that heals itself or ends with the request. A
   size or timing trigger states its threshold and why real data reaches it. No finding carries a score.
 - **At most five simplifications by default** (`max_simplifications`, per repository), the most
-  substantial, one comment per idea, titled
-  "**Simplification** (optional, no reply needed)", each backed by an equivalence probe listed in Checks.
+  substantial, one comment per idea, titled "**Simplification** (keeps behavior: apply it, or reply with
+  the risk)", each backed by an equivalence probe listed in Checks.
   Each removes something a reader must hold (a branch, helper, flag, duplicated block), never only renames
   or moves code, removes or changes only what the PR added, never a construct a line already had before a
   mechanical edit (a renamed call, a swapped logger), and none touches authorization, sandboxing, money or usage recording, or concurrency code
@@ -2725,7 +2726,7 @@ No problems found. LGTM :shipit:
 
 <details><summary>ℹ️ About Magnum</summary>
 
-Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically (during 03:00-12:00 UTC+3 only small ones, by a short check). A thread reply gets an answer without a push, and a review request for `your-login` starts a round.
+Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; a simplification keeps behavior: apply it, or reply `won't fix: <the risk>`. New pushes are re-reviewed automatically (during 03:00-12:00 UTC+3 only small ones, by a short check). A thread reply gets an answer without a push, and a review request for `your-login` starts a round.
 
 </details>
 ```

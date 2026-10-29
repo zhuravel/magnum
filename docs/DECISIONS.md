@@ -14227,6 +14227,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   guard TestAReviewSomeoneAskedForDoesNotMeasureThePushAgain (a review request, `magnum review`) passed
   before the change and fails under the mutation of what it protects.
 
+- **A simplification's title and the footer ask for a named risk, not "optional"** (2026-10-29, the
+  operator's approval of the author-visible wording, after one organization's 68 simplifications on 21 PRs
+  of one author whose agent answers threads, 2026-10-04 to 2026-10-28: 12 applied, 47 refused, 9 left
+  unanswered). The refusals gave a cost and no risk ("Low priority (Net +0.5)", "a push only for this starts
+  a new bot review and CI run", "saves 3 lines in a test that runs only on a laptop"), and a blind check of
+  the refused threads found 45 refusals of correct simplifications that keep behavior, in 13 PRs, none of
+  them on master since. **Why**: the title `(optional, no reply needed)` and the footer's "simplifications
+  are optional" told the author that ignoring one is fine, and invited refusals for cost alone. The
+  author's skill now applies a simplification that keeps behavior and refuses one only for a named risk:
+  it changes behavior for a named input or caller, drops a guard, check or assertion, edits lines the PR
+  did not add or change, edits authorization, sandboxing, money or usage recording or concurrency code, is
+  out of date with the head, conflicts with a repository rule or another open PR, or the specs fail after
+  it. Magnum's words now say the same. **What**: the judge prompts title a simplification
+  `**Simplification** (keeps behavior: apply it, or reply with the risk)`, and the default footer, when the
+  watch runs simplify, says "a simplification keeps behavior: apply it, or reply `won't fix: <the risk>`"
+  (words the reply classifier knows). A P3's title, the body's count line (`2 optional: 1 P3, 1
+  simplification.`, which the board and the tests parse), `max_simplifications` and what counts as a
+  simplification do not change; a simplification still never affects the verdict or auto-approval.
+  **Readers**: stored rows and posted threads keep the old headings, so each reader takes every form.
+  `learn` titles a thread by the word and any tag in parentheses, as before; the fix skill names the new
+  tag and the old one; postreview checks no heading. The replay scoring (`eval.ParseResult`) looked for
+  "simplification (optional)" and so had missed the bold-word heading since 2026-10-05, counting such a
+  suggestion as noise, or as a found defect on a defect's lines. It now reads a comment as a
+  simplification only when its first line, without the bold, is one of the three headings with its tag
+  closed (the first one also before a colon), so a finding whose title starts like a heading ("[P2]
+  Simplification (optional argument) breaks…") or quotes one, or whose body quotes one below its title,
+  stays in the score. **Rejected**: keeping "optional" in the title or the footer (it reads as
+  permission to ignore), and a per-author cap on simplifications (the operator declined it on 2026-10-21
+  and on 2026-10-23).
+  Tests, failing first: TestJudgePromptsPostAtMostTheConfiguredSimplificationsThatRemoveSomething (the new
+  heading, and no "(optional, no reply needed)" in a judge prompt), the 54 judge goldens (the heading
+  only), TestDefaultFooterCollapsesAndNamesSimplificationsOnlyWhenSimplifyRuns,
+  TestVerifiedReviewGetsTheFooterOnceAfterABlankLine, TestParseResultSimplificationMarker (the three
+  headings; a P2 whose title starts like one, a P3 whose title quotes one, a body that quotes one below
+  its title) and TestTheFixSkillKnowsTheSimplificationHeadings;
+  TestFindingTitleReadsASimplificationThread, which passed before, now reads the new heading and both old
+  ones.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
