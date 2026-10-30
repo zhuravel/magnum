@@ -14389,3 +14389,16 @@ versions, newest last. People add their entries to the sections above, never her
   were shapes the skill covered only in part. The skill holds the priority rule; the checks sit in the
   uncapped prompts. To make room the skill shortens the readiness, prepass and notes lines, the
   machine-failure list, the Checks example and the reread clause; no rule was dropped.
+- **The judge ranks a test-hook variable only tests set, and a hardcoded copy of a configurable value
+  that only a non-default setting breaks, P3 beside the other rare preconditions, and the reviewers and
+  the judge's own pass look for eight more shapes: a range guard that copies a bound the model already
+  validates, a test or draft mark copied from a long-lived parent onto later records, a switched-off
+  automation that stranded older in-flight records, an example that asserts only the log row, a value
+  read from an element's position, a typed-value cache never cleared, a dedup key with a constant
+  fallback, and a sink escaped for one value while others stay raw** (2026-10-30, the skill editor's
+  proposal for m704, m680, m679, m673, m672, m644, m624, m614, m611, m548, m547, m546, m544, m540, m502,
+  m281, m222, d849, d826, d164, d161, d157, d145). Why: two P2 findings about a test-only variable and a
+  mismatch of defaults were declined as hardening points, and the misses were checks the skill did not
+  name. The checks sit in the uncapped prompts and the priority rule in the skill. To make room the
+  skill drops 'though the build passes', 'while you worked', one word before 'body' and 'normal delay',
+  and the passing line of the Checks example; no rule was dropped.
