@@ -14402,3 +14402,17 @@ versions, newest last. People add their entries to the sections above, never her
   name. The checks sit in the uncapped prompts and the priority rule in the skill. To make room the
   skill drops 'though the build passes', 'while you worked', one word before 'body' and 'normal delay',
   and the passing line of the Checks example; no rule was dropped.
+- **The judge ranks a gap that exists only in one local launcher mode, while another documented start
+  mode works, P3 beside the other rare preconditions, and the reviewers and the judge's own pass look
+  for six more shapes: a rate-limit classifier that treats a spend, plan or budget limit as transient, a
+  rate limit on a secret check whose tries per hour and shared counters nobody computed, a proxy that
+  drops the client address while a limiter keys on it, a host gate with no spec for mutating verbs and
+  no logged rejection, a name-blind or instant test fake of a lock or channel, and an unload handler
+  that aborts a write that must arrive** (2026-10-31, the skill editor's proposal for m793, m789, m788,
+  m770, m757, m756, m755, m673, m672, m548, m547, m546, m544, m540, m502, m222, d1068, d1062, d982,
+  d849, d826, d161, d157). Why: authors declined a P2 about a local-only launcher mode that another
+  start mode avoids and a P3 about a Secure cookie on a plain-HTTP dev host that browsers and providers
+  do not reach; the misses were checks the skill did not name. The simplify prompts drop a deletion of
+  lines as unused that a reference search does not prove. The checks sit in the uncapped prompts, the
+  priority rule in the skill. To make room the skill drops 'the worktree path', 'their', 'exactly', 'the
+  wrong language version' and 'gem'; no rule was dropped.
