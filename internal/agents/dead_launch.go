@@ -167,7 +167,7 @@ func (m *Manager) afterClear(ctx context.Context, pr store.PR, role Role, sessio
 		m.mu.Lock()
 		m.replaced[pane] = repl
 		m.mu.Unlock()
-		if err := m.d.Herdr.PaneRename(ctx, repl, TaggedPaneLabel(m.d.Tag, pr.Number, role)); err != nil {
+		if err := m.d.Herdr.PaneRename(ctx, repl, m.paneLabel(pr, role)); err != nil {
 			m.logErr(ctx, err, "agents: name the replacement %s: %v", repl, err)
 		}
 	}

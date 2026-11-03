@@ -476,7 +476,7 @@ func (m *Manager) recordPane(ctx context.Context, pr store.PR, ws Workspace, rol
 func (m *Manager) namePane(ctx context.Context, pr store.PR, ws *Workspace, role config.Role, paneID string) error {
 	r := Role(role.Name)
 	ws.Panes[r] = paneID
-	if err := m.d.Herdr.PaneRename(ctx, paneID, TaggedPaneLabel(m.d.Tag, pr.Number, r)); err != nil {
+	if err := m.d.Herdr.PaneRename(ctx, paneID, m.paneLabel(pr, r)); err != nil {
 		return fmt.Errorf("agents: rename pane %s: %w", paneID, err)
 	}
 	return nil

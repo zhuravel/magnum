@@ -101,7 +101,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	if err != nil {
 		return fmt.Errorf("agents: repo of pr %d: %w", pr.Number, err)
 	}
-	name, title := TaggedAgentName(m.d.Tag, repo.Owner+"/"+repo.Name, pr.Number, r), TaggedTitle(m.d.Tag, repo.Name, pr.Number, r)
+	name, title := TaggedAgentName(m.d.Tag, repo.Owner+"/"+repo.Name, pr.Number, r), m.agentTitle(pr, repo.Name, r)
 	paneID = m.replacement(paneID)
 	snap, err := m.d.Herdr.Snapshot(ctx)
 	if err != nil {

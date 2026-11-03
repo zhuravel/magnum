@@ -20,22 +20,58 @@ import (
 // (codex /rename, see nameAgent), and a shell role from the OSC 0 prefix of
 // its command line (ShellData.Title).
 func Title(repo string, number int, role Role) string {
-	if i := strings.LastIndexByte(repo, '/'); i >= 0 {
-		repo = repo[i+1:]
-	}
-	if repo == "" {
-		return fmt.Sprintf("PR #%d %s", number, role.Label())
-	}
-	return fmt.Sprintf("PR #%d %s - %s", number, role.Label(), repo)
+	return ownerTitle("", repo, prOwner(number), role)
 }
 
 // TaggedTitle is Title under a tag (Deps.Tag): "eval PR #729 codex-judge -
 // talkable". An empty tag is Title.
 func TaggedTitle(tag, repo string, number int, role Role) string {
-	if tag == "" {
-		return Title(repo, number, role)
+	return ownerTitle(tag, repo, prOwner(number), role)
+}
+
+// prOwner is how a PR's agents are named by default: "PR #729".
+func prOwner(number int) string { return fmt.Sprintf("PR #%d", number) }
+
+// ownerTitle is TaggedTitle for an owner named owner ("PR #729", or a
+// factory's "PR-12345" or "task 12"): "<tag> <owner> <role> - <repo>", the
+// tag and the repo left out when empty.
+func ownerTitle(tag, repo, owner string, role Role) string {
+	if i := strings.LastIndexByte(repo, '/'); i >= 0 {
+		repo = repo[i+1:]
 	}
-	return tag + " " + Title(repo, number, role)
+	title := owner + " " + role.Label()
+	if repo != "" {
+		title += " - " + repo
+	}
+	if tag == "" {
+		return title
+	}
+	return tag + " " + title
+}
+
+// ownerName is how pr is named in the titles and pane labels of its agents:
+// Deps.OwnerName's answer, else "PR #<number>".
+func (m *Manager) ownerName(pr store.PR) string {
+	if m.d.OwnerName != nil {
+		if name := m.d.OwnerName(pr); name != "" {
+			return name
+		}
+	}
+	return prOwner(pr.Number)
+}
+
+// agentTitle is the title of role r's agent in pr's repository repo (name
+// part), under Deps.Tag and Deps.OwnerName: TaggedTitle for the PRs of
+// magnum's own reviews.
+func (m *Manager) agentTitle(pr store.PR, repo string, r Role) string {
+	return ownerTitle(m.d.Tag, repo, m.ownerName(pr), r)
+}
+
+// paneLabel is the herdr pane name of role r in pr's workspace, under
+// Deps.Tag and Deps.OwnerName: TaggedPaneLabel for the PRs of magnum's own
+// reviews.
+func (m *Manager) paneLabel(pr store.PR, r Role) string {
+	return m.agentTitle(pr, "", r)
 }
 
 // TitleAttempts caps the rename attempts per session row (one generation; a
@@ -92,7 +128,7 @@ func (m *Manager) nameAgent(ctx context.Context, s store.Session, paneID, curren
 			m.logErr(ctx, err, "agents: title of session %d: %v", s.ID, err)
 			return
 		}
-		title = TaggedTitle(m.d.Tag, repo, pr.Number, Role(s.Role))
+		title = m.agentTitle(pr, repo, Role(s.Role))
 		command = kind.RenameCommand(title)
 		m.mu.Lock()
 		st.title, st.command = title, command

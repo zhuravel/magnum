@@ -2,10 +2,12 @@ package agents
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -240,5 +242,112 @@ func TestNameJudgeRightAfterAFreshStart(t *testing.T) {
 	}
 	if got := e2.renames(ws2.Panes[RoleJudge]); len(got) != 0 {
 		t.Fatalf("renames after a resume = %q", got)
+	}
+}
+
+// ownerWriter adds a claude role named fx-writer, as a factory's writer role
+// is, to e's configuration.
+func (e *env) ownerWriter() config.Role {
+	e.t.Helper()
+	r := e.spec(RoleClaude)
+	r.Name = "fx-writer"
+	return e.addRole(r)
+}
+
+// ownerWorkspace lays out the panes of the fx-writer and codex-judge roles of
+// the test PR in the standard checkout.
+func (e *env) ownerWorkspace(writer config.Role) Workspace {
+	e.t.Helper()
+	ws, err := e.m.EnsureWorkspace(e.ctx, e.pr, "/Users/x/Projects/talkable.review1",
+		map[string]string{"WT_BRANCH": "review1"}, "talkable#11920", []config.Role{writer, e.spec(RoleJudge)})
+	if err != nil {
+		e.t.Fatalf("EnsureWorkspace: %v", err)
+	}
+	return ws
+}
+
+// A factory names its agents after the task or the ticket they work for, not
+// after a pull request: Deps.OwnerName replaces "PR #N" in the pane label,
+// the title a claude agent gets by --name and the /rename a codex agent is
+// given.
+func TestTitlesUseTheOwnerNameWhenGiven(t *testing.T) {
+	e := newEnv(t)
+	e.m.d.Tag = "factory"
+	e.m.d.OwnerName = func(store.PR) string { return "PR-12345" }
+	writer := e.ownerWriter()
+	ws := e.ownerWorkspace(writer)
+
+	if got := e.h.renames[ws.Panes["fx-writer"]]; got != "factory PR-12345 fx-writer" {
+		t.Fatalf("pane label = %q", got)
+	}
+	if err := e.m.StartAgent(e.ctx, e.pr, writer, ws.Panes["fx-writer"], ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.h.starts) != 1 {
+		t.Fatalf("starts = %+v", e.h.starts)
+	}
+	args := e.h.starts[0].Args
+	if i := slices.Index(args, "--name"); i < 0 || args[i+1] != "factory PR-12345 fx-writer - talkable" {
+		t.Fatalf("claude args = %q, want --name factory PR-12345 fx-writer - talkable", args)
+	}
+	// What herdr addresses the agent by keeps the number of the row.
+	if got, want := e.h.starts[0].Name, TaggedAgentName("factory", "talkable/talkable", 11920, "fx-writer"); got != want {
+		t.Fatalf("agent name = %q, want %q", got, want)
+	}
+
+	// Codex has no --name: the namer types /rename with the same title.
+	judge := ws.Panes[RoleJudge]
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), judge, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.renames(judge); len(got) != 1 || got[0] != "/rename factory PR-12345 codex-judge - talkable" {
+		t.Fatalf("codex renames = %q", got)
+	}
+}
+
+// The pane that replaces a closed one (a dead launch cleared) is labelled
+// like the first, with the owner's name.
+func TestTitlesUseTheOwnerNameForAReplacementPane(t *testing.T) {
+	e := newEnv(t)
+	e.m.d.Tag = "factory"
+	e.m.d.OwnerName = func(store.PR) string { return "task 12" }
+	ws := e.workspace()
+	dead := ws.Panes[RoleJudge]
+	e.h.addAgent(herdr.AgentInfo{Name: TaggedAgentName("factory", "talkable/talkable", 11920, RoleJudge), PaneID: dead,
+		WorkspaceID: ws.WorkspaceID, Agent: KindCodex, AgentStatus: herdr.StatusUnknown, LaunchPending: true})
+	e.h.reads[dead] = "codex-cli 0.163.0\nError: the TUI could not start\n% "
+
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), dead, ""); err != nil {
+		t.Fatal(err)
+	}
+	repl := e.h.splits[len(e.h.splits)-1].New
+	if got := e.h.renames[repl]; got != "factory task 12 codex-judge" {
+		t.Fatalf("replacement label = %q", got)
+	}
+}
+
+// Without Deps.OwnerName, and when it has no name for a PR, the agents are
+// named after the pull request, as magnum's reviews always were.
+func TestTitlesKeepPRNumbersByDefault(t *testing.T) {
+	e := newEnv(t)
+	ws := e.started()
+	if got := e.h.renames[ws.Panes[RoleClaude]]; got != "PR #11920 claude-review" {
+		t.Fatalf("pane label = %q", got)
+	}
+	args := e.h.starts[1].Args
+	if i := slices.Index(args, "--name"); i < 0 || args[i+1] != "PR #11920 claude-review - talkable" {
+		t.Fatalf("claude args = %q", args)
+	}
+	if got := e.renames(ws.Panes[RoleJudge]); len(got) != 1 || got[0] != "/rename "+judgeTitle {
+		t.Fatalf("codex renames = %q", got)
+	}
+
+	// A tag leads the label; the number stays when the owner has no name.
+	tagged := newEnv(t)
+	tagged.m.d.Tag = "eval"
+	tagged.m.d.OwnerName = func(store.PR) string { return "" }
+	tws := tagged.workspace()
+	if got := tagged.h.renames[tws.Panes[RoleClaude]]; got != "eval PR #11920 claude-review" {
+		t.Fatalf("tagged pane label = %q", got)
 	}
 }

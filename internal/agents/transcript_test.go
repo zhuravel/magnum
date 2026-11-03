@@ -1,0 +1,227 @@
+package agents
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+// textBlocks is a user entry whose content is a list of blocks, the shape
+// Claude Code writes for a prompt with an image or a pasted attachment.
+func textBlocks(at time.Time, blocks ...map[string]any) tline {
+	l := humanPrompt(at, "")
+	content := make([]any, len(blocks))
+	for i, b := range blocks {
+		content[i] = b
+	}
+	l["message"] = map[string]any{"role": "user", "content": content}
+	return l
+}
+
+// The text of the user turns of a Claude transcript: the prompts typed into
+// the pane, by a person or by magnum. A subagent's own thread, the text
+// Claude Code adds itself (a skill's body), a task notification, a tool
+// result and the line esc writes into the turn it ends are no turns of the
+// operator's.
+func TestClaudeUserTurnsSkipSidechainsMetaAndNotifications(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	at := t0
+	sidechain := humanPrompt(at.Add(time.Minute), "the subagent's task")
+	sidechain["isSidechain"] = true
+	meta := userPrompt(at.Add(2*time.Minute), "Base directory for this skill: /skills/x")
+	meta["isMeta"] = true
+	tr.addAll(
+		[]tline{
+			humanPrompt(at, "first prompt"),
+			assistantSays(at.Add(10*time.Second), "working"),
+			sidechain,
+			meta,
+		},
+		bashInBackground(at.Add(3*time.Minute), "toolu_1", "bg1"),
+		notification(at.Add(4*time.Minute), "toolu_1", "bg1", "completed"),
+		[]tline{
+			interruption(at.Add(5*time.Minute), "p1"),
+			humanPrompt(at.Add(6*time.Minute), "second prompt"),
+			textBlocks(at.Add(7*time.Minute),
+				map[string]any{"type": "text", "text": "third prompt"}, map[string]any{"type": "text", "text": "pasted"}),
+			userPrompt(at.Add(8*time.Minute), "an older Claude Code recorded no origin"),
+			// A task notification of an older Claude Code, with no origin: its text says what it is.
+			userPrompt(at.Add(9*time.Minute), notificationText("toolu_2", "bg2", "completed")),
+			textBlocks(at.Add(10*time.Minute), map[string]any{"type": "image", "source": map[string]any{"type": "base64"}}),
+		},
+	)
+	// A line that is not JSON and a half-written last line are skipped.
+	f, err := os.OpenFile(tr.path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("not json \"user\"\n{\"type\":\"user\",\"timestamp\":"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ClaudeUserTurns(tr.path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []UserTurn{
+		{At: at, Text: "first prompt", Origin: "human"},
+		{At: at.Add(6 * time.Minute), Text: "second prompt", Origin: "human"},
+		{At: at.Add(7 * time.Minute), Text: "third prompt", Origin: "human"},
+		{At: at.Add(8 * time.Minute), Text: "an older Claude Code recorded no origin"},
+	}
+	if !slices.EqualFunc(got, want, func(a, b UserTurn) bool { return a.At.Equal(b.At) && a.Text == b.Text && a.Origin == b.Origin }) {
+		t.Fatalf("turns = %+v\nwant   %+v", got, want)
+	}
+
+	// since keeps the turns stamped at or after it.
+	got, err = ClaudeUserTurns(tr.path, at.Add(7*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Text != "third prompt" || got[1].Text != "an older Claude Code recorded no origin" {
+		t.Fatalf("turns since 7m = %+v", got)
+	}
+	if got, err = ClaudeUserTurns(tr.path, at.Add(time.Hour)); err != nil || len(got) != 0 {
+		t.Fatalf("turns since an hour on = %+v, %v", got, err)
+	}
+	if _, err := ClaudeUserTurns(filepath.Join(t.TempDir(), "gone.jsonl"), time.Time{}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a missing transcript = %v, want a not-exist error", err)
+	}
+}
+
+// A Codex rollout records what the operator typed as a user_message event
+// with the text in payload.message. The response items that carry the same
+// text and the instructions Codex adds are no user messages.
+func TestCodexUserTurnsReadTheMessageText(t *testing.T) {
+	home := t.TempDir()
+	at := t0
+	line := func(at time.Time, typ string, payload map[string]any) map[string]any {
+		payload["type"] = typ
+		return map[string]any{"timestamp": at.UTC().Format(time.RFC3339Nano), "type": "event_msg", "payload": payload}
+	}
+	codexRollout(t, home, at,
+		map[string]any{"timestamp": at.UTC().Format(time.RFC3339Nano), "type": "session_meta", "payload": map[string]any{"id": codexSID}},
+		line(at.Add(time.Second), "user_message", map[string]any{"message": "review"}),
+		map[string]any{"timestamp": at.Add(2 * time.Second).UTC().Format(time.RFC3339Nano), "type": "response_item",
+			"payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "review"}}}},
+		line(at.Add(3*time.Second), "agent_message", map[string]any{"message": "done"}),
+		taskComplete(at.Add(4*time.Second), "", ""),
+		line(at.Add(time.Minute), "user_message", map[string]any{"message": "second\nline", "images": []any{}}),
+		line(at.Add(2*time.Minute), "user_message", map[string]any{"message": ""}),
+		line(at.Add(3*time.Minute), "user_message", map[string]any{"message": "third"}),
+	)
+	path, err := rolloutIn(home, codexSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := CodexUserTurns(path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []UserTurn{
+		{At: at.Add(time.Second), Text: "review"},
+		{At: at.Add(time.Minute), Text: "second\nline"},
+		{At: at.Add(3 * time.Minute), Text: "third"},
+	}
+	if !slices.EqualFunc(got, want, func(a, b UserTurn) bool { return a.At.Equal(b.At) && a.Text == b.Text && a.Origin == b.Origin }) {
+		t.Fatalf("turns = %+v\nwant   %+v", got, want)
+	}
+
+	got, err = CodexUserTurns(path, at.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Text != "second\nline" || got[1].Text != "third" {
+		t.Fatalf("turns since 1m = %+v", got)
+	}
+	if _, err := CodexUserTurns(filepath.Join(home, "gone.jsonl"), time.Time{}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a missing rollout = %v, want a not-exist error", err)
+	}
+}
+
+// A rollout longer than the tail TurnError reads still gives the turns that
+// sit before it: a long turn's tool output must not push the prompt out.
+func TestCodexUserTurnsReadTheWholeRollout(t *testing.T) {
+	home := t.TempDir()
+	at := t0
+	lines := []map[string]any{{"timestamp": at.UTC().Format(time.RFC3339Nano), "type": "event_msg",
+		"payload": map[string]any{"type": "user_message", "message": "the prompt"}}}
+	filler := map[string]any{"timestamp": at.Add(time.Second).UTC().Format(time.RFC3339Nano), "type": "event_msg",
+		"payload": map[string]any{"type": "exec_command_end", "aggregated_output": strings.Repeat("x", 64<<10)}}
+	for range rolloutTail/(64<<10) + 2 {
+		lines = append(lines, filler)
+	}
+	codexRollout(t, home, at, lines...)
+	path, err := rolloutIn(home, codexSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := CodexUserTurns(path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Text != "the prompt" {
+		t.Fatalf("turns = %+v, want the prompt before a tail of tool output", got)
+	}
+}
+
+// TranscriptPath is the file a session's turns are read from: a Claude
+// session's transcript, a Codex session's rollout, each under the session's
+// own config directory. A shell pane, a session without an id and a missing
+// file have none.
+func TestTranscriptPathFindsTheFileOfAClaudeOrACodexSession(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	tr.add(humanPrompt(t0, "hello"))
+	home := t.TempDir()
+	e.m.d.CodexHome = home
+	codexRollout(t, home, t0, taskComplete(t0, "", ""))
+
+	claude, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleClaude), AgentName: new("a"),
+		AgentKind: new(KindClaude), SessionID: new(claudeSID), Cwd: new("/Users/x/Projects/talkable.review1"),
+		HerdrPaneID: new("p1"), State: store.SessionLive, StartedAt: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.m.TranscriptPath(e.ctx, claude)
+	if err != nil || got != tr.path {
+		t.Fatalf("claude TranscriptPath = %q, %v, want %q", got, err, tr.path)
+	}
+
+	codex, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleJudge), AgentName: new("b"),
+		AgentKind: new(KindCodex), SessionID: new(codexSID), HerdrPaneID: new("p2"), State: store.SessionLive, StartedAt: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := rolloutIn(home, codexSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err = e.m.TranscriptPath(e.ctx, codex); err != nil || got != want {
+		t.Fatalf("codex TranscriptPath = %q, %v, want %q", got, err, want)
+	}
+
+	// No session id, no file, no agent: no path.
+	noID := codex
+	noID.SessionID = nil
+	missing := claude
+	missing.SessionID = new("0a1b2c3d-0000-4000-8000-0000000000ff")
+	shell := claude
+	shell.AgentKind, shell.AgentName = new(KindShell), nil
+	for name, s := range map[string]store.Session{"no id": noID, "no file": missing, "shell": shell} {
+		if p, err := e.m.TranscriptPath(e.ctx, s); err == nil {
+			t.Errorf("%s: TranscriptPath = %q, want an error", name, p)
+		}
+	}
+}

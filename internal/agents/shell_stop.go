@@ -903,7 +903,7 @@ func (m *Manager) replaceShell(ctx context.Context, pr store.PR, o ownedShell, b
 		m.mu.Lock()
 		m.replaced[o.pane] = repl
 		m.mu.Unlock()
-		if err := m.d.Herdr.PaneRename(ctx, repl, TaggedPaneLabel(m.d.Tag, pr.Number, role)); err != nil {
+		if err := m.d.Herdr.PaneRename(ctx, repl, m.paneLabel(pr, role)); err != nil {
 			m.logErr(ctx, err, "agents: name the replacement %s: %v", repl, err)
 		}
 	} else if err := m.afterClear(ctx, pr, role, sessions, o.pane, ""); err != nil {
@@ -1068,7 +1068,7 @@ func (m *Manager) moveShell(ctx context.Context, pr store.PR, sess store.Session
 		undo()
 		return failed("registry", err)
 	}
-	if err := m.d.Herdr.PaneRename(ctx, repl, TaggedPaneLabel(m.d.Tag, pr.Number, role)); err != nil {
+	if err := m.d.Herdr.PaneRename(ctx, repl, m.paneLabel(pr, role)); err != nil {
 		m.logErr(ctx, err, "agents: name the new pane %s: %v", repl, err)
 	}
 	m.event(ctx, subject, "info", EventShellMoved, fmt.Sprintf("%s moved from pane %s to pane %s", role, pane, repl),

@@ -1099,6 +1099,13 @@ type Deps struct {
 	// magnum eval): it joins their names' hash (TaggedAgentName) and leads
 	// their titles and pane labels (TaggedTitle). "" = the PR's own agents.
 	Tag string
+	// OwnerName names the owner of a stored PR row in the titles and pane
+	// labels of its agents ("PR #729" by default, "PR-12345" or "task 12" for
+	// a factory's task): the title "<tag> <owner> <role> - <repo>" a claude
+	// agent gets by --name and a codex agent by /rename, and the pane label
+	// "<tag> <owner> <role>". nil, or a "" answer, keeps "PR #<number>". The
+	// agent's herdr name (AgentName) always keeps the row's number.
+	OwnerName func(store.PR) string
 	// IdentityEnv is the GitHub env (identity.Source.Env) of the configured
 	// identity name, false when it is not declared or cannot make its env.
 	// A pane of a role with an identity (config.Role.Identity) gets that env
@@ -2283,6 +2290,14 @@ func (m *Manager) TookNoPrompt(ctx context.Context, s store.Session) bool
     (two Codex sessions started in one checkout keep their ids unknown) answer
     false.
 
+func (m *Manager) TranscriptPath(ctx context.Context, s store.Session) (string, error)
+    TranscriptPath is the file the turns of session s are read from:
+    the transcript of a Claude session (under the session's CLAUDE_CONFIG_DIR,
+    else Deps.ClaudeDir; see transcriptPath), the rollout of a Codex session
+    (under its CODEX_HOME, else Deps.CodexHome; see rolloutPath). It is an error
+    for a shell pane, a kind with no such record, a session whose id is not
+    recorded yet and a file that is not there.
+
 func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool)
     TurnError reads the error the turn of run ended with from its Codex
     session's rollout: the last task_complete event stamped at or after
@@ -2827,6 +2842,36 @@ type TurnError struct {
 	Helper string
 }
     TurnError is the error a Codex turn ended with, as its rollout records it.
+
+type UserTurn struct {
+	At   time.Time // when the CLI stamped it
+	Text string
+	// Origin is what began the turn, as Claude Code records it ("human" for a
+	// typed prompt); "" when the transcript names none (an older Claude Code,
+	// every Codex rollout).
+	Origin string
+}
+    UserTurn is a prompt typed into an agent's pane, by a person or by magnum
+    through herdr, as its transcript records it.
+
+func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error)
+    ClaudeUserTurns reads the user turns of the Claude Code transcript at path
+    that are stamped at or after since (the zero time: all of them), in order:
+    the user entries that start a turn (a string, or the first text block,
+    is the Text; a tool result and the line esc writes are no turns),
+    not the entries of a subagent's own thread, not text Claude Code adds itself
+    (isMeta) and not task notifications. The whole file is read, a line at a
+    time; a line that is no JSON, such as the half-written last one, is skipped.
+    A prompt typed while the agent worked and taken into the turn it was in is
+    an attachment entry, not a user entry, and is not returned.
+
+func CodexUserTurns(path string, since time.Time) ([]UserTurn, error)
+    CodexUserTurns reads the user turns of the Codex rollout at path that
+    are stamped at or after since (the zero time: all of them), in order:
+    its user_message events, with the text of payload.message. Unlike the tail
+    scan TurnError makes, it reads the whole file, so a long turn's output never
+    pushes a prompt out of reach. An empty message and a line that is no JSON
+    are skipped.
 
 type WhiteboardPromptInput struct {
 	Owner, Repo, Checkout, BaseRef, ReviewURL, ReviewFile, Session string

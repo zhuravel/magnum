@@ -191,6 +191,13 @@ type Deps struct {
 	// magnum eval): it joins their names' hash (TaggedAgentName) and leads
 	// their titles and pane labels (TaggedTitle). "" = the PR's own agents.
 	Tag string
+	// OwnerName names the owner of a stored PR row in the titles and pane
+	// labels of its agents ("PR #729" by default, "PR-12345" or "task 12" for
+	// a factory's task): the title "<tag> <owner> <role> - <repo>" a claude
+	// agent gets by --name and a codex agent by /rename, and the pane label
+	// "<tag> <owner> <role>". nil, or a "" answer, keeps "PR #<number>". The
+	// agent's herdr name (AgentName) always keeps the row's number.
+	OwnerName func(store.PR) string
 	// IdentityEnv is the GitHub env (identity.Source.Env) of the configured
 	// identity name, false when it is not declared or cannot make its env.
 	// A pane of a role with an identity (config.Role.Identity) gets that env
