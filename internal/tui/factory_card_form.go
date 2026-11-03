@@ -53,15 +53,18 @@ func (p *cardPainter) inputLabel() string {
 }
 
 // inputRows echo the text being typed, behind the quote bar, with the caret
-// at its end. The last lines are kept when there are many.
+// at its end (on a new line after a line break). A line wider than the screen
+// breaks at the width, not at a word, so every space stays where it was typed.
+// The last lines are kept when there are many.
 func (p *cardPainter) inputRows(text string) []string {
+	w := max(p.width-4, 8) // the caret takes the cell after the text
 	var lines []string
 	for l := range strings.SplitSeq(text, "\n") {
-		if wrapped := wrapText(l, p.width-4, 0); len(wrapped) > 0 {
-			lines = append(lines, wrapped...)
-		} else {
-			lines = append(lines, "")
+		if ansi.StringWidth(l) <= w {
+			lines = append(lines, l)
+			continue
 		}
+		lines = append(lines, strings.Split(ansi.Hardwrap(l, w, true), "\n")...)
 	}
 	if len(lines) > cardInputLines {
 		lines = lines[len(lines)-cardInputLines:]

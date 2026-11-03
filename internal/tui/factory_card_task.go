@@ -279,7 +279,8 @@ func (p *cardPainter) agentRows(c TaskCard, stop, add func(string)) {
 		stateX = whyX + whyW + cardGap
 	}
 	for i, a := range c.Agents {
-		mark := seg{p.markGlyph(MarkNeedsYou), p.st.Warn}
+		// Yellow means on you: only an agent that waits on the operator has it.
+		mark := p.stageMark("")
 		switch a.State {
 		case "working":
 			mark = seg{p.spinnerFrame(), p.st.Accent}
@@ -287,6 +288,8 @@ func (p *cardPainter) agentRows(c TaskCard, stop, add func(string)) {
 			mark = seg{p.tick(), p.st.OK}
 		case "failed":
 			mark = seg{p.g.fail, p.st.Err}
+		case "waits on you":
+			mark = seg{p.markGlyph(MarkNeedsYou), p.st.Warn}
 		}
 		ps := []placed{at(2, 1, mark), at(4, nameW, seg{a.Name, noStyle}), at(whyX, whyW, seg{whys[i], noStyle})}
 		if stateW > 0 {
@@ -310,7 +313,7 @@ func (p *cardPainter) agentState(a CardAgent) cell {
 		}
 		return cell{{text, noStyle}}
 	case "":
-		return nil
+		return cell{{"unknown", p.st.Dim}}
 	}
 	text := a.State
 	if !a.Output.IsZero() {

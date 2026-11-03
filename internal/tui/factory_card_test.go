@@ -583,3 +583,90 @@ func TestTaskCardMarkStandsOnStagesThenAgentsThenTheReport(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskCardAnAgentIsYellowOnlyWhenItWaitsOnYou(t *testing.T) {
+	tc := fixtureTaskCard()
+	tc.Agents = []CardAgent{
+		{Name: "stopped one", Why: "was reading the history", State: "stopped", Output: cardAt(12, 0)},
+		{Name: "parked one", Why: "waits for memory", State: "parked"},
+		{Name: "no state one", Why: "the registry gave none"},
+		{Name: "failed one", Why: "died on start", State: "failed", Output: cardAt(11, 0)},
+	}
+	frame := drawTask(tc, 0)(140, 0, true, IconsUnicode)
+	if got := warnRuns(t, frame); len(got) != 0 {
+		t.Errorf("no agent waits on the operator, but the card is yellow on %q", got)
+	}
+	plain := ansi.Strip(frame)
+	for name, want := range map[string][]string{
+		"stopped one":  {"  · stopped one", "stopped 12:00"},
+		"parked one":   {"  · parked one", "parked"},
+		"no state one": {"  · no state one", "unknown"},
+		"failed one":   {"  ✗ failed one", "failed 11:00"},
+	} {
+		l := cardLineWith(t, plain, name)
+		for _, w := range want {
+			if !strings.Contains(l, w) {
+				t.Errorf("the line of %q lacks %q: %q", name, w, l)
+			}
+		}
+	}
+	tc.Agents = append(tc.Agents, CardAgent{Name: "asks you", Why: "needs a login", State: "waits on you"})
+	frame = drawTask(tc, 0)(140, 0, true, IconsUnicode)
+	if got := warnRuns(t, frame); !slices.Equal(got, []string{"●"}) {
+		t.Errorf("only the agent that waits on the operator is yellow, got %q", got)
+	}
+	if l := cardLineWith(t, ansi.Strip(frame), "asks you"); !strings.Contains(l, "● asks you") || !strings.Contains(l, "waits on you") {
+		t.Errorf("the agent that waits on the operator reads %q", l)
+	}
+}
+
+func TestNewTaskEchoShowsWhatWasTyped(t *testing.T) {
+	input := func(text string, w int) []string {
+		f := NewTaskForm{Text: text}
+		var rows []string
+		for l := range strings.SplitSeq(plainCard(drawNewTask(f), w), "\n") {
+			if strings.HasPrefix(l, " ┃") {
+				rows = append(rows, l)
+			}
+		}
+		return rows
+	}
+	for _, c := range []struct {
+		name, text string
+		want       []string
+	}{
+		{"a line break at the end", "foo\n", []string{" ┃ foo", " ┃ ▏"}},
+		{"two line breaks at the end", "foo\n\n", []string{" ┃ foo", " ┃", " ┃ ▏"}},
+		{"a space at the end", "foo ", []string{" ┃ foo ▏"}},
+		{"two spaces inside", "foo  bar", []string{" ┃ foo  bar▏"}},
+		{"an indent", "  foo\n    bar", []string{" ┃   foo", " ┃     bar▏"}},
+		{"a blank line inside", "foo\n\nbar", []string{" ┃ foo", " ┃", " ┃ bar▏"}},
+		{"a tab", "a\tb", []string{" ┃ a    b▏"}},
+	} {
+		if got := input(c.text, 100); !slices.Equal(got, c.want) {
+			t.Errorf("%s: the echo of %q reads %q, want %q", c.name, c.text, got, c.want)
+		}
+	}
+	// Control characters never reach the echo, and a lone carriage return is a line break.
+	if got := input("a\x1b[2Jb\x00c\rd", 100); !slices.Equal(got, []string{" ┃ ab c", " ┃ d▏"}) {
+		t.Errorf("control characters in the echo: %q", got)
+	}
+	// A line wider than the screen breaks at the width and loses no character.
+	long := strings.Repeat("ab  ", 12)
+	rows := input(long, 30)
+	if len(rows) < 2 || !strings.Contains(rows[0], "ab  ab  ab") {
+		t.Fatalf("the long line should wrap and keep its double spaces: %q", rows)
+	}
+	var kept strings.Builder
+	for _, r := range rows {
+		kept.WriteString(strings.TrimPrefix(strings.TrimSuffix(r, "▏"), " ┃ "))
+	}
+	if strings.Count(kept.String(), "a") != 12 || strings.Count(kept.String(), "b") != 12 {
+		t.Errorf("the wrapped echo lost letters: %q", rows)
+	}
+	for _, r := range rows {
+		if w := ansi.StringWidth(r); w > 30 {
+			t.Errorf("an echo row is %d cells wide, over 30: %q", w, r)
+		}
+	}
+}

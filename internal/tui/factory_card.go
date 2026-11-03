@@ -96,6 +96,20 @@ func cleanLines(s string) []string {
 	return out
 }
 
+// cleanInput is typed text with its escape sequences and control characters
+// taken out and everything else kept: the spaces, the indents and the line
+// breaks (also the one at the end) are what the operator typed.
+func cleanInput(s string) string {
+	s = strings.ReplaceAll(ansi.Strip(s), "\t", "    ")
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+	return strings.Map(func(r rune) rune {
+		if r != '\n' && (r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0)) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 func cleanQuestionCard(c QuestionCard) QuestionCard {
 	c.TaskKey, c.Title, c.Kind = cleanText(c.TaskKey), cleanText(c.Title), cleanText(c.Kind)
 	qs := make([]CardQuestion, len(c.Questions))
@@ -142,7 +156,7 @@ func cleanTaskCard(c TaskCard) TaskCard {
 }
 
 func cleanNewTaskForm(f NewTaskForm) NewTaskForm {
-	f.Text = strings.Join(cleanLines(f.Text), "\n")
+	f.Text = cleanInput(f.Text)
 	f.Kind, f.KindWhy, f.Branch, f.Starts = cleanText(f.Kind), cleanText(f.KindWhy), cleanText(f.Branch), cleanText(f.Starts)
 	f.Err, f.Repo, f.Title, f.Ask = cleanText(f.Err), cleanText(f.Repo), cleanText(f.Title), cleanText(f.Ask)
 	f.Agents, f.Rules = cleanAll(f.Agents), cleanAll(f.Rules)
