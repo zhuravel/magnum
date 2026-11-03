@@ -237,21 +237,21 @@ func TestAnUnchangedClassEditsNothing(t *testing.T) {
 	h.wantApprovalLine(aliceAgentConfig)
 }
 
-// alice's own comment by hand stops auto-approval of the PR; the line says
-// so in the third person, without the hold's words ("you commented on it by
-// hand") or the review's link.
+// alice's own changes request by hand stops auto-approval of the PR; the
+// line says so in the third person, without the hold's words ("you
+// requested changes by hand") or the review's link.
 func TestAStoppedAutoApprovalSpeaksInTheThirdPerson(t *testing.T) {
 	h, _ := newAutoHarness(t, approvesAsAlice)
-	h.gh.addReview(2, github.Review{DatabaseID: 40, State: "COMMENTED", AuthorLogin: "alice", AuthorType: "User", Body: "Why this way?",
+	h.gh.addReview(2, github.Review{DatabaseID: 40, State: "CHANGES_REQUESTED", AuthorLogin: "alice", AuthorType: "User", Body: "Not this way.",
 		CommitOid: "b1", SubmittedAt: h.clock.Now(), URL: prURL2 + "#pullrequestreview-40"})
 	h.reviewedFor(prSpec{head: "b1"})
-	if hd := h.hold(2); !hd.Held || !strings.Contains(hd.Reason, "you commented") {
+	if hd := h.hold(2); !hd.Held || !strings.Contains(hd.Reason, "you requested changes") {
 		t.Fatalf("hold = %+v", hd)
 	}
 	h.flush()
 	h.wantApprovalLine(aliceStopped)
 	body := strings.ToLower(h.statusComment(2).body)
-	for _, bad := range []string{"you", "pullrequestreview-40", "commented", "unapprove"} {
+	for _, bad := range []string{"you", "pullrequestreview-40", "requested changes", "unapprove"} {
 		if strings.Contains(body, bad) {
 			t.Fatalf("the status comment says %q:\n%s", bad, body)
 		}
@@ -474,20 +474,21 @@ func TestAnUnknownVerdictSaysNothingWhateverTheRecord(t *testing.T) {
 	h.wantNoApprovalLine()
 }
 
-// alice replies on a thread of a PR magnum approved as her: GitHub lists her
-// comment as her latest review, auto-approval of the PR stops, and her
-// approval stands. The comment says nothing of a stop while magnum's
-// approval as her stands on the head.
+// A review of alice's by hand on a PR magnum approved as her, dismissed
+// since by someone else: auto-approval of the PR stops (GitHub does not say
+// what the review was), and magnum's approval as her stands. The comment
+// says nothing of a stop while that approval stands on the head.
 func TestNoStoppedLineWhileTheApprovalStands(t *testing.T) {
 	h, _ := newAutoHarness(t, approvesAsAlice)
 	h.reviewedFor(prSpec{head: "b1"})
 	if a := h.autoApproval(2); a.State != store.AutoStanding {
 		t.Fatalf("approval = %+v", a)
 	}
-	h.gh.addReview(2, github.Review{DatabaseID: 41, State: "COMMENTED", AuthorLogin: "alice", AuthorType: "User", Body: "a question",
+	h.gh.addReview(2, github.Review{DatabaseID: 41, State: "DISMISSED", AuthorLogin: "alice", AuthorType: "User", Body: "Not yet.",
 		CommitOid: "b1", SubmittedAt: h.clock.Now().Add(time.Minute), URL: prURL2 + "#pullrequestreview-41"})
+	h.gh.dismissals = map[int][]github.ReviewDismissal{2: {{ReviewID: 41, Actor: "bob-rev"}}}
 	h.moveTo(prSpec{head: "b1", reviews: []github.LatestReview{
-		{State: "COMMENTED", AuthorLogin: "alice", AuthorType: "User", CommitOid: "b1", SubmittedAt: h.clock.Now()}}})
+		{State: "DISMISSED", AuthorLogin: "alice", AuthorType: "User", CommitOid: "b1", SubmittedAt: h.clock.Now()}}})
 	h.flush()
 	h.flush()
 	h.flush()

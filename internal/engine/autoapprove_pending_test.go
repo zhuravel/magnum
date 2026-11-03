@@ -254,8 +254,9 @@ func TestAnApprovalWhoseAnswerWasLostIsMagnumsOwnWithoutItsMarker(t *testing.T) 
 
 // A post GitHub refused (a 400: it did nothing) leaves no pending record,
 // so an approval of the head by the operator before the retry is theirs by
-// hand, as today: auto-approval of the PR stops and nothing is posted.
-func TestAnApprovalByHandAfterARefusedPostStillStopsAutoApproval(t *testing.T) {
+// hand: nothing is posted, and it is not adopted as magnum's. Their approval
+// stops nothing (only a changes request by hand does).
+func TestAnApprovalByHandAfterARefusedPostLeavesNothingToPost(t *testing.T) {
 	h, _ := newAutoHarness(t)
 	h.gh.createErr = &github.APIError{Op: "review", Status: 400, Message: "Bad Request"}
 	h.reviewedPR(2, "b1")
@@ -271,8 +272,11 @@ func TestAnApprovalByHandAfterARefusedPostStillStopsAutoApproval(t *testing.T) {
 	if n := len(h.ghCalls("review:")); n != 1 {
 		t.Fatalf("posted %d times after the approval by hand", n)
 	}
-	if hd := h.hold(2); !hd.Held || !strings.Contains(hd.Reason, "you approved it by hand") {
+	if hd := h.hold(2); hd.Held {
 		t.Fatalf("hold = %+v", hd)
+	}
+	if live, ok, err := h.st.LiveAutoApproval(h.ctx, h.pr(2).ID); err != nil || (ok && live.State != store.AutoFailed) {
+		t.Fatalf("the operator's approval was adopted as magnum's: %+v %v", live, err)
 	}
 }
 

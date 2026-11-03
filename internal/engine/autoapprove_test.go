@@ -343,9 +343,10 @@ func TestAutoApprovalRefusesPRsItMustLeaveAlone(t *testing.T) {
 
 // What the operator's own reviews on GitHub say: magnum's reviews posted as
 // them (its rounds', its automatic approvals) are not theirs; any other
-// review of theirs, since a resume, is a review by hand; their approval of
-// the head (its own, by its marker) means there is nothing to post; a
-// pending review of theirs waits.
+// verdict of theirs (an approval, a changes request, a dismissed review),
+// since a resume, is a verdict by hand, and a comment is none; their
+// approval of the head (its own, by its marker) means there is nothing to
+// post; a pending review of theirs waits.
 func TestTheOperatorsWordOnGitHub(t *testing.T) {
 	since := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	at := func(h int) time.Time { return since.Add(time.Duration(h) * time.Hour) }
@@ -361,13 +362,16 @@ func TestTheOperatorsWordOnGitHub(t *testing.T) {
 	if w.hand != nil || w.pending || w.approved == nil || w.approved.DatabaseID != 2 || !w.approvedByMagnum {
 		t.Fatalf("magnum's own reviews: %+v", w)
 	}
-	for state, want := range map[string]string{"CHANGES_REQUESTED": "requested changes", "APPROVED": "approved", "COMMENTED": "commented",
-		"DISMISSED": "reviewed"} {
+	for state, want := range map[string]string{"CHANGES_REQUESTED": "you requested changes", "APPROVED": "", "DISMISSED": "you reviewed"} {
 		hand := rev(5, "Zhuravel", "User", state, "h0", "by hand", 4)
 		w := operatorWord([]github.Review{magnumRound, hand}, "zhuravel", "h1", time.Time{}, "")
 		if w.hand == nil || w.hand.DatabaseID != 5 || !strings.Contains(w.handReason(), want) {
 			t.Errorf("%s by hand: %+v (%q)", state, w, w.handReason())
 		}
+	}
+	if w := operatorWord([]github.Review{magnumRound, rev(5, "zhuravel", "User", "COMMENTED", "h0", "by hand", 4)}, "zhuravel", "h1",
+		time.Time{}, ""); w.hand != nil {
+		t.Errorf("a comment by hand is a verdict: %+v", w)
 	}
 	verdict := rev(6, "zhuravel", "User", "APPROVED", "h1", "Approved after Magnum's review.\n<!-- magnum:verdict=APPROVE head=h1 -->", 5)
 	if w := operatorWord([]github.Review{verdict}, "zhuravel", "h1", time.Time{}, ""); w.hand == nil {
@@ -472,13 +476,13 @@ func TestABlockingRoundWithdrawsTheAutoApprovalAndACleanOneApprovesAgain(t *test
 	}
 }
 
-// The operator's own review by hand stops auto-approval of the PR for good:
-// recorded with why, shown on the card; a review magnum is asked for does
-// not lift it, `magnum unapprove --resume` does (counting only what the
-// operator does from then on).
+// The operator's own changes request by hand stops auto-approval of the PR
+// for good: recorded with why, shown on the card; a review magnum is asked
+// for does not lift it, `magnum unapprove --resume` does (counting only what
+// the operator does from then on).
 func TestTheOperatorsOwnReviewStopsAutoApproval(t *testing.T) {
 	h, _ := newAutoHarness(t)
-	h.gh.addReview(2, github.Review{DatabaseID: 40, State: "COMMENTED", AuthorLogin: "zhuravel", AuthorType: "User", Body: "Why this way?",
+	h.gh.addReview(2, github.Review{DatabaseID: 40, State: "CHANGES_REQUESTED", AuthorLogin: "zhuravel", AuthorType: "User", Body: "Not this way.",
 		CommitOid: "b1", SubmittedAt: h.clock.Now(), URL: prURL2 + "#pullrequestreview-40"})
 	h.reviewedPR(2, "b1")
 	h.tick()
@@ -486,7 +490,7 @@ func TestTheOperatorsOwnReviewStopsAutoApproval(t *testing.T) {
 		t.Fatalf("approved despite the operator's own review: %q", got)
 	}
 	hd := h.hold(2)
-	if !hd.Held || !strings.Contains(hd.Reason, "commented") {
+	if !hd.Held || !strings.Contains(hd.Reason, "you requested changes by hand") {
 		t.Fatalf("hold = %+v", hd)
 	}
 	if !h.hasEvent("pr:talkable/talkable#2", "review.auto_approve_stopped") {
@@ -514,21 +518,150 @@ func TestTheOperatorsOwnReviewStopsAutoApproval(t *testing.T) {
 	}
 }
 
-// The operator's changes request by hand stops it too (W27's "lift your ✗"
-// shows instead), and their approval of the head leaves nothing to post.
-func TestTheOperatorsVerdictByHandStopsAutoApproval(t *testing.T) {
-	for state, n := range map[string]int{"CHANGES_REQUESTED": 2, "APPROVED": 3} {
-		t.Run(state, func(t *testing.T) {
+// Only a changes request by hand stops auto-approval (the operator's rule of
+// 2026-11-03): their approval of the head leaves nothing to post and stops
+// nothing, so a later head magnum finds clean is approved as them again.
+func TestTheOperatorsApprovalByHandLeavesNothingToPostAndStopsNothing(t *testing.T) {
+	h, _ := newAutoHarness(t)
+	h.gh.addReview(2, github.Review{DatabaseID: 40, State: "APPROVED", AuthorLogin: "zhuravel", AuthorType: "User", Body: "",
+		CommitOid: "b1", SubmittedAt: h.clock.Now(), URL: prURL2 + "#pullrequestreview-40"})
+	h.reviewedPR(2, "b1")
+	h.tick()
+	if got := h.created(); len(got) != 0 {
+		t.Fatalf("posted beside the operator's approval of the head: %q", got)
+	}
+	if hd := h.hold(2); hd.Held {
+		t.Fatalf("the approval by hand stopped auto-approval: %+v", hd)
+	}
+	h.push(2, "b2")
+	h.reviewTo(2, "b2")
+	h.tick()
+	if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b2:") {
+		t.Fatalf("after a clean review of the next head: %q", got)
+	}
+}
+
+// A comment by hand stops nothing, a reply in a thread (GitHub records it as
+// a review with no body) or a review body: two holds in a week came from
+// replies in magnum's own threads, a request the author met before the next
+// clean round and a note about the author's tooling.
+func TestACommentByHandDoesNotStopAutoApproval(t *testing.T) {
+	for name, body := range map[string]string{"a reply in a thread": "", "a review body": "Why this way?"} {
+		t.Run(name, func(t *testing.T) {
 			h, _ := newAutoHarness(t)
-			h.gh.addReview(n, github.Review{DatabaseID: 40, State: state, AuthorLogin: "zhuravel", AuthorType: "User", Body: "",
-				CommitOid: "b1", SubmittedAt: h.clock.Now()})
-			h.reviewedPR(n, "b1")
+			h.gh.addReview(2, github.Review{DatabaseID: 40, State: "COMMENTED", AuthorLogin: "zhuravel", AuthorType: "User", Body: body,
+				CommitOid: "b1", SubmittedAt: h.clock.Now(), URL: prURL2 + "#pullrequestreview-40"})
+			h.reviewedPR(2, "b1")
 			h.tick()
-			if got := h.created(); len(got) != 0 {
+			if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
 				t.Fatalf("posted = %q", got)
 			}
-			if hd := h.hold(n); !hd.Held {
+			if hd := h.hold(2); hd.Held {
 				t.Fatalf("hold = %+v", hd)
+			}
+			if h.hasEvent("pr:talkable/talkable#2", "review.auto_approve_stopped") {
+				t.Error("a review.auto_approve_stopped event")
+			}
+		})
+	}
+}
+
+// The operator's latest verdict by hand decides, whatever they commented
+// after it: a changes request followed by a comment holds, and one followed
+// by their approval (of an earlier head) does not.
+func TestTheOperatorsLatestVerdictByHandDecides(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		later github.Review
+		held  bool
+	}{
+		{"a comment after the changes request", github.Review{DatabaseID: 41, State: "COMMENTED", Body: "Any news?", CommitOid: "b0"}, true},
+		{"an approval after the changes request", github.Review{DatabaseID: 41, State: "APPROVED", CommitOid: "b0"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t)
+			h.gh.addReview(2, github.Review{DatabaseID: 40, State: "CHANGES_REQUESTED", AuthorLogin: "zhuravel", AuthorType: "User",
+				Body: "Not this way.", CommitOid: "b0", SubmittedAt: h.clock.Now(), URL: prURL2 + "#pullrequestreview-40"})
+			later := tc.later
+			later.AuthorLogin, later.AuthorType, later.SubmittedAt = "zhuravel", "User", h.clock.Now().Add(time.Minute)
+			later.URL = prURL2 + "#pullrequestreview-41"
+			h.gh.addReview(2, later)
+			h.advance(2 * time.Minute)
+			h.reviewedPR(2, "b1")
+			h.tick()
+			if hd := h.hold(2); hd.Held != tc.held {
+				t.Fatalf("hold = %+v, want held %v", hd, tc.held)
+			}
+			if got := h.created(); (len(got) == 0) != tc.held {
+				t.Fatalf("posted = %q (held %v)", got, tc.held)
+			}
+		})
+	}
+}
+
+// A dismissed review of the operator's still stops auto-approval (GitHub's
+// list cannot tell a dismissed changes request from a dismissed approval),
+// unless its timeline says GitHub dismissed it as stale on a push, which it
+// does only to approvals.
+func TestADismissedReviewByHandStopsAutoApprovalUnlessGitHubDismissedItOnAPush(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ds   []github.ReviewDismissal
+		held bool
+	}{
+		{"on a push", []github.ReviewDismissal{{ReviewID: 40, Actor: "alice", ByPush: true, Commit: "b1"}}, false},
+		{"by a person", []github.ReviewDismissal{{ReviewID: 40, Actor: "bob-rev"}}, true},
+		{"by an unknown hand", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t)
+			h.gh.addReview(2, github.Review{DatabaseID: 40, State: "DISMISSED", AuthorLogin: "zhuravel", AuthorType: "User",
+				CommitOid: "b0", SubmittedAt: h.clock.Now(), URL: prURL2 + "#pullrequestreview-40"})
+			h.gh.dismissals = map[int][]github.ReviewDismissal{2: tc.ds}
+			h.advance(time.Minute)
+			h.reviewedPR(2, "b1")
+			h.tick()
+			if hd := h.hold(2); hd.Held != tc.held {
+				t.Fatalf("hold = %+v, want held %v", hd, tc.held)
+			}
+			if got := h.created(); (len(got) == 0) != tc.held {
+				t.Fatalf("posted = %q (held %v)", got, tc.held)
+			}
+		})
+	}
+}
+
+// A review by hand after magnum's approval stands: a comment leaves it, an
+// approval replaces it as the operator's without stopping auto-approval,
+// and a changes request replaces it and stops auto-approval.
+func TestAReviewByHandAfterAStandingApproval(t *testing.T) {
+	for _, tc := range []struct {
+		state      string
+		superseded bool
+		held       bool
+	}{
+		{"COMMENTED", false, false},
+		{"APPROVED", true, false},
+		{"CHANGES_REQUESTED", true, true},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			h, _ := newAutoHarness(t)
+			h.reviewedPR(2, "b1")
+			h.tick()
+			if a := h.autoApproval(2); a.State != store.AutoStanding {
+				t.Fatalf("approval = %+v", a)
+			}
+			h.advance(time.Minute)
+			h.gh.addReview(2, github.Review{DatabaseID: 40, State: tc.state, AuthorLogin: "zhuravel", AuthorType: "User",
+				CommitOid: "b1", SubmittedAt: h.clock.Now(), URL: prURL2 + "#pullrequestreview-40"})
+			h.push(2, "b1") // the PR moves: its updatedAt
+			h.tick()
+			a := h.autoApproval(2)
+			if (a.State == store.AutoStanding) == tc.superseded || (tc.superseded && a.EndedBy != store.AutoEndedOperator) {
+				t.Fatalf("approval = %+v, want superseded %v", a, tc.superseded)
+			}
+			if hd := h.hold(2); hd.Held != tc.held {
+				t.Fatalf("hold = %+v, want held %v", hd, tc.held)
 			}
 		})
 	}

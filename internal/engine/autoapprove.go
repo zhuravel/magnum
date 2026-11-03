@@ -15,9 +15,9 @@ package engine
 // the review agents' instructions, a head whose checks fail or run; a later
 // review of the head that those gates, the author's aside, refuse
 // withdraws the approval too, once that head's checks finished. The
-// operator's word wins: a review of theirs by hand, or a
-// dismissal of one of these approvals, stops it on that PR for good
-// (`magnum unapprove --resume` lifts that). Every post and withdrawal is
+// operator's word wins: a changes request of theirs by hand (not a comment
+// or an approval: handHolds), or a dismissal of one of these approvals,
+// stops it on that PR for good (`magnum unapprove --resume` lifts that). Every post and withdrawal is
 // compare-and-set on the auto_approvals row, writes begin/ok/fail events,
 // and is found on GitHub instead of repeated when its answer was lost, as
 // magnum's own by its pending record (autoapprove_pending.go); a
@@ -218,8 +218,10 @@ func autoApproveRefusal(f autoFacts) string {
 
 // opWord is what the operator's own reviews on GitHub say.
 type opWord struct {
-	// hand is their latest review by hand (not one magnum posted as them:
-	// a round's, an automatic approval) since the resume, if any.
+	// hand is their latest verdict by hand (an approval, a changes request
+	// or a dismissed review; not one magnum posted as them: a round's, an
+	// automatic approval) since the resume, if any. A comment is none, and
+	// only some of these stop auto-approval (handHolds).
 	hand *github.Review
 	// pending: they have a review in progress.
 	pending bool
@@ -236,10 +238,9 @@ func (w opWord) handReason() string {
 	if w.hand == nil {
 		return ""
 	}
-	what := map[string]string{"APPROVED": "you approved it by hand", "CHANGES_REQUESTED": "you requested changes by hand",
-		"COMMENTED": "you commented on it by hand"}[w.hand.State]
-	if what == "" {
-		what = "you reviewed it by hand"
+	what := "you reviewed it by hand" // a dismissed review: GitHub does not say what it was
+	if strings.EqualFold(w.hand.State, "CHANGES_REQUESTED") {
+		what = "you requested changes by hand"
 	}
 	if w.hand.URL != "" {
 		what += " (" + w.hand.URL + ")"
@@ -274,13 +275,13 @@ func operatorWord(reviews []github.Review, login, head string, since time.Time, 
 			w.pending = true
 			continue
 		}
-		if !ours(r) && (since.IsZero() || r.SubmittedAt.After(since)) && (w.hand == nil || !r.SubmittedAt.Before(w.hand.SubmittedAt)) {
-			w.hand = r
-		}
 		switch strings.ToUpper(r.State) {
 		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
 			if verdict == nil || !r.SubmittedAt.Before(verdict.SubmittedAt) {
 				verdict = r
+			}
+			if !ours(r) && (since.IsZero() || r.SubmittedAt.After(since)) && (w.hand == nil || !r.SubmittedAt.Before(w.hand.SubmittedAt)) {
+				w.hand = r
 			}
 		}
 	}
@@ -289,6 +290,29 @@ func operatorWord(reviews []github.Review, login, head string, since time.Time, 
 		w.approvedByMagnum = strings.Contains(verdict.Body, AutoApprovalMarker(head)) || pending == head
 	}
 	return w
+}
+
+// handHolds reports whether the operator's word by hand stops auto-approval
+// of PR number (the operator's rule of 2026-11-03): their latest verdict by
+// hand requests changes, or was dismissed, unless its timeline says GitHub
+// dismissed it as stale on a push, which it does only to approvals (GitHub's
+// list of reviews cannot tell a dismissed changes request from a dismissed
+// approval). An approval by hand stops nothing, and a comment is no verdict.
+func handHolds(ctx context.Context, ag autoApproveGitHub, repo store.Repo, number int, w opWord) (bool, error) {
+	if w.hand == nil {
+		return false, nil
+	}
+	switch strings.ToUpper(w.hand.State) {
+	case "CHANGES_REQUESTED":
+		return true, nil
+	case "DISMISSED":
+		ds, err := ag.ReviewDismissals(ctx, repo.Owner, repo.Name, number)
+		if err != nil {
+			return false, err
+		}
+		return !slices.ContainsFunc(ds, func(d github.ReviewDismissal) bool { return d.ReviewID == w.hand.DatabaseID && d.ByPush }), nil
+	}
+	return false, nil
 }
 
 // reviewBody is the body of review id among reviews ("" when not listed).
@@ -428,9 +452,9 @@ func (e *Engine) autoClient(id *config.Identity) (GitHub, autoApproveGitHub) {
 // again after autoApproveRetry, autoApproveAttempts times), nothing holds
 // it back (its author, authorRefusal, then autoGateRefusal: recorded for
 // the card; a review it refuses for the reviewers it did not hear gets its
-// completion, considerCompletion), and GitHub's reviews, all of them, agree: none of the
-// operator's by hand (else auto-approval of the PR stops), none in
-// progress, no approval of the head of theirs, and
+// completion, considerCompletion), and GitHub's reviews, all of them, agree: no
+// verdict of the operator's by hand that holds (handHolds: else auto-approval
+// of the PR stops), none in progress, no approval of the head of theirs, and
 // a verdict line that leaves nothing to fix when the result cannot tell. An
 // approval of magnum's GitHub has but the registry lost is recorded instead
 // of posted again: its marker says so, or the pending record of a post of
@@ -498,7 +522,12 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	if w.approved != nil && w.approvedByMagnum {
 		e.adoptAutoApproval(ctx, repo, pr, id, *sum, priorPtr, w.approved, pending == pr.HeadSHA)
 	}
-	if w.hand != nil {
+	holds, err := handHolds(ctx, ag, repo, pr.Number, w)
+	if err != nil {
+		e.autoReadFailed(ctx, "read the dismissals", id.Name, pr.ID, err)
+		return
+	}
+	if holds {
 		e.stopAutoApproval(ctx, repo, pr, w.handReason())
 		return
 	}
@@ -790,10 +819,10 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 // withdrawn again; then a is withdrawn when the PR's latest round is a
 // later one that leaves something to fix (or cannot tell: earlier findings
 // open, the verdict line unread or unknown) or that the gates refuse
-// (standingWithdrawal), and a review of the operator's by hand since stops
-// auto-approval (an approval or changes request of theirs also supersedes
-// a). A list GitHub cut short still withdraws (the safe way), and tells
-// nothing else until the PR moves.
+// (standingWithdrawal), and a verdict of the operator's by hand since that
+// holds stops auto-approval (handHolds); an approval or changes request of
+// theirs also supersedes a. A list GitHub cut short still withdraws (the
+// safe way), and tells nothing else until the PR moves.
 func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, sum *store.ReviewSummary,
 	hold *store.AutoApproveHold, gh GitHub, ag autoApproveGitHub) {
 	runID := ""
@@ -836,7 +865,14 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 		since = *a.PostedAt
 	}
 	if w := operatorWord(reviews, a.Login, a.PR.HeadSHA, since, ""); w.hand != nil {
-		e.stopAutoApproval(ctx, repo, a.PR, w.handReason())
+		holds, err := handHolds(ctx, ag, repo, a.PR.Number, w)
+		if err != nil {
+			e.autoReadFailed(ctx, "read the dismissals", a.Identity, a.PRID, err)
+			return
+		}
+		if holds {
+			e.stopAutoApproval(ctx, repo, a.PR, w.handReason())
+		}
 		if s := strings.ToUpper(w.hand.State); s == "APPROVED" || s == "CHANGES_REQUESTED" {
 			e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding}, store.AutoEndedOperator,
 				"superseded by your review by hand ("+w.hand.URL+")")

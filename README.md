@@ -1252,7 +1252,7 @@ link that turned up, your note) leaves it. The first line says where the review 
   alice yet: one of Magnum's reviewers did not finish on this head, and Magnum runs it again. Magnum
   approves only a complete review.", and the line before once it gives up on the head; "Approval as alice
   waits for the checks of this head to pass." (with "Some fail now." when they fail); "Magnum stopped
-  approving this PR as alice. A review by alice decides." once your review by hand, a dismissal or
+  approving this PR as alice. A review by alice decides." once your changes request by hand, a dismissal or
   `magnum unapprove` stopped it; and "The approval as alice did not post. Magnum told alice." when its
   last attempt failed. It never names a path, a reviewer, a check or the reason's own words. On a PR the
   author lists (`auto_approve_skip_authors`, `auto_approve_authors`) or the watch's filters (a manual
@@ -1617,7 +1617,7 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   comparison reads the checks: a head whose only failing check it names is approved once the others
   pass, its rollup decided from them, and one where another check still runs waits for it;
 - on GitHub (read just before posting) you have not approved that head, have no review in progress, and
-  have not reviewed the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
+  have not requested changes on the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
 
 When the review, the watch, the agents' files, the workflows or the checks hold a PR back, the card says
 why ("magnum does not approve it as you: its head's checks fail …"; `auto_approve_refused` in
@@ -1707,13 +1707,20 @@ approval first, as you, since GitHub would count it next to the changes request,
 until the changes request is recorded. The approval of a PR that was merged or
 closed ends as history (`review.auto_approval_ended`): nothing follows it any more.
 
-Your word wins, for good on that PR: once you review it by hand (an approval, a comment or a changes
-request; one you post with `magnum approve` or `magnum request-changes` counts as yours, but not `magnum
-approve --as` your account, the board's `A` on a row that needs you, which is followed like these
-approvals), or you or anyone
-else dismisses one of these approvals, Magnum stops approving that PR as you, and your changes request shows
-as `✔ lift your ✗` instead. `magnum review` does not change that; `magnum unapprove --resume <ref>` does
-(only what you do from then on counts). GitHub dismissing it as stale on a push does not stop it. Nor does
+Your word wins, for good on that PR: once you request changes on it by hand (one you post with `magnum
+request-changes` counts as yours), or you or anyone else dismisses one of these approvals, Magnum stops
+approving that PR as you, and your changes request shows as `✔ lift your ✗` instead. Your latest verdict by
+hand decides, so an approval after your changes request lifts it before Magnum sees the PR. A comment by hand,
+also a reply in a thread (GitHub records it as a review), stops nothing. Neither does your approval by hand
+(also one you post with `magnum approve`, and `magnum approve --as` your account, the board's `A` on a row that
+needs you, which is followed like these approvals): Magnum posts nothing beside your approval of the head,
+replaces a standing approval of its own with yours, and approves a later head it finds clean as you again. A
+review of yours that is dismissed since stops it too, because GitHub does not say whether it requested changes,
+unless GitHub dismissed it as stale on a push, which it does only to approvals. Holds that a comment or an
+approval by hand made before 2026-11-03 were lifted on the upgrade (migration 30), and the next pass reads the
+PR's reviews again. `magnum review` does not change a stop; `magnum unapprove --resume <ref>` lifts it
+(only what you do from then on counts). GitHub dismissing one of these approvals as stale on a push does not
+stop it. Nor does
 Magnum's own request whose answer was lost: Magnum acts as your login, so GitHub names you on its dismissals
 and approvals too, and only Magnum's record of its request tells them apart. Before it sends an approval or a
 withdrawal as you it records the request as pending (`pr.<id>.auto_approve_pending`, the head;

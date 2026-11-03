@@ -68,8 +68,8 @@ func TestAnApprovalOutOfAttemptsLeavesNoPendingRecord(t *testing.T) {
 // The path the cleanup above protects: three unanswered attempts, then the
 // operator approves the same head by hand, then a later round of that head
 // (a new run: the failed row does not block it). Their approval is theirs:
-// auto-approval of the PR stops, and the approval is not adopted as
-// magnum's, which a later round with findings would dismiss.
+// it is not adopted as magnum's, which a later round with findings would
+// dismiss, nothing is posted beside it, and it stops nothing.
 func TestAnApprovalByHandAfterThreeUnansweredAttemptsIsNotAdoptedAsMagnums(t *testing.T) {
 	h := postsFailingUnanswered(t, errBadGateway)
 	h.gh.createErr = nil
@@ -78,8 +78,8 @@ func TestAnApprovalByHandAfterThreeUnansweredAttemptsIsNotAdoptedAsMagnums(t *te
 	h.advance(time.Hour)
 	h.reviewAgain(2)
 	h.tick()
-	if hd := h.hold(2); !hd.Held || !strings.Contains(hd.Reason, "you approved it by hand") {
-		t.Fatalf("hold = %+v, want auto-approval stopped by the approval by hand", hd)
+	if hd := h.hold(2); hd.Held {
+		t.Fatalf("hold = %+v: the approval by hand stopped auto-approval", hd)
 	}
 	if live, ok, err := h.st.LiveAutoApproval(h.ctx, h.pr(2).ID); err != nil || ok {
 		t.Fatalf("the operator's approval was adopted as magnum's: %+v %v", live, err)

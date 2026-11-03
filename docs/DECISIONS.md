@@ -14375,6 +14375,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestPRsSourceCarriesThePrioritiesOfEarlierFindingsStillOpen and the new cases of
   TestPRsTableShowsTheSnoozeAndTheOpenFindings. The icon fixtures and TestPRBoardShowsFindingsAndPostsAVerdict
   now show the open findings after the new ones.
+- **Only a changes request by hand stops auto-approval** (2026-11-03, the operator's rule, amends "magnum
+  approves as the operator when its review found nothing to fix"). Two clean reviews in a week posted no
+  approval as the operator. The cause each time was a reply of theirs in one of magnum's own threads, which
+  GitHub records as a COMMENTED review. On talkable#12106 the reply asked the author to apply a
+  simplification, and the author applied it before the next clean round. On talkable#12066 the reply told
+  the author to update their skills, and magnum found it a week later, at the first clean round. Approvals by
+  hand made 12 of the 21 holds in the registry. Now operatorWord keeps the operator's latest verdict by hand
+  (an approval, a changes request or a dismissed review), and a comment is no verdict. handHolds stops
+  auto-approval for a changes request. It also stops it for a dismissed review, because GitHub's list of
+  reviews does not say what that review was. The exception is a review the timeline says GitHub dismissed on a
+  push (ReviewDismissals, ByPush), because GitHub dismisses only approvals that way. An approval by hand of the
+  head still leaves nothing to post. One after magnum's standing approval still replaces it (`superseded by
+  your review by hand`). Neither stops auto-approval of a later head. The latest verdict
+  decides, so an approval after a changes request lifts it, and a comment after it does not. A dismissal of
+  one of magnum's approvals by a person stops it as before. Migration 30 deletes the held rows that a comment
+  or an approval by hand made. The next pass then reads the PR's reviews from the start, so an older changes
+  request holds again. The open PRs it lifts are talkable#12066 and talkable#12136. Rejected: keeping
+  approvals as holds (the operator chose against it), and letting only replies in magnum's threads through
+  (a top-level comment is no verdict either). Tests, failing first:
+  TestTheOperatorsApprovalByHandLeavesNothingToPostAndStopsNothing, TestACommentByHandDoesNotStopAutoApproval
+  (a reply in a thread and a review body) and TestTheOperatorsLatestVerdictByHandDecides. Also
+  TestADismissedReviewByHandStopsAutoApprovalUnlessGitHubDismissedItOnAPush, TestAReviewByHandAfterAStandingApproval
+  (a comment, an approval and a changes request after magnum's approval) and
+  TestMigrationV29ToV30LiftsTheHoldsOfACommentOrAnApprovalByHand. Two tests now use a changes request:
+  TestTheOperatorsOwnReviewStopsAutoApproval and TestAStoppedAutoApprovalSpeaksInTheThirdPerson.
+  TestNoStoppedLineWhileTheApprovalStands uses a review a person dismissed. The two tests of an approval by
+  hand after a failed post now see no hold.
 
 ## Learned rules
 
