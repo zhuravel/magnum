@@ -530,9 +530,12 @@ func TestFactoryCodexFallbackMustNameAClaudeRole(t *testing.T) {
 		}
 	}
 	for name, edit := range map[string]func(*Config){
-		"a codex fallback":       func(c *Config) { c.Factory.CodexFallback["fx-critic"] = "fx-cause" },
-		"an unknown fallback":    func(c *Config) { c.Factory.CodexFallback["fx-critic"] = "fx-nope" },
-		"a claude role as key":   func(c *Config) { c.Factory.CodexFallback["fx-judge"] = "fx-writer" },
+		"a codex fallback":    func(c *Config) { c.Factory.CodexFallback["fx-critic"] = "fx-cause" },
+		"an unknown fallback": func(c *Config) { c.Factory.CodexFallback["fx-critic"] = "fx-nope" },
+		"an empty fallback":   func(c *Config) { c.Factory.CodexFallback["fx-critic"] = "" },
+		"a codex value under a claude key": func(c *Config) {
+			c.Factory.CodexFallback["fx-judge"] = "fx-cause"
+		},
 		"an unknown role as key": func(c *Config) { c.Factory.CodexFallback["fx-nope"] = "fx-writer" },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -547,6 +550,82 @@ func TestFactoryCodexFallbackMustNameAClaudeRole(t *testing.T) {
 	delete(cfg.Factory.CodexFallback, "fx-critic")
 	if w := cfg.Warnings(); !slices.ContainsFunc(w, func(s string) bool { return strings.Contains(s, "fx-critic") && strings.Contains(s, "codex_fallback") }) {
 		t.Errorf("warnings = %q, want one for fx-critic", w)
+	}
+}
+
+// A user with no Codex, or who wants Claude on a role the defaults run on
+// Codex, moves the role to Claude with a [[factory.role]] that sets its kind.
+// Its codex_fallback entry then has no use: that is a warning, not an error
+// (nothing else in the configuration could get rid of it), and the entry is
+// not used. A key that names no role, and a value that names no Claude role,
+// stay errors.
+func TestAFactoryRoleCanMoveFromCodexToClaude(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+`
+[[factory.role]]
+name = "fx-cause"
+kind = "claude"
+`)
+	if err != nil {
+		t.Fatalf("a Codex role moved to Claude: %v", err)
+	}
+	if r, _ := cfg.FactoryRole("fx-cause"); r.Kind != KindClaude || r.Doing != "finding the cause" {
+		t.Fatalf("fx-cause = %+v, want the claude kind and its other keys", r)
+	}
+	want := "factory.codex_fallback key fx-cause is a claude role: its fallback is not used"
+	if w := cfg.Warnings(); !slices.Contains(w, want) {
+		t.Errorf("warnings = %q, want %q", w, want)
+	}
+	// The other Codex role keeps its fallback and its silence.
+	if w := cfg.Warnings(); slices.ContainsFunc(w, func(s string) bool { return strings.Contains(s, "fx-critic") }) {
+		t.Errorf("warnings = %q, fx-critic is still on Codex with its fallback", w)
+	}
+
+	// The same through Validate on a built configuration, and the entry
+	// stays refused when its value is no Claude role.
+	c := validFactoryConfig()
+	c.Factory.Roles[slices.IndexFunc(c.Factory.Roles, func(r Role) bool { return r.Name == "fx-cause" })].Kind = KindClaude
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Factory.CodexFallback["fx-cause"] = "fx-critic"
+	wantError(t, c.Validate(), "factory.codex_fallback fx-cause", "must be a claude role")
+}
+
+// An empty value in the user's codex_fallback removes the built-in entry
+// (the tables merge entry by entry, so an empty table changes nothing).
+func TestAnEmptyCodexFallbackRemovesTheDefault(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+`
+[factory]
+codex_fallback = { fx-cause = "" }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cfg.Factory.CodexFallback["fx-cause"]; ok {
+		t.Errorf("codex_fallback still has fx-cause = %q", got)
+	}
+	if got := cfg.Factory.CodexFallback["fx-critic"]; got != "fx-critic-claude" {
+		t.Errorf("codex_fallback fx-critic = %q, want the default kept", got)
+	}
+	if w := cfg.Warnings(); !slices.ContainsFunc(w, func(s string) bool { return strings.Contains(s, "fx-cause") && strings.Contains(s, "codex_fallback") }) {
+		t.Errorf("warnings = %q, want one for fx-cause, a Codex role with no fallback now", w)
+	}
+
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+"\n[factory]\ncodex_fallback = {}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Factory.CodexFallback) != 2 {
+		t.Errorf("an empty table changed the entries: %v", cfg.Factory.CodexFallback)
+	}
+
+	// A later layer can set the entry again; the base file removes it too.
+	cfg, err = loadFiles(t, t.TempDir(), map[string]string{"config.toml": minimalConfig + "\n[factory]\ncodex_fallback = { fx-critic = \"\" }\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Factory.CodexFallback["fx-critic"]; ok || cfg.Factory.CodexFallback["fx-cause"] != "fx-cause-claude" {
+		t.Errorf("codex_fallback = %v, want fx-critic removed by the base file", cfg.Factory.CodexFallback)
 	}
 }
 

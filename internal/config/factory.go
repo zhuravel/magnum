@@ -68,7 +68,12 @@ type Factory struct {
 	// each carry a why and a doing (Role.Why, Role.Doing).
 	Roles []Role `toml:"role"`
 	// CodexFallback maps a factory role that runs on Codex to the factory
-	// role of the Claude kind that takes its work after a Codex refusal.
+	// role of the Claude kind that takes its work after a Codex refusal. The
+	// user's table merges entry by entry, and an empty value removes the
+	// built-in entry. An entry whose key is a role that no longer runs on
+	// Codex (a [[factory.role]] moved it to Claude) is not an error: it is
+	// not used, so read it only for a role of the Codex kind (Warnings says
+	// so).
 	CodexFallback map[string]string `toml:"codex_fallback"`
 	// Kinds are the kinds of task ([factory.kinds.<name>]) and their stages.
 	Kinds map[string]FactoryKind `toml:"kinds"`
@@ -398,6 +403,7 @@ func (c *Config) mergeFactory(md toml.MetaData, prev, src Factory, rawRoles []ma
 	f.Roles = roles
 	f.Kinds = mergedMap(prev.Kinds, src.Kinds)
 	f.CodexFallback = mergedMap(prev.CodexFallback, src.CodexFallback)
+	maps.DeleteFunc(f.CodexFallback, func(_, fallback string) bool { return fallback == "" })
 	f.KindByJiraType = mergedMap(prev.KindByJiraType, src.KindByJiraType)
 	f.KindWords = mergedMap(prev.KindWords, src.KindWords)
 	f.LocalReview = prev.LocalReview
@@ -715,11 +721,10 @@ func (c *Config) validateFactoryPickers() []error {
 	}
 	for _, key := range slices.Sorted(maps.Keys(f.CodexFallback)) {
 		fallback := f.CodexFallback[key]
-		switch r, ok := c.FactoryRole(key); {
-		case !ok:
+		// A key that is a role of another kind is only a warning
+		// (factoryWarnings): a [[factory.role]] may move a role to Claude.
+		if _, ok := c.FactoryRole(key); !ok {
 			errs = append(errs, fmt.Errorf("factory.codex_fallback key %q names no [[factory.role]]", key))
-		case r.AgentKind() != KindCodex:
-			errs = append(errs, fmt.Errorf("factory.codex_fallback key %s is a %s role, not a codex role", key, r.AgentKind()))
 		}
 		switch r, ok := c.FactoryRole(fallback); {
 		case !ok:
@@ -919,13 +924,19 @@ func validateFactoryStaging(where string, r FactoryRepo) []error {
 
 // factoryWarnings lists what is valid but probably not what you meant: a
 // Codex factory role with no fallback (after a Codex refusal its task waits
-// for you), and, once a repository is configured, a later_without role no
-// [[role]] has.
+// for you), a codex_fallback entry for a role that is not on Codex (the
+// entry is not used), and, once a repository is configured, a later_without
+// role no [[role]] has.
 func (c *Config) factoryWarnings() []string {
 	var out []string
 	for _, r := range c.Factory.Roles {
 		if r.AgentKind() == KindCodex && c.Factory.CodexFallback[r.Name] == "" {
 			out = append(out, fmt.Sprintf("factory role %s runs on Codex and [factory] codex_fallback names no Claude role for it: after a Codex refusal its task waits for you", r.Name))
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(c.Factory.CodexFallback)) {
+		if r, ok := c.FactoryRole(key); ok && r.AgentKind() != KindCodex {
+			out = append(out, fmt.Sprintf("factory.codex_fallback key %s is a %s role: its fallback is not used", key, r.AgentKind()))
 		}
 	}
 	if len(c.Factory.Repos) > 0 {

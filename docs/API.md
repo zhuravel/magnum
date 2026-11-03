@@ -5068,7 +5068,12 @@ type Factory struct {
 	// each carry a why and a doing (Role.Why, Role.Doing).
 	Roles []Role `toml:"role"`
 	// CodexFallback maps a factory role that runs on Codex to the factory
-	// role of the Claude kind that takes its work after a Codex refusal.
+	// role of the Claude kind that takes its work after a Codex refusal. The
+	// user's table merges entry by entry, and an empty value removes the
+	// built-in entry. An entry whose key is a role that no longer runs on
+	// Codex (a [[factory.role]] moved it to Claude) is not an error: it is
+	// not used, so read it only for a role of the Codex kind (Warnings says
+	// so).
 	CodexFallback map[string]string `toml:"codex_fallback"`
 	// Kinds are the kinds of task ([factory.kinds.<name>]) and their stages.
 	Kinds map[string]FactoryKind `toml:"kinds"`

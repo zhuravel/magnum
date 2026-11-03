@@ -3441,7 +3441,9 @@ stages = [
   neither. A factory role is never a judge, fix or whiteboard role, takes no `identity` (the agents act as
   you) and no `aliases`, and its `prompt` is a file of [prompts](prompts/README.md) (`factory-*.md`). A role
   on Codex needs an entry in `codex_fallback`, the Claude role that takes its work after a Codex refusal;
-  `magnum config` warns about one without it.
+  `magnum config` warns about one without it. To run a role on Claude instead, set `kind = "claude"` in a
+  `[[factory.role]]` of its name (the entry is then unused and `magnum config` says so), and to drop an
+  entry write it with an empty value: `codex_fallback = { fx-cause = "" }`.
 - **Kinds of task and stages.** A kind lists its stages in order; each has a `name` and a `type`.
   An `agents` stage launches its `roles` in parallel and ends when its `end` fact holds (`findings`,
   `report`, `critic`, `proof` or `pr_body`: files and results the factory checks, never a "done" message).
