@@ -1,0 +1,37 @@
+ [1;94mmagnum factory[m[37m · [m[94mPR-12330[m[37m · [mbug[37m · [mAdvocate offer email locale                                                                      [37m↻ 14:09[m 
+ zhuravel-PR-12330-offer-email-locale[37m · #4527 · copy 2 of 3, server off · started 08:40 · your time on it 6m[m
+
+ [1;96mWAITING FOR[m  [94mrev-ann:[m review of #4527, requested 3h ago · meanwhile the factory moves bastion to your latest head (no agent)
+
+ [1;96mSTAGES[m                                                                                                                    [1;37mtook[m   [1;37mfinished[m
+  [92m✓[m start          Jira PR-12330 read · bug, from the Jira type                                                              [37m0s[m      [37m08:40[m
+  [92m✓[m investigate    reproduced with a failing spec · 2 agents found the same cause                                           [37m24m[m      [37m09:04[m
+  [37m–[m [37mquestions[m      [37mskipped: nothing was open[m
+  [92m✓[m coding         spec red before, green after · 3 files +22 −4                                                            [37m31m[m      [37m09:35[m
+  [92m✓[m tests          216 specs green · rubocop clean · Codex review: 1 note, fixed                                             [37m9m[m      [37m09:44[m
+  [92m✓[m ready to push  you read the diff 09:52 and pushed                                                                       [37m14m[m      [37m09:58[m
+  [92m✓[m pushed         draft #4527 · magnum approved round 1 · you marked it ready for review                                 [37m1h11m[m      [37m11:09[m
+  [37m◷[m review         rev-ann asked 11:09, nothing yet · 0 comments open                                                        [37m3h[m    [37mwaiting[m
+  [92m✓[m CI             41 of 41 green at 9c4e2d1 · 3 tries, see CI                                                            [37m1h26m[m      [37m11:31[m
+  [92m✓[m merge master   not needed: 0 commits behind master                                                                       [37m0s[m      [37m11:32[m
+  [92m✓[m void           your latest head deployed · QA ✓ 9 of 9                                                                  [37m52m[m      [37m12:24[m
+  [92m✓[m bart           your latest head deployed · no QA on bart                                                                [37m23m[m      [37m11:55[m
+› [7m⣷ bastion        merging your latest head (bastion has an older one)                                                       2m        now  [m
+  [37m·[m [37mmerge[m          [37myours: the factory never merges to master[m
+  [37m·[m [37mcleanup[m        [37mafter your merge: free the copy[m
+
+ [1;96mAGENTS[m  [37mnone working: the factory merges bastion itself · 5 done, logs kept[m
+  [92m✓[m QA on void          t:qa on void: 9 of 9 checks, 4 screenshots           [37mdone 12:24[m
+  [92m✓[m fixing bart         kept both changes in the offer mailer                [37mdone 11:48[m
+  [92m✓[m fixing CI           t:fix-ci: the locale fallback in the mailer          [37mdone 10:40[m
+  [92m✓[m writer              wrote the failing spec, then the fix                 [37mdone 09:44[m
+  [92m✓[m 3 investigators     reproduced it, found the cause, read the history     [37mdone 09:04[m
+
+ [1;96mREPORT[m
+  [1;37mcause[m   the offer email takes the site's locale, not the advocate's
+  [1;37mproof[m   spec "sends the offer email in the advocate's locale": red before, green after
+  [1;37mplan[m    3 steps, all done · no migration · visible: the email text, 2 screenshots
+
+ [1;96mLEARNED[m  1 from this task: magnum's P2 "falls back to the site's locale" → a test case in the replay set [37m(L)[m
+[90m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[m
+ [1;94mj k[m [37mmove[m[37m · [m[1;94menter[m [37mopen the line[m[37m · [m[1;94md[m [37mdiff[m[37m · [m[1;94ml[m [37mlog[m[37m · [m[1;94m+ −[m [37mrate[m[37m · [m[1;94mesc[m [37mback[m[37m · [m[1;94m?[m [37mmore[m

@@ -1,0 +1,39 @@
+ magnum factory · PR-12330 · bug · Advocate offer email locale                              ↻ 14:09 
+ zhuravel-PR-12330-offer-email-locale · #4527 · copy 2 of 3, server off · started 08:40 · your time…
+
+ WAITING FOR  rev-ann: review of #4527, requested 3h ago · meanwhile the factory moves
+              bastion to your latest head (no agent)
+
+ STAGES                                                                            took   finished
+  ✓ start          Jira PR-12330 read · bug, from the Jira type                      0s      08:40
+  ✓ investigate    reproduced with a failing spec · 2 agents found the same cau…    24m      09:04
+  – questions      skipped: nothing was open
+  ✓ coding         spec red before, green after · 3 files +22 −4                    31m      09:35
+  ✓ tests          216 specs green · rubocop clean · Codex review: 1 note, fixed     9m      09:44
+  ✓ ready to push  you read the diff 09:52 and pushed                               14m      09:58
+  ✓ pushed         draft #4527 · magnum approved round 1 · you marked it ready…   1h11m      11:09
+  ◷ review         rev-ann asked 11:09, nothing yet · 0 comments open                3h    waiting
+  ✓ CI             41 of 41 green at 9c4e2d1 · 3 tries, see CI                    1h26m      11:31
+  ✓ merge master   not needed: 0 commits behind master                               0s      11:32
+  ✓ void           your latest head deployed · QA ✓ 9 of 9                          52m      12:24
+  ✓ bart           your latest head deployed · no QA on bart                        23m      11:55
+› ⣷ bastion        merging your latest head (bastion has an older one)               2m        now  
+  · merge          yours: the factory never merges to master
+  · cleanup        after your merge: free the copy
+
+ AGENTS  none working: the factory merges bastion itself · 5 done, logs kept
+  ✓ QA on void          t:qa on void: 9 of 9 checks, 4 screenshots           done 12:24
+  ✓ fixing bart         kept both changes in the offer mailer                done 11:48
+  ✓ fixing CI           t:fix-ci: the locale fallback in the mailer          done 10:40
+  ✓ writer              wrote the failing spec, then the fix                 done 09:44
+  ✓ 3 investigators     reproduced it, found the cause, read the history     done 09:04
+
+ REPORT
+  cause   the offer email takes the site's locale, not the advocate's
+  proof   spec "sends the offer email in the advocate's locale": red before, green after
+  plan    3 steps, all done · no migration · visible: the email text, 2 screenshots
+
+ LEARNED  1 from this task: magnum's P2 "falls back to the site's locale" → a test case in
+          the replay set (L)
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ j k move · enter open the line · d diff · l log · + − rate · esc back · ? more

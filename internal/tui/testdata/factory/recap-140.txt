@@ -1,0 +1,16 @@
+ magnum factory · PR-12345 · your answers                                                                                          esc back 
+ Credit expiry reminder email · feature · nothing is sent yet
+
+ 1  Who gets the reminder?
+    advocates only                                                                                                          your answer
+ 2  When does the reminder go out?
+    seven days before it expires (expires Fri 14 Nov → email Fri 7 Nov)                                                     recommended
+ 3  Can a merchant turn it off?
+    ask rev-ann in Jira                                                                                     there was no recommendation
+    ┃ rev-ann, should merchants be able to turn off the credit expiry reminder,
+    ┃ or is it always on? The ticket does not say.
+
+ When you send: the agents get answers 1 and 2, and 1 Jira comment is copied for you to post on PR-12345. The task waits for rev-ann
+ until you mark question 3 answered. These answers are for the questions as of 14:12.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Send 2 answers and copy 1 Jira comment for you to post? y/N  y confirms, any other key cancels

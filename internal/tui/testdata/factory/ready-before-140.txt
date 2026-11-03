@@ -1,0 +1,21 @@
+ magnum factory · PR-12360 · ready to push                                                                                         esc back 
+ Custom activities lose points on copy · bug · waited 12m
+ zhuravel-PR-12360-activity-points-on-copy · 1 commit · not on GitHub yet
+
+ CAUSE        copying a campaign copies its activities before their reward rules
+ FIX          copy the reward rules first, then point each activity at its copy
+ PROOF        spec "copies reward rules with the activities": red before (0 points, want 25), green after · 214 specs near the change
+              green · rubocop clean
+ FILES        app/services/campaign_copier.rb          +31 −6    in the plan
+              spec/services/campaign_copier_spec.rb    +15       in the plan
+              spec/factories/reward_rules.rb           +2        not in the plan
+ DOUBTS       the writer was unsure if archived campaigns copy too: not tested
+              Codex noted one query per rule; fixed in the same commit
+ SCREENSHOTS  2, from the copy's own server: the copied campaign shows 25 points
+
+   push + draft PR
+   send back with a note
+   drop: free the copy, keep the branch
+ You have not read the diff yet. The recommendation shows after d.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ d read the diff · e screenshots · j k pick · enter do it · esc back

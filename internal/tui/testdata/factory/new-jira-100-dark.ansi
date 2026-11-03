@@ -1,0 +1,18 @@
+ [1;94mmagnum factory[m[37m · [mnew task                                                              [1;94mesc[m [37mcancels[m 
+
+ [1;37mJira key or describe the task[m                       [1;94menter[m [37mstarts[m[37m · [m[1;94mctrl+j[m [37mnew line[m[37m · [m[1;94mctrl+g[m [37meditor[m 
+ [94m┃[m PR-12345 the reminder is for advocates only, not their friends[94m▏[m
+
+ [1;37mJIRA[m      [94mPR-12345[m[37m · [mStory[37m · [mTo Do[37m · [mHigh[37m · [mreporter rev-ann[37m · [m[37mread by the daemon 2s ago[m
+           [1mCredit expiry reminder email[m
+           "Send advocates a reminder before their referral credit expires."    [1;94mpgdn[m[37m reads more[m
+ [1;37mGUIDANCE[m  "the reminder is for advocates only, not their friends" goes to every agent
+ [1;37mKIND[m      feature     [37mfrom the Jira type Story · [m[37mtab: bug, feature, chore[m
+ [1;37mBRANCH[m    zhuravel-PR-12345-credit-expiry-reminder
+ [1;37mSTARTS[m    now, in talkable.factory2 (free)
+ [1;37mAGENTS[m    2: test each point of the ticket against the code · collect the open questions
+ [1;37mRULES[m     3 talkable rules go into its prompts                                    [1;94mL[m[37m shows them[m
+           ask before changing an email's words · seed data into the copy's own databases ·
+           screenshots come from the copy's own server
+[90m────────────────────────────────────────────────────────────────────────────────────────────────────[m
+ [1;93mStart feature PR-12345 with 2 agents in talkable.factory2? y/N[m  [37my confirms, any other key cancels[m

@@ -1,0 +1,19 @@
+ [1;94mmagnum factory[m[37m · [m[94mPR-12345[m[37m · [mquestion 2 of 3                                               [1;94mesc[m [37mback[m 
+ Credit expiry reminder email[37m · feature · asked 41m ago · coding starts after all 3[m
+
+ [92m✓[m 1  Who gets the reminder?             advocates only                        [37myour answer[m[37m 13:31[m
+ [1;93m●[m 2  When does the reminder go out?                                           [37mnow[m
+   3  Can a merchant turn it off?
+
+ [1mWhen does the reminder go out?[m
+ [37mThe ticket says "before the credit expires" and names no day.[m
+ [37mExample: a credit that expires on Fri 14 Nov.[m
+
+ [1;94m›[m 1  [1mSeven days before it expires[m             [37m→ [mthe email goes out Fri 7 Nov       [92mrecommended[m
+      [37mwhy: the coupon reminder already uses 7 days, so the two emails match[m
+   2  One day before it expires                [37m→ [mThu 13 Nov
+   3  On the day it expires                    [37m→ [mFri 14 Nov, 09:00 merchant time
+   4  Ask rev-ann in Jira (the task waits)     [37m→ [mdrafts a comment for you to check
+   5  Type your own answer
+[90m────────────────────────────────────────────────────────────────────────────────────────────────────[m
+ [1;94menter[m [37mtake the marked one[m[37m · [m[1;94mj k[m [37mmove[m[37m · [m[1;94m1-5[m [37mpick[m[37m · [m[1;94mbackspace[m [37mprevious[m[37m · [m[1;94mz[m [37msnooze 2h[m[37m · [m[1;94mesc[m [37mback[m

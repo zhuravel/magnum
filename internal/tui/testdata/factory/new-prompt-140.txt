@@ -1,0 +1,15 @@
+ magnum factory · new task                                                                                                      esc cancels 
+
+ Jira key or describe the task                                                               enter starts · ctrl+j new line · ctrl+g editor 
+ ┃ The weekly digest email shows last week's numbers for merchants east of UTC+10.
+ ┃ Use the merchant's time zone for the week window. Check a merchant in UTC-11 too.▏
+
+ JIRA      none: the agents work from your words
+ KIND      bug         guessed from "shows last week's numbers" · tab: bug, feature, chore
+ TITLE     Weekly digest uses the wrong week east of UTC+10
+ BRANCH    zhuravel-weekly-digest-time-zone
+ STARTS    queued: memory full (swap 91%) · starts when swap is under 80%
+ AGENTS    3: reproduce it · find the cause on its own · read the history of the code
+ RULES     3 talkable rules go into its prompts                                                                            L shows them
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Queue bug "Weekly digest uses the wrong week…"? It starts when memory allows. y/N  y confirms, any other key cancels
