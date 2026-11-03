@@ -359,10 +359,50 @@ func TestTheFindingsCellCountsStillOpenFindingsWhenNothingNewWasPosted(t *testin
 		{&FindingsInfo{Open: 3, Verdict: "blocking"}, "✗ 3 open"},
 		{&FindingsInfo{Open: 1, Verdict: "non_blocking"}, p.g.nonBlocking + " 1 open"},
 		{&FindingsInfo{Verdict: "clean"}, "✔ clean"},
-		{&FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Open: 2, Verdict: "blocking"}, "✗ P1"},
 	} {
 		if got := text(c.f); got != c.want {
 			t.Errorf("findings %+v: cell %q, want %q", *c.f, got, c.want)
+		}
+	}
+}
+
+// A re-review that posted new findings while earlier ones stay open names
+// those too, each priority behind a plus and without its mark ("P3×3 +P2"):
+// the verdict counts them, and the cell listed only the new ones (2026-11-03:
+// an open P2 behind "P3×3" while the review said "Fix 1 problem before
+// merging"). A result without their priorities gives their number.
+func TestTheFindingsCellNamesEarlierFindingsStillOpenBesideNewOnes(t *testing.T) {
+	for _, mode := range []IconMode{IconsUnicode, IconsNerd} {
+		p := needsMePainter(mode, nil)
+		text := func(f *FindingsInfo) string {
+			var b strings.Builder
+			for _, s := range p.findingsCell(f) {
+				b.WriteString(s.text)
+			}
+			return b.String()
+		}
+		mark := func(i int) string { return p.priorityMark(i) }
+		for _, c := range []struct {
+			f    *FindingsInfo
+			want string
+		}{
+			{&FindingsInfo{Counts: [4]int{0, 0, 0, 3}, Open: 1, OpenCounts: &[4]int{0, 0, 1, 0}, Verdict: "non_blocking"},
+				p.g.nonBlocking + " " + mark(3) + "P3" + p.g.times + "3 +P2"},
+			{&FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Open: 3, OpenCounts: &[4]int{0, 0, 2, 1}, Verdict: "blocking", Simplifications: 1},
+				p.g.changes + " " + mark(1) + "P1 +P2" + p.g.times + "2 +P3 " + p.g.simplify + p.g.gap + "1"},
+			{&FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Open: 2, Verdict: "blocking"}, p.g.changes + " " + mark(1) + "P1 +2 open"},
+			{&FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Verdict: "blocking"}, p.g.changes + " " + mark(1) + "P1"},
+		} {
+			if got := text(c.f); got != c.want {
+				t.Errorf("%s: findings %+v: cell %q, want %q", mode, *c.f, got, c.want)
+			}
+		}
+	}
+	// An open priority is in its own color, not the verdict's.
+	p := needsMePainter(IconsUnicode, nil)
+	for _, s := range p.findingsCell(&FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Open: 2, OpenCounts: &[4]int{0, 0, 2, 0}, Verdict: "blocking"}) {
+		if s.text == " +P2×2" && s.st.Render("x") != p.priorityStyle(2).Render("x") {
+			t.Errorf("the open P2 is drawn %q, want the P2 color %q", s.st.Render("x"), p.priorityStyle(2).Render("x"))
 		}
 	}
 }

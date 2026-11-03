@@ -890,7 +890,21 @@ func (p *prbPainter) findingsLines(f FindingsInfo) []string {
 	}
 	out = append(out, counts)
 	if f.Fixed+f.Open+f.Answered > 0 {
-		out = append(out, fmt.Sprintf("Earlier findings: %d fixed, %d still open, %d answered", f.Fixed, f.Open, f.Answered))
+		// The priorities of those still open, when the result gives them:
+		// "3 still open (P1 P2×2)".
+		var open []string
+		if f.OpenCounts != nil {
+			for i, n := range f.OpenCounts {
+				if n > 0 {
+					open = append(open, p.priorityCount(i, n))
+				}
+			}
+		}
+		still := strconv.Itoa(f.Open) + " still open"
+		if len(open) > 0 {
+			still += " (" + strings.Join(open, " ") + ")"
+		}
+		out = append(out, fmt.Sprintf("Earlier findings: %d fixed, %s, %d answered", f.Fixed, still, f.Answered))
 	}
 	return out
 }

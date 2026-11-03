@@ -1066,7 +1066,7 @@ func TestPRBoardShowsFindingsAndPostsAVerdict(t *testing.T) {
 	clean.Findings = &FindingsInfo{Verdict: "clean", Posted: "COMMENT", SHA: "abcdef1234"}
 	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{row, clean}})
 	v := viewOf(m)
-	mustContain(t, v, "FINDINGS", "✗ P1 P2×3 ✂4", "✔ clean")
+	mustContain(t, v, "FINDINGS", "✗ P1 P2×3 +1 open ✂4", "✔ clean")
 
 	c, _, _ := newBoard(t, 170, 70, PRBoardOptions{})
 	c, _ = send(t, c, prbDataMsg{rows: []PRBoardRow{row, clean}})
@@ -1087,6 +1087,20 @@ func TestPRBoardShowsFindingsAndPostsAVerdict(t *testing.T) {
 	if got := act.last(); got != "approve talkable/talkable#9" {
 		t.Fatalf("A called %q", got)
 	}
+}
+
+// The card names the priorities of the earlier findings still open when the
+// result gives them, as the FINDINGS cell does.
+func TestTheCardNamesThePrioritiesOfEarlierFindingsStillOpen(t *testing.T) {
+	row := PRBoardRow{Ref: "talkable/talkable#8", Owner: "talkable", Repo: "talkable", Number: 8, Title: "Refund metrics",
+		State: "reviewed", GHState: "OPEN", ActivityAt: ago(time.Hour), HeadSHA: "abcdef1234",
+		LastReview: &ReviewInfo{Login: "talkable[bot]", Event: "COMMENTED", SubmittedAt: ago(time.Hour), CommitSHA: "abcdef1234"},
+		Findings: &FindingsInfo{Counts: [4]int{0, 0, 0, 3}, Fixed: 4, Open: 3, OpenCounts: &[4]int{0, 1, 2, 0},
+			Verdict: "blocking", Posted: "COMMENT", SHA: "abcdef1234"}}
+	c, _, _ := newBoard(t, 170, 70, PRBoardOptions{})
+	c, _ = send(t, c, prbDataMsg{rows: []PRBoardRow{row}})
+	c, _ = send(t, c, keyMsg("enter"))
+	mustContain(t, viewOf(c), "Earlier findings: 4 fixed, 3 still open (P1 P2×2), 0 answered")
 }
 
 // The registry records what a review was posted as in GitHub's state names

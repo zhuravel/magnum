@@ -27,10 +27,11 @@ func findingsRow() PRBoardRow {
 			{Login: "bob", Verdict: "dismissed", SubmittedAt: ago(2 * time.Hour), CommitSHA: "1234567", Stale: true},
 		},
 		SinceReview: &ReviewDelta{Base: "reviewed", BaseSHA: "abcdef1234"},
-		Findings:    &FindingsInfo{Counts: [4]int{1, 1, 3, 1}, Simplifications: 2, Open: 1, Verdict: "blocking", Posted: "COMMENT", SHA: "abcdef1234"},
-		LastRound:   &RoundTimings{Round: 2, Kind: "full", Stages: []StageTiming{{Name: "judge", Duration: time.Minute}}, Total: time.Minute},
-		WaitDetail:  "quiet period after a push",
-		LastError:   "judge failed", ErrorFix: "magnum review talkable#8",
+		Findings: &FindingsInfo{Counts: [4]int{1, 1, 3, 1}, Simplifications: 2, Open: 1, OpenCounts: &[4]int{0, 0, 1, 0}, Verdict: "blocking", Posted: "COMMENT",
+			SHA: "abcdef1234"},
+		LastRound:  &RoundTimings{Round: 2, Kind: "full", Stages: []StageTiming{{Name: "judge", Duration: time.Minute}}, Total: time.Minute},
+		WaitDetail: "quiet period after a push",
+		LastError:  "judge failed", ErrorFix: "magnum review talkable#8",
 	}
 }
 
@@ -114,7 +115,7 @@ func TestNerdIconsMarkStatesVerdictsAndPriorities(t *testing.T) {
 	mustContain(t, viewOf(b),
 		"\uf421 2 attention", "⣷ 1 reviewing", "\uf42e 1 reviewed", "\uf4c5 1 not reviewed", // the summary: pill icons
 		" ⣷ reviewing ", " \uf421 attention ", " \uf4c5 not reviewed ", // the pills; a running round spins (frame 0 here)
-		"\ueb43 \uf490 P0 \uf444 P1 \uf444 P2×3 \uf444 P3 \uf0c4 2", // FINDINGS, whole
+		"\ueb43 \uf490 P0 \uf444 P1 \uf444 P2×3 \uf444 P3 +P2 \uf0c4 2", // FINDINGS, whole
 		"\U000F012C approved", "alice\ueb43", "bob\uf468 \uf464", "eve\ue641", "\uf51f zhuravel\U000F012C", // verdicts and chips: gh-dash's icons
 		"\uf435 Fix referral", "\uf530 Referral analytics") // pin and failure
 
@@ -175,7 +176,7 @@ func TestIconModeDefaultsToUnicode(t *testing.T) {
 	rows := append(boardRows(), findingsRow())
 	for _, mode := range []IconMode{"", IconsUnicode} {
 		b := iconBoard(t, mode, 240, 30, rows...)
-		mustContain(t, viewOf(b), "✗ P0 P1 P2×3 P3 ✂2", "● 2 attention", " reviewing ", "📌 Fix referral")
+		mustContain(t, viewOf(b), "✗ P0 P1 P2×3 P3 +P2 ✂2", "● 2 attention", " reviewing ", "📌 Fix referral")
 		d := iconDash(t, mode, 120, 40)
 		mustContain(t, viewOf(d), "\nSLOTS (2)", "talkable#1 reviewing", "running (pid")
 		dh, _ := send(t, d, tea.WindowSizeMsg{Width: 120, Height: 80}, keyMsg("?"))
@@ -201,7 +202,7 @@ func TestASCIIIconsDrawNoSymbols(t *testing.T) {
 		}
 	}
 	b := iconBoard(t, IconsASCII, 240, 30, findingsRow())
-	mustContain(t, viewOf(b), "x P0 P1 P2x3 P3 s2")
+	mustContain(t, viewOf(b), "x P0 P1 P2x3 P3 +P2 s2")
 }
 
 // nerdRune is the first Private Use Area rune of s, where Nerd Fonts keep

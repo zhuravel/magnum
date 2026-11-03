@@ -20,7 +20,11 @@ type FindingsInfo struct {
 	// (store.ReviewSummary.OpenProblems: P0 to P2, or all of Open when their
 	// priorities are unknown): f fixes them too.
 	OpenProblems int
-	Answered     int // earlier findings answered with a reason
+	// OpenCounts is Open by priority, P0..P3
+	// (store.ReviewSummary.OpenCounts); nil when the result gives only
+	// their number.
+	OpenCounts *[4]int
+	Answered   int // earlier findings answered with a reason
 	// Verdict is the review's decision whatever its repository lets it
 	// post: blocking (request changes), non_blocking (comment) or clean
 	// (approve).

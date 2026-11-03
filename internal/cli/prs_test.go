@@ -866,6 +866,42 @@ func TestPRsSourceCarriesWaitAndTrivialNote(t *testing.T) {
 	}
 }
 
+// The board's row carries the priorities of the earlier findings the latest
+// review keeps open, from the judge's result.
+func TestPRsSourceCarriesThePrioritiesOfEarlierFindingsStillOpen(t *testing.T) {
+	f := newInspFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "RO", Owner: "talkable", Name: "talkable", Mode: store.RepoModePool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "PO", Number: 78, URL: "u", HeadSHA: "abc",
+		InitialState: store.PRReviewed, Identity: "talkable-app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRun(ctx, store.Run{PRID: res.PR.ID, Round: 1, Role: store.RoleJudge, Kind: store.RunInitial,
+		TargetSHA: "abc", State: store.RunVerified, Outcome: new("posted"), ReviewID: new(int64(7)),
+		ResultJSON: new(`{"verdict":"non_blocking","findings":{"P3":3},"previous_findings":{"fixed":4,"open":{"P2":1}}}`),
+		Identity:   "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := prsSource(st, nil, store.BoardFilter{}, nil, f.Ctx.Layout)(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *tui.FindingsInfo
+	for i := range rows {
+		if rows[i].Number == 78 {
+			got = rows[i].Findings
+		}
+	}
+	if got == nil || got.Open != 1 || got.OpenCounts == nil || *got.OpenCounts != [4]int{0, 0, 1, 0} {
+		t.Fatalf("findings = %+v", got)
+	}
+}
+
 // [terminal] icons reaches both screens; without a configuration they
 // draw Unicode symbols.
 func TestScreensDrawTheConfiguredIcons(t *testing.T) {
@@ -920,8 +956,10 @@ func TestPRsTableFindingsCell(t *testing.T) {
 }
 
 // The plain table says what the board says: a snooze in the STATE cell
-// ("snoozed→18:00", while no round runs) and the earlier findings still open
-// when the review posted none new ("blocking 3 open").
+// ("snoozed→18:00", while no round runs) and the earlier findings still open,
+// "blocking 3 open" when the review posted none new, by priority after the
+// new ones ("non-blocking P3:3 +P2:1"), or their number when the result
+// gives no priorities.
 func TestPRsTableShowsTheSnoozeAndTheOpenFindings(t *testing.T) {
 	until := prsNow.Add(6 * time.Hour)
 	snoozed := tui.PRBoardRow{State: "reviewed", SnoozedUntil: until}
@@ -939,7 +977,10 @@ func TestPRsTableShowsTheSnoozeAndTheOpenFindings(t *testing.T) {
 		want string
 	}{
 		{&tui.FindingsInfo{Verdict: "blocking", Open: 3}, "blocking 3 open"},
-		{&tui.FindingsInfo{Verdict: "blocking", Counts: [4]int{0, 1, 0, 0}, Open: 3}, "blocking P1:1"},
+		{&tui.FindingsInfo{Verdict: "blocking", Counts: [4]int{0, 1, 0, 0}, Open: 3}, "blocking P1:1 +3 open"},
+		{&tui.FindingsInfo{Verdict: "non_blocking", Counts: [4]int{0, 0, 0, 3}, Open: 1, OpenCounts: &[4]int{0, 0, 1, 0}}, "non-blocking P3:3 +P2:1"},
+		{&tui.FindingsInfo{Verdict: "blocking", Counts: [4]int{0, 1, 0, 0}, Open: 3, OpenCounts: &[4]int{0, 0, 2, 1}, Simplifications: 2},
+			"blocking P1:1 +P2:2 +P3:1 simplify:2"},
 	} {
 		if got := prsFindingsCell(tc.f); got != tc.want {
 			t.Errorf("%+v: %q, want %q", tc.f, got, tc.want)

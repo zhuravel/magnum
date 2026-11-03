@@ -413,7 +413,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			for i := range out {
 				if s, ok := sums[ids[i]]; ok {
 					out[i].Findings = &tui.FindingsInfo{Counts: s.Counts, Simplifications: s.Simplifications,
-						Fixed: s.Fixed, Open: s.Open, OpenProblems: s.OpenProblems(), Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA,
+						Fixed: s.Fixed, Open: s.Open, OpenProblems: s.OpenProblems(), OpenCounts: s.OpenCounts, Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA,
 						Held: boardHeld(ctx, st, ids[i], s)}
 				}
 			}
@@ -917,8 +917,9 @@ func prsCICell(ci *tui.CIInfo) string {
 
 // prsFindingsCell is what magnum's latest review concluded:
 // "blocking P1:1 P2:3 simplify:4", "clean", "blocking 3 open" (none new,
-// earlier ones still open, as the board says), or "-" when it has not
-// reviewed the PR.
+// earlier ones still open, as the board says), the earlier ones still open
+// after the new ones ("non-blocking P3:3 +P2:1", or "+3 open" when the result
+// gives no priorities), or "-" when it has not reviewed the PR.
 func prsFindingsCell(f *tui.FindingsInfo) string {
 	if f == nil {
 		return "-"
@@ -929,8 +930,21 @@ func prsFindingsCell(f *tui.FindingsInfo) string {
 			parts = append(parts, fmt.Sprintf("P%d:%d", i, n))
 		}
 	}
-	if len(parts) == 1 && f.Open > 0 {
+	switch {
+	case len(parts) == 1 && f.Open > 0:
 		parts = append(parts, fmt.Sprintf("%d open", f.Open))
+	case f.Open > 0:
+		n := len(parts)
+		if f.OpenCounts != nil {
+			for i, c := range f.OpenCounts {
+				if c > 0 {
+					parts = append(parts, fmt.Sprintf("+P%d:%d", i, c))
+				}
+			}
+		}
+		if len(parts) == n {
+			parts = append(parts, fmt.Sprintf("+%d open", f.Open))
+		}
 	}
 	if f.Simplifications > 0 {
 		parts = append(parts, fmt.Sprintf("simplify:%d", f.Simplifications))

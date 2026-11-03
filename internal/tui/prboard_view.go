@@ -1098,10 +1098,10 @@ func workingState(s string) bool {
 }
 
 // findingsCell is the latest review's verdict glyph, its findings by
-// priority ("P1 P2×3", each behind its mark in the nerd mode: "🔴P1"), or
-// "3 open" when it posted none new but earlier ones stay open, and its
-// simplifications ("✂4"): what the review concluded, also where it could
-// only comment. A review that held its approval (FindingsInfo.Held) says
+// priority ("P1 P2×3", each behind its mark in the nerd mode: "🔴P1"), the
+// earlier ones it keeps open after them ("P3×3 +P2"), or "3 open" when it
+// posted none new but earlier ones stay open, and its simplifications
+// ("✂4"): what the review concluded, also where it could only comment. A review that held its approval (FindingsInfo.Held) says
 // "held" in place of "clean", in the yellow of a wait, before whatever else
 // it left ("✔ held ✂2").
 func (p *prbPainter) findingsCell(f *FindingsInfo) cell {
@@ -1122,13 +1122,27 @@ func (p *prbPainter) findingsCell(f *FindingsInfo) cell {
 			c = append(c, seg{" ", lipgloss.Style{}})
 		}
 		listed = true
-		t := p.priorityMark(i) + fmt.Sprintf("P%d", i)
-		if n > 1 {
-			t += p.g.times + strconv.Itoa(n)
-		}
-		c = append(c, seg{t, p.priorityStyle(i)})
+		c = append(c, seg{p.priorityMark(i) + p.priorityCount(i, n), p.priorityStyle(i)})
 	}
 	switch {
+	case listed && f.Open > 0:
+		// Earlier findings stay open beside the new ones: the verdict
+		// counts them too, so each priority follows behind a plus, in its
+		// color without its mark (the plus sets it apart, and the busiest
+		// cell keeps within the column's cap), or their number when the
+		// result gives no priorities.
+		open := cell{}
+		if f.OpenCounts != nil {
+			for i, n := range f.OpenCounts {
+				if n > 0 {
+					open = append(open, seg{" +" + p.priorityCount(i, n), p.priorityStyle(i)})
+				}
+			}
+		}
+		if len(open) == 0 {
+			open = cell{{" +" + strconv.Itoa(f.Open) + " open", vst}}
+		}
+		c = append(c, open...)
 	case !listed && f.Open > 0:
 		// Nothing new, but earlier findings stay open: they decide the
 		// verdict, so say so rather than "clean" beside its glyph.
@@ -1166,6 +1180,15 @@ func (p *prbPainter) priorityMark(i int) string {
 		return m + p.g.gap
 	}
 	return ""
+}
+
+// priorityCount is "P<i>", with "×n" when there are more than one.
+func (p *prbPainter) priorityCount(i, n int) string {
+	t := fmt.Sprintf("P%d", i)
+	if n > 1 {
+		t += p.g.times + strconv.Itoa(n)
+	}
+	return t
 }
 
 func (p *prbPainter) priorityStyle(i int) lipgloss.Style {

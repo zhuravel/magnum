@@ -155,16 +155,17 @@ type prsJSONReview struct {
 }
 
 type prsJSONFindings struct {
-	Counts          [4]int `json:"counts"` // P0, P1, P2, P3 posted
-	Simplifications int    `json:"simplifications"`
-	Fixed           int    `json:"fixed"`
-	Open            int    `json:"open"`
-	OpenProblems    int    `json:"open_problems"` // of open: P0 to P2, or all when their priorities are unknown
-	Answered        int    `json:"answered"`
-	Verdict         string `json:"verdict"` // blocking, non_blocking, clean
-	Posted          string `json:"posted"`  // APPROVE, REQUEST_CHANGES, COMMENT
-	SHA             string `json:"sha"`
-	Held            bool   `json:"held"` // its approval waits for a full pass of the whole PR (approve_after_full_pass)
+	Counts          [4]int  `json:"counts"` // P0, P1, P2, P3 posted
+	Simplifications int     `json:"simplifications"`
+	Fixed           int     `json:"fixed"`
+	Open            int     `json:"open"`
+	OpenProblems    int     `json:"open_problems"`         // of open: P0 to P2, or all when their priorities are unknown
+	OpenCounts      *[4]int `json:"open_counts,omitempty"` // open by priority, P0..P3; absent when the result gives only their number
+	Answered        int     `json:"answered"`
+	Verdict         string  `json:"verdict"` // blocking, non_blocking, clean
+	Posted          string  `json:"posted"`  // APPROVE, REQUEST_CHANGES, COMMENT
+	SHA             string  `json:"sha"`
+	Held            bool    `json:"held"` // its approval waits for a full pass of the whole PR (approve_after_full_pass)
 }
 
 type prsJSONCI struct {
@@ -365,7 +366,7 @@ func prsJSONReviewOf(r tui.ReviewInfo) prsJSONReview {
 
 func prsJSONFindingsOf(f tui.FindingsInfo) prsJSONFindings {
 	return prsJSONFindings{Counts: f.Counts, Simplifications: f.Simplifications, Fixed: f.Fixed, Open: f.Open,
-		OpenProblems: f.OpenProblems, Answered: f.Answered, Verdict: f.Verdict, Posted: f.Posted, SHA: f.SHA, Held: f.Held}
+		OpenProblems: f.OpenProblems, OpenCounts: f.OpenCounts, Answered: f.Answered, Verdict: f.Verdict, Posted: f.Posted, SHA: f.SHA, Held: f.Held}
 }
 
 func prsJSONCIOf(c tui.CIInfo) prsJSONCI {

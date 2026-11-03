@@ -14355,6 +14355,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   judge prompts, the old ones gone), TestSimplifyPromptIsReadOnlyWithFourAnglesAndRemovals (the same in
   claude-simplify), and the 54 judge goldens, the 6 simplify goldens and the retro golden (the areas and
   the risk list only).
+- **The FINDINGS cell names earlier findings still open beside new ones** (2026-11-03). The operator chose
+  it from mockups through the real painter. It amends "The FINDINGS cell counts still-open findings when a
+  review posted nothing new". A re-review posted 3 new P3 findings and kept 1 earlier P2 open. Its verdict was "Fix
+  1 problem before merging", but the board read `● P3×3`. If a review posted new findings, the cell named no
+  earlier ones, and the card said "1 still open" without the priority. The judge's result gives the open
+  findings by priority (`previous_findings.open`, ReviewSummary.OpenCounts), but the board row did not carry
+  them. Now FindingsInfo.OpenCounts carries them. The cell names each open priority after the new ones,
+  behind a plus, in the priority's color and without its mark (`● P3×3 +P2`). The plus sets it apart. With
+  no mark, the busiest cell (`✗ P0 P1 P2×3 P3 +P2 ✂2`) stays within the column's cap in every icon mode. A
+  result with only their number reads `+1 open`. The card says "1 still open (P2)". The printed `magnum prs`
+  FINDINGS says `non-blocking P3:3 +P2:1` (or `+3 open`), and `prs --json` gives `findings.open_counts`.
+  Rejected: `+1 open` for a result with priorities (two more cells and no priority). Also rejected: adding
+  the open findings to the new counts (`● P2 P3×3`). That matches the verdict line, but then the row does
+  not tell new findings from earlier ones. The `magnum status` queue line keeps ` · 3 open` only for a
+  review that posted nothing new, because it shows no new findings either. Tests, failing first:
+  TestTheFindingsCellNamesEarlierFindingsStillOpenBesideNewOnes (unicode and nerd, the color of an open
+  priority, the fallback), TestTheCardNamesThePrioritiesOfEarlierFindingsStillOpen,
+  TestPRsSourceCarriesThePrioritiesOfEarlierFindingsStillOpen and the new cases of
+  TestPRsTableShowsTheSnoozeAndTheOpenFindings. The icon fixtures and TestPRBoardShowsFindingsAndPostsAVerdict
+  now show the open findings after the new ones.
 
 ## Learned rules
 
