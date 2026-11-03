@@ -106,6 +106,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/github`, `identity`, `herdr`, `gitx`, `mysqlx`, `execx` | the outside world, each behind a fake |
 | `internal/webhooks` | magnum-relay's journal of the GitHub App's deliveries, read with curl (the token on stdin): `[webhooks]` shadow mode's source |
 | `internal/jira` | the PR's Jira issue a round hands the judge as `ticket.md`, read with curl (the token on stdin): `[jira]`'s client |
+| `internal/factory` | the factory daemon that writes code from a Jira key or a prompt: its own registry (the subdirectory registry, with its migrations), its runtime and its stages; configured by `[factory]` (config/factory.go), whose roles and prompts (`prompts/factory-*.md`) it launches |
 | `internal/launchd`, `reveal` | the LaunchAgent; bringing the herdr client to the front of the terminal |
 | `internal/paths`, `fsx`, `textx` | the on-disk layout; the shared file (atomic write) and text helpers, leaves on the stdlib |
 | `internal/relay`, `cmd/magnum-relay`, `deploy/relay` | the webhook relay, a separate internet-facing service (stdlib and SQLite only): signed receiver, journal, listing; its Dockerfile, compose file and deploy guide |

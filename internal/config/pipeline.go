@@ -650,6 +650,7 @@ func (c *Config) Normalize() {
 		c.Roles = DefaultRoles()
 	}
 	c.Roles = c.normalizedRoles(c.Roles)
+	c.Factory.Roles = c.normalizedRoles(c.Factory.Roles)
 }
 
 // cloneOrNil copies s; an empty list (`args = []`) becomes nil, so a block

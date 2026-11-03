@@ -39,6 +39,7 @@ func (c *Config) Warnings() []string {
 	out = append(out, c.fixRoleWarnings()...)
 	out = append(out, c.webhooksWarnings()...)
 	out = append(out, c.jiraWarnings()...)
+	out = append(out, c.factoryWarnings()...)
 	return out
 }
 
@@ -264,6 +265,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateNotes()...)
 	errs = append(errs, c.validateWebhooks()...)
 	errs = append(errs, c.validateJira()...)
+	errs = append(errs, c.validateFactory()...)
 	switch c.GitHub.Transport {
 	case "gh", "direct":
 	default:
@@ -801,6 +803,9 @@ func (c *Config) validatePipeline() []error {
 			errs = append(errs, fmt.Errorf("role %s: output %q is already written by role %s", r.Name, r.ReportFile(), owner))
 		}
 		outputs[r.ReportFile()] = r.Name
+		if r.Why != "" || r.Doing != "" {
+			errs = append(errs, fmt.Errorf("role %s: why and doing are for [[factory.role]] only (the factory's screen names its agents by them)", r.Name))
+		}
 		errs = append(errs, c.validateRole(r, kinds, ids)...)
 	}
 	errs = append(errs, validateAfter(roles)...)

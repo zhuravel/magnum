@@ -3,7 +3,8 @@
 # config.defaults.toml (embedded in the binary); set one here only to change it. App private keys are files
 # next to the config (~/.config/magnum/keys/, chmod 600). Your config's [[watch]], [[identity]], [[pool]] and
 # [[repo]] blocks are appended to the defaults, any key it sets under [daemon], [herdr], [terminal], [board],
-# [github], [pipeline], [usage], [triage], [learn], [notes], [webhooks], [jira] or [kinds.<name>] overrides the default, its [[role]] blocks
+# [github], [pipeline], [usage], [triage], [learn], [notes], [webhooks], [jira], [factory] or [kinds.<name>] overrides the default
+# (the factory's roles and kinds merge by name, see config.defaults.toml), its [[role]] blocks
 # override the role of the same name key by key (other names are appended), and its [spend.<level>] tables (the
 # models and efforts of a [pipeline] spend level, per role) merge by level, role and key. `magnum roles` prints the
 # effective roles and `magnum config` validates the result.
@@ -173,3 +174,64 @@ databases = [
 #
 #   [repo.env]                            # {slug} = magnum-pr-<N>, {path} = worktree, {clone} = main clone
 #   DATABASE_NAME = "your_app_{slug}"
+
+# The factory (`magnum factory`) works in a repository only when a [[factory.repo]] declares it. Its roles, kinds
+# of task and their stages are in config.defaults.toml; the repository's copies, commands, precheck and staging
+# environments are yours. The repository needs a [[watch]]: the local review runs the review roles of its watch.
+# A copy is a checkout of its own, never a second [[pool]] of the repository: its copy_name and copies must not
+# render a [[pool]] slot_name or slot_path.
+#
+# [[factory.repo]]
+# repo = "talkable/talkable"
+# base = "master"                          # tasks start here and the PR targets it; the factory never merges into it
+# main_clone = "~/Projects/talkable"
+# copies = "~/Projects/talkable.factory{n}"   # copy {n}'s checkout
+# copy_name = "factory{n}"                 # its name (default factory{n})
+# max_copies = 4                           # default: [factory] max_active
+# min_free_disk_gb = 15                    # default: [daemon] min_free_disk_gb
+# copy_files = ["mise.local.toml"]         # as on [[pool]]: copied from the main clone when present
+# strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+# setup = ["bin/worktree-setup"]           # after a copy is created
+# post_checkout = ["pnpm install --frozen-lockfile"]
+# reset_db = ["bin/rails db:schema:load"]
+# databases = ["app_development__{slug}", "app_test__{slug}"]   # named like a pool's: the suffix is how copies' databases are told
+# installs = [                             # run when the lock file differs from the copy's last install
+#   { lock = "Gemfile.lock", run = "bundle install --jobs 4" },
+#   { lock = "pnpm-lock.yaml", run = "pnpm install --frozen-lockfile" },
+# ]
+# server = "bin/worktree-run"              # starts the copy's local server
+# env = { WT_BRANCH = "{slot}" }
+# reviewer = "your-reviewer-login"         # requested as the PR's reviewer once CI is green (a later milestone)
+# error_skill = "error-tracker"            # the read-only skill an investigator reads the ticket's error through
+# ghost_marker = "<what a migration names the gh-ost environments with>"   # section 8.4 of the design: the migration-safety lint
+# table_stats = "db/table_stats.json"      # the file (in the checkout) that lists each table's row count
+# large_table_rows = 10000000              # a table this large needs gh-ost or an online algorithm
+# consoles = ["kubectl exec", "bin/remote-console"]   # remote consoles that no factory command and no agent runs
+#
+#   [factory.repo.precheck]                # after the writer's last commit, and after each fix of the local review
+#   lint = ["bundle exec rubocop {files}", "yarn eslint {files}"]   # {files}: the changed files, shell-quoted; {base}: the base
+#   specs = "bin/impact-specs {files}"     # the specs the change affects, with a baseline at the base
+#   jest = "yarn jest --findRelatedTests {files}"
+#   migrations = ["bin/rails db:migrate:redo"]
+#   cap = "10m"                            # a precheck stops after this long (default 10m)
+#   skip_specs_for_kinds = ["chore"]       # a gem upgrade runs no specs
+#
+#   [[factory.repo.staging]]               # staging environments: a branch the factory merges into after your approval
+#   name = "alpha"
+#   branch = "staging-alpha"
+#   qa = "qa"                              # the skill that tests it ("" = no QA)
+#
+#   [[factory.repo.staging]]
+#   name = "beta"
+#   branch = "staging-beta"                # merges and deploys, no QA
+#
+#   [[factory.repo.staging]]
+#   name = "gamma"
+#   branch = "staging-gamma"
+#   qa = "qa"
+#   after = "alpha"                        # QA here starts after alpha passes
+#
+# [factory]                                # a few keys you may set (the rest, with their meaning, are in config.defaults.toml)
+# max_active = 3                           # tasks with live agents or a held copy at once
+# [factory.local_review]
+# cycles = 3                               # at most this many local review rounds

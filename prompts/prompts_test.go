@@ -8,7 +8,8 @@ import (
 // defaults lists the embedded default prompts.
 var defaults = []string{
 	"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh",
-	"fix.md", "judge-continue.md", "judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md",
+	"factory-cause.md", "factory-critic.md", "factory-history.md", "factory-judge.md", "factory-points.md", "factory-repro.md",
+	"factory-scope.md", "factory-writer.md", "fix.md", "judge-continue.md", "judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md",
 	"model-fallback.md", "notes-critic.md", "notes-curate.md", "retro.md", "skill-edit.md", "triage.md", "whiteboard.md",
 }
 

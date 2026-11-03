@@ -18,6 +18,9 @@ func TestEveryNegativeDurationIsRefused(t *testing.T) {
 [[repo]]
 repo = "talkable/talkable"
 ready_timeout = "5m"
+`+factoryRepoToml+`
+[factory.repo.precheck]
+cap = "5m"
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +44,8 @@ ready_timeout = "5m"
 		}
 	})
 	for _, want := range []string{"pool.idle_remove_after", "pool.ready_timeout", "repo.ready_timeout", "watch.related_lookback",
-		"daemon.poll_interval", "pipeline.judge_fresh_after", "role.timeout", "learn.settle", "board.recent_closed"} {
+		"daemon.poll_interval", "pipeline.judge_fresh_after", "role.timeout", "learn.settle", "board.recent_closed",
+		"factory.observe", "factory.poll", "factory.human_cooldown", "precheck.cap"} {
 		if !slices.Contains(keys, want) {
 			t.Errorf("no %s among the duration keys walked: %v", want, keys)
 		}

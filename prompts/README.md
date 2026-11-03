@@ -49,6 +49,14 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `claude-simplify.md` | claude-simplify | role |
 | `fix.md` | the fix role (claude-fix), which fixes the findings of magnum's review of your own PR (the fix job) | role |
 | `whiteboard.md` | the whiteboard role (claude-whiteboard), which writes the dev.fast Whiteboard of the head magnum reviewed once the review posts, with the review as its last section (the whiteboard job) | role |
+| `factory-repro.md` | `fx-repro`, the factory's reproducer of a bug (`[[factory.role]]`) | factory |
+| `factory-cause.md` | `fx-cause` and its Claude fallback `fx-cause-claude`, which find a bug's cause on their own | factory |
+| `factory-history.md` | `fx-history`, which reads the history of the code a fix will change | factory |
+| `factory-points.md` | `fx-points`, which tests each point of a feature's ticket against the code | factory |
+| `factory-scope.md` | `fx-scope`, which finds every place a chore touches | factory |
+| `factory-judge.md` | `fx-judge`, which merges the findings into `report.md` and the questions | factory |
+| `factory-critic.md` | `fx-critic` and its Claude fallback `fx-critic-claude`, which criticize the plan of a wide change | factory |
+| `factory-writer.md` | `fx-writer`, which writes the change test first | factory |
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
 | `retro.md` | the retro's agent, which classifies what other reviewers said about a closed pull request ([learn]) | retro |
@@ -77,7 +85,9 @@ the judge data, every other session role gets the role data, and a shell role's 
 `retro.md` the retro data (`internal/engine/retro.go`), `notes-curate.md` the curation data
 (`internal/engine/notes_curate.go`), `notes-critic.md` the critic data (`internal/engine/notes_critic.go`)
 and `skill-edit.md` the skill edit data
-(`internal/engine/learn_edit.go`).
+(`internal/engine/learn_edit.go`). The `factory-*.md` prompts are the factory's: each `[[factory.role]]`
+names one, and the factory renders it with its own data (paths and commands, never ticket text), not with
+the three shapes above.
 
 ## Shared blocks of the judge prompts (`judge-shared.md`)
 

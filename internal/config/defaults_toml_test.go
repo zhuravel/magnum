@@ -47,6 +47,9 @@ func TestGoDefaultsEqualTheEmbeddedDefaultsFile(t *testing.T) {
 			if !key.IsExported() || name == "" || name == "-" || !md.IsDefined(section, name) {
 				continue
 			}
+			if section == "factory" && name == "role" {
+				continue // normalized, like the top-level roles: TestFactoryGoDefaultsEqualTheEmbeddedFile
+			}
 			checked++
 			got, want := goSection.Field(j).Interface(), fileSection.Field(j).Interface()
 			if !reflect.DeepEqual(got, want) {

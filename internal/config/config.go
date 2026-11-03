@@ -73,6 +73,7 @@ type Config struct {
 	Board      Board      `toml:"board"`
 	Webhooks   Webhooks   `toml:"webhooks"`
 	Jira       Jira       `toml:"jira"`
+	Factory    Factory    `toml:"factory"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -826,6 +827,9 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	// Kinds and roles are merged key by key below; decoding into the
 	// defaults would reuse their slice elements and replace whole map values.
 	cfg.Kinds, cfg.Roles = nil, nil
+	// [factory] is merged the same way (mergeFactory), onto the built-in
+	// values, which Normalize has not touched yet.
+	cfg.Factory = Factory{}
 	name := file
 	var md toml.MetaData
 	var data []byte // nil: read file
@@ -848,6 +852,13 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	if err != nil {
 		return nil, err
 	}
+	fxRoles, err := readFactoryRoles(name, data, md)
+	if err != nil {
+		return nil, err
+	}
+	decoded := cfg.Factory
+	cfg.Factory = DefaultFactory()
+	cfg.overlayFactory(md, decoded, fxRoles)
 	cfg.Sources = []string{name}
 	var over *layer
 	if user := layout.UserConfig; user != "" && (opts.UserData != nil || fsx.Exists(user)) && !opts.NoOverlay {
@@ -879,7 +890,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 
 // applyOverlay merges the user config: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [github], [pipeline], [usage], [triage], [learn], [notes], [board], [webhooks] and [jira] override the committed values key by key,
+// [github], [pipeline], [usage], [triage], [learn], [notes], [board], [webhooks], [jira] and [factory] override the committed values key by key,
 // and [spend.<level>] tables merge into the base's by level, role and key (mergeSpendLevels).
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
@@ -916,7 +927,22 @@ func (c *Config) applyOverlay(path string, data []byte) (*layer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
 	}
+	fxRoles, err := readFactoryRoles(path, data, md)
+	if err != nil {
+		return nil, fmt.Errorf("config overlay %s: %w", path, err)
+	}
+	c.overlayFactory(md, o.Factory, fxRoles)
 	return l, nil
+}
+
+// overlayFactory lays one layer's [factory] (src, decoded from the layer
+// whose metadata is md; rawRoles are its [[factory.role]] tables as written)
+// over c.Factory: every key the layer defines replaces the value
+// (overlaySection), and mergeFactory then puts back what merges instead.
+func (c *Config) overlayFactory(md toml.MetaData, src Factory, rawRoles []map[string]any) {
+	prev := c.Factory
+	overlaySection(md, "factory", &c.Factory, &src)
+	c.mergeFactory(md, prev, src, rawRoles)
 }
 
 // UserSum is the SHA-256 of the user layer's bytes as Load read them (the
@@ -1002,6 +1028,7 @@ func Defaults() *Config {
 		Notes:    DefaultNotes(),
 		Board:    Board{RecentClosed: Duration{24 * time.Hour}, Shimmer: true},
 		Webhooks: Webhooks{Mode: WebhooksOff, Wait: Duration{25 * time.Second}, StaleAfter: Duration{90 * time.Second}},
+		Factory:  DefaultFactory(),
 	}
 	c.Normalize()
 	return c
@@ -1034,6 +1061,7 @@ func (c *Config) expand() {
 	}
 	c.Webhooks.TokenFile = c.configPath(c.Webhooks.TokenFile)
 	c.Jira.TokenFile = c.configPath(c.Jira.TokenFile)
+	c.expandFactory()
 	for i := range c.Watches {
 		c.Watches[i].CloneRoot = paths.Expand(c.Watches[i].CloneRoot)
 		if c.Watches[i].CloneRoot == "" {

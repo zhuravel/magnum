@@ -3767,6 +3767,42 @@ const (
     Built-in critic values.
 
 const (
+	FactoryStageAgents   = "agents"
+	FactoryStageGate     = "gate"
+	FactoryStageReview   = "review"
+	FactoryStageDecision = "decision"
+	FactoryStageEffect   = "effect"
+
+	FactoryEndFindings = "findings"
+	FactoryEndReport   = "report"
+	FactoryEndCritic   = "critic"
+	FactoryEndProof    = "proof"
+	FactoryEndClean    = "clean"
+	FactoryEndPRBody   = "pr_body"
+	FactoryEndPR       = "pr"
+
+	FactoryGateNoOpenQuestions = "no_open_questions"
+	FactoryGateReproduced      = "reproduced"
+
+	FactoryDecisionReadyPush = "ready_push"
+
+	FactoryEffectPublish = "publish"
+
+	FactoryWhenWide = "wide"
+)
+    The stage types, end facts, gates, decisions, effects and conditions a
+    FactoryStage may name.
+
+const (
+	DefaultPrecheckCap   = 10 * time.Minute
+	DefaultFactoryBase   = "master"
+	DefaultFactoryCopies = "factory{n}"
+	MaxFactoryCycles     = 10
+)
+    Factory defaults that a repository without the key takes (expand), and the
+    most rounds of the local review.
+
+const (
 	ContextUsedGroup = "used" // the percent of the context used
 	ContextLeftGroup = "left" // the percent left
 )
@@ -4158,6 +4194,16 @@ const StakesMax = 300
 
 VARIABLES
 
+var (
+	FactoryStageTypes = []string{FactoryStageAgents, FactoryStageGate, FactoryStageReview, FactoryStageDecision, FactoryStageEffect}
+	FactoryEndFacts   = []string{FactoryEndFindings, FactoryEndReport, FactoryEndCritic, FactoryEndProof, FactoryEndClean, FactoryEndPRBody, FactoryEndPR}
+	FactoryGates      = []string{FactoryGateNoOpenQuestions, FactoryGateReproduced}
+	FactoryDecisions  = []string{FactoryDecisionReadyPush}
+	FactoryEffects    = []string{FactoryEffectPublish}
+)
+    FactoryStageTypes, FactoryEndFacts, FactoryGates, FactoryDecisions and
+    FactoryEffects list what a stage may name, in the order the docs give.
+
 var BadgeColors = []string{"red", "green", "yellow", "blue", "magenta", "cyan", "gray", "grey"}
     BadgeColors are the colors a badge may ask for: the board's ANSI colors.
 
@@ -4189,6 +4235,14 @@ func DefaultCriticModel(kind string) string
     choosing a model: fable, the strongest Claude model (a second opinion on the
     curator's work), for claude, and "" for every other kind, whose CLI would
     not know a Claude model name.
+
+func DefaultFactoryKinds() map[string]FactoryKind
+    DefaultFactoryKinds are the built-in kinds of task. They differ in what
+    investigates (the bug's reproducer, cause and history, the feature's points,
+    the chore's scope) and in the bug's gate on a reproduction; the rest is the
+    same: a judge, a critic for a wide plan, one batch of questions, the writer,
+    the local review, the PR body, your decision, and the publish that only the
+    decision leads to.
 
 func DefaultKinds() map[string]Kind
     DefaultKinds returns the built-in kinds (fresh copies):
@@ -4360,6 +4414,7 @@ type Config struct {
 	Board      Board      `toml:"board"`
 	Webhooks   Webhooks   `toml:"webhooks"`
 	Jira       Jira       `toml:"jira"`
+	Factory    Factory    `toml:"factory"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -4495,6 +4550,13 @@ func (c *Config) EditorRole() Role
     [learn] editor_kind in session mode with its editor_model, editor_effort,
     editor_args, editor_prompt, editor_timeout and editor_fallback_models,
     writing changes.json, normalized like a configured role.
+
+func (c *Config) FactoryRepo(full string) (FactoryRepo, bool)
+    FactoryRepo returns the [[factory.repo]] for owner/name (case ignored).
+
+func (c *Config) FactoryRole(name string) (Role, bool)
+    FactoryRole returns the factory role named name (an exact name: a factory
+    role takes no alias).
 
 func (c *Config) FixCyclesFor(w *Watch) int
     FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
@@ -4967,6 +5029,200 @@ type Duration struct{ time.Duration }
     "2h") with whole days allowed in front ("30d", "1d12h").
 
 func (d *Duration) UnmarshalText(b []byte) error
+
+type Factory struct {
+	// MaxActive is how many tasks may have live agents or a held copy at
+	// once; a task over it waits queued.
+	MaxActive int `toml:"max_active"`
+	// MemoryGateSwap is the swap use, in percent of the swap file, at which
+	// new tasks wait for memory (the same reading as `magnum doctor`);
+	// 0 = no gate.
+	MemoryGateSwap int `toml:"memory_gate_swap"`
+	// HeavyStages is how many heavy stages run at once across tasks (a local
+	// review round, local QA or a copy's server). At least 1.
+	HeavyStages int `toml:"heavy_stages"`
+	// HerdrSocket is the socket of the herdr session the factory's panes
+	// live in; "" = the named session's own socket. Absolute after ~
+	// expands.
+	HerdrSocket string `toml:"herdr_socket"`
+	// HerdrSession is the name of that herdr session (`herdr --session
+	// <name>`): a separate server with its own windows, apart from the
+	// panes of magnum's reviews.
+	HerdrSession string `toml:"herdr_session"`
+	// Observe is how often the factory reads its panes; Poll how often it
+	// reads CI and the staging branches' tips from GitHub.
+	Observe Duration `toml:"observe"`
+	Poll    Duration `toml:"poll"`
+	// HumanCooldown is how long the factory leaves a pane alone after you
+	// type into it.
+	HumanCooldown Duration `toml:"human_cooldown"`
+
+	// LocalReview is magnum's review loop on the change before the PR.
+	LocalReview FactoryLocalReview `toml:"local_review"`
+	// Repos are the repositories the factory writes code in
+	// ([[factory.repo]]), appended from every layer. A repository needs a
+	// [[watch]] that covers it: the first local round runs the review roles
+	// of that watch.
+	Repos []FactoryRepo `toml:"repo"`
+	// Roles are the factory's agents ([[factory.role]]): session roles that
+	// each carry a why and a doing (Role.Why, Role.Doing).
+	Roles []Role `toml:"role"`
+	// CodexFallback maps a factory role that runs on Codex to the factory
+	// role of the Claude kind that takes its work after a Codex refusal.
+	CodexFallback map[string]string `toml:"codex_fallback"`
+	// Kinds are the kinds of task ([factory.kinds.<name>]) and their stages.
+	Kinds map[string]FactoryKind `toml:"kinds"`
+	// KindByJiraType maps a Jira issue type to a kind of task, KindWords a
+	// kind of task to the words of a free prompt that suggest it.
+	KindByJiraType map[string]string   `toml:"kind_by_jira_type"`
+	KindWords      map[string][]string `toml:"kind_words"`
+}
+    Factory is [factory]: the factory daemon that writes code from a Jira key
+    or a prompt (internal/factory). The code knows a few generic stage types;
+    everything specific to a repository or a team is configuration, as magnum's
+    own roles and kinds are. config.defaults.toml ships the roles, the kinds of
+    task and their stages, and names no repository and no staging environment
+    (those are [[factory.repo]] blocks of the user's config).
+
+    The user config merges into the built-in values key by key where that
+    is safe: [factory.kinds.<name>] replaces that kind of task and keeps the
+    others, a [[factory.role]] named like a role overrides the keys it sets
+    (any other name is appended), [factory.local_review] and the three tables
+    codex_fallback, kind_by_jira_type and kind_words merge entry by entry,
+    and [[factory.repo]] blocks are appended. The other keys replace the value.
+
+func DefaultFactory() Factory
+    DefaultFactory returns the built-in [factory] values, the ones
+    config.defaults.toml writes out (TestFactoryGoDefaultsEqualTheEmbeddedFile
+    holds the two together). The roles are not normalized: Normalize does.
+
+type FactoryInstall struct {
+	Lock string `toml:"lock"`
+	Run  string `toml:"run"`
+}
+    FactoryInstall is an `installs` entry of a repository: Run runs when the
+    file Lock differs from the copy's last install.
+
+type FactoryKind struct {
+	Stages []FactoryStage `toml:"stages"`
+}
+    FactoryKind is a kind of task: the stages it runs, in order.
+
+type FactoryLocalReview struct {
+	// Cycles is the most rounds the loop runs (1 to MaxFactoryCycles).
+	Cycles int `toml:"cycles"`
+	// LaterWithout names the review roles that run in round 1 only.
+	LaterWithout []string `toml:"later_without"`
+}
+    FactoryLocalReview is [factory.local_review]. Round 1 runs the review roles
+    of the repository's [[watch]]; later rounds run without LaterWithout.
+
+type FactoryPrecheck struct {
+	Lint       []string `toml:"lint"`
+	Specs      string   `toml:"specs"`
+	Jest       string   `toml:"jest"`
+	Migrations []string `toml:"migrations"`
+	// Cap stops a precheck that runs this long (default DefaultPrecheckCap).
+	Cap Duration `toml:"cap"`
+	// SkipSpecsForKinds names the kinds of task whose precheck skips the
+	// specs (a gem upgrade).
+	SkipSpecsForKinds []string `toml:"skip_specs_for_kinds"`
+}
+    FactoryPrecheck is [factory.repo.precheck]: what runs after the writer's
+    last commit and after each fix of the local review. A command takes {files}
+    (the changed files, shell-quoted) and {base}.
+
+type FactoryRepo struct {
+	Repo string `toml:"repo"` // owner/name
+	// Base is the branch tasks start from and the PR targets (default
+	// master). The factory never merges into it.
+	Base      string `toml:"base"`
+	MainClone string `toml:"main_clone"`
+	// Copies is the path of copy {n}; CopyName its name (default
+	// factory{n}). Neither may render a name or path a [[pool]] renders.
+	Copies   string `toml:"copies"`
+	CopyName string `toml:"copy_name"`
+	// MaxCopies is how many copies exist at most (default [factory]
+	// max_active); MinFreeDiskGB the free disk a copy needs (default
+	// [daemon] min_free_disk_gb).
+	MaxCopies     int `toml:"max_copies"`
+	MinFreeDiskGB int `toml:"min_free_disk_gb"`
+	// Setup, Teardown, PostCheckout and ResetDB are the commands of a
+	// copy's life, as a [[pool]] has them.
+	Setup        []string `toml:"setup"`
+	Teardown     []string `toml:"teardown"`
+	PostCheckout []string `toml:"post_checkout"`
+	ResetDB      []string `toml:"reset_db"`
+	// Installs run Run when Lock differs from the one the copy last
+	// installed.
+	Installs []FactoryInstall `toml:"installs"`
+	// Server is the command that starts a copy's local server.
+	Server string `toml:"server"`
+	// Env is the copy's environment; Databases its databases, named like a
+	// pool's (DatabaseSuffix).
+	Env       map[string]string `toml:"env"`
+	Databases []string          `toml:"databases"`
+	CopyFiles []string          `toml:"copy_files"`
+	StripEnv  []string          `toml:"strip_env"`
+	// Reviewer is the GitHub login the factory requests as the PR's
+	// reviewer (milestone 2).
+	Reviewer string          `toml:"reviewer"`
+	Precheck FactoryPrecheck `toml:"precheck"`
+	// ErrorSkill is the read-only error-tracker skill an investigator reads
+	// the ticket's error through. GhostMarker is what a migration names the
+	// environments with, where a person changes the table with gh-ost;
+	// TableStats the file (relative to the checkout) that lists the size of
+	// each table, and LargeTableRows the row count from which a table is
+	// large (a change to it needs gh-ost or an online algorithm). Consoles
+	// are the remote console commands that no factory command runs. None has
+	// a default.
+	ErrorSkill     string   `toml:"error_skill"`
+	GhostMarker    string   `toml:"ghost_marker"`
+	TableStats     string   `toml:"table_stats"`
+	LargeTableRows int64    `toml:"large_table_rows"`
+	Consoles       []string `toml:"consoles"`
+	// Staging are the staging environments, in the order they are listed.
+	Staging []FactoryStaging `toml:"staging"`
+}
+    FactoryRepo is a [[factory.repo]]: a repository the factory writes code in,
+    with the copies of its checkout the tasks work in. The copies are a block of
+    their own, never a second [[pool]] of the repository (Pool turns them into
+    the Pool the slot code provisions).
+
+func (r FactoryRepo) Pool() Pool
+    Pool is the repository's copies as the Pool the slot code provisions:
+    slots named CopyName at Copies, at most MaxCopies of them, none kept ready
+    (Min 0), the commands and databases the repository sets. The slices and the
+    map are copies.
+
+type FactoryStage struct {
+	Name     string   `toml:"name"`
+	Type     string   `toml:"type"`
+	Roles    []string `toml:"roles"`
+	End      string   `toml:"end"`
+	Gate     string   `toml:"gate"`
+	Decision string   `toml:"decision"`
+	Effect   string   `toml:"effect"`
+	When     string   `toml:"when"`
+}
+    FactoryStage is one stage of a kind of task. Its Type picks the code that
+    runs it and which of the other fields it takes: an agents stage launches
+    Roles in parallel and ends when its End fact holds; a gate waits until
+    its Gate holds; a review stage runs the local review loop (End "clean");
+    a decision waits for your Decision; an effect does its Effect (End "pr").
+    When "wide" skips the stage unless the plan touches 3 or more files,
+    the database or security.
+
+type FactoryStaging struct {
+	Name   string `toml:"name"`
+	Branch string `toml:"branch"`
+	QA     string `toml:"qa"`
+	After  string `toml:"after"`
+}
+    FactoryStaging is a `staging` entry of a repository: an environment with
+    a branch the factory merges into after your approval. QA names the skill
+    that tests it ("" = no QA); After the environment whose QA must pass first.
+    The first milestone reads none of it, but it validates.
 
 type FooterData struct {
 	SHA    string // the reviewed commit
@@ -5989,6 +6245,14 @@ type Role struct {
 	// triage model ([triage]; Removable). A role without one is never
 	// removed from a round, and neither is the judge.
 	Summary string `toml:"summary"`
+	// Why and Doing are the words of a [[factory.role]] (Factory.Roles) that
+	// the factory's screen names its agent by: Doing is what the agent does
+	// now ("finding the cause") and Why the reason it exists ("find the
+	// cause on its own, apart from the others"). A factory role needs both,
+	// one line each; a [[role]] of the review pipeline takes neither
+	// (Validate refuses them).
+	Why   string `toml:"why"`
+	Doing string `toml:"doing"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
 	// A fix or whiteboard role has none: it stays "" and validation refuses
 	// a value.
@@ -6131,6 +6395,10 @@ type Role struct {
     the base (config.defaults.toml, or a --config file) replaces the built-in
     list; the user config [[role]] blocks merge into it by name (or are
     appended).
+
+func DefaultFactoryRoles() []Role
+    DefaultFactoryRoles are the factory's built-in agents. The prompts are the
+    factory-*.md files of package prompts.
 
 func DefaultRoles() []Role
     DefaultRoles returns the built-in roles in display order (fresh copies,

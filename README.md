@@ -3364,6 +3364,108 @@ owners = ["talkable"]                # the watch owners the App is installed on;
   poll, or when no page came within `stale_after`; the daemon writes a `webhooks.unhealthy` event when a
   kind of failure starts and `webhooks.healthy` when the pages come again.
 
+### Factory: writing code from a Jira key or a prompt
+
+magnum reviews PRs; the factory is its second half: it takes a Jira key or a free prompt, investigates with
+several agents, asks you the questions no agent can answer in one batch, has one writer agent write the
+change test first, runs magnum's own review on the change locally, and then, on your `y`, pushes the
+approved head and opens a PR ready for review. The factory never merges into the base branch. The code
+knows a few generic stage types; everything specific to a repository or a team is configuration, as the
+review pipeline's roles and kinds are. This section documents the `[factory]` keys; the defaults in
+[config.defaults.toml](config.defaults.toml) ship the roles, the kinds of task and their stages, and name no
+repository and no staging environment, so the factory works on none until your config declares a
+`[[factory.repo]]` ([config.full.example.toml](config.full.example.toml) shows one).
+
+```toml
+[factory]
+max_active = 3                       # tasks with live agents or a held copy at once; the next waits, queued
+memory_gate_swap = 80                # new tasks wait while the swap is this many percent used (0 = no gate)
+heavy_stages = 1                     # heavy stages at once across tasks (a local review round, local QA, a server)
+herdr_session = "factory"            # the herdr session of the factory's panes: its own windows, apart from reviews
+observe = "10s"                      # how often it reads its panes
+poll = "45s"                         # how often it reads CI and the staging branches' tips
+human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
+
+[factory.local_review]
+cycles = 3                           # at most 3 rounds of magnum's review on the change before the PR
+later_without = ["claude-simplify"]  # round 1 runs the review roles of the repository's [[watch]]; later ones skip these
+
+[[factory.repo]]
+repo = "talkable/talkable"
+main_clone = "~/Projects/talkable"
+copies = "~/Projects/talkable.factory{n}"   # copy {n}'s checkout: its own block, never a second [[pool]] of the repo
+max_copies = 4
+setup = ["bin/worktree-setup"]
+installs = [{ lock = "Gemfile.lock", run = "bundle install --jobs 4" }]
+reviewer = "rev-ann"                 # requested as the PR's reviewer once CI is green (a later milestone)
+
+[factory.repo.precheck]              # after the writer's last commit, and after each fix of the local review
+lint = ["bundle exec rubocop {files}"]
+specs = "bin/impact-specs {files}"
+cap = "10m"
+skip_specs_for_kinds = ["chore"]
+
+[[factory.repo.staging]]
+name = "alpha"
+branch = "staging-alpha"
+qa = "qa"
+
+[[factory.repo.staging]]
+name = "beta"
+branch = "staging-beta"
+after = "alpha"                      # QA on beta starts after alpha passes
+
+[factory.kinds.bug]                  # replaces the bug kind (the feature and chore kinds stay as they are)
+stages = [
+  { name = "investigate", type = "agents", roles = ["fx-repro", "fx-cause"], end = "findings" },
+  { name = "judge", type = "agents", roles = ["fx-judge"], end = "report" },
+  { name = "questions", type = "gate", gate = "no_open_questions" },
+  { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
+  { name = "local_review", type = "review", end = "clean" },
+  { name = "ready", type = "decision", decision = "ready_push" },
+  { name = "publish", type = "effect", effect = "publish", end = "pr" },
+]
+```
+
+- **Merging.** Your config's `[factory]` keys replace the built-in values. A `[[factory.role]]` named like a
+  role overrides the keys it sets (any other name is appended), a `[factory.kinds.<name>]` replaces that
+  kind of task and keeps the others, `[factory.local_review]` and the `codex_fallback`, `kind_by_jira_type`
+  and `kind_words` tables merge entry by entry, and `[[factory.repo]]` blocks are appended.
+- **Limits and intervals.** `max_active`, `heavy_stages` and `[factory.local_review] cycles` (1 to 10) are
+  at least 1; `memory_gate_swap` is 0 to 100; `observe` and `poll` are positive and `human_cooldown` is not
+  negative. `herdr_socket` is empty (the named session's own socket) or an absolute path.
+- **Roles.** A `[[factory.role]]` is a session role like a review role (`kind`, `model`, `effort`, `prompt`,
+  `timeout`, `args`, `env`, `fallback_models`; it is checked the same way) with two more keys the factory's
+  screen names its agent by, each one line: `doing` is what the agent does now (`finding the cause`) and
+  `why` the reason it exists (`find the cause on its own, apart from the others`). A review `[[role]]` takes
+  neither. A factory role is never a judge, fix or whiteboard role, takes no `identity` (the agents act as
+  you) and no `aliases`, and its `prompt` is a file of [prompts](prompts/README.md) (`factory-*.md`). A role
+  on Codex needs an entry in `codex_fallback`, the Claude role that takes its work after a Codex refusal;
+  `magnum config` warns about one without it.
+- **Kinds of task and stages.** A kind lists its stages in order; each has a `name` and a `type`.
+  An `agents` stage launches its `roles` in parallel and ends when its `end` fact holds (`findings`,
+  `report`, `critic`, `proof` or `pr_body`: files and results the factory checks, never a "done" message).
+  A `gate` waits until its `gate` holds (`no_open_questions`, or `reproduced` for a bug). A `review` stage
+  runs the local review (`end = "clean"`). A `decision` waits for you (`ready_push`). An `effect` does its
+  `effect` (`publish`, `end = "pr"`). `when = "wide"` skips a stage unless the plan touches 3 or more files,
+  the database or security. A `publish` effect must come after a `ready_push` decision. `kind_by_jira_type`
+  maps a Jira issue type to a kind and `kind_words` a kind to the words of a prompt that suggest it.
+- **Repositories.** A `[[factory.repo]]` needs `repo` (`owner/name`), `main_clone`, `copies` (with `{n}`) and a
+  `[[watch]]` that covers it. `base` (default `master`), `copy_name` (default `factory{n}`), `max_copies`
+  (default `max_active`) and `min_free_disk_gb` (default `[daemon]`'s) have defaults. `copy_name` and `copies`
+  must not render a name or path a `[[pool]]` renders. `setup`, `teardown`, `post_checkout`, `reset_db`,
+  `copy_files`, `strip_env`, `env` and `databases` are a pool's keys; `installs` runs its `run` when its
+  `lock` file differs from the copy's last install; `server` starts the copy's local server. `reviewer` is a
+  GitHub login. `error_skill` (the read-only error-tracker skill), `ghost_marker`, `table_stats` and
+  `large_table_rows` (the gh-ost rule for migrations) and `consoles` (remote consoles that no factory command
+  runs) have no default: they are yours.
+- **Precheck.** `lint` and `migrations` are lists of commands, `specs` and `jest` one command each; a command
+  takes `{files}` (the changed files, shell-quoted) and `{base}`. A precheck stops after `cap` (default
+  `10m`), and `skip_specs_for_kinds` names the kinds of task that run no specs (a gem upgrade).
+- **Staging.** Each `[[factory.repo.staging]]` has a `name`, a `branch` (never the base), an optional `qa`
+  skill and an optional `after`, another environment of the repository whose QA must pass first (no cycles).
+  The first milestone reads none of it, but `magnum config` validates it.
+
 ## Daily use
 
 `magnum` alone opens the PR board, `magnum tui` (the printed rows when the output is not a terminal, so

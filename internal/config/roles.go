@@ -56,6 +56,14 @@ type Role struct {
 	// triage model ([triage]; Removable). A role without one is never
 	// removed from a round, and neither is the judge.
 	Summary string `toml:"summary"`
+	// Why and Doing are the words of a [[factory.role]] (Factory.Roles) that
+	// the factory's screen names its agent by: Doing is what the agent does
+	// now ("finding the cause") and Why the reason it exists ("find the
+	// cause on its own, apart from the others"). A factory role needs both,
+	// one line each; a [[role]] of the review pipeline takes neither
+	// (Validate refuses them).
+	Why   string `toml:"why"`
+	Doing string `toml:"doing"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
 	// A fix or whiteboard role has none: it stays "" and validation refuses
 	// a value.

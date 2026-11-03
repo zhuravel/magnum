@@ -880,7 +880,11 @@ func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "fix.md", "judge-continue.md",
 		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-critic.md", "notes-curate.md", "retro.md",
 		"skill-edit.md", "triage.md", "whiteboard.md"}
-	if got := prompts.Names(); !slices.Equal(got, want) {
+	// The factory's prompts (factory-*.md) render with the factory's own data
+	// (internal/factory), not the review pipeline's three shapes, and are
+	// tested there.
+	got := slices.DeleteFunc(prompts.Names(), func(n string) bool { return strings.HasPrefix(n, "factory-") })
+	if !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
 	}
 }
