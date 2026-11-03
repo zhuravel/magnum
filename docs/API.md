@@ -8045,6 +8045,16 @@ func LooksLikeDaemon(comm, args string) bool
     opening a file named magnum ("/usr/bin/vim /tmp/magnum daemon") is not one:
     its executable is vim.
 
+func LooksLikeDaemonArgs(args []string, sub ...string) bool
+    LooksLikeDaemonArgs reports whether the arguments after the executable
+    name the subcommand sub: the arguments that are not flags start with sub,
+    word for word (--config takes a value). No sub names nothing.
+
+func LooksLikeMagnum(comm, args string, sub ...string) bool
+    LooksLikeMagnum is LooksLikeDaemon for any subcommand path: the executable
+    is magnum and the first arguments that are not flags are sub, as in
+    LooksLikeMagnum(comm, args, "factory", "daemon").
+
 func NotesDir(l paths.Layout, owner, repo string) string
     NotesDir is the harness directory next to the notes file: the notes path
     without ".md". "" under the same conditions as NotesPath.
@@ -9633,6 +9643,26 @@ type PlannedOp struct {
 }
     PlannedOp is one side effect a dry run decided on but did not perform.
 
+type Processes struct {
+	Command func(pid int) (comm, args string, err error)
+	Kill    func(pid int, sig syscall.Signal) error
+}
+    Processes is what a signal to a daemon asks of the operating system, in one
+    place so that tests answer for it and touch no real process: Command is what
+    ps knows about a pid (ProcessCommand) and Kill is kill(2).
+
+func SystemProcesses() Processes
+    SystemProcesses is the real ps and kill(2).
+
+func (p Processes) Kick(pidFile, what string, looks func(comm, args string) bool) (int, error)
+    Kick is KickDaemon for the daemon whose pidfile is pidFile: the pid in it
+    gets SIGUSR1 only when looks accepts what ps shows of it. what names that
+    daemon in the errors ("magnum daemon").
+
+func (p Processes) PidFromFile(path string) (int, error)
+    PidFromFile returns the pid in the pidfile at path, or 0 when there is no
+    pidfile or that process is gone (signal 0 finds no such process).
+
 type ProposalDecidedError struct{ Proposal store.NotesProposal }
     ProposalDecidedError refuses an apply of a proposal that no longer waits:
     another decider applied or rejected it, or claimed it first.
@@ -11029,6 +11059,35 @@ and the state the factory keeps.
 
 The registry lives in the registry package (SQLite, its own migrations);
 the daemon, its stages and its screen build on it.
+
+FUNCTIONS
+
+func DaemonPID(l paths.Layout) (int, error)
+    DaemonPID returns the pid of the running factory daemon from its pidfile
+    (paths.Layout.FactoryPid), or 0 when there is no pidfile or that process is
+    gone. Like the review daemon's it never touches the lock: probing it could
+    make a starting daemon exit as "already running".
+
+func DaemonPIDWith(l paths.Layout, procs engine.Processes) (int, error)
+    DaemonPIDWith is DaemonPID with the processes it asks about given, so a test
+    needs no real process.
+
+func Kick(l paths.Layout) (int, error)
+    Kick asks the running factory daemon for a pass now (SIGUSR1); it returns
+    the daemon's pid, or 0 when none runs. The pidfile can outlive the daemon
+    and its pid be reused, and SIGUSR1 terminates a process that does not handle
+    it: the pid is signalled only when ps shows `magnum factory daemon` (not the
+    review daemon, `magnum daemon`, whose pidfile is another file).
+
+func KickWith(l paths.Layout, procs engine.Processes) (int, error)
+    KickWith is Kick with the processes it asks about given, so a test needs no
+    real process.
+
+func LooksLikeFactoryDaemon(comm, args string) bool
+    LooksLikeFactoryDaemon reports whether a process is a magnum factory daemon
+    from what engine.ProcessCommand read: the executable is magnum and its first
+    arguments that are not flags are "factory daemon".
+
 ```
 
 ## registry
@@ -16954,6 +17013,31 @@ func (l Layout) Eval() string
     Eval is where the eval runs live, Eval()/<run id>/ (`magnum eval run`
     and the gate of a skill proposal), with the flagged cases and the cases'
     worktrees (wt/).
+
+func (l Layout) FactoryAgentsDB() string
+    FactoryAgentsDB is the registry of the factory's agent sessions (agents.db),
+    beside FactoryDB.
+
+func (l Layout) FactoryDB() string
+    FactoryDB is the factory's own registry (factory.db in the factory directory
+    of the data directory), separate from the review registry.
+
+func (l Layout) FactoryLock() string
+    FactoryLock is the factory daemon's lock file under State, held for the
+    daemon's whole life.
+
+func (l Layout) FactoryLog() string
+    FactoryLog is the factory daemon's log file in Logs.
+
+func (l Layout) FactoryPid() string
+    FactoryPid is the factory daemon's pidfile under State, beside the review
+    daemon's: the two daemons can run at once.
+
+func (l Layout) FactoryTaskDir(id int64) string
+    FactoryTaskDir is one task's directory in FactoryTasks, named by its id.
+
+func (l Layout) FactoryTasks() string
+    FactoryTasks is the root of the factory's task directories.
 
 func (l Layout) GhConfigDir(id string) string
     GhConfigDir is identity id's gh config directory in GhRoot.

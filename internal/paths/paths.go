@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/fsx"
@@ -251,6 +252,37 @@ func (l Layout) Logs() string { return filepath.Join(l.State(), "logs") }
 // DaemonLog is the daemon's log file in Logs.
 func (l Layout) DaemonLog() string { return filepath.Join(l.Logs(), "daemon.log") }
 
+// factoryDir is where the factory daemon keeps its registries and its task
+// directories, in the data directory.
+func (l Layout) factoryDir() string { return filepath.Join(l.data(), "factory") }
+
+// FactoryDB is the factory's own registry (factory.db in the factory
+// directory of the data directory), separate from the review registry.
+func (l Layout) FactoryDB() string { return filepath.Join(l.factoryDir(), "factory.db") }
+
+// FactoryAgentsDB is the registry of the factory's agent sessions
+// (agents.db), beside FactoryDB.
+func (l Layout) FactoryAgentsDB() string { return filepath.Join(l.factoryDir(), "agents.db") }
+
+// FactoryTasks is the root of the factory's task directories.
+func (l Layout) FactoryTasks() string { return filepath.Join(l.factoryDir(), "tasks") }
+
+// FactoryTaskDir is one task's directory in FactoryTasks, named by its id.
+func (l Layout) FactoryTaskDir(id int64) string {
+	return filepath.Join(l.FactoryTasks(), strconv.FormatInt(id, 10))
+}
+
+// FactoryPid is the factory daemon's pidfile under State, beside the review
+// daemon's: the two daemons can run at once.
+func (l Layout) FactoryPid() string { return filepath.Join(l.State(), "factory.pid") }
+
+// FactoryLock is the factory daemon's lock file under State, held for the
+// daemon's whole life.
+func (l Layout) FactoryLock() string { return filepath.Join(l.State(), "factory.lock") }
+
+// FactoryLog is the factory daemon's log file in Logs.
+func (l Layout) FactoryLog() string { return filepath.Join(l.Logs(), "factory.log") }
+
 // Reviews is the root of the review reports in the data directory.
 func (l Layout) Reviews() string { return filepath.Join(l.data(), "reviews") }
 
@@ -376,7 +408,7 @@ func (l Layout) PRReviews(owner, repo string, number int) string {
 // manual mkdir) is tightened explicitly: it holds the database, logs and the
 // per-identity gh credentials.
 func (l Layout) EnsureDirs() error {
-	for _, d := range []string{l.State(), l.data(), l.Logs(), l.Reviews(), l.GhRoot()} {
+	for _, d := range []string{l.State(), l.data(), l.Logs(), l.Reviews(), l.GhRoot(), l.factoryDir(), l.FactoryTasks()} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}

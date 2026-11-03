@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -43,11 +44,33 @@ func writePid(path string) error {
 	return fsx.WriteFileAtomic(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 }
 
+// Processes is what a signal to a daemon asks of the operating system, in one
+// place so that tests answer for it and touch no real process: Command is
+// what ps knows about a pid (ProcessCommand) and Kill is kill(2).
+type Processes struct {
+	Command func(pid int) (comm, args string, err error)
+	Kill    func(pid int, sig syscall.Signal) error
+}
+
+// SystemProcesses is the real ps and kill(2).
+func SystemProcesses() Processes {
+	return Processes{
+		Command: processCommand,
+		Kill:    syscall.Kill,
+	}
+}
+
 // DaemonPID returns the pid of the running daemon from the pidfile, or 0
 // when there is no pidfile or that process is gone. It never touches the
 // lock (probing it could make a starting daemon exit as "already running").
 func DaemonPID(layout paths.Layout) (int, error) {
-	b, err := os.ReadFile(layout.Pid())
+	return SystemProcesses().PidFromFile(layout.Pid())
+}
+
+// PidFromFile returns the pid in the pidfile at path, or 0 when there is no
+// pidfile or that process is gone (signal 0 finds no such process).
+func (p Processes) PidFromFile(path string) (int, error) {
+	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	}
@@ -56,9 +79,9 @@ func DaemonPID(layout paths.Layout) (int, error) {
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	if err != nil || pid <= 0 {
-		return 0, fmt.Errorf("pidfile %s: bad content %q", layout.Pid(), strings.TrimSpace(string(b)))
+		return 0, fmt.Errorf("pidfile %s: bad content %q", path, strings.TrimSpace(string(b)))
 	}
-	if err := syscall.Kill(pid, 0); err != nil {
+	if err := p.Kill(pid, 0); err != nil {
 		if errors.Is(err, syscall.ESRCH) {
 			return 0, nil
 		}
@@ -101,6 +124,13 @@ var processCommand = func(pid int) (comm, args string, err error) {
 // editor opening a file named magnum ("/usr/bin/vim /tmp/magnum daemon")
 // is not one: its executable is vim.
 func LooksLikeDaemon(comm, args string) bool {
+	return LooksLikeMagnum(comm, args, "daemon")
+}
+
+// LooksLikeMagnum is LooksLikeDaemon for any subcommand path: the
+// executable is magnum and the first arguments that are not flags are sub,
+// as in LooksLikeMagnum(comm, args, "factory", "daemon").
+func LooksLikeMagnum(comm, args string, sub ...string) bool {
 	comm, args = strings.TrimSpace(comm), strings.TrimSpace(args)
 	if comm == "" || filepath.Base(comm) != "magnum" {
 		return false
@@ -118,18 +148,27 @@ func LooksLikeDaemon(comm, args string) bool {
 	if !ok {
 		return false
 	}
-	fields := strings.Fields(rest)
-	for i := 0; i < len(fields); i++ {
-		f := fields[i]
-		switch {
+	return LooksLikeDaemonArgs(strings.Fields(rest), sub...)
+}
+
+// LooksLikeDaemonArgs reports whether the arguments after the executable
+// name the subcommand sub: the arguments that are not flags start with sub,
+// word for word (--config takes a value). No sub names nothing.
+func LooksLikeDaemonArgs(args []string, sub ...string) bool {
+	if len(sub) == 0 {
+		return false
+	}
+	var words []string
+	for i := 0; i < len(args) && len(words) < len(sub); i++ {
+		switch f := args[i]; {
 		case f == "--config":
 			i++ // its value
 		case strings.HasPrefix(f, "-"):
 		default:
-			return f == "daemon"
+			words = append(words, f)
 		}
 	}
-	return false
+	return slices.Equal(words, sub)
 }
 
 // KickDaemon asks the running daemon for a tick now (SIGUSR1, `magnum
@@ -138,22 +177,29 @@ func LooksLikeDaemon(comm, args string) bool {
 // a process that does not handle it: the pid is signalled only after ps shows
 // a magnum daemon, as `magnum daemon stop` checks.
 func KickDaemon(layout paths.Layout) (int, error) {
-	pid, err := DaemonPID(layout)
+	return SystemProcesses().Kick(layout.Pid(), "magnum daemon", LooksLikeDaemon)
+}
+
+// Kick is KickDaemon for the daemon whose pidfile is pidFile: the pid in it
+// gets SIGUSR1 only when looks accepts what ps shows of it. what names that
+// daemon in the errors ("magnum daemon").
+func (p Processes) Kick(pidFile, what string, looks func(comm, args string) bool) (int, error) {
+	pid, err := p.PidFromFile(pidFile)
 	if err != nil || pid == 0 {
 		return 0, err
 	}
-	comm, args, err := processCommand(pid)
+	comm, args, err := p.Command(pid)
 	if err != nil {
-		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		if errors.Is(p.Kill(pid, 0), syscall.ESRCH) {
 			return 0, nil // gone meanwhile
 		}
-		return 0, fmt.Errorf("pid %d in %s: cannot check that it is a magnum daemon (%v); not signalling it", pid, layout.Pid(), err)
+		return 0, fmt.Errorf("pid %d in %s: cannot check that it is a %s (%w); not signalling it", pid, pidFile, what, err)
 	}
-	if !LooksLikeDaemon(comm, args) {
-		return 0, fmt.Errorf("pid %d in %s is %q, not a magnum daemon; refusing to signal it\nfix: remove the stale pidfile %s",
-			pid, layout.Pid(), execx.Redact(args), layout.Pid())
+	if !looks(comm, args) {
+		return 0, fmt.Errorf("pid %d in %s is %q, not a %s; refusing to signal it\nfix: remove the stale pidfile %s",
+			pid, pidFile, execx.Redact(args), what, pidFile)
 	}
-	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
+	if err := p.Kill(pid, syscall.SIGUSR1); err != nil {
 		if errors.Is(err, syscall.ESRCH) {
 			return 0, nil
 		}

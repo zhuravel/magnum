@@ -334,3 +334,78 @@ func TestDBLockIsOneFilePerCheckout(t *testing.T) {
 		}
 	}
 }
+
+// The factory daemon keeps its registries and task directories in the data
+// directory, and its pidfile, lock and log beside the review daemon's in the
+// state directory, in both layouts.
+func TestFactoryPathsLiveUnderTheDataAndStateDirs(t *testing.T) {
+	user := realTemp(t)
+	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
+	exe := filepath.Join(user, "homebrew", "Cellar", "magnum", "1.2.0", "bin", "magnum")
+	write(t, exe, "")
+	checkout := filepath.Join(realTemp(t), "magnum")
+
+	cases := []struct {
+		name        string
+		env         map[string]string
+		data, state string
+	}{
+		{"MAGNUM_HOME", map[string]string{"MAGNUM_HOME": checkout}, filepath.Join(checkout, "state"), filepath.Join(checkout, "state")},
+		{"XDG", nil, filepath.Join(user, ".local/share/magnum"), filepath.Join(user, ".local/state/magnum")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l, err := resolve(env(tc.env), exe, user)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for got, want := range map[string]string{
+				l.FactoryDB():        filepath.Join(tc.data, "factory", "factory.db"),
+				l.FactoryAgentsDB():  filepath.Join(tc.data, "factory", "agents.db"),
+				l.FactoryTasks():     filepath.Join(tc.data, "factory", "tasks"),
+				l.FactoryTaskDir(42): filepath.Join(tc.data, "factory", "tasks", "42"),
+				l.FactoryPid():       filepath.Join(tc.state, "factory.pid"),
+				l.FactoryLock():      filepath.Join(tc.state, "factory.lock"),
+				l.FactoryLog():       filepath.Join(tc.state, "logs", "factory.log"),
+			} {
+				if got != want {
+					t.Errorf("got %q, want %q", got, want)
+				}
+			}
+			// The review daemon's files stay where they were, and the
+			// factory's never collide with them.
+			if l.FactoryDB() == l.DB() || l.FactoryPid() == l.Pid() || l.FactoryLock() == l.Lock() || l.FactoryLog() == l.DaemonLog() {
+				t.Errorf("a factory file is a review daemon file: %+v", l)
+			}
+		})
+	}
+}
+
+// The factory's registries hold the operator's tasks, prompts and answers,
+// so its directories are private like the rest of the tree, including ones
+// that already exist with looser permissions.
+func TestEnsureDirsCreatesTheFactoryDirsPrivate(t *testing.T) {
+	l := Layout{Home: realTemp(t)}
+	factoryDir := filepath.Dir(l.FactoryDB())
+	if err := os.MkdirAll(factoryDir, 0o755); err != nil { // an existing, loose directory
+		t.Fatal(err)
+	}
+	if err := os.Chmod(factoryDir, 0o755); err != nil { // MkdirAll honours the umask
+		t.Fatal(err)
+	}
+	if filepath.Dir(l.FactoryAgentsDB()) != factoryDir {
+		t.Fatalf("the two registries live in different directories: %s, %s", l.FactoryDB(), l.FactoryAgentsDB())
+	}
+	if err := l.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{factoryDir, l.FactoryTasks()} {
+		st, err := os.Stat(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.IsDir() || st.Mode().Perm() != 0o700 {
+			t.Errorf("%s: dir=%v mode=%v, want a 0700 directory", d, st.IsDir(), st.Mode().Perm())
+		}
+	}
+}

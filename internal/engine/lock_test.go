@@ -69,3 +69,59 @@ func TestProcessCommandReadsCommThenArgs(t *testing.T) {
 		t.Fatalf("calls %v", gone.Calls)
 	}
 }
+
+// LooksLikeDaemon keeps its meaning now that the match is by subcommand
+// words: the review daemon is `magnum daemon` and only that.
+func TestLooksLikeDaemonKeepsItsMeaning(t *testing.T) {
+	const bin = "/Users/b/bin/magnum"
+	for _, tc := range []struct {
+		name       string
+		comm, args string
+		want       bool
+	}{
+		{"the daemon", bin, bin + " daemon", true},
+		{"the daemon with --once", bin, bin + " daemon --once", true},
+		{"--config before the subcommand", "magnum", "magnum --config /x/config.toml daemon", true},
+		{"a factory daemon is not the review daemon", bin, bin + " factory daemon", false},
+		{"another subcommand", bin, bin + " status", false},
+		{"daemon as a later argument", bin, bin + " logs daemon", false},
+		{"vim on a file named magnum", "/usr/bin/vim", "/usr/bin/vim /tmp/magnum daemon", false},
+		{"no comm", "", bin + " daemon", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LooksLikeDaemon(tc.comm, tc.args); got != tc.want {
+				t.Errorf("LooksLikeDaemon(%q, %q) = %v, want %v", tc.comm, tc.args, got, tc.want)
+			}
+			if got := LooksLikeMagnum(tc.comm, tc.args, "daemon"); got != tc.want {
+				t.Errorf("LooksLikeMagnum(%q, %q, daemon) = %v, want %v", tc.comm, tc.args, got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+		sub  []string
+		want bool
+	}{
+		{"daemon", []string{"daemon"}, []string{"daemon"}, true},
+		{"daemon with a flag after", []string{"daemon", "--once"}, []string{"daemon"}, true},
+		{"flags before", []string{"--verbose", "--config", "/x/c.toml", "daemon"}, []string{"daemon"}, true},
+		{"--config= before", []string{"--config=/x/c.toml", "daemon"}, []string{"daemon"}, true},
+		{"factory daemon", []string{"factory", "daemon"}, []string{"factory", "daemon"}, true},
+		{"factory daemon with flags between", []string{"factory", "--config", "x.toml", "daemon", "--once"}, []string{"factory", "daemon"}, true},
+		{"the review daemon is not a factory daemon", []string{"daemon"}, []string{"factory", "daemon"}, false},
+		{"a factory daemon is not the review daemon", []string{"factory", "daemon"}, []string{"daemon"}, false},
+		{"the factory without a subcommand", []string{"factory"}, []string{"factory", "daemon"}, false},
+		{"the factory's other subcommand", []string{"factory", "status"}, []string{"factory", "daemon"}, false},
+		{"daemon as the value of --config", []string{"--config", "daemon"}, []string{"daemon"}, false},
+		{"a longer word", []string{"daemon-stop"}, []string{"daemon"}, false},
+		{"no arguments", nil, []string{"daemon"}, false},
+		{"no subcommand asked for", []string{"daemon"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LooksLikeDaemonArgs(tc.args, tc.sub...); got != tc.want {
+				t.Errorf("LooksLikeDaemonArgs(%q, %q) = %v, want %v", tc.args, tc.sub, got, tc.want)
+			}
+		})
+	}
+}
