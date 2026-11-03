@@ -52,6 +52,17 @@ const (
 	drainWhat      = "the factory daemon is restarting"
 )
 
+// infraBackoffShifts caps the doubling: 2m<<4 is past infraBackoffMax, and
+// an uncapped shift overflows after 27 tries (12 hours of an outage), when
+// the wait turns negative and every tick becomes a try.
+const infraBackoffShifts = 4
+
+// infraBackoff is the wait after an infrastructure hold's tries failed
+// tries times: 2, 4, 8, 16, then 30 minutes however long the outage lasts.
+func infraBackoff(tries int) time.Duration {
+	return min(infraBackoffFirst<<min(max(tries, 0), infraBackoffShifts), infraBackoffMax)
+}
+
 // Hold is a stop of the machine's: its kind (HoldInfra, HoldHerdr,
 // HoldDisk, HoldMemory), its reason without the kind ("SSH key refused"),
 // since when it holds, when it tries again (an infrastructure hold's next
@@ -111,7 +122,7 @@ func (e *Engine) hold(ctx context.Context, failures []error) (Hold, bool) {
 	case h == nil && cause == "":
 		return Hold{}, false
 	case h == nil:
-		h = &Hold{Kind: HoldInfra, Reason: cause, Since: now, Next: now.Add(infraBackoffFirst)}
+		h = &Hold{Kind: HoldInfra, Reason: cause, Since: now, Next: now.Add(infraBackoff(0))}
 		e.holds[HoldInfra] = h
 		e.log.Warn("infrastructure hold: every stage holds, at no cost to the tasks", "cause", cause, "next", h.Next)
 		e.event(ctx, 0, "hold", registry.PhaseBegin, fmt.Sprintf("infra: %s; every stage holds; tries again at %s",
@@ -122,7 +133,7 @@ func (e *Engine) hold(ctx context.Context, failures []error) (Hold, bool) {
 	case cause != "":
 		h.Tries++
 		h.Reason = cause
-		h.Next = now.Add(min(infraBackoffFirst<<h.Tries, infraBackoffMax))
+		h.Next = now.Add(infraBackoff(h.Tries))
 		e.event(ctx, 0, "hold", registry.PhaseInfo, fmt.Sprintf("infra: try %d failed (%s); tries again at %s",
 			h.Tries, cause, h.Next.Local().Format("15:04")))
 		return *h, true
@@ -250,7 +261,7 @@ func (e *Engine) pressure(ctx context.Context, now time.Time, tasks []registry.T
 	}
 	for _, t := range tasks {
 		if s, ok := e.servers[t.ID]; ok && idle(t) {
-			e.stopServer(ctx, t, s)
+			e.stopServer(ctx, t, s, "it was idle and the Mac is short on disk or memory")
 		}
 	}
 }
@@ -386,6 +397,10 @@ type server struct {
 	release func()
 }
 
+// heavyServer is the heavy use of a task's server: bound to no stage, it
+// ends when the server stops.
+const heavyServer = "server"
+
 // startServer starts a task's copy's server (Copies.StartServer): a heavy
 // stage, and a launch, so it waits for both.
 func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error {
@@ -395,7 +410,7 @@ func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error
 	if e.d.Copies == nil {
 		return heldError{who: "copy", what: "this build has no copies yet"}
 	}
-	release, ok := e.heavy(ctx, t, "server")
+	release, ok := e.takeHeavy(ctx, t, heavyServer, "")
 	if !ok {
 		return heldError{who: "heavy", what: "another heavy stage runs"}
 	}
@@ -407,42 +422,50 @@ func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error
 	return nil
 }
 
-// stopServer stops a server startServer started and frees its heavy slot.
-func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server) {
+// stopServer stops a server startServer started and frees its heavy use.
+func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server, why string) {
 	if err := e.d.Copies.StopServer(ctx, s.copy); err != nil {
-		e.log.Warn("stop an idle server", "task", t.ID, "copy", s.copy.Name, "err", err)
+		e.log.Warn("stop a server", "task", t.ID, "copy", s.copy.Name, "err", err)
 		e.event(ctx, t.ID, "server", registry.PhaseFail, "stop "+s.copy.Name+": "+err.Error())
 		return
 	}
 	delete(e.servers, t.ID)
 	s.release()
-	e.event(ctx, t.ID, "server", registry.PhaseOK, "stopped "+s.copy.Name+"'s idle server: the Mac is short on disk or memory")
+	e.event(ctx, t.ID, "server", registry.PhaseOK, "stopped "+s.copy.Name+"'s server: "+why)
 }
 
-// heavySlot is a task's hold on a heavy stage: what runs (for the wait of
-// the others), how many of the task's heavy uses share it (a task's QA and
-// its server count once), whether startup adopted it from an attempt that
-// still runs, and its order.
+// heavySlot is a task's hold on the heavy stages: its key and the use the
+// others' waits name, its uses (what runs, by the stage it was taken in; ""
+// for a use no stage binds, a server), whether startup adopted it from an
+// attempt that still runs, and its order. A task's uses share one slot, so
+// its QA and its server count once.
 type heavySlot struct {
 	key, what string
-	refs      int
+	uses      map[string]string
 	adopted   bool
 	seq       int
 }
 
 // heavy takes a slot of the heavy stages for task t's what (a local review
-// round, local QA, a server): at most [factory] heavy_stages tasks hold one
-// at once, and a task's own uses share its slot. When none is free it
-// returns false and the task waits "heavy: <key>'s <what> runs", naming the
-// oldest holder. release frees the use, once however often it is called.
+// round, local QA) in its current stage: at most [factory] heavy_stages
+// tasks hold one at once. A repeat call for the same use is the same hold,
+// so a stage may ask on every tick. When no slot is free it returns false
+// and the task waits "heavy: <key>'s <what> runs", naming the oldest
+// holder. release frees the use; a use the stage never releases is freed
+// when the task leaves the stage or stops being live (sweepHeavy).
 func (e *Engine) heavy(ctx context.Context, t registry.Task, what string) (release func(), ok bool) {
+	return e.takeHeavy(ctx, t, what, t.Stage)
+}
+
+// takeHeavy is heavy for a use bound to stage ("" = to none).
+func (e *Engine) takeHeavy(ctx context.Context, t registry.Task, what, stage string) (release func(), ok bool) {
 	e.heavyMu.Lock()
 	s := e.heavyHeld[t.ID]
 	switch {
-	case s != nil && s.adopted:
-		s.adopted, s.what = false, what // the attempt that still ran takes its slot back
+	case s != nil && s.adopted: // the attempt that still ran takes its slot back
+		s.adopted, s.what, s.uses = false, what, map[string]string{what: stage}
 	case s != nil:
-		s.refs++
+		s.uses[what] = stage
 	case len(e.heavyHeld) >= max(1, e.cfg.Factory.HeavyStages):
 		holder := e.oldestHeavy()
 		e.heavyMu.Unlock()
@@ -450,14 +473,14 @@ func (e *Engine) heavy(ctx context.Context, t registry.Task, what string) (relea
 		return nil, false
 	default:
 		e.heavySeq++
-		e.heavyHeld[t.ID] = &heavySlot{key: TaskKey(t), what: what, refs: 1, seq: e.heavySeq}
+		e.heavyHeld[t.ID] = &heavySlot{key: TaskKey(t), what: what, uses: map[string]string{what: stage}, seq: e.heavySeq}
 	}
 	e.heavyMu.Unlock()
 	if t.WaitsWho == "heavy" {
 		e.waitOn(ctx, t, "", "")
 	}
 	var once sync.Once
-	return func() { once.Do(func() { e.releaseHeavy(t.ID, false) }) }, true
+	return func() { once.Do(func() { e.releaseHeavy(t.ID, what) }) }, true
 }
 
 // oldestHeavy is the slot taken first; heavyMu is held.
@@ -471,31 +494,81 @@ func (e *Engine) oldestHeavy() *heavySlot {
 	return old
 }
 
-// releaseHeavy frees one use of task id's slot, or the whole slot (all).
-func (e *Engine) releaseHeavy(id int64, all bool) {
+// releaseHeavy frees task id's use what; the slot goes with its last use.
+func (e *Engine) releaseHeavy(id int64, what string) {
 	e.heavyMu.Lock()
 	defer e.heavyMu.Unlock()
-	s := e.heavyHeld[id]
-	if s == nil {
-		return
-	}
-	if s.refs--; all || s.refs <= 0 {
-		delete(e.heavyHeld, id)
+	if s := e.heavyHeld[id]; s != nil {
+		delete(s.uses, what)
+		if len(s.uses) == 0 {
+			delete(e.heavyHeld, id)
+		}
 	}
 }
 
+// freeHeavy frees everything heavy of task t, which is no longer live (it
+// needs you, it stopped, it ended): its server stops and its slot goes.
+func (e *Engine) freeHeavy(ctx context.Context, t registry.Task, why string) {
+	if s, ok := e.servers[t.ID]; ok {
+		e.stopServer(ctx, t, s, why)
+	}
+	e.heavyMu.Lock()
+	delete(e.heavyHeld, t.ID)
+	e.heavyMu.Unlock()
+}
+
+// sweepHeavy frees the heavy uses nothing will release: every use of a task
+// that is not live (a panic sent it to you, it stopped or ended, or it is
+// gone), and a live task's uses bound to a stage it has left. A stage that
+// failed between its heavy and its release, or a restart that adopted an
+// attempt whose stage never came back, would otherwise hold the slot for
+// good, and every other task would wait on it.
+func (e *Engine) sweepHeavy(ctx context.Context, tasks []registry.Task) {
+	byID := make(map[int64]registry.Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	var gone []registry.Task
+	e.heavyMu.Lock()
+	for id, s := range e.heavyHeld {
+		t, ok := byID[id]
+		if !ok || !isLive(t) {
+			if !ok {
+				t = registry.Task{ID: id}
+			}
+			gone = append(gone, t)
+			continue
+		}
+		for what, stage := range s.uses {
+			if stage != "" && stage != t.Stage {
+				delete(s.uses, what)
+			}
+		}
+		if len(s.uses) == 0 {
+			delete(e.heavyHeld, id)
+		}
+	}
+	e.heavyMu.Unlock()
+	for _, t := range gone {
+		e.freeHeavy(ctx, t, "its task is not at work")
+	}
+}
+
+// isLive reports whether the loop advances t (liveStates).
+func isLive(t registry.Task) bool { return slices.Contains(liveStates, t.State) }
+
 // adoptHeavy is startup's count of the heavy stages that still run: each
-// task with a launching or running attempt of a heavy stage (a local
+// live task with a launching or running attempt of a heavy stage (a local
 // review) holds its slot until that stage takes it back (heavy) and
-// releases it.
+// releases it. A task that is not live (a panic sent it to you with its
+// attempt left running) holds none: nothing would release it.
 func (e *Engine) adoptHeavy(ctx context.Context) error {
 	tasks, err := e.reg.Tasks(ctx)
 	if err != nil {
 		return fmt.Errorf("factory startup: %w", err)
 	}
 	for _, t := range tasks {
-		switch t.State {
-		case registry.TaskDone, registry.TaskStopped:
+		if !isLive(t) {
 			continue
 		}
 		as, err := e.reg.Attempts(ctx, t.ID)
@@ -510,7 +583,8 @@ func (e *Engine) adoptHeavy(ctx context.Context) error {
 			e.heavyMu.Lock()
 			if e.heavyHeld[t.ID] == nil {
 				e.heavySeq++
-				e.heavyHeld[t.ID] = &heavySlot{key: TaskKey(t), what: stageWhat(st.Name), refs: 1, adopted: true, seq: e.heavySeq}
+				what := stageWhat(st.Name)
+				e.heavyHeld[t.ID] = &heavySlot{key: TaskKey(t), what: what, uses: map[string]string{what: st.Name}, adopted: true, seq: e.heavySeq}
 			}
 			e.heavyMu.Unlock()
 		}

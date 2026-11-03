@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -38,8 +39,8 @@ func newFactoryDaemonCmd(c *Context) *cobra.Command {
 			"[factory] poll and on SIGUSR1, answers the factory's requests, advances its tasks and reads its panes "+
 			"every [factory] observe, until SIGTERM or ctrl+c, which drain it: no new launch or effect starts and the "+
 			"tick in progress ends. It loads its prompts once, at start: an edit reaches it after a restart "+
-			"(`magnum factory install`). Only one factory daemon runs per home: a second one exits with an error "+
-			"naming the first one's pid. It logs to logs/factory.log.",
+			"(`magnum factory install`). Only one factory daemon runs per home: a second one says so, naming the "+
+			"first one's pid, and exits 0 before it opens a log or a store. It logs to logs/factory.log.",
 		func(pos []string) int { return runFactoryDaemonCmd(c, level, pos) })
 	cmd.Flags().StringVar(&level, "log-level", "info", "log level: debug, info, warn or error")
 	_ = cmd.RegisterFlagCompletionFunc("log-level", cobra.FixedCompletions([]cobra.Completion{"debug", "info", "warn", "error"}, cobra.ShellCompDirectiveNoFileComp))
@@ -60,13 +61,27 @@ func runFactoryDaemonCmd(c *Context, level string, pos []string) int {
 			"check with `magnum config`, then `magnum factory install`\n", err)
 		return 1
 	}
+	// The lock comes first: a second daemon (one run by hand, or a newer
+	// build's) must not open the log or migrate a store under the running
+	// one. It exits 0, as the review daemon does, so launchd (KeepAlive on a
+	// failed exit only) does not start it again and again.
+	unlock, err := factory.Lock(c.Layout)
+	if running, ok := errors.AsType[factory.ErrRunning](err); ok {
+		fmt.Fprintf(c.Stderr, "magnum factory daemon: %v; exiting\n", strings.TrimPrefix(running.Error(), "factory: "))
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "magnum factory daemon: %v\n", err)
+		return 1
+	}
+	defer unlock()
 	d, err := buildFactoryDaemon(c, lvl)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum factory daemon: %v\n", err)
 		return 1
 	}
 	defer d.Close()
-	if err := d.Engine.Run(context.Background()); err != nil {
+	if err := d.Engine.RunLocked(context.Background()); err != nil {
 		d.Log.Error("magnum factory daemon stopped", "err", err)
 		fmt.Fprintf(c.Stderr, "magnum factory daemon: %v\n", err)
 		return 1
@@ -106,17 +121,24 @@ func (d *factoryDaemon) Close() error {
 // a factory repository has databases, herdr's ping when [factory]
 // herdr_socket names the session's socket, and the reveal of the factory's
 // herdr session. The runtime, the copies, Jira, GitHub, magnum and the local
-// reviewer are nil until the builds that bring them.
-func buildFactoryDaemon(c *Context, level slog.Level) (d *factoryDaemon, err error) {
+// reviewer are nil until the builds that bring them. The caller holds the
+// factory lock (factory.Lock); the registry's migration is still refused
+// while a factory daemon's pidfile names a live factory daemon
+// (refuseWhileDaemonRuns: this daemon writes its own pidfile later, in
+// RunLocked).
+func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	cfg, l := c.Config, c.Layout
 	if err := l.EnsureDirs(); err != nil {
 		return nil, fmt.Errorf("factory: state dirs: %w", err)
 	}
-	d = &factoryDaemon{}
+	// A failed build closes what it opened. The daemon is a local, not the
+	// named result: `return nil, err` would set that to nil before the
+	// deferred cleanup ran.
+	d := &factoryDaemon{}
+	built := false
 	defer func() {
-		if err != nil {
+		if !built {
 			_ = d.Close()
-			d = nil
 		}
 	}()
 	logf, err := app.OpenRotating(l.FactoryLog(), app.LogMaxBytes, app.LogKeep)
@@ -136,7 +158,7 @@ func buildFactoryDaemon(c *Context, level slog.Level) (d *factoryDaemon, err err
 	}
 	d.Log.Info("prompts loaded", "files", snap.Files())
 
-	if d.Registry, err = registry.Open(l.FactoryDB(), registry.Options{}); err != nil {
+	if d.Registry, err = registry.Open(l.FactoryDB(), registry.Options{BeforeMigrate: refuseWhileDaemonRuns(l)}); err != nil {
 		return nil, err
 	}
 	d.closers = append(d.closers, d.Registry.Close)
@@ -161,6 +183,7 @@ func buildFactoryDaemon(c *Context, level slog.Level) (d *factoryDaemon, err err
 		d.closers = append(d.closers, closer)
 	}
 	d.Engine = factory.New(deps)
+	built = true
 	return d, nil
 }
 

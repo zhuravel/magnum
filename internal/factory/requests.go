@@ -181,10 +181,7 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 			}
 		}
 	}
-	e.releaseHeavy(t.ID, true)
-	if s, ok := e.servers[t.ID]; ok {
-		e.stopServer(ctx, t, s)
-	}
+	e.freeHeavy(ctx, t, "its task stopped")
 	if e.d.Copies != nil && t.Copy != "" {
 		if err := e.d.Copies.Release(ctx, t, "stopped"); err != nil {
 			e.event(ctx, t.ID, "release", registry.PhaseFail, err.Error())

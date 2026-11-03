@@ -3477,7 +3477,7 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 | `magnum factory install [--dry-run]` | Write the factory daemon's LaunchAgent (`~/Library/LaunchAgents/zhuravel.magnum.factory.plist`, running `magnum factory daemon`) and load it: bootout, then bootstrap, once. A running factory daemon drains (no new launch or effect starts, its tick ends) and launchd starts it again on this build, which also loads edited prompts. The review daemon's job is left alone. |
 | `magnum factory uninstall [--dry-run]` | Unload and delete that LaunchAgent; the factory's registry, task directories and copies stay. |
 | `magnum factory status [--json]` | Whether the factory daemon runs, and each task's key, kind, state, stage and what it waits on. It never creates the registry, and refuses to migrate one while an older factory daemon runs on it (`magnum factory install` restarts it on the new build, which migrates). |
-| `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one exits with an error naming the first one's pid. |
+| `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one says so, naming the first one's pid, and exits 0 before it opens a log or a store, so it migrates nothing and launchd does not restart it. |
 
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the

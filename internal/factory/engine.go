@@ -271,27 +271,49 @@ func (e ErrRunning) Error() string {
 	return "factory: a factory daemon already holds " + e.Lock
 }
 
-// Run runs the daemon until SIGTERM or SIGINT, or until ctx ends: it takes
-// the factory lock (another daemon holding it is ErrRunning, naming its
-// pid), writes the pidfile, runs startup, then a tick at once, every [factory]
-// poll and on SIGUSR1, and an observe pass every [factory] observe. A stop
-// signal drains: no new launch or effect starts, the tick in progress ends,
-// and Run returns nil, so launchd (KeepAlive on a failed exit only) starts
-// the daemon again only after a crash.
-func (e *Engine) Run(ctx context.Context) error {
-	lock := e.d.Layout.FactoryLock()
+// Lock takes the factory daemon's lock (Layout.FactoryLock), held for the
+// daemon's whole life; another daemon holding it is ErrRunning, naming that
+// daemon's pid. The daemon command takes it before it opens its log or a
+// store, so a second daemon touches neither (RunLocked).
+func Lock(l paths.Layout) (unlock func(), err error) {
+	return lockWith(l, engine.SystemProcesses())
+}
+
+func lockWith(l paths.Layout, procs engine.Processes) (unlock func(), err error) {
+	lock := l.FactoryLock()
 	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
-		return fmt.Errorf("factory: state dir: %w", err)
+		return nil, fmt.Errorf("factory: state dir: %w", err)
 	}
 	unlock, held, err := engine.AcquireLock(lock)
 	if err != nil {
-		return fmt.Errorf("factory: lock %s: %w", lock, err)
+		return nil, fmt.Errorf("factory: lock %s: %w", lock, err)
 	}
 	if held {
-		pid, _ := e.procs.PidFromFile(e.d.Layout.FactoryPid())
-		return ErrRunning{PID: pid, Lock: lock}
+		pid, _ := procs.PidFromFile(l.FactoryPid())
+		return nil, ErrRunning{PID: pid, Lock: lock}
+	}
+	return unlock, nil
+}
+
+// Run takes the factory lock (Lock; another daemon holding it is
+// ErrRunning) and runs the daemon (RunLocked) until it stops.
+func (e *Engine) Run(ctx context.Context) error {
+	unlock, err := lockWith(e.d.Layout, e.procs)
+	if err != nil {
+		return err
 	}
 	defer unlock()
+	return e.RunLocked(ctx)
+}
+
+// RunLocked runs the daemon, whose lock the caller holds (Lock), until
+// SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
+// then a tick at once, every [factory] poll and on SIGUSR1, and an observe
+// pass every [factory] observe. A stop signal drains: no new launch or
+// effect starts, the tick in progress ends, and it returns nil, so launchd
+// (KeepAlive on a failed exit only) starts the daemon again only after a
+// crash.
+func (e *Engine) RunLocked(ctx context.Context) error {
 	pidFile := e.d.Layout.FactoryPid()
 	if err := fsx.WriteFileAtomic(pidFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		return fmt.Errorf("factory: pidfile: %w", err)
@@ -390,6 +412,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("factory tick: %w", err)
 	}
+	e.sweepHeavy(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
 	e.pressure(ctx, now, tasks)
 	infra, held := e.holds[HoldInfra]
@@ -599,8 +622,8 @@ func (e *Engine) waitOn(ctx context.Context, t registry.Task, who, what string) 
 	}
 }
 
-// toOperator moves a live task to NEEDS YOU, waiting on you for what, and
-// alerts.
+// toOperator moves a live task to NEEDS YOU, waiting on you for what, frees
+// its heavy slot (nothing advances it to release one), and alerts.
 func (e *Engine) toOperator(ctx context.Context, t registry.Task, what, because string) {
 	err := e.reg.TransitionTask(ctx, t.ID, liveStates, registry.TaskNeedsYou, func(u *registry.TaskUpdate) {
 		u.Set("waits_who", waitsYou)
@@ -611,6 +634,7 @@ func (e *Engine) toOperator(ctx context.Context, t registry.Task, what, because 
 		e.log.Warn("move a task to NEEDS YOU", "task", t.ID, "err", err)
 		return
 	}
+	e.freeHeavy(ctx, t, "its task waits on you")
 	e.alert(ctx, t.ID, TaskKey(t)+": you: "+what)
 }
 

@@ -171,6 +171,158 @@ func TestAnInfraFailureHoldsEveryStageAtNoCost(t *testing.T) {
 	}
 }
 
+func TestAnInfraHoldKeepsItsBackoffPastTwelveHours(t *testing.T) {
+	h := newHarness(t)
+	h.task("PR-12328", registry.TaskActive, "investigate")
+	var c calls
+	h.stage(config.FactoryStageAgents, failingStage(&c, h, sshRefused, nil))
+	h.tick() // the hold starts; its first try is 2 minutes later
+
+	// 70 tries run 33 hours: past try 27 (12 hours), where 2m<<27 overflows,
+	// and try 63, from which a shift gives 0.
+	for try := 1; try <= 70; try++ {
+		before := *h.e.holds[HoldInfra]
+		h.clock.Set(before.Next.Add(-45 * time.Second))
+		h.tick() // a tick between tries runs no stage
+		h.clock.Set(before.Next)
+		h.tick()
+		after, held := h.e.holds[HoldInfra]
+		if !held {
+			t.Fatalf("try %d lifted the hold", try)
+		}
+		want := infraBackoffMax
+		if waits := []time.Duration{4 * time.Minute, 8 * time.Minute, 16 * time.Minute}; try <= len(waits) {
+			want = waits[try-1]
+		}
+		if got := after.Next.Sub(before.Next); got != want {
+			t.Fatalf("try %d at %v waits %v, want %v", try, before.Next.Sub(t0), got, want)
+		}
+	}
+	if n := len(c.list()); n != 71 {
+		t.Fatalf("the stage ran %d times over 70 tries, want 71 (the failure and each try)", n)
+	}
+}
+
+func TestAHeavyStageThatPanicsFreesItsSlot(t *testing.T) {
+	h := newHarness(t)
+	bad := h.task("PR-12364", registry.TaskActive, "local_review")
+	other := h.task("PR-12365", registry.TaskActive, "local_review")
+	var holders []int64
+	runner := func(ctx context.Context, task registry.Task, _ config.FactoryStage) (bool, error) {
+		if _, ok := h.e.heavy(ctx, task, "local review"); !ok {
+			return false, nil
+		}
+		if !slices.Contains(holders, task.ID) {
+			holders = append(holders, task.ID)
+		}
+		if task.ID == bad.ID {
+			if as, _ := h.reg.Attempts(ctx, task.ID); len(as) == 0 { // the round's attempt, left running by the panic
+				a, err := h.reg.BeginAttempt(ctx, task.ID, "local_review")
+				if err == nil {
+					err = h.reg.TransitionAttempt(ctx, a.ID, nil, registry.AttemptRunning, nil)
+				}
+				if err != nil {
+					t.Errorf("attempt: %v", err)
+				}
+			}
+			panic("the round's result parser exploded")
+		}
+		return false, nil
+	}
+	h.stage(config.FactoryStageReview, runner)
+
+	h.tick()
+	h.clock.Add(time.Minute)
+	h.tick() // the second panic: bad needs you
+	if got := h.reload(bad.ID).State; got != registry.TaskNeedsYou {
+		t.Fatalf("after two panics the task is %s", got)
+	}
+	h.clock.Add(time.Minute)
+	h.tick()
+	if !slices.Contains(holders, other.ID) {
+		got := h.reload(other.ID)
+		t.Fatalf("the other task never got the slot: it waits %q: %q", got.WaitsWho, got.WaitsWhat)
+	}
+
+	// A restart does not give the slot back to the task that needs you.
+	h.e = New(h.e.d)
+	h.stage(config.FactoryStageReview, runner)
+	if err := h.e.startup(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	release, ok := h.e.heavy(h.ctx, h.reload(other.ID), "local review") // before any tick could sweep
+	if !ok {
+		t.Fatalf("startup adopted the slot of the task that needs you: %+v", h.e.heavyHeld[bad.ID])
+	}
+	release()
+	holders = nil
+	h.clock.Add(time.Minute)
+	h.tick()
+	if !slices.Equal(holders, []int64{other.ID}) {
+		got := h.reload(other.ID)
+		t.Fatalf("after the restart holders %v; the other task waits %q: %q", holders, got.WaitsWho, got.WaitsWhat)
+	}
+}
+
+func TestHeavyIsOneHoldPerTaskAndUse(t *testing.T) {
+	h := newHarness(t)
+	first := h.task("PR-12366", registry.TaskActive, "local_review")
+	second := h.task("PR-12367", registry.TaskActive, "local_review")
+	var release func()
+	firstDone, secondGot := false, false
+	h.stage(config.FactoryStageReview, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		switch {
+		case t.ID == first.ID && !firstDone:
+			if rel, ok := h.e.heavy(ctx, t, "local review"); ok {
+				release = rel // a stage that asks on every tick and keeps its last release
+			}
+		case t.ID == second.ID:
+			_, secondGot = h.e.heavy(ctx, t, "local review")
+		}
+		return false, nil
+	})
+	for range 3 {
+		h.tick()
+		h.clock.Add(time.Minute)
+	}
+	if secondGot {
+		t.Fatal("the second task got the slot while the first held it")
+	}
+
+	release()
+	firstDone = true
+	h.tick()
+	if !secondGot {
+		got := h.reload(second.ID)
+		t.Fatalf("one release after three asks left the slot held: the second task waits %q: %q", got.WaitsWho, got.WaitsWhat)
+	}
+}
+
+func TestAHeavySlotIsFreedWhenItsTaskLeavesTheStage(t *testing.T) {
+	h := newHarness(t)
+	first := h.task("PR-12368", registry.TaskActive, "local_review")
+	second := h.task("PR-12369", registry.TaskActive, "local_review")
+	secondGot := false
+	h.stage(config.FactoryStageReview, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		_, ok := h.e.heavy(ctx, t, "local review")
+		if t.ID == second.ID {
+			secondGot = ok
+		}
+		return t.ID == first.ID && ok, nil // the first round passes, and its stage never released its slot
+	})
+
+	h.tick()
+	if got := h.reload(first.ID).Stage; got != "pr_body" || secondGot {
+		t.Fatalf("first at %q, second got the slot %v", got, secondGot)
+	}
+	h.clock.Add(time.Minute)
+	h.tick()
+	if !secondGot {
+		got := h.reload(second.ID)
+		t.Fatalf("the slot of a task that left its local review stayed taken: the second task waits %q: %q", got.WaitsWho, got.WaitsWhat)
+	}
+}
+
 func TestAHoldIsNotLiftedByATickThatTriedNothing(t *testing.T) {
 	var herdrDown atomic.Bool
 	h := newHarness(t, func(d *Deps) {

@@ -11159,6 +11159,12 @@ func KickWith(l paths.Layout, procs engine.Processes) (int, error)
     KickWith is Kick with the processes it asks about given, so a test needs no
     real process.
 
+func Lock(l paths.Layout) (unlock func(), err error)
+    Lock takes the factory daemon's lock (Layout.FactoryLock), held for the
+    daemon's whole life; another daemon holding it is ErrRunning, naming that
+    daemon's pid. The daemon command takes it before it opens its log or a
+    store, so a second daemon touches neither (RunLocked).
+
 func LooksLikeFactoryDaemon(comm, args string) bool
     LooksLikeFactoryDaemon reports whether a process is a magnum factory daemon
     from what engine.ProcessCommand read: the executable is magnum and its first
@@ -11239,13 +11245,16 @@ func (e *Engine) Kick()
     screen's requests); a kick already pending absorbs it.
 
 func (e *Engine) Run(ctx context.Context) error
-    Run runs the daemon until SIGTERM or SIGINT, or until ctx ends: it takes
-    the factory lock (another daemon holding it is ErrRunning, naming its pid),
-    writes the pidfile, runs startup, then a tick at once, every factory poll
-    and on SIGUSR1, and an observe pass every factory observe. A stop signal
-    drains: no new launch or effect starts, the tick in progress ends, and Run
-    returns nil, so launchd (KeepAlive on a failed exit only) starts the daemon
-    again only after a crash.
+    Run takes the factory lock (Lock; another daemon holding it is ErrRunning)
+    and runs the daemon (RunLocked) until it stops.
+
+func (e *Engine) RunLocked(ctx context.Context) error
+    RunLocked runs the daemon, whose lock the caller holds (Lock), until
+    SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
+    then a tick at once, every factory poll and on SIGUSR1, and an observe pass
+    every factory observe. A stop signal drains: no new launch or effect starts,
+    the tick in progress ends, and it returns nil, so launchd (KeepAlive on a
+    failed exit only) starts the daemon again only after a crash.
 
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory, then

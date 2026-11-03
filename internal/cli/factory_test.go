@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -222,6 +223,56 @@ func TestTheCLIRefusesToMigrateUnderARunningDaemon(t *testing.T) {
 	}
 	if v := factorySchema(t, db); v != registry.LatestSchemaVersion() {
 		t.Fatalf("user_version %d, want %d", v, registry.LatestSchemaVersion())
+	}
+}
+
+func TestASecondFactoryDaemonMigratesNothingAndExitsZero(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	l := dt.ctx.Layout
+	writeFactoryRegistryAt(t, l.FactoryDB(), 1) // a newer build's second daemon must not migrate the first one's file
+	if err := os.MkdirAll(l.State(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unlock, held, err := engine.AcquireLock(l.FactoryLock()) // the running daemon's lock
+	if err != nil || held {
+		t.Fatalf("lock: held %v, %v", held, err)
+	}
+	defer unlock()
+
+	if code := dt.run("factory", "daemon"); code != 0 {
+		t.Fatalf("exit %d, want 0 (launchd must not relaunch it in a loop); stderr %s", code, dt.stderr)
+	}
+	if !strings.Contains(dt.stderr.String(), "already") {
+		t.Fatalf("stderr %q: want one line saying a factory daemon already runs", dt.stderr)
+	}
+	if v := factorySchema(t, l.FactoryDB()); v != 1 {
+		t.Fatalf("user_version %d, want 1: the second daemon migrated the registry", v)
+	}
+	if _, err := os.Stat(l.FactoryAgentsDB()); !os.IsNotExist(err) {
+		t.Fatalf("the second daemon created the agents store: %v", err)
+	}
+}
+
+func TestTheFactoryDaemonBuilderRefusesToMigrateUnderAnotherDaemon(t *testing.T) {
+	storetest.Serial(t)
+	comm, args := daemonRulePS("/opt/bin/magnum", "/opt/bin/magnum factory daemon")
+	dt := newDaemonGroupTest(t, comm, args)
+	daemonSys.FactoryPID = func(paths.Layout) (int, error) { return 250, nil }
+	l := dt.ctx.Layout
+	writeFactoryRegistryAt(t, l.FactoryDB(), 1)
+	storetest.Seed(t, l.FactoryAgentsDB())
+
+	d, err := buildFactoryDaemon(dt.ctx, slog.LevelInfo)
+	if err == nil {
+		d.Close()
+		t.Fatal("the daemon built and migrated under another factory daemon")
+	}
+	if !strings.Contains(err.Error(), "pid 250") {
+		t.Fatalf("err %v, want the refusal naming pid 250", err)
+	}
+	if v := factorySchema(t, l.FactoryDB()); v != 1 {
+		t.Fatalf("user_version %d, want 1", v)
 	}
 }
 
