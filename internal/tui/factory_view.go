@@ -780,7 +780,13 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 		start = cur - bodyH + 1
 	}
 	window := body[start:min(start+bodyH, len(body))]
-	below := len(body) - start - len(window)
+	// The rule counts the tasks below the screen, not the headings and blanks between them.
+	below := 0
+	for _, l := range body[start+len(window):] {
+		if l.row >= 0 {
+			below++
+		}
+	}
 	lines := []string{p.titleLine(), p.chipLine(), ""}
 	rowLines := map[int64]int{}
 	for i, l := range window {

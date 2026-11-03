@@ -349,7 +349,7 @@ func TestFactoryAShortListScrollsToTheCursorAndCountsWhatIsBelow(t *testing.T) {
 	}
 	f.Cursor = 0
 	top, _ := factoryFrameOf(f, 100, 10, true, IconsUnicode, factoryNow)
-	if rule := strings.Split(ansi.Strip(top), "\n")[7]; !strings.Contains(rule, "▼ 8 more") {
+	if rule := strings.Split(ansi.Strip(top), "\n")[7]; !strings.Contains(rule, "▼ 4 more") {
 		t.Errorf("the rows below the screen are not counted: %q", rule)
 	}
 }
