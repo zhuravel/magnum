@@ -201,7 +201,7 @@ Agents run in parallel, in the task's copy. Roles are data, as magnum's `[[role]
 
 - PR: the factory pushes through the push helper (section 7) and opens a draft PR with the body of `t:create-pr`.
 - Review: magnum reviews the PR as the operator's own PR. From milestone 2, the fix of review comments runs in the factory: the operator chose to move magnum's fix loop into the factory, with its skill, prompts, `fix-reply` and `fix-sync` helpers and tests. The board's `f` and `F` keys then queue the work in the factory, and magnum's own fix code is deleted. The factory asks magnum for each re-review through magnum's request table. Replies to people post by themselves, as the fix loop does today (the operator's decision). A comment that only the operator can answer goes to NEEDS YOU.
-- Author: from milestone 2, the factory opens its PRs as a GitHub App, so the operator can approve them. The moved fix loop treats a PR that the factory opened as the operator's own. The push helper holds the App's credentials, so factory pushes need no login in the pane.
+- Author: the factory opens its PRs under the operator's login (the operator's decision), so magnum's own-PR fix loop works unchanged and a colleague approves, as today. From milestone 2, the commits that the factory pushes are authored by the factory App (`zhuravel-factory[bot]`) and pushed with the App's token through the push helper, and the factory's replies and comments come from the App. So the history and the threads show which work an agent did, and factory pushes need no login in the pane.
 - CI: section 8.
 - Parent branch: the factory merges the parent at three times: on a conflict that GitHub reports, before each staging merge, and once a day. An agent resolves conflicts in the task's copy, and the targeted specs run before the push.
 - Stagings and QA: section 8.
@@ -1206,7 +1206,7 @@ The operator's improvement loop (`/magnum-improve`) covers both halves:
 - Logs and errors never contain tokens or pane environment values.
 - Replies to people and to magnum's findings post without asking, as the fix loop does today (the operator's decision).
 - Production: an agent runs only a read-only script that the operator approved on a production card, bound to the script's hash, through `magnum factory prod-run`. The operator's AWS and kubectl sessions are readable on the same macOS user, so this rule stops mistakes, not a determined agent.
-- From milestone 2, factory PRs and pushes use a GitHub App with no bypass of master protection. magnum's auto-approval as the operator then also applies to these PRs, unless the App is in `auto_approve_skip_authors`. The operator decides that in the config.
+- From milestone 2, factory pushes and comments use a GitHub App with no bypass of master protection. The PRs stay the operator's own, so magnum never auto-approves them (GitHub refuses an approval by the PR's author).
 
 ## 13. Decisions
 
@@ -1225,7 +1225,7 @@ The operator's improvement loop (`/magnum-improve`) covers both halves:
 - Production: an agent runs a read-only script after the operator's `y` on a card that shows it.
 - Replies to people's comments post by themselves.
 - A staging conflict in other people's changes is pushed after the specs pass.
-- From milestone 2, factory PRs come from a new GitHub App of the factory, not the review App. It is installed on the factory's repositories only, with `contents: write`, `pull_requests: write`, `actions: write`, `checks: read`, `deployments: read` and `metadata: read`. It has no `workflows` permission, so GitHub refuses its pushes that change `.github/workflows`. magnum reviews its PRs through `allow_bot_authors`.
+- PRs open under the operator's login. From milestone 2, factory commits and comments come from a new GitHub App of the factory, not the review App. It is installed on the factory's repositories only, with `contents: write`, `pull_requests: write`, `actions: write`, `checks: read`, `deployments: read` and `metadata: read`. It has no `workflows` permission, so GitHub refuses its pushes that change `.github/workflows`.
 
 ### 13.2 Calls made in this document (the operator can override them)
 
