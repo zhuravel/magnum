@@ -22,7 +22,7 @@ func TestMigrationV19ToV20AddsAutoApprovals(t *testing.T) {
 	ts := FormatTime(t0)
 	var stmts []string
 	for _, m := range migrations[:19] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	stmts = append(stmts, "PRAGMA user_version = 19",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`,

@@ -168,7 +168,7 @@ func TestMigrationV4ToV5Findings(t *testing.T) {
 	ts := FormatTime(t0)
 	stmts := []string{}
 	for _, m := range migrations[:4] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	stmts = append(stmts, "PRAGMA user_version = 4",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`,

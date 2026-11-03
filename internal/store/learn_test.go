@@ -25,7 +25,7 @@ func TestMigrationV9ToV10Learn(t *testing.T) {
 	ts := FormatTime(t0)
 	var stmts []string
 	for _, m := range migrations[:9] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	pr := func(id int64, ghState string) string {
 		return `INSERT INTO prs (id, repo_id, node_id, number, url, title, head_sha, head_changed_at, state, identity, created_at, updated_at,

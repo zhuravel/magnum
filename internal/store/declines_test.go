@@ -24,7 +24,7 @@ func TestMigrationV22ToV23Declines(t *testing.T) {
 	ts := FormatTime(t0)
 	var stmts []string
 	for _, m := range migrations[:22] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	stmts = append(stmts, "PRAGMA user_version = 22",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`,

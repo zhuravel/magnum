@@ -26,7 +26,7 @@ func TestMigrationV23ToV24LearnProposals(t *testing.T) {
 	}
 	var stmts []string
 	for _, m := range migrations[:23] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	stmts = append(stmts, "PRAGMA user_version = 23")
 	for _, q := range stmts {

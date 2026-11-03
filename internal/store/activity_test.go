@@ -26,7 +26,7 @@ func TestMigrationV17ToV18AddsActivityAt(t *testing.T) {
 	merged, closed := t0.Add(-2*time.Hour), t0.Add(-3*time.Hour)
 	var setup []string
 	for _, m := range migrations[:17] {
-		setup = append(setup, m.sql)
+		setup = append(setup, m.SQL)
 	}
 	setup = append(setup, "PRAGMA user_version = 17",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`,

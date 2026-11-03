@@ -29,7 +29,7 @@ func TestMigrationV24ToV25AcceptsFixRuns(t *testing.T) {
 	ts1 := FormatTime(t0.Add(time.Minute))
 	var setup []string
 	for _, m := range migrations[:24] {
-		setup = append(setup, m.sql)
+		setup = append(setup, m.SQL)
 	}
 	setup = append(setup, "PRAGMA user_version = 24",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`,

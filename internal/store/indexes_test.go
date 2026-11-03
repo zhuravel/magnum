@@ -22,9 +22,9 @@ func TestMigrationV3ToV4Indexes(t *testing.T) {
 	}
 	ts := FormatTime(t0)
 	for _, q := range []string{
-		migrations[0].sql,
-		migrations[1].sql,
-		migrations[2].sql,
+		migrations[0].SQL,
+		migrations[1].SQL,
+		migrations[2].SQL,
 		"PRAGMA user_version = 3",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '` + ts + `')`,
 		`INSERT INTO prs (id, repo_id, node_id, number, url, head_sha, head_changed_at, state, identity, created_at, updated_at)
@@ -105,7 +105,7 @@ func TestMigrationV3ToV4Indexes(t *testing.T) {
 // IF NOT EXISTS makes a re-run harmless.
 func TestMigration0004IsIdempotent(t *testing.T) {
 	st, _ := newStore(t)
-	if _, err := st.DB().Exec(migrations[3].sql); err != nil {
+	if _, err := st.DB().Exec(migrations[3].SQL); err != nil {
 		t.Fatalf("0004 applied twice: %v", err)
 	}
 }

@@ -22,7 +22,7 @@ func TestMigrationV1ToV2KeepsData(t *testing.T) {
 	}
 	ts := FormatTime(t0)
 	for _, q := range []string{
-		migrations[0].sql,
+		migrations[0].SQL,
 		"PRAGMA user_version = 1",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '` + ts + `')`,
 		`INSERT INTO prs (id, repo_id, node_id, number, url, title, head_sha, head_changed_at, labels_json, state, identity,

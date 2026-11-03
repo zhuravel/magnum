@@ -24,8 +24,8 @@ func TestMigrationV2ToV3FreeFormRoles(t *testing.T) {
 	ts := FormatTime(t0)
 	ts1 := FormatTime(t0.Add(time.Minute))
 	for _, q := range []string{
-		migrations[0].sql,
-		migrations[1].sql,
+		migrations[0].SQL,
+		migrations[1].SQL,
 		"PRAGMA user_version = 2",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '` + ts + `')`,
 		`INSERT INTO prs (id, repo_id, node_id, number, url, head_sha, head_changed_at, state, identity, simplify_done, created_at, updated_at)

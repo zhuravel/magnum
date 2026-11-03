@@ -21,7 +21,7 @@ func TestMigrationV11ToV12RecordsTheSlotSchema(t *testing.T) {
 	ts := FormatTime(t0)
 	var stmts []string
 	for _, m := range migrations[:11] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	stmts = append(stmts, "PRAGMA user_version = 11",
 		`INSERT INTO slots (id, name, repo_full_name, kind, path, main_clone, state, dirty_schema, created_at, updated_at)

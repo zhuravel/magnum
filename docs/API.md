@@ -19336,6 +19336,19 @@ var InFlightStates = []string{PRClaiming, PRReviewing, PRVerifying}
 
 FUNCTIONS
 
+func ApplyMigrations(ctx context.Context, db *sql.DB, set []Migration, before func(from, to int) error) (from, to int, err error)
+    ApplyMigrations brings db, whose schema version is PRAGMA user_version, up
+    to the last migration of set (versions 1..N without gaps, as LoadMigrations
+    returns them) and reports the version it found and the one it left.
+    It refuses a database newer than set, and applies every migration above
+    the current version after before (Options.BeforeMigrate) agrees; before's
+    error is returned as it is and leaves db untouched. A schema that is already
+    current is detected with a plain read, so it never takes the write lock.
+    Otherwise the migrations run inside one transaction that re-reads
+    user_version first, so a concurrent opener waits and then sees the result
+    instead of applying them twice; open db with BEGIN IMMEDIATE transactions
+    (_txlock=immediate) for that. On error from and to are zero.
+
 func DayKey(t time.Time) string
     DayKey is the local calendar day of t ("2006-01-02"), the value stored in
     prs.rounds_day next to rounds_today.
@@ -20148,6 +20161,17 @@ type LearnVersion struct {
     LearnVersion is a landed change of the skill and the prompts
     (learn_versions): its measurement window starts at RestartedAt and ends at
     the next version's.
+
+type Migration struct {
+	Version int    // the NNNN prefix; a set runs 1..N without gaps
+	Name    string // the file name, for errors
+	SQL     string
+}
+    Migration is one numbered schema step: the contents of NNNN_name.sql.
+
+func LoadMigrations(fsys fs.FS, dir string) ([]Migration, error)
+    LoadMigrations reads dir/NNNN_name.sql from fsys, in version order; other
+    files are skipped. The versions must run 1..N without gaps.
 
 type Miss struct {
 	ID          int64     `json:"id"`

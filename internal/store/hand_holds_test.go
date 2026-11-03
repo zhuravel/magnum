@@ -37,7 +37,7 @@ func TestMigrationV29ToV30LiftsTheHoldsOfACommentOrAnApprovalByHand(t *testing.T
 	}
 	stmts := []string{}
 	for _, m := range migrations[:29] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	stmts = append(stmts, "PRAGMA user_version = 29",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`)
@@ -77,7 +77,7 @@ func TestMigrationV29ToV30LiftsTheHoldsOfACommentOrAnApprovalByHand(t *testing.T
 			t.Errorf("hold %q (held %d): after the migration %+v (present %v), want it kept %v", h.reason, h.held, kept, ok, h.stays)
 		}
 	}
-	if !slices.ContainsFunc(migrations, func(m migration) bool { return m.version == 30 }) {
+	if !slices.ContainsFunc(migrations, func(m Migration) bool { return m.Version == 30 }) {
 		t.Fatal("no migration 30")
 	}
 }

@@ -101,7 +101,7 @@ func OpenWith(path string, opts Options) (*Store, error) {
 	db.SetConnMaxLifetime(0)
 	s := &Store{db: db}
 	ctx := context.Background()
-	if err := s.migrate(ctx, opts.BeforeMigrate); err != nil {
+	if _, _, err := ApplyMigrations(ctx, db, migrations, opts.BeforeMigrate); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: %s: %w", path, err)
 	}
@@ -163,22 +163,37 @@ func (s *Store) now() time.Time {
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-type migration struct {
-	version int
-	name    string
-	sql     string
+// Migration is one numbered schema step: the contents of NNNN_name.sql.
+type Migration struct {
+	Version int    // the NNNN prefix; a set runs 1..N without gaps
+	Name    string // the file name, for errors
+	SQL     string
 }
 
 var migrations = mustLoadMigrations()
 
-// mustLoadMigrations reads migrations/NNNN_name.sql; versions must run 1..N
-// without gaps. A malformed embed is a build defect, hence the panic.
-func mustLoadMigrations() []migration {
-	entries, err := fs.ReadDir(migrationFS, "migrations")
+// mustLoadMigrations loads the migrations embedded in this binary. A malformed
+// embed is a build defect, hence the panic.
+func mustLoadMigrations() []Migration {
+	out, err := LoadMigrations(migrationFS, "migrations")
 	if err != nil {
-		panic(fmt.Sprintf("store: read embedded migrations: %v", err))
+		panic(fmt.Sprintf("store: embedded migrations: %v", err))
 	}
-	var out []migration
+	return out
+}
+
+// LoadMigrations reads dir/NNNN_name.sql from fsys, in version order; other
+// files are skipped. The versions must run 1..N without gaps.
+func LoadMigrations(fsys fs.FS, dir string) ([]Migration, error) {
+	sub, err := fs.Sub(fsys, dir)
+	if err != nil {
+		return nil, fmt.Errorf("read migrations: %w", err)
+	}
+	entries, err := fs.ReadDir(sub, ".")
+	if err != nil {
+		return nil, fmt.Errorf("read migrations: %w", err)
+	}
+	var out []Migration
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
@@ -186,68 +201,78 @@ func mustLoadMigrations() []migration {
 		prefix, _, _ := strings.Cut(e.Name(), "_")
 		v, err := strconv.Atoi(prefix)
 		if err != nil || v < 1 {
-			panic(fmt.Sprintf("store: migration %s: name must start with a positive number", e.Name()))
+			return nil, fmt.Errorf("migration %s: name must start with a positive number", e.Name())
 		}
-		body, err := fs.ReadFile(migrationFS, "migrations/"+e.Name())
+		body, err := fs.ReadFile(sub, e.Name())
 		if err != nil {
-			panic(fmt.Sprintf("store: read migration %s: %v", e.Name(), err))
+			return nil, fmt.Errorf("read migration %s: %w", e.Name(), err)
 		}
-		out = append(out, migration{version: v, name: e.Name(), sql: string(body)})
+		out = append(out, Migration{Version: v, Name: e.Name(), SQL: string(body)})
 	}
-	slices.SortFunc(out, func(a, b migration) int { return cmp.Compare(a.version, b.version) })
+	slices.SortFunc(out, func(a, b Migration) int { return cmp.Compare(a.Version, b.Version) })
 	for i, m := range out {
-		if m.version != i+1 {
-			panic(fmt.Sprintf("store: migration %s: expected version %d", m.name, i+1))
+		if m.Version != i+1 {
+			return nil, fmt.Errorf("migration %s: expected version %d", m.Name, i+1)
 		}
 	}
-	return out
+	return out, nil
 }
 
-// migrate applies every migration above the current user_version, after
-// before (Options.BeforeMigrate) agrees. A schema
-// that is already current is detected with a plain read, so opening it never
-// takes the write lock. Otherwise the migrations run inside one immediate
-// transaction that re-reads user_version first, so a concurrent opener waits
-// and then sees the result instead of applying them twice.
-func (s *Store) migrate(ctx context.Context, before func(from, to int) error) error {
-	v, err := s.SchemaVersion(ctx)
-	if err != nil {
-		return err
+// ApplyMigrations brings db, whose schema version is PRAGMA user_version, up
+// to the last migration of set (versions 1..N without gaps, as LoadMigrations
+// returns them) and reports the version it found and the one it left. It
+// refuses a database newer than set, and applies every migration above the
+// current version after before (Options.BeforeMigrate) agrees; before's error
+// is returned as it is and leaves db untouched. A schema that is already
+// current is detected with a plain read, so it never takes the write lock.
+// Otherwise the migrations run inside one transaction that re-reads
+// user_version first, so a concurrent opener waits and then sees the result
+// instead of applying them twice; open db with BEGIN IMMEDIATE transactions
+// (_txlock=immediate) for that. On error from and to are zero.
+func ApplyMigrations(ctx context.Context, db *sql.DB, set []Migration, before func(from, to int) error) (from, to int, err error) {
+	var v int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
+		return 0, 0, fmt.Errorf("store: read user_version: %w", err)
 	}
-	if err := checkSchemaVersion(v); err != nil {
-		return err
+	if err := checkSchemaVersion(v, len(set)); err != nil {
+		return 0, 0, err
 	}
-	if v == len(migrations) {
-		return nil
+	if v == len(set) {
+		return v, v, nil
 	}
 	if before != nil {
-		if err := before(v, len(migrations)); err != nil {
-			return err
+		if err := before(v, len(set)); err != nil {
+			return 0, 0, err
 		}
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error {
+	err = runTx(ctx, db, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
 			return fmt.Errorf("read user_version: %w", err)
 		}
-		if err := checkSchemaVersion(v); err != nil {
+		if err := checkSchemaVersion(v, len(set)); err != nil {
 			return err
 		}
-		for _, m := range migrations[v:] {
-			if _, err := tx.ExecContext(ctx, m.sql); err != nil {
-				return fmt.Errorf("migration %s: %w", m.name, err)
+		for _, m := range set[v:] {
+			if _, err := tx.ExecContext(ctx, m.SQL); err != nil {
+				return fmt.Errorf("migration %s: %w", m.Name, err)
 			}
-			if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", m.version)); err != nil {
-				return fmt.Errorf("migration %s: set user_version: %w", m.name, err)
+			if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", m.Version)); err != nil {
+				return fmt.Errorf("migration %s: set user_version: %w", m.Name, err)
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return v, len(set), nil
 }
 
-// checkSchemaVersion refuses a database newer than this binary.
-func checkSchemaVersion(v int) error {
-	if v > len(migrations) {
-		return fmt.Errorf("database schema version %d is newer than this binary supports (%d); upgrade magnum", v, len(migrations))
+// checkSchemaVersion refuses a database newer than this binary (latest is the
+// last version it knows).
+func checkSchemaVersion(v, latest int) error {
+	if v > latest {
+		return fmt.Errorf("database schema version %d is newer than this binary supports (%d); upgrade magnum", v, latest)
 	}
 	return nil
 }
@@ -265,7 +290,12 @@ type querier interface {
 // a no-op after Commit; it releases the only connection when fn returns an
 // error or panics.
 func (s *Store) tx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	return runTx(ctx, s.db, fn)
+}
+
+// runTx is tx on any handle: ApplyMigrations runs before a Store exists.
+func runTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}

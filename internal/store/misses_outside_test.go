@@ -22,7 +22,7 @@ func TestMigrationV28ToV29AddsTheCommentsCommitAndWhyItIsOutside(t *testing.T) {
 	ts := FormatTime(t0)
 	var stmts []string
 	for _, m := range migrations[:28] {
-		stmts = append(stmts, m.sql)
+		stmts = append(stmts, m.SQL)
 	}
 	miss := func(id, class string) string {
 		return `INSERT INTO misses (id, pr_id, source_url, source_kind, reviewer, path, line, reviewed_sha, class, raised, created_at, updated_at)

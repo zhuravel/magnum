@@ -25,7 +25,7 @@ func TestMigrationV15ToV16AddsPRFiles(t *testing.T) {
 	ts := FormatTime(t0)
 	var setup []string
 	for _, m := range migrations[:15] {
-		setup = append(setup, m.sql)
+		setup = append(setup, m.SQL)
 	}
 	setup = append(setup, "PRAGMA user_version = 15",
 		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`,
