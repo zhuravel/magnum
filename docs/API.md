@@ -44,6 +44,9 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [evalrun](#evalrun) | Package evalrun replays one case of an eval corpus (internal/eval) as a blind dry-run round and scores it: what `magnum eval run` does for each case, in a package the daemon can call too. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
+| [factory](#factory) | Package factory is the magnum factory: a second daemon, in the magnum binary and with a registry of its own, that takes a Jira key or a free prompt and does the work up to the final merge, which stays the operator's. |
+| [registry](#registry) | Package registry is the factory's own SQLite registry: tasks, the stage attempts that run them, questions and the operator's decisions, the prompt ledger, external effects, the event log and the CLI's requests. |
+| [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which registry.Open then finds current. |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -10735,6 +10738,478 @@ type Runner interface {
 	Run(ctx context.Context, c Cmd) (Result, error)
 }
     Runner executes commands. Implementations: Real, Fake, DryRun.
+
+```
+
+## factory
+
+```text
+package factory // import "github.com/zhuravel/magnum/internal/factory"
+
+Package factory is the magnum factory: a second daemon, in the magnum
+binary and with a registry of its own, that takes a Jira key or a free
+prompt and does the work up to the final merge, which stays the operator's.
+Agents investigate in parallel, one writer writes the change test
+first, and the operator answers only what no agent can answer. See
+docs/superpowers/specs/2026-11-03-factory-design.md, section 5 for the processes
+and the state the factory keeps.
+
+The registry lives in the registry package (SQLite, its own migrations);
+the daemon, its stages and its screen build on it.
+```
+
+## registry
+
+```text
+package registry // import "github.com/zhuravel/magnum/internal/factory/registry"
+
+Package registry is the factory's own SQLite registry: tasks, the stage attempts
+that run them, questions and the operator's decisions, the prompt ledger,
+external effects, the event log and the CLI's requests.
+
+It is a file of its own with its own migration list (migrations/NNNN_*.sql,
+tracked by PRAGMA user_version and applied by the store package's runner),
+so a factory migration never touches magnum's review registry. It follows that
+registry's conventions: WAL with busy_timeout 5 s and foreign keys on, one
+connection per process, BEGIN IMMEDIATE transactions, timestamps as fixed-width
+RFC3339 UTC text, and compare-and-set state changes that return ErrConflict or
+ErrNotFound.
+
+Callers redact secrets (execx.Redact) before they put text into an event,
+a result or an error column: the registry stores what it is given.
+
+CONSTANTS
+
+const (
+	EffectBegin = "begin"
+	EffectOK    = "ok"
+	EffectFail  = "fail"
+)
+    Effect states: begin while the effect may be half done, then ok or fail.
+
+const (
+	PhaseBegin = "begin"
+	PhaseOK    = "ok"
+	PhaseFail  = "fail"
+	PhaseInfo  = "info"
+)
+    Event phases: begin, ok and fail bracket a destructive step; info is
+    everything else.
+
+const (
+	DeliveredUnknown = "unknown"
+	DeliveredYes     = "yes"
+	DeliveredNo      = "no"
+)
+    Delivery verdicts of a ledger entry. magnum sends a prompt before it saves
+    that the prompt was sent, so a crash between the two leaves the entry
+    unknown until recovery reads the agent's transcript for the prompt's hash.
+
+const (
+	QuestionOpen     = "open"
+	QuestionAnswered = "answered"
+	QuestionVoided   = "voided"
+)
+    Question states: open until the operator answers it or newer evidence
+    replaces it (voided).
+
+const (
+	RequestPending = "pending"
+	RequestDone    = "done"
+	RequestFailed  = "failed"
+)
+    Request states.
+
+const (
+	TaskQueued   = "queued"
+	TaskActive   = "active"
+	TaskNeedsYou = "needs_you"
+	TaskWaiting  = "waiting"
+	TaskDone     = "done"
+	TaskStopped  = "stopped"
+	TaskFailed   = "failed"
+)
+    Task states. A task is queued until the daemon has room for it, active
+    while agents or the daemon work on it, needs_you while only the operator
+    can move it, waiting while someone or something else must (a reviewer, CI,
+    a person the operator asked), and done, stopped or failed once it has ended.
+
+const (
+	AttemptLaunching = "launching"
+	AttemptRunning   = "running"
+	AttemptEnded     = "ended"
+	AttemptVerified  = "verified"
+	AttemptFailed    = "failed"
+	AttemptAbandoned = "abandoned"
+)
+    Attempt states. An attempt is launching from the moment the daemon records
+    the intent to start a stage's agents (before any workspace exists), running
+    while they work, ended when they stopped, then verified or failed by the
+    stage's end fact; abandoned is an attempt a restart found and gave up.
+
+
+VARIABLES
+
+var ErrConflict = errors.New("factory registry: conflict")
+    ErrConflict is returned (wrapped) when a compare-and-set update matched no
+    row because the state moved on, or when a write hits a uniqueness rule.
+
+var ErrNotFound = errors.New("factory registry: not found")
+    ErrNotFound is returned (wrapped) when a looked-up row, or a row that
+    another row refers to, does not exist.
+
+var ErrStaleRevision = errors.New("factory registry: stale question revision")
+    ErrStaleRevision is returned (wrapped) when a question revision is not the
+    newest one the task has: answers to older questions are never taken.
+
+
+FUNCTIONS
+
+func LatestSchemaVersion() int
+    LatestSchemaVersion is the highest migration version embedded in this
+    binary.
+
+
+TYPES
+
+type Attempt struct {
+	ID     string // t<task>-<stage>-<n>
+	TaskID int64
+	Stage  string
+	N      int // 1 for the first attempt of the stage, then 2, 3, ...
+	State  string
+	// WorkspaceLabel is the herdr workspace label that carries the attempt id.
+	WorkspaceLabel string
+	Error          string
+	Started, Ended time.Time // Ended is the zero time until the attempt has ended
+}
+    Attempt is one launch of a stage of a task.
+
+type AttemptUpdate struct {
+	// Has unexported fields.
+}
+    AttemptUpdate collects the column assignments of TransitionAttempt.
+    Settable columns: workspace_label and error. The state moves through
+    TransitionAttempt's `to`, and ended_at is stamped when the attempt first
+    reaches ended, verified, failed or abandoned.
+
+func (u *AttemptUpdate) Inc(col string, n int)
+    Inc adds n to the integer column col.
+
+func (u *AttemptUpdate) Set(col string, v any)
+    Set assigns v to column col. v is nil (NULL), a string, an int, an int64,
+    a bool or a time.Time (the zero time stores NULL).
+
+type Decision struct {
+	TaskID                        int64
+	Kind, Choice, Note            string
+	HeadSHA, ReportHash, DiffHash string
+	DiffOpened, At                time.Time
+}
+    Decision is what the operator decided on a card. HeadSHA, ReportHash and
+    DiffHash are what the card showed, so a later change to any of them voids
+    the decision; DiffOpened is when the operator opened the diff first (the
+    zero time if they did not).
+
+type Effect struct {
+	Key, Kind    string
+	TaskID       int64
+	State        string
+	Result       string
+	Begun, Ended time.Time // Ended is the zero time while the effect is begun
+}
+    Effect is one external side effect (a push, a PR, a comment, a merge) under
+    an idempotency key. Result is what an ok effect made: a PR url, a commit
+    sha, the reason a failed one failed.
+
+type ErrActiveKey struct {
+	Key    string
+	TaskID int64 // the task that holds the key
+}
+    ErrActiveKey is returned (as a value; use errors.As) by CreateTask when
+    a task for the same Jira key is not done or stopped. It also matches
+    ErrConflict.
+
+func (e ErrActiveKey) Error() string
+    Error implements error.
+
+func (e ErrActiveKey) Unwrap() error
+    Unwrap makes errors.Is(err, ErrConflict) true.
+
+type Event struct {
+	ID     int64
+	At     time.Time
+	TaskID int64 // 0 for the daemon's own events
+	Kind   string
+	Phase  string
+	Text   string
+}
+    Event is one row of the audit log.
+
+type LedgerEntry struct {
+	ID        int64
+	TaskID    int64
+	AttemptID string
+	Role      string
+	RunID     string
+	Hash      string
+	Text      string
+	Delivered string
+	Sent      time.Time
+}
+    LedgerEntry is one prompt the factory sends (or is about to send) to an
+    agent: the scrubbed text and its hash, written before the prompt leaves.
+
+type Option struct {
+	Label string `json:"label"`
+	Means string `json:"means"`
+}
+    Option is one answer a question offers: its label, and what it means for the
+    question's example.
+
+type Options struct {
+	// Clock returns the current time; nil means time.Now. Tests replace it.
+	Clock func() time.Time
+}
+    Options tune Open.
+
+type Question struct {
+	ID       int64
+	TaskID   int64
+	Revision int
+	Index    int
+	Text     string
+	// Context is the one line that says why it is asked, Example a concrete
+	// case the options can be read against.
+	Context, Example string
+	Options          []Option
+	// Recommended is an index into Options, or -1 for "no recommendation";
+	// Why is the reason for the recommendation.
+	Recommended int
+	Why         string
+	Answer      string
+	State       string
+	// Asked is when the revision was stored, Answered when the answer was
+	// (the zero time while the question is open or voided).
+	Asked, Answered time.Time
+}
+    Question is one question of a task to the operator. A revision is the set of
+    questions the agents asked at one time; Index is the position within it.
+
+type Registry struct {
+	// Has unexported fields.
+}
+    Registry is the factory's registry handle. It is safe for concurrent use.
+
+func Open(path string, opts Options) (*Registry, error)
+    Open creates the parent directory (0700), opens the database at path with
+    WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL, and applies
+    pending migrations. It refuses a database whose schema version is newer than
+    this binary knows. The database, its -wal and its -shm file are made 0600
+    whatever the umask.
+
+func (r *Registry) AnswerBatch(ctx context.Context, taskID int64, rev int, answers map[int]string) error
+    AnswerBatch records answers (question Index -> the answer text) to the open
+    questions of revision rev, all or none. It returns ErrStaleRevision when
+    rev is not the task's newest revision, so answers to questions that newer
+    evidence replaced are never taken, and ErrConflict when a batch names a
+    question that is not open in that revision. Questions the batch does not
+    name stay open. An empty batch or a blank answer is refused.
+
+func (r *Registry) AppendEvent(ctx context.Context, taskID int64, kind, phase, text string) error
+    AppendEvent writes an audit row at the clock's time. taskID 0 is an event
+    of the daemon itself; any other must be an existing task (ErrNotFound).
+    Kind is required and phase must be begin, ok, fail or info. Callers redact
+    secrets (execx.Redact) before they put command output into text.
+
+func (r *Registry) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, error)
+    AppendLedger writes e before its prompt is sent and returns the stored
+    entry. TaskID (an existing task), AttemptID (an existing attempt), Role,
+    Hash and Text are required (ErrNotFound for a task or attempt that does not
+    exist); Delivered starts unknown, and Sent defaults to the clock.
+
+func (r *Registry) AttemptByID(ctx context.Context, id string) (Attempt, error)
+    AttemptByID looks up an attempt; a missing one is ErrNotFound.
+
+func (r *Registry) Attempts(ctx context.Context, taskID int64) ([]Attempt, error)
+    Attempts returns a task's attempts in the order they began.
+
+func (r *Registry) BeginAttempt(ctx context.Context, taskID int64, stage string) (Attempt, error)
+    BeginAttempt records a launching attempt for the next number of the task's
+    stage and returns it. The task must exist (ErrNotFound).
+
+func (r *Registry) BeginEffect(ctx context.Context, key, kind string, taskID int64) (Effect, bool, error)
+    BeginEffect records that the effect under key is about to run, and reports
+    whether the caller should run it. The bool is false when the key already has
+    an ok result (the returned Effect holds it): the effect is never repeated.
+    A key that was begun and never ended (a crash) or that failed runs again,
+    so the caller first looks for what the effect may already have made. A key
+    belongs to one kind and one task: reusing it for another is ErrConflict.
+
+func (r *Registry) Close() error
+    Close closes the database.
+
+func (r *Registry) CompleteRequest(ctx context.Context, id int64, state, result string) error
+    CompleteRequest marks a pending request done or failed with a result
+    message. Completing a request twice is ErrConflict.
+
+func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error)
+    CreateTask inserts t and returns the stored row. A task needs a Jira key or
+    a prompt; an empty State is queued; Created and Updated are the clock's.
+    It returns an ErrActiveKey naming the holder when a task for the same Jira
+    key is not done or stopped.
+
+func (r *Registry) Decisions(ctx context.Context, taskID int64) ([]Decision, error)
+    Decisions returns a task's decisions in the order they were made.
+
+func (r *Registry) EffectByKey(ctx context.Context, key string) (Effect, error)
+    EffectByKey looks up an effect; a missing one is ErrNotFound.
+
+func (r *Registry) EndEffect(ctx context.Context, key, state, result string) error
+    EndEffect settles a begun effect as ok or fail with its result. Ending an
+    effect that is not begun is ErrConflict, and an unknown key ErrNotFound.
+
+func (r *Registry) EnqueueRequest(ctx context.Context, kind string, payload any) (int64, error)
+    EnqueueRequest inserts a pending request with payload marshalled as JSON
+    (nil = {}) and returns its id.
+
+func (r *Registry) Events(ctx context.Context, taskID int64, limit int) ([]Event, error)
+    Events returns a task's events oldest first (taskID 0: the daemon's own);
+    limit > 0 keeps only the newest limit rows.
+
+func (r *Registry) MarkDelivered(ctx context.Context, id int64, delivered string) error
+    MarkDelivered settles an unknown entry as yes (the agent got the prompt) or
+    no (it did not). Settling an entry with the verdict it already has is not an
+    error; a different verdict is ErrConflict, and a missing entry ErrNotFound.
+
+func (r *Registry) OpenEffects(ctx context.Context) ([]Effect, error)
+    OpenEffects returns the effects still begun, oldest first: the ones a
+    restart must settle by running each one's guard again.
+
+func (r *Registry) PendingRequests(ctx context.Context, limit int) ([]Request, error)
+    PendingRequests returns up to limit pending requests, oldest first (limit <=
+    0 = all), so a consumer can skip a request it already handed to a background
+    worker.
+
+func (r *Registry) Questions(ctx context.Context, taskID int64) ([]Question, error)
+    Questions returns every question of a task, voided and answered ones
+    included, by revision and position.
+
+func (r *Registry) RecordDecision(ctx context.Context, d Decision) error
+    RecordDecision stores d. Kind and Choice are required, At defaults to the
+    clock, and the task must exist (ErrNotFound).
+
+func (r *Registry) ReplaceQuestions(ctx context.Context, taskID int64, rev int, qs []Question) error
+    ReplaceQuestions stores qs as revision rev of the task's questions and
+    voids the open questions of every earlier revision (answered ones stay).
+    Each question's Index is its position in qs, whatever it carries; its State
+    is open. rev must be above the task's newest revision (ErrStaleRevision),
+    so a caller asks for newest+1. An empty qs voids the open questions and asks
+    nothing. A question needs Text, and Recommended must be -1 or an index into
+    its Options.
+
+func (r *Registry) RequestByID(ctx context.Context, id int64) (Request, error)
+    RequestByID looks up a request; a missing one is ErrNotFound.
+
+func (r *Registry) SchemaVersion(ctx context.Context) (int, error)
+    SchemaVersion returns PRAGMA user_version.
+
+func (r *Registry) TaskByID(ctx context.Context, id int64) (Task, error)
+    TaskByID looks up a task; a missing one is ErrNotFound.
+
+func (r *Registry) Tasks(ctx context.Context) ([]Task, error)
+    Tasks returns every task, oldest first.
+
+func (r *Registry) TransitionAttempt(ctx context.Context, id string, from []string, to string, set func(*AttemptUpdate)) error
+    TransitionAttempt is TransitionTask for attempts.
+
+func (r *Registry) TransitionTask(ctx context.Context, id int64, from []string, to string, set func(*TaskUpdate)) error
+    TransitionTask moves task id to state `to` only if its current state is
+    one of from (nil from = any state; empty to = keep the state), applying
+    set's assignments and the new updated_at in the same UPDATE. It returns
+    ErrConflict when the state did not match (or when the move would give a Jira
+    key a second unfinished task) and ErrNotFound when the task does not exist.
+
+func (r *Registry) Undelivered(ctx context.Context) ([]LedgerEntry, error)
+    Undelivered returns the entries whose delivery is still unknown, oldest
+    first: the prompts recovery has to settle after a restart.
+
+type Request struct {
+	ID      int64
+	Kind    string
+	Payload json.RawMessage
+	State   string
+	Result  string
+	Created time.Time
+	Handled time.Time // the zero time while the request is pending
+}
+    Request is a CLI to daemon work item.
+
+type Task struct {
+	ID int64
+	// JiraKey is the ticket, "" for a task that started from a free prompt. Of
+	// the tasks that are not done or stopped, one key has at most one.
+	JiraKey string
+	// Prompt is the operator's free text; Guidance the words after a Jira key.
+	Prompt, Guidance string
+	// Kind is a configured kind of task (bug, feature, chore, ...), Repo the
+	// configured repository's name.
+	Kind, Repo string
+	Title      string
+	State      string
+	// Stage is the configured stage the task is in, Branch the local branch,
+	// Copy the repository copy it holds and HeadSHA the branch's head.
+	Stage, Branch, Copy, HeadSHA string
+	// WaitsWho and WaitsWhat say who the task waits on and for what, in the
+	// words the screen shows.
+	WaitsWho, WaitsWhat string
+	// Attempt counts the attempts of the current stage; PRNumber is the draft
+	// PR's number, 0 before it exists.
+	Attempt, PRNumber int
+	Created, Updated  time.Time
+}
+    Task is one piece of work: a Jira key or a free prompt, taken to a draft PR.
+
+type TaskUpdate struct {
+	// Has unexported fields.
+}
+    TaskUpdate collects the column assignments of TransitionTask. Settable
+    columns: kind, repo, title, guidance, stage, branch, copy, head_sha,
+    waits_who, waits_what, attempt and pr_number. The state moves through
+    TransitionTask's `to` and updated_at is the registry's.
+
+func (u *TaskUpdate) Inc(col string, n int)
+    Inc adds n to the integer column col.
+
+func (u *TaskUpdate) Set(col string, v any)
+    Set assigns v to column col. v is nil (NULL), a string, an int, an int64,
+    a bool or a time.Time (the zero time stores NULL).
+
+```
+
+## registrytest
+
+```text
+package registrytest // import "github.com/zhuravel/magnum/internal/factory/registry/registrytest"
+
+Package registrytest gives tests a factory registry without migrating one for
+each of them: the first call in a test binary migrates a template database, and
+every call writes a copy of its bytes, which registry.Open then finds current.
+Only _test.go files import it.
+
+FUNCTIONS
+
+func Open(tb testing.TB) *registry.Registry
+    Open seeds a database in the test's temporary directory and opens it;
+    the registry is closed when the test ends.
+
+func OpenWith(tb testing.TB, opts registry.Options) *registry.Registry
+    OpenWith is Open with options, for a test that moves the registry's clock.
+
+func Seed(tb testing.TB, path string)
+    Seed writes a migrated database to path, creating its directory (0700),
+    for code under test that opens the registry itself. A file already at path
+    is left as it is.
 
 ```
 
@@ -22227,6 +22702,64 @@ type CIInfo struct {
 }
     CIInfo is the head commit's CI as the board shows it.
 
+type CardAgent struct {
+	Name, Why, Now, State string
+	For                   time.Duration
+	Output                time.Time
+}
+    CardAgent is one agent of a task. State is "working", "done" or any other
+    state the agents view names ("waits on you", "stopped"). Why says what it is
+    for, Now what it does at the moment (a working agent), For how long it has
+    worked and Output when its pane last printed.
+
+type CardFile struct {
+	Path           string
+	Added, Removed int
+	// InPlan is false for a file the plan did not name: checking it is on the
+	// operator.
+	InPlan bool
+}
+    CardFile is one changed file of a ready card.
+
+type CardOption struct{ Label, Means string }
+    CardOption is one choice and what it means for the question's example.
+
+type CardQuestion struct {
+	Text    string
+	Context string // one line of why it is asked
+	Example string // one example, drawn behind "Example:"
+	// Options are drawn in the order given, the recommended one first. The
+	// last one is usually "Type your own answer", which has no Means.
+	Options []CardOption
+	// Recommended is the index of the option the factory picks; -1 means no
+	// recommendation, and nothing is marked.
+	Recommended int
+	// Why is the reason of the recommendation. With no recommendation it is
+	// why there is none ("the ticket and the code give no hint").
+	Why        string
+	Answer     string // the answer as the recap says it; empty: not answered
+	AnsweredAt time.Time
+
+	// TookRecommendation is true when the answer is the recommended option.
+	TookRecommendation bool
+	// Comment is the drafted Jira comment of an answer that asks someone: the
+	// recap draws it, and counts the question as an ask, not an answer.
+	Comment string
+	// Asks is who the Comment asks ("rev-ann").
+	Asks string
+}
+    CardQuestion is one question with its options and, once answered, its
+    answer.
+
+type CardStage struct {
+	Name, State, Proof string
+	Took               time.Duration
+	Finished           time.Time
+}
+    CardStage is one stage of a task. State is one of "done", "skipped",
+    "waiting", "working", "failed" or "todo". Proof says what makes the stage
+    done, in words.
+
 type CheckState struct {
 	Name, Label, State string
 	Done, Total        int
@@ -22443,6 +22976,59 @@ type DiskInfo struct {
 }
     DiskInfo is the free space where slots live; FreeGB <= 0 means unknown.
 
+type FactoryGroup int
+    FactoryGroup is the band of the home list a task sits in, by who it waits
+    on.
+
+const (
+	// GroupNeedsYou holds the tasks that are stopped until the operator decides or acts.
+	GroupNeedsYou FactoryGroup = iota
+	// GroupWaits holds the tasks that wait on someone or something else.
+	GroupWaits
+	// GroupDone holds the tasks that finished today.
+	GroupDone
+)
+type FactoryMark int
+    FactoryMark is the one-cell mark before a row: what the task is doing now.
+
+const (
+	// MarkNeedsYou is drawn in yellow: the task is on the operator.
+	MarkNeedsYou FactoryMark = iota
+	// MarkWorking is the only moving mark: an agent works on the task.
+	MarkWorking
+	// MarkWaits marks a task that waits on someone or something else.
+	MarkWaits
+	// MarkDone marks a task that finished.
+	MarkDone
+)
+type FactoryRow struct {
+	ID int64
+	// Key is what the task is called in the list: its Jira key, or its GitHub
+	// number ("#4512") for a PR the operator wrote by hand. GitHub is the
+	// PR's number, shown beside the Jira key on a wide screen.
+	Key, GitHub, Title string
+	Group              FactoryGroup
+	Mark               FactoryMark
+	WaitsOn            []WaitsOn
+	Move               string // the step the factory recommends; NeedsYou rows only
+	Stagings           []StagingCell
+	Since              time.Time // when the task began to wait on this; zero = not shown
+	Help               string    // the line under the rule while the row is selected
+
+	// Jira is the Jira key of a task keyed by its GitHub number, for the wide
+	// screen's JIRA cell. Empty: the Key, unless the Key is the GitHub number.
+	Jira string
+	// MoveShort is Move on a narrow screen.
+	MoveShort string
+	// HelpShort and HelpLong are Help on a narrow and on a wide screen.
+	HelpShort, HelpLong string
+}
+    FactoryRow is one task on the home list, one line.
+
+    The fields after Help are optional extra forms of the text before them:
+    the painter draws the form that fits the screen and falls back to the plain
+    one when a form is empty.
+
 type FindingsInfo struct {
 	Counts          [4]int // P0..P3 findings posted
 	Simplifications int    // optional simplification suggestions posted
@@ -22494,6 +23080,14 @@ const (
 	// IconsASCII draws plain ASCII ("+", "x", "pin").
 	IconsASCII IconMode = "ascii"
 )
+type JiraPreview struct {
+	Key, Type, Status, Priority, Reporter, Summary, Excerpt string
+	Read                                                    time.Time
+	// More is true when the description has more than the Excerpt.
+	More bool
+}
+    JiraPreview is a Jira issue as the daemon read it.
+
 type KindCount struct {
 	Kind    string
 	Working int
@@ -22504,6 +23098,24 @@ type ManualRow struct {
 	Folder, Branch, PRRef, GitHub, DBs, Agents, Disk string
 }
     ManualRow is a manual worktree (read-only, not selectable).
+
+type NewTaskForm struct {
+	Text string
+	// Jira is the issue the text starts with, read by the daemon; nil: the
+	// text is a prompt.
+	Jira                  *JiraPreview
+	Kind, KindWhy, Branch string
+	Starts                string // "now, in talkable.factory2 (free)" or why it is queued
+	Agents, Rules         []string
+	Err                   string // a problem with the text, drawn in the JIRA row
+	Repo                  string // the repository, named in "3 talkable rules go into its prompts"
+	Title                 string // the title of a task started from words
+	Ask                   string // the y/N question being asked; empty: the key hints
+	// ShowRules lists the rules under their count; false: the count alone.
+	ShowRules bool
+}
+    NewTaskForm is the new task screen: the operator's text and what the factory
+    understood of it. A row is drawn only when its field is filled.
 
 type PRBoardOptions struct {
 	Refresh time.Duration    // between Rows calls; default 5s, at least 200ms
@@ -22960,6 +23572,50 @@ type PickerOptions struct {
 	Reload func(ctx context.Context) ([]PickEntry, error)
 }
     PickerOptions tune the picker.
+
+type QuestionCard struct {
+	// TaskKey is the task's Jira key ("PR-12345") or its GitHub number.
+	TaskKey, Title, Kind string
+	Asked                time.Time // when the batch was asked
+	Questions            []CardQuestion
+	Current              int // the index of the question on the card
+
+	// AsOf is the revision of the questions the answers are for ("as of
+	// 14:12"), drawn on the recap. Zero: the sentence is left out.
+	AsOf time.Time
+}
+    QuestionCard is the agents' questions before coding, one at a time,
+    and their recap. Questions are drawn in the order given; Current is the one
+    on the card.
+
+type ReadyCard struct {
+	// TaskKey is the task's Jira key or its GitHub number.
+	TaskKey, Title, Branch string
+	Waited                 time.Duration // how long the card has waited
+	Cause, Fix, Proof      string
+	Files                  []CardFile
+	Doubts                 []string // what the agents were unsure of or skipped
+	Screenshots            int
+	// DiffOpened is when the operator opened the diff; zero: not yet, and
+	// neither Recommended nor Why is drawn.
+	DiffOpened time.Time
+	// Recommended is the option the factory picks: 0 push + draft PR, 1 send
+	// back with a note, 2 drop; -1 for none.
+	Recommended int
+	Why         string
+
+	// Kind is the task's kind ("bug"), Commits the commits on the branch.
+	Kind    string
+	Commits int
+	// ScreenshotsNote says what the screenshots show ("from the copy's own
+	// server: the copied campaign shows 25 points").
+	ScreenshotsNote string
+	// Ask is the y/N question being asked; empty: the key hints.
+	Ask string
+}
+    ReadyCard is a finished task waiting for the operator's decision: read the
+    diff, then push, send back or drop. The recommendation is hidden until the
+    operator opened the diff.
 
 type Request struct {
 	ID     int64
@@ -23419,6 +24075,20 @@ type StageTiming struct {
 }
     StageTiming is one stage of a round.
 
+type StagingCell struct {
+	Name, State, Count string
+	Seen               time.Time
+
+	// OnYou marks a conflict that is out of fix tries, which is on the
+	// operator: the cell turns yellow.
+	OnYou bool
+}
+    StagingCell is one staging server's column on a row. State is one of "none",
+    "outdated", "merging", "conflict", "ci", "deploying", "qa", "qa-pass",
+    "qa-fail", "latest" or "unknown". Count is the progress of a "ci" or "qa"
+    cell ("12/41", "4/9"). Seen is when the factory read it: a wide screen shows
+    its age.
+
 type StatusData struct {
 	Daemon    DaemonInfo
 	Activity  ActivityInfo
@@ -23443,6 +24113,43 @@ type StatusData struct {
     StatusData is one snapshot of what the dashboard shows. Table cells are
     display strings the caller formats (refs, folders, sizes); the header
     numbers are formatted by the dashboard.
+
+type TaskCard struct {
+	Key, Kind, Title, Branch string
+	// Copy says which copy the task holds ("copy 2 of 3, server off").
+	Copy       string
+	Started    time.Time
+	WaitingFor string // starts with who it waits on ("rev-ann: review of #4527")
+	Stages     []CardStage
+	Agents     []CardAgent
+	// Report lines each start with a label word and a space ("cause the offer
+	// email takes ...").
+	Report []string
+	// Learned is what the task taught the factory, one lesson per entry.
+	Learned []string
+
+	// PR is the task's GitHub number once pushed ("#4527").
+	PR string
+	// YourTime is how long the operator spent on the task.
+	YourTime time.Duration
+	// Cursor is the line the mark is on: the stages, then the agents, then
+	// the REPORT line, counted in that order; out of range = none.
+	Cursor int
+	// AgentsNote is the AGENTS line's remark ("the factory merges bastion itself").
+	AgentsNote string
+}
+    TaskCard is a task's card, cut to what milestone 1a draws: the header,
+    what the task waits for, its stages, agents, report and lessons.
+
+type WaitsOn struct {
+	Who, What string
+	OnYou     bool // the blocker is the operator: drawn in yellow, whatever Who says
+
+	// Short and Long are What on a narrow and on a wide screen.
+	Short, Long string
+}
+    WaitsOn is one thing a task waits on. Who is "you", "agent", "CI", a login,
+    "magnum", "memory", "usage" or "nothing"; What says why.
 
 type WatchFailing struct {
 	Watch string

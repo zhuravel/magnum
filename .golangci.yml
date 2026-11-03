@@ -204,6 +204,12 @@ linters:
       - path: internal/mysqlx/
         linters: [gosec]
         text: "G202"
+      # The factory registry is the second SQLite registry: its UPDATE statements join the package's own
+      # table names, column lists and placeholders(n), and the columns an Update sets are checked against
+      # a per-table allowlist, never taken from input.
+      - path: internal/factory/registry/
+        linters: [gosec]
+        text: "G202"
       # execx is the one place commands run; its callers pass argv, never a shell string.
       - path: internal/execx/
         linters: [gosec]

@@ -6,6 +6,7 @@ mise.local.toml
 /state/
 /config.local.toml
 !internal/store/migrations/*.sql
+!internal/factory/registry/migrations/*.sql
 /eval.local.toml
 /config.toml
 /.claude/*
