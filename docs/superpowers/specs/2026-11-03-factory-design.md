@@ -1,6 +1,6 @@
 # magnum factory: design
 
-Status: draft for the operator's approval, 2026-11-03.
+Status: draft for the operator's approval, 2026-11-03. Revision 1, the same day: a review wave of six agents and the operator's decisions (section 13).
 
 ## 1. Intent
 
@@ -23,10 +23,11 @@ Goals:
 
 - A task starts from a Jira key or a free prompt. Kinds: bug, small feature, chore.
 - Several agents investigate before any code: they reproduce the bug, find the cause on their own, read the history of the code and test the claims of the ticket.
-- One writer agent writes the change, test first. A Codex review reads the diff.
+- One writer agent writes the change, test first. Before the PR, magnum's full review runs locally on the change, and the writer fixes what blocks.
+- The factory pushes the approved head and opens a PR ready for review.
 - Later milestones add the rest of the life of a task:
-  - a draft PR, the review rounds of magnum and the fix of review comments
-  - CI watched and fixed, and the parent branch merged again and again
+  - the review rounds of magnum and the fix of review comments
+  - CI watched and fixed, and the parent branch merged when needed
   - merges into the staging branches with QA, and the final merge by the operator
 - A terminal screen, `magnum factory`. It shows what needs the operator and what each task waits on. It also shows every conflict in progress, every unanswered comment and the state of each staging branch.
 - Full transparency: every agent runs in a herdr pane that the operator can watch and type into.
@@ -57,6 +58,7 @@ Anti-goals. Each of these is a failure, and the rest of the work does not make u
 - The magnum daemon restarts about 3 times a day. It started 1 to 12 times a day in the last two weeks. Prompt and skill edits need a restart, and the learning loop lands edits.
 - The operator runs the magnum PR board in another terminal. The factory screen must not give a board letter a different meaning.
 - Every destructive step is idempotent or guarded, and writes `begin`/`ok`/`fail` events.
+- No factory agent and no factory code connects to a shared database or console of any environment. A copy uses only its own local databases (section 8.4).
 
 ## 4. Approaches
 
@@ -99,6 +101,9 @@ This is my call, and the operator can override it.
 - Agent sessions live in a separate magnum-schema store file of the factory (section 4.3).
 - Factory panes run in a named herdr session, `factory`. Each named session is a separate herdr server with its own socket. So factory panes open in their own terminal window, apart from the operator's own panes. magnum's review panes stay where they are. Milestone 1 also tests whether `[herdr] socket` and `[terminal] session` can move magnum's own panes into a named session without code changes.
 - The daemon reads the same usage meter as magnum. Near a soft cap, the factory pauses new stages before magnum pauses reviews. This is my call: reviews are cheaper and other people wait on them.
+- The factory's local review rounds (section 6.5) run at the lowest priority. They yield to magnum's real rounds and to the Codex soft cap.
+- Memory and usage are read before every launch. While memory pressure is at warn, the factory staggers parallel launches.
+- At most one heavy stage runs at a time across tasks (`heavy_stages = 1`): a local review round, local QA or a copy's server.
 
 ### 5.1 Configuration
 
@@ -112,6 +117,7 @@ The factory is lean. The code knows a few generic stage types. Everything specif
 - Each kind of task lists its stages. Each stage names its type, its roles, its prompt file, the stage it follows, its end fact and its caps.
 - Staging environments are a list. Each entry names its branch, whether it gets QA, the QA skill, and the environment that must pass first.
 - Repositories, copies, setup and server commands, the task limit, the memory gate, the CI caps and the poll intervals are configuration.
+- So are the precheck commands, the local review's rounds, the limit of heavy stages and the reviewer that the factory requests.
 - `config.defaults.toml` lists no staging environment and no repository, so it stays distributable. The operator's config holds the Talkable values.
 
 An example from the operator's configuration file. The keys are a sketch for the builder:
@@ -122,6 +128,10 @@ max_active = 3                     # tasks with live agents or a held copy
 memory_gate = true                 # new tasks wait while magnum reads memory pressure
 herdr_session = "factory"
 poll = "45s"                       # CI checks and staging tips
+heavy_stages = 1                   # local review rounds, local QA, servers: one at a time across tasks
+
+[factory.local_review]
+cycles = 3                         # round 1 runs the watch's review roles, later rounds run without simplify
 
 [[factory.repo]]
 repo = "talkable/talkable"
@@ -132,6 +142,13 @@ setup = ["bin/worktree-setup"]
 server = "bin/worktree-run"
 env = { WT_BRANCH = "{copy}", REDIS_DB_OFFSET = "{n*16}" }
 repair_budget = 4                  # CI and QA fixes per task, over all heads
+reviewer = "rev-ann"               # requested once CI is green and magnum's first round blocks nothing (milestone 2)
+
+  [factory.repo.precheck]          # after the writer's last commit, and after each fix of the local review
+  lint = ["bundle exec rubocop {files}", "yarn eslint {files}"]   # changed lines only, with CI's configs
+  specs = "bin/impact-specs {files}"                              # the specs that the change affects
+  cap = "10m"
+  skip_specs_for_kinds = ["chore"]                                # gem upgrades
 
   [[factory.repo.staging]]
   name = "void"
@@ -149,7 +166,7 @@ repair_budget = 4                  # CI and QA fixes per task, over all heads
   after = "void"                   # QA on bastion starts after void passes
 
 [factory.kinds.bug]
-stages = ["start", "investigate", "questions", "coding", "tests", "ready"]
+stages = ["start", "investigate", "questions", "coding", "tests", "local_review", "ready", "publish"]
 ```
 
 ## 6. Tasks and stages
@@ -159,6 +176,11 @@ stages = ["start", "investigate", "questions", "coding", "tests", "ready"]
 - A Jira key: the daemon reads the issue itself (magnum's `internal/jira`, extended with attachments and comments). The token never enters a pane. The ticket goes to agents as a file that they read as data.
 - A free prompt: the text goes to agents as a file in the same way.
 - Text after a Jira key ("PR-12345 only the refund path") is the operator's guidance and goes in with the ticket.
+- The new-task box reads links too. A Jira link is its key. A GitHub PR link offers adoption (section 6.9, milestone 2). A GitHub Actions run link offers a CI task (milestone 3).
+- One key has one task, and one task has one PR. A repeated `start` for a key that has a task returns that task, or its PR, and makes no new task.
+- An overlap line shows what else touches the work: commits that name the key (`git log --all --grep=<key>`), PRs that name it (`gh pr list --search <key>`), and open PRs that change the same files. The line is advisory. It does not stop the task.
+- If Jira does not answer, the task waits as "start when Jira answers". The factory tries again after 1 minute, and waits longer after each failure, up to 30 minutes between tries. After 6 hours the task goes to NEEDS YOU. An unknown key or a missing token file makes no task, and the error names the cause.
+- A free prompt's question batch asks which Jira issue the work belongs to. A title search gives the recommended match. When nothing matches, the recommendation is "no issue".
 - The kind comes from the Jira issue type, or from the words of the prompt. The operator can change it before the start.
 - The base branch is master. If the ticket or the prompt names another base, the report asks the operator.
 - A preflight tests the access that later stages need: VPN, AWS MFA, the read-only production console, QA logins, the gh login. Each missing access becomes one access card at the start, not a stop in the middle.
@@ -168,10 +190,14 @@ stages = ["start", "investigate", "questions", "coding", "tests", "ready"]
 Agents run in parallel, in the task's copy. Roles are data, as magnum's `[[role]]` blocks are.
 
 - Bug: one Claude agent reproduces the bug (`rails runner`, the copy's local server in a browser, or a failing spec). One Codex agent finds the cause on its own, without the reproducer's guess. One agent reads the history of the code that the fix will change: when and why each guard was added.
+- When a bug's ticket names an error, the reproducer reads it through the read-only error-tracker skill that the configuration names. The reproducer leaves its failing spec file in the copy for the writer.
 - Feature: the agents test each point of the ticket against the code: what exists, what is missing, which files change. They collect the product questions that the ticket leaves open.
 - Chore: the agents find every place it touches. If a skill does the chore (for example `t:upgrade-gems`), the writer uses that skill.
 - If an investigator needs production data, it writes a read-only script and asks for it on a production card (section 9). The card shows the script, what it reads and why. The operator's `y` binds to the script's hash. Then the agent runs exactly that script through `magnum factory prod-run`, and the output goes back to it. Any other production command is against its prompt rules.
 - A judge merges the results into one report, `report.md`. If a question is open, the judge also writes `questions.json`.
+- `report.md` opens with "Architecture decisions", or "none". It lists the existing helpers that the change reuses, with file and line. Each architecture decision also joins the question batch.
+- The judge writes `acceptance.json` from the ticket: the checks that prove the task. The writer reuses them, and QA reuses them later.
+- A Codex plan critic reads the report of a feature or a chore that touches 3 or more files, the database or security. It runs before the gate, so its questions join the one batch.
 - Each question has a context line, a concrete example, options, and a recommended option with its reason. If the evidence gives no clear answer, the question says "no recommendation".
 
 ### 6.3 The gate before code
@@ -179,42 +205,87 @@ Agents run in parallel, in the task's copy. Roles are data, as magnum's `[[role]
 - A bug needs a reproduction and no open question.
 - A feature or a chore needs no open question.
 - If a question is open, the task waits for the operator. All open questions go in one batch.
-- If the bug does not reproduce, or the investigators disagree on the cause, the task waits for the operator with the report.
+- If the bug does not reproduce, or the investigators disagree on the cause, the judge asks a question with options: give a hint, take the other cause, try Docker or a staging, or drop the task. One option is recommended.
+- When the answers change the plan, one judge turn amends `report.md` before coding starts.
+- An "ask someone" answer keeps its question open until the answer arrives.
 
 ### 6.4 Implementation
 
 - One writer agent works in the task's copy on a local branch, for example `zhuravel-PR-12345-short-slug` (the naming of `t:create-pr`).
-- A bug: first a spec that fails, recorded with its output, then the fix. A feature: specs for the new behavior. A chore: the existing specs stay green.
-- Then the specs near the change, rubocop, and a Codex review of the diff. A Codex finding goes back to the writer once.
+- A bug: first a spec that fails, then the fix. A feature: specs for the new behavior. A chore: the existing specs stay green.
+- The factory runs the proof itself. On the base with only the spec files of the change applied, the new spec must fail. At the head, it must pass. The factory records the commands, the exit codes, the output and the tree SHAs. A new head voids the proof.
+- A precheck runs after the writer's last commit, and again after each fix of the local review:
+  - lint on the changed lines with CI's configs: rubocop, haml-lint, eslint, stylelint
+  - the specs that the change affects, with a baseline at the base SHA. A spec that is also red on the base is not blamed on the change.
+  - the related jest tests
+  - each new migration up and down, and the migration-safety lint of section 8.4
+- One lock on the machine lets one precheck run specs at a time. A precheck stops after 10 minutes. A gem upgrade skips the specs.
+- Then the local magnum review loop runs (section 6.5). It replaces the single Codex review of the first draft.
 - If the change is visible, the writer takes screenshots from the copy's local server.
-- The end fact of the stage: the branch has commits, the working tree has no tracked changes, the recorded failing spec passes, and the report lists the files. A "done" message alone is not the end fact.
+- The end fact of the stage has three parts. The branch has commits, and the working tree has no tracked changes. The factory's proof and the precheck passed at the head. The report lists the files. A "done" message alone is not the end fact.
+- Factory mode: no agent pushes or opens a PR. An agent follows a skill such as `t:upgrade-gems` or `t:fix-ci`, but stops before the skill's push or PR step. The prompts say so.
 
-### 6.5 Ready to push
+### 6.5 The local magnum review loop
 
+Before the PR, the factory runs magnum's full review on the change, on this Mac. The operator decided this (13.1).
+
+- A local round is a blind dry run in the task's copy. It makes no GitHub call and needs no PR. magnum's eval replays (`engine.RunEval`) already run such rounds, and the local round is a copy of that code. Each round gets a fresh scratch directory, a high synthetic PR number and a new agent tag. It always gets the base SHA, so `post-review` anchors the comments on the local diff (`--local-base`).
+- The judge reads the title, the body and `ticket.md` from files, not from GitHub. A `local` block in the judge's shared prompt and in the judge skill says so, and claude-review gets a local prompt without `/code-review <url>`. The factory runs them as a candidate (`config.WithCandidate`), so the prompts of live PRs render unchanged.
+- Round 1 runs the review roles of the repository's watch. Later rounds run without simplify. At most 3 rounds run. A round takes 39 minutes at the median, so the loop takes up to about 2 hours.
+- A round blocks on a P0, P1 or P2 finding, new or still open. It also blocks on the judge's verdict "blocking". This is magnum's own rule (`roundBlocks`), in a function of the factory. The factory never trusts the planned event.
+- A round that ends as needs attention, blocked, error or timeout means "review unavailable", never "clean". The task goes to NEEDS YOU, and nothing is pushed.
+- The writer gets the blocking findings as `review.json`, and commits a fix before the next round. The precheck runs after each fix. The writer declines a finding only with the risk of the suggested change. A decline without a risk counts as open.
+- Each finding gets a fingerprint (path, lines and a hash of the title), so the factory follows it across rounds. A finding that comes back twice after its fix goes to the ready card's doubts. A finding that is a product question joins the question batch.
+- The ready card lists what is left and does not block.
+- Local rounds run at the lowest priority. They yield to magnum's real rounds and to the Codex soft cap, and they run while the writer is idle. A restart during a round closes its workspace by label and runs the round again.
+- Every round is a record (section 11.1). It keeps the heads before and after, the change between them and the hash of the review skill. It also keeps the minutes, the tokens and the exit: clean, cap, operator, oscillation or unavailable. Every finding is a record too.
+- In milestone 1a, the PR body lists the leftovers under "Known", and the factory records the local findings. From milestone 2, magnum's first GitHub round builds on the last local round: it is a re-review, and it never posts the same note twice. This needs a change in magnum's engine, next to the move of the fix loop.
+- Before the loop is built, a spike runs one hand-seeded local round with the unmodified judge, to see whether the judge survives the missing PR. The spike is an operator step or an opt-in live test, never part of the gate.
+
+### 6.6 Ready to push
+
+- Before the card, a judge turn drafts the PR body from the report and the proof. It follows the rules of the repository's PR template. It adds a table from the ticket's points to the specs that prove them. It lists the local review's leftovers under "Known". The card shows the body.
+- The card's FLAGS line names what needs a second look:
+  - a migration or a schema change (section 8.4)
+  - a change to `Gemfile.lock`, a workflow or a config file
+  - a file that the plan did not name
+  - a changed guard older than 6 months, with the reason that the history agent found
+  - a conflict with current master, by `git merge-tree`
+  - the CI jobs that did not run locally
+- When the card is drawn, the factory merges current master into the head in memory (`git merge-tree`). On a conflict, the writer merges the base, the proof and the precheck run again, and a new card is drawn.
 - The task waits for the operator on the ready card (section 9). Nothing is on GitHub yet.
-- The operator's `y` binds to the head commit, the report hash and the diff hash. Before anything leaves the Mac, the factory makes sure that the branch still has that head. A change voids the `y`.
-- Milestone 1 (my call): on `y`, the factory tells the writer to open a draft PR with `t:create-pr`. The operator does the same by hand today ("open PR, assign me"). The PR uses the operator's login.
-- Then the factory makes sure that the pushed head is the approved head. It sends magnum a review request, because magnum does not review drafts by default (`include_drafts = false`).
+- The operator's `y` binds to the head commit, the report hash and the diff hash. Before anything leaves the Mac, the factory makes sure that the branch still has that head. A change voids the `y`. The y/N sentence names the copy that the push frees and the queued task that starts.
+- On `y`, the factory pushes, not an agent (my call, 13.2): `git push origin <approved sha>:refs/heads/<branch>`, with a guard on the expected remote head, never with force. Then it opens the PR with `gh pr create`, ready for review and not a draft, under the operator's login and with the drafted body.
+- Then the factory reads the PR back: the author, the base, the head and the ready state. The head must be the approved head. Otherwise the task goes to NEEDS YOU.
+- The task is then `published`: its PR is open, and work on it goes on in later milestones. Only a merge of the PR or a stop by the operator ends it.
+- The PR is not a draft, so magnum reviews it by itself. The factory sends no review request in milestone 1a.
+- From milestone 2, the factory requests the reviewer configured for the repository, once. It does so after CI is green and magnum's first GitHub round has nothing blocking.
 - The push helper and the branch lock come in milestone 2.
 
-### 6.6 Later stages
+### 6.7 Later stages
 
-- PR: the factory pushes through the push helper (section 7) and opens a draft PR with the body of `t:create-pr`.
-- Review: magnum reviews the PR as the operator's own PR. From milestone 2, the fix of review comments runs in the factory: the operator chose to move magnum's fix loop into the factory, with its skill, prompts, `fix-reply` and `fix-sync` helpers and tests. The board's `f` and `F` keys then queue the work in the factory, and magnum's own fix code is deleted. The factory asks magnum for each re-review through magnum's request table. Replies to people post by themselves, as the fix loop does today (the operator's decision). A comment that only the operator can answer goes to NEEDS YOU.
-- Author: the factory opens its PRs under the operator's login (the operator's decision), so magnum's own-PR fix loop works unchanged and a colleague approves, as today. From milestone 2, the commits that the factory pushes are authored by the factory App (`zhuravel-factory[bot]`) and pushed with the App's token through the push helper, and the factory's replies and comments come from the App. So the history and the threads show which work an agent did, and factory pushes need no login in the pane.
+- PR: the factory pushes through the push helper (section 7) and opens a PR ready for review, with the drafted body.
+- Review: magnum reviews the PR as the operator's own PR. Its first round builds on the last local round (section 6.5). From milestone 2, the fix of review comments runs in the factory: the operator chose to move magnum's fix loop into the factory, with its skill, prompts, `fix-reply` and `fix-sync` helpers and tests. The board's `f` and `F` keys then queue the work in the factory, and magnum's own fix code is deleted. The factory asks magnum for each re-review through magnum's request table. Replies to people post by themselves, as the fix loop does today (the operator's decision). A comment that only the operator can answer goes to NEEDS YOU.
+- Settle (milestone 2): the factory waits until every reviewer of a head is done (Pronto, the Codex connector, pr-agent and magnum), at most 20 minutes. Then one fix pass makes one push. Each task has one serial work queue, so the newest head wins and stale events drop.
+- Hand-off (milestone 2): one key writes a brief for a colleague and offers to assign the PR.
+- Author: the factory opens its PRs under the operator's login (the operator's decision), so magnum's own-PR fix loop works unchanged and a colleague approves, as today. From milestone 2, the factory App (`zhuravel-factory[bot]`) authors the commits that the factory pushes. They go out with the App's token through the push helper, and the factory's replies and comments come from the App. So the history and the threads show which work an agent did, and factory pushes need no login in the pane.
 - CI: section 8.
-- Parent branch: the factory merges the parent at three times: on a conflict that GitHub reports, before each staging merge, and once a day. An agent resolves conflicts in the task's copy, and the targeted specs run before the push.
+- Parent branch (milestone 3, my call): the factory merges the parent for a conflict that GitHub or `git merge-tree` reports, or for a required check, and at no other time. It never merges while QA runs. An agent resolves conflicts in the task's copy, and the targeted specs run before the push.
 - Stagings and QA: section 8.
 - Merge: the operator merges. If QA passed on void and bastion at the latest head, a "ready to merge" alert fires.
 - Cleanup: after the merge, the factory frees the copy, removes the local branch, and keeps the logs and the report.
 
-### 6.7 Questions from agents during work
+### 6.8 Questions from agents during work
 
 Agents do not use interactive question dialogs. A prompt rule tells them to write `questions.json` and end the turn. The factory sees the file and the idle pane, and the task goes to NEEDS YOU. The answers go back as the next prompt.
 
+Questions raised in any stage suspend that stage. The factory keeps the asking role, the suspended attempt and the open conditions. After the answers, the stage resumes, and its gate is evaluated again.
+
+The operator flags a question as needless with `−` on the question card, with one key for the reason. The flag teaches the factory which questions to skip (section 11).
+
 If an agent shows a dialog anyway, the factory does not answer it. The task goes to NEEDS YOU as "an agent shows a prompt the factory does not know", and the operator answers in the pane.
 
-### 6.8 The operator's own PRs
+### 6.9 The operator's own PRs
 
 The operator can adopt work that started without the factory, with `magnum factory adopt <PR, Jira key or branch>` or one key on the screen. Adoption is explicit, never automatic.
 
@@ -232,17 +303,27 @@ The operator can adopt work that started without the factory, with `magnum facto
 - A task holds its copy from intake until its PR opens. After that, a stage that needs a copy claims a free one: a CI fix, a parent merge, a QA fix or a staging conflict. A task that waits on a reviewer holds no copy and does not count toward the limit.
 - That script already gives each copy its own databases and a fixed port derived from the copy's name. The factory also sets a Redis offset for each copy, because the Redis configuration reads `REDIS_DB_OFFSET` and the setup script does not set it.
 - The server of a copy starts only for the stages that need it (a browser reproduction, screenshots, local QA) and stops after. If a feature needs background jobs, Sidekiq starts too.
-- At most 3 tasks are active at once: a task with live agents or a held copy. A new task waits while the machine shows memory pressure, read by magnum's existing memory check.
+- The factory starts and stops the copy's server itself. It records the server's pid and its start time. At reconcile, it kills a stray server whose pid and start time both match the record.
+- A claim follows a protocol:
+  - The factory prefers the copy that the task used last.
+  - When the copy's databases hold the migrations of another task, it resets them.
+  - When `Gemfile.lock` or `yarn.lock` differs from the copy's last install, it runs bundle and yarn.
+  - It flushes the copy's Redis databases.
+  - When a task leaves a copy, the factory writes `handoff.md` in the task's directory.
+- If setup fails, it runs once more. A second failure marks the copy broken, and the task claims another.
+- A release keeps the factory branch. The factory never removes a copy while a pane runs in it.
+- At most 3 tasks are active at once: a task with live agents or a held copy. A new task waits while the machine shows memory pressure, read by magnum's existing memory check. Memory and usage are read again before every launch, not only at the start of a task.
 
 ### 7.2 The boundary with magnum
 
 | Who | Owns |
 |---|---|
-| The factory | the work up to the PR: intake, investigation, questions, implementation, the push, the draft PR. The work after it: the fix of review comments (from milestone 2), CI fixes and reruns, parent merges, staging merges, deploy tests, QA, cleanup |
+| The factory | the work up to the PR: intake, investigation, questions, implementation, the local review, the push, the PR ready for review. The work after it: the fix of review comments (from milestone 2), CI fixes and reruns, parent merges, staging merges, deploy tests, QA, cleanup |
 | magnum | review rounds, re-reviews on request, approvals |
 
+- magnum reviews a factory PR as it reviews any PR that is not a draft. The factory's local rounds run magnum's round code in a scratch layout of the factory. They never write magnum's registry, and they wait while magnum runs a real round.
 - From milestone 2 the factory is the only writer of code, so no lease between the two daemons is needed. A lock inside the factory stops two of its own agents from pushing to one branch at the same time. It survives a restart, and it is not dropped while its pane still runs.
-- A push helper (`magnum push`, like `magnum fix-reply` today) is the push path for factory agents from milestone 2. It tests the lock, the target branch and the expected remote head, and refuses master and main.
+- In milestone 1a, only the factory's own code pushes (section 6.6). From milestone 2, a push helper (`magnum push`, like `magnum fix-reply` today) is the push path for factory agents. It tests the lock, the target branch and the expected remote head, and refuses master and main.
 - The helper and a pre-push hook in each copy stop mistakes. They are not a security boundary (section 12).
 
 ### 7.3 GitHub reads: polling, no webhooks
@@ -265,6 +346,9 @@ The operator can adopt work that started without the factory, with `magnum facto
 - A repair budget for the whole task stops a loop in which every failed fix makes a new head with fresh caps. It counts CI and QA fixes over all heads, 4 by default. It survives pushes and restarts, and only the operator resets it.
 - When a cap or the budget is used up, the task goes to NEEDS YOU with the reason.
 - magnum's check reads keep only passed, failed, pending and skipped today. The factory needs the conclusion of each check, which the query already fetches.
+- Milestone 3 adds a third cause, "not ours": a spec that fails away from the diff and passes locally, or that is red on master too. The factory reruns it once, then waits with "master is red". It makes no fix and spends no budget.
+- A CI-miss ledger (milestone 3): each CI code failure on a head that passed the local precheck joins the precheck's spec map.
+- A watchdog (milestone 3) fires when no checks start after a push, or when a queue does not move.
 
 ### 8.2 Stagings
 
@@ -276,6 +360,12 @@ The operator can adopt work that started without the factory, with `magnum facto
 - After CI on the staging tip, the factory waits for the deploy. Then it makes sure that the server runs a commit that contains the task head. How to read the deployed commit is an open item (section 13).
 - If a staging holds an older head, the factory merges and deploys the latest head without asking.
 - What the start of a task allows: merges of the task's own head into the configured staging branches, and their deploys. A conflict resolution that changes other people's changes on a staging branch is pushed after the specs of the touched files pass (the operator's decision). The stage card shows what the agent kept.
+- Only a clean head goes to a staging (milestone 4): no magnum P0 to P2, and CI green. Redeploys coalesce, and bart gets only the final head.
+- The targeted specs run on the combined tree of a staging merge, even when it merges clean. Earlier conflict resolutions are reused. Lockfiles and the schema are regenerated, never merged as text.
+- A migration that reached a staging is frozen. A later edit of it is refused, and the writer adds a new migration.
+- A resolver's change to a colleague's change gets a review against both inputs before the push.
+- Each wait for a deploy has a cap and an alert.
+- Before a deploy to an environment that a migration of the branch names, the factory shows the runbook card of section 8.4.
 
 ### 8.3 QA
 
@@ -284,6 +374,26 @@ The operator can adopt work that started without the factory, with `magnum facto
 - A QA verdict belongs to the task head, the staging commit that the server ran and the version of the check list. A new task head makes every earlier verdict stale, and QA runs again after the new deploy.
 - Before QA, after QA and before "ready to merge", the factory reads the commit that the server runs. If another developer's deploy changed it since QA, QA runs once more before "ready to merge".
 - A failed check that the lead QA agent confirmed becomes a bug for a QA fix agent. At most 2 QA fixes per environment, then NEEDS YOU.
+- The QA check list comes from the plan and `acceptance.json`. The operator approves it on the ready card. It runs locally first, then on void and bastion.
+- "Ready to merge" is its own group on the screen, and it does not count as needs-you. Its predicate is true only at the head: the approvals, CI, no open threads, a mergeable PR and QA. The card lists the commits made since the operator read the diff.
+
+### 8.4 gh-ost and production migrations
+
+The operator said: "gh-ost migrations ... are special case and should be handled well, production should only be migrated by me manually (magnum provides instructions, I execute)".
+
+In the talkable repository, a migration that uses `GhostCommandGenerator[<envs>]` names the environments where a person changes the table with gh-ost. On those environments, the migrate step of the deploy stops with an error. Every later deploy of that environment then stops for every developer, until a person runs gh-ost. In that environment's console, the generator prints the gh-ost commands and the code that marks the migration as performed. Its `down` always refuses. `config/table_stats.json` lists the size of each table.
+
+A colleague's prototype runs the migration code itself in a console pod with the operator's cluster login, to get the commands. That runs any data change of the migration on a shared database before a person reviewed it. It also writes the database password into a file. The factory does not copy that.
+
+Rules:
+
+1. No factory agent and no factory code ever connects to a shared database or console of any environment (production, bastion, void, bart) to migrate. Copies use only their own local databases. The prompts forbid it. The factory's own commands never run a remote console, `kubectl exec` or gh-ost.
+2. Detection starts in milestone 1a. The precheck and the ready card's FLAGS line name every migration that the branch adds. They say whether it uses `GhostCommandGenerator`, and for which environments. They flag a change to a large table (by `config/table_stats.json`) without `GhostCommandGenerator` and without an online algorithm. A gh-ost migration changes one table only. An irreversible migration is flagged. This migration-safety lint moves from milestone 1b into 1a, because the factory writes migrations from its first task.
+3. The factory writes a runbook for each environment and shows it on a card. It never runs the runbook. The runbook names the migration and the environment, and the console to open. It gives the line that prints the gh-ost commands in that console, where to run gh-ost, and the line that marks the migration performed. It says how to make sure that the change worked (the schema and `schema_migrations`), and what to do on a gh-ost failure. For production, it gives the order against the deploy. The operator runs it, then presses "done" on the card.
+4. Stagings (milestone 4): before a deploy to an environment that a migration of the branch names, the factory does not deploy. It shows that environment's runbook card and waits for the operator's "done". Then it makes sure that the migration is marked performed: the deploy's migrate step passes, or the operator confirms a read. Then it deploys. A later deploy to the same environment does not stop again for the same migration.
+5. Production: the factory never deploys or migrates production. A PR with a migration that names production gets the production runbook on its "ready to merge" card. The "ready to merge" alert says that a manual production migration comes with this merge.
+6. Every environment, staging and production, gets a runbook card (the operator's decision, 2026-11-03). The factory never runs gh-ost or migration code on a shared database.
+
 
 ## 9. The screen
 
@@ -293,6 +403,18 @@ Two answers came after the screen spec was drawn. They change two mockups, and t
 
 - Replies to people post by themselves. So the NEEDS YOU row "post the drafted reply" becomes "answer alice: a product question", and only for a comment that the fixer could not answer. The reply card stays for those.
 - A production card joins the decision cards: the read-only script, what it reads and why, then `Run this read-only script on production? y/N`.
+
+Revision 1 refines the frames again (13.1). The mockups below do not show these changes yet. The painters draw them, and the operator approves a second frames page before the screen is wired (a second checkpoint):
+
+- The ready card gets the FLAGS line (section 6.6) and a row with the local review's leftovers (section 6.5).
+- The ready card's options are "push + PR" (ready for review, not a draft), "send back" and "drop", and the digits 1 to 3 pick them. After "send back", reason keys come before the note.
+- The diff shows the flagged files first. "unread: <file>" replaces "You have not read the diff yet".
+- A queued row names what frees it. Every y/N sentence names what it frees, for example the copy and the queued task that then starts.
+- The new-task box reads links: a Jira link, a GitHub PR link (it offers adoption) and an Actions run link.
+- After the operator was away, home shows a short digest: a chip segment until the next key, and "DONE SINCE <day time>".
+- With 0 tasks, home is an empty screen with one line. With 1 task, home draws no empty groups. With 10 tasks, long groups collapse.
+- The question card gets a "needless" key, `−`.
+- The tests stage reads "specs, lint, then the local review", not "a Codex review".
 
 ### 9.A Principles
 
@@ -646,8 +768,8 @@ If the evidence changes before you send:
 - **Colors:** labels use Header and "not in the plan" is Warn, because checking that file is on you. A failed check turns its line `✗` Err, and the recommendation then moves to "send back".
 - **Before the diff:** nothing is marked. Choosing push asks "Push without reading the diff? y/N" instead of the normal question.
 - **The diff:** `d` runs the pager in the task's copy through `tea.ExecProcess` and returns to the card. `e` opens the screenshots.
-- **Asks y/N:** push + draft PR. "Send back" asks after you type a one-line note. "Drop" asks "Drop PR-12360: free talkable.factory3, keep the branch?".
-- **Milestone 1:** I keep push as your `y` on this card. The factory pushes and opens the draft PR.
+- **Asks y/N:** push + PR. "Send back" asks after you type a one-line note. "Drop" asks "Drop PR-12360: free talkable.factory3, keep the branch?".
+- **Milestone 1:** I keep push as your `y` on this card. The factory pushes and opens the PR, ready for review.
 
 #### Reply card (100)
 
@@ -935,12 +1057,14 @@ It is not asked:
 | | `o` | the pane that asked | no |
 | | `esc` | back, answers kept | – |
 | Questions | `enter`, `1-9` | answer and move on | no |
+| | `−` then one key | flag the question as needless, with the reason | no |
 | | `backspace` | previous question | – |
 | | recap `y` | send the batch | yes, once |
 | | recap `e` | edit the drafted Jira comment | – |
 | Ready to push | `d` / `e` | diff in the pager / screenshots | – |
-| | push + draft PR | push the branch, open a draft PR | yes ("without reading the diff?" if `d` was not opened) |
-| | send back | send a one-line note to the writer | yes |
+| | `1-3` | pick push + PR, send back or drop | per option |
+| | push + PR | push the branch, open a PR ready for review | yes ("without reading the diff?" if `d` was not opened) |
+| | send back | one reason key, then a one-line note to the writer | yes |
 | | drop | free the copy, keep the branch | yes |
 | Reply | post / edit, then post | post the reply as you | yes |
 | | answer myself | you answer on GitHub | no |
@@ -1014,11 +1138,18 @@ It is not asked:
 | investigate | agents reproduce, find the cause, read history |
 | questions | agents stopped for your answers |
 | coding | a failing spec first, then the change |
-| tests | specs, rubocop, then a Codex review |
+| tests | the factory's proof and the precheck: specs, lint, migrations |
+| local review | magnum's review on this Mac, before the PR |
+| FLAGS | what needs a second look before the push |
+| Known | the local review's notes that do not block, listed in the PR body |
+| review unavailable | the local review did not finish; never read as clean |
+| published | the PR is open; work on it goes on |
+| runbook | the steps of a manual migration, for you to run |
+| needless | you flagged a question that the factory did not need to ask |
 | ready to push | committed on this Mac, not on GitHub |
-| push + draft PR | push the branch, open a draft PR |
+| push + PR | push the branch, open a PR ready for review |
 | you pushed 11:02 | you said y; the factory pushed |
-| pushed | the branch is on GitHub, draft PR open |
+| pushed | the branch is on GitHub, the PR is open |
 | review | magnum's rounds and people's comments |
 | merge master | master merged into the branch, conflicts fixed |
 | merge | your final merge into master |
@@ -1080,6 +1211,7 @@ It is not asked:
 - access needed: at once, once more after 5 minutes, and at "2m left"
 - ready to merge: QA ✓ on void and bastion at the latest head
 - an agent showing a prompt the factory does not know
+- review unavailable, or 3 local review rounds with something that still blocks
 
 **Rules:**
 - Alerts within 2 minutes merge into one toast, for example "factory: 3 need you · PR-12345 questions · #4512 reply · PR-12360 ready to push".
@@ -1099,7 +1231,7 @@ Never use a title that looks like the marker `reveal` puts on herdr's client.
 
 ### 9.G Milestone 1, and what later milestones add
 
-Milestone 1 covers the stages up to ready to push. Then your `y` on the ready card makes the factory push and open the draft PR. I keep this, so it is not an open question. The task then goes to DONE TODAY, and the magnum board takes over the review.
+Milestone 1 covers the stages up to the PR. Your `y` on the ready card makes the factory push and open the PR, ready for review. I keep this, so it is not an open question. The task is then published. In milestone 1a it shows in DONE TODAY on that day, and the magnum board takes over the review.
 
 ```
  magnum factory · talkable                                    memory full: new tasks wait · ↻ 14:09 
@@ -1121,7 +1253,7 @@ Milestone 1 covers the stages up to ready to push. Then your `y` on the ready ca
 ```
 
 **Milestone 1 has:**
-- NEEDS YOU kinds: questions, ready to push, access needed, out of fix tries, unknown prompt.
+- NEEDS YOU kinds: questions, ready to push, review unavailable, access needed, out of fix tries, unknown prompt.
 - The task card with STAGES (start to pushed), AGENTS, REPORT and LEARNED.
 - Stage cards with the mirror, the agents view, and new task.
 - Learning from your typed lines, your answers and `+ −`, with rules that wait for your OK. Skill edits come once enough finished tasks exist to replay.
@@ -1139,19 +1271,45 @@ Milestone 1 covers the stages up to ready to push. Then your `y` on the ready ca
 
 ### 9.H Open questions of the screen
 
-The designer's five questions are settled in section 13. Adoption is explicit (13.1). The staging-conflict policy is open (13.3). QA fix tries, the 7-day branch after a drop and the 2-hour snooze are calls (13.2).
+The designer's five questions are settled in section 13. Adoption is explicit (13.1). The staging-conflict policy is decided (13.1). QA fix tries, the 7-day branch after a drop and the 2-hour snooze are calls (13.2).
 
 ## 10. Restarts and durability
 
 - The factory registry keeps a row for each of these: a task, a stage attempt, an input head, a prompt version, a session id, a pane and workspace id, a question, an answer and an external effect.
 - The daemon records the intent to launch an agent before it starts the pane. After a restart, it reconciles by session id, copy and attempt before it launches anything.
 - A live pane goes on. `Manager.Recover` binds it to its stored session again, and a submitted prompt is observed, never sent again.
-- magnum sends a prompt before it saves that the prompt was sent. If the daemon stopped in that window, the factory reads the agent's transcript (the Claude session file or the Codex rollout) for the prompt's hash from the prompt ledger. If the prompt arrived, the run is marked sent. If it did not, the factory sends it.
-- magnum creates a herdr workspace before it saves its pane. The factory puts the attempt id into the workspace label, so after a crash it finds a workspace that no row names, and adopts or closes it.
-- Crash tests: between the workspace creation and its row, between a prompt and its row, during a push, during a staging merge, and during a question batch.
-- If a pane is lost, the agent CLI resumes its session from the stored session id. If the CLI cannot resume it, the stage starts again from its files.
+- magnum sends a prompt before it saves that the prompt was sent. If the daemon stopped in that window, the prompt's delivery is unknown. The factory reads the agent's transcript (the Claude session file or the Codex rollout) for the prompt's hash from the prompt ledger. If the prompt arrived, the run is marked sent.
+- A prompt of unknown delivery stays unknown. The factory sends it again only on proof that it never arrived: a second read of the transcript after a delay has no such turn, and the run and the session agree. Without that proof, the task waits with "agent: prompt delivery unknown".
+- magnum creates a herdr workspace before it saves its pane. The factory puts the attempt id into the workspace label. After a crash, it finds a workspace that no row names, and adopts or closes it. Labels are unique per task and attempt.
+- A restart during a local review round closes the round's workspace by its label, and the round runs again.
+- Crash tests: between the workspace creation and its row, between a prompt and its row, and during a push. Also during a staging merge, a question batch and a local review round.
+- If a pane is lost, the agent CLI resumes its session from the stored session id, at most 2 times per attempt. Then a fresh session starts from the stage's files. Without progress before the deadline, the task goes to NEEDS YOU.
 - Each external effect (a push, a PR, a comment, a rerun, a staging merge) has an idempotency key. The daemon looks for an existing result (the PR, the pushed commit, the run) before it tries again.
 - Milestone 1 proves this with a restart test: restart the factory daemon during a launch and during work. The panes go on, no prompt is sent twice, and the logs stay.
+
+### 10.1 Self-healing
+
+The operator's standing rule: fix the cause and add the recovery. These items are approved by default (13.2). Milestone 1a has these:
+
+- Panic containment: a panic stops only the tick of its task. After 2 panics, the task goes to NEEDS YOU.
+- Sleep and wake: when the wall clock jumps by more than 3 ticks, every turn deadline moves by the gap. Read failures on the first tick after the wake do not count.
+- An infrastructure hold: SSH, DNS or TLS errors, a failed MySQL ping, or the same failure on 2 tasks within 10 minutes. The hold stops every stage at no cost: no attempt and no budget counts. The factory tries again after 2 minutes, and waits longer after each failure, up to 30 minutes. After 30 minutes of hold, the factory goes to NEEDS YOU.
+- A herdr-down hold: the factory opens `herdr --session factory` through magnum's reveal code, at most 2 times an hour.
+- A restart drains: the daemon starts no new launch or effect, ends its tick and exits, and launchd starts it again. `magnum factory install` reloads the job once.
+- A request that waited too long expires, with its reason.
+- Disk and memory are read every tick. Under pressure, the factory holds launches, parks the idle agents of tasks that wait on the operator, and stops idle servers. At half the disk floor, the factory goes to NEEDS YOU.
+- A hung turn: the role's timeout passed, the transcript did not grow, and the screen did not change for 10 minutes. The factory stops the shell and nudges. Then it parks the session and resumes it. Then it starts a fresh session. After these 3 steps, the task goes to NEEDS YOU with the pane's last line.
+- A loop without progress: 6 prompts in one stage, the same failing output 3 times, or a context over 85%. The factory compacts the session. Then it starts one fresh session from the files. Then the task goes to NEEDS YOU.
+- A Codex cybersecurity warning marks the task as never for Codex. Its Codex roles run on their Claude fallback, with no retry, as magnum's reviews do.
+- A model limit moves the session to the role's fallback models. A changed login lifts a login pause. After an account switch, idle Codex sessions restart.
+- A Codex session that shows the hooks-trust dialog holds the task with its reason. A session that never took its first prompt starts fresh.
+- Factory roles run their database commands through `magnum db-lock` on their copy.
+
+Milestone 1b adds:
+
+- A CLI-update hold: the factory records the version of each CLI. The same pane error on 2 launches holds new launches of that kind.
+- Registry integrity: `PRAGMA quick_check` at start, a reconcile for tasks with no live attempt and no wait reason, and a daily `VACUUM INTO` backup, 7 kept.
+- Access is tested again before each stage that needs it, and after a wake. Every task that needs the same access shares one access card.
 
 ## 11. Learning
 
@@ -1165,12 +1323,47 @@ The operator said: "very important for the factory to constantly improve itself 
 - Tasks that the operator stopped or redid.
 - From later stages: magnum's findings on factory PRs that the writer fixed, people's review comments, CI code failures, QA bugs, and conflicts that came back.
 
+**Evidence records, from the first task.** The factory cannot read evidence later that it did not record at the time. So the factory registry records these from milestone 1a, before any screen or lesson reads them:
+
+| Record | What it keeps |
+|---|---|
+| span | each move of a task between states: the stage, who it waits on and for what, whether that is the operator, the reason |
+| run | for each role of an attempt: the CLI, the model, the versions of the CLI and of magnum |
+| | the hashes of the prompt, the skill and the config, the rules it carried |
+| | the session id and the transcript path, the times of launch, first output, end and verification |
+| | the end fact and why, the nudges, the tokens by model, the active and idle seconds |
+| | the outcome: verified, failed with its cause, voided, stopped, lost, paused |
+| operator input | the kind: task text, guidance, answer, decision, send back, rating, stop, drop, retry, typed in a pane, say one line |
+| | where it came from, the stage and the role, the scrubbed text or the reason it was dropped, the proof of its origin |
+| | the agent's two turns before it (scrubbed, 1 KiB), the agent's state on its arrival |
+| | a later class: a step start, an approval, a correction, access or information |
+| question | the role that asked, the cited evidence, the times it was shown and answered, whether the answer took the recommendation |
+| | the flag (needless, needed, unclear) and its reason, the history of the answer, the revision that voided it |
+| decision | the times the card was shown and decided, whether the diff was opened and for how long, whether the recommendation was shown and followed |
+| | the ready patch and its SHA, the report hash, a snapshot of the proof |
+| rating | the value, the reason key, whether the diff was opened first |
+| review round | section 6.5 |
+| finding | the fingerprint, the priority, the class, the sources, the judge's verdict and reason, whether it blocks |
+| | the first and the last round, the outcome (fixed, waived, rebutted, open), the fix commit, how often it came back |
+| artifact | a path, its sha256 and its revision: the full base SHA, the ticket snapshot, the guidance, the answers and the report of each revision |
+| | `proof.json`, a patch per round head and for the ready head, the test commands |
+| PR link | the repository, the number, the branch, the head at opening, the approved head |
+| check | the kind (spec, lint, review, CI, QA), the result, the command and the duration |
+| | the cause: code, infra, flaky, env, access, not ours, unknown |
+| | the source: the writer's claim, the factory's own run, GitHub |
+
 Captured text is scrubbed: `execx.Redact` plus AWS keys, other token shapes, `password=` pairs, emails and host names. Long pasted blocks are dropped. Messages within a few minutes of an access card are dropped, because they can hold codes or passwords. The scrub runs before every place that keeps text, the event log of "say one line" too. The text lives only in the factory registry, never in tracked files. A skill edit that a lesson shaped goes through magnum's public-data check (`make check-private`) before it lands.
 
 ### 11.2 Two paths
 
 - The fast path: a daily factory retro (a pane agent, as magnum's retro is) turns each correction into a candidate rule for one repository: "When X, make sure that Y, because Z". The operator approves it on the learning screen with `y`. From then on, every later task in that repository gets the rule in its prompts. The rules live in a factory store of their own, with versions, apart from magnum's review notes, which the judge rewrites. They reuse the notes code for versions and the archive. Each task records the ids and versions of the rules that went into its prompts.
 - The slow path: an edit to a factory skill or prompt. A skill editor proposes it. A gate replays earlier tasks with and without the edit. If a target improves and nothing gets worse, the edit lands. A case is a past task: its input, its base commit and its acceptance (the spec that proved the fix). An investigation-only replay compares the cause and the plan and costs less.
+- Guardrails of the slow path (milestone 5):
+  - Evidence of machine origin gives measures, never a rule alone.
+  - A rule needs 2 tasks plus a human or a deterministic signal.
+  - No gated skill edit runs below about 15 replayable cases.
+  - Each rule carries `used_in` and `last_hit`.
+  - A rating given without opening the diff counts as noise.
 
 ### 11.3 Rules that the loop keeps from magnum
 
@@ -1183,15 +1376,20 @@ Captured text is scrubbed: `execx.Redact` plus AWS keys, other token shapes, `pa
 
 ### 11.4 magnum-improve
 
-The operator's improvement loop (`/magnum-improve`) covers both halves:
+The operator's improvement loop (`/magnum-improve`) covers both halves, from milestone 1b:
 
-- `evidence.sh` gains factory sections: tasks, stage times, the operator's messages and seconds per task, corrections, stuck or recovered panes, CI fixes and reruns, conflicts, QA results, lessons and repeats.
-- Lenses 0 and 1 get factory twins: what reviewers and QA found in factory PRs that the factory missed, and what the operator rejected, redid or corrected.
-- A factory-quality lens reads stage failures, caps used up and questions that the operator called needless.
+- A `factory-evidence.sh` script reads the evidence records. It gives the factory sections: tasks, stage times, the operator's messages and seconds per task, corrections, stuck or recovered panes, CI fixes and reruns, conflicts, QA results, lessons and repeats.
+- Lenses 0F and 1F are the factory twins of lenses 0 and 1: what reviewers and QA found in factory PRs that the factory missed, and what the operator rejected, redid or corrected.
+- Lens 13, the factory-quality lens, reads stage failures, caps used up and questions that the operator called needless.
+- The loop keeps a second `since` cursor for the factory, and a target names the reviewer half or the coder half.
+- `magnum factory daemon-restart --drain` lands a factory edit as `magnum daemon-restart --drain` lands a review edit.
 
 ### 11.5 Measures
 
-- The operator's messages per task (baseline: one ticket takes 5 to 20 sessions, a median session has 6 messages from the operator).
+- `magnum factory stats [--since] [--json|--markdown]` computes the measures from the evidence records (section 11.1).
+- A `baseline.json` is frozen before the first task. The same message classifier runs over the operator's old transcripts, per ticket and not per session. 100 messages that the operator labelled are the classifier's test set. They stay outside the repository.
+- The operator's step-starting messages per task. The target is zero.
+- The operator's typed messages per task. Today one ticket takes 30 to 120: 5 to 20 sessions, with a median of 6 messages from the operator in each.
 - The operator's seconds per task.
 - Time from start to ready.
 - Repeats seen after a rule.
@@ -1199,7 +1397,10 @@ The operator's improvement loop (`/magnum-improve`) covers both halves:
 ## 12. Safety
 
 - Branch protection on master stays. No factory identity has a bypass.
-- Factory agents push only through the push helper, only to the task's branch or a staging branch, never with force.
+- In milestone 1a no agent pushes. The factory pushes the approved head itself, to the task's branch, never with force (section 6.6).
+- From milestone 2, factory agents push only through the push helper, only to the task's branch or a staging branch, never with force.
+- Factory mode: no agent and no skill that an agent runs pushes or opens a PR on its own. The prompts tell an agent to follow a skill such as `t:fix-ci` up to its push or PR step, and to stop there.
+- No agent and no factory code connects to a shared database or console of any environment. The factory's own commands never run a remote console, `kubectl exec` or gh-ost (section 8.4).
 - Jira text, PR comments and checkout files reach agents as data files. Prompts carry keys, URLs and paths.
 - magnum's rules for a checkout whose `.claude/`, `.codex/`, `CLAUDE.md` or `AGENTS.md` changed apply to factory sessions too.
 - On one macOS user, an agent pane can read the operator's `gh` login from the keyring, as magnum's fix agent can today. So the push helper, the pre-push hook and the prompt rules stop mistakes, not a determined agent. The boundary that stops damage is on GitHub: master protection, required reviews and no force-push. The staging branches have no such protection, so a bad push there is visible and can be undone, but it reaches other developers. A stronger boundary needs a second macOS user or a sandbox for the agents, which is not planned.
@@ -1225,41 +1426,95 @@ The operator's improvement loop (`/magnum-improve`) covers both halves:
 - Production: an agent runs a read-only script after the operator's `y` on a card that shows it.
 - Replies to people's comments post by themselves.
 - A staging conflict in other people's changes is pushed after the specs pass.
+- Before the PR, the factory runs magnum's full review locally, as a blind dry run in the task's copy, with no GitHub call and no PR. It loops the writer until nothing blocks. A P0, P1 or P2 finding, new or still open, blocks, and so does the judge's verdict "blocking" (magnum's own `roundBlocks` rule). The ready card shows what is left that does not block (section 6.5).
+- The factory opens the PR ready for review under the operator's login, not as a draft. From milestone 2, it requests the reviewer configured for the repository, once, after CI is green and magnum's first GitHub round has nothing blocking.
+- The local review carries over. In milestone 1a, the PR body lists the leftovers that do not block under "Known", and the factory records the local findings. From milestone 2, magnum's first GitHub round builds on the last local round and never posts the same note twice.
+- The UI refinements of revision 1 go into the frames. The operator sees a second frames page before the screen is wired (section 9).
+- Production is migrated only by the operator, by hand, from the factory's instructions. Every environment, staging and production, gets a runbook card. The factory never runs gh-ost or migration code on a shared database (section 8.4).
 - PRs open under the operator's login. From milestone 2, factory commits and comments come from a new GitHub App of the factory, not the review App. It is installed on the factory's repositories only, with `contents: write`, `pull_requests: write`, `actions: write`, `checks: read`, `deployments: read` and `metadata: read`. It has no `workflows` permission, so GitHub refuses its pushes that change `.github/workflows`.
 
 ### 13.2 Calls made in this document (the operator can override them)
 
-- Milestone 1: `y` on the ready card makes the writer open the draft PR with `t:create-pr` as the operator, and the factory asks magnum for a review.
+- In milestone 1a the factory pushes, not the writer. It runs `git push origin <approved sha>:refs/heads/<branch>` with a guard on the expected remote head. Then it runs `gh pr create`, ready for review, with the operator's login and the drafted body. No agent and no skill that an agent runs pushes or opens a PR.
+- The screen's actions go through a narrow adapter of the factory in `internal/tui`. The action bar of the board and the dashboard stays as it is, so the live board takes no risk for no gain in milestone 1a.
+- The parent branch is merged only when needed: for a GitHub or `git merge-tree` conflict, or a required check. It is never merged while QA runs (milestone 3). This replaces "once a day".
+- Self-healing and reliability items are approved by default, by the operator's standing rule (section 10.1).
+- Local review rounds run at the lowest priority, at most 3 per task. At most one heavy stage runs at a time (`heavy_stages = 1`).
+- A local review that is unavailable is never clean. The task goes to NEEDS YOU, and nothing is pushed.
+- The evidence records start with the first task (section 11.1). A baseline is frozen before it (section 11.5).
+- Rejected:
+  - fixed recipes in place of configurable stages, because the operator chose lean and configurable stages
+  - only P0 and P1 block, because it contradicts the blocking rule of the local review
+  - milestone 1a starts with one active task, because the operator chose 3, and memory and usage are now read before every launch
+  - QA on void and bastion in parallel after a local pass, because it contradicts the QA order
 - Agents run through `agents.Manager` over a store file of the factory (section 4.3).
 - A task holds its copy until its PR opens. Later stages claim a copy when they need one.
 - Near a usage cap, the factory pauses before magnum's reviews.
 - In milestone 1, "ask someone" drafts the Jira comment for the operator to post. The factory writes to Jira in a later milestone.
 - Milestone 1 configures one repository. More repositories are configuration later.
-- The milestone 1 exit test counts the operator's typed messages, answer batches and card decisions per task, apart.
+- The milestone 1 exit test counts the operator's typed messages, step-starting messages, answer batches and card decisions per task, apart, against the baseline.
 - From the screen spec: QA fixes run up to 2 tries before NEEDS YOU, a dropped task keeps its branch for 7 days, and snooze matches the board's 2 hours.
 
 ### 13.3 Open, for the operator
 
 1. For milestone 4: how to read the commit that a staging server runs (the GitHub deployment, the image tag in the cluster, or a version page).
+2. For milestone 4: does the factory post one comment on another developer's PR when an agent changed their code in a staging merge?
 
 ## 14. Milestones
 
-1. Investigation and the local fix, in two parts.
-   - 1a: one task end to end: intake, investigation, the gate, the batch of questions, implementation with proof, the ready card and the draft PR through the writer. The screen: home, the task card, the question card, the ready card and new task. The prompt ledger records. The restart and crash tests pass. Before any screen code, real-painter mockups at 100, 140 and 200 columns go to the operator.
-   - 1b: the agents view, the stage card with the mirror, "say one line", access cards and the preflight, alerts, the learning screen and the fast learning path.
-2. The PR. The push helper, the branch lock, the fix loop moved from magnum into the factory, the review requests to magnum, adoption of PRs, issues and branches.
-3. CI and the parent branch. CI watched, fixed or rerun, the parent merged on a conflict, before stagings and daily.
-4. Stagings and QA. void comes first: the merge, conflicts, the deploy test and QA with a JSON verdict. Then bart and bastion, the redeploy of the latest head and the "ready to merge" alert.
-5. The slow learning path and scale. Gated skill edits, the factory lenses of magnum-improve, parallel implementation tries, Jira comments on request.
+1. Investigation, the local fix and the PR, in two parts.
+   - 1a: one task end to end:
+     - intake with links, the overlap line and the Jira wait
+     - investigation with the plan critic and `acceptance.json`, the gate and the batch of questions
+     - implementation with the factory's own proof, the precheck and the migration-safety lint
+     - the local magnum review loop
+     - the ready card with the drafted PR body and the FLAGS line, and the PR ready for review, pushed by the factory
+     - the evidence records, `magnum factory stats` and the frozen baseline
+     - the self-healing items of section 10.1, and the restart and crash tests
+     - the screen: home, the task card, the question card, the ready card and new task
+     - before any screen code, real-painter mockups at 100, 140 and 200 columns go to the operator
+     - the refined frames go to the operator a second time, before the screen is wired
+   - 1b:
+     - the agents view, the stage card with the mirror, "say one line", alerts, the learning screen and the fast learning path
+     - access cards and the preflight
+     - access tested again before each stage that needs it and after a wake
+     - one access card for every task that needs the same access
+     - the production card: a read-only script after the operator's `y`
+     - the CLI-update hold and registry integrity (section 10.1)
+     - the post-push card, with the drafts in full to copy: the Jira comment, a note to the reporter and the release line
+     - a guard set of repo-wide specs by path class, a stability run of new specs with 3 seeds, and a guard-mutation proof
+     - checks-job parity for a change to the database, the models, GraphQL or the routes
+     - pre-warm during the operator's waits, and typical durations on agent rows
+     - night and focus: one summary toast at the end, and a timed-out access card becomes a doubt with a redo key
+     - the factory half of magnum-improve (section 11.4)
+2. The PR:
+   - the push helper, the branch lock, the fix loop moved from magnum into the factory, the re-review requests to magnum
+   - adoption of PRs, issues and branches
+   - the import of the last local round into magnum's registry, so magnum's first round is a re-review
+   - the reviewer request on green
+   - one serial work queue per task, so the newest head wins and stale events drop
+   - one answer per PR on the board and on the factory screen: a factory mark on the board, mocked through the real painter first
+   - the hand-off key and the review-settle barrier (section 6.7)
+3. CI and the parent branch: CI watched, fixed or rerun, with the "not ours" cause, the CI-miss ledger and the watchdog (section 8.1). The parent is merged on a conflict or for a required check, and at no other time.
+4. Stagings and QA:
+   - void comes first: the merge, conflicts, the deploy test and QA with a JSON verdict
+   - then bart and bastion, the redeploy of the latest head, and the "ready to merge" group and alert
+   - clean heads only, the combined-tree check and reused resolutions (section 8.2)
+   - regenerated lockfiles and schema, and frozen migrations
+   - the review of a resolver's change to a colleague's change
+   - the runbook cards for every environment (section 8.4)
+   - the QA check list from the plan, approved on the ready card and run locally first
+5. The slow learning path and scale: gated skill edits with the guardrails of section 11.2, parallel implementation tries, Jira comments posted on request.
 
-Exit test of milestone 1: one bug, one feature and one chore reach "ready to push". The operator sends fewer messages per task than today's median of 6 per session.
+Exit test of milestone 1: one bug, one feature and one chore reach a PR ready for review. No message of the operator only starts a step. The operator's typed messages per task stay far below today's 30 to 120 per ticket, as `baseline.json` records them.
 
 ## 15. Left to the builder
 
 - The exact tables of the factory registry and the request kinds.
 - The Redis offset for each copy and the Sidekiq switch.
-- The format of `report.md` and `questions.json`.
+- The format of `report.md`, `questions.json` and `acceptance.json`.
 - The prompt files and the factory skills (`prompts/factory-*.md`, `skills/magnum-factory-*/SKILL.md`), loaded at daemon start like magnum's.
 - The CI cause detection (job steps and annotations), cached per run id.
 - The scrubber patterns and the size limit for captured text.
+- The fingerprint of a finding across local rounds, and the patterns of the infrastructure hold.
 - The probe of how Codex takes a prompt in the middle of a turn, before "say one line" ships for Codex panes.
