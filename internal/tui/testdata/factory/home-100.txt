@@ -1,0 +1,18 @@
+ magnum factory · talkable                                    memory full: new tasks wait · ↻ 14:09 
+ ● 3 tasks need you, 5 decisions · 3 wait on others · 1 done                  1 rule to approve (L) 
+
+ NEEDS YOU                   WAITS ON                  YOUR MOVE        VOID   BART   BASTION WAITED
+› ● #4512    Deploy list o…  you: reply · agent: bart  post reply       QA ✓   confl  QA 4/9      2h
+  ● PR-12345 Credit expiry…  you: 3 questions          answer them                               41m
+  ● PR-12360 Custom activi…  you: ready to push        diff, then push                           12m
+
+ WAITS ON OTHERS
+  ⣷ PR-12371 Coupon CSV ex…  agent: finding the cause                                             9m
+  ◷ PR-12330 Advocate offe…  rev-ann: review of #4527                   QA ✓   latest old         3h
+  ◷ PR-12388 Weekly gem up…  memory: full                                                        18m
+
+ DONE TODAY
+  ✓ PR-12302 Remove old sy…  nothing: merged 13:20                      QA ✓   latest QA ✓
+── ✓ 14:02 you said MFA done → bart deploy resumed ─────────────────────────────────────────────────
+ alice: "Do we need the deploy list for archived campaigns too?" · also: agent fixing bart
+ enter read and reply · a oldest ask · o pane fixing bart · n new task · ? more

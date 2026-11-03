@@ -1,0 +1,18 @@
+ [1;34mmagnum factory[m[90m · [mtalkable                                                                            memory full: new tasks wait[90m · [m[90m↻ 14:09[m 
+ [1;33m● 3 tasks need you[m[90m, 5 decisions[m[90m · [m[90m3 wait on others[m[90m · [m[90m1 done today[m                                                    [1;33m1 rule to approve (L)[m 
+
+ [1;36mNEEDS YOU[m                          [1;90mWAITS ON[m                                  [1;90mYOUR MOVE[m                 [1;90mVOID[m      [1;90mBART[m      [1;90mBASTION[m   [1;90mWAITED[m
+› [7m● #4512     Deploy list on camp…  you: reply to alice · agent: fixing bart  post the drafted reply    QA ✓      conflict  QA 4/9        2h[m
+  [1;33m●[m [34mPR-12345[m  Credit expiry remin…  [1;33myou:[m 3 questions before coding            answer 3 questions                                         [1;33m41m[m
+  [1;33m●[m [34mPR-12360[m  Custom activities l…  [1;33myou:[m ready to push · 3 files +48 −6       read the diff, then push                                   12m
+
+ [1;36mWAITS ON OTHERS[m
+  [34m⣷[m [34mPR-12371[m  Coupon CSV export t…  [34magent:[m finding the cause, 2 of 3 done                                                                 9m
+  [90m◷[m [34mPR-12330[m  Advocate offer emai…  [34mrev-ann:[m review of #4527                                            [32mQA ✓[m      [32mlatest[m    outdated      3h
+  [90m◷[m [34mPR-12388[m  Weekly gem upgrades   memory: full, starts below 80% swap                                                                  18m
+
+ [1;36mDONE TODAY[m
+  [90m✓[m [90mPR-12302[m  [90mRemove old sync job[m   [90mnothing:[m[90m merged 13:20 · not rated yet[m                               [32mQA ✓[m      [32mlatest[m    [32mQA ✓[m
+[37m──[m [32m✓ 14:02 you said MFA done → bart deploy resumed[m [37m─────────────────────────────────────────────────────────────────────────────────────────[m
+ alice on #4512: "Do we need the deploy list for archived campaigns too?" · reply drafted · also: agent fixing 2 conflicts in bart, 10m
+ [1;34menter[m [90mread and reply[m[90m · [m[1;34ma[m [90moldest ask[m[90m · [m[1;34mo[m [90mpane fixing bart[m[90m · [m[1;34mn[m [90mnew task[m[90m · [m[1;34m?[m [90mmore[m

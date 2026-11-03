@@ -1,0 +1,20 @@
+ magnum factory · talkable                                    memory full: new tasks wait · ↻ 15:20 
+ ✓ nothing waits on you · 6 wait on others · 1 done today
+
+ NEEDS YOU
+   ✓ Nothing waits on you.
+     Next for you: PR-12371's questions or its diff, once its plan is written.
+
+ WAITS ON OTHERS             WAITS ON                  YOUR MOVE        VOID   BART   BASTION WAITED
+  ⣷ PR-12345 Credit expiry…  agent: writing the spec                                             12m
+› ⣷ PR-12371 Coupon CSV ex…  agent: writing the plan                                             21m
+  ⣷ #4512    Deploy list o…  agents: fixing bart, QA                    QA ✓   confl  QA 6/9     14m
+  ◷ PR-12360 Custom activi…  magnum: review of #4540                    –      –      –          40m
+  ◷ PR-12330 Advocate offe…  rev-ann: review of #4527                   QA ✓   latest deploy      4h
+  ◷ PR-12388 Weekly gem up…  memory: full                                                         1h
+
+ DONE TODAY
+  ✓ PR-12302 Remove old sy…  nothing: merged 13:20                      QA ✓   latest QA ✓
+── ✓ 15:18 sent 3 answers to PR-12345 → coding started ─────────────────────────────────────────────
+ writing the plan: 3 agents agree on the cause; a judge writes the plan, then coding starts
+ enter task card · o pane writing the plan · tab agents · n new task · ? more

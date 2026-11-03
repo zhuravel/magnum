@@ -1,0 +1,18 @@
+ magnum factory · talkable                                                                                                                             memory full: new tasks wait (swap 91%) · ↻ 14:09 
+ ● 3 tasks need you, 5 decisions · 3 wait on others · 1 done today                                                                                                                1 rule to approve (L) 
+
+ NEEDS YOU                                                    WAITS ON                                                    YOUR MOVE                     VOID          BART          BASTION       WAITED
+› ● PR-12310  #4512   Deploy list on campaigns                you: reply to alice · agent: fixing 2 conflicts in bart     post the drafted reply        QA ✓ 1h       conflict 11m  QA 4/9 12m        2h
+  ● PR-12345          Credit expiry reminder email            you: 3 questions before coding · first: when is it sent?    answer 3 questions                                                         41m
+  ● PR-12360          Custom activities lose points on copy   you: ready to push · 3 files +48 −6, 1 not in the plan      read the diff, then push                                                   12m
+
+ WAITS ON OTHERS
+  ⣷ PR-12371          Coupon CSV export times out             agent: finding the cause · reproduced, history read                                                                                     9m
+  ◷ PR-12330  #4527   Advocate offer email locale             rev-ann: review of #4527, requested 3h ago                                                QA ✓ 1h       latest 2h     outdated 2m       3h
+  ◷ PR-12388          Weekly gem upgrades                     memory: full (swap 91%), starts when swap is under 80%                                                                                 18m
+
+ DONE TODAY
+  ✓ PR-12302  #4519   Remove old sync job                     nothing: merged 13:20 · not rated yet                                                     QA ✓ 4h       latest 4h     QA ✓ 3h
+── ✓ 14:02 you said MFA done → bart deploy resumed ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ alice on #4512, 2h ago: "Do we need the deploy list for archived campaigns too, or only for live ones?" · reply drafted · also: agent fixing 2 conflicts in bart, try 1 of 2, 10m
+ enter read and reply · a oldest ask · o pane fixing bart · n new task · ? more
