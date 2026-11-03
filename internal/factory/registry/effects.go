@@ -21,18 +21,22 @@ const (
 // an idempotency key. Result is what an ok effect made: a PR url, a commit
 // sha, the reason a failed one failed.
 type Effect struct {
-	Key, Kind    string
-	TaskID       int64
-	State        string
-	Result       string
-	Begun, Ended time.Time // Ended is the zero time while the effect is begun
+	Key, Kind string
+	TaskID    int64
+	State     string
+	Result    string
+	// Begun is when the effect was first begun, whatever ran it again later;
+	// Ended is the zero time while the effect is begun.
+	Begun, Ended time.Time
+	// Resumed says the effect was begun again after a crash or a failure.
+	Resumed bool
 }
 
-const effectColumns = "key, kind, task_id, state, result, begun_at, ended_at"
+const effectColumns = "key, kind, task_id, state, result, begun_at, ended_at, resumed"
 
 func scanEffect(sc scanner) (Effect, error) {
 	var e Effect
-	err := sc.Scan(&e.Key, &e.Kind, &e.TaskID, &e.State, &e.Result, timeCol{&e.Begun}, timeCol{&e.Ended})
+	err := sc.Scan(&e.Key, &e.Kind, &e.TaskID, &e.State, &e.Result, timeCol{&e.Begun}, timeCol{&e.Ended}, &e.Resumed)
 	return e, err
 }
 
@@ -40,8 +44,10 @@ func scanEffect(sc scanner) (Effect, error) {
 // whether the caller should run it. The bool is false when the key already has
 // an ok result (the returned Effect holds it): the effect is never repeated.
 // A key that was begun and never ended (a crash) or that failed runs again, so
-// the caller first looks for what the effect may already have made. A key
-// belongs to one kind and one task: reusing it for another is ErrConflict.
+// the caller first looks for what the effect may already have made; the
+// effect is then Resumed, keeps the time it first began, and the reason of a
+// failed run goes into an info event of kind effect. A key belongs to one kind
+// and one task: reusing it for another is ErrConflict.
 func (r *Registry) BeginEffect(ctx context.Context, key, kind string, taskID int64) (Effect, bool, error) {
 	if key == "" || kind == "" {
 		return Effect{}, false, errors.New("begin effect: key and kind are required")
@@ -66,7 +72,14 @@ func (r *Registry) BeginEffect(ctx context.Context, key, kind string, taskID int
 			out = cur
 			return nil
 		default:
-			if _, err := tx.ExecContext(ctx, "UPDATE effects SET state = ?, result = '', begun_at = ?, ended_at = NULL WHERE key = ?", EffectBegin, now, key); err != nil {
+			if cur.State == EffectFail {
+				_, err := tx.ExecContext(ctx, "INSERT INTO events (at, task_id, kind, phase, text) VALUES (?, ?, ?, ?, ?)",
+					now, taskID, "effect", PhaseInfo, fmt.Sprintf("%s runs again after it failed: %s", key, cur.Result))
+				if err != nil {
+					return fmt.Errorf("begin effect %s: %w", key, mapErr(err))
+				}
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE effects SET state = ?, result = '', ended_at = NULL, resumed = 1 WHERE key = ?", EffectBegin, key); err != nil {
 				return fmt.Errorf("begin effect %s: %w", key, err)
 			}
 		}

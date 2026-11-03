@@ -22,7 +22,7 @@ func TestUndeliveredListsOnlyUnknownEntries(t *testing.T) {
 	t.Parallel()
 	r, _ := openAt(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	a, err := r.BeginAttempt(ctx, task.ID, "investigate")
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestMarkDeliveredDecidesOnce(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	a, _ := r.BeginAttempt(ctx, task.ID, "investigate")
 	e := appendPrompt(t, r, task.ID, a.ID, "h1")
 
@@ -78,7 +78,7 @@ func TestAppendLedgerNeedsItsAttemptAndItsHash(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	a, _ := r.BeginAttempt(ctx, task.ID, "investigate")
 	if _, err := r.AppendLedger(ctx, registry.LedgerEntry{TaskID: task.ID, AttemptID: "t1-nope-1", Role: "r", Hash: "h", Text: "x"}); !errors.Is(err, registry.ErrNotFound) {
 		t.Errorf("AppendLedger for a missing attempt = %v, want ErrNotFound", err)
@@ -95,5 +95,29 @@ func TestAppendLedgerNeedsItsAttemptAndItsHash(t *testing.T) {
 	}
 	if got, _ := r.Undelivered(ctx); len(got) != 0 {
 		t.Errorf("refused entries left %d rows", len(got))
+	}
+}
+
+func TestALedgerEntryBelongsToTheTaskOfItsAttempt(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	ctx := t.Context()
+	one := createTask(t, r, "PR-12301")
+	two := createTask(t, r, "PR-12302")
+	a, err := r.BeginAttempt(ctx, one.ID, "investigate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, taskID := range map[string]int64{"another task": two.ID, "no task": 0, "a task that does not exist": 999} {
+		_, err := r.AppendLedger(ctx, registry.LedgerEntry{TaskID: taskID, AttemptID: a.ID, Role: "r", Hash: "h", Text: "x"})
+		if err == nil || errors.Is(err, registry.ErrNotFound) {
+			t.Errorf("%s: AppendLedger = %v, want a refusal that names the mismatch", name, err)
+		}
+	}
+	if got, _ := r.Undelivered(ctx); len(got) != 0 {
+		t.Errorf("refused entries left %d rows", len(got))
+	}
+	if _, err := r.AppendLedger(ctx, registry.LedgerEntry{TaskID: one.ID, AttemptID: a.ID, Role: "r", Hash: "h", Text: "x"}); err != nil {
+		t.Errorf("AppendLedger for the attempt's own task: %v", err)
 	}
 }

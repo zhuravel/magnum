@@ -101,7 +101,7 @@ func TestCreateTaskFromPromptsHoldsNoKey(t *testing.T) {
 func TestCreateTaskStartsQueuedAtTheClock(t *testing.T) {
 	t.Parallel()
 	r, _ := openAt(t)
-	got := createTask(t, r, "PR-1")
+	got := createTask(t, r, "PR-12301")
 	if got.State != registry.TaskQueued || got.ID == 0 {
 		t.Errorf("created task = %+v, want a queued task with an id", got)
 	}
@@ -232,8 +232,8 @@ func TestBeginAttemptNumbersPerTaskAndStage(t *testing.T) {
 	t.Parallel()
 	r, clk := openAt(t)
 	ctx := t.Context()
-	one := createTask(t, r, "PR-1")
-	two := createTask(t, r, "PR-2")
+	one := createTask(t, r, "PR-12301")
+	two := createTask(t, r, "PR-12302")
 
 	first, err := r.BeginAttempt(ctx, one.ID, "investigate")
 	if err != nil {
@@ -271,13 +271,13 @@ func TestTransitionAttemptIsCompareAndSetAndStampsTheEnd(t *testing.T) {
 	t.Parallel()
 	r, clk := openAt(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	a, err := r.BeginAttempt(ctx, task.ID, "investigate")
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = r.TransitionAttempt(ctx, a.ID, []string{registry.AttemptLaunching}, registry.AttemptRunning, func(u *registry.AttemptUpdate) {
-		u.Set("workspace_label", "factory PR-1 "+a.ID)
+		u.Set("workspace_label", "factory PR-12301 "+a.ID)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestTransitionAttemptIsCompareAndSetAndStampsTheEnd(t *testing.T) {
 	if err := r.TransitionAttempt(ctx, "t9-x-1", nil, registry.AttemptRunning, nil); !errors.Is(err, registry.ErrNotFound) {
 		t.Errorf("transition of a missing attempt = %v, want ErrNotFound", err)
 	}
-	if got, _ := r.AttemptByID(ctx, a.ID); !got.Ended.IsZero() || got.WorkspaceLabel != "factory PR-1 "+a.ID {
+	if got, _ := r.AttemptByID(ctx, a.ID); !got.Ended.IsZero() || got.WorkspaceLabel != "factory PR-12301 "+a.ID {
 		t.Errorf("running attempt = %+v", got)
 	}
 

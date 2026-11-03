@@ -41,7 +41,7 @@ func TestReplaceQuestionsKeepsTheCardsFieldsInPositionOrder(t *testing.T) {
 	t.Parallel()
 	r, _ := openAt(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	if err := r.ReplaceQuestions(ctx, task.ID, 1, askTwo()); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestReplaceQuestionsVoidsTheOpenOnes(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	if err := r.ReplaceQuestions(ctx, task.ID, 1, askTwo()); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestReplaceQuestionsRefusesARevisionThatIsNotNewer(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	if err := r.ReplaceQuestions(ctx, task.ID, 2, askTwo()); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestReplaceQuestionsRefusesWhatTheCardCannotShow(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	noText := askTwo()
 	noText[1].Text = ""
 	badPick := askTwo()
@@ -145,7 +145,7 @@ func TestAnswerBatchRefusesAStaleRevision(t *testing.T) {
 	t.Parallel()
 	r, clk := openAt(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	if err := r.ReplaceQuestions(ctx, task.ID, 1, askTwo()); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestAnswerBatchRefusesAStaleRevision(t *testing.T) {
 func TestAnswerBatchWithoutQuestionsIsStale(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	if err := r.AnswerBatch(t.Context(), task.ID, 1, map[int]string{0: "x"}); !errors.Is(err, registry.ErrStaleRevision) {
 		t.Errorf("AnswerBatch on a task with no questions = %v, want ErrStaleRevision", err)
 	}
@@ -195,7 +195,7 @@ func TestAnswerBatchIsAllOrNothing(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	if err := r.ReplaceQuestions(ctx, task.ID, 1, askTwo()); err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +222,43 @@ func TestAnswerBatchIsAllOrNothing(t *testing.T) {
 	}
 }
 
+func TestAnEmptyReplaceQuestionsAdvancesTheRevision(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12301")
+	if err := r.ReplaceQuestions(ctx, task.ID, 1, askTwo()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReplaceQuestions(ctx, task.ID, 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The newest revision is the task's, not the highest one that holds a row:
+	// answers to the voided revision 1 are stale, not conflicts.
+	if err := r.AnswerBatch(ctx, task.ID, 1, map[int]string{0: "Seven days before it expires"}); !errors.Is(err, registry.ErrStaleRevision) {
+		t.Errorf("AnswerBatch for revision 1 after an empty revision 2 = %v, want ErrStaleRevision", err)
+	}
+	if err := r.ReplaceQuestions(ctx, task.ID, 2, askTwo()); !errors.Is(err, registry.ErrStaleRevision) {
+		t.Errorf("ReplaceQuestions at the empty revision's number = %v, want ErrStaleRevision", err)
+	}
+	if got, _ := r.TaskByID(ctx, task.ID); got.QuestionRev != 2 {
+		t.Errorf("QuestionRev = %d, want 2", got.QuestionRev)
+	}
+	for _, q := range mustQuestions(t, r, task.ID) {
+		if q.State != registry.QuestionVoided || q.VoidedBy != 2 {
+			t.Errorf("question %d of revision %d is %s voided by %d, want voided by 2", q.Index, q.Revision, q.State, q.VoidedBy)
+		}
+	}
+}
+
+func TestAnswerBatchOnAMissingTaskIsNotFound(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	if err := r.AnswerBatch(t.Context(), 999, 1, map[int]string{0: "x"}); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("AnswerBatch for a missing task = %v, want ErrNotFound", err)
+	}
+}
+
 func mustQuestions(t *testing.T, r *registry.Registry, task int64) []registry.Question {
 	t.Helper()
 	qs, err := r.Questions(t.Context(), task)
@@ -235,7 +272,7 @@ func TestRecordDecisionBindsTheApprovalToTheHeadAndHashes(t *testing.T) {
 	t.Parallel()
 	r, clk := openAt(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	opened := t0.Add(-time.Minute)
 	first := registry.Decision{TaskID: task.ID, Kind: "ready", Choice: "push", Note: "looks right",
 		HeadSHA: "abc123", ReportHash: "r1", DiffHash: "d1", DiffOpened: opened}

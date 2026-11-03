@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -41,9 +42,10 @@ func scanLedger(sc scanner) (LedgerEntry, error) {
 }
 
 // AppendLedger writes e before its prompt is sent and returns the stored
-// entry. TaskID (an existing task), AttemptID (an existing attempt), Role,
-// Hash and Text are required (ErrNotFound for a task or attempt that does not
-// exist); Delivered starts unknown, and Sent defaults to the clock.
+// entry. TaskID, AttemptID (an existing attempt, ErrNotFound if there is
+// none), Role, Hash and Text are required, and TaskID must be the task of the
+// attempt (checked in the same transaction as the insert); Delivered starts
+// unknown, and Sent defaults to the clock.
 func (r *Registry) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, error) {
 	if e.AttemptID == "" || e.Role == "" || e.Hash == "" || e.Text == "" {
 		return LedgerEntry{}, errors.New("append ledger: attempt, role, hash and text are required")
@@ -54,16 +56,26 @@ func (r *Registry) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry
 	if e.Sent.IsZero() {
 		e.Sent = r.now()
 	}
-	res, err := r.db.ExecContext(ctx, "INSERT INTO ledger (task_id, attempt_id, role, run_id, hash, text, delivered, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		e.TaskID, e.AttemptID, e.Role, e.RunID, e.Hash, e.Text, DeliveredUnknown, store.FormatTime(e.Sent))
-	if err != nil {
-		return LedgerEntry{}, fmt.Errorf("append ledger for attempt %s: %w", e.AttemptID, mapErr(err))
-	}
-	id, err := res.LastInsertId()
+	err := r.tx(ctx, func(tx *sql.Tx) error {
+		var owner int64
+		if err := tx.QueryRowContext(ctx, "SELECT task_id FROM attempts WHERE id = ?", e.AttemptID).Scan(&owner); err != nil {
+			return notFound(err, "attempt", e.AttemptID)
+		}
+		if owner != e.TaskID {
+			return fmt.Errorf("attempt %s belongs to task %d, not task %d", e.AttemptID, owner, e.TaskID)
+		}
+		res, err := tx.ExecContext(ctx, "INSERT INTO ledger (task_id, attempt_id, role, run_id, hash, text, delivered, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			e.TaskID, e.AttemptID, e.Role, e.RunID, e.Hash, e.Text, DeliveredUnknown, store.FormatTime(e.Sent))
+		if err != nil {
+			return mapErr(err)
+		}
+		e.ID, err = res.LastInsertId()
+		return err
+	})
 	if err != nil {
 		return LedgerEntry{}, fmt.Errorf("append ledger for attempt %s: %w", e.AttemptID, err)
 	}
-	e.ID, e.Delivered, e.Sent = id, DeliveredUnknown, e.Sent.UTC()
+	e.Delivered, e.Sent = DeliveredUnknown, e.Sent.UTC()
 	return e, nil
 }
 

@@ -85,7 +85,7 @@ func TestOpenRefusesADatabaseNewerThanTheBinary(t *testing.T) {
 func TestRegistrytestGivesEachTestItsOwnMigratedCopy(t *testing.T) {
 	t.Parallel()
 	a, b := registrytest.Open(t), registrytest.Open(t)
-	createTask(t, a, "PR-1")
+	createTask(t, a, "PR-12301")
 	if tasks, err := b.Tasks(t.Context()); err != nil || len(tasks) != 0 {
 		t.Errorf("the second copy holds %d tasks, %v; want none", len(tasks), err)
 	}
@@ -111,7 +111,7 @@ func TestSchemaRefusesWhatTheTypedMethodsNeverWrite(t *testing.T) {
 		}
 	}
 	// The partial index is the key rule's last line of defence.
-	const insert = "INSERT INTO tasks (jira_key, state, created_at, updated_at) VALUES ('PR-1', ?, 'x', 'x')"
+	const insert = "INSERT INTO tasks (jira_key, state, created_at, updated_at) VALUES ('PR-12301', ?, 'x', 'x')"
 	if _, err := db.ExecContext(t.Context(), insert, "active"); err != nil {
 		t.Fatalf("first task for a key: %v", err)
 	}

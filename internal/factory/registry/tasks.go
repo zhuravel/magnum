@@ -13,23 +13,33 @@ import (
 // Task states. A task is queued until the daemon has room for it, active while
 // agents or the daemon work on it, needs_you while only the operator can move
 // it, waiting while someone or something else must (a reviewer, CI, a person
-// the operator asked), and done, stopped or failed once it has ended.
+// the operator asked), published while its PR is open and the work goes on,
+// and done (merged), stopped or failed once it has ended. A published task
+// holds its Jira key, as a failed one does.
 const (
-	TaskQueued   = "queued"
-	TaskActive   = "active"
-	TaskNeedsYou = "needs_you"
-	TaskWaiting  = "waiting"
-	TaskDone     = "done"
-	TaskStopped  = "stopped"
-	TaskFailed   = "failed"
+	TaskQueued    = "queued"
+	TaskActive    = "active"
+	TaskNeedsYou  = "needs_you"
+	TaskWaiting   = "waiting"
+	TaskPublished = "published"
+	TaskDone      = "done"
+	TaskStopped   = "stopped"
+	TaskFailed    = "failed"
 )
 
 var taskStates = map[string]bool{
-	TaskQueued: true, TaskActive: true, TaskNeedsYou: true, TaskWaiting: true,
+	TaskQueued: true, TaskActive: true, TaskNeedsYou: true, TaskWaiting: true, TaskPublished: true,
 	TaskDone: true, TaskStopped: true, TaskFailed: true,
 }
 
-// Task is one piece of work: a Jira key or a free prompt, taken to a draft PR.
+// holdsKey is the SQL predicate of a task that holds its Jira key: it has one
+// and is not done or stopped. It is the WHERE of the tasks_active_key partial
+// index (migrations/0002_evidence.sql) and of the holder queries of CreateTask
+// and TaskByKey, which must keep implying the index's predicate to use it:
+// change the three together.
+const holdsKey = "jira_key != '' AND state NOT IN ('done','stopped')"
+
+// Task is one piece of work: a Jira key or a free prompt, taken to a PR.
 type Task struct {
 	ID int64
 	// JiraKey is the ticket, "" for a task that started from a free prompt. Of
@@ -48,10 +58,17 @@ type Task struct {
 	// WaitsWho and WaitsWhat say who the task waits on and for what, in the
 	// words the screen shows.
 	WaitsWho, WaitsWhat string
-	// Attempt counts the attempts of the current stage; PRNumber is the draft
-	// PR's number, 0 before it exists.
+	// Attempt counts the attempts of the current stage; PRNumber is the PR's
+	// number, 0 before it exists.
 	Attempt, PRNumber int
-	Created, Updated  time.Time
+	// QuestionRev is the newest question revision of the task, 0 before it
+	// has asked anything; ReplaceQuestions keeps it, so a revision that asks
+	// nothing still counts.
+	QuestionRev int
+	// CodexNever says Codex never works on this task again (a cybersecurity
+	// warning marked it).
+	CodexNever       bool
+	Created, Updated time.Time
 }
 
 // ErrActiveKey is returned (as a value; use errors.As) by CreateTask when a
@@ -72,29 +89,38 @@ func (e ErrActiveKey) Unwrap() error { return ErrConflict }
 
 // TaskUpdate collects the column assignments of TransitionTask. Settable
 // columns: kind, repo, title, guidance, stage, branch, copy, head_sha,
-// waits_who, waits_what, attempt and pr_number. The state moves through
-// TransitionTask's `to` and updated_at is the registry's.
-type TaskUpdate struct{ update }
+// waits_who, waits_what, attempt, pr_number and codex_never. The state moves
+// through TransitionTask's `to`, the question revision through
+// ReplaceQuestions, and updated_at is the registry's.
+type TaskUpdate struct {
+	update
+	reason string
+}
+
+// Because sets the reason of the span that the move writes (Span.Reason).
+func (u *TaskUpdate) Because(reason string) { u.reason = reason }
 
 var taskSettable = map[string]bool{
 	"kind": true, "repo": true, "title": true, "guidance": true, "stage": true, "branch": true,
 	"copy": true, "head_sha": true, "waits_who": true, "waits_what": true, "attempt": true, "pr_number": true,
+	"codex_never": true,
 }
 
-const taskColumns = "id, jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, created_at, updated_at"
+const taskColumns = "id, jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, question_rev, codex_never, created_at, updated_at"
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	err := sc.Scan(&t.ID, &t.JiraKey, &t.Prompt, &t.Guidance, &t.Kind, &t.Repo, &t.Title, &t.State, &t.Stage,
-		&t.Branch, &t.Copy, &t.HeadSHA, &t.WaitsWho, &t.WaitsWhat, &t.Attempt, &t.PRNumber,
+		&t.Branch, &t.Copy, &t.HeadSHA, &t.WaitsWho, &t.WaitsWhat, &t.Attempt, &t.PRNumber, &t.QuestionRev, &t.CodexNever,
 		timeCol{&t.Created}, timeCol{&t.Updated})
 	return t, err
 }
 
-// CreateTask inserts t and returns the stored row. A task needs a Jira key or
-// a prompt; an empty State is queued; Created and Updated are the clock's. It
-// returns an ErrActiveKey naming the holder when a task for the same Jira key
-// is not done or stopped.
+// CreateTask inserts t and returns the stored row, and writes the task's first
+// span in the same transaction. A task needs a Jira key or a prompt; an empty
+// State is queued; Created and Updated are the clock's and the question
+// revision starts at 0. It returns an ErrActiveKey naming the holder when a
+// task for the same Jira key is not done or stopped.
 func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error) {
 	if t.JiraKey == "" && t.Prompt == "" {
 		return Task{}, errors.New("create task: a Jira key or a prompt is required")
@@ -108,8 +134,9 @@ func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error) {
 	var out Task
 	err := r.tx(ctx, func(tx *sql.Tx) error {
 		if t.JiraKey != "" {
+			// The holder query of the tasks_active_key partial index (see holdsKey).
 			var holder int64
-			err := tx.QueryRowContext(ctx, "SELECT id FROM tasks WHERE jira_key = ? AND state NOT IN ('done','stopped') ORDER BY id LIMIT 1", t.JiraKey).Scan(&holder)
+			err := tx.QueryRowContext(ctx, "SELECT id FROM tasks WHERE jira_key = ? AND "+holdsKey+" ORDER BY id LIMIT 1", t.JiraKey).Scan(&holder)
 			if err == nil {
 				return ErrActiveKey{Key: t.JiraKey, TaskID: holder}
 			}
@@ -117,11 +144,12 @@ func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error) {
 				return fmt.Errorf("create task: %w", err)
 			}
 		}
-		now := store.FormatTime(r.now())
-		res, err := tx.ExecContext(ctx, `INSERT INTO tasks (jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		now := r.now()
+		stamp := store.FormatTime(now)
+		res, err := tx.ExecContext(ctx, `INSERT INTO tasks (jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, codex_never, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.JiraKey, t.Prompt, t.Guidance, t.Kind, t.Repo, t.Title, t.State, t.Stage, t.Branch, t.Copy, t.HeadSHA,
-			t.WaitsWho, t.WaitsWhat, t.Attempt, t.PRNumber, now, now)
+			t.WaitsWho, t.WaitsWhat, t.Attempt, t.PRNumber, boolInt(t.CodexNever), stamp, stamp)
 		if err != nil {
 			return fmt.Errorf("create task: %w", mapErr(err))
 		}
@@ -131,6 +159,9 @@ func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error) {
 		}
 		out, err = scanTask(tx.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id))
 		if err != nil {
+			return fmt.Errorf("create task: %w", err)
+		}
+		if err := insertSpan(ctx, tx, id, "", spanShape{out.State, out.Stage, out.WaitsWho, out.WaitsWhat}, "", now); err != nil {
 			return fmt.Errorf("create task: %w", err)
 		}
 		return nil
@@ -146,13 +177,42 @@ func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error) {
 // assignments and the new updated_at in the same UPDATE. It returns
 // ErrConflict when the state did not match (or when the move would give a Jira
 // key a second unfinished task) and ErrNotFound when the task does not exist.
+//
+// A move that changes the state, the stage, who the task waits on or for what,
+// or that has a reason (TaskUpdate.Because), also writes a span in the same
+// transaction; a refused move and an update of bookkeeping columns (the head,
+// the copy) write none.
 func (r *Registry) TransitionTask(ctx context.Context, id int64, from []string, to string, set func(*TaskUpdate)) error {
-	u := &TaskUpdate{update{settable: taskSettable}}
+	u := &TaskUpdate{update: update{settable: taskSettable}}
 	if set != nil {
 		set(u)
 	}
-	u.raw("updated_at = ?", store.FormatTime(r.now()))
-	return r.transition(ctx, "tasks", "id", "task", id, taskStates, from, to, &u.update)
+	now := r.now()
+	u.raw("updated_at = ?", store.FormatTime(now))
+	var before spanShape
+	hooks := moveHooks{
+		before: func(tx *sql.Tx) error {
+			err := tx.QueryRowContext(ctx, "SELECT state, stage, waits_who, waits_what FROM tasks WHERE id = ?", id).
+				Scan(&before.state, &before.stage, &before.waitsWho, &before.waitsWhat)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			return nil // a missing task is reported by transition
+		},
+		after: func(tx *sql.Tx) error {
+			var after spanShape
+			err := tx.QueryRowContext(ctx, "SELECT state, stage, waits_who, waits_what FROM tasks WHERE id = ?", id).
+				Scan(&after.state, &after.stage, &after.waitsWho, &after.waitsWhat)
+			if err != nil {
+				return err
+			}
+			if after == before && u.reason == "" {
+				return nil
+			}
+			return insertSpan(ctx, tx, id, before.state, after, u.reason, now)
+		},
+	}
+	return r.transition(ctx, "tasks", "id", "task", id, taskStates, from, to, &u.update, hooks)
 }
 
 // TaskByID looks up a task; a missing one is ErrNotFound.
@@ -160,6 +220,18 @@ func (r *Registry) TaskByID(ctx context.Context, id int64) (Task, error) {
 	t, err := scanTask(r.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id))
 	if err != nil {
 		return Task{}, notFound(err, "task", id)
+	}
+	return t, nil
+}
+
+// TaskByKey returns the task that holds a Jira key: the one that is not done
+// or stopped (a published or failed task holds it). No such task, and the empty
+// key, are ErrNotFound.
+func (r *Registry) TaskByKey(ctx context.Context, key string) (Task, error) {
+	// The holder query of the tasks_active_key partial index (see holdsKey).
+	t, err := scanTask(r.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE jira_key = ? AND "+holdsKey+" ORDER BY id LIMIT 1", key))
+	if err != nil {
+		return Task{}, notFound(err, "task for key", key)
 	}
 	return t, nil
 }
@@ -262,7 +334,7 @@ func (r *Registry) TransitionAttempt(ctx context.Context, id string, from []stri
 	case AttemptEnded, AttemptVerified, AttemptFailed, AttemptAbandoned:
 		u.raw("ended_at = COALESCE(ended_at, ?)", store.FormatTime(r.now()))
 	}
-	return r.transition(ctx, "attempts", "id", "attempt", id, attemptStates, from, to, &u.update)
+	return r.transition(ctx, "attempts", "id", "attempt", id, attemptStates, from, to, &u.update, moveHooks{})
 }
 
 // AttemptByID looks up an attempt; a missing one is ErrNotFound.

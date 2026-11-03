@@ -1,6 +1,11 @@
 // Package registry is the factory's own SQLite registry: tasks, the stage
 // attempts that run them, questions and the operator's decisions, the prompt
-// ledger, external effects, the event log and the CLI's requests.
+// ledger, external effects, the event log and the CLI's requests. It also
+// keeps the evidence records of the factory's design (section 11.1) from the
+// first task on, because evidence that was not written at the time cannot be
+// read later: the spans of a task's states, the facts of each role of an
+// attempt, the operator's inputs, ratings, the rounds and findings of the
+// local review, artifacts, the PR link, checks and suspensions.
 //
 // It is a file of its own with its own migration list (migrations/NNNN_*.sql,
 // tracked by PRAGMA user_version and applied by the store package's runner),
@@ -53,13 +58,19 @@ type Registry struct {
 type Options struct {
 	// Clock returns the current time; nil means time.Now. Tests replace it.
 	Clock func() time.Time
+	// BeforeMigrate, when set, runs before pending migrations are applied,
+	// with the file's schema version and the one this binary migrates to; an
+	// error from it aborts Open and leaves the file untouched. The CLI sets it
+	// to refuse while a factory daemon runs on the older schema; the daemon
+	// leaves it nil.
+	BeforeMigrate func(from, to int) error
 }
 
 // Open creates the parent directory (0700), opens the database at path with
 // WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL, and applies
-// pending migrations. It refuses a database whose schema version is newer
-// than this binary knows. The database, its -wal and its -shm file are made
-// 0600 whatever the umask.
+// pending migrations after opts.BeforeMigrate agrees. It refuses a database
+// whose schema version is newer than this binary knows. The database, its
+// -wal and its -shm file are made 0600 whatever the umask.
 func Open(path string, opts Options) (*Registry, error) {
 	if path == "" {
 		return nil, errors.New("factory registry: empty database path")
@@ -86,7 +97,7 @@ func Open(path string, opts Options) (*Registry, error) {
 	// keeps transactions and pragmas trivially consistent.
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	if _, _, err := store.ApplyMigrations(context.Background(), db, migrations, nil); err != nil {
+	if _, _, err := store.ApplyMigrations(context.Background(), db, migrations, opts.BeforeMigrate); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("factory registry: %s: %w", path, err)
 	}
@@ -334,11 +345,19 @@ func dbValue(v any) (any, error) {
 	}
 }
 
+// moveHooks run inside the transaction of transition: before just ahead of
+// the UPDATE (the row may not exist), after when the UPDATE matched a row.
+// Either may be nil.
+type moveHooks struct {
+	before func(tx *sql.Tx) error
+	after  func(tx *sql.Tx) error
+}
+
 // transition is the shared body of the Transition methods: UPDATE table SET
 // the update's assignments (and state = to, unless to is empty) WHERE the key
 // matches and, when from is not nil, the state is one of from. When no row
 // matched it tells a missing row (ErrNotFound) from a moved one (ErrConflict).
-func (r *Registry) transition(ctx context.Context, table, keyCol, what string, key any, validStates map[string]bool, from []string, to string, u *update) error {
+func (r *Registry) transition(ctx context.Context, table, keyCol, what string, key any, validStates map[string]bool, from []string, to string, u *update, hooks moveHooks) error {
 	if u.err != nil {
 		return fmt.Errorf("update %s %v: %w", what, key, u.err)
 	}
@@ -362,11 +381,21 @@ func (r *Registry) transition(ctx context.Context, table, keyCol, what string, k
 		}
 	}
 	return r.tx(ctx, func(tx *sql.Tx) error {
+		if hooks.before != nil {
+			if err := hooks.before(tx); err != nil {
+				return fmt.Errorf("transition %s %v: %w", what, key, err)
+			}
+		}
 		res, err := tx.ExecContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf("transition %s %v %v -> %s: %w", what, key, from, to, mapErr(err))
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
+			if hooks.after != nil {
+				if err := hooks.after(tx); err != nil {
+					return fmt.Errorf("transition %s %v: %w", what, key, err)
+				}
+			}
 			return nil
 		}
 		var state string
@@ -381,4 +410,22 @@ func (r *Registry) transition(ctx context.Context, table, keyCol, what string, k
 // placeholders returns n comma-separated question marks.
 func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// boolInt is the column value of a bool.
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// taskExists returns a wrapped ErrNotFound unless task id exists, for a write
+// that has to read the task's rows before it can insert.
+func taskExists(ctx context.Context, q querier, id int64) error {
+	var one int
+	if err := q.QueryRowContext(ctx, "SELECT 1 FROM tasks WHERE id = ?", id).Scan(&one); err != nil {
+		return notFound(err, "task", id)
+	}
+	return nil
 }

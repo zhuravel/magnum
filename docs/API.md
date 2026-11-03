@@ -10765,7 +10765,12 @@ package registry // import "github.com/zhuravel/magnum/internal/factory/registry
 
 Package registry is the factory's own SQLite registry: tasks, the stage attempts
 that run them, questions and the operator's decisions, the prompt ledger,
-external effects, the event log and the CLI's requests.
+external effects, the event log and the CLI's requests. It also keeps the
+evidence records of the factory's design (section 11.1) from the first task on,
+because evidence that was not written at the time cannot be read later: the
+spans of a task's states, the facts of each role of an attempt, the operator's
+inputs, ratings, the rounds and findings of the local review, artifacts,
+the PR link, checks and suspensions.
 
 It is a file of its own with its own migration list (migrations/NNNN_*.sql,
 tracked by PRAGMA user_version and applied by the store package's runner),
@@ -10797,6 +10802,31 @@ const (
     everything else.
 
 const (
+	InputTaskText   = "task_text"
+	InputGuidance   = "guidance"
+	InputAnswer     = "answer"
+	InputDecision   = "decision"
+	InputSendBack   = "send_back"
+	InputRating     = "rating"
+	InputStop       = "stop"
+	InputDrop       = "drop"
+	InputRetry      = "retry"
+	InputPaneTyped  = "pane_typed"
+	InputSayOneLine = "say_one_line"
+)
+    Input kinds: what the operator did. The text of an input is whatever words
+    came with it; a stop, a drop or a retry has none.
+
+const (
+	ClassStepStart  = "step_start"
+	ClassApproval   = "approval"
+	ClassCorrection = "correction"
+	ClassAccess     = "access"
+	ClassInfo       = "info"
+)
+    Input classes, set later by a classifier: what an input was for.
+
+const (
 	DeliveredUnknown = "unknown"
 	DeliveredYes     = "yes"
 	DeliveredNo      = "no"
@@ -10814,6 +10844,14 @@ const (
     replaces it (voided).
 
 const (
+	FlagNeedless = "needless"
+	FlagNeeded   = "needed"
+	FlagUnclear  = "unclear"
+)
+    Question flags, the operator's verdict on a question: it was needless,
+    it was needed, or it was unclear.
+
+const (
 	RequestPending = "pending"
 	RequestDone    = "done"
 	RequestFailed  = "failed"
@@ -10821,18 +10859,54 @@ const (
     Request states.
 
 const (
-	TaskQueued   = "queued"
-	TaskActive   = "active"
-	TaskNeedsYou = "needs_you"
-	TaskWaiting  = "waiting"
-	TaskDone     = "done"
-	TaskStopped  = "stopped"
-	TaskFailed   = "failed"
+	ExitClean       = "clean"
+	ExitCap         = "cap"
+	ExitOperator    = "operator"
+	ExitOscillation = "oscillation"
+	ExitUnavailable = "unavailable"
 )
-    Task states. A task is queued until the daemon has room for it, active
-    while agents or the daemon work on it, needs_you while only the operator
-    can move it, waiting while someone or something else must (a reviewer, CI,
-    a person the operator asked), and done, stopped or failed once it has ended.
+    Exits of a review cycle: the loop ended clean, at its cap of rounds,
+    by the operator, on an oscillation, or because the review was unavailable.
+    A cycle after which the loop goes on has no exit.
+
+const (
+	FindingOpen     = "open"
+	FindingFixed    = "fixed"
+	FindingWaived   = "waived"
+	FindingRebutted = "rebutted"
+)
+    Finding outcomes.
+
+const (
+	CheckSpec      = "spec"
+	CheckLint      = "lint"
+	CheckReview    = "review"
+	CheckCI        = "ci"
+	CheckQA        = "qa"
+	CheckMigration = "migration"
+
+	CheckPass    = "pass"
+	CheckFail    = "fail"
+	CheckSkipped = "skipped"
+)
+    Check kinds, results, causes and sources.
+
+const (
+	TaskQueued    = "queued"
+	TaskActive    = "active"
+	TaskNeedsYou  = "needs_you"
+	TaskWaiting   = "waiting"
+	TaskPublished = "published"
+	TaskDone      = "done"
+	TaskStopped   = "stopped"
+	TaskFailed    = "failed"
+)
+    Task states. A task is queued until the daemon has room for it, active while
+    agents or the daemon work on it, needs_you while only the operator can move
+    it, waiting while someone or something else must (a reviewer, CI, a person
+    the operator asked), published while its PR is open and the work goes on,
+    and done (merged), stopped or failed once it has ended. A published task
+    holds its Jira key, as a failed one does.
 
 const (
 	AttemptLaunching = "launching"
@@ -10872,6 +10946,26 @@ func LatestSchemaVersion() int
 
 TYPES
 
+type AnswerEdit struct {
+	Answer string
+	At     time.Time
+}
+    AnswerEdit is one answer a question has had and when it was given.
+
+type Artifact struct {
+	TaskID int64
+	Kind   string
+	Path   string
+	SHA256 string
+	Rev    int
+	At     time.Time
+}
+    Artifact is a file of a task's directory as the factory saw it: its kind
+    (base_sha, ticket, guidance, answers, report, proof, patch, pr_body or
+    test_commands), its path relative to the task directory, the sha256 of
+    its content and its revision. A file that changes gets the next revision,
+    so the report that the operator approved can be told from the one before it.
+
 type Attempt struct {
 	ID     string // t<task>-<stage>-<n>
 	TaskID int64
@@ -10900,23 +10994,64 @@ func (u *AttemptUpdate) Set(col string, v any)
     Set assigns v to column col. v is nil (NULL), a string, an int, an int64,
     a bool or a time.Time (the zero time stores NULL).
 
+type Check struct {
+	ID, TaskID                  int64
+	AttemptID, HeadSHA          string
+	Kind, Result, Cause, Source string
+	Command                     string
+	Exit                        int
+	Took                        time.Duration // kept to the millisecond
+	At                          time.Time
+}
+    Check is one run of a check on a head: its kind (spec, lint, review, ci, qa
+    or migration), result (pass, fail or skipped), the source that ran it (the
+    writer's claim, the factory's own run, or GitHub), the command and its exit
+    code and duration. Cause is set only on a failure (code, infra, flaky, env,
+    access, not_ours or unknown) and may stay empty until someone classifies it.
+    AttemptID is empty for a check that no attempt ran, such as GitHub's.
+
+type Cycle struct {
+	ID, TaskID            int64
+	N                     int
+	HeadBefore, HeadAfter string
+	Delta, SkillHash      string
+	Started, Ended        time.Time // Ended is the zero time while the round runs
+	Tokens                int64
+	Exit                  string
+}
+    Cycle is one round of the local magnum review of a task: the heads before
+    and after it, the change between them (the sha256 of a patch artifact, say),
+    the hash of the review skill, the time and the tokens it took, and the exit.
+    N counts the task's rounds from 1.
+
 type Decision struct {
 	TaskID                        int64
 	Kind, Choice, Note            string
 	HeadSHA, ReportHash, DiffHash string
-	DiffOpened, At                time.Time
+	Shown, DiffOpened, At         time.Time
+	DiffDwell                     time.Duration // kept to the millisecond
+	RecommendationShown           bool
+	RecommendationFollowed        bool
+	Patch, Proof                  string
 }
     Decision is what the operator decided on a card. HeadSHA, ReportHash and
     DiffHash are what the card showed, so a later change to any of them voids
-    the decision; DiffOpened is when the operator opened the diff first (the
-    zero time if they did not).
+    the decision. Shown is when the card was shown, DiffOpened when the operator
+    opened the diff (the zero time if they did not) and DiffDwell how long they
+    read it. RecommendationShown and RecommendationFollowed say whether the card
+    carried a recommendation and the choice took it. Patch and Proof are the
+    sha256 of the ready patch and of the proof snapshot (artifacts).
 
 type Effect struct {
-	Key, Kind    string
-	TaskID       int64
-	State        string
-	Result       string
-	Begun, Ended time.Time // Ended is the zero time while the effect is begun
+	Key, Kind string
+	TaskID    int64
+	State     string
+	Result    string
+	// Begun is when the effect was first begun, whatever ran it again later;
+	// Ended is the zero time while the effect is begun.
+	Begun, Ended time.Time
+	// Resumed says the effect was begun again after a crash or a failure.
+	Resumed bool
 }
     Effect is one external side effect (a push, a PR, a comment, a merge) under
     an idempotency key. Result is what an ok effect made: a PR url, a commit
@@ -10946,6 +11081,46 @@ type Event struct {
 }
     Event is one row of the audit log.
 
+type Finding struct {
+	ID, TaskID            int64
+	Fingerprint, Path     string
+	StartLine, EndLine    int
+	TitleHash             string
+	Priority, Class       string
+	Sources               []string
+	Verdict, VerdictWhy   string
+	Blocking              bool
+	FirstCycle, LastCycle int
+	Outcome, FixCommit    string
+	Reopened              int
+}
+    Finding is one finding of the local review, followed across the rounds
+    by its fingerprint (path, lines and a hash of the title). Sources are
+    the reviewers that reported it, Verdict and VerdictWhy the judge's,
+    and Blocking whether it blocks the round. FirstCycle and LastCycle are round
+    numbers (Cycle.N), Reopened counts how often a fixed finding came back,
+    and FixCommit is the last commit that claimed to fix it.
+
+type Input struct {
+	ID, TaskID    int64
+	Kind          string
+	Surface       string
+	Stage, Role   string
+	Text          string
+	DroppedReason string
+	Origin        string
+	Before        string
+	AgentState    string
+	Class         string
+	At            time.Time
+}
+    Input is one thing the operator said or did to a task. Surface is where it
+    came from (a screen, a pane, the CLI), Stage and Role where in the task,
+    Text the scrubbed words or DroppedReason why the words were not kept (never
+    both), Origin the proof that the operator and no agent produced it, Before
+    the agent's two turns before it (scrubbed, at most 1 KiB) and AgentState the
+    agent's state when it arrived. Class stays empty until classified.
+
 type LedgerEntry struct {
 	ID        int64
 	TaskID    int64
@@ -10970,8 +11145,26 @@ type Option struct {
 type Options struct {
 	// Clock returns the current time; nil means time.Now. Tests replace it.
 	Clock func() time.Time
+	// BeforeMigrate, when set, runs before pending migrations are applied,
+	// with the file's schema version and the one this binary migrates to; an
+	// error from it aborts Open and leaves the file untouched. The CLI sets it
+	// to refuse while a factory daemon runs on the older schema; the daemon
+	// leaves it nil.
+	BeforeMigrate func(from, to int) error
 }
     Options tune Open.
+
+type PRLink struct {
+	TaskID       int64
+	Repo         string
+	Number       int
+	Branch       string
+	OpenedHead   string
+	ApprovedHead string
+	Opened       time.Time
+}
+    PRLink ties a task to its one PR: the repository, the number, the task's
+    branch, the head the PR was opened with and the head the operator approved.
 
 type Question struct {
 	ID       int64
@@ -10989,12 +11182,33 @@ type Question struct {
 	Why         string
 	Answer      string
 	State       string
-	// Asked is when the revision was stored, Answered when the answer was
-	// (the zero time while the question is open or voided).
-	Asked, Answered time.Time
+	// RaisedBy is the role that asked the question, Evidence what it cited.
+	RaisedBy, Evidence string
+	// Asked is when the revision was stored, Shown when a card first showed
+	// it, Answered when the first answer was (the zero time while the
+	// question is open or voided).
+	Asked, Shown, Answered time.Time
+	// TookRecommendation says the current answer is the recommended option.
+	TookRecommendation bool
+	// Flag is the operator's verdict (needless, needed or unclear; empty
+	// until given) and FlagWhy its reason.
+	Flag, FlagWhy string
+	// VoidedBy is the revision that voided the question, 0 if none did.
+	VoidedBy int
 }
     Question is one question of a task to the operator. A revision is the set of
     questions the agents asked at one time; Index is the position within it.
+
+type Rating struct {
+	TaskID          int64
+	Value           int
+	ReasonKey       string
+	DiffOpenedFirst bool
+	At              time.Time
+}
+    Rating is a + (Value 1) or − (Value -1) on a finished task, with the one key
+    for the reason and whether the operator opened the diff before giving it (a
+    rating given without opening the diff counts as noise).
 
 type Registry struct {
 	// Has unexported fields.
@@ -11002,19 +11216,26 @@ type Registry struct {
     Registry is the factory's registry handle. It is safe for concurrent use.
 
 func Open(path string, opts Options) (*Registry, error)
-    Open creates the parent directory (0700), opens the database at path with
-    WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL, and applies
-    pending migrations. It refuses a database whose schema version is newer than
-    this binary knows. The database, its -wal and its -shm file are made 0600
-    whatever the umask.
+    Open creates the parent directory (0700), opens the database at path
+    with WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL,
+    and applies pending migrations after opts.BeforeMigrate agrees. It refuses a
+    database whose schema version is newer than this binary knows. The database,
+    its -wal and its -shm file are made 0600 whatever the umask.
 
 func (r *Registry) AnswerBatch(ctx context.Context, taskID int64, rev int, answers map[int]string) error
     AnswerBatch records answers (question Index -> the answer text) to the open
-    questions of revision rev, all or none. It returns ErrStaleRevision when
-    rev is not the task's newest revision, so answers to questions that newer
-    evidence replaced are never taken, and ErrConflict when a batch names a
-    question that is not open in that revision. Questions the batch does not
-    name stay open. An empty batch or a blank answer is refused.
+    questions of revision rev, all or none, and keeps each as the first entry
+    of the question's answer history. It returns ErrNotFound when the task does
+    not exist, ErrStaleRevision when rev is not the task's newest revision,
+    so answers to questions that newer evidence replaced are never taken, and
+    ErrConflict when a batch names a question that is not open in that revision
+    (ReviseAnswer edits an answered one). Questions the batch does not name stay
+    open. An empty batch or a blank answer is refused.
+
+func (r *Registry) AnswerHistory(ctx context.Context, questionID int64) ([]AnswerEdit, error)
+    AnswerHistory returns every answer a question has had, the first one and
+    each edit, oldest first; a question that was never answered, or does not
+    exist, has none.
 
 func (r *Registry) AppendEvent(ctx context.Context, taskID int64, kind, phase, text string) error
     AppendEvent writes an audit row at the clock's time. taskID 0 is an event
@@ -11024,9 +11245,14 @@ func (r *Registry) AppendEvent(ctx context.Context, taskID int64, kind, phase, t
 
 func (r *Registry) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, error)
     AppendLedger writes e before its prompt is sent and returns the stored
-    entry. TaskID (an existing task), AttemptID (an existing attempt), Role,
-    Hash and Text are required (ErrNotFound for a task or attempt that does not
-    exist); Delivered starts unknown, and Sent defaults to the clock.
+    entry. TaskID, AttemptID (an existing attempt, ErrNotFound if there is
+    none), Role, Hash and Text are required, and TaskID must be the task of the
+    attempt (checked in the same transaction as the insert); Delivered starts
+    unknown, and Sent defaults to the clock.
+
+func (r *Registry) Artifacts(ctx context.Context, taskID int64) ([]Artifact, error)
+    Artifacts returns every revision of every artifact of a task, in the order
+    they were recorded.
 
 func (r *Registry) AttemptByID(ctx context.Context, id string) (Attempt, error)
     AttemptByID looks up an attempt; a missing one is ErrNotFound.
@@ -11038,13 +11264,28 @@ func (r *Registry) BeginAttempt(ctx context.Context, taskID int64, stage string)
     BeginAttempt records a launching attempt for the next number of the task's
     stage and returns it. The task must exist (ErrNotFound).
 
+func (r *Registry) BeginCycle(ctx context.Context, taskID int64, headBefore, skillHash string) (Cycle, error)
+    BeginCycle starts the next round of the task's local review, numbered after
+    its last one, on the head it starts from and with the review skill's hash.
+    A missing task is ErrNotFound.
+
 func (r *Registry) BeginEffect(ctx context.Context, key, kind string, taskID int64) (Effect, bool, error)
     BeginEffect records that the effect under key is about to run, and reports
     whether the caller should run it. The bool is false when the key already has
     an ok result (the returned Effect holds it): the effect is never repeated.
     A key that was begun and never ended (a crash) or that failed runs again,
-    so the caller first looks for what the effect may already have made. A key
-    belongs to one kind and one task: reusing it for another is ErrConflict.
+    so the caller first looks for what the effect may already have made;
+    the effect is then Resumed, keeps the time it first began, and the reason
+    of a failed run goes into an info event of kind effect. A key belongs to one
+    kind and one task: reusing it for another is ErrConflict.
+
+func (r *Registry) Checks(ctx context.Context, taskID int64) ([]Check, error)
+    Checks returns a task's checks in the order they were recorded.
+
+func (r *Registry) ClassifyInput(ctx context.Context, id int64, class string) error
+    ClassifyInput sets the class of input id: step_start, approval, correction,
+    access or info. A classifier may set it again. A missing input is
+    ErrNotFound.
 
 func (r *Registry) Close() error
     Close closes the database.
@@ -11054,16 +11295,25 @@ func (r *Registry) CompleteRequest(ctx context.Context, id int64, state, result 
     message. Completing a request twice is ErrConflict.
 
 func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error)
-    CreateTask inserts t and returns the stored row. A task needs a Jira key or
-    a prompt; an empty State is queued; Created and Updated are the clock's.
-    It returns an ErrActiveKey naming the holder when a task for the same Jira
-    key is not done or stopped.
+    CreateTask inserts t and returns the stored row, and writes the task's
+    first span in the same transaction. A task needs a Jira key or a prompt;
+    an empty State is queued; Created and Updated are the clock's and the
+    question revision starts at 0. It returns an ErrActiveKey naming the holder
+    when a task for the same Jira key is not done or stopped.
+
+func (r *Registry) Cycles(ctx context.Context, taskID int64) ([]Cycle, error)
+    Cycles returns a task's review rounds in order.
 
 func (r *Registry) Decisions(ctx context.Context, taskID int64) ([]Decision, error)
     Decisions returns a task's decisions in the order they were made.
 
 func (r *Registry) EffectByKey(ctx context.Context, key string) (Effect, error)
     EffectByKey looks up an effect; a missing one is ErrNotFound.
+
+func (r *Registry) EndCycle(ctx context.Context, id int64, headAfter, delta, exit string, tokens int64) error
+    EndCycle ends a running round with the head it left, the change between
+    the heads, its exit (empty when the loop goes on) and the tokens it took.
+    A round ends once (ErrConflict) and a missing one is ErrNotFound.
 
 func (r *Registry) EndEffect(ctx context.Context, key, state, result string) error
     EndEffect settles a begun effect as ok or fail with its result. Ending an
@@ -11077,6 +11327,27 @@ func (r *Registry) Events(ctx context.Context, taskID int64, limit int) ([]Event
     Events returns a task's events oldest first (taskID 0: the daemon's own);
     limit > 0 keeps only the newest limit rows.
 
+func (r *Registry) Findings(ctx context.Context, taskID int64) ([]Finding, error)
+    Findings returns a task's findings in the order they were first seen.
+
+func (r *Registry) FlagQuestion(ctx context.Context, id int64, flag, why string) error
+    FlagQuestion records the operator's verdict on question id: needless, needed
+    or unclear, with the reason in words. A later flag replaces an earlier one.
+    A missing question is ErrNotFound.
+
+func (r *Registry) Inputs(ctx context.Context, taskID int64) ([]Input, error)
+    Inputs returns a task's inputs in the order they were recorded.
+
+func (r *Registry) LinkPR(ctx context.Context, l PRLink) error
+    LinkPR records the PR of task l.TaskID. A task has one PR, and a PR one
+    task: linking another number or repository to a task that has a PR, or a PR
+    that another task has, is ErrConflict; linking the PR it already has is a
+    no-op that leaves the first record as it was. Repo and Number are required,
+    Opened defaults to the clock, and the task must exist (ErrNotFound).
+
+func (r *Registry) LinkedPR(ctx context.Context, taskID int64) (PRLink, error)
+    LinkedPR returns the PR of a task; a task without one is ErrNotFound.
+
 func (r *Registry) MarkDelivered(ctx context.Context, id int64, delivered string) error
     MarkDelivered settles an unknown entry as yes (the agent got the prompt) or
     no (it did not). Settling an entry with the verdict it already has is not an
@@ -11085,6 +11356,10 @@ func (r *Registry) MarkDelivered(ctx context.Context, id int64, delivered string
 func (r *Registry) OpenEffects(ctx context.Context) ([]Effect, error)
     OpenEffects returns the effects still begun, oldest first: the ones a
     restart must settle by running each one's guard again.
+
+func (r *Registry) OpenSuspension(ctx context.Context, taskID int64) (Suspension, error)
+    OpenSuspension returns the task's open suspension; a task that is not
+    suspended is ErrNotFound.
 
 func (r *Registry) PendingRequests(ctx context.Context, limit int) ([]Request, error)
     PendingRequests returns up to limit pending requests, oldest first (limit <=
@@ -11095,27 +11370,121 @@ func (r *Registry) Questions(ctx context.Context, taskID int64) ([]Question, err
     Questions returns every question of a task, voided and answered ones
     included, by revision and position.
 
+func (r *Registry) Ratings(ctx context.Context, taskID int64) ([]Rating, error)
+    Ratings returns a task's ratings in the order they were given.
+
+func (r *Registry) RecordArtifact(ctx context.Context, a Artifact) error
+    RecordArtifact stores a as a new revision of its kind and path, unless the
+    latest revision of that kind and path already has the same sha256 (a no-op:
+    nothing is written and the first time stays). New content, including going
+    back to earlier content, gets the next Rev, counted from 1 for each task,
+    kind and path; a.Rev is ignored. The path must be relative to the task
+    directory and clean, and the hash a lowercase hex sha256. At defaults to the
+    clock and the task must exist (ErrNotFound).
+
+func (r *Registry) RecordCheck(ctx context.Context, c Check) (int64, error)
+    RecordCheck stores c and returns its id. Kind, Result and Source are
+    required and must be listed; Cause must be empty unless the result is a
+    failure. At defaults to the clock; the task (and the attempt, if given) must
+    exist (ErrNotFound).
+
 func (r *Registry) RecordDecision(ctx context.Context, d Decision) error
     RecordDecision stores d. Kind and Choice are required, At defaults to the
     clock, and the task must exist (ErrNotFound).
 
+func (r *Registry) RecordInput(ctx context.Context, in Input) (int64, error)
+    RecordInput stores in and returns its id. The kind is required and must be
+    one of the input kinds; Text and DroppedReason are never both set. Before
+    keeps its last 1 KiB (the turns nearest the input), cut at a rune boundary.
+    Class is normally empty (ClassifyInput sets it later) but may carry a class
+    the caller already knows. At defaults to the clock and the task must exist
+    (ErrNotFound). The caller scrubs the text and Before (secrets, tokens,
+    emails, hosts) first: the registry stores what it is given.
+
+func (r *Registry) RecordRating(ctx context.Context, rt Rating) error
+    RecordRating stores r for its task (ErrNotFound if there is none).
+    Value must be 1 or -1; At defaults to the clock. A task may be rated again;
+    every rating is kept.
+
+func (r *Registry) RecordRoleRun(ctx context.Context, rr RoleRun) error
+    RecordRoleRun stores rr, a row for each attempt and role: the first call
+    inserts, later calls fill in what they know. A field left at its zero
+    value never clears one that is set, and a value replaces an earlier one,
+    so the launch and the end of a role can each record their own facts.
+    The attempt must exist (ErrNotFound), the role is required, and Outcome must
+    be one of the outcomes or failed:<cause>.
+
 func (r *Registry) ReplaceQuestions(ctx context.Context, taskID int64, rev int, qs []Question) error
-    ReplaceQuestions stores qs as revision rev of the task's questions and
-    voids the open questions of every earlier revision (answered ones stay).
-    Each question's Index is its position in qs, whatever it carries; its State
-    is open. rev must be above the task's newest revision (ErrStaleRevision),
-    so a caller asks for newest+1. An empty qs voids the open questions and asks
-    nothing. A question needs Text, and Recommended must be -1 or an index into
-    its Options.
+    ReplaceQuestions stores qs as revision rev of the task's questions and voids
+    the open questions of every earlier revision (answered ones stay), recording
+    rev as the voiding revision. Each question's Index is its position in qs,
+    whatever it carries; its State is open; RaisedBy and Evidence are kept.
+    rev must be above the task's newest revision (ErrStaleRevision), so a caller
+    asks for newest+1, and it becomes the task's newest even when qs is empty:
+    an empty qs voids the open questions and asks nothing. A question needs
+    Text, and Recommended must be -1 or an index into its Options.
 
 func (r *Registry) RequestByID(ctx context.Context, id int64) (Request, error)
     RequestByID looks up a request; a missing one is ErrNotFound.
 
+func (r *Registry) Resume(ctx context.Context, taskID int64) error
+    Resume closes the task's open suspension at the clock's time. A task
+    with none open (it never suspended, or already resumed) is ErrNotFound,
+    so a suspension resumes once.
+
+func (r *Registry) ReviseAnswer(ctx context.Context, taskID int64, rev, idx int, answer string) error
+    ReviseAnswer replaces the answer of an answered question of the task's
+    newest revision and keeps the old one in the answer history. The same words
+    again are not an edit. It returns ErrNotFound when the task does not exist,
+    ErrStaleRevision when rev is not its newest revision and ErrConflict when
+    the question is not answered (AnswerBatch answers an open one). The question
+    keeps the time of its first answer.
+
+func (r *Registry) RoleRuns(ctx context.Context, attemptID string) ([]RoleRun, error)
+    RoleRuns returns the roles of an attempt in the order they were first
+    recorded.
+
 func (r *Registry) SchemaVersion(ctx context.Context) (int, error)
     SchemaVersion returns PRAGMA user_version.
 
+func (r *Registry) SeeFinding(ctx context.Context, cycleID int64, f Finding) (Finding, error)
+    SeeFinding records that round cycleID saw f, and returns the finding as the
+    registry now holds it. The finding of a task is told by its fingerprint:
+    a new one is stored open with that round as its first and last; one seen
+    before moves LastCycle to this round, takes the newest sighting's location,
+    priority, class, verdict and blocking flag (a value left empty keeps the
+    old one) and the union of the sources, and, if it was fixed and this round
+    is after its last, comes back open with Reopened + 1. Waived and rebutted
+    findings stay so. f.TaskID may be left 0; f.Outcome, FirstCycle, LastCycle
+    and Reopened are the registry's. A missing round is ErrNotFound.
+
+func (r *Registry) SettleFinding(ctx context.Context, id int64, outcome, fixCommit string) error
+    SettleFinding sets the outcome of finding id: fixed, waived, rebutted or
+    open. A non-empty fixCommit is kept as the commit that claimed the fix.
+    A missing finding is ErrNotFound.
+
+func (r *Registry) ShowQuestions(ctx context.Context, taskID int64, rev int) error
+    ShowQuestions records that a card showed the questions of revision rev of
+    the task. A question keeps the first time it was shown, whatever later shows
+    say. A revision that has no questions (or a task that does not exist) is
+    ErrNotFound.
+
+func (r *Registry) Spans(ctx context.Context, taskID int64) ([]Span, error)
+    Spans returns a task's spans oldest first; a task with none, or no task,
+    has an empty list.
+
+func (r *Registry) Suspend(ctx context.Context, s Suspension) error
+    Suspend opens a suspension of s.TaskID, stamped with the clock. The task
+    must exist (ErrNotFound) and have no open suspension (ErrConflict); a stage
+    is required, and an empty AttemptID means no attempt.
+
 func (r *Registry) TaskByID(ctx context.Context, id int64) (Task, error)
     TaskByID looks up a task; a missing one is ErrNotFound.
+
+func (r *Registry) TaskByKey(ctx context.Context, key string) (Task, error)
+    TaskByKey returns the task that holds a Jira key: the one that is not done
+    or stopped (a published or failed task holds it). No such task, and the
+    empty key, are ErrNotFound.
 
 func (r *Registry) Tasks(ctx context.Context) ([]Task, error)
     Tasks returns every task, oldest first.
@@ -11129,6 +11498,11 @@ func (r *Registry) TransitionTask(ctx context.Context, id int64, from []string, 
     set's assignments and the new updated_at in the same UPDATE. It returns
     ErrConflict when the state did not match (or when the move would give a Jira
     key a second unfinished task) and ErrNotFound when the task does not exist.
+
+    A move that changes the state, the stage, who the task waits on or for what,
+    or that has a reason (TaskUpdate.Because), also writes a span in the same
+    transaction; a refused move and an update of bookkeeping columns (the head,
+    the copy) write none.
 
 func (r *Registry) Undelivered(ctx context.Context) ([]LedgerEntry, error)
     Undelivered returns the entries whose delivery is still unknown, oldest
@@ -11144,6 +11518,72 @@ type Request struct {
 	Handled time.Time // the zero time while the request is pending
 }
     Request is a CLI to daemon work item.
+
+type RoleRun struct {
+	AttemptID, Role string
+	CLI, Model      string
+	CLIVersion      string
+	MagnumBuild     string
+	PromptHash      string
+	SkillHash       string
+	ConfigHash      string
+	Rules           []RuleRef
+	SessionID       string
+	Transcript      string
+	Launched        time.Time
+	FirstOutput     time.Time
+	Ended           time.Time
+	Verified        time.Time
+	EndFact, EndWhy string
+	Nudges          int
+	Outcome         string
+	Tokens          map[string]int64
+	ActiveSecs      int
+	IdleSecs        int
+}
+    RoleRun holds the facts of one role of one stage attempt (an attempt runs
+    several roles): what ran it (CLI, model, versions, the hashes of the prompt,
+    the skill and the config, the rules the prompts carried), where (session
+    and transcript), when (launch, first output, end, verification), how it
+    ended (the end fact and why, the nudges, the tokens by model, the active and
+    idle seconds) and the outcome: verified, failed:<cause>, voided, stopped,
+    lost or paused. A field that is not known is its zero value.
+
+type RuleRef struct {
+	ID      string `json:"id"`
+	Version int    `json:"version"`
+}
+    RuleRef names a rule that went into a role's prompts, by id and version.
+
+type Span struct {
+	ID, TaskID int64
+	From, To   string
+	Stage      string
+	// WaitsWho and WaitsWhat are the task's after the move; OnYou is true when
+	// WaitsWho is "you".
+	WaitsWho, WaitsWhat string
+	OnYou               bool
+	Reason              string
+	At                  time.Time
+}
+    Span is one move of a task between states: where it came from and where it
+    went, the stage, who it then waited on and for what, whether that is the
+    operator, and why. CreateTask writes the first span (From is empty) and
+    TransitionTask one for each move.
+
+type Suspension struct {
+	TaskID    int64
+	Stage     string
+	AttemptID string
+	Role      string
+	Open      []string
+	Suspended time.Time
+	Resumed   time.Time
+}
+    Suspension records a task held while it waits for the operator, for the
+    stage's attempt and role that were running and the things that were open
+    (question ids, say) when it stopped. At most one suspension of a task is
+    open (Resumed is the zero time); Resume closes it.
 
 type Task struct {
 	ID int64
@@ -11163,20 +11603,31 @@ type Task struct {
 	// WaitsWho and WaitsWhat say who the task waits on and for what, in the
 	// words the screen shows.
 	WaitsWho, WaitsWhat string
-	// Attempt counts the attempts of the current stage; PRNumber is the draft
-	// PR's number, 0 before it exists.
+	// Attempt counts the attempts of the current stage; PRNumber is the PR's
+	// number, 0 before it exists.
 	Attempt, PRNumber int
-	Created, Updated  time.Time
+	// QuestionRev is the newest question revision of the task, 0 before it
+	// has asked anything; ReplaceQuestions keeps it, so a revision that asks
+	// nothing still counts.
+	QuestionRev int
+	// CodexNever says Codex never works on this task again (a cybersecurity
+	// warning marked it).
+	CodexNever       bool
+	Created, Updated time.Time
 }
-    Task is one piece of work: a Jira key or a free prompt, taken to a draft PR.
+    Task is one piece of work: a Jira key or a free prompt, taken to a PR.
 
 type TaskUpdate struct {
 	// Has unexported fields.
 }
-    TaskUpdate collects the column assignments of TransitionTask. Settable
-    columns: kind, repo, title, guidance, stage, branch, copy, head_sha,
-    waits_who, waits_what, attempt and pr_number. The state moves through
-    TransitionTask's `to` and updated_at is the registry's.
+    TaskUpdate collects the column assignments of TransitionTask.
+    Settable columns: kind, repo, title, guidance, stage, branch, copy,
+    head_sha, waits_who, waits_what, attempt, pr_number and codex_never.
+    The state moves through TransitionTask's `to`, the question revision through
+    ReplaceQuestions, and updated_at is the registry's.
+
+func (u *TaskUpdate) Because(reason string)
+    Because sets the reason of the span that the move writes (Span.Reason).
 
 func (u *TaskUpdate) Inc(col string, n int)
     Inc adds n to the integer column col.
@@ -11202,6 +11653,10 @@ FUNCTIONS
 func Open(tb testing.TB) *registry.Registry
     Open seeds a database in the test's temporary directory and opens it;
     the registry is closed when the test ends.
+
+func OpenPair(tb testing.TB) (first, second *registry.Registry)
+    OpenPair opens two registries on one database file, the way the daemon and
+    the CLI each hold one in production; both are closed when the test ends.
 
 func OpenWith(tb testing.TB, opts registry.Options) *registry.Registry
     OpenWith is Open with options, for a test that moves the registry's clock.

@@ -90,3 +90,20 @@ func OpenWith(tb testing.TB, opts registry.Options) *registry.Registry {
 	tb.Cleanup(func() { r.Close() })
 	return r
 }
+
+// OpenPair opens two registries on one database file, the way the daemon and
+// the CLI each hold one in production; both are closed when the test ends.
+func OpenPair(tb testing.TB) (first, second *registry.Registry) {
+	tb.Helper()
+	path := filepath.Join(tb.TempDir(), "factory.db")
+	Seed(tb, path)
+	for _, r := range []**registry.Registry{&first, &second} {
+		opened, err := registry.Open(path, registry.Options{})
+		if err != nil {
+			tb.Fatalf("registry.Open: %v", err)
+		}
+		tb.Cleanup(func() { opened.Close() })
+		*r = opened
+	}
+	return first, second
+}

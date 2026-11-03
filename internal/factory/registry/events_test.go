@@ -12,8 +12,8 @@ func TestAppendEventKeepsEachTasksStepsInOrder(t *testing.T) {
 	t.Parallel()
 	r, clk := openAt(t)
 	ctx := t.Context()
-	one := createTask(t, r, "PR-1")
-	two := createTask(t, r, "PR-2")
+	one := createTask(t, r, "PR-12301")
+	two := createTask(t, r, "PR-12302")
 
 	steps := []struct {
 		task        int64
@@ -52,7 +52,7 @@ func TestAppendEventRefusesWhatTheLogCannotHold(t *testing.T) {
 	t.Parallel()
 	r, _ := openAt(t)
 	ctx := t.Context()
-	task := createTask(t, r, "PR-1")
+	task := createTask(t, r, "PR-12301")
 	if err := r.AppendEvent(ctx, task.ID, "push", "started", "x"); err == nil {
 		t.Error("AppendEvent with an unknown phase succeeded")
 	}
