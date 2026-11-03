@@ -1,0 +1,48 @@
+// Package runtime is the factory's agent runtime: the owner rows of its
+// tasks in the factory's own agents store, the launches it records before
+// any workspace exists, the prompt ledger that never sends a prompt of
+// unknown delivery twice, the pauses that are not failures, and a watchdog
+// with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md,
+// sections 4.3, 10 and 10.1).
+//
+// The factory engine (package factory) drives it through its Runtime
+// interface; this file holds the events that interface reports, which the
+// engine declares before the runtime itself exists.
+package runtime
+
+// EventKind is what happened to a run of a factory agent.
+type EventKind string
+
+// The kinds of Event.
+const (
+	// EventEnded: the run ended (its pane went idle); the stage checks its
+	// end fact.
+	EventEnded EventKind = "ended"
+	// EventBlocked: the pane shows a dialog the factory does not answer.
+	EventBlocked EventKind = "blocked"
+	// EventPaused: a usage limit, a login or an overload screen; Reason says
+	// which and until when, when known. A pause is not a failure.
+	EventPaused EventKind = "paused"
+	// EventLost: the pane is gone and its recoveries ran out.
+	EventLost EventKind = "lost"
+	// EventStuck: the watchdog's steps ran out on a hung turn; Reason holds
+	// the pane's last line.
+	EventStuck EventKind = "stuck"
+	// EventNoProgress: a loop without progress outlived its compaction and
+	// its fresh session.
+	EventNoProgress EventKind = "no_progress"
+	// EventRefused: a Codex cybersecurity warning; the task never runs on
+	// Codex again.
+	EventRefused EventKind = "refused"
+	// EventHooksTrust: a Codex session shows the hooks-trust dialog.
+	EventHooksTrust EventKind = "hooks_trust"
+)
+
+// Event is one thing the runtime saw on a run of a task's role.
+type Event struct {
+	TaskID int64
+	Role   string
+	RunID  string
+	Kind   EventKind
+	Reason string
+}

@@ -3468,6 +3468,28 @@ stages = [
   skill and an optional `after`, another environment of the repository whose QA must pass first (no cycles).
   The first milestone reads none of it, but `magnum config` validates it.
 
+The factory daemon is a second daemon in the same binary, with its own launchd job
+(`zhuravel.magnum.factory`), registry (`factory/factory.db` in the data directory), pid, lock and log
+(`logs/factory.log`; launchd's capture of its output is `logs/factory-launchd.log`):
+
+| Command | What it does |
+|---|---|
+| `magnum factory install [--dry-run]` | Write the factory daemon's LaunchAgent (`~/Library/LaunchAgents/zhuravel.magnum.factory.plist`, running `magnum factory daemon`) and load it: bootout, then bootstrap, once. A running factory daemon drains (no new launch or effect starts, its tick ends) and launchd starts it again on this build, which also loads edited prompts. The review daemon's job is left alone. |
+| `magnum factory uninstall [--dry-run]` | Unload and delete that LaunchAgent; the factory's registry, task directories and copies stay. |
+| `magnum factory status [--json]` | Whether the factory daemon runs, and each task's key, kind, state, stage and what it waits on. It never creates the registry, and refuses to migrate one while an older factory daemon runs on it (`magnum factory install` restarts it on the new build, which migrates). |
+| `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one exits with an error naming the first one's pid. |
+
+The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
+sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the
+first tick after the wake do not count. An SSH, DNS or TLS failure, a failed MySQL ping, or the same failure
+on two tasks within 10 minutes holds every stage at no cost to the tasks, with tries after 2, 4, 8, 16 and
+then every 30 minutes; a hold that lasts 30 minutes needs you. While its herdr session does not answer, the
+factory holds its stages and opens `herdr --session <herdr_session>` in your terminal, at most twice an
+hour. A full disk or memory holds new launches, parks the idle agents of tasks that wait on you and stops
+idle servers; a disk below half of `min_free_disk_gb` needs you. At most `heavy_stages` heavy stages (local
+review rounds, local QA, servers) run at once, and a task that waits for one says whose runs. A request
+that waited 30 minutes expires.
+
 ## Daily use
 
 `magnum` alone opens the PR board, `magnum tui` (the printed rows when the output is not a terminal, so

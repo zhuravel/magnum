@@ -47,6 +47,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [factory](#factory) | Package factory is the magnum factory: a second daemon, in the magnum binary and with a registry of its own, that takes a Jira key or a free prompt and does the work up to the final merge, which stays the operator's. |
 | [registry](#registry) | Package registry is the factory's own SQLite registry: tasks, the stage attempts that run them, questions and the operator's decisions, the prompt ledger, external effects, the event log and the CLI's requests. |
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which registry.Open then finds current. |
+| [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -7901,6 +7902,12 @@ func HeldReviewID(v string) (int64, bool)
     drops the record, and one left behind names an older review). ok is false
     for a value that names none.
 
+func InfraCause(err error) string
+    InfraCause names the infrastructure failure err reports, "" for none of the
+    known patterns (an SSH key refused, then the network's: DNS, timeouts and
+    refusals, TLS): what pauses the review daemon's dispatch, for the factory's
+    infrastructure hold.
+
 func KVGitHubCost(identity string) string
     KVGitHubCost holds the cost record of one identity's GitHub calls
     (GitHubCost as JSON).
@@ -10730,6 +10737,43 @@ type Deps struct {
 }
     Deps is what a replay works with.
 
+type LocalCase struct {
+	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD string
+	Watch                                                     config.Watch
+	Roles                                                     []string
+	Round                                                     int
+}
+    LocalCase is one round of the factory's local review: magnum's full review
+    of a change in the task's copy, as a blind dry run, before any PR exists
+    (docs/superpowers/specs/2026-11-03-factory-design.md, section 6.5). Checkout
+    is the copy, BaseSHA and HeadSHA the change's ends, Branch its branch,
+    Title (with the Jira key), Body and TicketMD what the judge reads from files
+    instead of GitHub; Watch is the repository's [[watch]], whose review roles
+    round 1 runs, Roles the roles of this round and Round its number, from 1.
+    The factory's LocalReviewer takes it.
+
+type LocalFinding struct {
+	Severity, Title, Path    string
+	Line                     int
+	Body                     string
+	Simplification, Question bool
+}
+    LocalFinding is one finding of a local round: its Severity (P0 to P3),
+    Title, Path and Line, its Body, and whether it is a simplification or a
+    question for the operator.
+
+type LocalResult struct {
+	Outcome, ReportDir, Verdict string
+	Counts                      [4]int
+	OpenCounts                  *[4]int
+	Findings                    []LocalFinding
+	Round                       int
+}
+    LocalResult is what a local round found: the round's Outcome (dry_run when
+    it finished), its ReportDir, the judge's Verdict, the findings' counts
+    by priority (P0 to P3) and, for a later round, the counts of the earlier
+    findings still open, the findings themselves, and the round's number.
+
 type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
 	// (WithCandidate); "" = Config's.
@@ -11060,6 +11104,38 @@ and the state the factory keeps.
 The registry lives in the registry package (SQLite, its own migrations);
 the daemon, its stages and its screen build on it.
 
+CONSTANTS
+
+const (
+	HoldInfra  = "infra"
+	HoldHerdr  = "herdr"
+	HoldDisk   = "disk"
+	HoldMemory = "memory"
+)
+    The kinds of Hold.
+
+const (
+	ReqStart   = "start"
+	ReqAnswer  = "answer"
+	ReqDecide  = "decide"
+	ReqStop    = "stop"
+	ReqPreview = "preview"
+)
+    Request kinds.
+
+const LaunchLabel = "zhuravel.magnum.factory"
+    LaunchLabel is the launchd label of the factory daemon's LaunchAgent,
+    apart from the review daemon's (launchd.DefaultLabel), so either restarts
+    without the other.
+
+
+VARIABLES
+
+var ErrHeld = errors.New("held")
+    ErrHeld marks a launch or an effect that the engine held back: the daemon
+    drains, or a hold of the machine is on. It costs the task nothing.
+
+
 FUNCTIONS
 
 func DaemonPID(l paths.Layout) (int, error)
@@ -11087,6 +11163,178 @@ func LooksLikeFactoryDaemon(comm, args string) bool
     LooksLikeFactoryDaemon reports whether a process is a magnum factory daemon
     from what engine.ProcessCommand read: the executable is magnum and its first
     arguments that are not flags are "factory daemon".
+
+func TaskKey(t registry.Task) string
+    TaskKey names a task as the screen and the waits do: its Jira key, else
+    "task <id>".
+
+
+TYPES
+
+type Copies interface {
+	Claim(ctx context.Context, t registry.Task) (Copy, error)
+	Release(ctx context.Context, t registry.Task, reason string) error
+	Free(ctx context.Context) (int, error)
+	StartServer(ctx context.Context, c Copy) error
+	StopServer(ctx context.Context, c Copy) error
+	Reconcile(ctx context.Context) error
+}
+    Copies are the repositories' copies the tasks work in: a claim for a task
+    (the copy it used last first), its release, how many are free, the copy's
+    local server, and the reconcile of servers and copies after a restart.
+
+type Copy struct {
+	Name, Path   string
+	Number, Port int
+	Env          map[string]string
+}
+    Copy is a task's copy of a repository: its name and path, its number (copy
+    {n}), the port of its server and its environment.
+
+type Deps struct {
+	Config   *config.Config
+	Layout   paths.Layout
+	Registry *registry.Registry
+	Runtime  Runtime
+	Copies   Copies
+	Jira     Jira
+	GitHub   GitHub
+	Magnum   Magnum
+	Review   LocalReviewer
+	Git      *gitx.Client
+	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
+	// bytes of the filesystem that holds path.
+	Memory func(ctx context.Context) engine.MemorySample
+	Disk   func(path string) (free uint64, err error)
+	// MySQL pings the copies' database server; HerdrUp asks the factory's
+	// herdr session whether it answers; Reveal opens a terminal on it
+	// (`herdr --session <herdr_session>`, internal/reveal).
+	MySQL   func(ctx context.Context) error
+	HerdrUp func(ctx context.Context) error
+	Reveal  func(ctx context.Context) error
+	// Clock returns the current time; nil means time.Now.
+	Clock func() time.Time
+	Log   *slog.Logger
+}
+    Deps are the engine's collaborators. Config, Layout and Registry are
+    required; any other may be nil, and what needs it waits (a collaborator a
+    build does not wire yet) or is skipped (a function field: no memory read,
+    no disk check, no MySQL ping, herdr taken as up, no reveal).
+
+type Engine struct {
+	// Has unexported fields.
+}
+    Engine is the factory daemon's loop. New builds it, Run runs it until a stop
+    signal, and Tick is one pass of it.
+
+func New(d Deps) *Engine
+    New builds the engine over d.
+
+func (e *Engine) Blocking() []string
+    Blocking is the factory's NEEDS YOU blockers of the home screen, one line
+    each ("infra: SSH key refused, held since 14:02"), sorted.
+
+func (e *Engine) Kick()
+    Kick asks the loop for a tick now (SIGUSR1, `magnum factory start` and the
+    screen's requests); a kick already pending absorbs it.
+
+func (e *Engine) Run(ctx context.Context) error
+    Run runs the daemon until SIGTERM or SIGINT, or until ctx ends: it takes
+    the factory lock (another daemon holding it is ErrRunning, naming its pid),
+    writes the pidfile, runs startup, then a tick at once, every factory poll
+    and on SIGUSR1, and an observe pass every factory observe. A stop signal
+    drains: no new launch or effect starts, the tick in progress ends, and Run
+    returns nil, so launchd (KeepAlive on a failed exit only) starts the daemon
+    again only after a crash.
+
+func (e *Engine) Tick(ctx context.Context) error
+    Tick runs one pass of the loop: the holds (herdr, disk and memory, then
+    the infrastructure hold and a MySQL ping before a pass that advances), the
+    requests, then each live task's advance under its own panic guard (safely).
+    During an infrastructure or a herdr hold no task advances except on the
+    hold's tries; a failure that a hold covers costs its task nothing. The
+    returned error joins what failed, for the log; each step records its own.
+
+type ErrRunning struct {
+	PID  int
+	Lock string
+}
+    ErrRunning is Run's answer when another factory daemon holds the lock:
+    PID is that daemon's, from its pidfile (0 when it could not be read).
+
+func (e ErrRunning) Error() string
+    Error implements error.
+
+type GitHub interface {
+	CreatePR(ctx context.Context, repo, base, branch, title, bodyFile string) (PRView, error)
+	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
+	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
+}
+    GitHub opens a task's PR (ready for review, never a draft) and reads it
+    back, by its branch or its number.
+
+type Hold struct {
+	Kind, Reason string
+	Since, Next  time.Time
+	Tries        int
+}
+    Hold is a stop of the machine's: its kind (HoldInfra, HoldHerdr, HoldDisk,
+    HoldMemory), its reason without the kind ("SSH key refused"), since when
+    it holds, when it tries again (an infrastructure hold's next try, a herdr
+    hold's next reveal) and how many tries ran.
+
+type Jira interface {
+	Ticket(ctx context.Context, key string) (jira.Ticket, error)
+	Search(ctx context.Context, words string, limit int) ([]jira.Ticket, error)
+}
+    Jira reads a task's ticket, and searches issues by the words of a free
+    prompt.
+
+type LocalReviewer interface {
+	Round(ctx context.Context, c evalrun.LocalCase) (evalrun.LocalResult, error)
+}
+    LocalReviewer runs one round of magnum's review on a task's change in its
+    copy, as a blind dry run (evalrun.LocalCase).
+
+type Magnum interface {
+	Busy(ctx context.Context) (busy bool, why string, err error)
+}
+    Magnum is the review daemon as the factory's local review sees it: busy
+    while a real round is in flight or due, so a local round yields to it.
+
+type PRView struct {
+	Number                     int
+	URL, Author, Base, HeadSHA string
+	Draft                      bool
+}
+    PRView is a pull request as the factory reads it back after it opened it.
+
+type Runtime interface {
+	Owner(ctx context.Context, t registry.Task) (store.PR, error)
+	Launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error
+	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
+	Observe(ctx context.Context) ([]runtime.Event, error)
+	Verify(ctx context.Context, runID string, ok bool, why string) error
+	Park(ctx context.Context, t registry.Task) error
+	Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
+	Watchdog(ctx context.Context, now time.Time) ([]runtime.Event, error)
+	RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
+	Shift(gap time.Duration)
+}
+    Runtime is the factory's agent runtime (internal/factory/runtime): the owner
+    row of a task in the factory's agents store, the launch of a stage's roles
+    (recorded before any workspace exists), the prompts it sends through its
+    ledger, the panes it observes and the watchdog over them, the verification
+    of a run's end, parking a task's sessions, the reconcile of a prompt of
+    unknown delivery, the recovery of a lost pane, and the shift of every turn
+    deadline after the Mac slept.
+
+type StopPayload struct {
+	TaskID  int64
+	Surface string
+}
+    StopPayload is a ReqStop: stop task TaskID for good. Surface is where you
+    asked (the screen, the CLI), for the record of your input.
 
 ```
 
@@ -11997,6 +12245,63 @@ func Seed(tb testing.TB, path string)
     Seed writes a migrated database to path, creating its directory (0700),
     for code under test that opens the registry itself. A file already at path
     is left as it is.
+
+```
+
+## runtime
+
+```text
+package runtime // import "github.com/zhuravel/magnum/internal/factory/runtime"
+
+Package runtime is the factory's agent runtime: the owner rows of its tasks in
+the factory's own agents store, the launches it records before any workspace
+exists, the prompt ledger that never sends a prompt of unknown delivery twice,
+the pauses that are not failures, and a watchdog with its recovery steps
+(docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and
+10.1).
+
+The factory engine (package factory) drives it through its Runtime interface;
+this file holds the events that interface reports, which the engine declares
+before the runtime itself exists.
+
+TYPES
+
+type Event struct {
+	TaskID int64
+	Role   string
+	RunID  string
+	Kind   EventKind
+	Reason string
+}
+    Event is one thing the runtime saw on a run of a task's role.
+
+type EventKind string
+    EventKind is what happened to a run of a factory agent.
+
+const (
+	// EventEnded: the run ended (its pane went idle); the stage checks its
+	// end fact.
+	EventEnded EventKind = "ended"
+	// EventBlocked: the pane shows a dialog the factory does not answer.
+	EventBlocked EventKind = "blocked"
+	// EventPaused: a usage limit, a login or an overload screen; Reason says
+	// which and until when, when known. A pause is not a failure.
+	EventPaused EventKind = "paused"
+	// EventLost: the pane is gone and its recoveries ran out.
+	EventLost EventKind = "lost"
+	// EventStuck: the watchdog's steps ran out on a hung turn; Reason holds
+	// the pane's last line.
+	EventStuck EventKind = "stuck"
+	// EventNoProgress: a loop without progress outlived its compaction and
+	// its fresh session.
+	EventNoProgress EventKind = "no_progress"
+	// EventRefused: a Codex cybersecurity warning; the task never runs on
+	// Codex again.
+	EventRefused EventKind = "refused"
+	// EventHooksTrust: a Codex session shows the hooks-trust dialog.
+	EventHooksTrust EventKind = "hooks_trust"
+)
+    The kinds of Event.
 
 ```
 

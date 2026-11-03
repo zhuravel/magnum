@@ -128,7 +128,7 @@ func installLaunchAgent(ctx context.Context, c *Context, run execx.Runner, dry b
 		return 1
 	}
 	prefix := launchPrefix(c.Layout, c.Config, resolveMisePath(ctx, run))
-	plist := launchd.Plist(magnumPlistOptions(c.Layout, userHome, prefix, c.Config.Herdr.Socket, daemonConfigOverride(c)))
+	plist := launchd.Plist(magnumPlistOptions(launchd.DefaultLabel, c.Layout, userHome, prefix, c.Config.Herdr.Socket, daemonConfigOverride(c)))
 	label := launchd.DefaultLabel
 	path := launchd.AgentPath(userHome, label)
 	uid := daemonSys.UID()

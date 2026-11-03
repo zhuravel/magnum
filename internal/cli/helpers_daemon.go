@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -43,8 +44,10 @@ type daemonGroupSys struct {
 	Setenv func(key, value string) error
 	// Kill signals a process (syscall.Kill).
 	Kill func(pid int, sig syscall.Signal) error
-	// DaemonPID reads the daemon pidfile (engine.DaemonPID).
-	DaemonPID func(paths.Layout) (int, error)
+	// DaemonPID reads the daemon pidfile (engine.DaemonPID); FactoryPID the
+	// factory daemon's (factory.DaemonPID, when nil).
+	DaemonPID  func(paths.Layout) (int, error)
+	FactoryPID func(paths.Layout) (int, error)
 	// Sleep waits d between polls; it returns ctx's error, at once, when ctx
 	// ends first (ctrl+c), and nil otherwise.
 	Sleep func(ctx context.Context, d time.Duration) error
@@ -78,6 +81,15 @@ var daemonSys = daemonGroupSys{
 	Kill:      syscall.Kill,
 	DaemonPID: engine.DaemonPID,
 	Sleep:     actSleep,
+}
+
+// factoryPID reads the factory daemon's pidfile (FactoryPID, else
+// factory.DaemonPID).
+func (s daemonGroupSys) factoryPID(l paths.Layout) (int, error) {
+	if s.FactoryPID != nil {
+		return s.FactoryPID(l)
+	}
+	return factory.DaemonPID(l)
 }
 
 // signals is the context a command of the group runs under (Signals, else
@@ -234,19 +246,27 @@ func launchdPATH(userHome string) string {
 	}, ":")
 }
 
-// magnumPlistOptions describes the LaunchAgent: `<prefix> <binary> daemon`
-// (prefix: launchPrefix), restarted only after an abnormal exit. The
-// daemon writes and rotates logs/daemon.log itself; launchd's capture of
-// stdout/stderr (crashes, output before the logger exists) goes to
-// logs/launchd.log so the two never write one file. MAGNUM_HOME is set only
-// for the checkout layout, which it selects. configFile is non-empty only
-// for a non-default config (see daemonConfigOverride). Never put secrets
-// here: the plist is world-readable; keys are files or come from mise.
-func magnumPlistOptions(layout paths.Layout, userHome string, prefix []string, herdrSocket, configFile string) launchd.Options {
+// magnumPlistOptions describes the LaunchAgent of the job label: the review
+// daemon's (launchd.DefaultLabel), `<prefix> <binary> daemon`, or the
+// factory daemon's (factory.LaunchLabel), `<prefix> <binary> factory
+// daemon` (prefix: launchPrefix), restarted only after an abnormal exit.
+// Each daemon writes and rotates its own log (logs/daemon.log,
+// logs/factory.log); launchd's capture of a job's stdout/stderr (crashes,
+// output before the logger exists) goes to a file of its own
+// (logs/launchd.log, logs/factory-launchd.log) so no two writers share one
+// file. HERDR_SOCKET_PATH is herdrSocket when it is set (the factory's
+// herdr_socket may be empty: its named session's own socket). MAGNUM_HOME
+// is set only for the checkout layout, which it selects. configFile is
+// non-empty only for a non-default config (see daemonConfigOverride). Never
+// put secrets here: the plist is world-readable; keys are files or come
+// from mise.
+func magnumPlistOptions(label string, layout paths.Layout, userHome string, prefix []string, herdrSocket, configFile string) launchd.Options {
 	env := map[string]string{
-		"PATH":              launchdPATH(userHome),
-		"HOME":              userHome,
-		"HERDR_SOCKET_PATH": herdrSocket,
+		"PATH": launchdPATH(userHome),
+		"HOME": userHome,
+	}
+	if herdrSocket != "" {
+		env["HERDR_SOCKET_PATH"] = herdrSocket
 	}
 	if layout.CheckoutLayout() && layout.Home != "" {
 		env["MAGNUM_HOME"] = layout.Home
@@ -266,17 +286,25 @@ func magnumPlistOptions(layout paths.Layout, userHome string, prefix []string, h
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" && !strings.Contains(sock, "/com.apple.launchd.") {
 		env["SSH_AUTH_SOCK"] = sock
 	}
+	args, capture := []string{"daemon"}, launchd.LogPath(layout.Logs())
+	if label == factory.LaunchLabel {
+		args, capture = []string{"factory", "daemon"}, factoryLaunchdLog(layout)
+	}
 	return launchd.Options{
-		Label:            launchd.DefaultLabel,
-		ProgramArguments: append(slices.Clone(prefix), layout.Binary(), "daemon"),
+		Label:            label,
+		ProgramArguments: append(append(slices.Clone(prefix), layout.Binary()), args...),
 		WorkingDir:       workDir,
 		Env:              env,
-		StdoutPath:       launchd.LogPath(layout.Logs()),
-		StderrPath:       launchd.LogPath(layout.Logs()),
+		StdoutPath:       capture,
+		StderrPath:       capture,
 		KeepAlive:        true,
 		ThrottleSeconds:  int(launchdThrottle / time.Second),
 	}
 }
+
+// factoryLaunchdLog is launchd's capture of the factory daemon's stdout and
+// stderr, beside the review daemon's (launchd.LogName).
+func factoryLaunchdLog(l paths.Layout) string { return filepath.Join(l.Logs(), "factory-launchd.log") }
 
 // herdrPluginEntry is the part of one `herdr plugin list --json` entry magnum
 // reads.

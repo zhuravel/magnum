@@ -245,16 +245,16 @@ func TestInstallLaunchdFailureNamesTheFix(t *testing.T) {
 func TestPlistCarriesTheShellsSSHAgentSocket(t *testing.T) {
 	layout := paths.Layout{Home: "/Users/x/Projects/magnum"}
 	t.Setenv("SSH_AUTH_SOCK", "/Users/x/Library/Group Containers/agent.sock")
-	env := magnumPlistOptions(layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env
+	env := magnumPlistOptions(launchd.DefaultLabel, layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env
 	if env["SSH_AUTH_SOCK"] != "/Users/x/Library/Group Containers/agent.sock" {
 		t.Fatalf("SSH_AUTH_SOCK = %q", env["SSH_AUTH_SOCK"])
 	}
 	t.Setenv("SSH_AUTH_SOCK", "/private/tmp/com.apple.launchd.abc/Listeners")
-	if _, ok := magnumPlistOptions(layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
+	if _, ok := magnumPlistOptions(launchd.DefaultLabel, layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
 		t.Fatal("Apple's launchd listener must not be pinned into the plist")
 	}
 	t.Setenv("SSH_AUTH_SOCK", "")
-	if _, ok := magnumPlistOptions(layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
+	if _, ok := magnumPlistOptions(launchd.DefaultLabel, layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
 		t.Fatal("no socket in the shell, none in the plist")
 	}
 }
@@ -283,7 +283,7 @@ func TestLaunchRunsTheBinaryDirectlyUnlessAKeyComesFromMise(t *testing.T) {
 	if got := launchPrefix(installed, cfg, "/m/mise"); got != nil {
 		t.Fatalf("no checkout: %q", got)
 	}
-	o := magnumPlistOptions(installed, "/Users/x", nil, "/tmp/h.sock", "")
+	o := magnumPlistOptions(launchd.DefaultLabel, installed, "/Users/x", nil, "/tmp/h.sock", "")
 	if !slices.Equal(o.ProgramArguments, []string{"/opt/homebrew/bin/magnum", "daemon"}) || o.WorkingDir != "/Users/x" ||
 		o.StdoutPath != launchd.LogPath("/s/magnum/logs") {
 		t.Fatalf("installed: %+v", o)
@@ -291,7 +291,7 @@ func TestLaunchRunsTheBinaryDirectlyUnlessAKeyComesFromMise(t *testing.T) {
 	if _, ok := o.Env["MAGNUM_HOME"]; ok {
 		t.Fatal("an installed layout pinned MAGNUM_HOME")
 	}
-	if got := magnumPlistOptions(checkout, "/Users/x", nil, "/tmp/h.sock", "").Env["MAGNUM_HOME"]; got != repo {
+	if got := magnumPlistOptions(launchd.DefaultLabel, checkout, "/Users/x", nil, "/tmp/h.sock", "").Env["MAGNUM_HOME"]; got != repo {
 		t.Fatalf("checkout layout: MAGNUM_HOME = %q", got)
 	}
 }

@@ -256,3 +256,9 @@ func gitProbe(g *gitx.Client) func(ctx context.Context, dir string) error {
 func clipRunes(s string, n int) string {
 	return textx.Clip(strings.TrimSpace(s), n)
 }
+
+// InfraCause names the infrastructure failure err reports, "" for none of
+// the known patterns (an SSH key refused, then the network's: DNS, timeouts
+// and refusals, TLS): what pauses the review daemon's dispatch, for the
+// factory's infrastructure hold.
+func InfraCause(err error) string { return infraCause(err) }
