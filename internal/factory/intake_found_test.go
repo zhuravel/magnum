@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,11 +9,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/stats"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -21,6 +25,10 @@ import (
 
 // foundText names PR-12345 in the middle of its words.
 const foundText = "fix the expiry date in PR-12345, only the refund path"
+
+// noProjects leaves the rig's trackers with the Jira site alone, naming no
+// project: every bare key of the text is then read from Jira.
+func noProjects(r *intakeRig) { r.cfg.Board.Trackers = nil }
 
 // foundKeyEvent reports whether task id has the info event of a task started
 // from a key found in its text.
@@ -138,6 +146,7 @@ func TestAKeyFoundInTheTextThatHasATaskReturnsThatTask(t *testing.T) {
 // it.
 func TestAnUpperCaseWordJiraDoesNotKnowStaysInThePrompt(t *testing.T) {
 	r := newIntakeRig(t)
+	noProjects(r)
 	text := "Read the dates as UTF-8 and ISO-8601 in the digest export."
 	task, err := r.start(text)
 	if err != nil {
@@ -177,6 +186,7 @@ func TestAnUpperCaseWordJiraDoesNotKnowStaysInThePrompt(t *testing.T) {
 // Jira is asked for at most 3 of the keys a text names, the first 3.
 func TestNoMoreThanThreeFoundKeysAreRead(t *testing.T) {
 	r := newIntakeRig(t)
+	noProjects(r)
 	task := r.mustStart("Read UTF-8, ISO-8601 and SHA-256 dates in the reminder of PR-12345")
 	if want := []string{"UTF-8", "ISO-8601", "SHA-256"}; !slices.Equal(r.site.asked, want) {
 		t.Fatalf("Jira was asked for %q, want only the first 3 words: %q", r.site.asked, want)
@@ -237,9 +247,10 @@ func TestSeveralKeysFoundInTheTextAskWhichIssue(t *testing.T) {
 
 // If Jira does not answer, a key found in the text waits like a key at the
 // start: "start when Jira answers", tried after 1, 2 and 4 minutes, for no
-// cost, and it needs you after 6 hours. The wait holds no key (none is known
-// yet). When Jira answers, the key it knows starts the key task, with the
-// whole text as its guidance and the branch named for the key.
+// cost, and after 6 hours it goes on from the operator's words. The wait
+// holds no key (none is known yet). When Jira answers, the key it knows starts
+// the key task, with the whole text as its guidance and the branch named for
+// the key.
 func TestAKeyFoundInTheTextWaitsForJiraLikeAKeyAtTheStart(t *testing.T) {
 	r := newIntakeRig(t)
 	r.site.setDown(7)
@@ -278,9 +289,16 @@ func TestAKeyFoundInTheTextWaitsForJiraLikeAKeyAtTheStart(t *testing.T) {
 	if evs := r.events(task.ID, "advance"); len(evs) != 0 {
 		t.Fatalf("Jira's outage counted as the task's failure: %+v", evs)
 	}
+	// After 6 hours of silence a key task needs you; a text whose found keys
+	// never got an answer goes on from the operator's words instead.
 	at(6 * time.Hour)
-	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != "Jira did not answer for 6h" {
-		t.Fatalf("after 6h the task is %s: %q, want needs_you: Jira did not answer for 6h", got.State, got.WaitsWhat)
+	r.e.waitBackground()
+	got := r.reload(task.ID)
+	if got.State != registry.TaskActive || got.WaitsWho != "" || got.JiraKey != "" || got.Prompt != foundText {
+		t.Fatalf("after 6h the task is %+v, want a prompt task that goes on from the words", got)
+	}
+	if !refusedEvent(r, task.ID, "Jira did not answer for 6h; it goes on from your words") {
+		t.Fatalf("intake events %+v, want the info event: Jira did not answer for 6h; it goes on from your words", r.events(task.ID, "intake"))
 	}
 
 	// Another task of the same words waits too, and Jira answers it at once.
@@ -290,7 +308,7 @@ func TestAKeyFoundInTheTextWaitsForJiraLikeAKeyAtTheStart(t *testing.T) {
 	r.clock.Add(time.Minute)
 	r.tick()
 	r.e.waitBackground()
-	got := r.reload(second.ID)
+	got = r.reload(second.ID)
 	if got.State != registry.TaskActive || got.WaitsWho != "" || got.JiraKey != "PR-12345" || got.Guidance != foundText ||
 		got.Title != "Credit expiry reminder email" || got.Kind != "feature" || got.Branch != "zhuravel-PR-12345-credit-expiry-reminder-email" {
 		t.Fatalf("after Jira answered the task is %+v, want the key task of PR-12345 with the whole text as guidance", got)
@@ -378,7 +396,7 @@ func TestAWaitingTextYouTakeOverGoesOnWithYourRequest(t *testing.T) {
 func TestAWaitingTextGoesOnFromTheWordsWhenJiraKnowsNoKey(t *testing.T) {
 	r := newIntakeRig(t)
 	r.site.setDown(7)
-	words := r.mustStart("Read the dates as UTF-8 in the digest export")
+	words := r.mustStart("Read the dates of PR-12399 in the digest export")
 	several := r.mustStart("the refund of PR-12346 and the reminder of PR-12345 both lose points")
 	for _, task := range []registry.Task{words, several} {
 		if task.State != registry.TaskWaiting || task.WaitsWho != "Jira" {
@@ -400,8 +418,8 @@ func TestAWaitingTextGoesOnFromTheWordsWhenJiraKnowsNoKey(t *testing.T) {
 	if qs, _ := r.reg.Questions(r.ctx, words.ID); len(qs) != 1 || qs[0].Text != whichIssue || len(r.site.searched) != 1 {
 		t.Fatalf("questions %+v after %d searches, want the title search's question", qs, len(r.site.searched))
 	}
-	if foundKeyEvent(r, words.ID, "UTF-8") {
-		t.Fatal("an unknown word was reported as a found key")
+	if foundKeyEvent(r, words.ID, "PR-12399") {
+		t.Fatal("an unknown key was reported as a found key")
 	}
 
 	got = r.reload(several.ID)
@@ -501,10 +519,27 @@ func TestAFoundKeyJiraRefusesStaysAWordAndNamesTheCause(t *testing.T) {
 		t.Fatalf("task %+v with events %+v, want a prompt task and the cause named", got, other.events(got.ID, "intake"))
 	}
 
+	// A 403 is not "no such issue": the account is refused, and that is said.
+	forbidden := newIntakeRig(t)
+	forbidden.site.refuse("PR-12345", 403)
+	denied := forbidden.mustStart(foundText)
+	if denied.JiraKey != "" || denied.Prompt != foundText ||
+		!refusedEvent(forbidden, denied.ID, "Jira refused PR-12345: Jira refused the account (HTTP 403); starts from your words") {
+		t.Fatalf("task %+v with events %+v, want a prompt task and the 403 named", denied, forbidden.events(denied.ID, "intake"))
+	}
+
+	// "No such issue" (a 404) is the one refusal that is only a word, and says nothing.
+	unknown := other.mustStart("the refund of PR-12398 is wrong")
+	for _, ev := range other.events(unknown.ID, "intake") {
+		if strings.Contains(ev.Text, "refused") {
+			t.Fatalf("intake event %+v about a key Jira has no issue for", ev)
+		}
+	}
+
 	// A key Jira refuses beside one it knows stays a word of the key task.
-	other.site.refuse("PR-12399", 429)
+	other.site.refuse("PR-12399", 400)
 	mixed := other.mustStart("the refund of PR-12399 and the reminder of PR-12346")
-	if mixed.JiraKey != "PR-12346" || !refusedEvent(other, mixed.ID, "Jira refused PR-12399: Jira answered HTTP 429; it stays a word of your text") {
+	if mixed.JiraKey != "PR-12346" || !refusedEvent(other, mixed.ID, "Jira refused PR-12399: Jira answered HTTP 400; it stays a word of your text") {
 		t.Fatalf("task %+v with events %+v, want a key task of PR-12346 and the refusal named", mixed, other.events(mixed.ID, "intake"))
 	}
 }
@@ -558,10 +593,187 @@ func TestThePreviewNamesTheCauseWhenJiraRefusesAFoundKey(t *testing.T) {
 
 	// Beside a key Jira knows, the note joins the key's line.
 	other := newIntakeRig(t)
-	other.site.refuse("PR-12399", 429)
+	other.site.refuse("PR-12399", 400)
 	f, _ = other.e.preview(other.ctx, "the refund of PR-12399 and the reminder of PR-12346")
-	if f.Jira == nil || f.Jira.Key != "PR-12346" || !strings.Contains(f.Jira.Found, "Jira refused PR-12399: Jira answered HTTP 429") || f.Err != "" {
+	if f.Jira == nil || f.Jira.Key != "PR-12346" || !strings.Contains(f.Jira.Found, "Jira refused PR-12399: Jira answered HTTP 400") || f.Err != "" {
 		t.Fatalf("preview with a refused key beside a known one %+v (Jira %+v)", f, f.Jira)
+	}
+
+	// A 403 is named too, and a 404 is not.
+	forbidden := newIntakeRig(t)
+	forbidden.site.refuse("PR-12345", 403)
+	f, _ = forbidden.e.preview(forbidden.ctx, foundText)
+	if want := "Jira refused PR-12345: Jira refused the account (HTTP 403); starts from your words"; f.Err != want || f.Jira != nil {
+		t.Fatalf("preview of a key Jira refuses with a 403 %+v, want Err %q", f, want)
+	}
+	if f, _ = forbidden.e.preview(forbidden.ctx, "the refund of PR-12398 is wrong"); f.Err != "" || f.Jira != nil {
+		t.Fatalf("preview of a key Jira has no issue for %+v, want a prompt's", f)
+	}
+}
+
+// When the trackers name Jira projects, a bare key of another project is a
+// word, read from no Jira: "UTF-8" never waits on a Jira that is down, and the
+// preview does not mention Jira. A Jira link on the tracker's site counts
+// whatever its project.
+func TestABareKeyOfAnotherProjectIsAWordReadFromNoJira(t *testing.T) {
+	r := newIntakeRig(t) // its tracker names the project PR
+	r.site.setDown(7)
+	text := "Read the dates as UTF-8 and ISO-8601 in the digest export, and the report of OPS-8."
+	task := r.mustStart(text)
+	if task.State != registry.TaskActive || task.JiraKey != "" || task.Prompt != text {
+		t.Fatalf("task %+v, want a prompt task that started at once: no word of the text waits on Jira", task)
+	}
+	if len(r.site.asked) != 0 {
+		t.Fatalf("Jira was asked for %q, want no key", r.site.asked)
+	}
+	f, err := r.e.preview(r.ctx, text)
+	if err != nil || f.Err != "" || f.Jira != nil || f.Title != promptTitle(text) {
+		t.Fatalf("preview %+v (%v), want a prompt's, with nothing about Jira", f, err)
+	}
+
+	r.site.setDown(0)
+	r.site.issues["OPS-7"] = issueJSON("OPS-7", "The ops report is slow", "Bug", "It takes a minute.")
+	linked := r.mustStart("the page " + jiraTestSite + "/browse/OPS-7 is slow, and UTF-8 is not the cause")
+	if linked.JiraKey != "OPS-7" || !slices.Equal(r.site.asked, []string{"OPS-7"}) {
+		t.Fatalf("task %+v after reading %q, want a key task of OPS-7 from its link", linked, r.site.asked)
+	}
+}
+
+// For a found key, silence is more than curl's exits 6, 7 and 28 and a 5xx: a
+// 429 and every curl failure to reach Jira count, so the task waits for Jira
+// instead of dropping a key the operator named.
+func TestAFoundKeyThatJiraAnswersTooOftenOrCannotBeReachedWaits(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.refuse("PR-12345", 429)
+	busy := r.mustStart(foundText)
+	if busy.State != registry.TaskWaiting || busy.WaitsWho != "Jira" || busy.JiraKey != "" {
+		t.Fatalf("a 429: task %+v, want waiting on Jira", busy)
+	}
+	for _, exit := range []int{35, 52, 56} { // curl: TLS handshake, empty reply, receive failure
+		other := newIntakeRig(t)
+		other.site.setDown(exit)
+		got := other.mustStart(foundText)
+		if got.State != registry.TaskWaiting || got.WaitsWho != "Jira" {
+			t.Fatalf("curl exit %d: task %+v, want waiting on Jira", exit, got)
+		}
+	}
+	// A key at the start keeps today's meaning: only exits 6, 7 and 28 and a 5xx are silence.
+	if _, err := newIntakeRigDown(t, 35).start("PR-12345"); err == nil {
+		t.Fatal("a key at the start with curl exit 35 made a task, want today's error")
+	}
+}
+
+// newIntakeRigDown is a rig whose Jira is down with curl exit code.
+func newIntakeRigDown(t *testing.T, code int) *intakeRig {
+	t.Helper()
+	r := newIntakeRig(t)
+	r.site.setDown(code)
+	return r
+}
+
+// The CLI has no preview, so the answer to a start names the refusal of a
+// found key: the task started from the words, and why.
+func TestAStartRequestNamesTheRefusalOfAFoundKey(t *testing.T) {
+	r := newIntakeRig(t)
+	missing := filepath.Join(t.TempDir(), "jira.token")
+	r.client.TokenFile = missing
+	id, err := r.reg.EnqueueRequest(r.ctx, ReqStart, StartPayload{Text: foundText})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	r.e.waitBackground()
+	req, _ := r.reg.RequestByID(r.ctx, id)
+	note := "Jira refused PR-12345: the Jira token file is missing: " + missing + "; starts from your words"
+	if req.State != registry.RequestDone || !strings.HasPrefix(req.Result, `started "`+foundText+`" as task 1: `) || !strings.HasSuffix(req.Result, ". "+note) {
+		t.Fatalf("start request %s %q, want the answer of a start with %q after it", req.State, req.Result, note)
+	}
+}
+
+// slowRunner answers after d, or when its context ends first.
+type slowRunner struct {
+	d     time.Duration
+	next  execx.Runner
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *slowRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	select {
+	case <-time.After(s.d):
+		return s.next.Run(ctx, c)
+	case <-ctx.Done():
+		return execx.Result{}, ctx.Err()
+	}
+}
+
+// The reads of the keys of one start, and of one preview, share one deadline:
+// a Jira that answers slowly cannot hold the engine's loop for a read per
+// key. When the time is out, that is silence: the task waits for Jira, and the
+// preview says Jira does not answer. It is never a failed start.
+func TestTheFoundReadsOfAStartShareOneDeadline(t *testing.T) {
+	storetest.Serial(t)
+	old := foundBudget
+	foundBudget = 150 * time.Millisecond
+	t.Cleanup(func() { foundBudget = old })
+	r := newIntakeRig(t)
+	slow := &slowRunner{d: 100 * time.Millisecond, next: r.client.Runner}
+	r.client.Runner = slow
+	text := "the refund of PR-12346 and the reminder of PR-12345 and the third of PR-12347"
+	r.site.issues["PR-12347"] = issueJSON("PR-12347", "Upgrade the gems", "Task", "Bundler 3.")
+
+	task, err := r.start(text)
+	if err != nil {
+		t.Fatalf("a start whose reads ran out of time = %v, want a waiting task", err)
+	}
+	slow.mu.Lock()
+	calls := slow.calls
+	slow.mu.Unlock()
+	if task.State != registry.TaskWaiting || task.WaitsWho != "Jira" || task.JiraKey != "" || calls > 2 {
+		t.Fatalf("task %+v after %d reads, want it waiting on Jira: the third read is not started once the time is out", task, calls)
+	}
+
+	f, err := r.e.preview(r.ctx, text)
+	if err != nil || f.Err != "Jira does not answer: the task waits for it, then starts" {
+		t.Fatalf("preview %+v (%v), want Jira does not answer", f, err)
+	}
+}
+
+// A task that waits for Jira with the keys of its text and finds [jira]
+// switched off goes on from the words, as a start with [jira] off does.
+func TestAWaitingTextGoesOnFromTheWordsWhenJiraIsSwitchedOff(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(7)
+	task := r.mustStart(foundText)
+	r.e.d.Jira = nil
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	got := r.reload(task.ID)
+	if got.State != registry.TaskActive || got.WaitsWho != "" || got.JiraKey != "" || got.Prompt != foundText {
+		t.Fatalf("with [jira] off the task is %+v, want a prompt task that goes on", got)
+	}
+	if !refusedEvent(r, task.ID, "[jira] is off; it goes on from your words") {
+		t.Fatalf("intake events %+v, want the info event: [jira] is off; it goes on from your words", r.events(task.ID, "intake"))
+	}
+}
+
+// A text whose only key-shaped words meet a Jira that is down previews as the
+// prompt it will be, with Jira's silence on the JIRA line.
+func TestThePreviewOfKeyShapedWordsMeetsADownJira(t *testing.T) {
+	r := newIntakeRig(t)
+	noProjects(r)
+	r.site.setDown(7)
+	text := "Read the dates as UTF-8 in the digest export"
+	f, err := r.e.preview(r.ctx, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Err != "Jira does not answer: the task waits for it, then starts" || f.Jira != nil || f.Title != text || f.Kind == "" || f.Branch == "" || f.Starts == "" {
+		t.Fatalf("preview %+v, want a prompt's preview with Jira's silence", f)
 	}
 }
 
@@ -650,8 +862,8 @@ func TestThePreviewSaysTheKeyWasFoundInTheText(t *testing.T) {
 		t.Fatalf("preview request %s %q (%v), want the form with the note", req.State, req.Result, err)
 	}
 
-	f, _ = r.e.preview(r.ctx, "Read the dates as UTF-8 in the digest export")
-	if f.Jira != nil || f.Err != "" || f.Title != "Read the dates as UTF-8 in the digest export" || f.Branch == "" {
+	f, _ = r.e.preview(r.ctx, "Read the dates of PR-12399 in the digest export")
+	if f.Jira != nil || f.Err != "" || f.Title != "Read the dates of PR-12399 in the digest export" || f.Branch == "" {
 		t.Fatalf("preview of words Jira does not know %+v, want a prompt's", f)
 	}
 

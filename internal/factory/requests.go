@@ -222,9 +222,11 @@ func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, i
 }
 
 // startRequest answers a ReqStart (start): the task it made, or the task
-// that holds the key (no failure: the work runs), or why it made none.
+// that holds the key (no failure: the work runs), or why it made none. A
+// found key Jira refused for a cause of its own is named after the answer
+// (the CLI has no preview to say so).
 func (e *Engine) startRequest(ctx context.Context, p StartPayload) (string, error) {
-	t, err := e.start(ctx, p)
+	t, note, err := e.startNoted(ctx, p)
 	switch {
 	case errors.Is(err, ErrKeyRuns):
 		return err.Error(), nil
@@ -237,13 +239,19 @@ func (e *Engine) startRequest(ctx context.Context, p StartPayload) (string, erro
 	if name == "" {
 		name = strconv.Quote(t.Title)
 	}
+	var answer string
 	switch {
 	case t.State == registry.TaskWaiting && t.WaitsWho == waitJira:
-		return fmt.Sprintf("%s waits as task %d: Jira does not answer; it starts when Jira answers", name, t.ID), nil
+		answer = fmt.Sprintf("%s waits as task %d: Jira does not answer; it starts when Jira answers", name, t.ID)
 	case t.State == registry.TaskQueued:
-		return fmt.Sprintf("queued %s as task %d: %s: %s", name, t.ID, t.WaitsWho, t.WaitsWhat), nil
+		answer = fmt.Sprintf("queued %s as task %d: %s: %s", name, t.ID, t.WaitsWho, t.WaitsWhat)
+	default:
+		answer = fmt.Sprintf("started %s as task %d: %s in %s on %s", name, t.ID, t.Kind, t.Repo, t.Branch)
 	}
-	return fmt.Sprintf("started %s as task %d: %s in %s on %s", name, t.ID, t.Kind, t.Repo, t.Branch), nil
+	if note != "" {
+		answer += ". " + note
+	}
+	return answer, nil
 }
 
 // previewRequest answers a ReqPreview with the JSON of the new-task form

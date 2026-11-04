@@ -26,7 +26,7 @@ func TestParseStartFindsAKeyInTheMiddleOfTheText(t *testing.T) {
 		{"PR-12345's reminder is wrong, so the PR-12345 email too", []string{"PR-12345"}},         // distinct
 		{"the reminder of PR-12346 and the refund of PR-12345", []string{"PR-12346", "PR-12345"}}, // in the text's order
 		{"line one\nthe reminder is PR-12345\nline three", []string{"PR-12345"}},
-		{"parse UTF-8 and ISO-8601 dates", []string{"UTF-8", "ISO-8601"}},
+		{"parse UTF-8 and ISO-8601 dates in PR-12345", []string{"PR-12345"}}, // the PR template names the project
 		{"[PR-12345](" + jiraTestSite + "/browse/PR-12345) is wrong", []string{"PR-12345"}},
 		// Not keys: lower case, a longer word, a longer number, a dash before.
 		{"pr-12345 is lowercase", nil},
@@ -70,6 +70,31 @@ func TestParseStartFindsAJiraLinkWithACommentAroundIt(t *testing.T) {
 	// Without a site to tell it by, any Jira issue link counts, as at the start.
 	if got := ParseStart("see https://other.atlassian.net/browse/PR-12347 please", ""); !slices.Equal(got.Found, []string{"PR-12347"}) {
 		t.Errorf("a Jira link without trackers = %s", showStart(got))
+	}
+}
+
+// When the trackers name Jira projects (a template with the project's prefix),
+// a bare key of another project is a word: "UTF-8" and "ISO-8601" are found
+// only where no project is named (a site alone, or nothing). A Jira link on a
+// tracker host counts whatever its project.
+func TestParseStartFindsOnlyBareKeysOfTheNamedProjects(t *testing.T) {
+	words := "parse UTF-8 and ISO-8601 dates in PR-12345 and OPS-7"
+	for _, tc := range []struct {
+		name, trackers string
+		found          []string
+	}{
+		{"one project", jiraTestSite + "/browse/PR-{num} " + jiraTestSite, []string{"PR-12345"}},
+		{"two projects", jiraTestSite + "/browse/PR-{num} " + jiraTestSite + "/browse/OPS-{num} " + jiraTestSite, []string{"PR-12345", "OPS-7"}},
+		{"the site alone", jiraTestSite, []string{"UTF-8", "ISO-8601", "PR-12345", "OPS-7"}},
+		{"no trackers", "", []string{"UTF-8", "ISO-8601", "PR-12345", "OPS-7"}},
+	} {
+		if got := ParseStart(words, tc.trackers); got.Key != "" || got.Prompt != words || !slices.Equal(got.Found, tc.found) {
+			t.Errorf("%s: ParseStart(%q) = %s, want found %q", tc.name, words, showStart(got), tc.found)
+		}
+	}
+	linked := "see " + jiraTestSite + "/browse/OPS-7 and UTF-8 and PR-12345"
+	if got := ParseStart(linked, jiraTestSite+"/browse/PR-{num} "+jiraTestSite); !slices.Equal(got.Found, []string{"OPS-7", "PR-12345"}) {
+		t.Errorf("ParseStart(%q) = %s, want the link of another project found, and the word of none", linked, showStart(got))
 	}
 }
 

@@ -98,13 +98,23 @@ func isGitHub(host string) bool {
 // underscore or dash touches it ("PR-12345's" and "(PR-12345)" are keys;
 // "xPR-12345", "PR-12345x" and "ABC-DEF-12" are not), and a link is read as
 // a link only, so the key in a link of another site is nobody's. A GitHub
-// link stays words (the first word's rule handles it).
+// link stays words (the first word's rule handles it). When the trackers
+// name Jira projects (a template's prefix, "PR-" of .../browse/PR-{num}), a
+// bare key of another project is a word too: "UTF-8" is none of them. A Jira
+// link counts whatever its project; with no project named, every bare key is
+// found.
 func foundKeys(text, trackers string) []string {
 	type hit struct {
 		at  int
 		key string
 	}
 	var hits []hit
+	var projects []string
+	for f := range strings.FieldsSeq(trackers) {
+		if t, err := config.ParseTracker(f); err == nil {
+			projects = append(projects, t.Prefix)
+		}
+	}
 	bare := []byte(text) // the text with its links blanked out
 	for _, loc := range textLink.FindAllStringIndex(text, -1) {
 		link := strings.TrimRight(text[loc[0]:loc[1]], ".,;:!?)]}")
@@ -120,9 +130,14 @@ func foundKeys(text, trackers string) []string {
 	for _, loc := range anyKey.FindAllIndex(bare, -1) {
 		before, _ := utf8.DecodeLastRune(bare[:loc[0]])
 		after, _ := utf8.DecodeRune(bare[loc[1]:])
-		if !touchesKey(before) && !touchesKey(after) {
-			hits = append(hits, hit{loc[0], string(bare[loc[0]:loc[1]])})
+		key := string(bare[loc[0]:loc[1]])
+		if touchesKey(before) || touchesKey(after) {
+			continue
 		}
+		if len(projects) > 0 && !slices.ContainsFunc(projects, func(prefix string) bool { return strings.HasPrefix(key, prefix) }) {
+			continue
+		}
+		hits = append(hits, hit{loc[0], key})
 	}
 	slices.SortStableFunc(hits, func(a, b hit) int { return a.at - b.at })
 	var keys []string

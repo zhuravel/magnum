@@ -104,12 +104,12 @@ func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartI
 	}
 	known, refused, err := e.readFound(ctx, in.Found)
 	switch {
-	case err != nil && jiraDown(err):
-		f.Err = "Jira does not answer: the task waits for it, then starts"
-		return nil, false
-	case err != nil: // the request was cancelled
+	case err != nil && ctx.Err() != nil: // the request was cancelled
 		f.Err = err.Error()
 		return nil, true
+	case err != nil: // silence, or the end of the time the reads share
+		f.Err = "Jira does not answer: the task waits for it, then starts"
+		return nil, false
 	case len(known) == 0:
 		if len(refused) > 0 {
 			f.Err = refused[0].note(refusedAlone)

@@ -3572,11 +3572,23 @@ the key on any branch but the task's own (`git log --all --grep` in the main clo
 and, once its report names the files, the open PRs that change them (`gh pr list`, as your gh login). The
 line is advisory: it never stops a task.
 
-A key found in the middle of your text (not its first word) is read like a key at the start. While Jira does not
+A key found in the middle of your text (not its first word) is read like a key at the start. Only a Jira key counts:
+when the trackers name Jira projects (a `trackers` template such as `https://example.atlassian.net/browse/PR-{num}`), a
+bare key of another project is a word and is read from no Jira, so `UTF-8` or `ISO-8601` never waits on Jira (with no
+project named every bare key is read, at most the first 3 of the text, all within one read's time of 20 seconds); a Jira
+link on a tracker's site counts whatever its project. A key Jira has no issue for (404) stays a word, with nothing said.
+Any other refusal of a found key (a 403, a 401, a missing token file, any answer but silence) is no error either: the
+task goes on from your words, its events carry `Jira refused PR-12345: <cause>; starts from your words` (`; it stays a
+word of your text` beside a key Jira knows), the answer to `magnum factory start` repeats it, and the preview says so
+on the JIRA line before you confirm; a broken Jira setup never blocks a prompt that holds a word such as `UTF-8`. Only a
+key at the start of the text keeps the error. For a found key, silence is more than for a key at the start: curl
+exits 6, 7 and 28, a 5xx, a 429, any other failure to reach Jira, and the 20 seconds running out. While Jira does not
 answer, the task waits, `Jira: start when Jira answers`, as a task from your words that holds no key (none is known yet)
 with a kind and a branch from your words; when Jira answers, the one key it knows links to the task, which starts as a
 key task with the whole text as its guidance and the branch named by the key and the summary, none sends it on from your
-words, and several ask which issue it is. A key that a task holds since makes the waiting task need you, naming that task. A found key Jira refuses for a cause of its own (a missing token file, a 401, any refusal but "no such issue" and silence) is no error either: the task goes on from your words, its events carry `Jira refused PR-12345: <cause>; starts from your words`, and the preview says so on the JIRA line before you confirm; a broken Jira setup never blocks a prompt that holds a word such as `UTF-8`. Only a key at the start of the text keeps the error.
+words, and several ask which issue it is. After 6 hours without an answer the task goes on from your words (an info
+event says so; a key task needs you then), and so does a waiting task when `[jira]` is switched off. A key that a task
+holds since makes the waiting task need you, naming that task.
 The new-task preview shows the found key on the JIRA line with the note `found in your text`. The PR's title and branch
 take the key as for a key at the start. The text you started with is recorded once, as guidance of the intake role for a
 key found at once and as the task's text for one that waited, and the stats count it as typed, never as a step start.
