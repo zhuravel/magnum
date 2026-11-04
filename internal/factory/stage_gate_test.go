@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/jira"
 )
 
 // fileQuestion is a question as an agent writes it: options labelled
@@ -1003,6 +1004,97 @@ func TestAJiraKeyAnotherTaskHoldsIsRefusedAndTheQuestionStaysOpen(t *testing.T) 
 	}
 	if qs := r.newestQuestions(task.ID); qs[0].State != registry.QuestionOpen {
 		t.Fatalf("the question is %s, want open", qs[0].State)
+	}
+}
+
+// A key Jira refuses (a typo: no such issue, or one the token cannot see)
+// is no dead end: the link is undone and the question is asked again, in a
+// new revision that gives the cause; your next answer links the right key.
+func TestAKeyJiraRefusesIsUnlinkedAndTheQuestionAskedAgain(t *testing.T) {
+	r, task := linkRig(t)
+	r.clock.Add(time.Minute)
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "PR-12399"}})
+	got := r.reload(task.ID)
+	if got.JiraKey != "" || got.QuestionRev != 2 || got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 question before coding" {
+		t.Fatalf("task %s with key %q at revision %d waits %q; want needs_you with no key at revision 2: 1 question before coding",
+			got.State, got.JiraKey, got.QuestionRev, got.WaitsWhat)
+	}
+	qs := r.newestQuestions(task.ID)
+	want := "PR-12399 is not in Jira: type the key again or answer no issue"
+	if len(qs) != 1 || qs[0].Text != whichIssue || qs[0].State != registry.QuestionOpen || !strings.Contains(qs[0].Context, want) ||
+		len(qs[0].Options) != 2 {
+		t.Fatalf("revision 2 is %+v, want the question which Jira issue again, open, its options kept, saying %q", qs, want)
+	}
+
+	r.clock.Add(time.Minute)
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 2, Answers: map[int]string{0: "PR-12345 Credit expiry reminder email"}})
+	if got := r.reload(task.ID); got.JiraKey != "PR-12345" || got.Title != "Credit expiry reminder email" {
+		t.Fatalf("task with key %q titled %q, want PR-12345 linked and its ticket read", got.JiraKey, got.Title)
+	}
+	if answers := r.taskFile(task.ID, answersFile); strings.Contains(answers, "PR-12399") || !strings.Contains(answers, "PR-12345") {
+		t.Fatalf("answers.md must hold the answer that stands, not the refused key:\n%s", answers)
+	}
+}
+
+// Only an issue Jira cannot show (no such issue, or one the token may not
+// see) asks for the key again; Jira's other refusals (a token file gone, a
+// wrong token, another status) are yours to fix, the link kept.
+func TestOnlyAnIssueJiraCannotShowAsksForTheKeyAgain(t *testing.T) {
+	for class, want := range map[string]bool{jira.ClassNotFound: true, jira.ClassForbidden: true, jira.ClassUnauthorized: false,
+		jira.ClassTokenFile: false, jira.ClassStatus: false, jira.ClassMalformed: false} {
+		if got := jiraRefusesKey(&jira.Error{Class: class}); got != want {
+			t.Errorf("jiraRefusesKey(%s) = %v, want %v", class, got, want)
+		}
+	}
+	if jiraRefusesKey(errors.New("curl: exit 7")) {
+		t.Error("an error that is not Jira's refuses the key")
+	}
+}
+
+// A restart between the write of ticket.md and the end of the link (the
+// title, the wait for Jira) ends the link: ticket.md is there, so Jira is
+// not read again.
+func TestARestartAfterTheTicketWasWrittenEndsTheLink(t *testing.T) {
+	r, task := linkRig(t)
+	r.site.setDown(7)
+	r.clock.Add(time.Minute)
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "PR-12345 Credit expiry reminder email"}})
+	r.site.setDown(0)
+	tk, err := r.client.Ticket(r.ctx, "PR-12345") // the read that wrote ticket.md before the daemon stopped
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.harness.taskFile(task.ID, ticketFile, string(tk.Markdown()))
+	reads := r.site.reads()
+
+	r.restart()
+	r.tick()
+	got := r.reload(task.ID)
+	if got.WaitsWho == "Jira" || got.Title != "Credit expiry reminder email" || r.site.reads() != reads {
+		t.Fatalf("task waits %q: %q titled %q after %d more reads; want the link ended from ticket.md, no read", got.WaitsWho,
+			got.WaitsWhat, got.Title, r.site.reads()-reads)
+	}
+}
+
+// Jira that never answers the read of a linked key sends the task to you
+// after 6 hours, as a start's wait for Jira does.
+func TestALinkedKeyJiraNeverAnswersNeedsYouAfterSixHours(t *testing.T) {
+	r, task := linkRig(t)
+	r.site.setDown(7)
+	r.clock.Add(time.Minute)
+	answered := r.clock.Now()
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "PR-12345 Credit expiry reminder email"}})
+	for _, d := range []time.Duration{time.Hour, 3 * time.Hour, 5*time.Hour + 59*time.Minute} {
+		r.clock.Set(answered.Add(d))
+		r.tick()
+		if got := r.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != "Jira" {
+			t.Fatalf("at +%s the task is %s waiting %q: %q, want still waiting on Jira", d, got.State, got.WaitsWho, got.WaitsWhat)
+		}
+	}
+	r.clock.Set(answered.Add(6 * time.Hour))
+	r.tick()
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != "Jira did not answer for 6h" {
+		t.Fatalf("after 6h the task is %s waiting %q, want needs_you: Jira did not answer for 6h", got.State, got.WaitsWhat)
 	}
 }
 

@@ -12487,6 +12487,11 @@ func (r *Registry) Undelivered(ctx context.Context) ([]LedgerEntry, error)
     Undelivered returns the entries whose delivery is still unknown, oldest
     first: the prompts recovery has to settle after a restart.
 
+func (r *Registry) UnlinkKey(ctx context.Context, id int64, key string) error
+    UnlinkKey takes key back from task id (Jira refused a key LinkKey gave it),
+    compare-and-set: a task that holds another key, or none, is no change.
+    The key is then free for another task. A missing task is ErrNotFound.
+
 type Request struct {
 	ID      int64
 	Kind    string

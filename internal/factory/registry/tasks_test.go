@@ -94,6 +94,40 @@ func TestLinkKeyHoldsOneUnfinishedTaskPerKey(t *testing.T) {
 	}
 }
 
+// A link is taken back only from the task that holds that key
+// (compare-and-set): another key, or none, is no change, and the key is
+// free again for another task.
+func TestUnlinkKeyTakesBackOnlyTheKeyTheTaskHolds(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	ctx := t.Context()
+	task, err := r.CreateTask(ctx, registry.Task{Prompt: "remind advocates before their credit expires", Kind: "feature"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.LinkKey(ctx, task.ID, "PR-12399"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.UnlinkKey(ctx, task.ID, "PR-12398"); err != nil {
+		t.Fatalf("UnlinkKey of a key the task does not hold = %v, want no change", err)
+	}
+	if got, _ := r.TaskByID(ctx, task.ID); got.JiraKey != "PR-12399" {
+		t.Fatalf("key %q, want PR-12399 kept", got.JiraKey)
+	}
+	for range 2 { // the second is no change
+		if err := r.UnlinkKey(ctx, task.ID, "PR-12399"); err != nil {
+			t.Fatalf("UnlinkKey = %v", err)
+		}
+	}
+	if got, _ := r.TaskByID(ctx, task.ID); got.JiraKey != "" {
+		t.Fatalf("key %q, want none", got.JiraKey)
+	}
+	createTask(t, r, "PR-12399") // the key is free again
+	if err := r.UnlinkKey(ctx, 999, "PR-12399"); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("UnlinkKey of a missing task = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateTaskAllowsAKeyAgainAfterDone(t *testing.T) {
 	t.Parallel()
 	for _, end := range []string{registry.TaskDone, registry.TaskStopped} {

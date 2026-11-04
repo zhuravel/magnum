@@ -424,6 +424,39 @@ func (e *Engine) startWaiting(ctx context.Context, p StartPayload, repo config.F
 	return t, nil
 }
 
+// jiraTryOf is task t's next try of Jira, a wait that began at since (a
+// restart: at once), and whether it is due: its time came, or the time to
+// give up did (since + jiraGiveUp), which takes one more try.
+func (e *Engine) jiraTryOf(t registry.Task, since time.Time) (*jiraTry, bool) {
+	now := e.now()
+	w := e.jiraTries[t.ID]
+	if w == nil {
+		w = &jiraTry{next: now}
+		e.jiraTries[t.ID] = w
+	}
+	return w, !now.Before(w.next) || !now.Before(since.Add(jiraGiveUp))
+}
+
+// jiraDidNotAnswer records try w of Jira for task t that Jira did not answer
+// (err), in a wait that began at since: the next try comes after the backoff
+// (jiraBackoff), never after the time to give up (since + jiraGiveUp); once
+// that time came, the task needs you, "Jira did not answer for 6h".
+func (e *Engine) jiraDidNotAnswer(ctx context.Context, t registry.Task, w *jiraTry, since time.Time, err error) {
+	now, giveUp := e.now(), since.Add(jiraGiveUp)
+	w.tries++
+	if !now.Before(giveUp) {
+		delete(e.jiraTries, t.ID)
+		e.toOperator(ctx, t, "Jira did not answer for "+shortAge(jiraGiveUp), "Jira did not answer")
+		return
+	}
+	w.next = now.Add(jiraBackoff(w.tries))
+	if w.next.After(giveUp) {
+		w.next = giveUp
+	}
+	e.event(ctx, t.ID, "intake", registry.PhaseInfo, fmt.Sprintf("Jira: try %d failed (%v); tries again at %s",
+		w.tries, err, w.next.Local().Format("15:04")))
+}
+
 // retryJira tries Jira again for a task that waits for it, when its next
 // try is due (jiraBackoff after each failed try). Jira's answer gives the
 // task its ticket and starts it (startTicket); one more outage moves the
@@ -431,14 +464,8 @@ func (e *Engine) startWaiting(ctx context.Context, p StartPayload, repo config.F
 // unknown key, a token file gone) sends the task to you with the cause. A
 // wait for Jira costs the task nothing.
 func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
-	now := e.now()
-	w := e.jiraTries[t.ID]
-	if w == nil { // a restart: try now
-		w = &jiraTry{next: now}
-		e.jiraTries[t.ID] = w
-	}
-	giveUp := t.Created.Add(jiraGiveUp)
-	if now.Before(w.next) && now.Before(giveUp) {
+	w, due := e.jiraTryOf(t, t.Created)
+	if !due {
 		return nil
 	}
 	if e.d.Jira == nil {
@@ -451,18 +478,7 @@ func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
 	case err != nil && ctx.Err() != nil:
 		return ctx.Err()
 	case err != nil && jiraDown(err):
-		w.tries++
-		if !now.Before(giveUp) {
-			delete(e.jiraTries, t.ID)
-			e.toOperator(ctx, t, "Jira did not answer for "+shortAge(jiraGiveUp), "Jira did not answer")
-			return nil
-		}
-		w.next = now.Add(jiraBackoff(w.tries))
-		if w.next.After(giveUp) {
-			w.next = giveUp
-		}
-		e.event(ctx, t.ID, "intake", registry.PhaseInfo, fmt.Sprintf("Jira: try %d failed (%v); tries again at %s",
-			w.tries, err, w.next.Local().Format("15:04")))
+		e.jiraDidNotAnswer(ctx, t, w, t.Created, err)
 		return nil
 	case err != nil:
 		delete(e.jiraTries, t.ID)

@@ -257,6 +257,26 @@ func (r *Registry) LinkKey(ctx context.Context, id int64, key string) error {
 	})
 }
 
+// UnlinkKey takes key back from task id (Jira refused a key LinkKey gave
+// it), compare-and-set: a task that holds another key, or none, is no
+// change. The key is then free for another task. A missing task is
+// ErrNotFound.
+func (r *Registry) UnlinkKey(ctx context.Context, id int64, key string) error {
+	if key == "" {
+		return errors.New("unlink key: a key is required")
+	}
+	return r.tx(ctx, func(tx *sql.Tx) error {
+		if err := taskExists(ctx, tx, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE tasks SET jira_key = '', updated_at = ? WHERE id = ? AND jira_key = ?",
+			store.FormatTime(r.now()), id, key); err != nil {
+			return fmt.Errorf("unlink key %s from task %d: %w", key, id, err)
+		}
+		return nil
+	})
+}
+
 // TaskByID looks up a task; a missing one is ErrNotFound.
 func (r *Registry) TaskByID(ctx context.Context, id int64) (Task, error) {
 	t, err := scanTask(r.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id))

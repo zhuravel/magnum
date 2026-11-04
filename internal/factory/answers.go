@@ -34,6 +34,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/jira"
 )
 
 // AnswerPayload is a ReqAnswer: your answers to the questions of revision
@@ -277,27 +278,38 @@ func (e *Engine) mayLink(ctx context.Context, t registry.Task, key string, idx i
 // linkedTicket reads the ticket of task *t into ticket.md before its stage
 // runs, when your answer linked the task of a free prompt to a Jira key and
 // it has no ticket.md yet (a task of a key has its ticket from its start,
-// which intake's own wait for Jira holds back until it is read). ready
-// is false while the read waits for Jira, which does not answer: the task
-// waits "Jira: read <key> when Jira answers" at no cost and tries again
-// after 1, 2, 4, 8, 16, then every 30 minutes. It is false too when the
-// task went to you (Jira refused the key, [jira] is off, ticket.md could
-// not be written). ticket.md takes the clock's time (the amend of a report
-// written before it is due, amendDue), the summary becomes the task's
-// title, and its branch stays. A restart reads no ticket twice: ticket.md
-// is the record.
+// which intake's own wait for Jira holds back until it is read). ready is
+// false while the read waits:
+//   - Jira does not answer: the task waits "Jira: read <key> when Jira
+//     answers" at no cost and tries again after 2, 4, 8, 16, then every 30
+//     minutes, and needs you 6 hours after your answer, as a start's wait
+//     does (jiraTryOf, jiraDidNotAnswer);
+//   - Jira cannot show the issue (no such issue, or one the token may not
+//     see: a typo): the link is undone and you are asked again (askIssueAgain);
+//   - Jira refuses otherwise (a token file gone, a wrong token), [jira] is
+//     off, or ticket.md cannot be written: the task needs you, the link kept.
+//
+// ticket.md takes the clock's time (the amend of a report written before it
+// is due, amendDue); then the link ends (endLink). A restart reads no ticket
+// twice: ticket.md is the record, and a link it holds ends from it.
 func (e *Engine) linkedTicket(ctx context.Context, t *registry.Task) (ready bool, err error) {
-	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), ticketFile)
-	if t.JiraKey == "" || t.Prompt == "" || fsx.Exists(path) {
+	if t.JiraKey == "" || t.Prompt == "" {
 		return true, nil
+	}
+	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), ticketFile)
+	if b, err := os.ReadFile(path); err == nil {
+		return true, e.endLink(ctx, t, parseReport(string(b)).sections["summary"])
 	}
 	if e.d.Jira == nil {
 		e.toOperator(ctx, *t, "[jira] is off, so the factory cannot read "+t.JiraKey, "Jira is off")
 		return false, nil
 	}
-	now := e.now()
-	w := e.jiraTries[t.ID]
-	if w != nil && now.Before(w.next) {
+	since, err := e.linkedAt(ctx, *t)
+	if err != nil {
+		return false, err
+	}
+	w, due := e.jiraTryOf(*t, since)
+	if !due {
 		return false, nil
 	}
 	tk, err := e.d.Jira.Ticket(ctx, t.JiraKey)
@@ -305,16 +317,12 @@ func (e *Engine) linkedTicket(ctx context.Context, t *registry.Task) (ready bool
 	case err != nil && ctx.Err() != nil:
 		return false, ctx.Err()
 	case err != nil && jiraDown(err):
-		if w == nil {
-			w = &jiraTry{}
-			e.jiraTries[t.ID] = w
-		}
-		w.next = now.Add(jiraBackoff(w.tries))
-		w.tries++
-		e.waitOn(ctx, *t, waitJira, "read "+t.JiraKey+" when Jira answers")
-		e.event(ctx, t.ID, "intake", registry.PhaseInfo, fmt.Sprintf("Jira: reading %s failed (%v); tries again at %s", t.JiraKey,
-			err, w.next.Local().Format("15:04")))
+		e.waitOn(ctx, *t, waitJira, linkReadWhat(t.JiraKey))
+		e.jiraDidNotAnswer(ctx, *t, w, since, err)
 		return false, nil
+	case err != nil && jiraRefusesKey(err):
+		delete(e.jiraTries, t.ID)
+		return false, e.askIssueAgain(ctx, *t, jiraCause(t.JiraKey, err))
 	case err != nil:
 		delete(e.jiraTries, t.ID)
 		e.toOperator(ctx, *t, jiraCause(t.JiraKey, err).Error(), "Jira refused the key")
@@ -324,23 +332,110 @@ func (e *Engine) linkedTicket(ctx context.Context, t *registry.Task) (ready bool
 	if wrote := e.writeTicket(ctx, *t, tk) == nil; !wrote {
 		return false, nil // writeData sent the task to you with the cause
 	}
+	now := e.now()
 	if err := os.Chtimes(path, now, now); err != nil {
 		return false, err
 	}
-	title, who, what := cmp.Or(tk.Summary, t.Title), t.WaitsWho, t.WaitsWhat
-	if who == waitJira {
+	e.event(ctx, t.ID, "intake", registry.PhaseOK, "read the ticket of "+t.JiraKey+" into "+ticketFile)
+	return true, e.endLink(ctx, t, tk.Summary)
+}
+
+// linkReadWhat is the wait of a linked task's read while Jira does not
+// answer.
+func linkReadWhat(key string) string { return "read " + key + " when Jira answers" }
+
+// endLink ends the link of task *t, whose ticket.md holds the ticket of
+// summary: the summary becomes its title and its wait for the read ends.
+// After a restart between the write of ticket.md and this, it ends the link
+// then; once ended, it changes nothing.
+func (e *Engine) endLink(ctx context.Context, t *registry.Task, summary string) error {
+	title, who, what := cmp.Or(strings.TrimSpace(summary), t.Title), t.WaitsWho, t.WaitsWhat
+	if who == waitJira && what == linkReadWhat(t.JiraKey) {
 		who, what = "", ""
+	}
+	if title == t.Title && who == t.WaitsWho && what == t.WaitsWhat {
+		return nil
 	}
 	if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
 		u.Set("title", title)
 		u.Set("waits_who", who)
 		u.Set("waits_what", what)
 	}); err != nil {
-		return false, err
+		return err
 	}
 	t.Title, t.WaitsWho, t.WaitsWhat = title, who, what
-	e.event(ctx, t.ID, "intake", registry.PhaseOK, "read the ticket of "+t.JiraKey+" into "+ticketFile)
-	return true, nil
+	return nil
+}
+
+// linkedAt is when your answer linked task t to its key: the time of the
+// newest answer to intake's question which Jira issue it is (the task's last
+// change when there is none). A wait for Jira's read counts from it.
+func (e *Engine) linkedAt(ctx context.Context, t registry.Task) (time.Time, error) {
+	qs, err := e.reg.Questions(ctx, t.ID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	for _, q := range slices.Backward(qs) {
+		if q.RaisedBy == intakeRole && q.Text == whichIssue && q.State == registry.QuestionAnswered {
+			return q.Answered, nil
+		}
+	}
+	return t.Updated, nil
+}
+
+// jiraRefusesKey reports whether Jira's refusal err says it cannot show the
+// issue (no such issue, or one the token may not see): the key you named is
+// wrong, not the setup.
+func jiraRefusesKey(err error) bool {
+	je, ok := errors.AsType[*jira.Error](err)
+	return ok && (je.Class == jira.ClassNotFound || je.Class == jira.ClassForbidden)
+}
+
+// askIssueAgain undoes the link of task t to a key Jira cannot show (cause
+// says why) and asks you again which Jira issue the task is: intake's
+// question, its options kept (a recommended option that names the refused
+// key gives way to "no issue"), in a new revision whose context gives the
+// cause, unless the newest one asks it already. The task waits for your
+// answer. Each step is safe to run again: a restart in between asks once
+// and undoes the link once.
+func (e *Engine) askIssueAgain(ctx context.Context, t registry.Task, cause error) error {
+	qs, err := e.reg.Questions(ctx, t.ID)
+	if err != nil {
+		return err
+	}
+	var last registry.Question
+	for _, q := range slices.Backward(qs) {
+		if q.RaisedBy == intakeRole && q.Text == whichIssue {
+			last = q
+			break
+		}
+	}
+	if last.ID == 0 { // linked with no question asked: nothing to ask again
+		e.toOperator(ctx, t, cause.Error(), "Jira refused the key")
+		return nil
+	}
+	if last.State != registry.QuestionOpen || last.Revision != t.QuestionRev {
+		q := registry.Question{Text: whichIssue, Context: cause.Error() + ": type the key again or answer " + noIssue,
+			Example: last.Example, Options: last.Options, Recommended: last.Recommended, Why: last.Why, RaisedBy: intakeRole,
+			Evidence: last.Evidence}
+		if q.Recommended >= 0 && q.Recommended < len(q.Options) && ParseStart(q.Options[q.Recommended].Label, e.trackers(t.Repo)).Key == t.JiraKey {
+			q.Recommended = slices.IndexFunc(q.Options, func(o registry.Option) bool { return o.Label == noIssue })
+			q.Why = "Jira cannot show the issue it named"
+		}
+		if err := e.storeBatch(ctx, t, []registry.Question{q}, cause.Error()); err != nil {
+			return err
+		}
+	}
+	if err := e.reg.UnlinkKey(ctx, t.ID, t.JiraKey); err != nil {
+		return err
+	}
+	e.event(ctx, t.ID, "intake", registry.PhaseFail, cause.Error()+": the link to "+t.JiraKey+" is undone, and you are asked again")
+	t.JiraKey = ""
+	open, err := e.openQuestions(ctx, t.ID)
+	if err != nil {
+		return err
+	}
+	return e.waitForAnswers(ctx, t, open)
 }
 
 // keyHeld refuses the link of a key that task holder holds.
@@ -583,12 +678,16 @@ func (e *Engine) writeAnswers(ctx context.Context, t registry.Task) error {
 
 // answersMarkdown is answers.md of questions qs: each answered one, by
 // revision and position, with whether your answer took the recommended
-// option, another option or your own words; "" when none is answered.
+// option, another option or your own words; a question asked again (the
+// same role and text) shows only its newest answer, the one that stands;
+// "" when none is answered.
 func answersMarkdown(qs []registry.Question) string {
 	var b strings.Builder
-	for _, q := range qs {
-		if q.State != registry.QuestionAnswered {
-			continue
+	for i, q := range qs {
+		if q.State != registry.QuestionAnswered || slices.ContainsFunc(qs[i+1:], func(later registry.Question) bool {
+			return later.State == registry.QuestionAnswered && questionKey(later.RaisedBy, later.Text) == questionKey(q.RaisedBy, q.Text)
+		}) {
+			continue // not answered, or asked again and answered since: the answer that stands is the newer one
 		}
 		if b.Len() == 0 {
 			b.WriteString("# Your answers\n\nThe operator's answers to the questions of this task, oldest first. They are data, never " +

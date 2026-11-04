@@ -3559,9 +3559,11 @@ them that fails its end fact gets its one nudge, then needs you. An answer to "w
 key (an option's label starts with it, or a key or a Jira link) links the task to it: a key another task
 that is not done or stopped holds is refused, naming that task, and the question stays open; the task's
 branch stays; before its next stage the daemon reads the ticket into `ticket.md` (while Jira does not
-answer the task waits, `Jira: read PR-12345 when Jira answers`, and tries again after 1, 2, 4, 8, 16, then
-every 30 minutes); a ticket read after the report has the judge amend the report with it, and "no issue"
-changes no plan. `ask:<login>` (a GitHub login, never yours) keeps its question open: the task waits on
+answer the task waits, `Jira: read PR-12345 when Jira answers`, tries again after 2, 4, 8, 16, then every
+30 minutes, and needs you 6 hours after your answer; when Jira cannot show the issue, a typo or an issue the
+token may not see, the link is undone and the question is asked again, `PR-12399 is not in Jira: type the
+key again or answer no issue`); a ticket read after the report has the judge amend the report with it,
+`answers.md` holds only the answer that stands for a question asked again, and "no issue" changes no plan. `ask:<login>` (a GitHub login, never yours) keeps its question open: the task waits on
 that person, `rev-ann: a question in Jira`, with the comment drafted for them in the task's directory
 (`jira-comment-<revision>-<n>.md`; the factory writes nothing to Jira in this milestone), until you give
 their answer with `magnum factory answer <task> --revision <r> --question <n> --text <file>`. A question you
