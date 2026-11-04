@@ -736,6 +736,35 @@ The operator's request of 2026-11-04 (spec 6.1): a Jira key or a Jira link anywh
 - [ ] **Step 4: Run** `go test -count=1 -race ./internal/factory/... ./internal/tui/` and see them pass.
 - [ ] **Step 5: Commit.** `git commit -m "A Jira key or link anywhere in a start's text starts a key task with the whole text as its guidance, when Jira knows the key"`
 
+### Task 16d: The operator's typed turns in the panes
+
+Spec 11.1 records the operator's messages from the first task, and the exit test counts them, but no earlier task records a user turn the operator typed in a factory pane. This task does.
+
+**Files:**
+- Create: `internal/factory/typed.go`
+- Modify: `internal/factory/runtime/` (the observe pass hands the engine the user turns it reads), `internal/factory/engine.go`
+- Test: `internal/factory/typed_test.go`, `internal/factory/runtime/*_test.go`
+
+**Interfaces:**
+- Produces:
+  - On each observe pass, the user turns of a run's transcript since the last read (Task 8's `ClaudeUserTurns`, `CodexUserTurns`) that match no ledger prompt (by hash) and no tool result become `pane_typed` inputs, once each, with the stage, the role, the agent's state on arrival and the agent's two turns before (scrubbed, 1 KiB, as `RecordInput` cuts them).
+  - The origin: `herdr` when herdr showed the operator in that pane (`human_active_at`) within 2 minutes before the turn, else `unknown`. A turn of unknown origin is kept for evaluation only: `magnum factory stats` counts it apart, never as a typed message, and no lesson reads it.
+  - The text is scrubbed (`execx.Redact` and the factory's scrub), a long pasted block is dropped with its reason, and a message within a few minutes of an access card is dropped (spec 11.1).
+  - Every input the engine records with text gets its class at once: `ClassifyInput(id, stats.Classify(text))`.
+- Consumes: Task 4b (`RecordInput`, `ClassifyInput`), Task 8, Task 9 (the ledger), Task 16b (`Classify`).
+
+- [ ] **Step 1: Write the failing tests:**
+  - `TestATurnTheOperatorTypedIsRecordedOnce` (a turn while herdr shows the operator in the pane: one `pane_typed` input with origin `herdr`, its class set, and a second pass records nothing more)
+  - `TestTheFactorysOwnPromptIsNoTypedTurn` (a turn with a ledger prompt's hash)
+  - `TestATurnWithoutProofIsKeptAsUnknown` (origin `unknown`, and stats count it apart)
+  - `TestATypedTurnIsScrubbedAndALongPasteDropped`
+  - `TestATurnNearAnAccessCardIsDropped`
+  - `TestATypedTurnSurvivesARestartWithoutADuplicate`
+- [ ] **Step 2: Run and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `go test -count=1 -race ./internal/factory/...` and see them pass.
+- [ ] **Step 5: Commit.** `git commit -m "The factory records what the operator types in its panes, with the proof of its origin, once, scrubbed and classified"`
+
 ## Phase D: the screen (after the operator approved the frames)
 
 ### Task 17: A narrow factory action adapter
