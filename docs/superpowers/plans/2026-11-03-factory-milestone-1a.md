@@ -750,7 +750,7 @@ Spec 11.1 records the operator's messages from the first task, and the exit test
   - On each observe pass, the user turns of a run's transcript since the last read (Task 8's `ClaudeUserTurns`, `CodexUserTurns`) that match no ledger prompt (by hash) and no tool result become `pane_typed` inputs, once each, with the stage, the role, the agent's state on arrival and the agent's two turns before (scrubbed, 1 KiB, as `RecordInput` cuts them).
   - The origin: `herdr` when herdr showed the operator in that pane (`human_active_at`) within 2 minutes before the turn, else `unknown`. A turn of unknown origin is kept for evaluation only: `magnum factory stats` counts it apart, never as a typed message, and no lesson reads it.
   - The text is scrubbed (`execx.Redact` and the factory's scrub), a long pasted block is dropped with its reason, and a message within a few minutes of an access card is dropped (spec 11.1).
-  - Every input the engine records with text gets its class at once: `ClassifyInput(id, stats.Classify(text))`.
+  - A `pane_typed` input gets its class with the insert, through the engine's classify helper that Task 16b added (every input with the operator's own words is classified; decisions are not, since their text is the machine's choice).
 - Consumes: Task 4b (`RecordInput`, `ClassifyInput`), Task 8, Task 9 (the ledger), Task 16b (`Classify`).
 
 - [ ] **Step 1: Write the failing tests:**
