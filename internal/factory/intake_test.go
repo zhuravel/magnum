@@ -183,12 +183,15 @@ func (r *intakeRig) start(text string) (registry.Task, error) {
 	return r.e.start(r.ctx, StartPayload{Text: text})
 }
 
+// mustStart starts text and waits for the start's work off the loop (the
+// overlap line, the question of a prompt).
 func (r *intakeRig) mustStart(text string) registry.Task {
 	r.t.Helper()
 	task, err := r.start(text)
 	if err != nil {
 		r.t.Fatalf("start %q: %v", text, err)
 	}
+	r.e.waitBackground()
 	return task
 }
 
@@ -348,6 +351,103 @@ func TestStartWhileJiraIsDownWaitsForJira(t *testing.T) {
 	}
 	if md := r.taskFile(other.ID, "ticket.md"); !strings.HasPrefix(md, "# PR-12346 ") {
 		t.Fatalf("ticket.md:\n%s", md)
+	}
+}
+
+// A task that waits for Jira has a kind from its start: the one you chose,
+// or the one your words after the key pick (else the default), so a task
+// that went to you and back starts its kind's first stage. When Jira
+// answers, a picked kind follows the ticket's type; a chosen one stays.
+func TestAJiraWaitingTaskHasAKindFromTheStart(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.issues["PR-12347"] = issueJSON("PR-12347", "Upgrade the gems", "Bug", "Bundler 3.")
+	r.site.setDown(7)
+	guessed := r.mustStart("PR-12345 fix the reminder's crash")
+	plain := r.mustStart("PR-12346")
+	chosen, err := r.e.start(r.ctx, StartPayload{Text: "PR-12347", Kind: "chore"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		task registry.Task
+		kind string
+	}{{guessed, "bug"}, {plain, "bug"}, {chosen, "chore"}} {
+		if c.task.State != registry.TaskWaiting || c.task.Kind != c.kind {
+			t.Fatalf("%s is %s of kind %q, want waiting of kind %q", c.task.JiraKey, c.task.State, c.task.Kind, c.kind)
+		}
+	}
+
+	// You take the waiting task over and let it go on: it starts its kind's
+	// first stage, with no kind to miss.
+	if err := r.reg.TransitionTask(r.ctx, plain.ID, nil, registry.TaskNeedsYou, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reg.TransitionTask(r.ctx, plain.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", "")
+		u.Set("waits_what", "")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if got := r.reload(plain.ID); got.Stage != "investigate" {
+		t.Fatalf("the resumed task is at %q, want its kind's first stage", got.Stage)
+	}
+	if evs := r.events(plain.ID, "advance"); len(evs) != 0 {
+		t.Fatalf("the resumed task failed: %+v", evs)
+	}
+
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	if got := r.reload(guessed.ID); got.State != registry.TaskActive || got.Kind != "feature" {
+		t.Fatalf("after Jira answered the guessed task is %s of kind %q, want active, the Story's feature", got.State, got.Kind)
+	}
+	if got := r.reload(chosen.ID); got.State != registry.TaskActive || got.Kind != "chore" {
+		t.Fatalf("after Jira answered the chosen task is %s of kind %q, want active, your chore", got.State, got.Kind)
+	}
+}
+
+// The overlap line is advisory: it is read off the loop, after the task
+// exists, and a slow gh never delays the start's answer. The line lands
+// among the task's events once it is read.
+func TestTheOverlapLineNeverDelaysTheStart(t *testing.T) {
+	r := newIntakeRig(t)
+	release := make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	defer free()
+	r.run.Rules = []execx.Rule{
+		{Prefix: []string{"git", "log"}, Result: execx.Result{Stdout: []byte("abc1234\tSpec the reminder\n")}},
+		{Prefix: []string{"gh"}, Fn: func(execx.Cmd) (execx.Result, error) {
+			<-release
+			return execx.Result{Stdout: []byte("[]")}, nil
+		}},
+	}
+	done := make(chan registry.Task, 1)
+	go func() {
+		task, err := r.start("PR-12345")
+		if err != nil {
+			t.Error(err)
+		}
+		done <- task
+	}()
+	var task registry.Task
+	select {
+	case task = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the start waited for the overlap's gh")
+	}
+	if task.State != registry.TaskActive {
+		t.Fatalf("the task is %s", task.State)
+	}
+	if evs := r.events(task.ID, "overlap"); len(evs) != 0 {
+		t.Fatalf("an overlap line before gh answered: %+v", evs)
+	}
+	free()
+	r.e.waitBackground()
+	if evs := r.events(task.ID, "overlap"); len(evs) != 1 || !strings.Contains(evs[0].Text, "1 commit names PR-12345") {
+		t.Fatalf("overlap events %+v, want the line once gh answered", evs)
 	}
 }
 

@@ -208,13 +208,21 @@ type Engine struct {
 	heavyHeld map[int64]*heavySlot
 	heavySeq  int
 
-	// The claims of copies that run off the loop (claimCopy) and the copy
-	// each task holds once its claim handed it over; claimMu guards both, a
-	// claim's goroutine ends its claimRun.
-	claimMu sync.Mutex
-	claims  map[int64]*claimRun
-	held    map[int64]Copy
-	claimWG sync.WaitGroup
+	// The claims of copies that run off the loop (claimCopy), the waits of
+	// the claims that ended without a copy and the copy each task holds once
+	// its claim handed it over; claimMu guards the three, a claim's
+	// goroutine ends its claimRun.
+	claimMu    sync.Mutex
+	claims     map[int64]*claimRun
+	claimWaits map[int64]*claimWait
+	held       map[int64]Copy
+
+	// The work off the loop (claims, the overlap line, a prompt's search)
+	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
+	// (stopBackground), so none of it outlives the daemon.
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bg       sync.WaitGroup
 }
 
 // New builds the engine over d.
@@ -223,8 +231,10 @@ func New(d Deps) *Engine {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	bgCtx, bgCancel := context.WithCancel(context.Background())
 	return &Engine{
 		d: d, cfg: d.Config, reg: d.Registry, log: log,
+		bgCtx: bgCtx, bgCancel: bgCancel,
 		runners:    map[string]stageRunner{},
 		kick:       make(chan struct{}, 1),
 		notify:     ossignal.Notify,
@@ -241,6 +251,7 @@ func New(d Deps) *Engine {
 		heavyHeld:  map[int64]*heavySlot{},
 		jiraTries:  map[int64]*jiraTry{},
 		claims:     map[int64]*claimRun{},
+		claimWaits: map[int64]*claimWait{},
 		held:       map[int64]Copy{},
 	}
 }
@@ -340,6 +351,9 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 		return fmt.Errorf("factory: pidfile: %w", err)
 	}
 	defer os.Remove(pidFile)
+	// The work off the loop ends with the daemon: a claim's setup or install
+	// must not go on in a copy after it exits.
+	defer e.stopBackground()
 
 	stop := make(chan struct{})
 	sigs := make(chan os.Signal, 4)

@@ -162,7 +162,8 @@ var stoppable = []string{registry.TaskQueued, registry.TaskActive, registry.Task
 
 // stopTask stops a task for good: its state moves to stopped and your input
 // is recorded, then its agents are parked, its open attempts end failed,
-// its heavy slot is freed and its copy released (the branch stays).
+// its heavy slot is freed and its copy released (the branch stays): the
+// copy it holds or a claim of it reserved, a claim that runs cancelled.
 func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -199,12 +200,10 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 		}
 	}
 	e.freeHeavy(ctx, t, "its task stopped")
-	if e.d.Copies != nil && t.Copy != "" {
-		if err := e.d.Copies.Release(ctx, t, "stopped"); err != nil {
-			e.event(ctx, t.ID, "release", registry.PhaseFail, err.Error())
-		}
-	}
-	e.forgetCopy(t.ID) // a claim still running releases its copy when it ends (sweepClaims)
+	// Whether or not the task names a copy: a claim that waited or failed
+	// keeps the copy it reserved, and one that runs is cancelled and its copy
+	// released once it ended (sweepClaims).
+	e.releaseCopy(ctx, t, "stopped")
 	delete(e.jiraTries, t.ID)
 	delete(e.panics, t.ID)
 	delete(e.inbox, t.ID)

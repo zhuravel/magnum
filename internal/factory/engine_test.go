@@ -125,6 +125,9 @@ type fakeCopies struct {
 	claimErr error
 	claims   int
 	block    chan struct{}
+	// ended counts the claims that returned, cancelled those that returned
+	// because their context ended.
+	ended, cancelled int
 }
 
 func (f *fakeCopies) Claim(ctx context.Context, _ registry.Task) (Copy, error) {
@@ -132,10 +135,18 @@ func (f *fakeCopies) Claim(ctx context.Context, _ registry.Task) (Copy, error) {
 	f.claims++
 	block := f.block
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.ended++
+		f.mu.Unlock()
+	}()
 	if block != nil {
 		select {
 		case <-block:
 		case <-ctx.Done():
+			f.mu.Lock()
+			f.cancelled++
+			f.mu.Unlock()
 			return Copy{}, ctx.Err()
 		}
 	}
@@ -145,6 +156,20 @@ func (f *fakeCopies) Claim(ctx context.Context, _ registry.Task) (Copy, error) {
 		return Copy{}, f.claimErr
 	}
 	return f.claimed, nil
+}
+
+// endedClaims are how many claims returned, and how many of them because
+// their context ended.
+func (f *fakeCopies) endedClaims() (ended, cancelled int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ended, f.cancelled
+}
+
+func (f *fakeCopies) releases() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.released...)
 }
 
 func (f *fakeCopies) claimCount() int {
@@ -206,6 +231,7 @@ func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
 		f(&d)
 	}
 	h.e = New(d)
+	t.Cleanup(h.e.stopBackground) // no claim or overlap outlives the test
 	return h
 }
 

@@ -3482,8 +3482,10 @@ stages = [
   steps, so a stage claims its task's copy once and keeps it until the release: the claim runs off the
   daemon's loop (a setup can take most of an hour), at most `max_active` at once, while the task waits
   `copy: preparing a copy (setup 3m)` (the copy it used last by name) and the other tasks go on. A guard that holds the copy
-  (`copy: held: foreign_agent: …`) or a factory pane in it is a wait like a busy copy, never a failure, and
-  the claim is tried again on the next tick. A
+  (`copy: held: foreign_agent: …`) or a factory pane in it is a wait like a busy copy, never a failure: the
+  task keeps that wait, and the claim is tried again after 1, 2, 4 and then every 5 minutes. A claim that
+  waited or failed keeps the copy it reserved for the task's next claim; a stop of the task cancels its claim
+  (its commands end) and releases that copy, and a drain cancels every claim and waits for it to end. A
   release is refused while a factory pane works in the copy; it stops the copy's server, keeps the task's
   branch (its commits on it, pushed or not), puts the copy back on its placeholder at `origin/<base>` and
   writes `handoff.md` in the task's directory: the branch, the head, the server and what the next claimer
@@ -3525,7 +3527,9 @@ and "no issue"; the best match is recommended, and "no issue" when no title shar
 not answer (curl exit 6, 7 or 28, HTTP 5xx) the task waits, `Jira: start when Jira answers`, at no cost,
 tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours; an unknown key
 (`PR-12399 is not in Jira`), a missing token file (`the Jira token file is missing: <path>`) or another
-refusal makes no task. A key's start records an overlap line among the task's events: the commits that name
+refusal makes no task; a task that waits for Jira has a kind from the start (yours, or the one your words
+pick), which follows the ticket's type when Jira answers unless you chose it. After a key's start has
+answered, the daemon reads an overlap line, off its loop, into the task's events: the commits that name
 the key on any branch but the task's own (`git log --all --grep` in the main clone), the PRs that name it
 and, once its report names the files, the open PRs that change them (`gh pr list`, as your gh login). The
 line is advisory: it never stops a task.

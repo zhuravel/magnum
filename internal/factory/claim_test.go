@@ -65,7 +65,7 @@ func TestAClaimRunsOffTheLoopAndTheTaskWaitsWhileItPrepares(t *testing.T) {
 	}
 
 	close(h.copies.block)
-	h.e.waitClaims()
+	h.e.waitBackground()
 	h.tick()
 	if claimErr != nil || got.Name != "factory2" {
 		t.Fatalf("claimCopy after the claim = %+v, %v", got, claimErr)
@@ -137,7 +137,7 @@ func TestAGuardHoldDuringAClaimIsAWaitNotAFailure(t *testing.T) {
 				return false, err
 			})
 			h.tick() // starts the claim
-			h.e.waitClaims()
+			h.e.waitBackground()
 			h.tick() // picks its answer up
 			w := h.reload(task.ID)
 			if w.State != registry.TaskActive || w.WaitsWho != "copy" || w.WaitsWhat != tc.what {
@@ -146,8 +146,14 @@ func TestAGuardHoldDuringAClaimIsAWaitNotAFailure(t *testing.T) {
 			if evs := h.events(task.ID, "advance"); len(evs) != 0 {
 				t.Fatalf("the hold counted as the task's failure: %+v", evs)
 			}
+			h.tick() // not yet: the next claim comes a minute after the hold
+			h.e.waitBackground()
+			if n := h.copies.claimCount(); n != 1 {
+				t.Fatalf("%d claims, want no try on the next tick", n)
+			}
+			h.clock.Add(time.Minute)
 			h.tick() // tries again
-			h.e.waitClaims()
+			h.e.waitBackground()
 			if n := h.copies.claimCount(); n != 2 {
 				t.Fatalf("%d claims, want a second try", n)
 			}
@@ -156,8 +162,9 @@ func TestAGuardHoldDuringAClaimIsAWaitNotAFailure(t *testing.T) {
 			h.copies.claimed = Copy{Name: "factory1", Path: "/copies/factory1", Number: 1}
 			h.copies.mu.Unlock()
 			h.tick() // the second try's hold
+			h.clock.Add(2 * time.Minute)
 			h.tick() // a third claim, which goes through
-			h.e.waitClaims()
+			h.e.waitBackground()
 			h.tick()
 			if w := h.reload(task.ID); w.Copy != "factory1" || w.WaitsWho != "" {
 				t.Fatalf("after the hold lifted the task holds %q and waits %q", w.Copy, w.WaitsWho)
@@ -181,5 +188,5 @@ func (h *harness) claimNow(task registry.Task) {
 	if _, err := h.e.claimCopy(h.ctx, task); !errors.Is(err, ErrHeld) {
 		h.t.Fatalf("the first claimCopy = %v, want the wait while the claim runs", err)
 	}
-	h.e.waitClaims()
+	h.e.waitBackground()
 }

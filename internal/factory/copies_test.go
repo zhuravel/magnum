@@ -595,6 +595,7 @@ func TestCopiesQueueATaskWhenNoCopyIsFree(t *testing.T) {
 	h.copies.claimErr = nil
 	h.copies.claimed = Copy{Name: "factory2", Path: "/copies/factory2", Number: 2}
 	h.copies.mu.Unlock()
+	h.clock.Add(time.Minute) // a waiting claim tries again a minute later
 	h.claimNow(h.reload(task.ID))
 	if c, err := h.e.claimCopy(h.ctx, h.reload(task.ID)); err != nil || c.Name != "factory2" {
 		t.Fatalf("claimCopy = %+v, %v", c, err)

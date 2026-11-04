@@ -126,14 +126,24 @@ func jiraBackoff(tries int) time.Duration {
 	return min(jiraFirstTry<<min(max(tries, 0), jiraTryShifts), jiraTryMax)
 }
 
-// jiraTry is when a task that waits for Jira tries it next, and how many
-// tries failed since the daemon started; the loop's own. After a restart a
-// task tries at once, then backs off from 1 minute again; the 6 hours count
-// from the task's creation whatever the restarts.
+// jiraTry is when a task that waits for Jira tries it next, how many tries
+// failed since the daemon started, and whether its kind is intake's own
+// pick (from your words; Jira's answer refines it) rather than yours; the
+// loop's own. After a restart a task tries at once, then backs off from 1
+// minute again, and keeps the kind it has; the 6 hours count from the task's
+// creation whatever the restarts.
 type jiraTry struct {
-	tries int
-	next  time.Time
+	tries  int
+	next   time.Time
+	picked bool
 }
+
+// The bounds of the work of a start off the loop: the overlap line's three
+// reads, and a prompt's search of Jira.
+const (
+	overlapBound = 2 * time.Minute
+	searchBound  = jira.MaxTime + 10*time.Second
+)
 
 // The bounds of what intake writes and reads.
 const (
@@ -382,16 +392,22 @@ func (e *Engine) heldBy(ctx context.Context, key string, err error) (registry.Ta
 }
 
 // startWaiting makes the task of a key Jira does not answer for: waiting
-// for Jira (retryJira tries it), with your guidance and kind kept; the
-// title, the branch and ticket.md come when Jira answers.
+// for Jira (retryJira tries it), with your guidance and a kind from the
+// start (yours, else the one your words pick, PickKind without a ticket),
+// so a task you take over and let go on has one; the title, the branch and
+// ticket.md come when Jira answers, and a picked kind follows its type.
 func (e *Engine) startWaiting(ctx context.Context, p StartPayload, repo config.FactoryRepo, in StartInput, cause error) (registry.Task, error) {
-	t, err := e.reg.CreateTask(ctx, registry.Task{JiraKey: in.Key, Guidance: in.Guidance, Kind: p.Kind, Repo: repo.Repo,
+	kind := p.Kind
+	if kind == "" {
+		kind, _ = PickKind(e.cfg.Factory, nil, in.Guidance)
+	}
+	t, err := e.reg.CreateTask(ctx, registry.Task{JiraKey: in.Key, Guidance: in.Guidance, Kind: kind, Repo: repo.Repo,
 		Title: in.Key, State: registry.TaskWaiting, WaitsWho: waitJira, WaitsWhat: jiraWaitWhat})
 	if err != nil {
 		return e.heldBy(ctx, in.Key, err)
 	}
 	next := e.now().Add(jiraBackoff(0))
-	e.jiraTries[t.ID] = &jiraTry{next: next}
+	e.jiraTries[t.ID] = &jiraTry{next: next, picked: p.Kind == ""}
 	e.recordStart(ctx, t, p, in)
 	e.event(ctx, t.ID, "intake", registry.PhaseFail, fmt.Sprintf("%s waits for Jira (%v) and tries again at %s",
 		in.Key, cause, next.Local().Format("15:04")))
@@ -444,20 +460,21 @@ func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
 		return nil
 	}
 	delete(e.jiraTries, t.ID)
-	return e.startTicket(ctx, t, tk)
+	return e.startTicket(ctx, t, tk, w.picked)
 }
 
 // startTicket starts a task that waited for Jira with the ticket Jira gave:
-// its title, its kind (unless you chose one), its branch and ticket.md, then
-// queued or active as a start's gate says.
-func (e *Engine) startTicket(ctx context.Context, t registry.Task, tk jira.Ticket) error {
+// its title, its kind (picked again with the ticket when intake picked it
+// and no stage has started), its branch and ticket.md, then queued or
+// active as a start's gate says.
+func (e *Engine) startTicket(ctx context.Context, t registry.Task, tk jira.Ticket, picked bool) error {
 	login, err := e.operatorLogin(t.Repo)
 	if err != nil {
 		e.toOperator(ctx, t, err.Error(), "no login for the branch")
 		return nil
 	}
-	kind, why := t.Kind, "you chose it"
-	if kind == "" {
+	kind, why := t.Kind, "kept from the start"
+	if kind == "" || (picked && t.Stage == "") {
 		kind, why = PickKind(e.cfg.Factory, &tk, t.Guidance)
 	}
 	branch, err := e.branchFor(ctx, t.Repo, login, t.JiraKey, tk.Summary)
@@ -590,18 +607,24 @@ func scrubbed(text string) string {
 	return clean
 }
 
-// noteOverlap records the overlap line of a key's start (Overlap, without
-// files: the report names them later) as an advisory event; a read that
-// failed is logged and recorded, and stops nothing.
-func (e *Engine) noteOverlap(ctx context.Context, t registry.Task) {
-	line, err := e.Overlap(ctx, t, nil)
-	if line != "" {
-		e.event(ctx, t.ID, "overlap", registry.PhaseInfo, line)
-	}
-	if err != nil {
-		e.log.Info("the overlap line read only part", "task", t.ID, "err", err)
-		e.event(ctx, t.ID, "overlap", registry.PhaseFail, "read only part: "+err.Error())
-	}
+// noteOverlap reads the overlap line of a key's start (Overlap, without
+// files: the report names them later) off the loop, after the task exists,
+// within overlapBound, and records it as an advisory event: it never delays
+// the start's answer. A read that failed is logged and recorded, and stops
+// nothing.
+func (e *Engine) noteOverlap(_ context.Context, t registry.Task) {
+	e.goBackground("the overlap line", func(ctx context.Context) {
+		rctx, cancel := context.WithTimeout(ctx, overlapBound)
+		defer cancel()
+		line, err := e.Overlap(rctx, t, nil)
+		if line != "" {
+			e.event(ctx, t.ID, "overlap", registry.PhaseInfo, line)
+		}
+		if err != nil {
+			e.log.Info("the overlap line read only part", "task", t.ID, "err", err)
+			e.event(ctx, t.ID, "overlap", registry.PhaseFail, "read only part: "+err.Error())
+		}
+	})
 }
 
 // askWhichIssue asks, as the first question of a free prompt's task, which
@@ -610,13 +633,24 @@ func (e *Engine) noteOverlap(ctx context.Context, t registry.Task) {
 // prompt's search words, in their own forms, in its title) is recommended;
 // with no match, or a search that failed, "no issue" is. The question is
 // revision 1 of the task's questions; the gate's first batch keeps it.
-// Without Jira, nothing is asked.
-func (e *Engine) askWhichIssue(ctx context.Context, t registry.Task, prompt string) {
+// The search runs off the loop, within searchBound: the start answers
+// first. Without Jira, nothing is asked.
+func (e *Engine) askWhichIssue(_ context.Context, t registry.Task, prompt string) {
 	if e.d.Jira == nil {
 		return
 	}
+	e.goBackground("the question which Jira issue a prompt is", func(ctx context.Context) {
+		sctx, cancel := context.WithTimeout(ctx, searchBound)
+		defer cancel()
+		hits, err := e.d.Jira.Search(sctx, prompt, issueSearch)
+		e.storeWhichIssue(ctx, t, prompt, hits, err)
+	})
+}
+
+// storeWhichIssue stores the question which Jira issue task t's prompt is,
+// of the search's hits (or its error), as the task's next revision.
+func (e *Engine) storeWhichIssue(ctx context.Context, t registry.Task, prompt string, hits []jira.Ticket, err error) {
 	words := jira.SearchWords(prompt)
-	hits, err := e.d.Jira.Search(ctx, prompt, issueSearch)
 	type match struct {
 		tk     jira.Ticket
 		shared []string
@@ -652,7 +686,12 @@ func (e *Engine) askWhichIssue(ctx context.Context, t registry.Task, prompt stri
 	default:
 		q.Why = "no title in Jira shares a word with yours"
 	}
-	if err := e.reg.ReplaceQuestions(ctx, t.ID, t.QuestionRev+1, []registry.Question{q}); err != nil {
+	cur, rerr := e.reg.TaskByID(ctx, t.ID)
+	if rerr != nil {
+		e.log.Warn("ask which Jira issue a prompt is", "task", t.ID, "err", rerr)
+		return
+	}
+	if err := e.reg.ReplaceQuestions(ctx, t.ID, cur.QuestionRev+1, []registry.Question{q}); err != nil {
 		e.log.Warn("ask which Jira issue a prompt is", "task", t.ID, "err", err)
 	}
 }
