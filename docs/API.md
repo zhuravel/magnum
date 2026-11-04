@@ -1292,6 +1292,15 @@ type JudgeData struct {
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
+	// Local (with Blind and DryRun): the factory's local round of a change
+	// before its PR exists (pipeline.RoundInput.Local), rendered as
+	// `local: true` with `description_file`, only then: no PR is on GitHub,
+	// so the judge reads the title and the body from DescriptionFile (the
+	// factory's description.md) and the ticket from TicketFile, and makes no
+	// gh call (the skill's "Local round"). A round of a PR on GitHub leaves
+	// both zero, and its prompts render as they always did.
+	Local           bool
+	DescriptionFile string
 	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
 	// (pipeline.RoundInput.PostMerge), rendered as `post_merge: true` only
 	// then; the skill posts a COMMENT that asks for follow-ups, and
@@ -2665,6 +2674,11 @@ type RoleData struct {
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
+	// DescriptionFile is a local round's description.md (pipeline.Local):
+	// the change's title and body, which no PR on GitHub holds yet. Only the
+	// local reviewer prompt (claude-review-local.md) names it; "" = a round
+	// of a PR on GitHub.
+	DescriptionFile string
 	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
 	// (pipeline.RoundInput.PostMerge); the prompts that name the PR say it
 	// is merged and to review it anyway.
@@ -8982,6 +8996,19 @@ func (e *Engine) RunEval(ctx context.Context, c EvalCase) (pipeline.RoundResult,
     those belong to the PR's real rounds. The registry rows it seeds (repo,
     PR in claiming, a per-PR slot at Checkout) live in the scratch store.
 
+func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResult, store.PR, error)
+    RunLocal runs one local round for c and returns the pipeline's result and
+    the agents' PR row (for ReleaseEval), as RunEval runs a replay: on an engine
+    built on a scratch layout only (ErrEvalLayout otherwise), a blind dry run
+    of the watch's roles in Checkout, in the workspace "eval <repo>#<N>" (an
+    earlier round's left open is closed first). It differs in what the round
+    reads: its base is always c.BaseSHA, whatever the checkout's base branch
+    says, so post-review anchors the comments on the local diff (--local-base),
+    and the round input's Local names c's files, so the judge reads the title,
+    the body and the ticket from them and nothing from GitHub, and the round
+    reads no Jira issue. A case without a full base commit or a description
+    file, or a judge-only one, never starts.
+
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one iteration of the daemon loop. Steps log their own
     failures; the returned error joins them for the caller's information.
@@ -9000,6 +9027,7 @@ type EvalCase struct {
 	DefaultBranch string
 	Title, Author string
 	AuthorType    string // "User" or "Bot" ("" = User)
+	HeadRef       string // the PR's head branch ("" = not known)
 	Checkout      string // absolute path of the worktree at Head
 	MainClone     string // the clone the worktree belongs to
 	Watch         config.Watch
@@ -9510,6 +9538,21 @@ type LearnRevertPayload struct {
     LearnRevertPayload is a `magnum learn --revert <version>` request:
     a proposal that restores the files of the version before Version, for Reason
     (the design log's entry says it).
+
+type LocalRound struct {
+	EvalCase
+	BaseSHA                     string
+	DescriptionFile, TicketFile string
+}
+    LocalRound is one round of the factory's local review of a change before
+    its PR exists (docs/superpowers/specs/2026-11-03-factory-design.md, section
+    6.5): a replay's case (EvalCase) whose number is a high synthetic one,
+    whose Checkout is the task's copy at Head (the change's head, on its branch)
+    and whose PR is on no GitHub, with the change's base (BaseSHA, the commit
+    its diff starts at) and the files the judge reads in place of GitHub's PR:
+    DescriptionFile (the title and body, description.md) and TicketFile (the
+    task's ticket, ticket.md; "" = none). The factory writes both before the
+    round (evalrun.RunLocal).
 
 type MachineGroup struct {
 	Repo string // owner/name
@@ -10727,6 +10770,14 @@ checkout's prompts and skill.
 CONSTANTS
 
 const (
+	LocalDescriptionFile = "description.md"
+	LocalTicketFile      = pipeline.TicketFile
+)
+    LocalDescriptionFile and LocalTicketFile are the files a local round writes
+    in its scratch directory for the judge: the change's title and body,
+    and its ticket.
+
+const (
 	// OutcomeFlagged: the case is not replayed: an earlier replay of it or
 	// of its PR was refused (eval.FlaggedCase), or the live registry holds
 	// a Codex flag for its PR (Refused).
@@ -10773,6 +10824,15 @@ func Inputs(cfg *config.Config) string
     role config, so a candidate directory with the same texts as the checkout
     has its inputs (a landed candidate's replays are the next baseline).
     magnum's own code is not part of it. "" without a config.
+
+func LocalNumber(taskID int64, round int) int
+    LocalNumber is the synthetic PR number of round n of task taskID's
+    local review: 900000 + task id × 10 + round. A round of the loop is 1 to
+    config.MaxFactoryCycles, so no two tasks' rounds share one.
+
+func LocalRoot(l paths.Layout, taskID int64) string
+    LocalRoot is where task taskID's local rounds keep their scratch
+    directories: local-review/ in the task's directory.
 
 func Refused(ctx context.Context, d Deps, ec eval.Case) string
     Refused says why case ec is not replayed ("" = it may be): an earlier
@@ -10847,6 +10907,8 @@ type Deps struct {
 	// agents that stay open); nil = none.
 	Progress func(format string, args ...any)
 	Warn     func(format string, args ...any)
+
+	// Has unexported fields.
 }
     Deps is what a replay works with.
 
@@ -10855,6 +10917,8 @@ type LocalCase struct {
 	Watch                                                     config.Watch
 	Roles                                                     []string
 	Round                                                     int
+	TaskID                                                    int64
+	Repo, Base                                                string
 }
     LocalCase is one round of the factory's local review: magnum's full review
     of a change in the task's copy, as a blind dry run, before any PR exists
@@ -10863,7 +10927,10 @@ type LocalCase struct {
     Title (with the Jira key), Body and TicketMD what the judge reads from files
     instead of GitHub; Watch is the repository's [[watch]], whose review roles
     round 1 runs, Roles the roles of this round and Round its number, from 1.
-    The factory's LocalReviewer takes it.
+    TaskID is the task whose change it is and Repo its repository (owner/name):
+    the round's synthetic PR number (LocalNumber) and its scratch directory
+    (LocalRoot) come from them. Base is the base branch ("" = master). The
+    factory's LocalReviewer takes it.
 
 type LocalFinding struct {
 	Severity, Title, Path    string
@@ -10871,9 +10938,10 @@ type LocalFinding struct {
 	Body                     string
 	Simplification, Question bool
 }
-    LocalFinding is one finding of a local round: its Severity (P0 to P3),
-    Title, Path and Line, its Body, and whether it is a simplification or a
-    question for the operator.
+    LocalFinding is one finding of a local round: its Severity (P0 to P3, "" for
+    a simplification), Title, Path and Line (0 for one in the review's body),
+    its Body, and whether it is a simplification or a question for the operator
+    (the judge's provenance marks it, the skill's Local round).
 
 type LocalResult struct {
 	Outcome, ReportDir, Verdict string
@@ -10881,11 +10949,50 @@ type LocalResult struct {
 	OpenCounts                  *[4]int
 	Findings                    []LocalFinding
 	Round                       int
+	Number                      int
+	Tag, Scratch                string
+	Refused                     string
+	Missing                     []string
+	Error                       string
 }
     LocalResult is what a local round found: the round's Outcome (dry_run when
-    it finished), its ReportDir, the judge's Verdict, the findings' counts
-    by priority (P0 to P3) and, for a later round, the counts of the earlier
-    findings still open, the findings themselves, and the round's number.
+    it finished), its ReportDir, the judge's Verdict ("" when its result file
+    is missing or does not parse), the findings' counts by priority (P0 to P3)
+    and, for a later round, the counts of the earlier findings still open,
+    the findings themselves, and the round's number. Number, Tag and Scratch are
+    the round's synthetic PR number, its agents' tag and its scratch directory;
+    Refused the agent kind whose provider refused the round (OutcomeRefused:
+    "codex" for a Codex warning); Missing the reviewer roles whose report the
+    judge went without (a lost pane, a timeout); Error why a round that did not
+    finish ended, in the round's words.
+
+func ParseLocalResult(data []byte) LocalResult
+    ParseLocalResult reads a judge's result file (the skill's section 8 JSON)
+    as a local round has it: the verdict, the counts and the earlier findings
+    still open (store.ParseReviewResult; Verdict "" when data is no result), and
+    the findings: each posted entry of the provenance with its severity, title,
+    path and line, the body of the planned comment on that line, and whether
+    the judge marked it a question; each simplification of the planned review;
+    a planned comment no entry names, by its own severity and first line; and,
+    when the counts hold a P0 to P2 that no finding carries, the review's body
+    as one finding of that priority, so what blocks always reaches the writer.
+
+func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error)
+    RunLocal runs local round c and reads its judge's result (ParseLocalResult).
+    Each round is its own: a fresh scratch directory under the task's
+    (LocalRoot/<round>-<tag>) with its registry, reports and a copy of the
+    repository notes, a new agent tag, and the synthetic PR number LocalNumber,
+    so two rounds never share an agent, a herdr workspace label or an eval case
+    lock (it holds the case lock "local-<number>" for the round). It writes the
+    title and body (description.md) and the ticket (ticket.md, when c has one)
+    there, and runs engine.RunLocal in the task's copy at c.HeadSHA, always
+    with c.BaseSHA (post-review's --local-base), as a gh identity (the watch's,
+    else the first configured: an App's token would be minted from GitHub),
+    with the branch as the head ref and the title with the Jira key. The round's
+    config is d.Config (the factory's review candidate, config.WithCandidate).
+    A case it cannot run is an error and nothing starts; a round that ran is a
+    result, whatever its outcome, and only the end of ctx (a drain) is an error
+    after it started.
 
 type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
@@ -11220,6 +11327,13 @@ the daemon, its stages and its screen build on it.
 CONSTANTS
 
 const (
+	LocalReviewPrompt = "claude-review-local.md"
+	LiveReviewPrompt  = "claude-review.md"
+)
+    LocalReviewPrompt is the local reviewer prompt, the candidate's
+    claude-review.md; LiveReviewPrompt the prompt it stands in for.
+
+const (
 	HoldInfra  = "infra"
 	HoldHerdr  = "herdr"
 	HoldDisk   = "disk"
@@ -11259,6 +11373,10 @@ const RedisOffsetEnv = "REDIS_DB_OFFSET"
     RedisOffsetEnv is the variable a copy's Redis configuration reads its first
     database from. A repository whose env names it gets each copy's own offset
     there, whatever value the env gives it.
+
+const ReviewFixPrompt = "factory-review-fix.md"
+    ReviewFixPrompt is the prompt of the writer's fix turn in the local review:
+    the coding stage's roles get it in place of their own prompt.
 
 const YourPanePrefix = "yours:"
     YourPanePrefix starts the ids of your herdr session's workspaces, tabs and
@@ -11300,6 +11418,15 @@ var ReproductionOptions = []string{"give a hint", "take the other cause", "try D
 
 
 FUNCTIONS
+
+func Blocks(r evalrun.LocalResult) (blocks, unavailable bool, why string)
+    Blocks reads local round r: blocks when a P0, P1 or P2 finding is new
+    (Counts) or still open (OpenCounts), or the judge's verdict is "blocking";
+    unavailable when the round did not finish as a dry run (needs_attention,
+    blocked, error, timeout, a refusal, a stop, no outcome at all) or its result
+    does not parse (no verdict): review unavailable, never clean, whatever the
+    result says (Review Focus 1). why says which, in plain words that carry no
+    finding's text ("" when nothing blocks).
 
 func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok bool, why string)
     CheckEnd reports whether end fact fact holds in task directory dir for a
@@ -11362,6 +11489,12 @@ func Denied(argv []string, repo config.FactoryRepo) (why string, denied bool)
     console's own file as an argument (lint of bin/remote-console) is no console
     run.
 
+func Fingerprint(f evalrun.LocalFinding) string
+    Fingerprint is how the factory follows a finding across rounds: its path,
+    its line rounded down to a window of 10, and a hash of its title without its
+    priority ("app/credit.rb:40:1a2b3c4d5e6f"). A finding re-ranked, or moved
+    within its window, is the same one.
+
 func Guard(next execx.Runner, cfg *config.Config) execx.Runner
     Guard puts the deny list (Denied) in front of next, with the consoles of
     every [[factory.repo]] of cfg: a command it denies never starts, and its
@@ -11403,9 +11536,22 @@ func PromptNames(cfg *config.Config) []string
     (of each prompt kind), each agents stage's own, and the amend turn's,
     once each; the daemon loads them at startup (config.SnapshotPrompts).
 
+func ReviewCandidateDir(l paths.Layout) string
+    ReviewCandidateDir is where the factory writes its review candidate:
+    <data>/factory/review-candidate/.
+
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
     "task <id>".
+
+func WriteReviewCandidate(l paths.Layout) (string, error)
+    WriteReviewCandidate writes the review candidate the factory's local rounds
+    run with (their config is cfg.WithCandidate(dir)) and returns its directory:
+    prompts/ with every prompt this build embeds, the partials files included,
+    LocalReviewPrompt as claude-review.md, and the build's judge skill at
+    skills/magnum-review/SKILL.md (magnum.Skill). The factory daemon writes it
+    once, at startup, as it loads its own prompts: whatever an earlier build
+    left there goes. Magnum's live rounds never read it.
 
 
 TYPES
@@ -11481,7 +11627,14 @@ type Deps struct {
 	GitHub   GitHub
 	Magnum   Magnum
 	Review   LocalReviewer
-	Git      *gitx.Client
+	// ReviewCandidate is the directory of the review candidate the local
+	// rounds run with (WriteReviewCandidate): its skill's hash goes on each
+	// round's cycle. Usage reads Codex's budget (nil: usage.Codex of [usage]
+	// codex_home), which a local round with a Codex role yields to at
+	// [usage] codex_soft.
+	ReviewCandidate string
+	Usage           func(ctx context.Context, now time.Time) (usage.Snapshot, error)
+	Git             *gitx.Client
 	// Run runs the overlap line's reads (Overlap: git log in the main
 	// clone, gh pr list as your gh login) and the factory's own commands in
 	// a task's copy (its precheck and its proof), every one through the deny
@@ -11630,11 +11783,19 @@ type LocalReviewer interface {
     LocalReviewer runs one round of magnum's review on a task's change in its
     copy, as a blind dry run (evalrun.LocalCase).
 
+func NewLocalReviewer(d evalrun.Deps) LocalReviewer
+    NewLocalReviewer is the local reviewer that runs each round with
+    evalrun.RunLocal over d.
+
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 }
     Magnum is the review daemon as the factory's local review sees it: busy
     while a real round is in flight or due, so a local round yields to it.
+
+func NewMagnum(l paths.Layout) Magnum
+    NewMagnum is magnum's review daemon of layout l as the factory's local
+    review sees it (Magnum).
 
 type MigrationFlag struct {
 	Path                                   string
@@ -11703,6 +11864,7 @@ type PromptData struct {
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
 	Ticket, Guidance, Prompt, Answers, Rules               string
 	Findings, Report, Questions, Acceptance, Proof, Review string
+	ReviewReply                                            string
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
 }
@@ -11715,15 +11877,18 @@ type PromptData struct {
     and TaskDir its directory. Ticket (ticket.md), Guidance (guidance.md),
     Prompt (prompt.md, the operator's request), Answers (answers.md) and Rules
     (rules.md, the learned rules) are paths in TaskDir, each "" while its file
-    is not there. Findings is the role's findings-<role>.md in a findings stage,
-    else the pattern of every investigator's file (findings-*.md); Questions the
-    file the role writes its questions to (questions.json in the judge's report
-    stage, questions-<role>.json for any other role); Report, Acceptance and
-    Proof the judge's report.md and acceptance.json and the writer's proof.json;
-    Review the local review's findings for the writer ("" before that stage).
-    ErrorSkill is the repository's error_skill ("" = none: no prompt names one),
-    DBLockCommand the `magnum db-lock` line of the copy for the role as it runs,
-    and Port the copy's server's (0 when its env names none).
+    is not there. Findings is the role's findings-<role>.md in a findings
+    stage, else the pattern of every investigator's file (findings-*.md);
+    Questions the file the role writes its questions to (questions.json in the
+    judge's report stage, questions-<role>.json for any other role); Report,
+    Acceptance and Proof the judge's report.md and acceptance.json and the
+    writer's proof.json; Review the local review's findings for the writer
+    (review-<n>.json, the newest round's) and ReviewReply the writer's reply to
+    them (review-reply-<n>.json), both "" outside the local review's fix turn
+    (ReviewFixPrompt). ErrorSkill is the repository's error_skill ("" = none:
+    no prompt names one), DBLockCommand the `magnum db-lock` line of the copy
+    for the role as it runs, and Port the copy's server's (0 when its env names
+    none).
 
 type Proof struct {
 	Specs   []string `json:"specs"`
@@ -11787,6 +11952,58 @@ type Reservation struct {
 }
     Reservation is a copy a task's owner row holds, from its claim (one that got
     the copy, waits or failed) until its release.
+
+type ReviewFile struct {
+	Round          int          `json:"round"`
+	Head           string       `json:"head"`
+	AttemptsBefore int          `json:"attempts_before"`
+	Findings       []ReviewItem `json:"findings"`
+}
+    ReviewFile is review-<n>.json, what a blocking round hands the writer:
+    the cycle's number, the head it reviewed, how many attempts the review stage
+    had when it was written (the fix turn is the first attempt after them) and
+    the findings to fix, the questions among them.
+
+type ReviewItem struct {
+	ID          string `json:"id"`
+	Fingerprint string `json:"fingerprint"`
+	Severity    string `json:"severity,omitempty"`
+	Title       string `json:"title"`
+	Path        string `json:"path,omitempty"`
+	Line        int    `json:"line,omitempty"`
+	Body        string `json:"body,omitempty"`
+	Question    bool   `json:"question,omitempty"`
+	Risk        string `json:"risk,omitempty"`
+}
+    ReviewItem is one finding of the local review as the factory hands it on:
+    its id in the round's file (F1, F2, ...), its fingerprint, severity, title,
+    path, line and body, whether the judge marked it a product question, and,
+    for one the writer declined, the risk it named.
+
+type ReviewReply struct {
+	Replies []struct {
+		ID     string `json:"id"`
+		Action string `json:"action"`
+		Risk   string `json:"risk"`
+	} `json:"replies"`
+}
+    ReviewReply is review-reply-<n>.json, the writer's: per finding, fixed,
+    or declined with the risk of its suggested change.
+
+type ReviewSummary struct {
+	Exit      string       `json:"exit"`
+	Rounds    int          `json:"rounds"`
+	Head      string       `json:"head"`
+	Leftovers []ReviewItem `json:"leftovers"`
+	Declined  []ReviewItem `json:"declined"`
+	Doubts    []ReviewItem `json:"doubts"`
+}
+    ReviewSummary is review-summary.json: how the local review ended (exit
+    clean or oscillation), after how many rounds, at which head, and what it
+    left that does not block, for the ready card and the PR body's "Known":
+    the leftovers (P3s and simplifications of its last round), the findings the
+    writer declined with their risks, and the doubts (findings that came back
+    twice after their fix).
 
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
@@ -18919,6 +19136,16 @@ type Keys interface {
     when that wait fails, asks herdr whether the pane is gone (PaneGet).
     *herdr.Client satisfies it.
 
+type Local struct {
+	DescriptionFile, TicketFile string
+}
+    Local is what a local round (RoundInput.Local) hands its roles as files
+    in place of GitHub's PR: DescriptionFile, the change's title and body
+    as its PR will carry them (description.md), and TicketFile, the task's
+    ticket (ticket.md: its Jira issue, or the operator's request; "" = none).
+    Both are absolute paths, written before the round; their text is data and
+    never reaches a prompt.
+
 type Method struct {
 	File      string `json:"file"`
 	Name      string `json:"name"`
@@ -19340,6 +19567,14 @@ type RoundInput struct {
 	// judge takes the local diff, not GitHub's (the PR may have moved on or
 	// closed). Rendered as `blind: true` in the prompts.
 	Blind bool
+	// Local (with Blind and DryRun): the round is the factory's local round
+	// of a change before its PR exists (engine.RunLocal): no PR on GitHub to
+	// read, so the judge takes the title and the body from DescriptionFile
+	// and the ticket from TicketFile, as data, and the reviewers the
+	// description too (agents.JudgeData.Local, RoleData.DescriptionFile).
+	// nil = a round of a PR on GitHub, whose prompts render as they always
+	// did.
+	Local *Local
 	// StoredReports (magnum eval --judge-only, with the Round of the stored
 	// runs): the reviewers do not run; their reports are the files in the
 	// round's report directory that their runs of Round on TargetSHA

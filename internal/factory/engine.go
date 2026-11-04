@@ -38,6 +38,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
+	"github.com/zhuravel/magnum/internal/usage"
 )
 
 // LaunchLabel is the launchd label of the factory daemon's LaunchAgent,
@@ -154,7 +155,14 @@ type Deps struct {
 	GitHub   GitHub
 	Magnum   Magnum
 	Review   LocalReviewer
-	Git      *gitx.Client
+	// ReviewCandidate is the directory of the review candidate the local
+	// rounds run with (WriteReviewCandidate): its skill's hash goes on each
+	// round's cycle. Usage reads Codex's budget (nil: usage.Codex of [usage]
+	// codex_home), which a local round with a Codex role yields to at
+	// [usage] codex_soft.
+	ReviewCandidate string
+	Usage           func(ctx context.Context, now time.Time) (usage.Snapshot, error)
+	Git             *gitx.Client
 	// Run runs the overlap line's reads (Overlap: git log in the main
 	// clone, gh pr list as your gh login) and the factory's own commands in
 	// a task's copy (its precheck and its proof), every one through the deny
@@ -272,6 +280,13 @@ type Engine struct {
 	lockPoll  time.Duration
 	after     func(d time.Duration) <-chan time.Time
 
+	// The local review's rounds that run off the loop, one per task
+	// (launchRound), which reviewMu guards; roundCap ends a round that runs
+	// longer (localRoundCap; a seam of the tests).
+	reviewMu sync.Mutex
+	reviews  map[int64]*localRound
+	roundCap time.Duration
+
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
 	// (stopBackground), so none of it outlives the daemon.
@@ -317,9 +332,12 @@ func New(d Deps) *Engine {
 		keptCopies: map[int64]keptCopy{},
 		keptMem:    map[int64]keptUnwritten{},
 		lockPoll:   specsLockPoll,
+		reviews:    map[int64]*localRound{},
+		roundCap:   localRoundCap,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
 	e.runners[config.FactoryStageGate] = e.runGate
+	e.runners[config.FactoryStageReview] = e.runReview
 	return e
 }
 
@@ -538,6 +556,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.sweepHeavy(ctx, tasks)
 	e.sweepClaims(ctx, tasks)
 	e.sweepChecks(tasks)
+	e.sweepRounds(tasks)
 	e.payReleaseDebts(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
 	if herdrUp { // herdr says who is in a copy: without it no copy is touched

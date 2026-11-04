@@ -1,0 +1,6 @@
+{"status":"dry_run","run_id":"r-20261104T100000-4","verdict":"blocking","event":"COMMENT",
+ "findings":{"P0":0,"P1":0,"P2":0,"P3":1},
+ "provenance":[
+  {"id":"F1","title":"A comment says the wrong unit (optional, no reply needed)","severity":"P3","path":"app/credit.rb","line":3,"sources":["judge"],"verdict":"posted"}],
+ "planned_review":{"event":"COMMENT","body":"Blocking: 1 problem must be fixed before merging.","comments":[
+   {"path":"app/credit.rb","line":3,"body":"**[P3] A comment says the wrong unit (optional, no reply needed)**\n\nIt says cents."}]}}

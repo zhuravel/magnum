@@ -947,6 +947,9 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	if c := rd.completion(); c != nil {
 		jd.LateSince = c.Since // a late simplifier's proposals keep to its round's lines (complete.go)
 	}
+	if l := in.Local; l != nil {
+		jd.Local, jd.DescriptionFile = true, l.DescriptionFile // the files the factory wrote, in place of GitHub's PR
+	}
 	jd.EvidenceFile = filepath.Join(filepath.Dir(jd.ResultFile), EvidenceFile)
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {

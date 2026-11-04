@@ -33,6 +33,7 @@ type EvalCase struct {
 	DefaultBranch string
 	Title, Author string
 	AuthorType    string // "User" or "Bot" ("" = User)
+	HeadRef       string // the PR's head branch ("" = not known)
 	Checkout      string // absolute path of the worktree at Head
 	MainClone     string // the clone the worktree belongs to
 	Watch         config.Watch
@@ -88,10 +89,18 @@ func (e *Engine) RunEval(ctx context.Context, c EvalCase) (pipeline.RoundResult,
 	if err := e.checkEvalReports(c); err != nil {
 		return pipeline.RoundResult{}, store.PR{}, fmt.Errorf("engine: eval %s/%s#%d: %w", c.Owner, c.Repo, c.Number, err)
 	}
+	return e.runEval(ctx, c, nil)
+}
+
+// runEval is RunEval's round once its case passed its checks, and a local
+// round's (RunLocal: local is the factory's base and files, seeded on the
+// round's job; nil for a replay).
+func (e *Engine) runEval(ctx context.Context, c EvalCase, local *localJob) (pipeline.RoundResult, store.PR, error) {
 	job, err := e.seedEval(ctx, c)
 	if err != nil {
 		return pipeline.RoundResult{}, store.PR{}, fmt.Errorf("engine: eval %s/%s#%d: %w", c.Owner, c.Repo, c.Number, err)
 	}
+	job.local = local
 	if err := e.closeEvalLeftovers(ctx, c); err != nil {
 		return pipeline.RoundResult{}, job.pr, fmt.Errorf("engine: eval %s/%s#%d: %w", c.Owner, c.Repo, c.Number, err)
 	}
@@ -113,7 +122,7 @@ func (e *Engine) RunEval(ctx context.Context, c EvalCase) (pipeline.RoundResult,
 	if serr != nil {
 		return pipeline.RoundResult{}, job.pr, fmt.Errorf("engine: eval %s/%s#%d: setup: %w", c.Owner, c.Repo, c.Number, serr)
 	}
-	if !in.DryRun || !in.Blind {
+	if !in.DryRun || !in.Blind || (local != nil && (in.Local == nil || in.BaseSHA != local.base)) {
 		return pipeline.RoundResult{}, job.pr, fmt.Errorf("engine: eval %s/%s#%d: the round is not a blind dry run", c.Owner, c.Repo, c.Number)
 	}
 	if err := e.evalSessionsIn(ctx, job.pr, ws); err != nil {
@@ -357,7 +366,7 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 	up, err := e.st.UpsertPRFromGitHub(ctx, store.GitHubPR{
 		RepoID: repo.ID, NodeID: fmt.Sprintf("eval:%s/%s#%d", c.Owner, c.Repo, c.Number), Number: c.Number, URL: c.URL,
 		HeadSHA: c.Head, Title: nonEmptyPtr(c.Title), AuthorLogin: nonEmptyPtr(c.Author), AuthorType: new(authorType),
-		BaseRef: nonEmptyPtr(c.BaseRef), GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: c.Identity,
+		BaseRef: nonEmptyPtr(c.BaseRef), HeadRef: nonEmptyPtr(c.HeadRef), GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: c.Identity,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("seed PR: %w", err)

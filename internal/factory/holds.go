@@ -23,6 +23,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -569,10 +570,12 @@ func (e *Engine) sweepHeavy(ctx context.Context, tasks []registry.Task) {
 func isLive(t registry.Task) bool { return slices.Contains(liveStates, t.State) }
 
 // adoptHeavy is startup's count of the heavy stages that still run: each
-// live task with a launching or running attempt of a heavy stage (a local
-// review) holds its slot until that stage takes it back (heavy) and
-// releases it. A task that is not live (a panic sent it to you with its
-// attempt left running) holds none: nothing would release it.
+// live task with a launching or running attempt of a heavy stage, or, in a
+// local review, a round whose cycle is open with no result (its agents may
+// still work in magnum's herdr), holds its slot until that stage takes it
+// back (heavy) and releases it. A local review's attempts are its writer's
+// fix turns, never heavy. A task that is not live (a panic sent it to you
+// with its attempt left running) holds none: nothing would release it.
 func (e *Engine) adoptHeavy(ctx context.Context) error {
 	tasks, err := e.reg.Tasks(ctx)
 	if err != nil {
@@ -588,19 +591,33 @@ func (e *Engine) adoptHeavy(ctx context.Context) error {
 		}
 		for _, a := range as {
 			st, ok := e.stageOf(t, a.Stage)
-			if !ok || !heavyStage(st) || (a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning) {
+			if !ok || !heavyStage(st) || st.Type == config.FactoryStageReview || (a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning) {
 				continue
 			}
-			e.heavyMu.Lock()
-			if e.heavyHeld[t.ID] == nil {
-				e.heavySeq++
-				what := stageWhat(st.Name)
-				e.heavyHeld[t.ID] = &heavySlot{key: TaskKey(t), what: what, uses: map[string]string{what: st.Name}, adopted: true, seq: e.heavySeq}
+			e.adoptSlot(t, st)
+		}
+		if st, ok := e.stageOf(t, t.Stage); ok && st.Type == config.FactoryStageReview {
+			cs, err := e.reg.Cycles(ctx, t.ID)
+			if err != nil {
+				return fmt.Errorf("factory startup: %w", err)
 			}
-			e.heavyMu.Unlock()
+			if n := len(cs); n > 0 && cs[n-1].Ended.IsZero() && !fsx.Exists(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewRoundFile(cs[n-1].N))) {
+				e.adoptSlot(t, st)
+			}
 		}
 	}
 	return nil
+}
+
+// adoptSlot holds a heavy slot for task t's stage st at startup (adoptHeavy).
+func (e *Engine) adoptSlot(t registry.Task, st config.FactoryStage) {
+	e.heavyMu.Lock()
+	defer e.heavyMu.Unlock()
+	if e.heavyHeld[t.ID] == nil {
+		e.heavySeq++
+		what := stageWhat(st.Name)
+		e.heavyHeld[t.ID] = &heavySlot{key: TaskKey(t), what: what, uses: map[string]string{what: st.Name}, adopted: true, seq: e.heavySeq}
+	}
 }
 
 // heavyStage reports whether a stage is heavy: the local review loop.

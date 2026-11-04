@@ -1,0 +1,10 @@
+{"status":"dry_run","run_id":"r-20261104T100000-1","verdict":"blocking","event":"REQUEST_CHANGES",
+ "findings":{"P0":0,"P1":1,"P2":0,"P3":1},
+ "provenance":[
+  {"id":"F1","title":"Points skip the refunded activities","severity":"P1","path":"app/credit.rb","line":42,"sources":["claude-review","judge"],"verdict":"posted"},
+  {"id":"F2","title":"A log line names the wrong method (optional, no reply needed)","severity":"P3","path":"app/credit.rb","line":7,"sources":["judge"],"verdict":"posted"}],
+ "previous_findings":{"fixed":0,"open":{"P0":0,"P1":0,"P2":0,"P3":0},"answered":0},
+ "planned_review":{"event":"REQUEST_CHANGES","body":"Blocking: 1 problem must be fixed before merging.\n- P1: Points skip the refunded activities",
+  "comments":[
+   {"path":"app/credit.rb","line":42,"body":"**[P1] Points skip the refunded activities**\n\nA refund leaves its points counted."},
+   {"path":"app/credit.rb","line":7,"body":"**[P3] A log line names the wrong method (optional, no reply needed)**\n\nIt says points_for."}]}}

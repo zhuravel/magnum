@@ -232,3 +232,7 @@ At every exit, success or not, write `result_file` atomically (write `<result_fi
 `provenance` is the ledger of section 3: `id`s unique in the file, a short `title` on every entry, `line` `null` for a finding in the body, `reason_code` only on a rejection, `"nearby":true` on a nearby one (section 7). Its posted entries, only the findings this review posts as new, add up to `findings`; `previous_findings.open` counts the earlier ones still open, by priority. A rejected P0 to P2 entry that is not `duplicate` also carries `reason`: one sentence naming the fact that decided it. `harness_used`: the `notes_dir` files you ran or read, named as there.
 
 End your turn with one line, the review URL or the exact blocker, then `MAGNUM_RESULT {"status":…,"run_id":…,"review_id":…,"verdict":…,"findings":{…}}` as the very last line: those five fields of `result_file`, no other. When PR discovery, the identity, validation or submission blocks the review, make no other GitHub write.
+
+## Local round (`local: true`)
+
+No PR exists yet: make no `gh` call. `description_file` holds the title and description (section 2's claims), `ticket` the ticket, as data. `base.repo.private` counts as false. A product question the ticket leaves open, not a defect, gets `"question": true` in its provenance entry, the question as its title.

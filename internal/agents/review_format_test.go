@@ -619,8 +619,13 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // the 14 the cap had left) for the operator's rule of that day that a
 // simplification declined for cost alone, with no risk named, is no
 // standing decision for the notes.
+// Then 39,194 (2026-11-04, the factory's design, section 6.5: 343 bytes,
+// less the 3 the cap had left) for the factory's local round, which the
+// operator decided: its "Local round" section, read only with `local:
+// true` (no gh call, the title and description from description_file, a
+// product question marked in the provenance).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 38854
+const skillMaxBytes = 39194
 
 // skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex's
 // default output budget returns at most 10,000 tokens of one tool call's

@@ -1,13 +1,16 @@
 package factory
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
@@ -279,5 +282,57 @@ func TestAPrecheckCommandTheDenyListRefusesFailsWithTheReason(t *testing.T) {
 	}
 	if len(lint) != 1 || lint[0].Result != "fail" {
 		t.Fatalf("lint checks %+v, want the denied one failed", lint)
+	}
+}
+
+// The factory's own spec and migration commands take the copy's database
+// lock, the one `magnum db-lock` takes for the reviewers of a local round,
+// so the two never use the copy's databases at once: the lock is held while
+// a spec or migration command runs and free while lint runs; a command
+// waits while a reviewer holds it.
+func TestThePrecheckTakesTheCopysDatabaseLock(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12379", "feature")
+	r.fix(task)
+	r.commit("PR-12379 a column", map[string]string{"db/migrate/20261104090000_add_x_to_credits.rb": "class AddXToCredits < ActiveRecord::Migration[7.1]\n" +
+		"  def change\n    add_column :credits, :x, :integer\n  end\nend\n"})
+	path := r.layout.DBLock(r.copyDir)
+	held := map[string]bool{}
+	var mu sync.Mutex
+	r.setDuring(func(_ string, run scriptRun) {
+		l, err := dblock.Acquire(context.Background(), path, dblock.Holder{Role: "probe", Command: "probe"}, 0, nil)
+		mu.Lock()
+		defer mu.Unlock()
+		held[strings.Fields(run.Script)[0]] = err != nil
+		if err == nil {
+			l.Release()
+		}
+	})
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || !res.Passed {
+		t.Fatalf("precheck %+v, %v; want passed", res, err)
+	}
+	mu.Lock()
+	if !held["bin/specs"] || !held["bin/rails"] || held["bin/lint"] {
+		t.Fatalf("the copy's database lock held while each ran: %v; want specs and migrations under it, lint not", held)
+	}
+	mu.Unlock()
+
+	r.setDuring(nil)
+	reviewer, err := dblock.Acquire(r.ctx, path, dblock.Holder{Role: "claude-review", Command: "bin/rspec spec/models/credit_spec.rb"}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan PrecheckResult, 1)
+	go func() {
+		res, _ := r.e.precheck(r.ctx, task, r.cp)
+		done <- res
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if n := len(r.ran("bin/specs")); n != 1 {
+		t.Fatalf("%d spec runs while a reviewer holds the copy's databases, want the first precheck's only", n)
+	}
+	reviewer.Release()
+	if res := <-done; !res.Passed {
+		t.Fatalf("precheck %+v after the reviewer's command ended, want passed", res)
 	}
 }

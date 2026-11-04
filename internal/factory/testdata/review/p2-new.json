@@ -1,0 +1,5 @@
+{"status":"dry_run","run_id":"r-20261104T100000-3","verdict":"non_blocking","event":"COMMENT",
+ "findings":{"P0":0,"P1":0,"P2":1,"P3":0},
+ "provenance":[
+  {"id":"F1","title":"No spec pins the refund guard","severity":"P2","path":"spec/models/credit_spec.rb","line":null,"sources":["judge"],"verdict":"posted"}],
+ "planned_review":{"event":"COMMENT","body":"Fix 1 problem before merging.\n- P2: No spec pins the refund guard","comments":[]}}

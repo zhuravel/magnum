@@ -104,10 +104,19 @@ func (rd *round) readTicket(ctx context.Context) *jira.Ticket {
 // round (readTicket), and keeps its path for the judge prompts in
 // rd.ticketFile; "" when there is none, and an earlier round's file on this
 // head is removed. A continued turn reads nothing: its prompt names the
-// paused turn's file when there is one. Each head's file is a round.ticket
+// paused turn's file when there is one. A local round reads nothing either:
+// its ticket is the factory's file (Local.TicketFile), when it is there. Each head's file is a round.ticket
 // event naming the key, the status, the requirement fields and the sizes.
 func (rd *round) writeTicket(ctx context.Context) {
 	rd.ticketFile = ""
+	if l := rd.in.Local; l != nil {
+		// A local round's ticket is the factory's file, read from Jira
+		// before the round: nothing is read here.
+		if l.TicketFile != "" && fsx.Exists(l.TicketFile) {
+			rd.ticketFile = l.TicketFile
+		}
+		return
+	}
 	path := filepath.Join(rd.dir, TicketFile)
 	if rd.in.Kind == KindContinue {
 		if fsx.Exists(path) {

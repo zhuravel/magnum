@@ -195,6 +195,9 @@ func (rd *round) roleData(role config.Role, runID, path string) (string, agents.
 		Budget: durationWords(rd.timeout(role)), RunID: runID,
 		Magnum: rd.r.Layout.Binary(), Checkout: in.SlotPath, Role: role.Name,
 	}
+	if l := in.Local; l != nil {
+		d.DescriptionFile = l.DescriptionFile
+	}
 	kind := config.PromptInitial
 	if rereview {
 		kind, d.Mode, d.PreviousHeadSHA, d.ForcePushed, d.BaseMerged = config.PromptRereview, agents.ModeRereview, prev, forcePushed, baseMerged

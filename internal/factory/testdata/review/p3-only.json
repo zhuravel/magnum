@@ -1,0 +1,6 @@
+{"status":"dry_run","run_id":"r-20261104T100000-7","verdict":"non_blocking","event":"COMMENT",
+ "findings":{"P0":0,"P1":0,"P2":0,"P3":1},
+ "provenance":[
+  {"id":"F1","title":"A log line names the wrong method (optional, no reply needed)","severity":"P3","path":"app/credit.rb","line":7,"sources":["judge"],"verdict":"posted"}],
+ "planned_review":{"event":"COMMENT","body":"No blocking problems.\n\n1 optional: 1 P3.","comments":[
+   {"path":"app/credit.rb","line":7,"body":"**[P3] A log line names the wrong method (optional, no reply needed)**\n\nIt says points_for."}]}}

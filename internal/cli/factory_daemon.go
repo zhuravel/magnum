@@ -21,6 +21,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -140,9 +141,13 @@ func (d *factoryDaemon) Close() error {
 // factory's herdr session and of yours, factory.GuardPanes, with the
 // runtime's owner rows), the [jira] site's client when [jira] is on (intake's
 // tickets), and the runner of the overlap line's git and gh reads and of the
-// coding stage's proof and precheck. Every command of the daemon's runner,
-// git's included, goes through the deny list (factory.Guard). GitHub,
-// magnum and the local reviewer are nil until the builds that bring them.
+// coding stage's proof and precheck, and the local review: magnum's
+// registry read for its real rounds (factory.NewMagnum, never migrated) and
+// the local rounds (factory.NewLocalReviewer: evalrun.RunLocal with the
+// review candidate this build writes at startup, factory.WriteReviewCandidate,
+// as its config's candidate). Every command of the daemon's runner, git's
+// included, goes through the deny list (factory.Guard). GitHub is nil until
+// the build that brings it.
 // The caller holds the factory lock (factory.Lock); the registry's migration
 // is still refused
 // while a factory daemon's pidfile names a live factory daemon
@@ -236,6 +241,19 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "copies"}, SecretEnv: identityKeyEnvs(cfg)})
 	d.Copies = factory.NewCopies(cfg, copySlots, d.Agents, git, run, copyDBs, h.Snapshot, d.Runtime.Owner)
 	deps.Copies = d.Copies
+	// The local review: this build's prompts and judge skill as the review
+	// candidate, written once at startup as the prompts are loaded.
+	candidate, err := factory.WriteReviewCandidate(l)
+	if err != nil {
+		return nil, err
+	}
+	reviewCfg, err := cfg.WithCandidate(candidate)
+	if err != nil {
+		return nil, fmt.Errorf("factory: review candidate: %w", err)
+	}
+	deps.Magnum, deps.ReviewCandidate = factory.NewMagnum(l), candidate
+	deps.Review = factory.NewLocalReviewer(evalrun.Deps{Layout: l, Config: reviewCfg, Logger: d.Log, Stderr: io.Discard, Runner: run,
+		Warn: func(format string, args ...any) { d.Log.Warn("local review: " + fmt.Sprintf(format, args...)) }})
 	d.Engine = factory.New(deps)
 	built = true
 	return d, nil

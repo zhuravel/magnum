@@ -72,7 +72,9 @@ import (
 // (questions.json in the judge's report stage, questions-<role>.json for
 // any other role); Report, Acceptance and Proof the judge's report.md and
 // acceptance.json and the writer's proof.json; Review the local review's
-// findings for the writer ("" before that stage). ErrorSkill is the
+// findings for the writer (review-<n>.json, the newest round's) and
+// ReviewReply the writer's reply to them (review-reply-<n>.json), both ""
+// outside the local review's fix turn (ReviewFixPrompt). ErrorSkill is the
 // repository's error_skill ("" = none: no prompt names one), DBLockCommand
 // the `magnum db-lock` line of the copy for the role as it runs, and Port
 // the copy's server's (0 when its env names none).
@@ -81,6 +83,7 @@ type PromptData struct {
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
 	Ticket, Guidance, Prompt, Answers, Rules               string
 	Findings, Report, Questions, Acceptance, Proof, Review string
+	ReviewReply                                            string
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
 }
@@ -109,6 +112,14 @@ type agentsRun struct {
 type agentsTurn struct {
 	gate  bool
 	since time.Time
+	// review is the local review's fix turn of the writer (review.go): a
+	// turn of the coding stage's roles in the review stage, each its own
+	// attempt, on the task's branch as it is (no fresh start from the
+	// base), whose end fact is the coding stage's (proof.json, the factory's
+	// proof and precheck at the head, provenHead) and the review's own:
+	// the writer's reply, and a commit since the round unless it declined
+	// every finding with its risk. nil for any other turn.
+	review *reviewTurn
 }
 
 // since is the time the end fact's files of attempt a must be newer than.
@@ -208,7 +219,7 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	if !slices.Contains(agentsEnds, st.End) || e.d.Runtime == nil || (st.End == config.FactoryEndProof && e.d.Git == nil) {
 		return false, nil
 	}
-	a, open, passed, err := e.stageAttempt(ctx, t, st, turn.gate)
+	a, open, passed, err := e.stageAttempt(ctx, t, st, turn.gate || turn.review != nil)
 	if err != nil || passed {
 		return passed, err
 	}
@@ -222,7 +233,7 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 		return false, err
 	}
 	if !open {
-		if st.End == config.FactoryEndProof {
+		if st.End == config.FactoryEndProof && turn.review == nil { // a review's fix goes on from the reviewed head
 			if err := e.startCoding(ctx, &t, c); err != nil {
 				return false, e.stageFailed(ctx, t, err)
 			}
@@ -588,6 +599,9 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 		return "" // its questions wait for your answers already
 	}
 	p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
+	if p == nil && run.turn.review != nil {
+		p = run.turn.review.replyProblem(dir, run.since(a))
+	}
 	switch asks, err := e.roleAsks(ctx, t, st, a, run, r, dir, p); {
 	case err != nil:
 		e.log.Warn("ask a role's questions", "task", t.ID, "role", r.runAs.Name, "err", err)
@@ -618,6 +632,9 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 			}
 			e.inbox[t.ID] = append(e.inbox[t.ID], runtime.Event{TaskID: t.ID, Role: r.runAs.Name, RunID: runID, Kind: runtime.EventEnded})
 			return ""
+		}
+		if p == nil && run.turn.review != nil {
+			p = run.turn.review.commitProblem(dir, run.proven)
 		}
 	}
 	if p == nil {
@@ -716,6 +733,9 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 			continue
 		}
 		p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
+		if p == nil && run.turn.review != nil {
+			p = run.turn.review.replyProblem(dir, run.since(a))
+		}
 		if p == nil && st.End == config.FactoryEndProof {
 			var pending bool
 			var err error
@@ -724,6 +744,9 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 					e.log.Warn("check the coding stage's end again", "task", t.ID, "err", err)
 				}
 				continue
+			}
+			if p == nil && run.turn.review != nil {
+				p = run.turn.review.commitProblem(dir, run.proven)
 			}
 		}
 		if p != nil {
@@ -898,6 +921,9 @@ func (e *Engine) outputs(t registry.Task, st config.FactoryStage, role config.Ro
 		names = []string{criticFile, roleQuestionsFile(role.Name)}
 	case config.FactoryEndProof:
 		names = []string{proofFile, roleQuestionsFile(role.Name)}
+		if n := newestReview(dir); st.Prompt == ReviewFixPrompt && n > 0 {
+			names = append(names, reviewReplyFile(n))
+		}
 	}
 	for i, n := range names {
 		names[i] = filepath.Join(dir, n)
@@ -970,6 +996,11 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 	if st.End == config.FactoryEndFindings {
 		d.Findings = in(findingsFile(role.Name))
 	}
+	if st.Prompt == ReviewFixPrompt { // the local review's fix turn: its newest round's findings
+		if n := newestReview(dir); n > 0 {
+			d.Review, d.ReviewReply = in(reviewFile(n)), in(reviewReplyFile(n))
+		}
+	}
 	return d
 }
 
@@ -1019,6 +1050,9 @@ func CheckPrompts(cfg *config.Config) error {
 			if st.End == config.FactoryEndReport {
 				check(fmt.Sprintf("factory kind %s, the amend of its %s stage", name, st.Name), role, AmendPrompt)
 			}
+			if st.End == config.FactoryEndProof {
+				check(fmt.Sprintf("factory kind %s, the local review's fix turn of its %s stage's writer", name, st.Name), role, ReviewFixPrompt)
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -1058,6 +1092,7 @@ func PromptNames(cfg *config.Config) []string {
 		}
 	}
 	add(AmendPrompt)
+	add(ReviewFixPrompt)
 	return names
 }
 
@@ -1069,6 +1104,6 @@ func checkData(role config.Role) PromptData {
 		TaskDir: dir, Ticket: dir + "/ticket.md", Guidance: dir + "/guidance.md", Prompt: dir + "/prompt.md",
 		Answers: dir + "/" + answersFile, Rules: dir + "/rules.md", Findings: dir + "/" + findingsFile(role.Name),
 		Report: dir + "/" + reportFile, Questions: dir + "/" + questionsFile, Acceptance: dir + "/" + acceptanceFile,
-		Proof: dir + "/proof.json", Review: dir + "/review-1.json", ErrorSkill: "error-tracker",
+		Proof: dir + "/proof.json", Review: dir + "/review-1.json", ReviewReply: dir + "/review-reply-1.json", ErrorSkill: "error-tracker",
 		DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000}
 }

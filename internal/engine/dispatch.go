@@ -127,6 +127,10 @@ type roundJob struct {
 	evalHead   string
 	evalNotes  bool
 	evalStored bool
+	// local is set for the factory's local round of a change before its PR
+	// exists (RunLocal, with evalHead): its base and the files the judge
+	// reads in place of GitHub's PR (pipeline.RoundInput.Local).
+	local *localJob
 }
 
 // roundHandle tracks a round goroutine, a `magnum open` restore, a fix job

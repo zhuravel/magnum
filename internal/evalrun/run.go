@@ -130,6 +130,9 @@ type Deps struct {
 	// agents that stay open); nil = none.
 	Progress func(format string, args ...any)
 	Warn     func(format string, args ...any)
+	// localRound replaces a local round's engine (RunLocal; nil = the
+	// real one, runLocalRound): the tests' seam.
+	localRound localRoundFunc
 }
 
 // Options are a case's settings, the run's.

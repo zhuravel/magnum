@@ -3629,6 +3629,37 @@ environments and flags). A change the checks refuse gets the writer fix turns, e
 that file, up to 6 prompts in the stage's attempt (your retry's new attempt gets its own); then the task needs
 you with the last failure. Checks that do not
 run to their end (git fails in them) run again a minute later, 3 times at most, then the task needs you.
+The proof's and the precheck's spec and migration commands also take the copy's database lock, the one
+`magnum db-lock` takes for the reviewers of a local round, so the two never use the copy's databases at once.
+
+The local review (`local_review`, `type = "review"`) runs magnum's full review on the change before any PR
+exists: a blind dry run in the task's copy, the watch's review roles in round 1, the same without
+`[factory.local_review] later_without` (claude-simplify) after it, at most `cycles` rounds. Each round gets a
+fresh scratch directory under the task's (`local-review/`), a new agent tag and a synthetic PR number (900000
+plus the task's id times 10 plus the round), so it never meets a real PR's agents, workspace or registry. Its
+judge reads the change's title and body (`description.md`) and the ticket (`ticket.md`) as files and makes no
+`gh` call; claude-review reviews the local diff without `/code-review <url>`, and `post-review` checks the
+anchors against that diff (`--local-base`). The rounds run with this build's prompts and judge skill, written
+at the factory daemon's start as a candidate (`<data>/factory/review-candidate/`) that magnum's live rounds
+never read. A round runs at the lowest priority: it waits while magnum has a real round in flight or due
+(`magnum: …`), while Codex is at or past `[usage] codex_soft` and the round runs a Codex role, while an agent or
+you work in the copy, and for a heavy slot; the factory reads magnum's registry and never migrates it (a
+registry of another schema waits, saying to restart magnum's daemon first). The factory reads the result
+itself: a P0, P1 or P2, new or still open, or the verdict `blocking` blocks, whatever the planned event says. A
+round that ended `needs_attention`, `blocked`, `error`, `timeout` or refused, or whose result does not parse, is
+"review unavailable" and never clean: the task needs you (`you: review unavailable (<outcome>)`), and nothing
+is pushed; an error or a timeout (a round over 3 hours) runs once more first, and so does a clean round that
+went without a reviewer's report. A Codex refusal makes the task Codex-never for good, and the round runs
+again with `judge_fallback` in place of the Codex judge and without Codex's review. A blocking round hands
+the writer `review-<n>.json` for one fix turn (`factory-review-fix.md`): it fixes or declines each finding
+(a decline counts only with the risk of the suggested change), commits, writes `review-reply-<n>.json`, and
+the factory's proof and precheck run at the new head before the next round. A product question among the
+findings joins the task's question batch first. Every round is a review cycle with its findings, followed by
+their fingerprints: one that comes back twice after its fix is a doubt, and when only doubts block the loop
+ends on the oscillation; after the last round with something that still blocks the task needs you (`you: <n>
+blocking findings after 3 review rounds`). The loop's end (`review-summary.json`) lists what is left for the
+ready card: the P3s and simplifications, the declined findings with their risks, and the doubts. A drain or a
+restart in the middle of a round leaves its cycle open, and the round runs again in it.
 
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the

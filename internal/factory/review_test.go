@@ -1,0 +1,718 @@
+package factory
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/evalrun"
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/usage"
+)
+
+// fakeReviewer is the local reviewer: it records each round's case and
+// answers with the next of answers (the last one repeats); block, when set,
+// holds a round until it closes or the round's context ends.
+type fakeReviewer struct {
+	mu      sync.Mutex
+	cases   []evalrun.LocalCase
+	answers []func(c evalrun.LocalCase) evalrun.LocalResult
+	block   chan struct{}
+}
+
+func (f *fakeReviewer) Round(ctx context.Context, c evalrun.LocalCase) (evalrun.LocalResult, error) {
+	f.mu.Lock()
+	f.cases = append(f.cases, c)
+	i := min(len(f.cases), len(f.answers)) - 1
+	answer, block := f.answers[i], f.block
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return evalrun.LocalResult{}, ctx.Err()
+		}
+	}
+	r := answer(c)
+	r.Round = c.Round
+	return r, nil
+}
+
+func (f *fakeReviewer) calls() []evalrun.LocalCase {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.cases)
+}
+
+// fakeMagnum is magnum's daemon: busy says why it is busy ("" = it is not).
+type fakeMagnum struct {
+	mu   sync.Mutex
+	busy string
+}
+
+func (f *fakeMagnum) Busy(context.Context) (bool, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.busy != "", f.busy, nil
+}
+
+func (f *fakeMagnum) set(why string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.busy = why
+}
+
+// reviewRig is the coding rig with the local review wired: the fake
+// reviewer and magnum, a watch of the repository, the review candidate,
+// and a Codex gauge that reads used percent.
+type reviewRig struct {
+	*codingRig
+	rv     *fakeReviewer
+	magnum *fakeMagnum
+	used   float64
+}
+
+func newReviewRig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.LocalResult) *reviewRig {
+	t.Helper()
+	r := &reviewRig{codingRig: newCodingRig(t), rv: &fakeReviewer{answers: answers}, magnum: &fakeMagnum{}}
+	r.cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"*"}, Identity: "zhuravel"}}
+	dir, err := WriteReviewCandidate(r.layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []*Deps{&r.deps, &r.e.d} {
+		d.Review, d.Magnum, d.ReviewCandidate = r.rv, r.magnum, dir
+		d.Usage = func(context.Context, time.Time) (usage.Snapshot, error) {
+			return usage.Snapshot{Window: usage.Window{UsedPercent: r.used}}, nil
+		}
+	}
+	return r
+}
+
+// restart is the rig's restart with the review's deps on the new engine.
+func (r *reviewRig) restart() {
+	r.t.Helper()
+	r.codingRig.restart()
+}
+
+// reviewTask is a bug task at its local review, its writer's fix
+// committed on its branch and proven: the head the round reviews.
+func (r *reviewRig) reviewTask(key string) (registry.Task, string) {
+	r.t.Helper()
+	task := r.codingTask(key, "bug")
+	head := r.fix(task)
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("stage", "local_review")
+		u.Set("head_sha", head)
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return r.reload(task.ID), head
+}
+
+// run ticks and waits for the work off the loop, n times or until done
+// holds.
+func (r *reviewRig) run(n int, done func() bool) {
+	r.t.Helper()
+	for range n {
+		if done != nil && done() {
+			return
+		}
+		r.tick()
+		r.e.waitBackground()
+	}
+}
+
+// startBlockedRound runs the ticks that start a round the reviewer holds
+// (block): the claim's, then the round's, without waiting for the round.
+func (r *reviewRig) startBlockedRound() {
+	r.t.Helper()
+	r.tick()
+	r.e.waitBackground()
+	r.tick()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(r.rv.calls()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(r.rv.calls()) != 1 {
+		r.t.Fatalf("%d rounds started, want 1", len(r.rv.calls()))
+	}
+}
+
+// cycles are the task's review cycles.
+func (r *reviewRig) cycles(id int64) []registry.Cycle {
+	r.t.Helper()
+	cs, err := r.reg.Cycles(r.ctx, id)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return cs
+}
+
+// findings are the task's findings, by fingerprint.
+func (r *reviewRig) findings(id int64) map[string]registry.Finding {
+	r.t.Helper()
+	fs, err := r.reg.Findings(r.ctx, id)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	out := map[string]registry.Finding{}
+	for _, f := range fs {
+		out[f.Fingerprint] = f
+	}
+	return out
+}
+
+// writerFixes is the writer's fix turn: a commit (none when files is nil),
+// proof.json, the reply to review-<n>.json (each finding fixed, but those
+// declined with the risk given, "" for none), then its turn's end.
+func (r *reviewRig) writerFixes(task registry.Task, n int, files map[string]string, declined map[string]string) {
+	r.t.Helper()
+	r.clock.Add(time.Minute)
+	if files != nil {
+		r.commit(task.JiraKey+" fixes the review", files)
+	}
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	var rf struct {
+		Findings []struct {
+			ID string `json:"id"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewFile(n))), &rf); err != nil {
+		r.t.Fatal(err)
+	}
+	var replies []map[string]string
+	for _, f := range rf.Findings {
+		reply := map[string]string{"id": f.ID, "action": "fixed"}
+		if risk, ok := declined[f.ID]; ok {
+			reply["action"], reply["risk"] = "declined", risk
+		}
+		replies = append(replies, reply)
+	}
+	b, _ := json.Marshal(map[string]any{"replies": replies})
+	r.taskFile(task.ID, reviewReplyFile(n), string(b))
+	r.ended(task, "fx-writer")
+}
+
+// result is a round's answer: a dry run of findings (verdict from them).
+func result(fs ...evalrun.LocalFinding) func(evalrun.LocalCase) evalrun.LocalResult {
+	return func(evalrun.LocalCase) evalrun.LocalResult {
+		r := evalrun.LocalResult{Outcome: pipeline.OutcomeDryRun, Verdict: "clean", Findings: fs}
+		for _, f := range fs {
+			switch f.Severity {
+			case "P0", "P1", "P2", "P3":
+				r.Counts[f.Severity[1]-'0']++
+			}
+		}
+		switch {
+		case r.Counts[0]+r.Counts[1] > 0:
+			r.Verdict = "blocking"
+		case r.Counts[2]+r.Counts[3] > 0:
+			r.Verdict = "non_blocking"
+		}
+		return r
+	}
+}
+
+// rounds are n rounds that each answer answer.
+func rounds(n int, answer func(evalrun.LocalCase) evalrun.LocalResult) []func(evalrun.LocalCase) evalrun.LocalResult {
+	out := make([]func(evalrun.LocalCase) evalrun.LocalResult, n)
+	for i := range out {
+		out[i] = answer
+	}
+	return out
+}
+
+// outcome is a round that ended as outcome, its result clean.
+func outcome(o string) func(evalrun.LocalCase) evalrun.LocalResult {
+	return func(c evalrun.LocalCase) evalrun.LocalResult {
+		r := result()(c)
+		r.Outcome = o
+		return r
+	}
+}
+
+var (
+	refundFinding = evalrun.LocalFinding{Severity: "P1", Title: "Points skip the refunded activities", Path: "app/credit.rb", Line: 3,
+		Body: "A refund leaves its points counted."}
+	unitFinding = evalrun.LocalFinding{Severity: "P2", Title: "Points count cancelled activities", Path: "app/credit.rb", Line: 14}
+	logFinding  = evalrun.LocalFinding{Severity: "P1", Title: "The log names the wrong method", Path: "app/notes.rb", Line: 31}
+	nitFinding  = evalrun.LocalFinding{Severity: "P3", Title: "A comment says cents (optional, no reply needed)", Path: "app/credit.rb", Line: 1}
+)
+
+// fixedCredit is a commit that changes app/credit.rb once more (round n's
+// fix), its spec still passing.
+func fixedCredit(n int) map[string]string {
+	return map[string]string{"app/credit.rb": strings.Replace(creditRB, "    0\n", "    10\n", 1) + fmt.Sprintf("# round %d\n", n)}
+}
+
+// The loop stops as soon as a round blocks nothing: round 1 finds a P1, the
+// writer fixes it, round 2 is clean. Two cycles, the stage passes with exit
+// clean, and the writer got the blocking finding as review-1.json.
+func TestReviewLoopStopsWhenNothingBlocks(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding), result())
+	task, head := r.reviewTask("PR-12361")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 1 || !strings.Contains(ps[0].Text, reviewFile(1)) {
+		t.Fatalf("the writer's prompts %+v, want its fix turn naming %s", ps, reviewFile(1))
+	}
+	if got := r.readTask(task.ID, reviewFile(1)); !strings.Contains(got, refundFinding.Title) || strings.Contains(got, nitFinding.Title) {
+		t.Fatalf("%s:\n%s", reviewFile(1), got)
+	}
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	got := r.reload(task.ID)
+	cs := r.cycles(task.ID)
+	if got.Stage != "pr_body" || len(cs) != 2 || cs[0].Exit != "" || cs[1].Exit != registry.ExitClean || cs[0].HeadBefore != head ||
+		cs[0].HeadAfter == head || cs[1].HeadBefore != cs[0].HeadAfter {
+		t.Fatalf("task %s at %s waits %q; cycles %+v", got.State, got.Stage, got.WaitsWhat, cs)
+	}
+	if calls := r.rv.calls(); len(calls) != 2 || calls[1].HeadSHA != cs[0].HeadAfter || calls[0].Round != 1 || calls[1].Round != 2 {
+		t.Fatalf("rounds %+v", calls)
+	}
+}
+
+// At most cycles (3) rounds run: three rounds that each block on a new
+// finding end the loop at its cap, and the task needs you with the count.
+func TestReviewLoopStopsAtThreeRounds(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding), result(unitFinding), result(logFinding))
+	task, _ := r.reviewTask("PR-12362")
+	for n := 1; n <= 2; n++ {
+		r.run(6, func() bool {
+			return fileIn(r.layout.FactoryTaskDir(task.ID), reviewFile(n)) && len(r.rt.promptsTo("fx-writer")) >= n
+		})
+		r.writerFixes(task, n, fixedCredit(n), nil)
+	}
+	r.run(10, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	cs := r.cycles(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 blocking finding after 3 review rounds" || len(cs) != 3 || cs[2].Exit != registry.ExitCap {
+		t.Fatalf("task %s waits %q; cycles %+v", got.State, got.WaitsWhat, cs)
+	}
+	if n := len(r.rv.calls()); n != 3 {
+		t.Fatalf("%d rounds, want 3", n)
+	}
+}
+
+// Round 1 runs the watch's review roles, later rounds the same roles
+// without later_without (claude-simplify).
+func TestLaterRoundsRunWithoutSimplify(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding), result())
+	task, _ := r.reviewTask("PR-12363")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.run(8, func() bool { return len(r.rv.calls()) == 2 })
+	calls := r.rv.calls()
+	if len(calls) != 2 {
+		t.Fatalf("%d rounds", len(calls))
+	}
+	want1 := []string{"codex-judge", "claude-review", "codex-review", "claude-simplify"}
+	if !slices.Equal(calls[0].Roles, want1) || !slices.Equal(calls[1].Roles, want1[:3]) {
+		t.Fatalf("round 1 roles %v, round 2 %v", calls[0].Roles, calls[1].Roles)
+	}
+}
+
+// The writer must commit its fix before the next round: a fix turn that
+// ends with the branch where the round reviewed it gets a fix turn saying
+// so, and no round runs until a commit lands.
+func TestReviewLoopNeedsACommitBeforeTheNextRound(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding), result())
+	task, head := r.reviewTask("PR-12364")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.writerFixes(task, 1, nil, nil)
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "commit") {
+		t.Fatalf("the writer's prompts %+v, want a fix turn asking for its commit", ps)
+	}
+	if n := len(r.rv.calls()); n != 1 {
+		t.Fatalf("%d rounds before the writer committed, want 1", n)
+	}
+	if got := r.git(r.copyDir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("head %s", got)
+	}
+	r.clock.Add(time.Minute)
+	r.commit(task.JiraKey+" fixes the review", fixedCredit(1))
+	r.ended(task, "fx-writer")
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task at %s after %d rounds", got.Stage, len(r.rv.calls()))
+	}
+}
+
+// After each fix commit the factory's checks run again at the new head,
+// through the coding stage's own path: its lint, before the next round,
+// and a lint offense on the fix gives the writer a fix turn, not a round.
+func TestReviewLoopRunsThePrecheckAfterEachFix(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding), result())
+	task, head := r.reviewTask("PR-12365")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	offenses := 0
+	r.lint = func(files []string) string {
+		if offenses > 0 {
+			return ""
+		}
+		offenses++
+		return "app/credit.rb:3:5: C: Style: the fix's line"
+	}
+	r.writerFixes(task, 1, map[string]string{"app/credit.rb": strings.Replace(creditRB, "    0\n", "    10 \n", 1)}, nil)
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "lint") {
+		t.Fatalf("the writer's prompts %+v, want a fix turn for the lint on its fix", ps)
+	}
+	if n := len(r.rv.calls()); n != 1 {
+		t.Fatalf("%d rounds before the fix passed its checks, want 1", n)
+	}
+	r.clock.Add(time.Minute)
+	fix := r.commit(task.JiraKey+" lint", fixedCredit(1))
+	r.ended(task, "fx-writer")
+	r.run(8, func() bool { return len(r.rv.calls()) == 2 })
+	lints := r.ran("bin/lint")
+	if len(lints) == 0 || lints[len(lints)-1].Head != fix || lints[len(lints)-1].Head == head {
+		t.Fatalf("lint runs %+v, want the last at the fix %s", lints, fix)
+	}
+	if calls := r.rv.calls(); len(calls) != 2 || calls[1].HeadSHA != fix {
+		t.Fatalf("rounds %+v, want round 2 at %s", calls, fix)
+	}
+}
+
+// A finding that comes back twice after its fix goes to the doubts: once
+// only such findings block, the loop ends on an oscillation and the stage
+// passes with the finding among the doubts.
+func TestAFindingThatReturnsTwiceAfterItsFixBecomesADoubt(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding))
+	task, _ := r.reviewTask("PR-12366")
+	for n := 1; n <= 2; n++ {
+		r.run(6, func() bool {
+			return fileIn(r.layout.FactoryTaskDir(task.ID), reviewFile(n)) && len(r.rt.promptsTo("fx-writer")) >= n
+		})
+		r.writerFixes(task, n, fixedCredit(n), nil)
+	}
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	cs := r.cycles(task.ID)
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(cs) != 3 || cs[2].Exit != registry.ExitOscillation {
+		t.Fatalf("task %s at %s waits %q; cycles %+v", got.State, got.Stage, got.WaitsWhat, cs)
+	}
+	f := r.findings(task.ID)[Fingerprint(refundFinding)]
+	if f.Reopened != 2 {
+		t.Fatalf("finding %+v, want it reopened twice", f)
+	}
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Exit != registry.ExitOscillation || len(sum.Doubts) != 1 || sum.Doubts[0].Title != refundFinding.Title {
+		t.Fatalf("summary %+v, want the finding among the doubts", sum)
+	}
+}
+
+// A finding the judge marks a product question joins the task's question
+// batch: it is asked as a question of the local review, the task waits for
+// your answer, and the writer gets no fix turn before it.
+func TestAQuestionFindingJoinsTheQuestionBatch(t *testing.T) {
+	q := evalrun.LocalFinding{Severity: "P2", Title: "Should a refund take back the points it gave?", Path: "app/credit.rb", Line: 12, Question: true,
+		Body: "The ticket says nothing of refunds."}
+	r := newReviewRig(t, result(q))
+	task, _ := r.reviewTask("PR-12367")
+	r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 question before local review goes on" {
+		t.Fatalf("task %s waits %q", got.State, got.WaitsWhat)
+	}
+	qs, err := r.reg.Questions(r.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qs) != 1 || qs[0].Text != q.Title || qs[0].RaisedBy != "local_review" || qs[0].State != registry.QuestionOpen || len(qs[0].Options) < 2 {
+		t.Fatalf("questions %+v", qs)
+	}
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 {
+		t.Fatalf("the writer got %d prompts before your answer, want none", len(ps))
+	}
+}
+
+// A decline counts only with the risk of the suggested change: a finding
+// the writer declined without one stays open and blocks the next round
+// again; one declined with a risk is rebutted, blocks no more, and ends
+// among the leftovers.
+func TestADeclineWithoutARiskStaysOpen(t *testing.T) {
+	r := newReviewRig(t, append(rounds(2, result(refundFinding, unitFinding)), result())...)
+	task, _ := r.reviewTask("PR-12368")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	var rf ReviewFile
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewFile(1))), &rf); err != nil || len(rf.Findings) != 2 {
+		t.Fatalf("%s: %+v, %v", reviewFile(1), rf, err)
+	}
+	ids := map[string]string{}
+	for _, f := range rf.Findings {
+		ids[f.Title] = f.ID
+	}
+	r.writerFixes(task, 1, fixedCredit(1), map[string]string{ids[refundFinding.Title]: "", ids[unitFinding.Title]: "counting them changes the monthly statements"})
+	r.run(8, func() bool { return fileIn(r.layout.FactoryTaskDir(task.ID), reviewFile(2)) })
+	fs := r.findings(task.ID)
+	if f := fs[Fingerprint(refundFinding)]; f.Outcome != registry.FindingOpen {
+		t.Errorf("the finding declined without a risk is %s, want open", f.Outcome)
+	}
+	if f := fs[Fingerprint(unitFinding)]; f.Outcome != registry.FindingRebutted {
+		t.Errorf("the finding declined with a risk is %s, want rebutted", f.Outcome)
+	}
+	var rf2 ReviewFile
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewFile(2))), &rf2); err != nil {
+		t.Fatal(err)
+	}
+	if len(rf2.Findings) != 1 || rf2.Findings[0].Title != refundFinding.Title {
+		t.Fatalf("round 2 hands the writer %+v, want only the finding declined without a risk", rf2.Findings)
+	}
+	r.writerFixes(task, 2, fixedCredit(2), nil)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Exit != registry.ExitClean || len(sum.Declined) != 1 || sum.Declined[0].Title != unitFinding.Title ||
+		sum.Declined[0].Risk != "counting them changes the monthly statements" {
+		t.Fatalf("summary %+v, want the finding declined with its risk among the declined", sum)
+	}
+}
+
+// Review Focus 1: a round that ended needs_attention is review
+// unavailable, never clean: the task needs you saying so, the cycle ends
+// unavailable, the writer gets nothing and nothing is pushed or begun.
+func TestReviewUnavailableNeedsYouAndPushesNothing(t *testing.T) {
+	r := newReviewRig(t, outcome(pipeline.OutcomeNeedsAttention))
+	task, _ := r.reviewTask("PR-12369")
+	r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "review unavailable (needs_attention)" || got.Stage != "local_review" {
+		t.Fatalf("task %s at %s waits %q", got.State, got.Stage, got.WaitsWhat)
+	}
+	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitUnavailable {
+		t.Fatalf("cycles %+v", cs)
+	}
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 {
+		t.Fatalf("the writer got %d prompts, want none", len(ps))
+	}
+	if effs, err := r.reg.OpenEffects(r.ctx); err != nil || len(effs) != 0 {
+		t.Fatalf("effects %+v, %v", effs, err)
+	}
+	if fileIn(r.layout.FactoryTaskDir(task.ID), reviewSummaryFile) {
+		t.Fatal("an unavailable review left a summary for the ready card")
+	}
+}
+
+// A local round yields to magnum's real rounds: while magnum is busy no
+// round starts and the task says why; once it is not, the round runs.
+func TestLocalRoundWaitsWhileMagnumRunsARealRound(t *testing.T) {
+	r := newReviewRig(t, result())
+	r.magnum.set("a review round of magnum's runs")
+	task, _ := r.reviewTask("PR-12370")
+	r.run(4, nil)
+	if got := r.reload(task.ID); len(r.rv.calls()) != 0 || got.WaitsWho != "magnum" || !strings.Contains(got.WaitsWhat, "runs") {
+		t.Fatalf("%d rounds; task waits %q: %q", len(r.rv.calls()), got.WaitsWho, got.WaitsWhat)
+	}
+	r.magnum.set("")
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); len(r.rv.calls()) != 1 || got.Stage != "pr_body" {
+		t.Fatalf("%d rounds; task at %s", len(r.rv.calls()), got.Stage)
+	}
+}
+
+// A local round with Codex roles yields to the Codex soft cap: at or past
+// [usage] codex_soft no round starts, and the task says Codex's use.
+func TestLocalRoundWaitsAtTheCodexSoftCap(t *testing.T) {
+	r := newReviewRig(t, result())
+	r.cfg.Usage.CodexSoft = 80
+	r.used = 85
+	task, _ := r.reviewTask("PR-12371")
+	r.run(4, nil)
+	if got := r.reload(task.ID); len(r.rv.calls()) != 0 || got.WaitsWho != "usage" || !strings.Contains(got.WaitsWhat, "codex at 85%") {
+		t.Fatalf("%d rounds; task waits %q: %q", len(r.rv.calls()), got.WaitsWho, got.WaitsWhat)
+	}
+	r.used = 40
+	r.run(6, func() bool { return len(r.rv.calls()) == 1 })
+	if len(r.rv.calls()) != 1 {
+		t.Fatal("no round below the soft cap")
+	}
+}
+
+// A local round runs while no writer turn does: while an agent of the task
+// is at work in its copy, no round starts.
+func TestLocalRoundWaitsWhileTheWriterWorks(t *testing.T) {
+	r := newReviewRig(t, result())
+	task, _ := r.reviewTask("PR-12372")
+	r.rt.setAtWork("fx-writer")
+	r.run(4, nil)
+	if got := r.reload(task.ID); len(r.rv.calls()) != 0 || got.WaitsWho != waitAgent || !strings.Contains(got.WaitsWhat, "fx-writer") {
+		t.Fatalf("%d rounds; task waits %q: %q", len(r.rv.calls()), got.WaitsWho, got.WaitsWhat)
+	}
+	r.rt.setAtWork("")
+	r.run(6, func() bool { return len(r.rv.calls()) == 1 })
+	if len(r.rv.calls()) != 1 {
+		t.Fatal("no round once the writer stopped")
+	}
+}
+
+// Every round is a cycle with its findings: the heads before and after, the
+// review skill's hash and its exit, and each finding by its fingerprint,
+// its priority and whether it blocks; a blocking one the writer fixed is
+// fixed, a P3 stays open for the ready card.
+func TestEveryRoundIsACycleWithItsFindings(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding, nitFinding), result(nitFinding))
+	task, head := r.reviewTask("PR-12373")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	cs := r.cycles(task.ID)
+	if len(cs) != 2 || cs[0].HeadBefore != head || cs[0].HeadAfter == "" || cs[0].SkillHash == "" || cs[0].Ended.IsZero() || cs[1].Exit != registry.ExitClean {
+		t.Fatalf("cycles %+v", cs)
+	}
+	fs := r.findings(task.ID)
+	refund, nit := fs[Fingerprint(refundFinding)], fs[Fingerprint(nitFinding)]
+	if refund.Priority != "P1" || !refund.Blocking || refund.Outcome != registry.FindingFixed || refund.FirstCycle != 1 || refund.FixCommit != cs[0].HeadAfter {
+		t.Errorf("the P1 %+v", refund)
+	}
+	if nit.Priority != "P3" || nit.Blocking || nit.Outcome != registry.FindingOpen {
+		t.Errorf("the P3 %+v", nit)
+	}
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Exit != registry.ExitClean || len(sum.Leftovers) != 1 || sum.Leftovers[0].Title != nitFinding.Title {
+		t.Fatalf("summary %+v, want the P3 among the leftovers", sum)
+	}
+}
+
+// A Codex refusal in a local round makes the task Codex-never for good:
+// the round runs again with magnum's judge_fallback in place of the Codex
+// judge and without Codex's own review, and no later round runs a Codex
+// role; the refused round is never run on Codex again.
+func TestACodexRefusalInALocalRoundRunsLaterRoundsWithTheFallbackJudge(t *testing.T) {
+	refused := func(c evalrun.LocalCase) evalrun.LocalResult {
+		return evalrun.LocalResult{Outcome: pipeline.OutcomeRefused, Refused: config.KindCodex, Round: c.Round}
+	}
+	r := newReviewRig(t, refused, result(refundFinding), result())
+	task, _ := r.reviewTask("PR-12374")
+	r.run(6, func() bool { return len(r.rv.calls()) >= 2 && len(r.rt.promptsTo("fx-writer")) > 0 })
+	if got := r.reload(task.ID); !got.CodexNever {
+		t.Fatal("the task is not Codex-never after a Codex refusal")
+	}
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	calls := r.rv.calls()
+	if len(calls) != 3 {
+		t.Fatalf("%d rounds, want the refused one, its run again and round 2", len(calls))
+	}
+	for _, c := range calls[1:] {
+		if !slices.Contains(c.Roles, "claude-judge") {
+			t.Errorf("round %d roles %v, want the fallback judge", c.Round, c.Roles)
+		}
+		for _, role := range c.Roles {
+			if rl, ok := r.cfg.RoleByNameOrAlias(nil, role); ok && rl.AgentKind() == config.KindCodex {
+				t.Errorf("round %d after the refusal runs the Codex role %s", c.Round, role)
+			}
+		}
+	}
+	if calls[1].Round != 1 || calls[2].Round != 2 {
+		t.Fatalf("rounds %d, %d; want round 1 again, then round 2", calls[1].Round, calls[2].Round)
+	}
+}
+
+// A round that hangs ends at its cap and runs once more; a second hang is
+// review unavailable (timeout), and the task needs you.
+func TestALocalRoundThatHangsRunsOnceMoreThenNeedsYou(t *testing.T) {
+	r := newReviewRig(t, result())
+	r.rv.block = make(chan struct{}) // never closed: each round hangs
+	r.e.roundCap = 20 * time.Millisecond
+	task, _ := r.reviewTask("PR-12375")
+	r.run(8, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "review unavailable (timeout)" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task %s waits %q after %d rounds", got.State, got.WaitsWhat, len(r.rv.calls()))
+	}
+	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitUnavailable {
+		t.Fatalf("cycles %+v", cs)
+	}
+}
+
+// A round that went without a reviewer's report (its pane was lost
+// mid-round) is not read as clean on that alone: it runs once more, and
+// the round that has every report decides.
+func TestALocalRoundThatLostAReviewerRunsOnceMoreBeforeItCountsAsClean(t *testing.T) {
+	lost := func(c evalrun.LocalCase) evalrun.LocalResult {
+		res := result()(c)
+		res.Missing = []string{"claude-review"}
+		return res
+	}
+	r := newReviewRig(t, lost, result())
+	task, _ := r.reviewTask("PR-12376")
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task at %s after %d rounds, want pr_body after 2", got.Stage, len(r.rv.calls()))
+	}
+	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitClean {
+		t.Fatalf("cycles %+v, want the one round's cycle, clean", cs)
+	}
+}
+
+// A drain mid-round loses nothing: the round's cycle stays open, nothing
+// is read as its result and the task does not need you; after the restart
+// the same round runs again in that cycle (its number, so its leftover
+// workspace is closed by its label) and decides.
+func TestADrainMidRoundRunsTheRoundAgainAfterTheRestart(t *testing.T) {
+	r := newReviewRig(t, result())
+	r.rv.block = make(chan struct{})
+	task, _ := r.reviewTask("PR-12377")
+	r.startBlockedRound()
+	r.e.stopBackground() // the drain cancels the round
+	r.rv.mu.Lock()
+	r.rv.block = nil
+	r.rv.mu.Unlock()
+	if got := r.reload(task.ID); !isLive(got) {
+		t.Fatalf("task %s waits %q after the drain", got.State, got.WaitsWhat)
+	}
+	if cs := r.cycles(task.ID); len(cs) != 1 || !cs[0].Ended.IsZero() {
+		t.Fatalf("cycles %+v, want one still open", cs)
+	}
+	r.restart()
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	calls := r.rv.calls()
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(calls) != 2 || calls[1].Round != 1 {
+		t.Fatalf("task at %s after rounds %+v", got.Stage, calls)
+	}
+	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitClean {
+		t.Fatalf("cycles %+v, want the one cycle, clean", cs)
+	}
+}
+
+// A restart after a round ended but before the loop read it reads the
+// result the round left: the round does not run again.
+func TestARestartAfterARoundReadsItsResult(t *testing.T) {
+	r := newReviewRig(t, result())
+	task, _ := r.reviewTask("PR-12378")
+	r.run(3, func() bool { return len(r.rv.calls()) == 1 })
+	r.e.waitBackground()
+	r.restart()
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
+		t.Fatalf("task at %s after %d rounds, want pr_body after 1", got.Stage, len(r.rv.calls()))
+	}
+}
+
+// fileIn reports whether dir holds name.
+func fileIn(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return !errors.Is(err, os.ErrNotExist)
+}

@@ -730,7 +730,13 @@ func TestStartupCountsTheHeavyStagesThatStillRun(t *testing.T) {
 	h := newHarness(t)
 	first := h.task("PR-12362", registry.TaskActive, "local_review")
 	second := h.task("PR-12363", registry.TaskActive, "local_review")
-	a, err := h.reg.BeginAttempt(h.ctx, first.ID, "local_review")
+	// A local round is a cycle (review.go): open, with no result, its round
+	// may still run in magnum's herdr. A fix turn of the writer (an attempt
+	// of the review stage) is no heavy work.
+	if _, err := h.reg.BeginCycle(h.ctx, first.ID, strings.Repeat("ab", 20), ""); err != nil {
+		t.Fatal(err)
+	}
+	a, err := h.reg.BeginAttempt(h.ctx, second.ID, "local_review")
 	if err != nil {
 		t.Fatal(err)
 	}

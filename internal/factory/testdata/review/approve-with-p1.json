@@ -1,0 +1,6 @@
+{"status":"dry_run","run_id":"r-20261104T100000-5","event":"APPROVE",
+ "findings":{"P0":0,"P1":1,"P2":0,"P3":0},
+ "provenance":[
+  {"id":"F1","title":"Points skip the refunded activities","severity":"P1","path":"app/credit.rb","line":42,"sources":["codex-review"],"verdict":"posted"}],
+ "planned_review":{"event":"APPROVE","body":"No problems found. LGTM :shipit:","comments":[
+   {"path":"app/credit.rb","line":42,"body":"**[P1] Points skip the refunded activities**\n\nA refund leaves its points counted."}]}}

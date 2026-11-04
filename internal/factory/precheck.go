@@ -26,7 +26,9 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
@@ -313,7 +315,15 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	p.e.noteCheck(p.t.ID, "precheck: "+what)
 	run := ProofRun{Command: cmd}
 	start := time.Now()
-	res, err := p.e.script(p.ctx, p.c, cmd, "precheck "+what, p.limit)
+	var res execx.Result
+	var err error
+	if dbKeys[key] { // the copy's databases: in turn with the local review's reviewers (db-lock)
+		res, err = p.e.dbScript(p.ctx, p.c, cmd, "precheck "+what, p.limit, func(h dblock.Holder) {
+			p.e.noteCheck(p.t.ID, "precheck: "+what+" waits for the copy's databases ("+h.String()+")")
+		})
+	} else {
+		res, err = p.e.script(p.ctx, p.c, cmd, "precheck "+what, p.limit)
+	}
 	run.Took = time.Since(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
@@ -342,6 +352,25 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 		return run, false
 	}
 	return run, true
+}
+
+// dbKeys are the precheck's commands that use the copy's databases: they
+// run under its database lock (dbScript).
+var dbKeys = map[string]bool{"precheck.specs": true, "precheck.migrations": true}
+
+// dbScript is script under copy c's database lock, the one `magnum db-lock`
+// takes for the roles of a local round (Layout.DBLock of the copy): the
+// factory's spec and migration commands and the reviewers never use the
+// copy's databases at once. It waits for the lock within timeout, waiting
+// told who holds it; a lock that stays held is a command that did not
+// start, which the checks try again.
+func (e *Engine) dbScript(ctx context.Context, c Copy, script, label string, timeout time.Duration, waiting func(dblock.Holder)) (execx.Result, error) {
+	lock, err := dblock.Acquire(ctx, e.d.Layout.DBLock(c.Path), dblock.Holder{Role: "factory", Command: label, PID: os.Getpid()}, timeout, waiting)
+	if err != nil {
+		return execx.Result{Code: -1}, fmt.Errorf("the copy's database lock: %w", err)
+	}
+	defer lock.Release()
+	return e.script(ctx, c, script, label, timeout)
 }
 
 // offenseRe is a lint offense line: path:line[:column][:] message.

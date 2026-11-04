@@ -100,3 +100,49 @@ thread can be named before its first turn. Codex still titles the thread itself 
 first turn, so the namer also repeats the rename while magnum's turn works. `codex review` (the
 non-interactive subcommand) prints only its verdict on stdout and the whole transcript on stderr
 (172 bytes vs 7.5 KB for a one-line change), so shell roles with `capture = "stdout"` tee stdout only.
+
+## 2026-11-04 — the factory's local round with the unmodified judge (a static read; the live run is the operator's)
+
+The factory's design (section 6.5) asks for one hand-seeded local round with the unmodified judge before the
+local review is built, to see whether the judge survives the missing PR. No agent task may run a live round
+(AGENTS.md), so this is a static read of what the judge prompts, the skill, the reviewer prompts and
+`post-review` take from the PR, and the local block is shaped from it. The live run is the operator's step at
+the factory's first run: `TestLiveLocalRoundWithTheUnmodifiedJudge` in `internal/evalrun`, with
+`MAGNUM_LIVE_ENGINE=1` and `MAGNUM_LIVE_LOCAL=<checkout>,<owner/name>,<base sha>,<head sha>` (the checkout on
+the change's branch at its head); it runs the round as a replay runs one, under the live config, and with
+`MAGNUM_LIVE_LOCAL_BLOCK=1` a second round as the factory runs it. Record what it shows here.
+
+What a round of a synthetic PR number (no PR on GitHub) meets, by the static read:
+
+1. **The judge prompts.** `judge-initial.md` and `judge-own-pass.md` say "Review <url>" and carry the PR's
+   `url`, `number` and `pr` fields; the blind block skips the `state == open` check and takes `git diff
+   <base_sha>..<head_sha>` as the boundary, but still says "Read the PR description and the commits up to
+   `<head_sha>` only", which the skill reads from GitHub. Nothing else in the prompts calls GitHub.
+2. **The skill.** Section 1.3 opens with `gh api repos/{owner}/{repo}/pulls/{number}` (a 404 here, which a
+   judge may write as `blocked` or `error`: "PR discovery ... blocks the review"); section 2 reads the PR's
+   description, commits, review comments and replies; section 7 reads `base.repo.private` for a nearby
+   security finding and checks `gh api user` before its first GitHub write. A dry run makes no GitHub write.
+3. **claude-review.** `claude-review.md` starts with `/code-review <url> <effort>`: the code-review skill
+   reads the PR from its URL, which does not exist, so its report may be missing or empty.
+   `claude-simplify.md` names the URL in its first sentence but reviews the local diff; codex-review is
+   `codex review --base <base_sha>` on the local diff.
+4. **post-review.** A blind dry run's line carries `--dry-run --local-base <base_sha>` when the round knows
+   the base: it checks the anchors against `git diff <base> <head>` in the checkout and reads nothing from
+   GitHub. Without a base it would read the PR's files from GitHub.
+5. **The round.** A blind dry run reads nothing of the PR from GitHub (no related PRs, failing checks,
+   evidence map, earlier reviews or threads), but it reads the Jira issue a key in the title names, and an
+   App identity's pane environment mints its token from GitHub.
+
+So the local block: `{{if .Local}}` in judge-shared.md's `blind` block (no `gh` call, the PR checks of
+sections 1 and 7 skipped, the local diff as the boundary, the title and description from `description_file`
+and the ticket from `ticket`, the skill's "Local round") and `local: true` with `description_file` among the
+`<magnum>` fields; a "Local round" section in the skill (`base.repo.private` counts as false, a product
+question marked `"question": true` in the provenance); `claude-review-local.md` without `/code-review <url>`,
+as the review candidate's `claude-review.md`; and in the round, the factory's base always (`--local-base`),
+its `ticket.md` in place of a Jira read, and a gh identity. The live rounds render as before (the judge
+goldens are unchanged).
+
+Open for the live run: whether the unmodified judge ends `blocked` or `error` on the 404 or reviews the local
+diff anyway; whether `claude-review-local.md`, without the code-review skill, finds what `/code-review` finds
+(or whether `/code-review <effort>` with a local target reviews the branch's diff); whether claude-simplify's
+URL leads it to a `gh` call; and a round's minutes and tokens.

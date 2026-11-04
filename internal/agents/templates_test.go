@@ -730,6 +730,7 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_continue_notes", "judge-continue.md", withNotes},
 		{"judge_recovery_notes", "judge-recovery.md", withNotes},
 		{"claude_initial", "claude-review.md", roleFixture()},
+		{"claude_review_local", "claude-review-local.md", localReviewer()},
 		// The operator's stakes line: the judge's <magnum> field after
 		// prepass, the claude reviewer's sentence (every prompt in
 		// TestTheJudgePromptCarriesTheStakesLine).
@@ -877,7 +878,7 @@ func checkGolden(t *testing.T, golden, got string) {
 }
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
-	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "fix.md", "judge-continue.md",
+	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review-local.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "fix.md", "judge-continue.md",
 		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-critic.md", "notes-curate.md", "retro.md",
 		"skill-edit.md", "triage.md", "whiteboard.md"}
 	// The factory's prompts (factory-*.md) render with the factory's own data

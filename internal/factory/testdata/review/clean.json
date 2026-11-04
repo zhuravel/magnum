@@ -1,0 +1,4 @@
+{"status":"dry_run","run_id":"r-20261104T100000-6","verdict":"clean","event":"APPROVE",
+ "findings":{"P0":0,"P1":0,"P2":0,"P3":0},"provenance":[],
+ "previous_findings":{"fixed":0,"open":{"P0":0,"P1":0,"P2":0,"P3":0},"answered":0},
+ "planned_review":{"event":"APPROVE","body":"No problems found. LGTM :shipit:","comments":[]}}

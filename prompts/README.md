@@ -44,6 +44,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `judge-shared.md` | every judge prompt: the blocks they share (see Shared blocks); never a prompt of its own | judge |
 | `model-fallback.md` | any session role, the judge included, after magnum switched its model because the model hit its own limit | fallback |
 | `claude-review.md` | claude-review, first review | role |
+| `claude-review-local.md` | claude-review in the factory's local round of a change before its PR exists: the factory's review candidate has it as its `claude-review.md` (it reviews `git diff .BaseSHA..HeadSHA` in the copy, names `.DescriptionFile`, and runs no `/code-review <url>`, as there is no PR); never a live round's | role |
 | `claude-rereview.md` | claude-review, new head | role |
 | `claude-restart.md` | claude-review, a push cut its review short and the round restarted on the new head | role |
 | `claude-simplify.md` | claude-simplify | role |
@@ -58,6 +59,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `factory-amend.md` | the roles of the report stage (`fx-judge`) in the turn a `no_open_questions` or `reproduced` gate runs when your answers change the plan: they amend `report.md`, `acceptance.json` and `questions.json` with `answers.md` | factory |
 | `factory-critic.md` | `fx-critic` and its Claude fallback `fx-critic-claude`, which criticize the plan of a wide change | factory |
 | `factory-writer.md` | `fx-writer`, which writes the change test first | factory |
+| `factory-review-fix.md` | the coding stage's roles (`fx-writer`) in the local review's fix turn: they fix or decline (with the risk of the suggested change) each finding of `.Review`, commit, and write `.ReviewReply`, `proof.json` and their questions file again | factory |
 | `factory-shared.md` | every factory prompt: the blocks they share, the factory mode's rules among them (see Factory prompts); never a prompt of its own | factory |
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
@@ -123,7 +125,7 @@ does not change a rendered prompt: the goldens in `internal/agents/testdata` pin
 |---|---|---|
 | `skill` | the skill link and the sentence to read it first | initial, rereview, recovery, own pass, continue |
 | `simplify` | the proposals of claude-simplify's report | initial, rereview, recovery |
-| `blind` | the blind evaluation rules | initial, own pass |
+| `blind` | the blind evaluation rules; with `.Local`, the local round's instead (no `gh` call, `git diff .BaseSHA..HeadSHA` as the boundary, the title and description from `description_file` and the ticket from `ticket`, the skill's "Local round") | initial, own pass |
 | `post-merge-rereview` | the post-merge rules of a re-review | rereview, recovery |
 | `hold-approval` | the approval held for a full pass | rereview, recovery |
 | `no-approval` | the approval the approval's gates refuse | initial, rereview, recovery, continue |
@@ -172,6 +174,7 @@ does not change a rendered prompt: the goldens in `internal/agents/testdata` pin
 | `.DryRun` | plan the review without posting it |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (`magnum review` of a merged PR): post a COMMENT asking for follow-ups; `.NoFindingsEvent` and `.BlockingEvent` are both `COMMENT`. The judge prompts render `post_merge: true` only then, and the initial, rereview, recovery and own-pass prompts the post-merge rules (`merged == true` for `state == open`, the `**Post-merge review**` body start, follow-ups, `in a follow-up`) |
 | `.Blind` | a `magnum eval` replay (with `.DryRun`): the initial and own-pass prompts render `blind: true` and the blind rules (the local diff of `.BaseSHA..HeadSHA` as the boundary, nothing written about the PR afterwards, no commit newer than `.HeadSHA`) only then |
+| `.Local`, `.DescriptionFile` | the factory's local round of a change before its PR exists (with `.Blind` and `.DryRun`; `pipeline.RoundInput.Local`): every judge prompt renders `local: true` and `description_file` (the factory's `description.md`: the change's title and body) beside `ticket` (the factory's `ticket.md`, read from no Jira by the round), and the initial and own-pass prompts the local rules in place of the blind ones; the base is always the factory's, so `post_review` carries `--local-base`. Zero in every round of a PR on GitHub, whose prompts render as they always did (`TestLiveJudgePromptsRenderUnchanged`) |
 | `.SkillPath` | the role's `skill`, absolute; in the daemon, the copy it took at startup. The initial, rereview, recovery, continue and own-pass prompts start with its link and "Read <path> first, by itself, unless this session already read that file, and follow it; load no other skill." (with Codex's skills instructions off, nothing else tells the judge to open it; by itself, because Codex drops the middle of one tool call's output over 10,000 tokens) |
 | `.Model`, `.Effort` | the judge role's `model` (else its kind's `default_model`), and its effort for this round: `rereview_effort` in a re-review, a delta check or a same-head recovery (when set), else `effort` |
 | `.EffortInPrompt` | the kind sets the effort only at launch (its `effort` args, as codex) and `.Effort` is not the role's `effort`: a running session cannot switch, so the prompt asks for `.Effort` in words |
@@ -527,7 +530,7 @@ answers reach the agents as files of the task's directory (`~/.local/share/magnu
 | `.Ticket`, `.Guidance`, `.Prompt`, `.Answers`, `.Rules` | `ticket.md`, `guidance.md` (your words after a key), `prompt.md` (a free prompt), `answers.md` and `rules.md` in the task's directory, each empty while its file is not there |
 | `.Findings` | the role's `findings-<role>.md` in a findings stage (named for the role the stage names, so a Codex role's Claude fallback writes the same file), else the pattern of every investigator's file, `findings-*.md` |
 | `.Questions` | the file the role writes its questions to: `questions.json` in the judge's report stage, `questions-<role>.json` for any other role (the critic's join the judge's in one batch) |
-| `.Report`, `.Acceptance`, `.Proof`, `.Review` | the judge's `report.md` and `acceptance.json`, the writer's `proof.json`, and the local review's findings for the writer (empty before that stage) |
+| `.Report`, `.Acceptance`, `.Proof`, `.Review`, `.ReviewReply` | the judge's `report.md` and `acceptance.json`, the writer's `proof.json`, and in the local review's fix turn (`factory-review-fix.md`) the newest round's findings for the writer (`review-<n>.json`) and the file of its reply (`review-reply-<n>.json`); both empty in any other prompt |
 | `.ErrorSkill` | the repository's `error_skill` (`[[factory.repo]]`): the reproducer reads a ticket's error through it, read-only; empty, no prompt names an error tracker |
 | `.DBLockCommand` | the copy's `magnum db-lock --checkout <copy> --role <role> --` line for the role as it runs, shell-quoted: every command that touches the copy's databases runs through it |
 | `.Port` | the port of the copy's local server (0 when the copy's env names none) |
@@ -558,6 +561,16 @@ gates run one turn of their own: when your answers change the plan, the roles of
 `factory-amend.md`, with the same data as the judge's report stage, and the turn passes on the `report` end
 fact with `report.md`, `acceptance.json` and `questions.json` all newer than `answers.md`, so the prompt
 asks for all three again.
+
+The local review (a `review` stage, spec 6.5) runs magnum's review of the change in the copy as a blind dry
+run, with this build's prompts and judge skill as the factory's review candidate
+(`<data>/factory/review-candidate/`, written at the factory daemon's start: `claude-review-local.md` as its
+`claude-review.md`; magnum's live rounds never read it). A round that blocks hands its findings to the writer
+in one fix turn: the coding stage's roles get `factory-review-fix.md`, each turn an attempt of the review
+stage, and the turn passes on the `proof` end fact (the factory's proof and precheck at the new head) and
+the review's own: `review-reply-<n>.json` newer than the turn's start, each reply `fixed` or `declined`, and a
+commit since the round unless every finding was declined with its risk (a decline without one counts as
+open).
 
 ### Repository notes
 

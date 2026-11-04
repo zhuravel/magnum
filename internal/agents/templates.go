@@ -333,6 +333,15 @@ type JudgeData struct {
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
+	// Local (with Blind and DryRun): the factory's local round of a change
+	// before its PR exists (pipeline.RoundInput.Local), rendered as
+	// `local: true` with `description_file`, only then: no PR is on GitHub,
+	// so the judge reads the title and the body from DescriptionFile (the
+	// factory's description.md) and the ticket from TicketFile, and makes no
+	// gh call (the skill's "Local round"). A round of a PR on GitHub leaves
+	// both zero, and its prompts render as they always did.
+	Local           bool
+	DescriptionFile string
 	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
 	// (pipeline.RoundInput.PostMerge), rendered as `post_merge: true` only
 	// then; the skill posts a COMMENT that asks for follow-ups, and
@@ -773,6 +782,11 @@ type RoleData struct {
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
+	// DescriptionFile is a local round's description.md (pipeline.Local):
+	// the change's title and body, which no PR on GitHub holds yet. Only the
+	// local reviewer prompt (claude-review-local.md) names it; "" = a round
+	// of a PR on GitHub.
+	DescriptionFile string
 	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
 	// (pipeline.RoundInput.PostMerge); the prompts that name the PR say it
 	// is merged and to review it anyway.

@@ -671,6 +671,11 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		}
 	}
 	in.BaseSHA, in.ForcePushed = e.headContext(ctx, job.slot.Path, base, reviewed, rs.target)
+	if l := job.local; l != nil {
+		// The factory's base, whatever the checkout's base branch says:
+		// post-review anchors on that local diff (--local-base).
+		in.BaseSHA, in.Local = l.base, &pipeline.Local{DescriptionFile: l.description, TicketFile: l.ticket}
+	}
 	if sinceReview(rs.kind) && job.evalHead == "" {
 		in.BaseMerged = e.baseMerged(ctx, job, reviewed, rs.target)
 	}

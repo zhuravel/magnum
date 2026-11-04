@@ -437,6 +437,14 @@ type RoundInput struct {
 	// judge takes the local diff, not GitHub's (the PR may have moved on or
 	// closed). Rendered as `blind: true` in the prompts.
 	Blind bool
+	// Local (with Blind and DryRun): the round is the factory's local round
+	// of a change before its PR exists (engine.RunLocal): no PR on GitHub to
+	// read, so the judge takes the title and the body from DescriptionFile
+	// and the ticket from TicketFile, as data, and the reviewers the
+	// description too (agents.JudgeData.Local, RoleData.DescriptionFile).
+	// nil = a round of a PR on GitHub, whose prompts render as they always
+	// did.
+	Local *Local
 	// StoredReports (magnum eval --judge-only, with the Round of the stored
 	// runs): the reviewers do not run; their reports are the files in the
 	// round's report directory that their runs of Round on TargetSHA
@@ -489,6 +497,16 @@ type RoundInput struct {
 	// repository's other PRs that change the same paths (related.go), and
 	// history.json leaves out the paths related_ignore lists (history.go).
 	Related config.Related
+}
+
+// Local is what a local round (RoundInput.Local) hands its roles as files in
+// place of GitHub's PR: DescriptionFile, the change's title and body as its
+// PR will carry them (description.md), and TicketFile, the task's ticket
+// (ticket.md: its Jira issue, or the operator's request; "" = none). Both
+// are absolute paths, written before the round; their text is data and
+// never reaches a prompt.
+type Local struct {
+	DescriptionFile, TicketFile string
 }
 
 // Switched is the checkout after RoundInput.Switch.

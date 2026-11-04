@@ -1,0 +1,6 @@
+{"status":"dry_run","run_id":"r-20261104T100000-9","verdict":"non_blocking","event":"COMMENT",
+ "findings":{"P0":0,"P1":0,"P2":1,"P3":0},
+ "provenance":[
+  {"id":"F1","title":"Should a refund take back the points it gave?","severity":"P2","path":"app/credit.rb","line":12,"sources":["judge"],"verdict":"posted","question":true}],
+ "planned_review":{"event":"COMMENT","body":"Fix 1 problem before merging.","comments":[
+   {"path":"app/credit.rb","line":12,"body":"**[P2] Should a refund take back the points it gave?**\n\nThe ticket says nothing of refunds."}]}}
