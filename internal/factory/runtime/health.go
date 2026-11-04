@@ -607,10 +607,11 @@ func (r *Runtime) dueCheck(id int64, now time.Time) bool {
 	return true
 }
 
-// proving reports whether the proof that ledger entry id never arrived is
-// under way: a read found no such turn, and the next after RedeliverAfter
-// decides.
-func (r *Runtime) proving(id int64) bool {
+// Proving reports whether the proof that ledger entry id never arrived is
+// under way: a read (Reconcile) found no such turn in a transcript written
+// past the prompt, and the read after RedeliverAfter decides. It is the
+// runtime's own: a fresh runtime after a restart starts every proof again.
+func (r *Runtime) Proving(id int64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, ok := r.misses[id]
@@ -649,7 +650,7 @@ func (r *Runtime) reconcileUnknown(ctx context.Context) {
 				Reason: "the prompt to " + e.Role + " never arrived (its transcript, read twice, has no such turn): it goes once more"})
 			continue
 		}
-		if got == registry.DeliveredUnknown && now.Sub(e.Sent) >= UnknownAfter && !r.proving(e.ID) {
+		if got == registry.DeliveredUnknown && now.Sub(e.Sent) >= UnknownAfter && !r.Proving(e.ID) {
 			// No transcript tells, and the role gets no prompt meanwhile:
 			// the operator looks at the pane and lets it go (LetGo).
 			r.emit(unknownKey(e.ID), Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: EventDeliveryUnknown,

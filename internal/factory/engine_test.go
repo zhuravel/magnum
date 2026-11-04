@@ -85,6 +85,43 @@ type fakeRuntime struct {
 	recoverErr  error
 	verdict     func(e registry.LedgerEntry) string
 	unknownNext map[string]bool
+	// failRecover is Recover's error for a task (on top of recoverErr).
+	// provable are the entries whose transcript can prove they never
+	// arrived (written past the prompt, the run never submitted): as the
+	// runtime's, a read of one that settles nothing begins its proof
+	// (proving, Proving), and a read that settles it, or one of an entry
+	// that cannot be proven, ends it.
+	failRecover map[int64]error
+	provable    map[int64]bool
+	proving     map[int64]bool
+}
+
+// canProve makes entry id provable: its transcript is written past its
+// prompt, and its run was never submitted.
+func (f *fakeRuntime) canProve(id int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.provable == nil {
+		f.provable = map[int64]bool{}
+	}
+	f.provable[id] = true
+}
+
+// Proving reports whether a read began entry id's proof and none settled it.
+func (f *fakeRuntime) Proving(id int64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.proving[id]
+}
+
+// setFailRecover makes Recover fail for task id with err (nil: not).
+func (f *fakeRuntime) setFailRecover(id int64, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failRecover == nil {
+		f.failRecover = map[int64]error{}
+	}
+	f.failRecover[id] = err
 }
 
 // note adds what to the calls (a collaborator's call in the same order).
@@ -105,6 +142,9 @@ func (f *fakeRuntime) Recover(_ context.Context, t registry.Task) ([]string, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "recover "+TaskKey(t))
+	if err := f.failRecover[t.ID]; err != nil {
+		return nil, err
+	}
 	return f.changed[t.ID], f.recoverErr
 }
 
@@ -421,7 +461,8 @@ func (f *fakeRuntime) Park(_ context.Context, t registry.Task) error {
 
 // Reconcile records the call and answers verdict's verdict (unknown without
 // one), settling it as the runtime does: yes marks the entry delivered and
-// its run at work, no marks it never sent and abandons its run.
+// its run at work, no marks it never sent and abandons its run. An unknown
+// read of a provable entry begins its proof; any other read ends it.
 func (f *fakeRuntime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, fmt.Sprintf("reconcile %d", e.ID))
@@ -431,6 +472,12 @@ func (f *fakeRuntime) Reconcile(ctx context.Context, e registry.LedgerEntry) (st
 	if verdict != nil {
 		v = verdict(e)
 	}
+	f.mu.Lock()
+	if f.proving == nil {
+		f.proving = map[int64]bool{}
+	}
+	f.proving[e.ID] = v == registry.DeliveredUnknown && f.provable[e.ID]
+	f.mu.Unlock()
 	if v == registry.DeliveredUnknown || reg == nil {
 		return v, nil
 	}

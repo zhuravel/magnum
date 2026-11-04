@@ -141,12 +141,14 @@ func TestStartupRunsTheRecoveryStepsInOrder(t *testing.T) {
 }
 
 // A herdr that does not answer at the startup holds the agents' recovery
-// until it does: the first tick herdr answers runs it, once.
-func TestTheAgentsAreRecoveredOnTheFirstTickHerdrAnswers(t *testing.T) {
+// until it does: once its try is due, the first tick herdr answers runs
+// it, once, and a tick herdr does not answer runs nothing.
+func TestTheAgentsAreRecoveredOnceHerdrAnswers(t *testing.T) {
 	h := newHarness(t)
 	h.stage(config.FactoryStageAgents, idleStage)
 	h.task("PR-12405", registry.TaskActive, "investigate")
-	h.rt.recoverErr = errors.New("herdr: dial unix herdr.sock: connect: no such file or directory")
+	down := errors.New("herdr: dial unix herdr.sock: connect: no such file or directory")
+	h.rt.recoverErr = down
 
 	h.startup()
 	if got := h.rt.callList(); !slices.Equal(got, []string{"recover PR-12405", "workspaces"}) {
@@ -155,7 +157,13 @@ func TestTheAgentsAreRecoveredOnTheFirstTickHerdrAnswers(t *testing.T) {
 	if evs := h.events(0, "recover"); len(evs) != 1 || evs[0].Phase != registry.PhaseFail {
 		t.Fatalf("recover events %+v, want the failure", evs)
 	}
-	h.rt.recoverErr = nil
+	h.clock.Add(time.Minute)
+	h.e.d.HerdrUp = func(context.Context) error { return down }
+	h.tick()
+	if got := h.rt.callList(); len(got) != 2 {
+		t.Fatalf("calls %q on a tick herdr did not answer", got)
+	}
+	h.rt.recoverErr, h.e.d.HerdrUp = nil, nil
 	h.tick()
 	h.tick()
 	if got := h.rt.callList(); !slices.Equal(got, []string{"recover PR-12405", "workspaces", "recover PR-12405", "workspaces"}) {
@@ -778,4 +786,216 @@ func TestAClaimCutByACrashRunsAgainAfterTheRestart(t *testing.T) {
 		t.Fatalf("task holds %q after %d claims, want factory1 from the claim run again", got.Copy, h.copies.claimCount())
 	}
 	h.wantClaimsClosed(task.ID)
+}
+
+// undeliveredEvent is the observe pass's word that entry e's prompt never
+// arrived, its second read having proven it (the runtime settles it first).
+func (h *harness) undeliveredEvent(e registry.LedgerEntry) {
+	h.t.Helper()
+	h.rt.setVerdict(registry.DeliveredNo)
+	if v, err := h.rt.Reconcile(h.ctx, e); err != nil || v != registry.DeliveredNo {
+		h.t.Fatalf("Reconcile = %s, %v", v, err)
+	}
+	h.rt.setVerdict(registry.DeliveredUnknown)
+	h.observeEvents(runtime.Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: runtime.EventUndelivered,
+		Reason: "the prompt to " + e.Role + " never arrived (its transcript, read twice, has no such turn): it goes once more"})
+}
+
+// Task 9's N5 end to end: a prompt of unknown delivery older than
+// runtime.UnknownAfter whose proof the startup's read began (its transcript
+// is written past it) holds its task, which never needs you meanwhile; the
+// proof's "no" lets the role have its prompt once more, and once only.
+func TestARestartMidProofHoldsTheTaskAndNeverCallsYou(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12430", "bug", "investigate")
+	h.rt.sendUnknown("fx-repro")
+	h.startStage(task)
+	entry := h.entryOf(task.ID, "fx-repro")
+	h.rt.canProve(entry.ID)
+	h.clock.Add(runtime.UnknownAfter + time.Minute)
+
+	h.crash() // the startup's read begins the proof
+	h.startStage(task)
+	h.tick()
+	h.waitsOn(task.ID, registry.TaskActive, waitAgent, "prompt delivery unknown (fx-repro)")
+	if evs := h.events(task.ID, "alert"); len(evs) != 0 {
+		t.Fatalf("alerts %+v while the proof runs, want none", evs)
+	}
+
+	h.undeliveredEvent(entry)
+	h.tick()
+	ps := h.rt.promptsTo("fx-repro")
+	if len(ps) != 2 || ps[1].Text != ps[0].Text {
+		t.Fatalf("fx-repro's prompts %+v, want its first prompt once more", ps)
+	}
+	h.tick()
+	h.crash()
+	h.startStage(task)
+	if n := len(h.rt.promptsTo("fx-repro")); n != 2 {
+		t.Fatalf("fx-repro got %d prompts, want 2", n)
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == waitAgent {
+		t.Fatalf("task %s waits %q: %q, want at work", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+}
+
+// A task sent to you for a prompt nobody could tell yet comes back once a
+// proof settles it: the wait names the prompts still unknown, and with none
+// left the task goes back to work and each role gets its prompt once more.
+func TestAProofThatAPromptNeverArrivedBringsTheTaskBackFromYou(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12431", "bug", "investigate")
+	h.rt.sendUnknown("fx-repro")
+	h.rt.sendUnknown("fx-cause")
+	h.startStage(task)
+	repro, cause := h.entryOf(task.ID, "fx-repro"), h.entryOf(task.ID, "fx-cause")
+	h.clock.Add(runtime.UnknownAfter)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-repro")})
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-repro", "fx-cause"))
+
+	h.undeliveredEvent(repro)
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-cause"))
+	h.undeliveredEvent(cause)
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == waitsYou {
+		t.Fatalf("task %s waits %q: %q after both proofs, want at work", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	h.tick()
+	h.tick()
+	for _, role := range []string{"fx-repro", "fx-cause"} {
+		if ps := h.rt.promptsTo(role); len(ps) != 2 || ps[1].Text != ps[0].Text {
+			t.Errorf("%s's prompts %+v, want its first prompt once more", role, ps)
+		}
+	}
+	if n := len(h.rt.promptsTo("fx-history")); n != 1 {
+		t.Fatalf("fx-history got %d prompts, want 1", n)
+	}
+}
+
+// The agents' recovery that fails for a reason of the task's own (its
+// store, not herdr) is not run again on every tick: it backs off, runs
+// again only for the tasks it failed for, and tells each cause once.
+func TestTheAgentsRecoveryBacksOffAndRetriesOnlyWhatFailed(t *testing.T) {
+	h := newHarness(t)
+	h.stage(config.FactoryStageAgents, idleStage)
+	failing := h.task("PR-12432", registry.TaskActive, "investigate")
+	h.task("PR-12433", registry.TaskActive, "investigate")
+	h.rt.setFailRecover(failing.ID, errors.New("agents: recover pr 1: database is locked"))
+
+	h.startup()
+	want := []string{"recover PR-12432", "recover PR-12433", "workspaces"}
+	if got := h.rt.callList(); !slices.Equal(got, want) {
+		t.Fatalf("startup ran %q, want %q", got, want)
+	}
+	h.tick()
+	h.tick()
+	if got := h.rt.callList(); !slices.Equal(got, want) {
+		t.Fatalf("calls %q: the recovery ran again before its backoff", got)
+	}
+	h.clock.Add(time.Minute)
+	h.tick()
+	want = append(want, "recover PR-12432")
+	if got := h.rt.callList(); !slices.Equal(got, want) {
+		t.Fatalf("calls %q, want %q: only the task that failed", got, want)
+	}
+	if evs := h.events(0, "recover"); len(evs) != 1 || evs[0].Phase != registry.PhaseFail {
+		t.Fatalf("recover events %+v, want the cause told once", evs)
+	}
+	h.rt.setFailRecover(failing.ID, nil)
+	h.clock.Add(2 * time.Minute)
+	h.tick()
+	h.clock.Add(time.Hour)
+	h.tick()
+	want = append(want, "recover PR-12432")
+	if got := h.rt.callList(); !slices.Equal(got, want) {
+		t.Fatalf("calls %q, want %q: no more once it went through", got, want)
+	}
+}
+
+// A retry of a task that waits for your answers is refused, naming how to
+// answer: the stage would only ask the same batch again.
+func TestRetryOfATaskThatWaitsForYourAnswersIsRefused(t *testing.T) {
+	h := newHarness(t)
+	task := h.gateTask("PR-12434", "feature", whenQuestion)
+	h.tick()
+	before := h.reload(task.ID)
+	if before.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s waits %q, want your answers", before.State, before.WaitsWhat)
+	}
+	q := h.retry(task.ID)
+	if q.State != registry.RequestFailed || !strings.Contains(q.Result, "magnum factory answer") {
+		t.Fatalf("retry %s: %q, want refused naming magnum factory answer", q.State, q.Result)
+	}
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, before.WaitsWhat)
+	if evs := h.events(task.ID, "alert"); len(evs) != 1 {
+		t.Fatalf("alerts %+v, want the batch's one", evs)
+	}
+}
+
+// A prompt you let go that started a later turn of a role (here the one
+// that hands it your answers) is never passed on a file its earlier turn
+// wrote: only a file written after that prompt holds.
+func TestALetGoAnswersPromptNeedsTheRolesNewFile(t *testing.T) {
+	h := newHarness(t)
+	codingEndsOnFindings(h)
+	task := h.kindTask("PR-12435", "feature", "coding")
+	h.startStage(task)
+	h.taskFile(task.ID, findingsFile("fx-writer"), "committed abc1234\n")
+	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("Reuse CreditMailer?", 0, "yes", "no")))
+	h.ended(task, "fx-writer")
+	h.tick()
+	h.clock.Add(time.Minute)
+	h.rt.sendUnknown("fx-writer")
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "yes"}})
+	if ps := h.rt.promptsTo("fx-writer"); len(ps) != 2 || !strings.HasPrefix(ps[1].Text, answersLead) {
+		t.Fatalf("the writer's prompts %+v, want its answers", ps)
+	}
+	h.clock.Add(runtime.UnknownAfter)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-writer")})
+	if _, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-writer", Surface: "screen"}); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, "the prompt to fx-writer was let go, and its turn is not watched: once "+
+		"findings-fx-writer.md is written (tell its agent in its pane), retry the task; or stop it")
+
+	h.taskFile(task.ID, findingsFile("fx-writer"), "committed def5678 with your answer\n")
+	h.retry(task.ID)
+	if got := h.reload(task.ID); got.Stage != "local_review" {
+		t.Fatalf("task %s at %s waits %q, want past coding on the file written after your answers", got.State, got.Stage, got.WaitsWhat)
+	}
+}
+
+// Your retry of a task at its publish runs the publish's own checks again
+// before anything is pushed: a branch that moved since the card needs you
+// again and nothing leaves the Mac; once it is back, the retry publishes.
+func TestARetryAtThePublishRunsItsGuardsAgain(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toCard("PR-12436")
+	r.gh.mu.Lock()
+	r.gh.active = "alice"
+	r.gh.mu.Unlock()
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	if got := r.published(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "gh acts as alice") {
+		t.Fatalf("task %s waits %q, want you for the gh account", got.State, got.WaitsWhat)
+	}
+	r.gh.mu.Lock()
+	r.gh.active = ""
+	r.gh.mu.Unlock()
+	moved := r.commit("PR-12436 a commit after the card", map[string]string{"app/notes.rb": "# moved\n"})
+
+	r.retry(task.ID)
+	r.run(3, nil)
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "the branch changed after you read it") ||
+		!strings.Contains(got.WaitsWhat, short(moved)) || r.remoteHead(task.Branch) != "" || len(r.gh.createCalls()) != 0 {
+		t.Fatalf("task %s waits %q; remote %q, %d PRs: want nothing pushed on a moved branch", got.State, got.WaitsWhat,
+			r.remoteHead(task.Branch), len(r.gh.createCalls()))
+	}
+	r.git(r.copyDir, "reset", "--quiet", "--keep", head)
+	r.retry(task.ID)
+	if got := r.published(task.ID); got.State != registry.TaskPublished || r.remoteHead(task.Branch) != head {
+		t.Fatalf("task %s waits %q, remote %q: want published at %s", got.State, got.WaitsWhat, r.remoteHead(task.Branch), short(head))
+	}
 }

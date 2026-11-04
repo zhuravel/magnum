@@ -167,10 +167,13 @@ type stageRole struct {
 	// ok: its end fact held at its run's end; failed: it did not after the
 	// nudge (the file), and the task waits on you; letGo: its last run held
 	// only a prompt you let go (runtime.LetGoWhy), so its turn is not
-	// watched, and the task waits on you until its end fact holds.
-	ok     bool
-	failed string
-	letGo  bool
+	// watched, and the task waits on you until its end fact holds in files
+	// written after that prompt went (letGoSince: a file of an earlier turn
+	// is no end of it).
+	ok         bool
+	failed     string
+	letGo      bool
+	letGoSince time.Time
 	// asking: its run ended with questions that wait for your answers (the
 	// stage is suspended).
 	asking bool
@@ -431,12 +434,16 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 	var evs []runtime.Event
 	for _, r := range run.roles {
 		last := ""
+		var lastSent time.Time
 		for _, en := range entries {
 			if en.AttemptID != a.ID || en.Role != r.runAs.Name || en.Delivered == registry.DeliveredNo {
 				continue
 			}
 			r.prompted = true
 			r.runs[en.RunID] = true
+			if en.RunID != last {
+				lastSent = en.Sent // the run's first prompt: a nudge riding on it keeps it
+			}
 			switch {
 			case strings.HasPrefix(en.Text, answersLead): // a new turn: its own nudge
 				r.nudged = false
@@ -453,6 +460,9 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		ev, err := e.lastRunEvent(ctx, t, r, last)
 		if err != nil {
 			return nil, nil, err
+		}
+		if r.letGo {
+			r.letGoSince = lastSent
 		}
 		if ev != nil {
 			evs = append(evs, *ev)
@@ -786,6 +796,9 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 			continue
 		}
 		p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
+		if p == nil && r.letGo {
+			p = e.beforeLetGo(t, st, r)
+		}
 		if p == nil && run.turn.review != nil {
 			p = run.turn.review.replyProblem(dir, run.since(a))
 		}
@@ -818,6 +831,26 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		r.ok, r.failed, r.letGo = true, "", false
 	}
 	return ""
+}
+
+// beforeLetGo is the problem of a role r whose turn was a prompt you let go
+// (sent at r.letGoSince) when its main output (the first file of its stage
+// st in the task's directory, outputs) was written before that prompt: a
+// file of its earlier turn (the one that asked the questions the prompt
+// answered, say) is no end of that turn. A coding stage's end is the
+// factory's checks at the head, which a turn that never ran does not pass:
+// proof.json itself may stay as it was.
+func (e *Engine) beforeLetGo(t *registry.Task, st config.FactoryStage, r *stageRole) *endProblem {
+	outs := e.outputs(*t, st, r.role)
+	if st.End == config.FactoryEndProof || len(outs) == 0 || r.letGoSince.IsZero() {
+		return nil
+	}
+	fi, err := os.Stat(outs[0])
+	if err == nil && !fi.ModTime().Before(r.letGoSince) {
+		return nil
+	}
+	name := filepath.Base(outs[0])
+	return &endProblem{file: name, why: "written before the prompt you let go (" + r.letGoSince.Local().Format("15:04:05") + ")"}
 }
 
 // letGoWait is the wait of a task whose role's turn was a prompt you let go
@@ -963,15 +996,16 @@ func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole,
 // (the ledger entries es of task t): it is sent nothing (Review Focus 2),
 // and the task waits on it, naming every such prompt ("agent: prompt
 // delivery unknown (fx-repro)"), until a read settles it or you let it go.
-// Once a prompt is runtime.UnknownAfter old, the task needs you to look at
-// its pane (a needsYou), as the observe pass's EventDeliveryUnknown says;
-// the stage says it itself, so a prompt told of while the task needed you
-// for something else is not lost. Else the wait is a held error.
+// Once a prompt is runtime.UnknownAfter old with no proof under way that it
+// never arrived (unknownToYou), the task needs you to look at its pane (a
+// needsYou), as the observe pass's EventDeliveryUnknown says; the stage
+// says it itself, so a prompt told of while the task needed you for
+// something else is not lost. Else the wait is a held error.
 func (e *Engine) unknownHeld(ctx context.Context, t registry.Task, es []registry.LedgerEntry) error {
-	if old := unknownIn(es, e.now(), true); len(old) > 0 {
-		return needsYou{runtime.UnknownReason(old...)}
+	if you := e.unknownToYou(es); len(you) > 0 {
+		return needsYou{runtime.UnknownReason(you...)}
 	}
-	what := unknownWait(unknownIn(es, e.now(), false))
+	what := unknownWait(unknownRoles(es))
 	e.waitOn(ctx, t, waitAgent, what)
 	return heldError{who: waitAgent, what: what}
 }

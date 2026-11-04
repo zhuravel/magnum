@@ -12171,6 +12171,7 @@ type Runtime interface {
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
 	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
 	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
+	Proving(entry int64) bool
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
     the owner row of a task in the factory's agents store, the launch of a
@@ -12187,7 +12188,9 @@ type Runtime interface {
     changed only when nobody else could have). After a restart it binds a task's
     sessions to the panes herdr shows again (Recover) and settles the workspaces
     a crash left that no row names (SettleWorkspaces: kept for their attempt's
-    launch to adopt, or closed).
+    launch to adopt, or closed). Proving says whether the proof that a prompt of
+    unknown delivery never arrived is under way (its read after RedeliverAfter
+    settles it).
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -13433,6 +13436,12 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error
     Park parks the agents of task t (agents.Manager.Park): their conversations
     stay resumable, their panes are released. A run in flight or an agent at
     work refuses with agents.ErrBusy.
+
+func (r *Runtime) Proving(id int64) bool
+    Proving reports whether the proof that ledger entry id never arrived is
+    under way: a read (Reconcile) found no such turn in a transcript written
+    past the prompt, and the read after RedeliverAfter decides. It is the
+    runtime's own: a fresh runtime after a restart starts every proof again.
 
 func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error
     QuitCodex quits the live Codex sessions of task t, once Codex never works

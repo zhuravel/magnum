@@ -819,6 +819,15 @@ func TestAnUnknownDeliveryGoesToYouWithOneAction(t *testing.T) {
 	h := newHarness(t)
 	h.stage(config.FactoryStageAgents, idleStage) // the let-go's, not the stage's
 	task := h.task("PR-12372", registry.TaskActive, "investigate")
+	a, err := h.reg.BeginAttempt(h.ctx, task.ID, "investigate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.reg.AppendLedger(h.ctx, registry.LedgerEntry{TaskID: task.ID, AttemptID: a.ID, Role: "fx-repro", RunID: "run-1",
+		Hash: runtime.PromptHash("reproduce the bug"), Text: "reproduce the bug"}); err != nil { // its delivery unknown
+		t.Fatal(err)
+	}
+	h.clock.Add(runtime.UnknownAfter)
 	why := "a prompt to fx-repro may or may not have arrived: look at its pane"
 	h.rt.events = []runtime.Event{{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: why}}
 

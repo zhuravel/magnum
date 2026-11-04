@@ -19,7 +19,6 @@ import (
 	"os"
 	ossignal "os/signal"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +62,8 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // restart it binds a task's sessions to the panes herdr shows again
 // (Recover) and settles the workspaces a crash left that no row names
 // (SettleWorkspaces: kept for their attempt's launch to adopt, or closed).
+// Proving says whether the proof that a prompt of unknown delivery never
+// arrived is under way (its read after RedeliverAfter settles it).
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
@@ -82,6 +83,7 @@ type Runtime interface {
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
 	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
 	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
+	Proving(entry int64) bool
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -233,11 +235,11 @@ type Engine struct {
 	recent    map[string]recentFailure
 	// lastReveal is when a herdr hold last opened herdr's session.
 	lastReveal time.Time
-	// unrecovered: the startup's recovery of the agents (recoverAgents)
-	// failed, herdr not answering; the first tick herdr answers runs it.
-	unrecovered bool
-	parked      map[int64]bool
-	servers     map[int64]server
+	// recovery is what the agents' recovery has left to do after a failure
+	// (nil: nothing); a tick herdr answers runs it once due (retryRecovery).
+	recovery *agentsRecovery
+	parked   map[int64]bool
+	servers  map[int64]server
 	// beforeMark runs right before codexRefused writes its mark (a test's
 	// seam: another writer moving the task meanwhile); nil in a daemon.
 	beforeMark func()
@@ -555,9 +557,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.payReleaseDebts(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
 	if herdrUp { // herdr says who is in a copy: without it no copy is touched
-		if e.unrecovered {
-			e.recoverAgents(ctx, tasks)
-		}
+		e.retryRecovery(ctx, tasks)
 		e.sweepDetached(ctx, tasks)
 	}
 	e.pressure(ctx, now, tasks)
@@ -811,36 +811,19 @@ func sleepFor(ctx context.Context, d time.Duration) bool {
 // deliveryUnknown sends a live task whose prompt may or may not have
 // arrived to you: no transcript can tell, and its role gets no prompt until
 // you looked at the pane and let the prompt go (ReqLetGo). Whatever stage
-// the task is in, it would stall there in silence otherwise. The wait names
-// every prompt of the task told of so far (runtime.UnknownAfter old): one
-// that comes while the task waits on you for another names both. A task
-// that waits on you for something else keeps that reason; its stage holds
-// the role once it goes on (promptRoles), so none is dropped.
+// the task is in, it would stall there in silence otherwise. The wait is
+// settleUnknown's, from the ledger: it names every prompt of the task to
+// look at, one that comes while the task waits on you for another names
+// both, and none whose proof is under way. A task that waits on you for
+// something else keeps that reason; its stage holds the role once it goes
+// on (promptRoles), so none is dropped.
 func (e *Engine) deliveryUnknown(ctx context.Context, ev runtime.Event) {
 	t, err := e.reg.TaskByID(ctx, ev.TaskID)
 	if err != nil {
 		return
 	}
-	roles, err := e.unknownRoles(ctx, t.ID, true)
-	if err != nil {
-		e.log.Warn("read the prompts of unknown delivery", "task", t.ID, "err", err)
-	}
-	if !slices.Contains(roles, ev.Role) {
-		roles = append(roles, ev.Role)
-	}
-	what := runtime.UnknownReason(roles...)
-	switch {
-	case isLive(t):
-		e.toOperator(ctx, t, what, "a prompt's delivery is unknown")
-	case t.State == registry.TaskNeedsYou && runtime.IsUnknownReason(t.WaitsWhat) && t.WaitsWhat != what:
-		if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, "", func(u *registry.TaskUpdate) {
-			u.Set("waits_what", what)
-			u.Because("another prompt's delivery is unknown")
-		}); err != nil {
-			e.log.Warn("name another unknown delivery", "task", t.ID, "err", err)
-			return
-		}
-		e.alert(ctx, t.ID, TaskKey(t)+": you: "+what)
+	if err := e.settleUnknown(ctx, t, "a prompt's delivery is unknown", true); err != nil {
+		e.log.Warn("name the prompts of unknown delivery", "task", t.ID, "err", err)
 	}
 }
 
@@ -848,10 +831,18 @@ func (e *Engine) deliveryUnknown(ctx context.Context, ev runtime.Event) {
 // (runtime.EventUndelivered): the stage forgets what it knew of its attempt
 // and rebuilds it from the ledger on its next pass (agentsRunOf), where
 // that prompt counts as never sent, so the role gets what it is due once
-// more.
+// more; a task that waited on you for it waits on the rest, or goes back to
+// work (settleUnknown).
 func (e *Engine) undelivered(ctx context.Context, ev runtime.Event) {
 	delete(e.agentRuns, ev.TaskID)
 	e.event(ctx, ev.TaskID, "prompt", registry.PhaseInfo, ev.Reason)
+	t, err := e.reg.TaskByID(ctx, ev.TaskID)
+	if err != nil {
+		return
+	}
+	if err := e.settleUnknown(ctx, t, "the prompt to "+ev.Role+" never arrived: it goes once more", false); err != nil {
+		e.log.Warn("settle a task's wait on its unknown deliveries", "task", t.ID, "err", err)
+	}
 }
 
 // maxInbox bounds the events kept for a task between its advances.

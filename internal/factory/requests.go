@@ -21,7 +21,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
-	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -285,24 +284,8 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 		Stage: t.Stage, Role: p.Role}); err != nil {
 		e.log.Warn("record a let-go", "task", t.ID, "err", err)
 	}
-	if t.State == registry.TaskNeedsYou && runtime.IsUnknownReason(t.WaitsWhat) {
-		left, err := e.unknownRoles(ctx, t.ID, true)
-		if err != nil {
-			return "", err
-		}
-		if len(left) > 0 {
-			err = e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, "", func(u *registry.TaskUpdate) {
-				u.Set("waits_what", runtime.UnknownReason(left...))
-				u.Because("you let the prompt to " + p.Role + " go; the others' delivery is still unknown")
-			})
-		} else {
-			err = e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
-				u.Set("waits_who", "")
-				u.Set("waits_what", "")
-				u.Because("you let the prompt to " + p.Role + " go")
-			})
-		}
-		if err != nil {
+	if t.State == registry.TaskNeedsYou { // a live task's stage settles its own wait
+		if err := e.settleUnknown(ctx, t, "you let the prompt to "+p.Role+" go", false); err != nil {
 			return "", err
 		}
 	}
@@ -318,7 +301,9 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 // sent the task to you (its panics, its checks that did not run to their
 // end) start again. A retry sends no prompt of unknown delivery (its role
 // stays held until a read settles it or you let it go) and never lifts
-// Codex-never. A task that does not wait on you is refused.
+// Codex-never. A task that does not wait on you is refused, and so is one
+// whose questions wait for your answers: its stage would only ask them
+// again.
 func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -326,6 +311,20 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	}
 	if t.State != registry.TaskNeedsYou {
 		return "", fmt.Errorf("%s is %s, not waiting on you: there is nothing to retry", TaskKey(t), t.State)
+	}
+	open, err := e.openQuestions(ctx, t.ID)
+	if err != nil {
+		return "", err
+	}
+	asks, err := e.readAsks(t.ID)
+	if err != nil {
+		return "", err
+	}
+	if len(open) > 0 {
+		if state, _, _ := e.questionsWait(t, open, asks); state == registry.TaskNeedsYou {
+			return "", fmt.Errorf("%s waits for your answers to %s: answer them with `magnum factory answer %d` (it prints them); "+
+				"a retry would only ask them again", TaskKey(t), plural(len(open), "question"), t.ID)
+		}
 	}
 	if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
 		u.Set("waits_who", "")

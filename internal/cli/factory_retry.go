@@ -23,7 +23,7 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"stage's own checks run again (a file you fixed, the local review's fresh loop after it stopped for you, "+
 			"what a check kept for you, the publish's checks before any step); a prompt whose delivery is unknown is "+
 			"still sent to nobody (let it go on the screen), and a task Codex never works on stays so. A task that "+
-			"does not wait on you is refused.",
+			"does not wait on you is refused, and so is one whose questions wait for your answers (`magnum factory answer`).",
 		func(pos []string) int { return runFactoryRetryCmd(c, pos) })
 }
 

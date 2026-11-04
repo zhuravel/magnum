@@ -8,13 +8,14 @@ package factory
 // short is finished and its copy released, a claim a crash cut has its
 // begin ended (its next claim runs its steps again), the sessions are bound
 // to the panes herdr shows again and the workspaces no row names are
-// adopted or closed (the runtime's Recover and SettleWorkspaces; tried
-// again on the first tick herdr answers when it does not), a local round a
-// restart cut is said to run again, each prompt of unknown delivery is read
-// once (a yes is watched, a no goes once more, an unknown is sent to nobody
-// and its task waits on it), the effects in flight are named (their stage
-// runs each one's guard again before any step), and last the heavy stages
-// that still run take their slots back (adoptHeavy).
+// adopted or closed (the runtime's Recover and SettleWorkspaces; what
+// fails runs again after a backoff, on a tick herdr answers), a local round
+// a restart cut is said to run again, each prompt of unknown delivery is
+// read once (a yes is watched; any other is sent to nobody, its task waits
+// on it, and a no is proven only by a later read, which sends it once),
+// the effects in flight are named (their stage runs each one's guard again
+// before any step), and last the heavy stages that still run take their
+// slots back (adoptHeavy).
 
 import (
 	"context"
@@ -140,48 +141,94 @@ func (e *Engine) closeCutClaims(ctx context.Context, tasks []registry.Task) {
 	}
 }
 
+// agentsRecovery is what the agents' recovery has left to do after a
+// failure (herdr that does not answer, a store that refuses): the tasks
+// Recover failed for, whether SettleWorkspaces runs again, when the next try
+// runs (claimBackoff after each failure in a row, and only on a tick herdr
+// answers), and the cause last told (each distinct one is one fail event).
+// The loop's own.
+type agentsRecovery struct {
+	tasks  map[int64]bool
+	settle bool
+	next   time.Time
+	tries  int
+	why    string
+}
+
 // recoverAgents binds the sessions of every task whose agents may live (at
 // work, waiting, or waiting on you) to the panes herdr shows again
 // (Runtime.Recover), then settles the workspaces a crash left that no row
 // names (Runtime.SettleWorkspaces): one its attempt's launch adopts, the
-// others closed. Each is in the event log. When herdr does not answer, the
-// two run again on the first tick it does (unrecovered).
+// others closed. Each is in the event log. What fails runs again later, and
+// only that (retryRecovery).
 func (e *Engine) recoverAgents(ctx context.Context, tasks []registry.Task) {
+	e.runRecovery(ctx, tasks, nil)
+}
+
+// retryRecovery runs again, once its try is due, what the agents' recovery
+// failed for; the caller runs it on a tick herdr answers.
+func (e *Engine) retryRecovery(ctx context.Context, tasks []registry.Task) {
+	if r := e.recovery; r != nil && !e.now().Before(r.next) {
+		e.runRecovery(ctx, tasks, r)
+	}
+}
+
+// runRecovery is recoverAgents over every task (left nil) or over what left
+// says failed before.
+func (e *Engine) runRecovery(ctx context.Context, tasks []registry.Task, left *agentsRecovery) {
 	if e.d.Runtime == nil {
 		return
 	}
-	e.unrecovered = false
-	var failed error
+	failed := map[int64]bool{}
+	var cause error
 	for _, t := range tasks {
-		if !isLive(t) && t.State != registry.TaskNeedsYou {
+		if (!isLive(t) && t.State != registry.TaskNeedsYou) || (left != nil && !left.tasks[t.ID]) {
 			continue
 		}
 		changed, err := e.d.Runtime.Recover(ctx, t)
 		if err != nil {
-			failed = cmpErr(failed, err)
+			failed[t.ID], cause = true, cmpErr(cause, err)
 			continue
 		}
 		if len(changed) > 0 {
 			e.event(ctx, t.ID, "recover", registry.PhaseInfo, "the agents after the restart: "+strings.Join(changed, ", "))
 		}
 	}
-	orphans, err := e.d.Runtime.SettleWorkspaces(ctx)
-	if err != nil {
-		failed = cmpErr(failed, err)
-	}
-	for _, o := range orphans {
-		if o.Adopted {
-			e.event(ctx, o.TaskID, "workspace", registry.PhaseInfo, fmt.Sprintf("workspace %q, which no row names (a launch the daemon "+
-				"stopped in), is adopted by its attempt's launch", o.Label))
-			continue
+	settleFailed := false
+	if left == nil || left.settle {
+		orphans, err := e.d.Runtime.SettleWorkspaces(ctx)
+		if err != nil {
+			settleFailed, cause = true, cmpErr(cause, err)
 		}
-		e.event(ctx, o.TaskID, "workspace", registry.PhaseOK, fmt.Sprintf("closed workspace %q, which no row names: %s", o.Label, o.Why))
+		for _, o := range orphans {
+			if o.Adopted {
+				e.event(ctx, o.TaskID, "workspace", registry.PhaseInfo, fmt.Sprintf("workspace %q, which no row names (a launch the daemon "+
+					"stopped in), is adopted by its attempt's launch", o.Label))
+				continue
+			}
+			e.event(ctx, o.TaskID, "workspace", registry.PhaseOK, fmt.Sprintf("closed workspace %q, which no row names: %s", o.Label, o.Why))
+		}
 	}
-	if failed != nil {
-		e.unrecovered = true
-		e.log.Warn("the agents' recovery waits for herdr", "err", failed)
-		e.event(ctx, 0, "recover", registry.PhaseFail, "the agents' recovery runs again once herdr answers: "+
-			textx.Clip(textx.FirstLine(execx.Redact(failed.Error())), 300))
+	if cause == nil {
+		if left != nil {
+			e.event(ctx, 0, "recover", registry.PhaseOK, "the agents' recovery went through")
+		}
+		e.recovery = nil
+		return
+	}
+	r := left
+	if r == nil {
+		r = &agentsRecovery{}
+	}
+	r.tasks, r.settle = failed, settleFailed
+	r.tries++
+	r.next = e.now().Add(claimBackoff(r.tries))
+	e.recovery = r
+	if why := textx.Clip(textx.FirstLine(execx.Redact(cause.Error())), 300); why != r.why {
+		r.why = why
+		e.log.Warn("the agents' recovery failed; what failed runs again", "err", cause)
+		e.event(ctx, 0, "recover", registry.PhaseFail, fmt.Sprintf("the agents' recovery runs again at %s for what failed (once herdr "+
+			"answers): %s", r.next.Local().Format("15:04"), why))
 	}
 }
 
@@ -216,10 +263,14 @@ func (e *Engine) cutRounds(ctx context.Context, tasks []registry.Task) {
 
 // reconcileDeliveries reads each prompt of unknown delivery once
 // (Runtime.Reconcile): one its transcript shows arrived is delivered and
-// its run watched, never sent again; one proven never to have arrived goes
-// once more (its stage, rebuilt from the ledger, counts it as never sent);
-// any other is sent to nobody, and its task, at work, waits on it ("agent:
-// prompt delivery unknown") until a later read settles it or you let it go.
+// its run watched, never sent again; any other is sent to nobody, and its
+// task, at work, waits on it ("agent: prompt delivery unknown") until a
+// later read settles it or you let it go. This first read never proves that
+// a prompt never arrived: the proof needs a second read RedeliverAfter later
+// (the runtime keeps the first in memory), which the observe pass makes and
+// says (EventUndelivered); this read begins it (Runtime.Proving). Then the
+// wait on you of each task read is settled from its ledger (settleUnknown):
+// none while a proof is under way.
 func (e *Engine) reconcileDeliveries(ctx context.Context) {
 	if e.d.Runtime == nil {
 		return
@@ -232,6 +283,10 @@ func (e *Engine) reconcileDeliveries(ctx context.Context) {
 	unknown := map[int64][]string{}
 	var order []int64
 	for _, en := range es {
+		if _, ok := unknown[en.TaskID]; !ok {
+			order = append(order, en.TaskID)
+			unknown[en.TaskID] = nil
+		}
 		v, err := e.d.Runtime.Reconcile(ctx, en)
 		if err != nil {
 			e.log.Warn("read a prompt's delivery at the startup", "entry", en.ID, "err", err)
@@ -241,25 +296,30 @@ func (e *Engine) reconcileDeliveries(ctx context.Context) {
 		case registry.DeliveredYes:
 			e.event(ctx, en.TaskID, "prompt", registry.PhaseOK, fmt.Sprintf("prompt %d to %s arrived before the restart (its transcript "+
 				"holds it): its run is watched, never sent again", en.ID, en.Role))
-		case registry.DeliveredNo:
-			e.event(ctx, en.TaskID, "prompt", registry.PhaseInfo, fmt.Sprintf("prompt %d to %s never arrived (its transcript holds no "+
-				"such turn): it goes once more", en.ID, en.Role))
 		case registry.DeliveredUnknown:
-			if _, ok := unknown[en.TaskID]; !ok {
-				order = append(order, en.TaskID)
-			}
 			if !slices.Contains(unknown[en.TaskID], en.Role) {
 				unknown[en.TaskID] = append(unknown[en.TaskID], en.Role)
 			}
 		}
 	}
 	for _, id := range order {
-		roles := strings.Join(unknown[id], ", ")
-		e.event(ctx, id, "prompt", registry.PhaseInfo, "the delivery of a prompt to "+roles+" is unknown: nothing is sent to "+roles+
-			" until a read of its transcript proves it never arrived, or you let it go")
 		t, err := e.reg.TaskByID(ctx, id)
-		if err == nil && isLive(t) {
-			e.waitOn(ctx, t, waitAgent, unknownWait(unknown[id]))
+		if err != nil {
+			continue
+		}
+		if roles := unknown[id]; len(roles) > 0 {
+			who := strings.Join(roles, ", ")
+			e.event(ctx, id, "prompt", registry.PhaseInfo, "the delivery of a prompt to "+who+" is unknown: nothing is sent to "+who+
+				" until a read of its transcript proves it never arrived, or you let it go")
+			if isLive(t) {
+				e.waitOn(ctx, t, waitAgent, unknownWait(roles))
+				if t, err = e.reg.TaskByID(ctx, id); err != nil {
+					continue
+				}
+			}
+		}
+		if err := e.settleUnknown(ctx, t, "the restart's read of its prompts", false); err != nil {
+			e.log.Warn("settle a task's wait on its unknown deliveries", "task", id, "err", err)
 		}
 	}
 }
@@ -290,25 +350,77 @@ func (e *Engine) openEffects(ctx context.Context) {
 	}
 }
 
-// unknownRoles are the roles of task id's prompts whose delivery is
-// unknown, in the ledger's order; past only those sent at least
-// runtime.UnknownAfter ago (the ones you are told of).
-func (e *Engine) unknownRoles(ctx context.Context, id int64, past bool) ([]string, error) {
-	es, err := e.reg.LedgerOf(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return unknownIn(es, e.now(), past), nil
-}
-
-// unknownIn is unknownRoles over the ledger entries es at now.
-func unknownIn(es []registry.LedgerEntry, now time.Time, past bool) []string {
+// unknownRoles are the roles of the ledger entries es whose delivery is
+// unknown, in the ledger's order: the ones a stage holds.
+func unknownRoles(es []registry.LedgerEntry) []string {
 	var roles []string
 	for _, en := range es {
-		if en.Delivered != registry.DeliveredUnknown || (past && now.Sub(en.Sent) < runtime.UnknownAfter) || slices.Contains(roles, en.Role) {
+		if en.Delivered == registry.DeliveredUnknown && !slices.Contains(roles, en.Role) {
+			roles = append(roles, en.Role)
+		}
+	}
+	return roles
+}
+
+// unknownToYou are the roles of the ledger entries es whose prompt you are
+// to look at: its delivery unknown for runtime.UnknownAfter or longer, and
+// no proof under way that it never arrived (Runtime.Proving: its read
+// after RedeliverAfter settles it), in the ledger's order. Every wait on
+// you for prompts of unknown delivery is these roles' (settleUnknown,
+// unknownHeld).
+func (e *Engine) unknownToYou(es []registry.LedgerEntry) []string {
+	now := e.now()
+	var roles []string
+	for _, en := range es {
+		if en.Delivered != registry.DeliveredUnknown || now.Sub(en.Sent) < runtime.UnknownAfter || slices.Contains(roles, en.Role) ||
+			(e.d.Runtime != nil && e.d.Runtime.Proving(en.ID)) {
 			continue
 		}
 		roles = append(roles, en.Role)
 	}
 	return roles
+}
+
+// settleUnknown is the one place that decides, from task t's ledger as it
+// is now (unknownToYou), what t waits on you for about its prompts of
+// unknown delivery: a live task with such a prompt goes to NEEDS YOU naming
+// every one; a task at NEEDS YOU for them (runtime.UnknownReason's wait)
+// names the ones left, with an alert when alert says one came, or, none
+// left (you let them go, a read settled them, their proof is under way),
+// goes back to work, where its stage holds a role whose prompt is still
+// unknown and sends the others what they are due. because says what
+// changed. A task that waits on you for anything else is left alone.
+func (e *Engine) settleUnknown(ctx context.Context, t registry.Task, because string, alert bool) error {
+	live, ours := isLive(t), t.State == registry.TaskNeedsYou && runtime.IsUnknownReason(t.WaitsWhat)
+	if !live && !ours {
+		return nil
+	}
+	es, err := e.reg.LedgerOf(ctx, t.ID)
+	if err != nil {
+		return err
+	}
+	left := e.unknownToYou(es)
+	switch {
+	case live && len(left) > 0:
+		e.toOperator(ctx, t, runtime.UnknownReason(left...), because)
+	case live:
+	case len(left) == 0:
+		return e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
+			u.Set("waits_who", "")
+			u.Set("waits_what", "")
+			u.Because(because)
+		})
+	case t.WaitsWhat != runtime.UnknownReason(left...):
+		what := runtime.UnknownReason(left...)
+		if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, "", func(u *registry.TaskUpdate) {
+			u.Set("waits_what", what)
+			u.Because(because)
+		}); err != nil {
+			return err
+		}
+		if alert {
+			e.alert(ctx, t.ID, TaskKey(t)+": you: "+what)
+		}
+	}
+	return nil
 }
