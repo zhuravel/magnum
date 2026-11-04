@@ -1,0 +1,20 @@
+{"text": "open PR", "class": "step_start"}
+{"text": "ok, push it to the branch and open a pull request", "class": "step_start"}
+{"text": "merge master into the branch and run the specs again", "class": "step_start"}
+{"text": "merge this into staging-void please", "class": "step_start"}
+{"text": "do as recommended", "class": "step_start"}
+{"text": "yes", "class": "approval"}
+{"text": "looks good, thanks", "class": "approval"}
+{"text": "lgtm", "class": "approval"}
+{"text": "go ahead", "class": "approval"}
+{"text": "no, that is the wrong table: the points live in the ledger table", "class": "correction"}
+{"text": "wrong file. the helper belongs in lib/rewards, not in app/models", "class": "correction"}
+{"text": "you forgot the down method of the migration", "class": "correction"}
+{"text": "use the ledger table instead of the cache", "class": "correction"}
+{"text": "I gave you access to the sandbox database, try again", "class": "access"}
+{"text": "the api key is in the vault, log in with my account", "class": "access"}
+{"text": "here is the 2FA code: 000000", "class": "access"}
+{"text": "the refund path only matters for expired points", "class": "info"}
+{"text": "this endpoint is used by the mobile client too", "class": "info"}
+{"text": "the customer wrote in on Tuesday, the ticket has screenshots of the failing page", "class": "info"}
+{"text": "what does the retry in the points sync do?", "class": "info"}

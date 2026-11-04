@@ -362,6 +362,7 @@ func TestFactoryPathsLiveUnderTheDataAndStateDirs(t *testing.T) {
 			for got, want := range map[string]string{
 				l.FactoryDB():        filepath.Join(tc.data, "factory", "factory.db"),
 				l.FactoryAgentsDB():  filepath.Join(tc.data, "factory", "agents.db"),
+				l.FactoryBaseline():  filepath.Join(tc.data, "factory", "baseline.json"),
 				l.FactoryTasks():     filepath.Join(tc.data, "factory", "tasks"),
 				l.FactoryTaskDir(42): filepath.Join(tc.data, "factory", "tasks", "42"),
 				l.FactoryPid():       filepath.Join(tc.state, "factory.pid"),

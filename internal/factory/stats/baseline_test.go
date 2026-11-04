@@ -1,0 +1,368 @@
+package stats_test
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/stats"
+)
+
+// The tracked set is 20 invented messages. The operator's own 100 stay
+// outside the repository and are read the same way.
+func TestClassifierAccuracyOnTheTrackedSet(t *testing.T) {
+	t.Parallel()
+	set, err := stats.ReadLabelled(filepath.Join("testdata", "labelled.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set) != 20 {
+		t.Fatalf("the tracked set has %d messages, want 20", len(set))
+	}
+	classes := map[string]int{}
+	right := 0
+	for _, l := range set {
+		classes[l.Class]++
+		if got := stats.Classify(l.Text); got == l.Class {
+			right++
+		} else {
+			t.Logf("Classify(%q) = %q, labelled %q", l.Text, got, l.Class)
+		}
+	}
+	for _, class := range []string{registry.ClassStepStart, registry.ClassApproval, registry.ClassCorrection, registry.ClassAccess, registry.ClassInfo} {
+		if classes[class] < 3 {
+			t.Errorf("the tracked set has %d messages of class %s, want at least 3", classes[class], class)
+		}
+	}
+	if acc := float64(right) / float64(len(set)); acc < 0.9 {
+		t.Errorf("accuracy %.0f%% (%d of %d), want at least 90%%", acc*100, right, len(set))
+	}
+	b, err := stats.BuildBaseline([]stats.Session{{Key: "PR-12301", Messages: []string{"hello"}}}, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := float64(right) / float64(len(set)); b.Accuracy != want {
+		t.Errorf("the baseline's accuracy = %v, want the classifier's %v on the same set", b.Accuracy, want)
+	}
+}
+
+func TestReadLabelledNamesTheLineOfABadOne(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"class.jsonl": `{"text": "open PR", "class": "step_start"}` + "\n" + `{"text": "a secret sentence", "class": "chatter"}` + "\n",
+		"json.jsonl":  `{"text": "open PR", "class": "step_start"}` + "\n" + `not json a secret sentence` + "\n",
+		"text.jsonl":  `{"text": "  ", "class": "info"}` + "\n",
+	} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := stats.ReadLabelled(path)
+		if err == nil || !strings.Contains(err.Error(), "line") {
+			t.Errorf("%s: err = %v, want one that names the line", name, err)
+			continue
+		}
+		if strings.Contains(err.Error(), "secret") {
+			t.Errorf("%s: the error carries the operator's text: %v", name, err)
+		}
+	}
+	if _, err := stats.ReadLabelled(filepath.Join(dir, "missing.jsonl")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a missing file = %v, want fs.ErrNotExist", err)
+	}
+	blank := filepath.Join(dir, "blank.jsonl")
+	if err := os.WriteFile(blank, []byte("\n"+`{"text": "open PR", "class": "step_start"}`+"\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := stats.ReadLabelled(blank); err != nil || len(got) != 1 {
+		t.Errorf("blank lines are skipped: %v, %v", got, err)
+	}
+}
+
+// Three sessions of one ticket are one ticket with the sum of their
+// messages, never three tickets.
+func TestBaselineCountsPerTicketNotPerSession(t *testing.T) {
+	t.Parallel()
+	sessions := []stats.Session{
+		{Key: "PR-12301", Messages: []string{"look at the points sync", "open PR", "the refund path only matters for expired points", "yes"}},
+		{Key: "PR-12301", Messages: []string{"merge master", "wrong table, use the ledger", "the spec output is in the log"}},
+		{Key: "PR-12302", Messages: []string{"what does the retry do?", "push"}},
+		{Key: "PR-12301", Messages: []string{"open PR", "ok", "lgtm", "  ", "thanks", "done"}}, // the blank is no message
+		{Key: "PR-12303", Messages: []string{"hello", "the mailer is slow", "yes", "no, wrong", "ok", "push it"}},
+	}
+	labelled := []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}, {Text: "yes", Class: registry.ClassApproval},
+		{Text: "the mailer is slow", Class: registry.ClassCorrection}, {Text: "hello", Class: registry.ClassInfo}}
+	b, err := stats.BuildBaseline(sessions, labelled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Tickets != 3 {
+		t.Errorf("Tickets = %d, want 3 (five sessions of three keys)", b.Tickets)
+	}
+	// PR-12301: 4 + 3 + 5 messages = 12, and open PR, merge master, open PR = 3 step starts.
+	// PR-12302: 2 messages, 1 step start (push). PR-12303: 6 messages, 1 step start (push it).
+	wantTyped := stats.Dist{Median: 6, P25: 4, P75: 9, Min: 2, Max: 12}
+	if b.TypedPerTicket != wantTyped {
+		t.Errorf("TypedPerTicket = %+v, want %+v", b.TypedPerTicket, wantTyped)
+	}
+	wantSteps := stats.Dist{Median: 1, P25: 1, P75: 2, Min: 1, Max: 3}
+	if b.StepStartsPerTicket != wantSteps {
+		t.Errorf("StepStartsPerTicket = %+v, want %+v", b.StepStartsPerTicket, wantSteps)
+	}
+	// "the mailer is slow" is labelled a correction on purpose: 3 of 4 right.
+	if b.Accuracy != 0.75 {
+		t.Errorf("Accuracy = %v, want 0.75", b.Accuracy)
+	}
+	if !b.Frozen.IsZero() {
+		t.Errorf("BuildBaseline stamps no freeze time; FreezeBaseline does: %s", b.Frozen)
+	}
+}
+
+func TestBuildBaselineRefusesWhatItCannotMeasure(t *testing.T) {
+	t.Parallel()
+	one := []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}}
+	sessions := []stats.Session{{Key: "PR-12301", Messages: []string{"open PR"}}}
+	for name, c := range map[string]struct {
+		sessions []stats.Session
+		labelled []stats.Labelled
+	}{
+		"no sessions":         {nil, one},
+		"no message at all":   {[]stats.Session{{Key: "PR-12301", Messages: []string{" "}}}, one},
+		"a session of no key": {[]stats.Session{{Messages: []string{"open PR"}}}, one},
+		"no labelled set":     {sessions, nil},
+		"an unknown class":    {sessions, []stats.Labelled{{Text: "open PR", Class: "chatter"}}},
+	} {
+		if _, err := stats.BuildBaseline(c.sessions, c.labelled); err == nil {
+			t.Errorf("%s: a baseline was built", name)
+		}
+	}
+}
+
+func TestDistOfEvenAndOddCounts(t *testing.T) {
+	t.Parallel()
+	got := func(counts ...int) stats.Dist {
+		var ss []stats.Session
+		for i, n := range counts {
+			ss = append(ss, stats.Session{Key: fmt.Sprintf("PR-%d", 12300+i), Messages: make([]string, n)})
+			for j := range ss[i].Messages {
+				ss[i].Messages[j] = "word"
+			}
+		}
+		b, err := stats.BuildBaseline(ss, []stats.Labelled{{Text: "word", Class: registry.ClassInfo}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.TypedPerTicket
+	}
+	if d := got(7); d != (stats.Dist{Median: 7, P25: 7, P75: 7, Min: 7, Max: 7}) {
+		t.Errorf("one ticket: %+v", d)
+	}
+	if d := got(10, 2); d != (stats.Dist{Median: 6, P25: 4, P75: 8, Min: 2, Max: 10}) {
+		t.Errorf("two tickets: %+v", d)
+	}
+	if d := got(5, 1, 9, 3, 7); d != (stats.Dist{Median: 5, P25: 3, P75: 7, Min: 1, Max: 9}) {
+		t.Errorf("five tickets: %+v", d)
+	}
+}
+
+func sampleBaseline() stats.Baseline {
+	return stats.Baseline{Frozen: time.Date(2026, 11, 2, 9, 30, 0, 0, time.UTC), Tickets: 12, Accuracy: 0.93,
+		TypedPerTicket:      stats.Dist{Median: 41, P25: 30, P75: 77.5, Min: 12, Max: 120},
+		StepStartsPerTicket: stats.Dist{Median: 9, P25: 5, P75: 14, Min: 1, Max: 30}}
+}
+
+// A baseline is frozen once: a second freeze, whatever it holds, leaves the
+// first file as it is.
+func TestFreezeBaselineNeverOverwrites(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "factory")
+	path := filepath.Join(dir, "baseline.json")
+	first := sampleBaseline()
+	if err := stats.FreezeBaseline(path, first); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want 0600", st.Mode().Perm())
+	}
+
+	second := first
+	second.Tickets, second.Frozen = 99, first.Frozen.Add(time.Hour)
+	err = stats.FreezeBaseline(path, second)
+	if !errors.Is(err, stats.ErrBaselineFrozen) {
+		t.Fatalf("a second freeze = %v, want ErrBaselineFrozen", err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("the refusal does not name the file: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Errorf("the frozen file changed: %v\nbefore %s\nafter  %s", err, before, after)
+	}
+
+	loaded, err := stats.LoadBaseline(path)
+	if err != nil || loaded == nil || *loaded != first {
+		t.Errorf("LoadBaseline = %+v, %v; want what was frozen", loaded, err)
+	}
+
+	// A refused or a finished freeze leaves no temporary file behind.
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Errorf("the directory holds %v (%v), want only baseline.json", entries, err)
+	}
+}
+
+// A path that is anything at all, a dangling link included, is not free.
+func TestFreezeBaselineRefusesAnyExistingPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	link := filepath.Join(dir, "baseline.json")
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := stats.FreezeBaseline(link, sampleBaseline()); !errors.Is(err, stats.ErrBaselineFrozen) {
+		t.Errorf("freeze over a dangling link = %v, want ErrBaselineFrozen", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "nowhere")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the freeze wrote through the link: %v", err)
+	}
+}
+
+// The moment of the freeze is the baseline's date; a caller that leaves it
+// zero gets the clock's.
+func TestFreezeBaselineStampsTheFreezeTime(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	b := sampleBaseline()
+	b.Frozen = time.Time{}
+	before := time.Now()
+	if err := stats.FreezeBaseline(path, b); err != nil {
+		t.Fatal(err)
+	}
+	got, err := stats.LoadBaseline(path)
+	if err != nil || got == nil {
+		t.Fatalf("LoadBaseline = %v, %v", got, err)
+	}
+	if got.Frozen.Before(before.Add(-time.Second)) || got.Frozen.After(time.Now().Add(time.Second)) {
+		t.Errorf("Frozen = %s, want about now", got.Frozen)
+	}
+}
+
+func TestLoadBaselineMissingAndBroken(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if got, err := stats.LoadBaseline(filepath.Join(dir, "baseline.json")); got != nil || err != nil {
+		t.Errorf("a missing baseline = %v, %v; want none and no error", got, err)
+	}
+	for name, body := range map[string]string{"junk": "not json", "empty": "{}", "no tickets": `{"frozen":"2026-11-02T09:30:00Z","tickets":0}`} {
+		path := filepath.Join(dir, name+".json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := stats.LoadBaseline(path); err == nil {
+			t.Errorf("%s: loaded %+v", name, got)
+		}
+	}
+}
+
+// --- the old transcripts ---
+
+func claudeLine(at time.Time, origin, text string) string {
+	b, _ := json.Marshal(map[string]any{"type": "user", "timestamp": at.UTC().Format(time.RFC3339), "turnOrigin": origin,
+		"message": map[string]any{"role": "user", "content": text}})
+	return string(b)
+}
+
+func codexLine(at time.Time, text string) string {
+	b, _ := json.Marshal(map[string]any{"type": "event_msg", "timestamp": at.UTC().Format(time.RFC3339),
+		"payload": map[string]any{"type": "user_message", "message": text}})
+	return string(b)
+}
+
+func writeTranscript(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+var keyIn = regexp.MustCompile(`PR-[0-9]+`)
+
+func firstKey(text string) string { return keyIn.FindString(text) }
+
+// ReadSessions turns a directory of Claude Code transcripts and Codex
+// rollouts into sessions of a ticket: the key comes from the file's path, else
+// from its first messages, and a session with none is counted, not guessed.
+func TestReadSessionsGroupsTranscriptsByTicketKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	writeTranscript(t, filepath.Join(dir, "proj-a", "one.jsonl"),
+		claudeLine(at, "human", "work on PR-12301, the points sync loses archived rows"),
+		claudeLine(at.Add(time.Minute), "human", "open PR"),
+		claudeLine(at.Add(2*time.Minute), "task_notification", "<task-notification>done</task-notification>"),
+		`{"type":"assistant","timestamp":"2026-10-01T10:03:00Z","message":{"role":"assistant","content":"done"}}`)
+	writeTranscript(t, filepath.Join(dir, "proj-a", "two.jsonl"),
+		claudeLine(at.Add(time.Hour), "human", "continue with PR-12301"),
+		claudeLine(at.Add(2*time.Hour), "human", "merge master"))
+	writeTranscript(t, filepath.Join(dir, "worktree-PR-12302", "three.jsonl"),
+		claudeLine(at, "human", "look at the mailer"))
+	writeTranscript(t, filepath.Join(dir, "codex", "rollout-2026-10-02T09-00-00-abc.jsonl"),
+		codexLine(at, "fix PR-12303 please"), codexLine(at.Add(time.Minute), "push"))
+	writeTranscript(t, filepath.Join(dir, "proj-b", "nokey.jsonl"), claudeLine(at, "human", "what is in this repo?"))
+	writeTranscript(t, filepath.Join(dir, "proj-b", "empty.jsonl"))
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("PR-12399 is not a transcript"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 2 {
+		t.Errorf("skipped = %d, want 2 (the transcript with no key and the one with no message)", skipped)
+	}
+	byKey := map[string][]int{}
+	for _, s := range sessions {
+		byKey[s.Key] = append(byKey[s.Key], len(s.Messages))
+	}
+	want := map[string][]int{"PR-12301": {2, 2}, "PR-12302": {1}, "PR-12303": {2}}
+	if len(byKey) != len(want) {
+		t.Fatalf("sessions by key = %v, want %v", byKey, want)
+	}
+	for key, counts := range want {
+		if !slices.Equal(byKey[key], counts) {
+			t.Errorf("%s: sessions of %v messages, want %v (a task notification is no message)", key, byKey[key], counts)
+		}
+	}
+	// Two sessions of one key are one ticket in the baseline.
+	b, err := stats.BuildBaseline(sessions, []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Tickets != 3 || b.TypedPerTicket.Max != 4 {
+		t.Errorf("baseline of the directory = %+v, want 3 tickets, the largest of 4 messages", b)
+	}
+}
+
+func TestReadSessionsOfAMissingDirectory(t *testing.T) {
+	t.Parallel()
+	if _, _, err := stats.ReadSessions(filepath.Join(t.TempDir(), "nope"), firstKey); err == nil {
+		t.Error("a missing directory read as no sessions")
+	}
+}

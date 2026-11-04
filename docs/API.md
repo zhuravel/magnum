@@ -48,6 +48,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registry](#registry) | Package registry is the factory's own SQLite registry: tasks, the stage attempts that run them, questions and the operator's decisions, the prompt ledger, external effects, the event log and the CLI's requests. |
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which registry.Open then finds current. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
+| [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions and the time a task waited on them, computed from the factory registry's evidence records alone and set against the baseline frozen before the first task (milestone 1's exit test). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -13568,6 +13569,173 @@ func (w *WaitError) Error() string
 
 ```
 
+## stats
+
+```text
+package stats // import "github.com/zhuravel/magnum/internal/factory/stats"
+
+Package stats measures how much the factory still asks of the operator:
+per task, the messages typed, the messages that only start a step, the answer
+batches, the card decisions and the time a task waited on them, computed from
+the factory registry's evidence records alone and set against the baseline
+frozen before the first task (milestone 1's exit test). Compute only reads the
+registry.
+
+VARIABLES
+
+var ErrBaselineFrozen = errors.New("the baseline is frozen once and never rewritten")
+    ErrBaselineFrozen is FreezeBaseline's refusal: the file exists.
+
+
+FUNCTIONS
+
+func Classify(text string) string
+    Classify returns the class of a message: step_start (it only starts a step:
+    open the PR, push, merge the parent in, merge into a staging branch,
+    take the recommendation), approval (a yes), correction (the agent was wrong
+    or must do it otherwise), access (credentials, a login, permission) or info
+    (anything else, which is also the class of an empty message). It reads the
+    words alone, in this order: a message that hands over a credential is access
+    whatever else it says, and one that refuses a step ("don't push yet") is
+    a correction, not a step start. Stagings live in the operator's config,
+    not here: any staging-<name> branch counts. The engine stores the class with
+    registry.ClassifyInput; the classes are the registry's.
+
+func FreezeBaseline(path string, b Baseline) error
+    FreezeBaseline writes b to path, once. A path that exists, whatever it is (a
+    file, a link, a directory), is refused with ErrBaselineFrozen and left as
+    it is; the file appears whole or not at all (it is written beside path and
+    linked into place, which cannot replace a file). A zero Frozen becomes the
+    clock's now. The file is private (0600) and holds counts, no text.
+
+
+TYPES
+
+type Baseline struct {
+	Frozen              time.Time `json:"frozen"`
+	Tickets             int       `json:"tickets"`
+	TypedPerTicket      Dist      `json:"typed_per_ticket"`
+	StepStartsPerTicket Dist      `json:"step_starts_per_ticket"`
+	Accuracy            float64   `json:"accuracy"`
+}
+    Baseline is the operator's way of working before the factory: over Tickets
+    tickets, the typed messages and the step-starting messages per ticket,
+    and Accuracy, the share of the operator's labelled messages that Classify
+    got right (so how far the step-start counts can be trusted).
+
+func BuildBaseline(sessions []Session, labelled []Labelled) (Baseline, error)
+    BuildBaseline counts the operator's messages per ticket: the sessions of
+    one key are one ticket, with the sum of their messages (a blank message is
+    none), and the median, quartiles and extremes are taken over the tickets,
+    never over the sessions. Accuracy is the share of labelled that Classify
+    gets right. It refuses sessions without a key, a set with no message and an
+    empty or mislabelled labelled set, because a baseline it cannot measure is
+    worse than none. The result has no Frozen time; FreezeBaseline sets it.
+
+func LoadBaseline(path string) (*Baseline, error)
+    LoadBaseline reads the frozen baseline at path: nil and no error when there
+    is none yet, an error for a file that is not a baseline.
+
+type Dist struct {
+	Median float64 `json:"median"`
+	P25    float64 `json:"p25"`
+	P75    float64 `json:"p75"`
+	Min    float64 `json:"min"`
+	Max    float64 `json:"max"`
+}
+    Dist is how a count spreads over the tickets: the median, the quartiles
+    (linear interpolation between the two nearest tickets) and the extremes.
+
+func (d Dist) String() string
+    String spells the distribution: its median, its middle half and its
+    extremes, each to one decimal at most.
+
+func (d Dist) Where(v float64) string
+    Where says where v lies against the middle half of the tickets: "below" the
+    first quartile, "above" the third, else "within".
+
+type Labelled struct {
+	Text  string `json:"text"`
+	Class string `json:"class"`
+}
+    Labelled is a message with the class the operator gave it by hand.
+
+func ReadLabelled(path string) ([]Labelled, error)
+    ReadLabelled reads the operator's labelled messages: one JSON object per
+    line, {"text": "...", "class": "step_start"}, blank lines skipped. An error
+    names the line, never its text.
+
+type Report struct {
+	Since    time.Time
+	Tasks    []TaskStats
+	Baseline *Baseline
+}
+    Report is the stats of the tasks started at or after Since (the zero time:
+    all of them), oldest first, and the baseline to read them against (nil when
+    none is frozen; Compute leaves it to the caller to load).
+
+func Compute(ctx context.Context, reg *registry.Registry, since time.Time) (Report, error)
+    Compute is ComputeAt at the clock's now.
+
+func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time) (Report, error)
+    ComputeAt measures the tasks of reg started at or after since (the zero
+    time: all), whole, whatever happened to them later, from their spans,
+    inputs, decisions and review rounds. now ends a wait on the operator that
+    is still open. It reads and never writes. Nothing here reads a transcript or
+    GitHub, so the numbers are the evidence the factory recorded.
+
+func (r Report) Markdown() string
+    Markdown renders the report for reading and for the exit test: a table of
+    the tasks, then each task set against the baseline's middle half.
+
+func (r Report) MarshalJSON() ([]byte, error)
+    MarshalJSON writes the report with fixed keys, an empty list for no tasks
+    and null for no window and no baseline.
+
+type Session struct {
+	Key      string
+	Messages []string
+}
+    Session is one agent session of the operator's: the ticket it worked on and
+    the messages the operator typed to it.
+
+func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, skipped int, err error)
+    ReadSessions reads the operator's old transcripts under dir (every
+    .jsonl file: a Claude Code transcript, or a Codex rollout when the file
+    is named rollout-*) into sessions: the messages the operator typed,
+    from the user turns agents.ClaudeUserTurns and agents.CodexUserTurns read,
+    less turns a tool or a task notification began. A session's ticket is the
+    key keyOf finds in the file's path below dir, else in its first message
+    that holds one. A transcript with no message or no key is not guessed at:
+    it is counted in skipped. Prompts queued while an agent worked are not read,
+    so a count is never above what was typed. Symbolic links are not followed.
+
+type TaskStats struct {
+	TaskID int64
+	Key    string
+
+	Typed, StepStarts, Approvals, Corrections, Access int
+	AnswerBatches, Decisions, ReviewRounds            int
+
+	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
+	StartToReady time.Duration
+}
+    TaskStats is what one task asked of the operator. Typed counts the messages
+    the operator typed (typed in a pane, said in one line, the start's guidance,
+    the note of a send-back); StepStarts, Approvals, Corrections and Access
+    count those of them by class (a retry is a step the operator started by
+    hand, so it counts as a step start and not as a typed message); a message
+    of another class, or of none, is only typed. AnswerBatches and Decisions are
+    counted apart. OperatorSecs is how long the task waited on the operator (its
+    spans that wait on "you"), StartToReady how long it took to reach the ready
+    card (zero before it does).
+
+func (t TaskStats) MarshalJSON() ([]byte, error)
+    MarshalJSON writes the task's stats with fixed keys and the durations in
+    whole seconds.
+
+```
+
 ## fsx
 
 ```text
@@ -18722,6 +18890,11 @@ func (l Layout) Eval() string
 func (l Layout) FactoryAgentsDB() string
     FactoryAgentsDB is the registry of the factory's agent sessions (agents.db),
     beside FactoryDB.
+
+func (l Layout) FactoryBaseline() string
+    FactoryBaseline is baseline.json, the counts of the operator's messages
+    per ticket before the factory, frozen once before its first task (`magnum
+    factory baseline`), beside FactoryDB.
 
 func (l Layout) FactoryDB() string
     FactoryDB is the factory's own registry (factory.db in the factory directory

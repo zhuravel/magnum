@@ -264,6 +264,11 @@ func (l Layout) FactoryDB() string { return filepath.Join(l.factoryDir(), "facto
 // (agents.db), beside FactoryDB.
 func (l Layout) FactoryAgentsDB() string { return filepath.Join(l.factoryDir(), "agents.db") }
 
+// FactoryBaseline is baseline.json, the counts of the operator's messages per
+// ticket before the factory, frozen once before its first task (`magnum factory
+// baseline`), beside FactoryDB.
+func (l Layout) FactoryBaseline() string { return filepath.Join(l.factoryDir(), "baseline.json") }
+
 // FactoryTasks is the root of the factory's task directories.
 func (l Layout) FactoryTasks() string { return filepath.Join(l.factoryDir(), "tasks") }
 
