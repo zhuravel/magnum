@@ -1088,6 +1088,7 @@ It is not asked:
 | | `d` `l` `o` `b` `t` | diff, log, step in, PR, Jira | – |
 | | `+ −` | rate the task | no |
 | | `K` | stop the task's agents | yes |
+| | `r` | retry: a task that needs you goes on at its stage, which checks again what stopped it (`magnum factory retry`) | yes |
 | | `x` | drop: free the copy, keep the branch | yes |
 | | `T` | try a stopped stage again | yes |
 | Stage card | `c` | say one line (typed, `enter` sends, guarded) | no |
