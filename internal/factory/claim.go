@@ -298,8 +298,7 @@ func (e *Engine) releaseCopy(ctx context.Context, t registry.Task, reason string
 		return
 	}
 	if err := e.d.Copies.Release(ctx, t, reason); err != nil {
-		e.log.Warn("release a task's copy", "task", t.ID, "err", err)
-		e.event(ctx, t.ID, "release", registry.PhaseFail, err.Error())
+		e.owe(ctx, t, t.Copy, err) // tried again until the copy is free
 	}
 }
 
@@ -334,8 +333,11 @@ func (e *Engine) goBackground(what string, fn func(ctx context.Context)) {
 
 // stopBackground ends the work off the loop: it cancels the engine's
 // context (a claim's commands end with it), waits up to drainWait for the
-// work to end, and ends the begin of each claim no stage took the answer
-// of. Run calls it as it returns; a second call does nothing new.
+// work to end, releases the copies the claims of ended tasks reserved (as
+// the sweep does: a stop in the drain's last tick cancelled its claim and
+// left the release to a tick that never comes), and ends the begin of each
+// claim of a task at work no stage took the answer of. Run calls it as it
+// returns; a second call does nothing new.
 func (e *Engine) stopBackground() {
 	e.bgCancel()
 	done := make(chan struct{})
@@ -348,11 +350,16 @@ func (e *Engine) stopBackground() {
 	case <-time.After(drainWait):
 		e.log.Warn("work off the loop did not end within the drain's wait; the daemon stops anyway", "wait", drainWait)
 	}
+	ctx := context.Background() // the engine's is cancelled
+	if tasks, err := e.reg.Tasks(ctx); err == nil {
+		e.sweepClaims(ctx, tasks)
+	} else {
+		e.log.Warn("read the tasks at the drain: the copies of their claims are released after the restart", "err", err)
+	}
 	e.claimMu.Lock()
 	runs := e.claims
 	e.claims = map[int64]*claimRun{}
 	e.claimMu.Unlock()
-	ctx := context.Background() // the engine's is cancelled
 	for id, run := range runs {
 		if !run.ended() {
 			e.event(ctx, id, "claim", registry.PhaseFail, "the daemon stopped during the claim: the next claim resumes its steps")
@@ -399,8 +406,9 @@ func (e *Engine) sweepClaims(ctx context.Context, tasks []registry.Task) {
 			continue
 		}
 		if err := e.d.Copies.Release(ctx, g.t, "its task ended during the claim"); err != nil {
-			e.log.Warn("release the copy of a task that ended during its claim", "task", g.t.ID, "err", err)
-			e.event(ctx, g.t.ID, "release", registry.PhaseFail, err.Error())
+			if g.t.Repo != "" { // a task the registry has: tried again until the copy is free
+				e.owe(ctx, g.t, g.run.copy.Name, err)
+			}
 			continue
 		}
 		e.event(ctx, g.t.ID, "claim", registry.PhaseInfo, "released what the claim reserved: the task ended during it")

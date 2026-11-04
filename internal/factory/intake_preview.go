@@ -76,7 +76,7 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 			key, summary = tk.Key, tk.Summary
 		}
 		if key == "" || tk != nil {
-			f.Branch, _ = e.branchFor(ctx, repo.Repo, login, key, summary)
+			f.Branch, _ = e.branchFor(ctx, 0, repo.Repo, login, key, summary)
 		}
 	}
 	f.Starts = e.startsWhen(ctx)

@@ -258,12 +258,13 @@ func (e *Engine) operatorLogin(repo string) (string, error) {
 	return "", errors.New(`no [[identity]] of kind "gh" names your GitHub login: a task's branch starts with it`)
 }
 
-// branchFor is the branch of a new task of repo: <login>-<KEY>-<slug> for
-// a key, <login>-<slug> for a prompt, with the slug of the Jira summary or
-// the prompt. A name another task has, or a branch the repository's main
-// clone has (local or origin's: yours, made without the factory), gets -2,
-// -3, ...: a claim would check that branch out, and its push would meet it.
-func (e *Engine) branchFor(ctx context.Context, repo, login, key, words string) (string, error) {
+// branchFor is the branch of a task of repo: <login>-<KEY>-<slug> for a
+// key, <login>-<slug> for a prompt, with the slug of the Jira summary or
+// the prompt (a key alone without words). A name another task than self
+// has, or a branch the repository's main clone has (local or origin's:
+// yours, made without the factory), gets -2, -3, ...: a claim would check
+// that branch out, and its push would meet it.
+func (e *Engine) branchFor(ctx context.Context, self int64, repo, login, key, words string) (string, error) {
 	parts := []string{login}
 	if key != "" {
 		parts = append(parts, key)
@@ -280,29 +281,32 @@ func (e *Engine) branchFor(ctx context.Context, repo, login, key, words string) 
 	}
 	taken := map[string]bool{}
 	for _, t := range tasks {
-		taken[t.Branch] = true
-	}
-	clone := ""
-	if r, ok := e.cfg.FactoryRepo(repo); ok && e.d.Git != nil {
-		clone = r.MainClone
-	}
-	inClone := func(b string) bool {
-		if clone == "" {
-			return false
+		if t.ID != self {
+			taken[t.Branch] = true
 		}
-		for _, ref := range []string{"refs/heads/" + b, "refs/remotes/origin/" + b} {
-			if _, err := e.d.Git.RevParse(ctx, clone, ref); err == nil {
-				return true
-			}
-		}
-		return false // no such ref, or git could not tell: the claim's switch reports a clash
 	}
 	for n, b := 2, name; ; n++ {
-		if !taken[b] && !inClone(b) {
+		if !taken[b] && !e.branchExists(ctx, repo, b) {
 			return b, nil
 		}
 		b = fmt.Sprintf("%s-%d", name, n)
 	}
+}
+
+// branchExists reports whether the main clone of repo has branch b, its
+// own or origin's; false without git, and when git cannot tell (a claim's
+// switch reports a clash then).
+func (e *Engine) branchExists(ctx context.Context, repo, b string) bool {
+	r, ok := e.cfg.FactoryRepo(repo)
+	if !ok || e.d.Git == nil || r.MainClone == "" {
+		return false
+	}
+	for _, ref := range []string{"refs/heads/" + b, "refs/remotes/origin/" + b} {
+		if _, err := e.d.Git.RevParse(ctx, r.MainClone, ref); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // jiraDown reports whether err is Jira not answering (curl exit 6, 7 or
@@ -345,7 +349,7 @@ func (e *Engine) startKey(ctx context.Context, p StartPayload, repo config.Facto
 	case err != nil && ctx.Err() != nil:
 		return registry.Task{}, ctx.Err()
 	case err != nil && jiraDown(err):
-		return e.startWaiting(ctx, p, repo, in, err)
+		return e.startWaiting(ctx, p, repo, login, in, err)
 	case err != nil:
 		return registry.Task{}, jiraCause(in.Key, err)
 	}
@@ -358,7 +362,7 @@ func (e *Engine) startKey(ctx context.Context, p StartPayload, repo config.Facto
 	if kind == "" {
 		kind, why = PickKind(e.cfg.Factory, &tk, in.Guidance)
 	}
-	branch, err := e.branchFor(ctx, repo.Repo, login, tk.Key, tk.Summary)
+	branch, err := e.branchFor(ctx, 0, repo.Repo, login, tk.Key, tk.Summary)
 	if err != nil {
 		return registry.Task{}, err
 	}
@@ -392,17 +396,23 @@ func (e *Engine) heldBy(ctx context.Context, key string, err error) (registry.Ta
 }
 
 // startWaiting makes the task of a key Jira does not answer for: waiting
-// for Jira (retryJira tries it), with your guidance and a kind from the
-// start (yours, else the one your words pick, PickKind without a ticket),
-// so a task you take over and let go on has one; the title, the branch and
-// ticket.md come when Jira answers, and a picked kind follows its type.
-func (e *Engine) startWaiting(ctx context.Context, p StartPayload, repo config.FactoryRepo, in StartInput, cause error) (registry.Task, error) {
+// for Jira (retryJira tries it), with your guidance, a kind from the start
+// (yours, else the one your words pick, PickKind without a ticket) and a
+// branch named by the key (<login>-<KEY>), so a task you take over and let
+// go on has both; the title and ticket.md come when Jira answers, a picked
+// kind follows its type, and the summary's words join the branch's name.
+func (e *Engine) startWaiting(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput,
+	cause error) (registry.Task, error) {
 	kind := p.Kind
 	if kind == "" {
 		kind, _ = PickKind(e.cfg.Factory, nil, in.Guidance)
 	}
+	branch, err := e.branchFor(ctx, 0, repo.Repo, login, in.Key, "")
+	if err != nil {
+		return registry.Task{}, err
+	}
 	t, err := e.reg.CreateTask(ctx, registry.Task{JiraKey: in.Key, Guidance: in.Guidance, Kind: kind, Repo: repo.Repo,
-		Title: in.Key, State: registry.TaskWaiting, WaitsWho: waitJira, WaitsWhat: jiraWaitWhat})
+		Title: in.Key, State: registry.TaskWaiting, Branch: branch, WaitsWho: waitJira, WaitsWhat: jiraWaitWhat})
 	if err != nil {
 		return e.heldBy(ctx, in.Key, err)
 	}
@@ -465,7 +475,9 @@ func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
 
 // startTicket starts a task that waited for Jira with the ticket Jira gave:
 // its title, its kind (picked again with the ticket when intake picked it
-// and no stage has started), its branch and ticket.md, then queued or
+// and no stage has started), its branch (named again with the summary's
+// words while no stage has started and the branch does not exist yet: a
+// claim never loses the branch it made) and ticket.md, then queued or
 // active as a start's gate says.
 func (e *Engine) startTicket(ctx context.Context, t registry.Task, tk jira.Ticket, picked bool) error {
 	login, err := e.operatorLogin(t.Repo)
@@ -477,9 +489,11 @@ func (e *Engine) startTicket(ctx context.Context, t registry.Task, tk jira.Ticke
 	if kind == "" || (picked && t.Stage == "") {
 		kind, why = PickKind(e.cfg.Factory, &tk, t.Guidance)
 	}
-	branch, err := e.branchFor(ctx, t.Repo, login, t.JiraKey, tk.Summary)
-	if err != nil {
-		return err
+	branch := t.Branch
+	if branch == "" || (t.Stage == "" && !e.branchExists(ctx, t.Repo, branch)) {
+		if branch, err = e.branchFor(ctx, t.ID, t.Repo, login, t.JiraKey, tk.Summary); err != nil {
+			return err
+		}
 	}
 	if wrote := e.writeTicket(ctx, t, tk) == nil; !wrote {
 		return nil // writeData sent the task to you with the cause
@@ -519,7 +533,7 @@ func (e *Engine) startPrompt(ctx context.Context, p StartPayload, repo config.Fa
 	if kind == "" {
 		kind, why = PickKind(e.cfg.Factory, nil, in.Prompt)
 	}
-	branch, err := e.branchFor(ctx, repo.Repo, login, "", in.Prompt)
+	branch, err := e.branchFor(ctx, 0, repo.Repo, login, "", in.Prompt)
 	if err != nil {
 		return registry.Task{}, err
 	}

@@ -11304,13 +11304,15 @@ type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
 	Release(ctx context.Context, t registry.Task, reason string) error
 	Free(ctx context.Context) (int, error)
+	Reserved(ctx context.Context) ([]Reservation, error)
 	StartServer(ctx context.Context, c Copy) error
 	StopServer(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
 }
     Copies are the repositories' copies the tasks work in (copies.go): a claim
     for a task (the copy it used last first), its release, how many are free,
-    the copy's local server, and the reconcile of the servers after a restart.
+    the copies reserved and for which task, the copy's local server, and the
+    reconcile of the servers after a restart.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error)) Copies
@@ -11501,6 +11503,13 @@ type PreviewPayload struct {
 }
     PreviewPayload is a ReqPreview: the new-task screen's text, whose preview
     the daemon answers as the JSON of a tui.NewTaskForm.
+
+type Reservation struct {
+	TaskID int64
+	Copy   string
+}
+    Reservation is a copy a task's owner row holds, from its claim (one that got
+    the copy, waits or failed) until its release.
 
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
@@ -12554,6 +12563,10 @@ var ErrOperatorInPane = errors.New("you're in that pane")
 
 
 FUNCTIONS
+
+func OwnerTask(nodeID string) (int64, bool)
+    OwnerTask is the task an owner row's node id names (Owner), false for a row
+    that is no task's.
 
 func PromptHash(text string) string
     PromptHash is the ledger's hash of a prompt: the sha256 of its text with the

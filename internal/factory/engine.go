@@ -76,15 +76,23 @@ type Copy = runtime.Copy
 
 // Copies are the repositories' copies the tasks work in (copies.go): a
 // claim for a task (the copy it used last first), its release, how many are
-// free, the copy's local server, and the reconcile of the servers after a
-// restart.
+// free, the copies reserved and for which task, the copy's local server,
+// and the reconcile of the servers after a restart.
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
 	Release(ctx context.Context, t registry.Task, reason string) error
 	Free(ctx context.Context) (int, error)
+	Reserved(ctx context.Context) ([]Reservation, error)
 	StartServer(ctx context.Context, c Copy) error
 	StopServer(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
+}
+
+// Reservation is a copy a task's owner row holds, from its claim (one that
+// got the copy, waits or failed) until its release.
+type Reservation struct {
+	TaskID int64
+	Copy   string
 }
 
 // Jira reads a task's ticket, and searches issues by the words of a free
@@ -216,6 +224,9 @@ type Engine struct {
 	claims     map[int64]*claimRun
 	claimWaits map[int64]*claimWait
 	held       map[int64]Copy
+	// debts are the releases of ended tasks' copies that did not go through
+	// (payReleaseDebts); claimMu guards them too.
+	debts map[int64]*releaseDebt
 
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
@@ -253,6 +264,7 @@ func New(d Deps) *Engine {
 		claims:     map[int64]*claimRun{},
 		claimWaits: map[int64]*claimWait{},
 		held:       map[int64]Copy{},
+		debts:      map[int64]*releaseDebt{},
 	}
 }
 
@@ -456,6 +468,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	e.sweepHeavy(ctx, tasks)
 	e.sweepClaims(ctx, tasks)
+	e.payReleaseDebts(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
 	e.pressure(ctx, now, tasks)
 	infra, held := e.holds[HoldInfra]

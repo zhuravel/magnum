@@ -46,7 +46,21 @@ func repoName(full string) string {
 	return "task"
 }
 
-func ownerNode(id int64) string { return "factory:task:" + strconv.FormatInt(id, 10) }
+// ownerNodePrefix starts the node id of a task's owner row.
+const ownerNodePrefix = "factory:task:"
+
+func ownerNode(id int64) string { return ownerNodePrefix + strconv.FormatInt(id, 10) }
+
+// OwnerTask is the task an owner row's node id names (Owner), false for a
+// row that is no task's.
+func OwnerTask(nodeID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(nodeID, ownerNodePrefix)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil && id > 0
+}
 
 // Owner upserts task t's owner row: repository factory/<repo name>, number
 // the task's id, URL file://<task dir>, head the task's newest attempt

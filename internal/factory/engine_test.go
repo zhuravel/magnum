@@ -1,10 +1,12 @@
 package factory
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -114,25 +116,33 @@ func (f *fakeRuntime) parked() []int64 {
 }
 
 // fakeCopies records the servers it was asked to start and stop and the
-// releases; a claim answers claimed, or claimErr, after block (when set)
-// is closed or ctx ends, and counts itself in claims.
+// releases; a claim reserves a copy for its task (reserved: the claimed
+// one's name, else factory1) and answers claimed, or claimErr, after block
+// (when set) is closed or ctx ends, and counts itself in claims. A release
+// answers releaseErr, or frees the task's reservation.
 type fakeCopies struct {
-	mu       sync.Mutex
-	started  []string
-	stopped  []string
-	released []int64
-	claimed  Copy
-	claimErr error
-	claims   int
-	block    chan struct{}
+	mu         sync.Mutex
+	started    []string
+	stopped    []string
+	released   []int64
+	reserved   map[int64]string
+	releaseErr error
+	claimed    Copy
+	claimErr   error
+	claims     int
+	block      chan struct{}
 	// ended counts the claims that returned, cancelled those that returned
 	// because their context ended.
 	ended, cancelled int
 }
 
-func (f *fakeCopies) Claim(ctx context.Context, _ registry.Task) (Copy, error) {
+func (f *fakeCopies) Claim(ctx context.Context, t registry.Task) (Copy, error) {
 	f.mu.Lock()
 	f.claims++
+	if f.reserved == nil {
+		f.reserved = map[int64]string{}
+	}
+	f.reserved[t.ID] = cmp.Or(f.claimed.Name, "factory1")
 	block := f.block
 	f.mu.Unlock()
 	defer func() {
@@ -182,7 +192,38 @@ func (f *fakeCopies) Release(_ context.Context, t registry.Task, _ string) error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.released = append(f.released, t.ID)
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+	delete(f.reserved, t.ID)
 	return nil
+}
+
+func (f *fakeCopies) Reserved(context.Context) ([]Reservation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []Reservation
+	for id, name := range f.reserved {
+		out = append(out, Reservation{TaskID: id, Copy: name})
+	}
+	slices.SortFunc(out, func(a, b Reservation) int { return cmp.Compare(a.TaskID, b.TaskID) })
+	return out, nil
+}
+
+// reserve makes copy name reserved for task id, as a claim leaves it.
+func (f *fakeCopies) reserve(id int64, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reserved == nil {
+		f.reserved = map[int64]string{}
+	}
+	f.reserved[id] = name
+}
+
+func (f *fakeCopies) setReleaseErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releaseErr = err
 }
 
 func (f *fakeCopies) Free(context.Context) (int, error) { return 1, nil }
@@ -214,7 +255,17 @@ type harness struct {
 	rt     *fakeRuntime
 	copies *fakeCopies
 	layout paths.Layout
+	deps   Deps
 	e      *Engine
+}
+
+// restart builds a new engine over the same registry and collaborators, as
+// a daemon restart does: nothing of the old engine's memory comes along.
+func (h *harness) restart() {
+	h.t.Helper()
+	h.e.stopBackground()
+	h.e = New(h.deps)
+	h.t.Cleanup(h.e.stopBackground)
 }
 
 func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
@@ -230,6 +281,7 @@ func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
 	for _, f := range edit {
 		f(&d)
 	}
+	h.deps = d
 	h.e = New(d)
 	t.Cleanup(h.e.stopBackground) // no claim or overlap outlives the test
 	return h

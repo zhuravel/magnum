@@ -3,6 +3,8 @@ package factory
 import (
 	"context"
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -157,6 +159,166 @@ func TestADrainCancelsTheClaimsThatRunAndWaitsForThem(t *testing.T) {
 		t.Fatalf("after Run returned %d claims ended, %d cancelled; want the running one cancelled and ended", ended, cancelled)
 	}
 	h.wantClaimsClosed(task.ID)
+}
+
+// A stop that cancels a running claim leaves the release to the sweep; a
+// drain right after that tick still releases the copy the claim reserved
+// before Run returns (a stopped task is no restart's), and the claim's
+// begin ends without promising a next claim.
+func TestADrainAfterAStopReleasesTheCopyOfTheRunningClaim(t *testing.T) {
+	h := newHarness(t)
+	h.copies.block = make(chan struct{})
+	claimer := h.task("PR-12341", registry.TaskActive, "investigate")
+	helper := h.task("PR-12342", registry.TaskActive, "investigate")
+	started := make(chan struct{}, 1)
+	term := make(chan chan<- os.Signal, 1)
+	h.stage(config.FactoryStageAgents, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		switch t.ID {
+		case claimer.ID:
+			_, err := h.e.claimCopy(ctx, t)
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			return false, err
+		case helper.ID:
+			select {
+			case sigs := <-term: // SIGTERM lands in the tick that stops the claimer
+				sigs <- syscall.SIGTERM
+				for i := 0; i < 2000 && !h.e.draining.Load(); i++ {
+					time.Sleep(5 * time.Millisecond)
+				}
+			default:
+			}
+		}
+		return false, nil
+	})
+	sigs := h.captureSignals()
+	done := make(chan error, 1)
+	go func() { done <- h.e.Run(h.ctx) }()
+	sigCh := <-sigs
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no claim started")
+	}
+	if _, err := h.reg.EnqueueRequest(h.ctx, ReqStop, StopPayload{TaskID: claimer.ID, Surface: "cli"}); err != nil {
+		t.Fatal(err)
+	}
+	term <- sigCh
+	h.e.Kick()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after SIGTERM")
+	}
+	if got := h.reload(claimer.ID); got.State != registry.TaskStopped {
+		t.Fatalf("the claimer is %s, want stopped", got.State)
+	}
+	if got := h.copies.releases(); len(got) != 1 || got[0] != claimer.ID {
+		t.Fatalf("released %v before Run returned, want the stopped task's reserved copy", got)
+	}
+	h.wantClaimsClosed(claimer.ID)
+	for _, ev := range h.events(claimer.ID, "claim") {
+		if strings.Contains(ev.Text, "next claim") {
+			t.Fatalf("a stopped task's claim promises a next claim: %q", ev.Text)
+		}
+	}
+}
+
+// A release the copy's guard refuses (your changes or your console in it)
+// is a debt: it is tried again after 1, 2, 4 and then every 5 minutes until
+// the copy is free, and after 30 minutes one alert names the copy and the
+// guard's reason. The debt is read from the reservations, not memory.
+func TestARefusedReleaseIsTriedAgainUntilTheCopyIsFree(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12343", registry.TaskActive, "investigate")
+	h.copies.reserve(task.ID, "factory2")
+	h.copies.setReleaseErr(slots.ErrHold{Reason: slots.HoldDirtyWorktree, Detail: "factory2 has your changes"})
+	if _, err := h.e.stopTask(h.ctx, StopPayload{TaskID: task.ID, Surface: "cli"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.copies.releases(); len(got) != 1 {
+		t.Fatalf("the stop released %v, want one try", got)
+	}
+	alerts := func() []registry.Event {
+		var out []registry.Event
+		for _, ev := range h.events(task.ID, "alert") {
+			if strings.Contains(ev.Text, "factory2") {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+	stop := h.clock.Now()
+	for _, s := range []struct {
+		at    time.Duration
+		tries int
+	}{
+		{30 * time.Second, 1}, {time.Minute, 2}, {2*time.Minute + 59*time.Second, 2}, {3 * time.Minute, 3},
+		{7 * time.Minute, 4}, {12 * time.Minute, 5}, {17 * time.Minute, 6}, {22 * time.Minute, 7}, {27 * time.Minute, 8},
+	} {
+		h.clock.Set(stop.Add(s.at))
+		h.tick()
+		if got := len(h.copies.releases()); got != s.tries {
+			t.Fatalf("at +%s: %d tries of the release, want %d", s.at, got, s.tries)
+		}
+	}
+	if a := alerts(); len(a) != 0 {
+		t.Fatalf("an alert before 30 minutes: %+v", a)
+	}
+	h.clock.Set(stop.Add(32 * time.Minute))
+	h.tick()
+	a := alerts()
+	if len(a) != 1 || !strings.Contains(a[0].Text, "dirty_worktree") || !strings.Contains(a[0].Text, "your changes") {
+		t.Fatalf("alerts %+v, want one naming factory2 and the guard's reason", a)
+	}
+	h.clock.Set(stop.Add(37 * time.Minute))
+	h.tick()
+	if got := len(alerts()); got != 1 {
+		t.Fatalf("%d alerts, want one: it keeps trying, it alerts once", got)
+	}
+	if got := len(h.copies.releases()); got != 10 {
+		t.Fatalf("%d tries, want 10: it keeps trying", got)
+	}
+	h.copies.setReleaseErr(nil)
+	h.clock.Set(stop.Add(42 * time.Minute))
+	h.tick()
+	h.clock.Set(stop.Add(60 * time.Minute))
+	h.tick()
+	if got := len(h.copies.releases()); got != 11 {
+		t.Fatalf("%d tries, want the one that freed the copy and no more", got)
+	}
+}
+
+// A release debt is read from the registry and the copies' reservations:
+// after a restart, the copies tasks that stopped or are done still hold are
+// released on the first tick; a task at work, or one that waits on you,
+// keeps its copy.
+func TestAReleaseDebtSurvivesARestart(t *testing.T) {
+	h := newHarness(t)
+	stopped := h.task("PR-12344", registry.TaskStopped, "investigate")
+	done := h.task("PR-12345", registry.TaskDone, "publish")
+	working := h.task("PR-12346", registry.TaskActive, "coding")
+	waiting := h.task("PR-12347", registry.TaskNeedsYou, "questions")
+	for i, task := range []registry.Task{stopped, done, working, waiting} {
+		h.copies.reserve(task.ID, "factory"+string(rune('1'+i)))
+	}
+	h.restart()
+	h.tick()
+	got := h.copies.releases()
+	slices.Sort(got)
+	if !slices.Equal(got, []int64{stopped.ID, done.ID}) {
+		t.Fatalf("released %v, want the stopped and the done tasks' copies", got)
+	}
+	h.clock.Add(time.Hour)
+	h.tick()
+	if got := h.copies.releases(); len(got) != 2 {
+		t.Fatalf("released %v, want no second release", got)
+	}
 }
 
 // A claim that ends in a wait keeps that wait's reason, at no cost, and is

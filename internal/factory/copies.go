@@ -30,6 +30,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -835,6 +836,34 @@ func (c *copySet) writeHandoff(t registry.Task, repo config.FactoryRepo, cp Copy
 		return fmt.Errorf("handoff of %s: %w", TaskKey(t), err)
 	}
 	return nil
+}
+
+// Reserved lists the copies the tasks' owner rows hold, by slot: a claim
+// reserves a copy (one that got it, waits on a guard or failed) and the
+// release frees it, so the factory's agents store says which tasks hold one
+// whatever the daemon remembers.
+func (c *copySet) Reserved(ctx context.Context) ([]Reservation, error) {
+	list, err := c.st.ListSlots(ctx, store.SlotFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("the copies reserved: %w", err)
+	}
+	var out []Reservation
+	for _, sl := range list {
+		if sl.PRID == nil || sl.State == store.SlotRemoved {
+			continue
+		}
+		pr, err := c.st.PRByID(ctx, *sl.PRID)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("the copies reserved: %w", err)
+		}
+		if id, ok := runtime.OwnerTask(pr.NodeID); ok {
+			out = append(out, Reservation{TaskID: id, Copy: sl.Name})
+		}
+	}
+	return out, nil
 }
 
 // Free is how many copies a claim could take now, over the factory's

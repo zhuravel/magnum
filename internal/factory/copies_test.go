@@ -887,6 +887,28 @@ func TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
 // head, the server, what the next claimer needs), and its branch stays: its
 // commits, pushed or not, are the factory's own on a branch of its own, so
 // the guard holds nothing, and the copy goes back to its placeholder.
+// Reserved names the copies the tasks' owner rows hold and for which task,
+// from the claim to the release, so a release that failed can be told from
+// the stores after a restart.
+func TestReservedNamesTheCopiesTasksHold(t *testing.T) {
+	r := newCopiesRig(t, 2)
+	a, b := r.task("PR-12348"), r.task("PR-12349")
+	r.claim(a)
+	r.claim(b)
+	got, err := r.c.Reserved(r.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Reservation{{TaskID: a.ID, Copy: "factory1"}, {TaskID: b.ID, Copy: "factory2"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Reserved = %+v, want %+v", got, want)
+	}
+	r.release(a)
+	if got, _ := r.c.Reserved(r.ctx); !slices.Equal(got, want[1:]) {
+		t.Fatalf("after a release Reserved = %+v, want %+v", got, want[1:])
+	}
+}
+
 func TestReleaseWritesHandoffAndKeepsTheBranch(t *testing.T) {
 	r := newCopiesRig(t, 1)
 	task := r.task("PR-12345")

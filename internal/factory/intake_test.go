@@ -408,6 +408,31 @@ func TestAJiraWaitingTaskHasAKindFromTheStart(t *testing.T) {
 	}
 }
 
+// A task that waits for Jira has a branch from its start, named by intake's
+// rules from your login and the key, so a task you take over can claim a
+// copy and create it. When Jira answers, the summary's words join the name,
+// unless the branch exists already (a claim made it).
+func TestAJiraWaitingTaskHasABranchFromTheStart(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(7)
+	named := r.mustStart("PR-12345 the advocates only")
+	made := r.mustStart("PR-12346")
+	if named.Branch != "zhuravel-PR-12345" || made.Branch != "zhuravel-PR-12346" {
+		t.Fatalf("branches %q and %q, want the key's", named.Branch, made.Branch)
+	}
+	r.refs["refs/heads/zhuravel-PR-12346"] = true // a claim created it meanwhile
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	if got := r.reload(named.ID); got.State != registry.TaskActive || got.Branch != "zhuravel-PR-12345-credit-expiry-reminder-email" {
+		t.Fatalf("after Jira answered the task is %s on %q, want active on the summary's name", got.State, got.Branch)
+	}
+	if got := r.reload(made.ID); got.State != registry.TaskActive || got.Branch != "zhuravel-PR-12346" {
+		t.Fatalf("after Jira answered the task whose branch exists is %s on %q, want it kept", got.State, got.Branch)
+	}
+}
+
 // The overlap line is advisory: it is read off the loop, after the task
 // exists, and a slow gh never delays the start's answer. The line lands
 // among the task's events once it is read.
