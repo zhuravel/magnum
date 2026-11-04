@@ -197,6 +197,9 @@ type Engine struct {
 	lastReveal time.Time
 	parked     map[int64]bool
 	servers    map[int64]server
+	// beforeMark runs right before codexRefused writes its mark (a test's
+	// seam: another writer moving the task meanwhile); nil in a daemon.
+	beforeMark func()
 
 	heavyMu   sync.Mutex
 	heavyHeld map[int64]*heavySlot
@@ -579,32 +582,66 @@ func (e *Engine) observe(ctx context.Context) {
 // codexRefused marks the task of a refused Codex role never for Codex again
 // (Task.CodexNever), at once and in the registry, so no restart and no stage
 // lets Codex back on it: a cybersecurity or abuse warning is never retried
-// (the account is at stake). The update is a compare-and-set on the task's
-// state, tried again once when the task moved meanwhile, with a codex_never
-// event row. A refusal of another kind's role marks nothing.
+// (the account is at stake). The update sets the mark in whatever state the
+// task is (no state to compare: the task may move meanwhile), with a
+// codex_never event row, and is tried again after a failure until it lands,
+// the task is gone, or ctx ends (markTries at most); one that gives up says
+// so in the log and in a codex_never fail event. A refusal of another kind's
+// role marks nothing.
 func (e *Engine) codexRefused(ctx context.Context, ev runtime.Event) {
 	if role, ok := e.cfg.FactoryRole(ev.Role); !ok || role.AgentKind() != config.KindCodex {
 		return
 	}
-	for range 2 {
-		t, err := e.reg.TaskByID(ctx, ev.TaskID)
-		if err != nil || t.CodexNever {
+	var err error
+	for try := 0; try < markTries && ctx.Err() == nil; try++ {
+		if try > 0 && !sleepFor(ctx, markRetry) {
+			break
+		}
+		var t registry.Task
+		if t, err = e.reg.TaskByID(ctx, ev.TaskID); errors.Is(err, registry.ErrNotFound) {
+			return
+		} else if err != nil {
+			continue
+		}
+		if t.CodexNever {
 			return
 		}
-		err = e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
+		if e.beforeMark != nil {
+			e.beforeMark()
+		}
+		if err = e.reg.TransitionTask(ctx, t.ID, nil, "", func(u *registry.TaskUpdate) {
 			u.Set("codex_never", true)
 			u.Because("a Codex refusal")
-		})
-		if errors.Is(err, registry.ErrConflict) {
-			continue // it moved meanwhile: read it again
-		}
-		if err != nil {
-			e.log.Warn("mark a task never for Codex", "task", t.ID, "err", err)
+		}); err == nil {
+			e.event(ctx, t.ID, "codex_never", registry.PhaseInfo,
+				ev.Role+" was refused by Codex; Codex never works on "+TaskKey(t)+" again: "+ev.Reason)
 			return
 		}
-		e.event(ctx, t.ID, "codex_never", registry.PhaseInfo,
-			ev.Role+" was refused by Codex; Codex never works on "+TaskKey(t)+" again: "+ev.Reason)
-		return
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	e.log.Error("a Codex refusal could not mark its task never for Codex; its Codex roles must not run", "task", ev.TaskID,
+		"role", ev.Role, "err", err)
+	e.event(context.WithoutCancel(ctx), ev.TaskID, "codex_never", registry.PhaseFail,
+		fmt.Sprintf("%s was refused by Codex, but the task could not be marked never for Codex: %v", ev.Role, err))
+}
+
+// How codexRefused tries again.
+const (
+	markTries = 20
+	markRetry = 250 * time.Millisecond
+)
+
+// sleepFor waits d or until ctx ends; false when ctx ended.
+func sleepFor(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 

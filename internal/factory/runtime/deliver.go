@@ -219,8 +219,9 @@ func (r *Runtime) endRun(ctx context.Context, id, why string) bool {
 // LetGo settles every prompt to role (as it runs) of task t whose delivery
 // is unknown as abandoned: the operator looked at the pane
 // (EventDeliveryUnknown). The role gets prompts again, none of those is
-// sent a second time, and their runs still in flight are abandoned. It
-// returns how many it settled.
+// sent a second time, and a run of theirs that was never submitted, and
+// carries no prompt that arrived, is abandoned. It returns how many it
+// settled.
 func (r *Runtime) LetGo(ctx context.Context, t registry.Task, role string) (int, error) {
 	return r.letGoWhere(ctx, t.ID, func(e registry.LedgerEntry) bool { return e.Role == role })
 }
@@ -245,9 +246,28 @@ func (r *Runtime) letGoWhere(ctx context.Context, id int64, keep func(registry.L
 		delete(r.misses, e.ID)
 		delete(r.once, unknownKey(e.ID))
 		r.mu.Unlock()
-		r.endRun(ctx, e.RunID, "its prompt was let go") // a run left pending would hold Park and the active runs for good
+		if r.heldOnly(ctx, e, entries) {
+			r.endRun(ctx, e.RunID, "its prompt was let go") // left pending, it would hold Park and the active runs for good
+		}
 	}
 	return n, nil
+}
+
+// heldOnly reports whether the run of entry e holds nothing but what is let
+// go: it was never submitted, and no other entry of it is settled yes. A
+// watchdog nudge rides on the live run it nudges, whose own prompt arrived:
+// letting the nudge go must leave that run observed.
+func (r *Runtime) heldOnly(ctx context.Context, e registry.LedgerEntry, entries []registry.LedgerEntry) bool {
+	if e.RunID == "" {
+		return false
+	}
+	for _, x := range entries {
+		if x.ID != e.ID && x.RunID == e.RunID && x.Delivered == registry.DeliveredYes {
+			return false
+		}
+	}
+	run, err := r.st.RunByID(ctx, e.RunID)
+	return err == nil && run.SubmittedAt == nil
 }
 
 // UnknownReason is the wait of a task whose prompt to role may or may not

@@ -881,3 +881,49 @@ func TestACodexRefusalSurvivesARestart(t *testing.T) {
 		}
 	}
 }
+
+// The mark of a Codex refusal does not depend on the task's state: a task
+// that moves between the engine's read and its write (a stage, the
+// screen) is marked all the same, whatever the moves.
+func TestACodexRefusalIsMarkedWhileTheTaskMoves(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12375", registry.TaskActive, "investigate")
+	moves := 0
+	h.e.beforeMark = func() { // another writer moves the task each time, between a read and the write
+		moves++
+		from, to := registry.TaskActive, registry.TaskWaiting
+		if moves%2 == 0 {
+			from, to = to, from
+		}
+		if err := h.reg.TransitionTask(h.ctx, task.ID, []string{from}, to, nil); err != nil {
+			t.Errorf("move the task: %v", err)
+		}
+	}
+	h.rt.events = []runtime.Event{{TaskID: task.ID, Role: "fx-cause", RunID: "r-1", Kind: runtime.EventRefused, Reason: "codex: flagged"}}
+
+	h.e.observe(h.ctx)
+
+	if got := h.reload(task.ID); !got.CodexNever {
+		t.Fatalf("after %d moves the refused task is not marked never for Codex", moves)
+	}
+	if evs := h.events(task.ID, "codex_never"); len(evs) != 1 || evs[0].Phase != registry.PhaseInfo {
+		t.Fatalf("codex_never events %+v, want one", evs)
+	}
+}
+
+// A mark that cannot land (the daemon stops first) is never lost in
+// silence: a codex_never fail event says the task's Codex roles must not
+// run.
+func TestACodexRefusalThatCannotBeMarkedSaysSo(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12376", registry.TaskActive, "investigate")
+	ctx, cancel := context.WithCancel(h.ctx)
+	cancel()
+
+	h.e.codexRefused(ctx, runtime.Event{TaskID: task.ID, Role: "fx-cause", RunID: "r-1", Kind: runtime.EventRefused})
+
+	evs := h.events(task.ID, "codex_never")
+	if len(evs) != 1 || evs[0].Phase != registry.PhaseFail || !strings.Contains(evs[0].Text, "could not be marked") {
+		t.Fatalf("codex_never events %+v, want one failure that says so", evs)
+	}
+}

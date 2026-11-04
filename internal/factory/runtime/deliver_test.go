@@ -441,3 +441,74 @@ func TestAFreshRuntimeReadsTheTasksCodexNever(t *testing.T) {
 		t.Fatalf("starts %+v, want the Claude fallback", s)
 	}
 }
+
+// A watchdog nudge rides on the hung run it nudges. When herdr's answer to
+// it is lost (a closed connection), its entry stays unknown; letting that
+// entry go must leave the run, whose own prompt arrived, alive and watched.
+func TestLetGoOfANudgeKeepsTheLiveRun(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	id := g.send("fx-repro", "reproduce the bug")
+	g.observe()
+	timeout := g.role("fx-repro").Timeout.Duration
+	g.clock.Add(timeout - NoProgressAfter)
+	g.watchdog()
+	g.h.promptErr = func(text string) error {
+		if strings.Contains(text, "stuck") {
+			return fmt.Errorf("herdr agent.prompt: connection closed without a response: %w", io.EOF)
+		}
+		return nil
+	}
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // step 1: the nudge, its answer lost
+	g.h.promptErr = nil
+	es := g.ledger()
+	if len(es) != 2 || es[1].RunID != id || es[1].Delivered != registry.DeliveredUnknown {
+		t.Fatalf("ledger %+v, want the nudge on run %s, unknown", es, id)
+	}
+
+	if n, err := g.r.LetGo(g.ctx, g.task, "fx-repro"); err != nil || n != 1 {
+		t.Fatalf("LetGo = %d, %v", n, err)
+	}
+
+	if r := g.storeRun(id); r.State != store.RunWorking {
+		t.Fatalf("the live run is %s after the nudge was let go, want working", r.State)
+	}
+	active, err := g.st.ActiveRuns(g.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(active, func(r store.Run) bool { return r.ID == id }) {
+		t.Fatal("the live run left the active runs")
+	}
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	if ended := only(g.observeN(2), EventEnded); len(ended) != 1 || ended[0].RunID != id {
+		t.Fatalf("events %+v, want the live run's end", ended)
+	}
+}
+
+// A run Submit left submitted (herdr timed out once the prompt was in) may
+// be the agent's live turn: letting its unknown prompt go keeps it watched.
+func TestLetGoKeepsARunHerdrMayHaveStarted(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.promptErr = func(string) error {
+		return &herdr.Error{Method: "agent.prompt", Code: herdr.CodeTimeout, Message: "timed out"}
+	}
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); err == nil {
+		t.Fatal("Send = nil, want herdr's timeout")
+	}
+	g.h.promptErr = nil
+	e := g.ledger()[0]
+	if r := g.storeRun(e.RunID); r.State != store.RunSubmitted || e.Delivered != registry.DeliveredUnknown {
+		t.Fatalf("run %s, entry %s: want submitted and unknown", r.State, e.Delivered)
+	}
+
+	if n, err := g.r.LetGo(g.ctx, g.task, "fx-repro"); err != nil || n != 1 {
+		t.Fatalf("LetGo = %d, %v", n, err)
+	}
+
+	if r := g.storeRun(e.RunID); r.State != store.RunSubmitted {
+		t.Fatalf("the run herdr may have started is %s after LetGo, want still submitted", r.State)
+	}
+}
