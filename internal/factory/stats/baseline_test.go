@@ -188,7 +188,7 @@ func TestDistOfEvenAndOddCounts(t *testing.T) {
 	got := func(counts ...int) stats.Dist {
 		var ss []stats.Session
 		for i, n := range counts {
-			ss = append(ss, stats.Session{Key: fmt.Sprintf("PR-%d", 12300+i), Messages: make([]string, n)})
+			ss = append(ss, stats.Session{Key: fmt.Sprintf("PR-%d", 12301+i), Messages: make([]string, n)})
 			for j := range ss[i].Messages {
 				ss[i].Messages[j] = "word"
 			}
@@ -420,6 +420,37 @@ func TestReadSessionsComesOldestFirst(t *testing.T) {
 	}
 	if b.Tickets != 1 || b.TypedPerTicket.Max != 4 || b.StepStartsPerTicket.Max != 0 {
 		t.Errorf("baseline %+v, want one ticket of 4 messages and no step start: the ticket's first message is the earlier session's open PR", b)
+	}
+}
+
+// A transcript whose turns carry no timestamp cannot say when it began, so it
+// comes after every session that can: it never becomes the first session of a
+// ticket and never takes the exemption of the ticket's first message.
+func TestReadSessionsPutsASessionWithoutTimestampsLast(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	untimed, err := json.Marshal(map[string]any{"type": "user", "turnOrigin": "human",
+		"message": map[string]any{"role": "user", "content": "open PR for PR-12301"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, filepath.Join(dir, "a-untimed.jsonl"), string(untimed))
+	writeTranscript(t, filepath.Join(dir, "b-timed.jsonl"), claudeLine(at, "human", "work on PR-12301"))
+
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey)
+	if err != nil || skipped != 0 {
+		t.Fatalf("ReadSessions = %v, skipped %d, %v", sessions, skipped, err)
+	}
+	if len(sessions) != 2 || sessions[0].Messages[0] != "work on PR-12301" || sessions[1].Messages[0] != "open PR for PR-12301" {
+		t.Fatalf("sessions %+v, want the timed one first and the untimed one last, though its name sorts first", sessions)
+	}
+	b, err := stats.BuildBaseline(sessions, []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.TypedPerTicket.Max != 2 || b.StepStartsPerTicket.Max != 1 {
+		t.Errorf("baseline %+v, want 2 messages and 1 step start: the untimed session's open PR is not the ticket's first message", b)
 	}
 }
 

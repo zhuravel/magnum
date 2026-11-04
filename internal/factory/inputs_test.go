@@ -6,10 +6,11 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
-// The one place the engine records an input classifies the words you typed
-// (the task's text, guidance, a send-back's note, a pane's turn, one line
-// said), whatever the surface; an act (an answer, a decision, a retry) and a
-// dropped paste have no words to classify, and a class the caller knows stays.
+// The one place the engine records an input classifies your words (the task's
+// text, guidance, a send-back's note, a pane's turn, one line said, an
+// answer), whatever the surface; a decision's text is the machine's choice,
+// not your words, a retry has none, a dropped paste has none left, and a
+// class the caller knows stays.
 func TestRecordInputClassifiesTheWordsYouTyped(t *testing.T) {
 	h := newHarness(t)
 	task := h.task("PR-12390", registry.TaskActive, "coding")
@@ -25,7 +26,9 @@ func TestRecordInputClassifiesTheWordsYouTyped(t *testing.T) {
 		{"guidance", registry.Input{Kind: registry.InputGuidance, Text: "wrong table, use the ledger"}, registry.ClassCorrection},
 		{"a send back's note", registry.Input{Kind: registry.InputSendBack, Text: "you forgot the down method"}, registry.ClassCorrection},
 		{"a dropped paste", registry.Input{Kind: registry.InputPaneTyped, DroppedReason: "a long paste"}, ""},
-		{"an answer", registry.Input{Kind: registry.InputAnswer, Text: "do as recommended"}, ""},
+		{"an answer that takes the recommendation", registry.Input{Kind: registry.InputAnswer, Text: "do as recommended"}, registry.ClassStepStart},
+		{"an answer in your own words", registry.Input{Kind: registry.InputAnswer, Text: "Seven days before it expires"}, registry.ClassInfo},
+		{"an answer that approves", registry.Input{Kind: registry.InputAnswer, Text: "Yes"}, registry.ClassApproval},
 		{"a decision", registry.Input{Kind: registry.InputDecision, Text: "push"}, ""},
 		{"a retry", registry.Input{Kind: registry.InputRetry}, ""},
 		{"a class the caller knows", registry.Input{Kind: registry.InputPaneTyped, Text: "open PR", Class: registry.ClassInfo}, registry.ClassInfo},

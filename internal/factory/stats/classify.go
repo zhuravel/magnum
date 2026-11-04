@@ -17,11 +17,14 @@ import (
 // the recommendation), approval (a yes), correction (the agent was wrong or
 // must do it otherwise), access (credentials, a login, permission) or info
 // (anything else, which is also the class of an empty message). It reads the
-// words alone, in this order: a message that hands over a credential is
-// access whatever else it says, and one that refuses a step ("don't push
-// yet") is a correction, not a step start. Stagings live in the operator's
-// config, not here: any staging-<name> branch counts. The engine stores the
-// class with registry.ClassifyInput; the classes are the registry's.
+// words alone, in this order: a message that hands over a credential or
+// grants access is access whatever else it says, and one that refuses a step
+// ("don't push yet") is a correction, not a step start. Only the acts count:
+// "log in to the sandbox" is access, "fix the login page" is information,
+// "push it" starts a step and "the push failed" does not. Stagings live in the
+// operator's config, not here: any staging-<name> branch counts. The classes
+// are the registry's; the factory's engine stores the class of your words
+// with the input when it records them.
 func Classify(text string) string {
 	t := normalize(text)
 	switch {
@@ -31,7 +34,7 @@ func Classify(text string) string {
 		return registry.ClassAccess
 	case correctionRE.MatchString(t):
 		return registry.ClassCorrection
-	case stepStartRE.MatchString(strings.ReplaceAll(t, "push notification", "")), goOnRE.MatchString(t):
+	case startsAStep(t):
 		return registry.ClassStepStart
 	case approvalRE.MatchString(t):
 		return registry.ClassApproval
@@ -46,18 +49,27 @@ func normalize(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
+// startsAStep reports whether the normalized message asks for a step. A push
+// notification is a subject, not a push, so it is taken out first.
+func startsAStep(t string) bool {
+	t = strings.ReplaceAll(t, "push notification", "")
+	return stepStartRE.MatchString(t) || pushRE.MatchString(t) || goOnRE.MatchString(t)
+}
+
 // phrases compiles alternatives, each a whole phrase, into one regular
 // expression matched on word edges.
 func phrases(alternatives ...string) *regexp.Regexp {
 	return regexp.MustCompile(`\b(?:` + strings.Join(alternatives, "|") + `)\b`)
 }
 
+// secrets are the nouns of what you hand an agent to let it in.
+const secrets = `(?:password|passcode|credentials?|api[ -]?keys?|(?:access|auth|bearer|secret|api) tokens?|secret keys?|ssh keys?|` +
+	`(?:2fa|mfa|otp|one[- ]time|verification|sms|login|auth) (?:codes?|passwords?)|otp)`
+
 var (
-	// stepStartRE: the phrases that start the next step of the work. Push is
-	// the word alone (a push notification is a subject, removed beforehand).
+	// stepStartRE: the phrases that start the next step of the work.
 	stepStartRE = phrases(
 		`(?:open|create|make|raise|submit|file)(?: me)? (?:a |the |new )*(?:draft )?(?:pr|pull request)`,
-		`push`,
 		`(?:merge|update from|rebase (?:on|onto)) (?:the )?(?:latest )?(?:master|main|parent|base|develop)(?: branch)?`,
 		`(?:merge|deploy|ship|put)\b[^.!?]{0,40}\bstaging-[a-z0-9][a-z0-9_-]*`,
 		`(?:do|go) (?:it )?as (?:you )?(?:recommend|recommended|suggest|suggested)`,
@@ -68,6 +80,12 @@ var (
 		`start (?:the )?(?:implementation|coding|work)`,
 		`commit (?:it|this|that|everything|the changes)`,
 	)
+
+	// pushRE: push as an act asked for, the message's own verb or the one after
+	// a comma, a conjunction, "please" or "can you". "the push failed" and
+	// "the pushed commit" are about a push, and start nothing.
+	pushRE = regexp.MustCompile(`(?:^|[,;:.!?] ?|\b(?:and|then|ok|okay|now|please|just|also|go) |\b(?:can|could|would|will) you (?:please )?)` +
+		`(?:git )?push(?: |$|[,;:.!?])`)
 
 	// goOnRE: "continue" and its kin start a step only as the message's own
 	// words, not inside a sentence about a job that should continue.
@@ -83,15 +101,27 @@ var (
 		`still (?:fails|failing|broken|wrong|not working)|wrong (?:file|table|branch|place|one|approach|way))\b|` +
 		`\binstead\b[.!]?$`)
 
-	// accessRE: credentials, a login, a permission. A word like "login"
-	// alone is a ticket's subject, so only the acts count.
-	accessRE = phrases(
-		`passwords?`, `passcode`, `credentials?`, `api[ -]?keys?`, `access[ -]?tokens?`, `auth(?:entication)? tokens?`, `secret keys?`,
-		`ssh keys?`, `2fa`, `two[- ]factor`, `one[- ]time (?:code|password)`, `otp`, `sso`, `vpn`,
-		`log ?(?:in|into)(?: to| with| again| first)?`, `sign ?(?:in|into)(?: to| with| again)?`, `logged in`, `re-?authenticate`,
-		`(?:gave|give|given|have|has|grant(?:ed)?) (?:you |me )?access`, `access to`, `(?:can't|cannot|can not|no) access`,
-		`permission denied`, `unauthori[sz]ed`,
-	)
+	// accessRE: handing over a credential, logging in, granting access, the acts
+	// of a VPN or a second factor. A word like "login", "sso" or "password" in
+	// a ticket's subject is none of these, so a noun alone does not match: it
+	// takes a verb that hands the credential over, a possessive, or a login to do.
+	accessRE = regexp.MustCompile(`\b(?:` + strings.Join([]string{
+		// handing a credential over, or saying what is wrong with it
+		`(?:here(?:'s| is| are)|this is|it(?:'s| is)) (?:my |the |your |our |a |an |the new |a new )?` + secrets,
+		secrets + ` (?:is|are|was)`,
+		secrets + `[:=] ?\w+`,
+		`(?:my|your|our) ` + secrets,
+		secrets + ` (?:expired|has expired|changed|was rotated|is wrong|is invalid|stopped working)`,
+		// logging in is something to do
+		`log in (?:to|into|with|again|first|as)`, `log into`, `sign in (?:to|into|with|again|as)`, `sign into`,
+		`(?:you(?:'re| are)|i(?:'m| am)) (?:now )?logged in`, `re-?authenticate`,
+		// granting access
+		`(?:gave|give|given|granted|grant|giving) (?:you|it|the agent|the factory)(?: \w+)? access`,
+		`you (?:now )?have(?: \w+)? access`, `access (?:granted|for you)`,
+		// the acts of a VPN or a second factor
+		`(?:connect(?:ed)?|turn(?:ed)? on|join(?:ed)?|start(?:ed)?) (?:to )?(?:the |my |a )?vpn`,
+		`(?:approve[ds]?|accept(?:ed)?|confirm(?:ed)?) (?:the |a |your |my )?(?:2fa|mfa|two[- ]factor|sso|sign[- ]in|login)(?: prompt| request| push)?`,
+	}, `|`) + `)\b`)
 
 	// approvalRE: a short yes, alone or with a few words.
 	approvalRE = regexp.MustCompile(`^(?:yes|yep|yeah|yup|y|ok|okay|sure|fine|good|great|perfect|nice|agreed|approved?|lgtm|looks good|` +

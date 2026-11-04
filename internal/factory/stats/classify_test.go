@@ -33,6 +33,12 @@ func TestClassifyKnowsTheStepStartingMessages(t *testing.T) {
 		"do as recommended",
 		"Do it as recommended",
 		"go with your recommendation",
+		// a word of the ticket's subject beside the act does not hide it
+		"open PR for the login fix",
+		"merge master and push",
+		"fix the password reset, then push it",
+		"can you push it?",
+		"git push",
 	} {
 		if got := stats.Classify(text); got != registry.ClassStepStart {
 			t.Errorf("Classify(%q) = %q, want %q", text, got, registry.ClassStepStart)
@@ -62,6 +68,13 @@ func TestClassifyTellsTheOtherClasses(t *testing.T) {
 			"log in with my account",
 			"here is the 2FA code: 000000",
 			"your api key expired, use the new one",
+			"log in to the sandbox first",
+			"I granted you access to the staging console",
+			"you have access now",
+			"you are logged in as me",
+			"connect to the vpn and try again",
+			"I approved the 2fa prompt",
+			"use my credentials",
 		},
 		registry.ClassInfo: {
 			"the refund path only matters for expired points",
@@ -70,6 +83,17 @@ func TestClassifyTellsTheOtherClasses(t *testing.T) {
 			"this table has 3 million rows",
 			"",
 			"   ",
+			// the words of a ticket's subject are not acts
+			"fix the login page",
+			"the signin button is broken",
+			"the user has no access to the report",
+			"the sso redirect drops the cart",
+			"the password reset email is late",
+			"the vpn docs need a new section",
+			"the credentials form shows twice",
+			"the push failed on the worker",
+			"push notifications arrive late",
+			"the pushed commit is on the branch",
 		},
 	} {
 		for _, text := range texts {

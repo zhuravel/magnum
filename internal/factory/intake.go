@@ -103,8 +103,9 @@ const (
 	waitMemory = "memory"
 	// startSurface is where a start without one came from.
 	startSurface = "cli"
-	// intakeRole raises the question of which Jira issue a prompt is.
-	intakeRole = "intake"
+	// intakeRole raises the question of which Jira issue a prompt is, and
+	// marks the input that starts a task.
+	intakeRole = registry.RoleIntake
 	noIssue    = "no issue"
 	// whichIssue is that question's text.
 	whichIssue = "Which Jira issue is this?"
@@ -574,14 +575,16 @@ func (e *Engine) startPrompt(ctx context.Context, p StartPayload, repo config.Fa
 
 // recordStart records your text of a start as an input: the guidance after
 // a key, or the start's text (a key alone, a prompt), scrubbed (a long
-// paste is dropped, with the reason), and writes guidance.md.
+// paste is dropped, with the reason), and writes guidance.md. The input
+// carries the intake role, the mark of the message that starts the task: the
+// stats count it as typed and never as a step start.
 func (e *Engine) recordStart(ctx context.Context, t registry.Task, p StartPayload, in StartInput) {
 	kind, text := registry.InputTaskText, strings.TrimSpace(p.Text)
 	if in.Key != "" && in.Guidance != "" {
 		kind, text = registry.InputGuidance, in.Guidance
 	}
 	clean, kept := runtime.Scrub(text)
-	input := registry.Input{TaskID: t.ID, Kind: kind, Surface: cmp.Or(p.Surface, startSurface), Text: clean}
+	input := registry.Input{TaskID: t.ID, Kind: kind, Surface: cmp.Or(p.Surface, startSurface), Role: intakeRole, Text: clean}
 	if !kept {
 		input.Text, input.DroppedReason = "", "a long paste: more than 40 lines or 4000 bytes"
 	}

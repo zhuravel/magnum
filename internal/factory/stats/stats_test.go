@@ -64,6 +64,16 @@ func input(t *testing.T, r *registry.Registry, taskID int64, kind, text, class s
 	}
 }
 
+// startInput records the message that started the task, marked as the engine
+// marks it (the intake role), at offset after t0.
+func startInput(t *testing.T, r *registry.Registry, taskID int64, kind, text, class string, offset time.Duration) {
+	t.Helper()
+	in := registry.Input{TaskID: taskID, Kind: kind, Text: text, Class: class, Role: registry.RoleIntake, At: t0.Add(offset)}
+	if _, err := r.RecordInput(t.Context(), in); err != nil {
+		t.Fatalf("RecordInput(%s %q): %v", kind, text, err)
+	}
+}
+
 func only(t *testing.T, rep stats.Report, key string) stats.TaskStats {
 	t.Helper()
 	for _, ts := range rep.Tasks {
@@ -189,12 +199,12 @@ func TestStatsCountsStepStartingMessages(t *testing.T) {
 	r := openRegistry(t)
 	task := createTask(t, r, "PR-12303")
 
-	input(t, r, task.ID, registry.InputTaskText, "PR-12303", "", 0)                                           // a key alone: information
+	startInput(t, r, task.ID, registry.InputGuidance, "merge master first", "", 0)                            // the start's words: typed, no step start
 	input(t, r, task.ID, registry.InputPaneTyped, "merge master", "", time.Minute)                            // classified by its words
 	input(t, r, task.ID, registry.InputSayOneLine, "go on with that", registry.ClassStepStart, 2*time.Minute) // class stored by the engine
 	input(t, r, task.ID, registry.InputPaneTyped, "open PR", registry.ClassInfo, 3*time.Minute)               // the stored class wins
 	input(t, r, task.ID, registry.InputRetry, "", "", 4*time.Minute)                                          // a step started by hand
-	input(t, r, task.ID, registry.InputGuidance, "open PR when it is done", "", 5*time.Minute)                // the start's words, by their words
+	input(t, r, task.ID, registry.InputGuidance, "open PR when it is done", "", 5*time.Minute)                // guidance given later keeps its class
 	input(t, r, task.ID, registry.InputAnswer, "do as recommended", "", 6*time.Minute)                        // an answer, apart
 	input(t, r, task.ID, registry.InputDecision, "push", "", 7*time.Minute)                                   // a decision, apart
 
@@ -204,7 +214,7 @@ func TestStatsCountsStepStartingMessages(t *testing.T) {
 	}
 	got := only(t, rep, "PR-12303")
 	if got.StepStarts != 4 {
-		t.Errorf("StepStarts = %d, want 4 (merge master, the stored step start, the retry, the guidance)", got.StepStarts)
+		t.Errorf("StepStarts = %d, want 4 (merge master, the stored step start, the retry, the later guidance; not the start's words)", got.StepStarts)
 	}
 	if got.Typed != 5 {
 		t.Errorf("Typed = %d, want 5 (the retry is not a typed message; the answer and the decision are counted apart)", got.Typed)
@@ -214,36 +224,56 @@ func TestStatsCountsStepStartingMessages(t *testing.T) {
 	}
 }
 
-// A task's text is the one message the factory needs to start the task: it
+// The message that starts a task is the one message the factory needs: it
 // counts as typed and never as a step start, whatever its words or its stored
-// class say, or the target of zero step starts could not be reached. Its
-// other classes, and the classes of guidance and of a send-back's note, count
-// as they are.
-func TestStatsCountsAStartTextAsTypedAndNeverAsAStepStart(t *testing.T) {
+// class say, or the target of zero step starts could not be reached. That
+// holds however the start is recorded (a prompt's text, or the guidance after
+// a key) and wherever its input lies among the others: the engine marks it.
+// Guidance or a send-back's note given later keeps its class, and the start's
+// other classes (a correction, say) still count.
+func TestStatsCountsAStartMessageAsTypedAndNeverAsAStepStart(t *testing.T) {
 	t.Parallel()
 	r := openRegistry(t)
-	byWords := createTask(t, r, "PR-12310")
-	stored := createTask(t, r, "PR-12311")
-	other := createTask(t, r, "PR-12312")
+	prompt := createTask(t, r, "PR-12310")
+	keyed := createTask(t, r, "PR-12311")
+	stored := createTask(t, r, "PR-12312")
+	early := createTask(t, r, "PR-12313")
+	corrects := createTask(t, r, "PR-12314")
 
-	input(t, r, byWords.ID, registry.InputTaskText, "fix the points, then open PR", "", 0)       // class by its words
-	input(t, r, stored.ID, registry.InputTaskText, "fix the points", registry.ClassStepStart, 0) // class stored as a step start
+	// A prompt's text, a key's guidance (the same words), both naming a step.
+	input(t, r, prompt.ID, registry.InputTaskText, "fix the points, then open PR", "", 0)
+	startInput(t, r, keyed.ID, registry.InputGuidance, "fix the points, then open PR", "", 0)
+	// Stored as a step start by the engine: the start still is none; the
+	// guidance and the note given later, with the same class, are.
+	startInput(t, r, stored.ID, registry.InputGuidance, "fix the points", registry.ClassStepStart, 0)
 	input(t, r, stored.ID, registry.InputGuidance, "open PR when it is done", registry.ClassStepStart, time.Minute)
 	input(t, r, stored.ID, registry.InputSendBack, "push it again", registry.ClassStepStart, 2*time.Minute)
-	input(t, r, other.ID, registry.InputTaskText, "wrong table, use the ledger", registry.ClassCorrection, 0)
+	// The mark tells the start, not its place: guidance recorded before it
+	// keeps its class.
+	input(t, r, early.ID, registry.InputGuidance, "push it", "", 0)
+	startInput(t, r, early.ID, registry.InputGuidance, "fix the points, then open PR", "", time.Minute)
+	// A start that corrects is still a correction.
+	startInput(t, r, corrects.ID, registry.InputGuidance, "wrong table, use the ledger", registry.ClassCorrection, 0)
 
 	rep, err := stats.ComputeAt(t.Context(), r, time.Time{}, t0.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := only(t, rep, "PR-12310"); got.Typed != 1 || got.StepStarts != 0 {
-		t.Errorf("a start text that names a step: typed %d, step starts %d; want 1 and 0", got.Typed, got.StepStarts)
-	}
-	if got := only(t, rep, "PR-12311"); got.Typed != 3 || got.StepStarts != 2 {
-		t.Errorf("a stored step start of a start text, guidance and a send-back: typed %d, step starts %d; want 3 and 2 (the guidance and the note)", got.Typed, got.StepStarts)
-	}
-	if got := only(t, rep, "PR-12312"); got.Typed != 1 || got.Corrections != 1 {
-		t.Errorf("a start text that corrects: typed %d, corrections %d; want 1 and 1", got.Typed, got.Corrections)
+	for _, c := range []struct {
+		key                   string
+		typed, steps, correct int
+		what                  string
+	}{
+		{"PR-12310", 1, 0, 0, "a prompt's text that names a step"},
+		{"PR-12311", 1, 0, 0, "a key's guidance that names a step"},
+		{"PR-12312", 3, 2, 0, "a stored step start on the start, later guidance and a note (the last two count)"},
+		{"PR-12313", 2, 1, 0, "guidance before the marked start"},
+		{"PR-12314", 1, 0, 1, "a start that corrects"},
+	} {
+		if got := only(t, rep, c.key); got.Typed != c.typed || got.StepStarts != c.steps || got.Corrections != c.correct {
+			t.Errorf("%s: typed %d, step starts %d, corrections %d; want %d, %d and %d", c.what, got.Typed, got.StepStarts, got.Corrections,
+				c.typed, c.steps, c.correct)
+		}
 	}
 }
 

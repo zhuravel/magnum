@@ -67,14 +67,14 @@ var classes = []string{registry.ClassStepStart, registry.ClassApproval, registry
 // none), and the median, quartiles and extremes are taken over the tickets,
 // never over the sessions. The sessions come oldest first (ReadSessions
 // sorts them): the first message of a ticket's first session is the one that
-// starts the work, so it counts as typed and never as a step start, as a
-// task's text does on the factory's side; the first message of a later
-// session keeps its class, because a session opened only to start the next
-// step is what the measure counts. Accuracy is the share of labelled that
-// Classify gets right. It refuses sessions without a key, a set with no
-// message and an empty or mislabelled labelled set, because a baseline it
-// cannot measure is worse than none. The result has no Frozen time;
-// FreezeBaseline sets it.
+// starts the work, so it counts as typed and never as a step start, as the
+// message that starts a task does on the factory's side; the first message of
+// a later session keeps its class, because a session opened only to start
+// the next step is what the measure counts. Accuracy is the share of
+// labelled that Classify gets right. It refuses sessions without a key,
+// a set with no message and an empty or mislabelled labelled set, because
+// a baseline it cannot measure is worse than none. The result has no Frozen
+// time; FreezeBaseline sets it.
 func BuildBaseline(sessions []Session, labelled []Labelled) (Baseline, error) {
 	type count struct{ typed, steps int }
 	tickets := map[string]*count{}
@@ -277,7 +277,8 @@ func ReadLabelled(path string) ([]Labelled, error) {
 // transcript with no message or no key is not guessed at: it is counted in
 // skipped. The sessions come oldest first, by the time of their first
 // message, so that the first session of a ticket is the first one
-// (BuildBaseline). Prompts queued while an agent worked are not read, so a
+// (BuildBaseline); a transcript whose turns carry no timestamp comes after
+// the rest, and is never a ticket's first session. Prompts queued while an agent worked are not read, so a
 // count is never above what was typed. Symbolic links are not followed.
 func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, skipped int, err error) {
 	st, err := os.Stat(dir)
@@ -325,7 +326,17 @@ func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, sk
 	if err != nil {
 		return nil, 0, err
 	}
-	slices.SortStableFunc(found, func(a, b dated) int { return a.began.Compare(b.began) })
+	slices.SortStableFunc(found, func(a, b dated) int {
+		switch {
+		case a.began.IsZero() && b.began.IsZero():
+			return 0
+		case a.began.IsZero(): // no timestamp to say when it began: after the rest
+			return 1
+		case b.began.IsZero():
+			return -1
+		}
+		return a.began.Compare(b.began)
+	})
 	for _, f := range found {
 		sessions = append(sessions, f.session)
 	}

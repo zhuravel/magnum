@@ -26,6 +26,14 @@ const (
 	InputSayOneLine = "say_one_line"
 )
 
+// RoleIntake is the Role of the input that starts a task: the words it was
+// started with, whether they are recorded as its text (a prompt, a key alone)
+// or as the guidance after a key. It is the mark of the start's message, which
+// the statistics count as typed and never as a step start, and which tells it
+// from guidance given later. The answers to the intake's own question carry
+// the role too; their kind tells them apart.
+const RoleIntake = "intake"
+
 // maxInputBefore is the most bytes of the agent's turns kept with an input.
 const maxInputBefore = 1024
 

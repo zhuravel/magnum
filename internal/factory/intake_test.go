@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/stats"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/jira"
 )
@@ -885,5 +886,35 @@ func TestTheWordsOfAStartAreClassifiedWhenRecorded(t *testing.T) {
 		if len(ins) != 1 || ins[0].Kind != c.kind || ins[0].Class != c.class {
 			t.Errorf("start %q: inputs %+v, want one %s input of class %q", c.text, ins, c.kind, c.class)
 		}
+		if len(ins) == 1 && ins[0].Role != registry.RoleIntake {
+			t.Errorf("start %q: the input has the role %q, want %q: the mark of the message that starts the task", c.text, ins[0].Role, registry.RoleIntake)
+		}
+	}
+}
+
+// However a task is started, the message that starts it is typed and never a
+// step start in the stats, even when its words name a step; guidance given
+// later is neither marked nor exempt.
+func TestTheMessageThatStartsATaskIsNeverAStepStart(t *testing.T) {
+	r := newIntakeRig(t)
+	keyed := r.mustStart("PR-12345 fix it, then open PR")
+	prompt := r.mustStart("open PR for the rename of the referral helper")
+	if _, err := r.e.recordInput(r.ctx, registry.Input{TaskID: keyed.ID, Kind: registry.InputGuidance, Surface: "screen", Text: "merge master first"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := stats.ComputeAt(r.ctx, r.reg, time.Time{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[int64]stats.TaskStats{}
+	for _, ts := range rep.Tasks {
+		byID[ts.TaskID] = ts
+	}
+	if got := byID[prompt.ID]; got.Typed != 1 || got.StepStarts != 0 {
+		t.Errorf("a prompt that names a step: typed %d, step starts %d; want 1 and 0", got.Typed, got.StepStarts)
+	}
+	if got := byID[keyed.ID]; got.Typed != 2 || got.StepStarts != 1 {
+		t.Errorf("a key's words that name a step, then guidance that does: typed %d, step starts %d; want 2 and 1 (only the later guidance)", got.Typed, got.StepStarts)
 	}
 }

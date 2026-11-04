@@ -12400,6 +12400,14 @@ const (
     while they work, ended when they stopped, then verified or failed by the
     stage's end fact; abandoned is an attempt a restart found and gave up.
 
+const RoleIntake = "intake"
+    RoleIntake is the Role of the input that starts a task: the words it was
+    started with, whether they are recorded as its text (a prompt, a key alone)
+    or as the guidance after a key. It is the mark of the start's message,
+    which the statistics count as typed and never as a step start, and which
+    tells it from guidance given later. The answers to the intake's own question
+    carry the role too; their kind tells them apart.
+
 
 VARIABLES
 
@@ -13595,12 +13603,15 @@ func Classify(text string) string
     open the PR, push, merge the parent in, merge into a staging branch,
     take the recommendation), approval (a yes), correction (the agent was wrong
     or must do it otherwise), access (credentials, a login, permission) or info
-    (anything else, which is also the class of an empty message). It reads the
-    words alone, in this order: a message that hands over a credential is access
-    whatever else it says, and one that refuses a step ("don't push yet") is
-    a correction, not a step start. Stagings live in the operator's config,
-    not here: any staging-<name> branch counts. The engine stores the class with
-    registry.ClassifyInput; the classes are the registry's.
+    (anything else, which is also the class of an empty message). It reads
+    the words alone, in this order: a message that hands over a credential or
+    grants access is access whatever else it says, and one that refuses a step
+    ("don't push yet") is a correction, not a step start. Only the acts count:
+    "log in to the sandbox" is access, "fix the login page" is information,
+    "push it" starts a step and "the push failed" does not. Stagings live in the
+    operator's config, not here: any staging-<name> branch counts. The classes
+    are the registry's; the factory's engine stores the class of your words with
+    the input when it records them.
 
 func FreezeBaseline(path string, b Baseline) error
     FreezeBaseline writes b to path, once. A path that exists, whatever it is (a
@@ -13608,6 +13619,12 @@ func FreezeBaseline(path string, b Baseline) error
     it is; the file appears whole or not at all (it is written beside path and
     linked into place, which cannot replace a file). A zero Frozen becomes the
     clock's now. The file is private (0600) and holds counts, no text.
+
+func HasWords(kind string) bool
+    HasWords reports whether an input of the kind holds the operator's own
+    words, which the engine classifies when it records them: the typed kinds
+    (IsTyped) and an answer. A decision's text is the machine's choice ("push"),
+    not the operator's words, and the other kinds have no text.
 
 func IsTyped(kind string) bool
     IsTyped reports whether an input of the kind holds the operator's own words:
@@ -13635,15 +13652,16 @@ func BuildBaseline(sessions []Session, labelled []Labelled) (Baseline, error)
     BuildBaseline counts the operator's messages per ticket: the sessions of
     one key are one ticket, with the sum of their messages (a blank message is
     none), and the median, quartiles and extremes are taken over the tickets,
-    never over the sessions. The sessions come oldest first (ReadSessions sorts
-    them): the first message of a ticket's first session is the one that starts
-    the work, so it counts as typed and never as a step start, as a task's text
-    does on the factory's side; the first message of a later session keeps its
-    class, because a session opened only to start the next step is what the
-    measure counts. Accuracy is the share of labelled that Classify gets right.
-    It refuses sessions without a key, a set with no message and an empty or
-    mislabelled labelled set, because a baseline it cannot measure is worse than
-    none. The result has no Frozen time; FreezeBaseline sets it.
+    never over the sessions. The sessions come oldest first (ReadSessions
+    sorts them): the first message of a ticket's first session is the one
+    that starts the work, so it counts as typed and never as a step start,
+    as the message that starts a task does on the factory's side; the first
+    message of a later session keeps its class, because a session opened only
+    to start the next step is what the measure counts. Accuracy is the share of
+    labelled that Classify gets right. It refuses sessions without a key, a set
+    with no message and an empty or mislabelled labelled set, because a baseline
+    it cannot measure is worse than none. The result has no Frozen time;
+    FreezeBaseline sets it.
 
 func LoadBaseline(path string) (*Baseline, error)
     LoadBaseline reads the frozen baseline at path: nil and no error when there
@@ -13721,9 +13739,10 @@ func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, sk
     in the file's path below dir, else in its first message that holds one.
     A transcript with no message or no key is not guessed at: it is counted in
     skipped. The sessions come oldest first, by the time of their first message,
-    so that the first session of a ticket is the first one (BuildBaseline).
-    Prompts queued while an agent worked are not read, so a count is never above
-    what was typed. Symbolic links are not followed.
+    so that the first session of a ticket is the first one (BuildBaseline); a
+    transcript whose turns carry no timestamp comes after the rest, and is never
+    a ticket's first session. Prompts queued while an agent worked are not read,
+    so a count is never above what was typed. Symbolic links are not followed.
 
 type TaskStats struct {
 	TaskID int64
@@ -13739,19 +13758,19 @@ type TaskStats struct {
     TaskStats is what one task asked of the operator. Typed counts the messages
     the operator typed (the task's text, typed in a pane, said in one line,
     the start's guidance, the note of a send-back); StepStarts, Approvals,
-    Corrections and Access count those of them by class (a retry is a step
-    the operator started by hand, so it counts as a step start and not as a
-    typed message; the task's text is the one message that starts the task,
-    so it is typed and never a step start, whatever its words say); a message of
-    another class, or of none, is only typed. AnswerBatches counts the revisions
-    of questions that were answered, and Decisions the decisions on cards;
-    both are counted apart. OperatorSecs is the operator's time on cards: for
-    each decision, from the card shown to the decision, and for each answered
-    revision of questions, from the questions shown to the first answer, each
-    at most cardCap (a card never shown has no time to measure). WaitedOnYou is
-    how long the task waited on the operator, asleep or not (its spans that wait
-    on "you"). StartToReady is how long it took to reach the ready card (zero
-    before it does).
+    Corrections and Access count those of them by class (a retry is a step the
+    operator started by hand, so it counts as a step start and not as a typed
+    message; the message that starts the task, however it is recorded, is the
+    one the factory needs, so it is typed and never a step start, whatever
+    its words say); a message of another class, or of none, is only typed.
+    AnswerBatches counts the revisions of questions that were answered, and
+    Decisions the decisions on cards; both are counted apart. OperatorSecs is
+    the operator's time on cards: for each decision, from the card shown to the
+    decision, and for each answered revision of questions, from the questions
+    shown to the first answer, each at most cardCap (a card never shown has no
+    time to measure). WaitedOnYou is how long the task waited on the operator,
+    asleep or not (its spans that wait on "you"). StartToReady is how long it
+    took to reach the ready card (zero before it does).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in

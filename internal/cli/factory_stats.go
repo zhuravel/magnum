@@ -41,7 +41,7 @@ func newFactoryStatsCmd(c *Context) *cobra.Command {
 		"Count, per factory task, what it asked of you: your typed messages (the task's text, the start's "+
 			"guidance, what you typed in a pane or said in one line, the note of a send-back), those of them that "+
 			"only start a step (the target is zero; a retry counts as one, as you start a step by hand, and the "+
-			"task's text never does: it is the one message the factory needs to start the task), approvals, "+
+			"message that starts the task never does, however it is recorded: it is the one message the factory needs), approvals, "+
 			"corrections and access, your answer batches (the revisions of questions you answered), your card "+
 			"decisions, the local review's rounds, your time on cards (for each decision and each answered batch, "+
 			"from the card shown to your answer, at most 30 minutes each, so a card left open and idle does not "+
@@ -119,7 +119,7 @@ func newFactoryBaselineCmd(c *Context) *cobra.Command {
 			"session belongs to the ticket whose key (a tracker of your config's [board] or [[repo]] trackers) its "+
 			"file path or its first messages name, and the sessions of one ticket are one ticket, never counted "+
 			"apart. The first message of a ticket (the oldest session's first) counts as typed and never as a step "+
-			"start, as a task's text does in `magnum factory stats`, while the first message of a later session keeps "+
+			"start, as the message that starts a task does in `magnum factory stats`, while the first message of a later session keeps "+
 			"its class. A transcript with no message or no ticket key is left out and counted. --labelled is a JSON-lines "+
 			"file of your messages with the class you gave each by hand ({\"text\": \"open PR\", \"class\": "+
 			"\"step_start\"}; the classes are step_start, approval, correction, access and info): the classifier that "+
