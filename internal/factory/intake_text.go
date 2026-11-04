@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/jira"
@@ -23,6 +24,11 @@ var (
 	// startKey is a Jira key at the start of a start's text: upper case, so
 	// a prompt that opens with "covid-19" stays a prompt.
 	startKey = regexp.MustCompile(`^[A-Z][A-Z0-9_]*-[0-9]+$`)
+	// anyKey is the shape of a key anywhere in a text (foundKeys looks at
+	// what touches it), textLink a link in a text: it ends at white space, a
+	// quote or an angle bracket.
+	anyKey   = regexp.MustCompile(`[A-Z][A-Z0-9_]*-[0-9]+`)
+	textLink = regexp.MustCompile("https?://[^\\s<>\"'`]+")
 	// browsePath is a Jira site's link to an issue.
 	browsePath = regexp.MustCompile(`^/browse/([A-Z][A-Z0-9_]*-[0-9]+)/?$`)
 	// prPath and runPath are a GitHub PR's and an Actions run's links.
@@ -41,7 +47,10 @@ var (
 //     a dash between the two is dropped);
 //   - a GitHub PR link (PR) or an Actions run link (Run), the words after
 //     it the guidance;
-//   - anything else: the whole text is the prompt.
+//   - anything else: the whole text is the prompt, and Found are the keys
+//     it names elsewhere (foundKeys). ParseStart reads no Jira: a word of
+//     the shape of a key ("UTF-8") is found, and the start asks Jira which
+//     of them count.
 func ParseStart(text string, trackers string) StartInput {
 	text = strings.TrimSpace(text)
 	first, rest := text, ""
@@ -53,12 +62,12 @@ func ParseStart(text string, trackers string) StartInput {
 	if startKey.MatchString(word) {
 		return StartInput{Key: word, Guidance: guidance}
 	}
+	prompt := StartInput{Prompt: text, Found: foundKeys(text, trackers)}
 	u, err := url.Parse(word)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return StartInput{Prompt: text}
+		return prompt
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "github.com" || host == "www.github.com" {
+	if isGitHub(u.Hostname()) {
 		in := StartInput{Guidance: guidance}
 		if m := prPath.FindStringSubmatch(u.Path); m != nil {
 			in.PR = &Link{URL: word, Repo: m[1] + "/" + m[2], Number: parseNumber(m[3])}
@@ -68,12 +77,67 @@ func ParseStart(text string, trackers string) StartInput {
 			in.Run = &Link{URL: word, Repo: m[1] + "/" + m[2], Number: parseNumber(m[3])}
 			return in
 		}
-		return StartInput{Prompt: text}
+		return prompt
 	}
 	if key := jiraLinkKey(u, word, trackers); key != "" {
 		return StartInput{Key: key, Guidance: guidance}
 	}
-	return StartInput{Prompt: text}
+	return prompt
+}
+
+// isGitHub reports whether host is GitHub's: its links are PRs and runs,
+// never Jira's.
+func isGitHub(host string) bool {
+	host = strings.ToLower(host)
+	return host == "github.com" || host == "www.github.com"
+}
+
+// foundKeys are the distinct Jira keys of a prompt, in the order of the text:
+// the keys of its Jira links (as the first word's rule reads one) and its
+// bare upper-case keys. A key counts as bare when no letter, digit,
+// underscore or dash touches it ("PR-12345's" and "(PR-12345)" are keys;
+// "xPR-12345", "PR-12345x" and "ABC-DEF-12" are not), and a link is read as
+// a link only, so the key in a link of another site is nobody's. A GitHub
+// link stays words (the first word's rule handles it).
+func foundKeys(text, trackers string) []string {
+	type hit struct {
+		at  int
+		key string
+	}
+	var hits []hit
+	bare := []byte(text) // the text with its links blanked out
+	for _, loc := range textLink.FindAllStringIndex(text, -1) {
+		link := strings.TrimRight(text[loc[0]:loc[1]], ".,;:!?)]}")
+		if u, err := url.Parse(link); err == nil && u.Host != "" && !isGitHub(u.Hostname()) {
+			if key := jiraLinkKey(u, link, trackers); key != "" {
+				hits = append(hits, hit{loc[0], key})
+			}
+		}
+		for i := loc[0]; i < loc[1]; i++ {
+			bare[i] = ' '
+		}
+	}
+	for _, loc := range anyKey.FindAllIndex(bare, -1) {
+		before, _ := utf8.DecodeLastRune(bare[:loc[0]])
+		after, _ := utf8.DecodeRune(bare[loc[1]:])
+		if !touchesKey(before) && !touchesKey(after) {
+			hits = append(hits, hit{loc[0], string(bare[loc[0]:loc[1]])})
+		}
+	}
+	slices.SortStableFunc(hits, func(a, b hit) int { return a.at - b.at })
+	var keys []string
+	for _, h := range hits {
+		if !slices.Contains(keys, h.key) {
+			keys = append(keys, h.key)
+		}
+	}
+	return keys
+}
+
+// touchesKey reports whether r, next to a key's shape, makes it part of a
+// longer word.
+func touchesKey(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
 }
 
 // jiraLinkKey is the key of a Jira link (ParseStart), "" for a link that is

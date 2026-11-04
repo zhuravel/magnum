@@ -43,7 +43,8 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 	}
 	var tk *jira.Ticket
 	words := in.Prompt
-	if in.Key != "" {
+	switch {
+	case in.Key != "":
 		words = in.Guidance
 		if t, err := e.reg.TaskByKey(ctx, in.Key); err == nil {
 			f.Err = keyRuns{t}.Error()
@@ -58,15 +59,18 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 			f.Err = err.Error()
 		default:
 			tk = &got
-			desc := strings.Join(strings.Fields(got.Description), " ")
-			excerpt := textx.Clip(desc, maxExcerpt)
-			f.Jira = &tui.JiraPreview{Key: got.Key, Type: got.Type, Status: got.Status, Priority: got.Priority, Summary: got.Summary,
-				Excerpt: excerpt, Read: e.now(), More: excerpt != desc}
+			f.Jira = e.jiraPreview(got)
 		}
 		if f.Err != "" && !down { // a refusal: no task would start
 			return f, nil
 		}
-	} else {
+	case len(in.Found) > 0 && e.d.Jira != nil:
+		var stop bool
+		if tk, stop = e.previewFound(ctx, &f, in); stop {
+			return f, nil
+		}
+	}
+	if tk == nil && in.Key == "" {
 		f.Title = promptTitle(in.Prompt)
 	}
 	f.Kind, f.KindWhy = PickKind(e.cfg.Factory, tk, words)
@@ -82,6 +86,50 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 	f.Starts = e.startsWhen(ctx)
 	f.Agents = e.firstAgents(f.Kind)
 	return f, nil
+}
+
+// previewFound previews a prompt whose words name keys elsewhere than at
+// their start (in.Found), as startFound would start it: the ticket of the one
+// key Jira knows (returned, for the kind and the branch of a key task), or
+// the first of several with a note naming the others (the task asks which
+// issue it is). A key a task holds, and a Jira refusal, are f.Err and stop
+// the preview; Jira's silence is f.Err and the preview goes on, as a key
+// at the start does.
+func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartInput) (tk *jira.Ticket, stop bool) {
+	if t, err := e.holderOf(ctx, in.Found); err == nil {
+		f.Err = keyRuns{t}.Error()
+		return nil, true
+	}
+	known, err := e.readFound(ctx, in.Found)
+	switch {
+	case err != nil && jiraDown(err):
+		f.Err = "Jira does not answer: the task waits for it, then starts"
+		return nil, false
+	case err != nil:
+		f.Err = err.Error()
+		return nil, true
+	case len(known) == 0:
+		return nil, false
+	}
+	f.Jira = e.jiraPreview(known[0])
+	f.Jira.Found = foundNote
+	if len(known) > 1 {
+		others := make([]string, 0, len(known)-1)
+		for _, k := range known[1:] {
+			others = append(others, k.Key)
+		}
+		f.Jira.Found += ", with " + strings.Join(others, ", ") + ": the task asks which issue it is"
+		return nil, false
+	}
+	return &known[0], false
+}
+
+// jiraPreview is the preview of the ticket the daemon read.
+func (e *Engine) jiraPreview(got jira.Ticket) *tui.JiraPreview {
+	desc := strings.Join(strings.Fields(got.Description), " ")
+	excerpt := textx.Clip(desc, maxExcerpt)
+	return &tui.JiraPreview{Key: got.Key, Type: got.Type, Status: got.Status, Priority: got.Priority, Summary: got.Summary,
+		Excerpt: excerpt, Read: e.now(), More: excerpt != desc}
 }
 
 // readTicket reads a key's ticket for the preview; a refusal is in a

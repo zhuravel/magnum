@@ -240,4 +240,8 @@ type JiraPreview struct {
 	Read                                                    time.Time
 	// More is true when the description has more than the Excerpt.
 	More bool
+	// Found is the note drawn after the key on its row when the text names
+	// it elsewhere than at its start ("found in your text"); empty for a key
+	// at the start.
+	Found string
 }

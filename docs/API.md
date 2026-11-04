@@ -12196,10 +12196,14 @@ type Runtime interface {
 type StartInput struct {
 	Key, Guidance, Prompt string
 	PR, Run               *Link
+	Found                 []string
 }
     StartInput is what a start's text holds (ParseStart): a Jira key with your
-    guidance after it, a GitHub PR link (PR) or an Actions run link (Run), with
-    the words after the link as Guidance, or else the whole text as a prompt.
+    guidance after it, a GitHub PR link (PR) or an Actions run link (Run),
+    with the words after the link as Guidance, or else the whole text as a
+    prompt. Found are the keys such a prompt names elsewhere than at its start:
+    the distinct keys of its words and of its Jira links, in their order,
+    which Jira still has to know to count.
 
 func ParseStart(text string, trackers string) StartInput
     ParseStart reads a start's text. trackers are the Jira sites and the
@@ -12213,7 +12217,10 @@ func ParseStart(text string, trackers string) StartInput
         dash between the two is dropped);
       - a GitHub PR link (PR) or an Actions run link (Run), the words after it
         the guidance;
-      - anything else: the whole text is the prompt.
+      - anything else: the whole text is the prompt, and Found are the keys it
+        names elsewhere (foundKeys). ParseStart reads no Jira: a word of the
+        shape of a key ("UTF-8") is found, and the start asks Jira which of them
+        count.
 
 type StartPayload struct {
 	Text, Kind, Repo string
@@ -25846,6 +25853,10 @@ type JiraPreview struct {
 	Read                                                    time.Time
 	// More is true when the description has more than the Excerpt.
 	More bool
+	// Found is the note drawn after the key on its row when the text names
+	// it elsewhere than at its start ("found in your text"); empty for a key
+	// at the start.
+	Found string
 }
     JiraPreview is a Jira issue as the daemon read it.
 

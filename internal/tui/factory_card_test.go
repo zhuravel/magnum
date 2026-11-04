@@ -256,6 +256,31 @@ func TestNewTaskFromAJiraKey(t *testing.T) {
 	}
 }
 
+// A key the text names elsewhere than at its start is the JIRA line's key
+// with the note "found in your text", on the line of its summary; a key at
+// the start has no note.
+func TestNewTaskSaysAKeyWasFoundInTheText(t *testing.T) {
+	f := fixtureNewTaskJira(factoryNow)
+	f.Text = "fix the expiry date in PR-12345, only the refund path"
+	f.Jira.Found = "found in your text"
+	for _, w := range []int{100, 140} {
+		frame := plainCard(drawNewTask(f), w)
+		if !strings.Contains(frame, "Credit expiry reminder email · found in your text") {
+			t.Errorf("%d: no note on the summary line in\n%s", w, frame)
+		}
+		if !strings.Contains(frame, "PR-12345 · Story · To Do · High · reporter rev-ann · read by the daemon 2s ago") {
+			t.Errorf("%d: the facts line changed in\n%s", w, frame)
+		}
+		if strings.Contains(plainCard(drawNewTask(fixtureNewTaskJira(factoryNow)), w), "found in your text") {
+			t.Errorf("%d: a key at the start has a note", w)
+		}
+	}
+	f.Jira.Summary = ""
+	if frame := plainCard(drawNewTask(f), 100); !strings.Contains(frame, "found in your text") {
+		t.Errorf("a key with no summary lost its note in\n%s", frame)
+	}
+}
+
 func TestNewTaskFromAPrompt(t *testing.T) {
 	d := drawNewTask(fixtureNewTaskPrompt())
 	checkCardGolden(t, "new-prompt", d)

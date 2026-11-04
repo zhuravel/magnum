@@ -1,0 +1,561 @@
+package factory
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/stats"
+	"github.com/zhuravel/magnum/internal/tui"
+)
+
+// The start of a text that names a Jira key somewhere but at its start (the
+// operator's request of 2026-11-04, spec 6.1), against the intake rig.
+
+// foundText names PR-12345 in the middle of its words.
+const foundText = "fix the expiry date in PR-12345, only the refund path"
+
+// foundKeyEvent reports whether task id has the info event of a task started
+// from a key found in its text.
+func foundKeyEvent(r *intakeRig, id int64, key string) bool {
+	for _, ev := range r.events(id, "intake") {
+		if ev.Phase == registry.PhaseInfo && ev.Text == "key "+key+" found in your text" {
+			return true
+		}
+	}
+	return false
+}
+
+// A key in the middle of a start's text that Jira knows starts a key task
+// with the whole text as its guidance: nothing is cut out, the ticket is read
+// as for a key at the start, and the words are recorded as the guidance that
+// starts the task.
+func TestAKeyFoundInTheTextStartsAKeyTaskWithTheWholeTextAsGuidance(t *testing.T) {
+	r := newIntakeRig(t)
+	task := r.mustStart(foundText)
+	asked, searched := slices.Clone(r.site.asked), slices.Clone(r.site.searched)
+	if task.JiraKey != "PR-12345" || task.Prompt != "" || task.Guidance != foundText || task.State != registry.TaskActive ||
+		task.Title != "Credit expiry reminder email" || task.Kind != "feature" || task.Repo != "talkable/talkable" ||
+		task.Branch != "zhuravel-PR-12345-credit-expiry-reminder-email" {
+		t.Fatalf("task %+v, want a key task of PR-12345 with the whole text as guidance", task)
+	}
+	want, err := r.client.Ticket(r.ctx, "PR-12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.taskFile(task.ID, "ticket.md"); got != string(want.Markdown()) {
+		t.Fatalf("ticket.md:\n%s\nwant Ticket.Markdown():\n%s", got, want.Markdown())
+	}
+	if got := r.taskFile(task.ID, "guidance.md"); got != foundText+"\n" {
+		t.Fatalf("guidance.md %q, want the whole text", got)
+	}
+	if _, err := os.Stat(filepath.Join(r.layout.FactoryTaskDir(task.ID), "prompt.md")); !os.IsNotExist(err) {
+		t.Fatalf("prompt.md for a key task: %v", err)
+	}
+	ins, err := r.reg.Inputs(r.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ins) != 1 || ins[0].Kind != registry.InputGuidance || ins[0].Role != registry.RoleIntake || ins[0].Text != foundText ||
+		ins[0].Surface != "cli" {
+		t.Fatalf("inputs %+v, want one guidance input of the intake role with the whole text", ins)
+	}
+	if !foundKeyEvent(r, task.ID, "PR-12345") {
+		t.Fatalf("intake events %+v, want the info event: key PR-12345 found in your text", r.events(task.ID, "intake"))
+	}
+	if len(asked) != 1 || asked[0] != "PR-12345" {
+		t.Fatalf("Jira was asked for %q, want PR-12345 once", asked)
+	}
+	if len(searched) != 0 {
+		t.Fatalf("a key task searched Jira's titles: %q", searched)
+	}
+
+	// A Jira link in the middle is its key, whatever the words around it.
+	linkText := "this one is wrong " + jiraTestSite + "/browse/PR-12346 only the advocates"
+	link := r.mustStart(linkText)
+	if link.JiraKey != "PR-12346" || link.Prompt != "" || link.Kind != "bug" || link.Guidance != linkText {
+		t.Fatalf("a link in the middle made %+v, want a key task of PR-12346", link)
+	}
+}
+
+// The message that starts a task is typed and never a step start, however
+// the task is started: a key found in words that name a step is no different
+// from a key at the start.
+func TestTheTextOfAKeyFoundInTheTextIsNeverAStepStart(t *testing.T) {
+	r := newIntakeRig(t)
+	task := r.mustStart("fix the expiry date in PR-12345, then open PR")
+	rep, err := stats.ComputeAt(r.ctx, r.reg, time.Time{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, ts := range rep.Tasks {
+		if ts.TaskID != task.ID {
+			continue
+		}
+		seen = true
+		if ts.Typed != 1 || ts.StepStarts != 0 {
+			t.Errorf("a found key's text that names a step: typed %d, step starts %d; want 1 and 0", ts.Typed, ts.StepStarts)
+		}
+	}
+	if !seen {
+		t.Fatalf("no stats for task %d", task.ID)
+	}
+}
+
+// A found key follows the one-key-one-task rule as a key at the start does: a
+// start whose text names a key that a task holds returns that task, reads
+// nothing from Jira and makes no task.
+func TestAKeyFoundInTheTextThatHasATaskReturnsThatTask(t *testing.T) {
+	r := newIntakeRig(t)
+	first := r.mustStart("PR-12345")
+	reads := r.site.reads()
+
+	for _, text := range []string{foundText, "the refund of PR-12399 and the reminder of PR-12345"} {
+		got, err := r.start(text)
+		if !errors.Is(err, ErrKeyRuns) || err.Error() != fmt.Sprintf("PR-12345 already runs as task %d", first.ID) || got.ID != first.ID {
+			t.Fatalf("a start of %q = task %d, %v; want task %d with ErrKeyRuns", text, got.ID, err, first.ID)
+		}
+	}
+	if n := len(r.tasks()); n != 1 {
+		t.Fatalf("%d tasks, want 1: no new row", n)
+	}
+	if n := r.site.reads(); n != reads {
+		t.Fatalf("a start for a key that runs read Jira %d times more", n-reads)
+	}
+}
+
+// A word of the shape of a key that Jira does not know ("UTF-8", "ISO-8601")
+// stays a word of the prompt, and that is no error: the task is a prompt
+// task as before. A key Jira knows counts whatever unknown ones come before
+// it.
+func TestAnUpperCaseWordJiraDoesNotKnowStaysInThePrompt(t *testing.T) {
+	r := newIntakeRig(t)
+	text := "Read the dates as UTF-8 and ISO-8601 in the digest export."
+	task, err := r.start(text)
+	if err != nil {
+		t.Fatalf("a start with unknown keys in its text = %v, want no error", err)
+	}
+	r.e.waitBackground()
+	if task.JiraKey != "" || task.Prompt != text || task.Guidance != "" || task.State != registry.TaskActive {
+		t.Fatalf("task %+v, want a prompt task of the whole text", task)
+	}
+	if got := r.site.asked; !slices.Equal(got, []string{"UTF-8", "ISO-8601"}) {
+		t.Fatalf("Jira was asked for %q, want both words once", got)
+	}
+	if got := r.taskFile(task.ID, "prompt.md"); got != text+"\n" {
+		t.Fatalf("prompt.md %q", got)
+	}
+	ins, _ := r.reg.Inputs(r.ctx, task.ID)
+	if len(ins) != 1 || ins[0].Kind != registry.InputTaskText || ins[0].Text != text {
+		t.Fatalf("inputs %+v, want the task's text", ins)
+	}
+	if qs, _ := r.reg.Questions(r.ctx, task.ID); len(qs) != 1 || qs[0].Text != whichIssue || len(r.site.searched) != 1 {
+		t.Fatalf("questions %+v after %d searches, want the title search's question as for any prompt", qs, len(r.site.searched))
+	}
+	for _, ev := range r.events(task.ID, "intake") {
+		if strings.Contains(ev.Text, "found in your text") || ev.Phase == registry.PhaseFail {
+			t.Fatalf("intake event %+v, want none about the words Jira does not know", ev)
+		}
+	}
+
+	// A known key after an unknown word counts.
+	r.site.asked = nil
+	mixed := r.mustStart("Read the dates as UTF-8 in the reminder of PR-12346")
+	if mixed.JiraKey != "PR-12346" || !slices.Equal(r.site.asked, []string{"UTF-8", "PR-12346"}) {
+		t.Fatalf("task %+v after reading %q, want a key task of PR-12346", mixed, r.site.asked)
+	}
+}
+
+// Jira is asked for at most 3 of the keys a text names, the first 3.
+func TestNoMoreThanThreeFoundKeysAreRead(t *testing.T) {
+	r := newIntakeRig(t)
+	task := r.mustStart("Read UTF-8, ISO-8601 and SHA-256 dates in the reminder of PR-12345")
+	if want := []string{"UTF-8", "ISO-8601", "SHA-256"}; !slices.Equal(r.site.asked, want) {
+		t.Fatalf("Jira was asked for %q, want only the first 3 words: %q", r.site.asked, want)
+	}
+	if task.JiraKey != "" || task.Prompt == "" {
+		t.Fatalf("task %+v, want a prompt task: the fourth key is not read", task)
+	}
+}
+
+// Several keys of the text that Jira knows start a prompt task that asks
+// which issue it is, with the keys as its options in the text's order, the
+// first recommended; no title search is made.
+func TestSeveralKeysFoundInTheTextAskWhichIssue(t *testing.T) {
+	r := newIntakeRig(t)
+	text := "the reminder of PR-12345 and the refund of PR-12346 both lose points"
+	task := r.mustStart(text)
+	if task.JiraKey != "" || task.Prompt != text || task.State != registry.TaskActive {
+		t.Fatalf("task %+v, want a prompt task of the whole text", task)
+	}
+	qs, err := r.reg.Questions(r.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qs) != 1 {
+		t.Fatalf("questions %+v, want one", qs)
+	}
+	q := qs[0]
+	if q.Text != whichIssue || q.Revision != 1 || q.State != registry.QuestionOpen || q.RaisedBy != "intake" {
+		t.Fatalf("question %+v", q)
+	}
+	var labels []string
+	for _, o := range q.Options {
+		labels = append(labels, o.Label)
+	}
+	if want := []string{"PR-12345 Credit expiry reminder email", "PR-12346 Points vanish after a refund", "no issue"}; !slices.Equal(labels, want) {
+		t.Fatalf("options %q, want %q", labels, want)
+	}
+	if q.Recommended != 0 || q.Why == "" {
+		t.Fatalf("recommended %d (%q), want the first key, 0", q.Recommended, q.Why)
+	}
+	if got := r.e.namedIssue(task, q, q.Options[1].Label); got != "PR-12346" {
+		t.Fatalf("an answer taking the second option names %q, want PR-12346: Task 13's link reads it", got)
+	}
+	if len(r.site.searched) != 0 {
+		t.Fatalf("a title search was made: %q", r.site.searched)
+	}
+	if got := r.reload(task.ID); got.QuestionRev != 1 {
+		t.Fatalf("the task is at question revision %d, want 1", got.QuestionRev)
+	}
+
+	// The order of the text decides which is first.
+	swapped := r.mustStart("the refund of PR-12346 first, then the reminder of PR-12345")
+	qs, _ = r.reg.Questions(r.ctx, swapped.ID)
+	if len(qs) != 1 || !strings.HasPrefix(qs[0].Options[qs[0].Recommended].Label, "PR-12346 ") {
+		t.Fatalf("questions %+v, want PR-12346 recommended: it comes first in the text", qs)
+	}
+}
+
+// If Jira does not answer, a key found in the text waits like a key at the
+// start: "start when Jira answers", tried after 1, 2 and 4 minutes, for no
+// cost, and it needs you after 6 hours. The wait holds no key (none is known
+// yet). When Jira answers, the key it knows starts the key task, with the
+// whole text as its guidance and the branch named for the key.
+func TestAKeyFoundInTheTextWaitsForJiraLikeAKeyAtTheStart(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(7)
+	task := r.mustStart(foundText)
+	if task.State != registry.TaskWaiting || task.WaitsWho != "Jira" || task.WaitsWhat != "start when Jira answers" {
+		t.Fatalf("task %s waits %q: %q, want waiting on Jira: start when Jira answers", task.State, task.WaitsWho, task.WaitsWhat)
+	}
+	if task.JiraKey != "" || task.Prompt != foundText || task.Kind != "bug" || !strings.HasPrefix(task.Branch, "zhuravel-") {
+		t.Fatalf("task %+v, want the text kept, a kind from its words and a branch, no key yet", task)
+	}
+	ins, _ := r.reg.Inputs(r.ctx, task.ID)
+	if len(ins) != 1 || ins[0].Role != registry.RoleIntake || ins[0].Text != foundText {
+		t.Fatalf("inputs %+v, want the text recorded once, as the start", ins)
+	}
+	if p := r.taskFile(task.ID, "prompt.md"); p != foundText+"\n" { // a task you take over meanwhile has your request
+		t.Fatalf("prompt.md %q, want the whole text", p)
+	}
+	at := func(d time.Duration) {
+		t.Helper()
+		r.clock.Set(t0.Add(d))
+		r.tick()
+	}
+	base := r.site.curlCalls()
+	for _, step := range []struct {
+		at    time.Duration
+		tries int
+	}{{59 * time.Second, 0}, {time.Minute, 1}, {2*time.Minute + 59*time.Second, 1}, {3 * time.Minute, 2}, {7 * time.Minute, 3}} {
+		at(step.at)
+		if got := r.site.curlCalls() - base; got != step.tries {
+			t.Fatalf("at +%s Jira was tried %d times, want %d", step.at, got, step.tries)
+		}
+		if got := r.reload(task.ID); got.State != registry.TaskWaiting || got.WaitsWho != "Jira" {
+			t.Fatalf("at +%s the task is %s waiting on %q", step.at, got.State, got.WaitsWho)
+		}
+	}
+	if evs := r.events(task.ID, "advance"); len(evs) != 0 {
+		t.Fatalf("Jira's outage counted as the task's failure: %+v", evs)
+	}
+	at(6 * time.Hour)
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != "Jira did not answer for 6h" {
+		t.Fatalf("after 6h the task is %s: %q, want needs_you: Jira did not answer for 6h", got.State, got.WaitsWhat)
+	}
+
+	// Another task of the same words waits too, and Jira answers it at once.
+	r.clock.Set(t0.Add(7 * time.Hour))
+	second := r.mustStart(foundText)
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	got := r.reload(second.ID)
+	if got.State != registry.TaskActive || got.WaitsWho != "" || got.JiraKey != "PR-12345" || got.Guidance != foundText ||
+		got.Title != "Credit expiry reminder email" || got.Kind != "feature" || got.Branch != "zhuravel-PR-12345-credit-expiry-reminder-email" {
+		t.Fatalf("after Jira answered the task is %+v, want the key task of PR-12345 with the whole text as guidance", got)
+	}
+	if md := r.taskFile(second.ID, "ticket.md"); !strings.HasPrefix(md, "# PR-12345 ") {
+		t.Fatalf("ticket.md:\n%s", md)
+	}
+	if g := r.taskFile(second.ID, "guidance.md"); g != foundText+"\n" {
+		t.Fatalf("guidance.md %q, want the whole text", g)
+	}
+	if !foundKeyEvent(r, second.ID, "PR-12345") {
+		t.Fatalf("intake events %+v, want the info event: key PR-12345 found in your text", r.events(second.ID, "intake"))
+	}
+	if ins, _ := r.reg.Inputs(r.ctx, second.ID); len(ins) != 1 {
+		t.Fatalf("inputs %+v, want the one start", ins)
+	}
+	if _, err := r.start(foundText); !errors.Is(err, ErrKeyRuns) {
+		t.Fatalf("a second start of the text Jira answered for = %v, want ErrKeyRuns", err)
+	}
+}
+
+// The kind you chose stays for a key found in the text, at once and after a
+// wait for Jira; the kind your words pick follows the ticket's type then.
+func TestAKindYouChoseStaysForAKeyFoundInTheText(t *testing.T) {
+	r := newIntakeRig(t)
+	chosen, err := r.e.start(r.ctx, StartPayload{Text: foundText, Kind: "chore"})
+	if err != nil || chosen.Kind != "chore" {
+		t.Fatalf("a start with a kind = %+v, %v; want the chore kept", chosen, err)
+	}
+	r.e.waitBackground()
+
+	r.site.setDown(7)
+	waited, err := r.e.start(r.ctx, StartPayload{Text: "fix the reminder email in PR-12346, only the refund path", Kind: "feature"})
+	if err != nil || waited.State != registry.TaskWaiting || waited.Kind != "feature" {
+		t.Fatalf("a start while Jira is down = %+v, %v; want a waiting task of the kind you chose", waited, err)
+	}
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	if got := r.reload(waited.ID); got.State != registry.TaskActive || got.JiraKey != "PR-12346" || got.Kind != "feature" {
+		t.Fatalf("after Jira answered the task is %+v, want the kind you chose kept (the ticket's type is a Bug)", got)
+	}
+}
+
+// A task that waits for Jira with a key found in its text can be taken over
+// and let go on, as a key task's wait can: it starts its kind's first stage
+// with the request it has, and Jira's answer then finds the task at its stage
+// and leaves it alone.
+func TestAWaitingTextYouTakeOverGoesOnWithYourRequest(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(7)
+	task := r.mustStart(foundText)
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskNeedsYou, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", "")
+		u.Set("waits_what", "")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if got := r.reload(task.ID); got.Stage != "investigate" || got.JiraKey != "" {
+		t.Fatalf("the resumed task is %+v, want it at its kind's first stage with no key", got)
+	}
+	if p := r.taskFile(task.ID, "prompt.md"); p != foundText+"\n" {
+		t.Fatalf("prompt.md %q, want the request", p)
+	}
+	if evs := r.events(task.ID, "advance"); len(evs) != 0 {
+		t.Fatalf("the resumed task failed: %+v", evs)
+	}
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	if got := r.reload(task.ID); got.JiraKey != "" || got.Stage != "investigate" {
+		t.Fatalf("a task at its stage was changed after Jira answered: %+v", got)
+	}
+}
+
+// When Jira, once it answers, does not know the keys of a waiting text, the
+// task goes on from the operator's words as a prompt task, with no error; and
+// when it knows several, it asks which issue.
+func TestAWaitingTextGoesOnFromTheWordsWhenJiraKnowsNoKey(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(7)
+	words := r.mustStart("Read the dates as UTF-8 in the digest export")
+	several := r.mustStart("the refund of PR-12346 and the reminder of PR-12345 both lose points")
+	for _, task := range []registry.Task{words, several} {
+		if task.State != registry.TaskWaiting || task.WaitsWho != "Jira" {
+			t.Fatalf("task %+v, want waiting on Jira", task)
+		}
+	}
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+
+	got := r.reload(words.ID)
+	if got.State != registry.TaskActive || got.WaitsWho != "" || got.JiraKey != "" || got.Prompt != words.Prompt || got.Kind != words.Kind {
+		t.Fatalf("after Jira answered the task is %+v, want a prompt task that goes on", got)
+	}
+	if p := r.taskFile(words.ID, "prompt.md"); p != words.Prompt+"\n" {
+		t.Fatalf("prompt.md %q", p)
+	}
+	if qs, _ := r.reg.Questions(r.ctx, words.ID); len(qs) != 1 || qs[0].Text != whichIssue || len(r.site.searched) != 1 {
+		t.Fatalf("questions %+v after %d searches, want the title search's question", qs, len(r.site.searched))
+	}
+	if foundKeyEvent(r, words.ID, "UTF-8") {
+		t.Fatal("an unknown word was reported as a found key")
+	}
+
+	got = r.reload(several.ID)
+	qs, _ := r.reg.Questions(r.ctx, several.ID)
+	if got.State != registry.TaskActive || got.JiraKey != "" || len(qs) != 1 || qs[0].Text != whichIssue || len(qs[0].Options) != 3 ||
+		!strings.HasPrefix(qs[0].Options[0].Label, "PR-12346 ") || qs[0].Recommended != 0 {
+		t.Fatalf("after Jira answered the task is %+v with questions %+v, want a prompt task asking which issue, PR-12346 first", got, qs)
+	}
+}
+
+// A task that waited for Jira cannot take a key that a task holds since: it
+// needs you, naming the holder, and no second task holds the key.
+func TestAWaitingTextWhoseKeyGotATaskNeedsYou(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(7)
+	waiting := r.mustStart(foundText)
+	holder := r.mustStart("PR-12345")
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+
+	got := r.reload(waiting.ID)
+	if got.State != registry.TaskNeedsYou || got.JiraKey != "" || !strings.Contains(got.WaitsWhat, fmt.Sprintf("PR-12345 already runs as task %d", holder.ID)) {
+		t.Fatalf("the waiting task is %s with key %q: %q, want needs_you naming the holder", got.State, got.JiraKey, got.WaitsWhat)
+	}
+	if h := r.reload(holder.ID); h.State != registry.TaskActive || h.JiraKey != "PR-12345" {
+		t.Fatalf("the holder is %+v, want it started", h)
+	}
+}
+
+// Without [jira] a key in the text is a word: nothing can read it, and the
+// start is a prompt task with no error. A Jira that refuses for another cause
+// than an unknown issue (a missing token file) is an error naming the cause,
+// as at the start of a key.
+func TestFoundKeysNeedJiraAndNameItsRefusal(t *testing.T) {
+	r := newIntakeRig(t)
+	missing := filepath.Join(t.TempDir(), "jira.token")
+	r.client.TokenFile = missing
+	if _, err := r.start(foundText); err == nil || err.Error() != "the Jira token file is missing: "+missing {
+		t.Fatalf("a found key with no token file = %v, want the Jira token file is missing: %s", err, missing)
+	}
+	if ts := r.tasks(); len(ts) != 0 {
+		t.Fatalf("tasks %+v, want none", ts)
+	}
+
+	r.e.d.Jira = nil
+	task, err := r.start(foundText)
+	if err != nil || task.JiraKey != "" || task.Prompt != foundText || task.State != registry.TaskActive {
+		t.Fatalf("a found key with [jira] off = %+v, %v; want a prompt task and no error", task, err)
+	}
+}
+
+// A GitHub link in the middle of the text stays words of the prompt:
+// adoption and CI tasks come from a link at the start.
+func TestAGitHubLinkInTheMiddleOfTheTextStaysWords(t *testing.T) {
+	r := newIntakeRig(t)
+	text := "the title of https://github.com/talkable/talkable/pull/4527 is wrong, and the run https://github.com/talkable/talkable/actions/runs/1234567890 too"
+	task, err := r.start(text)
+	if err != nil {
+		t.Fatalf("a start with GitHub links in the middle = %v, want a prompt task", err)
+	}
+	r.e.waitBackground()
+	if task.JiraKey != "" || task.Prompt != text {
+		t.Fatalf("task %+v, want a prompt task of the whole text", task)
+	}
+	if got := r.site.asked; len(got) != 0 {
+		t.Fatalf("Jira was asked for %q, want no key", got)
+	}
+}
+
+// The branch and the PR's title use a key found in the text as they do a key
+// at the start, for a task that started at once and for one that waited for
+// Jira.
+func TestThePRTitleUsesAKeyFoundInTheText(t *testing.T) {
+	r := newIntakeRig(t)
+	now := r.mustStart(foundText)
+	r.site.setDown(7)
+	waited := r.mustStart("fix the reminder email in PR-12346, only the refund path")
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	waited = r.reload(waited.ID)
+
+	for _, c := range []struct {
+		task          registry.Task
+		title, branch string
+	}{
+		{now, "PR-12345 Credit expiry reminder email", "zhuravel-PR-12345-credit-expiry-reminder-email"},
+		{waited, "PR-12346 Points vanish after a refund", "zhuravel-PR-12346-points-vanish-after-refund"},
+	} {
+		if got := prTitle(c.task); got != c.title {
+			t.Errorf("the PR title of %s = %q, want %q", c.task.JiraKey, got, c.title)
+		}
+		if err := r.e.nameRemoteBranch(r.ctx, &c.task); err != nil || c.task.RemoteBranch != c.branch {
+			t.Errorf("the PR's branch of %s = %q (%v), want %q", c.task.JiraKey, c.task.RemoteBranch, err, c.branch)
+		}
+	}
+}
+
+// The new-task preview shows a key found in the text with the note "found
+// in your text" for the JIRA line, the ticket the daemon read, and what a
+// key task would be; it makes nothing. Words Jira does not know are a
+// prompt's preview.
+func TestThePreviewSaysTheKeyWasFoundInTheText(t *testing.T) {
+	r := newIntakeRig(t)
+	f, err := r.e.preview(r.ctx, foundText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Jira == nil || f.Jira.Key != "PR-12345" || f.Jira.Found != "found in your text" || f.Jira.Type != "Story" ||
+		f.Jira.Summary != "Credit expiry reminder email" || f.Jira.Read.IsZero() {
+		t.Fatalf("preview Jira %+v, want PR-12345 with the note found in your text", f.Jira)
+	}
+	if f.Kind != "feature" || f.KindWhy != "from the Jira type Story" || f.Branch != "zhuravel-PR-12345-credit-expiry-reminder-email" ||
+		f.Err != "" || f.Repo != "talkable/talkable" {
+		t.Fatalf("preview %+v", f)
+	}
+	if n := len(r.tasks()); n != 0 {
+		t.Fatalf("a preview made %d tasks", n)
+	}
+	if f, _ = r.e.preview(r.ctx, "PR-12345 only the refund path"); f.Jira == nil || f.Jira.Found != "" {
+		t.Fatalf("preview of a key at the start %+v, want no note", f.Jira)
+	}
+
+	// The daemon answers the screen with JSON, which carries the note.
+	id, err := r.reg.EnqueueRequest(r.ctx, ReqPreview, PreviewPayload{Text: foundText})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	req, _ := r.reg.RequestByID(r.ctx, id)
+	var form tui.NewTaskForm
+	if err := json.Unmarshal([]byte(req.Result), &form); err != nil || form.Jira == nil || form.Jira.Found != "found in your text" {
+		t.Fatalf("preview request %s %q (%v), want the form with the note", req.State, req.Result, err)
+	}
+
+	f, _ = r.e.preview(r.ctx, "Read the dates as UTF-8 in the digest export")
+	if f.Jira != nil || f.Err != "" || f.Title != "Read the dates as UTF-8 in the digest export" || f.Branch == "" {
+		t.Fatalf("preview of words Jira does not know %+v, want a prompt's", f)
+	}
+
+	f, _ = r.e.preview(r.ctx, "the refund of PR-12346 and the reminder of PR-12345")
+	if f.Jira == nil || f.Jira.Key != "PR-12346" || !strings.HasPrefix(f.Jira.Found, "found in your text") || !strings.Contains(f.Jira.Found, "PR-12345") {
+		t.Fatalf("preview of two keys %+v, want the first with a note naming the other", f.Jira)
+	}
+
+	first := r.mustStart("PR-12345")
+	if f, _ = r.e.preview(r.ctx, foundText); f.Err != fmt.Sprintf("PR-12345 already runs as task %d", first.ID) {
+		t.Fatalf("preview of a key that runs %+v", f)
+	}
+	r.site.setDown(7)
+	if f, _ = r.e.preview(r.ctx, "fix the refund path of PR-12346"); f.Err != "Jira does not answer: the task waits for it, then starts" {
+		t.Fatalf("preview while Jira is down %+v", f)
+	}
+}

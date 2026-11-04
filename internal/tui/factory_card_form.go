@@ -151,6 +151,14 @@ func (p *cardPainter) jiraRows(j *JiraPreview) []string {
 	if j.Summary != "" {
 		cells = append(cells, cell{{j.Summary, p.st.Label}})
 	}
+	if j.Found != "" { // after the summary: the facts row has no room for it at 100 columns
+		note := seg{j.Found, p.st.Dim}
+		if len(cells) > 1 {
+			cells[1] = append(cells[1], p.sepSeg(), note)
+		} else {
+			cells = append(cells, cell{note})
+		}
+	}
 	out := p.labelRows("JIRA", x, cells)
 	if j.Excerpt == "" {
 		return out

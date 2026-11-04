@@ -10,7 +10,8 @@ package factory
 // is full or max_active tasks are at work. One key has one task: a second
 // start returns the first. A key Jira cannot read now (it does not answer)
 // makes a task that waits for Jira; an unknown key or a missing token file
-// makes none.
+// makes none. A key or a Jira link elsewhere in a free prompt counts too,
+// when Jira knows the key (startFound): the whole text is then the guidance.
 
 import (
 	"cmp"
@@ -38,10 +39,13 @@ import (
 // StartInput is what a start's text holds (ParseStart): a Jira key with
 // your guidance after it, a GitHub PR link (PR) or an Actions run link
 // (Run), with the words after the link as Guidance, or else the whole text
-// as a prompt.
+// as a prompt. Found are the keys such a prompt names elsewhere than at its
+// start: the distinct keys of its words and of its Jira links, in their
+// order, which Jira still has to know to count.
 type StartInput struct {
 	Key, Guidance, Prompt string
 	PR, Run               *Link
+	Found                 []string
 }
 
 // Link is a GitHub link of a start: its URL as given, the repository
@@ -169,7 +173,9 @@ const (
 // While Jira does not answer, the task waits for it (retryJira). Each start
 // records your text as an input (task_text, or the guidance after a key)
 // and writes the task's data files: ticket.md (Ticket.Markdown) and
-// guidance.md for a key, prompt.md for a prompt, each an artifact.
+// guidance.md for a key, prompt.md for a prompt, each an artifact. A prompt
+// that names keys elsewhere (in.Found) is read from Jira (startFound),
+// unless [jira] is off, when they are words.
 func (e *Engine) start(ctx context.Context, p StartPayload) (registry.Task, error) {
 	text := strings.TrimSpace(p.Text)
 	if text == "" {
@@ -189,21 +195,41 @@ func (e *Engine) start(ctx context.Context, p StartPayload) (registry.Task, erro
 	if p.Kind != "" && !hasKind(e.cfg.Factory, p.Kind) {
 		return registry.Task{}, fmt.Errorf("no kind of task %q: one of %s", p.Kind, strings.Join(slices.Sorted(maps.Keys(e.cfg.Factory.Kinds)), ", "))
 	}
+	keys := in.Found
+	if e.d.Jira == nil { // nothing reads a key of the words: they are words
+		keys = nil
+	}
 	if in.Key != "" {
-		if t, err := e.reg.TaskByKey(ctx, in.Key); err == nil {
-			return t, keyRuns{t}
-		} else if !errors.Is(err, registry.ErrNotFound) {
-			return registry.Task{}, err
-		}
+		keys = []string{in.Key}
+	}
+	if t, err := e.holderOf(ctx, keys); err == nil {
+		return t, keyRuns{t}
+	} else if !errors.Is(err, registry.ErrNotFound) {
+		return registry.Task{}, err
 	}
 	login, err := e.operatorLogin(repo.Repo)
 	if err != nil {
 		return registry.Task{}, err
 	}
-	if in.Key != "" {
+	switch {
+	case in.Key != "":
 		return e.startKey(ctx, p, repo, login, in)
+	case len(keys) > 0:
+		return e.startFound(ctx, p, repo, login, in)
 	}
-	return e.startPrompt(ctx, p, repo, login, in)
+	return e.startPrompt(ctx, p, repo, login, in, nil)
+}
+
+// holderOf is the task that holds the first of keys that a task holds (at
+// most foundReads of them), registry.ErrNotFound when none does.
+func (e *Engine) holderOf(ctx context.Context, keys []string) (registry.Task, error) {
+	for _, k := range keys[:min(len(keys), foundReads)] {
+		t, err := e.reg.TaskByKey(ctx, k)
+		if !errors.Is(err, registry.ErrNotFound) {
+			return t, err
+		}
+	}
+	return registry.Task{}, registry.ErrNotFound
 }
 
 // startRepo is the repository of a start: the [[factory.repo]] named, or
@@ -355,6 +381,14 @@ func (e *Engine) startKey(ctx context.Context, p StartPayload, repo config.Facto
 	case err != nil:
 		return registry.Task{}, jiraCause(in.Key, err)
 	}
+	return e.startTicketed(ctx, p, repo, login, in, tk, false)
+}
+
+// startTicketed starts the task of key in.Key, whose ticket tk Jira gave
+// (found: the key came from the middle of the text, and in.Guidance is the
+// whole text).
+func (e *Engine) startTicketed(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput,
+	tk jira.Ticket, found bool) (registry.Task, error) {
 	if tk.Key != in.Key { // the issue moved to another project: its key now
 		if t, err := e.reg.TaskByKey(ctx, tk.Key); err == nil {
 			return t, keyRuns{t}
@@ -382,7 +416,100 @@ func (e *Engine) startKey(ctx context.Context, p StartPayload, repo config.Facto
 		return t, err
 	}
 	e.event(ctx, t.ID, "intake", registry.PhaseOK, fmt.Sprintf("%s: %s, %s (%s), on %s", startVerb(t), tk.Key, kind, why, branch))
+	if found {
+		e.noteFound(ctx, t.ID, tk.Key)
+	}
 	e.noteOverlap(ctx, t)
+	return t, nil
+}
+
+// foundReads is the most keys of a text that a start reads from Jira (the
+// first of in.Found), and foundNote the note the preview gives a key found
+// in the text.
+const (
+	foundReads = 3
+	foundNote  = "found in your text"
+)
+
+// noteFound records, as an info event of task id, that its key came from
+// the middle of the text.
+func (e *Engine) noteFound(ctx context.Context, id int64, key string) {
+	e.event(ctx, id, "intake", registry.PhaseInfo, "key "+key+" "+foundNote)
+}
+
+// readFound reads the keys of a prompt's words from Jira (at most
+// foundReads, in order) and gives the tickets of those Jira knows. A key
+// Jira cannot show (no such issue, or one the token may not see) is a word of
+// the prompt, no error. Jira's silence is the error itself (jiraDown); any
+// other refusal is in a start's words (jiraCause), since the start cannot
+// tell which keys count.
+func (e *Engine) readFound(ctx context.Context, keys []string) ([]jira.Ticket, error) {
+	var known []jira.Ticket
+	for _, k := range keys[:min(len(keys), foundReads)] {
+		tk, err := e.d.Jira.Ticket(ctx, k)
+		switch {
+		case err == nil:
+			known = append(known, tk)
+		case jiraDown(err) || ctx.Err() != nil:
+			return nil, err
+		case !jiraRefusesKey(err):
+			return nil, jiraCause(k, err)
+		}
+	}
+	return known, nil
+}
+
+// startFound starts a task of a prompt that names Jira keys elsewhere than
+// at its start (in.Found), once Jira says which of them it knows:
+//   - one: a key task of that key with the whole text as its guidance;
+//   - several: a prompt task whose first question asks which of them it is;
+//   - none: a prompt task as any other, the words Jira does not know staying
+//     words of the prompt;
+//   - Jira does not answer: the task waits for Jira (startFoundWaiting) and
+//     goes on by these rules when it answers.
+func (e *Engine) startFound(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput) (registry.Task, error) {
+	known, err := e.readFound(ctx, in.Found)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return registry.Task{}, ctx.Err()
+	case err != nil && jiraDown(err):
+		return e.startFoundWaiting(ctx, p, repo, login, in, err)
+	case err != nil:
+		return registry.Task{}, err
+	case len(known) == 1:
+		return e.startTicketed(ctx, p, repo, login, StartInput{Key: known[0].Key, Guidance: in.Prompt}, known[0], true)
+	}
+	return e.startPrompt(ctx, p, repo, login, in, known)
+}
+
+// startFoundWaiting makes the task of a prompt whose found keys Jira does not
+// answer for: a prompt task waiting for Jira (retryJira tries it) that holds
+// no key, since none is known yet, with a kind from its words, a branch
+// named from them and prompt.md, so a task you take over and let go on has
+// your request; retryFound gives it its key, or goes on from the words.
+func (e *Engine) startFoundWaiting(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput,
+	cause error) (registry.Task, error) {
+	kind := p.Kind
+	if kind == "" {
+		kind, _ = PickKind(e.cfg.Factory, nil, in.Prompt)
+	}
+	branch, err := e.branchFor(ctx, 0, repo.Repo, login, "", in.Prompt)
+	if err != nil {
+		return registry.Task{}, err
+	}
+	t, err := e.reg.CreateTask(ctx, registry.Task{Prompt: in.Prompt, Kind: kind, Repo: repo.Repo, Title: promptTitle(in.Prompt),
+		State: registry.TaskWaiting, Branch: branch, WaitsWho: waitJira, WaitsWhat: jiraWaitWhat})
+	if err != nil {
+		return registry.Task{}, err
+	}
+	next := e.now().Add(jiraBackoff(0))
+	e.jiraTries[t.ID] = &jiraTry{next: next, picked: p.Kind == ""}
+	e.recordStart(ctx, t, p, in)
+	if err := e.writeData(ctx, t, "ticket", "prompt.md", []byte(in.Prompt+"\n")); err != nil {
+		return t, err
+	}
+	e.event(ctx, t.ID, "intake", registry.PhaseFail, fmt.Sprintf("%s found in your text: waits for Jira (%v) and tries again at %s",
+		strings.Join(in.Found[:min(len(in.Found), foundReads)], ", "), cause, next.Local().Format("15:04")))
 	return t, nil
 }
 
@@ -464,7 +591,8 @@ func (e *Engine) jiraDidNotAnswer(ctx context.Context, t registry.Task, w *jiraT
 // task its ticket and starts it (startTicket); one more outage moves the
 // next try; 6 hours after the start the task needs you; a refusal (an
 // unknown key, a token file gone) sends the task to you with the cause. A
-// wait for Jira costs the task nothing.
+// wait for Jira costs the task nothing. A task that holds no key waits for
+// the keys of its words (retryFound).
 func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
 	w, due := e.jiraTryOf(t, t.Created)
 	if !due {
@@ -472,8 +600,11 @@ func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
 	}
 	if e.d.Jira == nil {
 		delete(e.jiraTries, t.ID)
-		e.toOperator(ctx, t, "[jira] is off, so the factory cannot read "+t.JiraKey, "Jira is off")
+		e.toOperator(ctx, t, "[jira] is off, so the factory cannot read "+cmp.Or(t.JiraKey, "the keys of your words"), "Jira is off")
 		return nil
+	}
+	if t.JiraKey == "" {
+		return e.retryFound(ctx, t, w)
 	}
 	tk, err := e.d.Jira.Ticket(ctx, t.JiraKey)
 	switch {
@@ -489,6 +620,94 @@ func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
 	}
 	delete(e.jiraTries, t.ID)
 	return e.startTicket(ctx, t, tk, w.picked)
+}
+
+// retryFound tries Jira again for a prompt task that waits for it, w being
+// its try (retryJira): the keys of its words are read again, as a start
+// reads them (readFound), and Jira's answer decides as a start's does:
+// one known key links to the task and starts it as a key task with the whole
+// text as its guidance (linkFound), none or several send it on from its words
+// (goOnFromWords). One more outage moves the next try, 6 hours after the
+// start the task needs you, and another refusal sends it to you with the
+// cause.
+func (e *Engine) retryFound(ctx context.Context, t registry.Task, w *jiraTry) error {
+	known, err := e.readFound(ctx, ParseStart(t.Prompt, e.trackers(t.Repo)).Found)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil && jiraDown(err):
+		e.jiraDidNotAnswer(ctx, t, w, t.Created, err)
+		return nil
+	case err != nil:
+		delete(e.jiraTries, t.ID)
+		e.toOperator(ctx, t, err.Error(), "Jira refused a key")
+		return nil
+	}
+	delete(e.jiraTries, t.ID)
+	if len(known) == 1 {
+		return e.linkFound(ctx, t, known[0], w.picked)
+	}
+	return e.goOnFromWords(ctx, t, known)
+}
+
+// linkFound gives the prompt task t, which waited for Jira, the one key of
+// its words that Jira knows (ticket tk): its whole text becomes its
+// guidance (guidance.md and the task's guidance), the key is linked, and the
+// task starts as a key task that waited for Jira (startTicket). A key that a
+// task holds since sends the task to you, naming that task: the key has one
+// task.
+func (e *Engine) linkFound(ctx context.Context, t registry.Task, tk jira.Ticket, picked bool) error {
+	if h, err := e.reg.TaskByKey(ctx, tk.Key); err == nil {
+		e.toOperator(ctx, t, keyRuns{h}.Error()+": stop this task", "its key has a task")
+		return nil
+	} else if !errors.Is(err, registry.ErrNotFound) {
+		return err
+	}
+	if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskWaiting}, "", func(u *registry.TaskUpdate) {
+		u.Set("guidance", t.Prompt)
+	}); err != nil {
+		return err
+	}
+	t.Guidance = t.Prompt
+	if wrote := e.writeData(ctx, t, "guidance", "guidance.md", []byte(t.Guidance+"\n")) == nil; !wrote {
+		return nil // writeData sent the task to you with the cause
+	}
+	if err := e.reg.LinkKey(ctx, t.ID, tk.Key); err != nil {
+		if _, held := errors.AsType[registry.ErrActiveKey](err); held { // another start took it meanwhile
+			return nil // the next try finds the holder
+		}
+		return err
+	}
+	t.JiraKey = tk.Key
+	e.noteFound(ctx, t.ID, tk.Key)
+	return e.startTicket(ctx, t, tk, picked)
+}
+
+// goOnFromWords starts the prompt task t, which waited for Jira, from its
+// words (its prompt.md is there since its start): queued or active as a
+// start's gate says, with its question which Jira issue it is: the keys of
+// its words that Jira knows when there are several, else the title search of
+// any prompt.
+func (e *Engine) goOnFromWords(ctx context.Context, t registry.Task, known []jira.Ticket) error {
+	state, who, what, err := e.startState(ctx)
+	if err != nil {
+		return err
+	}
+	if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskWaiting}, state, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", who)
+		u.Set("waits_what", what)
+		u.Because("Jira answered")
+	}); err != nil {
+		return err
+	}
+	t.State = state
+	e.event(ctx, t.ID, "intake", registry.PhaseOK, fmt.Sprintf("Jira answered: %s from your words: %s, on %s", startVerb(t), t.Kind, t.Branch))
+	if len(known) > 1 {
+		e.storeFoundIssues(ctx, t, known)
+	} else {
+		e.askWhichIssue(ctx, t, t.Prompt)
+	}
+	return nil
 }
 
 // startTicket starts a task that waited for Jira with the ticket Jira gave:
@@ -545,8 +764,11 @@ func startVerb(t registry.Task) string {
 }
 
 // startPrompt starts a task of a free prompt: prompt.md, and the question
-// which Jira issue it is (askWhichIssue).
-func (e *Engine) startPrompt(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput) (registry.Task, error) {
+// which Jira issue it is: the keys of its words that Jira knows when it
+// knows several (known; storeFoundIssues), else the title search of any
+// prompt (askWhichIssue).
+func (e *Engine) startPrompt(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput,
+	known []jira.Ticket) (registry.Task, error) {
 	kind, why := p.Kind, "you chose it"
 	if kind == "" {
 		kind, why = PickKind(e.cfg.Factory, nil, in.Prompt)
@@ -568,7 +790,11 @@ func (e *Engine) startPrompt(ctx context.Context, p StartPayload, repo config.Fa
 	if err := e.writeData(ctx, t, "ticket", "prompt.md", []byte(in.Prompt+"\n")); err != nil {
 		return t, err
 	}
-	e.askWhichIssue(ctx, t, in.Prompt)
+	if len(known) > 1 {
+		e.storeFoundIssues(ctx, t, known)
+	} else {
+		e.askWhichIssue(ctx, t, in.Prompt)
+	}
 	e.event(ctx, t.ID, "intake", registry.PhaseOK, fmt.Sprintf("%s from your words: %s (%s), on %s", startVerb(t), kind, why, branch))
 	return t, nil
 }
@@ -695,19 +921,11 @@ func (e *Engine) storeWhichIssue(ctx context.Context, t registry.Task, prompt st
 	}
 	slices.SortStableFunc(ms, func(a, b match) int { return len(b.shared) - len(a.shared) })
 	ms = ms[:min(len(ms), issueOptions)]
-	q := registry.Question{
-		Text:     whichIssue,
-		Context:  "You started this task from your words. A Jira issue gives its agents the ticket and its PR the key.",
-		Example:  textx.Clip(scrubbed(textx.FirstLine(prompt)), maxTitle),
-		RaisedBy: intakeRole,
-		Evidence: "a Jira search of the titles for: " + strings.Join(words, " "),
-	}
+	q := whichIssueQuestion(prompt,
+		"You started this task from your words. A Jira issue gives its agents the ticket and its PR the key.",
+		"a Jira search of the titles for: "+strings.Join(words, " "))
 	for _, m := range ms {
-		means := "the task follows " + m.tk.Key
-		if m.tk.Type != "" || m.tk.Status != "" {
-			means += " (" + strings.Trim(m.tk.Type+", "+m.tk.Status, ", ") + ")"
-		}
-		q.Options = append(q.Options, registry.Option{Label: strings.TrimSpace(m.tk.Key + " " + m.tk.Summary), Means: means})
+		q.Options = append(q.Options, issueOption(m.tk))
 	}
 	q.Options = append(q.Options, registry.Option{Label: noIssue, Means: "the agents work from your words only"})
 	q.Recommended = len(q.Options) - 1
@@ -720,9 +938,56 @@ func (e *Engine) storeWhichIssue(ctx context.Context, t registry.Task, prompt st
 	default:
 		q.Why = "no title in Jira shares a word with yours"
 	}
-	cur, rerr := e.reg.TaskByID(ctx, t.ID)
-	if rerr != nil {
-		e.log.Warn("ask which Jira issue a prompt is", "task", t.ID, "err", rerr)
+	e.putWhichIssue(ctx, t, q)
+}
+
+// storeFoundIssues stores the question which Jira issue task t's prompt is,
+// when its words name several that Jira knows (known, in the order of the
+// words): they are its options, the first recommended, and "no issue" the
+// last. No search is made.
+func (e *Engine) storeFoundIssues(ctx context.Context, t registry.Task, known []jira.Ticket) {
+	keys := make([]string, len(known))
+	for i, tk := range known {
+		keys[i] = tk.Key
+	}
+	q := whichIssueQuestion(t.Prompt,
+		"Your words name more than one Jira issue. The one you pick gives the agents its ticket and its PR the key.",
+		"the keys of your words that Jira knows: "+strings.Join(keys, ", "))
+	for _, tk := range known {
+		q.Options = append(q.Options, issueOption(tk))
+	}
+	q.Options = append(q.Options, registry.Option{Label: noIssue, Means: "the agents work from your words only"})
+	q.Recommended, q.Why = 0, "it comes first in your words"
+	e.putWhichIssue(ctx, t, q)
+}
+
+// whichIssueQuestion is intake's question which Jira issue a prompt is, with
+// no options yet: ctxLine says why it is asked, evidence what it cites.
+func whichIssueQuestion(prompt, ctxLine, evidence string) registry.Question {
+	return registry.Question{
+		Text:     whichIssue,
+		Context:  ctxLine,
+		Example:  textx.Clip(scrubbed(textx.FirstLine(prompt)), maxTitle),
+		RaisedBy: intakeRole,
+		Evidence: evidence,
+	}
+}
+
+// issueOption is the option of an issue: its key and summary, and what
+// picking it means.
+func issueOption(tk jira.Ticket) registry.Option {
+	means := "the task follows " + tk.Key
+	if tk.Type != "" || tk.Status != "" {
+		means += " (" + strings.Trim(tk.Type+", "+tk.Status, ", ") + ")"
+	}
+	return registry.Option{Label: strings.TrimSpace(tk.Key + " " + tk.Summary), Means: means}
+}
+
+// putWhichIssue stores q as the next revision of task t's questions.
+func (e *Engine) putWhichIssue(ctx context.Context, t registry.Task, q registry.Question) {
+	cur, err := e.reg.TaskByID(ctx, t.ID)
+	if err != nil {
+		e.log.Warn("ask which Jira issue a prompt is", "task", t.ID, "err", err)
 		return
 	}
 	if err := e.reg.ReplaceQuestions(ctx, t.ID, cur.QuestionRev+1, []registry.Question{q}); err != nil {

@@ -524,7 +524,8 @@ func TestParseStartReadsJiraPRAndRunLinks(t *testing.T) {
 
 func sameStart(a, b StartInput) bool {
 	link := func(x, y *Link) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
-	return a.Key == b.Key && a.Guidance == b.Guidance && a.Prompt == b.Prompt && link(a.PR, b.PR) && link(a.Run, b.Run)
+	return a.Key == b.Key && a.Guidance == b.Guidance && a.Prompt == b.Prompt && link(a.PR, b.PR) && link(a.Run, b.Run) &&
+		slices.Equal(a.Found, b.Found)
 }
 
 func showStart(s StartInput) string {
@@ -534,6 +535,9 @@ func showStart(s StartInput) string {
 	}
 	if s.Run != nil {
 		out += fmt.Sprintf(" Run %+v", *s.Run)
+	}
+	if len(s.Found) > 0 {
+		out += fmt.Sprintf(" Found %q", s.Found)
 	}
 	return out + "}"
 }
