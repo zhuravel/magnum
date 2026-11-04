@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	factoryUsage          = "factory <daemon|install|uninstall|status>"
+	factoryUsage          = "factory <daemon|install|uninstall|status|start>"
 	factoryInstallUsage   = "install [--dry-run]"
 	factoryUninstallUsage = "uninstall [--dry-run]"
 	factoryStatusUsage    = "status [--json]"
@@ -33,15 +33,16 @@ func newFactoryCmd(c *Context) *cobra.Command {
 			"herdr session of its own ([factory] herdr_session). It is a second daemon with its own launchd job "+
 			"("+factory.LaunchLabel+"), registry, pid, lock and log (logs/factory.log), apart from the review "+
 			"daemon's: `magnum factory install` loads the job (and reloads it once, restarting a running factory "+
-			"daemon on this build), `uninstall` removes it, `status` lists the tasks, and `daemon` is what the job "+
-			"runs.",
+			"daemon on this build), `uninstall` removes it, `status` lists the tasks, `start` hands it a task, and "+
+			"`daemon` is what the job runs.",
 		func(pos []string) int {
 			if len(pos) == 0 {
-				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status>")
+				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status|start>")
 			}
-			return inspUsage(c, "factory", fmt.Sprintf("unknown factory command %q", pos[0]), "<daemon|install|uninstall|status>")
+			return inspUsage(c, "factory", fmt.Sprintf("unknown factory command %q", pos[0]), "<daemon|install|uninstall|status|start>")
 		})
-	cmd.AddCommand(newFactoryDaemonCmd(c), newFactoryInstallCmd(c), newFactoryUninstallCmd(c), newFactoryStatusCmd(c))
+	cmd.AddCommand(newFactoryDaemonCmd(c), newFactoryInstallCmd(c), newFactoryUninstallCmd(c), newFactoryStatusCmd(c),
+		newFactoryStartCmd(c))
 	return cmd
 }
 

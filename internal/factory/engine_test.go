@@ -113,17 +113,32 @@ func (f *fakeRuntime) parked() []int64 {
 	return append([]int64(nil), f.parks...)
 }
 
-// fakeCopies records the servers it was asked to start and stop; a claim
-// answers claimed, or claimErr.
+// fakeCopies records the servers it was asked to start and stop and the
+// releases; a claim answers claimed, or claimErr, after block (when set)
+// is closed or ctx ends, and counts itself in claims.
 type fakeCopies struct {
 	mu       sync.Mutex
 	started  []string
 	stopped  []string
+	released []int64
 	claimed  Copy
 	claimErr error
+	claims   int
+	block    chan struct{}
 }
 
-func (f *fakeCopies) Claim(context.Context, registry.Task) (Copy, error) {
+func (f *fakeCopies) Claim(ctx context.Context, _ registry.Task) (Copy, error) {
+	f.mu.Lock()
+	f.claims++
+	block := f.block
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return Copy{}, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.claimErr != nil {
@@ -132,7 +147,18 @@ func (f *fakeCopies) Claim(context.Context, registry.Task) (Copy, error) {
 	return f.claimed, nil
 }
 
-func (f *fakeCopies) Release(context.Context, registry.Task, string) error { return nil }
+func (f *fakeCopies) claimCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.claims
+}
+
+func (f *fakeCopies) Release(_ context.Context, t registry.Task, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, t.ID)
+	return nil
+}
 
 func (f *fakeCopies) Free(context.Context) (int, error) { return 1, nil }
 

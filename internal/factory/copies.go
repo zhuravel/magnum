@@ -10,6 +10,7 @@ package factory
 // handoff.md in the task's directory. The copies' servers are in server.go.
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -135,9 +136,12 @@ func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx
 // it holds, else a free one, the copy it used last first (slots.Reserve:
 // the owner row's state stays the runtime's), else a new one while the
 // repository has fewer than max_copies (provision). None left is ErrNoCopy,
-// "copy: all 3 busy". The claim protocol runs once per claim (prepare),
-// under the copy's own lock: claims of different copies go on side by side,
-// and a release of another copy never waits for one.
+// "copy: all 3 busy". Every claim runs the claim protocol (prepare), under
+// the copy's own lock: claims of different copies go on side by side, and a
+// release of another copy never waits for one. So a claim of the copy a
+// task holds runs it again, and an install step can run in the middle of
+// the task's work: a stage claims its task's copy once, off the loop, and
+// keeps it (Engine.claimCopy).
 func (c *copySet) Claim(ctx context.Context, t registry.Task) (Copy, error) {
 	repo, ok := c.cfg.FactoryRepo(t.Repo)
 	if !ok {
@@ -351,9 +355,10 @@ func (c *copySet) markBroken(ctx context.Context, name string, cause error) erro
 	return nil
 }
 
-// prepare is the claim protocol, in order: the task's branch checked out
-// when it has one (a later claim of a task that left another copy),
-// reset_db when the development database holds a migration the task's code
+// prepare is the claim protocol, in order: the task's branch created at
+// origin/<base> when the task has a branch name and no branch yet (its
+// first claim), or checked out when it has one (a later claim of a task
+// that left another copy), reset_db when the development database holds a migration the task's code
 // lacks, each installs entry whose lockfile differs from the copy's last
 // install, and a flush of the copy's Redis databases. Each one that has
 // work to do is a step (steps.Step) of the claim's subject,
@@ -375,7 +380,12 @@ func (c *copySet) prepare(ctx context.Context, t registry.Task, repo config.Fact
 			return fn(ctx)
 		})
 	}
-	if c.mustSwitch(ctx, t, cp) {
+	switch {
+	case c.mustCreate(ctx, t, cp):
+		if err := step("create_branch", func(ctx context.Context) error { return c.createBranch(ctx, t, repo, cp) }); err != nil {
+			return err
+		}
+	case c.mustSwitch(ctx, t, cp):
 		if err := step("switch_branch", func(ctx context.Context) error { return c.git.Switch(ctx, cp.Path, t.Branch) }); err != nil {
 			return err
 		}
@@ -464,6 +474,28 @@ func (c *copySet) mustSwitch(ctx context.Context, t registry.Task, cp Copy) bool
 	}
 	b, err := c.git.CurrentBranch(ctx, cp.Path)
 	return err != nil || b != t.Branch
+}
+
+// mustCreate reports whether the claim creates the task's branch: the task
+// has a branch name (intake gave it one) and the repository no branch of
+// it yet.
+func (c *copySet) mustCreate(ctx context.Context, t registry.Task, cp Copy) bool {
+	if t.Branch == "" {
+		return false
+	}
+	_, err := c.git.RevParse(ctx, cp.Path, "refs/heads/"+t.Branch)
+	return errors.Is(err, gitx.ErrNoSuchRef)
+}
+
+// createBranch creates the task's branch at origin/<base> in the copy and
+// checks it out, tracking nothing (gitx.SwitchCreate); a branch made since
+// the check (a step resumed after the switch) is checked out.
+func (c *copySet) createBranch(ctx context.Context, t registry.Task, repo config.FactoryRepo, cp Copy) error {
+	err := c.git.SwitchCreate(ctx, cp.Path, t.Branch, "origin/"+cmp.Or(repo.Base, "master"))
+	if errors.Is(err, gitx.ErrBranchExists) {
+		return c.git.Switch(ctx, cp.Path, t.Branch)
+	}
+	return err
 }
 
 // foreignSchema says why the copy's databases need reset_db ("" when they

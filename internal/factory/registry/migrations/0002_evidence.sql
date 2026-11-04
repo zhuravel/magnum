@@ -243,7 +243,9 @@ CREATE TABLE artifacts (
   UNIQUE (task_id, kind, path, rev)
 );
 
--- The one PR of a task, and one task per PR.
+-- The one PR of a task. A PR belongs to one task that holds its work (not done or stopped): LinkPR refuses it
+-- for another while that task does (tasks.go, holdsWork), and a task that adopts the PR of a stopped one
+-- (milestone 2) gets a row of its own, so (repo, number) is indexed, not unique.
 CREATE TABLE pr_links (
   task_id       INTEGER PRIMARY KEY REFERENCES tasks(id),
   repo          TEXT NOT NULL,
@@ -251,9 +253,9 @@ CREATE TABLE pr_links (
   branch        TEXT NOT NULL DEFAULT '',
   opened_head   TEXT NOT NULL DEFAULT '',
   approved_head TEXT NOT NULL DEFAULT '',
-  opened_at     TEXT NOT NULL,
-  UNIQUE (repo, number)
+  opened_at     TEXT NOT NULL
 );
+CREATE INDEX pr_links_pr ON pr_links(repo, number);
 
 -- One run of a check on a head: by the writer (its claim), the factory (its own run) or GitHub. cause is
 -- set only on a failure, and may stay '' until someone classifies it.

@@ -11,8 +11,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,7 +89,11 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 		answer(e, ctx, q, e.stopTask)
 	case ReqLetGo:
 		answer(e, ctx, q, e.letGo)
-	case ReqStart, ReqAnswer, ReqDecide, ReqPreview:
+	case ReqStart:
+		answer(e, ctx, q, e.startRequest)
+	case ReqPreview:
+		answer(e, ctx, q, e.previewRequest)
+	case ReqAnswer, ReqDecide:
 		e.complete(ctx, q, fmt.Errorf("this factory daemon cannot %s a task yet: update magnum (`make build`), then `magnum factory install`", q.Kind), "")
 	default:
 		e.complete(ctx, q, fmt.Errorf("unknown request kind %q", q.Kind), "")
@@ -198,9 +204,50 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 			e.event(ctx, t.ID, "release", registry.PhaseFail, err.Error())
 		}
 	}
+	e.forgetCopy(t.ID) // a claim still running releases its copy when it ends (sweepClaims)
+	delete(e.jiraTries, t.ID)
 	delete(e.panics, t.ID)
 	delete(e.inbox, t.ID)
 	return "stopped " + TaskKey(t), nil
+}
+
+// startRequest answers a ReqStart (start): the task it made, or the task
+// that holds the key (no failure: the work runs), or why it made none.
+func (e *Engine) startRequest(ctx context.Context, p StartPayload) (string, error) {
+	t, err := e.start(ctx, p)
+	switch {
+	case errors.Is(err, ErrKeyRuns):
+		return err.Error(), nil
+	case err != nil && t.ID > 0: // made, and then a data file failed: the task waits on you
+		return "", fmt.Errorf("made task %d, but %w", t.ID, err)
+	case err != nil:
+		return "", err
+	}
+	name := t.JiraKey
+	if name == "" {
+		name = strconv.Quote(t.Title)
+	}
+	switch {
+	case t.State == registry.TaskWaiting && t.WaitsWho == waitJira:
+		return fmt.Sprintf("%s waits as task %d: Jira does not answer; it starts when Jira answers", name, t.ID), nil
+	case t.State == registry.TaskQueued:
+		return fmt.Sprintf("queued %s as task %d: %s: %s", name, t.ID, t.WaitsWho, t.WaitsWhat), nil
+	}
+	return fmt.Sprintf("started %s as task %d: %s in %s on %s", name, t.ID, t.Kind, t.Repo, t.Branch), nil
+}
+
+// previewRequest answers a ReqPreview with the JSON of the new-task form
+// (preview).
+func (e *Engine) previewRequest(ctx context.Context, p PreviewPayload) (string, error) {
+	f, err := e.preview(ctx, p.Text)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // letGo is your one action on a prompt of unknown delivery: you looked at

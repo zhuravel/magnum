@@ -136,6 +136,9 @@ type Deps struct {
 	Magnum   Magnum
 	Review   LocalReviewer
 	Git      *gitx.Client
+	// Run runs the overlap line's reads (Overlap: git log in the main
+	// clone, gh pr list as your gh login).
+	Run execx.Runner
 	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
 	// bytes of the filesystem that holds path.
 	Memory func(ctx context.Context) engine.MemorySample
@@ -197,10 +200,21 @@ type Engine struct {
 	// beforeMark runs right before codexRefused writes its mark (a test's
 	// seam: another writer moving the task meanwhile); nil in a daemon.
 	beforeMark func()
+	// jiraTries are the next tries of the tasks that wait for Jira
+	// (retryJira).
+	jiraTries map[int64]*jiraTry
 
 	heavyMu   sync.Mutex
 	heavyHeld map[int64]*heavySlot
 	heavySeq  int
+
+	// The claims of copies that run off the loop (claimCopy) and the copy
+	// each task holds once its claim handed it over; claimMu guards both, a
+	// claim's goroutine ends its claimRun.
+	claimMu sync.Mutex
+	claims  map[int64]*claimRun
+	held    map[int64]Copy
+	claimWG sync.WaitGroup
 }
 
 // New builds the engine over d.
@@ -225,6 +239,9 @@ func New(d Deps) *Engine {
 		parked:     map[int64]bool{},
 		servers:    map[int64]server{},
 		heavyHeld:  map[int64]*heavySlot{},
+		jiraTries:  map[int64]*jiraTry{},
+		claims:     map[int64]*claimRun{},
+		held:       map[int64]Copy{},
 	}
 }
 
@@ -424,6 +441,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		return fmt.Errorf("factory tick: %w", err)
 	}
 	e.sweepHeavy(ctx, tasks)
+	e.sweepClaims(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
 	e.pressure(ctx, now, tasks)
 	infra, held := e.holds[HoldInfra]
@@ -438,6 +456,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 
 	e.handleRequests(ctx)
+	e.admit(ctx)
 
 	if advance {
 		if tasks, err = e.reg.Tasks(ctx); err != nil { // the requests may have moved some
@@ -491,8 +510,12 @@ func live(tasks []registry.Task) []registry.Task {
 
 // advance runs one pass of the task's current stage (an empty stage is its
 // kind's first, recorded) and moves the task to the next stage once the
-// stage passes. The last stage's own effect ends the task.
+// stage passes. The last stage's own effect ends the task. A task that
+// waits for Jira before its first stage tries Jira instead (retryJira).
 func (e *Engine) advance(ctx context.Context, t registry.Task) error {
+	if t.Stage == "" && t.State == registry.TaskWaiting && t.WaitsWho == waitJira {
+		return e.retryJira(ctx, t)
+	}
 	kind, ok := e.cfg.Factory.Kinds[t.Kind]
 	if !ok || len(kind.Stages) == 0 {
 		return fmt.Errorf("task %d: the kind of task %q is not configured", t.ID, t.Kind)
@@ -698,36 +721,6 @@ func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt
 		e.waitOn(ctx, t, "", "")
 	}
 	return nil
-}
-
-// claimCopy is how a stage claims the task's copy (Copies.Claim) and
-// notes its name on the task. A task no copy is free for waits at no cost
-// (ErrNoCopy is held) with the copies' reason, "copy: all 3 busy", until a
-// claim goes through and clears that wait.
-func (e *Engine) claimCopy(ctx context.Context, t registry.Task) (Copy, error) {
-	if e.d.Copies == nil {
-		return Copy{}, heldError{who: waitCopy, what: "this build has no copies yet"}
-	}
-	c, err := e.d.Copies.Claim(ctx, t)
-	if nc, ok := errors.AsType[noCopy](err); ok {
-		e.waitOn(ctx, t, waitCopy, nc.what)
-		return Copy{}, err
-	}
-	if err != nil {
-		return Copy{}, err
-	}
-	if t.Copy != c.Name || t.WaitsWho == waitCopy {
-		if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
-			u.Set("copy", c.Name)
-			if t.WaitsWho == waitCopy {
-				u.Set("waits_who", "")
-				u.Set("waits_what", "")
-			}
-		}); err != nil {
-			return Copy{}, fmt.Errorf("note copy %s on %s: %w", c.Name, TaskKey(t), err)
-		}
-	}
-	return c, nil
 }
 
 // beginEffect is how a stage begins an external effect (a push, a PR):

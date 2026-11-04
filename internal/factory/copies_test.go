@@ -584,14 +584,18 @@ func TestCopiesQueueATaskWhenNoCopyIsFree(t *testing.T) {
 	h := newHarness(t)
 	h.copies.claimErr = err
 	task := h.task("PR-4", registry.TaskActive, "investigate")
-	if _, err := h.e.claimCopy(h.ctx, task); !errors.Is(err, ErrHeld) {
+	h.claimNow(task) // the claim runs off the loop
+	if _, err := h.e.claimCopy(h.ctx, h.reload(task.ID)); !errors.Is(err, ErrHeld) {
 		t.Fatalf("claimCopy = %v, want a hold that costs the task nothing", err)
 	}
 	if got := h.reload(task.ID); got.WaitsWho != "copy" || got.WaitsWhat != "all 3 busy" || got.Copy != "" {
 		t.Fatalf("task waits %q: %q with copy %q, want copy: all 3 busy and none", got.WaitsWho, got.WaitsWhat, got.Copy)
 	}
+	h.copies.mu.Lock()
 	h.copies.claimErr = nil
 	h.copies.claimed = Copy{Name: "factory2", Path: "/copies/factory2", Number: 2}
+	h.copies.mu.Unlock()
+	h.claimNow(h.reload(task.ID))
 	if c, err := h.e.claimCopy(h.ctx, h.reload(task.ID)); err != nil || c.Name != "factory2" {
 		t.Fatalf("claimCopy = %+v, %v", c, err)
 	}
@@ -760,6 +764,48 @@ func TestClaimInstallsOnlyWhenALockfileDiffers(t *testing.T) {
 	}
 	if got := len(r.calls("bundle install", c.Path)); got != 2 {
 		t.Fatalf("bundle install ran %d times, want a second run for the branch's Gemfile.lock", got)
+	}
+}
+
+// A task that has a branch name and no branch yet gets it at its claim,
+// from origin/<base>, as a step of the claim with its guard and events: the
+// copy is on the task's branch when the claim hands it over. A later claim
+// switches to the branch it has.
+func TestClaimCreatesTheTasksBranchFromTheBase(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	task := r.task("PR-12345")
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, "", func(u *registry.TaskUpdate) {
+		u.Set("branch", "zhuravel-PR-12345-credit-expiry")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := r.claim(r.reload(task.ID))
+	if b := r.gitIn(c.Path, "branch", "--show-current"); b != "zhuravel-PR-12345-credit-expiry" {
+		t.Fatalf("the copy is on %q, want the task's new branch", b)
+	}
+	if head, base := r.gitIn(c.Path, "rev-parse", "HEAD"), r.gitIn(r.main, "rev-parse", "origin/master"); head != base {
+		t.Fatalf("the branch starts at %s, want origin/master %s", head, base)
+	}
+	if up := r.gitIn(c.Path, "for-each-ref", "--format=%(upstream)", "refs/heads/zhuravel-PR-12345-credit-expiry"); up != "" {
+		t.Fatalf("the branch tracks %q, want nothing", up)
+	}
+	var created bool
+	evs, err := r.st.EventsMatching(r.ctx, []store.SubjectMatch{{Prefix: "slot:factory1:claim:"}}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		if store.Deref(ev.Step) == "create_branch" && store.Deref(ev.Phase) == store.PhaseOK {
+			created = true
+		}
+	}
+	if !created {
+		t.Fatalf("no ok step create_branch among %+v", evs)
+	}
+	r.release(r.reload(task.ID))
+	c = r.claim(r.reload(task.ID))
+	if b := r.gitIn(c.Path, "branch", "--show-current"); b != "zhuravel-PR-12345-credit-expiry" {
+		t.Fatalf("a second claim left the copy on %q", b)
 	}
 }
 

@@ -10,6 +10,9 @@
 // argv, a log, an event or an error; --disable, the first argument, keeps a
 // ~/.curlrc out. The token is read from a file only its owner can open.
 //
+// Search finds issues by the words of their title (the factory asks which
+// issue a free prompt is): GET <url>/rest/api/3/search/jql, the same way.
+//
 // A Ticket keeps the issue's key, URL, summary, status, type, priority,
 // labels, parent, its description (cut at MaxDescription) and the custom
 // fields whose name speaks of requirements (cut at MaxField): never a
@@ -73,10 +76,18 @@ type Error struct {
 	// Code is the HTTP status (ClassUnauthorized, ClassForbidden,
 	// ClassNotFound, ClassStatus) or curl's exit code (ClassUnreachable).
 	Code int
-	msg  string
+	// File is the token file of a ClassTokenFile error ("" for another
+	// class); a missing one wraps fs.ErrNotExist (errors.Is).
+	File  string
+	msg   string
+	cause error
 }
 
 func (e *Error) Error() string { return e.msg }
+
+// Unwrap is the file system's error under a ClassTokenFile error (nil for
+// another class).
+func (e *Error) Unwrap() error { return e.cause }
 
 func failed(class string, code int, format string, args ...any) *Error {
 	return &Error{Class: class, Code: code, msg: fmt.Sprintf(format, args...)}
@@ -254,31 +265,34 @@ func splitStatus(out []byte) (int, []byte, bool) {
 
 // ReadToken reads the API token from path: a file fsx.CheckPrivate
 // accepts, holding one word of printable ASCII, trimmed of surrounding
-// white space. Its errors are of ClassTokenFile, name the file and never
-// quote the token.
+// white space. Its errors are of ClassTokenFile, name the file (Error.File)
+// and never quote the token; a file that does not exist wraps
+// fs.ErrNotExist.
 func ReadToken(path string) (string, error) {
-	bad := func(format string, args ...any) error {
-		return failed(ClassTokenFile, 0, "jira.token_file "+format, args...)
+	bad := func(cause error, format string, args ...any) error {
+		e := failed(ClassTokenFile, 0, "jira.token_file "+format, args...)
+		e.File, e.cause = path, cause
+		return e
 	}
 	if path == "" {
-		return "", bad("is not set")
+		return "", bad(nil, "is not set")
 	}
 	if err := fsx.CheckPrivate(path); err != nil {
-		return "", bad("%v", err)
+		return "", bad(err, "%v", err)
 	}
 	data, err := fsx.ReadRegular(path, maxToken)
 	if errors.Is(err, fsx.ErrTooLarge) {
-		return "", bad("%s is longer than %d bytes: it must hold the API token alone", path, maxToken)
+		return "", bad(nil, "%s is longer than %d bytes: it must hold the API token alone", path, maxToken)
 	}
 	if err != nil {
-		return "", bad("%v", err)
+		return "", bad(err, "%v", err)
 	}
 	token := strings.TrimSpace(string(data))
 	switch {
 	case token == "":
-		return "", bad("%s is empty", path)
+		return "", bad(nil, "%s is empty", path)
 	case strings.ContainsFunc(token, func(r rune) bool { return r < '!' || r > '~' }):
-		return "", bad("%s holds a character a token cannot have (one word of printable ASCII)", path)
+		return "", bad(nil, "%s holds a character a token cannot have (one word of printable ASCII)", path)
 	}
 	return token, nil
 }

@@ -46,8 +46,9 @@ type daemonGroupSys struct {
 	Kill func(pid int, sig syscall.Signal) error
 	// DaemonPID reads the daemon pidfile (engine.DaemonPID); FactoryPID the
 	// factory daemon's (factory.DaemonPID, when nil).
-	DaemonPID  func(paths.Layout) (int, error)
-	FactoryPID func(paths.Layout) (int, error)
+	DaemonPID   func(paths.Layout) (int, error)
+	FactoryPID  func(paths.Layout) (int, error)
+	FactoryKick func(paths.Layout) (int, error)
 	// Sleep waits d between polls; it returns ctx's error, at once, when ctx
 	// ends first (ctrl+c), and nil otherwise.
 	Sleep func(ctx context.Context, d time.Duration) error

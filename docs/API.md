@@ -11237,6 +11237,15 @@ var (
 	// sessions works in the copy.
 	ErrPaneInCopy = errors.New("factory: a pane runs in the copy")
 )
+var (
+	// ErrKeyRuns is a start for a Jira key that a task holds (it is not
+	// done or stopped): the start returns that task and makes none. The
+	// error's text names the task, or its PR.
+	ErrKeyRuns = errors.New("factory: the key has a task")
+	// ErrLater is a start of a later milestone: a PR link (adoption,
+	// milestone 2) or a run link (CI tasks, milestone 3).
+	ErrLater = errors.New("factory: not in this milestone")
+)
 var ErrHeld = errors.New("held")
     ErrHeld marks a launch or an effect that the engine held back: the daemon
     drains, or a hold of the machine is on. It costs the task nothing.
@@ -11275,6 +11284,14 @@ func LooksLikeFactoryDaemon(comm, args string) bool
     LooksLikeFactoryDaemon reports whether a process is a magnum factory daemon
     from what engine.ProcessCommand read: the executable is magnum and its first
     arguments that are not flags are "factory daemon".
+
+func PickKind(cfg config.Factory, t *jira.Ticket, prompt string) (kind, why string)
+    PickKind picks the kind of a task: the kind kind_by_jira_type maps the
+    ticket's issue type to (the type's case ignored), else the kind whose
+    kind_words the ticket's summary and prompt use most (a word's own forms,
+    "crashes" for "crash", count; a tie goes to the kind used first), else bug.
+    Only a configured kind is picked. why says how, in the words the new-task
+    screen shows.
 
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
@@ -11323,6 +11340,9 @@ type Deps struct {
 	Magnum   Magnum
 	Review   LocalReviewer
 	Git      *gitx.Client
+	// Run runs the overlap line's reads (Overlap: git log in the main
+	// clone, gh pr list as your gh login).
+	Run execx.Runner
 	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
 	// bytes of the filesystem that holds path.
 	Memory func(ctx context.Context) engine.MemorySample
@@ -11358,6 +11378,13 @@ func (e *Engine) Blocking() []string
 func (e *Engine) Kick()
     Kick asks the loop for a tick now (SIGUSR1, `magnum factory start` and the
     screen's requests); a kick already pending absorbs it.
+
+func (e *Engine) Overlap(ctx context.Context, t registry.Task, files []string) (string, error)
+    Overlap is the advisory line of what else touches task t's work ("" for
+    nothing): the commits that name its key, the PRs that name it, and the
+    open PRs that change files (the report's). Each part is read on its own;
+    one that fails leaves the others' line, and the error says what failed.
+    A build without a runner (Deps.Run) reads nothing.
 
 func (e *Engine) Run(ctx context.Context) error
     Run takes the factory lock (Lock; another daemon holding it is ErrRunning)
@@ -11443,6 +11470,13 @@ type LetGoPayload struct {
     LetGoPayload is a ReqLetGo: you looked at the pane of task TaskID's Role,
     whose last prompt may or may not have arrived, and let the prompt go.
 
+type Link struct {
+	URL, Repo string
+	Number    int64
+}
+    Link is a GitHub link of a start: its URL as given, the repository
+    (owner/name) and the PR's or the run's number.
+
 type LocalReviewer interface {
 	Round(ctx context.Context, c evalrun.LocalCase) (evalrun.LocalResult, error)
 }
@@ -11461,6 +11495,12 @@ type PRView struct {
 	Draft                      bool
 }
     PRView is a pull request as the factory reads it back after it opened it.
+
+type PreviewPayload struct {
+	Text string
+}
+    PreviewPayload is a ReqPreview: the new-task screen's text, whose preview
+    the daemon answers as the JSON of a tui.NewTaskForm.
 
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
@@ -11482,6 +11522,37 @@ type Runtime interface {
     of a run's end, parking a task's sessions, the reconcile of a prompt of
     unknown delivery, the recovery of a lost pane, and the shift of every turn
     deadline after the Mac slept.
+
+type StartInput struct {
+	Key, Guidance, Prompt string
+	PR, Run               *Link
+}
+    StartInput is what a start's text holds (ParseStart): a Jira key with your
+    guidance after it, a GitHub PR link (PR) or an Actions run link (Run), with
+    the words after the link as Guidance, or else the whole text as a prompt.
+
+func ParseStart(text string, trackers string) StartInput
+    ParseStart reads a start's text. trackers are the Jira sites and the
+    tracker templates (config.ParseTracker) that tell a Jira link, separated by
+    white space: a site's URL ("https://example.atlassian.net") or a template
+    ("https://example.atlassian.net/browse/PR-{num}"). The text is trimmed;
+    its first word is:
+      - a Jira key in upper case ("PR-12345"), or a Jira link: /browse/<KEY>
+        on the host of one of trackers (on any host when trackers is empty),
+        or a template's link; the words after it are the guidance (a colon or a
+        dash between the two is dropped);
+      - a GitHub PR link (PR) or an Actions run link (Run), the words after it
+        the guidance;
+      - anything else: the whole text is the prompt.
+
+type StartPayload struct {
+	Text, Kind, Repo string
+	Surface          string `json:",omitempty"`
+}
+    StartPayload is a ReqStart (and the start of the new-task screen): your
+    text, the kind of task you chose ("" = the daemon picks it, PickKind), the
+    repository ("" = the only [[factory.repo]]), and where you asked (Surface,
+    for the record of your input; "" = the CLI).
 
 type StopPayload struct {
 	TaskID  int64
@@ -12081,10 +12152,13 @@ func (r *Registry) LedgerOf(ctx context.Context, taskID int64) ([]LedgerEntry, e
     the prompts its agents were sent, or were about to be.
 
 func (r *Registry) LinkPR(ctx context.Context, l PRLink) error
-    LinkPR records the PR of task l.TaskID. A task has one PR, and a PR one
-    task: linking another number or repository to a task that has a PR, or a PR
-    that another task has, is ErrConflict; linking the PR it already has is a
-    no-op that leaves the first record as it was. Repo and Number are required,
+    LinkPR records the PR of task l.TaskID. A task has one PR, and a PR one task
+    at a time: linking another number or repository to a task that has a PR,
+    or a PR that another task has while that task holds its work (it is not
+    done or stopped, holdsWork), is ErrConflict; linking the PR it already
+    has is a no-op that leaves the first record as it was. The PR of a task
+    that is done or stopped may be linked to another (adoption, milestone 2),
+    and the ended task's link stays as it was. Repo and Number are required,
     Opened defaults to the clock, and the task must exist (ErrNotFound).
 
 func (r *Registry) LinkedPR(ctx context.Context, taskID int64) (PRLink, error)
@@ -15435,6 +15509,9 @@ the config curl reads with --config - (basic auth), never in argv, a log,
 an event or an error; --disable, the first argument, keeps a ~/.curlrc out.
 The token is read from a file only its owner can open.
 
+Search finds issues by the words of their title (the factory asks which issue a
+free prompt is): GET <url>/rest/api/3/search/jql, the same way.
+
 A Ticket keeps the issue's key, URL, summary, status, type, priority, labels,
 parent, its description (cut at MaxDescription) and the custom fields whose name
 speaks of requirements (cut at MaxField): never a comment, a person (assignee,
@@ -15462,6 +15539,13 @@ const (
 )
     The classes of an *Error.
 
+const (
+	MaxSearchWords   = 8
+	MaxSearchResults = 50
+)
+    The bounds of a search: the most words it asks for (the first of the text)
+    and the most issues it reads (the API's own page limit).
+
 const MaxTime = 20 * time.Second
     MaxTime is curl's bound on one request (its --max-time); the command itself
     gets 5 seconds more.
@@ -15472,7 +15556,15 @@ FUNCTIONS
 func ReadToken(path string) (string, error)
     ReadToken reads the API token from path: a file fsx.CheckPrivate accepts,
     holding one word of printable ASCII, trimmed of surrounding white space.
-    Its errors are of ClassTokenFile, name the file and never quote the token.
+    Its errors are of ClassTokenFile, name the file (Error.File) and never quote
+    the token; a file that does not exist wraps fs.ErrNotExist.
+
+func SearchWords(text string) []string
+    SearchWords are the words a title search asks for: the first MaxSearchWords
+    distinct ones of text, lowercased, of letters and digits only (an apostrophe
+    inside a word dropped, any other mark a break), at least minSearchWord long
+    and not a common word. No mark of JQL or of Jira's text search survives,
+    so the words need no escaping.
 
 
 TYPES
@@ -15495,6 +15587,15 @@ func (c *Client) Myself(ctx context.Context) error
     Myself asks the site whether it accepts the credentials (GET
     /rest/api/2/myself), keeping nothing of the answer: doctor's live check.
 
+func (c *Client) Search(ctx context.Context, words string, limit int) ([]Ticket, error)
+    Search finds the issues whose summary holds one of the first words of words
+    (SearchWords; none asks Jira nothing): one GET of the enhanced search,
+    /rest/api/3/search/jql, with the JQL `summary ~ "<word>" OR ... ORDER BY
+    updated DESC`, at most limit issues (1 to MaxSearchResults) and the fields
+    of a ticket's head. Each issue is a Ticket of its key, URL, summary, status,
+    type and priority, in Jira's order; an issue without a valid key is left
+    out. The credentials go to curl as Ticket's do.
+
 func (c *Client) Ticket(ctx context.Context, key string) (Ticket, error)
     Ticket reads the issue key ("PS-123") from the site.
 
@@ -15509,6 +15610,10 @@ type Error struct {
 	// Code is the HTTP status (ClassUnauthorized, ClassForbidden,
 	// ClassNotFound, ClassStatus) or curl's exit code (ClassUnreachable).
 	Code int
+	// File is the token file of a ClassTokenFile error ("" for another
+	// class); a missing one wraps fs.ErrNotExist (errors.Is).
+	File string
+
 	// Has unexported fields.
 }
     Error is a failure to read an issue, by class. Its message names the class
@@ -15516,6 +15621,10 @@ type Error struct {
     or the token; a token file's names the file.
 
 func (e *Error) Error() string
+
+func (e *Error) Unwrap() error
+    Unwrap is the file system's error under a ClassTokenFile error (nil for
+    another class).
 
 type Field struct {
 	Name  string

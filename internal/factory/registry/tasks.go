@@ -37,7 +37,12 @@ var taskStates = map[string]bool{
 // index (migrations/0002_evidence.sql) and of the holder queries of CreateTask
 // and TaskByKey, which must keep implying the index's predicate to use it:
 // change the three together.
-const holdsKey = "jira_key != '' AND state NOT IN ('done','stopped')"
+const holdsKey = "jira_key != '' AND " + holdsWork
+
+// holdsWork is the SQL predicate of a task that still holds its work, its
+// key and its PR: it is not done or stopped (a published or failed task
+// holds them). LinkPR refuses a PR such a task has for another.
+const holdsWork = "state NOT IN ('done','stopped')"
 
 // Task is one piece of work: a Jira key or a free prompt, taken to a PR.
 type Task struct {

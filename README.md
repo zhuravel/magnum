@@ -3470,14 +3470,20 @@ stages = [
   another, and no claim takes a broken copy until it is repaired. In `env`, `{copy}` (or `{slot}`) is the
   copy's name, `{n}` its number and `{n*16}` its Redis offset; when `env` names `REDIS_DB_OFFSET`, copy `{n}`
   gets `n*16` there whatever the value, its 16 Redis databases. `PORT` in `env` is the copy's server port.
-  Each claim then checks out the task's branch when it has one, runs `reset_db` when the development
+  Each claim then creates the task's branch at `origin/<base>` (tracking nothing) on its first claim, or
+  checks it out when it has one, runs `reset_db` when the development
   database's newest migration is none the task's code has, runs each `installs` entry whose lockfile changed
   since the copy's last install, and flushes the copy's 16 Redis databases (`redis-cli -n <db> FLUSHDB`). Each
   of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
   the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over both herdr
   sessions, the factory's and yours (your agent or console in the copy, your changes, a moved HEAD), and no
   pane of the factory's session in the copy that no session of the factory's is in. Claims of different
-  copies run side by side, and a release never waits for another copy's claim. A
+  copies run side by side, and a release never waits for another copy's claim. Every claim runs these
+  steps, so a stage claims its task's copy once and keeps it until the release: the claim runs off the
+  daemon's loop (a setup can take most of an hour), at most `max_active` at once, while the task waits
+  `copy: preparing a copy (setup 3m)` (the copy it used last by name) and the other tasks go on. A guard that holds the copy
+  (`copy: held: foreign_agent: …`) or a factory pane in it is a wait like a busy copy, never a failure, and
+  the claim is tried again on the next tick. A
   release is refused while a factory pane works in the copy; it stops the copy's server, keeps the task's
   branch (its commits on it, pushed or not), puts the copy back on its placeholder at `origin/<base>` and
   writes `handoff.md` in the task's directory: the branch, the head, the server and what the next claimer
@@ -3500,7 +3506,29 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 | `magnum factory install [--dry-run]` | Write the factory daemon's LaunchAgent (`~/Library/LaunchAgents/zhuravel.magnum.factory.plist`, running `magnum factory daemon`) and load it: bootout, then bootstrap, once. A running factory daemon drains (no new launch or effect starts, its tick ends) and launchd starts it again on this build, which also loads edited prompts. The review daemon's job is left alone. |
 | `magnum factory uninstall [--dry-run]` | Unload and delete that LaunchAgent; the factory's registry, task directories and copies stay. |
 | `magnum factory status [--json]` | Whether the factory daemon runs, and each task's key, kind, state, stage and what it waits on. It never creates the registry, and refuses to migrate one while an older factory daemon runs on it (`magnum factory install` restarts it on the new build, which migrates). |
+| `magnum factory start <key, link or prompt> [--kind bug\|feature\|chore] [--repo owner/name]` | Hand the factory daemon a task and print its answer (it waits up to 30 seconds; without a factory daemon the request stays queued, and expires after 30 minutes). A Jira key (`PR-12345`) or a Jira link (`/browse/<KEY>` on the `[jira]` site, or a tracker template's link) at the start is a task of that ticket, which the daemon reads itself; the words after it are your guidance for every agent (`magnum factory start PR-12345 only the refund path`). Anything else is the task in your words. A key that has a task (not done or stopped) gets that task back, `PR-12345 already runs as task 7` or `PR-12345 has PR #4527`, and no second one; a GitHub PR link (adoption) and an Actions run link (a CI task) come in milestones 2 and 3. `--kind` names the kind of task, else the daemon picks it (below); `--repo` names the `[[factory.repo]]` when there is more than one. |
 | `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one says so, naming the first one's pid, and exits 0 before it opens a log or a store, so it migrates nothing and launchd does not restart it. |
+
+A start writes the task's data files to its directory (`factory/tasks/<id>/` in the data directory), which
+its agents read as data: `ticket.md` (the ticket as a round's judge gets it) and `guidance.md` (your words
+after the key), or `prompt.md` (your words); each is an artifact of the task, and your words are its first
+input. The kind comes from the Jira issue type through `kind_by_jira_type`, else from `kind_words` in the
+summary and your words, else it is `bug` ("no hint; tab changes it"). The branch is
+`<login>-<KEY>-<words>` for a key and `<login>-<words>` for your words: your gh login (the operator identity
+of the repository's `[[watch]]`), and at most 40 characters of the summary's or your first line's words; a
+name another task has, or a branch the main clone has (yours or origin's), gets `-2`. The task's first claim
+creates the branch. A task starts at once, or waits queued while memory is full
+(`memory: full, starts below 80% swap`, `memory_gate_swap`) or `max_active` tasks are at work
+(`copy: all 3 busy`), and starts on the first tick with room, oldest first. A task from your words asks, as
+its first question, which Jira issue it is: the 3 best title matches of a Jira search on its first words,
+and "no issue"; the best match is recommended, and "no issue" when no title shares a word. While Jira does
+not answer (curl exit 6, 7 or 28, HTTP 5xx) the task waits, `Jira: start when Jira answers`, at no cost,
+tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours; an unknown key
+(`PR-12399 is not in Jira`), a missing token file (`the Jira token file is missing: <path>`) or another
+refusal makes no task. A key's start records an overlap line among the task's events: the commits that name
+the key on any branch but the task's own (`git log --all --grep` in the main clone), the PRs that name it
+and, once its report names the files, the open PRs that change them (`gh pr list`, as your gh login). The
+line is advisory: it never stops a task.
 
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the

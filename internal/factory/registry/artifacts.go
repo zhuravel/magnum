@@ -112,11 +112,14 @@ type PRLink struct {
 	Opened       time.Time
 }
 
-// LinkPR records the PR of task l.TaskID. A task has one PR, and a PR one task:
-// linking another number or repository to a task that has a PR, or a PR that
-// another task has, is ErrConflict; linking the PR it already has is a no-op
-// that leaves the first record as it was. Repo and Number are required, Opened
-// defaults to the clock, and the task must exist (ErrNotFound).
+// LinkPR records the PR of task l.TaskID. A task has one PR, and a PR one task
+// at a time: linking another number or repository to a task that has a PR, or a
+// PR that another task has while that task holds its work (it is not done or
+// stopped, holdsWork), is ErrConflict; linking the PR it already has is a no-op
+// that leaves the first record as it was. The PR of a task that is done or
+// stopped may be linked to another (adoption, milestone 2), and the ended
+// task's link stays as it was. Repo and Number are required, Opened defaults to
+// the clock, and the task must exist (ErrNotFound).
 func (r *Registry) LinkPR(ctx context.Context, l PRLink) error {
 	if l.Repo == "" || l.Number <= 0 {
 		return errors.New("link pr: a repository and a PR number are required")
@@ -133,6 +136,15 @@ func (r *Registry) LinkPR(ctx context.Context, l PRLink) error {
 			return nil
 		case err == nil:
 			return fmt.Errorf("link pr: %w: task %d already has %s#%d, not %s#%d", ErrConflict, l.TaskID, repo, number, l.Repo, l.Number)
+		case !errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("link pr: %w", err)
+		}
+		var holder int64
+		err = tx.QueryRowContext(ctx, "SELECT task_id FROM pr_links WHERE repo = ? AND number = ? AND task_id IN (SELECT id FROM tasks WHERE "+
+			holdsWork+") ORDER BY task_id LIMIT 1", l.Repo, l.Number).Scan(&holder)
+		switch {
+		case err == nil:
+			return fmt.Errorf("link pr: %w: %s#%d is task %d's, which still holds it", ErrConflict, l.Repo, l.Number, holder)
 		case !errors.Is(err, sql.ErrNoRows):
 			return fmt.Errorf("link pr: %w", err)
 		}

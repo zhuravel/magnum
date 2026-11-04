@@ -27,6 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/reveal"
@@ -109,6 +110,7 @@ type factoryDaemon struct {
 	// Guard is the herdr the copies' guard sees: the factory's session and
 	// yours.
 	Guard factory.GuardPanes
+	Jira  *jira.Client
 	Log   *slog.Logger
 
 	closers []func() error
@@ -135,10 +137,11 @@ func (d *factoryDaemon) Close() error {
 // is the herdr ping, the reveal of that session, and the copies (a second
 // slot manager over the agents store, whose guard sees the panes of the
 // factory's herdr session and of yours, factory.GuardPanes, with the
-// runtime's owner rows). Jira, GitHub, magnum and
-// the local reviewer are nil until the builds that bring them. The caller
-// holds the
-// factory lock (factory.Lock); the registry's migration is still refused
+// runtime's owner rows), the [jira] site's client when [jira] is on (intake's
+// tickets), and the runner of the overlap line's git and gh reads. GitHub,
+// magnum and the local reviewer are nil until the builds that bring them.
+// The caller holds the factory lock (factory.Lock); the registry's migration
+// is still refused
 // while a factory daemon's pidfile names a live factory daemon
 // (refuseWhileDaemonRuns: this daemon writes its own pidfile later, in
 // RunLocked).
@@ -194,11 +197,17 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		return nil, fmt.Errorf("factory: runtime: %w", err)
 	}
 	deps := factory.Deps{
-		Config: cfg, Layout: l, Registry: d.Registry, Runtime: d.Runtime, Git: git, Log: d.Log,
+		Config: cfg, Layout: l, Registry: d.Registry, Runtime: d.Runtime, Git: git, Run: run, Log: d.Log,
 		Memory:  memory,
 		Disk:    inspDiskFree,
 		HerdrUp: d.Runtime.HerdrUp,
 		Reveal:  factoryReveal(cfg, run),
+	}
+	// The tickets of intake: the [jira] site's client, reading with curl
+	// (the token on stdin, never in a pane).
+	if cfg.Jira.On() {
+		d.Jira = &jira.Client{Runner: run, URL: cfg.Jira.URL, User: cfg.Jira.User, TokenFile: cfg.Jira.TokenFile}
+		deps.Jira = d.Jira
 	}
 	var copyDBs slots.MySQL
 	if my := factoryMySQL(cfg, d.Log); my != nil {

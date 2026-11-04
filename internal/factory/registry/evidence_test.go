@@ -748,6 +748,50 @@ func TestLinkPRAllowsOnePRPerTask(t *testing.T) {
 	}
 }
 
+// A PR stays one task's while that task holds its work (it is not done or
+// stopped), with a Jira key or from a prompt; once that task stopped, a new
+// task may take the PR over (adoption, milestone 2) and keeps it, and the
+// stopped task's link stays as it was.
+func TestLinkPRAdoptsThePROfATaskThatEnded(t *testing.T) {
+	t.Parallel()
+	r, _ := openAt(t)
+	ctx := t.Context()
+	first := createTask(t, r, "PR-12303")
+	link := registry.PRLink{TaskID: first.ID, Repo: "talkable/talkable", Number: 4527, Branch: "zhuravel-PR-12303-fix"}
+	if err := r.LinkPR(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := r.CreateTask(ctx, registry.Task{Prompt: "take over the fix", Kind: "bug", Repo: "talkable/talkable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs := link
+	theirs.TaskID = prompt.ID
+	if err := r.LinkPR(ctx, theirs); !errors.Is(err, registry.ErrConflict) {
+		t.Fatalf("the PR of a task at work for another task = %v, want ErrConflict", err)
+	}
+
+	if err := r.TransitionTask(ctx, first.ID, nil, registry.TaskStopped, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.LinkPR(ctx, theirs); err != nil {
+		t.Fatalf("adopting the PR of a stopped task: %v", err)
+	}
+	if got, err := r.LinkedPR(ctx, prompt.ID); err != nil || got.Number != 4527 || got.Repo != "talkable/talkable" {
+		t.Fatalf("LinkedPR of the adopter = %+v, %v", got, err)
+	}
+	if got, err := r.LinkedPR(ctx, first.ID); err != nil || got.Number != 4527 {
+		t.Fatalf("the stopped task's link = %+v, %v; want it kept", got, err)
+	}
+	// The adopter holds the PR now: a third task cannot take it.
+	third := createTask(t, r, "PR-12304")
+	again := link
+	again.TaskID = third.ID
+	if err := r.LinkPR(ctx, again); !errors.Is(err, registry.ErrConflict) {
+		t.Fatalf("the PR of the adopter for a third task = %v, want ErrConflict", err)
+	}
+}
+
 func TestRecordCheckRefusesACauseOnAPass(t *testing.T) {
 	t.Parallel()
 	r, clk := openAt(t)
