@@ -146,3 +146,25 @@ func TestLedgerOfListsOneTasksEntriesInOrder(t *testing.T) {
 		t.Fatalf("LedgerOf = %+v, want the task's two entries, the first settled", got)
 	}
 }
+
+// A prompt the factory gave up on (its run abandoned, or the operator let it
+// go) settles as abandoned: neither known to have arrived nor to be sent
+// again.
+func TestMarkDeliveredSettlesAnAbandonedPrompt(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12303")
+	a, _ := r.BeginAttempt(ctx, task.ID, "investigate")
+	e := appendPrompt(t, r, task.ID, a.ID, "h1")
+
+	if err := r.MarkDelivered(ctx, e.ID, registry.DeliveredAbandoned); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Undelivered(ctx); len(got) != 0 {
+		t.Fatalf("Undelivered = %+v, want none", got)
+	}
+	if err := r.MarkDelivered(ctx, e.ID, registry.DeliveredNo); !errors.Is(err, registry.ErrConflict) {
+		t.Fatalf("settling an abandoned prompt as no = %v, want ErrConflict", err)
+	}
+}

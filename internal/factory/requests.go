@@ -18,6 +18,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -28,7 +29,15 @@ const (
 	ReqDecide  = "decide"
 	ReqStop    = "stop"
 	ReqPreview = "preview"
+	ReqLetGo   = "let_go"
 )
+
+// LetGoPayload is a ReqLetGo: you looked at the pane of task TaskID's Role,
+// whose last prompt may or may not have arrived, and let the prompt go.
+type LetGoPayload struct {
+	TaskID        int64
+	Role, Surface string
+}
 
 const (
 	// requestTTL is how long a request may wait for the daemon; an older
@@ -76,6 +85,8 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 	switch q.Kind {
 	case ReqStop:
 		answer(e, ctx, q, e.stopTask)
+	case ReqLetGo:
+		answer(e, ctx, q, e.letGo)
 	case ReqStart, ReqAnswer, ReqDecide, ReqPreview:
 		e.complete(ctx, q, fmt.Errorf("this factory daemon cannot %s a task yet: update magnum (`make build`), then `magnum factory install`", q.Kind), "")
 	default:
@@ -190,4 +201,35 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 	delete(e.panics, t.ID)
 	delete(e.inbox, t.ID)
 	return "stopped " + TaskKey(t), nil
+}
+
+// letGo is your one action on a prompt of unknown delivery: you looked at
+// the pane of the task's role, and the prompt is let go (Runtime.LetGo:
+// never sent again), and a task that waited on it goes on.
+func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
+	t, err := e.reg.TaskByID(ctx, p.TaskID)
+	if err != nil {
+		return "", err
+	}
+	if e.d.Runtime == nil {
+		return "", fmt.Errorf("this factory daemon runs no agents")
+	}
+	n, err := e.d.Runtime.LetGo(ctx, t, p.Role)
+	if err != nil {
+		return "", err
+	}
+	if _, err := e.reg.RecordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface,
+		Stage: t.Stage, Role: p.Role}); err != nil {
+		e.log.Warn("record a let-go", "task", t.ID, "err", err)
+	}
+	if t.State == registry.TaskNeedsYou && t.WaitsWhat == runtime.UnknownReason(p.Role) {
+		if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
+			u.Set("waits_who", "")
+			u.Set("waits_what", "")
+			u.Because("you let the prompt to " + p.Role + " go")
+		}); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("let %d prompt(s) to %s go", n, p.Role), nil
 }

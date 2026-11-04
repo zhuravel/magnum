@@ -11195,6 +11195,7 @@ const (
 	ReqDecide  = "decide"
 	ReqStop    = "stop"
 	ReqPreview = "preview"
+	ReqLetGo   = "let_go"
 )
     Request kinds.
 
@@ -11374,6 +11375,13 @@ type Jira interface {
     Jira reads a task's ticket, and searches issues by the words of a free
     prompt.
 
+type LetGoPayload struct {
+	TaskID        int64
+	Role, Surface string
+}
+    LetGoPayload is a ReqLetGo: you looked at the pane of task TaskID's Role,
+    whose last prompt may or may not have arrived, and let the prompt go.
+
 type LocalReviewer interface {
 	Round(ctx context.Context, c evalrun.LocalCase) (evalrun.LocalResult, error)
 }
@@ -11403,6 +11411,7 @@ type Runtime interface {
 	Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
 	Watchdog(ctx context.Context, now time.Time) ([]runtime.Event, error)
 	RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
+	LetGo(ctx context.Context, t registry.Task, role string) (int, error)
 	Shift(gap time.Duration)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime): the owner
@@ -11491,13 +11500,17 @@ const (
     Input classes, set later by a classifier: what an input was for.
 
 const (
-	DeliveredUnknown = "unknown"
-	DeliveredYes     = "yes"
-	DeliveredNo      = "no"
+	DeliveredUnknown   = "unknown"
+	DeliveredYes       = "yes"
+	DeliveredNo        = "no"
+	DeliveredAbandoned = "abandoned"
 )
     Delivery verdicts of a ledger entry. magnum sends a prompt before it saves
     that the prompt was sent, so a crash between the two leaves the entry
     unknown until recovery reads the agent's transcript for the prompt's hash.
+    Abandoned is a prompt the factory gave up on (its run abandoned for a fresh
+    session, or the operator let it go after a look at the pane): it may or may
+    not have arrived, and it is never sent again.
 
 const (
 	QuestionOpen     = "open"
@@ -12017,9 +12030,10 @@ func (r *Registry) LinkedPR(ctx context.Context, taskID int64) (PRLink, error)
     LinkedPR returns the PR of a task; a task without one is ErrNotFound.
 
 func (r *Registry) MarkDelivered(ctx context.Context, id int64, delivered string) error
-    MarkDelivered settles an unknown entry as yes (the agent got the prompt) or
-    no (it did not). Settling an entry with the verdict it already has is not an
-    error; a different verdict is ErrConflict, and a missing entry ErrNotFound.
+    MarkDelivered settles an unknown entry as yes (the agent got the prompt),
+    no (it did not) or abandoned (nobody knows, and nobody sends it again).
+    Settling an entry with the verdict it already has is not an error;
+    a different verdict is ErrConflict, and a missing entry ErrNotFound.
 
 func (r *Registry) OpenEffects(ctx context.Context) ([]Effect, error)
     OpenEffects returns the effects still begun, oldest first: the ones a
@@ -12361,6 +12375,9 @@ const (
 	// RedeliverAfter is the least time between the two reads of a
 	// transcript that prove a prompt never arrived (Reconcile).
 	RedeliverAfter = 2 * time.Minute
+	// UnknownAfter is how long a prompt's delivery may stay unknown before
+	// the operator is asked to look at the pane (EventDeliveryUnknown).
+	UnknownAfter = 15 * time.Minute
 	// NoProgressAfter is how long a run's transcript and screen stay the
 	// same before the watchdog takes its next step, and how long a
 	// recovery waits for progress before the next one.
@@ -12416,6 +12433,10 @@ func Scrub(text string) (clean string, kept bool)
     pasted block (more than 40 lines or 4000 bytes), which a capture of what the
     operator typed drops (the ledger keeps the factory's own prompts, scrubbed,
     whatever their length).
+
+func UnknownReason(role string) string
+    UnknownReason is the wait of a task whose prompt to role may or may not have
+    arrived (EventDeliveryUnknown).
 
 func WorkspaceLabel(t registry.Task, a registry.Attempt) string
     WorkspaceLabel is the herdr workspace label of a task's attempt, unique per
@@ -12475,6 +12496,11 @@ const (
 	EventRefused EventKind = "refused"
 	// EventHooksTrust: a Codex session shows the hooks-trust dialog.
 	EventHooksTrust EventKind = "hooks_trust"
+	// EventDeliveryUnknown: a prompt to the role may or may not have
+	// arrived, and no transcript can tell (Runtime.Reconcile): the role gets
+	// no prompt until the operator looked at its pane and let it go
+	// (Runtime.LetGo).
+	EventDeliveryUnknown EventKind = "delivery_unknown"
 )
     The kinds of Event.
 
@@ -12508,6 +12534,12 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
     earlier session when it has one, launches Stagger apart while the memory
     pressure is at warn, the RoleRun facts of each, and the attempt running.
 
+func (r *Runtime) LetGo(ctx context.Context, t registry.Task, role string) (int, error)
+    LetGo settles every prompt to role (as it runs) of task t whose
+    delivery is unknown as abandoned: the operator looked at the pane
+    (EventDeliveryUnknown). The role gets prompts again, and none of those is
+    sent a second time. It returns how many it settled.
+
 func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
     Observe runs one observe pass over herdr's snapshot and returns its
     events (and those Send and the recoveries found since the last pass):
@@ -12535,8 +12567,9 @@ func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string
     marked submitted, so it is observed and never sent again. No needs proof:
     a read that finds no such turn, and another at least RedeliverAfter later
     that finds none either, in a transcript written past the prompt, with the
-    run never submitted and the session not prompted since. Every other case (no
-    transcript, a run that went further) stays unknown.
+    run never submitted (pending, or failed before it was) and the session not
+    prompted since. Every other case (no transcript, a run that went further)
+    stays unknown.
 
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
     RecoverLost recovers role (as it runs) of attempt a of task t whose pane
@@ -12547,21 +12580,23 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 
 func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error)
     RunsAs is the role that runs for role on task t: role itself, or, on a task
-    Codex never works on again (Task.CodexNever), a Codex role's codex_fallback.
-    A Codex role without a fallback there is an error: it cannot run.
+    Codex never works on again (Task.CodexNever, or a refusal this runtime saw
+    before the engine marked the task), a Codex role's codex_fallback. A Codex
+    role without a fallback there is an error: it cannot run.
 
 func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error)
     Send sends text to role's agent in attempt a of task t (role as it runs:
-    RunsAs) as a new run, and returns the run's id. The ledger entry, with the
-    text scrubbed and its hash, is written before the prompt leaves. It refuses
-    without sending: a pause of the role's kind (a *WaitError), an entry of the
-    role whose delivery is unknown (ErrDeliveryUnknown), the operator typing
-    in the pane (ErrOperatorInPane), and a loop without progress whose steps
-    ran out (ErrNoProgress, with EventNoProgress at the next Observe). Past
-    MaxStagePrompts prompts in the stage, a context over MaxContext or the same
-    failure SameFailures times, it first compacts the session, the next time
-    starts a fresh session from the attempt's first prompt (returning that run),
-    then refuses.
+    RunsAs) as a new run, and returns the run's id. The ledger entry,
+    with the text scrubbed and its hash, is written before the prompt leaves. It
+    refuses without sending: a pause of the role's kind (a *WaitError), an entry
+    of the role whose delivery is unknown (ErrDeliveryUnknown), the operator
+    typing in the pane (ErrOperatorInPane), and a loop without progress whose
+    steps ran out (ErrNoProgress, with EventNoProgress at the next Observe).
+    Past MaxStagePrompts prompts in the stage, a context over MaxContext or the
+    same failure SameFailures times, it first compacts the session, the next
+    time starts a fresh session with the attempt's first prompt and text after
+    it (returning that run), then refuses; a step that would compact or quit a
+    pane the operator is in waits, ErrOperatorInPane.
 
 func (r *Runtime) Shift(gap time.Duration)
     Shift moves every turn deadline and progress window by gap, the time the Mac

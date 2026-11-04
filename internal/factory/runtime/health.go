@@ -248,6 +248,7 @@ func (r *Runtime) completed(ctx context.Context, s store.Session, run store.Run)
 		}
 		w := r.pause(ctx, kind, who, until)
 		r.pausedRun(ctx, run, w)
+		r.calm(run.TargetSHA, run.Role, t.ID, kind, false)
 		ev.Kind, ev.Reason = EventPaused, w.Error()
 		return []Event{ev}
 	case agents.HealthModelLimit:
@@ -260,9 +261,11 @@ func (r *Runtime) completed(ctx context.Context, s store.Session, run store.Run)
 		}
 		w := r.pause(ctx, kind, pauseUsage, until)
 		r.pausedRun(ctx, run, w)
+		r.calm(run.TargetSHA, run.Role, t.ID, kind, false)
 		ev.Kind, ev.Reason = EventPaused, w.Error()
 		return []Event{ev}
 	case agents.HealthRefused:
+		r.calm(run.TargetSHA, run.Role, t.ID, kind, true)
 		r.abandon(ctx, run.ID, "refused: "+h.Detail)
 		r.record(ctx, registry.RoleRun{AttemptID: run.TargetSHA, Role: run.Role, Ended: r.now(), Outcome: "failed:refused",
 			EndWhy: textx.Clip(h.Detail, 300)})
@@ -412,10 +415,24 @@ func (r *Runtime) lostPane(ctx context.Context, o agents.Observation) []Event {
 	if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
 		return []Event{r.lostEvent(t, a, role, spent)}
 	}
-	if err != nil {
+	if _, wait := errors.AsType[*WaitError](err); wait || errors.Is(err, ErrOperatorInPane) {
+		r.waitToRecover(a.ID, role.Name) // the watchdog recovers it once the pause ends or you leave
+		return nil
+	}
+	if err != nil && !errors.Is(err, errRefusedRole) {
 		r.log.Warn("recover a lost pane", "task", t.ID, "role", role.Name, "err", err)
 	}
 	return nil
+}
+
+// waitToRecover marks role of attempt as due a recovery that waits (on a
+// pause, on the operator): the watchdog takes it when it may.
+func (r *Runtime) waitToRecover(attempt, role string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if st := r.roles[roleKey{attempt, role}]; st != nil {
+		st.recovering = true
+	}
 }
 
 // modelFallback continues run's turn, which ended on its model's own limit
@@ -526,7 +543,7 @@ func (r *Runtime) restartIdleCodex(ctx context.Context) {
 		}) {
 			continue
 		}
-		if err := r.relaunch(ctx, s); err != nil {
+		if err := r.relaunch(ctx, s); err != nil && !errors.Is(err, errRefusedRole) {
 			r.log.Warn("restart an idle Codex session after a login change", "role", s.Role, "err", err)
 		}
 	}
@@ -558,6 +575,10 @@ func (r *Runtime) freshStarts(ctx context.Context) {
 		if err != nil {
 			continue
 		}
+		if err := r.mayRestart(ctx, t, st); err != nil {
+			r.forget(fmt.Sprintf("noprompt:%d", s.ID)) // look again once it may
+			continue
+		}
 		r.mu.Lock()
 		st.noPrompt++
 		n := st.noPrompt
@@ -568,7 +589,7 @@ func (r *Runtime) freshStarts(ctx context.Context) {
 			continue
 		}
 		r.log.Warn("a Codex session never took its first prompt; it starts fresh", "task", t.ID, "role", s.Role)
-		if _, err := r.fromFiles(ctx, t, a, st, "it never took its first prompt"); err != nil {
+		if _, err := r.fromFiles(ctx, t, a, st, "it never took its first prompt", ""); err != nil {
 			r.log.Warn("start a session that took no prompt fresh", "role", s.Role, "err", err)
 		}
 	}
@@ -604,8 +625,15 @@ func (r *Runtime) reconcileUnknown(ctx context.Context) {
 		return
 	}
 	for _, e := range es {
-		if _, err := r.Reconcile(ctx, e); err != nil {
+		got, err := r.Reconcile(ctx, e)
+		if err != nil {
 			r.log.Warn("reconcile a prompt's delivery", "entry", e.ID, "err", err)
+		}
+		if got == registry.DeliveredUnknown && now.Sub(e.Sent) >= UnknownAfter {
+			// No transcript tells, and the role gets no prompt meanwhile:
+			// the operator looks at the pane and lets it go (LetGo).
+			r.emit(unknownKey(e.ID), Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: EventDeliveryUnknown,
+				Reason: UnknownReason(e.Role)})
 		}
 	}
 }

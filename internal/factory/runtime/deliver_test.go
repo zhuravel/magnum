@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -233,4 +236,91 @@ func TestAPromptFoundInTheTranscriptIsDelivered(t *testing.T) {
 			g.send("fx-repro", "write findings.md")
 		})
 	}
+}
+
+// A herdr error after the request left (the connection closed while herdr
+// waited for the agent to start working) is no proof the prompt never
+// arrived: the entry stays unknown and nothing is sent again. A dial that
+// failed is: the prompt never left.
+func TestAHerdrErrorAfterThePromptLeftIsNoProofItNeverArrived(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.promptErr = func(string) error {
+		return fmt.Errorf("herdr agent.prompt: connection closed without a response: %w", io.EOF)
+	}
+
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	if err == nil {
+		t.Fatal("Send = nil, want herdr's error")
+	}
+	if got := g.ledger()[0].Delivered; got != registry.DeliveredUnknown {
+		t.Fatalf("the entry is %s, want unknown", got)
+	}
+	g.h.promptErr = nil
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.Is(err, ErrDeliveryUnknown) {
+		t.Fatalf("the next Send = %v, want ErrDeliveryUnknown", err)
+	}
+	if n := len(g.h.promptTexts()); n != 1 {
+		t.Fatalf("%d prompts: the prompt went out again", n)
+	}
+
+	d := newRig(t)
+	d.launch("fx-repro")
+	d.h.promptErr = func(string) error {
+		return fmt.Errorf("herdr agent.prompt: %w: dial unix: connect: connection refused", herdr.ErrUnavailable)
+	}
+	if _, err := d.r.Send(d.ctx, d.task, d.attempt, d.role("fx-repro"), "reproduce the bug"); err == nil {
+		t.Fatal("Send = nil, want the dial's error")
+	}
+	if got := d.ledger()[0].Delivered; got != registry.DeliveredNo {
+		t.Fatalf("after a failed dial the entry is %s, want no", got)
+	}
+	d.h.promptErr = nil
+	d.send("fx-repro", "reproduce the bug")
+}
+
+// An unknown delivery never stalls a task in silence: past UnknownAfter it
+// is EventDeliveryUnknown, once, for the operator to look at the pane, and
+// their one action (LetGo) lets the role go on without a blind resend. A
+// run the factory itself gives up (a fresh session) lets go of its prompts.
+func TestAnUnknownDeliveryNeverStallsSilently(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.pendingPrompt("fx-repro", "reproduce the bug", true)
+
+	g.clock.Add(UnknownAfter)
+	evs := g.observeN(2)
+	unknown := only(evs, EventDeliveryUnknown)
+	if len(unknown) != 1 || unknown[0].Role != "fx-repro" ||
+		unknown[0].Reason != "a prompt to fx-repro may or may not have arrived: look at its pane" {
+		t.Fatalf("events %+v, want one EventDeliveryUnknown for fx-repro", evs)
+	}
+	g.clock.Add(time.Hour)
+	if again := only(g.observeN(2), EventDeliveryUnknown); len(again) != 0 {
+		t.Fatalf("the unknown delivery was reported again: %+v", again)
+	}
+
+	n, err := g.r.LetGo(g.ctx, g.task, "fx-repro")
+	if err != nil || n != 1 {
+		t.Fatalf("LetGo = %d, %v, want 1 entry", n, err)
+	}
+	if got := g.ledger()[0].Delivered; got != registry.DeliveredAbandoned {
+		t.Fatalf("the entry is %s, want abandoned", got)
+	}
+	g.send("fx-repro", "go on")
+	if prompts := g.h.promptTexts(); !slices.Equal(prompts, []string{"reproduce the bug", "go on"}) {
+		t.Fatalf("prompts %q, want no blind resend", prompts)
+	}
+
+	f := newRig(t)
+	f.launch("fx-repro")
+	f.pendingPrompt("fx-repro", "reproduce the bug", true) // no conversation id: a lost pane starts fresh
+	f.observeN(2)
+	f.h.losePane(f.agent("fx-repro"))
+	f.observe()
+	if got := f.ledger()[0].Delivered; got != registry.DeliveredAbandoned {
+		t.Fatalf("the prompt of the run the fresh session gave up is %s, want abandoned", got)
+	}
+	f.observeN(2)
+	f.send("fx-repro", "go on")
 }

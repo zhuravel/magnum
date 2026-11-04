@@ -13,10 +13,14 @@ import (
 // Delivery verdicts of a ledger entry. magnum sends a prompt before it saves
 // that the prompt was sent, so a crash between the two leaves the entry
 // unknown until recovery reads the agent's transcript for the prompt's hash.
+// Abandoned is a prompt the factory gave up on (its run abandoned for a
+// fresh session, or the operator let it go after a look at the pane): it may
+// or may not have arrived, and it is never sent again.
 const (
-	DeliveredUnknown = "unknown"
-	DeliveredYes     = "yes"
-	DeliveredNo      = "no"
+	DeliveredUnknown   = "unknown"
+	DeliveredYes       = "yes"
+	DeliveredNo        = "no"
+	DeliveredAbandoned = "abandoned"
 )
 
 // LedgerEntry is one prompt the factory sends (or is about to send) to an
@@ -79,12 +83,13 @@ func (r *Registry) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry
 	return e, nil
 }
 
-// MarkDelivered settles an unknown entry as yes (the agent got the prompt) or
-// no (it did not). Settling an entry with the verdict it already has is not an
-// error; a different verdict is ErrConflict, and a missing entry ErrNotFound.
+// MarkDelivered settles an unknown entry as yes (the agent got the prompt),
+// no (it did not) or abandoned (nobody knows, and nobody sends it again).
+// Settling an entry with the verdict it already has is not an error; a
+// different verdict is ErrConflict, and a missing entry ErrNotFound.
 func (r *Registry) MarkDelivered(ctx context.Context, id int64, delivered string) error {
-	if delivered != DeliveredYes && delivered != DeliveredNo {
-		return fmt.Errorf("mark delivered %d: verdict must be %s or %s, got %q", id, DeliveredYes, DeliveredNo, delivered)
+	if delivered != DeliveredYes && delivered != DeliveredNo && delivered != DeliveredAbandoned {
+		return fmt.Errorf("mark delivered %d: verdict must be %s, %s or %s, got %q", id, DeliveredYes, DeliveredNo, DeliveredAbandoned, delivered)
 	}
 	res, err := r.db.ExecContext(ctx, "UPDATE ledger SET delivered = ? WHERE id = ? AND delivered = ?", delivered, id, DeliveredUnknown)
 	if err != nil {

@@ -62,6 +62,7 @@ type Runtime interface {
 	Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
 	Watchdog(ctx context.Context, now time.Time) ([]runtime.Event, error)
 	RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
+	LetGo(ctx context.Context, t registry.Task, role string) (int, error)
 	Shift(gap time.Duration)
 }
 
@@ -566,7 +567,22 @@ func (e *Engine) observe(ctx context.Context) {
 		if box := e.inbox[ev.TaskID]; len(box) > maxInbox {
 			e.inbox[ev.TaskID] = box[len(box)-maxInbox:]
 		}
+		if ev.Kind == runtime.EventDeliveryUnknown {
+			e.deliveryUnknown(ctx, ev)
+		}
 	}
+}
+
+// deliveryUnknown sends a live task whose prompt may or may not have
+// arrived to you: no transcript can tell, and its role gets no prompt until
+// you looked at the pane and let the prompt go (ReqLetGo). Whatever stage
+// the task is in, it would stall there in silence otherwise.
+func (e *Engine) deliveryUnknown(ctx context.Context, ev runtime.Event) {
+	t, err := e.reg.TaskByID(ctx, ev.TaskID)
+	if err != nil || (t.State != registry.TaskActive && t.State != registry.TaskWaiting) {
+		return
+	}
+	e.toOperator(ctx, t, ev.Reason, "a prompt's delivery is unknown")
 }
 
 // maxInbox bounds the events kept for a task between its advances.

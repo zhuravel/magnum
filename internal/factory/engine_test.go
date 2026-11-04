@@ -38,6 +38,8 @@ type fakeRuntime struct {
 	launchErr    error
 	observePanic any
 	watched      int
+	// letGo records the LetGo calls, "<task key>/<role>".
+	letGo []string
 }
 
 func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { return store.PR{}, nil }
@@ -84,6 +86,13 @@ func (f *fakeRuntime) Watchdog(context.Context, time.Time) ([]runtime.Event, err
 
 func (f *fakeRuntime) RecoverLost(context.Context, registry.Task, registry.Attempt, config.Role) error {
 	return nil
+}
+
+func (f *fakeRuntime) LetGo(_ context.Context, t registry.Task, role string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.letGo = append(f.letGo, TaskKey(t)+"/"+role)
+	return 1, nil
 }
 
 func (f *fakeRuntime) Shift(gap time.Duration) {

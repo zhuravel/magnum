@@ -25,6 +25,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -41,8 +42,9 @@ const deliverySlack = 5 * time.Second
 // progress whose steps ran out (ErrNoProgress, with EventNoProgress at the
 // next Observe). Past MaxStagePrompts prompts in the stage, a context over
 // MaxContext or the same failure SameFailures times, it first compacts the
-// session, the next time starts a fresh session from the attempt's first
-// prompt (returning that run), then refuses.
+// session, the next time starts a fresh session with the attempt's first
+// prompt and text after it (returning that run), then refuses; a step that
+// would compact or quit a pane the operator is in waits, ErrOperatorInPane.
 func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("send to %s: an empty prompt", role.Name)
@@ -76,7 +78,7 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 	case err != nil:
 		return "", err
 	case step == loopFresh:
-		return r.fromFiles(ctx, t, a, st, "a loop without progress")
+		return r.fromFiles(ctx, t, a, st, "a loop without progress", text)
 	}
 	kind := store.RunNudge
 	if !hasPrompt(entries, a.ID, role.Name) {
@@ -122,16 +124,18 @@ func (r *Runtime) send(ctx context.Context, t registry.Task, a registry.Attempt,
 	switch {
 	case serr == nil:
 		verdict = registry.DeliveredYes
-	case rerr != nil:
-	case cur.State == store.RunPending: // refused before the prompt left
+	case neverSent(serr):
 		verdict = registry.DeliveredNo
-		r.abandon(ctx, run.ID, serr.Error())
-	case cur.State == store.RunFailed: // herdr refused it, or the agent was gone
-		verdict = registry.DeliveredNo
-	case cur.State == store.RunWorking, cur.State == store.RunSubmitted && cur.Error == nil:
+	case rerr == nil && (cur.State == store.RunWorking || cur.State == store.RunSubmitted && cur.Error == nil):
 		verdict = registry.DeliveredYes // acked: working, or blocked once it was in
 	}
+	// Any other error may have come after herdr typed the prompt (the
+	// connection closed while herdr waited for the agent to work, Submit's
+	// own record failed after the prompt went out): unknown, for Reconcile.
 	r.settle(ctx, e, verdict)
+	if verdict == registry.DeliveredNo && rerr == nil && cur.State == store.RunPending {
+		r.abandon(ctx, run.ID, serr.Error())
+	}
 	if verdict != registry.DeliveredNo {
 		r.sent(a.ID, role.Name)
 	}
@@ -146,6 +150,23 @@ func (r *Runtime) send(ctx context.Context, t registry.Task, a registry.Attempt,
 	return run.ID, fmt.Errorf("send to %s: %w", role.Name, serr)
 }
 
+// neverSent reports whether a Submit (or Tell) error proves the prompt never
+// left: the refusals Submit makes before it sends (no live session, the
+// operator's cooldown, a judge's turn still ending, a shell role), a dial
+// to herdr that failed (herdr.ErrUnavailable: the request was never
+// written), and herdr's answers that it took nothing (agent_blocked:
+// rejected before sending; agent_not_ready; agent_not_found). Nothing else
+// is proof: herdr may have typed the prompt before the error.
+func neverSent(err error) bool {
+	for _, e := range []error{agents.ErrNoSession, agents.ErrHumanActive, agents.ErrBusy, agents.ErrNotAgent, herdr.ErrUnavailable} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return herdr.IsCode(err, herdr.CodeAgentBlocked) || herdr.IsCode(err, herdr.CodeAgentNotReady) ||
+		herdr.IsCode(err, herdr.CodeAgentNotFound)
+}
+
 // sent notes a new run of a role: the watchdog reads its progress afresh.
 func (r *Runtime) sent(attempt, role string) {
 	r.mu.Lock()
@@ -155,9 +176,12 @@ func (r *Runtime) sent(attempt, role string) {
 	}
 }
 
-// abandon ends a run nobody waits for any more.
+// abandon ends a run nobody waits for any more, and lets go of its prompts
+// whose delivery is unknown (DeliveredAbandoned): the factory gave the run
+// up, so the role goes on, and none of them is sent again.
 func (r *Runtime) abandon(ctx context.Context, id, why string) {
-	err := r.st.TransitionRun(context.WithoutCancel(ctx), id,
+	ctx = context.WithoutCancel(ctx)
+	err := r.st.TransitionRun(ctx, id,
 		[]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, store.RunAbandoned,
 		func(u *store.RunUpdate) {
 			u.Set("error", execx.Redact(why))
@@ -165,8 +189,60 @@ func (r *Runtime) abandon(ctx context.Context, id, why string) {
 		})
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		r.log.Warn("abandon a run", "run", id, "err", err)
+		return
+	}
+	run, err := r.st.RunByID(ctx, id)
+	if err != nil {
+		return
+	}
+	pr, err := r.st.PRByID(ctx, run.PRID)
+	if err != nil {
+		return
+	}
+	if _, err := r.letGoWhere(ctx, int64(pr.Number), func(e registry.LedgerEntry) bool { return e.RunID == id }); err != nil {
+		r.log.Warn("let go of an abandoned run's prompts", "run", id, "err", err)
 	}
 }
+
+// LetGo settles every prompt to role (as it runs) of task t whose delivery
+// is unknown as abandoned: the operator looked at the pane
+// (EventDeliveryUnknown). The role gets prompts again, and none of those is
+// sent a second time. It returns how many it settled.
+func (r *Runtime) LetGo(ctx context.Context, t registry.Task, role string) (int, error) {
+	return r.letGoWhere(ctx, t.ID, func(e registry.LedgerEntry) bool { return e.Role == role })
+}
+
+// letGoWhere settles task id's unknown entries that keep accepts as
+// abandoned, and returns how many.
+func (r *Runtime) letGoWhere(ctx context.Context, id int64, keep func(registry.LedgerEntry) bool) (int, error) {
+	entries, err := r.reg.LedgerOf(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("let go of the prompts of task %d: %w", id, err)
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Delivered != registry.DeliveredUnknown || !keep(e) {
+			continue
+		}
+		if err := r.reg.MarkDelivered(ctx, e.ID, registry.DeliveredAbandoned); err != nil {
+			return n, fmt.Errorf("let go of prompt %d: %w", e.ID, err)
+		}
+		n++
+		r.mu.Lock()
+		delete(r.misses, e.ID)
+		delete(r.once, unknownKey(e.ID))
+		r.mu.Unlock()
+	}
+	return n, nil
+}
+
+// UnknownReason is the wait of a task whose prompt to role may or may not
+// have arrived (EventDeliveryUnknown).
+func UnknownReason(role string) string {
+	return "a prompt to " + role + " may or may not have arrived: look at its pane"
+}
+
+func unknownKey(entry int64) string { return fmt.Sprintf("unknown:%d", entry) }
 
 // Reconcile settles the delivery of ledger entry e from its agent's
 // transcript and returns the verdict (registry.DeliveredYes, DeliveredNo
@@ -175,8 +251,9 @@ func (r *Runtime) abandon(ctx context.Context, id, why string) {
 // submitted, so it is observed and never sent again. No needs proof: a
 // read that finds no such turn, and another at least RedeliverAfter later
 // that finds none either, in a transcript written past the prompt, with
-// the run never submitted and the session not prompted since. Every other
-// case (no transcript, a run that went further) stays unknown.
+// the run never submitted (pending, or failed before it was) and the
+// session not prompted since. Every other case (no transcript, a run that
+// went further) stays unknown.
 func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error) {
 	if e.Delivered == registry.DeliveredYes || e.Delivered == registry.DeliveredNo {
 		return e.Delivered, nil
@@ -214,7 +291,7 @@ func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string
 		r.mu.Unlock()
 		return registry.DeliveredYes, nil
 	}
-	proof := run.State == store.RunPending && run.SubmittedAt == nil && last.After(e.Sent) &&
+	proof := (run.State == store.RunPending || run.State == store.RunFailed) && run.SubmittedAt == nil && last.After(e.Sent) &&
 		(s.LastPromptAt == nil || !s.LastPromptAt.After(e.Sent))
 	if !proof {
 		return unknown()

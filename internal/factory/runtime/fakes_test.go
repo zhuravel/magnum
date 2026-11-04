@@ -53,6 +53,11 @@ type fakeHerdr struct {
 	onPrompt func(f *fakeHerdr, target, text string)
 	onRun    func(f *fakeHerdr, pane, command string)
 	snapErr  error
+	// promptErr, when set, is what AgentPrompt answers for text, after it
+	// recorded the prompt (herdr may have typed it); focused is the pane
+	// the operator's terminal shows focused.
+	promptErr func(text string) error
+	focused   string
 
 	creates []herdr.WorkspaceCreateOptions
 	starts  []herdr.AgentStartOptions
@@ -97,8 +102,10 @@ func (f *fakeHerdr) Snapshot(context.Context) (herdr.Snapshot, error) {
 	if f.snapErr != nil {
 		return herdr.Snapshot{}, f.snapErr
 	}
-	s := herdr.Snapshot{Workspaces: slices.Clone(f.workspaces), Panes: slices.Clone(f.panes), Agents: slices.Clone(f.agents)}
+	s := herdr.Snapshot{Workspaces: slices.Clone(f.workspaces), Panes: slices.Clone(f.panes), Agents: slices.Clone(f.agents),
+		FocusedPaneID: f.focused}
 	for i := range s.Panes {
+		s.Panes[i].Focused = s.Panes[i].ID == f.focused
 		for _, a := range s.Agents {
 			if a.PaneID == s.Panes[i].ID {
 				s.Panes[i].Agent, s.Panes[i].AgentStatus, s.Panes[i].AgentSession = a.Agent, a.AgentStatus, a.AgentSession
@@ -300,6 +307,11 @@ func (f *fakeHerdr) AgentPrompt(_ context.Context, target, text string, _ *herdr
 	if f.onPrompt != nil {
 		f.onPrompt(f, target, text)
 	}
+	if f.promptErr != nil {
+		if err := f.promptErr(text); err != nil {
+			return herdr.AgentInfo{}, err
+		}
+	}
 	if i, ok := f.agentLocked(target); ok {
 		f.agents[i].AgentStatus = f.promptStatus
 		return f.agents[i], nil
@@ -340,6 +352,17 @@ func (f *fakeHerdr) screen(name, text string) {
 	defer f.mu.Unlock()
 	if i, ok := f.agentLocked(name); ok {
 		f.screens[f.agents[i].PaneID] = text
+	}
+}
+
+// focus shows the pane of the agent named name focused in the operator's
+// terminal ("" for none).
+func (f *fakeHerdr) focus(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.focused = ""
+	if i, ok := f.agentLocked(name); ok {
+		f.focused = f.agents[i].PaneID
 	}
 }
 

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -240,8 +241,8 @@ func TestALoopWithoutProgressCompactsThenStartsFresh(t *testing.T) {
 		t.Fatalf("starts %+v, want one fresh session", s[starts:])
 	}
 	prompts := g.h.promptTexts()
-	if prompts[len(prompts)-1] != first {
-		t.Fatalf("the fresh session got %q, want the first prompt from the files", prompts[len(prompts)-1])
+	if last := prompts[len(prompts)-1]; !strings.HasPrefix(last, first) || !strings.Contains(last, "nudge "+strings.Repeat("!", 2*MaxStagePrompts+1)) {
+		t.Fatalf("the fresh session got %q, want the first prompt from the files and the caller's text", last)
 	}
 
 	// And then the operator.
@@ -287,5 +288,202 @@ func TestAContextOver85PercentCompactsTheSession(t *testing.T) {
 
 	if !slices.ContainsFunc(g.h.runCalls(), func(r paneRunCall) bool { return r.Command == agents.CompactCommand }) {
 		t.Fatalf("pane runs %+v, want /compact at 87%% of the context", g.h.runCalls())
+	}
+}
+
+// lostThenResumed launches role with a conversation, sends it a prompt,
+// loses its pane and lets the runtime resume it.
+func (g *rig) lostThenResumed(role, sid string) {
+	g.t.Helper()
+	g.launch(role)
+	g.h.setSession(g.agent(role), sid)
+	g.send(role, "work on the task")
+	g.observeN(2)
+	g.h.losePane(g.agent(role))
+	g.observe()
+	if s := g.h.startCalls(); len(s) != 2 || !strings.Contains(strings.Join(s[1].Args, " "), sid) {
+		g.t.Fatalf("starts %+v, want the conversation resumed", s)
+	}
+	g.observe()
+}
+
+// quietHour runs the watchdog and the observe pass every 10 minutes for an
+// hour and returns their events.
+func (g *rig) quietHour() []Event {
+	g.t.Helper()
+	var evs []Event
+	for range 6 {
+		g.clock.Add(NoProgressAfter)
+		evs = append(evs, g.watchdog()...)
+		evs = append(evs, g.observe()...)
+	}
+	return evs
+}
+
+// A recovered Codex role that is refused is never started again: no
+// recovery, no retry, no lost pane at the end.
+func TestARecoveredRoleThatIsRefusedIsNeverStartedAgain(t *testing.T) {
+	g := newRig(t)
+	g.lostThenResumed("fx-cause", "11111111-1111-4111-8111-111111111111")
+	starts, prompts := len(g.h.startCalls()), len(g.h.promptTexts())
+
+	g.h.screen(g.agent("fx-cause"), "■ This content was flagged for possible cybersecurity risk.\n")
+	g.h.setStatus(g.agent("fx-cause"), herdr.StatusIdle)
+	evs := g.observeN(2)
+	if len(only(evs, EventRefused)) != 1 {
+		t.Fatalf("events %+v, want the refusal", evs)
+	}
+
+	evs = g.quietHour()
+	if n := len(g.h.startCalls()); n != starts {
+		t.Fatalf("%d starts after the refusal: the refused conversation was started again", n-starts)
+	}
+	if got := g.h.promptTexts()[prompts:]; len(got) != 0 {
+		t.Fatalf("prompts after the refusal %q", got)
+	}
+	if lost := only(evs, EventLost); len(lost) != 0 {
+		t.Fatalf("the refusal ended as %+v", lost)
+	}
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-cause"), "go on"); err == nil {
+		t.Fatal("a prompt went to fx-cause after its refusal")
+	}
+	// Before the engine marks the task never for Codex, its Codex roles run
+	// as their Claude fallback already.
+	if runs, err := g.r.RunsAs(g.task, g.role("fx-cause")); err != nil || runs.Name != "fx-cause-claude" {
+		t.Fatalf("after the refusal fx-cause runs as %q (%v), want fx-cause-claude", runs.Name, err)
+	}
+}
+
+// A recovered role that pauses on its CLI's usage limit waits for the
+// pause: no resume, no fresh session, no lost pane.
+func TestARecoveredRoleThatPausesWaitsForThePause(t *testing.T) {
+	g := newRig(t)
+	g.lostThenResumed("fx-repro", "sid-1")
+	starts, prompts := len(g.h.startCalls()), len(g.h.promptTexts())
+
+	g.h.screen(g.agent("fx-repro"), "You've hit your limit · resets 4pm (UTC)\n")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	if paused := only(g.observeN(2), EventPaused); len(paused) != 1 {
+		t.Fatalf("events %+v, want the pause", paused)
+	}
+
+	evs := g.quietHour()
+	if n := len(g.h.startCalls()); n != starts {
+		t.Fatalf("%d starts during the pause", n-starts)
+	}
+	if got := g.h.promptTexts()[prompts:]; len(got) != 0 {
+		t.Fatalf("prompts during the pause %q", got)
+	}
+	if lost := only(evs, EventLost); len(lost) != 0 {
+		t.Fatalf("the pause ended as %+v", lost)
+	}
+}
+
+// ---- fix 3
+
+// The CLIs show the time a turn has run while it works; a ticking timer
+// is no progress, and the watchdog still takes its step.
+func TestTheWatchdogSeesThroughACLIsTickingTimer(t *testing.T) {
+	for _, tc := range []struct {
+		role  string
+		timer func(m int) string
+	}{
+		{"fx-repro", func(m int) string {
+			return fmt.Sprintf("Bash(bin/rspec)\n✻ Cogitating… (%dm %ds · ↓ %d.%dk tokens · esc to interrupt)\n", m, (m*7)%60, m, m%10)
+		}},
+		{"fx-cause", func(m int) string {
+			return fmt.Sprintf("• Running bin/rspec\n\n• Working (%dm %02ds • esc to interrupt)\n", m, m%60)
+		}},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			g := newRig(t)
+			g.launch(tc.role)
+			g.send(tc.role, "find out why it fails")
+			timeout := g.role(tc.role).Timeout.Duration
+			g.clock.Add(timeout - NoProgressAfter)
+			for m := range 11 {
+				g.h.screen(g.agent(tc.role), tc.timer(int(timeout/time.Minute)-10+m))
+				g.watchdog()
+				g.clock.Add(time.Minute)
+			}
+			prompts := g.h.promptTexts()
+			if len(prompts) != 2 || !strings.Contains(prompts[1], "stuck") {
+				t.Fatalf("prompts %q: a turn whose screen shows only its timer ticking was never nudged", prompts)
+			}
+		})
+	}
+}
+
+// ---- fix 4
+
+// sendLoop sends prompt i of a loop to role (the first is the attempt's
+// first prompt), the agent idle in between.
+func (g *rig) sendLoop(role string, i int) (string, error) {
+	g.h.setStatus(g.agent(role), herdr.StatusIdle)
+	text := "reproduce the bug"
+	if i > 1 {
+		text = "nudge " + strings.Repeat("!", i)
+	}
+	return g.r.Send(g.ctx, g.task, g.attempt, g.role(role), text)
+}
+
+func TestTheLoopLadderNeverQuitsAPaneTheOperatorIsIn(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	for i := 1; i <= 2*MaxStagePrompts; i++ {
+		if _, err := g.sendLoop("fx-repro", i); err != nil {
+			t.Fatalf("prompt %d: %v", i, err)
+		}
+	}
+	starts, prompts, keys := len(g.h.startCalls()), len(g.h.promptTexts()), len(g.h.keyCalls())
+	g.h.focus(g.agent("fx-repro")) // the operator looks at the pane
+
+	_, err := g.sendLoop("fx-repro", 2*MaxStagePrompts+1)
+
+	if !errors.Is(err, ErrOperatorInPane) {
+		t.Fatalf("the fresh step with you in the pane = %v, want ErrOperatorInPane", err)
+	}
+	if len(g.h.startCalls()) != starts || len(g.h.promptTexts()) != prompts || len(g.h.keyCalls()) != keys {
+		t.Fatal("the pane the operator is in was quit, restarted or prompted")
+	}
+
+	g.h.focus("") // gone
+	if _, err := g.sendLoop("fx-repro", 2*MaxStagePrompts+1); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.h.startCalls()) != starts+1 {
+		t.Fatal("the fresh step did not run once the operator left")
+	}
+}
+
+func TestTheLoopLadderFreshStepSendsTheCallersText(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	for i := 1; i <= 2*MaxStagePrompts; i++ {
+		if _, err := g.sendLoop("fx-repro", i); err != nil {
+			t.Fatalf("prompt %d: %v", i, err)
+		}
+	}
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+
+	id, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "write findings.md now")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompts := g.h.promptTexts()
+	last := prompts[len(prompts)-1]
+	if !strings.Contains(last, "reproduce the bug") || !strings.Contains(last, "write findings.md now") {
+		t.Fatalf("the fresh session got %q, want the first prompt and the caller's text", last)
+	}
+	if r := g.storeRun(id); r.PromptText != last {
+		t.Fatalf("Send returned run %s with prompt %q, not the fresh session's", id, r.PromptText)
+	}
+}
+
+func TestAStillScreenDropsOnlyTheCLIsTimerLines(t *testing.T) {
+	screen := "• Ran bin/rspec (12s)\n✻ Cogitating… (3m 12s · ↓ 2.1k tokens)\n• Working (12m 03s • esc to interrupt)\n› "
+	if got := stillScreen(screen); got != "• Ran bin/rspec (12s)\n› " {
+		t.Fatalf("stillScreen = %q, want the tool line and the composer only", got)
 	}
 }

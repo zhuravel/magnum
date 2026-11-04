@@ -82,7 +82,8 @@ CREATE TABLE decisions (
 CREATE INDEX decisions_task ON decisions(task_id, id);
 
 -- The prompt ledger: a row before a prompt is sent. delivered stays 'unknown' until the daemon (or its
--- recovery, reading the agent's transcript for the hash) settles it.
+-- recovery, reading the agent's transcript for the hash) settles it; 'abandoned' is a prompt the factory
+-- gave up on (its run abandoned, or the operator let it go): neither proven to have arrived nor sent again.
 CREATE TABLE ledger (
   id         INTEGER PRIMARY KEY,
   task_id    INTEGER NOT NULL REFERENCES tasks(id),
@@ -91,7 +92,7 @@ CREATE TABLE ledger (
   run_id     TEXT NOT NULL DEFAULT '',
   hash       TEXT NOT NULL,
   text       TEXT NOT NULL,
-  delivered  TEXT NOT NULL DEFAULT 'unknown' CHECK (delivered IN ('unknown','yes','no')),
+  delivered  TEXT NOT NULL DEFAULT 'unknown' CHECK (delivered IN ('unknown','yes','no','abandoned')),
   sent_at    TEXT NOT NULL
 );
 CREATE INDEX ledger_undelivered ON ledger(id) WHERE delivered = 'unknown';

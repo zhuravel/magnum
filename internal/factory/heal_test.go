@@ -802,3 +802,33 @@ func TestALaunchThatWaitsOnCodexsBudgetCostsTheTaskNothing(t *testing.T) {
 		t.Fatalf("after a launch that went through the task still waits %q: %q", got.WaitsWho, got.WaitsWhat)
 	}
 }
+
+// A prompt of unknown delivery past its bound sends the task to you with
+// the pane to look at; your one action, let it go, settles it and the task
+// goes on.
+func TestAnUnknownDeliveryGoesToYouWithOneAction(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12372", registry.TaskActive, "investigate")
+	why := "a prompt to fx-repro may or may not have arrived: look at its pane"
+	h.rt.events = []runtime.Event{{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: why}}
+
+	h.e.observe(h.ctx)
+
+	got := h.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWho != "you" || got.WaitsWhat != why {
+		t.Fatalf("the task is %s waiting %q: %q, want NEEDS YOU on the pane", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+
+	h.rt.events = nil
+	if _, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-repro", Surface: "screen"}); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != "" || got.WaitsWhat != "" {
+		t.Fatalf("after you let it go the task is %s waiting %q: %q, want active", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	if !slices.Equal(h.rt.letGo, []string{"PR-12372/fx-repro"}) {
+		t.Fatalf("LetGo calls %v, want the role's", h.rt.letGo)
+	}
+}

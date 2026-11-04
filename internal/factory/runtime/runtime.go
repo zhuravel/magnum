@@ -50,6 +50,9 @@ const (
 	// RedeliverAfter is the least time between the two reads of a
 	// transcript that prove a prompt never arrived (Reconcile).
 	RedeliverAfter = 2 * time.Minute
+	// UnknownAfter is how long a prompt's delivery may stay unknown before
+	// the operator is asked to look at the pane (EventDeliveryUnknown).
+	UnknownAfter = 15 * time.Minute
 	// NoProgressAfter is how long a run's transcript and screen stay the
 	// same before the watchdog takes its next step, and how long a
 	// recovery waits for progress before the next one.
@@ -155,6 +158,7 @@ type Runtime struct {
 	once       map[string]bool          // events and records written once
 	checked    map[int64]time.Time      // Codex session -> when TookNoPrompt last read it
 	pending    []Event                  // events found outside Observe
+	refused    map[int64]bool           // task -> a Codex refusal: its Codex roles never run again
 	loginFP    string
 	loginRead  time.Time
 	reconciled time.Time
@@ -191,6 +195,9 @@ type roleState struct {
 	lost       bool
 	noPrompt   int
 	nudges     int
+	// refused: the role's turn ended on a refusal; it never runs again in
+	// the attempt.
+	refused bool
 }
 
 // loopKey names a role in a stage of a task: a loop without progress is
@@ -255,7 +262,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 	r := &Runtime{d: d, cfg: &cfg, st: d.Store, reg: d.Registry, log: log, s: s,
 		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
-		once: map[string]bool{}, checked: map[int64]time.Time{}, versions: map[string]cliVersion{}}
+		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{}}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
 		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal})
@@ -303,11 +310,12 @@ func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string {
 }
 
 // RunsAs is the role that runs for role on task t: role itself, or, on a
-// task Codex never works on again (Task.CodexNever), a Codex role's
+// task Codex never works on again (Task.CodexNever, or a refusal this
+// runtime saw before the engine marked the task), a Codex role's
 // codex_fallback. A Codex role without a fallback there is an error: it
 // cannot run.
 func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error) {
-	if !t.CodexNever || role.AgentKind() != agents.KindCodex {
+	if !r.codexNever(t) || role.AgentKind() != agents.KindCodex {
 		return role, nil
 	}
 	name := r.d.Config.Factory.CodexFallback[role.Name]
@@ -316,6 +324,86 @@ func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	}
 	return config.Role{}, fmt.Errorf("%s runs on Codex, which never works on %s again, and [factory] codex_fallback names no role for it",
 		role.Name, taskKey(t))
+}
+
+// codexNever reports whether Codex never works on task t again: the engine
+// marked it, or one of its Codex roles was refused.
+func (r *Runtime) codexNever(t registry.Task) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return t.CodexNever || r.refused[t.ID]
+}
+
+// errRefusedRole is a restart of a role that may never run again: it was
+// refused, or it runs on Codex on a task Codex never works on again.
+var errRefusedRole = errors.New("the role was refused on this task: it never runs again")
+
+// mayRestart says why role st of task t may not be restarted, resumed or
+// compacted now (nil when it may): it was refused, or runs on Codex on a
+// task Codex never works on again (errRefusedRole); its kind is paused (the
+// pause's *WaitError); the operator is in its pane (ErrOperatorInPane).
+func (r *Runtime) mayRestart(ctx context.Context, t registry.Task, st *roleState) error {
+	r.mu.Lock()
+	refused := st.refused
+	r.mu.Unlock()
+	if refused || (st.role.AgentKind() == agents.KindCodex && r.codexNever(t)) {
+		return errRefusedRole
+	}
+	if w := r.paused(st.role.AgentKind()); w != nil {
+		return w
+	}
+	if r.operatorIn(ctx, st) {
+		return fmt.Errorf("%s: %w", st.role.Name, ErrOperatorInPane)
+	}
+	return nil
+}
+
+// operatorIn reports whether the operator is in role st's pane: they typed
+// into one of the task's panes within the factory's human cooldown (the
+// owner row's human_active_at, as Send's refusal reads it), or herdr shows
+// the role's pane focused in their terminal. A herdr that cannot say counts
+// as in it: nothing is quit on a guess.
+func (r *Runtime) operatorIn(ctx context.Context, st *roleState) bool {
+	pr, err := r.ownerRow(ctx, st.taskID)
+	if err != nil {
+		return false
+	}
+	if r.now().Before(r.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
+		return true
+	}
+	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, st.role.Name)
+	if err != nil {
+		return false // no pane to be in
+	}
+	pane := store.Deref(s.HerdrPaneID)
+	snap, err := r.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		return true
+	}
+	if pane != "" && snap.FocusedPaneID == pane {
+		return true
+	}
+	for _, p := range snap.Panes {
+		if p.ID == pane && p.Focused {
+			return true
+		}
+	}
+	return false
+}
+
+// calm ends the watchdog's and the recoveries' work on role of attempt: its
+// turn ended on a pause or a refusal, which no restart helps; refused marks
+// it never to run again (and the task never for Codex, for a Codex role).
+func (r *Runtime) calm(attempt, role string, taskID int64, kind string, refused bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if st := r.roles[roleKey{attempt, role}]; st != nil {
+		st.recovering, st.step, st.sig, st.since = false, 0, "", time.Time{}
+		st.refused = st.refused || refused
+	}
+	if refused && kind == agents.KindCodex {
+		r.refused[taskID] = true
+	}
 }
 
 // Launch starts the roles of attempt a of task t in the copy at copyPath.

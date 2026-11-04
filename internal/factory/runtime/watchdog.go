@@ -16,14 +16,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
-	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -132,6 +133,12 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		(a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning) {
 		return Event{}, false // the task stopped, or its stage moved on: nothing is restarted for it
 	}
+	if err := r.mayRestart(ctx, t, st); err != nil {
+		if errors.Is(err, errRefusedRole) {
+			r.calm(st.key.attempt, st.key.role, t.ID, st.role.AgentKind(), true)
+		}
+		return Event{}, false // a pause, a refusal or you in the pane: no step now
+	}
 	if recovering {
 		err := r.recoverRole(ctx, t, a, st.role, "no progress for "+NoProgressAfter.String())
 		if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
@@ -165,7 +172,27 @@ func (r *Runtime) signature(ctx context.Context, st *roleState, run store.Run) s
 		}
 	}
 	screen, _ := r.mgr.ReadRecent(ctx, s, agents.HealthLines)
-	return strconv.FormatInt(size, 10) + "\x00" + shortHash(screen)
+	return strconv.FormatInt(size, 10) + "\x00" + shortHash(stillScreen(screen))
+}
+
+// statusLine is a line a CLI redraws while its turn runs, a timer in it:
+// Claude Code's spinner ("✻ Cogitating… (3m 12s · ↓ 2.1k tokens · esc to
+// interrupt)"), Codex's ("• Working (12m 03s • esc to interrupt)"). A tool
+// line that only carries its duration ("• Ran bin/rspec (12s)") stays: a
+// new one is progress.
+var statusLine = regexp.MustCompile(`(?i)esc to interrupt|\bworking\s*\(\s*\d|^\s*\S\s+\S[^(]*…\s*\(\s*\d+\s*[hms]\b`)
+
+// stillScreen is a screen as the watchdog compares it: without the status
+// lines whose timer ticks while a turn runs, so a turn that only waits still
+// reads as still.
+func stillScreen(text string) string {
+	var keep []string
+	for line := range strings.SplitSeq(strings.ReplaceAll(text, "\r", ""), "\n") {
+		if !statusLine.MatchString(line) {
+			keep = append(keep, line)
+		}
+	}
+	return strings.Join(keep, "\n")
 }
 
 // baseline takes the role's reading now: the stillness a next step waits
@@ -197,7 +224,7 @@ func (r *Runtime) climb(ctx context.Context, t registry.Task, a registry.Attempt
 			r.log.Warn("resume a hung session", "role", st.role.Name, "err", err)
 		}
 	case 2:
-		if _, err := r.fromFiles(ctx, t, a, st, "its turn hung"); err != nil {
+		if _, err := r.fromFiles(ctx, t, a, st, "its turn hung", ""); err != nil {
 			r.log.Warn("start a hung role fresh", "role", st.role.Name, "err", err)
 		}
 	default:
@@ -228,9 +255,9 @@ func (r *Runtime) nudge(ctx context.Context, t registry.Task, a registry.Attempt
 	verdict := registry.DeliveredYes
 	if err != nil {
 		r.log.Warn("nudge a hung turn", "role", st.role.Name, "err", err)
-		verdict = registry.DeliveredNo
-		if herdr.IsTimeout(err) || errors.Is(err, agents.ErrTimeout) {
-			verdict = registry.DeliveredUnknown
+		verdict = registry.DeliveredUnknown                      // herdr may have typed it
+		if neverSent(err) || errors.Is(err, agents.ErrBlocked) { // Tell's dialog check, or herdr's refusal
+			verdict = registry.DeliveredNo
 		}
 	}
 	r.settle(ctx, e, verdict)
@@ -273,6 +300,9 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	if err != nil {
 		return err
 	}
+	if err := r.mayRestart(ctx, t, st); err != nil {
+		return err // no step is spent
+	}
 	pr, err := r.owner(ctx, t, a.ID)
 	if err != nil {
 		return err
@@ -306,7 +336,7 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	if step == "resume" {
 		err = r.restart(ctx, t, a, st, true, why)
 	} else {
-		_, err = r.fromFiles(ctx, t, a, st, why)
+		_, err = r.fromFiles(ctx, t, a, st, why, "")
 	}
 	r.baseline(ctx, st)
 	return err
@@ -317,6 +347,9 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 // runs in flight are abandoned, a live session is quit hard first, and a
 // lost one gets a pane again.
 func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, resume bool, why string) error {
+	if err := r.mayRestart(ctx, t, st); err != nil {
+		return err
+	}
 	pr, err := r.owner(ctx, t, a.ID)
 	if err != nil {
 		return err
@@ -332,7 +365,7 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 		return err
 	}
 	if !resume || id == "" {
-		_, err := r.fromFiles(ctx, t, a, st, why)
+		_, err := r.fromFiles(ctx, t, a, st, why, "")
 		return err
 	}
 	if err := r.startIn(ctx, t, a, st, pr, id); err != nil {
@@ -343,9 +376,14 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 }
 
 // fromFiles starts role st afresh in attempt a and sends it the attempt's
-// first prompt again, the task's files being its inputs; the run's id
-// comes back.
-func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, why string) (string, error) {
+// first prompt again, the task's files being its inputs, with then after
+// it (a caller's prompt the fresh session is to act on; "" for none); the
+// run's id comes back. A role that may not restart (mayRestart) is left as
+// it is, with that error.
+func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, why, then string) (string, error) {
+	if err := r.mayRestart(ctx, t, st); err != nil {
+		return "", err
+	}
 	first, err := r.firstPrompt(ctx, st)
 	if err != nil {
 		return "", err
@@ -361,10 +399,28 @@ func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Att
 		}
 		r.closeConversation(ctx, s)
 	}
+	// The old conversation is gone: whether its prompts arrived no longer
+	// matters, and none of them is sent again (the first prompt is the
+	// fresh session's own).
+	if _, err := r.letGoWhere(ctx, t.ID, func(e registry.LedgerEntry) bool {
+		return e.AttemptID == a.ID && e.Role == st.role.Name
+	}); err != nil {
+		r.log.Warn("let go of the prompts a fresh session replaces", "role", st.role.Name, "err", err)
+	}
 	if err := r.startIn(ctx, t, a, st, pr, ""); err != nil {
 		return "", err
 	}
-	return r.send(ctx, t, a, st.role, pr, first, store.RunRecovery)
+	return r.send(ctx, t, a, st.role, pr, freshText(first, then), store.RunRecovery)
+}
+
+// freshText is the prompt a fresh session starts with: the attempt's first
+// prompt, then what the caller meant to say when it is something else.
+func freshText(first, then string) string {
+	if strings.TrimSpace(then) == "" || normalPrompt(then) == normalPrompt(first) {
+		return first
+	}
+	return first + "\n\n---\n\nmagnum started this session afresh: the one before made no progress. Read the task's files as " +
+		"the prompt above says, then:\n\n" + then
 }
 
 // closeConversation closes a quit session that is parked, so no later
@@ -419,6 +475,9 @@ func (r *Runtime) relaunch(ctx context.Context, s store.Session) error {
 	}
 	st, err := r.stateFor(ctx, a.ID, s.Role)
 	if err != nil {
+		return err
+	}
+	if err := r.mayRestart(ctx, t, st); err != nil {
 		return err
 	}
 	if err := r.mgr.Quit(ctx, s); err != nil {
@@ -519,6 +578,10 @@ func (r *Runtime) loopStep(ctx context.Context, t registry.Task, a registry.Atte
 	}
 	if why == "" {
 		return loopNone, nil
+	}
+	if st, err := r.stateFor(ctx, a.ID, role.Name); err == nil && r.operatorIn(ctx, st) {
+		return loopNone, fmt.Errorf("send to %s: %s, but the session is not compacted or restarted while you are in it: %w",
+			role.Name, why, ErrOperatorInPane)
 	}
 	r.mu.Lock()
 	l.step++

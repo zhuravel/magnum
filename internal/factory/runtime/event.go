@@ -36,6 +36,11 @@ const (
 	EventRefused EventKind = "refused"
 	// EventHooksTrust: a Codex session shows the hooks-trust dialog.
 	EventHooksTrust EventKind = "hooks_trust"
+	// EventDeliveryUnknown: a prompt to the role may or may not have
+	// arrived, and no transcript can tell (Runtime.Reconcile): the role gets
+	// no prompt until the operator looked at its pane and let it go
+	// (Runtime.LetGo).
+	EventDeliveryUnknown EventKind = "delivery_unknown"
 )
 
 // Event is one thing the runtime saw on a run of a task's role.
