@@ -702,6 +702,40 @@ Before the PR, magnum's full review runs on the change as a blind dry run in the
 - [ ] **Step 4: Run** `go test -count=1 -race ./internal/factory/stats/ ./internal/cli/` and see them pass.
 - [ ] **Step 5: Commit.** `git commit -m "magnum factory stats: the operator's messages, decisions and seconds per task from the evidence records, against a baseline frozen before the first task"`
 
+### Task 16c: A Jira key or link anywhere in the start text
+
+The operator's request of 2026-11-04 (spec 6.1): a Jira key or a Jira link anywhere in the text starts a key task, with the whole text as the guidance.
+
+**Files:**
+- Modify: `internal/factory/intake_text.go` (`ParseStart`), `internal/factory/intake.go` (the start and its preview), the new-task form's data in `internal/tui` (the JIRA line's "found in your text")
+- Test: `internal/factory/intake_text_test.go`, `internal/factory/intake_test.go`
+
+**Interfaces:**
+- Produces:
+  - `StartInput` gains `Found []string`: the distinct keys of the text that are not its first word, in their order, from bare upper-case keys and from Jira links on the trackers' hosts. `ParseStart` stays pure: it reads no Jira. A first word that is a key or a link keeps today's meaning, and `Found` is then empty.
+  - The start of a text with no key at its start and a non-empty `Found` reads each found key from Jira, at most 3:
+    - one key that Jira knows: a key task, the whole text as its guidance, and an `info` event "key PR-12345 found in your text";
+    - several known keys: a prompt task whose which-issue question (Task 11, revision 1) offers them, the first recommended;
+    - no known key: a prompt task, as today, with no error;
+    - Jira does not answer: the task waits "start when Jira answers" as a key task does, and resolves by the three rules above when Jira answers.
+  - The preview (`ReqPreview`) gives the found key and the note "found in your text" for the JIRA line.
+- Consumes: Task 11 (`ParseStart`, `startKey`, `startWaiting`, `retryJira`, `askWhichIssue`, the trackers), Task 13 (`LinkKey`), Task 15 (the remote branch and the PR title from the key).
+
+- [ ] **Step 1: Write the failing tests:**
+  - `TestParseStartFindsAKeyInTheMiddleOfTheText` ("fix the expiry date in PR-12345, only the refund path": `Found` is `[PR-12345]`, `Prompt` is the whole text)
+  - `TestParseStartFindsAJiraLinkWithACommentAroundIt` (a comment, then the link, then more words)
+  - `TestParseStartKeepsTheFirstWordRule` (a key or a link as the first word gives `Key` and no `Found`)
+  - `TestAKeyFoundInTheTextStartsAKeyTaskWithTheWholeTextAsGuidance`
+  - `TestAnUpperCaseWordJiraDoesNotKnowStaysInThePrompt` ("UTF-8" and "ISO-8601": a prompt task, no error)
+  - `TestSeveralKeysFoundInTheTextAskWhichIssue` (the first recommended)
+  - `TestAKeyFoundInTheTextWaitsForJiraLikeAKeyAtTheStart` (and goes on from the words when Jira then does not know it)
+  - `TestThePreviewSaysTheKeyWasFoundInTheText`
+  - `TestThePRTitleUsesAKeyFoundInTheText`
+- [ ] **Step 2: Run and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `go test -count=1 -race ./internal/factory/... ./internal/tui/` and see them pass.
+- [ ] **Step 5: Commit.** `git commit -m "A Jira key or link anywhere in a start's text starts a key task with the whole text as its guidance, when Jira knows the key"`
+
 ## Phase D: the screen (after the operator approved the frames)
 
 ### Task 17: A narrow factory action adapter

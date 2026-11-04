@@ -176,6 +176,11 @@ stages = ["start", "investigate", "questions", "coding", "tests", "local_review"
 - A Jira key: the daemon reads the issue itself (magnum's `internal/jira`, extended with attachments and comments). The token never enters a pane. The ticket goes to agents as a file that they read as data.
 - A free prompt: the text goes to agents as a file in the same way.
 - Text after a Jira key ("PR-12345 only the refund path") is the operator's guidance and goes in with the ticket.
+- A key or a Jira link anywhere in the text counts too (the operator's request of 2026-11-04): "fix the expiry date in PR-12345, only the refund path", or a pasted link with a comment before or after it. The whole text is then the guidance, and nothing is cut out of it.
+  - Only a key that Jira knows counts. A word such as "UTF-8" or "ISO-8601" stays a word of the prompt, and an unknown key found in the text is no error.
+  - Several known keys in the text give the which-issue question, with the first key recommended.
+  - If Jira does not answer, a key found in the text waits like a key at the start. If Jira then does not know it, the task goes on from the operator's words.
+  - The new-task preview shows the key with "found in your text". The branch, the PR title and the PR body use it, as for a key at the start.
 - The new-task box reads links too. A Jira link is its key. A GitHub PR link offers adoption (section 6.9, milestone 2). A GitHub Actions run link offers a CI task (milestone 3).
 - One key has one task, and one task has one PR. A repeated `start` for a key that has a task returns that task, or its PR, and makes no new task.
 - An overlap line shows what else touches the work: commits that name the key (`git log --all --grep=<key>`), PRs that name it (`gh pr list --search <key>`), and open PRs that change the same files. The line is advisory. It does not stop the task.
@@ -266,6 +271,15 @@ Before the PR, the factory runs magnum's full review on the change, on this Mac.
 
 - PR: the factory pushes through the push helper (section 7) and opens a PR ready for review, with the drafted body.
 - Review: magnum reviews the PR as the operator's own PR. Its first round builds on the last local round (section 6.5). From milestone 2, the fix of review comments runs in the factory: the operator chose to move magnum's fix loop into the factory, with its skill, prompts, `fix-reply` and `fix-sync` helpers and tests. The board's `f` and `F` keys then queue the work in the factory, and magnum's own fix code is deleted. The factory asks magnum for each re-review through magnum's request table. Replies to people post by themselves, as the fix loop does today (the operator's decision). A comment that only the operator can answer goes to NEEDS YOU.
+- The operator's self-review on GitHub (milestone 2, the operator's request of 2026-11-04): the operator reviews the factory's PR on GitHub, and the factory acts on those comments.
+  - The trigger is `/factory` at the start of the comment. A review whose body starts with `/factory` covers every inline comment of that review, so the operator types it once per review. A comment of the operator's without it is a note for people, and the factory leaves it alone.
+  - A question gets an answer in its thread. A change request gets a fix commit and a reply that names the commit. The factory reacts with 👀 when it takes a comment. Its replies come from the factory App.
+  - Only the operator's own comments trigger it. A `/factory` from anyone else is ignored, because nothing from a PR is trusted.
+  - Why `/factory`:
+    - A GitHub App cannot be @-mentioned. GitHub gives no autocomplete and no notification, and the text could ping a person who registers that user name.
+    - `@zhuravel` mentions the operator, so it notifies the operator and reads to collaborators as talking to oneself.
+    - A `factory:` prefix collides with review prose in a Rails repository, where FactoryBot factories are a common topic.
+    - A slash command at the start of a comment is a convention that collaborators know from other bots, and it is rare in prose.
 - Settle (milestone 2): the factory waits until every reviewer of a head is done (Pronto, the Codex connector, pr-agent and magnum), at most 20 minutes. Then one fix pass makes one push. Each task has one serial work queue, so the newest head wins and stale events drop.
 - Hand-off (milestone 2): one key writes a brief for a colleague and offers to assign the PR.
 - Author: the factory opens its PRs under the operator's login (the operator's decision), so magnum's own-PR fix loop works unchanged and a colleague approves, as today. From milestone 2, the factory App (`zhuravel-factory[bot]`) authors the commits that the factory pushes. They go out with the App's token through the push helper, and the factory's replies and comments come from the App. So the history and the threads show which work an agent did, and factory pushes need no login in the pane.
@@ -1489,6 +1503,7 @@ The operator's improvement loop (`/magnum-improve`) covers both halves, from mil
      - the factory half of magnum-improve (section 11.4)
 2. The PR:
    - the push helper, the branch lock, the fix loop moved from magnum into the factory, the re-review requests to magnum
+   - the operator's self-review on GitHub: `/factory` comments and reviews, answered or fixed by the factory (section 6.7)
    - adoption of PRs, issues and branches
    - the import of the last local round into magnum's registry, so magnum's first round is a re-review
    - the reviewer request on green
