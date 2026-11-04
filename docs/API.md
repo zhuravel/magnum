@@ -11802,6 +11802,7 @@ type Runtime interface {
 	QuitCodex(ctx context.Context, t registry.Task) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
 	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
+	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
     the owner row of a task in the factory's agents store, the launch of a
@@ -11812,8 +11813,10 @@ type Runtime interface {
     every turn deadline after the Mac slept, the role that runs for a role (its
     Claude fallback on a task Codex never works on), the quit of such a task's
     Codex sessions, a run's state as the agents store keeps it across a restart,
-    and the role of a task whose run is in flight (the factory's own commands in
-    its copy wait for it).
+    who is at work in a task's copy now (a run in flight, you in a pane: the
+    factory's own commands that change the copy wait for them), and who could
+    have changed it since a time (the factory puts back what its checks changed
+    only when nobody else could have).
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -13092,6 +13095,14 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 func (r *Runtime) Shift(gap time.Duration)
     Shift moves every turn deadline and progress window by gap, the time the Mac
     slept (the engine's wake): no run counts as hung for a sleep.
+
+func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.Time) (string, error)
+    TouchedSince names who could have changed task t's copy since the time
+    since, "" for nobody: a prompt to one of its agents after it (a run made
+    after it), or your input into one of its panes after it (the owner row's
+    human_active_at). The factory's checks ask it before they put back what
+    their own commands changed: with somebody else at work since they began,
+    they cannot tell their changes from that person's or that agent's.
 
 func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string) error
     Verify settles an ended run: verified when ok, failed with why otherwise,

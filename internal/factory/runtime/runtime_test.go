@@ -698,6 +698,38 @@ func TestAtWorkNamesTheRoleWhoseRunIsInFlight(t *testing.T) {
 	}
 }
 
+// TouchedSince names who could have changed the task's copy since a time:
+// a prompt to one of its agents after it, or your input into one of its
+// panes after it; nobody for a task that never launched or was left alone.
+func TestTouchedSinceNamesAPromptOrYourInputAfterTheTime(t *testing.T) {
+	g := newRig(t)
+	since := g.clock.Now()
+	if who, err := g.r.TouchedSince(g.ctx, g.task, since); err != nil || who != "" {
+		t.Fatalf("TouchedSince before a launch = %q, %v", who, err)
+	}
+	g.launch("fx-repro")
+	g.clock.Add(time.Minute)
+	if who, err := g.r.TouchedSince(g.ctx, g.task, since); err != nil || who != "" {
+		t.Fatalf("TouchedSince of a task left alone = %q, %v", who, err)
+	}
+	g.send("fx-repro", "reproduce the bug")
+	if who, err := g.r.TouchedSince(g.ctx, g.task, since); err != nil || !strings.Contains(who, "fx-repro") {
+		t.Fatalf("TouchedSince after a prompt = %q, %v; want the fx-repro agent", who, err)
+	}
+	later := g.clock.Now().Add(time.Second)
+	g.clock.Add(time.Minute)
+	if who, err := g.r.TouchedSince(g.ctx, g.task, later); err != nil || who != "" {
+		t.Fatalf("TouchedSince after the prompt's time = %q, %v; want nobody", who, err)
+	}
+	typed := g.clock.Now()
+	if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", typed) }); err != nil {
+		t.Fatal(err)
+	}
+	if who, err := g.r.TouchedSince(g.ctx, g.task, later); err != nil || !strings.Contains(who, "you typed") {
+		t.Fatalf("TouchedSince after your input = %q, %v; want you", who, err)
+	}
+}
+
 // Once Codex never works on a task, its live Codex sessions are quit and
 // their runs abandoned; its Claude sessions go on, and a session whose
 // pane you are in waits for you to leave.

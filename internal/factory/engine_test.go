@@ -67,6 +67,8 @@ type fakeRuntime struct {
 	// are in its pane (rather than its agent at work).
 	atWork    string
 	atWorkYou bool
+	// touched is who TouchedSince names ("" for nobody).
+	touched string
 }
 
 // runFact is a run's state and why it failed or was given up.
@@ -292,6 +294,20 @@ func (f *fakeRuntime) setOperatorIn(role string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.atWork, f.atWorkYou = role, role != ""
+}
+
+// setTouched has who changed the task's copy since any time ("" for nobody).
+func (f *fakeRuntime) setTouched(who string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.touched = who
+}
+
+// TouchedSince is who touched names.
+func (f *fakeRuntime) TouchedSince(context.Context, registry.Task, time.Time) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.touched, nil
 }
 
 // AtWork is who atWork names: a run in flight in the task's copy, or you

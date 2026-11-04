@@ -943,6 +943,35 @@ func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (role string, you
 	return "", false, nil
 }
 
+// TouchedSince names who could have changed task t's copy since the time
+// since, "" for nobody: a prompt to one of its agents after it (a run made
+// after it), or your input into one of its panes after it (the owner row's
+// human_active_at). The factory's checks ask it before they put back what
+// their own commands changed: with somebody else at work since they began,
+// they cannot tell their changes from that person's or that agent's.
+func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.Time) (string, error) {
+	pr, err := r.ownerRow(ctx, t.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("the runs of %s: %w", taskKey(t), err)
+	}
+	if at := pr.HumanActiveAt; at != nil && at.After(since) {
+		return "you typed into a pane of " + taskKey(t) + " at " + at.Local().Format("15:04:05"), nil
+	}
+	runs, err := r.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		return "", fmt.Errorf("the runs of %s: %w", taskKey(t), err)
+	}
+	for _, run := range slices.Backward(runs) {
+		if run.CreatedAt.After(since) {
+			return "the " + run.Role + " agent got a prompt at " + run.CreatedAt.Local().Format("15:04:05"), nil
+		}
+	}
+	return "", nil
+}
+
 // QuitCodex quits the live Codex sessions of task t, once Codex never works
 // on it again (Task.CodexNever, a refusal): none of them gets another
 // prompt, and no conversation of theirs is resumed (a restart or a

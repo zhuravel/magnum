@@ -47,6 +47,11 @@ type codingRig struct {
 	migrate func(dir, script string) int
 	hang    func(run scriptRun) bool
 	failGit func(args []string) error
+	// during runs inside each script, before it does its work (a person
+	// entering the copy's pane mid-run, a spec writing a tracked file);
+	// startErr is the error of a script that did not start (nil: it starts).
+	during   func(dir string, run scriptRun)
+	startErr func(run scriptRun) error
 	// blocks hold a script whose first word they name until the channel
 	// closes or its run's context ends; entered gets that word as one
 	// starts to wait.
@@ -159,8 +164,16 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 	run.Branch = r.gitOut(c.Dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	run.Head = r.gitOut(c.Dir, "rev-parse", "HEAD")
 	r.mu.Lock()
-	block, hang := r.blocks[words[0]], r.hang
+	block, hang, during, startErr := r.blocks[words[0]], r.hang, r.during, r.startErr
 	r.mu.Unlock()
+	if startErr != nil {
+		if err := startErr(run); err != nil {
+			return execx.Result{Code: -1}, &execx.RunError{Cmd: c, Err: err}
+		}
+	}
+	if during != nil {
+		during(c.Dir, run)
+	}
 	if hang != nil && hang(run) {
 		<-ctx.Done()
 		r.record(run)
@@ -195,8 +208,10 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 		if migrate != nil {
 			run.Exit = migrate(c.Dir, script)
 		}
-	default:
-		return execx.Result{Code: 127}, fmt.Errorf("the coding rig knows no script %q", script)
+	default: // as a shell answers a command it cannot find
+		r.record(run)
+		return execx.Result{Code: 127, Stderr: []byte("sh: " + words[0] + ": not found")},
+			&execx.ExitError{Cmd: c, Code: 127, Stderr: "sh: " + words[0] + ": not found"}
 	}
 	r.record(run)
 	res := execx.Result{Code: run.Exit, Stdout: []byte(run.Out)}

@@ -629,7 +629,7 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	switch {
 	case p.operator:
 	case p.change:
-		if n, err := e.stagePrompts(ctx, t, st, r); err != nil || n < runtime.MaxStagePrompts {
+		if n, err := e.attemptPrompts(ctx, t, a, r); err != nil || n < runtime.MaxStagePrompts {
 			if err != nil {
 				e.log.Warn("count a role's prompts in its stage", "task", t.ID, "role", r.runAs.Name, "err", err)
 			}
@@ -644,27 +644,18 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	return noValidFile(r, p)
 }
 
-// stagePrompts counts the prompts that went, or may have gone, to role r in
-// task t's stage st, over its attempts (the ledger's entries not settled as
-// never sent), as the runtime counts them for a loop without progress.
-func (e *Engine) stagePrompts(ctx context.Context, t registry.Task, st config.FactoryStage, r *stageRole) (int, error) {
-	as, err := e.reg.Attempts(ctx, t.ID)
-	if err != nil {
-		return 0, err
-	}
-	in := map[string]bool{}
-	for _, a := range as {
-		if a.Stage == st.Name {
-			in[a.ID] = true
-		}
-	}
+// attemptPrompts counts the prompts that went, or may have gone, to role r
+// in attempt a of task t's stage (the ledger's entries not settled as never
+// sent): a new attempt (your retry) counts from 0, as the runtime's count of
+// a loop without progress starts again on a new attempt.
+func (e *Engine) attemptPrompts(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) (int, error) {
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, en := range entries {
-		if en.Role == r.runAs.Name && in[en.AttemptID] && en.Delivered != registry.DeliveredNo {
+		if en.Role == r.runAs.Name && en.AttemptID == a.ID && en.Delivered != registry.DeliveredNo {
 			n++
 		}
 	}

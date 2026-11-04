@@ -382,6 +382,23 @@ func (e *Engine) runChecks(ctx context.Context, t registry.Task, c Copy, proof b
 // passedOrNone reports whether p is no proof or one that passed.
 func (p *Proof) passedOrNone() bool { return p == nil || p.Passed }
 
+// forYou reports whether the checks failed on what the writer cannot fix
+// (the proof's or, after a proof that passed, the precheck's ForYou).
+func (r checkResult) forYou() bool {
+	return (r.Proof != nil && !r.Proof.Passed && r.Proof.ForYou) || (r.Proof.passedOrNone() && r.Precheck != nil && r.Precheck.ForYou)
+}
+
+// endedResult is the result of task id's check that ended, if one did.
+func (e *Engine) endedResult(id int64) (checkResult, bool) {
+	e.checksMu.Lock()
+	x := e.checks[id]
+	e.checksMu.Unlock()
+	if x == nil || !x.ended() {
+		return checkResult{}, false
+	}
+	return x.res, true
+}
+
 // passed reports whether the checks passed.
 func (r checkResult) passed() bool {
 	return r.Err == nil && (r.Proof == nil || r.Proof.Passed) && r.Precheck != nil && r.Precheck.Passed
@@ -411,6 +428,13 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 	if e.checkRuns(t.ID) {
 		e.precheckWait(ctx, t)
 		return nil, "", true, nil
+	}
+	// An ended check whose failure is yours comes first: the tree may hold
+	// what it left for you (changes it could not tell from others'), which
+	// the writer must not be asked to commit.
+	if res, ok := e.endedResult(t.ID); ok && res.Err == nil && res.forYou() {
+		e.clearPrecheckWait(ctx, t)
+		return &endProblem{file: precheckFile, why: res.why(), operator: true}, "", false, nil
 	}
 	repo, err := e.factoryRepo(*t)
 	if err != nil {
@@ -463,7 +487,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		if res.Proof != nil && !res.Proof.Passed {
 			file = factoryProofFile
 		}
-		forYou := (res.Proof != nil && !res.Proof.Passed && res.Proof.ForYou) || (res.Proof.passedOrNone() && res.Precheck != nil && res.Precheck.ForYou)
+		forYou := res.forYou()
 		return &endProblem{file: file, why: res.why(), change: !forYou, operator: forYou}, "", false, nil
 	}
 	return nil, bh.Head, false, nil

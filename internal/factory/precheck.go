@@ -31,7 +31,6 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/slots"
-	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // precheckFile is the precheck's report in the task's directory: what ran,
@@ -124,13 +123,8 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		}
 	}()
 
-	p := &precheckRun{e: e, t: t, c: c, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit,
+	p := &precheckRun{e: e, t: t, c: c, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit, started: e.now(),
 		res: PrecheckResult{Passed: true}}
-	defer func() {
-		if _, err := e.restoreTracked(ctx, t, c, "the precheck's commands"); err != nil {
-			e.log.Warn("restore what a precheck changed", "task", t.ID, "err", err)
-		}
-	}()
 	p.say("# Precheck of %s at %s\n\nThe change from %s: %d files.\n", t.Branch, short(bh.Head), short(bh.Base), len(files))
 	steps := []func(){
 		func() { p.lint(pc.Lint, files, diff) },
@@ -152,9 +146,25 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		}
 		step()
 	}
+	// What its commands changed goes back, guarded, however it ended; a base
+	// run that left the copy detached (a wait) leaves it to resumeDetached.
+	var restored []string
+	if !errors.Is(p.err, ErrHeld) {
+		var kept string
+		var rerr error
+		switch restored, kept, rerr = e.restoreOwn(ctx, t, c, p.started, "the precheck's commands"); {
+		case kept != "":
+			p.res.Passed, p.res.ForYou, p.res.Why = false, true, "precheck: "+kept
+			p.say("\n**Left as it is: %s.**\n", kept)
+			p.err = nil
+		case rerr != nil && p.err == nil:
+			p.err = rerr
+		}
+	}
 	switch {
 	case ctx.Err() != nil:
 		return p.res, ctx.Err()
+	case p.res.ForYou:
 	case errors.Is(context.Cause(cctx), errOverCap) || p.overCap:
 		p.res.Passed = false
 		if !p.res.ForYou {
@@ -164,9 +174,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	case p.err != nil:
 		return p.res, p.err
 	}
-	if restored, err := e.restoreTracked(ctx, t, c, "the precheck's commands"); err != nil {
-		return p.res, err
-	} else if len(restored) > 0 {
+	if len(restored) > 0 {
 		p.say("\nRestored %s: the precheck's commands changed %s, and the copy is left as the branch has it.\n",
 			clipList(restored), map[bool]string{true: "it", false: "them"}[len(restored) == 1])
 	}
@@ -203,10 +211,12 @@ type precheckRun struct {
 	limit      time.Duration
 	res        PrecheckResult
 	report     strings.Builder
-	// err is a failure to run that ends the precheck (git); overCap a
-	// command that did not end within the cap (its own bound).
+	// err is a failure to run that ends the precheck (git, a start failure
+	// of the moment); overCap a command that did not end within the cap
+	// (its own bound); started when it began, on a clean tree.
 	err     error
 	overCap bool
+	started time.Time
 }
 
 func (p *precheckRun) say(format string, a ...any) { fmt.Fprintf(&p.report, format, a...) }
@@ -264,8 +274,17 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 		p.overCap = true // its own bound is the cap
 		return run, false
 	case err != nil:
-		p.say("\n- `%s` did not start: %s\n", cmd, textx.FirstLine(err.Error()))
-		p.failForYou(key + " `" + cmd + "` did not start: " + textx.Clip(textx.FirstLine(err.Error()), 200))
+		why, transient := startFailure(err)
+		p.say("\n- `%s` %s\n", cmd, why)
+		if transient { // the machine's, of the moment: the checks run again
+			p.err = fmt.Errorf("precheck %s: %s %w", what, cmd, err)
+			return run, false
+		}
+		p.failForYou(key + " `" + cmd + "` " + why)
+		return run, false
+	case notRunnable(code) != "":
+		p.say("\n- `%s` %s\n", cmd, notRunnable(code))
+		p.failForYou(key + " `" + cmd + "` " + notRunnable(code))
 		return run, false
 	}
 	return run, true
@@ -422,7 +441,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 	if len(atBase) > 0 {
 		baseScript := renderCommand(cmd, atBase, p.base)
 		p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
-		base, problem, err := p.e.baseRun(p.ctx, p.t, p.c, p.base, p.head, nil, baseScript, p.limit)
+		base, problem, err := p.e.baseRun(p.ctx, p.t, p.c, p.started, p.base, p.head, nil, baseScript, p.limit)
 		switch {
 		case p.ctx.Err() != nil:
 			return

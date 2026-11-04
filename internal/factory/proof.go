@@ -25,10 +25,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -272,6 +274,7 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	if err := e.copyIdle(ctx, t); err != nil {
 		return Proof{}, err
 	}
+	started := e.now() // the tree is clean here: a change after it is the proof's own, or somebody else's
 	proof := Proof{Specs: pf.Specs, HeadSHA: bh.Head, BaseSHA: bh.Base}
 	done := func() (Proof, error) { return proof, e.saveProof(ctx, t, proof) }
 	forYou := func(why string) (Proof, error) {
@@ -309,7 +312,7 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	}
 	if red {
 		e.noteCheck(t.ID, "proof: runs "+strings.Join(pf.Specs, ", ")+" on the base")
-		run, problem, err := e.baseRun(ctx, t, c, bh.Base, bh.Head, pf.Specs, cmd, timeout)
+		run, problem, err := e.baseRun(ctx, t, c, started, bh.Base, bh.Head, pf.Specs, cmd, timeout)
 		proof.Base = run
 		if err != nil {
 			return proof, err
@@ -327,16 +330,21 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	e.noteCheck(t.ID, "proof: runs "+strings.Join(pf.Specs, ", ")+" at the head")
 	run, problem, err := e.specRun(ctx, c, cmd, bh.Head, timeout, "proof specs")
 	proof.Head = run
-	if err != nil {
+	// What the spec run changed goes back, guarded, however the run ended
+	// (a drain too): the next check must find the tree as the branch has it.
+	restored, kept, rerr := e.restoreOwn(ctx, t, c, started, "the proof's spec run")
+	switch {
+	case err != nil:
 		return proof, err
-	}
-	if problem != "" {
+	case kept != "":
+		return forYou(kept)
+	case rerr != nil:
+		return proof, rerr
+	case problem != "":
 		return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem)
 	}
 	e.recordRun(ctx, t, "spec", bh.Head, run)
-	if restored, err := e.restoreTracked(ctx, t, c, "the proof's spec run"); err != nil {
-		return proof, err
-	} else if len(restored) > 0 {
+	if len(restored) > 0 {
 		proof.Why = "the spec run changed tracked files in the copy (" + clipList(restored) + "; the factory restored them): " +
 			"git status must be clean before and after"
 		return done()
@@ -403,8 +411,10 @@ func renderCommand(cmd string, files []string, base string) string {
 // specRun runs a spec command in copy c at rev (checked out), bounded by
 // timeout. A run that does not end within it is a result (Hung, exit -1),
 // as a red one is. problem is what keeps the command from running at all,
-// for you ("is denied: …", "did not start: …"); the error is the caller's
-// context ending (the daemon stops).
+// for you: the deny list refused it, or it is missing or not executable
+// (startFailure; a shell's exit 126 or 127). The error is the caller's
+// context ending (the daemon stops), or a start failure of the moment
+// (EAGAIN, ENOMEM), which the checks try again.
 func (e *Engine) specRun(ctx context.Context, c Copy, cmd, rev string, timeout time.Duration, label string) (ProofRun, string, error) {
 	run := ProofRun{Command: cmd}
 	if tree, err := e.d.Git.TreeOf(ctx, c.Path, rev); err == nil {
@@ -418,6 +428,8 @@ func (e *Engine) specRun(ctx context.Context, c Copy, cmd, rev string, timeout t
 	switch {
 	case denied != "":
 		return run, "is denied: " + denied, nil
+	case err == nil && notRunnable(code) != "":
+		return run, notRunnable(code), nil
 	case err == nil:
 		return run, "", nil
 	case ctx.Err() != nil:
@@ -427,7 +439,34 @@ func (e *Engine) specRun(ctx context.Context, c Copy, cmd, rev string, timeout t
 		run.Output = strings.TrimSpace(run.Output + "\n[the factory stopped it: it did not end within " + capText(timeout) + "]")
 		return run, "", nil
 	}
-	return run, "did not start: " + textx.Clip(textx.FirstLine(err.Error()), 200), nil
+	if why, transient := startFailure(err); !transient {
+		return run, why, nil
+	}
+	return run, "", fmt.Errorf("%s did not start: %w", cmd, err)
+}
+
+// startFailure says why a command did not start (err: not its exit, not the
+// caller's context): missing or not executable, the configuration's
+// (transient false), or a failure of the moment, the machine's (EAGAIN,
+// ENOMEM: tried again).
+func startFailure(err error) (why string, transient bool) {
+	line := textx.Clip(textx.FirstLine(err.Error()), 200)
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOEXEC) {
+		return "is missing or not executable: " + line, false
+	}
+	return "did not start: " + line, true
+}
+
+// notRunnable is why a shell's exit says it ran no command: 127, none found;
+// 126, not executable ("" for any other exit).
+func notRunnable(code int) string {
+	switch code {
+	case 127:
+		return "exited 127: the shell finds no such command"
+	case 126:
+		return "exited 126: its command is not executable"
+	}
+	return ""
 }
 
 // ranTo reads a command's end: its exit (0, or a non-zero exit's), the deny
@@ -532,8 +571,13 @@ type detachedRecord struct {
 
 // baseRun is a run of cmd on the base: detachForBase, the run, then the
 // branch and the head's tree restored (restoreBranch), whatever ended the
-// run, with the begin event's ok or fail.
-func (e *Engine) baseRun(ctx context.Context, t registry.Task, c Copy, base, head string, specs []string, cmd string,
+// run, with the begin event's ok or fail. The restore discards what the run
+// changed, so it is guarded as restoreOwn is: with somebody else at work in
+// the copy since the check began at since (othersIn), the copy stays
+// detached with its record, a fail event says why, and the error is a wait;
+// resumeDetached restores it once nobody works there, never over a change
+// the base run did not make.
+func (e *Engine) baseRun(ctx context.Context, t registry.Task, c Copy, since time.Time, base, head string, specs []string, cmd string,
 	timeout time.Duration) (ProofRun, string, error) {
 	if err := e.detachForBase(ctx, t, c, base, head, specs); err != nil {
 		e.event(context.WithoutCancel(ctx), t.ID, "proof", registry.PhaseFail, "base run in "+c.Name+" did not start: "+
@@ -543,6 +587,12 @@ func (e *Engine) baseRun(ctx context.Context, t registry.Task, c Copy, base, hea
 	run, denied, err := e.specRun(ctx, c, cmd, base, timeout, "specs on the base")
 	rec := detachedRecord{Copy: c.Path, CopyName: c.Name, Branch: t.Branch, Head: head, Specs: specs}
 	ectx := context.WithoutCancel(ctx) // the run's end is written whatever ended it
+	if who := e.othersIn(ectx, t, since); who != "" {
+		what := c.Name + " stays detached by the base run of " + TaskKey(t) + ": " + who
+		e.event(ectx, t.ID, "proof", registry.PhaseFail, "base run: "+what+"; it is restored once nobody works in it, never over "+
+			"changes the base run did not make")
+		return run, "", errors.Join(heldError{who: waitCopy, what: what}, err)
+	}
 	rerr := e.restoreBranch(ectx, t, rec)
 	switch {
 	case rerr != nil:
@@ -730,20 +780,60 @@ func (e *Engine) holdsCopy(ctx context.Context, t registry.Task, name string) (h
 	return slices.ContainsFunc(rs, func(r Reservation) bool { return r.TaskID == t.ID && r.Copy == name }), true, nil
 }
 
-// restoreTracked undoes what the factory's own commands changed in tracked
-// files of task t's copy c (what, for the event: the precheck's commands,
-// the proof's spec run), which the checks start on clean (branchHead): each
-// path back as HEAD has it (gitx.RestoreTracked), and an info event names
-// them. restored are the paths it put back.
-func (e *Engine) restoreTracked(ctx context.Context, t registry.Task, c Copy, what string) (restored []string, err error) {
+// restoreOwn puts back what the factory's own commands changed in tracked
+// files of task t's copy c (what, for the events: the precheck's commands,
+// the proof's spec run): the checks start on a clean tree at since
+// (branchHead), so a tracked change is theirs when nobody else could have
+// made it. It is a guarded step: with nobody at work in the copy now and
+// nobody who could have changed it since (othersIn), a begin event, each path
+// back as HEAD has it (gitx.RestoreTracked), and an ok or a fail event. With
+// somebody else, or when it cannot tell, it leaves the paths, writes a fail
+// event and returns kept, the reason for you (the task needs you: keep or
+// undo them). It runs whatever ended the check (ctx's end does not stop it).
+func (e *Engine) restoreOwn(ctx context.Context, t registry.Task, c Copy, since time.Time, what string) (restored []string, kept string,
+	err error) {
 	ctx = context.WithoutCancel(ctx)
 	dirty, err := trackedChanges(ctx, e.d.Git, c.Path)
 	if err != nil || len(dirty) == 0 {
-		return nil, err
+		return nil, "", err
 	}
+	list := clipList(dirty)
+	if who := e.othersIn(ctx, t, since); who != "" {
+		kept = fmt.Sprintf("%s changed %s in %s, and %s since it began, so the factory cannot tell its changes from others' "+
+			"and left them: keep or undo them, then let the task go on", what, list, c.Name, who)
+		e.event(ctx, t.ID, "check", registry.PhaseFail, "left "+list+" in "+c.Name+" as it is: "+who)
+		return nil, kept, nil
+	}
+	e.event(ctx, t.ID, "check", registry.PhaseBegin, "restores "+list+" in "+c.Name+": "+what+" changed it")
 	if err := e.d.Git.RestoreTracked(ctx, c.Path, dirty...); err != nil {
-		return nil, fmt.Errorf("restore what %s changed in %s (%s): %w", what, c.Name, clipList(dirty), err)
+		e.event(ctx, t.ID, "check", registry.PhaseFail, "restore "+list+" in "+c.Name+": "+textx.Clip(textx.FirstLine(err.Error()), 300))
+		return nil, "", fmt.Errorf("restore what %s changed in %s (%s): %w", what, c.Name, list, err)
 	}
-	e.event(ctx, t.ID, "check", registry.PhaseInfo, "restored "+clipList(dirty)+" in "+c.Name+": "+what+" changed it")
-	return dirty, nil
+	e.event(ctx, t.ID, "check", registry.PhaseOK, "restored "+list+" in "+c.Name+" as the branch has it")
+	return dirty, "", nil
+}
+
+// othersIn says who besides the factory's own commands could have changed
+// task t's copy since the time since, "" for nobody: an agent of the task at
+// work or you in one of its panes now (Runtime.AtWork), or a prompt to one
+// of its agents or your input since then (Runtime.TouchedSince). A runtime
+// that cannot tell is somebody too: the factory then changes nothing.
+func (e *Engine) othersIn(ctx context.Context, t registry.Task, since time.Time) string {
+	if e.d.Runtime == nil {
+		return ""
+	}
+	role, you, err := e.d.Runtime.AtWork(ctx, t)
+	switch {
+	case err != nil:
+		return "the factory cannot tell who works in it (" + textx.Clip(textx.FirstLine(err.Error()), 200) + ")"
+	case role != "" && you:
+		return "you are in the " + role + " pane"
+	case role != "":
+		return "the " + role + " agent works in it"
+	}
+	who, err := e.d.Runtime.TouchedSince(ctx, t, since)
+	if err != nil {
+		return "the factory cannot tell who changed it (" + textx.Clip(textx.FirstLine(err.Error()), 200) + ")"
+	}
+	return who
 }
