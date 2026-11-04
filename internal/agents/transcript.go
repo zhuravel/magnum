@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,7 +71,11 @@ func (r *replies) turn() []string {
 // the user entries that start a turn (a string, or the first text block, is
 // the Text; a tool result and the line esc writes are no turns), not the
 // entries of a subagent's own thread, not text Claude Code adds itself
-// (isMeta) and not task notifications. Each carries the text of the
+// (isMeta), not task notifications, and not what Claude Code writes as a
+// command's output (a slash or bash-mode command's stdout and stderr, the
+// caveat before them: cliOutputTags) or a compaction's summary
+// (isCompactSummary); the command record a slash command leaves stays (see
+// SlashCommand). Each carries the text of the
 // assistant's messages in the agent's two turns before it (Before; a turn a
 // task notification began is one of the agent's turns too). The whole file
 // is read, a line at a time; a line that is no JSON, such as the
@@ -98,8 +103,8 @@ func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error) {
 			return true
 		}
 		text, ok := e.prompt(blocks)
-		if !ok {
-			return true
+		if !ok || e.IsCompactSummary || cliOutput(text) {
+			return true // no prompt, or one Claude Code wrote itself: no turn of anybody's
 		}
 		before := said.turn()
 		if !e.byNotification(text) && !e.Timestamp.Before(since) {
@@ -111,6 +116,39 @@ func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// cliOutputTags open the user entries Claude Code writes itself as a
+// command's output: a slash command's (its stdout and stderr, and the caveat
+// before them) and a bash-mode command's (its stdout and stderr).
+var cliOutputTags = []string{"<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>", "<bash-stdout>", "<bash-stderr>"}
+
+// cliOutput reports whether text, a user entry's, is a command's output that
+// Claude Code wrote itself (cliOutputTags).
+func cliOutput(text string) bool {
+	text = strings.TrimSpace(text)
+	return slices.ContainsFunc(cliOutputTags, func(tag string) bool { return strings.HasPrefix(text, tag) })
+}
+
+// SlashCommand is the slash command a user turn of a Claude Code transcript
+// records, with its slash ("/model"): Claude Code files a slash command typed
+// into the pane as a record of tags (<command-name>/model</command-name>,
+// <command-message>, <command-args>), in no fixed order. ok is false for any
+// other text.
+func SlashCommand(text string) (name string, ok bool) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "<command-") {
+		return "", false
+	}
+	_, rest, ok := strings.Cut(text, "<command-name>")
+	if !ok {
+		return "", false
+	}
+	name, _, ok = strings.Cut(rest, "</command-name>")
+	if name = strings.TrimPrefix(strings.TrimSpace(name), "/"); !ok || name == "" {
+		return "", false
+	}
+	return "/" + name, true
 }
 
 // OriginQueued is the Origin of a prompt typed while the agent worked

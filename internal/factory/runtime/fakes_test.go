@@ -429,7 +429,8 @@ type rig struct {
 	loggedOut  map[string]bool // kind -> its preflight says logged out
 	slept      []time.Duration
 	signals    []int
-	turnReads  int // the reads of a transcript's user turns
+	turnReads  int   // the reads of a transcript's user turns
+	turnErr    error // what the next read of a transcript's user turns fails with (nil: none)
 
 	layout               paths.Layout
 	claudeDir, codexHome string
@@ -520,7 +521,12 @@ func (g *rig) restart() {
 		userTurns: func(kind, path string) ([]agents.UserTurn, error) {
 			g.mu.Lock()
 			g.turnReads++
+			err := g.turnErr
+			g.turnErr = nil
 			g.mu.Unlock()
+			if err != nil {
+				return nil, err
+			}
 			return readUserTurns(kind, path)
 		},
 		claudeDir: g.claudeDir, codexHome: g.codexHome,
@@ -748,7 +754,8 @@ type transcriptLine struct {
 		Role    string `json:"role"`
 		Content any    `json:"content"`
 	} `json:"message,omitempty"`
-	TurnOrigin string `json:"turnOrigin,omitempty"`
+	TurnOrigin       string `json:"turnOrigin,omitempty"`
+	IsCompactSummary bool   `json:"isCompactSummary,omitempty"`
 }
 
 // userLine is a transcript line of a prompt typed at at.

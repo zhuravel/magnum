@@ -599,6 +599,9 @@ type (
 		// read loosely, so a shape of its own never drops the entry).
 		TurnOrigin any `json:"turnOrigin"`
 		Origin     any `json:"origin"`
+		// IsCompactSummary marks the user entry a compaction leaves (its
+		// summary of the conversation): ClaudeUserTurns returns no such turn.
+		IsCompactSummary bool `json:"isCompactSummary"`
 	}
 	tBlock struct {
 		Type      string         `json:"type"`

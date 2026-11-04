@@ -36,7 +36,8 @@ const cardCap = 30 * time.Minute
 // one the factory needs, so it is typed and never a step start, whatever its
 // words say); a message of another class, or of none, is only typed.
 // UnknownOrigin counts apart the turns typed in a pane that nothing proves the
-// operator typed (registry.OriginUnknown): kept for evaluation only, they are
+// operator typed (any origin but registry.OriginHerdr: a turn counts as the
+// operator's only with positive proof): kept for evaluation only, they are
 // never a typed message, a step start or any class.
 // AnswerBatches counts the revisions of questions that were answered, and
 // Decisions the decisions on cards; both are counted apart. OperatorSecs is
@@ -197,7 +198,7 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 		OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now), StartToReady: startToReady(spans)}
 	for _, in := range inputs {
 		switch {
-		case in.Kind == registry.InputPaneTyped && in.Origin == registry.OriginUnknown:
+		case in.Kind == registry.InputPaneTyped && in.Origin != registry.OriginHerdr:
 			ts.UnknownOrigin++ // for evaluation only: nothing proves the operator typed it
 		case IsTyped(in.Kind):
 			ts.Typed++

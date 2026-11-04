@@ -180,9 +180,14 @@ func (r *Runtime) forget(key string) {
 	delete(r.once, key)
 }
 
-// onObservation turns one session's observation into events.
+// onObservation turns one session's observation into events; one of you
+// in the pane (ObsHumanActive) is the proof of what you typed there
+// (sawYou).
 func (r *Runtime) onObservation(ctx context.Context, o agents.Observation) []Event {
 	r.noteSession(ctx, o)
+	if o.Kind == agents.ObsHumanActive {
+		r.sawYou(o.Session.ID)
+	}
 	if o.Status != herdr.StatusBlocked {
 		r.forget(fmt.Sprintf("blocked:%d", o.Session.ID))
 	}

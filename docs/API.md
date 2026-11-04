@@ -924,6 +924,13 @@ func ShellLine(role config.Role, d ShellData) (string, error)
     the marker (prompts/codex-review.sh shows the same ending). Marker must
     match [A-Za-z0-9._-]+; trailing newlines are trimmed.
 
+func SlashCommand(text string) (name string, ok bool)
+    SlashCommand is the slash command a user turn of a Claude Code transcript
+    records, with its slash ("/model"): Claude Code files a slash command typed
+    into the pane as a record of tags (<command-name>/model</command-name>,
+    <command-message>, <command-args>), in no fixed order. ok is false for any
+    other text.
+
 func TaggedAgentName(tag string, repo string, number int, role Role) string
     TaggedAgentName is AgentName for agents started under a tag (Deps.Tag,
     "eval" for magnum eval): the tag joins the hashed key, so a replay of a PR
@@ -2912,13 +2919,16 @@ func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error)
     the user entries that start a turn (a string, or the first text block,
     is the Text; a tool result and the line esc writes are no turns),
     not the entries of a subagent's own thread, not text Claude Code adds
-    itself (isMeta) and not task notifications. Each carries the text of
-    the assistant's messages in the agent's two turns before it (Before;
-    a turn a task notification began is one of the agent's turns too).
-    The whole file is read, a line at a time; a line that is no JSON, such as
-    the half-written last one, is skipped. A prompt typed while the agent worked
-    and taken into the turn it was in is an attachment entry, not a user entry,
-    and is not returned.
+    itself (isMeta), not task notifications, and not what Claude Code writes
+    as a command's output (a slash or bash-mode command's stdout and stderr,
+    the caveat before them: cliOutputTags) or a compaction's summary
+    (isCompactSummary); the command record a slash command leaves stays (see
+    SlashCommand). Each carries the text of the assistant's messages in the
+    agent's two turns before it (Before; a turn a task notification began is
+    one of the agent's turns too). The whole file is read, a line at a time;
+    a line that is no JSON, such as the half-written last one, is skipped.
+    A prompt typed while the agent worked and taken into the turn it was in is
+    an attachment entry, not a user entry, and is not returned.
 
 func CodexUserTurns(path string, since time.Time) ([]UserTurn, error)
     CodexUserTurns reads the user turns of the Codex rollout at path that
@@ -12316,10 +12326,10 @@ const (
 )
     The origins of a turn typed into a pane (InputPaneTyped): the proof that the
     operator, and nobody else, typed it. OriginHerdr: herdr showed the operator
-    in the task's panes (the owner row's human_active_at) within two minutes of
-    the turn. OriginUnknown: nothing proves who typed it; such a turn is kept
-    for evaluation only, never counted as a typed message and never a lesson's
-    source.
+    in the turn's own pane (its agent at work on no prompt of the factory's)
+    within two minutes of the turn. OriginUnknown: nothing proves who typed it;
+    such a turn, like one of any origin but OriginHerdr, is kept for evaluation
+    only, never counted as a typed message and never a lesson's source.
 
 const (
 	ClassStepStart  = "step_start"
@@ -13821,8 +13831,9 @@ type TaskStats struct {
     message; the message that starts the task, however it is recorded, is the
     one the factory needs, so it is typed and never a step start, whatever
     its words say); a message of another class, or of none, is only typed.
-    UnknownOrigin counts apart the turns typed in a pane that nothing proves the
-    operator typed (registry.OriginUnknown): kept for evaluation only, they are
+    UnknownOrigin counts apart the turns typed in a pane that nothing proves
+    the operator typed (any origin but registry.OriginHerdr: a turn counts as
+    the operator's only with positive proof): kept for evaluation only, they are
     never a typed message, a step start or any class. AnswerBatches counts the
     revisions of questions that were answered, and Decisions the decisions on
     cards; both are counted apart. OperatorSecs is the operator's time on cards:

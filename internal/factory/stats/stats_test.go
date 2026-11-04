@@ -55,10 +55,14 @@ func createTask(t *testing.T, r *registry.Registry, key string) registry.Task {
 	return got
 }
 
-// input records an input of the task at offset after t0.
+// input records an input of the task at offset after t0; a pane's turn with
+// herdr's proof that the operator typed it.
 func input(t *testing.T, r *registry.Registry, taskID int64, kind, text, class string, offset time.Duration) {
 	t.Helper()
 	in := registry.Input{TaskID: taskID, Kind: kind, Text: text, Class: class, At: t0.Add(offset)}
+	if kind == registry.InputPaneTyped {
+		in.Origin = registry.OriginHerdr
+	}
 	if _, err := r.RecordInput(t.Context(), in); err != nil {
 		t.Fatalf("RecordInput(%s %q): %v", kind, text, err)
 	}
@@ -105,7 +109,8 @@ func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 	input(t, r, a.ID, registry.InputPaneTyped, "I gave you access to the sandbox", "", 5*time.Minute)
 	input(t, r, a.ID, registry.InputGuidance, "only the refund path", "", 6*time.Minute)
 	input(t, r, a.ID, registry.InputSendBack, "keep archived out", registry.ClassCorrection, 7*time.Minute)
-	if _, err := r.RecordInput(ctx, registry.Input{TaskID: a.ID, Kind: registry.InputPaneTyped, DroppedReason: "a long paste", At: t0.Add(8 * time.Minute)}); err != nil {
+	if _, err := r.RecordInput(ctx, registry.Input{TaskID: a.ID, Kind: registry.InputPaneTyped, DroppedReason: "a long paste", Origin: registry.OriginHerdr,
+		At: t0.Add(8 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	// Questions: three answered together, one answered later, one asked and
@@ -277,9 +282,10 @@ func TestStatsCountsAStartMessageAsTypedAndNeverAsAStepStart(t *testing.T) {
 	}
 }
 
-// A turn typed in a pane that nothing proves the operator typed (origin
-// unknown) is counted apart, for evaluation only: never a typed message, a
-// step start or any class; one herdr proved is typed and classed as usual.
+// A turn typed in a pane counts as the operator's only with herdr's proof:
+// one of unknown origin, of no origin or of any other is counted apart, for
+// evaluation only, never a typed message, a step start or any class; one
+// herdr proved is typed and classed as usual.
 func TestStatsCountsAPaneTurnOfUnknownOriginApart(t *testing.T) {
 	t.Parallel()
 	r := openRegistry(t)
@@ -288,6 +294,8 @@ func TestStatsCountsAPaneTurnOfUnknownOriginApart(t *testing.T) {
 		{Kind: registry.InputPaneTyped, Text: "open PR", Origin: registry.OriginUnknown},
 		{Kind: registry.InputPaneTyped, Text: "I gave you access to the sandbox", Origin: registry.OriginUnknown},
 		{Kind: registry.InputPaneTyped, DroppedReason: "a long paste", Origin: registry.OriginUnknown},
+		{Kind: registry.InputPaneTyped, Text: "push it"},
+		{Kind: registry.InputPaneTyped, Text: "merge into staging-void", Origin: "a later writer's"},
 		{Kind: registry.InputPaneTyped, Text: "merge master", Origin: registry.OriginHerdr},
 	} {
 		in.TaskID, in.At = task.ID, t0.Add(time.Duration(i)*time.Minute)
@@ -300,8 +308,8 @@ func TestStatsCountsAPaneTurnOfUnknownOriginApart(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := only(t, rep, "PR-12315")
-	if got.UnknownOrigin != 3 || got.Typed != 1 || got.StepStarts != 1 || got.Access != 0 {
-		t.Errorf("unknown origin %d, typed %d, step starts %d, access %d; want 3, 1, 1 and 0", got.UnknownOrigin, got.Typed, got.StepStarts,
+	if got.UnknownOrigin != 5 || got.Typed != 1 || got.StepStarts != 1 || got.Access != 0 {
+		t.Errorf("unknown origin %d, typed %d, step starts %d, access %d; want 5, 1, 1 and 0", got.UnknownOrigin, got.Typed, got.StepStarts,
 			got.Access)
 	}
 }

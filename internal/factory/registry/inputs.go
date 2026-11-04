@@ -28,10 +28,11 @@ const (
 
 // The origins of a turn typed into a pane (InputPaneTyped): the proof that
 // the operator, and nobody else, typed it. OriginHerdr: herdr showed the
-// operator in the task's panes (the owner row's human_active_at) within two
-// minutes of the turn. OriginUnknown: nothing proves who typed it; such a
-// turn is kept for evaluation only, never counted as a typed message and
-// never a lesson's source.
+// operator in the turn's own pane (its agent at work on no prompt of the
+// factory's) within two minutes of the turn. OriginUnknown: nothing proves
+// who typed it; such a turn, like one of any origin but OriginHerdr, is kept
+// for evaluation only, never counted as a typed message and never a
+// lesson's source.
 const (
 	OriginHerdr   = "herdr"
 	OriginUnknown = "unknown"

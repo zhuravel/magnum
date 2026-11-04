@@ -3778,15 +3778,19 @@ watched: …`), and your retry lets it go on. An effect in flight (a push, a PR)
 any step. The event log says what each step found, and a restart keeps it.
 
 What you type into the factory's panes is recorded as your input (`pane_typed`, in the factory's registry only),
-once each: about once a minute, the observe pass reads the transcript of each agent that changed since, and one
-last time an agent whose pane ended, in the same read that settles a prompt of unknown delivery. A user turn
-counts unless it is a prompt of the task's ledger (by its hash), the kind's after-deny prompt, a tool's result or
-a turn a tool or a task notification began. Each keeps the stage, the role, the agent's state when it arrived
-(`working` on the factory's prompt, or `idle`), what the agent said in its two turns before it (its last 1 KiB) and
-its class (`Classify`), and the proof of its origin: `herdr` when herdr showed you in the task's panes (the
-`human_active_at` that holds its prompts for `human_cooldown`) within 2 minutes of the turn, else `unknown`, kept
-for evaluation only (`magnum factory stats` counts it apart; a turn without proof younger than those 2 minutes waits
-for a later read). The words and the agent's turns are scrubbed (tokens, `password=` values, emails and host
+once each: about once a minute, the observe pass reads the transcript of each agent of a task that changed since,
+in the same read that settles a prompt of unknown delivery, and one last time an agent whose pane ended, whether a
+read saw it live or not (one that ended while the daemon was down too; a last read that fails is tried again). A
+user turn counts unless it is a prompt of the task's ledger (by its hash), the kind's after-deny prompt, the record
+of a slash command the factory types (`/compact`, the kind's `switch_model`, `rename` and exit command: yours of
+those names are dropped with them), a tool's result or a turn a tool or a task notification began; what Claude Code
+writes itself (a command's stdout and stderr, a compaction's summary) is no turn at all. Each keeps the stage, the
+role, the agent's state when it arrived (`working` on the factory's prompt, or `idle`), what the agent said in its
+two turns before it (its last 1 KiB) and its class (`Classify`), and the proof of its origin: `herdr` when herdr
+showed you in that very pane (its agent at work on no prompt of the factory's, which also starts the pane's
+`human_cooldown`) within 2 minutes of the turn, else `unknown`, kept for evaluation only (`magnum factory stats`
+counts every pane turn without `herdr` apart; a turn without proof younger than those 2 minutes waits for a later
+read, and what herdr showed before a restart is forgotten, so such a turn is `unknown`). The words and the agent's turns are scrubbed (tokens, `password=` values, emails and host
 names), a long paste (more than 40 lines or 4000 bytes) keeps only why it was dropped, and a turn within 5 minutes
 of a wait on you for access (`access needed: …`) keeps only that, as it may hold a code or a password. A turn is
 known by its role and the time you typed it, so a restart records none twice and loses none the transcript holds.

@@ -167,8 +167,9 @@ type Runtime struct {
 	loginRead  time.Time
 	reconciled time.Time
 	versions   map[string]cliVersion
-	typedRead  time.Time           // the last read of the turns typed into the panes
-	seen       map[int64]typedSeen // session -> what that read saw of it
+	typedRead  time.Time             // the last read of the turns typed into the panes
+	seen       map[int64]typedSeen   // session -> its transcript as the last read that took it whole saw it
+	youAt      map[int64][]time.Time // session -> when herdr showed you in its pane (sawYou)
 }
 
 // roleKey names a role of an attempt, as it runs (after a Codex fallback).
@@ -275,7 +276,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
-		seen: map[int64]typedSeen{}}
+		seen: map[int64]typedSeen{}, youAt: map[int64][]time.Time{}}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
 		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal})

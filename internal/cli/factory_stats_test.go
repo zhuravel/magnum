@@ -37,7 +37,8 @@ func seedStatsTask(t *testing.T, dt *daemonGroupTest, key string, when time.Time
 		t.Fatal(err)
 	}
 	for _, text := range typed {
-		if _, err := reg.RecordInput(ctx, registry.Input{TaskID: task.ID, Kind: registry.InputPaneTyped, Text: text}); err != nil {
+		if _, err := reg.RecordInput(ctx, registry.Input{TaskID: task.ID, Kind: registry.InputPaneTyped, Text: text,
+			Origin: registry.OriginHerdr}); err != nil {
 			t.Fatal(err)
 		}
 	}
