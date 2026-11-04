@@ -1,9 +1,10 @@
 package factory
 
-// The release debt: a copy a task that ended (it stopped or is done) still
-// holds. A release can be refused (the copy's guard holds it: your changes
-// or your console in it) or cut (the daemon stopped), and a stopped task is
-// never advanced again, so each tick reads the copies' reservations
+// The release debt: a copy a task that ended (it stopped or is done) or
+// was published still holds. A release can be refused (the copy's guard
+// holds it: your changes or your console in it) or cut (the daemon
+// stopped), and such a task is never advanced again, so each tick reads
+// the copies' reservations
 // (Copies.Reserved, from the factory's agents store) against the registry
 // and tries the release again, after 1, 2, 4 and then every 5 minutes,
 // until the copy is free. The debt is the stores', not the daemon's memory:
@@ -39,6 +40,10 @@ func taskEnded(t registry.Task) bool {
 	return t.State == registry.TaskStopped || t.State == registry.TaskDone
 }
 
+// freesCopy reports whether a task holds no copy: it ended, or it is
+// published (its PR is open; milestone 1a does no more work on it).
+func freesCopy(t registry.Task) bool { return taskEnded(t) || t.State == registry.TaskPublished }
+
 // owe records a release of task t's copy that failed with err: the next
 // try comes after claimBackoff.
 func (e *Engine) owe(ctx context.Context, t registry.Task, copyName string, err error) {
@@ -67,10 +72,12 @@ func (e *Engine) owe(ctx context.Context, t registry.Task, copyName string, err 
 }
 
 // payReleaseDebts tries the releases due of the copies that ended tasks
-// still hold (Copies.Reserved): a task that stopped or is done, whose claim
-// does not run (sweepClaims takes those). A task at work or that waits on
-// you keeps its copy, and a reservation of a task the registry does not
-// have is left alone. A debt whose copy is free is forgotten.
+// still hold (Copies.Reserved): a task that stopped, is done or is
+// published (freesCopy), whose claim does not run (sweepClaims takes
+// those); a published task's copy comes off the task once released. A
+// task at work or that waits on you keeps its copy, and a reservation of a
+// task the registry does not have is left alone. A debt whose copy is free
+// is forgotten.
 func (e *Engine) payReleaseDebts(ctx context.Context, tasks []registry.Task) {
 	if e.d.Copies == nil {
 		return
@@ -88,7 +95,7 @@ func (e *Engine) payReleaseDebts(ctx context.Context, tasks []registry.Task) {
 	owing := map[int64]bool{}
 	for _, r := range res {
 		t, ok := byID[r.TaskID]
-		if !ok || !taskEnded(t) {
+		if !ok || !freesCopy(t) {
 			continue
 		}
 		owing[t.ID] = true
@@ -106,6 +113,9 @@ func (e *Engine) payReleaseDebts(ctx context.Context, tasks []registry.Task) {
 		e.claimMu.Lock()
 		delete(e.debts, t.ID)
 		e.claimMu.Unlock()
+		if t.State == registry.TaskPublished {
+			e.copyReleased(ctx, t.ID)
+		}
 		e.event(ctx, t.ID, "release", registry.PhaseOK, fmt.Sprintf("released %s, which the %s task still held", r.Copy, t.State))
 	}
 	e.claimMu.Lock()

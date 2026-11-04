@@ -788,6 +788,39 @@ func (c *Client) FileLog(ctx context.Context, dir, rev, path string, n int) ([]C
 	return commits, nil
 }
 
+// BlameLine is the commit that last wrote line (from 1) of path at rev, and
+// when it was authored (`git blame --porcelain -L <line>,<line> rev --
+// path`; path is relative to dir, the top of a work tree: blame takes no
+// pathspec magic). A line the file does not have at rev is an error.
+func (c *Client) BlameLine(ctx context.Context, dir, rev, path string, line int) (sha string, at time.Time, err error) {
+	if err := checkRev("revision", rev); err != nil {
+		return "", time.Time{}, err
+	}
+	if path == "" || line < 1 {
+		return "", time.Time{}, fmt.Errorf("gitx: blame needs a path and a line from 1 (path %q, line %d)", path, line)
+	}
+	n := strconv.Itoa(line)
+	res, err := c.git(ctx, dir, call{label: "blame " + rev + " " + path + ":" + n},
+		"blame", "--porcelain", "-L", n+","+n, rev, "--", path)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	lines := strings.Split(res.Out(), "\n")
+	if sha, _, _ = strings.Cut(lines[0], " "); !isOID(sha) {
+		return "", time.Time{}, fmt.Errorf("gitx: blame %s:%d: unexpected output %.60q", path, line, res.Out())
+	}
+	for _, l := range lines[1:] {
+		if v, ok := strings.CutPrefix(l, "author-time "); ok {
+			secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			if err != nil {
+				return "", time.Time{}, fmt.Errorf("gitx: blame %s:%d: author-time %q", path, line, v)
+			}
+			return sha, time.Unix(secs, 0).UTC(), nil
+		}
+	}
+	return "", time.Time{}, fmt.Errorf("gitx: blame %s:%d: no author-time", path, line)
+}
+
 // Empty tree ids of the two object formats: TreeFiles diffs a commit against
 // the empty tree to list its files.
 const (

@@ -287,8 +287,9 @@ func (e *Engine) heldCopy(id int64) (Copy, bool) {
 // failed or waits keeps its reservation for the task's next claim, and the
 // task's row names no copy; none is no error), and forgets the task's
 // claims. A claim that still runs is cancelled instead (its commands end
-// with it): sweepClaims releases its copy once it ended.
-func (e *Engine) releaseCopy(ctx context.Context, t registry.Task, reason string) {
+// with it): sweepClaims releases its copy once it ended. released reports
+// that the release went through now; a refused one is owed (owe).
+func (e *Engine) releaseCopy(ctx context.Context, t registry.Task, reason string) (released bool) {
 	e.stopCheck(t.ID) // its base run restores the copy's branch as it ends
 	e.claimMu.Lock()
 	run := e.claims[t.ID]
@@ -301,17 +302,19 @@ func (e *Engine) releaseCopy(ctx context.Context, t registry.Task, reason string
 	e.claimMu.Unlock()
 	if running {
 		run.cancel()
-		return
+		return false
 	}
 	if run != nil { // it ended, and nobody took its answer
 		e.endClaim(ctx, t, run, "the task left first")
 	}
 	if e.d.Copies == nil {
-		return
+		return false
 	}
 	if err := e.d.Copies.Release(ctx, t, reason); err != nil {
 		e.owe(ctx, t, t.Copy, err) // tried again until the copy is free
+		return false
 	}
+	return true
 }
 
 // endClaim ends the begin of a claim whose answer no stage took, saying

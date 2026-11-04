@@ -5168,6 +5168,12 @@ type Factory struct {
 	// type into it.
 	HumanCooldown Duration `toml:"human_cooldown"`
 
+	// Sensitive are the path globs (MatchPath's: "**" matches whole
+	// directories) of the files whose change the ready card's FLAGS line
+	// names for a second look: by default Gemfile.lock, the workflows and
+	// the config files.
+	Sensitive []string `toml:"sensitive"`
+
 	// LocalReview is magnum's review loop on the change before the PR.
 	LocalReview FactoryLocalReview `toml:"local_review"`
 	// Repos are the repositories the factory writes code in
@@ -10832,6 +10838,13 @@ func Inputs(cfg *config.Config) string
     has its inputs (a landed candidate's replays are the next baseline).
     magnum's own code is not part of it. "" without a config.
 
+func LocalIdentity(cfg *config.Config, w *config.Watch) (string, error)
+    LocalIdentity is the name of the identity a local round runs as: the watch's
+    when it is a gh identity, else the first gh identity configured. An App's
+    would have its token minted from GitHub, and the round reads nothing there.
+    A config without one is a ConfigError. The factory opens its PRs as the same
+    identity.
+
 func LocalNumber(taskID int64, round int) int
     LocalNumber is the synthetic PR number of round n of task taskID's
     local review: 900000 + task id × 10 + round. A round of the loop is 1 to
@@ -11372,6 +11385,13 @@ const (
 )
     Request kinds.
 
+const (
+	ChoicePush     = "push"
+	ChoiceSendBack = "send_back"
+	ChoiceDrop     = "drop"
+)
+    The choices of the ready card.
+
 const AmendPrompt = "factory-amend.md"
     AmendPrompt is the prompt of the judge's turn that amends report.md when
     your answers change the plan: the report stage's roles get it in place of
@@ -11487,6 +11507,11 @@ func CheckPrompts(cfg *config.Config) error
     data lacks, or a block the partials file does not define, is an error naming
     the role or the stage and its file.
 
+func ConfirmSentence(t registry.Task, frees string, starts string) string
+    ConfirmSentence is the y/N question of the ready card's push: the branch it
+    pushes, the copy it frees and the queued task that then starts (each left
+    out when "").
+
 func DaemonPID(l paths.Layout) (int, error)
     DaemonPID returns the pid of the running factory daemon from its pidfile
     (paths.Layout.FactoryPid), or 0 when there is no pidfile or that process is
@@ -11543,6 +11568,12 @@ func LooksLikeFactoryDaemon(comm, args string) bool
     LooksLikeFactoryDaemon reports whether a process is a magnum factory daemon
     from what engine.ProcessCommand read: the executable is magnum and its first
     arguments that are not flags are "factory daemon".
+
+func NextQueued(tasks []registry.Task) string
+    NextQueued is the key of the queued task that starts when a copy frees:
+    the oldest queued task, when it waits for a copy ("" when none waits,
+    or the oldest waits on something a copy does not free, such as memory:
+    no queued task jumps another).
 
 func PickKind(cfg config.Factory, t *jira.Ticket, prompt string) (kind, why string)
     PickKind picks the kind of a task: the kind kind_by_jira_type maps the
@@ -11637,6 +11668,20 @@ type Copy = runtime.Copy
     Copy is a task's copy of a repository: its name and path, its number (copy
     {n}), the port of its server and its environment (runtime.Copy: a launch
     runs the task's panes in it).
+
+type DecidePayload struct {
+	TaskID                                              int64
+	Choice, Reason, Note, HeadSHA, ReportHash, DiffHash string
+	DiffOpened, Shown                                   time.Time
+	DiffDwell                                           time.Duration
+	Surface                                             string
+}
+    DecidePayload is a ReqDecide: your decision on task TaskID's ready card.
+    Choice is push, send_back or drop; a send back takes the key of its Reason
+    and a Note to the writer. HeadSHA, ReportHash and DiffHash are what the
+    card showed (ReadyCardFile), Shown when it was shown, DiffOpened when you
+    opened the diff (zero: you did not) and DiffDwell how long you read it.
+    Surface is where you decided (the screen, the CLI).
 
 type Deps struct {
 	Config   *config.Config
@@ -11737,6 +11782,22 @@ type ErrRunning struct {
 func (e ErrRunning) Error() string
     Error implements error.
 
+type Flags struct {
+	Migrations                         []MigrationFlag
+	Sensitive, NotInPlan, CIJobsNotRun []string
+	OldGuards                          []OldGuard
+	Conflicts                          []string
+}
+    Flags are what the ready card's FLAGS line names: the migrations the branch
+    adds (with their flags), the sensitive files it changes, the files it
+    changes that the plan did not name, the old guards it touches, the CI jobs
+    whose commands did not run locally ("<workflow>: <job>") and the paths
+    merging origin/<base> into it would conflict in.
+
+func (f Flags) Lines() []string
+    Lines are the flags as the card's FLAGS line says them, one each; none when
+    nothing needs a second look.
+
 type GitHub interface {
 	CreatePR(ctx context.Context, repo, base, branch, title, bodyFile string) (PRView, error)
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
@@ -11744,6 +11805,10 @@ type GitHub interface {
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number.
+
+func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
+    NewGitHub is the factory's GitHub over run: gh as your gh identity for each
+    repository, the one its local review runs as.
 
 type GuardPanes struct{ Factory, Yours HerdrView }
     GuardPanes is the herdr the copies' guard sees (slots.Deps Snapshot and
@@ -11852,6 +11917,16 @@ func (f MigrationFlag) String() string
     String is f in one line: its file, its gh-ost environments, its tables and
     its problems.
 
+type OldGuard struct {
+	Path string
+	Line int
+	Age  time.Duration
+	Why  string
+}
+    OldGuard is a guard the change touches (a condition, a rescue, a validation,
+    an early return): its place in the base, how long ago the line was written,
+    and why it was added, as the history agent found it.
+
 type PRView struct {
 	Number                     int
 	URL, Author, Base, HeadSHA string
@@ -11885,7 +11960,10 @@ type PromptData struct {
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
 	Ticket, Guidance, Prompt, Answers, Rules               string
 	Findings, Report, Questions, Acceptance, Proof, Review string
-	ReviewReply                                            string
+	ReviewReply, FactoryProof, ReviewSummary               string
+	PRBody, PRTemplate                                     string
+	SendBack, SendBackReason, MergeBase                    string
+	Conflicts                                              []string
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
 }
@@ -11906,10 +11984,17 @@ type PromptData struct {
     writer's proof.json; Review the local review's findings for the writer
     (review-<n>.json, the newest round's) and ReviewReply the writer's reply to
     them (review-reply-<n>.json), both "" outside the local review's fix turn
-    (ReviewFixPrompt). ErrorSkill is the repository's error_skill ("" = none:
-    no prompt names one), DBLockCommand the `magnum db-lock` line of the copy
-    for the role as it runs, and Port the copy's server's (0 when its env names
-    none).
+    (ReviewFixPrompt). FactoryProof is the factory's proof (factory-proof.json),
+    ReviewSummary the local review's end (review-summary.json), PRBody the PR
+    body the pr_body stage writes (pr-body.md) and PRTemplate the repository's
+    PR template in the copy ("" when it has none). A coding turn back from
+    the ready card carries what it is back for (rework.json): SendBack your
+    note's file and SendBackReason the key of your reason (a send back), or
+    MergeBase the base to merge (origin/<base>) and Conflicts the paths merging
+    it conflicts in (a conflict at the card); each "" (nil) in any other turn.
+    ErrorSkill is the repository's error_skill ("" = none: no prompt names one),
+    DBLockCommand the `magnum db-lock` line of the copy for the role as it runs,
+    and Port the copy's server's (0 when its env names none).
 
 type Proof struct {
 	Specs   []string `json:"specs"`
@@ -11967,6 +12052,31 @@ type QuestionFile struct {
     no recommendation) and why, the role that raised it and what it rests on.
     The gate turns each into a registry.Question.
 
+type ReadyCardFile struct {
+	Revision   int           `json:"revision"`
+	Drawn      time.Time     `json:"drawn"`
+	Head       string        `json:"head"`
+	Base       string        `json:"base"`
+	ReportHash string        `json:"report_hash"`
+	DiffHash   string        `json:"diff_hash"`
+	Branch     string        `json:"branch"`
+	Title      string        `json:"title"`
+	Copy       string        `json:"copy"`
+	CopyPath   string        `json:"copy_path"`
+	Flags      []string      `json:"flags"`
+	Review     ReviewSummary `json:"review"`
+}
+    ReadyCardFile is ready-card.json, the ready card as the factory drew it:
+    its revision (a new one each time what it shows changed) and when it was
+    drawn, the head and the base of the change (the PR's diff is base...head),
+    the hash of report.md and pr-body.md as shown and the hash of the diff (the
+    patch id of base...head), the branch, the PR's title, the copy a push frees
+    (its directory's name) and its path, the FLAGS lines (Flags.Lines) and the
+    local review's end.
+
+func ReadReadyCard(l paths.Layout, id int64) (ReadyCardFile, error)
+    ReadReadyCard reads the ready card of task id in layout l.
+
 type Reservation struct {
 	TaskID int64
 	Copy   string
@@ -12021,11 +12131,15 @@ type ReviewSummary struct {
 	Missing   []string     `json:"missing,omitempty"`
 }
     ReviewSummary is review-summary.json: how the local review ended (exit
-    clean or oscillation), after how many rounds, at which head, and what it
-    left that does not block, for the ready card and the PR body's "Known":
-    the leftovers (P3s and simplifications of its last round), the findings the
-    writer declined with their risks, and the doubts (findings that came back
-    twice after their fix).
+    clean or oscillation), after how many rounds, at which head (the one its
+    last round reviewed), and what it left that does not block, for the ready
+    card and the PR body's "Known": the leftovers of its last round (P3s,
+    simplifications, product questions you answered, and on a clean exit the
+    findings at a blocking priority that the round's counts and verdict left
+    out), the findings the writer declined with their risks (whichever round
+    raised them), the doubts (findings that came back twice after their fix,
+    each told there only) and the reviewers a round of the loop went without
+    (Missing).
 
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
@@ -14504,6 +14618,10 @@ var ErrNoClone = errors.New("gitx: no clone of the repository")
     ErrNoClone is returned by FindClone when no directory under the clone root
     is a git clone of the repository.
 
+var ErrNotDescendant = errors.New("gitx: the commit does not descend from the remote head")
+    ErrNotDescendant is PushLease's refusal of a commit that does not descend
+    from the remote head it expects: the push would rewrite history.
+
 
 FUNCTIONS
 
@@ -14589,6 +14707,12 @@ func (c *Client) AbortOperation(ctx context.Context, dir, op string) error
     --abort`: HEAD, the index and the work tree go back to where it started.
     Callers ask InProgress first; with nothing in progress git fails, and any
     other op is an error before git runs.
+
+func (c *Client) BlameLine(ctx context.Context, dir, rev, path string, line int) (sha string, at time.Time, err error)
+    BlameLine is the commit that last wrote line (from 1) of path at rev, and
+    when it was authored (`git blame --porcelain -L <line>,<line> rev -- path`;
+    path is relative to dir, the top of a work tree: blame takes no pathspec
+    magic). A line the file does not have at rev is an error.
 
 func (c *Client) BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
     BranchDelete deletes a local branch (force = -D, otherwise -d). A branch
@@ -14846,6 +14970,18 @@ func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error)
     with no context lines, a commit rebased onto a branch that changed lines
     near its own keeps the id it had, and a commit that changes anything else
     has another. An error for a commit with no change to hash.
+
+func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string) error
+    PushLease pushes commit sha (a full id) to origin's refs/heads/<branch>
+    from dir with a lease: `git push --force-with-lease=refs/heads/<branch>:
+    <expect> origin <sha>:refs/heads/<branch>`, reaching origin the way
+    fetches do (NetworkRemote with HTTPSFetch). expect is the remote head the
+    caller recorded, "" for a new branch, which must not exist on origin then.
+    The remote branch moved since (or a branch that exists for an expect of
+    "") fails the push and leaves it as it is. A sha that does not descend from
+    expect is refused before anything is pushed (ErrNotDescendant), so the
+    lease never rewrites history; an expect dir does not have is an error too,
+    never a push.
 
 func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error
     RebaseOnto replays the commits of the branch checked out at dir that

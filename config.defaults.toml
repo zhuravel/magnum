@@ -780,6 +780,9 @@ herdr_session = "factory"         # the herdr session of the factory's panes (`h
 observe = "10s"                   # how often the factory reads its panes; must be positive
 poll = "45s"                      # how often it reads CI and the staging branches' tips from GitHub; must be positive
 human_cooldown = "15m"            # after you type into a factory pane the factory leaves it alone this long
+sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
+                                  # line names for a second look: path globs, "**" matches whole directories and
+                                  # "*" never crosses "/"; your list replaces this one
 codex_fallback = { fx-cause = "fx-cause-claude", fx-critic = "fx-critic-claude" }   # a factory role on Codex -> the
                                   # Claude role that takes its work after a Codex refusal (a cybersecurity warning
                                   # marks the task for good), as magnum's judge_fallback does. Your table merges entry
@@ -918,7 +921,7 @@ stages = [
   { name = "reproduction", type = "gate", gate = "reproduced" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },
-  { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body" },
+  { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body", prompt = "factory-pr-body.md" },
   { name = "ready", type = "decision", decision = "ready_push" },
   { name = "publish", type = "effect", effect = "publish", end = "pr" },
 ]
@@ -931,7 +934,7 @@ stages = [
   { name = "questions", type = "gate", gate = "no_open_questions" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },
-  { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body" },
+  { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body", prompt = "factory-pr-body.md" },
   { name = "ready", type = "decision", decision = "ready_push" },
   { name = "publish", type = "effect", effect = "publish", end = "pr" },
 ]
@@ -947,7 +950,7 @@ stages = [
   { name = "questions", type = "gate", gate = "no_open_questions" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },
-  { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body" },
+  { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body", prompt = "factory-pr-body.md" },
   { name = "ready", type = "decision", decision = "ready_push" },
   { name = "publish", type = "effect", effect = "publish", end = "pr" },
 ]

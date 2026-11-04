@@ -74,16 +74,27 @@ import (
 // acceptance.json and the writer's proof.json; Review the local review's
 // findings for the writer (review-<n>.json, the newest round's) and
 // ReviewReply the writer's reply to them (review-reply-<n>.json), both ""
-// outside the local review's fix turn (ReviewFixPrompt). ErrorSkill is the
-// repository's error_skill ("" = none: no prompt names one), DBLockCommand
-// the `magnum db-lock` line of the copy for the role as it runs, and Port
-// the copy's server's (0 when its env names none).
+// outside the local review's fix turn (ReviewFixPrompt). FactoryProof is
+// the factory's proof (factory-proof.json), ReviewSummary the local
+// review's end (review-summary.json), PRBody the PR body the pr_body stage
+// writes (pr-body.md) and PRTemplate the repository's PR template in the
+// copy ("" when it has none). A coding turn back from the ready card
+// carries what it is back for (rework.json): SendBack your note's file and
+// SendBackReason the key of your reason (a send back), or MergeBase the
+// base to merge (origin/<base>) and Conflicts the paths merging it
+// conflicts in (a conflict at the card); each "" (nil) in any other turn.
+// ErrorSkill is the repository's error_skill ("" = none: no prompt names
+// one), DBLockCommand the `magnum db-lock` line of the copy for the role as
+// it runs, and Port the copy's server's (0 when its env names none).
 type PromptData struct {
 	TaskID                                                 int64
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
 	Ticket, Guidance, Prompt, Answers, Rules               string
 	Findings, Report, Questions, Acceptance, Proof, Review string
-	ReviewReply                                            string
+	ReviewReply, FactoryProof, ReviewSummary               string
+	PRBody, PRTemplate                                     string
+	SendBack, SendBackReason, MergeBase                    string
+	Conflicts                                              []string
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
 }
@@ -187,9 +198,9 @@ const (
 const waitAgent = "agent"
 
 // agentsEnds are the end facts an agents stage of this build checks: a
-// stage of another end (the PR body) waits for the build that brings its
-// stage.
-var agentsEnds = []string{config.FactoryEndFindings, config.FactoryEndReport, config.FactoryEndCritic, config.FactoryEndProof}
+// stage of another end waits for the build that brings its stage.
+var agentsEnds = []string{config.FactoryEndFindings, config.FactoryEndReport, config.FactoryEndCritic, config.FactoryEndProof,
+	config.FactoryEndPRBody}
 
 // runAgents runs one pass of an agents stage of task t (the engine's runner
 // for config.FactoryStageAgents); done reports that its end fact held for
@@ -924,6 +935,8 @@ func (e *Engine) outputs(t registry.Task, st config.FactoryStage, role config.Ro
 		if n := newestReview(dir); st.Prompt == ReviewFixPrompt && n > 0 {
 			names = append(names, reviewReplyFile(n))
 		}
+	case config.FactoryEndPRBody:
+		names = []string{prBodyFile, roleQuestionsFile(role.Name)}
 	}
 	for i, n := range names {
 		names[i] = filepath.Join(dir, n)
@@ -935,9 +948,20 @@ func (e *Engine) outputs(t registry.Task, st config.FactoryStage, role config.Ro
 // and, for the judge's report, the report, its acceptance checks and the
 // answers it read recorded as artifacts (a revision each time one changed);
 // for the coding stage, the head the factory's checks passed at (proven) on
-// the task.
+// the task, and the turn back from the ready card it ran (rework.json) set
+// aside; for the PR body, the "Known" list appended first (appendKnown:
+// before the attempt counts as passed, so a restart in between appends it
+// again, once).
 func (e *Engine) passStage(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, dir, proven string) error {
 	delete(e.agentRuns, t.ID)
+	switch {
+	case st.End == config.FactoryEndPRBody:
+		if err := e.appendKnown(ctx, t); err != nil {
+			return err
+		}
+	case st.End == config.FactoryEndProof && proven != "" && st.Prompt != ReviewFixPrompt:
+		e.consumeRework(t.ID) // before the attempt counts: no later coding turn names it again
+	}
 	if err := e.reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptRunning, registry.AttemptEnded}, registry.AttemptVerified, nil); err != nil &&
 		!errors.Is(err, registry.ErrConflict) {
 		return err
@@ -986,7 +1010,8 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 	d := PromptData{TaskID: t.ID, Key: t.JiraKey, Kind: t.Kind, Repo: t.Repo, Branch: t.Branch, Copy: c.Path, TaskDir: dir,
 		Ticket: present(ticketFile), Guidance: present("guidance.md"), Prompt: present("prompt.md"), Answers: present(answersFile),
 		Rules: present("rules.md"), Findings: in("findings-*.md"), Report: in(reportFile), Questions: in(questionsFileOf(st, role.Name)),
-		Acceptance: in(acceptanceFile), Proof: in("proof.json"),
+		Acceptance: in(acceptanceFile), Proof: in("proof.json"), FactoryProof: in(factoryProofFile), ReviewSummary: in(reviewSummaryFile),
+		PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port}
 	d.Base = config.DefaultFactoryBase
 	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok {
@@ -995,6 +1020,16 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 	}
 	if st.End == config.FactoryEndFindings {
 		d.Findings = in(findingsFile(role.Name))
+	}
+	if st.End == config.FactoryEndProof && st.Prompt != ReviewFixPrompt { // the coding stage: back from the ready card?
+		if rw, ok := readRework(dir); ok {
+			switch rw.Kind {
+			case reworkSendBack:
+				d.SendBack, d.SendBackReason = in(rw.Note), rw.Reason
+			case reworkMergeBase:
+				d.MergeBase, d.Conflicts = rw.Base, rw.Conflicts
+			}
+		}
 	}
 	if st.Prompt == ReviewFixPrompt { // the local review's fix turn: its newest round's findings
 		if n := newestReview(dir); n > 0 {
@@ -1104,6 +1139,9 @@ func checkData(role config.Role) PromptData {
 		TaskDir: dir, Ticket: dir + "/ticket.md", Guidance: dir + "/guidance.md", Prompt: dir + "/prompt.md",
 		Answers: dir + "/" + answersFile, Rules: dir + "/rules.md", Findings: dir + "/" + findingsFile(role.Name),
 		Report: dir + "/" + reportFile, Questions: dir + "/" + questionsFile, Acceptance: dir + "/" + acceptanceFile,
-		Proof: dir + "/proof.json", Review: dir + "/review-1.json", ReviewReply: dir + "/review-reply-1.json", ErrorSkill: "error-tracker",
+		Proof: dir + "/proof.json", Review: dir + "/review-1.json", ReviewReply: dir + "/review-reply-1.json",
+		FactoryProof: dir + "/" + factoryProofFile, ReviewSummary: dir + "/" + reviewSummaryFile, PRBody: dir + "/" + prBodyFile,
+		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
+		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, ErrorSkill: "error-tracker",
 		DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000}
 }

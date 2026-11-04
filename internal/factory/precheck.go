@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -198,7 +199,30 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if err := writeFile(filepath.Join(dir, precheckFile), p.report.String()); err != nil {
 		return p.res, err
 	}
+	if err := writeJSON(filepath.Join(dir, precheckRecordFile), precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why}); err != nil {
+		return p.res, err
+	}
 	return p.res, nil
+}
+
+// precheckRecordFile is precheck.json: the end of the task's last precheck
+// that ran to its end, at its head, which the ready card and the publish
+// read (precheckPassedAt) once the check's result in memory is gone.
+const precheckRecordFile = "precheck.json"
+
+// precheckRecord is precheck.json.
+type precheckRecord struct {
+	Head   string `json:"head_sha"`
+	Passed bool   `json:"passed"`
+	Why    string `json:"why,omitempty"`
+}
+
+// precheckPassedAt reports whether the last precheck in task directory dir
+// passed at head.
+func precheckPassedAt(dir, head string) bool {
+	var r precheckRecord
+	b, err := os.ReadFile(filepath.Join(dir, precheckRecordFile))
+	return err == nil && json.Unmarshal(b, &r) == nil && r.Passed && head != "" && r.Head == head
 }
 
 // timer is the precheck cap's timer (the after seam, else time.After).

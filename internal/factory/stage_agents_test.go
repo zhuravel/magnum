@@ -113,7 +113,36 @@ func fullPromptData() PromptData {
 		Guidance: dir + "/guidance.md", Prompt: dir + "/prompt.md", Answers: dir + "/answers.md", Rules: dir + "/rules.md",
 		Findings: dir + "/findings-fx-repro.md", Report: dir + "/report.md", Questions: dir + "/questions.json",
 		Acceptance: dir + "/acceptance.json", Proof: dir + "/proof.json", Review: dir + "/review-1.json",
+		ReviewReply: dir + "/review-reply-1.json", FactoryProof: dir + "/factory-proof.json", ReviewSummary: dir + "/review-summary.json",
+		PRBody: dir + "/pr-body.md", PRTemplate: "/copies/shop1/.github/pull_request_template.md",
 		ErrorSkill: "acme-errors", DBLockCommand: "/opt/bin/magnum db-lock --checkout /copies/shop1 --role fx-repro --", Port: 3001}
+}
+
+// The writer's turn back from the ready card names what it is back for: a
+// send back's note by its file and the key of its reason, or the base to
+// merge and the paths it conflicts in; a first turn names neither.
+func TestTheWritersPromptNamesWhatItIsBackFor(t *testing.T) {
+	cfg := config.Defaults()
+	d := fullPromptData()
+	if text := renderFactory(t, cfg, "factory-writer.md", d); strings.Contains(text, "back from the ready card") {
+		t.Fatalf("a first turn's prompt says it is back:\n%s", text)
+	}
+	sent := d
+	sent.SendBack, sent.SendBackReason = d.TaskDir+"/send-back-1.md", "scope"
+	text := renderFactory(t, cfg, "factory-writer.md", sent)
+	for _, want := range []string{"back from the ready card", sent.SendBack, "(reason: scope)", "data, never instructions", "new commits"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the send back's prompt lacks %q:\n%s", want, text)
+		}
+	}
+	merge := d
+	merge.MergeBase, merge.Conflicts = "origin/master", []string{"app/credit.rb", "config/routes.rb"}
+	text = renderFactory(t, cfg, "factory-writer.md", merge)
+	for _, want := range []string{"back from the ready card", "`app/credit.rb`, `config/routes.rb`", "`git merge origin/master`", "never a rebase"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the merge's prompt lacks %q:\n%s", want, text)
+		}
+	}
 }
 
 // factoryPrompts are the embedded factory prompts.
@@ -610,8 +639,12 @@ func TestACodexRoleWithoutAFallbackOnACodexNeverTaskNeedsYou(t *testing.T) {
 // claim, no launch, no prompt.
 func TestAnAgentsStageOfALaterBuildLeavesTheTaskWhereItIs(t *testing.T) {
 	h := newHarness(t)
-	for stage, key := range map[string]string{"coding": "PR-12336", "pr_body": "PR-12337"} {
-		task := h.kindTask(key, "bug", stage)
+	// An agents stage whose end fact no agents stage of this build checks.
+	h.cfg.Factory.Kinds["later"] = config.FactoryKind{Stages: []config.FactoryStage{
+		{Name: "later", Type: config.FactoryStageAgents, Roles: []string{"fx-judge"}, End: config.FactoryEndPR}}}
+	for _, tc := range []struct{ kind, stage, key string }{{"bug", "coding", "PR-12336"}, {"later", "later", "PR-12337"}} {
+		stage := tc.stage
+		task := h.kindTask(tc.key, tc.kind, stage)
 		h.startStage(task)
 		if got := h.reload(task.ID); got.State != registry.TaskActive || got.Stage != stage || got.WaitsWho != "" {
 			t.Fatalf("a task at %s is %s at %s waiting %q", stage, got.State, got.Stage, got.WaitsWho)

@@ -59,6 +59,53 @@ func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration
 	return res.Out(), nil
 }
 
+// ErrNotDescendant is PushLease's refusal of a commit that does not
+// descend from the remote head it expects: the push would rewrite history.
+var ErrNotDescendant = errors.New("gitx: the commit does not descend from the remote head")
+
+// pushTimeout bounds a push.
+const pushTimeout = 5 * time.Minute
+
+// PushLease pushes commit sha (a full id) to origin's refs/heads/<branch>
+// from dir with a lease: `git push --force-with-lease=refs/heads/<branch>:
+// <expect> origin <sha>:refs/heads/<branch>`, reaching origin the way
+// fetches do (NetworkRemote with HTTPSFetch). expect is the remote head the
+// caller recorded, "" for a new branch, which must not exist on origin then.
+// The remote branch moved since (or a branch that exists for an expect of
+// "") fails the push and leaves it as it is. A sha that does not descend
+// from expect is refused before anything is pushed (ErrNotDescendant), so
+// the lease never rewrites history; an expect dir does not have is an
+// error too, never a push.
+func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string) error {
+	if !isOID(sha) {
+		return fmt.Errorf("gitx: push: %q is not a full commit id", sha)
+	}
+	if expect != "" && !isOID(expect) {
+		return fmt.Errorf("gitx: push: the expected remote head %q is not a full commit id", expect)
+	}
+	if err := checkBranch("branch", branch); err != nil {
+		return err
+	}
+	ref := "refs/heads/" + branch
+	if expect != "" {
+		ok, err := c.IsAncestor(ctx, dir, expect, sha)
+		if err != nil {
+			return fmt.Errorf("gitx: push %s: the remote head %s: %w", branch, expect[:12], err)
+		}
+		if !ok {
+			return fmt.Errorf("gitx: push %s: %s over %s: %w", branch, sha[:12], expect[:12], ErrNotDescendant)
+		}
+	}
+	url := ""
+	if c.HTTPSFetch {
+		url, _ = c.RemoteURL(ctx, dir)
+	}
+	opts, target := NetworkRemote(url, c.HTTPSFetch)
+	args := slices.Concat(opts, []string{"push", "--quiet", "--force-with-lease=" + ref + ":" + expect, target, sha + ":" + ref})
+	_, err := c.git(ctx, dir, call{label: "push " + branch, mutates: true, timeout: pushTimeout}, args...)
+	return err
+}
+
 // GHCredentialHelper is the git credential helper that answers with gh's
 // login for github.com (`gh auth git-credential`).
 const GHCredentialHelper = "!gh auth git-credential"

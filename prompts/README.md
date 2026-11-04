@@ -52,13 +52,14 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `whiteboard.md` | the whiteboard role (claude-whiteboard), which writes the dev.fast Whiteboard of the head magnum reviewed once the review posts, with the review as its last section (the whiteboard job) | role |
 | `factory-repro.md` | `fx-repro`, the factory's reproducer of a bug (`[[factory.role]]`) | factory |
 | `factory-cause.md` | `fx-cause` and its Claude fallback `fx-cause-claude`, which find a bug's cause on their own | factory |
-| `factory-history.md` | `fx-history`, which reads the history of the code a fix will change | factory |
+| `factory-history.md` | `fx-history`, which reads the history of the code a fix will change: one list item per guard, starting with its `path:line`, with its `why:` (the ready card flags a guard the change rewrites that is older than 6 months, with that why) | factory |
 | `factory-points.md` | `fx-points`, which tests each point of a feature's ticket against the code | factory |
 | `factory-scope.md` | `fx-scope`, which finds every place a chore touches | factory |
 | `factory-judge.md` | `fx-judge`, which merges the findings into `report.md` and the questions | factory |
 | `factory-amend.md` | the roles of the report stage (`fx-judge`) in the turn a `no_open_questions` or `reproduced` gate runs when your answers change the plan: they amend `report.md`, `acceptance.json` and `questions.json` with `answers.md` | factory |
 | `factory-critic.md` | `fx-critic` and its Claude fallback `fx-critic-claude`, which criticize the plan of a wide change | factory |
-| `factory-writer.md` | `fx-writer`, which writes the change test first | factory |
+| `factory-writer.md` | `fx-writer`, which writes the change test first; back from the ready card, it names your send back's note file and reason key (`.SendBack`, `.SendBackReason`) or the base to merge and the paths it conflicts in (`.MergeBase`, `.Conflicts`) | factory |
+| `factory-pr-body.md` | the roles of the `pr_body` stage (`fx-judge`, the stage's `prompt`): they draft `pr-body.md` from the report, the proofs, the acceptance checks and the local review's end, following the repository's PR template, with a table from the ticket's points to their specs; the factory appends the "Known" list itself | factory |
 | `factory-review-fix.md` | the coding stage's roles (`fx-writer`) in the local review's fix turn: they fix or decline (with the risk of the suggested change) each finding of `.Review`, commit, and write `.ReviewReply`, `proof.json` and their questions file again | factory |
 | `factory-shared.md` | every factory prompt: the blocks they share, the factory mode's rules among them (see Factory prompts); never a prompt of its own | factory |
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
@@ -531,6 +532,9 @@ answers reach the agents as files of the task's directory (`~/.local/share/magnu
 | `.Findings` | the role's `findings-<role>.md` in a findings stage (named for the role the stage names, so a Codex role's Claude fallback writes the same file), else the pattern of every investigator's file, `findings-*.md` |
 | `.Questions` | the file the role writes its questions to: `questions.json` in the judge's report stage, `questions-<role>.json` for any other role (the critic's join the judge's in one batch) |
 | `.Report`, `.Acceptance`, `.Proof`, `.Review`, `.ReviewReply` | the judge's `report.md` and `acceptance.json`, the writer's `proof.json`, and in the local review's fix turn (`factory-review-fix.md`) the newest round's findings for the writer (`review-<n>.json`) and the file of its reply (`review-reply-<n>.json`); both empty in any other prompt |
+| `.FactoryProof`, `.ReviewSummary`, `.PRBody`, `.PRTemplate` | the factory's proof (`factory-proof.json`), the local review's end (`review-summary.json`), the PR body the `pr_body` stage writes (`pr-body.md`) and the repository's PR template in the copy (`.github/pull_request_template.md` and GitHub's other places; empty when it has none) |
+| `.SendBack`, `.SendBackReason` | in the coding stage's first prompt after your send back from the ready card: the file of your note (`send-back-<revision>.md`, read as data) and the key of your reason; empty in any other prompt |
+| `.MergeBase`, `.Conflicts` | in the coding stage's first prompt after a conflict at the ready card: the base to merge (`origin/<base>`) and the paths merging it conflicts in; empty in any other prompt |
 | `.ErrorSkill` | the repository's `error_skill` (`[[factory.repo]]`): the reproducer reads a ticket's error through it, read-only; empty, no prompt names an error tracker |
 | `.DBLockCommand` | the copy's `magnum db-lock --checkout <copy> --role <role> --` line for the role as it runs, shell-quoted: every command that touches the copy's databases runs through it |
 | `.Port` | the port of the copy's local server (0 when the copy's env names none) |
@@ -541,8 +545,9 @@ decisions`, or `none`, with `## Helpers` and `## Files` sections, Files naming a
 `acceptance.json` with at least one check; `questions.json`, when it is there, a list of questions with
 two or more options each; a bug whose Proof starts `Reproduced: no` must ask the reproduction question,
 with the options `give a hint`, `take the other cause`, `try Docker or a staging` and `drop`, one of them
-recommended), `critic` (`critic.md`, and the critic's questions file when it is there), and `proof` (the
-writer's `proof.json`, `{"specs": [...]}`, naming its spec files and never their results; then the branch
+recommended), `critic` (`critic.md`, and the critic's questions file when it is there), `pr_body`
+(`pr-body.md`, newer than the stage's start and not empty; the factory appends its "Known" list once it holds),
+and `proof` (the writer's `proof.json`, `{"specs": [...]}`, naming its spec files and never their results; then the branch
 has commits after `origin/<base>`, `git status` shows no tracked change, and the factory's own proof and
 precheck passed at the head: the factory runs them itself, off its loop). A role whose file is missing or
 malformed gets one nudge naming the file and what is wrong; then the task waits on you, "the <role> agent

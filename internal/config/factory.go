@@ -57,6 +57,12 @@ type Factory struct {
 	// type into it.
 	HumanCooldown Duration `toml:"human_cooldown"`
 
+	// Sensitive are the path globs (MatchPath's: "**" matches whole
+	// directories) of the files whose change the ready card's FLAGS line
+	// names for a second look: by default Gemfile.lock, the workflows and
+	// the config files.
+	Sensitive []string `toml:"sensitive"`
+
 	// LocalReview is magnum's review loop on the change before the PR.
 	LocalReview FactoryLocalReview `toml:"local_review"`
 	// Repos are the repositories the factory writes code in
@@ -286,6 +292,7 @@ func DefaultFactory() Factory {
 		Observe:        Duration{10 * time.Second},
 		Poll:           Duration{45 * time.Second},
 		HumanCooldown:  Duration{15 * time.Minute},
+		Sensitive:      []string{"Gemfile.lock", ".github/workflows/**", "config/**"},
 		LocalReview:    FactoryLocalReview{Cycles: 3, LaterWithout: []string{RoleClaudeSimplify}},
 		Roles:          DefaultFactoryRoles(),
 		CodexFallback:  map[string]string{"fx-cause": "fx-cause-claude", "fx-critic": "fx-critic-claude"},
@@ -348,7 +355,7 @@ func DefaultFactoryKinds() map[string]FactoryKind {
 		return FactoryKind{Stages: append(stages,
 			FactoryStage{Name: "coding", Type: FactoryStageAgents, Roles: []string{"fx-writer"}, End: FactoryEndProof},
 			FactoryStage{Name: "local_review", Type: FactoryStageReview, End: FactoryEndClean},
-			FactoryStage{Name: "pr_body", Type: FactoryStageAgents, Roles: []string{"fx-judge"}, End: FactoryEndPRBody},
+			FactoryStage{Name: "pr_body", Type: FactoryStageAgents, Roles: []string{"fx-judge"}, End: FactoryEndPRBody, Prompt: "factory-pr-body.md"},
 			FactoryStage{Name: "ready", Type: FactoryStageDecision, Decision: FactoryDecisionReadyPush},
 			FactoryStage{Name: "publish", Type: FactoryStageEffect, Effect: FactoryEffectPublish, End: FactoryEndPR},
 		)}
@@ -537,6 +544,11 @@ func (c *Config) validateFactory() []error {
 	}
 	if d := f.HumanCooldown.Duration; d < 0 {
 		bad("factory.human_cooldown must not be negative, got %s", d)
+	}
+	for _, g := range f.Sensitive {
+		if err := ValidatePathGlob(g); err != nil {
+			bad("factory.sensitive entry %q: %v", g, err)
+		}
 	}
 	errs = append(errs, f.LocalReview.validate()...)
 	errs = append(errs, c.validateFactoryRoles()...)

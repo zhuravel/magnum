@@ -96,7 +96,7 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 	case ReqAnswer:
 		respond(e, ctx, q, e.answerRequest)
 	case ReqDecide:
-		e.complete(ctx, q, fmt.Errorf("this factory daemon cannot %s a task yet: update magnum (`make build`), then `magnum factory install`", q.Kind), "")
+		respond(e, ctx, q, e.decideRequest)
 	default:
 		e.complete(ctx, q, fmt.Errorf("unknown request kind %q", q.Kind), "")
 	}

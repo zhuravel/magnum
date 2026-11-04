@@ -825,3 +825,41 @@ func TestFactoryRolesNameEmbeddedPrompts(t *testing.T) {
 		}
 	}
 }
+
+// The files the ready card's FLAGS line names as sensitive are a [factory]
+// key, sensitive: path globs (MatchPath's), by default Gemfile.lock, the
+// workflows and the config files; a user's list replaces it, and a
+// malformed glob is refused.
+func TestFactorySensitiveFilesAreConfigured(t *testing.T) {
+	want := []string{"Gemfile.lock", ".github/workflows/**", "config/**"}
+	for _, cfg := range []*Config{mustLoadDefaults(t), Defaults()} {
+		if !slices.Equal(cfg.Factory.Sensitive, want) {
+			t.Fatalf("factory.sensitive = %q, want %q", cfg.Factory.Sensitive, want)
+		}
+	}
+	cfg, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": minimalConfig + "\n[factory]\nsensitive = [\"db/structure.sql\"]\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.Factory.Sensitive, []string{"db/structure.sql"}) {
+		t.Fatalf("a config's sensitive = %q, want it to replace the defaults", cfg.Factory.Sensitive)
+	}
+	for _, bad := range []string{"", "config/**x", "a//b"} {
+		cfg := validFactoryConfig()
+		cfg.Factory.Sensitive = []string{bad}
+		wantError(t, cfg.Validate(), "factory.sensitive")
+	}
+}
+
+// The pr_body stage of every built-in kind gives its judge the PR body's
+// own prompt.
+func TestThePRBodyStageHasItsOwnPrompt(t *testing.T) {
+	for _, cfg := range []*Config{mustLoadDefaults(t), Defaults()} {
+		for _, name := range []string{"bug", "feature", "chore"} {
+			i := slices.IndexFunc(cfg.Factory.Kinds[name].Stages, func(s FactoryStage) bool { return s.End == FactoryEndPRBody })
+			if i < 0 || cfg.Factory.Kinds[name].Stages[i].Prompt != "factory-pr-body.md" {
+				t.Errorf("kind %s: the pr_body stage %+v, want prompt factory-pr-body.md", name, cfg.Factory.Kinds[name].Stages)
+			}
+		}
+	}
+}

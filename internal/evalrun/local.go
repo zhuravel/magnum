@@ -154,7 +154,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 	case !ok || owner == "" || name == "" || strings.Contains(name, "/"):
 		return LocalResult{}, fmt.Errorf("evalrun: a local round needs its repository as owner/name, not %q", c.Repo)
 	}
-	id, err := localIdentity(d.Config, &c.Watch)
+	id, err := LocalIdentity(d.Config, &c.Watch)
 	if err != nil {
 		return LocalResult{}, err
 	}
@@ -270,11 +270,12 @@ func (d Deps) runLocalRound(ctx context.Context, cfg *config.Config, layout path
 	return res, err
 }
 
-// localIdentity is the identity a local round runs as: the watch's when it
-// is a gh identity, else the first gh identity configured. An App's would
-// have its token minted from GitHub, and the round reads nothing there. A
-// config without one is a ConfigError.
-func localIdentity(cfg *config.Config, w *config.Watch) (string, error) {
+// LocalIdentity is the name of the identity a local round runs as: the
+// watch's when it is a gh identity, else the first gh identity configured.
+// An App's would have its token minted from GitHub, and the round reads
+// nothing there. A config without one is a ConfigError. The factory opens
+// its PRs as the same identity.
+func LocalIdentity(cfg *config.Config, w *config.Watch) (string, error) {
 	if id := cfg.IdentityByName(w.Identity); id != nil && id.Kind == "gh" {
 		return id.Name, nil
 	}

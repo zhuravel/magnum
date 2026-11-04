@@ -347,6 +347,8 @@ func New(d Deps) *Engine {
 	e.runners[config.FactoryStageAgents] = e.runAgents
 	e.runners[config.FactoryStageGate] = e.runGate
 	e.runners[config.FactoryStageReview] = e.runReview
+	e.runners[config.FactoryStageDecision] = e.runDecision
+	e.runners[config.FactoryStageEffect] = e.runEffect
 	return e
 }
 

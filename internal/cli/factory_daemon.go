@@ -112,7 +112,10 @@ type factoryDaemon struct {
 	// yours.
 	Guard factory.GuardPanes
 	Jira  *jira.Client
-	Log   *slog.Logger
+	// GitHub opens the PRs the factory publishes and reads them back: gh as
+	// your gh identity (factory.NewGitHub).
+	GitHub factory.GitHub
+	Log    *slog.Logger
 
 	closers []func() error
 }
@@ -145,9 +148,9 @@ func (d *factoryDaemon) Close() error {
 // registry read for its real rounds (factory.NewMagnum, never migrated) and
 // the local rounds (factory.NewLocalReviewer: evalrun.RunLocal with the
 // review candidate this build writes at startup, factory.WriteReviewCandidate,
-// as its config's candidate). Every command of the daemon's runner, git's
-// included, goes through the deny list (factory.Guard). GitHub is nil until
-// the build that brings it.
+// as its config's candidate), and the publish's GitHub (factory.NewGitHub:
+// gh as your gh identity). Every command of the daemon's runner, git's and
+// gh's included, goes through the deny list (factory.Guard).
 // The caller holds the factory lock (factory.Lock); the registry's migration
 // is still refused
 // while a factory daemon's pidfile names a live factory daemon
@@ -241,6 +244,9 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "copies"}, SecretEnv: identityKeyEnvs(cfg)})
 	d.Copies = factory.NewCopies(cfg, copySlots, d.Agents, git, run, copyDBs, h.Snapshot, d.Runtime.Owner)
 	deps.Copies = d.Copies
+	// The publish: gh as your gh identity, the one the local review runs as.
+	d.GitHub = factory.NewGitHub(cfg, run)
+	deps.GitHub = d.GitHub
 	// The local review: this build's prompts and judge skill as the review
 	// candidate, written once at startup as the prompts are loaded.
 	candidate, err := factory.WriteReviewCandidate(l)

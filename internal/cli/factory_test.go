@@ -377,6 +377,23 @@ func TestTheFactoryDaemonBuildsWithItsRuntime(t *testing.T) {
 	}
 }
 
+// The daemon builds with its GitHub, the publish's: gh as your gh identity.
+func TestTheFactoryDaemonBuildsWithItsGitHub(t *testing.T) {
+	cfg := config.Defaults()
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+
+	d, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	defer d.Close()
+	if d.GitHub == nil {
+		t.Fatal("the daemon has no GitHub: nothing would publish")
+	}
+}
+
 // The daemon builds with its copies: magnum's slot code over the factory's
 // agents store, never the review registry.
 func TestTheFactoryDaemonBuildsWithItsCopies(t *testing.T) {

@@ -173,11 +173,15 @@ func (rep ReviewReply) declinedWithRisk() map[string]string {
 }
 
 // ReviewSummary is review-summary.json: how the local review ended (exit
-// clean or oscillation), after how many rounds, at which head, and what it
-// left that does not block, for the ready card and the PR body's "Known":
-// the leftovers (P3s and simplifications of its last round), the findings
-// the writer declined with their risks, and the doubts (findings that came
-// back twice after their fix).
+// clean or oscillation), after how many rounds, at which head (the one its
+// last round reviewed), and what it left that does not block, for the
+// ready card and the PR body's "Known": the leftovers of its last round
+// (P3s, simplifications, product questions you answered, and on a clean
+// exit the findings at a blocking priority that the round's counts and
+// verdict left out), the findings the writer declined with their risks
+// (whichever round raised them), the doubts (findings that came back twice
+// after their fix, each told there only) and the reviewers a round of the
+// loop went without (Missing).
 type ReviewSummary struct {
 	Exit      string       `json:"exit"`
 	Rounds    int          `json:"rounds"`
@@ -256,12 +260,16 @@ func (e *Engine) sweepRounds(tasks []registry.Task) {
 
 // runReview runs one pass of review stage st of task t (the engine's runner
 // for config.FactoryStageReview); done reports that the loop ended clean or
-// on an oscillation. The newest cycle decides: one that ended the stage
-// passes it again (its move did not land); an open one goes on (goOnCycle);
-// else the next round of the loop starts, once it may (startRound). A loop
-// is the cycles after the newest that ended one with you (cap, unavailable,
-// operator): your "go on" after it starts a loop afresh. A build without the
-// local reviewer, agents or git leaves the task where it is.
+// on an oscillation at the task's head. The newest cycle decides: one that
+// ended the stage at the task's head passes it again (its move did not
+// land); an open one goes on (goOnCycle); else the next round of the loop
+// starts, once it may (startRound). A loop is the cycles after the newest
+// that ended one: with you (cap, unavailable, operator), and your "go on"
+// after it starts a loop afresh, or clean or on an oscillation, and a head
+// the loop did not review (a send back's commits, the base merged after a
+// conflict at the ready card) starts a fresh loop of up to cycles rounds. A
+// build without the local reviewer, agents or git leaves the task where it
+// is.
 func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	if e.d.Review == nil || e.d.Runtime == nil || e.d.Git == nil {
 		return false, nil
@@ -274,7 +282,8 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	if len(cycles) > 0 {
 		last = &cycles[len(cycles)-1]
 	}
-	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitClean || last.Exit == registry.ExitOscillation) {
+	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitClean || last.Exit == registry.ExitOscillation) &&
+		last.HeadBefore == t.HeadSHA {
 		return true, nil
 	}
 	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitUnavailable || last.Exit == registry.ExitCap) {
@@ -350,11 +359,12 @@ func (e *Engine) toldOfStop(ctx context.Context, t registry.Task, cy registry.Cy
 }
 
 // loopCycles are the cycles of the current loop: those after the newest
-// whose exit ended a loop with you.
+// whose exit ended a loop, with you or clean or on an oscillation (a loop
+// of a head reviewed before: runReview passes on it, or starts afresh).
 func loopCycles(cs []registry.Cycle) []registry.Cycle {
 	for i, c := range slices.Backward(cs) {
 		switch c.Exit {
-		case registry.ExitCap, registry.ExitUnavailable, registry.ExitOperator:
+		case registry.ExitCap, registry.ExitUnavailable, registry.ExitOperator, registry.ExitClean, registry.ExitOscillation:
 			return cs[i+1:]
 		}
 	}
@@ -619,7 +629,7 @@ func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.C
 // goOnCycle goes on with open cycle cy, round `round` of the loop: its
 // round while it runs (the task's wait says so), then its result as the
 // round left it (local-review-<n>.json; none, after a restart or a round
-// set aside, runs the round again in the cycle), read once (decide) and
+// set aside, runs the round again in the cycle), read once (decideRound) and
 // then its fix (fixPhase).
 func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.FactoryStage, c Copy, cy registry.Cycle, loop []registry.Cycle) (bool, error) {
 	round := len(loop)
@@ -665,7 +675,7 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 		return false, e.stageFailed(ctx, t, needsYou{fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; "+
 			"put the copy back as the round found it (%s at %s, no tracked change), then let the task go on", round, left, t.Branch, short(cy.HeadBefore))})
 	}
-	return e.decide(ctx, t, st, cy, loop, res)
+	return e.decideRound(ctx, t, st, cy, loop, res)
 }
 
 // roundLeft is what a round left in task t's copy c that keeps its result
@@ -757,20 +767,26 @@ func roundTries(dir string, n int, why string) int {
 	return len(names)
 }
 
-// decide reads cycle cy's round, round `round` of the loop (res):
+// decideRound reads cycle cy's round, round `round` of the loop (res):
 //   - a Codex refusal marks the task Codex-never for good, and the round
 //     runs again without Codex (reviewRoles), never on it;
+//   - a round that could not run for a fault of the configuration (no gh
+//     identity: res.ConfigKey) ends its cycle unavailable at once, and the
+//     task needs you naming the key: running it again changes nothing;
 //   - a round that did not finish (Blocks: unavailable) runs once more when
 //     it ended in an error or a timeout, then ends its cycle unavailable,
 //     and the task needs you with why: never read as clean;
-//   - a clean round that went without a reviewer's report runs once more;
+//   - a clean round that went without a reviewer's report runs once more,
+//     and a second one without it ends its cycle unavailable (review
+//     unavailable, no report from the reviewers): what they would have
+//     found is unknown;
 //   - else its findings are recorded (seeFindings) and what blocks decides:
 //     nothing (or only findings the writer declined with their risk) ends
 //     the loop clean, only doubts on an oscillation (the stage passes for
 //     both, with the summary for the ready card), anything else at the cap
 //     needs you, and before it the writer gets the findings (fixPhase), the
 //     product questions among them asked first.
-func (e *Engine) decide(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, loop []registry.Cycle,
+func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, loop []registry.Cycle,
 	res evalrun.LocalResult) (bool, error) {
 	round := len(loop)
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
@@ -857,8 +873,9 @@ func (e *Engine) decide(ctx context.Context, t registry.Task, st config.FactoryS
 	switch {
 	case !blocks || len(live)+len(questions)+len(doubts) == 0:
 		// A finding posted at a blocking priority that the counts left out
-		// (the judge disagreeing with itself) is no blocker, but stays told.
-		sum.Exit, sum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions, doubts)
+		// (the judge disagreeing with itself) is no blocker, but stays told;
+		// a doubt is told among the doubts, once.
+		sum.Exit, sum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions)
 		return e.endLoop(ctx, t, cy, sum)
 	case len(live)+len(questions) == 0:
 		sum.Exit = registry.ExitOscillation

@@ -3385,6 +3385,7 @@ herdr_session = "factory"            # the herdr session of the factory's panes:
 observe = "10s"                      # how often it reads its panes
 poll = "45s"                         # how often it reads CI and the staging branches' tips
 human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
+sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # files the ready card flags for a second look
 
 [factory.local_review]
 cycles = 3                           # at most 3 rounds of magnum's review on the change before the PR
@@ -3434,6 +3435,10 @@ stages = [
 - **Limits and intervals.** `max_active`, `heavy_stages` and `[factory.local_review] cycles` (1 to 10) are
   at least 1; `memory_gate_swap` is 0 to 100; `observe` and `poll` are positive and `human_cooldown` is not
   negative. `herdr_socket` is empty (the named session's own socket) or an absolute path.
+- **Sensitive files.** `sensitive` lists the path globs (`**` matches whole directories, `*` never crosses
+  `/`, as `skip_paths` reads them) of the files whose change the ready card's FLAGS line names for a second
+  look; the built-in list is `Gemfile.lock`, the workflows (`.github/workflows/**`) and the config files
+  (`config/**`), and your list replaces it.
 - **Roles.** A `[[factory.role]]` is a session role like a review role (`kind`, `model`, `effort`, `prompt`,
   `timeout`, `args`, `env`, `fallback_models`; it is checked the same way) with two more keys the factory's
   screen names its agent by, each one line: `doing` is what the agent does now (`finding the cause`) and
@@ -3447,7 +3452,8 @@ stages = [
 - **Kinds of task and stages.** A kind lists its stages in order; each has a `name` and a `type`.
   An `agents` stage launches its `roles` in parallel and ends when its `end` fact holds (`findings`,
   `report`, `critic`, `proof` or `pr_body`: files and results the factory checks, never a "done" message);
-  its optional `prompt` is the prompt file each of its roles gets in place of its own role's.
+  its optional `prompt` is the prompt file each of its roles gets in place of its own role's (the built-in
+  `pr_body` stage gives the judge `factory-pr-body.md`).
   A kind's `proof` says what its coding stage's proof needs: `red` (the default) a spec of the change that
   fails on the base and passes at the head (a bug, a feature), `green` its specs green at the head only (the
   built-in chore: its specs stay green).
@@ -3491,8 +3497,8 @@ stages = [
   waited or failed keeps the copy it reserved for the task's next claim; a stop of the task cancels its claim
   (its commands end) and releases that copy, and a drain cancels every claim and waits for it to end. A
   release the copy's guard refuses (your changes or your console in it) is tried again after 1, 2, 4 and then
-  every 5 minutes, also after a restart (the factory's store says which stopped or done task still holds a
-  copy), and after 30 minutes one alert names the copy and the reason. A
+  every 5 minutes, also after a restart (the factory's store says which stopped, done or published task still
+  holds a copy), and after 30 minutes one alert names the copy and the reason. A
   release is refused while a factory pane works in the copy; it stops the copy's server, keeps the task's
   branch (its commits on it, pushed or not), puts the copy back on its placeholder at `origin/<base>` and
   writes `handoff.md` in the task's directory: the branch, the head, the server and what the next claimer
@@ -3536,6 +3542,7 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 | `magnum factory status [--json]` | Whether the factory daemon runs, and each task's key, kind, state, stage and what it waits on. It never creates the registry, and refuses to migrate one while an older factory daemon runs on it (`magnum factory install` restarts it on the new build, which migrates). |
 | `magnum factory start <key, link or prompt> [--kind bug\|feature\|chore] [--repo owner/name]` | Hand the factory daemon a task and print its answer (it waits up to 30 seconds; without a factory daemon the request stays queued, and expires after 30 minutes). A Jira key (`PR-12345`) or a Jira link (`/browse/<KEY>` on the `[jira]` site, or a tracker template's link) at the start is a task of that ticket, which the daemon reads itself; the words after it are your guidance for every agent (`magnum factory start PR-12345 only the refund path`). Anything else is the task in your words. A key that has a task (not done or stopped) gets that task back, `PR-12345 already runs as task 7` or `PR-12345 has PR #4527`, and no second one; a GitHub PR link (adoption) and an Actions run link (a CI task) come in milestones 2 and 3. `--kind` names the kind of task, else the daemon picks it (below); `--repo` names the `[[factory.repo]]` when there is more than one. |
 | `magnum factory answer <task> [--json <file> \| [--revision <r>] --question <n> --text <file>]` | Answer a task's questions, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a flag it prints the questions of the task's newest revision, numbered from 1, with their options and the recommended one. `--json` sends a batch, `{"revision": 3, "answers": {"1": "Seven days before it expires", "2": "ask:rev-ann"}, "needless": {"3": "obvious"}}`: an answer is an option's label or your own words, `ask:<login>` asks someone else, and `needless` flags a question with the key of your reason (`ask:` takes a GitHub login, without the `@`, and never yours). `--question <n> --text <file>` answers one question with the file's text (`-` for stdin), such as the answer of the person you asked: question `n` of `--revision <r>`, the revision that asked it, wherever a newer revision carried it over (the daemon's answer to an ask prints both numbers); without `--revision`, of the newest revision. |
+| `magnum factory decide <task> [push\|send_back\|drop --card <revision> [--reason <key> --note <text>]]` | Decide on a task's ready card, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a choice it prints the card: its revision, the PR's title, the branch and its head, the FLAGS line, the local review's end and the y/N sentence of a push (`Push <branch> and open the PR? This frees <copy>, and <task> starts. y/N`). A choice names `--card`, the revision you read: a card drawn since is refused, and the daemon refuses a decision whose branch, report, PR body or diff changed after its card was drawn (`the branch changed after you read it`) and draws the card again. `push` publishes the head the card shows; `send_back` returns the task to its writer with `--reason`, the key of your reason (a word: lowercase letters, digits, `-` and `_`), and `--note`, your note, which the writer reads from `send-back-<revision>.md` in the task's directory, never in its prompt; `drop` stops the task, freeing its copy and keeping its branch. |
 | `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one says so, naming the first one's pid, and exits 0 before it opens a log or a store, so it migrates nothing and launchd does not restart it. |
 
 A start writes the task's data files to its directory (`factory/tasks/<id>/` in the data directory), which
@@ -3668,7 +3675,42 @@ blocking findings after 3 review rounds`); a daemon that stops between ending th
 you tells you at its next start, and your "go on" starts a fresh loop. The loop's end (`review-summary.json`)
 lists what is left for the ready card: the P3s and simplifications, the declined findings with their risks, the
 doubts, and the reviewers a round went without. A drain or a restart in the middle of a round leaves its cycle
-open, and the round runs again in it.
+open, and the round runs again in it. The stage passes only on a loop that reviewed the task's head: a new head
+(a send back's commits, the base merged after a conflict at the card) starts a fresh loop of up to `cycles` rounds.
+
+Before the card, the judge drafts the PR's body (`pr_body`, `factory-pr-body.md`): its prompt names
+`report.md`, `acceptance.json`, `proof.json`, the factory's proof, `review-summary.json` and the repository's PR
+template in the copy by their paths, and the body follows the template, explains the change and has a table
+from the ticket's points to the specs that prove them. The stage passes on a fresh, non-empty `pr-body.md`; the
+factory then appends the "Known" list itself (the leftovers, the declined findings with their risks, the doubts
+and the reviewers a round went without) and records the body as the `pr_body` artifact. The ready stage
+(`ready_push`) draws the card only when the local review ended clean or on an oscillation at the task's head,
+the factory's proof and precheck passed there (`precheck.json`) and your gh identity is configured; otherwise
+the task needs you (`no ready card: …`). It reads a fresh `origin/<base>` and merges it into the head in memory
+(`git merge-tree`, no work tree touched): on a conflict the card names it and the task goes back to its coding
+stage, where the writer merges the base (its prompt names `origin/<base>` and the conflicting paths), the
+proof and the precheck run again, a fresh local loop reviews the merge, the judge drafts the body again, and
+the next card is a new revision. The card (`ready-card.json`) holds the head, the hash of `report.md` and
+`pr-body.md` as shown, the hash of the diff, the PR's title (`<KEY> <title>`, the title alone for a task of a
+prompt), the copy a push frees and the FLAGS line: the migrations the branch adds, the `sensitive` files, the
+files the plan did not name, a guard the change rewrites that is older than 6 months with the reason the history
+agent found, the CI jobs of the workflows that run on a pull request whose commands the precheck did not run,
+and the conflicts. The task waits on you (`ready to push (card <n>): <title>`); decide with `magnum factory
+decide`.
+
+On your push the factory, never an agent, publishes the approved head once (the effect
+`publish:<task>:<sha>`): it checks the card's conditions again, the branch in the copy at the head you approved
+and the PR body as the card showed it, reads the remote branch (`git ls-remote`) and the PRs of the branch,
+pushes with a lease (`git push --force-with-lease=refs/heads/<branch>:<expected head> origin
+<sha>:refs/heads/<branch>`, refused for a commit that does not descend from the expected head, so it never
+rewrites history), opens the PR ready for review (never a draft) with `gh pr create` as your gh identity (the one
+the local review runs as) and the drafted body, and reads it back: the author must be your login, the base the
+repository's, the head the approved one, and it must not be a draft, or the task needs you (`the PR's <field>
+is not what you approved`). It never forces: a remote branch at a head it did not push, or a PR of the branch
+that is not the one you approved, needs you, naming it. A daemon stopped in the middle resumes from the effect,
+reading the remote branch and the branch's PRs first, so nothing is pushed or opened twice. Then the PR is
+linked, the task is published, its agents are parked, its copy is released and the queued task behind it
+starts. The factory sends magnum no review request: the PR is not a draft, and magnum reviews it by itself.
 
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the

@@ -237,5 +237,6 @@ databases = [
 #
 # [factory]                                # a few keys you may set (the rest, with their meaning, are in config.defaults.toml)
 # max_active = 3                           # tasks with live agents or a held copy at once
+# sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**", "db/schema.rb"]   # files the ready card flags
 # [factory.local_review]
 # cycles = 3                               # at most this many local review rounds
