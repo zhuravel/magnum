@@ -272,7 +272,10 @@ func ReadLabelled(path string) ([]Labelled, error) {
 // file: a Claude Code transcript, or a Codex rollout when the file is named
 // rollout-*) into sessions: the messages the operator typed, from the user
 // turns agents.ClaudeUserTurns and agents.CodexUserTurns read, less turns a
-// tool or a task notification began. A session's ticket is the key keyOf finds
+// tool or a task notification began and the records of the slash commands
+// magnum types (magnum: agents.MagnumCommands, the list the factory drops
+// from what it records of its panes, so both sides count the same; nil drops
+// none). A session's ticket is the key keyOf finds
 // in the file's path below dir, else in its first message that holds one. A
 // transcript with no message or no key is not guessed at: it is counted in
 // skipped. The sessions come oldest first, by the time of their first
@@ -280,7 +283,7 @@ func ReadLabelled(path string) ([]Labelled, error) {
 // (BuildBaseline); a transcript whose turns carry no timestamp comes after
 // the rest, and is never a ticket's first session. Prompts queued while an agent worked are not read, so a
 // count is never above what was typed. Symbolic links are not followed.
-func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, skipped int, err error) {
+func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool) (sessions []Session, skipped int, err error) {
 	st, err := os.Stat(dir)
 	if err != nil {
 		return nil, 0, err
@@ -304,7 +307,7 @@ func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, sk
 		if err != nil {
 			return err
 		}
-		turns, err := operatorTurns(path)
+		turns, err := operatorTurns(path, magnum)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", rel, err)
 		}
@@ -344,8 +347,9 @@ func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, sk
 }
 
 // operatorTurns are the turns the operator typed in the transcript or
-// rollout at path.
-func operatorTurns(path string) ([]agents.UserTurn, error) {
+// rollout at path: none a tool or a notification began, and no record of a
+// slash command of magnum's (agents.MagnumCommand).
+func operatorTurns(path string, magnum map[string]bool) ([]agents.UserTurn, error) {
 	var turns []agents.UserTurn
 	var err error
 	if strings.HasPrefix(filepath.Base(path), "rollout-") {
@@ -358,7 +362,7 @@ func operatorTurns(path string) ([]agents.UserTurn, error) {
 	}
 	var out []agents.UserTurn
 	for _, t := range turns {
-		if (t.Origin == "" || t.Origin == "human") && strings.TrimSpace(t.Text) != "" {
+		if (t.Origin == "" || t.Origin == "human") && strings.TrimSpace(t.Text) != "" && !agents.MagnumCommand(t.Text, magnum) {
 			out = append(out, t)
 		}
 	}

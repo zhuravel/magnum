@@ -2,6 +2,7 @@ package agents
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -207,6 +209,27 @@ func TestSlashCommandReadsAClaudeCommandRecord(t *testing.T) {
 		got, ok := SlashCommand(c.text)
 		if got != c.want || ok != (c.want != "") {
 			t.Errorf("SlashCommand(%q) = %q, %v; want %q", c.text, got, ok, c.want)
+		}
+	}
+}
+
+// The slash commands magnum types outside any prompt, with the built-in
+// kinds: Compact's, the kinds' model switch and rename, and the exit the
+// claude kind's exit keys type. MagnumCommand tells their records from any
+// other command's and from plain text.
+func TestMagnumCommandsAreTheCommandsMagnumTypes(t *testing.T) {
+	cmds := MagnumCommands(config.Defaults())
+	if got := slices.Sorted(maps.Keys(cmds)); !slices.Equal(got, []string{"/compact", "/exit", "/model", "/rename"}) {
+		t.Fatalf("MagnumCommands = %q, want /compact, /exit, /model and /rename", got)
+	}
+	for text, want := range map[string]bool{
+		"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>": true,
+		"<command-message>compact</command-message>\n<command-name>/compact</command-name>":                                true,
+		"<command-name>/cost</command-name>\n<command-message>cost</command-message>":                                      false,
+		"/model opus": false,
+	} {
+		if got := MagnumCommand(text, cmds); got != want {
+			t.Errorf("MagnumCommand(%q) = %v, want %v", text, got, want)
 		}
 	}
 }

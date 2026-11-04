@@ -14,7 +14,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -149,6 +151,47 @@ func SlashCommand(text string) (name string, ok bool) {
 		return "", false
 	}
 	return "/" + name, true
+}
+
+// MagnumCommands are the slash commands magnum types into an agent's pane
+// outside any prompt, by name ("/model"): Compact's CompactCommand, and for
+// every kind of cfg its switch_model and rename commands and the word its
+// exit_keys type. They are the one list both sides of the factory's measure
+// read: what the factory records of its panes, and the baseline of what
+// the operator typed before it, drop their records (MagnumCommand), so a
+// person's command of one of these names is dropped on both sides alike.
+func MagnumCommands(cfg *config.Config) map[string]bool {
+	cmds := map[string]bool{CompactCommand: true}
+	for _, name := range cfg.KindNames() {
+		k, _ := cfg.KindSpec(name)
+		for _, cmd := range []string{k.SwitchModel, k.Rename, keysWord(k.ExitKeys)} {
+			if word, _, _ := strings.Cut(strings.TrimSpace(cmd), " "); strings.HasPrefix(word, "/") && len(word) > 1 {
+				cmds[word] = true
+			}
+		}
+	}
+	return cmds
+}
+
+// keysWord is the word keys type one printable key at a time, up to the
+// first key that is no character ("/exit" of "/", "e", "x", "i", "t",
+// "enter").
+func keysWord(keys []string) string {
+	var b strings.Builder
+	for _, k := range keys {
+		if utf8.RuneCountInString(k) != 1 {
+			break
+		}
+		b.WriteString(k)
+	}
+	return b.String()
+}
+
+// MagnumCommand reports whether text, a user turn, is Claude Code's record of
+// one of cmds (MagnumCommands).
+func MagnumCommand(text string, cmds map[string]bool) bool {
+	name, ok := SlashCommand(text)
+	return ok && cmds[name]
 }
 
 // OriginQueued is the Origin of a prompt typed while the agent worked

@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/stats"
 	"github.com/zhuravel/magnum/internal/fsx"
@@ -120,7 +121,9 @@ func newFactoryBaselineCmd(c *Context) *cobra.Command {
 			"file path or its first messages name, and the sessions of one ticket are one ticket, never counted "+
 			"apart. The first message of a ticket (the oldest session's first) counts as typed and never as a step "+
 			"start, as the message that starts a task does in `magnum factory stats`, while the first message of a later session keeps "+
-			"its class. A transcript with no message or no ticket key is left out and counted. --labelled is a JSON-lines "+
+			"its class. The record of a slash command magnum types (/compact, /model, /rename, /exit) is no message of "+
+			"yours here, as it is none in the factory's panes. A transcript with no message or no ticket key is left "+
+			"out and counted. --labelled is a JSON-lines "+
 			"file of your messages with the class you gave each by hand ({\"text\": \"open PR\", \"class\": "+
 			"\"step_start\"}; the classes are step_start, approval, correction, access and info): the classifier that "+
 			"counts your step-starting messages, here and in `magnum factory stats`, is scored on it, and its "+
@@ -161,7 +164,7 @@ func runFactoryBaselineCmd(c *Context, f factoryBaselineFlags, pos []string) int
 	sessions, skipped, err := stats.ReadSessions(f.transcripts, func(text string) string {
 		key, _ := config.Issue(text, trackers)
 		return key
-	})
+	}, agents.MagnumCommands(c.Config)) // the commands the factory drops too: both sides count the same
 	if err != nil {
 		return fail("%v", err)
 	}

@@ -13,9 +13,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/stats"
 )
+
+// magnumCommands are the slash commands magnum types with the built-in
+// kinds, which the baseline drops as the factory does.
+var magnumCommands = agents.MagnumCommands(config.Defaults())
 
 // The tracked set is 20 invented messages. The operator's own 100 stay
 // outside the repository and are read the same way.
@@ -366,7 +372,7 @@ func TestReadSessionsGroupsTranscriptsByTicketKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, skipped, err := stats.ReadSessions(dir, firstKey)
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +413,7 @@ func TestReadSessionsComesOldestFirst(t *testing.T) {
 	writeTranscript(t, filepath.Join(dir, "z-first.jsonl"),
 		claudeLine(at, "human", "open PR for PR-12301"), claudeLine(at.Add(time.Minute), "human", "ok"))
 
-	sessions, _, err := stats.ReadSessions(dir, firstKey)
+	sessions, _, err := stats.ReadSessions(dir, firstKey, magnumCommands)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +444,7 @@ func TestReadSessionsPutsASessionWithoutTimestampsLast(t *testing.T) {
 	writeTranscript(t, filepath.Join(dir, "a-untimed.jsonl"), string(untimed))
 	writeTranscript(t, filepath.Join(dir, "b-timed.jsonl"), claudeLine(at, "human", "work on PR-12301"))
 
-	sessions, skipped, err := stats.ReadSessions(dir, firstKey)
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands)
 	if err != nil || skipped != 0 {
 		t.Fatalf("ReadSessions = %v, skipped %d, %v", sessions, skipped, err)
 	}
@@ -454,9 +460,41 @@ func TestReadSessionsPutsASessionWithoutTimestampsLast(t *testing.T) {
 	}
 }
 
+// The record of a slash command magnum types (/model here) is no message of
+// the baseline's, as it is none of what the factory records of its panes
+// (runtime TestTheFactorysOwnPromptIsNoTypedTurn drops the same record), so
+// both sides count the same; any other command record stays a message.
+func TestReadSessionsDropsTheCommandsMagnumTypes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	writeTranscript(t, filepath.Join(dir, "a.jsonl"),
+		claudeLine(at, "human", "fix PR-12316, the refund job counts twice"),
+		claudeLine(at.Add(time.Minute), "", "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>"))
+	writeTranscript(t, filepath.Join(dir, "b.jsonl"),
+		claudeLine(at.Add(time.Hour), "human", "look at PR-12317"),
+		claudeLine(at.Add(time.Hour+time.Minute), "", "<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>"))
+
+	sessions, _, err := stats.ReadSessions(dir, firstKey, magnumCommands)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 || !slices.Equal(sessions[0].Messages, []string{"fix PR-12316, the refund job counts twice"}) ||
+		len(sessions[1].Messages) != 2 {
+		t.Fatalf("sessions %+v, want the /model record dropped and the /cost one kept", sessions)
+	}
+	b, err := stats.BuildBaseline(sessions[:1], []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.TypedPerTicket.Max != 1 {
+		t.Errorf("baseline %+v, want one typed message for the session with the /model record", b)
+	}
+}
+
 func TestReadSessionsOfAMissingDirectory(t *testing.T) {
 	t.Parallel()
-	if _, _, err := stats.ReadSessions(filepath.Join(t.TempDir(), "nope"), firstKey); err == nil {
+	if _, _, err := stats.ReadSessions(filepath.Join(t.TempDir(), "nope"), firstKey, magnumCommands); err == nil {
 		t.Error("a missing directory read as no sessions")
 	}
 }

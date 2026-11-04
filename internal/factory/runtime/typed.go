@@ -8,8 +8,9 @@ package runtime
 // not, kept for the next pass when it fails). It hands the engine every user
 // turn the transcript holds that the factory did not send (EventTyped): no
 // prompt of the task's ledger (by its hash), no after-deny prompt of the
-// session's kind, no record of a slash command the factory or the agents
-// layer types (/compact, the kind's /model, /rename and exit command), no
+// session's kind, no record of a slash command magnum types (/compact, the
+// kinds' /model, /rename and exit commands: agents.MagnumCommands, which the
+// baseline drops as well, so both sides count the same), no
 // tool's result and no turn a tool or a notification began (Claude Code's
 // own records of a command's output and of a compaction are no user turns
 // at all: agents.ClaudeUserTurns). The proof of a turn's origin is herdr's,
@@ -30,7 +31,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -290,64 +290,38 @@ func (r *Runtime) transcriptMark(ctx context.Context, s store.Session, known str
 }
 
 // ownTexts are what the factory, or the agents layer for it, types into a
-// pane: the hashes of its prompts and the slash commands it types.
+// pane: the hashes of its prompts, and the slash commands magnum types
+// (agents.MagnumCommands, the list the baseline drops as well).
 type ownTexts struct {
 	hashes   map[string]bool
 	commands map[string]bool
 }
 
 // holds reports whether text, a user turn's, is the factory's own: one of
-// its prompts, or the record of one of its slash commands.
+// its prompts, or the record of one of magnum's slash commands.
 func (o ownTexts) holds(text string) bool {
-	if o.hashes[PromptHash(text)] {
-		return true
-	}
-	name, ok := agents.SlashCommand(text)
-	return ok && o.commands[name]
+	return o.hashes[PromptHash(text)] || agents.MagnumCommand(text, o.commands)
 }
 
 // ownPrompts are the texts the factory, or the agents layer for it, types
 // into a pane of task id of kind: every prompt of the task's ledger, the
-// kind's after-deny prompt, and the slash commands it types (Compact's
-// agents.CompactCommand, the kind's switch_model and rename commands and its
-// exit keys). A command of yours of one of those names is dropped with them:
-// a turn counts as yours only with positive proof.
+// kind's after-deny prompt, and the slash commands magnum types
+// (r.commands: agents.MagnumCommands). A command of yours of one of those
+// names is dropped with them, as the baseline drops it: a turn counts as
+// yours only with positive proof.
 func (r *Runtime) ownPrompts(ctx context.Context, id int64, kind string) (ownTexts, error) {
 	entries, err := r.reg.LedgerOf(ctx, id)
 	if err != nil {
 		return ownTexts{}, err
 	}
-	own := ownTexts{hashes: map[string]bool{}, commands: map[string]bool{agents.CompactCommand: true}}
+	own := ownTexts{hashes: map[string]bool{}, commands: r.commands}
 	for _, e := range entries {
 		own.hashes[e.Hash] = true
 	}
-	k, ok := r.cfg.KindSpec(kind)
-	if !ok {
-		return own, nil
-	}
-	if k.AfterDenyPrompt != "" {
+	if k, ok := r.cfg.KindSpec(kind); ok && k.AfterDenyPrompt != "" {
 		own.hashes[PromptHash(k.AfterDenyPrompt)] = true
 	}
-	for _, cmd := range []string{k.SwitchModel, k.Rename, typedKeys(k.ExitKeys)} {
-		if name, _, _ := strings.Cut(strings.TrimSpace(cmd), " "); strings.HasPrefix(name, "/") {
-			own.commands[name] = true
-		}
-	}
 	return own, nil
-}
-
-// typedKeys is the word the keys of a kind's exit_keys type, one printable
-// key at a time, up to the first key that is no character ("/exit" of "/",
-// "e", "x", "i", "t", "enter").
-func typedKeys(keys []string) string {
-	var b strings.Builder
-	for _, k := range keys {
-		if utf8.RuneCountInString(k) != 1 {
-			break
-		}
-		b.WriteString(k)
-	}
-	return b.String()
 }
 
 // originOf is the origin of a turn typed at at: herdr's when it showed you

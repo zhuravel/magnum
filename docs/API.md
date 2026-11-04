@@ -728,6 +728,19 @@ func LaunchModel(ctx context.Context, st *store.Store, cfg *config.Config, role 
     then role.Model. A pane job asks it before it starts again on a fallback.
     Limits that cannot be read give role.Model, neither a fallback nor none.
 
+func MagnumCommand(text string, cmds map[string]bool) bool
+    MagnumCommand reports whether text, a user turn, is Claude Code's record of
+    one of cmds (MagnumCommands).
+
+func MagnumCommands(cfg *config.Config) map[string]bool
+    MagnumCommands are the slash commands magnum types into an agent's pane
+    outside any prompt, by name ("/model"): Compact's CompactCommand, and for
+    every kind of cfg its switch_model and rename commands and the word its
+    exit_keys type. They are the one list both sides of the factory's measure
+    read: what the factory records of its panes, and the baseline of what the
+    operator typed before it, drop their records (MagnumCommand), so a person's
+    command of one of these names is dropped on both sides alike.
+
 func NewRunID(now time.Time) string
     NewRunID is a run id: "r-<UTC yyyymmddThhmmss>-<6 random hex digits>",
     sortable by creation second. The judge's review carries it as its magnum:run
@@ -13797,19 +13810,22 @@ type Session struct {
     Session is one agent session of the operator's: the ticket it worked on and
     the messages the operator typed to it.
 
-func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, skipped int, err error)
+func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool) (sessions []Session, skipped int, err error)
     ReadSessions reads the operator's old transcripts under dir (every .jsonl
     file: a Claude Code transcript, or a Codex rollout when the file is named
     rollout-*) into sessions: the messages the operator typed, from the user
     turns agents.ClaudeUserTurns and agents.CodexUserTurns read, less turns a
-    tool or a task notification began. A session's ticket is the key keyOf finds
-    in the file's path below dir, else in its first message that holds one.
-    A transcript with no message or no key is not guessed at: it is counted in
-    skipped. The sessions come oldest first, by the time of their first message,
-    so that the first session of a ticket is the first one (BuildBaseline); a
-    transcript whose turns carry no timestamp comes after the rest, and is never
-    a ticket's first session. Prompts queued while an agent worked are not read,
-    so a count is never above what was typed. Symbolic links are not followed.
+    tool or a task notification began and the records of the slash commands
+    magnum types (magnum: agents.MagnumCommands, the list the factory drops from
+    what it records of its panes, so both sides count the same; nil drops none).
+    A session's ticket is the key keyOf finds in the file's path below dir,
+    else in its first message that holds one. A transcript with no message or no
+    key is not guessed at: it is counted in skipped. The sessions come oldest
+    first, by the time of their first message, so that the first session of a
+    ticket is the first one (BuildBaseline); a transcript whose turns carry
+    no timestamp comes after the rest, and is never a ticket's first session.
+    Prompts queued while an agent worked are not read, so a count is never above
+    what was typed. Symbolic links are not followed.
 
 type TaskStats struct {
 	TaskID int64
