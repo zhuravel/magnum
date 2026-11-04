@@ -242,7 +242,9 @@ func (e *Engine) copyIdle(ctx context.Context, t registry.Task) error {
 // proof.json in the head, it runs them on the base (unless the kind's proof
 // is green) and at the head with the repository's specs command
 // (precheck.specs; jest for spec files of JavaScript when every one is),
-// under the machine's spec lock. It records a spec check for each run
+// under the machine's spec lock, once it looked at the copy again after
+// that lock's wait (afterWait: no spec runs over a change made while it
+// waited). It records a spec check for each run
 // (source factory) and the proof (factory-proof.json, the proof artifact).
 // A spec run bounded by the precheck's cap that does not end is a result,
 // never a failure to run: red on the base, a failure at the head. A proof
@@ -305,6 +307,12 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 		return proof, err
 	}
 	defer unlock()
+	if started, err = e.afterWait(ctx, t, c, started, "proof", "the proof"); err != nil { // no spec runs over what changed while it waited
+		if k, ok := errors.AsType[keptChanges](err); ok {
+			return forYou(k.why)
+		}
+		return proof, err
+	}
 	timeout := capOf(repo)
 	key := "precheck.specs"
 	if cmd != renderCommand(repo.Precheck.Specs, pf.Specs, "") {
@@ -580,10 +588,13 @@ func (e *Engine) hasDetachedRecord(t registry.Task) bool {
 }
 
 // keptChanges is a discarding git step the factory did not take: it would
-// have lost changes the factory did not make, which it left for you; why
-// names them, in plain words. No git step the factory runs in a copy
-// discards a change it did not make.
-type keptChanges struct{ why string }
+// have lost changes the factory did not make, which it left for you, the
+// paths; why names them, in plain words. No git step the factory runs in a
+// copy discards a change it did not make.
+type keptChanges struct {
+	why   string
+	paths []string
+}
 
 func (k keptChanges) Error() string { return k.why }
 
@@ -630,13 +641,15 @@ func (e *Engine) baseRun(ctx context.Context, t registry.Task, c Copy, since tim
 
 // detachForBase is the start of a base run in task t's copy c: the guards
 // first, nobody at work in the copy (copyIdle) and nothing in it the switch
-// would discard (its tree as the branch has it: no tracked change, no file at
-// a path the base has and the head lacks; the callers put back their own
-// changes before, so whatever is there is not the factory's, and a
-// keptChanges names it for you, with a fail event); then detached.json and
-// the begin event, then the copy detached at base with specs laid on it from
-// head. Its end is restoreBranch's; a daemon that dies before it leaves the
-// record, which the next start acts on (resumeDetached).
+// would discard (its tree as the branch has it: no tracked change, and no
+// file git does not track that the switch would lose, inTheWay; the callers
+// put back their own changes before, so whatever is there is not the
+// factory's, and a keptChanges names it for you, with a fail event and
+// kept.json); then detached.json and the begin event, then the copy detached
+// at base (a switch that refuses to write over a file git does not track)
+// with specs laid on it from head. Its end is restoreBranch's; a daemon that
+// dies before it leaves the record, which the next start acts on
+// (resumeDetached).
 func (e *Engine) detachForBase(ctx context.Context, t registry.Task, c Copy, base, head string, specs []string) error {
 	if err := e.copyIdle(ctx, t); err != nil {
 		return err
@@ -651,7 +664,8 @@ func (e *Engine) detachForBase(ctx context.Context, t registry.Task, c Copy, bas
 		why := fmt.Sprintf("%s has changes the factory did not make (%s), so it was not detached for the base run: "+
 			"keep or undo them, then let the task go on", c.Name, clipList(foreign))
 		e.event(ctx, t.ID, "proof", registry.PhaseFail, "base run: "+why)
-		return keptChanges{why}
+		e.keepFor(t, c, time.Time{}, dirty, false, why)
+		return keptChanges{why, foreign}
 	}
 	rec := detachedRecord{Copy: c.Path, CopyName: c.Name, Branch: t.Branch, Base: base, Head: head, Specs: specs, At: e.now()}
 	b, err := json.MarshalIndent(rec, "", "  ")
@@ -667,7 +681,7 @@ func (e *Engine) detachForBase(ctx context.Context, t registry.Task, c Copy, bas
 	}
 	e.event(ctx, t.ID, "proof", registry.PhaseBegin, fmt.Sprintf("base run in %s: detached at %s with %d spec files of %s; %s comes back after it",
 		c.Name, short(base), len(specs), short(head), t.Branch))
-	if err := e.d.Git.SwitchDetach(ctx, c.Path, base); err != nil {
+	if err := e.d.Git.SwitchDetachKeepUntracked(ctx, c.Path, base); err != nil {
 		return errors.Join(err, e.restoreBranch(context.WithoutCancel(ctx), t, rec, true))
 	}
 	if len(specs) > 0 {
@@ -678,26 +692,70 @@ func (e *Engine) detachForBase(ctx context.Context, t registry.Task, c Copy, bas
 	return nil
 }
 
-// inTheWay are the files of the copy at dir at paths that a switch between
-// base and head would write over although git tracks none there: the paths
-// the diff from base to head has with status (gitx.FileLines.Status: 'D'
-// for the base's, which a switch to the base writes; 'A' for the head's,
-// which a switch back to the branch writes) that a file of the copy is at.
+// inTheWay are the files of the copy at dir that git tracks none of
+// (untracked or ignored: gitx.NotTracked) and that a switch between base
+// and head would lose: at a path the head's change has with status
+// (gitx.ChangedFiles, which reads no patch, so a change of any size fits:
+// 'D' for the base's paths, which a switch to the base writes; 'A' for the
+// head's, which a switch back to the branch writes), or in a directory at
+// such a path. A directory of tracked files there (a file the head turned
+// into one) and the tracked file of a case-only rename are no such file.
 func (e *Engine) inTheWay(ctx context.Context, dir, base, head string, status byte) ([]string, error) {
-	diff, err := e.d.Git.DiffLines(ctx, dir, base, head)
+	changes, err := e.d.Git.ChangedFiles(ctx, dir, base, head)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
-	for _, f := range diff {
-		if f.Status != status {
-			continue
-		}
-		if _, err := os.Lstat(filepath.Join(dir, f.Path)); err == nil {
-			out = append(out, f.Path)
+	var paths []string
+	for _, f := range changes {
+		if f.Status == status {
+			paths = append(paths, f.Path)
 		}
 	}
-	return out, nil
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	others, err := e.d.Git.NotTracked(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	return lostBy(dir, paths, others), nil
+}
+
+// lostBy are what of others (gitx.NotTracked's entries in the work tree at
+// dir) a switch that writes paths would lose: an entry at one of the paths,
+// an entry under a directory at one, or the file at one that lies in a
+// directory git tracks nothing in. Names compare without case, as macOS's
+// file system compares them (on another it errs on the side of keeping).
+func lostBy(dir string, paths, others []string) []string {
+	type entry struct{ fold, name string }
+	es := make([]entry, len(others))
+	for i, o := range others {
+		es[i] = entry{strings.ToLower(o), o}
+	}
+	slices.SortFunc(es, func(a, b entry) int { return strings.Compare(a.fold, b.fold) })
+	find := func(s string) (int, bool) {
+		return slices.BinarySearchFunc(es, s, func(e entry, s string) int { return strings.Compare(e.fold, s) })
+	}
+	var out []string
+	for _, p := range paths {
+		fold := strings.ToLower(p)
+		if i, ok := find(fold); ok {
+			out = append(out, es[i].name)
+		}
+		i, _ := find(fold + "/")
+		for ; i < len(es) && strings.HasPrefix(es[i].fold, fold+"/"); i++ {
+			out = append(out, es[i].name)
+		}
+		for d := path.Dir(fold); d != "." && d != "/"; d = path.Dir(d) {
+			if _, ok := find(d + "/"); ok {
+				if _, err := os.Lstat(filepath.Join(dir, p)); err == nil {
+					out = append(out, p)
+				}
+				break
+			}
+		}
+	}
+	return mergePaths(out, nil)
 }
 
 // mergePaths is a and b in one sorted list, each path once.
@@ -710,33 +768,19 @@ func mergePaths(a, b []string) []string {
 // restoreBranch ends a base run: the copy back on the branch at its tip,
 // with the tip's tree, and detached.json removed. It discards what differs
 // from the branch (a spec file it laid that the base lacks is removed first,
-// since a switch never writes over an untracked file), so it is guarded:
-// every tracked change, and every file at a path the head adds, must be the
-// factory's, a spec file it laid that is still as the head has it, or, with
-// own, whatever is there (the caller vouches that nobody else could have
-// changed the copy since the check began). Anything else is a keptChanges,
-// and nothing is switched or removed.
+// since a switch never writes over a file git does not track, an ignored one
+// included), so it is guarded: with own, the caller vouches that nobody else
+// could have changed the copy since the check began; without it, nothing in
+// the copy may be foreign (foreignIn), else it is a keptChanges, and nothing
+// is switched or removed.
 func (e *Engine) restoreBranch(ctx context.Context, t registry.Task, rec detachedRecord, own bool) error {
 	if !own {
-		var foreign []string
-		candidates, err := trackedChanges(ctx, e.d.Git, rec.Copy)
+		foreign, err := e.foreignIn(ctx, rec)
 		if err != nil {
 			return err
 		}
-		if rec.Base != "" && rec.Head != "" {
-			adds, err := e.inTheWay(ctx, rec.Copy, rec.Base, rec.Head, 'A')
-			if err != nil {
-				return err
-			}
-			candidates = mergePaths(candidates, adds)
-		}
-		for _, p := range candidates {
-			if !slices.Contains(rec.Specs, p) || !e.asTheHeadHasIt(ctx, rec, p) {
-				foreign = append(foreign, p)
-			}
-		}
 		if len(foreign) > 0 {
-			return keptChanges{fmt.Sprintf("changes the factory did not make (%s)", clipList(foreign))}
+			return keptChanges{fmt.Sprintf("changes the factory did not make (%s)", clipList(foreign)), foreign}
 		}
 	}
 	for _, s := range rec.Specs {
@@ -747,7 +791,7 @@ func (e *Engine) restoreBranch(ctx context.Context, t registry.Task, rec detache
 			return err
 		}
 	}
-	if err := e.d.Git.SwitchDetach(ctx, rec.Copy, "refs/heads/"+rec.Branch); err != nil {
+	if err := e.d.Git.SwitchDetachKeepUntracked(ctx, rec.Copy, "refs/heads/"+rec.Branch); err != nil {
 		return err
 	}
 	if err := e.d.Git.Switch(ctx, rec.Copy, rec.Branch); err != nil {
@@ -757,6 +801,31 @@ func (e *Engine) restoreBranch(ctx context.Context, t registry.Task, rec detache
 		return err
 	}
 	return nil
+}
+
+// foreignIn are what in a copy a base run left detached (rec) is not the
+// factory's: every tracked change, and every file git does not track that
+// the switch back to the branch would lose (inTheWay 'A'), unless it is a
+// spec file the base run laid that is still as the head has it.
+func (e *Engine) foreignIn(ctx context.Context, rec detachedRecord) ([]string, error) {
+	candidates, err := trackedChanges(ctx, e.d.Git, rec.Copy)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Base != "" && rec.Head != "" {
+		adds, err := e.inTheWay(ctx, rec.Copy, rec.Base, rec.Head, 'A')
+		if err != nil {
+			return nil, err
+		}
+		candidates = mergePaths(candidates, adds)
+	}
+	var foreign []string
+	for _, p := range candidates {
+		if !slices.Contains(rec.Specs, p) || !e.asTheHeadHasIt(ctx, rec, p) {
+			foreign = append(foreign, p)
+		}
+	}
+	return foreign, nil
 }
 
 // asTheHeadHasIt reports whether the copy's file at path p (a spec file a
@@ -784,9 +853,11 @@ func (e *Engine) asTheHeadHasIt(ctx context.Context, rec detachedRecord, p strin
 // with an ok event; a copy the task no longer holds, or that is elsewhere,
 // drops it with an info event and is left as it is. Before it switches,
 // nobody may be at work in the copy (an agent's run, you in a pane: a wait),
-// and a tracked change the base run did not make (outside its spec files:
-// yours) is never discarded: a live task goes to NEEDS YOU naming it and
-// saying how to put the copy back. held is the wait, when there is one.
+// and a change the base run did not make (foreignIn: outside its spec
+// files, yours) is never discarded: a live task goes to NEEDS YOU naming it
+// and saying how to put the copy back (keptDetached). Its begin event comes
+// only once the guard let the restore go on. held is the wait, when there is
+// one.
 func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held error) {
 	if e.d.Git == nil || e.checkRuns(t.ID) {
 		return nil
@@ -794,6 +865,7 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), detachedFile)
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
+		delete(e.keptCopies, t.ID)
 		return nil
 	}
 	var rec detachedRecord
@@ -809,6 +881,7 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
+		delete(e.keptCopies, t.ID)
 		e.event(ctx, t.ID, "proof", phase, text)
 		return nil
 	}
@@ -850,27 +923,18 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 		}
 		return err
 	}
-	e.event(ctx, t.ID, "proof", registry.PhaseBegin, "restores "+rec.Branch+" in "+name+" after a base run")
-	err = e.restoreBranch(ctx, t, rec, false)
-	if k, ok := errors.AsType[keptChanges](err); ok {
-		back := "git switch " + rec.Branch
-		if len(rec.Specs) > 0 {
-			back = "remove the spec files the base run laid there (" + strings.Join(rec.Specs, ", ") + ") or keep them elsewhere, then " + back
-		}
-		what := fmt.Sprintf("%s was left detached at %s by a base run, with %s: keep or undo them, then put %s back on %s (%s)",
-			name, short(rec.Base), k.why, name, rec.Branch, back)
-		switch {
-		case isLive(t):
-			e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore after a base run: "+what)
-			e.toOperator(ctx, t, what, "a base run left changes the factory did not make")
-		case e.keptSaid[t.ID] != what: // a task the loop does not advance: said once
-			e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore after a base run: "+what)
-			e.alert(ctx, t.ID, TaskKey(t)+": "+what)
-		}
-		e.keptSaid[t.ID] = what
-		return heldError{who: waitsYou, what: what}
+	switch foreign, err := e.foreignIn(ctx, rec); {
+	case err != nil:
+		return err
+	case len(foreign) > 0:
+		return e.keptDetached(ctx, t, rec, keptChanges{fmt.Sprintf("changes the factory did not make (%s)", clipList(foreign)), foreign}, false)
 	}
-	delete(e.keptSaid, t.ID)
+	e.event(ctx, t.ID, "proof", registry.PhaseBegin, "restores "+rec.Branch+" in "+name+" after a base run")
+	err = e.restoreBranch(ctx, t, rec, false) // its guard again, right before its switch
+	if k, ok := errors.AsType[keptChanges](err); ok {
+		return e.keptDetached(ctx, t, rec, k, true)
+	}
+	delete(e.keptCopies, t.ID)
 	if err != nil {
 		e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore "+rec.Branch+" in "+name+": "+err.Error())
 		return err
@@ -879,16 +943,50 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 	return nil
 }
 
+// keptDetached is resumeDetached's end for a copy a base run left detached
+// with changes the factory did not make (k): the copy stays as it is, and
+// the task needs you, naming them and saying how to put the copy back. A
+// live task goes to NEEDS YOU with a fail event; a task the loop does not
+// advance keeps its wait and gets the fail event and an alert once
+// (keptCopies), and begun is a begin event that the fail event ends
+// whatever was said before. The copy and its kept paths are noted, so the
+// sweep looks at it again only when one of them changed (keptDue).
+func (e *Engine) keptDetached(ctx context.Context, t registry.Task, rec detachedRecord, k keptChanges, begun bool) error {
+	name := cmpJoin(nonEmpty(rec.CopyName), rec.Copy)
+	back := "git switch " + rec.Branch
+	if len(rec.Specs) > 0 {
+		back = "remove the spec files the base run laid there (" + strings.Join(rec.Specs, ", ") + ") or keep them elsewhere, then " + back
+	}
+	what := fmt.Sprintf("%s was left detached at %s by a base run, with %s: keep or undo them, then put %s back on %s (%s)",
+		name, short(rec.Base), k.why, name, rec.Branch, back)
+	switch {
+	case isLive(t):
+		e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore after a base run: "+what)
+		e.toOperator(ctx, t, what, "a base run left changes the factory did not make")
+	case begun || e.keptCopies[t.ID].what != what: // a task the loop does not advance: said once
+		e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore after a base run: "+what)
+		if e.keptCopies[t.ID].what != what {
+			e.alert(ctx, t.ID, TaskKey(t)+": "+what)
+		}
+	}
+	e.keptCopies[t.ID] = keptCopy{what: what, at: e.now(), copy: rec.Copy, paths: k.paths, marks: pathMarks(rec.Copy, k.paths)}
+	return heldError{who: waitsYou, what: what}
+}
+
 // sweepDetached acts on the copies base runs left detached for the tasks
 // the loop does not advance (at NEEDS YOU, stopped, ended) as a live task's
-// pass does (resumeDetached): a copy is put back whatever its task's state,
-// or held with its reason, and their waits stay as they are.
+// pass does (resumeDetached), each under the panic guard of a task's step
+// (safely): a copy is put back whatever its task's state, or held with its
+// reason, and their waits stay as they are. A copy kept for you is looked at
+// again only when it is due (keptDue). The tick runs it only while herdr
+// answers, as the rest of its passes: herdr says who is in a copy.
 func (e *Engine) sweepDetached(ctx context.Context, tasks []registry.Task) {
 	for _, t := range tasks {
-		if isLive(t) || !e.hasDetachedRecord(t) {
+		if isLive(t) || !e.hasDetachedRecord(t) || !e.keptDue(t.ID) {
 			continue
 		}
-		if err := e.resumeDetached(ctx, t); err != nil && !errors.Is(err, ErrHeld) {
+		err := e.safely(ctx, t, func(ctx context.Context) error { return e.resumeDetached(ctx, t) })
+		if err != nil && !errors.Is(err, ErrHeld) && !errors.Is(err, errPanicked) {
 			e.log.Warn("restore a copy a base run left detached", "task", t.ID, "err", err)
 		}
 	}
@@ -915,8 +1013,11 @@ func (e *Engine) holdsCopy(ctx context.Context, t registry.Task, name string) (h
 // nobody who could have changed it since (othersIn), a begin event, each path
 // back as HEAD has it (gitx.RestoreTracked), and an ok or a fail event. With
 // somebody else, or when it cannot tell, it leaves the paths, writes a fail
-// event and returns kept, the reason for you (the task needs you: keep or
-// undo them). It runs whatever ended the check (ctx's end does not stop it).
+// event and kept.json (keepFor: they may be the check's own, and go back
+// under this guard once the task goes on and nobody else could have changed
+// them, settleKept) and returns kept, the reason for you (the task needs
+// you: keep or undo them). It runs whatever ended the check (ctx's end does
+// not stop it).
 func (e *Engine) restoreOwn(ctx context.Context, t registry.Task, c Copy, since time.Time, what string) (restored []string, kept string,
 	err error) {
 	ctx = context.WithoutCancel(ctx)
@@ -929,6 +1030,7 @@ func (e *Engine) restoreOwn(ctx context.Context, t registry.Task, c Copy, since 
 		kept = fmt.Sprintf("%s changed %s in %s, and %s since it began, so the factory cannot tell its changes from others' "+
 			"and left them: keep or undo them, then let the task go on", what, list, c.Name, who)
 		e.event(ctx, t.ID, "check", registry.PhaseFail, "left "+list+" in "+c.Name+" as it is: "+who)
+		e.keepFor(t, c, since, dirty, true, kept)
 		return nil, kept, nil
 	}
 	e.event(ctx, t.ID, "check", registry.PhaseBegin, "restores "+list+" in "+c.Name+": "+what+" changed it")

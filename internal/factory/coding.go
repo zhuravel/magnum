@@ -431,9 +431,12 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 	}
 	// An ended check whose failure is yours comes first: the tree may hold
 	// what it left for you (changes it could not tell from others'), which
-	// the writer must not be asked to commit.
+	// the writer must not be asked to commit. It is taken then: the task goes
+	// to NEEDS YOU, and once it goes on its head is checked afresh, after
+	// what the check kept is settled (settleKept).
 	if res, ok := e.endedResult(t.ID); ok && res.Err == nil && res.forYou() {
 		e.clearPrecheckWait(ctx, t)
+		e.dropCheck(t.ID)
 		return &endProblem{file: precheckFile, why: res.why(), operator: true}, "", false, nil
 	}
 	repo, err := e.factoryRepo(*t)

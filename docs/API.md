@@ -11544,12 +11544,14 @@ func (e *Engine) RunLocked(ctx context.Context) error
     failed exit only) starts the daemon again only after a crash.
 
 func (e *Engine) Tick(ctx context.Context) error
-    Tick runs one pass of the loop: the holds (herdr, disk and memory, then
-    the infrastructure hold and a MySQL ping before a pass that advances), the
-    requests, then each live task's advance under its own panic guard (safely).
-    During an infrastructure or a herdr hold no task advances except on the
-    hold's tries; a failure that a hold covers costs its task nothing. The
-    returned error joins what failed, for the log; each step records its own.
+    Tick runs one pass of the loop: the holds (herdr, disk and memory,
+    then the infrastructure hold and a MySQL ping before a pass that advances),
+    the requests, then each live task's advance under its own panic guard
+    (safely). During an infrastructure or a herdr hold no task advances except
+    on the hold's tries, and while herdr does not answer no copy a base run left
+    detached is swept (sweepDetached, each under safely too); a failure that a
+    hold covers costs its task nothing. The returned error joins what failed,
+    for the log; each step records its own.
 
 type ErrRunning struct {
 	PID  int
@@ -14371,6 +14373,12 @@ func (c *Client) ChangedBetween(ctx context.Context, dir, from, to string) ([]st
     ChangedPaths it names a file an earlier head changed and a rewritten branch
     left as the base has it. nil when the trees are the same.
 
+func (c *Client) ChangedFiles(ctx context.Context, dir, base, head string) ([]FileChange, error)
+    ChangedFiles lists the files head changed relative to its merge base with
+    base, each with its status (git diff --name-status base...head; a rename as
+    a deletion plus an addition), in git's order; nil when head changes nothing.
+    Unlike DiffLines it reads no patch, so a change of any size fits.
+
 func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
     ChangedPaths lists the files head changed relative to its merge base with
     base (git diff base...head), optionally limited to pathspecs such as "db/".
@@ -14440,9 +14448,11 @@ func (c *Client) FastForward(ctx context.Context, dir, to string) error
     a commit ahead of it (`git merge --ff-only --no-autostash <to>`): a factory
     task's branch with no commit of its own, to a fresh origin/<base>. The work
     tree's changes the move does not touch are carried, staged ones staged; one
-    it would overwrite makes git refuse, which is an error, and nothing moves.
-    A to that HEAD is not an ancestor of is ErrNotFastForward and a detached
-    HEAD ErrNotOnBranch, nothing moved; to at HEAD is a no-op.
+    it would overwrite makes git refuse, which is an error, and nothing moves,
+    as does a file git does not track at a path the move writes, an ignored
+    one included (--no-overwrite-ignore; MergeFFOnly, the skill editor's, keeps
+    git's default). A to that HEAD is not an ancestor of is ErrNotFastForward
+    and a detached HEAD ErrNotOnBranch, nothing moved; to at HEAD is a no-op.
 
 func (c *Client) FetchBranch(ctx context.Context, mainClone, base string) error
     FetchBranch updates refs/remotes/origin/<base> in mainClone from the remote.
@@ -14563,6 +14573,14 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
     of (a rename counts as the deletion of its old path), whose history the base
     holds.
 
+func (c *Client) NotTracked(ctx context.Context, dir string) ([]string, error)
+    NotTracked lists what git tracks none of in the work tree whose top is dir
+    (`git ls-files --others --directory`): untracked and ignored files alike,
+    and a directory git tracks nothing in as one entry ending in "/", relative
+    to the top, in git's order. A switch that writes one of their paths loses
+    it, which the factory reads before it switches a copy. It is read-only and
+    does not take the index lock.
+
 func (c *Client) OwnDiffID(ctx context.Context, dir, base, head string) (string, error)
     OwnDiffID is the verbatim patch id of head's own diff against base:
     the change from their merge base to head (`git diff-tree --patch --unified=0
@@ -14662,8 +14680,9 @@ func (c *Client) Switch(ctx context.Context, dir, branch string) error
     Switch checks out branch, a local branch that exists, in the work tree at
     dir (`git switch --no-guess <branch>`): never a new branch that tracks a
     remote one of the name, never a discarded change (one the switch would
-    overwrite makes git refuse, and so does a branch another worktree has
-    checked out).
+    overwrite makes git refuse, and so do a file git does not track at a path
+    the switch writes, an ignored one included, --no-overwrite-ignore, and a
+    branch another worktree has checked out).
 
 func (c *Client) SwitchCreate(ctx context.Context, dir, branch, start string) error
     SwitchCreate creates branch at start in the work tree at dir and checks it
@@ -14671,11 +14690,21 @@ func (c *Client) SwitchCreate(ctx context.Context, dir, branch, start string) er
     from origin/<base>, tracking nothing. A branch of that name, in any worktree
     of the repository, is ErrBranchExists, and nothing moves. Local changes
     carry over as git carries them; one the switch would overwrite makes git
-    refuse.
+    refuse, and so does a file git does not track at a path the switch writes,
+    an ignored one included (--no-overwrite-ignore).
 
 func (c *Client) SwitchDetach(ctx context.Context, dir, ref string) error
     SwitchDetach detaches dir's HEAD at ref, discarding tracked changes
     (untracked files stay). Callers verify the result with RevParse.
+
+func (c *Client) SwitchDetachKeepUntracked(ctx context.Context, dir, ref string) error
+    SwitchDetachKeepUntracked detaches dir's HEAD at ref as SwitchDetach does,
+    discarding tracked changes, but never writes over a file git does not track:
+    an untracked one in its way, or in a directory it would remove, makes git
+    refuse even with --discard-changes, and --no-overwrite-ignore makes it
+    refuse an ignored one too (git's default, which SwitchDetach keeps for the
+    slots, writes over it). Nothing moves then. The factory's base runs detach a
+    copy, whose files are yours, with it.
 
 func (c *Client) TreeFiles(ctx context.Context, dir, rev string, pathspecs ...string) ([]string, error)
     TreeFiles lists the files of rev (a commit) that pathspecs match,
@@ -14780,6 +14809,13 @@ type Commit struct {
 	Subject string // the message's subject line ("" when the message is empty)
 }
     Commit is one commit of a file's log (FileLog).
+
+type FileChange struct {
+	Path   string
+	Status byte
+}
+    FileChange is one file of ChangedFiles: its path and its status letter ('A'
+    added, 'D' deleted, 'M' modified, 'T' its type changed).
 
 type FileLines struct {
 	Path string

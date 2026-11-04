@@ -10,7 +10,10 @@ package gitx
 // own diff against its base as one patch id, and a replay of a checkout's
 // own commits onto a branch's new tip that aborts itself on a conflict.
 // And the factory's: a task's branch started in its copy (SwitchCreate) and
-// checked out again in the copy a later claim gives it (Switch).
+// checked out again in the copy a later claim gives it (Switch), which,
+// with its fast-forward (FastForward), never write over a file git does not
+// track, an ignored one included (--no-overwrite-ignore; git's default
+// writes over an ignored file): the copy's files are yours.
 // Like every gitx command they run none of the clone's hooks (hooksOff).
 
 import (
@@ -47,7 +50,8 @@ var (
 // branch, from origin/<base>, tracking nothing. A branch of that name, in
 // any worktree of the repository, is ErrBranchExists, and nothing moves.
 // Local changes carry over as git carries them; one the switch would
-// overwrite makes git refuse.
+// overwrite makes git refuse, and so does a file git does not track at a
+// path the switch writes, an ignored one included (--no-overwrite-ignore).
 func (c *Client) SwitchCreate(ctx context.Context, dir, branch, start string) error {
 	if err := errors.Join(checkBranch("branch", branch), checkRev("start", start)); err != nil {
 		return err
@@ -59,7 +63,7 @@ func (c *Client) SwitchCreate(ctx context.Context, dir, branch, start string) er
 		return err
 	}
 	_, err := c.git(ctx, dir, call{label: "switch -c " + branch + " " + start, mutates: true, timeout: worktreeTimeout},
-		"switch", "--quiet", "--no-track", "-c", branch, start)
+		"switch", "--quiet", "--no-track", "--no-overwrite-ignore", "-c", branch, start)
 	if ee, ok := errors.AsType[*execx.ExitError](err); ok && strings.Contains(ee.Stderr, "already exists") {
 		return fmt.Errorf("gitx: switch -c %s: %w", branch, ErrBranchExists) // created since the check
 	}
@@ -69,14 +73,15 @@ func (c *Client) SwitchCreate(ctx context.Context, dir, branch, start string) er
 // Switch checks out branch, a local branch that exists, in the work tree
 // at dir (`git switch --no-guess <branch>`): never a new branch that tracks
 // a remote one of the name, never a discarded change (one the switch would
-// overwrite makes git refuse, and so does a branch another worktree has
-// checked out).
+// overwrite makes git refuse, and so do a file git does not track at a path
+// the switch writes, an ignored one included, --no-overwrite-ignore, and a
+// branch another worktree has checked out).
 func (c *Client) Switch(ctx context.Context, dir, branch string) error {
 	if err := checkBranch("branch", branch); err != nil {
 		return err
 	}
 	_, err := c.git(ctx, dir, call{label: "switch " + branch, mutates: true, timeout: worktreeTimeout},
-		"switch", "--quiet", "--no-guess", branch)
+		"switch", "--quiet", "--no-guess", "--no-overwrite-ignore", branch)
 	return err
 }
 
@@ -243,7 +248,10 @@ func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) err
 // task's branch with no commit of its own, to a fresh origin/<base>. The
 // work tree's changes the move does not touch are carried, staged ones
 // staged; one it would overwrite makes git refuse, which is an error, and
-// nothing moves. A to that HEAD is not an ancestor of is ErrNotFastForward
+// nothing moves, as does a file git does not track at a path the move
+// writes, an ignored one included (--no-overwrite-ignore; MergeFFOnly, the
+// skill editor's, keeps git's default). A to that HEAD is not an ancestor
+// of is ErrNotFastForward
 // and a detached HEAD ErrNotOnBranch, nothing moved; to at HEAD is a no-op.
 func (c *Client) FastForward(ctx context.Context, dir, to string) error {
 	if err := checkRev("target", to); err != nil {
@@ -273,7 +281,7 @@ func (c *Client) FastForward(ctx context.Context, dir, to string) error {
 		return fmt.Errorf("gitx: merge --ff-only %s: %w", to, ErrNotFastForward)
 	}
 	_, err = c.git(ctx, dir, call{label: "merge --ff-only " + to, mutates: true, timeout: commitTimeout},
-		"merge", "--ff-only", "--quiet", "--no-verify", "--no-autostash", target)
+		"merge", "--ff-only", "--quiet", "--no-verify", "--no-autostash", "--no-overwrite-ignore", target)
 	return err
 }
 

@@ -258,11 +258,12 @@ type Engine struct {
 	checks     map[int64]*headCheck
 	checkNotes map[int64]string
 	checkFails map[int64]int // checks in a row that did not run to their end, by task
-	// keptSaid is the last copy kept for you each task's resumeDetached
-	// said (an event and an alert once, not each tick): the loop's own.
-	keptSaid map[int64]string
-	lockPoll time.Duration
-	after    func(d time.Duration) <-chan time.Time
+	// keptCopies are the copies base runs left detached that resumeDetached
+	// keeps for you, by task (keptCopy: said once, looked at again only
+	// when due, keptDue): the loop's own.
+	keptCopies map[int64]keptCopy
+	lockPoll   time.Duration
+	after      func(d time.Duration) <-chan time.Time
 
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
@@ -306,7 +307,7 @@ func New(d Deps) *Engine {
 		checks:     map[int64]*headCheck{},
 		checkNotes: map[int64]string{},
 		checkFails: map[int64]int{},
-		keptSaid:   map[int64]string{},
+		keptCopies: map[int64]keptCopy{},
 		lockPoll:   specsLockPoll,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
@@ -479,18 +480,19 @@ func (e *Engine) signals(ctx context.Context, sigs <-chan os.Signal, stop chan<-
 
 // startup runs once before the first tick. It restores the branch of each
 // copy a base run left detached when the daemon stopped in its middle
-// (resumeDetached: before anything else runs in that copy), counts the
-// heavy stages whose attempts still run (heavy) and ends the copies'
-// servers a stopped daemon left (Copies.Reconcile: no stage owns one after
-// a restart); the recovery of what else a stopped daemon left comes on top
-// of it.
+// (resumeDetached: before anything else runs in that copy, under a task
+// step's panic guard, safely), counts the heavy stages whose attempts still
+// run (heavy) and ends the copies' servers a stopped daemon left
+// (Copies.Reconcile: no stage owns one after a restart); the recovery of
+// what else a stopped daemon left comes on top of it.
 func (e *Engine) startup(ctx context.Context) error {
 	tasks, err := e.reg.Tasks(ctx)
 	if err != nil {
 		return fmt.Errorf("factory startup: %w", err)
 	}
 	for _, t := range tasks {
-		if err := e.resumeDetached(ctx, t); err != nil && !errors.Is(err, ErrHeld) {
+		err := e.safely(ctx, t, func(ctx context.Context) error { return e.resumeDetached(ctx, t) })
+		if err != nil && !errors.Is(err, ErrHeld) && !errors.Is(err, errPanicked) {
 			e.log.Warn("restore a copy a base run left detached", "task", t.ID, "err", err)
 		}
 	}
@@ -510,9 +512,10 @@ var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 // the infrastructure hold and a MySQL ping before a pass that advances),
 // the requests, then each live task's advance under its own panic guard
 // (safely). During an infrastructure or a herdr hold no task advances
-// except on the hold's tries; a failure that a hold covers costs its task
-// nothing. The returned error joins what failed, for the log; each step
-// records its own.
+// except on the hold's tries, and while herdr does not answer no copy a
+// base run left detached is swept (sweepDetached, each under safely too); a
+// failure that a hold covers costs its task nothing. The returned error
+// joins what failed, for the log; each step records its own.
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
@@ -527,9 +530,11 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.sweepHeavy(ctx, tasks)
 	e.sweepClaims(ctx, tasks)
 	e.sweepChecks(tasks)
-	e.sweepDetached(ctx, tasks)
 	e.payReleaseDebts(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
+	if herdrUp { // herdr says who is in a copy: without it no copy is touched
+		e.sweepDetached(ctx, tasks)
+	}
 	e.pressure(ctx, now, tasks)
 	infra, held := e.holds[HoldInfra]
 	advance := herdrUp && (!held || !now.Before(infra.Next))
@@ -601,12 +606,17 @@ func live(tasks []registry.Task) []registry.Task {
 // waits for Jira before its first stage tries Jira instead (retryJira), and
 // one whose key has no ticket.md yet (your answer linked it) reads its
 // ticket first (linkedTicket). A copy a base run left detached is restored
-// before anything else (resumeDetached).
+// before anything else (resumeDetached), and what a check left in the copy
+// for you is settled (settleKept): put back under its guard, or the task
+// needs you again for it, never the writer.
 func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 	if t.Stage == "" && t.State == registry.TaskWaiting && t.WaitsWho == waitJira {
 		return e.retryJira(ctx, t)
 	}
 	if err := e.resumeDetached(ctx, t); err != nil {
+		return err
+	}
+	if err := e.settleKept(ctx, t); err != nil {
 		return err
 	}
 	kind, ok := e.cfg.Factory.Kinds[t.Kind]

@@ -4,7 +4,8 @@ package gitx
 // diff with its line counts, its lines and its hunks, whole-word uses of a
 // name in a revision's tree, the files of a revision's directories and a
 // file as a revision has it. Each reads the object store only, never the
-// work tree, whose files a role may have changed.
+// work tree, whose files a role may have changed. And the factory's: the
+// files a head changes, each with how (ChangedFiles), whatever its size.
 
 import (
 	"context"
@@ -93,6 +94,47 @@ func (c *Client) DiffStat(ctx context.Context, dir, base, head string) ([]FileSt
 			s.Added, s.Removed = a, r
 		}
 		out = append(out, s)
+	}
+	return out, nil
+}
+
+// FileChange is one file of ChangedFiles: its path and its status letter
+// ('A' added, 'D' deleted, 'M' modified, 'T' its type changed).
+type FileChange struct {
+	Path   string
+	Status byte
+}
+
+// ChangedFiles lists the files head changed relative to its merge base with
+// base, each with its status (git diff --name-status base...head; a rename
+// as a deletion plus an addition), in git's order; nil when head changes
+// nothing. Unlike DiffLines it reads no patch, so a change of any size fits.
+func (c *Client) ChangedFiles(ctx context.Context, dir, base, head string) ([]FileChange, error) {
+	if err := checkRange(base, head); err != nil {
+		return nil, err
+	}
+	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("diff --name-status %s...%s", base, head)},
+		"diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", base+"..."+head, "--")
+	if err != nil {
+		return nil, rangeErr(err, base, head)
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: diff --name-status %s...%s: more than %d bytes", base, head, execx.MaxOutput)
+	}
+	// Each file is "<status>" NUL "<path>" NUL.
+	fields := strings.Split(strings.TrimSuffix(string(res.Stdout), "\x00"), "\x00")
+	if len(fields) == 1 && fields[0] == "" {
+		return nil, nil
+	}
+	if len(fields)%2 != 0 {
+		return nil, fmt.Errorf("gitx: diff --name-status %s...%s: unexpected output", base, head)
+	}
+	out := make([]FileChange, 0, len(fields)/2)
+	for i := 0; i < len(fields); i += 2 {
+		if fields[i] == "" || fields[i+1] == "" {
+			return nil, fmt.Errorf("gitx: diff --name-status %s...%s: unexpected record", base, head)
+		}
+		out = append(out, FileChange{Path: fields[i+1], Status: fields[i][0]})
 	}
 	return out, nil
 }

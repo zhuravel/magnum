@@ -793,3 +793,105 @@ func TestTreeOfIsTheCommitsTree(t *testing.T) {
 		t.Fatal("an option as the revision was taken")
 	}
 }
+
+// The factory's switches of a copy never write over a file git does not
+// track, an ignored one included (git's default writes over an ignored
+// file): Switch, SwitchCreate, FastForward and SwitchDetachKeepUntracked
+// refuse, nothing moves, and the file stays as it is. SwitchDetach, the
+// slots', keeps git's default.
+func TestTheFactorysSwitchesNeverOverwriteAnIgnoredFile(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	c := fx.clone
+	start := fx.commit(c, ".gitignore", "notes.txt\n", "ignore notes")
+	fx.git(c, "switch", "--quiet", "-c", "tracks")
+	fx.write(c, "notes.txt", "tracked\n")
+	fx.git(c, "add", "-f", "--", "notes.txt")
+	fx.git(c, "commit", "--quiet", "-m", "tracks notes")
+	tracks := fx.git(c, "rev-parse", "HEAD")
+	fx.git(c, "switch", "--quiet", "main")
+	fx.write(c, "notes.txt", "mine\n")
+	kept := func(what string) {
+		t.Helper()
+		if got, _ := os.ReadFile(filepath.Join(c, "notes.txt")); string(got) != "mine\n" {
+			t.Fatalf("%s wrote over the ignored notes.txt: %q", what, got)
+		}
+		if got := fx.git(c, "rev-parse", "HEAD"); got != start {
+			t.Fatalf("%s moved HEAD to %s, want it at %s", what, got, start)
+		}
+	}
+	if err := fx.c.Switch(ctx, c, "tracks"); err == nil {
+		t.Fatal("Switch over an ignored file succeeded")
+	}
+	kept("Switch")
+	if err := fx.c.SwitchCreate(ctx, c, "task-PR-12347", tracks); err == nil {
+		t.Fatal("SwitchCreate over an ignored file succeeded")
+	}
+	kept("SwitchCreate")
+	if _, err := fx.c.RevParse(ctx, c, "refs/heads/task-PR-12347"); !errors.Is(err, ErrNoSuchRef) {
+		t.Fatalf("the refused SwitchCreate left its branch: %v", err)
+	}
+	if err := fx.c.FastForward(ctx, c, tracks); err == nil {
+		t.Fatal("FastForward over an ignored file succeeded")
+	}
+	kept("FastForward")
+	if err := fx.c.SwitchDetachKeepUntracked(ctx, c, tracks); err == nil {
+		t.Fatal("SwitchDetachKeepUntracked over an ignored file succeeded")
+	}
+	kept("SwitchDetachKeepUntracked")
+	fx.write(c, "untracked.txt", "mine too\n")
+	fx.git(c, "add", "-f", "--", "untracked.txt")
+	fx.git(c, "commit", "--quiet", "-m", "tracks untracked.txt")
+	other := fx.git(c, "rev-parse", "HEAD")
+	fx.git(c, "reset", "--quiet", "--hard", start)
+	fx.write(c, "untracked.txt", "mine\n")
+	if err := fx.c.SwitchDetachKeepUntracked(ctx, c, other); err == nil {
+		t.Fatal("SwitchDetachKeepUntracked over an untracked file succeeded")
+	}
+	if got, _ := os.ReadFile(filepath.Join(c, "untracked.txt")); string(got) != "mine\n" {
+		t.Fatalf("SwitchDetachKeepUntracked wrote over the untracked file: %q", got)
+	}
+
+	if err := fx.c.SwitchDetach(ctx, c, tracks); err != nil {
+		t.Fatalf("SwitchDetach: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(c, "notes.txt")); string(got) != "tracked\n" {
+		t.Fatalf("SwitchDetach left notes.txt %q; want git's default for the slots, the branch's file", got)
+	}
+}
+
+// ChangedFiles names each file a head changes with its status, a rename as
+// a deletion and an addition, whatever the size of its patch; NotTracked
+// names what the work tree has that git tracks none of, ignored files too,
+// a directory git tracks nothing in as one entry.
+func TestChangedFilesAndNotTracked(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	c := fx.clone
+	fx.commit(c, ".gitignore", "tmp/\n", "ignore tmp")
+	base := fx.git(c, "rev-parse", "HEAD")
+	fx.git(c, "mv", "README.md", "GUIDE.md")
+	fx.write(c, "big.txt", strings.Repeat("0123456789abcdef\n", (execx.MaxOutput+1<<20)/17))
+	fx.git(c, "add", "-A")
+	fx.git(c, "commit", "--quiet", "-m", "a rename and a large file")
+	head := fx.git(c, "rev-parse", "HEAD")
+	got, err := fx.c.ChangedFiles(ctx, c, base, head)
+	want := []FileChange{{Path: "GUIDE.md", Status: 'A'}, {Path: "README.md", Status: 'D'}, {Path: "big.txt", Status: 'A'}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("ChangedFiles = %v, %v; want %v", got, err, want)
+	}
+	if got, err := fx.c.ChangedFiles(ctx, c, head, head); err != nil || got != nil {
+		t.Fatalf("ChangedFiles of no change = %v, %v", got, err)
+	}
+	if _, err := fx.c.ChangedFiles(ctx, c, "--all", head); err == nil {
+		t.Fatal("an option as the base was taken")
+	}
+
+	fx.write(c, "notes.txt", "mine\n")
+	fx.write(c, "tmp/cache/a", "ignored\n")
+	fx.write(c, "new/b.txt", "untracked\n")
+	others, err := fx.c.NotTracked(ctx, c)
+	if wantOthers := []string{"new/", "notes.txt", "tmp/"}; err != nil || !slices.Equal(others, wantOthers) {
+		t.Fatalf("NotTracked = %q, %v; want %q", others, err, wantOthers)
+	}
+}

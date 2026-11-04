@@ -2,7 +2,10 @@ package gitx
 
 import (
 	"context"
+	"fmt"
 	"strings"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // Status summarizes `git status --porcelain` of a working tree. Ignored files
@@ -69,6 +72,29 @@ func (c *Client) StatusPaths(ctx context.Context, dir string) ([]StatusEntry, er
 		return nil, err
 	}
 	return parseStatusZ(res.Stdout), nil
+}
+
+// NotTracked lists what git tracks none of in the work tree whose top is
+// dir (`git ls-files --others --directory`): untracked and ignored files
+// alike, and a directory git tracks nothing in as one entry ending in "/",
+// relative to the top, in git's order. A switch that writes one of their
+// paths loses it, which the factory reads before it switches a copy. It is
+// read-only and does not take the index lock.
+func (c *Client) NotTracked(ctx context.Context, dir string) ([]string, error) {
+	res, err := c.git(ctx, dir, call{label: "ls-files --others --directory"}, "ls-files", "-z", "--others", "--directory")
+	if err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: ls-files --others in %s: more than %d bytes", dir, execx.MaxOutput)
+	}
+	var out []string
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 // parseStatusZ parses `git status --porcelain=v1 -z`: NUL-terminated "XY path"

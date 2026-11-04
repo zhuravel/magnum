@@ -403,6 +403,22 @@ func (c *Client) SwitchDetach(ctx context.Context, dir, ref string) error {
 	return err
 }
 
+// SwitchDetachKeepUntracked detaches dir's HEAD at ref as SwitchDetach does,
+// discarding tracked changes, but never writes over a file git does not
+// track: an untracked one in its way, or in a directory it would remove,
+// makes git refuse even with --discard-changes, and --no-overwrite-ignore
+// makes it refuse an ignored one too (git's default, which SwitchDetach
+// keeps for the slots, writes over it). Nothing moves then. The factory's
+// base runs detach a copy, whose files are yours, with it.
+func (c *Client) SwitchDetachKeepUntracked(ctx context.Context, dir, ref string) error {
+	if err := checkRev("ref", ref); err != nil {
+		return err
+	}
+	_, err := c.git(ctx, dir, call{label: "switch --detach " + ref, mutates: true, timeout: worktreeTimeout},
+		"switch", "--quiet", "--discard-changes", "--no-overwrite-ignore", "--detach", ref)
+	return err
+}
+
 // ResetPlaceholder points the slot's placeholder branch at origin/<base>
 // without upstream tracking, discarding tracked changes. It is idempotent.
 // `switch -C --no-track` only stops git from creating tracking; a branch that

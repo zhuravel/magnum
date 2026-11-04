@@ -64,9 +64,12 @@ var errOverCap = errors.New("the precheck's cap")
 // comment). A precheck that does not pass is a result with Why, nil error;
 // the error is a wait (somebody at work in the copy), the caller's context
 // ending, or a failure to run (git). It started on a clean tree (branchHead),
-// so whatever its commands changed in tracked files (Rails dumps
-// db/schema.rb after a migration) is its own: it puts those back as HEAD has
-// them at its end, however it ended, and says so. It writes precheck.md.
+// and looks at it again after its wait for the spec lock (afterWait: no
+// command runs over a change made while it waited), so whatever its commands
+// changed in tracked files (Rails dumps db/schema.rb after a migration) is
+// its own unless somebody else could have changed the copy since: it puts
+// those back as HEAD has them at its end, however it ended, and says so, or
+// keeps them for you (keep). It writes precheck.md.
 func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (PrecheckResult, error) {
 	repo, err := e.factoryRepo(t)
 	if err != nil {
@@ -108,6 +111,13 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 			return PrecheckResult{}, err
 		}
 		defer unlock()
+		// No command runs over what changed while it waited (afterWait).
+		if started, err = e.afterWait(ctx, t, c, started, "check", "the precheck"); err != nil {
+			if k, ok := errors.AsType[keptChanges](err); ok {
+				return PrecheckResult{Why: "precheck: " + k.why, ForYou: true}, nil
+			}
+			return PrecheckResult{}, err
+		}
 	}
 
 	limit := capOf(repo)
@@ -208,29 +218,30 @@ type precheckRun struct {
 	report     strings.Builder
 	// err is a failure to run that ends the precheck (git, a start failure
 	// of the moment); overCap a command that did not end within the cap
-	// (its own bound); started when it began, before its waits, on a clean
-	// tree; restoreErr a failed put-back of its own changes (restoreOwn).
+	// (its own bound); started when it began on a clean tree, before its
+	// waits, or when it looked at the tree again after them (afterWait);
+	// restoreErr a failed put-back of its own changes (restoreOwn), after
+	// which it runs nothing more.
 	err        error
 	overCap    bool
 	started    time.Time
 	restoreErr error
-	// kept: it left changes it could not vouch for; it runs nothing more
-	// and puts nothing back after that.
+	// kept: it left changes for you (keep); it runs nothing more and puts
+	// nothing back after that.
 	kept bool
 }
 
 // restoreOwn puts back what the precheck's commands changed so far
 // (Engine.restoreOwn, guarded), and says so in the report: kept changes
 // (somebody else could have made them) fail the precheck for you, naming
-// them; a failed put-back is restoreErr. It reports whether the tree is now
-// as the branch has it.
+// them whatever failed before (keep); a failed put-back is restoreErr. It
+// reports whether the tree is now as the branch has it.
 func (p *precheckRun) restoreOwn() bool {
 	restored, kept, err := p.e.restoreOwn(p.ctx, p.t, p.c, p.started, "the precheck's commands")
 	switch {
 	case kept != "":
 		p.say("\n**Left as it is: %s.**\n", kept)
-		p.failForYou(kept)
-		p.kept = true
+		p.keep(kept)
 		return false
 	case err != nil:
 		p.say("\n**The put-back failed: %s.**\n", err)
@@ -248,9 +259,23 @@ func (p *precheckRun) restoreOwn() bool {
 func (p *precheckRun) say(format string, a ...any) { fmt.Fprintf(&p.report, format, a...) }
 
 // stopped reports whether the precheck ends here: its cap, the caller's
-// context, a failure to run, or changes it left for you.
+// context, a failure to run, changes it left for you, or a put-back of its
+// own that failed (no command runs on a tree it could not put back).
 func (p *precheckRun) stopped() bool {
-	return p.ctx.Err() != nil || p.err != nil || p.overCap || p.kept
+	return p.ctx.Err() != nil || p.err != nil || p.overCap || p.kept || p.restoreErr != nil
+}
+
+// keep fails the precheck for you with why, changes it left for you, and
+// ends it: it runs nothing more and puts nothing back. The changes are named
+// whatever failed before: a failure for you that came first stays first, and
+// why follows it.
+func (p *precheckRun) keep(why string) {
+	p.kept = true
+	if p.res.ForYou {
+		p.res.Why += "; and " + why
+		return
+	}
+	p.failForYou(why)
 }
 
 // fail fails the precheck with why, its first failure's reason, unless a
@@ -477,7 +502,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		base, problem, err := p.e.baseRun(p.ctx, p.t, p.c, p.started, p.base, p.head, nil, baseScript, p.limit)
 		if k, ok := errors.AsType[keptChanges](err); ok {
 			p.say("\n**Not run on the base: %s.**\n", k.why)
-			p.failForYou(k.why)
+			p.keep(k.why)
 			return
 		}
 		switch {
