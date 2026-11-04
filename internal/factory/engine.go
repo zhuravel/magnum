@@ -54,7 +54,7 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // and the shift of every turn deadline after the Mac slept.
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
-	Launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error
+	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
@@ -70,16 +70,13 @@ type Runtime interface {
 var _ Runtime = (*runtime.Runtime)(nil)
 
 // Copy is a task's copy of a repository: its name and path, its number
-// (copy {n}), the port of its server and its environment.
-type Copy struct {
-	Name, Path   string
-	Number, Port int
-	Env          map[string]string
-}
+// (copy {n}), the port of its server and its environment (runtime.Copy: a
+// launch runs the task's panes in it).
+type Copy = runtime.Copy
 
-// Copies are the repositories' copies the tasks work in: a claim for a
-// task (the copy it used last first), its release, how many are free, the
-// copy's local server, and the reconcile of servers and copies after a
+// Copies are the repositories' copies the tasks work in (copies.go): a
+// claim for a task (the copy it used last first), its release, how many are
+// free, the copy's local server, and the reconcile of the servers after a
 // restart.
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
@@ -392,9 +389,16 @@ func (e *Engine) signals(ctx context.Context, sigs <-chan os.Signal, stop chan<-
 }
 
 // startup runs once before the first tick. It counts the heavy stages
-// whose attempts still run (heavy); the recovery of what a stopped daemon
-// left comes on top of it.
+// whose attempts still run (heavy) and ends the copies' servers a stopped
+// daemon left (Copies.Reconcile: no stage owns one after a restart); the
+// recovery of what else a stopped daemon left comes on top of it.
 func (e *Engine) startup(ctx context.Context) error {
+	if e.d.Copies != nil {
+		if err := e.d.Copies.Reconcile(ctx); err != nil {
+			e.log.Warn("reconcile the copies' servers", "err", err)
+			e.event(ctx, 0, "server", registry.PhaseFail, "reconcile: "+err.Error())
+		}
+	}
 	return e.adoptHeavy(ctx)
 }
 
@@ -671,7 +675,7 @@ func (e *Engine) takeEvents(id int64) []runtime.Event {
 // daemon drains or a hold of the machine holds launches (heldError, which
 // costs the task nothing; the task waits with the hold's reason). A
 // successful launch clears such a wait.
-func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error {
+func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error {
 	if who, what, ok := e.mayLaunch(); !ok {
 		if who != holdRestart {
 			e.waitOn(ctx, t, who, what)
@@ -681,7 +685,7 @@ func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt
 	if e.d.Runtime == nil {
 		return heldError{who: "agent", what: "this build runs no agents yet"}
 	}
-	if err := e.d.Runtime.Launch(ctx, t, a, copyPath, roles); err != nil {
+	if err := e.d.Runtime.Launch(ctx, t, a, c, roles); err != nil {
 		// A launch that waits on Codex's budget, the memory or a CLI's pause
 		// costs the task nothing either: it waits with the reason.
 		if w, ok := errors.AsType[*runtime.WaitError](err); ok {
@@ -694,6 +698,36 @@ func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt
 		e.waitOn(ctx, t, "", "")
 	}
 	return nil
+}
+
+// claimCopy is how a stage claims the task's copy (Copies.Claim) and
+// notes its name on the task. A task no copy is free for waits at no cost
+// (ErrNoCopy is held) with the copies' reason, "copy: all 3 busy", until a
+// claim goes through and clears that wait.
+func (e *Engine) claimCopy(ctx context.Context, t registry.Task) (Copy, error) {
+	if e.d.Copies == nil {
+		return Copy{}, heldError{who: waitCopy, what: "this build has no copies yet"}
+	}
+	c, err := e.d.Copies.Claim(ctx, t)
+	if nc, ok := errors.AsType[noCopy](err); ok {
+		e.waitOn(ctx, t, waitCopy, nc.what)
+		return Copy{}, err
+	}
+	if err != nil {
+		return Copy{}, err
+	}
+	if t.Copy != c.Name || t.WaitsWho == waitCopy {
+		if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
+			u.Set("copy", c.Name)
+			if t.WaitsWho == waitCopy {
+				u.Set("waits_who", "")
+				u.Set("waits_what", "")
+			}
+		}); err != nil {
+			return Copy{}, fmt.Errorf("note copy %s on %s: %w", c.Name, TaskKey(t), err)
+		}
+	}
+	return c, nil
 }
 
 // beginEffect is how a stage begins an external effect (a push, a PR):

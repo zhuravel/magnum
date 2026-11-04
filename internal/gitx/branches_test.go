@@ -632,3 +632,53 @@ func TestReplayConflictsNamesWhereACommitNoLongerAppliesAndMovesNothing(t *testi
 		t.Fatalf("the root commit = %v, nil; want an error", got)
 	}
 }
+
+// SwitchCreate starts a task's branch in a copy: checked out at its start,
+// tracking nothing. A branch of that name that exists already (an earlier
+// attempt's, another task's) is ErrBranchExists, and neither the checkout
+// nor the branch moves. Switch checks an existing branch out again.
+func TestSwitchCreateRefusesAnExistingBranch(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	if err := fx.c.SwitchCreate(ctx, fx.clone, "task-PR-12345", "origin/main"); err != nil {
+		t.Fatalf("SwitchCreate: %v", err)
+	}
+	if b, err := fx.c.CurrentBranch(ctx, fx.clone); err != nil || b != "task-PR-12345" {
+		t.Fatalf("CurrentBranch = %q, %v", b, err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "HEAD"); got != fx.base {
+		t.Fatalf("HEAD = %s, want origin/main %s", got, fx.base)
+	}
+	if res, err := fx.r.Run(ctx, gitCmd(fx.clone, "config", "--get", "branch.task-PR-12345.merge")); err == nil {
+		t.Fatalf("the new branch tracks %q", res.Out())
+	}
+	work := fx.commit(fx.clone, "app/fix.rb", "fixed = true\n", "the task's work")
+	fx.git(fx.clone, "switch", "--quiet", "main")
+
+	err := fx.c.SwitchCreate(ctx, fx.clone, "task-PR-12345", "origin/main")
+	if !errors.Is(err, ErrBranchExists) {
+		t.Fatalf("SwitchCreate of an existing branch = %v, want ErrBranchExists", err)
+	}
+	if b, _ := fx.c.CurrentBranch(ctx, fx.clone); b != "main" {
+		t.Fatalf("the refused switch left the checkout on %q", b)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "task-PR-12345"); got != work {
+		t.Fatalf("the refused switch moved the branch to %s, want %s", got, work)
+	}
+
+	if err := fx.c.Switch(ctx, fx.clone, "task-PR-12345"); err != nil {
+		t.Fatalf("Switch: %v", err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "HEAD"); got != work {
+		t.Fatalf("after Switch HEAD = %s, want the task's work %s", got, work)
+	}
+	if err := fx.c.Switch(ctx, fx.clone, "no-such-branch"); err == nil {
+		t.Fatal("Switch to a branch that does not exist succeeded")
+	}
+	if err := fx.c.SwitchCreate(ctx, fx.clone, "-x", "origin/main"); err == nil {
+		t.Fatal("an option as the branch was taken")
+	}
+	if err := fx.c.SwitchCreate(ctx, fx.clone, "task-2", "--orphan"); err == nil {
+		t.Fatal("an option as the start was taken")
+	}
+}

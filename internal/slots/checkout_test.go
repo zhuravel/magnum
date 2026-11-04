@@ -314,6 +314,36 @@ func TestCheckoutRefusals(t *testing.T) {
 	}
 }
 
+// refs/magnum/pr/N in a slot's main clone is PR #N of the slot's own
+// repository. A slot lent to a row of another repository (the factory's
+// copies hold its tasks' owner rows, repository factory/<name>, numbered by
+// task) keeps that ref at its release: the review daemon's slots of the same
+// main clone still read it.
+func TestReleaseKeepsThePRRefOfTheSlotsRepositoryForAnotherRepositorysRow(t *testing.T) {
+	h := newHarness(t)
+	sl := h.provisioned(1)
+	gitT(t, h.main, "update-ref", gitx.PRRef(7), h.shaPR7) // PR #7 of talkable/talkable, fetched for its review
+	other, err := h.st.UpsertRepo(h.ctx, store.Repo{NodeID: "factory:talkable", Owner: "factory", Name: "talkable",
+		WatchOwner: "factory", Mode: store.RepoModePerPR})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := h.pr(other.ID, 7, "attempt-1", store.PRClaiming)
+	got, err := h.m.Reserve(h.ctx, owner, h.pool)
+	if err != nil || got.Name != sl.Name {
+		t.Fatalf("Reserve = %s, %v", got.Name, err)
+	}
+	if err := h.m.Release(h.ctx, h.slot(sl.Name), h.pool, "released"); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotFree || got.PRID != nil {
+		t.Fatalf("released slot = %s, pr %v", got.State, got.PRID)
+	}
+	if ref := gitT(t, h.main, "rev-parse", gitx.PRRef(7)); ref != h.shaPR7 {
+		t.Fatalf("refs/magnum/pr/7 = %s after the release, want PR #7's head %s", ref, h.shaPR7)
+	}
+}
+
 func TestRelease(t *testing.T) {
 	h := newHarness(t)
 	sl, pr := h.claimedCheckout(7, h.shaPR7)

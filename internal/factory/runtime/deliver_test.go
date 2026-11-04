@@ -428,7 +428,7 @@ func TestAFreshRuntimeReadsTheTasksCodexNever(t *testing.T) {
 	}
 	g.restart()
 
-	if err := g.r.Launch(g.ctx, stale, g.attempt, g.copy, g.roles("fx-cause")); err != nil {
+	if err := g.r.Launch(g.ctx, stale, g.attempt, g.claimed(), g.roles("fx-cause")); err != nil {
 		t.Fatal(err)
 	}
 

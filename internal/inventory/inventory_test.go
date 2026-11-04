@@ -1105,3 +1105,36 @@ func TestUnreadableWorktreesDirSuppressesOrphans(t *testing.T) {
 		t.Fatalf("warnings = %v", inv.Warnings)
 	}
 }
+
+// The factory's copies are slots of the factory's own registry, which magnum
+// never reads: a database whose slug a [[factory.repo]] copy_name renders
+// (talkable_development__factory2) is the factory's, no orphan, even with
+// its copy's directory gone. A slug no slot and no copy name claims still
+// is one.
+func TestInventoryLeavesFactoryDatabasesAlone(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "talkable/talkable", MainClone: f.main, CopyName: "factory{n}",
+		Copies: f.path("talkable.factory{n}"), MaxCopies: 4, Databases: dbTemplates()}}
+	f.db.add("factory2", 1, talkableDBs...)
+	f.db.add("factory11", 1, talkableDBs[:1]...) // past max_copies: still a name of the factory's
+	f.db.add("review7", 1, talkableDBs[:1]...)
+	f.db.add("factory_x", 1, talkableDBs[:1]...) // no copy number: no copy's
+
+	inv := f.scan(Options{})
+	if !inv.OrphansKnown {
+		t.Fatalf("orphans not computed: %v", inv.Warnings)
+	}
+	var subjects []string
+	for _, g := range findingsOf(inv, KindOrphanDB) {
+		subjects = append(subjects, g.Subject)
+	}
+	slices.Sort(subjects)
+	if want := []string{"slug:factory_x", "slug:review7"}; !slices.Equal(subjects, want) {
+		t.Fatalf("orphan findings = %v, want %v", subjects, want)
+	}
+	for _, d := range inv.OrphanDBs {
+		if strings.HasSuffix(d.Name, "__factory2") || strings.HasSuffix(d.Name, "__factory11") {
+			t.Errorf("the factory's database %s is listed as an orphan", d.Name)
+		}
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -839,7 +840,8 @@ func (sc *scan) findUnknownDirs() {
 	}
 }
 
-// findOrphans reports listed databases whose slug nothing claims, only when
+// findOrphans reports listed databases whose slug nothing claims (no slot,
+// no worktree, no factory copy's name: factoryCopySlugs), only when
 // every ownership fact was read (Inventory.OrphansKnown); otherwise one
 // "discovery incomplete:" warning names what is missing.
 func (sc *scan) findOrphans() {
@@ -863,10 +865,12 @@ func (sc *scan) findOrphans() {
 			known = append(known, k)
 		}
 	}
+	factory := factoryCopySlugs(sc.cfg)
 	bySlug := map[string][]mysqlx.Database{}
 	var order []string
 	for _, d := range sc.dbs {
-		if slices.ContainsFunc(known, func(k string) bool { return hasSlug(d, k) }) {
+		if slices.ContainsFunc(known, func(k string) bool { return hasSlug(d, k) }) ||
+			slices.ContainsFunc(factory, func(re *regexp.Regexp) bool { return re.MatchString(d.Slug) }) {
 			continue
 		}
 		sc.inv.OrphanDBs = append(sc.inv.OrphanDBs, d)
@@ -887,6 +891,21 @@ func (sc *scan) findOrphans() {
 		}
 		sc.addFinding(KindOrphanDB, "slug:"+slug, safe, "%d database(s), %.1f MB, with slug %s belong to no slot or worktree", len(dbs), mb, slug)
 	}
+}
+
+// factoryCopySlugs match the database slugs of the factory's copies, one
+// pattern per [[factory.repo]] copy_name (slots.SlotSlugRegexp: factory{n}
+// gives ^factory[0-9]+$). The copies are slots of the factory's own
+// registry, which magnum does not read: their databases are the factory's,
+// never orphans of magnum's, with their copy's directory there or not.
+func factoryCopySlugs(cfg *config.Config) []*regexp.Regexp {
+	var out []*regexp.Regexp
+	for _, r := range cfg.Factory.Repos {
+		if strings.Contains(r.CopyName, "{n}") {
+			out = append(out, slots.SlotSlugRegexp(r.CopyName))
+		}
+	}
+	return out
 }
 
 func (sc *scan) confirmStates(ctx context.Context) {

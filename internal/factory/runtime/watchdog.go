@@ -453,7 +453,8 @@ func (r *Runtime) startIn(ctx context.Context, t registry.Task, a registry.Attem
 		if label == "" {
 			label = WorkspaceLabel(t, a)
 		}
-		ws, err := r.mgr.EnsureWorkspace(ctx, pr, r.copyOf(st), r.paneEnv(t), label, []config.Role{st.role})
+		path, env := r.copyOf(st)
+		ws, err := r.mgr.EnsureWorkspace(ctx, pr, path, env, label, []config.Role{st.role})
 		if err != nil {
 			return fmt.Errorf("a pane for %s: %w", st.role.Name, err)
 		}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
@@ -80,6 +81,44 @@ func TestTwoRolesOfOneTaskGetTwoPanesInOneWorkspace(t *testing.T) {
 	if args := strings.Join(starts[0].Args, " "); !strings.Contains(args, "--name factory PR-12345 fx-repro - talkable") {
 		t.Fatalf("the claude launch %q does not name the task", args)
 	}
+}
+
+// A pane's environment is its copy's, as the copies rendered it (the copy's
+// Redis offset and name), with the task's id, and never a secret:
+// sessions.env_json keeps it. A pane that takes a lost one's place after a
+// restart gets the same.
+func TestAPaneCarriesItsCopysRedisOffsetAndNoSecret(t *testing.T) {
+	g := newRig(t)
+	g.copyEnv = map[string]string{"REDIS_DB_OFFSET": "32", "WT_BRANCH": "factory2",
+		"GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		"DEPLOY_KEY":   "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----",
+		"SEED_NOTE":    "seeded with ghs_abcdefghijklmnopqrstuvwxyz0123456789"}
+	check := func(when string, s store.Session) {
+		t.Helper()
+		if s.Env["REDIS_DB_OFFSET"] != "32" || s.Env["WT_BRANCH"] != "factory2" ||
+			s.Env["MAGNUM_FACTORY_TASK"] != strconv.FormatInt(g.task.ID, 10) {
+			t.Errorf("%s: pane env %v, want the copy's Redis offset 32, its name and the task", when, s.Env)
+		}
+		for k, v := range s.Env {
+			if k == "GITHUB_TOKEN" || k == "DEPLOY_KEY" || k == "SEED_NOTE" || execx.Redact(v) != v {
+				t.Errorf("%s: pane env keeps the secret %s", when, k)
+			}
+		}
+	}
+	g.launch("fx-repro")
+	check("at the launch", g.session("fx-repro"))
+
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.send("fx-repro", "reproduce the bug")
+	g.observeN(2)
+	g.restart()
+	g.h.losePane(g.agent("fx-repro"))
+	g.observe()
+	g.observeN(2)
+	if s := g.h.startCalls(); len(s) != 2 || !strings.Contains(strings.Join(s[1].Args, " "), "--resume sid-1") {
+		t.Fatalf("starts %+v, want the lost conversation resumed", s)
+	}
+	check("in the pane that took the lost one's place", g.session("fx-repro"))
 }
 
 func TestLaunchRecordsTheRoleRunFacts(t *testing.T) {
@@ -488,7 +527,7 @@ func TestLaunchWaitsWhenCodexIsOverItsSoftCap(t *testing.T) {
 	g := newRig(t)
 	g.setUsage(usage.Snapshot{Window: usage.Window{UsedPercent: 96, WindowMinutes: 300, ResetsAt: t0.Add(7 * time.Hour)}})
 
-	err := g.r.Launch(g.ctx, g.task, g.attempt, g.copy, g.roles("fx-cause"))
+	err := g.r.Launch(g.ctx, g.task, g.attempt, g.claimed(), g.roles("fx-cause"))
 
 	var w *WaitError
 	if !errors.As(err, &w) || err.Error() != "usage: codex at 96%, waits till 16:00" {

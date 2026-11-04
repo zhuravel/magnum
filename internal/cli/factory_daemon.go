@@ -29,6 +29,7 @@ import (
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/reveal"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -101,7 +102,10 @@ type factoryDaemon struct {
 	Agents *store.Store
 	// Runtime drives the factory's agents in its herdr session over Agents.
 	Runtime *runtime.Runtime
-	Log     *slog.Logger
+	// Copies are the repositories' copies the tasks work in: magnum's slot
+	// code over Agents, never the review registry.
+	Copies factory.Copies
+	Log    *slog.Logger
 
 	closers []func() error
 }
@@ -124,9 +128,11 @@ func (d *factoryDaemon) Close() error {
 // collaborators this build has: the memory and disk reads, a MySQL ping when
 // a factory repository has databases, the agent runtime over the agents
 // store in the factory's herdr session (factoryHerdrSocket), whose snapshot
-// is the herdr ping, and the reveal of that session. The copies, Jira,
-// GitHub, magnum and the local reviewer are nil until the builds that bring
-// them. The caller holds the
+// is the herdr ping, the reveal of that session, and the copies (a second
+// slot manager over the agents store, whose guard sees the panes of your
+// herdr session, with the runtime's owner rows). Jira, GitHub, magnum and
+// the local reviewer are nil until the builds that bring them. The caller
+// holds the
 // factory lock (factory.Lock); the registry's migration is still refused
 // while a factory daemon's pidfile names a live factory daemon
 // (refuseWhileDaemonRuns: this daemon writes its own pidfile later, in
@@ -189,10 +195,19 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		HerdrUp: d.Runtime.HerdrUp,
 		Reveal:  factoryReveal(cfg, run),
 	}
-	if ping, closer := factoryMySQL(cfg, d.Log); ping != nil {
-		deps.MySQL = ping
-		d.closers = append(d.closers, closer)
+	var copyDBs slots.MySQL
+	if my := factoryMySQL(cfg, d.Log); my != nil {
+		deps.MySQL, copyDBs = my.Ping, my
+		d.closers = append(d.closers, my.Close)
 	}
+	// The guard of a copy looks for your panes in it: those of your herdr
+	// session. The factory's own sessions are the copies' pane check.
+	yours := &herdr.Client{Socket: cfg.Herdr.Socket, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+	copySlots := slots.New(slots.Deps{Store: d.Agents, Run: run, Git: git, MySQL: copyDBs,
+		Snapshot: yours.Snapshot, ProcessInfo: yours.PaneProcessInfo, Layout: l,
+		Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "copies"}, SecretEnv: identityKeyEnvs(cfg)})
+	d.Copies = factory.NewCopies(cfg, copySlots, d.Agents, git, run, copyDBs, d.Runtime.Owner)
+	deps.Copies = d.Copies
 	d.Engine = factory.New(deps)
 	built = true
 	return d, nil
@@ -240,17 +255,31 @@ func factoryReveal(cfg *config.Config, run execx.Runner) func(ctx context.Contex
 	}
 }
 
-// factoryMySQL pings the local MySQL server the copies' databases live on
-// ($MAGNUM_MYSQL_DSN, else mysqlx's default), when a factory repository has
-// databases; nil otherwise.
-func factoryMySQL(cfg *config.Config, log *slog.Logger) (ping func(ctx context.Context) error, closer func() error) {
+// factoryMySQL is the client of the local MySQL server the copies'
+// databases live on ($MAGNUM_MYSQL_DSN, else mysqlx's default), when a
+// factory repository has databases: the engine pings it, and the copies
+// read and verify their databases through it. nil otherwise.
+func factoryMySQL(cfg *config.Config, log *slog.Logger) *mysqlx.Client {
 	if !slices.ContainsFunc(cfg.Factory.Repos, func(r config.FactoryRepo) bool { return len(r.Databases) > 0 }) {
-		return nil, nil
+		return nil
 	}
 	my, err := mysqlx.Open(os.Getenv("MAGNUM_MYSQL_DSN"))
 	if err != nil {
 		log.Warn("mysql client unavailable; the factory pings no database", "err", err)
-		return nil, nil
+		return nil
 	}
-	return my.Ping, my.Close
+	return my
+}
+
+// identityKeyEnvs are the variables of the daemon's environment that hold an
+// App identity's private key ([[identity]] private_key_env): no copy's
+// command inherits them.
+func identityKeyEnvs(cfg *config.Config) []string {
+	var out []string
+	for _, id := range cfg.Identities {
+		if id.PrivateKeyEnv != "" {
+			out = append(out, id.PrivateKeyEnv)
+		}
+	}
+	return out
 }

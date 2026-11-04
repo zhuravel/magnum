@@ -95,7 +95,16 @@ func DropGuard(pool config.Pool) mysqlx.Guard {
 	if prefix == "" || !strings.Contains(pool.SlotName, "{n}") {
 		return mysqlx.Guard{}
 	}
-	return mysqlx.Guard{Prefix: prefix, AllowRegexp: TemplateRegexp(slugTemplate(pool.SlotName))}
+	return mysqlx.Guard{Prefix: prefix, AllowRegexp: SlotSlugRegexp(pool.SlotName)}
+}
+
+// SlotSlugRegexp matches the database slugs of the slots a slot_name
+// template renders: each name sanitized as SlotDBSlug sanitizes it, {n} as
+// [0-9]+ (^review[0-9]+$ for review{n}, ^example_review[0-9]+$ for
+// example-review{n}). DropGuard allows only these; inventory takes the
+// factory's copy names' as the factory's databases.
+func SlotSlugRegexp(slotName string) *regexp.Regexp {
+	return TemplateRegexp(slugTemplate(slotName))
 }
 
 // slugTemplate is a slot_name template with the text around each {n}

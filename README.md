@@ -3461,6 +3461,24 @@ stages = [
   GitHub login. `error_skill` (the read-only error-tracker skill), `ghost_marker`, `table_stats` and
   `large_table_rows` (the gh-ost rule for migrations) and `consoles` (remote consoles that no factory command
   runs) have no default: they are yours.
+- **Copies.** The copies are magnum's slots, kept in the factory's own store (`factory/agents.db`), so the
+  review daemon never sees one and `magnum slots` does not list them; magnum's inventory and cleanup leave the
+  databases of a `copy_name` alone. A claim takes the copy the task used last when it is free, else another
+  free one, else adds copy `{n}` (its worktree, `setup`, the checks of its slug marker and databases) up to
+  `max_copies`; with none left the task waits, `copy: all 3 busy`, at no cost. A setup that fails runs once
+  more; a second failure marks the copy broken (`factory.copy_broken` in its events) and the task takes
+  another, and no claim takes a broken copy until it is repaired. In `env`, `{copy}` (or `{slot}`) is the
+  copy's name, `{n}` its number and `{n*16}` its Redis offset; when `env` names `REDIS_DB_OFFSET`, copy `{n}`
+  gets `n*16` there whatever the value, its 16 Redis databases. `PORT` in `env` is the copy's server port.
+  Each claim then checks out the task's branch when it has one, runs `reset_db` when the development
+  database's newest migration is none the task's code has, runs each `installs` entry whose lockfile changed
+  since the copy's last install, and flushes the copy's 16 Redis databases (`redis-cli -n <db> FLUSHDB`). A
+  release is refused while a factory pane works in the copy; it stops the copy's server, keeps the task's
+  branch (its commits on it, pushed or not), puts the copy back on its placeholder at `origin/<base>` and
+  writes `handoff.md` in the task's directory: the branch, the head, the server and what the next claimer
+  needs. The factory starts a copy's `server` itself, only for the stages that need it, logs it to
+  `logs/factory-server-<copy>.log` and records its pid and start time; at its start the daemon stops the
+  servers a stopped daemon left, only those whose pid and start time both match the record.
 - **Precheck.** `lint` and `migrations` are lists of commands, `specs` and `jest` one command each; a command
   takes `{files}` (the changed files, shell-quoted) and `{base}`. A precheck stops after `cap` (default
   `10m`), and `skip_specs_for_kinds` names the kinds of task that run no specs (a gem upgrade).

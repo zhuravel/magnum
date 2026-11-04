@@ -9,6 +9,8 @@ package gitx
 // And the fixer's `magnum fix-sync`: the commits a branch gained, a head's
 // own diff against its base as one patch id, and a replay of a checkout's
 // own commits onto a branch's new tip that aborts itself on a conflict.
+// And the factory's: a task's branch started in its copy (SwitchCreate) and
+// checked out again in the copy a later claim gives it (Switch).
 // Like every gitx command they run none of the clone's hooks (hooksOff).
 
 import (
@@ -21,6 +23,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 var (
@@ -34,7 +38,47 @@ var (
 	// HEAD) checked out than the one it is to fast-forward, right before
 	// its merge, or that branch not at the commit it merged right after.
 	ErrNotOnBranch = errors.New("gitx: the checkout is not on the branch to fast-forward")
+	// ErrBranchExists is SwitchCreate finding the branch it is to create.
+	ErrBranchExists = errors.New("gitx: the branch exists")
 )
+
+// SwitchCreate creates branch at start in the work tree at dir and checks
+// it out (`git switch --no-track -c <branch> <start>`): a factory task's
+// branch, from origin/<base>, tracking nothing. A branch of that name, in
+// any worktree of the repository, is ErrBranchExists, and nothing moves.
+// Local changes carry over as git carries them; one the switch would
+// overwrite makes git refuse.
+func (c *Client) SwitchCreate(ctx context.Context, dir, branch, start string) error {
+	if err := errors.Join(checkBranch("branch", branch), checkRev("start", start)); err != nil {
+		return err
+	}
+	switch _, err := c.RevParse(ctx, dir, "refs/heads/"+branch); {
+	case err == nil:
+		return fmt.Errorf("gitx: switch -c %s: %w", branch, ErrBranchExists)
+	case !errors.Is(err, ErrNoSuchRef):
+		return err
+	}
+	_, err := c.git(ctx, dir, call{label: "switch -c " + branch + " " + start, mutates: true, timeout: worktreeTimeout},
+		"switch", "--quiet", "--no-track", "-c", branch, start)
+	if ee, ok := errors.AsType[*execx.ExitError](err); ok && strings.Contains(ee.Stderr, "already exists") {
+		return fmt.Errorf("gitx: switch -c %s: %w", branch, ErrBranchExists) // created since the check
+	}
+	return err
+}
+
+// Switch checks out branch, a local branch that exists, in the work tree
+// at dir (`git switch --no-guess <branch>`): never a new branch that tracks
+// a remote one of the name, never a discarded change (one the switch would
+// overwrite makes git refuse, and so does a branch another worktree has
+// checked out).
+func (c *Client) Switch(ctx context.Context, dir, branch string) error {
+	if err := checkBranch("branch", branch); err != nil {
+		return err
+	}
+	_, err := c.git(ctx, dir, call{label: "switch " + branch, mutates: true, timeout: worktreeTimeout},
+		"switch", "--quiet", "--no-guess", branch)
+	return err
+}
 
 // commitTimeout bounds a commit, a rebase and a merge of a checkout.
 const commitTimeout = 2 * time.Minute

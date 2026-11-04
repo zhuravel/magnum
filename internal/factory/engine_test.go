@@ -44,7 +44,7 @@ type fakeRuntime struct {
 
 func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { return store.PR{}, nil }
 
-func (f *fakeRuntime) Launch(_ context.Context, t registry.Task, _ registry.Attempt, _ string, _ []config.Role) error {
+func (f *fakeRuntime) Launch(_ context.Context, t registry.Task, _ registry.Attempt, _ Copy, _ []config.Role) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.launches = append(f.launches, t.ID)
@@ -113,14 +113,24 @@ func (f *fakeRuntime) parked() []int64 {
 	return append([]int64(nil), f.parks...)
 }
 
-// fakeCopies records the servers it was asked to start and stop.
+// fakeCopies records the servers it was asked to start and stop; a claim
+// answers claimed, or claimErr.
 type fakeCopies struct {
-	mu      sync.Mutex
-	started []string
-	stopped []string
+	mu       sync.Mutex
+	started  []string
+	stopped  []string
+	claimed  Copy
+	claimErr error
 }
 
-func (f *fakeCopies) Claim(context.Context, registry.Task) (Copy, error) { return Copy{}, nil }
+func (f *fakeCopies) Claim(context.Context, registry.Task) (Copy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.claimErr != nil {
+		return Copy{}, f.claimErr
+	}
+	return f.claimed, nil
+}
 
 func (f *fakeCopies) Release(context.Context, registry.Task, string) error { return nil }
 

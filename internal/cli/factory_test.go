@@ -376,6 +376,27 @@ func TestTheFactoryDaemonBuildsWithItsRuntime(t *testing.T) {
 	}
 }
 
+// The daemon builds with its copies: magnum's slot code over the factory's
+// agents store, never the review registry.
+func TestTheFactoryDaemonBuildsWithItsCopies(t *testing.T) {
+	cfg := config.Defaults()
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+
+	d, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	defer d.Close()
+	if d.Copies == nil {
+		t.Fatal("the daemon has no copies")
+	}
+	if _, err := os.Stat(c.Layout.DB()); !os.IsNotExist(err) {
+		t.Fatalf("the factory daemon opened the review registry: %v", err)
+	}
+}
+
 // The factory's panes live in its own herdr session: the socket [factory]
 // herdr_socket names, else the named session's own, never the review panes'
 // default one.

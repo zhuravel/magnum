@@ -99,6 +99,8 @@ const (
 	waitUsage    = "usage"
 	waitLogin    = "login"
 	waitOverload = "overload"
+	// waitCopy is a task's wait for a copy (claimCopy).
+	waitCopy = "copy"
 )
 
 // hold weighs a tick's failures for the infrastructure hold and returns the
@@ -417,7 +419,7 @@ func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error
 		return heldError{who: who, what: what}
 	}
 	if e.d.Copies == nil {
-		return heldError{who: "copy", what: "this build has no copies yet"}
+		return heldError{who: waitCopy, what: "this build has no copies yet"}
 	}
 	release, ok := e.takeHeavy(ctx, t, heavyServer, "")
 	if !ok {

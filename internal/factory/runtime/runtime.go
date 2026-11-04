@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
@@ -174,7 +176,10 @@ type roleState struct {
 	taskID int64
 	stage  string
 	role   config.Role
-	copy   string
+	// copy is the checkout the role works in, env its panes' environment
+	// (paneEnv; after a restart, the one its last session kept).
+	copy string
+	env  map[string]string
 	// first is the attempt's first prompt to the role, as sent: what a
 	// fresh session starts from.
 	first string
@@ -419,8 +424,20 @@ func (r *Runtime) calm(attempt, role string, taskID int64, kind string, refused 
 	}
 }
 
-// Launch starts the roles of attempt a of task t in the copy at copyPath.
-// It records the attempt's workspace label first (the attempt stays
+// Copy is a task's copy of a repository as the factory's copies claimed it
+// for the task (factory.Copies): its name (factory2) and checkout, its
+// number (copy {n}), the port of its local server (0 when the copy's env
+// names none) and its environment, the repository's env rendered for the
+// copy (its name, its number, its Redis offset). Its panes run in Path with
+// Env.
+type Copy struct {
+	Name, Path   string
+	Number, Port int
+	Env          map[string]string
+}
+
+// Launch starts the roles of attempt a of task t in copy c, the copy the
+// task claimed. It records the attempt's workspace label first (the attempt stays
 // launching), then, before any pane exists, reads the memory and, for a
 // Codex role, the budget for every role it launches: critical memory, a
 // Codex budget at its soft cap and a kind's pause are a WaitError, no
@@ -429,7 +446,7 @@ func (r *Runtime) calm(attempt, role string, taskID int64, kind string, refused 
 // of the role's earlier session when it has one, launches Stagger apart
 // while the memory pressure is at warn, the RoleRun facts of each, and the
 // attempt running.
-func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error {
+func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error {
 	if a.ID == "" || a.TaskID != t.ID {
 		return fmt.Errorf("launch %s: attempt %q is not the task's", taskKey(t), a.ID)
 	}
@@ -463,7 +480,8 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 	if err != nil {
 		return err
 	}
-	ws, err := r.mgr.EnsureWorkspace(ctx, pr, copyPath, r.paneEnv(t), label, run)
+	env := paneEnv(t, c)
+	ws, err := r.mgr.EnsureWorkspace(ctx, pr, c.Path, env, label, run)
 	if err != nil {
 		return fmt.Errorf("launch %s: %w", a.ID, err)
 	}
@@ -475,7 +493,7 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 		if err := r.start(ctx, pr, a, role, ws.Panes[agents.Role(role.Name)], resume, levels[i] == engine.MemoryWarn); err != nil {
 			return fmt.Errorf("launch %s: %w", a.ID, err)
 		}
-		r.track(t, a, role, copyPath)
+		r.track(t, a, role, c.Path, env)
 	}
 	err = r.reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptLaunching}, registry.AttemptRunning, nil)
 	if err != nil && !errors.Is(err, registry.ErrConflict) {
@@ -660,34 +678,41 @@ func shortHash(s string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// paneEnv is the environment of a task's panes: the repository's env and
-// MAGNUM_FACTORY_TASK, no secrets (sessions.env_json keeps it).
-func (r *Runtime) paneEnv(t registry.Task) map[string]string {
-	env := map[string]string{}
-	if repo, ok := r.d.Config.FactoryRepo(t.Repo); ok {
-		maps.Copy(env, repo.Env)
+// paneEnv is the environment of task t's panes in copy c: the copy's env
+// (the repository's, rendered for the copy) and MAGNUM_FACTORY_TASK.
+// sessions.env_json keeps it, so a secret never gets there: a GitHub token's
+// variable (slots.DefaultStripEnv) and a value execx.Redact would mask are
+// left out.
+func paneEnv(t registry.Task, c Copy) map[string]string {
+	env := make(map[string]string, len(c.Env)+1)
+	for k, v := range c.Env {
+		if slices.Contains(slots.DefaultStripEnv, k) || execx.Redact(v) != v {
+			continue
+		}
+		env[k] = v
 	}
 	env["MAGNUM_FACTORY_TASK"] = strconv.FormatInt(t.ID, 10)
 	return env
 }
 
-// track notes role of attempt a as launched in copyPath.
-func (r *Runtime) track(t registry.Task, a registry.Attempt, role config.Role, copyPath string) {
+// track notes role of attempt a as launched in the copy at path with the
+// pane env env.
+func (r *Runtime) track(t registry.Task, a registry.Attempt, role config.Role, path string, env map[string]string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := roleKey{a.ID, role.Name}
 	if st := r.roles[k]; st != nil {
-		st.copy = copyPath
+		st.copy, st.env = path, env
 		return
 	}
-	r.roles[k] = &roleState{key: k, taskID: t.ID, stage: a.Stage, role: role, copy: copyPath}
+	r.roles[k] = &roleState{key: k, taskID: t.ID, stage: a.Stage, role: role, copy: path, env: env}
 }
 
-// copyOf is the copy role st works in.
-func (r *Runtime) copyOf(st *roleState) string {
+// copyOf is the copy role st works in and the env of its panes.
+func (r *Runtime) copyOf(st *roleState) (path string, env map[string]string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return st.copy
+	return st.copy, maps.Clone(st.env)
 }
 
 // stateFor is the state of role (as it runs) in attempt id: the one Launch
@@ -714,7 +739,7 @@ func (r *Runtime) stateFor(ctx context.Context, attempt, role string) (*roleStat
 		if ss, err := r.st.SessionsByPR(ctx, pr.ID); err == nil {
 			for _, s := range ss {
 				if s.Role == role && store.Deref(s.Cwd) != "" {
-					st.copy = store.Deref(s.Cwd)
+					st.copy, st.env = store.Deref(s.Cwd), s.Env
 				}
 			}
 		}

@@ -433,8 +433,10 @@ type rig struct {
 	layout               paths.Layout
 	claudeDir, codexHome string
 	copy                 string
-	task                 registry.Task
-	attempt              registry.Attempt
+	// copyEnv is the env of the copy the rig's launches claim (claimed).
+	copyEnv map[string]string
+	task    registry.Task
+	attempt registry.Attempt
 }
 
 // newRig builds a runtime over fakes, with a bug task in its investigate
@@ -455,7 +457,10 @@ func newRig(t *testing.T) *rig {
 	g.cfg = config.Defaults()
 	g.cfg.Layout = g.layout
 	g.cfg.Usage.CodexSoft, g.cfg.Usage.CodexHard = 90, 98
-	g.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "talkable/talkable", Env: map[string]string{"RAILS_ENV": "development"}}}
+	// The repository's env is a template the copies render (Copies.Claim):
+	// a pane gets the copy's, never this.
+	g.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "talkable/talkable", Env: map[string]string{"REDIS_DB_OFFSET": "{n*16}"}}}
+	g.copyEnv = map[string]string{"RAILS_ENV": "development"}
 	g.run = &execx.Fake{Rules: []execx.Rule{
 		{Prefix: []string{"zsh", "-ic"}, Fn: func(c execx.Cmd) (execx.Result, error) {
 			kind := strings.TrimPrefix(c.Args[1], "whence -w ")
@@ -605,9 +610,15 @@ func (g *rig) roles(names ...string) []config.Role {
 // launch launches the roles named names for the rig's task and attempt.
 func (g *rig) launch(names ...string) {
 	g.t.Helper()
-	if err := g.r.Launch(g.ctx, g.task, g.attempt, g.copy, g.roles(names...)); err != nil {
+	if err := g.r.Launch(g.ctx, g.task, g.attempt, g.claimed(), g.roles(names...)); err != nil {
 		g.t.Fatalf("Launch %v: %v", names, err)
 	}
+}
+
+// claimed is the copy the rig's task claimed: copy 1 at g.copy, with
+// g.copyEnv.
+func (g *rig) claimed() Copy {
+	return Copy{Name: "factory1", Path: g.copy, Number: 1, Env: g.copyEnv}
 }
 
 // send sends text to the role named name of the rig's task.

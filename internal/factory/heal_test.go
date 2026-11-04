@@ -504,7 +504,7 @@ func TestSIGTERMDrainsWithoutNewLaunches(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 		case second.ID:
-			launchErr = h.e.launch(ctx, t, registry.Attempt{}, "", nil)
+			launchErr = h.e.launch(ctx, t, registry.Attempt{}, Copy{}, nil)
 			_, _, effectErr = h.e.beginEffect(ctx, "publish:2:abc", "publish", t.ID)
 		}
 		return false, nil
@@ -614,7 +614,7 @@ func TestLowDiskHoldsLaunchesAndParksIdleAgentsThatWaitOnYou(t *testing.T) {
 	}
 	var launchErr error
 	h.stage(config.FactoryStageAgents, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
-		launchErr = h.e.launch(ctx, t, registry.Attempt{}, "", nil)
+		launchErr = h.e.launch(ctx, t, registry.Attempt{}, Copy{}, nil)
 		return false, launchErr
 	})
 
@@ -788,7 +788,7 @@ func TestALaunchThatWaitsOnCodexsBudgetCostsTheTaskNothing(t *testing.T) {
 	}
 	h.rt.launchErr = &runtime.WaitError{Who: "usage", What: "codex at 96%, waits till 16:00"}
 
-	err = h.e.launch(h.ctx, task, a, "/copies/shop1", nil)
+	err = h.e.launch(h.ctx, task, a, Copy{Name: "shop1", Path: "/copies/shop1"}, nil)
 
 	if !errors.Is(err, ErrHeld) {
 		t.Fatalf("launch = %v, want a hold", err)
@@ -798,7 +798,7 @@ func TestALaunchThatWaitsOnCodexsBudgetCostsTheTaskNothing(t *testing.T) {
 	}
 
 	h.rt.launchErr = nil
-	if err := h.e.launch(h.ctx, h.reload(task.ID), a, "/copies/shop1", nil); err != nil {
+	if err := h.e.launch(h.ctx, h.reload(task.ID), a, Copy{Name: "shop1", Path: "/copies/shop1"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.reload(task.ID); got.WaitsWho != "" || got.WaitsWhat != "" {

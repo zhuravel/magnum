@@ -493,7 +493,8 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // checked_out_sha cleared;
 // origin/<base>'s commit is written to the kv store first, as Checkout's
 // switch does, so a release interrupted after the reset is no head drift),
-// delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check
+// delete_ref (refs/magnum/pr/N, kept for a row of another repository:
+// otherRepository), render_mise, deps, schema_check
 // (resetSchema: a LazySchema pool keeps the databases unless
 // MAX(schema_migrations.version) of the development database differs from
 // the version of the schema recorded for them; otherwise when dirty_schema
@@ -589,6 +590,9 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 		if err != nil || !ok || pr.Number <= 0 {
 			return err
 		}
+		if other, err := m.otherRepository(ctx, sl, pr); err != nil || other {
+			return err
+		}
 		return m.git.UpdateRefDelete(ctx, sl.MainClone, gitx.PRRef(pr.Number))
 	}); err != nil {
 		return err
@@ -614,6 +618,23 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 		}
 		return m.d.Store.ReleaseSlot(ctx, sl.ID, []string{store.SlotReleasing, store.SlotDirtySchema}, store.SlotFree, reason)
 	})
+}
+
+// otherRepository reports whether pr is a row of another repository than
+// the slot's: refs/magnum/pr/N in the slot's main clone is PR #N of the
+// slot's own repository, and a row of another one lent the slot (a factory
+// task's owner row, factory/<name>, numbered by its task) has no ref there,
+// so the release leaves that ref to the review it belongs to. A repository
+// row that is gone counts as the slot's, as before.
+func (m *Manager) otherRepository(ctx context.Context, sl store.Slot, pr store.PR) (bool, error) {
+	repo, err := m.d.Store.RepoByID(ctx, pr.RepoID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("slots: repository of PR #%d: %w", pr.Number, err)
+	}
+	return !strings.EqualFold(repo.FullName(), sl.RepoFullName), nil
 }
 
 // resetSchema is the release's schema step. A LazySchema pool keeps the

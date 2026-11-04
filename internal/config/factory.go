@@ -122,8 +122,11 @@ type FactoryRepo struct {
 	Installs []FactoryInstall `toml:"installs"`
 	// Server is the command that starts a copy's local server.
 	Server string `toml:"server"`
-	// Env is the copy's environment; Databases its databases, named like a
-	// pool's (DatabaseSuffix).
+	// Env is the copy's environment: {copy} (or {slot}) renders the copy's
+	// name, {n} its number and {n*16} its Redis offset, and REDIS_DB_OFFSET,
+	// when it is named, is copy n's n*16 whatever its value (the factory's
+	// copies). Databases its databases, named like a pool's
+	// (DatabaseSuffix).
 	Env       map[string]string `toml:"env"`
 	Databases []string          `toml:"databases"`
 	CopyFiles []string          `toml:"copy_files"`

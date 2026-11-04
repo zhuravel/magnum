@@ -5239,8 +5239,11 @@ type FactoryRepo struct {
 	Installs []FactoryInstall `toml:"installs"`
 	// Server is the command that starts a copy's local server.
 	Server string `toml:"server"`
-	// Env is the copy's environment; Databases its databases, named like a
-	// pool's (DatabaseSuffix).
+	// Env is the copy's environment: {copy} (or {slot}) renders the copy's
+	// name, {n} its number and {n*16} its Redis offset, and REDIS_DB_OFFSET,
+	// when it is named, is copy n's n*16 whatever its value (the factory's
+	// copies). Databases its databases, named like a pool's
+	// (DatabaseSuffix).
 	Env       map[string]string `toml:"env"`
 	Databases []string          `toml:"databases"`
 	CopyFiles []string          `toml:"copy_files"`
@@ -11199,14 +11202,37 @@ const (
 )
     Request kinds.
 
+const HandoffFile = "handoff.md"
+    HandoffFile is the file of a task's directory a release writes: how the task
+    left its copy, for whoever claims a copy for it next.
+
 const LaunchLabel = "zhuravel.magnum.factory"
     LaunchLabel is the launchd label of the factory daemon's LaunchAgent,
     apart from the review daemon's (launchd.DefaultLabel), so either restarts
     without the other.
 
+const RedisDBsPerCopy = 16
+    RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at n
+    × RedisDBsPerCopy (REDIS_DB_OFFSET).
+
+const RedisOffsetEnv = "REDIS_DB_OFFSET"
+    RedisOffsetEnv is the variable a copy's Redis configuration reads its first
+    database from. A repository whose env names it gets each copy's own offset
+    there, whatever value the env gives it.
+
 
 VARIABLES
 
+var (
+	// ErrNoCopy is a claim no copy is free for: every copy the repository
+	// may have is busy or broken. It costs the task nothing (it is ErrHeld
+	// too): the task waits with the reason the error gives, "copy: all 3
+	// busy" (claimCopy).
+	ErrNoCopy = errors.New("factory: no free copy")
+	// ErrPaneInCopy is a release refused while one of the factory's
+	// sessions works in the copy.
+	ErrPaneInCopy = errors.New("factory: a pane runs in the copy")
+)
 var ErrHeld = errors.New("held")
     ErrHeld marks a launch or an effect that the engine held back: the daemon
     drains, or a hold of the machine is on. It costs the task nothing.
@@ -11261,17 +11287,24 @@ type Copies interface {
 	StopServer(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
 }
-    Copies are the repositories' copies the tasks work in: a claim for a task
-    (the copy it used last first), its release, how many are free, the copy's
-    local server, and the reconcile of servers and copies after a restart.
+    Copies are the repositories' copies the tasks work in (copies.go): a claim
+    for a task (the copy it used last first), its release, how many are free,
+    the copy's local server, and the reconcile of the servers after a restart.
 
-type Copy struct {
-	Name, Path   string
-	Number, Port int
-	Env          map[string]string
-}
+func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
+	owner func(context.Context, registry.Task) (store.PR, error)) Copies
+    NewCopies returns the factory's copies: sm is magnum's slot manager over st,
+    the factory's agents store (Layout.FactoryAgentsDB, magnum's schema),
+    git and run run the claim protocol's commands, my reads a copy's development
+    database (nil: no reset_db at a claim), and owner is the runtime's Owner,
+    the task's row in st a copy is claimed for. A claim adds copy n on demand
+    with sm.ProvisionPool (FactoryRepo.Pool with the copy's env), up to
+    max_copies.
+
+type Copy = runtime.Copy
     Copy is a task's copy of a repository: its name and path, its number (copy
-    {n}), the port of its server and its environment.
+    {n}), the port of its server and its environment (runtime.Copy: a launch
+    runs the task's panes in it).
 
 type Deps struct {
 	Config   *config.Config
@@ -11403,7 +11436,7 @@ type PRView struct {
 
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
-	Launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error
+	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
@@ -12446,6 +12479,17 @@ func WorkspaceLabel(t registry.Task, a registry.Attempt) string
 
 TYPES
 
+type Copy struct {
+	Name, Path   string
+	Number, Port int
+	Env          map[string]string
+}
+    Copy is a task's copy of a repository as the factory's copies claimed it
+    for the task (factory.Copies): its name (factory2) and checkout, its number
+    (copy {n}), the port of its local server (0 when the copy's env names none)
+    and its environment, the repository's env rendered for the copy (its name,
+    its number, its Redis offset). Its panes run in Path with Env.
+
 type Deps struct {
 	Config   *config.Config
 	Layout   paths.Layout
@@ -12523,14 +12567,14 @@ func (r *Runtime) HerdrUp(ctx context.Context) error
     HerdrUp asks the factory's herdr session whether it answers (a snapshot):
     the engine's herdr hold.
 
-func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error
-    Launch starts the roles of attempt a of task t in the copy at copyPath. It
-    records the attempt's workspace label first (the attempt stays launching),
-    then, before any pane exists, reads the memory and, for a Codex role,
-    the budget for every role it launches: critical memory, a Codex budget at
-    its soft cap and a kind's pause are a WaitError, no failure. A logged-out
-    CLI pauses its kind. Then the task's workspace with a pane per role
-    (EnsureWorkspace), each agent started with the resume id of the role's
+func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
+    Launch starts the roles of attempt a of task t in copy c, the copy the
+    task claimed. It records the attempt's workspace label first (the attempt
+    stays launching), then, before any pane exists, reads the memory and,
+    for a Codex role, the budget for every role it launches: critical memory, a
+    Codex budget at its soft cap and a kind's pause are a WaitError, no failure.
+    A logged-out CLI pauses its kind. Then the task's workspace with a pane per
+    role (EnsureWorkspace), each agent started with the resume id of the role's
     earlier session when it has one, launches Stagger apart while the memory
     pressure is at warn, the RoleRun facts of each, and the attempt running.
 
@@ -13741,6 +13785,8 @@ var (
 	// HEAD) checked out than the one it is to fast-forward, right before
 	// its merge, or that branch not at the commit it merged right after.
 	ErrNotOnBranch = errors.New("gitx: the checkout is not on the branch to fast-forward")
+	// ErrBranchExists is SwitchCreate finding the branch it is to create.
+	ErrBranchExists = errors.New("gitx: the branch exists")
 )
 var (
 	// ErrNoSuchRef is returned when a ref or revision does not resolve.
@@ -14133,6 +14179,21 @@ func (c *Client) StatusPaths(ctx context.Context, dir string) ([]StatusEntry, er
     and untracked files (`--untracked-files=normal`, so a wholly untracked
     directory is one entry). Ignored files (.mise.local.toml, tmp/) are not
     requested. It is read-only and does not take the index lock.
+
+func (c *Client) Switch(ctx context.Context, dir, branch string) error
+    Switch checks out branch, a local branch that exists, in the work tree at
+    dir (`git switch --no-guess <branch>`): never a new branch that tracks a
+    remote one of the name, never a discarded change (one the switch would
+    overwrite makes git refuse, and so does a branch another worktree has
+    checked out).
+
+func (c *Client) SwitchCreate(ctx context.Context, dir, branch, start string) error
+    SwitchCreate creates branch at start in the work tree at dir and checks it
+    out (`git switch --no-track -c <branch> <start>`): a factory task's branch,
+    from origin/<base>, tracking nothing. A branch of that name, in any worktree
+    of the repository, is ErrBranchExists, and nothing moves. Local changes
+    carry over as git carries them; one the switch would overwrite makes git
+    refuse.
 
 func (c *Client) SwitchDetach(ctx context.Context, dir, ref string) error
     SwitchDetach detaches dir's HEAD at ref, discarding tracked changes
@@ -20254,6 +20315,13 @@ func SlotDBSlug(sl store.Slot) string
     MarkerFile. A row that stored a raw slot name resolves to it too. Slots,
     inventory and cleanup all use it.
 
+func SlotSlugRegexp(slotName string) *regexp.Regexp
+    SlotSlugRegexp matches the database slugs of the slots a slot_name
+    template renders: each name sanitized as SlotDBSlug sanitizes it,
+    {n} as [0-9]+ (^review[0-9]+$ for review{n}, ^example_review[0-9]+$ for
+    example-review{n}). DropGuard allows only these; inventory takes the
+    factory's copy names' as the factory's databases.
+
 func TemplateRegexp(tmpl string) *regexp.Regexp
     TemplateRegexp matches what a slot template renders to (slot_name review{n},
     an expanded slot_path): the template anchored, its text quoted, every {n} as
@@ -20559,20 +20627,20 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
     → origin/<base>, tracked changes discarded after a slot.discarded event,
     checked_out_sha cleared; origin/<base>'s commit is written to the kv store
     first, as Checkout's switch does, so a release interrupted after the reset
-    is no head drift), delete_ref (refs/magnum/pr/N), render_mise, deps,
-    schema_check (resetSchema: a LazySchema pool keeps the databases unless
-    MAX(schema_migrations.version) of the development database differs from
-    the version of the schema recorded for them; otherwise when dirty_schema
-    is set or that version differs from db/schema.rb at HEAD: the slot
-    moves to dirty_schema and pool.reset_db runs through mise exec, 30m;
-    a second failure in a row moves the slot to broken, with its PR released
-    unless it is pinned, and returns ErrBroken, as does a slot whose readiness
-    reset_db failed in BreakAfterResetFailures rounds in a row) and mark_free
-    (store.ReleaseSlot: free, pr_id cleared, assignment closed with reason).
-    A releasing or dirty_schema slot resumes after its last completed step,
-    after Guard ran again: whatever a human did since the last attempt refuses
-    the release before its next destructive step. Per-PR slots are removed
-    instead (RemovePRWorktree semantics).
+    is no head drift), delete_ref (refs/magnum/pr/N, kept for a row of another
+    repository: otherRepository), render_mise, deps, schema_check (resetSchema:
+    a LazySchema pool keeps the databases unless MAX(schema_migrations.version)
+    of the development database differs from the version of the schema recorded
+    for them; otherwise when dirty_schema is set or that version differs from
+    db/schema.rb at HEAD: the slot moves to dirty_schema and pool.reset_db
+    runs through mise exec, 30m; a second failure in a row moves the slot to
+    broken, with its PR released unless it is pinned, and returns ErrBroken,
+    as does a slot whose readiness reset_db failed in BreakAfterResetFailures
+    rounds in a row) and mark_free (store.ReleaseSlot: free, pr_id cleared,
+    assignment closed with reason). A releasing or dirty_schema slot resumes
+    after its last completed step, after Guard ran again: whatever a human did
+    since the last attempt refuses the release before its next destructive step.
+    Per-PR slots are removed instead (RemovePRWorktree semantics).
 
 func (m *Manager) Remove(ctx context.Context, slot store.Slot, pool config.Pool, force bool) error
     Remove tears a pool slot down: steps of subject "slot:<name>:remove" are
