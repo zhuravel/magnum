@@ -55,6 +55,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `factory-points.md` | `fx-points`, which tests each point of a feature's ticket against the code | factory |
 | `factory-scope.md` | `fx-scope`, which finds every place a chore touches | factory |
 | `factory-judge.md` | `fx-judge`, which merges the findings into `report.md` and the questions | factory |
+| `factory-amend.md` | the roles of the report stage (`fx-judge`) in the turn a `no_open_questions` or `reproduced` gate runs when your answers change the plan: they amend `report.md`, `acceptance.json` and `questions.json` with `answers.md` | factory |
 | `factory-critic.md` | `fx-critic` and its Claude fallback `fx-critic-claude`, which criticize the plan of a wide change | factory |
 | `factory-writer.md` | `fx-writer`, which writes the change test first | factory |
 | `factory-shared.md` | every factory prompt: the blocks they share, the factory mode's rules among them (see Factory prompts); never a prompt of its own | factory |
@@ -541,6 +542,14 @@ recommended), and `critic` (`critic.md`, and the critic's questions file when it
 file is missing or malformed gets one nudge naming the file and what is wrong; then the task waits on you,
 "the <role> agent wrote no valid <file>". The critic's stage (`when = "wide"`) runs only for a plan whose
 Files name 3 or more files, a file under `db/` or a security path.
+
+A role that ends its turn with new questions in `.Questions` suspends its stage instead of a nudge: once
+you answered, it gets a prompt that names `answers.md` by its path (never its words) and goes on where it
+stopped. An agents stage's `prompt` key gives every role of the stage that file in place of its own. The
+gates run one turn of their own: when your answers change the plan, the roles of the report stage get
+`factory-amend.md`, with the same data as the judge's report stage, and the turn passes on the `report` end
+fact with `report.md`, `acceptance.json` and `questions.json` all newer than `answers.md`, so the prompt
+asks for all three again.
 
 ### Repository notes
 

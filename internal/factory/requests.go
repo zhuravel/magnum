@@ -86,22 +86,24 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 	}()
 	switch q.Kind {
 	case ReqStop:
-		answer(e, ctx, q, e.stopTask)
+		respond(e, ctx, q, e.stopTask)
 	case ReqLetGo:
-		answer(e, ctx, q, e.letGo)
+		respond(e, ctx, q, e.letGo)
 	case ReqStart:
-		answer(e, ctx, q, e.startRequest)
+		respond(e, ctx, q, e.startRequest)
 	case ReqPreview:
-		answer(e, ctx, q, e.previewRequest)
-	case ReqAnswer, ReqDecide:
+		respond(e, ctx, q, e.previewRequest)
+	case ReqAnswer:
+		respond(e, ctx, q, e.answerRequest)
+	case ReqDecide:
 		e.complete(ctx, q, fmt.Errorf("this factory daemon cannot %s a task yet: update magnum (`make build`), then `magnum factory install`", q.Kind), "")
 	default:
 		e.complete(ctx, q, fmt.Errorf("unknown request kind %q", q.Kind), "")
 	}
 }
 
-// answer completes request q with fn's result on its decoded payload.
-func answer[T any](e *Engine, ctx context.Context, q registry.Request, fn func(context.Context, T) (string, error)) {
+// respond completes request q with fn's result on its decoded payload.
+func respond[T any](e *Engine, ctx context.Context, q registry.Request, fn func(context.Context, T) (string, error)) {
 	var p T
 	if err := decode(q, &p); err != nil {
 		e.complete(ctx, q, err, "")
@@ -160,10 +162,7 @@ func shortAge(d time.Duration) string {
 var stoppable = []string{registry.TaskQueued, registry.TaskActive, registry.TaskNeedsYou, registry.TaskWaiting,
 	registry.TaskPublished, registry.TaskFailed}
 
-// stopTask stops a task for good: its state moves to stopped and your input
-// is recorded, then its agents are parked, its open attempts end failed,
-// its heavy slot is freed and its copy released (the branch stays): the
-// copy it holds or a claim of it reserved, a claim that runs cancelled.
+// stopTask stops a task for good (endTask), with your stop as its input.
 func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -172,15 +171,27 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 	if t.State == registry.TaskDone || t.State == registry.TaskStopped {
 		return fmt.Sprintf("%s is %s already", TaskKey(t), t.State), nil
 	}
+	if err := e.endTask(ctx, t, "stopped by you", registry.Input{TaskID: t.ID, Kind: registry.InputStop, Surface: p.Surface, Stage: t.Stage}); err != nil {
+		return "", err
+	}
+	return "stopped " + TaskKey(t), nil
+}
+
+// endTask stops task t for good, because: its state moves to stopped and
+// your input in is recorded, then its agents are parked, its open attempts
+// end failed, its heavy slot is freed and its copy released (the branch
+// stays): the copy it holds or a claim of it reserved, a claim that runs
+// cancelled.
+func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, in registry.Input) error {
 	if err := e.reg.TransitionTask(ctx, t.ID, stoppable, registry.TaskStopped, func(u *registry.TaskUpdate) {
 		u.Set("waits_who", "")
 		u.Set("waits_what", "")
-		u.Because("stopped by you")
+		u.Because(because)
 	}); err != nil {
-		return "", err
+		return err
 	}
-	if _, err := e.reg.RecordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputStop, Surface: p.Surface, Stage: t.Stage}); err != nil {
-		e.log.Warn("record a stop", "task", t.ID, "err", err)
+	if _, err := e.reg.RecordInput(ctx, in); err != nil {
+		e.log.Warn("record why a task stopped", "task", t.ID, "kind", in.Kind, "err", err)
 	}
 	if e.d.Runtime != nil {
 		if err := e.d.Runtime.Park(ctx, t); err != nil {
@@ -192,7 +203,7 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 			switch a.State {
 			case registry.AttemptLaunching, registry.AttemptRunning, registry.AttemptEnded:
 				if err := e.reg.TransitionAttempt(ctx, a.ID, []string{a.State}, registry.AttemptFailed, func(u *registry.AttemptUpdate) {
-					u.Set("error", "stopped by you")
+					u.Set("error", because)
 				}); err != nil {
 					e.log.Warn("end a stopped task's attempt", "attempt", a.ID, "err", err)
 				}
@@ -208,7 +219,7 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 	delete(e.panics, t.ID)
 	delete(e.inbox, t.ID)
 	delete(e.agentRuns, t.ID)
-	return "stopped " + TaskKey(t), nil
+	return nil
 }
 
 // startRequest answers a ReqStart (start): the task it made, or the task

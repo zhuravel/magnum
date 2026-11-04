@@ -196,7 +196,10 @@ type FactoryKind struct {
 // Gate holds; a review stage runs the local review loop (End "clean"); a
 // decision waits for your Decision; an effect does its Effect (End "pr").
 // When "wide" skips the stage unless the plan touches 3 or more files, the
-// database or security.
+// database or security. Prompt, for an agents stage, is the prompt file
+// every role of the stage gets in place of its own role's (a stage that
+// asks a role for another file than its usual one, such as the judge's PR
+// body); empty, each role's own.
 type FactoryStage struct {
 	Name     string   `toml:"name"`
 	Type     string   `toml:"type"`
@@ -206,6 +209,7 @@ type FactoryStage struct {
 	Decision string   `toml:"decision"`
 	Effect   string   `toml:"effect"`
 	When     string   `toml:"when"`
+	Prompt   string   `toml:"prompt"`
 }
 
 // The stage types, end facts, gates, decisions, effects and conditions a
@@ -626,7 +630,7 @@ func (c *Config) validateFactoryKinds() []error {
 				bad("is listed twice")
 			}
 			seen[st.Name] = true
-			errs = append(errs, validateStage(where, st, roles)...)
+			errs = append(errs, c.validateStage(where, st, roles)...)
 			if st.Type == FactoryStageDecision && st.Decision == FactoryDecisionReadyPush {
 				decided = true
 			}
@@ -639,8 +643,9 @@ func (c *Config) validateFactoryKinds() []error {
 }
 
 // validateStage checks one stage against its type: the fields its type
-// needs are set and valid, and the fields of another type are empty.
-func validateStage(where string, st FactoryStage, roles map[string]Role) []error {
+// needs are set and valid (an agents stage's prompt resolves and parses),
+// and the fields of another type are empty.
+func (c *Config) validateStage(where string, st FactoryStage, roles map[string]Role) []error {
 	var errs []error
 	bad := func(format string, a ...any) {
 		errs = append(errs, fmt.Errorf("%s: stage %q: "+format, append([]any{where, st.Name}, a...)...))
@@ -662,6 +667,9 @@ func validateStage(where string, st FactoryStage, roles map[string]Role) []error
 	}
 	if st.Type != FactoryStageAgents && len(st.Roles) > 0 {
 		bad("roles are for agents stages only")
+	}
+	if st.Type != FactoryStageAgents && st.Prompt != "" {
+		bad("prompt is for agents stages only")
 	}
 	if st.Type != FactoryStageGate && st.Gate != "" {
 		bad("gate is for gate stages only")
@@ -687,6 +695,13 @@ func validateStage(where string, st FactoryStage, roles map[string]Role) []error
 		}
 		if st.End == "" {
 			bad("needs an end fact (one of %s)", strings.Join(FactoryEndFacts, ", "))
+		}
+		if st.Prompt != "" {
+			if p, err := c.ResolvePrompt(st.Prompt); err != nil {
+				bad("prompt: %v", err)
+			} else if _, err := ParseTemplate(p.Name, p.Text, p.Shared); err != nil {
+				bad("prompt %s: %v", p.Name, err)
+			}
 		}
 	case FactoryStageGate:
 		oneOf("gate", st.Gate, FactoryGates)

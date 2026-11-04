@@ -79,35 +79,8 @@ func runFactoryStartCmd(c *Context, kind, repo string, pos []string) int {
 		return 1
 	}
 	defer reg.Close()
-	id, err := reg.EnqueueRequest(ctx, factory.ReqStart, factory.StartPayload{Text: text, Kind: kind, Repo: repo})
-	if err != nil {
-		fmt.Fprintf(c.Stderr, "magnum factory start: %v\n", err)
-		return 1
-	}
-	pid, kerr := daemonSys.factoryKick(c.Layout)
-	if kerr != nil {
-		fmt.Fprintf(c.Stderr, "magnum factory start: could not wake the factory daemon: %v (it picks request %d up on its next tick)\n", kerr, id)
-	}
-	if pid == 0 {
-		fmt.Fprintf(c.Stderr, "magnum factory start: queued as request %d, but no factory daemon runs: `magnum factory install` "+
-			"loads it, and it starts the task if it runs within 30 minutes (a request expires then)\n", id)
-		return 0
-	}
-	q, err := waitFactoryRequest(ctx, reg, id)
-	if err != nil {
-		fmt.Fprintf(c.Stderr, "magnum factory start: %v\n", err)
-		return 1
-	}
-	switch q.State {
-	case registry.RequestDone:
-		fmt.Fprintln(c.Stdout, q.Result)
-		return 0
-	case registry.RequestFailed:
-		fmt.Fprintf(c.Stderr, "magnum factory start: %s\n", q.Result)
-		return 1
-	}
-	fmt.Fprintf(c.Stdout, "the factory daemon (pid %d) has not answered request %d yet: `magnum factory status` lists the task once it starts\n", pid, id)
-	return 0
+	return sendFactoryRequest(ctx, c, reg, "factory start", factory.ReqStart, factory.StartPayload{Text: text, Kind: kind, Repo: repo},
+		"it starts the task")
 }
 
 // waitFactoryRequest re-reads request id until the factory daemon answers

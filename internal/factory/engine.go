@@ -279,6 +279,7 @@ func New(d Deps) *Engine {
 		agentRuns:  map[int64]*agentsRun{},
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
+	e.runners[config.FactoryStageGate] = e.runGate
 	return e
 }
 

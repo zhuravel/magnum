@@ -328,6 +328,8 @@ func TestFactoryChecksEachStageAgainstItsType(t *testing.T) {
 		"unknown decision": {func(s []FactoryStage) []FactoryStage { s[findStage(s, "ready")].Decision = "vibes"; return s }, []string{`stage "ready"`, `decision "vibes"`}},
 		"unknown effect":   {func(s []FactoryStage) []FactoryStage { s[findStage(s, "publish")].Effect = "vibes"; return s }, []string{`stage "publish"`, `effect "vibes"`}},
 		"unknown when":     {func(s []FactoryStage) []FactoryStage { s[0].When = "sometimes"; return s }, []string{`stage "investigate"`, `when "sometimes"`}},
+		"prompt on a gate": {stagePrompt("questions", "factory-judge.md"), []string{`stage "questions"`, "prompt is for agents stages only"}},
+		"unknown prompt":   {stagePrompt("pr_body", "factory-nope.md"), []string{`stage "pr_body"`, "prompt", "factory-nope.md"}},
 		"twice":            {func(s []FactoryStage) []FactoryStage { s[1].Name = s[0].Name; return s }, []string{`stage "investigate"`, "twice"}},
 		"no stages":        {func(s []FactoryStage) []FactoryStage { return nil }, []string{"factory kind bug", "at least one stage"}},
 		"publish without a decision": {func(s []FactoryStage) []FactoryStage {
@@ -340,6 +342,24 @@ func TestFactoryChecksEachStageAgainstItsType(t *testing.T) {
 			editKind(cfg, "bug", tc.edit)
 			wantError(t, cfg.Validate(), append([]string{"factory kind bug"}, tc.want...)...)
 		})
+	}
+}
+
+// An agents stage may give its roles a prompt of its own, in place of each
+// role's: a file that resolves and parses.
+func TestAnAgentsStageMayNameAPromptForItsRoles(t *testing.T) {
+	cfg := validFactoryConfig()
+	editKind(cfg, "bug", stagePrompt("pr_body", "factory-amend.md"))
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a stage prompt that resolves: %v", err)
+	}
+}
+
+// stagePrompt is an edit of a kind's stages: stage gets prompt.
+func stagePrompt(stage, prompt string) func(s []FactoryStage) []FactoryStage {
+	return func(s []FactoryStage) []FactoryStage {
+		s[findStage(s, stage)].Prompt = prompt
+		return s
 	}
 }
 

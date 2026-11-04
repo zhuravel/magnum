@@ -5303,6 +5303,7 @@ type FactoryStage struct {
 	Decision string   `toml:"decision"`
 	Effect   string   `toml:"effect"`
 	When     string   `toml:"when"`
+	Prompt   string   `toml:"prompt"`
 }
     FactoryStage is one stage of a kind of task. Its Type picks the code that
     runs it and which of the other fields it takes: an agents stage launches
@@ -5310,7 +5311,10 @@ type FactoryStage struct {
     its Gate holds; a review stage runs the local review loop (End "clean");
     a decision waits for your Decision; an effect does its Effect (End "pr").
     When "wide" skips the stage unless the plan touches 3 or more files,
-    the database or security.
+    the database or security. Prompt, for an agents stage, is the prompt file
+    every role of the stage gets in place of its own role's (a stage that asks
+    a role for another file than its usual one, such as the judge's PR body);
+    empty, each role's own.
 
 type FactoryStaging struct {
 	Name   string `toml:"name"`
@@ -11217,6 +11221,11 @@ const (
 )
     Request kinds.
 
+const AmendPrompt = "factory-amend.md"
+    AmendPrompt is the prompt of the judge's turn that amends report.md when
+    your answers change the plan: the report stage's roles get it in place of
+    their own prompt.
+
 const HandoffFile = "handoff.md"
     HandoffFile is the file of a task's directory a release writes: how the task
     left its copy, for whoever claims a copy for it next.
@@ -11297,11 +11306,13 @@ func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok boo
     (not done, saying so).
 
 func CheckPrompts(cfg *config.Config) error
-    CheckPrompts renders the prompt of every factory role ([[factory.role]])
-    with data whose every field is set, as the factory daemon does once at
-    startup, after it loaded its prompts: a prompt (or factory-shared.md) that
-    names a field the data lacks, or a block the partials file does not define,
-    is an error naming the role and its file.
+    CheckPrompts renders the prompt of every factory role ([[factory.role]]),
+    every agents stage's own prompt (FactoryStage.Prompt) and the amend turn's
+    (AmendPrompt, for the roles of each kind's report stage) with data whose
+    every field is set, as the factory daemon does once at startup, after it
+    loaded its prompts: a prompt (or factory-shared.md) that names a field the
+    data lacks, or a block the partials file does not define, is an error naming
+    the role or the stage and its file.
 
 func DaemonPID(l paths.Layout) (int, error)
     DaemonPID returns the pid of the running factory daemon from its pidfile
@@ -11343,6 +11354,11 @@ func PickKind(cfg config.Factory, t *jira.Ticket, prompt string) (kind, why stri
     Only a configured kind is picked. why says how, in the words the new-task
     screen shows.
 
+func PromptNames(cfg *config.Config) []string
+    PromptNames are the prompt files the factory renders: each factory role's
+    (of each prompt kind), each agents stage's own, and the amend turn's,
+    once each; the daemon loads them at startup (config.SnapshotPrompts).
+
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
     "task <id>".
@@ -11365,6 +11381,20 @@ type AcceptanceFile struct {
 }
     AcceptanceFile is acceptance.json, the judge's checks that prove the task,
     from the ticket: the writer and QA reuse them.
+
+type AnswerPayload struct {
+	TaskID   int64
+	Revision int
+	Answers  map[int]string
+	Needless map[int]string
+	Surface  string
+}
+    AnswerPayload is a ReqAnswer: your answers to the questions of revision
+    Revision of task TaskID, by question index (from 0): an option's label,
+    your own words, or "ask:<login>" (then, optionally, the comment for that
+    person in your words) to ask someone else; Needless are the questions you
+    call needless, by index, with the key of your reason. Surface is where you
+    answered (the screen, the CLI), for the record of your input.
 
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)

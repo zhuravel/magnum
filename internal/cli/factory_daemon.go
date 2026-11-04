@@ -128,8 +128,8 @@ func (d *factoryDaemon) Close() error {
 
 // buildFactoryDaemon builds the factory daemon of c's config and layout: its
 // own log (logs/factory.log, rotated), its prompts loaded once
-// (config.SnapshotPrompts: the factory roles' prompts beside the review
-// roles', with factory-shared.md) and rendered once with this build
+// (config.SnapshotPrompts: the factory's prompts, factory.PromptNames, beside
+// the review roles', with factory-shared.md) and rendered once with this build
 // (factory.CheckPrompts), its registry (Layout.FactoryDB, migrated by the daemon) and its
 // agents store (Layout.FactoryAgentsDB), and the engine with the
 // collaborators this build has: the memory and disk reads, a MySQL ping when
@@ -172,7 +172,7 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	}
 	d.Log = app.NewLogger(logf, mirror, level)
 
-	snap, err := cfg.SnapshotPrompts("", time.Now(), factoryPromptNames(cfg)...)
+	snap, err := cfg.SnapshotPrompts("", time.Now(), factory.PromptNames(cfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("factory: %w", err)
 	}
@@ -235,20 +235,6 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	d.Engine = factory.New(deps)
 	built = true
 	return d, nil
-}
-
-// factoryPromptNames are the prompt files the factory roles name, each
-// once, for the daemon's prompt snapshot.
-func factoryPromptNames(cfg *config.Config) []string {
-	var names []string
-	for _, r := range cfg.Factory.Roles {
-		for _, kind := range config.PromptKinds {
-			if n := r.PromptFile(kind); n != "" && !slices.Contains(names, n) {
-				names = append(names, n)
-			}
-		}
-	}
-	return names
 }
 
 // factoryHerdrSocket is the socket of the factory's herdr session: [factory]

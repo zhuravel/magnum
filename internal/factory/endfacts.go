@@ -281,20 +281,33 @@ func (r report) problem() string {
 	return ""
 }
 
-// notReprodRe is the first line of the Proof section of a bug that did not
-// reproduce: "Reproduced: no", in any case and emphasis.
-var notReprodRe = regexp.MustCompile(`(?i)^[*_\s]*reproduced[*_\s]*:[*_\s]*no\b`)
+// notReprodRe and reprodRe are the first line of the Proof section of a bug
+// that did not reproduce, "Reproduced: no", and of one that did,
+// "Reproduced: yes": in any case and emphasis, after a list marker or not.
+var (
+	notReprodRe = regexp.MustCompile(`(?i)^[-+*_\s]*reproduced[*_\s]*:[*_\s]*no\b`)
+	reprodRe    = regexp.MustCompile(`(?i)^[-+*_\s]*reproduced[*_\s]*:[*_\s]*yes\b`)
+)
+
+// proofLine is the first line of the report's Proof section that is not
+// blank ("" when there is none).
+func (r report) proofLine() string {
+	for l := range strings.SplitSeq(r.sections[sectionProof], "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
 
 // notReproduced reports whether the report's Proof says the bug did not
 // reproduce.
-func (r report) notReproduced() bool {
-	for l := range strings.SplitSeq(r.sections[sectionProof], "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return notReprodRe.MatchString(l)
-		}
-	}
-	return false
-}
+func (r report) notReproduced() bool { return notReprodRe.MatchString(r.proofLine()) }
+
+// reproduced reports whether the report's Proof says, in so many words, that
+// the bug reproduced: anything else (no Proof, "Reproduced: no", a Proof
+// that names no reproduction) is not a reproduction.
+func (r report) reproduced() bool { return reprodRe.MatchString(r.proofLine()) }
 
 // lineSuffixRe is a :line (or :line-line) a file path may carry.
 var lineSuffixRe = regexp.MustCompile(`:\d+(-\d+)?$`)

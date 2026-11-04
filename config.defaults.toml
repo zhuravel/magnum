@@ -898,8 +898,11 @@ doing = "writing the change"
 # The kinds of task and their stages, in order. A stage has a name and a type:
 #   agents    launches `roles` in parallel in the task's copy; ends when its `end` fact holds
 #             (findings, report, critic, proof or pr_body: a file or a result the factory checks, never a "done" message)
-#   gate      waits until its `gate` holds: no_open_questions (all open questions go to you in one batch) or reproduced
-#             (the bug's report names a reproduction)
+#             `prompt` (optional) is the prompt file every role of the stage gets in place of its own role's
+#   gate      waits until its `gate` holds: no_open_questions (all open questions go to you in one batch, and an
+#             answer that changes the plan has the report stage's roles amend report.md with factory-amend.md
+#             first) or reproduced (the bug's report says `Reproduced: yes`; else the reproduction question waits
+#             on you)
 #   review    magnum's review loop on the change ([factory.local_review]); ends when a round is clean
 #   decision  waits for you: ready_push shows the ready card, and your y binds to the head it shows
 #   effect    publish pushes the approved head and opens the PR, ready for review, under your login
