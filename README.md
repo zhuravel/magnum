@@ -3692,7 +3692,7 @@ stage, where the writer merges the base (its prompt names `origin/<base>` and th
 proof and the precheck run again, a fresh local loop reviews the merge, the judge drafts the body again, and
 the next card is a new revision. The card (`ready-card.json`) holds the head, the hash of `report.md` and
 `pr-body.md` as shown, the hash of the diff, the PR's title (`<KEY> <title>`, the title alone for a task of a
-prompt), the copy a push frees and the FLAGS line: the migrations the branch adds, the `sensitive` files, the
+prompt), the branch the push goes to, the copy a push frees and the FLAGS line: the migrations the branch adds, the `sensitive` files, the
 files the plan did not name, a guard the change rewrites that is older than 6 months with the reason the history
 agent found, the CI jobs of the workflows that run on a pull request whose commands the precheck did not run,
 and the conflicts. The task waits on you (`ready to push (card <n>): <title>`); decide with `magnum factory
@@ -3700,7 +3700,8 @@ decide`.
 
 On your push the factory, never an agent, publishes the approved head once (the effect
 `publish:<task>:<sha>`): it checks the card's conditions again, the branch in the copy at the head you approved
-and the PR body as the card showed it, reads the remote branch (`git ls-remote`) and the PRs of the branch,
+and the PR body as the card showed it, reads the remote branch (`git ls-remote`) and the PRs of the branch
+(only the repository's own: a fork's PR of a branch of the same name is none of the task's),
 pushes with a lease (`git push --force-with-lease=refs/heads/<branch>:<expected head> origin
 <sha>:refs/heads/<branch>`, refused for a commit that does not descend from the expected head, so it never
 rewrites history), opens the PR ready for review (never a draft) with `gh pr create` as your gh identity (the one
@@ -3708,7 +3709,12 @@ the local review runs as) and the drafted body, and reads it back: the author mu
 repository's, the head the approved one, and it must not be a draft, or the task needs you (`the PR's <field>
 is not what you approved`). It never forces: a remote branch at a head it did not push, or a PR of the branch
 that is not the one you approved, needs you, naming it. A daemon stopped in the middle resumes from the effect,
-reading the remote branch and the branch's PRs first, so nothing is pushed or opened twice. Then the PR is
+reading the remote branch and the branch's PRs first, so nothing is pushed or opened twice. The push, its read of
+the remote branch and every `gh` call run as you only: your gh config dir (`$GH_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/gh`, else `~/.config/gh`) and none of `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
+`GITHUB_ENTERPRISE_TOKEN` of the daemon's environment. The branch the push goes to is the task's own, or, for a
+task whose Jira key was linked after its branch was made, `<login>-<KEY>-<slug of its title>`, recorded on the
+task when its card names it (the local branch keeps its name). Then the PR is
 linked, the task is published, its agents are parked, its copy is released and the queued task behind it
 starts. The factory sends magnum no review request: the PR is not a draft, and magnum reviews it by itself.
 

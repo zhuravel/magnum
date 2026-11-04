@@ -42,11 +42,13 @@ type codingRig struct {
 	// dir and gives its exit (it may write the copy's files, as Rails dumps
 	// db/schema.rb); hang makes a script never end on its own (it ends with
 	// its command's timeout or its context, as execx ends one); failGit
-	// fails the git commands it names (an error, not nil).
+	// fails the git commands it names (an error, not nil); seenGit sees
+	// every git command as the factory built it (its env and its unset).
 	lint    func(files []string) string
 	migrate func(dir, script string) int
 	hang    func(run scriptRun) bool
 	failGit func(args []string) error
+	seenGit func(c execx.Cmd)
 	// during runs inside each script, before it does its work (a person
 	// entering the copy's pane mid-run, a spec writing a tracked file);
 	// startErr is the error of a script that did not start (nil: it starts).
@@ -133,8 +135,11 @@ func (x rigRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
 	switch c.Name {
 	case "git":
 		x.r.mu.Lock()
-		fail := x.r.failGit
+		fail, seen := x.r.failGit, x.r.seenGit
 		x.r.mu.Unlock()
+		if seen != nil {
+			seen(c)
+		}
 		if fail != nil {
 			if err := fail(c.Args); err != nil {
 				return execx.Result{Code: 128}, &execx.ExitError{Cmd: c, Code: 128, Stderr: err.Error()}

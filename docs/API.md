@@ -11509,8 +11509,8 @@ func CheckPrompts(cfg *config.Config) error
 
 func ConfirmSentence(t registry.Task, frees string, starts string) string
     ConfirmSentence is the y/N question of the ready card's push: the branch it
-    pushes, the copy it frees and the queued task that then starts (each left
-    out when "").
+    pushes (the task's remote branch, else its own), the copy it frees and the
+    queued task that then starts (each left out when "").
 
 func DaemonPID(l paths.Layout) (int, error)
     DaemonPID returns the pid of the running factory daemon from its pidfile
@@ -12060,6 +12060,7 @@ type ReadyCardFile struct {
 	ReportHash string        `json:"report_hash"`
 	DiffHash   string        `json:"diff_hash"`
 	Branch     string        `json:"branch"`
+	Remote     string        `json:"remote"`
 	Title      string        `json:"title"`
 	Copy       string        `json:"copy"`
 	CopyPath   string        `json:"copy_path"`
@@ -13093,7 +13094,12 @@ type Task struct {
 	QuestionRev int
 	// CodexNever says Codex never works on this task again (a cybersecurity
 	// warning marked it).
-	CodexNever       bool
+	CodexNever bool
+	// RemoteBranch is the branch the task's PR is pushed to, "" until its
+	// ready card names it: Branch's own name, or <login>-<KEY>-<slug> for a
+	// task whose key was linked after its branch was made (Branch keeps its
+	// name).
+	RemoteBranch     string
 	Created, Updated time.Time
 }
     Task is one piece of work: a Jira key or a free prompt, taken to a PR.
@@ -13101,9 +13107,9 @@ type Task struct {
 type TaskUpdate struct {
 	// Has unexported fields.
 }
-    TaskUpdate collects the column assignments of TransitionTask.
-    Settable columns: kind, repo, title, guidance, stage, branch, copy,
-    head_sha, waits_who, waits_what, attempt, pr_number and codex_never.
+    TaskUpdate collects the column assignments of TransitionTask. Settable
+    columns: kind, repo, title, guidance, stage, branch, copy, head_sha,
+    waits_who, waits_what, attempt, pr_number, codex_never and remote_branch.
     The state moves through TransitionTask's `to`, the question revision through
     ReplaceQuestions, and updated_at is the registry's.
 

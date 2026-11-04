@@ -101,6 +101,7 @@ type ReadyCardFile struct {
 	ReportHash string        `json:"report_hash"`
 	DiffHash   string        `json:"diff_hash"`
 	Branch     string        `json:"branch"`
+	Remote     string        `json:"remote"`
 	Title      string        `json:"title"`
 	Copy       string        `json:"copy"`
 	CopyPath   string        `json:"copy_path"`
@@ -220,10 +221,10 @@ func prTitle(t registry.Task) string {
 }
 
 // ConfirmSentence is the y/N question of the ready card's push: the branch
-// it pushes, the copy it frees and the queued task that then starts (each
-// left out when "").
+// it pushes (the task's remote branch, else its own), the copy it frees and
+// the queued task that then starts (each left out when "").
 func ConfirmSentence(t registry.Task, frees string, starts string) string {
-	s := "Push " + t.Branch + " and open the PR?"
+	s := "Push " + cmp.Or(t.RemoteBranch, t.Branch) + " and open the PR?"
 	if frees != "" {
 		s += " This frees " + frees
 		if starts != "" {
@@ -303,6 +304,9 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	}
 	if ok, err := e.pushApproved(ctx, t, now); err != nil || ok {
 		return ok, err
+	}
+	if err := e.nameRemoteBranch(ctx, &t); err != nil {
+		return false, e.stageFailed(ctx, t, err)
 	}
 	f, err := e.flags(ctx, t, c)
 	if err != nil {
@@ -387,6 +391,39 @@ func (e *Engine) prLogin(t registry.Task) (string, error) {
 	return id.Login, nil
 }
 
+// nameRemoteBranch names and records the branch task t's PR is pushed to
+// (Task.RemoteBranch; *t has it): its own branch when that holds its Jira
+// key or it has none, else <login>-<KEY>-<slug of its title> as intake
+// names a key's branch (branchFor: no other task's and no branch of the
+// main clone), for a task whose key was linked after its branch was made;
+// the local branch keeps its name. A recorded name stays, unless it lacks
+// the key the task got since (the ready card names it again before
+// anything is pushed).
+func (e *Engine) nameRemoteBranch(ctx context.Context, t *registry.Task) error {
+	if t.RemoteBranch != "" && (t.JiraKey == "" || strings.Contains(t.RemoteBranch, t.JiraKey)) {
+		return nil
+	}
+	name := t.Branch
+	if t.JiraKey != "" && !strings.Contains(t.Branch, t.JiraKey) {
+		login, err := e.operatorLogin(t.Repo)
+		if err != nil {
+			return needsYou{err.Error()}
+		}
+		if name, err = e.branchFor(ctx, t.ID, t.Repo, login, t.JiraKey, t.Title); err != nil {
+			return err
+		}
+	}
+	if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) { u.Set("remote_branch", name) }); err != nil {
+		return err
+	}
+	if name != t.Branch {
+		e.event(ctx, t.ID, "ready", registry.PhaseInfo, fmt.Sprintf("the PR's branch is %s: %s was linked after %s was made, which keeps its name",
+			name, t.JiraKey, t.Branch))
+	}
+	t.RemoteBranch = name
+	return nil
+}
+
 // cardNow is what task t's card shows of its change in copy c now (bh).
 func (e *Engine) cardNow(ctx context.Context, t registry.Task, c Copy, bh branchHead) (cardState, error) {
 	rh, err := reportHash(e.d.Layout.FactoryTaskDir(t.ID))
@@ -446,7 +483,7 @@ func (e *Engine) pushApproved(ctx context.Context, t registry.Task, now cardStat
 func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now cardState, f Flags, sum ReviewSummary) (ReadyCardFile, error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	card := ReadyCardFile{Head: now.head, Base: now.base, ReportHash: now.reportHash, DiffHash: now.diffHash, Branch: t.Branch,
-		Title: prTitle(t), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum}
+		Remote: cmp.Or(t.RemoteBranch, t.Branch), Title: prTitle(t), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum}
 	old, err := readCard(dir)
 	if err == nil && sameCard(old, card) {
 		return old, nil

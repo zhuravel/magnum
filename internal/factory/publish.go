@@ -31,6 +31,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -50,8 +51,9 @@ func (e *Engine) runEffect(ctx context.Context, t registry.Task, st config.Facto
 func publishKey(id int64, sha string) string { return fmt.Sprintf("publish:%d:%s", id, sha) }
 
 // runPublish publishes task t's head that you approved (your push on its
-// ready card), once: see the file's comment. A build without GitHub or git
-// leaves the task where it is.
+// ready card), once, to its remote branch (Task.RemoteBranch, which its
+// card named): see the file's comment. A build without GitHub or git leaves
+// the task where it is.
 func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) {
 	if e.d.GitHub == nil || e.d.Git == nil {
 		return false, nil
@@ -106,6 +108,13 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		return false, e.stageFailed(ctx, t, needsYou{"the branch changed after you read it: " + reportFile + " or " + prBodyFile +
 			" changed since your push; nothing is pushed"})
 	}
+	if err := e.nameRemoteBranch(ctx, &t); err != nil { // a card an older build drew named none
+		return false, e.stageFailed(ctx, t, err)
+	}
+	git, err := e.operatorGit(ctx, t.Repo)
+	if err != nil {
+		return false, err
+	}
 	eff, run, err := e.beginEffect(ctx, key, "publish", t.ID)
 	if err != nil {
 		return false, err
@@ -114,9 +123,10 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		return e.finishPublish(ctx, t, sha)
 	}
 	if eff.Resumed {
-		e.event(ctx, t.ID, "publish", registry.PhaseInfo, "resumes the publish of "+short(sha)+": it reads the remote branch and its PRs first")
+		e.event(ctx, t.ID, "publish", registry.PhaseInfo, "resumes the publish of "+short(sha)+" to "+t.RemoteBranch+
+			": it reads the remote branch and its PRs first")
 	}
-	view, problem, err := e.publish(ctx, t, c.Path, baseOf(repo), sha, login)
+	view, problem, err := e.publish(ctx, t, git, c.Path, baseOf(repo), sha, login)
 	if err != nil || problem != "" {
 		why := problem
 		if err != nil {
@@ -130,7 +140,7 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		}
 		return false, e.stageFailed(ctx, t, needsYou{problem})
 	}
-	if err := e.reg.LinkPR(ctx, registry.PRLink{TaskID: t.ID, Repo: t.Repo, Number: view.Number, Branch: t.Branch, OpenedHead: view.HeadSHA,
+	if err := e.reg.LinkPR(ctx, registry.PRLink{TaskID: t.ID, Repo: t.Repo, Number: view.Number, Branch: t.RemoteBranch, OpenedHead: view.HeadSHA,
 		ApprovedHead: sha}); err != nil {
 		return false, err
 	}
@@ -140,26 +150,28 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 	return e.finishPublish(ctx, t, sha)
 }
 
-// publish pushes sha to task t's branch from the copy at dir and opens its
-// PR on base as login, each step guarded and evented: the remote branch and
-// the PRs of the branch are read first, so a step done before is not done
-// again, and nothing is forced. problem is what needs you (a branch or a
-// PR that is not the one you approved, the PR read back); err a failure to
-// run, which the effect runs again after.
-func (e *Engine) publish(ctx context.Context, t registry.Task, dir, base, sha, login string) (view PRView, problem string, err error) {
-	gh := e.d.GitHub
-	remote, err := e.remoteHead(ctx, dir, t.Branch)
+// publish pushes sha to task t's remote branch (Task.RemoteBranch) from the
+// copy at dir with git (as you: operatorGit) and opens its PR on base as
+// login, each step guarded and evented: the remote branch and the PRs of
+// the branch are read first, so a step done before is not done again, and
+// nothing is forced. problem is what needs you (a branch or a PR that is
+// not the one you approved, the PR read back); err a failure to run, which
+// the effect runs again after.
+func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client, dir, base, sha, login string) (view PRView, problem string,
+	err error) {
+	gh, branch := e.d.GitHub, t.RemoteBranch
+	remote, err := remoteHead(ctx, git, dir, branch)
 	if err != nil {
 		return view, "", err
 	}
-	pr, found, err := gh.PRByBranch(ctx, t.Repo, t.Branch)
+	pr, found, err := gh.PRByBranch(ctx, t.Repo, branch)
 	if err != nil {
 		return view, "", err
 	}
 	if found {
 		if field := prMismatch(pr, login, base, sha); field != "" {
 			return view, fmt.Sprintf("a PR of %s is open already, #%d, and it is not what you approved: %s; nothing is pushed over it",
-				t.Branch, pr.Number, field), nil
+				branch, pr.Number, field), nil
 		}
 	}
 
@@ -175,22 +187,22 @@ func (e *Engine) publish(ctx context.Context, t registry.Task, dir, base, sha, l
 	}
 	switch remote {
 	case sha:
-		e.event(ctx, t.ID, "publish", registry.PhaseOK, "push: "+t.Branch+" is at "+short(sha)+" on origin already")
+		e.event(ctx, t.ID, "publish", registry.PhaseOK, "push: "+branch+" is at "+short(sha)+" on origin already")
 	case "":
-		if err := step("push", "pushes "+short(sha)+" to "+t.Branch+" (a new branch)", func() (string, error) {
-			return "pushed " + short(sha), e.d.Git.PushLease(ctx, dir, sha, t.Branch, "")
+		if err := step("push", "pushes "+short(sha)+" of "+t.Branch+" to "+branch+" (a new branch)", func() (string, error) {
+			return "pushed " + short(sha), git.PushLease(ctx, dir, sha, branch, "")
 		}); err != nil {
 			return view, "", err
 		}
 	default:
-		return view, fmt.Sprintf("the remote branch %s is at %s, a head the factory did not push: nothing is pushed over it", t.Branch,
+		return view, fmt.Sprintf("the remote branch %s is at %s, a head the factory did not push: nothing is pushed over it", branch,
 			short(remote)), nil
 	}
 	if !found {
 		title := prTitle(t)
-		if err := step("pr", "opens the PR of "+t.Branch+" on "+base+", ready for review", func() (string, error) {
+		if err := step("pr", "opens the PR of "+branch+" on "+base+", ready for review", func() (string, error) {
 			var err error
-			pr, err = gh.CreatePR(ctx, t.Repo, base, t.Branch, title, filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), prBodyFile))
+			pr, err = gh.CreatePR(ctx, t.Repo, base, branch, title, filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), prBodyFile))
 			return fmt.Sprintf("opened #%d", pr.Number), err
 		}); err != nil {
 			return view, "", err
@@ -226,11 +238,11 @@ func prMismatch(v PRView, login, base, sha string) string {
 	return ""
 }
 
-// remoteHead is branch's head on origin, read from the copy at dir (git
-// ls-remote): "" when origin has no such branch.
-func (e *Engine) remoteHead(ctx context.Context, dir, branch string) (string, error) {
+// remoteHead is branch's head on origin, read from the copy at dir with git
+// (ls-remote): "" when origin has no such branch.
+func remoteHead(ctx context.Context, git *gitx.Client, dir, branch string) (string, error) {
 	ref := "refs/heads/" + branch
-	out, err := e.d.Git.LsRemote(ctx, dir, lsRemoteTimeout, ref)
+	out, err := git.LsRemote(ctx, dir, lsRemoteTimeout, ref)
 	if err != nil {
 		return "", err
 	}

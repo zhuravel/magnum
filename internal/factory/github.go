@@ -1,17 +1,26 @@
 package factory
 
 // The factory's GitHub (spec 6.6): gh as your own login, the gh identity
-// the local review runs as (evalrun.LocalIdentity), with your gh config dir
-// and keyring login (identity.GH's environment, GH_HOST pinned) and no
-// token of the daemon's environment, so a PR the factory opens is yours.
-// It opens a PR ready for review (never --draft) and reads PRs back; the
-// title and the body file pass to gh as arguments, never through a shell.
+// the local review runs as (evalrun.LocalIdentity), and the publish's git
+// (its push and its read of the remote branch) as you too: your gh config
+// dir (operatorGHDir, where gh and its git credential helper read your
+// login), GH_HOST pinned, and none of the GitHub tokens of the daemon's
+// environment, which could push or open the PR as someone else
+// (asOperator). It opens a PR ready for review (never --draft), finds the
+// PR of a branch among the repository's own (never a fork's of the same
+// branch name) and reads PRs back; the title and the body file pass to gh
+// as arguments, never through a shell.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/identity"
 )
 
@@ -26,11 +36,106 @@ import (
 const ghTimeout = time.Minute
 
 // ghTokens are the variables of the daemon's environment that would make gh
-// act as another login than yours: gh never inherits them here.
+// (or git through gh's credential helper) act as another login than yours:
+// nothing the publish runs inherits them.
 var ghTokens = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 
-// ghPRFields are the fields a PR is read back with (PRView).
-const ghPRFields = "number,url,author,baseRefName,headRefOid,isDraft"
+// ghPRFields are the fields a PR is read back with (PRView), and the head
+// repository a PR of a branch must be (PRByBranch).
+const ghPRFields = "number,url,author,baseRefName,headRefOid,isDraft,headRepository,headRepositoryOwner"
+
+// operatorGHDir is your own gh config directory, where gh and its git
+// credential helper read your login: $GH_CONFIG_DIR when your environment
+// sets one, else $XDG_CONFIG_HOME/gh, else ~/.config/gh (gh's own order),
+// named explicitly so that no other config dir can stand in for it.
+func operatorGHDir() (string, error) {
+	if d := os.Getenv("GH_CONFIG_DIR"); d != "" {
+		return d, nil
+	}
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "gh"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("your gh config dir: %w", err)
+	}
+	return filepath.Join(home, ".config", "gh"), nil
+}
+
+// asOperator is the environment of what the publish runs as you, the gh
+// identity id: identity.GH's (GH_HOST pinned) with your gh config dir, and
+// the variables it never inherits: what the factory's commands never do
+// (unsetEnv: the GitHub tokens among them) and every GitHub token.
+func asOperator(ctx context.Context, cfg *config.Config, id config.Identity, run execx.Runner) (env map[string]string, unset []string, err error) {
+	if env, err = identity.NewGH(id, run).Env(ctx); err != nil {
+		return nil, nil, err
+	}
+	dir, err := operatorGHDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	env = maps.Clone(env)
+	env["GH_CONFIG_DIR"] = dir
+	unset = slices.Concat(unsetEnv(cfg), ghTokens)
+	slices.Sort(unset)
+	return env, slices.Compact(unset), nil
+}
+
+// operatorIdentity is the gh identity the publish of repo runs as: the one
+// its local review runs as (evalrun.LocalIdentity).
+func operatorIdentity(cfg *config.Config, repo string) (config.Identity, error) {
+	var w config.Watch
+	if p := cfg.WatchFor(repo); p != nil {
+		w = *p
+	}
+	name, err := evalrun.LocalIdentity(cfg, &w)
+	if err != nil {
+		return config.Identity{}, err
+	}
+	id := cfg.IdentityByName(name)
+	if id == nil {
+		return config.Identity{}, fmt.Errorf("no [[identity]] named %s", name)
+	}
+	return *id, nil
+}
+
+// operatorRunner runs each command through next as you (asOperator): env
+// laid over its own, unset added to its own.
+type operatorRunner struct {
+	next  execx.Runner
+	env   map[string]string
+	unset []string
+}
+
+func (r operatorRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	env := maps.Clone(c.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	maps.Copy(env, r.env)
+	c.Env, c.Unset = env, slices.Concat(c.Unset, r.unset)
+	return r.next.Run(ctx, c)
+}
+
+// operatorGit is the publish's git for task repo repo: the engine's runner
+// (behind the deny list) as you (asOperator), reaching origin as the
+// engine's git does (HTTPSFetch).
+func (e *Engine) operatorGit(ctx context.Context, repo string) (*gitx.Client, error) {
+	if e.run == nil || e.d.Git == nil {
+		return nil, errors.New("this factory daemon has no runner to push with")
+	}
+	id, err := operatorIdentity(e.cfg, repo)
+	if err != nil {
+		return nil, err
+	}
+	env, unset, err := asOperator(ctx, e.cfg, id, e.run)
+	if err != nil {
+		return nil, err
+	}
+	g := gitx.New(operatorRunner{next: e.run, env: env, unset: unset})
+	g.HTTPSFetch = e.d.Git.HTTPSFetch
+	return g, nil
+}
 
 // NewGitHub is the factory's GitHub over run: gh as your gh identity for
 // each repository, the one its local review runs as.
@@ -41,25 +146,18 @@ type ghClient struct {
 	run execx.Runner
 }
 
-// gh runs gh with args as your gh identity for repo (label names it).
+// gh runs gh with args as your gh identity for repo (label names it), as
+// you only (asOperator).
 func (g ghClient) gh(ctx context.Context, repo, label string, mutates bool, args ...string) (execx.Result, error) {
-	var w config.Watch
-	if p := g.cfg.WatchFor(repo); p != nil {
-		w = *p
-	}
-	name, err := evalrun.LocalIdentity(g.cfg, &w)
+	id, err := operatorIdentity(g.cfg, repo)
 	if err != nil {
 		return execx.Result{}, fmt.Errorf("%s: %w", label, err)
 	}
-	id := g.cfg.IdentityByName(name)
-	if id == nil {
-		return execx.Result{}, fmt.Errorf("%s: no [[identity]] named %s", label, name)
-	}
-	env, err := identity.NewGH(*id, g.run).Env(ctx)
+	env, unset, err := asOperator(ctx, g.cfg, id, g.run)
 	if err != nil {
-		return execx.Result{}, err
+		return execx.Result{}, fmt.Errorf("%s: %w", label, err)
 	}
-	return g.run.Run(ctx, execx.Cmd{Name: "gh", Args: args, Env: env, Unset: ghTokens, Timeout: ghTimeout, Mutates: mutates,
+	return g.run.Run(ctx, execx.Cmd{Name: "gh", Args: args, Env: env, Unset: unset, Timeout: ghTimeout, Mutates: mutates,
 		Label: label + " (as " + id.Login + ")"})
 }
 
@@ -93,19 +191,33 @@ type ghPRView struct {
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
-	BaseRefName string `json:"baseRefName"`
-	HeadRefOid  string `json:"headRefOid"`
-	IsDraft     bool   `json:"isDraft"`
+	BaseRefName    string `json:"baseRefName"`
+	HeadRefOid     string `json:"headRefOid"`
+	IsDraft        bool   `json:"isDraft"`
+	HeadRepository struct {
+		Name string `json:"name"`
+	} `json:"headRepository"`
+	HeadRepositoryOwner struct {
+		Login string `json:"login"`
+	} `json:"headRepositoryOwner"`
+}
+
+// from reports whether p's head branch is in repo (owner/name): the
+// repository's own branch, not a fork's.
+func (p ghPRView) from(repo string) bool {
+	return strings.EqualFold(p.HeadRepositoryOwner.Login+"/"+p.HeadRepository.Name, repo)
 }
 
 func (p ghPRView) view() PRView {
 	return PRView{Number: p.Number, URL: p.URL, Author: p.Author.Login, Base: p.BaseRefName, HeadSHA: p.HeadRefOid, Draft: p.IsDraft}
 }
 
-// PRByBranch is the open PR of branch in repo; ok is false when it has none.
+// PRByBranch is the open PR of branch in repo whose head is repo's own
+// branch (a fork's PR of a branch of the same name is none of its); ok is
+// false when it has none.
 func (g ghClient) PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error) {
 	res, err := g.gh(ctx, repo, "gh pr list "+repo+" "+branch, false,
-		"pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", ghPRFields, "--limit", "5")
+		"pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", ghPRFields, "--limit", "20")
 	if err != nil {
 		return PRView{}, false, err
 	}
@@ -113,10 +225,10 @@ func (g ghClient) PRByBranch(ctx context.Context, repo, branch string) (PRView, 
 	if err := json.Unmarshal(res.Stdout, &prs); err != nil {
 		return PRView{}, false, fmt.Errorf("gh pr list %s %s: %w", repo, branch, err)
 	}
-	if len(prs) == 0 {
-		return PRView{}, false, nil
+	if i := slices.IndexFunc(prs, func(p ghPRView) bool { return p.from(repo) }); i >= 0 {
+		return prs[i].view(), true, nil
 	}
-	return prs[0].view(), true, nil
+	return PRView{}, false, nil
 }
 
 // ViewPR reads PR number of repo back.

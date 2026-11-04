@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -37,7 +38,8 @@ func (g *ghRunner) Run(_ context.Context, c execx.Cmd) (execx.Result, error) {
 func TestTheGitHubClientOpensTheReadyPRAsYourGhLogin(t *testing.T) {
 	const head = "3c3d79e4fc0c04f4d49bd3467fc079f6bc2662ad"
 	view := `{"number": 4501, "url": "https://github.com/example/shop/pull/4501", "author": {"login": "zhuravel"},` +
-		` "baseRefName": "master", "headRefOid": "` + head + `", "isDraft": false}`
+		` "baseRefName": "master", "headRefOid": "` + head + `", "isDraft": false, "headRepository": {"name": "shop"},` +
+		` "headRepositoryOwner": {"login": "example"}}`
 	run := &ghRunner{answer: func(c execx.Cmd) string {
 		switch {
 		case slices.Contains(c.Args, "create"):
@@ -125,8 +127,10 @@ func TestPublishRunsOnceForOneHead(t *testing.T) {
 		t.Fatalf("push request %s: %q", q.State, q.Result)
 	}
 	got := r.published(task.ID)
-	if got.State != registry.TaskPublished || got.PRNumber != 4501 || r.remoteHead(task.Branch) != head {
-		t.Fatalf("task %s waits %q, PR %d; remote %q, want published at %s", got.State, got.WaitsWhat, got.PRNumber, r.remoteHead(task.Branch), head)
+	// A task of a Jira key pushes its own branch, under its own name.
+	if got.State != registry.TaskPublished || got.PRNumber != 4501 || r.remoteHead(task.Branch) != head || got.RemoteBranch != task.Branch {
+		t.Fatalf("task %s waits %q, PR %d, pushes to %q; remote %q, want published at %s on %s", got.State, got.WaitsWhat, got.PRNumber,
+			got.RemoteBranch, r.remoteHead(task.Branch), head, task.Branch)
 	}
 	ds, err := r.reg.Decisions(r.ctx, task.ID)
 	if err != nil || len(ds) != 1 || ds[0].Choice != ChoicePush || ds[0].HeadSHA != head || ds[0].ReportHash != c.ReportHash ||
@@ -158,6 +162,148 @@ func TestPublishRunsOnceForOneHead(t *testing.T) {
 	}
 	if n := len(r.gh.createCalls()); n != 1 || pushes != 0 {
 		t.Fatalf("%d PRs opened and %d pushes after the second push, want 1 and none", n, pushes)
+	}
+}
+
+// A task of a prompt whose Jira key was linked after its branch was made
+// pushes to a branch named for the key, <login>-<KEY>-<slug of its title>,
+// recorded on the task: the card and its y/N sentence name it, the PR is
+// opened and linked on it, a publish cut after the push resumes on it, and
+// the local branch keeps its name.
+func TestATaskLinkedToAKeyLaterPushesToABranchNamedForTheKey(t *testing.T) {
+	r := newReadyRig(t)
+	task, err := r.reg.CreateTask(r.ctx, registry.Task{JiraKey: "PR-12376", Prompt: "count the archived activities", Kind: "bug",
+		Repo: "example/shop", Title: "count the archived activities", State: registry.TaskActive, Stage: "coding",
+		Branch: "zhuravel-count-archived-activities"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.taskFile(task.ID, ticketFile, "# PR-12376\n\n## Summary\n\nArchived activities lose their points\n")
+	r.git(r.copyDir, "switch", "--quiet", "--no-track", "-c", task.Branch, "origin/master")
+	got, head := r.cardOf(task)
+	const remote = "zhuravel-PR-12376-archived-activities-lose-their-points"
+	c := r.card(task.ID)
+	if got.RemoteBranch != remote || c.Remote != remote || c.Branch != task.Branch {
+		t.Fatalf("task pushes to %q, card %+v; want %s, the local branch %s kept", got.RemoteBranch, c, remote, task.Branch)
+	}
+	if s := ConfirmSentence(got, c.Copy, ""); !strings.HasPrefix(s, "Push "+remote+" and open the PR?") {
+		t.Fatalf("the y/N sentence %q, want it to name %s", s, remote)
+	}
+
+	r.gh.createErr = fmt.Errorf("gh: HTTP 502")
+	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	r.tick() // the push goes through, the PR does not
+	if r.remoteHead(remote) != head || r.remoteHead(task.Branch) != "" {
+		t.Fatalf("origin has %s at %q and %s at %q, want the key's branch at %s and no other", remote, r.remoteHead(remote), task.Branch,
+			r.remoteHead(task.Branch), short(head))
+	}
+	r.restart()
+	pushes := 0
+	r.failGit = func(args []string) error {
+		if slices.Contains(args, "push") {
+			pushes++
+		}
+		return nil
+	}
+	if got := r.published(task.ID); got.State != registry.TaskPublished || pushes != 0 {
+		t.Fatalf("task %s waits %q after %d pushes, want published with none", got.State, got.WaitsWhat, pushes)
+	}
+	cs := r.gh.createCalls()
+	link, err := r.reg.LinkedPR(r.ctx, task.ID)
+	if len(cs) != 2 || cs[0].branch != remote || cs[1].branch != remote || err != nil || link.Branch != remote {
+		t.Fatalf("CreatePR %+v; link %+v (%v); want both on %s", cs, link, err, remote)
+	}
+	if b := r.git(r.copyDir, "rev-parse", "refs/heads/"+task.Branch); b != head || r.gitOut(r.copyDir, "rev-parse", "--verify", "--quiet",
+		"refs/heads/"+remote) != "" {
+		t.Fatalf("the local branch %s at %s, want it kept at %s and no local %s", task.Branch, b, short(head), remote)
+	}
+}
+
+// The publish's push, its read of the remote branch and every gh call run
+// as you only: your gh config dir, and none of the GitHub tokens of the
+// daemon's environment, which could push or open the PR as someone else.
+func TestThePublishRunsAsYouOnly(t *testing.T) {
+	storetest.Serial(t)
+	ghDir := t.TempDir()
+	t.Setenv("GH_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", ghDir)
+	for _, k := range ghTokens {
+		t.Setenv(k, "a-token-of-the-daemon")
+	}
+	want := filepath.Join(ghDir, "gh")
+	asYou := func(what string, c execx.Cmd) {
+		t.Helper()
+		if c.Env["GH_CONFIG_DIR"] != want {
+			t.Errorf("%s runs with GH_CONFIG_DIR %q, want your %s", what, c.Env["GH_CONFIG_DIR"], want)
+		}
+		for _, k := range ghTokens {
+			if !slices.Contains(c.Unset, k) || c.Env[k] != "" {
+				t.Errorf("%s keeps %s of the daemon's environment (unset %v)", what, k, c.Unset)
+			}
+		}
+	}
+	r := newReadyRig(t)
+	var mu sync.Mutex
+	var seen []execx.Cmd
+	r.seenGit = func(c execx.Cmd) {
+		if slices.Contains(c.Args, "push") || slices.Contains(c.Args, "ls-remote") {
+			mu.Lock()
+			seen = append(seen, c)
+			mu.Unlock()
+		}
+	}
+	task, _ := r.toCard("PR-12375")
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	if got := r.published(task.ID); got.State != registry.TaskPublished {
+		t.Fatalf("task %s waits %q", got.State, got.WaitsWhat)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) < 2 {
+		t.Fatalf("git ran %d push or ls-remote commands, want the publish's", len(seen))
+	}
+	for _, c := range seen {
+		asYou("git "+strings.Join(c.Args, " "), c)
+	}
+
+	run := &ghRunner{answer: func(execx.Cmd) string { return "https://github.com/example/shop/pull/4501\n" }}
+	if _, err := NewGitHub(r.cfg, run).CreatePR(r.ctx, "example/shop", "master", task.Branch, "t", "/f"); err != nil {
+		t.Fatal(err)
+	}
+	asYou("gh pr create", run.cmds[0])
+}
+
+// A PR of the branch is the task's repository's own: a fork's PR whose
+// head branch has the same name is no PR of the task, and the task's own
+// is found.
+func TestPRByBranchIgnoresAForksPR(t *testing.T) {
+	const head = "3c3d79e4fc0c04f4d49bd3467fc079f6bc2662ad"
+	pr := func(n int, owner string) string {
+		return fmt.Sprintf(`{"number": %d, "url": "https://github.com/%s/shop/pull/%d", "author": {"login": "zhuravel"}, "baseRefName": "master",`+
+			` "headRefOid": "%s", "isDraft": false, "headRepository": {"name": "shop"}, "headRepositoryOwner": {"login": "%s"}}`, n, owner, n, head, owner)
+	}
+	run := &ghRunner{answer: func(c execx.Cmd) string {
+		if slices.Contains(c.Args, "zhuravel-PR-12360-copy") {
+			return "[" + pr(4590, "alice") + ", " + pr(4501, "example") + "]"
+		}
+		return "[" + pr(4591, "alice") + "]"
+	}}
+	cfg := config.Defaults()
+	cfg.Identities = []config.Identity{{Name: "zhuravel", Kind: "gh", Login: "zhuravel"}}
+	gh := NewGitHub(cfg, run)
+	v, ok, err := gh.PRByBranch(t.Context(), "example/shop", "zhuravel-PR-12360-copy")
+	if err != nil || !ok || v.Number != 4501 {
+		t.Fatalf("PRByBranch = %+v, %v, %v; want #4501, the repository's own", v, ok, err)
+	}
+	if f := run.cmds[0].Args; !slices.Contains(f, "--json") || !strings.Contains(f[slices.Index(f, "--json")+1], "headRepository,headRepositoryOwner") {
+		t.Fatalf("gh %q asks for no head repository", f)
+	}
+	if v, ok, err := gh.PRByBranch(t.Context(), "example/shop", "zhuravel-PR-12361-copy"); err != nil || ok {
+		t.Fatalf("PRByBranch of a branch only a fork has = %+v, %v, %v; want none", v, ok, err)
 	}
 }
 

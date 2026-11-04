@@ -261,9 +261,10 @@ func (e *Engine) operatorLogin(repo string) (string, error) {
 // branchFor is the branch of a task of repo: <login>-<KEY>-<slug> for a
 // key, <login>-<slug> for a prompt, with the slug of the Jira summary or
 // the prompt (a key alone without words). A name another task than self
-// has, or a branch the repository's main clone has (local or origin's:
-// yours, made without the factory), gets -2, -3, ...: a claim would check
-// that branch out, and its push would meet it.
+// has (as its branch or the branch its PR is pushed to), or a branch the
+// repository's main clone has (local or origin's: yours, made without the
+// factory), gets -2, -3, ...: a claim would check that branch out, and its
+// push would meet it.
 func (e *Engine) branchFor(ctx context.Context, self int64, repo, login, key, words string) (string, error) {
 	parts := []string{login}
 	if key != "" {
@@ -282,7 +283,7 @@ func (e *Engine) branchFor(ctx context.Context, self int64, repo, login, key, wo
 	taken := map[string]bool{}
 	for _, t := range tasks {
 		if t.ID != self {
-			taken[t.Branch] = true
+			taken[t.Branch], taken[t.RemoteBranch] = true, true
 		}
 	}
 	for n, b := 2, name; ; n++ {

@@ -133,7 +133,13 @@ const (
 // to its ready card: the task waits on you there, and its head is the fix.
 func (r *readyRig) toCard(key string) (registry.Task, string) {
 	r.t.Helper()
-	task := r.codingTask(key, "bug")
+	return r.cardOf(r.codingTask(key, "bug"))
+}
+
+// cardOf is toCard for task, at its coding stage with its branch in the
+// copy.
+func (r *readyRig) cardOf(task registry.Task) (registry.Task, string) {
+	r.t.Helper()
 	r.taskFile(task.ID, reportFile, planReport("app/credit.rb", "spec/models/"))
 	r.taskFile(task.ID, acceptanceFile, acceptanceJSON)
 	r.startStage(task)
@@ -439,6 +445,10 @@ func TestTheConfirmationNamesTheCopyItFreesAndTheTaskThatStarts(t *testing.T) {
 	if got, want := ConfirmSentence(task, "talkable.factory3", ""),
 		"Push zhuravel-PR-12360-activity-points-on-copy and open the PR? This frees talkable.factory3. y/N"; got != want {
 		t.Fatalf("ConfirmSentence without a queued task = %q, want %q", got, want)
+	}
+	linked := registry.Task{JiraKey: "PR-12360", Branch: "zhuravel-activity-points-on-copy", RemoteBranch: "zhuravel-PR-12360-activity-points-on-copy"}
+	if got, want := ConfirmSentence(linked, "", ""), "Push zhuravel-PR-12360-activity-points-on-copy and open the PR? y/N"; got != want {
+		t.Fatalf("ConfirmSentence of a task pushed to its key's branch = %q, want %q", got, want)
 	}
 	tasks := []registry.Task{{ID: 1, State: registry.TaskNeedsYou, JiraKey: "PR-12360"},
 		{ID: 2, State: registry.TaskQueued, JiraKey: "PR-12388", WaitsWho: waitCopy}, {ID: 3, State: registry.TaskQueued, JiraKey: "PR-12389", WaitsWho: waitCopy}}

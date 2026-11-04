@@ -114,6 +114,9 @@ func printReadyCard(ctx context.Context, c *Context, reg *registry.Registry, t r
 		t.WaitsWhat)
 	fmt.Fprintf(w, "title    %s\n", card.Title)
 	fmt.Fprintf(w, "branch   %s at %s (its diff from %s)\n", card.Branch, shortSHA(card.Head), shortSHA(card.Base))
+	if card.Remote != "" && card.Remote != card.Branch {
+		fmt.Fprintf(w, "pushed   as %s (the local branch keeps its name)\n", card.Remote)
+	}
 	flags := card.Flags
 	if len(flags) == 0 {
 		flags = []string{"nothing flagged"}

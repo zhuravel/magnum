@@ -72,7 +72,12 @@ type Task struct {
 	QuestionRev int
 	// CodexNever says Codex never works on this task again (a cybersecurity
 	// warning marked it).
-	CodexNever       bool
+	CodexNever bool
+	// RemoteBranch is the branch the task's PR is pushed to, "" until its
+	// ready card names it: Branch's own name, or <login>-<KEY>-<slug> for a
+	// task whose key was linked after its branch was made (Branch keeps its
+	// name).
+	RemoteBranch     string
 	Created, Updated time.Time
 }
 
@@ -94,9 +99,10 @@ func (e ErrActiveKey) Unwrap() error { return ErrConflict }
 
 // TaskUpdate collects the column assignments of TransitionTask. Settable
 // columns: kind, repo, title, guidance, stage, branch, copy, head_sha,
-// waits_who, waits_what, attempt, pr_number and codex_never. The state moves
-// through TransitionTask's `to`, the question revision through
-// ReplaceQuestions, and updated_at is the registry's.
+// waits_who, waits_what, attempt, pr_number, codex_never and
+// remote_branch. The state moves through TransitionTask's `to`, the
+// question revision through ReplaceQuestions, and updated_at is the
+// registry's.
 type TaskUpdate struct {
 	update
 	reason string
@@ -108,16 +114,16 @@ func (u *TaskUpdate) Because(reason string) { u.reason = reason }
 var taskSettable = map[string]bool{
 	"kind": true, "repo": true, "title": true, "guidance": true, "stage": true, "branch": true,
 	"copy": true, "head_sha": true, "waits_who": true, "waits_what": true, "attempt": true, "pr_number": true,
-	"codex_never": true,
+	"codex_never": true, "remote_branch": true,
 }
 
-const taskColumns = "id, jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, question_rev, codex_never, created_at, updated_at"
+const taskColumns = "id, jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, question_rev, codex_never, remote_branch, created_at, updated_at"
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	err := sc.Scan(&t.ID, &t.JiraKey, &t.Prompt, &t.Guidance, &t.Kind, &t.Repo, &t.Title, &t.State, &t.Stage,
 		&t.Branch, &t.Copy, &t.HeadSHA, &t.WaitsWho, &t.WaitsWhat, &t.Attempt, &t.PRNumber, &t.QuestionRev, &t.CodexNever,
-		timeCol{&t.Created}, timeCol{&t.Updated})
+		&t.RemoteBranch, timeCol{&t.Created}, timeCol{&t.Updated})
 	return t, err
 }
 
