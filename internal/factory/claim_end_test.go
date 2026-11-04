@@ -52,6 +52,7 @@ func TestAStopCancelsItsRunningClaimAndReleasesTheCopy(t *testing.T) {
 	if _, cancelled := h.copies.endedClaims(); cancelled != 1 {
 		t.Fatal("the stop did not cancel the claim")
 	}
+	h.e.waitBackground() // the fake counts its end before the claim's goroutine closes it
 	h.tick()
 	if got := h.copies.releases(); len(got) != 1 || got[0] != task.ID {
 		t.Fatalf("released %v, want the stopped task's reserved copy", got)

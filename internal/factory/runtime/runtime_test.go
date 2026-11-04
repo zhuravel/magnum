@@ -668,24 +668,33 @@ func TestRunStateTellsAPausedRunFromAnEndedOne(t *testing.T) {
 	}
 }
 
-// AtWork names the role whose run is in flight in the task's copy, so the
-// factory's own commands there wait for it; a task whose runs ended, and one
-// that never launched, has none at work.
+// AtWork names who is at work in the task's copy, so the factory's own
+// commands there wait: the role whose run is in flight, then the role whose
+// pane you are in (your edits are there); a task whose runs ended and whose
+// panes you left, and one that never launched, has nobody at work.
 func TestAtWorkNamesTheRoleWhoseRunIsInFlight(t *testing.T) {
 	g := newRig(t)
-	if role, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" {
-		t.Fatalf("AtWork before a launch = %q, %v", role, err)
+	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" || you {
+		t.Fatalf("AtWork before a launch = %q, %v, %v", role, you, err)
 	}
 	g.launch("fx-repro")
 	g.send("fx-repro", "reproduce the bug")
-	if role, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "fx-repro" {
-		t.Fatalf("AtWork with a prompt in flight = %q, %v; want fx-repro", role, err)
+	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "fx-repro" || you {
+		t.Fatalf("AtWork with a prompt in flight = %q, %v, %v; want the fx-repro agent", role, you, err)
 	}
 	g.observe()
 	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
 	g.observeN(2)
-	if role, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" {
-		t.Fatalf("AtWork after the run ended = %q, %v; want none", role, err)
+	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" || you {
+		t.Fatalf("AtWork after the run ended = %q, %v, %v; want nobody", role, you, err)
+	}
+	g.h.focus(g.agent("fx-repro"))
+	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "fx-repro" || !you {
+		t.Fatalf("AtWork with you in the pane = %q, %v, %v; want you, in fx-repro's pane", role, you, err)
+	}
+	g.h.focus("")
+	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" || you {
+		t.Fatalf("AtWork after you left the pane = %q, %v, %v; want nobody", role, you, err)
 	}
 }
 

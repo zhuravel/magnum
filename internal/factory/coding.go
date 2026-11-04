@@ -33,9 +33,13 @@ import (
 // its precheck) run.
 const waitPrecheck = "precheck"
 
-// checkRetry is how long a check that failed to run (git, a command that
-// did not start) is kept before the next pass runs a new one.
-const checkRetry = time.Minute
+// checkRetry is how long a check that did not run to its end (git failed
+// in it) is kept before the next pass runs a new one; checkTries how many
+// such checks in a row a task gets before it needs you.
+const (
+	checkRetry = time.Minute
+	checkTries = 3
+)
 
 // baseRecord is base.json, the base_sha artifact: the task's branch and the
 // commit of origin/<base> it starts from (its merge base), as the coding
@@ -208,6 +212,8 @@ type headCheck struct {
 	cancel      context.CancelFunc
 	endedAt     time.Time
 	res         checkResult
+	// counted: its failure to run to its end is counted (checkFails).
+	counted bool
 }
 
 // checkResult is a check's end: its proof (nil without one), its precheck
@@ -248,6 +254,26 @@ func (e *Engine) checkNote(id int64) string {
 	e.checksMu.Lock()
 	defer e.checksMu.Unlock()
 	return e.checkNotes[id]
+}
+
+// countFailedCheck counts the ended check of task id that did not run to
+// its end, once, and returns how many did in a row.
+func (e *Engine) countFailedCheck(id int64) int {
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	if x := e.checks[id]; x != nil && !x.counted {
+		x.counted = true
+		e.checkFails[id]++
+	}
+	return e.checkFails[id]
+}
+
+// checkRanToItsEnd ends task id's run of checks that did not run to their
+// end.
+func (e *Engine) checkRanToItsEnd(id int64) {
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	delete(e.checkFails, id)
 }
 
 // forgetCheck drops x, the check of task id, once it ended or was stopped.
@@ -353,6 +379,9 @@ func (e *Engine) runChecks(ctx context.Context, t registry.Task, c Copy, proof b
 	return r
 }
 
+// passedOrNone reports whether p is no proof or one that passed.
+func (p *Proof) passedOrNone() bool { return p == nil || p.Passed }
+
 // passed reports whether the checks passed.
 func (r checkResult) passed() bool {
 	return r.Err == nil && (r.Proof == nil || r.Proof.Passed) && r.Precheck != nil && r.Precheck.Passed
@@ -374,8 +403,10 @@ func (r checkResult) why() string {
 // copy c, and the factory's proof and the precheck passed at its head. While
 // the checks run (or wait for a heavy slot) it is pending, and the task
 // waits saying what they do; *t has its wait. A problem is the writer's to
-// fix (a change problem: its nudge names the file the checks wrote); head is
-// the head that passed. err is a failure to read the branch.
+// fix (a change problem: its fix turn names the file the checks wrote), or
+// yours (operator: the configuration's or the machine's, named by its key,
+// and checks that did not run to their end checkTries times in a row); head
+// is the head that passed. err is a failure to read the branch.
 func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *endProblem, head string, pending bool, err error) {
 	if e.checkRuns(t.ID) {
 		e.precheckWait(ctx, t)
@@ -414,17 +445,26 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		t.WaitsWho, t.WaitsWhat = w.who, w.what
 		return nil, "", true, nil
 	case res.Err != nil:
+		if n := e.countFailedCheck(t.ID); n >= checkTries {
+			e.dropCheck(t.ID)
+			e.checkRanToItsEnd(t.ID)
+			return &endProblem{file: "the checks", operator: true, why: fmt.Sprintf("the factory's checks of %s did not run to their end "+
+				"%d times: %s", short(bh.Head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))}, "", false, nil
+		}
 		e.retryCheck(ctx, t, res.Err)
-		return nil, "", true, nil //nolint:nilerr // a check that did not run to its end is a wait: it runs again after checkRetry
+		return nil, "", true, nil // a wait: a check that did not run to its end runs again after checkRetry
 	case res.Proof != nil && res.Proof.Passed && !res.Proof.Holds(bh.Head):
 		e.dropCheck(t.ID) // the head moved while it ran: void
 		return nil, "", true, nil
-	case !res.passed():
+	}
+	e.checkRanToItsEnd(t.ID)
+	if !res.passed() {
 		file := precheckFile
 		if res.Proof != nil && !res.Proof.Passed {
 			file = factoryProofFile
 		}
-		return &endProblem{file: file, why: res.why(), change: true}, "", false, nil
+		forYou := (res.Proof != nil && !res.Proof.Passed && res.Proof.ForYou) || (res.Proof.passedOrNone() && res.Precheck != nil && res.Precheck.ForYou)
+		return &endProblem{file: file, why: res.why(), change: !forYou, operator: forYou}, "", false, nil
 	}
 	return nil, bh.Head, false, nil
 }
@@ -454,10 +494,20 @@ func (e *Engine) retryCheck(ctx context.Context, t *registry.Task, err error) {
 		e.forgetCheck(t.ID, x)
 		return
 	}
-	what := "the checks did not run to their end (" + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200) + "); they run again at " +
+	what := "the checks did not run to their end (" + clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240) + "); they run again at " +
 		next.Local().Format("15:04")
 	e.waitOn(ctx, *t, waitPrecheck, what)
 	t.WaitsWho, t.WaitsWhat = waitPrecheck, what
+}
+
+// clipEnd is s, or its last n runes after an ellipsis: a command's error
+// says what went wrong at its end, after the command and its paths.
+func clipEnd(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return "…" + string(r[len(r)-n:])
 }
 
 // precheckWait is the wait of task t while its checks run: what they do.
@@ -490,6 +540,11 @@ func (e *Engine) sweepChecks(tasks []registry.Task) {
 	}
 	e.checksMu.Lock()
 	defer e.checksMu.Unlock()
+	for id := range e.checkFails {
+		if !live[id] {
+			delete(e.checkFails, id)
+		}
+	}
 	for id, x := range e.checks {
 		if live[id] {
 			continue

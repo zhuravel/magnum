@@ -217,6 +217,7 @@ func TestABaseRunCutShortByACrashRestoresTheBranchFirst(t *testing.T) {
 	task := r.codingTask("PR-12358", "bug")
 	base := r.git(r.copyDir, "rev-parse", "HEAD")
 	head := r.fix(task)
+	r.copies.reserve(task.ID, "factory1") // the task holds its copy
 	// What the base run does before its specs run, and no restore after it.
 	if err := r.e.detachForBase(r.ctx, task, r.cp, base, head, []string{pointsSpec}); err != nil {
 		t.Fatal(err)

@@ -63,8 +63,10 @@ type fakeRuntime struct {
 	// Send makes a working run, Observe's events end, pause or refuse it as
 	// the runtime does, Verify settles it.
 	runState map[string]runFact
-	// atWork is the role AtWork names ("" for none).
-	atWork string
+	// atWork is the role AtWork names ("" for none), atWorkYou whether you
+	// are in its pane (rather than its agent at work).
+	atWork    string
+	atWorkYou bool
 }
 
 // runFact is a run's state and why it failed or was given up.
@@ -278,17 +280,26 @@ func (f *fakeRuntime) Verify(ctx context.Context, runID string, ok bool, why str
 	return reg.RecordRoleRun(ctx, rr)
 }
 
+// setAtWork has role's agent at work in the task's copy ("" for none).
 func (f *fakeRuntime) setAtWork(role string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.atWork = role
+	f.atWork, f.atWorkYou = role, false
 }
 
-// AtWork is the role atWork names: a run in flight in the task's copy.
-func (f *fakeRuntime) AtWork(context.Context, registry.Task) (string, error) {
+// setOperatorIn has you in role's pane ("" for none).
+func (f *fakeRuntime) setOperatorIn(role string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.atWork, nil
+	f.atWork, f.atWorkYou = role, role != ""
+}
+
+// AtWork is who atWork names: a run in flight in the task's copy, or you
+// in a pane of the task.
+func (f *fakeRuntime) AtWork(context.Context, registry.Task) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.atWork, f.atWorkYou, nil
 }
 
 func (f *fakeRuntime) Park(_ context.Context, t registry.Task) error {

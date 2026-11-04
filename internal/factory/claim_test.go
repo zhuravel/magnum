@@ -57,6 +57,7 @@ func TestAClaimRunsOffTheLoopAndTheTaskWaitsWhileItPrepares(t *testing.T) {
 	if w := h.reload(task.ID); w.WaitsWhat != "preparing a copy (setup 3m)" {
 		t.Fatalf("after 3 minutes the task waits %q", w.WaitsWhat)
 	}
+	waitFor(t, "the claim's goroutine to call Claim", func() bool { return h.copies.claimCount() >= 1 })
 	if n := h.copies.claimCount(); n != 1 {
 		t.Fatalf("%d claims, want the one that still runs", n)
 	}

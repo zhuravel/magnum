@@ -135,6 +135,21 @@ func (c *Client) RestoreFrom(ctx context.Context, dir, rev string, paths ...stri
 	return err
 }
 
+// RestoreTracked puts paths (relative to the top of the work tree at dir)
+// back as HEAD has them, in the index and the work tree (`git restore
+// --source=HEAD --staged --worktree`): a change of a factory command to a
+// tracked file undone, a path HEAD lacks removed from both. At least one
+// path; nothing else changes, untracked files included.
+func (c *Client) RestoreTracked(ctx context.Context, dir string, paths ...string) error {
+	specs, err := literal(paths)
+	if err != nil {
+		return fmt.Errorf("gitx: restore: %w", err)
+	}
+	_, err = c.git(ctx, dir, call{label: "restore --source HEAD --staged --worktree", mutates: true, timeout: commitTimeout},
+		append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, specs...)...)
+	return err
+}
+
 // BranchesUnder lists the local branches of repo under prefix, one or more
 // path segments ending in "/" ("learn/"), by their short names, sorted: the
 // skill editor's orphan cleanup finds the branches no proposal holds.

@@ -1,0 +1,385 @@
+package factory
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
+)
+
+// setHang makes the copy's scripts that hang names never end on their own.
+func (r *codingRig) setHang(hang func(run scriptRun) bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.hang = hang
+}
+
+func (r *codingRig) setFailGit(fail func(args []string) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failGit = fail
+}
+
+// endTurns ends the writer's last run and runs the passes that take its
+// end, n times or until the task leaves the live states.
+func (r *codingRig) endTurns(task registry.Task, n int) {
+	r.t.Helper()
+	for range n {
+		if got := r.reload(task.ID); !isLive(got) {
+			return
+		}
+		r.clock.Add(time.Minute)
+		r.ended(task, "fx-writer")
+		r.tick()
+		r.e.waitBackground()
+		r.tick()
+	}
+}
+
+// A spec that never ends on its own is a result of the proof, not a
+// failure to run it: on the base it counts as red (a bug whose symptom is a
+// hang hangs there), at the head the proof fails, and the writer gets a fix
+// turn naming it; nothing is run again and again.
+func TestAHangingSpecIsAResultNotARetry(t *testing.T) {
+	r := newCodingRig(t)
+	r.cfg.Factory.Repos[0].Precheck.Cap = config.Duration{Duration: 300 * time.Millisecond}
+	task := r.codingTask("PR-12368", "bug")
+	r.startStage(task)
+	head := r.fix(task)
+	r.setHang(func(run scriptRun) bool { return strings.HasPrefix(run.Script, "bin/specs") && run.Branch == "" }) // on the base
+	p, err := r.e.runProof(r.ctx, task, r.cp)
+	if err != nil || !p.Passed || p.Base.Exit == 0 || !p.Base.Hung || !strings.Contains(p.Base.Output, "did not end within") {
+		t.Fatalf("a spec that hangs on the base: %+v, %v; want a red base run and a proof", p, err)
+	}
+	r.onBranch(task.Branch, head)
+
+	r.setHang(func(run scriptRun) bool { return strings.HasPrefix(run.Script, "bin/specs") }) // at the head too
+	r.endTurns(task, 1)
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "does not end at the head") ||
+		!strings.Contains(ps[1].Text, factoryProofFile) {
+		t.Fatalf("the writer's prompts %+v; want a fix turn for the spec that hangs at the head", ps)
+	}
+	if got := r.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == waitPrecheck {
+		t.Fatalf("task %s waits %q: %q; want active, at the writer's fix turn", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	if n := len(r.events(task.ID, "check")); n != 2 {
+		t.Fatalf("%d check events, want one check begun and ended", n)
+	}
+}
+
+// A check that does not run to its end (git fails in it) runs again after
+// a minute, 3 times at most; then the task needs you with the reason, and
+// its heavy slot and the spec lock are free.
+func TestAChecksRunThatFailsThreeTimesNeedsYou(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12369", "bug")
+	r.startStage(task)
+	base := r.git(r.copyDir, "rev-parse", "HEAD")
+	r.fix(task)
+	r.setFailGit(func(args []string) error {
+		if slices.Contains(args, "--detach") && slices.Contains(args, base) {
+			return errors.New("fatal: cannot lock ref 'HEAD'")
+		}
+		return nil
+	})
+	r.ended(task, "fx-writer")
+	for i := 0; i < 12 && isLive(r.reload(task.ID)); i++ {
+		r.tick()
+		r.e.waitBackground()
+		r.clock.Add(2 * time.Minute)
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "did not run to their end 3 times") ||
+		!strings.Contains(got.WaitsWhat, "cannot lock ref") {
+		t.Fatalf("task %s waits %q; want needs_you after 3 checks that did not run to their end", got.State, got.WaitsWhat)
+	}
+	var begins int
+	for _, ev := range r.events(task.ID, "check") {
+		if ev.Phase == registry.PhaseBegin {
+			begins++
+		}
+	}
+	if begins != 3 || len(r.rt.promptsTo("fx-writer")) != 1 {
+		t.Fatalf("%d checks begun, %d prompts; want 3 checks and no fix turn", begins, len(r.rt.promptsTo("fx-writer")))
+	}
+	r.e.heavyMu.Lock()
+	heavy := len(r.e.heavyHeld)
+	r.e.heavyMu.Unlock()
+	if heavy != 0 {
+		t.Fatalf("%d heavy slots held after the task went to you", heavy)
+	}
+	r.onBranch(task.Branch, r.git(r.copyDir, "rev-parse", task.Branch))
+}
+
+// A change the factory's checks refuse gets fix turns, each naming what
+// failed and the file of the runs, up to the stage's prompt cap
+// (runtime.MaxStagePrompts); then the task needs you with the last failure.
+func TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12370", "bug")
+	r.lint = func([]string) string { return "app/credit.rb:3:5: C: Style/NumericLiterals: on the changed line\n" }
+	r.startStage(task)
+	r.fix(task)
+	r.endTurns(task, 2*runtime.MaxStagePrompts)
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != runtime.MaxStagePrompts {
+		t.Fatalf("the writer got %d prompts, want %d: its first and the fix turns", len(ps), runtime.MaxStagePrompts)
+	}
+	report := filepath.Join(r.layout.FactoryTaskDir(task.ID), precheckFile)
+	for _, p := range ps[1:] {
+		if !strings.HasPrefix(p.Text, fixLead) || !strings.Contains(p.Text, report) || !strings.Contains(p.Text, "lint: 1 offense") {
+			t.Fatalf("a fix turn %q; want what failed and %s", p.Text, report)
+		}
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "does not pass after 6 prompts") ||
+		!strings.Contains(got.WaitsWhat, "lint: 1 offense on the changed lines") {
+		t.Fatalf("task %s waits %q; want needs_you naming the last failure", got.State, got.WaitsWhat)
+	}
+}
+
+// A proof.json that is missing or malformed keeps its one nudge (Review
+// Focus 4): then the task needs you, naming the file.
+func TestAMalformedProofFileGetsOneNudgeThenNeedsYou(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12371", "bug")
+	r.startStage(task)
+	r.fix(task)
+	r.taskFile(task.ID, proofFile, `{"specs": "spec/models/credit_points_spec.rb"}`)
+	r.endTurns(task, 3)
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, nudgeLead) || !strings.Contains(ps[1].Text, proofFile) {
+		t.Fatalf("the writer's prompts %+v; want one nudge about proof.json", ps)
+	}
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != "the fx-writer agent wrote no valid proof.json" {
+		t.Fatalf("task %s waits %q; want needs_you: the fx-writer agent wrote no valid proof.json", got.State, got.WaitsWhat)
+	}
+}
+
+// What the writer cannot fix goes to you at once, naming the configuration
+// key: no fix turn is spent on it.
+func TestAConfigurationProblemGoesStraightToYouNamingTheKey(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(r *codingRig)
+		want []string
+	}{
+		{"no specs command", func(r *codingRig) { r.cfg.Factory.Repos[0].Precheck.Specs = "" }, []string{"precheck.specs"}},
+		{"a denied specs command", func(r *codingRig) { r.cfg.Factory.Repos[0].Precheck.Specs = "bin/remote-console {files}" },
+			[]string{"precheck.specs", "remote console"}},
+		{"a denied lint", func(r *codingRig) {
+			r.cfg.Factory.Repos[0].Precheck.Lint = []string{"kubectl exec web-1 -- bin/lint {files}"}
+		},
+			[]string{"precheck.lint", "kubectl exec"}},
+		{"lint output not by path:line", func(r *codingRig) { r.lint = func([]string) string { return "something is wrong\n" } },
+			[]string{"precheck.lint", "path:line"}},
+		{"a missing table_stats", func(r *codingRig) {
+			r.cfg.Factory.Repos[0].TableStats, r.cfg.Factory.Repos[0].LargeTableRows = "config/table_stats.json", 1000
+		}, []string{"table_stats", "config/table_stats.json"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCodingRig(t)
+			tc.edit(r)
+			task := r.codingTask("PR-12372", "bug")
+			r.startStage(task)
+			r.fix(task)
+			r.commit("PR-12372 a column", map[string]string{"db/migrate/20261104090000_add_x_to_notes.rb": "class AddXToNotes < " +
+				"ActiveRecord::Migration[7.1]\n  def change\n    add_column :notes, :x, :integer\n  end\nend\n"})
+			r.endTurns(task, 2)
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou {
+				t.Fatalf("task %s waits %q; want needs_you", got.State, got.WaitsWhat)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got.WaitsWhat, w) {
+					t.Errorf("the wait %q does not name %q", got.WaitsWhat, w)
+				}
+			}
+			if n := len(r.rt.promptsTo("fx-writer")); n != 1 {
+				t.Fatalf("the writer got %d prompts, want no fix turn", n)
+			}
+		})
+	}
+}
+
+// The factory never detaches a copy, nor restores one, while you are in a
+// pane of the task: your edits there would be discarded. It waits, saying
+// so.
+func TestTheFactoryNeverTouchesACopyWhileYouAreInItsPane(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12373", "bug")
+	base := r.git(r.copyDir, "rev-parse", "HEAD")
+	head := r.fix(task)
+	r.copies.reserve(task.ID, "factory1")
+	r.rt.setOperatorIn("fx-writer")
+	if _, err := r.e.runProof(r.ctx, task, r.cp); !errors.Is(err, ErrHeld) || !strings.Contains(err.Error(), "you're in the fx-writer pane") {
+		t.Fatalf("runProof with you in the pane = %v, want a wait saying so", err)
+	}
+	if n := len(r.ran("bin/specs")); n != 0 {
+		t.Fatalf("%d spec runs while you were in the pane", n)
+	}
+	r.onBranch(task.Branch, head)
+
+	r.rt.setOperatorIn("")
+	if err := r.e.detachForBase(r.ctx, task, r.cp, base, head, []string{pointsSpec}); err != nil {
+		t.Fatal(err)
+	}
+	r.restart()
+	r.rt.setOperatorIn("fx-writer")
+	if err := r.e.startup(r.ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if b := r.gitOut(r.copyDir, "symbolic-ref", "--quiet", "--short", "HEAD"); b != "" {
+		t.Fatalf("the copy was restored to %q while you were in the pane", b)
+	}
+	if got := r.reload(task.ID); !strings.Contains(got.WaitsWhat, "you're in the fx-writer pane") {
+		t.Fatalf("task waits %q: %q, want you named", got.WaitsWho, got.WaitsWhat)
+	}
+	r.rt.setOperatorIn("")
+	r.tick()
+	r.onBranch(task.Branch, head)
+}
+
+// A base run's record whose copy you put back on its branch yourself is
+// dropped: nothing is switched or discarded again, and the NEEDS YOU that
+// asked you to do it does not come back.
+func TestARecordOfABaseRunIsDroppedOnceTheCopyIsBackOnItsBranch(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12374", "bug")
+	base := r.git(r.copyDir, "rev-parse", "HEAD")
+	head := r.fix(task)
+	r.copies.reserve(task.ID, "factory1")
+	if err := r.e.detachForBase(r.ctx, task, r.cp, base, head, []string{pointsSpec}); err != nil {
+		t.Fatal(err)
+	}
+	r.write(r.copyDir, "README", "mine\n") // your change in the detached copy
+	r.restart()
+	if err := r.e.startup(r.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "README") || !strings.Contains(got.WaitsWhat, pointsSpec) {
+		t.Fatalf("task %s waits %q; want needs_you naming README and the laid spec", got.State, got.WaitsWhat)
+	}
+
+	// You keep your change and put the copy back, as the wait says.
+	if err := os.Remove(filepath.Join(r.copyDir, pointsSpec)); err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.copyDir, "switch", "--quiet", task.Branch)
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", "")
+		u.Set("waits_what", "")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+		t.Fatalf("the task needs you again: %q", got.WaitsWhat)
+	}
+	if _, err := os.Stat(filepath.Join(r.layout.FactoryTaskDir(task.ID), detachedFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s is left: %v", detachedFile, err)
+	}
+	if r.read("README") != "mine\n" || r.git(r.copyDir, "rev-parse", "HEAD") != head {
+		t.Fatalf("your change or the branch moved: README %q", r.read("README"))
+	}
+	evs := r.events(task.ID, "proof")
+	if last := evs[len(evs)-1]; last.Phase != registry.PhaseOK || !strings.Contains(last.Text, "back on "+task.Branch) {
+		t.Fatalf("proof events %+v, want the record dropped with an ok", evs)
+	}
+}
+
+// A stale record never switches a copy the task no longer holds: another
+// task claimed it since, and works on its own branch there.
+func TestARecordOfABaseRunNeverSwitchesAnotherTasksCopy(t *testing.T) {
+	r := newCodingRig(t)
+	a := r.codingTask("PR-12375", "bug")
+	base := r.git(r.copyDir, "rev-parse", "HEAD")
+	head := r.fix(a)
+	r.copies.reserve(a.ID, "factory1")
+	if err := r.e.detachForBase(r.ctx, a, r.cp, base, head, []string{pointsSpec}); err != nil {
+		t.Fatal(err)
+	}
+	// a is stopped and its copy released; b claims it and works on its branch.
+	if err := r.reg.TransitionTask(r.ctx, a.ID, nil, registry.TaskStopped, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.copies.mu.Lock()
+	delete(r.copies.reserved, a.ID)
+	r.copies.mu.Unlock()
+	b := r.kindTask("PR-12376", "feature", "coding")
+	if err := os.Remove(filepath.Join(r.copyDir, pointsSpec)); err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.copyDir, "switch", "--quiet", "--no-track", "-c", b.Branch, "origin/master")
+	r.copies.reserve(b.ID, "factory1")
+
+	r.restart()
+	if err := r.e.startup(r.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if br := r.gitOut(r.copyDir, "symbolic-ref", "--quiet", "--short", "HEAD"); br != b.Branch {
+		t.Fatalf("the copy is on %q, want %s's branch left alone", br, b.Branch)
+	}
+	if _, err := os.Stat(filepath.Join(r.layout.FactoryTaskDir(a.ID), detachedFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s of the stopped task is left: %v", detachedFile, err)
+	}
+	evs := r.events(a.ID, "proof")
+	if last := evs[len(evs)-1]; last.Phase != registry.PhaseInfo || !strings.Contains(last.Text, "no longer holds") {
+		t.Fatalf("proof events %+v, want the record dropped with an info", evs)
+	}
+}
+
+// The precheck leaves the copy as it found it: what its commands changed in
+// tracked files (Rails dumps db/schema.rb after each migration) is restored
+// and said, so the writer is never asked to commit the factory's leftover,
+// and the stage passes.
+func TestThePrecheckRestoresWhatItsCommandsChanged(t *testing.T) {
+	r := newCodingRig(t)
+	r.cfg.Factory.Repos[0].Precheck.Migrations = []string{"bin/rails db:migrate:up VERSION={version}",
+		"bin/rails db:migrate:down VERSION={version}", "bin/rails db:migrate:up VERSION={version}"}
+	r.migrate = func(dir, script string) int {
+		dump := "version: none\n"
+		if _, v, ok := strings.Cut(script, "VERSION="); ok && strings.Contains(script, ":up") {
+			dump = "version: " + v + " (dumped)\n"
+		}
+		if err := os.WriteFile(filepath.Join(dir, "db", "schema.rb"), []byte(dump), 0o644); err != nil {
+			t.Error(err)
+		}
+		return 0
+	}
+	task := r.codingTask("PR-12377", "feature")
+	r.startStage(task)
+	r.fix(task)
+	const schema = "version: 20261104090000\n"
+	head := r.commit("PR-12377 a column", map[string]string{
+		"db/migrate/20261104090000_add_x_to_notes.rb": "class AddXToNotes < ActiveRecord::Migration[7.1]\n  def change\n" +
+			"    add_column :notes, :x, :integer\n  end\nend\n",
+		"db/schema.rb": schema,
+	})
+	r.endTurns(task, 1)
+	if got := r.reload(task.ID); got.Stage != "local_review" || len(r.rt.promptsTo("fx-writer")) != 1 {
+		t.Fatalf("task %s at %s waits %q, %d prompts; want local_review on the first turn", got.State, got.Stage, got.WaitsWhat,
+			len(r.rt.promptsTo("fx-writer")))
+	}
+	r.onBranch(task.Branch, head)
+	if got := r.read("db/schema.rb"); got != schema {
+		t.Fatalf("db/schema.rb = %q, want the committed one back", got)
+	}
+	if report := r.readTask(task.ID, precheckFile); !strings.Contains(report, "Restored db/schema.rb") {
+		t.Fatalf("%s does not say what it restored:\n%s", precheckFile, report)
+	}
+	if !slices.ContainsFunc(r.events(task.ID, "check"), func(e registry.Event) bool { return strings.Contains(e.Text, "db/schema.rb") }) {
+		t.Fatalf("no check event names the restore of db/schema.rb: %+v", r.events(task.ID, "check"))
+	}
+}

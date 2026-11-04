@@ -71,7 +71,7 @@ type Runtime interface {
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
-	AtWork(ctx context.Context, t registry.Task) (role string, err error)
+	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -254,6 +254,7 @@ type Engine struct {
 	checksMu   sync.Mutex
 	checks     map[int64]*headCheck
 	checkNotes map[int64]string
+	checkFails map[int64]int // checks in a row that did not run to their end, by task
 	lockPoll   time.Duration
 	after      func(d time.Duration) <-chan time.Time
 
@@ -298,6 +299,7 @@ func New(d Deps) *Engine {
 		run:        Guard(d.Run, d.Config),
 		checks:     map[int64]*headCheck{},
 		checkNotes: map[int64]string{},
+		checkFails: map[int64]int{},
 		lockPoll:   specsLockPoll,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents

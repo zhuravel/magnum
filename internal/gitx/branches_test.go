@@ -748,6 +748,35 @@ func TestFastForwardCarriesTheChangesAndRefusesWhatIsNotAhead(t *testing.T) {
 	}
 }
 
+// RestoreTracked puts tracked paths back as HEAD has them, in the index and
+// the work tree (a precheck's command rewrote db/schema.rb, deleted a file,
+// staged one); nothing else changes, untracked files stay.
+func TestRestoreTrackedPutsPathsBackAsHEADHasThem(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	fx.commit(fx.clone, "db/schema.rb", "version 1\n", "schema")
+	fx.write(fx.clone, "db/schema.rb", "version 2\n")
+	fx.git(fx.clone, "rm", "--quiet", "README.md")
+	fx.write(fx.clone, "tmp.log", "a log\n")
+	fx.write(fx.clone, "notes.txt", "kept\n")
+	fx.git(fx.clone, "add", "notes.txt")
+	if err := fx.c.RestoreTracked(ctx, fx.clone, "db/schema.rb", "README.md"); err != nil {
+		t.Fatalf("RestoreTracked: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(fx.clone, "db", "schema.rb")); string(got) != "version 1\n" {
+		t.Fatalf("db/schema.rb = %q, want HEAD's", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(fx.clone, "README.md")); string(got) != "hello\n" {
+		t.Fatalf("README.md = %q, want HEAD's back", got)
+	}
+	if st := fx.git(fx.clone, "status", "--porcelain"); st != "A  notes.txt\n?? tmp.log" && st != "A  notes.txt\n?? tmp.log\n" {
+		t.Fatalf("status after the restore:\n%s", st)
+	}
+	if err := fx.c.RestoreTracked(ctx, fx.clone); err == nil {
+		t.Fatal("RestoreTracked of no path succeeded")
+	}
+}
+
 // TreeOf is the tree id of a commit, which a proof records for each of its
 // runs.
 func TestTreeOfIsTheCommitsTree(t *testing.T) {

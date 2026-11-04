@@ -85,12 +85,14 @@ type AcceptanceCheck struct {
 // endProblem is why an end fact does not hold: the file at fault and what
 // is wrong with it, in words a nudge and a wait can carry. change marks a
 // problem of the change itself (the coding stage's: no commit, tracked
-// changes, the factory's proof or precheck failing), whose nudge asks for a
-// fix and a commit, not a file; file is then the file the checks wrote
-// ("the branch" for none).
+// changes, the factory's proof or precheck failing), which gets fix turns
+// asking for a fix and a commit, not a file; file is then the file the
+// checks wrote ("the branch" for none). operator marks one the agent cannot
+// fix (the configuration's or the machine's): no turn, the task needs you
+// with why.
 type endProblem struct {
-	file, why string
-	change    bool
+	file, why        string
+	change, operator bool
 }
 
 func (p *endProblem) String() string { return p.file + ": " + p.why }

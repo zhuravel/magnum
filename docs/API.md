@@ -11680,11 +11680,15 @@ type PrecheckResult struct {
 	Checks     []registry.Check
 	Migrations []MigrationFlag
 	Why        string
+	ForYou     bool
 }
     PrecheckResult is a precheck's end: whether it passed, the checks it
     recorded (the factory's), the migrations the branch adds with their flags,
     and why it did not pass (its first failure, in plain words, such as
-    "precheck: over 10m").
+    "precheck: over 10m"). ForYou says the writer cannot fix why: a command
+    the deny list refuses or that does not start, a lint whose output names no
+    offense by path:line, a table_stats it cannot read (the configuration's or
+    the machine's, named by its key); such a failure is the one Why says.
 
 type PreviewPayload struct {
 	Text string
@@ -11727,11 +11731,13 @@ type Proof struct {
 	BaseSHA string   `json:"base_sha"`
 	Passed  bool     `json:"passed"`
 	Why     string   `json:"why,omitempty"`
+	ForYou  bool     `json:"for_you,omitempty"`
 }
     Proof is the factory's proof of a head: the spec files it ran, its run
     on the base (none for a kind whose proof is green) and at the head,
-    the head and the base (the merge base with origin/<base>) it ran on, whether
-    it passed, and why not.
+    the head and the base (the merge base with origin/<base>) it ran on,
+    whether it passed, and why not; ForYou when the writer cannot fix why (the
+    configuration's or the machine's: the task needs you, naming the key).
 
 func (p Proof) Holds(head string) bool
     Holds reports whether p passed at head: another head voids it.
@@ -11749,10 +11755,12 @@ type ProofRun struct {
 	Output  string        `json:"output,omitempty"`
 	Tree    string        `json:"tree,omitempty"`
 	Took    time.Duration `json:"took,omitempty"`
+	Hung    bool          `json:"hung,omitempty"`
 }
-    ProofRun is one spec run of a proof: the command, its exit, the end of its
-    output (redacted), the tree of the commit it ran on (the base's, with the
-    head's spec files on it, for the base run) and how long it took.
+    ProofRun is one spec run of a proof: the command, its exit, the end of
+    its output (redacted), the tree of the commit it ran on (the base's,
+    with the head's spec files on it, for the base run), how long it took,
+    and whether it hung (the factory stopped it at its bound: exit -1).
 
 type QuestionFile struct {
 	Text        string            `json:"text"`
@@ -11793,7 +11801,7 @@ type Runtime interface {
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
-	AtWork(ctx context.Context, t registry.Task) (role string, err error)
+	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
     the owner row of a task in the factory's agents store, the launch of a
@@ -12967,11 +12975,14 @@ type Runtime struct {
 func New(d Deps) (*Runtime, error)
     New builds the runtime over d.
 
-func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (string, error)
-    AtWork names the role of task t whose run is in flight (pending,
-    submitted or working: its agent may be changing the copy), "" when none is:
-    the factory's own commands in the task's copy (its proof's base run) wait
-    for it. A task that never launched has none.
+func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
+    AtWork names who is at work in task t's copy, "" for nobody: the role whose
+    run is in flight (pending, submitted or working: its agent may be changing
+    the copy), or, you true, the role whose pane you are in (you typed into
+    one of the task's panes within the human cooldown, or herdr shows its pane
+    focused; a herdr that cannot say counts as in it), where your edits are. The
+    factory's own commands that change the task's copy (its proof's base run,
+    its restore) wait for both. A task that never launched has nobody at work.
 
 func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string
     DBLockCommand is the command prefix a role runs every command that touches
@@ -14615,6 +14626,13 @@ func (c *Client) RestoreFrom(ctx context.Context, dir, rev string, paths ...stri
     the same paths commits the change): a revert of a skill version restores its
     files as the commit before it had them. At least one path; nothing else in
     the work tree changes.
+
+func (c *Client) RestoreTracked(ctx context.Context, dir string, paths ...string) error
+    RestoreTracked puts paths (relative to the top of the work tree at dir) back
+    as HEAD has them, in the index and the work tree (`git restore --source=HEAD
+    --staged --worktree`): a change of a factory command to a tracked file
+    undone, a path HEAD lacks removed from both. At least one path; nothing else
+    changes, untracked files included.
 
 func (c *Client) RevParse(ctx context.Context, dir, ref string) (string, error)
     RevParse resolves ref to a full commit sha (tags are peeled). A ref that

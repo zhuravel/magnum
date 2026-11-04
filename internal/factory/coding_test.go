@@ -38,9 +38,15 @@ type codingRig struct {
 	mu      sync.Mutex
 	scripts []scriptRun
 	// lint is what bin/lint prints for its files (exit 1 when it prints
-	// anything); migrate the exit of a bin/rails migration script.
+	// anything); migrate runs a bin/rails migration script in the copy at
+	// dir and gives its exit (it may write the copy's files, as Rails dumps
+	// db/schema.rb); hang makes a script never end on its own (it ends with
+	// its command's timeout or its context, as execx ends one); failGit
+	// fails the git commands it names (an error, not nil).
 	lint    func(files []string) string
-	migrate func(script string) int
+	migrate func(dir, script string) int
+	hang    func(run scriptRun) bool
+	failGit func(args []string) error
 	// blocks hold a script whose first word they name until the channel
 	// closes or its run's context ends; entered gets that word as one
 	// starts to wait.
@@ -121,8 +127,21 @@ type rigRunner struct{ r *codingRig }
 func (x rigRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
 	switch c.Name {
 	case "git":
+		x.r.mu.Lock()
+		fail := x.r.failGit
+		x.r.mu.Unlock()
+		if fail != nil {
+			if err := fail(c.Args); err != nil {
+				return execx.Result{Code: 128}, &execx.ExitError{Cmd: c, Code: 128, Stderr: err.Error()}
+			}
+		}
 		return x.r.real.Run(ctx, c)
 	case "mise":
+		if c.Timeout > 0 { // as execx bounds a command
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+			defer cancel()
+		}
 		return x.r.script(ctx, c)
 	}
 	return execx.Result{Code: -1}, fmt.Errorf("the coding rig runs no %s", c.Name)
@@ -140,8 +159,13 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 	run.Branch = r.gitOut(c.Dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	run.Head = r.gitOut(c.Dir, "rev-parse", "HEAD")
 	r.mu.Lock()
-	block := r.blocks[words[0]]
+	block, hang := r.blocks[words[0]], r.hang
 	r.mu.Unlock()
+	if hang != nil && hang(run) {
+		<-ctx.Done()
+		r.record(run)
+		return execx.Result{Code: -1}, &execx.RunError{Cmd: c, Err: ctx.Err()}
+	}
 	if block != nil {
 		r.entered <- words[0]
 		select {
@@ -169,7 +193,7 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 		migrate := r.migrate
 		r.mu.Unlock()
 		if migrate != nil {
-			run.Exit = migrate(script)
+			run.Exit = migrate(c.Dir, script)
 		}
 	default:
 		return execx.Result{Code: 127}, fmt.Errorf("the coding rig knows no script %q", script)
@@ -435,7 +459,7 @@ func TestABranchOfAnotherTaskGetsASuffix(t *testing.T) {
 // The coding stage passes on its end fact, never on the writer's "done":
 // commits on the branch after origin/master, a clean tree, the factory's own
 // proof at the head and the precheck, both run off the loop while the task
-// waits with what they do; a writer that committed nothing gets its nudge.
+// waits with what they do; a writer that committed nothing gets a fix turn.
 func TestTheCodingStagePassesOnTheFactorysProofAndPrecheck(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12352", "bug")
@@ -444,8 +468,8 @@ func TestTheCodingStagePassesOnTheFactorysProofAndPrecheck(t *testing.T) {
 	r.ended(task, "fx-writer")
 	r.tick()
 	ps := r.rt.promptsTo("fx-writer")
-	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, nudgeLead) || !strings.Contains(ps[1].Text, "no commit after origin/master") {
-		t.Fatalf("the writer's prompts %+v, want a nudge for its missing commit", ps)
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "no commit after origin/master") {
+		t.Fatalf("the writer's prompts %+v, want a fix turn for its missing commit", ps)
 	}
 
 	r.clock.Add(time.Minute)

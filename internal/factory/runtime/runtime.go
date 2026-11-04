@@ -902,29 +902,45 @@ func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, e
 	return run.State, store.Deref(run.Error), nil
 }
 
-// AtWork names the role of task t whose run is in flight (pending,
-// submitted or working: its agent may be changing the copy), "" when none
-// is: the factory's own commands in the task's copy (its proof's base run)
-// wait for it. A task that never launched has none.
-func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (string, error) {
+// AtWork names who is at work in task t's copy, "" for nobody: the role
+// whose run is in flight (pending, submitted or working: its agent may be
+// changing the copy), or, you true, the role whose pane you are in (you
+// typed into one of the task's panes within the human cooldown, or herdr
+// shows its pane focused; a herdr that cannot say counts as in it), where
+// your edits are. The factory's own commands that change the task's copy
+// (its proof's base run, its restore) wait for both. A task that never
+// launched has nobody at work.
+func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error) {
 	pr, err := r.ownerRow(ctx, t.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", nil
+		return "", false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("the runs of %s: %w", taskKey(t), err)
+		return "", false, fmt.Errorf("the runs of %s: %w", taskKey(t), err)
 	}
 	runs, err := r.st.RunsByPR(ctx, pr.ID)
 	if err != nil {
-		return "", fmt.Errorf("the runs of %s: %w", taskKey(t), err)
+		return "", false, fmt.Errorf("the runs of %s: %w", taskKey(t), err)
 	}
 	for _, run := range runs {
 		switch run.State {
 		case store.RunPending, store.RunSubmitted, store.RunWorking:
-			return run.Role, nil
+			return run.Role, false, nil
 		}
 	}
-	return "", nil
+	sessions, err := r.st.SessionsByPR(ctx, pr.ID)
+	if err != nil {
+		return "", false, fmt.Errorf("the sessions of %s: %w", taskKey(t), err)
+	}
+	for _, s := range sessions {
+		if s.State != store.SessionStarting && s.State != store.SessionLive {
+			continue
+		}
+		if r.operatorIn(ctx, &roleState{taskID: t.ID, role: config.Role{Name: s.Role}}) {
+			return s.Role, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // QuitCodex quits the live Codex sessions of task t, once Codex never works

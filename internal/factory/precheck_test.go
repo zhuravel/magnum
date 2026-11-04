@@ -241,7 +241,7 @@ func TestPrecheckRunsEachNewMigrationUpAndDown(t *testing.T) {
 	}
 
 	// A down that fails fails the precheck, naming the migration.
-	r.migrate = func(script string) int {
+	r.migrate = func(_, script string) int {
 		if strings.Contains(script, "down VERSION=20261104090100") {
 			return 1
 		}
@@ -264,8 +264,8 @@ func TestAPrecheckCommandTheDenyListRefusesFailsWithTheReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Passed || !strings.Contains(res.Why, "kubectl exec") {
-		t.Fatalf("precheck %+v, want it failed with the deny list's reason", res)
+	if res.Passed || !res.ForYou || !strings.Contains(res.Why, "kubectl exec") || !strings.Contains(res.Why, "precheck.lint") {
+		t.Fatalf("precheck %+v, want it failed for you with the deny list's reason and the key", res)
 	}
 	if n := len(r.ran("kubectl")) + len(r.ran("bin/lint")); n != 0 {
 		t.Fatalf("%d runs of the denied command", n)

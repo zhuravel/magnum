@@ -214,8 +214,9 @@ databases = [
 #                                          # files, shell-quoted; {base}: the base; offenses as path:line: on changed lines
 #   specs = "bin/impact-specs {files}"     # the specs the change affects, with a baseline at the base
 #   jest = "yarn jest --findRelatedTests {files}"
-#   migrations = ["bin/rails db:migrate:up VERSION={version}", "bin/rails db:migrate:down VERSION={version}"]   # each new
-#                                          # migration, in order ({version}, {file}); a gh-ost one is not run
+#   migrations = ["bin/rails db:migrate:up VERSION={version}", "bin/rails db:migrate:down VERSION={version}",
+#                 "bin/rails db:migrate:up VERSION={version}"]   # each new migration, in order ({version}, {file}): up,
+#                                          # down and up again; a gh-ost one is not run; db/schema.rb is put back after
 #   cap = "10m"                            # a precheck stops after this long (default 10m)
 #   skip_specs_for_kinds = ["chore"]       # a gem upgrade runs no specs
 #

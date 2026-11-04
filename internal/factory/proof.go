@@ -60,7 +60,8 @@ type ProofFile struct {
 // Proof is the factory's proof of a head: the spec files it ran, its run on
 // the base (none for a kind whose proof is green) and at the head, the head
 // and the base (the merge base with origin/<base>) it ran on, whether it
-// passed, and why not.
+// passed, and why not; ForYou when the writer cannot fix why (the
+// configuration's or the machine's: the task needs you, naming the key).
 type Proof struct {
 	Specs   []string `json:"specs"`
 	Base    ProofRun `json:"base"`
@@ -69,17 +70,20 @@ type Proof struct {
 	BaseSHA string   `json:"base_sha"`
 	Passed  bool     `json:"passed"`
 	Why     string   `json:"why,omitempty"`
+	ForYou  bool     `json:"for_you,omitempty"`
 }
 
 // ProofRun is one spec run of a proof: the command, its exit, the end of its
 // output (redacted), the tree of the commit it ran on (the base's, with the
-// head's spec files on it, for the base run) and how long it took.
+// head's spec files on it, for the base run), how long it took, and whether
+// it hung (the factory stopped it at its bound: exit -1).
 type ProofRun struct {
 	Command string        `json:"command,omitempty"`
 	Exit    int           `json:"exit"`
 	Output  string        `json:"output,omitempty"`
 	Tree    string        `json:"tree,omitempty"`
 	Took    time.Duration `json:"took,omitempty"`
+	Hung    bool          `json:"hung,omitempty"`
 }
 
 // Holds reports whether p passed at head: another head voids it.
@@ -210,33 +214,41 @@ func (e *Engine) factoryRepo(t registry.Task) (config.FactoryRepo, error) {
 	return repo, nil
 }
 
-// copyIdle is the guard before the factory touches task t's copy: no run
-// of the task's agents is in flight there (Runtime.AtWork). One that is is
-// a wait, naming the role.
+// copyIdle is the guard before the factory changes task t's copy: no run
+// of the task's agents is in flight there, and you are in none of the
+// task's panes, where your edits are (Runtime.AtWork). Either is a wait,
+// saying who.
 func (e *Engine) copyIdle(ctx context.Context, t registry.Task) error {
 	if e.d.Runtime == nil {
 		return nil
 	}
-	role, err := e.d.Runtime.AtWork(ctx, t)
-	if err != nil {
+	role, you, err := e.d.Runtime.AtWork(ctx, t)
+	switch {
+	case err != nil:
 		return err
-	}
-	if role != "" {
+	case role != "" && you:
+		return heldError{who: waitAgent, what: "you're in the " + role + " pane; the factory changes the copy once you leave it"}
+	case role != "":
 		return heldError{who: waitAgent, what: "the " + role + " agent works in the copy; the factory's checks wait for its turn to end"}
 	}
 	return nil
 }
 
 // runProof runs the factory's proof of task t's head in copy c (spec 6.4):
-// with no agent at work in the copy, the branch checked out with no tracked
-// change and a commit after origin/<base>, and the spec files of proof.json
-// in the head, it runs them on the base (unless the kind's proof is green)
-// and at the head with the repository's specs command (precheck.specs; jest
-// for spec files of JavaScript when every one is), under the machine's spec
-// lock. It records a spec check for each run (source factory) and the proof
-// (factory-proof.json, the proof artifact). A proof that does not hold is a
-// Proof with Why set and nil error; the error is a wait (an agent at work)
-// or a failure to run.
+// with nobody at work in the copy (copyIdle), the branch checked out with no
+// tracked change and a commit after origin/<base>, and the spec files of
+// proof.json in the head, it runs them on the base (unless the kind's proof
+// is green) and at the head with the repository's specs command
+// (precheck.specs; jest for spec files of JavaScript when every one is),
+// under the machine's spec lock. It records a spec check for each run
+// (source factory) and the proof (factory-proof.json, the proof artifact).
+// A spec run bounded by the precheck's cap that does not end is a result,
+// never a failure to run: red on the base, a failure at the head. A proof
+// that does not hold is a Proof with Why set and nil error: ForYou when the
+// writer cannot fix it (no specs command, a command the deny list refuses
+// or that does not start: the configuration's or the machine's). The error
+// is a wait (somebody at work in the copy) or a failure to run (git, the
+// daemon stopping).
 func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, error) {
 	repo, err := e.factoryRepo(t)
 	if err != nil {
@@ -261,25 +273,29 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 		return Proof{}, err
 	}
 	proof := Proof{Specs: pf.Specs, HeadSHA: bh.Head, BaseSHA: bh.Base}
+	done := func() (Proof, error) { return proof, e.saveProof(ctx, t, proof) }
+	forYou := func(why string) (Proof, error) {
+		proof.Why, proof.ForYou = why, true
+		return done()
+	}
 	red := e.cfg.Factory.Kinds[t.Kind].RedRun()
 	if red && len(pf.Specs) == 0 {
 		proof.Why = "proof.json names no spec: a " + t.Kind + " needs a spec of the change that fails on the base and passes at the head"
-		return proof, e.saveProof(ctx, t, proof)
+		return done()
 	}
 	for _, s := range pf.Specs {
 		if _, err := e.d.Git.FileAt(ctx, c.Path, bh.Head, s); err != nil {
 			proof.Why = "proof.json names " + s + ", which the head does not have: commit the spec"
-			return proof, e.saveProof(ctx, t, proof)
+			return done()
 		}
 	}
 	if len(pf.Specs) == 0 {
 		proof.Passed = true // a green proof with no spec: the precheck runs the specs the change affects
-		return proof, e.saveProof(ctx, t, proof)
+		return done()
 	}
 	cmd := specCommand(repo, pf.Specs)
 	if cmd == "" {
-		proof.Why = repo.Repo + "'s precheck names no specs command, so the factory cannot run the proof's specs"
-		return proof, e.saveProof(ctx, t, proof)
+		return forYou(repo.Repo + "'s [[factory.repo]] names no precheck.specs, so the factory cannot run the proof's spec files")
 	}
 	unlock, err := e.specsLock(ctx, t, "proof")
 	if err != nil {
@@ -287,47 +303,62 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	}
 	defer unlock()
 	timeout := capOf(repo)
+	key := "precheck.specs"
+	if cmd != renderCommand(repo.Precheck.Specs, pf.Specs, "") {
+		key = "precheck.jest"
+	}
 	if red {
 		e.noteCheck(t.ID, "proof: runs "+strings.Join(pf.Specs, ", ")+" on the base")
-		run, denied, err := e.baseRun(ctx, t, c, bh.Base, bh.Head, pf.Specs, cmd, timeout)
+		run, problem, err := e.baseRun(ctx, t, c, bh.Base, bh.Head, pf.Specs, cmd, timeout)
 		proof.Base = run
 		if err != nil {
 			return proof, err
 		}
-		if denied != "" {
-			proof.Why = "the specs command is denied: " + denied
-			return proof, e.saveProof(ctx, t, proof)
+		if problem != "" {
+			return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem)
 		}
 		e.recordRun(ctx, t, "spec", bh.Base, run)
 		if run.Exit == 0 {
 			proof.Why = strings.Join(pf.Specs, ", ") + " passes on the base (" + short(bh.Base) + "), so it proves nothing: " +
 				"write a spec that fails without the change"
-			return proof, e.saveProof(ctx, t, proof)
+			return done()
 		}
 	}
 	e.noteCheck(t.ID, "proof: runs "+strings.Join(pf.Specs, ", ")+" at the head")
-	run, denied, err := e.specRun(ctx, c, cmd, bh.Head, timeout, "proof specs")
+	run, problem, err := e.specRun(ctx, c, cmd, bh.Head, timeout, "proof specs")
 	proof.Head = run
 	if err != nil {
 		return proof, err
 	}
-	if denied != "" {
-		proof.Why = "the specs command is denied: " + denied
-		return proof, e.saveProof(ctx, t, proof)
+	if problem != "" {
+		return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem)
 	}
 	e.recordRun(ctx, t, "spec", bh.Head, run)
-	if dirty, err := trackedChanges(ctx, e.d.Git, c.Path); err != nil {
+	if restored, err := e.restoreTracked(ctx, t, c, "the proof's spec run"); err != nil {
 		return proof, err
-	} else if len(dirty) > 0 {
-		proof.Why = "the spec run left tracked changes in the copy (" + clipList(dirty) + "): git status must be clean before and after"
-		return proof, e.saveProof(ctx, t, proof)
+	} else if len(restored) > 0 {
+		proof.Why = "the spec run changed tracked files in the copy (" + clipList(restored) + "; the factory restored them): " +
+			"git status must be clean before and after"
+		return done()
 	}
-	if run.Exit != 0 {
+	switch {
+	case run.Hung:
+		proof.Why = strings.Join(pf.Specs, ", ") + " does not end at the head (" + short(bh.Head) + ") within " + capText(timeout) + ": it hangs"
+		return done()
+	case run.Exit != 0:
 		proof.Why = strings.Join(pf.Specs, ", ") + " fails at the head (" + short(bh.Head) + ")"
-		return proof, e.saveProof(ctx, t, proof)
+		return done()
 	}
 	proof.Passed = true
-	return proof, e.saveProof(ctx, t, proof)
+	return done()
+}
+
+// capText is a cap as a wait says it ("10m", "300ms").
+func capText(d time.Duration) string {
+	if d < time.Second {
+		return d.Round(time.Millisecond).String()
+	}
+	return shortAge(d)
 }
 
 // short is a commit's first 12 characters.
@@ -370,9 +401,10 @@ func renderCommand(cmd string, files []string, base string) string {
 }
 
 // specRun runs a spec command in copy c at rev (checked out), bounded by
-// timeout: the run, or the deny list's reason when it refused the command,
-// or the error of a command that did not run to its end (ctx, a start
-// failure).
+// timeout. A run that does not end within it is a result (Hung, exit -1),
+// as a red one is. problem is what keeps the command from running at all,
+// for you ("is denied: …", "did not start: …"); the error is the caller's
+// context ending (the daemon stops).
 func (e *Engine) specRun(ctx context.Context, c Copy, cmd, rev string, timeout time.Duration, label string) (ProofRun, string, error) {
 	run := ProofRun{Command: cmd}
 	if tree, err := e.d.Git.TreeOf(ctx, c.Path, rev); err == nil {
@@ -381,9 +413,21 @@ func (e *Engine) specRun(ctx context.Context, c Copy, cmd, rev string, timeout t
 	start := time.Now()
 	res, err := e.script(ctx, c, cmd, label, timeout)
 	run.Took = time.Since(start).Round(time.Millisecond)
-	code, why, err := ranTo(res, err)
+	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
-	return run, why, err
+	switch {
+	case denied != "":
+		return run, "is denied: " + denied, nil
+	case err == nil:
+		return run, "", nil
+	case ctx.Err() != nil:
+		return run, "", err
+	case errors.Is(err, context.DeadlineExceeded):
+		run.Exit, run.Hung = -1, true
+		run.Output = strings.TrimSpace(run.Output + "\n[the factory stopped it: it did not end within " + capText(timeout) + "]")
+		return run, "", nil
+	}
+	return run, "did not start: " + textx.Clip(textx.FirstLine(err.Error()), 200), nil
 }
 
 // ranTo reads a command's end: its exit (0, or a non-zero exit's), the deny
@@ -492,6 +536,8 @@ type detachedRecord struct {
 func (e *Engine) baseRun(ctx context.Context, t registry.Task, c Copy, base, head string, specs []string, cmd string,
 	timeout time.Duration) (ProofRun, string, error) {
 	if err := e.detachForBase(ctx, t, c, base, head, specs); err != nil {
+		e.event(context.WithoutCancel(ctx), t.ID, "proof", registry.PhaseFail, "base run in "+c.Name+" did not start: "+
+			textx.Clip(textx.FirstLine(err.Error()), 300))
 		return ProofRun{Command: cmd}, "", err
 	}
 	run, denied, err := e.specRun(ctx, c, cmd, base, timeout, "specs on the base")
@@ -573,12 +619,17 @@ func (e *Engine) restoreBranch(ctx context.Context, t registry.Task, rec detache
 
 // resumeDetached is the guard of a base run a stopped daemon cut short: when
 // task t's directory holds detached.json and no check of the task runs, it
-// restores the branch and the head's tree in that copy before anything else
-// runs there (startup does it for every task, each pass of a live task
-// before its stage). An agent at work in the copy is a wait; a tracked
-// change the base run did not make (one outside its spec files: yours) is
-// never discarded, and a live task goes to NEEDS YOU naming it. held is
-// the wait, when there is one.
+// acts on the copy before anything else runs there (startup does it for
+// every task, each pass of a live task before its stage). It switches a
+// copy only when the copy is still as the base run left it: the task still
+// holds it (Copies.Reserved), and its HEAD is detached at the record's base.
+// A copy back on the record's branch (you switched it back) drops the record
+// with an ok event; a copy the task no longer holds, or that is elsewhere,
+// drops it with an info event and is left as it is. Before it switches,
+// nobody may be at work in the copy (an agent's run, you in a pane: a wait),
+// and a tracked change the base run did not make (outside its spec files:
+// yours) is never discarded: a live task goes to NEEDS YOU naming it and
+// saying how to put the copy back. held is the wait, when there is one.
 func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held error) {
 	if e.d.Git == nil || e.checkRuns(t.ID) {
 		return nil
@@ -597,9 +648,44 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 		return nil
 	}
 	name := cmpJoin(nonEmpty(rec.CopyName), rec.Copy)
+	drop := func(phase, text string) error {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		e.event(ctx, t.ID, "proof", phase, text)
+		return nil
+	}
+	switch holds, known, err := e.holdsCopy(ctx, t, rec.CopyName); {
+	case err != nil:
+		return err
+	case !known:
+		return nil // this build has no copies to ask: the record waits
+	case !holds:
+		return drop(registry.PhaseInfo, "the record of a base run cut short in "+name+" is dropped: "+TaskKey(t)+
+			" no longer holds the copy, which is left as it is")
+	}
+	cur, err := e.d.Git.CurrentBranch(ctx, rec.Copy)
+	if err != nil {
+		return err
+	}
+	if cur == rec.Branch {
+		return drop(registry.PhaseOK, name+" is back on "+rec.Branch+": the record of the base run cut short there is dropped")
+	}
+	head, err := e.d.Git.RevParse(ctx, rec.Copy, "HEAD")
+	if err != nil {
+		return err
+	}
+	if cur != "" || head != rec.Base {
+		where := "on " + cur
+		if cur == "" {
+			where = "detached at " + short(head)
+		}
+		return drop(registry.PhaseInfo, fmt.Sprintf("%s is %s, not where the base run left it (detached at %s): its record is dropped "+
+			"and the copy left as it is", name, where, short(rec.Base)))
+	}
 	if err := e.copyIdle(ctx, t); err != nil {
 		if h, ok := errors.AsType[heldError](err); ok {
-			what := name + " was left detached by a base run cut short; it is restored once no agent works in it (" + h.what + ")"
+			what := name + " was left detached by a base run cut short; it is restored once nobody works in it (" + h.what + ")"
 			e.waitOn(ctx, t, waitCopy, what)
 			return heldError{who: waitCopy, what: what}
 		}
@@ -610,8 +696,12 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 		return err
 	}
 	if theirs := slices.DeleteFunc(dirty, func(p string) bool { return slices.Contains(rec.Specs, p) }); len(theirs) > 0 {
+		back := "git switch " + rec.Branch
+		if len(rec.Specs) > 0 {
+			back = "remove the spec files it laid there (" + strings.Join(rec.Specs, ", ") + "), then " + back
+		}
 		what := fmt.Sprintf("%s was left detached at %s by a base run cut short, with changes it did not make (%s): "+
-			"keep or drop them, then put %s back on %s (git switch %s)", name, short(rec.Base), clipList(theirs), name, rec.Branch, rec.Branch)
+			"keep or drop them, then put %s back on %s (%s)", name, short(rec.Base), clipList(theirs), name, rec.Branch, back)
 		e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore after a base run cut short: "+what)
 		if isLive(t) {
 			e.toOperator(ctx, t, what, "a base run cut short left changes it did not make")
@@ -625,4 +715,35 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 	}
 	e.event(ctx, t.ID, "proof", registry.PhaseOK, "restored "+rec.Branch+" in "+name+" after a base run cut short")
 	return nil
+}
+
+// holdsCopy reports whether task t holds the copy named name (its owner row
+// reserves it: Copies.Reserved); known is false without copies to ask.
+func (e *Engine) holdsCopy(ctx context.Context, t registry.Task, name string) (holds, known bool, err error) {
+	if e.d.Copies == nil {
+		return false, false, nil
+	}
+	rs, err := e.d.Copies.Reserved(ctx)
+	if err != nil {
+		return false, true, err
+	}
+	return slices.ContainsFunc(rs, func(r Reservation) bool { return r.TaskID == t.ID && r.Copy == name }), true, nil
+}
+
+// restoreTracked undoes what the factory's own commands changed in tracked
+// files of task t's copy c (what, for the event: the precheck's commands,
+// the proof's spec run), which the checks start on clean (branchHead): each
+// path back as HEAD has it (gitx.RestoreTracked), and an info event names
+// them. restored are the paths it put back.
+func (e *Engine) restoreTracked(ctx context.Context, t registry.Task, c Copy, what string) (restored []string, err error) {
+	ctx = context.WithoutCancel(ctx)
+	dirty, err := trackedChanges(ctx, e.d.Git, c.Path)
+	if err != nil || len(dirty) == 0 {
+		return nil, err
+	}
+	if err := e.d.Git.RestoreTracked(ctx, c.Path, dirty...); err != nil {
+		return nil, fmt.Errorf("restore what %s changed in %s (%s): %w", what, c.Name, clipList(dirty), err)
+	}
+	e.event(ctx, t.ID, "check", registry.PhaseInfo, "restored "+clipList(dirty)+" in "+c.Name+": "+what+" changed it")
+	return dirty, nil
 }

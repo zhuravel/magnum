@@ -46,12 +46,16 @@ const specsLockPoll = 2 * time.Second
 // PrecheckResult is a precheck's end: whether it passed, the checks it
 // recorded (the factory's), the migrations the branch adds with their
 // flags, and why it did not pass (its first failure, in plain words, such
-// as "precheck: over 10m").
+// as "precheck: over 10m"). ForYou says the writer cannot fix why: a command
+// the deny list refuses or that does not start, a lint whose output names no
+// offense by path:line, a table_stats it cannot read (the configuration's or
+// the machine's, named by its key); such a failure is the one Why says.
 type PrecheckResult struct {
 	Passed     bool
 	Checks     []registry.Check
 	Migrations []MigrationFlag
 	Why        string
+	ForYou     bool
 }
 
 // errOverCap is the cause of a precheck's context its cap ended.
@@ -59,8 +63,11 @@ var errOverCap = errors.New("the precheck's cap")
 
 // precheck runs task t's precheck in copy c at its head (see the file's
 // comment). A precheck that does not pass is a result with Why, nil error;
-// the error is a wait (an agent at work in the copy), the caller's context
-// ending, or a failure to run (git). It writes precheck.md.
+// the error is a wait (somebody at work in the copy), the caller's context
+// ending, or a failure to run (git). It started on a clean tree (branchHead),
+// so whatever its commands changed in tracked files (Rails dumps
+// db/schema.rb after a migration) is its own: it puts those back as HEAD has
+// them at its end, however it ended, and says so. It writes precheck.md.
 func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (PrecheckResult, error) {
 	repo, err := e.factoryRepo(t)
 	if err != nil {
@@ -119,6 +126,11 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 
 	p := &precheckRun{e: e, t: t, c: c, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit,
 		res: PrecheckResult{Passed: true}}
+	defer func() {
+		if _, err := e.restoreTracked(ctx, t, c, "the precheck's commands"); err != nil {
+			e.log.Warn("restore what a precheck changed", "task", t.ID, "err", err)
+		}
+	}()
 	p.say("# Precheck of %s at %s\n\nThe change from %s: %d files.\n", t.Branch, short(bh.Head), short(bh.Base), len(files))
 	steps := []func(){
 		func() { p.lint(pc.Lint, files, diff) },
@@ -141,13 +153,22 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		step()
 	}
 	switch {
-	case errors.Is(context.Cause(cctx), errOverCap):
-		p.res.Passed, p.res.Why = false, "precheck: over "+shortAge(limit)
-		p.say("\n**Stopped: over its cap of %s.**\n", shortAge(limit))
 	case ctx.Err() != nil:
 		return p.res, ctx.Err()
+	case errors.Is(context.Cause(cctx), errOverCap) || p.overCap:
+		p.res.Passed = false
+		if !p.res.ForYou {
+			p.res.Why = "precheck: over " + capText(limit)
+		}
+		p.say("\n**Stopped: over its cap of %s.**\n", capText(limit))
 	case p.err != nil:
 		return p.res, p.err
+	}
+	if restored, err := e.restoreTracked(ctx, t, c, "the precheck's commands"); err != nil {
+		return p.res, err
+	} else if len(restored) > 0 {
+		p.say("\nRestored %s: the precheck's commands changed %s, and the copy is left as the branch has it.\n",
+			clipList(restored), map[bool]string{true: "it", false: "them"}[len(restored) == 1])
 	}
 	if p.res.Passed {
 		p.say("\nPassed.\n")
@@ -182,20 +203,31 @@ type precheckRun struct {
 	limit      time.Duration
 	res        PrecheckResult
 	report     strings.Builder
-	// err is a failure to run that ends the precheck (git).
-	err error
+	// err is a failure to run that ends the precheck (git); overCap a
+	// command that did not end within the cap (its own bound).
+	err     error
+	overCap bool
 }
 
 func (p *precheckRun) say(format string, a ...any) { fmt.Fprintf(&p.report, format, a...) }
 
 // stopped reports whether the precheck ends here: its cap, the caller's
 // context or a failure to run.
-func (p *precheckRun) stopped() bool { return p.ctx.Err() != nil || p.err != nil }
+func (p *precheckRun) stopped() bool { return p.ctx.Err() != nil || p.err != nil || p.overCap }
 
-// fail fails the precheck with why, its first failure's reason.
+// fail fails the precheck with why, its first failure's reason, unless a
+// failure for you came first.
 func (p *precheckRun) fail(why string) {
 	if p.res.Passed {
 		p.res.Passed, p.res.Why = false, "precheck: "+why
+	}
+}
+
+// failForYou fails the precheck with why, a failure the writer cannot fix:
+// it is the one the result says, whatever failed before it.
+func (p *precheckRun) failForYou(why string) {
+	if !p.res.ForYou {
+		p.res.Passed, p.res.Why, p.res.ForYou = false, "precheck: "+why, true
 	}
 }
 
@@ -209,10 +241,11 @@ func (p *precheckRun) record(c registry.Check) {
 	p.e.recordCheck(p.ctx, c)
 }
 
-// run runs a command of the precheck in the copy: its run, whether it ran
-// to its end (false: the cap or the caller's context stopped it, or it did
-// not start, which fails the precheck with the reason).
-func (p *precheckRun) run(what, cmd string) (ProofRun, bool) {
+// run runs a command of the precheck, of configuration key key, in the
+// copy: its run, whether it ran to its end (false: the cap or the caller's
+// context stopped it, or it did not run at all: refused by the deny list or
+// not started, which fails the precheck for you, naming the key).
+func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	p.e.noteCheck(p.t.ID, "precheck: "+what)
 	run := ProofRun{Command: cmd}
 	start := time.Now()
@@ -225,11 +258,14 @@ func (p *precheckRun) run(what, cmd string) (ProofRun, bool) {
 		return run, false
 	case denied != "":
 		p.say("\n- `%s`: denied: %s\n", cmd, denied)
-		p.fail(what + ": denied: " + denied)
+		p.failForYou(key + " `" + cmd + "` is denied: " + denied)
+		return run, false
+	case errors.Is(err, context.DeadlineExceeded):
+		p.overCap = true // its own bound is the cap
 		return run, false
 	case err != nil:
-		p.say("\n- `%s` did not run: %s\n", cmd, textx.FirstLine(err.Error()))
-		p.fail(what + ": " + cmd + " did not run: " + textx.Clip(textx.FirstLine(err.Error()), 200))
+		p.say("\n- `%s` did not start: %s\n", cmd, textx.FirstLine(err.Error()))
+		p.failForYou(key + " `" + cmd + "` did not start: " + textx.Clip(textx.FirstLine(err.Error()), 200))
 		return run, false
 	}
 	return run, true
@@ -254,9 +290,9 @@ func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines)
 			return
 		}
 		script := renderCommand(cmd, files, p.base)
-		run, ok := p.run("lint ("+firstWord(cmd)+")", script)
+		run, ok := p.run("precheck.lint", "lint ("+firstWord(cmd)+")", script)
 		if !ok {
-			if p.ctx.Err() == nil {
+			if !p.stopped() {
 				p.record(registry.Check{Kind: registry.CheckLint, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
 			}
 			continue
@@ -286,7 +322,8 @@ func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines)
 		case named == 0:
 			check.Result, check.Cause = registry.CheckFail, "unknown"
 			p.say("\n- `%s` exited %d and names no offense by path:line:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-			p.fail(fmt.Sprintf("lint: %s exited %d and names no offense by path:line", firstWord(cmd), run.Exit))
+			p.failForYou(fmt.Sprintf("precheck.lint `%s` exited %d and names no offense by path:line: (have it print them so: "+
+				"rubocop --format emacs, eslint --format unix)", cmd, run.Exit))
 		default:
 			p.say("\n- `%s`: %s, none on a changed line\n", script, plural(named, "offense"))
 		}
@@ -353,9 +390,9 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		return
 	}
 	script := renderCommand(cmd, files, p.base)
-	run, ok := p.run("specs", script)
+	run, ok := p.run("precheck.specs", "specs", script)
 	if !ok {
-		if p.ctx.Err() == nil {
+		if !p.stopped() {
 			p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
 		}
 		return
@@ -385,15 +422,18 @@ func (p *precheckRun) specs(cmd string, files []string) {
 	if len(atBase) > 0 {
 		baseScript := renderCommand(cmd, atBase, p.base)
 		p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
-		base, denied, err := p.e.baseRun(p.ctx, p.t, p.c, p.base, p.head, nil, baseScript, p.limit)
+		base, problem, err := p.e.baseRun(p.ctx, p.t, p.c, p.base, p.head, nil, baseScript, p.limit)
 		switch {
 		case p.ctx.Err() != nil:
 			return
 		case err != nil:
 			p.err = err
 			return
-		case denied != "":
-			p.fail("specs on the base: denied: " + denied)
+		case problem != "":
+			p.failForYou("precheck.specs `" + baseScript + "` " + problem)
+			return
+		case base.Hung:
+			p.overCap = true
 			return
 		}
 		for _, f := range failures(base.Output) {
@@ -438,10 +478,10 @@ func (p *precheckRun) jest(cmd string, files []string) {
 		return
 	}
 	script := renderCommand(cmd, files, p.base)
-	run, ok := p.run("jest", script)
+	run, ok := p.run("precheck.jest", "jest", script)
 	check := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckPass, Command: script, Exit: run.Exit, Took: run.Took}
 	switch {
-	case !ok && p.ctx.Err() != nil:
+	case !ok && (p.ctx.Err() != nil || p.overCap):
 		return
 	case !ok:
 		check.Result, check.Cause = registry.CheckFail, "code"
@@ -473,7 +513,7 @@ func (p *precheckRun) migrations(repo config.FactoryRepo, cmds []string, added [
 	flags, err := ScanMigrations(p.c.Path, added, repo)
 	if err != nil {
 		p.say("- the migration-safety lint cannot read them: %v\n", err)
-		p.fail("migrations: " + err.Error())
+		p.failForYou("the migration-safety lint of " + repo.Repo + "'s migrations: " + err.Error())
 		return
 	}
 	p.res.Migrations = flags
@@ -495,9 +535,9 @@ func (p *precheckRun) migrations(repo config.FactoryRepo, cmds []string, added [
 		}
 		for _, cmd := range cmds {
 			script := strings.NewReplacer("{version}", version, "{file}", f.Path).Replace(renderCommand(cmd, []string{f.Path}, p.base))
-			run, ok := p.run("migration "+filepath.Base(f.Path), script)
+			run, ok := p.run("precheck.migrations", "migration "+filepath.Base(f.Path), script)
 			if !ok {
-				if p.ctx.Err() == nil {
+				if !p.stopped() {
 					p.record(registry.Check{Kind: registry.CheckMigration, Result: registry.CheckFail, Cause: "code", Command: script})
 				}
 				break

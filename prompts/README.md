@@ -543,9 +543,11 @@ writer's `proof.json`, `{"specs": [...]}`, naming its spec files and never their
 has commits after `origin/<base>`, `git status` shows no tracked change, and the factory's own proof and
 precheck passed at the head: the factory runs them itself, off its loop). A role whose file is missing or
 malformed gets one nudge naming the file and what is wrong; then the task waits on you, "the <role> agent
-wrote no valid <file>". A writer whose change fails the factory's checks gets one nudge naming what failed
-and the file of the runs (`factory-proof.json` or `precheck.md`); then the task waits on you, "the
-fx-writer agent's change does not pass: <why>". The critic's stage (`when = "wide"`) runs only for a plan whose
+wrote no valid <file>". A writer whose change fails the factory's checks gets fix turns naming what failed
+and the file of the runs (`factory-proof.json` or `precheck.md`), up to 6 prompts in the stage; then the task
+waits on you, "the fx-writer agent's change does not pass after 6 prompts in the stage: <why>". What the
+writer cannot fix (a command the deny list refuses or that does not start, lint output not by `path:line`,
+no specs command, an unreadable `table_stats`) goes to you at once, naming the configuration key. The critic's stage (`when = "wide"`) runs only for a plan whose
 Files name 3 or more files, a file under `db/` or a security path.
 
 A role that ends its turn with new questions in `.Questions` suspends its stage instead of a nudge: once
