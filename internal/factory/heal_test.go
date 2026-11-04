@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func TestAPanicStopsOnlyItsTask(t *testing.T) {
@@ -830,5 +833,51 @@ func TestAnUnknownDeliveryGoesToYouWithOneAction(t *testing.T) {
 	}
 	if !slices.Equal(h.rt.letGo, []string{"PR-12372/fx-repro"}) {
 		t.Fatalf("LetGo calls %v, want the role's", h.rt.letGo)
+	}
+}
+
+// A Codex refusal marks the task never for Codex in the registry (a
+// compare-and-set update with its event row), so a restarted daemon (a
+// fresh engine and runtime on the same registry) runs the task's Codex
+// roles on their Claude fallback, whatever copy of the task it holds. A
+// Claude role's refusal marks nothing.
+func TestACodexRefusalSurvivesARestart(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12373", registry.TaskActive, "investigate")
+	other := h.task("PR-12374", registry.TaskActive, "investigate")
+	stale := task
+	h.rt.events = []runtime.Event{
+		{TaskID: task.ID, Role: "fx-cause", RunID: "r-1", Kind: runtime.EventRefused, Reason: "codex: flagged for possible cybersecurity risk"},
+		{TaskID: other.ID, Role: "fx-repro", RunID: "r-2", Kind: runtime.EventRefused, Reason: "claude: a usage policy warning"},
+	}
+
+	h.e.observe(h.ctx)
+
+	if got := h.reload(task.ID); !got.CodexNever {
+		t.Fatal("the refused task is not marked never for Codex")
+	}
+	if evs := h.events(task.ID, "codex_never"); len(evs) != 1 {
+		t.Fatalf("codex_never events %+v, want one", evs)
+	}
+	if got := h.reload(other.ID); got.CodexNever {
+		t.Fatal("a Claude role's refusal marked the task never for Codex")
+	}
+
+	// The restart: a fresh runtime and engine on the same registry.
+	rt, err := runtime.New(runtime.Deps{Config: h.cfg, Layout: h.layout,
+		Herdr: &herdr.Client{Socket: filepath.Join(t.TempDir(), "absent.sock")},
+		Store: storetest.Open(t, filepath.Join(t.TempDir(), "agents.db")), Registry: h.reg, Runner: &execx.Fake{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = New(Deps{Config: h.cfg, Layout: h.layout, Registry: h.reg, Runtime: rt, Clock: h.clock.Now})
+	cause, _ := h.cfg.FactoryRole("fx-cause")
+	for _, c := range []struct {
+		name string
+		task registry.Task
+	}{{"a copy from before the refusal", stale}, {"the task as stored", h.reload(task.ID)}} { // the stale copy first: nothing read before it
+		if runs, err := rt.RunsAs(c.task, cause); err != nil || runs.Name != "fx-cause-claude" {
+			t.Fatalf("%s: fx-cause runs as %q (%v), want its Claude fallback", c.name, runs.Name, err)
+		}
 	}
 }

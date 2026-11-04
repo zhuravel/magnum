@@ -475,6 +475,16 @@ func newRig(t *testing.T) *rig {
 	}}
 	g.task = g.newTask("PR-12345")
 	g.attempt = g.begin(g.task, "investigate")
+	g.restart()
+	return g
+}
+
+// restart builds the rig's runtime afresh over the same registry, agents
+// store and herdr, as a daemon restart does: nothing it kept in memory
+// survives.
+func (g *rig) restart() {
+	t := g.t
+	t.Helper()
 	r, err := newWith(Deps{Config: g.cfg, Layout: g.layout, Herdr: g.h, Store: g.st, Registry: g.reg, Runner: g.run,
 		Memory: g.memory, Clock: g.clock.Now}, seams{
 		sleep: func(ctx context.Context, d time.Duration) error {
@@ -507,7 +517,6 @@ func newRig(t *testing.T) *rig {
 		t.Fatalf("newWith: %v", err)
 	}
 	g.r = r
-	return g
 }
 
 func (g *rig) isLoggedOut(kind string) bool {

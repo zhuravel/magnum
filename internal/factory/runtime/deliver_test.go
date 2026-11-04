@@ -324,3 +324,120 @@ func TestAnUnknownDeliveryNeverStallsSilently(t *testing.T) {
 	f.observeN(2)
 	f.send("fx-repro", "go on")
 }
+
+// A prompt the operator let go stays let go: Reconcile answers with the
+// stored verdict, from a stale copy of the entry too, and never turns it
+// into a "no" a caller would resend on.
+func TestReconcileNeverTurnsALetGoPromptIntoNo(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.observe()
+	e := g.pendingPrompt("fx-repro", "reproduce the bug", false)
+	g.writeTranscript("sid-1", assistantLine(e.Sent.Add(30*time.Second), "the agent wrote after the prompt left"))
+	if got, err := g.r.Reconcile(g.ctx, e); err != nil || got != registry.DeliveredUnknown {
+		t.Fatalf("the first read = %s, %v, want unknown", got, err)
+	}
+	if n, err := g.r.LetGo(g.ctx, g.task, "fx-repro"); err != nil || n != 1 {
+		t.Fatalf("LetGo = %d, %v", n, err)
+	}
+
+	for i := range 3 {
+		g.clock.Add(RedeliverAfter)
+		if got, err := g.r.Reconcile(g.ctx, e); err != nil || got != registry.DeliveredAbandoned {
+			t.Fatalf("read %d of the stale entry = %s, %v, want abandoned", i+2, got, err)
+		}
+	}
+	stored := g.ledger()[0]
+	if stored.Delivered != registry.DeliveredAbandoned {
+		t.Fatalf("the entry is %s, want abandoned", stored.Delivered)
+	}
+	if got, err := g.r.Reconcile(g.ctx, stored); err != nil || got != registry.DeliveredAbandoned {
+		t.Fatalf("Reconcile of the stored entry = %s, %v, want abandoned", got, err)
+	}
+}
+
+// LetGo frees the runs it held: the role's pending run ends, the agents
+// store lists it no more, and the task's agents park.
+func TestLetGoFreesTheRunsItHeld(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	e := g.pendingPrompt("fx-repro", "reproduce the bug", false)
+	if err := g.r.Park(g.ctx, g.task); !errors.Is(err, agents.ErrBusy) {
+		t.Fatalf("Park with the run pending = %v, want ErrBusy", err)
+	}
+
+	if n, err := g.r.LetGo(g.ctx, g.task, "fx-repro"); err != nil || n != 1 {
+		t.Fatalf("LetGo = %d, %v", n, err)
+	}
+
+	active, err := g.st.ActiveRuns(g.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(active, func(r store.Run) bool { return r.ID == e.RunID }) {
+		t.Fatalf("the run of the prompt let go is still active: %s", g.storeRun(e.RunID).State)
+	}
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		t.Fatalf("Park after LetGo = %v", err)
+	}
+}
+
+// A prompt that did arrive although its Submit failed (the connection
+// closed after herdr typed it) is watched once its transcript proves it:
+// its run is submitted again, and its end comes as any run's.
+func TestAPromptFoundAfterAFailedRunIsWatched(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.observe()
+	g.h.promptErr = func(string) error {
+		return fmt.Errorf("herdr agent.prompt: connection closed without a response: %w", io.EOF)
+	}
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); err == nil {
+		t.Fatal("Send = nil, want herdr's error")
+	}
+	g.h.promptErr = nil
+	e := g.ledger()[0]
+	if r := g.storeRun(e.RunID); r.State != store.RunFailed {
+		t.Fatalf("the run is %s, want failed", r.State)
+	}
+	g.writeTranscript("sid-1", userLine(e.Sent.Add(2*time.Second), "reproduce the bug"))
+
+	if got, err := g.r.Reconcile(g.ctx, e); err != nil || got != registry.DeliveredYes {
+		t.Fatalf("Reconcile = %s, %v, want yes", got, err)
+	}
+	if r := g.storeRun(e.RunID); r.State != store.RunSubmitted {
+		t.Fatalf("the delivered prompt's run is %s, want submitted", r.State)
+	}
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	ended := only(g.observeN(2), EventEnded)
+	if len(ended) != 1 || ended[0].RunID != e.RunID {
+		t.Fatalf("events %+v, want the delivered run's end", ended)
+	}
+}
+
+// A fresh runtime (a daemon restart) reads Codex-never from the task in the
+// registry, whatever copy of the task it is given: a Codex role of a task
+// Codex refused runs as its Claude fallback, and nothing starts on Codex.
+func TestAFreshRuntimeReadsTheTasksCodexNever(t *testing.T) {
+	g := newRig(t)
+	stale := g.task
+	if err := g.reg.TransitionTask(g.ctx, g.task.ID, nil, "", func(u *registry.TaskUpdate) { u.Set("codex_never", true) }); err != nil {
+		t.Fatal(err)
+	}
+	g.restart()
+
+	if err := g.r.Launch(g.ctx, stale, g.attempt, g.copy, g.roles("fx-cause")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, s := range g.h.startCalls() {
+		if s.Kind == agents.KindCodex {
+			t.Fatalf("a Codex agent started on a task Codex refused: %+v", s)
+		}
+	}
+	if s := g.h.startCalls(); len(s) != 1 || s[0].Name != g.agent("fx-cause-claude") {
+		t.Fatalf("starts %+v, want the Claude fallback", s)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -104,12 +105,42 @@ func (r *Runtime) firstPrompt(ctx context.Context, st *roleState) (string, error
 // settle records the verdict on a ledger entry; a failure is logged (the
 // entry stays unknown, which only holds the role's next prompt back).
 func (r *Runtime) settle(ctx context.Context, e registry.LedgerEntry, verdict string) {
+	r.settleTo(ctx, e, verdict)
+}
+
+// settleTo is settle, and returns the verdict that stands: verdict, or,
+// when the entry was settled meanwhile (ErrConflict: let go, say), the
+// stored one; unknown when the registry failed.
+func (r *Runtime) settleTo(ctx context.Context, e registry.LedgerEntry, verdict string) string {
 	if verdict == registry.DeliveredUnknown {
-		return
+		return verdict
 	}
-	if err := r.reg.MarkDelivered(context.WithoutCancel(ctx), e.ID, verdict); err != nil {
-		r.log.Warn("settle a prompt's delivery", "entry", e.ID, "verdict", verdict, "err", err)
+	ctx = context.WithoutCancel(ctx)
+	err := r.reg.MarkDelivered(ctx, e.ID, verdict)
+	if err == nil {
+		return verdict
 	}
+	if errors.Is(err, registry.ErrConflict) {
+		if v, verr := r.verdict(ctx, e); verr == nil {
+			return v
+		}
+	}
+	r.log.Warn("settle a prompt's delivery", "entry", e.ID, "verdict", verdict, "err", err)
+	return registry.DeliveredUnknown
+}
+
+// verdict is ledger entry e's stored delivery.
+func (r *Runtime) verdict(ctx context.Context, e registry.LedgerEntry) (string, error) {
+	entries, err := r.reg.LedgerOf(ctx, e.TaskID)
+	if err != nil {
+		return "", err
+	}
+	for _, x := range entries {
+		if x.ID == e.ID {
+			return x.Delivered, nil
+		}
+	}
+	return "", fmt.Errorf("ledger entry %d: %w", e.ID, registry.ErrNotFound)
 }
 
 // inFlight reports whether run is pending, submitted or working.

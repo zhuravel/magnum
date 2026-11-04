@@ -567,9 +567,44 @@ func (e *Engine) observe(ctx context.Context) {
 		if box := e.inbox[ev.TaskID]; len(box) > maxInbox {
 			e.inbox[ev.TaskID] = box[len(box)-maxInbox:]
 		}
-		if ev.Kind == runtime.EventDeliveryUnknown {
+		switch ev.Kind {
+		case runtime.EventDeliveryUnknown:
 			e.deliveryUnknown(ctx, ev)
+		case runtime.EventRefused:
+			e.codexRefused(ctx, ev)
 		}
+	}
+}
+
+// codexRefused marks the task of a refused Codex role never for Codex again
+// (Task.CodexNever), at once and in the registry, so no restart and no stage
+// lets Codex back on it: a cybersecurity or abuse warning is never retried
+// (the account is at stake). The update is a compare-and-set on the task's
+// state, tried again once when the task moved meanwhile, with a codex_never
+// event row. A refusal of another kind's role marks nothing.
+func (e *Engine) codexRefused(ctx context.Context, ev runtime.Event) {
+	if role, ok := e.cfg.FactoryRole(ev.Role); !ok || role.AgentKind() != config.KindCodex {
+		return
+	}
+	for range 2 {
+		t, err := e.reg.TaskByID(ctx, ev.TaskID)
+		if err != nil || t.CodexNever {
+			return
+		}
+		err = e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
+			u.Set("codex_never", true)
+			u.Because("a Codex refusal")
+		})
+		if errors.Is(err, registry.ErrConflict) {
+			continue // it moved meanwhile: read it again
+		}
+		if err != nil {
+			e.log.Warn("mark a task never for Codex", "task", t.ID, "err", err)
+			return
+		}
+		e.event(ctx, t.ID, "codex_never", registry.PhaseInfo,
+			ev.Role+" was refused by Codex; Codex never works on "+TaskKey(t)+" again: "+ev.Reason)
+		return
 	}
 }
 

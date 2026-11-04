@@ -181,14 +181,7 @@ func (r *Runtime) sent(attempt, role string) {
 // up, so the role goes on, and none of them is sent again.
 func (r *Runtime) abandon(ctx context.Context, id, why string) {
 	ctx = context.WithoutCancel(ctx)
-	err := r.st.TransitionRun(ctx, id,
-		[]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, store.RunAbandoned,
-		func(u *store.RunUpdate) {
-			u.Set("error", execx.Redact(why))
-			u.Set("ended_at", r.now())
-		})
-	if err != nil && !errors.Is(err, store.ErrConflict) {
-		r.log.Warn("abandon a run", "run", id, "err", err)
+	if !r.endRun(ctx, id, why) {
 		return
 	}
 	run, err := r.st.RunByID(ctx, id)
@@ -204,10 +197,30 @@ func (r *Runtime) abandon(ctx context.Context, id, why string) {
 	}
 }
 
+// endRun moves run id, when it is in flight or ended, to abandoned with why;
+// false when the store failed (a run already settled is no failure).
+func (r *Runtime) endRun(ctx context.Context, id, why string) bool {
+	if id == "" {
+		return true
+	}
+	err := r.st.TransitionRun(context.WithoutCancel(ctx), id,
+		[]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, store.RunAbandoned,
+		func(u *store.RunUpdate) {
+			u.Set("error", execx.Redact(why))
+			u.Set("ended_at", r.now())
+		})
+	if err != nil && !errors.Is(err, store.ErrConflict) && !errors.Is(err, store.ErrNotFound) {
+		r.log.Warn("abandon a run", "run", id, "err", err)
+		return false
+	}
+	return true
+}
+
 // LetGo settles every prompt to role (as it runs) of task t whose delivery
 // is unknown as abandoned: the operator looked at the pane
-// (EventDeliveryUnknown). The role gets prompts again, and none of those is
-// sent a second time. It returns how many it settled.
+// (EventDeliveryUnknown). The role gets prompts again, none of those is
+// sent a second time, and their runs still in flight are abandoned. It
+// returns how many it settled.
 func (r *Runtime) LetGo(ctx context.Context, t registry.Task, role string) (int, error) {
 	return r.letGoWhere(ctx, t.ID, func(e registry.LedgerEntry) bool { return e.Role == role })
 }
@@ -232,6 +245,7 @@ func (r *Runtime) letGoWhere(ctx context.Context, id int64, keep func(registry.L
 		delete(r.misses, e.ID)
 		delete(r.once, unknownKey(e.ID))
 		r.mu.Unlock()
+		r.endRun(ctx, e.RunID, "its prompt was let go") // a run left pending would hold Park and the active runs for good
 	}
 	return n, nil
 }
@@ -255,8 +269,15 @@ func unknownKey(entry int64) string { return fmt.Sprintf("unknown:%d", entry) }
 // session not prompted since. Every other case (no transcript, a run that
 // went further) stays unknown.
 func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error) {
-	if e.Delivered == registry.DeliveredYes || e.Delivered == registry.DeliveredNo {
+	if e.Delivered != registry.DeliveredUnknown {
 		return e.Delivered, nil
+	}
+	// The copy may be stale: the stored verdict (yes, no, or a prompt let go)
+	// is the answer once there is one.
+	if v, err := r.verdict(ctx, e); err != nil {
+		return registry.DeliveredUnknown, fmt.Errorf("reconcile prompt %d: %w", e.ID, err)
+	} else if v != registry.DeliveredUnknown {
+		return v, nil
 	}
 	unknown := func() (string, error) {
 		r.mu.Lock()
@@ -284,11 +305,13 @@ func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string
 		return unknown()
 	}
 	if found {
-		r.settle(ctx, e, registry.DeliveredYes)
-		r.submitted(ctx, run, s, at)
 		r.mu.Lock()
 		delete(r.misses, e.ID)
 		r.mu.Unlock()
+		if v := r.settleTo(ctx, e, registry.DeliveredYes); v != registry.DeliveredYes {
+			return v, nil // settled meanwhile (let go): that stands
+		}
+		r.submitted(ctx, run, s, at)
 		return registry.DeliveredYes, nil
 	}
 	proof := (run.State == store.RunPending || run.State == store.RunFailed) && run.SubmittedAt == nil && last.After(e.Sent) &&
@@ -306,11 +329,13 @@ func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string
 	if !seen || now.Sub(first) < RedeliverAfter {
 		return registry.DeliveredUnknown, nil
 	}
-	r.settle(ctx, e, registry.DeliveredNo)
-	r.abandon(ctx, run.ID, "the prompt never arrived (its transcript, read twice, has no such turn)")
 	r.mu.Lock()
 	delete(r.misses, e.ID)
 	r.mu.Unlock()
+	if v := r.settleTo(ctx, e, registry.DeliveredNo); v != registry.DeliveredNo {
+		return v, nil // settled meanwhile (let go): never a "no" to resend on
+	}
+	r.abandon(ctx, run.ID, "the prompt never arrived (its transcript, read twice, has no such turn)")
 	return registry.DeliveredNo, nil
 }
 
@@ -335,14 +360,17 @@ func (r *Runtime) sessionOf(ctx context.Context, run store.Run) (store.Session, 
 }
 
 // submitted marks a run whose prompt the transcript shows arrived at at as
-// submitted to session s, when it is still pending.
+// submitted to session s, when it never was: still pending (the daemon
+// stopped before Submit recorded it), or failed by an error that came after
+// herdr typed it. From then on it is observed as any run in flight.
 func (r *Runtime) submitted(ctx context.Context, run store.Run, s store.Session, at time.Time) {
-	if run.State != store.RunPending {
+	if run.SubmittedAt != nil || (run.State != store.RunPending && run.State != store.RunFailed) {
 		return
 	}
-	err := r.st.TransitionRun(ctx, run.ID, []string{store.RunPending}, store.RunSubmitted, func(u *store.RunUpdate) {
+	err := r.st.TransitionRun(ctx, run.ID, []string{store.RunPending, store.RunFailed}, store.RunSubmitted, func(u *store.RunUpdate) {
 		u.Set("session_id", s.ID)
 		u.Set("submitted_at", at)
+		u.Set("ended_at", nil)
 	})
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		r.log.Warn("mark a delivered prompt's run submitted", "run", run.ID, "err", err)

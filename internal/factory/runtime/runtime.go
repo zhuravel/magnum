@@ -326,12 +326,25 @@ func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error)
 		role.Name, taskKey(t))
 }
 
-// codexNever reports whether Codex never works on task t again: the engine
-// marked it, or one of its Codex roles was refused.
+// codexNever reports whether Codex never works on task t again: one of its
+// Codex roles was refused in this runtime, or the task is marked
+// (Task.CodexNever), on the copy given or in the registry, which a restart
+// keeps: a stale copy of the task never lets Codex back on it.
 func (r *Runtime) codexNever(t registry.Task) bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return t.CodexNever || r.refused[t.ID]
+	known := t.CodexNever || r.refused[t.ID]
+	r.mu.Unlock()
+	if !known && t.ID != 0 {
+		if stored, err := r.reg.TaskByID(context.Background(), t.ID); err == nil {
+			known = stored.CodexNever
+		}
+	}
+	if known {
+		r.mu.Lock()
+		r.refused[t.ID] = true
+		r.mu.Unlock()
+	}
+	return known
 }
 
 // errRefusedRole is a restart of a role that may never run again: it was

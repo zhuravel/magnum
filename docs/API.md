@@ -12537,8 +12537,9 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 func (r *Runtime) LetGo(ctx context.Context, t registry.Task, role string) (int, error)
     LetGo settles every prompt to role (as it runs) of task t whose
     delivery is unknown as abandoned: the operator looked at the pane
-    (EventDeliveryUnknown). The role gets prompts again, and none of those is
-    sent a second time. It returns how many it settled.
+    (EventDeliveryUnknown). The role gets prompts again, none of those is sent
+    a second time, and their runs still in flight are abandoned. It returns how
+    many it settled.
 
 func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
     Observe runs one observe pass over herdr's snapshot and returns its
