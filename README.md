@@ -3749,7 +3749,7 @@ the workspace the cut one left by its label. Each prompt of unknown delivery (th
 it and saving that it went) is read once in its agent's transcript: one that arrived is watched, one a second
 read 2 minutes later proves never arrived goes once more, and any other is sent to nobody: the task waits
 (`agent: prompt delivery unknown (<role>)`), and after 15 minutes needs you to look at the pane, naming every
-such prompt; not while the proof that it never arrived runs, and a proof's "no" brings the task back to work. A prompt you let go is never sent again; when its role's turn was that prompt, nothing watches it,
+such prompt; not while the proof that it never arrived runs; a proof's "no" (the prompt goes once more) or a later read that finds the prompt (its run is watched, nothing is sent) brings the task back to work. A prompt you let go is never sent again; when its role's turn was that prompt, nothing watches it,
 so the task needs you until the role's file is written (`the prompt to <role> was let go, and its turn is not
 watched: …`), and your retry lets it go on. An effect in flight (a push, a PR) runs its own guard again before
 any step. The event log says what each step found, and a restart keeps it.

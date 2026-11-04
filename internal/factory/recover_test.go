@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // startup runs the engine's startup, as a daemon does before its first
@@ -868,6 +869,61 @@ func TestAProofThatAPromptNeverArrivedBringsTheTaskBackFromYou(t *testing.T) {
 	}
 	if n := len(h.rt.promptsTo("fx-history")); n != 1 {
 		t.Fatalf("fx-history got %d prompts, want 1", n)
+	}
+}
+
+// deliveredEvent is the observe pass's word that entry e's prompt arrived,
+// a later read having found it in its transcript (the runtime settles it
+// first: the entry delivered, its run watched).
+func (h *harness) deliveredEvent(e registry.LedgerEntry) {
+	h.t.Helper()
+	h.rt.setVerdict(registry.DeliveredYes)
+	if v, err := h.rt.Reconcile(h.ctx, e); err != nil || v != registry.DeliveredYes {
+		h.t.Fatalf("Reconcile = %s, %v", v, err)
+	}
+	h.rt.setVerdict(registry.DeliveredUnknown)
+	h.observeEvents(runtime.Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: runtime.EventDelivered,
+		Reason: "the prompt to " + e.Role + " arrived (its transcript holds it): its run is watched, never sent again"})
+}
+
+// A task sent to you for a prompt nobody could tell yet comes back once a
+// later read finds the prompt in its transcript: the wait keeps only the
+// prompts still unknown, and with none left the task goes back to work,
+// the found runs watched and nothing sent again; their ends pass the stage.
+func TestALaterReadThatFindsThePromptBringsTheTaskBackFromYou(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12437", "bug", "investigate")
+	h.rt.sendUnknown("fx-repro")
+	h.rt.sendUnknown("fx-cause")
+	h.startStage(task)
+	repro, cause := h.entryOf(task.ID, "fx-repro"), h.entryOf(task.ID, "fx-cause")
+	h.clock.Add(runtime.UnknownAfter)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-repro")})
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-repro", "fx-cause"))
+
+	h.deliveredEvent(repro)
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-cause"))
+	h.deliveredEvent(cause)
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == waitsYou {
+		t.Fatalf("task %s waits %q: %q after both reads, want at work", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	h.tick()
+	h.tick()
+	for _, e := range []registry.LedgerEntry{repro, cause} {
+		if state, _, err := h.rt.RunState(h.ctx, e.RunID); err != nil || state != store.RunWorking {
+			t.Errorf("%s's run is %s (%v), want watched", e.Role, state, err)
+		}
+	}
+	if n := len(h.rt.allPrompts()); n != 3 {
+		t.Fatalf("%d prompts, want the 3 from before: nothing sent again", n)
+	}
+	for _, role := range []string{"fx-repro", "fx-cause", "fx-history"} {
+		h.taskFile(task.ID, findingsFile(role), role+" found it in app/models/campaign.rb:88\n")
+	}
+	h.ended(task, "fx-repro", "fx-cause", "fx-history")
+	h.tick()
+	if got := h.reload(task.ID); got.Stage != "judge" {
+		t.Fatalf("task %s at %s waits %q, want past the investigation on the found runs", got.State, got.Stage, got.WaitsWhat)
 	}
 }
 

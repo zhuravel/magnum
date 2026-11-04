@@ -736,6 +736,8 @@ func (e *Engine) observe(ctx context.Context) {
 			e.deliveryUnknown(ctx, ev)
 		case runtime.EventUndelivered:
 			e.undelivered(ctx, ev)
+		case runtime.EventDelivered:
+			e.delivered(ctx, ev)
 		case runtime.EventRefused:
 			e.codexRefused(ctx, ev)
 		}
@@ -824,6 +826,21 @@ func (e *Engine) deliveryUnknown(ctx context.Context, ev runtime.Event) {
 	}
 	if err := e.settleUnknown(ctx, t, "a prompt's delivery is unknown", true); err != nil {
 		e.log.Warn("name the prompts of unknown delivery", "task", t.ID, "err", err)
+	}
+}
+
+// delivered takes a prompt a later read found in its transcript
+// (runtime.EventDelivered): its run is watched as submitted, so the stage
+// takes its end as any run's and sends nothing again; a task that waited on
+// you for it waits on the rest, or goes back to work (settleUnknown).
+func (e *Engine) delivered(ctx context.Context, ev runtime.Event) {
+	e.event(ctx, ev.TaskID, "prompt", registry.PhaseOK, ev.Reason)
+	t, err := e.reg.TaskByID(ctx, ev.TaskID)
+	if err != nil {
+		return
+	}
+	if err := e.settleUnknown(ctx, t, "the prompt to "+ev.Role+" arrived: its run is watched", false); err != nil {
+		e.log.Warn("settle a task's wait on its unknown deliveries", "task", t.ID, "err", err)
 	}
 }
 

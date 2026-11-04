@@ -381,3 +381,38 @@ func TestALaunchClosesItsLeftoverWhenTheTaskHasAWorkspace(t *testing.T) {
 		t.Fatalf("workspaces %v, want only the task's own: the leftover closed", got)
 	}
 }
+
+// A prompt of unknown delivery that a later read of the observe pass finds
+// in its transcript is settled delivered and says so (EventDelivered), once:
+// its run is watched as submitted, and nothing is sent again.
+func TestALaterReadThatFindsThePromptSaysItArrived(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.observe()
+	text := "reproduce the bug"
+	e := g.pendingPrompt("fx-repro", text, true)
+	g.clock.Add(UnknownAfter)
+	if evs := g.observeN(2); len(only(evs, EventDelivered)) != 0 || len(only(evs, EventDeliveryUnknown)) != 1 {
+		t.Fatalf("events %+v before the transcript holds the prompt, want you told and no delivery", evs)
+	}
+
+	g.writeTranscript("sid-1", userLine(e.Sent.Add(time.Second), text)) // the CLI flushed its transcript at last
+	g.clock.Add(time.Minute)
+	delivered := only(g.observe(), EventDelivered)
+	want := Event{TaskID: g.task.ID, Role: "fx-repro", RunID: e.RunID, Kind: EventDelivered,
+		Reason: "the prompt to fx-repro arrived (its transcript holds it): its run is watched, never sent again"}
+	if !slices.Equal(delivered, []Event{want}) {
+		t.Fatalf("delivered %+v, want %+v", delivered, want)
+	}
+	if run := g.storeRun(e.RunID); run.State != store.RunSubmitted || g.ledger()[0].Delivered != registry.DeliveredYes {
+		t.Fatalf("run %s is %s, entry %s: want submitted and delivered", run.ID, run.State, g.ledger()[0].Delivered)
+	}
+	g.clock.Add(time.Minute)
+	if again := only(g.observe(), EventDelivered); len(again) != 0 {
+		t.Fatalf("the delivery was told again: %+v", again)
+	}
+	if prompts := g.h.promptTexts(); !slices.Equal(prompts, []string{text}) {
+		t.Fatalf("prompts %q, want nothing sent again", prompts)
+	}
+}

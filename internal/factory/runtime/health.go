@@ -621,10 +621,12 @@ func (r *Runtime) Proving(id int64) bool {
 // reconcileUnknown settles, at most once every loginEvery, the prompts of
 // unknown delivery a stalled or cut-short Submit left (Reconcile). One
 // proven never to have arrived is EventUndelivered, for its stage to send
-// it once more; one nobody can tell past UnknownAfter is
-// EventDeliveryUnknown, once, unless its proof is under way (a first read
-// found no such turn: a fresh runtime after a restart starts the proof
-// again, and its first read is no reason to call you).
+// it once more; one its transcript shows arrived is EventDelivered (its run
+// is watched as submitted, nothing is sent again); one nobody can tell
+// past UnknownAfter is EventDeliveryUnknown, once, unless its proof is
+// under way (a first read found no such turn: a fresh runtime after a
+// restart starts the proof again, and its first read is no reason to call
+// you).
 func (r *Runtime) reconcileUnknown(ctx context.Context) {
 	now := r.now()
 	r.mu.Lock()
@@ -645,9 +647,14 @@ func (r *Runtime) reconcileUnknown(ctx context.Context) {
 		if err != nil {
 			r.log.Warn("reconcile a prompt's delivery", "entry", e.ID, "err", err)
 		}
-		if got == registry.DeliveredNo {
+		switch got {
+		case registry.DeliveredNo:
 			r.emit("", Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: EventUndelivered,
 				Reason: "the prompt to " + e.Role + " never arrived (its transcript, read twice, has no such turn): it goes once more"})
+			continue
+		case registry.DeliveredYes:
+			r.emit("", Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: EventDelivered,
+				Reason: "the prompt to " + e.Role + " arrived (its transcript holds it): its run is watched, never sent again"})
 			continue
 		}
 		if got == registry.DeliveredUnknown && now.Sub(e.Sent) >= UnknownAfter && !r.Proving(e.ID) {

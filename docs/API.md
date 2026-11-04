@@ -13356,6 +13356,11 @@ const (
 	// have arrived (Runtime.Reconcile's no): its entry is settled no and its
 	// run abandoned, and the stage sends the role what it is due once more.
 	EventUndelivered EventKind = "undelivered"
+	// EventDelivered: a prompt of unknown delivery is found in its
+	// transcript by a later read (Runtime.Reconcile's yes): its entry is
+	// settled yes and its run watched as submitted; nothing is sent again,
+	// and a wait on you for it is settled.
+	EventDelivered EventKind = "delivered"
 )
     The kinds of Event.
 
