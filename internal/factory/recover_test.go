@@ -12,6 +12,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/store"
@@ -1053,5 +1054,122 @@ func TestARetryAtThePublishRunsItsGuardsAgain(t *testing.T) {
 	r.retry(task.ID)
 	if got := r.published(task.ID); got.State != registry.TaskPublished || r.remoteHead(task.Branch) != head {
 		t.Fatalf("task %s waits %q, remote %q: want published at %s", got.State, got.WaitsWhat, r.remoteHead(task.Branch), short(head))
+	}
+}
+
+// commitAt commits files on the copy's branch as the writer would, dated at
+// (the committer's and the author's date: the fake clock's), and returns
+// the head.
+func (r *codingRig) commitAt(at time.Time, msg string, files map[string]string) string {
+	r.t.Helper()
+	for rel, text := range files {
+		r.write(r.copyDir, rel, text)
+		r.git(r.copyDir, "add", "--", rel)
+	}
+	date := at.UTC().Format(time.RFC3339)
+	if _, err := r.real.Run(context.Background(), execx.Cmd{Name: "git", Args: []string{"-C", r.copyDir, "commit", "--quiet", "-m", msg},
+		Env: map[string]string{"GIT_COMMITTER_DATE": date, "GIT_AUTHOR_DATE": date}}); err != nil {
+		r.t.Fatal(err)
+	}
+	return r.git(r.copyDir, "rev-parse", "HEAD")
+}
+
+// Check A at the coding stage's own end (the factory's proof and precheck
+// at the head): a writer that committed, wrote its proof.json and asked
+// questions was suspended before its head was ever judged. When you let go
+// of the prompt that hands it your answers, the stage does not pass on
+// that head and that proof.json: the task waits on you until the writer
+// commits after that prompt, and then the factory's checks judge the new
+// head.
+func TestALetGoAnswersTurnAtTheCodingEndNeedsAHeadAfterIt(t *testing.T) {
+	r := newCodingRig(t)
+	h := r.harness
+	task := r.codingTask("PR-12440", "feature")
+	h.startStage(task)
+	r.commitAt(h.clock.Now(), "PR-12440 Credit#points counts the activities", map[string]string{
+		"app/credit.rb":                     strings.Replace(creditRB, "    0\n", "    10\n", 1),
+		"spec/models/credit_points_spec.rb": "expect: 10 in app/credit.rb\n",
+	})
+	h.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("Reuse CreditMailer?", 0, "yes", "no")))
+	h.ended(task, "fx-writer")
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.QuestionRev != 1 {
+		t.Fatalf("task %s waits %q, want your answers", got.State, got.WaitsWhat)
+	}
+	h.clock.Add(time.Minute)
+	h.rt.sendUnknown("fx-writer")
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "yes"}})
+	h.clock.Add(runtime.UnknownAfter)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-writer")})
+	if _, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-writer", Surface: "screen"}); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	h.e.waitBackground() // any check of the head runs off the loop
+	h.tick()
+	why := "the prompt to fx-writer was let go, and its turn is not watched: once its agent has committed on " + task.Branch +
+		" or written proof.json since (tell it in its pane), retry the task; or stop it"
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, why)
+
+	h.clock.Add(time.Minute)
+	head := r.commitAt(h.clock.Now(), "PR-12440 reuse CreditMailer, as answered", map[string]string{"app/credit.rb": strings.Replace(creditRB,
+		"    0\n", "    10\n", 1) + "# reuses CreditMailer\n"})
+	h.retry(task.ID)
+	h.e.waitBackground()
+	h.tick()
+	if got := h.reload(task.ID); got.Stage != "local_review" || got.HeadSHA != head {
+		t.Fatalf("task %s at %s waits %q, head %s; want past coding at %s", got.State, got.Stage, got.WaitsWhat, short(got.HeadSHA), short(head))
+	}
+	if n := len(h.rt.promptsTo("fx-writer")); n != 2 {
+		t.Fatalf("the writer got %d prompts, want its two: the let-go one is never sent again", n)
+	}
+}
+
+// Check A at a review's fix turn, which shares the coding stage's end: a
+// fix prompt you let go never passes on what the writer left before it;
+// once the writer's fix turn ran after it (its commit, proof.json and
+// reply), your retry lets the loop go on, and the let-go prompt is never
+// sent again.
+func TestALetGoReviewFixPromptNeedsTheWritersTurnAfterIt(t *testing.T) {
+	r := newReviewRig(t, result(refundFinding), result())
+	task, _ := r.reviewTask("PR-12442")
+	r.rt.sendUnknown("fx-writer")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.clock.Add(runtime.UnknownAfter)
+	r.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-writer")})
+	if _, err := r.reg.EnqueueRequest(r.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-writer", Surface: "screen"}); err != nil {
+		t.Fatal(err)
+	}
+	r.run(3, nil)
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou ||
+		!strings.HasPrefix(got.WaitsWhat, "the prompt to fx-writer was let go, and its turn is not watched: once ") {
+		t.Fatalf("task %s at %s waits %q, want you: the fix turn you let go left nothing of its own", got.State, got.Stage, got.WaitsWhat)
+	}
+
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.letGoOn(task.ID)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task %s at %s waits %q after %d rounds, want pr_body after the fix's round", got.State, got.Stage, got.WaitsWhat,
+			len(r.rv.calls()))
+	}
+	if n := len(r.rt.promptsTo("fx-writer")); n != 1 {
+		t.Fatalf("the writer got %d prompts, want the one you let go and no other", n)
+	}
+}
+
+// A retry is never refused over a malformed asks.json when no question is
+// open: the file is read only to tell whether open questions wait on you.
+func TestARetryGoesOnWhateverAMalformedAsksFileSays(t *testing.T) {
+	h := newHarness(t)
+	h.stage(config.FactoryStageAgents, idleStage)
+	task := h.task("PR-12441", registry.TaskNeedsYou, "investigate")
+	h.taskFile(task.ID, asksFile, "{not json")
+	if q := h.retry(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("retry %s: %q, want it to go on", q.State, q.Result)
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive {
+		t.Fatalf("task %s after the retry, want active", got.State)
 	}
 }

@@ -744,6 +744,23 @@ func (c *Client) diffNames(ctx context.Context, dir, base, head string, opts, pa
 	return paths, nil
 }
 
+// CommitTime is the committer time of revision rev in the repository at dir
+// (git show -s --format=%ct, to the second).
+func (c *Client) CommitTime(ctx context.Context, dir, rev string) (time.Time, error) {
+	if err := checkRev("revision", rev); err != nil {
+		return time.Time{}, err
+	}
+	res, err := c.git(ctx, dir, call{label: "show " + rev}, "show", "-s", "--no-show-signature", "--format=%ct", rev, "--")
+	if err != nil {
+		return time.Time{}, err
+	}
+	secs, err := strconv.ParseInt(strings.TrimSpace(string(res.Stdout)), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("gitx: the commit time of %s: %w", rev, err)
+	}
+	return time.Unix(secs, 0), nil
+}
+
 // Commit is one commit of a file's log (FileLog).
 type Commit struct {
 	SHA     string // git's unique abbreviation of the commit id

@@ -609,14 +609,25 @@ func (r *Runtime) dueCheck(id int64, now time.Time) bool {
 
 // Proving reports whether the proof that ledger entry id never arrived is
 // under way: a read (Reconcile) found no such turn in a transcript written
-// past the prompt, and the read after RedeliverAfter decides. It is the
-// runtime's own: a fresh runtime after a restart starts every proof again.
+// past the prompt less than provingBound ago, and the read after
+// RedeliverAfter decides. A proof whose later reads failed (the registry or
+// the agents store refused) is under way no longer once its bound passed,
+// so its task is told to you rather than held for good; a read that settles
+// it or finds no proof ends it. It is the runtime's own: a fresh runtime
+// after a restart starts every proof again.
 func (r *Runtime) Proving(id int64) bool {
+	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.misses[id]
-	return ok
+	first, ok := r.misses[id]
+	return ok && now.Sub(first) < provingBound
 }
+
+// provingBound is how long a proof may stay under way: its second read
+// comes RedeliverAfter after its first, on an observe pass at most
+// loginEvery apart (reconcileUnknown), with one more of each for a read
+// that failed.
+const provingBound = 2*RedeliverAfter + loginEvery
 
 // reconcileUnknown settles, at most once every loginEvery, the prompts of
 // unknown delivery a stalled or cut-short Submit left (Reconcile). One

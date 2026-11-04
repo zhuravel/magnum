@@ -717,6 +717,27 @@ func TestFileLog(t *testing.T) {
 	}
 }
 
+// CommitTime is a commit's committer time, read from git's unix seconds; an
+// answer that is no time, or a revision that looks like an option, is an
+// error.
+func TestCommitTime(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(outRule("1793782800\n", "git", "-C", slot, "show"))
+	got, err := c.CommitTime(ctx, slot, "refs/heads/zhuravel-PR-12440-copy")
+	if err != nil || !got.Equal(time.Unix(1793782800, 0)) {
+		t.Fatalf("CommitTime = %v, %v", got, err)
+	}
+	wantCall(t, f, 0, false, "git", "-C", slot, "show", "-s", "--no-show-signature", "--format=%ct",
+		"refs/heads/zhuravel-PR-12440-copy", "--")
+	c, _ = newFake(outRule("yesterday\n", "git"))
+	if _, err := c.CommitTime(ctx, slot, "HEAD"); err == nil {
+		t.Error("an answer that is no time must be an error")
+	}
+	if _, err := c.CommitTime(ctx, slot, "--all"); err == nil {
+		t.Error("an option-looking revision must be refused")
+	}
+}
+
 func TestBranchPR(t *testing.T) {
 	ctx := context.Background()
 	c, f := newFake(outRule("11483\n", "git", "-C", slot, "config"))

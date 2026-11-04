@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -379,6 +380,40 @@ func TestALaunchClosesItsLeftoverWhenTheTaskHasAWorkspace(t *testing.T) {
 	}
 	if got := g.workspaceIDs(); !slices.Equal(got, []string{own}) || got[0] == cut.Workspace.ID {
 		t.Fatalf("workspaces %v, want only the task's own: the leftover closed", got)
+	}
+}
+
+// A proof whose reads fail (the registry or the agents store refuses) does
+// not hold its task for good: past its bound it is no longer under way, so
+// its task is told to you (which sends nothing); a proof that runs to its
+// second read in time is unaffected.
+func TestAProofWhoseReadsFailStopsHoldingItsTask(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.observe()
+	e := g.pendingPrompt("fx-repro", "reproduce the bug", false)
+	g.writeTranscript("sid-1", assistantLine(e.Sent.Add(30*time.Second), "the agent wrote after the prompt left"))
+	if got, err := g.r.Reconcile(g.ctx, e); err != nil || got != registry.DeliveredUnknown || !g.r.Proving(e.ID) {
+		t.Fatalf("the first read = %s, %v, proving %v; want its proof begun", got, err, g.r.Proving(e.ID))
+	}
+	failing, cancel := context.WithCancel(g.ctx)
+	cancel()
+	for range 3 {
+		g.clock.Add(time.Minute)
+		if _, err := g.r.Reconcile(failing, e); err == nil {
+			t.Fatal("a read on a store that refuses succeeded")
+		}
+	}
+	if !g.r.Proving(e.ID) {
+		t.Fatal("the proof ended after 3 minutes of failed reads, want it under way within its bound")
+	}
+	g.clock.Add(3 * time.Minute)
+	if g.r.Proving(e.ID) {
+		t.Fatal("a proof whose reads failed for 6 minutes is still under way: its task would hold for good")
+	}
+	if prompts := g.h.promptTexts(); len(prompts) != 0 {
+		t.Fatalf("prompts %q, want none sent", prompts)
 	}
 }
 

@@ -316,11 +316,11 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	asks, err := e.readAsks(t.ID)
-	if err != nil {
-		return "", err
-	}
-	if len(open) > 0 {
+	if len(open) > 0 { // asks.json only says whom the open questions wait on
+		asks, err := e.readAsks(t.ID)
+		if err != nil {
+			return "", err
+		}
 		if state, _, _ := e.questionsWait(t, open, asks); state == registry.TaskNeedsYou {
 			return "", fmt.Errorf("%s waits for your answers to %s: answer them with `magnum factory answer %d` (it prints them); "+
 				"a retry would only ask them again", TaskKey(t), plural(len(open), "question"), t.ID)

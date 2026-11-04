@@ -797,7 +797,7 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		}
 		p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
 		if p == nil && r.letGo {
-			p = e.beforeLetGo(t, st, r)
+			p = e.beforeLetGo(ctx, t, st, r, run)
 		}
 		if p == nil && run.turn.review != nil {
 			p = run.turn.review.replyProblem(dir, run.since(a))
@@ -824,7 +824,7 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		}
 		switch {
 		case p != nil && r.letGo && !p.operator:
-			return letGoWait(r, p)
+			return letGoWait(r, p, t.Branch)
 		case p != nil:
 			return noValidFile(r, p)
 		}
@@ -834,28 +834,56 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 }
 
 // beforeLetGo is the problem of a role r whose turn was a prompt you let go
-// (sent at r.letGoSince) when its main output (the first file of its stage
-// st in the task's directory, outputs) was written before that prompt: a
-// file of its earlier turn (the one that asked the questions the prompt
-// answered, say) is no end of that turn. A coding stage's end is the
-// factory's checks at the head, which a turn that never ran does not pass:
-// proof.json itself may stay as it was.
-func (e *Engine) beforeLetGo(t *registry.Task, st config.FactoryStage, r *stageRole) *endProblem {
+// (sent at r.letGoSince) when nothing it left is of that turn: an earlier
+// turn's work (the one that asked the questions the prompt answered, say)
+// is no end of it. Its main output (the first file of its stage st in the
+// task's directory, outputs) must be written after the prompt; at the
+// coding stage's end (proof), whose head an earlier turn may have left
+// unjudged (its questions suspended the stage before the factory's checks
+// ran), the turn must have committed on the task's branch since, or written
+// proof.json or, in a review's fix turn, its reply (a turn that declines
+// every finding commits nothing) since. A head the checks then refuse is
+// theirs to judge, as for any turn.
+func (e *Engine) beforeLetGo(ctx context.Context, t *registry.Task, st config.FactoryStage, r *stageRole, run *agentsRun) *endProblem {
 	outs := e.outputs(*t, st, r.role)
-	if st.End == config.FactoryEndProof || len(outs) == 0 || r.letGoSince.IsZero() {
+	if len(outs) == 0 || r.letGoSince.IsZero() {
 		return nil
 	}
-	fi, err := os.Stat(outs[0])
-	if err == nil && !fi.ModTime().Before(r.letGoSince) {
+	since := r.letGoSince.Truncate(time.Second) // git keeps a commit's time to the second
+	after := func(path string) bool {
+		fi, err := os.Stat(path)
+		return err == nil && !fi.ModTime().Before(since)
+	}
+	if st.End != config.FactoryEndProof {
+		if after(outs[0]) {
+			return nil
+		}
+		return &endProblem{file: filepath.Base(outs[0]), why: "written before the prompt you let go (" + r.letGoSince.Local().Format("15:04:05") + ")"}
+	}
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	if after(filepath.Join(dir, proofFile)) || (run.turn.review != nil && after(filepath.Join(dir, reviewReplyFile(run.turn.review.n)))) {
 		return nil
 	}
-	name := filepath.Base(outs[0])
-	return &endProblem{file: name, why: "written before the prompt you let go (" + r.letGoSince.Local().Format("15:04:05") + ")"}
+	if e.d.Git != nil && run.copy.Path != "" && t.Branch != "" {
+		at, err := e.d.Git.CommitTime(ctx, run.copy.Path, "refs/heads/"+t.Branch)
+		if err == nil && !at.Before(since) {
+			return nil
+		}
+		if err != nil {
+			e.log.Warn("read the head's commit time after a prompt you let go", "task", t.ID, "err", err)
+		}
+	}
+	return &endProblem{file: proofFile, why: "no commit on " + t.Branch + " and no " + proofFile + " since the prompt you let go"}
 }
 
 // letGoWait is the wait of a task whose role's turn was a prompt you let go
-// and whose end fact p does not hold yet.
-func letGoWait(r *stageRole, p *endProblem) string {
+// and whose end fact p does not hold yet: at the coding stage's end, a
+// commit on branch or proof.json since that prompt.
+func letGoWait(r *stageRole, p *endProblem, branch string) string {
+	if p.file == proofFile {
+		return "the prompt to " + r.runAs.Name + " was let go, and its turn is not watched: once its agent has committed on " + branch +
+			" or written " + proofFile + " since (tell it in its pane), retry the task; or stop it"
+	}
 	return "the prompt to " + r.runAs.Name + " was let go, and its turn is not watched: once " + p.file + " is written (tell its " +
 		"agent in its pane), retry the task; or stop it"
 }

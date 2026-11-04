@@ -13443,10 +13443,14 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error
     work refuses with agents.ErrBusy.
 
 func (r *Runtime) Proving(id int64) bool
-    Proving reports whether the proof that ledger entry id never arrived is
-    under way: a read (Reconcile) found no such turn in a transcript written
-    past the prompt, and the read after RedeliverAfter decides. It is the
-    runtime's own: a fresh runtime after a restart starts every proof again.
+    Proving reports whether the proof that ledger entry id never arrived
+    is under way: a read (Reconcile) found no such turn in a transcript
+    written past the prompt less than provingBound ago, and the read after
+    RedeliverAfter decides. A proof whose later reads failed (the registry or
+    the agents store refused) is under way no longer once its bound passed,
+    so its task is told to you rather than held for good; a read that settles it
+    or finds no proof ends it. It is the runtime's own: a fresh runtime after a
+    restart starts every proof again.
 
 func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error
     QuitCodex quits the live Codex sessions of task t, once Codex never works
@@ -14846,6 +14850,10 @@ func (c *Client) CommitAll(ctx context.Context, dir, message string, paths ...st
     and deletions; nothing else, whatever else is dirty) on its current branch
     with message, unsigned (commit.gpgsign=false whatever the repository says),
     and returns the new commit's id. Nothing to commit is an error.
+
+func (c *Client) CommitTime(ctx context.Context, dir, rev string) (time.Time, error)
+    CommitTime is the committer time of revision rev in the repository at dir
+    (git show -s --format=%ct, to the second).
 
 func (c *Client) CommitsAfter(ctx context.Context, dir, from, to string, firstParent bool) ([]ListedCommit, error)
     CommitsAfter lists the commits of to that from lacks (`git rev-list
