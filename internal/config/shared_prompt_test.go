@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -122,5 +123,60 @@ func TestTheConfigCheckParsesTheJudgePromptsWithThePartialsFile(t *testing.T) {
 	wantError(t, err, "judge-initial.md", SharedPrompt)
 	if strings.Contains(err.Error(), "claude-review.md") {
 		t.Errorf("a reviewer's prompt failed on the judge prompts' partials file: %v", err)
+	}
+}
+
+// A factory prompt (factory-*.md) comes with the factory prompts' partials
+// file, as a judge prompt comes with the judge's: prompts_dir's while it is
+// there, else the embedded copy. A judge prompt keeps the judge's file and
+// a reviewer's prompt gets none.
+func TestAFactoryPromptComesWithTheFactoryPartialsFile(t *testing.T) {
+	for name, want := range map[string]string{
+		"factory-repro.md": FactorySharedPrompt, "factory-judge.md": FactorySharedPrompt, "factory-custom.md": FactorySharedPrompt,
+		"judge-initial.md": SharedPrompt, "claude-review.md": "", FactorySharedPrompt: "", SharedPrompt: "", "factory-repro.txt": "",
+	} {
+		if got := PartialsOf(name); got != want {
+			t.Errorf("PartialsOf(%q) = %q, want %q", name, got, want)
+		}
+	}
+	const mine = `{{define "rules"}}my rules{{end}}`
+	cfg, home := snapLoad(t, map[string]string{"prompts/" + FactorySharedPrompt: mine})
+	if p, err := cfg.ResolvePrompt("factory-repro.md"); err != nil || p.Shared != mine {
+		t.Errorf("factory-repro.md: Shared = %q, %v, want prompts_dir's factory partials file", p.Shared, err)
+	}
+	if p, err := cfg.ResolvePrompt("judge-initial.md"); err != nil || p.Shared == mine || p.Shared == "" {
+		t.Errorf("judge-initial.md: Shared = %.60q, %v, want the judge prompts' partials file", p.Shared, err)
+	}
+	if err := os.Remove(filepath.Join(home, "prompts", FactorySharedPrompt)); err != nil {
+		t.Fatal(err)
+	}
+	embedded, ok := prompts.Read(FactorySharedPrompt)
+	if !ok {
+		t.Fatal("no embedded factory partials file")
+	}
+	if p, err := cfg.ResolvePrompt("factory-repro.md"); err != nil || p.Shared != embedded {
+		t.Errorf("without prompts_dir's factory partials file: Shared = %.60q, %v, want the embedded one", p.Shared, err)
+	}
+}
+
+// The factory daemon's snapshot of its roles' prompts holds the factory
+// partials file, which no role names, and refuses it as a prompt of its
+// own, as ResolvePrompt does.
+func TestTheSnapshotHoldsTheFactoryPartialsFile(t *testing.T) {
+	cfg, _ := snapLoad(t, nil)
+	snap, err := cfg.SnapshotPrompts("", snapNow, "factory-repro.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.prompts[FactorySharedPrompt]; !ok {
+		t.Fatalf("the snapshot holds %v, not the factory partials file", slices.Sorted(maps.Keys(snap.prompts)))
+	}
+	if _, err := cfg.ResolvePrompt(FactorySharedPrompt); !errors.Is(err, ErrSharedPrompt) {
+		t.Errorf("ResolvePrompt(%s) = %v, want ErrSharedPrompt", FactorySharedPrompt, err)
+	}
+	other, _ := snapLoad(t, nil)
+	if _, err := other.SnapshotPrompts("", snapNow, FactorySharedPrompt); !errors.Is(err, ErrSharedPrompt) || other.PromptSnapshot() != nil {
+		t.Errorf("SnapshotPrompts naming the factory partials file = %v (installed %v), want ErrSharedPrompt and nothing installed",
+			err, other.PromptSnapshot() != nil)
 	}
 }

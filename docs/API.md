@@ -4224,6 +4224,13 @@ const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
     EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
     as a skill source: what a judge gets without a checkout.
 
+const FactorySharedPrompt = prompts.FactoryShared
+    FactorySharedPrompt is the factory prompts' partials file
+    (prompts.FactoryShared), as SharedPrompt is the judge prompts': the blocks
+    the factory-*.md prompts share, the factory mode's rules among them.
+    Every factory prompt is parsed with it, resolved as SharedPrompt is;
+    ResolvePrompt refuses the name itself (ErrSharedPrompt).
+
 const LearnRoleName = "retro"
     LearnRoleName is the name of the role the retro's classifying agent runs as
     (LearnRole).
@@ -4287,10 +4294,10 @@ var ErrPromptNotFound = errors.New("prompt not found")
     ErrPromptNotFound: a prompt name exists neither in prompts_dir nor among the
     embedded defaults.
 
-var ErrSharedPrompt = errors.New("holds the blocks the judge prompts share and is not a prompt of its own")
-    ErrSharedPrompt means a prompt name is the judge prompts' partials file
-    (SharedPrompt), which holds blocks for the judge prompts and is never a
-    prompt of its own.
+var ErrSharedPrompt = errors.New("holds the blocks its prompts share and is not a prompt of its own")
+    ErrSharedPrompt means a prompt name is a partials file (SharedPrompt,
+    the judge prompts', or FactorySharedPrompt, the factory prompts'), which
+    holds blocks for its prompts and is never a prompt of its own.
 
 var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
@@ -4387,6 +4394,12 @@ func ParseTemplate(name, text, shared string) (*template.Template, error)
     parsed first as its own template, SharedPrompt, so that text's {{template}}
     calls find its blocks and a block text defines itself replaces the shared
     one.
+
+func PartialsOf(name string) string
+    PartialsOf is the partials file the prompt named name is parsed with:
+    SharedPrompt for a judge prompt (UsesShared), FactorySharedPrompt for a
+    factory prompt (factory-*.md), "" for any other prompt and for the two
+    partials files themselves.
 
 func QuietHoursLabel(spec string, at time.Time) string
     QuietHoursLabel is the quiet-hours window spec (ParseQuietHours) as an
@@ -4779,10 +4792,11 @@ func (c *Config) ResolvePrompt(name string) (Prompt, error)
     that file exists, else the embedded default of the same name; an unknown
     name wraps ErrPromptNotFound. Names are plain file names (no directories).
     A judge prompt (UsesShared) comes with the partials file (Prompt.Shared),
-    resolved the same way; the partials file's own name wraps ErrSharedPrompt.
-    In the daemon, which loaded its prompts at startup (SnapshotPrompts), a name
-    the snapshot holds resolves to the text loaded then, whatever the file holds
-    now, and so does the partials file.
+    resolved the same way, and a factory prompt with the factory's (PartialsOf);
+    a partials file's own name wraps ErrSharedPrompt. In the daemon, which
+    loaded its prompts at startup (SnapshotPrompts), a name the snapshot holds
+    resolves to the text loaded then, whatever the file holds now, and so does
+    the partials file.
 
 func (c *Config) RoleByNameOrAlias(w *Watch, s string) (Role, bool)
     RoleByNameOrAlias finds one of the watch's roles by name or alias (case and
@@ -4831,8 +4845,9 @@ func (c *Config) SkillFile(src string) string
 
 func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string) (*PromptSnapshot, error)
     SnapshotPrompts loads every prompt file the roles name (each prompt kind),
-    the extra names (model-fallback.md) and, with any judge prompt among them,
-    the judge prompts' partials file (SharedPrompt), copies each judge's and
+    the extra names (model-fallback.md) and the partials file of each
+    prompt among them (PartialsOf: SharedPrompt with a judge prompt,
+    FactorySharedPrompt with a factory prompt), copies each judge's and
     each fix role's skill file (RoleSkillPath) to skillDir/<hash>/SKILL.md
     ("" = no copies; the roles keep their configured skill paths), removes
     copies older than a week that no role uses, and installs the result:
@@ -11250,8 +11265,42 @@ var ErrHeld = errors.New("held")
     ErrHeld marks a launch or an effect that the engine held back: the daemon
     drains, or a hold of the machine is on. It costs the task nothing.
 
+var ReproductionOptions = []string{"give a hint", "take the other cause", "try Docker or a staging", "drop"}
+    ReproductionOptions are the options of the question a bug that did not
+    reproduce asks (spec 6.3), in the judge's prompt's words: one of them is
+    recommended.
+
 
 FUNCTIONS
+
+func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok bool, why string)
+    CheckEnd reports whether end fact fact holds in task directory dir for a
+    stage that started at since; why names the file at fault and what is wrong
+    ("findings-fx-cause.md: missing"). roles are the stage's roles, as the stage
+    names them:
+      - findings: findings-<role>.md of each role, newer than since and not
+        empty;
+      - report: report.md, newer than since, whose first section is `##
+        Architecture decisions` (its decisions, or none) and whose Helpers and
+        Files sections exist (Files naming at least one file); acceptance.json,
+        newer than since, with at least one check; and questions.json,
+        when it is there, newer than since and holding questions the operator
+        can answer. A report whose Proof says the bug did not reproduce needs
+        the reproduction question among them, with ReproductionOptions and a
+        recommendation;
+      - critic: critic.md, newer than since and not empty, and each role's
+        questions-<role>.json, when it is there, valid as questions.json is;
+      - pr_body: pr-body.md, newer than since and not empty.
+
+    The proof and pr facts are checked by the stages that own them, not here
+    (not done, saying so).
+
+func CheckPrompts(cfg *config.Config) error
+    CheckPrompts renders the prompt of every factory role ([[factory.role]])
+    with data whose every field is set, as the factory daemon does once at
+    startup, after it loaded its prompts: a prompt (or factory-shared.md) that
+    names a field the data lacks, or a block the partials file does not define,
+    is an error naming the role and its file.
 
 func DaemonPID(l paths.Layout) (int, error)
     DaemonPID returns the pid of the running factory daemon from its pidfile
@@ -11299,6 +11348,22 @@ func TaskKey(t registry.Task) string
 
 
 TYPES
+
+type AcceptanceCheck struct {
+	ID    string `json:"id"`
+	Point string `json:"point"`
+	Given string `json:"given"`
+	Then  string `json:"then"`
+	How   string `json:"how"`
+}
+    AcceptanceCheck is one check: its id (A1), the ticket's point it proves,
+    the setup, what must hold, and how it is checked (a spec, a QA step).
+
+type AcceptanceFile struct {
+	Checks []AcceptanceCheck `json:"checks"`
+}
+    AcceptanceFile is acceptance.json, the judge's checks that prove the task,
+    from the ticket: the writer and QA reuse them.
 
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
@@ -11504,6 +11569,49 @@ type PreviewPayload struct {
     PreviewPayload is a ReqPreview: the new-task screen's text, whose preview
     the daemon answers as the JSON of a tui.NewTaskForm.
 
+type PromptData struct {
+	TaskID                                                 int64
+	Key, Kind, Repo, Branch, Copy, TaskDir                 string
+	Ticket, Guidance, Prompt, Answers, Rules               string
+	Findings, Report, Questions, Acceptance, Proof, Review string
+	ErrorSkill, DBLockCommand                              string
+	Port                                                   int
+}
+    PromptData is what a factory prompt (factory-*.md, with the blocks of
+    factory-shared.md) renders with: paths, keys and commands, never the
+    ticket's text, which reaches the agents only as the task's files (spec 12).
+    Key is the Jira key ("" for a task of a free prompt), Kind and Repo
+    the task's, Branch its local branch, Copy the checkout of its copy and
+    TaskDir its directory. Ticket (ticket.md), Guidance (guidance.md),
+    Prompt (prompt.md, the operator's request), Answers (answers.md) and Rules
+    (rules.md, the learned rules) are paths in TaskDir, each "" while its file
+    is not there. Findings is the role's findings-<role>.md in a findings stage,
+    else the pattern of every investigator's file (findings-*.md); Questions the
+    file the role writes its questions to (questions.json in the judge's report
+    stage, questions-<role>.json for any other role); Report, Acceptance and
+    Proof the judge's report.md and acceptance.json and the writer's proof.json;
+    Review the local review's findings for the writer ("" before that stage).
+    ErrorSkill is the repository's error_skill ("" = none: no prompt names one),
+    DBLockCommand the `magnum db-lock` line of the copy for the role as it runs,
+    and Port the copy's server's (0 when its env names none).
+
+type QuestionFile struct {
+	Text        string            `json:"text"`
+	Context     string            `json:"context"`
+	Example     string            `json:"example"`
+	Options     []registry.Option `json:"options"`
+	Recommended *int              `json:"recommended"`
+	Why         string            `json:"why"`
+	RaisedBy    string            `json:"raised_by"`
+	Evidence    string            `json:"evidence"`
+}
+    QuestionFile is one question of a questions file (questions.json, or a
+    role's questions-<role>.json), as an agent writes it: the question, the line
+    that says why it is asked, a concrete example, two or more options (a label
+    and what it means for the example), the index of the recommended one (nil:
+    no recommendation) and why, the role that raised it and what it rests on.
+    The gate turns each into a registry.Question.
+
 type Reservation struct {
 	TaskID int64
 	Copy   string
@@ -11523,14 +11631,18 @@ type Runtime interface {
 	RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
 	LetGo(ctx context.Context, t registry.Task, role string) (int, error)
 	Shift(gap time.Duration)
+	RunsAs(t registry.Task, role config.Role) (config.Role, error)
+	QuitCodex(ctx context.Context, t registry.Task) error
 }
-    Runtime is the factory's agent runtime (internal/factory/runtime): the owner
-    row of a task in the factory's agents store, the launch of a stage's roles
-    (recorded before any workspace exists), the prompts it sends through its
-    ledger, the panes it observes and the watchdog over them, the verification
-    of a run's end, parking a task's sessions, the reconcile of a prompt of
-    unknown delivery, the recovery of a lost pane, and the shift of every turn
-    deadline after the Mac slept.
+    Runtime is the factory's agent runtime (internal/factory/runtime):
+    the owner row of a task in the factory's agents store, the launch of a
+    stage's roles (recorded before any workspace exists), the prompts it sends
+    through its ledger, the panes it observes and the watchdog over them,
+    the verification of a run's end, parking a task's sessions, the reconcile
+    of a prompt of unknown delivery, the recovery of a lost pane, the shift of
+    every turn deadline after the Mac slept, the role that runs for a role (its
+    Claude fallback on a task Codex never works on), and the quit of such a
+    task's Codex sessions.
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -11778,11 +11890,12 @@ type Artifact struct {
 	Rev    int
 	At     time.Time
 }
-    Artifact is a file of a task's directory as the factory saw it: its kind
-    (base_sha, ticket, guidance, answers, report, proof, patch, pr_body or
-    test_commands), its path relative to the task directory, the sha256 of
-    its content and its revision. A file that changes gets the next revision,
-    so the report that the operator approved can be told from the one before it.
+    Artifact is a file of a task's directory as the factory saw it:
+    its kind (base_sha, ticket, guidance, answers, report, acceptance, proof,
+    patch, pr_body or test_commands), its path relative to the task directory,
+    the sha256 of its content and its revision. A file that changes gets the
+    next revision, so the report that the operator approved can be told from the
+    one before it.
 
 type Attempt struct {
 	ID     string // t<task>-<stage>-<n>
@@ -12718,6 +12831,17 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error
     Park parks the agents of task t (agents.Manager.Park): their conversations
     stay resumable, their panes are released. A run in flight or an agent at
     work refuses with agents.ErrBusy.
+
+func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error
+    QuitCodex quits the live Codex sessions of task t, once Codex never works
+    on it again (Task.CodexNever, a refusal): none of them gets another prompt,
+    and no conversation of theirs is resumed (a restart or a recovery of a Codex
+    role refuses on such a task, mayRestart). Each session's runs in flight are
+    abandoned first, and the session is quit hard (agents.Manager.QuitHard):
+    a Codex agent at work on the task must stop. A session whose pane you are in
+    is left for a later call (ErrOperatorInPane in the error), and a quit that
+    fails does not stop the others; the errors come back joined. A task that
+    never launched has nothing to quit.
 
 func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
     Reconcile settles the delivery of ledger entry e from its agent's

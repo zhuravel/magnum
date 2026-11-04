@@ -638,3 +638,36 @@ func TestOwnerRowHeadNeverReachesTheTask(t *testing.T) {
 		t.Fatalf("owner head %q, want the new attempt %s", pr.HeadSHA, g.attempt.ID)
 	}
 }
+
+// Once Codex never works on a task, its live Codex sessions are quit and
+// their runs abandoned; its Claude sessions go on, and a session whose
+// pane you are in waits for you to leave.
+func TestQuitCodexQuitsOnlyTheTasksCodexSessions(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro", "fx-cause")
+	cause := g.send("fx-cause", "find the cause")
+	g.send("fx-repro", "reproduce it")
+
+	g.h.focus(g.agent("fx-cause"))
+	if err := g.r.QuitCodex(g.ctx, g.task); !errors.Is(err, ErrOperatorInPane) {
+		t.Fatalf("QuitCodex with you in the pane = %v, want ErrOperatorInPane", err)
+	}
+	g.session("fx-cause") // still live
+	g.h.focus("")
+
+	if err := g.r.QuitCodex(g.ctx, g.task); err != nil {
+		t.Fatalf("QuitCodex = %v", err)
+	}
+	if s, err := g.st.LiveSessionByPRRole(g.ctx, g.owner().ID, "fx-cause"); err == nil {
+		t.Fatalf("fx-cause's Codex session %d is still %s", s.ID, s.State)
+	}
+	if run := g.storeRun(cause); run.State != store.RunAbandoned {
+		t.Fatalf("fx-cause's run is %s, want abandoned", run.State)
+	}
+	if s := g.session("fx-repro"); s.State != store.SessionLive {
+		t.Fatalf("fx-repro's Claude session is %s, want live", s.State)
+	}
+	if err := g.r.QuitCodex(g.ctx, g.newTask("PR-12399")); err != nil {
+		t.Fatalf("QuitCodex of a task that never launched = %v, want nothing to do", err)
+	}
+}

@@ -235,7 +235,7 @@ CREATE TABLE artifacts (
   id      INTEGER PRIMARY KEY,
   task_id INTEGER NOT NULL REFERENCES tasks(id),
   kind    TEXT NOT NULL
-          CHECK (kind IN ('base_sha','ticket','guidance','answers','report','proof','patch','pr_body','test_commands')),
+          CHECK (kind IN ('base_sha','ticket','guidance','answers','report','acceptance','proof','patch','pr_body','test_commands')),
   path    TEXT NOT NULL,
   sha256  TEXT NOT NULL CHECK (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
   rev     INTEGER NOT NULL,

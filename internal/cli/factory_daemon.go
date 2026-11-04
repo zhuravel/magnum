@@ -129,7 +129,8 @@ func (d *factoryDaemon) Close() error {
 // buildFactoryDaemon builds the factory daemon of c's config and layout: its
 // own log (logs/factory.log, rotated), its prompts loaded once
 // (config.SnapshotPrompts: the factory roles' prompts beside the review
-// roles'), its registry (Layout.FactoryDB, migrated by the daemon) and its
+// roles', with factory-shared.md) and rendered once with this build
+// (factory.CheckPrompts), its registry (Layout.FactoryDB, migrated by the daemon) and its
 // agents store (Layout.FactoryAgentsDB), and the engine with the
 // collaborators this build has: the memory and disk reads, a MySQL ping when
 // a factory repository has databases, the agent runtime over the agents
@@ -174,6 +175,10 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	snap, err := cfg.SnapshotPrompts("", time.Now(), factoryPromptNames(cfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("factory: %w", err)
+	}
+	if err := factory.CheckPrompts(cfg); err != nil {
+		return nil, fmt.Errorf("factory: the factory roles' prompts do not render with this build "+
+			"(fix them, check with `magnum config`, then restart the factory daemon):\n%w", err)
 	}
 	d.Log.Info("prompts loaded", "files", snap.Files())
 

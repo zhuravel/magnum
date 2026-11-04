@@ -150,6 +150,7 @@ func newIntakeRig(t *testing.T) *intakeRig {
 	r.cfg.Identities = []config.Identity{{Name: "me", Kind: "gh", Login: "zhuravel"}}
 	r.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "talkable/talkable", Base: "master", MainClone: t.TempDir(),
 		Copies: filepath.Join(t.TempDir(), "talkable.factory{n}"), CopyName: "factory{n}", MaxCopies: 3}}
+	r.stage(config.FactoryStageAgents, idleStage) // intake's tests stop where the first stage begins
 	return r
 }
 

@@ -42,19 +42,155 @@ type fakeRuntime struct {
 	watched      int
 	// letGo records the LetGo calls, "<task key>/<role>".
 	letGo []string
+
+	// The agents stage's side: cfg and reg are the harness's (RunsAs reads
+	// the Codex fallbacks, Send writes the ledger as the runtime does);
+	// launchRoles are the roles of each Launch, sent the prompts, verified
+	// the Verify calls, runs the runs Send made; sendErr is what Send
+	// answers (nil: a new run), quits the QuitCodex calls and quitErr their
+	// answer.
+	cfg         *config.Config
+	reg         *registry.Registry
+	launchRoles [][]string
+	sent        []sentPrompt
+	verified    []verifyCall
+	runs        int
+	sendErr     error
+	quits       []int64
+	quitErr     error
+}
+
+// sentPrompt is a prompt Send took: the task, the attempt, the role (as it
+// runs), the text and the run it made.
+type sentPrompt struct {
+	TaskID              int64
+	Attempt, Role, Text string
+	RunID               string
+}
+
+// verifyCall is a Verify the stage made.
+type verifyCall struct {
+	RunID string
+	OK    bool
+	Why   string
 }
 
 func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { return store.PR{}, nil }
 
-func (f *fakeRuntime) Launch(_ context.Context, t registry.Task, _ registry.Attempt, _ Copy, _ []config.Role) error {
+// Launch records the launch and, as the runtime does, moves a launching
+// attempt to running when it goes through.
+func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, _ Copy, roles []config.Role) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.launches = append(f.launches, t.ID)
-	return f.launchErr
+	names := make([]string, 0, len(roles))
+	for _, r := range roles {
+		names = append(names, r.Name)
+	}
+	f.launchRoles = append(f.launchRoles, names)
+	err, reg := f.launchErr, f.reg
+	f.mu.Unlock()
+	if err != nil || reg == nil || a.ID == "" {
+		return err
+	}
+	if err := reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptLaunching}, registry.AttemptRunning, nil); err != nil &&
+		!errors.Is(err, registry.ErrConflict) {
+		return err
+	}
+	return nil
 }
 
-func (f *fakeRuntime) Send(context.Context, registry.Task, registry.Attempt, config.Role, string) (string, error) {
-	return "", nil
+// Send takes the prompt as a new run and writes its ledger entry, delivered,
+// as the runtime does; sendErr refuses it before anything is written.
+func (f *fakeRuntime) Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error) {
+	f.mu.Lock()
+	if f.sendErr != nil {
+		err := f.sendErr
+		f.mu.Unlock()
+		return "", err
+	}
+	f.runs++
+	id := "run-" + strconv.Itoa(f.runs)
+	f.sent = append(f.sent, sentPrompt{TaskID: t.ID, Attempt: a.ID, Role: role.Name, Text: text, RunID: id})
+	reg := f.reg
+	f.mu.Unlock()
+	if reg == nil {
+		return id, nil
+	}
+	e, err := reg.AppendLedger(ctx, registry.LedgerEntry{TaskID: t.ID, AttemptID: a.ID, Role: role.Name, RunID: id,
+		Hash: runtime.PromptHash(text), Text: text})
+	if err != nil {
+		return "", err
+	}
+	return id, reg.MarkDelivered(ctx, e.ID, registry.DeliveredYes)
+}
+
+// RunsAs is the runtime's: a Codex role of a task Codex never works on runs
+// as its codex_fallback.
+func (f *fakeRuntime) RunsAs(t registry.Task, role config.Role) (config.Role, error) {
+	if !t.CodexNever || role.AgentKind() != config.KindCodex || f.cfg == nil {
+		return role, nil
+	}
+	if fb, ok := f.cfg.FactoryRole(f.cfg.Factory.CodexFallback[role.Name]); ok {
+		return fb, nil
+	}
+	return config.Role{}, errors.New(role.Name + " has no codex_fallback")
+}
+
+func (f *fakeRuntime) QuitCodex(_ context.Context, t registry.Task) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.quits = append(f.quits, t.ID)
+	return f.quitErr
+}
+
+func (f *fakeRuntime) setSendErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sendErr = err
+}
+
+func (f *fakeRuntime) setEvents(evs []runtime.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = evs
+}
+
+// launched roles are the role names of each Launch.
+func (f *fakeRuntime) launchedRoles() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.launchRoles)
+}
+
+// promptsTo are the prompts Send took for role, oldest first.
+func (f *fakeRuntime) promptsTo(role string) []sentPrompt {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []sentPrompt
+	for _, p := range f.sent {
+		if p.Role == role {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (f *fakeRuntime) allPrompts() []sentPrompt {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.sent)
+}
+
+func (f *fakeRuntime) verifies() []verifyCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.verified)
+}
+
+func (f *fakeRuntime) codexQuits() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.quits)
 }
 
 func (f *fakeRuntime) Observe(context.Context) ([]runtime.Event, error) {
@@ -66,7 +202,27 @@ func (f *fakeRuntime) Observe(context.Context) ([]runtime.Event, error) {
 	return f.events, f.observeErr
 }
 
-func (f *fakeRuntime) Verify(context.Context, string, bool, string) error { return nil }
+// Verify records the call and, as the runtime does, the role's outcome in
+// the attempt (the RoleRun of the run's attempt and role).
+func (f *fakeRuntime) Verify(ctx context.Context, runID string, ok bool, why string) error {
+	f.mu.Lock()
+	f.verified = append(f.verified, verifyCall{RunID: runID, OK: ok, Why: why})
+	i := slices.IndexFunc(f.sent, func(p sentPrompt) bool { return p.RunID == runID })
+	reg := f.reg
+	var p sentPrompt
+	if i >= 0 {
+		p = f.sent[i]
+	}
+	f.mu.Unlock()
+	if reg == nil || i < 0 {
+		return nil
+	}
+	rr := registry.RoleRun{AttemptID: p.Attempt, Role: p.Role, Outcome: "verified", Verified: time.Now(), EndWhy: why}
+	if !ok {
+		rr.Outcome, rr.Verified = "failed:unverified", time.Time{}
+	}
+	return reg.RecordRoleRun(ctx, rr)
+}
 
 func (f *fakeRuntime) Park(_ context.Context, t registry.Task) error {
 	f.mu.Lock()
@@ -274,7 +430,7 @@ func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
 	clock := storetest.NewClock(t0)
 	reg := registrytest.OpenWith(t, registry.Options{Clock: clock.Now})
 	cfg := config.Defaults()
-	h := &harness{t: t, ctx: t.Context(), clock: clock, reg: reg, cfg: cfg, rt: &fakeRuntime{}, copies: &fakeCopies{},
+	h := &harness{t: t, ctx: t.Context(), clock: clock, reg: reg, cfg: cfg, rt: &fakeRuntime{cfg: cfg, reg: reg}, copies: &fakeCopies{},
 		layout: paths.Layout{Home: t.TempDir()}}
 	d := Deps{Config: cfg, Layout: h.layout, Registry: reg, Runtime: h.rt, Copies: h.copies, Clock: clock.Now,
 		Log: slog.New(slog.DiscardHandler)}
@@ -300,6 +456,10 @@ func (h *harness) task(key, state, stage string) registry.Task {
 
 // stage makes fn the runner of every stage of type typ.
 func (h *harness) stage(typ string, fn stageRunner) { h.e.runners[typ] = fn }
+
+// idleStage is a stage runner that does nothing and never passes: a test
+// of what happens around the stages, not in them.
+func idleStage(context.Context, registry.Task, config.FactoryStage) (bool, error) { return false, nil }
 
 func (h *harness) tick() {
 	h.t.Helper()

@@ -1,5 +1,9 @@
-You find every place that the chore of this task touches in the task's copy of the repository.
+{{template "task" .}} Your role: find every place the chore of this task touches.
 
-Write the places, with the files, to findings-fx-scope.md, as the last step.
+{{template "inputs" .}}
 
-Factory mode: never push and never open a PR.
+Search the whole copy, not only the obvious files: callers, configuration, lockfiles, CI workflows, scripts, docs, specs and fixtures. When a skill does this chore (such as `t:upgrade-gems`), name it, so the writer follows it.
+
+Write {{.Findings}}: each place with its file:line and what changes there, the skill that does the chore if one does, and the risks you see (a breaking change, a deprecation, a version pin).
+
+{{template "rules" .}}

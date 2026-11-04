@@ -207,6 +207,7 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 	delete(e.jiraTries, t.ID)
 	delete(e.panics, t.ID)
 	delete(e.inbox, t.ID)
+	delete(e.agentRuns, t.ID)
 	return "stopped " + TaskKey(t), nil
 }
 

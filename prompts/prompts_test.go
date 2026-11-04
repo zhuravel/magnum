@@ -22,13 +22,16 @@ func TestNames(t *testing.T) {
 	}
 }
 
-// The judge prompts' partials file is embedded with them, but it is no
-// prompt a role can name, so Names leaves it out.
-func TestThePartialsFileIsEmbeddedButIsNoPrompt(t *testing.T) {
-	if text, ok := Read(Shared); !ok || text == "" {
-		t.Fatalf("Read(%s) = %q, %v: the partials file must be embedded", Shared, text, ok)
-	}
-	if slices.Contains(Names(), Shared) {
-		t.Fatalf("Names() = %v lists the partials file", Names())
+// The judge prompts' and the factory prompts' partials files are embedded
+// with them, but neither is a prompt a role can name, so Names leaves both
+// out.
+func TestThePartialsFilesAreEmbeddedButAreNoPrompts(t *testing.T) {
+	for _, name := range []string{Shared, FactoryShared} {
+		if text, ok := Read(name); !ok || text == "" {
+			t.Fatalf("Read(%s) = %q, %v: the partials file must be embedded", name, text, ok)
+		}
+		if slices.Contains(Names(), name) {
+			t.Fatalf("Names() = %v lists the partials file %s", Names(), name)
+		}
 	}
 }

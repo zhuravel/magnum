@@ -149,8 +149,9 @@ func SkillPath(skill string, layout paths.Layout) string {
 }
 
 // SnapshotPrompts loads every prompt file the roles name (each prompt kind),
-// the extra names (model-fallback.md) and, with any judge prompt among them,
-// the judge prompts' partials file (SharedPrompt), copies each judge's and each fix
+// the extra names (model-fallback.md) and the partials file of each prompt
+// among them (PartialsOf: SharedPrompt with a judge prompt,
+// FactorySharedPrompt with a factory prompt), copies each judge's and each fix
 // role's skill file (RoleSkillPath) to skillDir/<hash>/SKILL.md ("" = no copies; the roles
 // keep their configured skill paths), removes copies older than a week that
 // no role uses, and installs the result: from now on ResolvePrompt answers
@@ -175,10 +176,15 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 		add(n)
 	}
 	var errs []error
-	if slices.Contains(names, SharedPrompt) {
-		errs = append(errs, fmt.Errorf("prompt %s: %w", SharedPrompt, ErrSharedPrompt))
-	} else if slices.ContainsFunc(names, UsesShared) {
-		names = append(names, SharedPrompt) // every judge prompt is parsed with it (ResolvePrompt)
+	for _, n := range names {
+		if isPartials(n) {
+			errs = append(errs, fmt.Errorf("prompt %s: %w", n, ErrSharedPrompt))
+		}
+	}
+	if len(errs) == 0 {
+		for _, n := range slices.Clone(names) {
+			add(PartialsOf(n)) // every judge and factory prompt is parsed with its partials file (ResolvePrompt)
+		}
 	}
 	for _, name := range names {
 		if err := validPromptName(name); err != nil {

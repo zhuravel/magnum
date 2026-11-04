@@ -13,13 +13,13 @@ import (
 )
 
 var artifactKinds = map[string]bool{
-	"base_sha": true, "ticket": true, "guidance": true, "answers": true, "report": true,
+	"base_sha": true, "ticket": true, "guidance": true, "answers": true, "report": true, "acceptance": true,
 	"proof": true, "patch": true, "pr_body": true, "test_commands": true,
 }
 
 // Artifact is a file of a task's directory as the factory saw it: its kind
-// (base_sha, ticket, guidance, answers, report, proof, patch, pr_body or
-// test_commands), its path relative to the task directory, the sha256 of its
+// (base_sha, ticket, guidance, answers, report, acceptance, proof, patch,
+// pr_body or test_commands), its path relative to the task directory, the sha256 of its
 // content and its revision. A file that changes gets the next revision, so
 // the report that the operator approved can be told from the one before it.
 type Artifact struct {

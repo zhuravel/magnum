@@ -887,6 +887,47 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
 	return r.mgr.Park(ctx, pr)
 }
 
+// QuitCodex quits the live Codex sessions of task t, once Codex never works
+// on it again (Task.CodexNever, a refusal): none of them gets another
+// prompt, and no conversation of theirs is resumed (a restart or a
+// recovery of a Codex role refuses on such a task, mayRestart). Each
+// session's runs in flight are abandoned first, and the session is quit
+// hard (agents.Manager.QuitHard): a Codex agent at work on the task must
+// stop. A session whose pane you are in is left for a later call
+// (ErrOperatorInPane in the error), and a quit that fails does not stop the
+// others; the errors come back joined. A task that never launched has
+// nothing to quit.
+func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error {
+	pr, err := r.ownerRow(ctx, t.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("quit the Codex sessions of %s: %w", taskKey(t), err)
+	}
+	sessions, err := r.st.SessionsByPR(ctx, pr.ID)
+	if err != nil {
+		return fmt.Errorf("quit the Codex sessions of %s: %w", taskKey(t), err)
+	}
+	var errs []error
+	for _, s := range sessions {
+		if (s.State != store.SessionStarting && s.State != store.SessionLive) || store.Deref(s.AgentKind) != agents.KindCodex {
+			continue
+		}
+		if r.operatorIn(ctx, &roleState{taskID: t.ID, role: config.Role{Name: s.Role}}) {
+			errs = append(errs, fmt.Errorf("quit %s's Codex session: %w", s.Role, ErrOperatorInPane))
+			continue
+		}
+		r.abandonRuns(ctx, pr, s.Role, "Codex never works on "+taskKey(t)+" again")
+		if err := r.mgr.QuitHard(ctx, s); err != nil {
+			errs = append(errs, fmt.Errorf("quit %s's Codex session: %w", s.Role, err))
+			continue
+		}
+		r.log.Info("quit a Codex session: Codex never works on the task again", "task", t.ID, "role", s.Role)
+	}
+	return errors.Join(errs...)
+}
+
 // Shift moves every turn deadline and progress window by gap, the time the
 // Mac slept (the engine's wake): no run counts as hung for a sleep.
 func (r *Runtime) Shift(gap time.Duration) {

@@ -15,7 +15,8 @@
 // resolves one. README.md documents the template variables and the
 // role/kind configuration. Shared, judge-shared.md, is no prompt of its own:
 // it holds the blocks the judge prompts share, and every judge prompt is
-// parsed with it (config.SharedPrompt).
+// parsed with it (config.SharedPrompt); FactoryShared, factory-shared.md, is
+// the same for the factory prompts (config.FactorySharedPrompt).
 package prompts
 
 import (
@@ -30,11 +31,16 @@ import (
 // not a prompt: Names leaves it out, Read returns it.
 const Shared = "judge-shared.md"
 
+// FactoryShared is the factory prompts' partials file, as Shared is the
+// judge prompts': the blocks the factory-*.md prompts share (the factory
+// mode's rules among them). Names leaves it out, Read returns it.
+const FactoryShared = "factory-shared.md"
+
 //go:embed judge-*.md claude-*.md codex-*.sh factory-*.md fix.md whiteboard.md model-fallback.md triage.md retro.md notes-curate.md notes-critic.md skill-edit.md
 var embedded embed.FS
 
 // Names lists the embedded default prompts, sorted: every embedded file but
-// the partials file (Shared).
+// the partials files (Shared, FactoryShared).
 func Names() []string {
 	ents, err := fs.ReadDir(embedded, ".")
 	if err != nil {
@@ -42,7 +48,7 @@ func Names() []string {
 	}
 	out := make([]string, 0, len(ents))
 	for _, e := range ents {
-		if e.Name() != Shared {
+		if e.Name() != Shared && e.Name() != FactoryShared {
 			out = append(out, e.Name())
 		}
 	}

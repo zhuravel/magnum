@@ -687,6 +687,19 @@ func TestRecordArtifactAddsARevisionOnlyForNewContent(t *testing.T) {
 	}
 }
 
+// The judge's acceptance checks (acceptance.json) are an artifact of their
+// own, beside its report and the answers it read.
+func TestEveryFileTheJudgeWritesIsAnArtifactKind(t *testing.T) {
+	t.Parallel()
+	r, _ := openAt(t)
+	task := createTask(t, r, "PR-12303")
+	for kind, path := range map[string]string{"report": "report.md", "acceptance": "acceptance.json", "answers": "answers.md"} {
+		if err := r.RecordArtifact(t.Context(), registry.Artifact{TaskID: task.ID, Kind: kind, Path: path, SHA256: sha(path)}); err != nil {
+			t.Errorf("RecordArtifact(%s) = %v", kind, err)
+		}
+	}
+}
+
 func TestLinkPRAllowsOnePRPerTask(t *testing.T) {
 	t.Parallel()
 	r, clk := openAt(t)

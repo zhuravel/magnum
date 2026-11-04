@@ -51,7 +51,9 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // sends through its ledger, the panes it observes and the watchdog over
 // them, the verification of a run's end, parking a task's sessions, the
 // reconcile of a prompt of unknown delivery, the recovery of a lost pane,
-// and the shift of every turn deadline after the Mac slept.
+// the shift of every turn deadline after the Mac slept, the role that runs
+// for a role (its Claude fallback on a task Codex never works on), and the
+// quit of such a task's Codex sessions.
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
@@ -64,6 +66,8 @@ type Runtime interface {
 	RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
 	LetGo(ctx context.Context, t registry.Task, role string) (int, error)
 	Shift(gap time.Duration)
+	RunsAs(t registry.Task, role config.Role) (config.Role, error)
+	QuitCodex(ctx context.Context, t registry.Task) error
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -228,6 +232,11 @@ type Engine struct {
 	// (payReleaseDebts); claimMu guards them too.
 	debts map[int64]*releaseDebt
 
+	// agentRuns are the agents stages' attempts in progress, by task
+	// (runAgents): the loop's own, rebuilt from the registry after a
+	// restart.
+	agentRuns map[int64]*agentsRun
+
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
 	// (stopBackground), so none of it outlives the daemon.
@@ -243,7 +252,7 @@ func New(d Deps) *Engine {
 		log = slog.New(slog.DiscardHandler)
 	}
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	return &Engine{
+	e := &Engine{
 		d: d, cfg: d.Config, reg: d.Registry, log: log,
 		bgCtx: bgCtx, bgCancel: bgCancel,
 		runners:    map[string]stageRunner{},
@@ -265,7 +274,10 @@ func New(d Deps) *Engine {
 		claimWaits: map[int64]*claimWait{},
 		held:       map[int64]Copy{},
 		debts:      map[int64]*releaseDebt{},
+		agentRuns:  map[int64]*agentsRun{},
 	}
+	e.runners[config.FactoryStageAgents] = e.runAgents
+	return e
 }
 
 func (e *Engine) now() time.Time {

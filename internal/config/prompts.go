@@ -15,10 +15,10 @@ import (
 // the embedded defaults.
 var ErrPromptNotFound = errors.New("prompt not found")
 
-// ErrSharedPrompt means a prompt name is the judge prompts' partials file
-// (SharedPrompt), which holds blocks for the judge prompts and is never a
-// prompt of its own.
-var ErrSharedPrompt = errors.New("holds the blocks the judge prompts share and is not a prompt of its own")
+// ErrSharedPrompt means a prompt name is a partials file (SharedPrompt, the
+// judge prompts', or FactorySharedPrompt, the factory prompts'), which holds
+// blocks for its prompts and is never a prompt of its own.
+var ErrSharedPrompt = errors.New("holds the blocks its prompts share and is not a prompt of its own")
 
 // SharedPrompt is the judge prompts' partials file (prompts.Shared): the
 // blocks two or more judge prompts share word for word, one {{define}} each,
@@ -29,12 +29,37 @@ var ErrSharedPrompt = errors.New("holds the blocks the judge prompts share and i
 // name itself.
 const SharedPrompt = prompts.Shared
 
+// FactorySharedPrompt is the factory prompts' partials file
+// (prompts.FactoryShared), as SharedPrompt is the judge prompts': the
+// blocks the factory-*.md prompts share, the factory mode's rules among
+// them. Every factory prompt is parsed with it, resolved as SharedPrompt
+// is; ResolvePrompt refuses the name itself (ErrSharedPrompt).
+const FactorySharedPrompt = prompts.FactoryShared
+
 // UsesShared reports whether the prompt named name is a judge prompt
 // (judge-*.md, the learn editor's glob), which is parsed with SharedPrompt;
 // SharedPrompt itself is not.
 func UsesShared(name string) bool {
 	return strings.HasPrefix(name, "judge-") && strings.HasSuffix(name, ".md") && name != SharedPrompt
 }
+
+// PartialsOf is the partials file the prompt named name is parsed with:
+// SharedPrompt for a judge prompt (UsesShared), FactorySharedPrompt for a
+// factory prompt (factory-*.md), "" for any other prompt and for the two
+// partials files themselves.
+func PartialsOf(name string) string {
+	switch {
+	case UsesShared(name):
+		return SharedPrompt
+	case strings.HasPrefix(name, "factory-") && strings.HasSuffix(name, ".md") && name != FactorySharedPrompt:
+		return FactorySharedPrompt
+	}
+	return ""
+}
+
+// isPartials reports whether name is one of the partials files, never a
+// prompt of its own.
+func isPartials(name string) bool { return name == SharedPrompt || name == FactorySharedPrompt }
 
 // Prompt is a resolved prompt template.
 type Prompt struct {
@@ -52,24 +77,26 @@ type Prompt struct {
 // that file exists, else the embedded default of the same name; an unknown
 // name wraps ErrPromptNotFound. Names are plain file names (no directories).
 // A judge prompt (UsesShared) comes with the partials file (Prompt.Shared),
-// resolved the same way; the partials file's own name wraps
-// ErrSharedPrompt. In the daemon, which loaded its prompts at startup
-// (SnapshotPrompts), a name the snapshot holds resolves to the text loaded
-// then, whatever the file holds now, and so does the partials file.
+// resolved the same way, and a factory prompt with the factory's
+// (PartialsOf); a partials file's own name wraps ErrSharedPrompt. In the
+// daemon, which loaded its prompts at startup (SnapshotPrompts), a name the
+// snapshot holds resolves to the text loaded then, whatever the file holds
+// now, and so does the partials file.
 func (c *Config) ResolvePrompt(name string) (Prompt, error) {
 	if err := validPromptName(name); err != nil {
 		return Prompt{}, err
 	}
-	if name == SharedPrompt {
+	if isPartials(name) {
 		return Prompt{}, fmt.Errorf("prompt %s: %w", name, ErrSharedPrompt)
 	}
 	p, err := c.resolve(name)
-	if err != nil || !UsesShared(name) {
+	partials := PartialsOf(name)
+	if err != nil || partials == "" {
 		return p, err
 	}
-	shared, err := c.resolve(SharedPrompt)
+	shared, err := c.resolve(partials)
 	if err != nil {
-		return Prompt{}, fmt.Errorf("prompt %s: the judge prompts' shared blocks: %w", name, err)
+		return Prompt{}, fmt.Errorf("prompt %s: the shared blocks of %s: %w", name, partials, err)
 	}
 	p.Shared = shared.Text
 	return p, nil

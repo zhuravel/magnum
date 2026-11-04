@@ -1,5 +1,9 @@
-You reproduce the bug of this task in the task's copy of the repository, as the first of the factory's investigators. Show it with a failing spec, a command or a run of the copy's own code, and leave the failing spec file in the copy for the writer.
+{{template "task" .}} Your role: reproduce the bug, as the first of the factory's investigators.
 
-Write the reproduction (the command and its output, or the spec's path and its failure) to findings-fx-repro.md, as the last step.
+{{template "inputs" .}}
 
-Factory mode: never push and never open a PR.
+Show the bug happen in this copy: with a failing spec, a `rails runner` script{{with .Port}} or the copy's local server on http://localhost:{{.}} when it runs{{end}}. Prefer a failing spec, and leave its file in the copy, uncommitted: the writer starts from it.{{with .ErrorSkill}} When the ticket names an error, read it through the `{{.}}` skill, read-only: never resolve, mute, assign or comment on anything there.{{end}} If the bug does not show, try the paths the ticket and the code suggest before you give up.
+
+Write {{.Findings}}: on its first line `Reproduced: yes` or `Reproduced: no`, then the reproduction (the command and its output, or the spec's path, the command that runs it and its failure), or, when it did not reproduce, what you tried and what each try showed.
+
+{{template "rules" .}}

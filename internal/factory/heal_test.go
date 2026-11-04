@@ -811,6 +811,7 @@ func TestALaunchThatWaitsOnCodexsBudgetCostsTheTaskNothing(t *testing.T) {
 // goes on.
 func TestAnUnknownDeliveryGoesToYouWithOneAction(t *testing.T) {
 	h := newHarness(t)
+	h.stage(config.FactoryStageAgents, idleStage) // the let-go's, not the stage's
 	task := h.task("PR-12372", registry.TaskActive, "investigate")
 	why := "a prompt to fx-repro may or may not have arrived: look at its pane"
 	h.rt.events = []runtime.Event{{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: why}}
