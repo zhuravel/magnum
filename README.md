@@ -3543,6 +3543,7 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 | `magnum factory start <key, link or prompt> [--kind bug\|feature\|chore] [--repo owner/name]` | Hand the factory daemon a task and print its answer (it waits up to 30 seconds; without a factory daemon the request stays queued, and expires after 30 minutes). A Jira key (`PR-12345`) or a Jira link (`/browse/<KEY>` on the `[jira]` site, or a tracker template's link) at the start is a task of that ticket, which the daemon reads itself; the words after it are your guidance for every agent (`magnum factory start PR-12345 only the refund path`). Anything else is the task in your words. A key that has a task (not done or stopped) gets that task back, `PR-12345 already runs as task 7` or `PR-12345 has PR #4527`, and no second one; a GitHub PR link (adoption) and an Actions run link (a CI task) come in milestones 2 and 3. `--kind` names the kind of task, else the daemon picks it (below); `--repo` names the `[[factory.repo]]` when there is more than one. |
 | `magnum factory answer <task> [--json <file> \| [--revision <r>] --question <n> --text <file>]` | Answer a task's questions, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a flag it prints the questions of the task's newest revision, numbered from 1, with their options and the recommended one. `--json` sends a batch, `{"revision": 3, "answers": {"1": "Seven days before it expires", "2": "ask:rev-ann"}, "needless": {"3": "obvious"}}`: an answer is an option's label or your own words, `ask:<login>` asks someone else, and `needless` flags a question with the key of your reason (`ask:` takes a GitHub login, without the `@`, and never yours). `--question <n> --text <file>` answers one question with the file's text (`-` for stdin), such as the answer of the person you asked: question `n` of `--revision <r>`, the revision that asked it, wherever a newer revision carried it over (the daemon's answer to an ask prints both numbers); without `--revision`, of the newest revision. |
 | `magnum factory decide <task> [push\|send_back\|drop --card <revision> [--reason <key> --note <text>]]` | Decide on a task's ready card, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a choice it prints the card: its revision, the PR's title, the branch and its head, the FLAGS line, the local review's end and the y/N sentence of a push (`Push <branch> and open the PR? This frees <copy>, and <task> starts. y/N`). A choice names `--card`, the revision you read: a card drawn since is refused, and the daemon refuses a decision whose branch, report, PR body or diff changed after its card was drawn (`the branch changed after you read it`) and draws the card again. `push` publishes the head the card shows; `send_back` returns the task to its writer with `--reason`, the key of your reason (a word: lowercase letters, digits, `-` and `_`), and `--note`, your note, which the writer reads from `send-back-<revision>.md` in the task's directory, never in its prompt; `drop` stops the task, freeing its copy and keeping its branch. |
+| `magnum factory retry <task>` | Let a task that waits on you (NEEDS YOU) go on at its stage, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Nothing is skipped: the stage's own checks run again (a file you fixed or had its agent write, the local review's fresh loop after it stopped for you, what a check kept for you, the publish's checks before any step). A prompt whose delivery is unknown is still sent to nobody (let it go on the screen), and a task Codex never works on stays so. The daemon refuses a task that does not wait on you (`<task> is active, not waiting on you: there is nothing to retry`). |
 | `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one says so, naming the first one's pid, and exits 0 before it opens a log or a store, so it migrates nothing and launchd does not restart it. |
 
 A start writes the task's data files to its directory (`factory/tasks/<id>/` in the data directory), which
@@ -3733,6 +3734,25 @@ hour. A full disk or memory holds new launches, parks the idle agents of tasks t
 idle servers; a disk below half of `min_free_disk_gb` needs you. At most `heavy_stages` heavy stages (local
 review rounds, local QA, servers) run at once, and a task that waits for one says whose runs. A request
 that waited 30 minutes expires.
+
+A restart, a drain or a crash loses nothing. Before its first tick the daemon restores a copy a base run left
+detached, ends the servers the last daemon left (a recorded one only while its pid and its start match the
+record, one spawned just before a crash by the pid it wrote to `factory-server-<copy>.pid` and a start that file's
+time matches; a stop ends every process of the server's group), finishes a stop or a publish cut short (its agents
+parked, its copy released), ends the begin of a claim a crash cut (the next claim runs its steps again), binds
+every task's sessions to the panes herdr shows (a run at work goes on being observed, and its prompt is never
+sent again), and settles the workspaces a crash left between their creation and their first row: one whose
+attempt still launches is adopted by that launch, any other is closed (a workspace's label is unique per task
+and attempt, `factory <key> <attempt id>`). When herdr does not answer at the start, that waits for the first
+tick it does. A local review round a restart cut runs again in its cycle as the same round, and its start closes
+the workspace the cut one left by its label. Each prompt of unknown delivery (the daemon stopped between sending
+it and saving that it went) is read once in its agent's transcript: one that arrived is watched, one a second
+read 2 minutes later proves never arrived goes once more, and any other is sent to nobody: the task waits
+(`agent: prompt delivery unknown (<role>)`), and after 15 minutes needs you to look at the pane, naming every
+such prompt. A prompt you let go is never sent again; when its role's turn was that prompt, nothing watches it,
+so the task needs you until the role's file is written (`the prompt to <role> was let go, and its turn is not
+watched: …`), and your retry lets it go on. An effect in flight (a push, a PR) runs its own guard again before
+any step. The event log says what each step found, and a restart keeps it.
 
 ## Daily use
 

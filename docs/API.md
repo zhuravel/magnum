@@ -11382,6 +11382,7 @@ const (
 	ReqStop    = "stop"
 	ReqPreview = "preview"
 	ReqLetGo   = "let_go"
+	ReqRetry   = "retry"
 )
     Request kinds.
 
@@ -12087,6 +12088,13 @@ type Reservation struct {
     Reservation is a copy a task's owner row holds, from its claim (one that got
     the copy, waits or failed) until its release.
 
+type RetryPayload struct {
+	TaskID  int64
+	Surface string
+}
+    RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at its
+    stage. Surface is where you asked, for the record of your input.
+
 type ReviewFile struct {
 	Round          int          `json:"round"`
 	Head           string       `json:"head"`
@@ -12161,6 +12169,8 @@ type Runtime interface {
 	RunState(ctx context.Context, runID string) (state, why string, err error)
 	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
+	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
+	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
     the owner row of a task in the factory's agents store, the launch of a
@@ -12171,10 +12181,13 @@ type Runtime interface {
     every turn deadline after the Mac slept, the role that runs for a role (its
     Claude fallback on a task Codex never works on), the quit of such a task's
     Codex sessions, a run's state as the agents store keeps it across a restart,
-    who is at work in a task's copy now (a run in flight, you in a pane: the
-    factory's own commands that change the copy wait for them), and who could
-    have changed it since a time (the factory puts back what its checks changed
-    only when nobody else could have).
+    who is at work in a task's copy now (a run in flight, you in a pane:
+    the factory's own commands that change the copy wait for them), and who
+    could have changed it since a time (the factory puts back what its checks
+    changed only when nobody else could have). After a restart it binds a task's
+    sessions to the panes herdr shows again (Recover) and settles the workspaces
+    a crash left that no row names (SettleWorkspaces: kept for their attempt's
+    launch to adopt, or closed).
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -13202,6 +13215,10 @@ const (
 )
     The runtime's timing and budgets (spec sections 5 and 10.1).
 
+const LetGoWhy = "its prompt was let go"
+    LetGoWhy is why a run that held only prompts you let go (LetGo) was
+    abandoned: its turn was never watched (RunState says it).
+
 const PausedPrefix = "paused: "
     PausedPrefix leads the error of a run its CLI's pause ended (a usage limit,
     a login, an overload): the run is abandoned with "paused: " and the pause's
@@ -13233,6 +13250,9 @@ var ErrOperatorInPane = errors.New("you're in that pane")
 
 FUNCTIONS
 
+func IsUnknownReason(what string) bool
+    IsUnknownReason reports whether a task's wait is UnknownReason's.
+
 func OwnerTask(nodeID string) (int64, bool)
     OwnerTask is the task an owner row's node id names (Owner), false for a row
     that is no task's.
@@ -13251,9 +13271,9 @@ func Scrub(text string) (clean string, kept bool)
     operator typed drops (the ledger keeps the factory's own prompts, scrubbed,
     whatever their length).
 
-func UnknownReason(role string) string
-    UnknownReason is the wait of a task whose prompt to role may or may not have
-    arrived (EventDeliveryUnknown).
+func UnknownReason(roles ...string) string
+    UnknownReason is the wait of a task whose prompts to roles may or may not
+    have arrived (EventDeliveryUnknown): it names every one.
 
 func WorkspaceLabel(t registry.Task, a registry.Attempt) string
     WorkspaceLabel is the herdr workspace label of a task's attempt, unique per
@@ -13329,8 +13349,24 @@ const (
 	// no prompt until the operator looked at its pane and let it go
 	// (Runtime.LetGo).
 	EventDeliveryUnknown EventKind = "delivery_unknown"
+	// EventUndelivered: a prompt of unknown delivery is proven never to
+	// have arrived (Runtime.Reconcile's no): its entry is settled no and its
+	// run abandoned, and the stage sends the role what it is due once more.
+	EventUndelivered EventKind = "undelivered"
 )
     The kinds of Event.
+
+type Orphan struct {
+	Workspace, Label, Attempt string
+	TaskID                    int64
+	Adopted                   bool
+	Why                       string
+}
+    Orphan is a workspace of the factory's herdr session that no session row
+    names: its id and label, the attempt the label names (its last word) and
+    that attempt's task (0 when the registry has no such attempt), whether it
+    is kept for the attempt's next launch to adopt (Adopted) or was closed,
+    and why.
 
 type Runtime struct {
 	// Has unexported fields.
@@ -13367,7 +13403,8 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
     for a Codex role, the budget for every role it launches: critical memory, a
     Codex budget at its soft cap and a kind's pause are a WaitError, no failure.
     A logged-out CLI pauses its kind. Then the task's workspace with a pane per
-    role (EnsureWorkspace), each agent started with the resume id of the role's
+    role (EnsureWorkspace; the attempt's workspace a crash left before its first
+    row is adopted, adopt), each agent started with the resume id of the role's
     earlier session when it has one, launches Stagger apart while the memory
     pressure is at warn, the RoleRun facts of each, and the attempt running.
 
@@ -13420,6 +13457,15 @@ func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string
     prompted since. Every other case (no transcript, a run that went further)
     stays unknown.
 
+func (r *Runtime) Recover(ctx context.Context, t registry.Task) ([]string, error)
+    Recover reconciles task t's sessions with herdr after a restart, before
+    anything is launched or sent (agents.Manager.Recover on its owner row):
+    a live row whose agent herdr shows elsewhere is bound to that pane again,
+    a conversation herdr restored is live again, and a row whose agent is gone
+    is lost (the watchdog recovers it). Runs are not touched: a submitted prompt
+    is observed, never sent again. It returns what changed ("fx-repro rebound");
+    a task without an owner row has nothing to recover.
+
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
     RecoverLost recovers role (as it runs) of attempt a of task t whose pane
     was lost: a resume of its conversation (at most MaxResumes in the attempt),
@@ -13454,6 +13500,16 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
     time starts a fresh session with the attempt's first prompt and text after
     it (returning that run), then refuses; a step that would compact or quit a
     pane the operator is in waits, ErrOperatorInPane.
+
+func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error)
+    SettleWorkspaces settles, after a restart, the factory's workspaces (a
+    label of WorkspaceLabel's shape, labelAttempt) that no session row names
+    and that hold no agent (a workspace with an agent is Recover's to bind),
+    a crash's leftovers between a workspace's creation and its first row:
+    one whose attempt still launches or runs is kept, and the attempt's next
+    launch adopts it (Launch); any other is closed, its attempt ended or unknown
+    to the registry. What it settled comes back in herdr's order; a workspace it
+    could not settle is in the error, and is settled at the next restart.
 
 func (r *Runtime) Shift(gap time.Duration)
     Shift moves every turn deadline and progress window by gap, the time the Mac

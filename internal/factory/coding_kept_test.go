@@ -49,14 +49,17 @@ func (r *codingRig) restoreEvents(id int64) (begins, fails, oks int) {
 	return begins, fails, oks
 }
 
-// letGoOn is your "go on" to a task at NEEDS YOU.
+// letGoOn is your "go on" to a task at NEEDS YOU: your retry, a request
+// the daemon answers (no tick of the stage runs with it).
 func (r *codingRig) letGoOn(id int64) {
 	r.t.Helper()
-	if err := r.reg.TransitionTask(r.ctx, id, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
-		u.Set("waits_who", "")
-		u.Set("waits_what", "")
-	}); err != nil {
+	qid, err := r.reg.EnqueueRequest(r.ctx, ReqRetry, RetryPayload{TaskID: id, Surface: "screen"})
+	if err != nil {
 		r.t.Fatal(err)
+	}
+	r.e.handleRequests(r.ctx)
+	if q, err := r.reg.RequestByID(r.ctx, qid); err != nil || q.State != registry.RequestDone {
+		r.t.Fatalf("your retry: %+v (%v)", q, err)
 	}
 }
 

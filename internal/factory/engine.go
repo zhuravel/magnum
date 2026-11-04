@@ -19,6 +19,7 @@ import (
 	"os"
 	ossignal "os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,7 +59,10 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // it across a restart, who is at work in a task's copy now (a run in flight,
 // you in a pane: the factory's own commands that change the copy wait for
 // them), and who could have changed it since a time (the factory puts back
-// what its checks changed only when nobody else could have).
+// what its checks changed only when nobody else could have). After a
+// restart it binds a task's sessions to the panes herdr shows again
+// (Recover) and settles the workspaces a crash left that no row names
+// (SettleWorkspaces: kept for their attempt's launch to adopt, or closed).
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
@@ -76,6 +80,8 @@ type Runtime interface {
 	RunState(ctx context.Context, runID string) (state, why string, err error)
 	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
+	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
+	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -227,8 +233,11 @@ type Engine struct {
 	recent    map[string]recentFailure
 	// lastReveal is when a herdr hold last opened herdr's session.
 	lastReveal time.Time
-	parked     map[int64]bool
-	servers    map[int64]server
+	// unrecovered: the startup's recovery of the agents (recoverAgents)
+	// failed, herdr not answering; the first tick herdr answers runs it.
+	unrecovered bool
+	parked      map[int64]bool
+	servers     map[int64]server
 	// beforeMark runs right before codexRefused writes its mark (a test's
 	// seam: another writer moving the task meanwhile); nil in a daemon.
 	beforeMark func()
@@ -517,33 +526,6 @@ func (e *Engine) signals(ctx context.Context, sigs <-chan os.Signal, stop chan<-
 	}
 }
 
-// startup runs once before the first tick. It restores the branch of each
-// copy a base run left detached when the daemon stopped in its middle
-// (resumeDetached: before anything else runs in that copy, under a task
-// step's panic guard, safely), counts the heavy stages whose attempts still
-// run (heavy) and ends the copies' servers a stopped daemon left
-// (Copies.Reconcile: no stage owns one after a restart); the recovery of
-// what else a stopped daemon left comes on top of it.
-func (e *Engine) startup(ctx context.Context) error {
-	tasks, err := e.reg.Tasks(ctx)
-	if err != nil {
-		return fmt.Errorf("factory startup: %w", err)
-	}
-	for _, t := range tasks {
-		err := e.safely(ctx, t, func(ctx context.Context) error { return e.resumeDetached(ctx, t) })
-		if err != nil && !errors.Is(err, ErrHeld) && !errors.Is(err, errPanicked) {
-			e.log.Warn("restore a copy a base run left detached", "task", t.ID, "err", err)
-		}
-	}
-	if e.d.Copies != nil {
-		if err := e.d.Copies.Reconcile(ctx); err != nil {
-			e.log.Warn("reconcile the copies' servers", "err", err)
-			e.event(ctx, 0, "server", registry.PhaseFail, "reconcile: "+err.Error())
-		}
-	}
-	return e.adoptHeavy(ctx)
-}
-
 // liveStates are the states of a task the loop advances.
 var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 
@@ -573,6 +555,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.payReleaseDebts(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
 	if herdrUp { // herdr says who is in a copy: without it no copy is touched
+		if e.unrecovered {
+			e.recoverAgents(ctx, tasks)
+		}
 		e.sweepDetached(ctx, tasks)
 	}
 	e.pressure(ctx, now, tasks)
@@ -749,6 +734,8 @@ func (e *Engine) observe(ctx context.Context) {
 		switch ev.Kind {
 		case runtime.EventDeliveryUnknown:
 			e.deliveryUnknown(ctx, ev)
+		case runtime.EventUndelivered:
+			e.undelivered(ctx, ev)
 		case runtime.EventRefused:
 			e.codexRefused(ctx, ev)
 		}
@@ -824,13 +811,47 @@ func sleepFor(ctx context.Context, d time.Duration) bool {
 // deliveryUnknown sends a live task whose prompt may or may not have
 // arrived to you: no transcript can tell, and its role gets no prompt until
 // you looked at the pane and let the prompt go (ReqLetGo). Whatever stage
-// the task is in, it would stall there in silence otherwise.
+// the task is in, it would stall there in silence otherwise. The wait names
+// every prompt of the task told of so far (runtime.UnknownAfter old): one
+// that comes while the task waits on you for another names both. A task
+// that waits on you for something else keeps that reason; its stage holds
+// the role once it goes on (promptRoles), so none is dropped.
 func (e *Engine) deliveryUnknown(ctx context.Context, ev runtime.Event) {
 	t, err := e.reg.TaskByID(ctx, ev.TaskID)
-	if err != nil || (t.State != registry.TaskActive && t.State != registry.TaskWaiting) {
+	if err != nil {
 		return
 	}
-	e.toOperator(ctx, t, ev.Reason, "a prompt's delivery is unknown")
+	roles, err := e.unknownRoles(ctx, t.ID, true)
+	if err != nil {
+		e.log.Warn("read the prompts of unknown delivery", "task", t.ID, "err", err)
+	}
+	if !slices.Contains(roles, ev.Role) {
+		roles = append(roles, ev.Role)
+	}
+	what := runtime.UnknownReason(roles...)
+	switch {
+	case isLive(t):
+		e.toOperator(ctx, t, what, "a prompt's delivery is unknown")
+	case t.State == registry.TaskNeedsYou && runtime.IsUnknownReason(t.WaitsWhat) && t.WaitsWhat != what:
+		if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, "", func(u *registry.TaskUpdate) {
+			u.Set("waits_what", what)
+			u.Because("another prompt's delivery is unknown")
+		}); err != nil {
+			e.log.Warn("name another unknown delivery", "task", t.ID, "err", err)
+			return
+		}
+		e.alert(ctx, t.ID, TaskKey(t)+": you: "+what)
+	}
+}
+
+// undelivered takes a prompt proven never to have arrived
+// (runtime.EventUndelivered): the stage forgets what it knew of its attempt
+// and rebuilds it from the ledger on its next pass (agentsRunOf), where
+// that prompt counts as never sent, so the role gets what it is due once
+// more.
+func (e *Engine) undelivered(ctx context.Context, ev runtime.Event) {
+	delete(e.agentRuns, ev.TaskID)
+	e.event(ctx, ev.TaskID, "prompt", registry.PhaseInfo, ev.Reason)
 }
 
 // maxInbox bounds the events kept for a task between its advances.

@@ -68,8 +68,10 @@ type copiesRig struct {
 	flushed []string // the Redis databases flushed, "<db>"
 	table   []execx.Process
 	kills   []string // "<pid> <signal>"
-	spawned []spawnCall
-	nextPID int
+	// ignoreTerm are the processes a SIGTERM does not end.
+	ignoreTerm map[int]bool
+	spawned    []spawnCall
+	nextPID    int
 }
 
 // fakeHerdrView is one herdr session as the copies' guard reads it.
@@ -453,27 +455,35 @@ func (r *copiesRig) processTable(context.Context) ([]execx.Process, error) {
 }
 
 // killGroup records the signal; a SIGTERM or SIGKILL ends the group's
-// processes in the table.
+// processes in the table, but those ignoreTerm names survive a SIGTERM.
 func (r *copiesRig) killGroup(pgid int, sig syscall.Signal) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.kills = append(r.kills, fmt.Sprintf("%d %s", pgid, sig))
-	r.table = slices.DeleteFunc(r.table, func(p execx.Process) bool { return p.PGID == pgid })
+	r.table = slices.DeleteFunc(r.table, func(p execx.Process) bool {
+		return p.PGID == pgid && (sig == syscall.SIGKILL || !r.ignoreTerm[p.PID])
+	})
 	return nil
 }
 
-// spawn starts a fake server: a new pid in the table, started now.
-func (r *copiesRig) spawn(_ context.Context, dir string, env map[string]string, command, _ string) (int, error) {
+// spawn starts a fake server: a new pid in the table, started now, which
+// writes its pid to pidfile at its start, as the server's shell does.
+func (r *copiesRig) spawn(_ context.Context, dir string, env map[string]string, command, _, pidfile string) (int, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	pid := r.nextPID
 	r.nextPID++
 	r.spawned = append(r.spawned, spawnCall{Dir: dir, Command: command, Env: env, PID: pid})
 	r.table = append(r.table, execx.Process{PID: pid, PPID: 1, PGID: pid, Start: lstart(r.clock.Now()), Name: "ruby"})
+	r.mu.Unlock()
+	r.write(pidfile, strconv.Itoa(pid)+"\n")
+	if err := os.Chtimes(pidfile, r.clock.Now(), r.clock.Now()); err != nil {
+		return 0, err
+	}
 	return pid, nil
 }
 
-func lstart(t time.Time) string { return t.Format("Mon Jan _2 15:04:05 2006") }
+// lstart is t as ps prints a process's start (lstart, the local time).
+func lstart(t time.Time) string { return t.Local().Format("Mon Jan _2 15:04:05 2006") }
 
 // copyDBs is the MySQL server of the copies' databases: each database's
 // MAX(schema_migrations.version).

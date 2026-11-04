@@ -247,7 +247,7 @@ func (r *Runtime) letGoWhere(ctx context.Context, id int64, keep func(registry.L
 		delete(r.once, unknownKey(e.ID))
 		r.mu.Unlock()
 		if r.heldOnly(ctx, e, entries) {
-			r.endRun(ctx, e.RunID, "its prompt was let go") // left pending, it would hold Park and the active runs for good
+			r.endRun(ctx, e.RunID, LetGoWhy) // left pending, it would hold Park and the active runs for good
 		}
 	}
 	return n, nil
@@ -270,11 +270,31 @@ func (r *Runtime) heldOnly(ctx context.Context, e registry.LedgerEntry, entries 
 	return err == nil && run.SubmittedAt == nil
 }
 
-// UnknownReason is the wait of a task whose prompt to role may or may not
-// have arrived (EventDeliveryUnknown).
-func UnknownReason(role string) string {
-	return "a prompt to " + role + " may or may not have arrived: look at its pane"
+// UnknownReason is the wait of a task whose prompts to roles may or may not
+// have arrived (EventDeliveryUnknown): it names every one.
+func UnknownReason(roles ...string) string {
+	switch len(roles) {
+	case 0:
+		return "a prompt to an agent may or may not have arrived: look at its pane"
+	case 1:
+		return "a prompt to " + roles[0] + " may or may not have arrived: look at its pane"
+	}
+	names := strings.Join(roles[:len(roles)-1], ", ") + " and " + roles[len(roles)-1]
+	return "prompts to " + names + unknownTail
 }
+
+// unknownTail ends the wait of several unknown deliveries.
+const unknownTail = " may or may not have arrived: look at their panes"
+
+// IsUnknownReason reports whether a task's wait is UnknownReason's.
+func IsUnknownReason(what string) bool {
+	return strings.HasPrefix(what, "a prompt to ") && strings.HasSuffix(what, " may or may not have arrived: look at its pane") ||
+		strings.HasPrefix(what, "prompts to ") && strings.HasSuffix(what, unknownTail)
+}
+
+// LetGoWhy is why a run that held only prompts you let go (LetGo) was
+// abandoned: its turn was never watched (RunState says it).
+const LetGoWhy = "its prompt was let go"
 
 func unknownKey(entry int64) string { return fmt.Sprintf("unknown:%d", entry) }
 

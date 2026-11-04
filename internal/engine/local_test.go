@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 )
@@ -79,6 +81,40 @@ func TestRunLocalAlwaysGivesPostReviewTheBase(t *testing.T) {
 		RunID: "r-1", ReviewerLogin: "zhuravel", DryRun: in.DryRun, Blind: in.Blind, BaseSHA: in.BaseSHA, ReviewFile: "/reviews/review.json"})
 	if !strings.Contains(line, " --dry-run ") || !strings.Contains(line, " --local-base "+c.BaseSHA+" ") {
 		t.Fatalf("post_review %q lacks --dry-run --local-base %s", line, c.BaseSHA)
+	}
+}
+
+// A local round a restart cut runs again as the same round of the same
+// task, so with the same synthetic number: its start closes the workspace
+// the cut one left in the copy, by its label, before anything else runs
+// there. Another round's workspace stays.
+func TestALocalRoundRunAgainClosesTheWorkspaceTheCutOneLeft(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		h.layout = paths.Layout{Home: h.layout.Home, Scratch: t.TempDir()}
+		h.d.Layout = h.layout
+	})
+	checkout := t.TempDir()
+	c := localRound(h, checkout, 1)
+	h.hd.workspaces = []herdr.Workspace{
+		{ID: "w-cut", Label: fmt.Sprintf("eval widgets#%d", c.Number)},
+		{ID: "w-next", Label: fmt.Sprintf("eval widgets#%d", c.Number+1)},
+	}
+	h.hd.panes = []herdr.Pane{
+		{ID: "w-cut:p1", WorkspaceID: "w-cut", Cwd: checkout},
+		{ID: "w-next:p1", WorkspaceID: "w-next", Cwd: checkout},
+	}
+	var closedAtRound []string
+	h.rd.script = func(pipeline.RoundInput) (pipeline.RoundResult, error) {
+		h.hd.mu.Lock()
+		closedAtRound = slices.Clone(h.hd.closed)
+		h.hd.mu.Unlock()
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeDryRun}, nil
+	}
+	if _, _, err := h.e.RunLocal(h.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(closedAtRound, []string{"w-cut"}) {
+		t.Fatalf("closed %v before the round ran, want the cut round's w-cut only", closedAtRound)
 	}
 }
 

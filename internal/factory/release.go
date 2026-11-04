@@ -74,7 +74,8 @@ func (e *Engine) owe(ctx context.Context, t registry.Task, copyName string, err 
 // payReleaseDebts tries the releases due of the copies that ended tasks
 // still hold (Copies.Reserved): a task that stopped, is done or is
 // published (freesCopy), whose claim does not run (sweepClaims takes
-// those); a published task's copy comes off the task once released. A
+// those), its agents parked first; a published task's copy comes off the
+// task once released. A
 // task at work or that waits on you keeps its copy, and a reservation of a
 // task the registry does not have is left alone. A debt whose copy is free
 // is forgotten.
@@ -105,6 +106,14 @@ func (e *Engine) payReleaseDebts(ctx context.Context, tasks []registry.Task) {
 		e.claimMu.Unlock()
 		if run != nil || (d != nil && now.Before(d.next)) {
 			continue
+		}
+		if e.d.Runtime != nil {
+			// A stop or a publish the daemon stopped in the middle of may have
+			// left its agents in the copy, where a release is refused for as
+			// long as they live; Park does nothing to agents parked already.
+			if err := e.d.Runtime.Park(ctx, t); err != nil {
+				e.log.Warn("park an ended task's agents before its copy's release", "task", t.ID, "err", err)
+			}
 		}
 		if err := e.d.Copies.Release(ctx, t, "its task "+t.State); err != nil {
 			e.owe(ctx, t, r.Copy, err)

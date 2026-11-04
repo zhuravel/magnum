@@ -41,6 +41,10 @@ const (
 	// no prompt until the operator looked at its pane and let it go
 	// (Runtime.LetGo).
 	EventDeliveryUnknown EventKind = "delivery_unknown"
+	// EventUndelivered: a prompt of unknown delivery is proven never to
+	// have arrived (Runtime.Reconcile's no): its entry is settled no and its
+	// run abandoned, and the stage sends the role what it is due once more.
+	EventUndelivered EventKind = "undelivered"
 )
 
 // PausedPrefix leads the error of a run its CLI's pause ended (a usage

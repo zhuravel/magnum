@@ -165,9 +165,12 @@ type stageRole struct {
 	// launch, then its prompt).
 	relaunch bool
 	// ok: its end fact held at its run's end; failed: it did not after the
-	// nudge (the file), and the task waits on you.
+	// nudge (the file), and the task waits on you; letGo: its last run held
+	// only a prompt you let go (runtime.LetGoWhy), so its turn is not
+	// watched, and the task waits on you until its end fact holds.
 	ok     bool
 	failed string
+	letGo  bool
 	// asking: its run ended with questions that wait for your answers (the
 	// stage is suspended).
 	asking bool
@@ -469,6 +472,9 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 //   - verified: the role is done;
 //   - abandoned on its CLI's pause: the pause, so the role waits and goes on
 //     once it is over (no event says a pause ended);
+//   - abandoned because you let its prompt go: no event, its turn is not
+//     watched (letGo: recheckFailed waits on you until its end fact holds;
+//     the prompt is never sent again);
 //   - in flight, or unknown: nothing, its events come.
 func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole, run string) (*runtime.Event, error) {
 	state, why, err := e.d.Runtime.RunState(ctx, run)
@@ -492,6 +498,7 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 			ev.Kind, ev.Reason = runtime.EventPaused, pause
 			return ev, nil
 		}
+		r.letGo = why == runtime.LetGoWhy
 	}
 	return nil, nil
 }
@@ -769,10 +776,13 @@ func (e *Engine) verify(ctx context.Context, runID string, ok bool, why string) 
 // told the agent to): a valid one is done, an invalid one is what the task
 // waits on you for again. A coding stage's role is done once the factory's
 // checks pass at its head (they run again: the task left the live states,
-// which forgot their result).
+// which forgot their result). A role whose turn was a prompt you let go is
+// checked so too: nothing watches that turn, so until its end fact holds the
+// task waits on you with a plain reason (letGoWait), never in silence, and
+// the prompt is never sent again.
 func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun, dir string) string {
 	for _, r := range run.roles {
-		if r.failed == "" {
+		if r.failed == "" && !r.letGo {
 			continue
 		}
 		p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
@@ -799,12 +809,22 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 				}
 			}
 		}
-		if p != nil {
+		switch {
+		case p != nil && r.letGo && !p.operator:
+			return letGoWait(r, p)
+		case p != nil:
 			return noValidFile(r, p)
 		}
-		r.ok, r.failed = true, ""
+		r.ok, r.failed, r.letGo = true, "", false
 	}
 	return ""
+}
+
+// letGoWait is the wait of a task whose role's turn was a prompt you let go
+// and whose end fact p does not hold yet.
+func letGoWait(r *stageRole, p *endProblem) string {
+	return "the prompt to " + r.runAs.Name + " was let go, and its turn is not watched: once " + p.file + " is written (tell its " +
+		"agent in its pane), retry the task; or stop it"
 }
 
 // promptRoles sends each role of run what it is due: the quit of the task's
@@ -823,8 +843,22 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			run.quitCodex = false
 		}
 	}
+	entries, err := e.reg.LedgerOf(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range run.roles {
 		if r.ok || r.failed != "" || r.asking {
+			continue
+		}
+		if slices.ContainsFunc(entries, func(en registry.LedgerEntry) bool {
+			return en.Role == r.runAs.Name && en.Delivered == registry.DeliveredUnknown
+		}) {
+			w := e.unknownHeld(ctx, t, entries)
+			if !errors.Is(w, ErrHeld) {
+				return nil, w // needs you
+			}
+			held = cmpErr(held, w)
 			continue
 		}
 		if r.relaunch {
@@ -908,7 +942,7 @@ func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole,
 	case errors.Is(err, runtime.ErrOperatorInPane):
 		who, what = waitAgent, "you're in the "+r.runAs.Name+" pane; its prompt waits until you leave it"
 	case errors.Is(err, runtime.ErrDeliveryUnknown):
-		who, what = waitAgent, "prompt delivery unknown ("+r.runAs.Name+")"
+		who, what = waitAgent, unknownWait([]string{r.runAs.Name})
 	case errors.Is(err, agents.ErrBusy), errors.Is(err, agents.ErrNoSession):
 		// Submit refused before the prompt left: the agent still works or
 		// shows a dialog, or its session is being recovered (a lost pane
@@ -923,6 +957,23 @@ func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole,
 	}
 	e.waitOn(ctx, t, who, what)
 	return heldError{who: who, what: what}
+}
+
+// unknownHeld is what holds a role whose prompt's delivery nobody can tell
+// (the ledger entries es of task t): it is sent nothing (Review Focus 2),
+// and the task waits on it, naming every such prompt ("agent: prompt
+// delivery unknown (fx-repro)"), until a read settles it or you let it go.
+// Once a prompt is runtime.UnknownAfter old, the task needs you to look at
+// its pane (a needsYou), as the observe pass's EventDeliveryUnknown says;
+// the stage says it itself, so a prompt told of while the task needed you
+// for something else is not lost. Else the wait is a held error.
+func (e *Engine) unknownHeld(ctx context.Context, t registry.Task, es []registry.LedgerEntry) error {
+	if old := unknownIn(es, e.now(), true); len(old) > 0 {
+		return needsYou{runtime.UnknownReason(old...)}
+	}
+	what := unknownWait(unknownIn(es, e.now(), false))
+	e.waitOn(ctx, t, waitAgent, what)
+	return heldError{who: waitAgent, what: what}
 }
 
 // nudgeText is a role's one nudge: its file at dir and what is wrong.

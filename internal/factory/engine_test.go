@@ -71,6 +71,69 @@ type fakeRuntime struct {
 	// (zero: for any time).
 	touched   string
 	touchedAt time.Time
+	// The restart's recovery: calls are Recover, SettleWorkspaces and
+	// Reconcile in order ("recover <key>", "workspaces", "reconcile <entry
+	// id>", and what note adds), changed and orphans their answers,
+	// recoverErr Recover's and SettleWorkspaces' error; verdict is
+	// Reconcile's answer for an entry (nil: unknown), which it settles as
+	// the runtime does; unknownNext are the roles whose next Send leaves its
+	// entry unknown and its run pending, as a daemon stopped between Submit
+	// and the verdict leaves them.
+	calls       []string
+	changed     map[int64][]string
+	orphans     []runtime.Orphan
+	recoverErr  error
+	verdict     func(e registry.LedgerEntry) string
+	unknownNext map[string]bool
+}
+
+// note adds what to the calls (a collaborator's call in the same order).
+func (f *fakeRuntime) note(what string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, what)
+}
+
+func (f *fakeRuntime) callList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
+}
+
+// Recover records the call and answers changed for the task.
+func (f *fakeRuntime) Recover(_ context.Context, t registry.Task) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "recover "+TaskKey(t))
+	return f.changed[t.ID], f.recoverErr
+}
+
+// SettleWorkspaces records the call and answers orphans.
+func (f *fakeRuntime) SettleWorkspaces(context.Context) ([]runtime.Orphan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "workspaces")
+	if f.recoverErr != nil {
+		return nil, f.recoverErr
+	}
+	return slices.Clone(f.orphans), nil
+}
+
+// sendUnknown has role's next Send leave its entry unknown.
+func (f *fakeRuntime) sendUnknown(role string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unknownNext == nil {
+		f.unknownNext = map[string]bool{}
+	}
+	f.unknownNext[role] = true
+}
+
+// setVerdict makes Reconcile answer v for every entry.
+func (f *fakeRuntime) setVerdict(v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.verdict = func(registry.LedgerEntry) string { return v }
 }
 
 // runFact is a run's state and why it failed or was given up.
@@ -116,7 +179,10 @@ func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.At
 }
 
 // Send takes the prompt as a new run and writes its ledger entry, delivered,
-// as the runtime does; sendErr refuses it before anything is written.
+// as the runtime does; sendErr refuses it before anything is written, and
+// so does an entry of the role whose delivery is unknown
+// (runtime.ErrDeliveryUnknown). A role in unknownNext leaves its entry
+// unknown and its run pending.
 func (f *fakeRuntime) Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error) {
 	f.mu.Lock()
 	if f.sendErr != nil {
@@ -124,19 +190,38 @@ func (f *fakeRuntime) Send(ctx context.Context, t registry.Task, a registry.Atte
 		f.mu.Unlock()
 		return "", err
 	}
+	reg := f.reg
+	f.mu.Unlock()
+	if reg != nil {
+		entries, err := reg.LedgerOf(ctx, t.ID)
+		if err != nil {
+			return "", err
+		}
+		if slices.ContainsFunc(entries, func(e registry.LedgerEntry) bool {
+			return e.Role == role.Name && e.Delivered == registry.DeliveredUnknown
+		}) {
+			return "", fmt.Errorf("send to %s: %w", role.Name, runtime.ErrDeliveryUnknown)
+		}
+	}
+	f.mu.Lock()
 	f.runs++
 	id := "run-" + strconv.Itoa(f.runs)
 	f.sent = append(f.sent, sentPrompt{TaskID: t.ID, Attempt: a.ID, Role: role.Name, Text: text, RunID: id})
-	f.setRunLocked(id, store.RunWorking, "")
-	reg := f.reg
+	unknown := f.unknownNext[role.Name]
+	delete(f.unknownNext, role.Name)
+	if unknown {
+		f.setRunLocked(id, store.RunPending, "")
+	} else {
+		f.setRunLocked(id, store.RunWorking, "")
+	}
 	f.mu.Unlock()
 	if reg == nil {
 		return id, nil
 	}
 	e, err := reg.AppendLedger(ctx, registry.LedgerEntry{TaskID: t.ID, AttemptID: a.ID, Role: role.Name, RunID: id,
 		Hash: runtime.PromptHash(text), Text: text})
-	if err != nil {
-		return "", err
+	if err != nil || unknown {
+		return id, err
 	}
 	return id, reg.MarkDelivered(ctx, e.ID, registry.DeliveredYes)
 }
@@ -334,8 +419,33 @@ func (f *fakeRuntime) Park(_ context.Context, t registry.Task) error {
 	return nil
 }
 
-func (f *fakeRuntime) Reconcile(context.Context, registry.LedgerEntry) (string, error) {
-	return registry.DeliveredUnknown, nil
+// Reconcile records the call and answers verdict's verdict (unknown without
+// one), settling it as the runtime does: yes marks the entry delivered and
+// its run at work, no marks it never sent and abandons its run.
+func (f *fakeRuntime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, fmt.Sprintf("reconcile %d", e.ID))
+	verdict, reg := f.verdict, f.reg
+	f.mu.Unlock()
+	v := registry.DeliveredUnknown
+	if verdict != nil {
+		v = verdict(e)
+	}
+	if v == registry.DeliveredUnknown || reg == nil {
+		return v, nil
+	}
+	if err := reg.MarkDelivered(ctx, e.ID, v); err != nil {
+		return registry.DeliveredUnknown, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch v {
+	case registry.DeliveredYes:
+		f.setRunLocked(e.RunID, store.RunWorking, "")
+	case registry.DeliveredNo:
+		f.setRunLocked(e.RunID, store.RunAbandoned, "the prompt never arrived")
+	}
+	return v, nil
 }
 
 func (f *fakeRuntime) Watchdog(context.Context, time.Time) ([]runtime.Event, error) {
@@ -349,11 +459,37 @@ func (f *fakeRuntime) RecoverLost(context.Context, registry.Task, registry.Attem
 	return nil
 }
 
-func (f *fakeRuntime) LetGo(_ context.Context, t registry.Task, role string) (int, error) {
+// LetGo records the call and, as the runtime does, settles the role's
+// entries of unknown delivery as abandoned and abandons a run of theirs
+// that never got past pending (runtime.LetGoWhy).
+func (f *fakeRuntime) LetGo(ctx context.Context, t registry.Task, role string) (int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.letGo = append(f.letGo, TaskKey(t)+"/"+role)
-	return 1, nil
+	reg := f.reg
+	f.mu.Unlock()
+	if reg == nil {
+		return 1, nil
+	}
+	entries, err := reg.LedgerOf(ctx, t.ID)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Role != role || e.Delivered != registry.DeliveredUnknown {
+			continue
+		}
+		if err := reg.MarkDelivered(ctx, e.ID, registry.DeliveredAbandoned); err != nil {
+			return n, err
+		}
+		n++
+		f.mu.Lock()
+		if f.runState[e.RunID].state == store.RunPending {
+			f.setRunLocked(e.RunID, store.RunAbandoned, runtime.LetGoWhy)
+		}
+		f.mu.Unlock()
+	}
+	return n, nil
 }
 
 func (f *fakeRuntime) Shift(gap time.Duration) {
@@ -393,6 +529,8 @@ type fakeCopies struct {
 	// ended counts the claims that returned, cancelled those that returned
 	// because their context ended.
 	ended, cancelled int
+	// onReconcile runs at each Reconcile.
+	onReconcile func()
 }
 
 func (f *fakeCopies) Claim(ctx context.Context, t registry.Task) (Copy, error) {
@@ -501,7 +639,16 @@ func (f *fakeCopies) StopServer(_ context.Context, c Copy) error {
 	return nil
 }
 
-func (f *fakeCopies) Reconcile(context.Context) error { return nil }
+// Reconcile runs onReconcile, when set (a test's record of the order).
+func (f *fakeCopies) Reconcile(context.Context) error {
+	f.mu.Lock()
+	on := f.onReconcile
+	f.mu.Unlock()
+	if on != nil {
+		on()
+	}
+	return nil
+}
 
 // harness is an engine on a test registry, fake collaborators and a clock
 // the test moves; no real process, socket or directory outside t.TempDir.

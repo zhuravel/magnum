@@ -770,17 +770,19 @@ func TestARestartKeepsWhatTheEndFactsDecided(t *testing.T) {
 		t.Fatalf("task %s waits %q, want needs_you: %s", got.State, got.WaitsWhat, want)
 	}
 
-	back := func() {
+	back := func() { // your retry, answered with no tick of the stage
 		t.Helper()
-		if err := h.reg.TransitionTask(h.ctx, task.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
-			u.Set("waits_who", "")
-			u.Set("waits_what", "")
-		}); err != nil {
+		qid, err := h.reg.EnqueueRequest(h.ctx, ReqRetry, RetryPayload{TaskID: task.ID, Surface: "screen"})
+		if err != nil {
 			t.Fatal(err)
+		}
+		h.e.handleRequests(h.ctx)
+		if q, err := h.reg.RequestByID(h.ctx, qid); err != nil || q.State != registry.RequestDone {
+			t.Fatalf("your retry: %+v (%v)", q, err)
 		}
 	}
 	h.restart()
-	back() // as a retry of yours would
+	back()
 	h.startStage(task)
 	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != want {
 		t.Fatalf("after a restart the task is %s waiting %q, want needs_you again: %s", got.State, got.WaitsWhat, want)

@@ -95,7 +95,7 @@ type copySet struct {
 	// and the clock.
 	processes func(ctx context.Context) ([]execx.Process, error)
 	kill      func(pgid int, sig syscall.Signal) error
-	spawn     func(ctx context.Context, dir string, env map[string]string, command, log string) (int, error)
+	spawn     func(ctx context.Context, dir string, env map[string]string, command, log, pidfile string) (int, error)
 	sleep     func(ctx context.Context, d time.Duration) error
 	now       func() time.Time
 }

@@ -442,7 +442,8 @@ type Copy struct {
 // Codex role, the budget for every role it launches: critical memory, a
 // Codex budget at its soft cap and a kind's pause are a WaitError, no
 // failure. A logged-out CLI pauses its kind. Then the task's workspace with
-// a pane per role (EnsureWorkspace), each agent started with the resume id
+// a pane per role (EnsureWorkspace; the attempt's workspace a crash left
+// before its first row is adopted, adopt), each agent started with the resume id
 // of the role's earlier session when it has one, launches Stagger apart
 // while the memory pressure is at warn, the RoleRun facts of each, and the
 // attempt running.
@@ -481,6 +482,9 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 		return err
 	}
 	env := paneEnv(t, c)
+	if err := r.adopt(ctx, pr, a, label, run, c.Path, env); err != nil {
+		return fmt.Errorf("launch %s: %w", a.ID, err)
+	}
 	ws, err := r.mgr.EnsureWorkspace(ctx, pr, c.Path, env, label, run)
 	if err != nil {
 		return fmt.Errorf("launch %s: %w", a.ID, err)

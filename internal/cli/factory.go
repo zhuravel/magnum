@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	factoryUsage          = "factory <daemon|install|uninstall|status|start|answer|decide>"
+	factoryUsage          = "factory <daemon|install|uninstall|status|start|answer|decide|retry>"
 	factoryInstallUsage   = "install [--dry-run]"
 	factoryUninstallUsage = "uninstall [--dry-run]"
 	factoryStatusUsage    = "status [--json]"
@@ -34,16 +34,16 @@ func newFactoryCmd(c *Context) *cobra.Command {
 			"("+factory.LaunchLabel+"), registry, pid, lock and log (logs/factory.log), apart from the review "+
 			"daemon's: `magnum factory install` loads the job (and reloads it once, restarting a running factory "+
 			"daemon on this build), `uninstall` removes it, `status` lists the tasks, `start` hands it a task, "+
-			"`answer` answers a task's questions, `decide` decides on a task's ready card, and `daemon` is what the "+
-			"job runs.",
+			"`answer` answers a task's questions, `decide` decides on a task's ready card, `retry` lets a task that "+
+			"waits on you go on, and `daemon` is what the job runs.",
 		func(pos []string) int {
 			if len(pos) == 0 {
-				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status|start|answer|decide>")
+				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status|start|answer|decide|retry>")
 			}
-			return inspUsage(c, "factory", fmt.Sprintf("unknown factory command %q", pos[0]), "<daemon|install|uninstall|status|start|answer|decide>")
+			return inspUsage(c, "factory", fmt.Sprintf("unknown factory command %q", pos[0]), "<daemon|install|uninstall|status|start|answer|decide|retry>")
 		})
 	cmd.AddCommand(newFactoryDaemonCmd(c), newFactoryInstallCmd(c), newFactoryUninstallCmd(c), newFactoryStatusCmd(c),
-		newFactoryStartCmd(c), newFactoryAnswerCmd(c), newFactoryDecideCmd(c))
+		newFactoryStartCmd(c), newFactoryAnswerCmd(c), newFactoryDecideCmd(c), newFactoryRetryCmd(c))
 	return cmd
 }
 

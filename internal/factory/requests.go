@@ -9,6 +9,7 @@ package factory
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,7 +33,15 @@ const (
 	ReqStop    = "stop"
 	ReqPreview = "preview"
 	ReqLetGo   = "let_go"
+	ReqRetry   = "retry"
 )
+
+// RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at
+// its stage. Surface is where you asked, for the record of your input.
+type RetryPayload struct {
+	TaskID  int64
+	Surface string
+}
 
 // LetGoPayload is a ReqLetGo: you looked at the pane of task TaskID's Role,
 // whose last prompt may or may not have arrived, and let the prompt go.
@@ -97,6 +106,8 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 		respond(e, ctx, q, e.answerRequest)
 	case ReqDecide:
 		respond(e, ctx, q, e.decideRequest)
+	case ReqRetry:
+		respond(e, ctx, q, e.retryTask)
 	default:
 		e.complete(ctx, q, fmt.Errorf("unknown request kind %q", q.Kind), "")
 	}
@@ -198,18 +209,7 @@ func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, i
 			e.event(ctx, t.ID, "park", registry.PhaseFail, err.Error())
 		}
 	}
-	if as, err := e.reg.Attempts(ctx, t.ID); err == nil {
-		for _, a := range as {
-			switch a.State {
-			case registry.AttemptLaunching, registry.AttemptRunning, registry.AttemptEnded:
-				if err := e.reg.TransitionAttempt(ctx, a.ID, []string{a.State}, registry.AttemptFailed, func(u *registry.AttemptUpdate) {
-					u.Set("error", because)
-				}); err != nil {
-					e.log.Warn("end a stopped task's attempt", "attempt", a.ID, "err", err)
-				}
-			}
-		}
-	}
+	e.failOpenAttempts(ctx, t, because)
 	e.freeHeavy(ctx, t, "its task stopped")
 	// Whether or not the task names a copy: a claim that waited or failed
 	// keeps the copy it reserved, and one that runs is cancelled and its copy
@@ -263,7 +263,11 @@ func (e *Engine) previewRequest(ctx context.Context, p PreviewPayload) (string, 
 
 // letGo is your one action on a prompt of unknown delivery: you looked at
 // the pane of the task's role, and the prompt is let go (Runtime.LetGo:
-// never sent again), and a task that waited on it goes on.
+// never sent again). The stage rebuilds its roles from the ledger on its
+// next pass, so a role whose let-go prompt was its turn's waits on you with
+// a plain reason (recheckFailed). A task that waited on you for unknown
+// deliveries goes on once none of them is left, and waits on the others
+// meanwhile.
 func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -276,18 +280,67 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	delete(e.agentRuns, t.ID)
 	if _, err := e.reg.RecordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface,
 		Stage: t.Stage, Role: p.Role}); err != nil {
 		e.log.Warn("record a let-go", "task", t.ID, "err", err)
 	}
-	if t.State == registry.TaskNeedsYou && t.WaitsWhat == runtime.UnknownReason(p.Role) {
-		if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
-			u.Set("waits_who", "")
-			u.Set("waits_what", "")
-			u.Because("you let the prompt to " + p.Role + " go")
-		}); err != nil {
+	if t.State == registry.TaskNeedsYou && runtime.IsUnknownReason(t.WaitsWhat) {
+		left, err := e.unknownRoles(ctx, t.ID, true)
+		if err != nil {
+			return "", err
+		}
+		if len(left) > 0 {
+			err = e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, "", func(u *registry.TaskUpdate) {
+				u.Set("waits_what", runtime.UnknownReason(left...))
+				u.Because("you let the prompt to " + p.Role + " go; the others' delivery is still unknown")
+			})
+		} else {
+			err = e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
+				u.Set("waits_who", "")
+				u.Set("waits_what", "")
+				u.Because("you let the prompt to " + p.Role + " go")
+			})
+		}
+		if err != nil {
 			return "", err
 		}
 	}
 	return fmt.Sprintf("let %d prompt(s) to %s go", n, p.Role), nil
+}
+
+// retryTask is your retry (ReqRetry): task p.TaskID, which waits on you,
+// goes on at its stage, and your input is recorded. Nothing is skipped: the
+// stage's own guard and checks run again on its next pass (a role's file
+// checked again, recheckFailed; a fresh local loop after the one that
+// stopped for you, toldOfStop; what a check kept for you settled first,
+// settleKept; the publish's checks before any step), and the counts that
+// sent the task to you (its panics, its checks that did not run to their
+// end) start again. A retry sends no prompt of unknown delivery (its role
+// stays held until a read settles it or you let it go) and never lifts
+// Codex-never. A task that does not wait on you is refused.
+func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) {
+	t, err := e.reg.TaskByID(ctx, p.TaskID)
+	if err != nil {
+		return "", err
+	}
+	if t.State != registry.TaskNeedsYou {
+		return "", fmt.Errorf("%s is %s, not waiting on you: there is nothing to retry", TaskKey(t), t.State)
+	}
+	if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", "")
+		u.Set("waits_what", "")
+		u.Because("you let it go on")
+	}); err != nil {
+		return "", err
+	}
+	if _, err := e.reg.RecordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface, Stage: t.Stage}); err != nil {
+		e.log.Warn("record a retry", "task", t.ID, "err", err)
+	}
+	delete(e.panics, t.ID)
+	delete(e.lastFail, t.ID)
+	e.checksMu.Lock()
+	delete(e.checkFails, t.ID)
+	e.checksMu.Unlock()
+	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")), nil
 }
