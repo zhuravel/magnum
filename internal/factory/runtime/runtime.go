@@ -1,0 +1,798 @@
+package runtime
+
+// The runtime drives the factory's agents through magnum's agents.Manager
+// over the factory's own agents store (Layout.FactoryAgentsDB): one owner row
+// per task (owner.go), the launch of a stage's roles, recorded on the attempt
+// before any workspace exists, the prompts it sends through its ledger
+// (deliver.go), the observe pass that turns the panes into events and heals
+// what it can (health.go), and the watchdog with its recovery steps
+// (watchdog.go). The real state of a task is the factory registry's; the
+// runtime keeps in memory only what a restart may forget (a watchdog's steps,
+// a pause's end), at worst starting a ladder over.
+
+import (
+	"cmp"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
+	"github.com/zhuravel/magnum/internal/usage"
+)
+
+// Tag marks the factory's agents (agents.Deps.Tag): it leads their titles
+// and pane labels and joins their herdr names' hash, so they never collide
+// with a review's.
+const Tag = "factory"
+
+// The runtime's timing and budgets (spec sections 5 and 10.1).
+const (
+	// Stagger is how far apart launches start while the Mac's memory
+	// pressure is at warn.
+	Stagger = 20 * time.Second
+	// RedeliverAfter is the least time between the two reads of a
+	// transcript that prove a prompt never arrived (Reconcile).
+	RedeliverAfter = 2 * time.Minute
+	// NoProgressAfter is how long a run's transcript and screen stay the
+	// same before the watchdog takes its next step, and how long a
+	// recovery waits for progress before the next one.
+	NoProgressAfter = 10 * time.Minute
+	// MaxResumes is how often a lost pane's conversation is resumed in one
+	// attempt before a fresh session starts from the files.
+	MaxResumes = 2
+	// MaxStagePrompts is how many prompts a role gets in one stage before a
+	// loop without progress is assumed; MaxContext the share of its context
+	// (percent) past which it is; SameFailures how often the same failing
+	// output in a row says so.
+	MaxStagePrompts = 6
+	MaxContext      = 85
+	SameFailures    = 3
+
+	// loginEvery bounds how often Observe reads Codex's login and re-checks
+	// a login pause; usageFallback is a usage pause without a named reset;
+	// overloadWait an overload's.
+	loginEvery    = time.Minute
+	usageFallback = time.Hour
+	overloadWait  = 2 * time.Minute
+	versionTTL    = time.Hour
+	versionWait   = 10 * time.Second
+)
+
+// ErrOperatorInPane is Send's answer while the operator types in the role's
+// pane (agents.ErrHumanActive): the prompt waits; nothing was sent.
+var ErrOperatorInPane = errors.New("you're in that pane")
+
+// ErrDeliveryUnknown is Send's answer while one of the role's prompts has a
+// delivery nobody can prove either way (Reconcile): a prompt is never sent
+// twice.
+var ErrDeliveryUnknown = errors.New("the last prompt's delivery is unknown")
+
+// ErrNoProgress is Send's answer once a loop without progress outlived its
+// compaction and its fresh session: the task needs the operator
+// (EventNoProgress).
+var ErrNoProgress = errors.New("the agent makes no progress")
+
+// WaitError is a launch or a prompt that waits on something outside the
+// task: Codex's budget, the Mac's memory, a usage limit, a login, an
+// overload. It is no failure: the task waits with Who and What, as its wait
+// says them ("usage: codex at 96%, waits till 16:00"), until Until when it
+// is known.
+type WaitError struct {
+	Who, What string
+	Until     time.Time
+}
+
+// Error implements error.
+func (w *WaitError) Error() string { return w.Who + ": " + w.What }
+
+// Deps are the runtime's collaborators. Config, Herdr, Store, Registry and
+// Runner are required. Store is the factory's agents store
+// (Layout.FactoryAgentsDB). Memory nil reads no memory (taken as normal);
+// Clock nil is time.Now; Log nil discards.
+type Deps struct {
+	Config   *config.Config
+	Layout   paths.Layout
+	Herdr    agents.Herdr
+	Store    *store.Store
+	Registry *registry.Registry
+	Runner   execx.Runner
+	Memory   func(ctx context.Context) engine.MemorySample
+	Clock    func() time.Time
+	Log      *slog.Logger
+}
+
+// seams are what New takes from the machine and a test replaces: the sleep
+// (stagger, quits, switches), the reading of Codex's budget and login, the
+// signal StopShell may send, and the CLIs' homes the agents manager reads
+// transcripts from ("" = the CLI's own default).
+type seams struct {
+	sleep                func(ctx context.Context, d time.Duration) error
+	usage                func(ctx context.Context, now time.Time) (usage.Snapshot, error)
+	login                func() (usage.Login, error)
+	signal               func(pid int, sig syscall.Signal) error
+	claudeDir, codexHome string
+}
+
+// Runtime is the factory's agent runtime (package doc). It is safe for
+// concurrent use; the engine calls it from its loop.
+type Runtime struct {
+	d   Deps
+	cfg *config.Config // the agents manager's: the factory's roles as its roles, the factory's human cooldown
+	mgr *agents.Manager
+	st  *store.Store
+	reg *registry.Registry
+	log *slog.Logger
+	s   seams
+
+	// launchMu makes the staggered launches take turns.
+	launchMu sync.Mutex
+
+	mu         sync.Mutex
+	lastStart  time.Time
+	keys       map[int64]string // task id -> its key, the owner name in titles
+	roles      map[roleKey]*roleState
+	loops      map[loopKey]*loopState
+	pauses     map[string]*pause        // agent kind -> its pause
+	misses     map[int64]time.Time      // ledger entry -> the first read that did not find it
+	shifts     map[string]time.Duration // run id -> the sleeps its deadline moved by
+	once       map[string]bool          // events and records written once
+	checked    map[int64]time.Time      // Codex session -> when TookNoPrompt last read it
+	pending    []Event                  // events found outside Observe
+	loginFP    string
+	loginRead  time.Time
+	reconciled time.Time
+	versions   map[string]cliVersion
+}
+
+// roleKey names a role of an attempt, as it runs (after a Codex fallback).
+type roleKey struct{ attempt, role string }
+
+// roleState is what the runtime keeps of a role of an attempt.
+type roleState struct {
+	key    roleKey
+	taskID int64
+	stage  string
+	role   config.Role
+	copy   string
+	// first is the attempt's first prompt to the role, as sent: what a
+	// fresh session starts from.
+	first string
+	// The watchdog: the last reading of the run's transcript and screen,
+	// when it last changed, the steps taken on a hung turn, and whether the
+	// steps ran out.
+	sig   string
+	since time.Time
+	step  int
+	stuck bool
+	// Recovery of a lost pane: resumes used, whether the fresh session
+	// started, whether a recovery waits for progress, and whether the
+	// recoveries ran out; noPrompt counts the fresh starts of a Codex
+	// session that never took its first prompt.
+	resumes    int
+	fresh      bool
+	recovering bool
+	lost       bool
+	noPrompt   int
+	nudges     int
+}
+
+// loopKey names a role in a stage of a task: a loop without progress is
+// counted per stage, across its attempts.
+type loopKey struct {
+	task        int64
+	stage, role string
+}
+
+// loopState is the ladder of a loop without progress: the steps taken
+// (compact, fresh session, the operator), the prompt count at the last
+// step, and the latest failing outputs.
+type loopState struct {
+	step, base int
+	fails      []string
+	// reset: a verified run showed progress; the next prompt sets base.
+	reset bool
+	// attempt is the attempt of the stage the last prompt went to.
+	attempt string
+}
+
+// cliVersion is a CLI's version as read at a time.
+type cliVersion struct {
+	v  string
+	at time.Time
+}
+
+// New builds the runtime over d.
+func New(d Deps) (*Runtime, error) {
+	return newWith(d, seams{})
+}
+
+// newWith is New with seams; a nil seam is the machine's.
+func newWith(d Deps, s seams) (*Runtime, error) {
+	if d.Config == nil || d.Herdr == nil || d.Store == nil || d.Registry == nil || d.Runner == nil {
+		return nil, errors.New("factory runtime: Config, Herdr, Store, Registry and Runner are required")
+	}
+	cfg := *d.Config
+	cfg.Roles = d.Config.Factory.Roles // the manager knows the factory's roles by name
+	cfg.Daemon.HumanCooldown = d.Config.Factory.HumanCooldown
+	log := d.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	if s.sleep == nil {
+		s.sleep = sleepCtx
+	}
+	if s.usage == nil {
+		home := d.Config.Usage.CodexHome
+		s.usage = func(ctx context.Context, now time.Time) (usage.Snapshot, error) { return usage.Codex(ctx, home, now) }
+	}
+	if s.login == nil {
+		home := d.Config.Usage.CodexHome
+		s.login = func() (usage.Login, error) { return usage.CodexLogin(home) }
+	}
+	if s.signal == nil {
+		s.signal = syscall.Kill
+	}
+	if s.codexHome == "" {
+		s.codexHome = d.Config.Usage.CodexHome
+	}
+	r := &Runtime{d: d, cfg: &cfg, st: d.Store, reg: d.Registry, log: log, s: s,
+		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
+		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
+		once: map[string]bool{}, checked: map[int64]time.Time{}, versions: map[string]cliVersion{}}
+	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
+		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
+		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal})
+	return r, nil
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (r *Runtime) now() time.Time {
+	if r.d.Clock != nil {
+		return r.d.Clock()
+	}
+	return time.Now()
+}
+
+// HerdrUp asks the factory's herdr session whether it answers (a snapshot):
+// the engine's herdr hold.
+func (r *Runtime) HerdrUp(ctx context.Context) error {
+	_, err := r.d.Herdr.Snapshot(ctx)
+	return err
+}
+
+// WorkspaceLabel is the herdr workspace label of a task's attempt, unique
+// per task and attempt: "factory <key> <attempt id>". A restart finds a
+// workspace no row names by it.
+func WorkspaceLabel(t registry.Task, a registry.Attempt) string {
+	return Tag + " " + taskKey(t) + " " + a.ID
+}
+
+// DBLockCommand is the command prefix a role runs every command that
+// touches its copy's databases with (`magnum db-lock --checkout <copy>
+// --role <role> --`, the prompts' .DBLockCommand): the roles of a task take
+// turns on the copy's databases.
+func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string {
+	return agents.DBLockLine(r.d.Layout.Binary(), copyPath, role.Name)
+}
+
+// RunsAs is the role that runs for role on task t: role itself, or, on a
+// task Codex never works on again (Task.CodexNever), a Codex role's
+// codex_fallback. A Codex role without a fallback there is an error: it
+// cannot run.
+func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error) {
+	if !t.CodexNever || role.AgentKind() != agents.KindCodex {
+		return role, nil
+	}
+	name := r.d.Config.Factory.CodexFallback[role.Name]
+	if fb, ok := r.d.Config.FactoryRole(name); name != "" && ok {
+		return fb, nil
+	}
+	return config.Role{}, fmt.Errorf("%s runs on Codex, which never works on %s again, and [factory] codex_fallback names no role for it",
+		role.Name, taskKey(t))
+}
+
+// Launch starts the roles of attempt a of task t in the copy at copyPath.
+// It records the attempt's workspace label first (the attempt stays
+// launching), then, before any pane exists, reads the memory and, for a
+// Codex role, the budget for every role it launches: critical memory, a
+// Codex budget at its soft cap and a kind's pause are a WaitError, no
+// failure. A logged-out CLI pauses its kind. Then the task's workspace with
+// a pane per role (EnsureWorkspace), each agent started with the resume id
+// of the role's earlier session when it has one, launches Stagger apart
+// while the memory pressure is at warn, the RoleRun facts of each, and the
+// attempt running.
+func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error {
+	if a.ID == "" || a.TaskID != t.ID {
+		return fmt.Errorf("launch %s: attempt %q is not the task's", taskKey(t), a.ID)
+	}
+	if len(roles) == 0 {
+		return fmt.Errorf("launch %s: no roles", a.ID)
+	}
+	label := WorkspaceLabel(t, a)
+	if err := r.reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptLaunching, registry.AttemptRunning}, "",
+		func(u *registry.AttemptUpdate) { u.Set("workspace_label", label) }); err != nil {
+		return fmt.Errorf("launch %s: %w", a.ID, err)
+	}
+	run := make([]config.Role, 0, len(roles))
+	levels := make([]int, 0, len(roles))
+	for _, role := range roles {
+		role, err := r.RunsAs(t, role)
+		if err != nil {
+			return fmt.Errorf("launch %s: %w", a.ID, err)
+		}
+		level, err := r.gate(ctx, role)
+		if err != nil {
+			return err
+		}
+		run, levels = append(run, role), append(levels, level)
+	}
+	for _, role := range run {
+		if err := r.preflight(ctx, role); err != nil {
+			return err
+		}
+	}
+	pr, err := r.owner(ctx, t, a.ID)
+	if err != nil {
+		return err
+	}
+	ws, err := r.mgr.EnsureWorkspace(ctx, pr, copyPath, r.paneEnv(t), label, run)
+	if err != nil {
+		return fmt.Errorf("launch %s: %w", a.ID, err)
+	}
+	for i, role := range run {
+		resume, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(role.Name))
+		if err != nil {
+			return fmt.Errorf("launch %s: %w", a.ID, err)
+		}
+		if err := r.start(ctx, pr, a, role, ws.Panes[agents.Role(role.Name)], resume, levels[i] == engine.MemoryWarn); err != nil {
+			return fmt.Errorf("launch %s: %w", a.ID, err)
+		}
+		r.track(t, a, role, copyPath)
+	}
+	err = r.reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptLaunching}, registry.AttemptRunning, nil)
+	if err != nil && !errors.Is(err, registry.ErrConflict) {
+		return fmt.Errorf("launch %s: %w", a.ID, err)
+	}
+	return nil
+}
+
+// gate reads what a launch of role waits on: a pause of its kind, the
+// Mac's memory (critical waits; the level comes back for the stagger) and,
+// for Codex, the budget, judged by [usage]: at its soft cap the factory's
+// new stages wait before magnum's reviews do.
+func (r *Runtime) gate(ctx context.Context, role config.Role) (level int, err error) {
+	kind := role.AgentKind()
+	if w := r.paused(kind); w != nil {
+		return 0, w
+	}
+	level = engine.MemoryNormal
+	if r.d.Memory != nil {
+		if s := r.d.Memory(ctx); s.Level != engine.MemoryUnknown {
+			level = s.Level
+		}
+		if level == engine.MemoryCritical {
+			return level, &WaitError{Who: "memory", What: "the Mac's memory pressure is critical"}
+		}
+	}
+	if kind != agents.KindCodex {
+		return level, nil
+	}
+	u := r.d.Config.Usage
+	if u.CodexSoft <= 0 && u.CodexHard <= 0 {
+		return level, nil
+	}
+	snap, err := r.s.usage(ctx, r.now())
+	if err != nil {
+		if !errors.Is(err, usage.ErrNoData) {
+			r.log.Warn("codex usage unread; the launch goes on", "role", role.Name, "err", err)
+		}
+		return level, nil
+	}
+	if usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK {
+		return level, nil
+	}
+	reset := binding(snap).ResetsAt
+	what := fmt.Sprintf("codex at %.0f%%", snap.Used())
+	if !reset.IsZero() {
+		what += ", waits till " + r.clock(reset)
+	} else {
+		what += fmt.Sprintf(", waits till it is below %.0f%%", u.CodexSoft)
+	}
+	return level, &WaitError{Who: "usage", What: what, Until: reset}
+}
+
+// binding is the window of snap that runs out first.
+func binding(snap usage.Snapshot) usage.Window {
+	if snap.Secondary != nil && snap.Secondary.UsedPercent > snap.UsedPercent {
+		return *snap.Secondary
+	}
+	return snap.Window
+}
+
+// clock is t as a wait says it: "16:00" today, "Mon 16:00" another day, in
+// the runtime clock's zone.
+func (r *Runtime) clock(t time.Time) string {
+	now := r.now()
+	t = t.In(now.Location())
+	if y, m, d := t.Date(); y == now.Year() && m == now.Month() && d == now.Day() {
+		return t.Format("15:04")
+	}
+	return t.Format("Mon 15:04")
+}
+
+// preflight checks role's CLI login (agents.PreflightRole): a logged-out
+// CLI pauses its kind and waits.
+func (r *Runtime) preflight(ctx context.Context, role config.Role) error {
+	err := r.mgr.PreflightRole(ctx, role)
+	if errors.Is(err, agents.ErrLoginRequired) {
+		return r.pause(ctx, role.AgentKind(), pauseLogin, time.Time{})
+	}
+	if err != nil {
+		return fmt.Errorf("preflight %s: %w", role.Name, err)
+	}
+	return nil
+}
+
+// start starts role's agent in pane (resumed from resume when it is set),
+// Stagger after the last start when stagger, and records its RoleRun facts.
+func (r *Runtime) start(ctx context.Context, pr store.PR, a registry.Attempt, role config.Role, pane, resume string, stagger bool) error {
+	if stagger {
+		r.launchMu.Lock()
+		defer r.launchMu.Unlock()
+		r.mu.Lock()
+		last := r.lastStart
+		r.mu.Unlock()
+		if wait := Stagger - r.now().Sub(last); !last.IsZero() && wait > 0 {
+			if err := r.s.sleep(ctx, wait); err != nil {
+				return err
+			}
+		}
+	}
+	launched := r.now()
+	if err := r.mgr.StartAgent(ctx, pr, role, pane, resume); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.lastStart = r.now()
+	r.mu.Unlock()
+	r.recordLaunch(ctx, pr, a, role, launched)
+	return nil
+}
+
+// recordLaunch writes the RoleRun facts of role's launch in attempt a: the
+// CLI and its version, the model, magnum's build, the prompt's and the
+// role's hashes, the session id and the transcript path when known.
+// Failures are logged: the evidence is no reason to stop the launch.
+func (r *Runtime) recordLaunch(ctx context.Context, pr store.PR, a registry.Attempt, role config.Role, launched time.Time) {
+	model, _, _ := agents.LaunchModel(ctx, r.st, r.cfg, role, r.now())
+	rr := registry.RoleRun{AttemptID: a.ID, Role: role.Name, CLI: role.AgentKind(),
+		CLIVersion: r.cliVersion(ctx, role), Model: cmp.Or(model, r.cfg.RoleModel(role), agents.UnknownModel),
+		MagnumBuild: engine.CurrentBuild("", r.d.Layout.Binary()).Label(), PromptHash: r.promptHash(role),
+		ConfigHash: configHash(role), Launched: launched}
+	if s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role.Name); err == nil {
+		rr.SessionID = store.Deref(s.SessionID)
+		if rr.SessionID != "" {
+			rr.Transcript, _ = r.mgr.TranscriptPath(ctx, s)
+		}
+	}
+	if err := r.reg.RecordRoleRun(ctx, rr); err != nil {
+		r.log.Warn("record a role's launch", "attempt", a.ID, "role", role.Name, "err", err)
+	}
+}
+
+// cliVersion is `<kind> --version` of role's CLI, with the role's pane env,
+// read at most once an hour per kind ("" when it does not answer).
+func (r *Runtime) cliVersion(ctx context.Context, role config.Role) string {
+	kind := role.AgentKind()
+	now := r.now()
+	r.mu.Lock()
+	v, ok := r.versions[kind]
+	r.mu.Unlock()
+	if ok && now.Sub(v.at) < versionTTL {
+		return v.v
+	}
+	res, err := r.d.Runner.Run(ctx, execx.Cmd{Name: kind, Args: []string{"--version"}, Env: r.cfg.RoleEnv(role),
+		Timeout: versionWait, NoTTY: true, Label: kind + " --version", Quiet: true})
+	out := ""
+	if err == nil {
+		out = textx.Clip(textx.FirstLine(strings.TrimSpace(string(res.Stdout))), 80)
+	}
+	r.mu.Lock()
+	r.versions[kind] = cliVersion{v: out, at: now}
+	r.mu.Unlock()
+	return out
+}
+
+// promptHash is the first 12 hex digits of the sha256 of role's prompt
+// file as the daemon loaded it (its shared blocks included); "" when it
+// cannot be read.
+func (r *Runtime) promptHash(role config.Role) string {
+	if role.Prompt == "" {
+		return ""
+	}
+	p, err := r.cfg.ResolvePrompt(role.Prompt)
+	if err != nil {
+		return ""
+	}
+	return shortHash(p.Shared + "\x00" + p.Text)
+}
+
+// configHash is the first 12 hex digits of the sha256 of role's
+// configuration.
+func configHash(role config.Role) string {
+	b, err := json.Marshal(role)
+	if err != nil {
+		return ""
+	}
+	return shortHash(string(b))
+}
+
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// paneEnv is the environment of a task's panes: the repository's env and
+// MAGNUM_FACTORY_TASK, no secrets (sessions.env_json keeps it).
+func (r *Runtime) paneEnv(t registry.Task) map[string]string {
+	env := map[string]string{}
+	if repo, ok := r.d.Config.FactoryRepo(t.Repo); ok {
+		maps.Copy(env, repo.Env)
+	}
+	env["MAGNUM_FACTORY_TASK"] = strconv.FormatInt(t.ID, 10)
+	return env
+}
+
+// track notes role of attempt a as launched in copyPath.
+func (r *Runtime) track(t registry.Task, a registry.Attempt, role config.Role, copyPath string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := roleKey{a.ID, role.Name}
+	if st := r.roles[k]; st != nil {
+		st.copy = copyPath
+		return
+	}
+	r.roles[k] = &roleState{key: k, taskID: t.ID, stage: a.Stage, role: role, copy: copyPath}
+}
+
+// copyOf is the copy role st works in.
+func (r *Runtime) copyOf(st *roleState) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return st.copy
+}
+
+// stateFor is the state of role (as it runs) in attempt id: the one Launch
+// noted, else one rebuilt from the registry and the role's newest session
+// (after a restart).
+func (r *Runtime) stateFor(ctx context.Context, attempt, role string) (*roleState, error) {
+	k := roleKey{attempt, role}
+	r.mu.Lock()
+	st := r.roles[k]
+	r.mu.Unlock()
+	if st != nil {
+		return st, nil
+	}
+	a, err := r.reg.AttemptByID(ctx, attempt)
+	if err != nil {
+		return nil, err
+	}
+	spec, ok := r.d.Config.FactoryRole(role)
+	if !ok {
+		return nil, fmt.Errorf("attempt %s: no factory role %q", attempt, role)
+	}
+	st = &roleState{key: k, taskID: a.TaskID, stage: a.Stage, role: spec}
+	if pr, err := r.ownerRow(ctx, a.TaskID); err == nil {
+		if ss, err := r.st.SessionsByPR(ctx, pr.ID); err == nil {
+			for _, s := range ss {
+				if s.Role == role && store.Deref(s.Cwd) != "" {
+					st.copy = store.Deref(s.Cwd)
+				}
+			}
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if prev := r.roles[k]; prev != nil {
+		return prev, nil
+	}
+	r.roles[k] = st
+	return st, nil
+}
+
+// Verify settles an ended run: verified when ok, failed with why otherwise,
+// so the agents store's active runs stay few. It records the RoleRun's end:
+// the stage's end fact and why, the outcome, the nudges, the tokens by model
+// and the active and idle seconds. A failure feeds the loop detector: the
+// same why SameFailures times in a row is a loop without progress.
+func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string) error {
+	run, err := r.st.RunByID(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("verify %s: %w", runID, err)
+	}
+	now := r.now()
+	to := store.RunVerified
+	if !ok {
+		to = store.RunFailed
+	}
+	why = execx.Redact(strings.TrimSpace(why))
+	if err := r.st.TransitionRun(ctx, runID, []string{store.RunEnded}, to, func(u *store.RunUpdate) {
+		if ok {
+			u.Set("verified_at", now)
+			u.Set("outcome", "verified")
+		} else {
+			u.Set("error", why)
+			u.Set("outcome", "failed")
+		}
+	}); err != nil {
+		return fmt.Errorf("verify %s: %w", runID, err)
+	}
+	st, err := r.stateFor(ctx, run.TargetSHA, run.Role)
+	if err != nil {
+		return fmt.Errorf("verify %s: %w", runID, err)
+	}
+	rr := registry.RoleRun{AttemptID: run.TargetSHA, Role: run.Role, EndFact: r.endFact(ctx, st), EndWhy: textx.Clip(why, 300)}
+	if run.EndedAt != nil {
+		rr.Ended = *run.EndedAt
+	}
+	if ok {
+		rr.Outcome, rr.Verified = "verified", now
+	} else {
+		rr.Outcome = "failed:" + cmp.Or(textx.Clip(textx.FirstLine(why), 80), "unverified")
+	}
+	r.endFacts(ctx, &rr, run, st, now)
+	if err := r.reg.RecordRoleRun(ctx, rr); err != nil {
+		r.log.Warn("record a role's end", "run", runID, "err", err)
+	}
+	r.mu.Lock()
+	lk := loopKey{st.taskID, st.stage, run.Role}
+	l := r.loops[lk]
+	if l == nil {
+		l = &loopState{}
+		r.loops[lk] = l
+	}
+	if ok { // progress: the ladder starts over from here
+		l.fails, l.step = nil, 0
+		l.reset = true
+		delete(r.once, noProgressKey(lk))
+	} else {
+		l.fails = append(l.fails, why)
+		if len(l.fails) > SameFailures {
+			l.fails = l.fails[len(l.fails)-SameFailures:]
+		}
+	}
+	r.mu.Unlock()
+	return nil
+}
+
+// endFact is the configured end fact of st's stage ("findings", "proof").
+func (r *Runtime) endFact(ctx context.Context, st *roleState) string {
+	t, err := r.reg.TaskByID(ctx, st.taskID)
+	if err != nil {
+		return ""
+	}
+	for _, s := range r.d.Config.Factory.Kinds[t.Kind].Stages {
+		if s.Name == st.stage {
+			return s.End
+		}
+	}
+	return ""
+}
+
+// endFacts fills the counts of rr from the role's runs in the attempt: the
+// nudges (its nudge and recovery runs and the watchdog's nudges), the
+// tokens by model since its launch, and the active seconds (each run's
+// submit to end) and the idle ones (the rest since the launch).
+func (r *Runtime) endFacts(ctx context.Context, rr *registry.RoleRun, run store.Run, st *roleState, now time.Time) {
+	r.mu.Lock()
+	rr.Nudges = st.nudges
+	r.mu.Unlock()
+	runs, err := r.st.RunsByPR(ctx, run.PRID)
+	if err != nil {
+		return
+	}
+	var active time.Duration
+	first := time.Time{}
+	for _, x := range runs {
+		if x.Role != run.Role || x.TargetSHA != run.TargetSHA {
+			continue
+		}
+		if first.IsZero() || x.CreatedAt.Before(first) {
+			first = x.CreatedAt
+		}
+		if x.Kind == store.RunNudge || x.Kind == store.RunRecovery {
+			rr.Nudges++
+		}
+		if x.SubmittedAt != nil && x.EndedAt != nil && x.EndedAt.After(*x.SubmittedAt) {
+			active += x.EndedAt.Sub(*x.SubmittedAt)
+		}
+	}
+	rr.ActiveSecs = int(active / time.Second)
+	if !first.IsZero() {
+		rr.IdleSecs = max(0, int(now.Sub(first)/time.Second)-rr.ActiveSecs)
+	}
+	if run.SessionID != nil {
+		if s, err := r.st.SessionByID(ctx, *run.SessionID); err == nil {
+			if path, err := r.mgr.TranscriptPath(ctx, s); err == nil {
+				rr.Tokens = tokensSince(s, path, first)
+			}
+		}
+	}
+}
+
+// Park parks the agents of task t (agents.Manager.Park): their
+// conversations stay resumable, their panes are released. A run in flight
+// or an agent at work refuses with agents.ErrBusy.
+func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
+	pr, err := r.ownerRow(ctx, t.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil // the task never launched an agent
+	}
+	if err != nil {
+		return err
+	}
+	return r.mgr.Park(ctx, pr)
+}
+
+// Shift moves every turn deadline and progress window by gap, the time the
+// Mac slept (the engine's wake): no run counts as hung for a sleep.
+func (r *Runtime) Shift(gap time.Duration) {
+	if gap <= 0 {
+		return
+	}
+	runs, err := r.st.ActiveRuns(context.Background())
+	if err != nil {
+		r.log.Warn("shift the turn deadlines", "err", err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, st := range r.roles {
+		if !st.since.IsZero() {
+			st.since = st.since.Add(gap)
+		}
+	}
+	for _, run := range runs {
+		r.shifts[run.ID] += gap
+	}
+}
+
+// slogLogger is the agents manager's execx.AttrLogger over the runtime's
+// slog.Logger.
+type slogLogger struct{ l *slog.Logger }
+
+func (s slogLogger) Printf(format string, args ...any) { s.Logf(slog.LevelInfo, format, args...) }
+
+func (s slogLogger) Logf(level slog.Level, format string, args ...any) {
+	s.l.Log(context.Background(), level, fmt.Sprintf(format, args...), "src", "agents")
+}
+
+func (s slogLogger) LogAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
+	s.l.LogAttrs(context.Background(), level, msg, append([]slog.Attr{slog.String("src", "agents")}, attrs...)...)
+}

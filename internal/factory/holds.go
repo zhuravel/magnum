@@ -83,14 +83,23 @@ type heldError struct{ who, what string }
 func (h heldError) Error() string        { return h.who + ": " + h.what }
 func (h heldError) Is(target error) bool { return target == ErrHeld }
 
-// heldWait reports whether a task's wait is a hold's (launch set it).
+// heldWait reports whether a task's wait is a hold's or a runtime wait's
+// (launch set it): a launch that goes through clears it.
 func heldWait(who string) bool {
 	switch who {
-	case HoldInfra, HoldHerdr, HoldDisk, HoldMemory:
+	case HoldInfra, HoldHerdr, HoldDisk, HoldMemory, waitUsage, waitLogin, waitOverload:
 		return true
 	}
 	return false
 }
+
+// The waits of a launch the runtime holds back (runtime.WaitError.Who):
+// Codex's budget or a CLI's usage limit, a logged-out CLI, an overload.
+const (
+	waitUsage    = "usage"
+	waitLogin    = "login"
+	waitOverload = "overload"
+)
 
 // hold weighs a tick's failures for the infrastructure hold and returns the
 // hold in force. Without one, an infrastructure failure (infraCause) or the

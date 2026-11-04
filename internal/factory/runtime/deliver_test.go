@@ -1,0 +1,236 @@
+package runtime
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+func TestSendWritesTheLedgerBeforeThePrompt(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	text := "reproduce the bug; the token in the log was ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	var atPrompt []registry.LedgerEntry
+	g.h.onPrompt = func(_ *fakeHerdr, _, _ string) {
+		es, err := g.reg.LedgerOf(g.ctx, g.task.ID)
+		if err != nil {
+			t.Errorf("LedgerOf at the prompt: %v", err)
+		}
+		atPrompt = es
+	}
+
+	id := g.send("fx-repro", text)
+
+	if len(atPrompt) != 1 {
+		t.Fatalf("the ledger held %d entries when the prompt left, want 1", len(atPrompt))
+	}
+	e := atPrompt[0]
+	if e.Delivered != registry.DeliveredUnknown || e.RunID != id || e.Role != "fx-repro" || e.AttemptID != g.attempt.ID ||
+		e.Hash != PromptHash(text) {
+		t.Fatalf("ledger entry at the prompt %+v, want unknown for run %s with the prompt's hash", e, id)
+	}
+	if strings.Contains(e.Text, "ghp_") || !strings.Contains(e.Text, "reproduce the bug") {
+		t.Fatalf("ledger text %q, want the prompt scrubbed of its token", e.Text)
+	}
+	if got := g.ledger()[0].Delivered; got != registry.DeliveredYes {
+		t.Fatalf("after the prompt the entry is %s, want yes", got)
+	}
+	if prompts := g.h.promptTexts(); !slices.Equal(prompts, []string{text}) {
+		t.Fatalf("the agent got %q, want the prompt as written", prompts)
+	}
+}
+
+func TestSendWaitsWhileTheOperatorIsInThePane(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	now := g.clock.Now()
+	if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", now) }); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+
+	if !errors.Is(err, ErrOperatorInPane) {
+		t.Fatalf("Send = %v, want ErrOperatorInPane", err)
+	}
+	if n := len(g.h.promptTexts()); n != 0 {
+		t.Fatalf("%d prompts typed into the operator's pane", n)
+	}
+	for _, e := range g.ledger() {
+		if e.Delivered != registry.DeliveredNo {
+			t.Fatalf("ledger entry %+v, want it settled as not sent", e)
+		}
+	}
+
+	g.clock.Add(g.cfg.Factory.HumanCooldown.Duration + time.Second)
+	g.send("fx-repro", "reproduce the bug")
+}
+
+// pendingPrompt leaves the state a daemon stopped between Submit and the
+// ledger's verdict leaves: a run that never got past pending and an entry of
+// unknown delivery, written at the clock's time; typed says herdr took the
+// prompt before the daemon stopped.
+func (g *rig) pendingPrompt(role, text string, typed bool) registry.LedgerEntry {
+	g.t.Helper()
+	run, err := g.r.mgr.NewRun(g.ctx, g.owner(), agents.Role(role), store.RunInitial, 1)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	e, err := g.reg.AppendLedger(g.ctx, registry.LedgerEntry{TaskID: g.task.ID, AttemptID: g.attempt.ID, Role: role,
+		RunID: run.ID, Hash: PromptHash(text), Text: text})
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	if typed {
+		if _, err := g.h.AgentPrompt(g.ctx, g.agent(role), text, nil); err != nil {
+			g.t.Fatal(err)
+		}
+	}
+	return e
+}
+
+func TestAPromptOfUnknownDeliveryIsNotSentAgain(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	text := "reproduce the bug"
+	e := g.pendingPrompt("fx-repro", text, true) // the session has no id yet: its transcript cannot be read
+
+	for range 3 {
+		got, err := g.r.Reconcile(g.ctx, e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != registry.DeliveredUnknown {
+			t.Fatalf("Reconcile with no transcript = %s, want unknown", got)
+		}
+		g.clock.Add(RedeliverAfter)
+	}
+
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), text)
+	if !errors.Is(err, ErrDeliveryUnknown) {
+		t.Fatalf("Send = %v, want ErrDeliveryUnknown", err)
+	}
+	if prompts := g.h.promptTexts(); len(prompts) != 1 {
+		t.Fatalf("prompts %q: a prompt of unknown delivery went out again", prompts)
+	}
+	if got := g.ledger()[0].Delivered; got != registry.DeliveredUnknown {
+		t.Fatalf("the entry is %s, want still unknown", got)
+	}
+}
+
+func TestAPromptIsSentAgainOnlyOnProof(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.observe()
+	text := "reproduce the bug"
+	e := g.pendingPrompt("fx-repro", text, false)
+	sent := e.Sent
+	g.writeTranscript("sid-1",
+		userLine(sent.Add(-time.Hour), "an older prompt"),
+		assistantLine(sent.Add(-time.Hour+time.Minute), "done"),
+		assistantLine(sent.Add(30*time.Second), "the agent wrote after the prompt left"))
+
+	for i, want := range []string{registry.DeliveredUnknown, registry.DeliveredUnknown, registry.DeliveredNo} {
+		got, err := g.r.Reconcile(g.ctx, e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("read %d (%s after the first) = %s, want %s", i+1, time.Duration(i)*time.Minute, got, want)
+		}
+		g.clock.Add(time.Minute)
+	}
+	if got := g.ledger()[0].Delivered; got != registry.DeliveredNo {
+		t.Fatalf("the entry is %s, want no", got)
+	}
+
+	g.send("fx-repro", text)
+
+	if prompts := g.h.promptTexts(); !slices.Equal(prompts, []string{text}) {
+		t.Fatalf("prompts %q, want exactly one resend", prompts)
+	}
+}
+
+// No proof, no resend: a transcript that stops before the prompt was
+// sent, a run that went past pending, a session prompted since all leave the
+// entry unknown however long the reads go on.
+func TestAPromptStaysUnknownWithoutEveryProof(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after func(g *rig, e registry.LedgerEntry)
+	}{
+		{"the transcript stops before the prompt", func(g *rig, e registry.LedgerEntry) {
+			g.writeTranscript("sid-1", assistantLine(e.Sent.Add(-time.Minute), "done"))
+		}},
+		{"the run went past pending", func(g *rig, e registry.LedgerEntry) {
+			g.writeTranscript("sid-1", assistantLine(e.Sent.Add(time.Minute), "working"))
+			at := e.Sent
+			if err := g.st.TransitionRun(g.ctx, e.RunID, nil, store.RunSubmitted, func(u *store.RunUpdate) { u.Set("submitted_at", at) }); err != nil {
+				g.t.Fatal(err)
+			}
+		}},
+		{"the session was prompted since", func(g *rig, e registry.LedgerEntry) {
+			g.writeTranscript("sid-1", assistantLine(e.Sent.Add(time.Minute), "working"))
+			at := e.Sent.Add(time.Second)
+			if err := g.st.UpdateSession(g.ctx, g.session("fx-repro").ID, func(u *store.SessionUpdate) { u.Set("last_prompt_at", at) }); err != nil {
+				g.t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newRig(t)
+			g.launch("fx-repro")
+			g.h.setSession(g.agent("fx-repro"), "sid-1")
+			g.observe()
+			e := g.pendingPrompt("fx-repro", "reproduce the bug", true)
+			tc.after(g, e)
+			for range 4 {
+				if got, err := g.r.Reconcile(g.ctx, e); err != nil || got != registry.DeliveredUnknown {
+					t.Fatalf("Reconcile = %s, %v, want unknown", got, err)
+				}
+				g.clock.Add(RedeliverAfter)
+			}
+		})
+	}
+}
+
+func TestAPromptFoundInTheTranscriptIsDelivered(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line func(at time.Time, text string) transcriptLine
+	}{
+		{"typed", userLine},
+		{"queued during a turn", func(at time.Time, text string) transcriptLine {
+			return transcriptLine{Type: "queue-operation", Timestamp: at, Operation: "enqueue", Content: text}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newRig(t)
+			g.launch("fx-repro")
+			g.h.setSession(g.agent("fx-repro"), "sid-1")
+			g.observe()
+			text := "reproduce the bug"
+			e := g.pendingPrompt("fx-repro", text, true)
+			g.writeTranscript("sid-1", tc.line(e.Sent.Add(2*time.Second), text+"\n"))
+
+			got, err := g.r.Reconcile(g.ctx, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != registry.DeliveredYes {
+				t.Fatalf("Reconcile = %s, want yes", got)
+			}
+			if got := g.ledger()[0].Delivered; got != registry.DeliveredYes {
+				t.Fatalf("the entry is %s, want yes", got)
+			}
+			g.send("fx-repro", "write findings.md")
+		})
+	}
+}

@@ -51,6 +51,15 @@ func TestDetectHooksDialog(t *testing.T) {
 	}
 }
 
+func TestHooksReviewShownOnlyForALiveReview(t *testing.T) {
+	if !HooksReviewShown(codexHooksScreen) {
+		t.Fatal("the hooks review was not seen")
+	}
+	if HooksReviewShown(codexIdleScreen) || HooksReviewShown("the agent said: Hooks need review") {
+		t.Fatal("a screen without a live hooks review was taken for one")
+	}
+}
+
 // A hooks review is live only at the bottom of the screen: its options are
 // the last lines but for blanks and key hints. Dialog text an agent's output
 // left above a permission prompt or the composer is never taken for it, so

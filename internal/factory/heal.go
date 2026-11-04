@@ -56,6 +56,21 @@ func (e *Engine) safely(ctx context.Context, t registry.Task, step func(ctx cont
 	return step(ctx)
 }
 
+// contained runs pass, a part of the observe pass that runs outside any
+// task's step (the runtime's Observe and Watchdog), and turns a panic in it
+// into its error, the stack in the log: the loop goes on, and the next tick
+// weighs the failed read.
+func (e *Engine) contained(what string, pass func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			msg := textx.Clip(strings.Join(strings.Fields(execx.Redact(fmt.Sprint(r))), " "), panicRunes)
+			e.log.Error("panic recovered in the observe pass", "pass", what, "panic", msg, "stack", execx.Redact(string(debug.Stack())))
+			err = fmt.Errorf("%s: %w: %s", what, errPanicked, msg)
+		}
+	}()
+	return pass()
+}
+
 // panicked records the panic r of task t's step and settles the task; a
 // panic while settling is logged, never re-raised.
 func (e *Engine) panicked(ctx context.Context, t registry.Task, r any, stack []byte) error {

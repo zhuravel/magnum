@@ -65,6 +65,9 @@ type Runtime interface {
 	Shift(gap time.Duration)
 }
 
+// The runtime the daemon wires (internal/factory/runtime) is the engine's.
+var _ Runtime = (*runtime.Runtime)(nil)
+
 // Copy is a task's copy of a repository: its name and path, its number
 // (copy {n}), the port of its server and its environment.
 type Copy struct {
@@ -551,12 +554,11 @@ func (e *Engine) observe(ctx context.Context) {
 	if _, down := e.holds[HoldHerdr]; down {
 		return
 	}
-	evs, err := e.d.Runtime.Observe(ctx)
-	if err != nil {
+	var evs, wd []runtime.Event
+	if err := e.contained("observe", func() (err error) { evs, err = e.d.Runtime.Observe(ctx); return err }); err != nil {
 		e.readFails = append(e.readFails, fmt.Errorf("observe: %w", err))
 	}
-	wd, err := e.d.Runtime.Watchdog(ctx, now)
-	if err != nil {
+	if err := e.contained("watchdog", func() (err error) { wd, err = e.d.Runtime.Watchdog(ctx, now); return err }); err != nil {
 		e.readFails = append(e.readFails, fmt.Errorf("watchdog: %w", err))
 	}
 	for _, ev := range append(evs, wd...) {
@@ -592,6 +594,12 @@ func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt
 		return heldError{who: "agent", what: "this build runs no agents yet"}
 	}
 	if err := e.d.Runtime.Launch(ctx, t, a, copyPath, roles); err != nil {
+		// A launch that waits on Codex's budget, the memory or a CLI's pause
+		// costs the task nothing either: it waits with the reason.
+		if w, ok := errors.AsType[*runtime.WaitError](err); ok {
+			e.waitOn(ctx, t, w.Who, w.What)
+			return heldError{who: w.Who, what: w.What}
+		}
 		return err
 	}
 	if heldWait(t.WaitsWho) {

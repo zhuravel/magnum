@@ -99,6 +99,40 @@ func TestClaudeUserTurnsSkipSidechainsMetaAndNotifications(t *testing.T) {
 	}
 }
 
+// A prompt typed while the agent worked is no user entry: Claude Code
+// queues it (an enqueue line) and either starts a turn with it later or
+// takes it into the turn it is in (a queued_command attachment). Both are
+// what was typed; a queued task notification is not.
+func TestClaudeQueuedTurnsReadPromptsTypedDuringATurn(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	at := t0
+	tr.addAll(
+		[]tline{humanPrompt(at, "first prompt"), assistantSays(at.Add(10*time.Second), "working")},
+		[]tline{enqueued(at.Add(time.Minute), "say one line")},
+		taken(at.Add(2*time.Minute), "say one line"),
+		[]tline{enqueued(at.Add(3*time.Minute), "and another")},
+		absorbed(at.Add(3*time.Minute), at.Add(4*time.Minute), "and another"),
+		notification(at.Add(5*time.Minute), "toolu_1", "bg1", "completed"),
+	)
+
+	got, err := ClaudeQueuedTurns(tr.path, at.Add(30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []UserTurn{
+		{At: at.Add(time.Minute), Text: "say one line", Origin: OriginQueued},
+		{At: at.Add(3 * time.Minute), Text: "and another", Origin: OriginQueued},
+		{At: at.Add(3 * time.Minute), Text: "and another", Origin: OriginQueued},
+	}
+	if !slices.EqualFunc(got, want, func(a, b UserTurn) bool { return a.At.Equal(b.At) && a.Text == b.Text && a.Origin == b.Origin }) {
+		t.Fatalf("queued turns = %+v\nwant          %+v", got, want)
+	}
+	if got, err := ClaudeQueuedTurns(tr.path, at.Add(time.Hour)); err != nil || len(got) != 0 {
+		t.Fatalf("queued turns since an hour on = %+v, %v", got, err)
+	}
+}
+
 // A Codex rollout records what the operator typed as a user_message event
 // with the text in payload.message. The response items that carry the same
 // text and the instructions Codex adds are no user messages.

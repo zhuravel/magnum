@@ -61,6 +61,50 @@ func claudeUserTurn(line []byte) (UserTurn, bool) {
 	return UserTurn{At: e.Timestamp, Text: text, Origin: e.originName()}, true
 }
 
+// OriginQueued is the Origin of a prompt typed while the agent worked
+// (ClaudeQueuedTurns).
+const OriginQueued = "queued"
+
+// ClaudeQueuedTurns reads the prompts typed into a Claude Code agent while
+// it worked that the transcript at path records, stamped at or after since
+// (the zero time: all of them), in order: the text of each queue-operation
+// enqueue line, and the prompt of each queued_command attachment (the entry
+// Claude Code writes when it takes a queued prompt into the turn it was in,
+// stamped when the prompt was queued), task notifications left out. Origin
+// is OriginQueued. ClaudeUserTurns returns neither, so what proves a prompt
+// arrived, or counts what someone typed, reads both; one prompt may appear
+// twice (queued, then taken in). Lines that are no JSON are skipped.
+func ClaudeQueuedTurns(path string, since time.Time) ([]UserTurn, error) {
+	var out []UserTurn
+	err := eachRolloutLine(path, `"queue`, func(line []byte) bool {
+		var e tEntry
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.Timestamp.Before(since) {
+			return true
+		}
+		text := ""
+		switch {
+		case e.Type == "queue-operation" && e.Operation == "enqueue":
+			text, _ = e.Content.(string)
+			if fromNotification("", nil, "", text) {
+				text = ""
+			}
+		case e.Type == "attachment":
+			if _, ok := e.takenIn(); ok {
+				a, _ := e.Attachment.(map[string]any)
+				text = str(a["prompt"])
+			}
+		}
+		if text != "" {
+			out = append(out, UserTurn{At: e.Timestamp, Text: text, Origin: OriginQueued})
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // originName is what began the turn the entry starts: its turnOrigin, else
 // its origin's kind, else "".
 func (e *tEntry) originName() string {

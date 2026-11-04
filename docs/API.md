@@ -469,6 +469,10 @@ const MaxReset = 24 * time.Hour
     or fake a far-off date, so a pause never lasts longer than this from one
     reading (a longer limit is simply hit again).
 
+const OriginQueued = "queued"
+    OriginQueued is the Origin of a prompt typed while the agent worked
+    (ClaudeQueuedTurns).
+
 const OwnFindingsFile = "judge-own.md"
     OwnFindingsFile is the file the judge's own pass writes in the round's
     report directory (JudgeData.OwnFindings): its findings, their proofs and the
@@ -666,6 +670,11 @@ func FixSyncLine(magnum, checkout, from, branch, base string) string
 
 func HasSessionID(s store.Session) bool
     HasSessionID reports whether session s has its CLI's session id.
+
+func HooksReviewShown(text string) bool
+    HooksReviewShown reports whether text, a pane's visible screen,
+    shows Codex's startup hooks review live at its bottom (detectHooksDialog):
+    a session that shows it eats its next prompt until someone answers it.
 
 func JoinCodexHookProblems(problems []CodexHookProblem) string
     JoinCodexHookProblems says problems in one sentence without its final
@@ -2019,6 +2028,16 @@ func (m *Manager) Quit(ctx context.Context, s store.Session) error
     reports ids), else closed. A pane or agent that is already gone counts as
     quit. For a shell role's pane this interrupts the running command.
 
+func (m *Manager) QuitHard(ctx context.Context, s store.Session) error
+    QuitHard quits session s alone the way ParkHard quits each of a PR's agents:
+    ctrl+c, 1 s, ctrl+c and a wait for an idle shell, then, when the pane
+    is still no idle shell, the kind's exit keys and, last, the pane closed
+    (forceQuit) and the session closed. Unlike ParkHard it leaves the PR's other
+    sessions as they are, and neither a run in flight nor an agent at work stops
+    it: a turn that hangs is what it is for (the caller abandons the hung run
+    first). The session becomes parked when it is resumable and quit before the
+    close, else closed.
+
 func (m *Manager) ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
     ReadRecent returns the last lines of a session's pane output (unwrapped
     text): agent.read by agent name, falling back to pane.read (shell panes,
@@ -2853,6 +2872,17 @@ type UserTurn struct {
 }
     UserTurn is a prompt typed into an agent's pane, by a person or by magnum
     through herdr, as its transcript records it.
+
+func ClaudeQueuedTurns(path string, since time.Time) ([]UserTurn, error)
+    ClaudeQueuedTurns reads the prompts typed into a Claude Code agent while
+    it worked that the transcript at path records, stamped at or after since
+    (the zero time: all of them), in order: the text of each queue-operation
+    enqueue line, and the prompt of each queued_command attachment (the entry
+    Claude Code writes when it takes a queued prompt into the turn it was in,
+    stamped when the prompt was queued), task notifications left out. Origin
+    is OriginQueued. ClaudeUserTurns returns neither, so what proves a prompt
+    arrived, or counts what someone typed, reads both; one prompt may appear
+    twice (queued, then taken in). Lines that are no JSON are skipped.
 
 func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error)
     ClaudeUserTurns reads the user turns of the Claude Code transcript at path
@@ -11972,6 +12002,10 @@ func (r *Registry) FlagQuestion(ctx context.Context, id int64, flag, why string)
 func (r *Registry) Inputs(ctx context.Context, taskID int64) ([]Input, error)
     Inputs returns a task's inputs in the order they were recorded.
 
+func (r *Registry) LedgerOf(ctx context.Context, taskID int64) ([]LedgerEntry, error)
+    LedgerOf returns the task's entries in the order they were written:
+    the prompts its agents were sent, or were about to be.
+
 func (r *Registry) LinkPR(ctx context.Context, l PRLink) error
     LinkPR records the PR of task l.TaskID. A task has one PR, and a PR one
     task: linking another number or repository to a task that has a PR, or a PR
@@ -12318,7 +12352,94 @@ The factory engine (package factory) drives it through its Runtime interface;
 this file holds the events that interface reports, which the engine declares
 before the runtime itself exists.
 
+CONSTANTS
+
+const (
+	// Stagger is how far apart launches start while the Mac's memory
+	// pressure is at warn.
+	Stagger = 20 * time.Second
+	// RedeliverAfter is the least time between the two reads of a
+	// transcript that prove a prompt never arrived (Reconcile).
+	RedeliverAfter = 2 * time.Minute
+	// NoProgressAfter is how long a run's transcript and screen stay the
+	// same before the watchdog takes its next step, and how long a
+	// recovery waits for progress before the next one.
+	NoProgressAfter = 10 * time.Minute
+	// MaxResumes is how often a lost pane's conversation is resumed in one
+	// attempt before a fresh session starts from the files.
+	MaxResumes = 2
+	// MaxStagePrompts is how many prompts a role gets in one stage before a
+	// loop without progress is assumed; MaxContext the share of its context
+	// (percent) past which it is; SameFailures how often the same failing
+	// output in a row says so.
+	MaxStagePrompts = 6
+	MaxContext      = 85
+	SameFailures    = 3
+)
+    The runtime's timing and budgets (spec sections 5 and 10.1).
+
+const Tag = "factory"
+    Tag marks the factory's agents (agents.Deps.Tag): it leads their titles and
+    pane labels and joins their herdr names' hash, so they never collide with a
+    review's.
+
+
+VARIABLES
+
+var ErrDeliveryUnknown = errors.New("the last prompt's delivery is unknown")
+    ErrDeliveryUnknown is Send's answer while one of the role's prompts has a
+    delivery nobody can prove either way (Reconcile): a prompt is never sent
+    twice.
+
+var ErrNoProgress = errors.New("the agent makes no progress")
+    ErrNoProgress is Send's answer once a loop without progress outlived
+    its compaction and its fresh session: the task needs the operator
+    (EventNoProgress).
+
+var ErrOperatorInPane = errors.New("you're in that pane")
+    ErrOperatorInPane is Send's answer while the operator types in the role's
+    pane (agents.ErrHumanActive): the prompt waits; nothing was sent.
+
+
+FUNCTIONS
+
+func PromptHash(text string) string
+    PromptHash is the ledger's hash of a prompt: the sha256 of its text with the
+    line ends made \n and the surrounding space trimmed, as a transcript records
+    it.
+
+func Scrub(text string) (clean string, kept bool)
+    Scrub cleans text before the factory keeps it: execx.Redact (GitHub tokens,
+    JWTs, Authorization values, private keys), then AWS keys and other token
+    shapes, the values of password=, token: and the like (the key stays),
+    emails and host names. clean is the scrubbed text; kept is false for a long
+    pasted block (more than 40 lines or 4000 bytes), which a capture of what the
+    operator typed drops (the ledger keeps the factory's own prompts, scrubbed,
+    whatever their length).
+
+func WorkspaceLabel(t registry.Task, a registry.Attempt) string
+    WorkspaceLabel is the herdr workspace label of a task's attempt, unique per
+    task and attempt: "factory <key> <attempt id>". A restart finds a workspace
+    no row names by it.
+
+
 TYPES
+
+type Deps struct {
+	Config   *config.Config
+	Layout   paths.Layout
+	Herdr    agents.Herdr
+	Store    *store.Store
+	Registry *registry.Registry
+	Runner   execx.Runner
+	Memory   func(ctx context.Context) engine.MemorySample
+	Clock    func() time.Time
+	Log      *slog.Logger
+}
+    Deps are the runtime's collaborators. Config, Herdr, Store,
+    Registry and Runner are required. Store is the factory's agents store
+    (Layout.FactoryAgentsDB). Memory nil reads no memory (taken as normal);
+    Clock nil is time.Now; Log nil discards.
 
 type Event struct {
 	TaskID int64
@@ -12356,6 +12477,120 @@ const (
 	EventHooksTrust EventKind = "hooks_trust"
 )
     The kinds of Event.
+
+type Runtime struct {
+	// Has unexported fields.
+}
+    Runtime is the factory's agent runtime (package doc). It is safe for
+    concurrent use; the engine calls it from its loop.
+
+func New(d Deps) (*Runtime, error)
+    New builds the runtime over d.
+
+func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string
+    DBLockCommand is the command prefix a role runs every command that touches
+    its copy's databases with (`magnum db-lock --checkout <copy> --role <role>
+    --`, the prompts' .DBLockCommand): the roles of a task take turns on the
+    copy's databases.
+
+func (r *Runtime) HerdrUp(ctx context.Context) error
+    HerdrUp asks the factory's herdr session whether it answers (a snapshot):
+    the engine's herdr hold.
+
+func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, copyPath string, roles []config.Role) error
+    Launch starts the roles of attempt a of task t in the copy at copyPath. It
+    records the attempt's workspace label first (the attempt stays launching),
+    then, before any pane exists, reads the memory and, for a Codex role,
+    the budget for every role it launches: critical memory, a Codex budget at
+    its soft cap and a kind's pause are a WaitError, no failure. A logged-out
+    CLI pauses its kind. Then the task's workspace with a pane per role
+    (EnsureWorkspace), each agent started with the resume id of the role's
+    earlier session when it has one, launches Stagger apart while the memory
+    pressure is at warn, the RoleRun facts of each, and the attempt running.
+
+func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
+    Observe runs one observe pass over herdr's snapshot and returns its
+    events (and those Send and the recoveries found since the last pass):
+    a run that ended (EventEnded), one that paused on its CLI's limit, login
+    or overload (EventPaused, its reason and end), a refusal (EventRefused),
+    a dialog left to the operator (EventBlocked, EventHooksTrust), a lost
+    pane whose recoveries ran out (EventLost) and a loop without progress
+    (EventNoProgress). A panic is contained: it comes back as the error.
+
+func (r *Runtime) Owner(ctx context.Context, t registry.Task) (store.PR, error)
+    Owner upserts task t's owner row: repository factory/<repo name>, number the
+    task's id, URL file://<task dir>, head the task's newest attempt (the task's
+    id while it has none).
+
+func (r *Runtime) Park(ctx context.Context, t registry.Task) error
+    Park parks the agents of task t (agents.Manager.Park): their conversations
+    stay resumable, their panes are released. A run in flight or an agent at
+    work refuses with agents.ErrBusy.
+
+func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
+    Reconcile settles the delivery of ledger entry e from its agent's
+    transcript and returns the verdict (registry.DeliveredYes, DeliveredNo
+    or DeliveredUnknown). A turn holding the prompt's hash, stamped after
+    it was sent, is yes: the entry is settled and a run still pending is
+    marked submitted, so it is observed and never sent again. No needs proof:
+    a read that finds no such turn, and another at least RedeliverAfter later
+    that finds none either, in a transcript written past the prompt, with the
+    run never submitted and the session not prompted since. Every other case (no
+    transcript, a run that went further) stays unknown.
+
+func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
+    RecoverLost recovers role (as it runs) of attempt a of task t whose pane
+    was lost: a resume of its conversation (at most MaxResumes in the attempt),
+    then a fresh session from the files; then the recoveries ran out (EventLost,
+    "no progress after <n> recoveries", at the next Observe). Each recovery that
+    shows no progress within NoProgressAfter takes the next step (Watchdog).
+
+func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error)
+    RunsAs is the role that runs for role on task t: role itself, or, on a task
+    Codex never works on again (Task.CodexNever), a Codex role's codex_fallback.
+    A Codex role without a fallback there is an error: it cannot run.
+
+func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error)
+    Send sends text to role's agent in attempt a of task t (role as it runs:
+    RunsAs) as a new run, and returns the run's id. The ledger entry, with the
+    text scrubbed and its hash, is written before the prompt leaves. It refuses
+    without sending: a pause of the role's kind (a *WaitError), an entry of the
+    role whose delivery is unknown (ErrDeliveryUnknown), the operator typing
+    in the pane (ErrOperatorInPane), and a loop without progress whose steps
+    ran out (ErrNoProgress, with EventNoProgress at the next Observe). Past
+    MaxStagePrompts prompts in the stage, a context over MaxContext or the same
+    failure SameFailures times, it first compacts the session, the next time
+    starts a fresh session from the attempt's first prompt (returning that run),
+    then refuses.
+
+func (r *Runtime) Shift(gap time.Duration)
+    Shift moves every turn deadline and progress window by gap, the time the Mac
+    slept (the engine's wake): no run counts as hung for a sleep.
+
+func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string) error
+    Verify settles an ended run: verified when ok, failed with why otherwise,
+    so the agents store's active runs stay few. It records the RoleRun's end:
+    the stage's end fact and why, the outcome, the nudges, the tokens by model
+    and the active and idle seconds. A failure feeds the loop detector: the same
+    why SameFailures times in a row is a loop without progress.
+
+func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err error)
+    Watchdog checks the runs in flight at now (the engine's observe pass):
+    the hung-turn steps, and the recoveries that show no progress. It returns
+    EventStuck and EventLost when their steps ran out. A panic is contained:
+    it comes back as the error.
+
+type WaitError struct {
+	Who, What string
+	Until     time.Time
+}
+    WaitError is a launch or a prompt that waits on something outside the task:
+    Codex's budget, the Mac's memory, a usage limit, a login, an overload. It is
+    no failure: the task waits with Who and What, as its wait says them ("usage:
+    codex at 96%, waits till 16:00"), until Until when it is known.
+
+func (w *WaitError) Error() string
+    Error implements error.
 
 ```
 

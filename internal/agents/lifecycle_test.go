@@ -261,6 +261,43 @@ func TestRecoverRestoresParkedSession(t *testing.T) {
 // (a shell no session owns shares it, as on talkable#11932), and its
 // session is closed, never parked, with one pr.park_forced event that names
 // the role, the pane and the cause, never the pane's text.
+// QuitHard quits one session as a hard park quits each: an agent stuck in
+// its turn, with its run in flight, gets two ctrl+c, the exit keys, and its
+// pane closed; the PR's other agent is left at work.
+func TestQuitHardQuitsOneHungSessionAndLeavesTheOthers(t *testing.T) {
+	e := newEnv(t)
+	ws := e.started()
+	e.h.setAgentStatus("mg-11920-codex-judge-5d01cf", herdr.StatusWorking)
+	run, err := e.m.NewRun(e.ctx, e.pr, RoleClaude, store.RunInitial, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.Submit(e.ctx, run, "review it"); err != nil {
+		t.Fatal(err)
+	}
+	stuck := ws.Panes[RoleClaude]
+	e.h.busy[stuck] = true
+	claude := e.session(RoleClaude)
+
+	if err := e.m.QuitHard(e.ctx, claude); err != nil {
+		t.Fatalf("QuitHard: %v", err)
+	}
+
+	want := [][]string{{"ctrl+c"}, {"ctrl+c"}, {"/", "e", "x", "i", "t", "enter"}}
+	if got := e.keysTo(stuck); !slices.EqualFunc(got, want, slices.Equal) {
+		t.Fatalf("keys to %s = %q, want %q", stuck, got, want)
+	}
+	if !slices.Equal(e.h.paneCloses, []string{stuck}) || len(e.h.closed) != 0 {
+		t.Fatalf("pane closes %v, workspace closes %v: want the stuck pane alone", e.h.paneCloses, e.h.closed)
+	}
+	if got, _ := e.st.SessionByID(e.ctx, claude.ID); got.State != store.SessionClosed {
+		t.Fatalf("claude session = %s, want closed", got.State)
+	}
+	if judge := e.session(RoleJudge); judge.State != store.SessionLive || len(e.keysTo(ws.Panes[RoleJudge])) != 0 {
+		t.Fatalf("the working judge = %s with keys %q, want it left alone", judge.State, e.keysTo(ws.Panes[RoleJudge]))
+	}
+}
+
 func TestAHardParkClosesThePaneOfAnAgentThatWillNotQuit(t *testing.T) {
 	e := newEnv(t)
 	ws := e.started()

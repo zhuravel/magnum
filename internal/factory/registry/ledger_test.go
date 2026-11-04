@@ -121,3 +121,28 @@ func TestALedgerEntryBelongsToTheTaskOfItsAttempt(t *testing.T) {
 		t.Errorf("AppendLedger for the attempt's own task: %v", err)
 	}
 }
+
+func TestLedgerOfListsOneTasksEntriesInOrder(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12301")
+	other := createTask(t, r, "PR-12302")
+	a, _ := r.BeginAttempt(ctx, task.ID, "investigate")
+	b, _ := r.BeginAttempt(ctx, other.ID, "investigate")
+	first := appendPrompt(t, r, task.ID, a.ID, "h1")
+	appendPrompt(t, r, other.ID, b.ID, "h2")
+	second := appendPrompt(t, r, task.ID, a.ID, "h3")
+	if err := r.MarkDelivered(ctx, first.ID, registry.DeliveredYes); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := r.LedgerOf(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Delivered = registry.DeliveredYes
+	if len(got) != 2 || got[0] != first || got[1] != second {
+		t.Fatalf("LedgerOf = %+v, want the task's two entries, the first settled", got)
+	}
+}

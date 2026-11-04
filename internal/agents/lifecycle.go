@@ -251,6 +251,18 @@ func (m *Manager) retireAs(ctx context.Context, s store.Session, to string) erro
 	return nil
 }
 
+// QuitHard quits session s alone the way ParkHard quits each of a PR's
+// agents: ctrl+c, 1 s, ctrl+c and a wait for an idle shell, then, when the
+// pane is still no idle shell, the kind's exit keys and, last, the pane
+// closed (forceQuit) and the session closed. Unlike ParkHard it leaves the
+// PR's other sessions as they are, and neither a run in flight nor an agent
+// at work stops it: a turn that hangs is what it is for (the caller
+// abandons the hung run first). The session becomes parked when it is
+// resumable and quit before the close, else closed.
+func (m *Manager) QuitHard(ctx context.Context, s store.Session) error {
+	return m.quit(ctx, s, true)
+}
+
 // ParkHard is Park for an agent that will not quit: the live agents it
 // quits go on where Quit waits (forceQuit), so one still its pane's
 // foreground process after ctrl+c and its kind's exit keys has that pane

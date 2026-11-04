@@ -33,6 +33,11 @@ type fakeRuntime struct {
 	shifts     []time.Duration
 	events     []runtime.Event // what Observe reports
 	observeErr error
+	// launchErr is what Launch answers; observePanic, when set, is what
+	// Observe panics with; watched counts the Watchdog calls.
+	launchErr    error
+	observePanic any
+	watched      int
 }
 
 func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { return store.PR{}, nil }
@@ -41,7 +46,7 @@ func (f *fakeRuntime) Launch(_ context.Context, t registry.Task, _ registry.Atte
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.launches = append(f.launches, t.ID)
-	return nil
+	return f.launchErr
 }
 
 func (f *fakeRuntime) Send(context.Context, registry.Task, registry.Attempt, config.Role, string) (string, error) {
@@ -51,6 +56,9 @@ func (f *fakeRuntime) Send(context.Context, registry.Task, registry.Attempt, con
 func (f *fakeRuntime) Observe(context.Context) ([]runtime.Event, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.observePanic != nil {
+		panic(f.observePanic)
+	}
 	return f.events, f.observeErr
 }
 
@@ -67,7 +75,12 @@ func (f *fakeRuntime) Reconcile(context.Context, registry.LedgerEntry) (string, 
 	return registry.DeliveredUnknown, nil
 }
 
-func (f *fakeRuntime) Watchdog(context.Context, time.Time) ([]runtime.Event, error) { return nil, nil }
+func (f *fakeRuntime) Watchdog(context.Context, time.Time) ([]runtime.Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.watched++
+	return nil, nil
+}
 
 func (f *fakeRuntime) RecoverLost(context.Context, registry.Task, registry.Attempt, config.Role) error {
 	return nil

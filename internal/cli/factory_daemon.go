@@ -23,9 +23,11 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/mysqlx"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/reveal"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -97,7 +99,9 @@ type factoryDaemon struct {
 	// Agents is the factory's agent sessions store (magnum's schema, its own
 	// file, owned by the factory: no migration guard), for the runtime.
 	Agents *store.Store
-	Log    *slog.Logger
+	// Runtime drives the factory's agents in its herdr session over Agents.
+	Runtime *runtime.Runtime
+	Log     *slog.Logger
 
 	closers []func() error
 }
@@ -118,10 +122,11 @@ func (d *factoryDaemon) Close() error {
 // roles'), its registry (Layout.FactoryDB, migrated by the daemon) and its
 // agents store (Layout.FactoryAgentsDB), and the engine with the
 // collaborators this build has: the memory and disk reads, a MySQL ping when
-// a factory repository has databases, herdr's ping when [factory]
-// herdr_socket names the session's socket, and the reveal of the factory's
-// herdr session. The runtime, the copies, Jira, GitHub, magnum and the local
-// reviewer are nil until the builds that bring them. The caller holds the
+// a factory repository has databases, the agent runtime over the agents
+// store in the factory's herdr session (factoryHerdrSocket), whose snapshot
+// is the herdr ping, and the reveal of that session. The copies, Jira,
+// GitHub, magnum and the local reviewer are nil until the builds that bring
+// them. The caller holds the
 // factory lock (factory.Lock); the registry's migration is still refused
 // while a factory daemon's pidfile names a live factory daemon
 // (refuseWhileDaemonRuns: this daemon writes its own pidfile later, in
@@ -171,11 +176,17 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	quiet := &execx.Real{} // the reads of every tick (sysctl) stay out of the log
 	git := gitx.New(run)
 	git.HTTPSFetch = true
+	memory := func(ctx context.Context) engine.MemorySample { return engine.ReadMemory(ctx, quiet, time.Now()) }
+	h := &herdr.Client{Socket: factoryHerdrSocket(cfg), Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+	if d.Runtime, err = runtime.New(runtime.Deps{Config: cfg, Layout: l, Herdr: h, Store: d.Agents, Registry: d.Registry,
+		Runner: run, Memory: memory, Log: d.Log}); err != nil {
+		return nil, fmt.Errorf("factory: runtime: %w", err)
+	}
 	deps := factory.Deps{
-		Config: cfg, Layout: l, Registry: d.Registry, Git: git, Log: d.Log,
-		Memory:  func(ctx context.Context) engine.MemorySample { return engine.ReadMemory(ctx, quiet, time.Now()) },
+		Config: cfg, Layout: l, Registry: d.Registry, Runtime: d.Runtime, Git: git, Log: d.Log,
+		Memory:  memory,
 		Disk:    inspDiskFree,
-		HerdrUp: factoryHerdrUp(cfg),
+		HerdrUp: d.Runtime.HerdrUp,
 		Reveal:  factoryReveal(cfg, run),
 	}
 	if ping, closer := factoryMySQL(cfg, d.Log); ping != nil {
@@ -201,18 +212,19 @@ func factoryPromptNames(cfg *config.Config) []string {
 	return names
 }
 
-// factoryHerdrUp pings the factory's herdr session at [factory]
-// herdr_socket; nil (herdr taken as up) while the setting is empty: the
-// runtime, which resolves the named session's own socket, brings its ping.
-func factoryHerdrUp(cfg *config.Config) func(ctx context.Context) error {
-	socket := cfg.Factory.HerdrSocket
-	if socket == "" {
-		return nil
+// factoryHerdrSocket is the socket of the factory's herdr session: [factory]
+// herdr_socket, else the named session's own,
+// ~/.config/herdr/sessions/<herdr_session>/herdr.sock (herdr's default
+// session, "" or "default", keeps herdr's default socket).
+func factoryHerdrSocket(cfg *config.Config) string {
+	if s := cfg.Factory.HerdrSocket; s != "" {
+		return s
 	}
-	cl := &herdr.Client{Socket: socket}
-	return func(ctx context.Context) error {
-		_, err := cl.Ping(ctx)
-		return err
+	switch name := cfg.Factory.HerdrSession; name {
+	case "", "default":
+		return paths.Expand("~/.config/herdr/herdr.sock")
+	default:
+		return paths.Expand("~/.config/herdr/sessions/" + name + "/herdr.sock")
 	}
 }
 

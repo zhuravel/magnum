@@ -357,3 +357,35 @@ func TestFactoryKeyNamesATaskWithoutAJiraKeyByItsNumber(t *testing.T) {
 		t.Fatalf("TaskKey = %q", got)
 	}
 }
+
+// The daemon builds with its agent runtime, and herdr's ping (the herdr
+// hold) is the runtime's: on even with [factory] herdr_socket unset.
+func TestTheFactoryDaemonBuildsWithItsRuntime(t *testing.T) {
+	cfg := config.Defaults()
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+
+	d, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	defer d.Close()
+	if d.Runtime == nil {
+		t.Fatal("the daemon has no agent runtime")
+	}
+}
+
+// The factory's panes live in its own herdr session: the socket [factory]
+// herdr_socket names, else the named session's own, never the review panes'
+// default one.
+func TestTheFactorySessionHasItsOwnHerdrSocket(t *testing.T) {
+	cfg := config.Defaults()
+	if got := factoryHerdrSocket(cfg); !strings.HasSuffix(got, "/.config/herdr/sessions/factory/herdr.sock") {
+		t.Fatalf("socket %q, want the factory session's own", got)
+	}
+	cfg.Factory.HerdrSocket = "/run/herdr/factory.sock"
+	if got := factoryHerdrSocket(cfg); got != "/run/herdr/factory.sock" {
+		t.Fatalf("socket %q, want the configured one", got)
+	}
+}

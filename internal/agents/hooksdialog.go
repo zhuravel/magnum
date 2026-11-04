@@ -121,6 +121,14 @@ func detectHooksDialog(text string) (hooksDialog, bool) {
 	return d, true
 }
 
+// HooksReviewShown reports whether text, a pane's visible screen, shows
+// Codex's startup hooks review live at its bottom (detectHooksDialog): a
+// session that shows it eats its next prompt until someone answers it.
+func HooksReviewShown(text string) bool {
+	_, ok := detectHooksDialog(text)
+	return ok
+}
+
 // hooksChoice is the option magnum picks on a hooks review of a kind's agent
 // working in dir, and why.
 func (m *Manager) hooksChoice(kind, dir string) (int, string) {

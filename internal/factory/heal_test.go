@@ -14,6 +14,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 )
 
 func TestAPanicStopsOnlyItsTask(t *testing.T) {
@@ -751,5 +752,53 @@ func TestStartupCountsTheHeavyStagesThatStillRun(t *testing.T) {
 	release()
 	if _, ok := h.e.heavy(h.ctx, h.reload(second.ID), "local review"); !ok {
 		t.Fatal("the slot stayed taken after the adopted round released it")
+	}
+}
+
+// The observe pass runs outside any task's step: a panic in the runtime's
+// Observe stops neither the daemon nor its watchdog, and comes back as a
+// failed read the next tick weighs.
+func TestAPanicInTheObservePassIsContained(t *testing.T) {
+	h := newHarness(t)
+	h.rt.observePanic = "index out of range [3] with length 3"
+
+	h.e.observe(h.ctx)
+
+	if len(h.e.readFails) != 1 || !errors.Is(h.e.readFails[0], errPanicked) ||
+		!strings.Contains(h.e.readFails[0].Error(), "index out of range") {
+		t.Fatalf("read failures %v, want the contained panic", h.e.readFails)
+	}
+	if h.rt.watched != 1 {
+		t.Fatalf("the watchdog ran %d times after the panic, want 1", h.rt.watched)
+	}
+}
+
+// A launch the runtime holds back on Codex's budget is no failure: the
+// task waits with the runtime's reason, and the next launch that goes
+// through clears it.
+func TestALaunchThatWaitsOnCodexsBudgetCostsTheTaskNothing(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12371", registry.TaskActive, "investigate")
+	a, err := h.reg.BeginAttempt(h.ctx, task.ID, "investigate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.rt.launchErr = &runtime.WaitError{Who: "usage", What: "codex at 96%, waits till 16:00"}
+
+	err = h.e.launch(h.ctx, task, a, "/copies/shop1", nil)
+
+	if !errors.Is(err, ErrHeld) {
+		t.Fatalf("launch = %v, want a hold", err)
+	}
+	if got := h.reload(task.ID); got.WaitsWho != "usage" || got.WaitsWhat != "codex at 96%, waits till 16:00" {
+		t.Fatalf("the task waits %q: %q, want usage: codex at 96%%, waits till 16:00", got.WaitsWho, got.WaitsWhat)
+	}
+
+	h.rt.launchErr = nil
+	if err := h.e.launch(h.ctx, h.reload(task.ID), a, "/copies/shop1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.reload(task.ID); got.WaitsWho != "" || got.WaitsWhat != "" {
+		t.Fatalf("after a launch that went through the task still waits %q: %q", got.WaitsWho, got.WaitsWhat)
 	}
 }

@@ -116,3 +116,17 @@ func (r *Registry) Undelivered(ctx context.Context) ([]LedgerEntry, error) {
 	}
 	return es, nil
 }
+
+// LedgerOf returns the task's entries in the order they were written: the
+// prompts its agents were sent, or were about to be.
+func (r *Registry) LedgerOf(ctx context.Context, taskID int64) ([]LedgerEntry, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT "+ledgerColumns+" FROM ledger WHERE task_id = ? ORDER BY id", taskID)
+	if err != nil {
+		return nil, fmt.Errorf("ledger of task %d: %w", taskID, err)
+	}
+	es, err := collect(rows, scanLedger)
+	if err != nil {
+		return nil, fmt.Errorf("ledger of task %d: %w", taskID, err)
+	}
+	return es, nil
+}
