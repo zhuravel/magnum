@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -394,6 +395,41 @@ func TestTheFactoryDaemonBuildsWithItsCopies(t *testing.T) {
 	}
 	if _, err := os.Stat(c.Layout.DB()); !os.IsNotExist(err) {
 		t.Fatalf("the factory daemon opened the review registry: %v", err)
+	}
+}
+
+// The copies' guard reads both herdr sessions: the factory's, whose panes
+// the agents store records, and yours (the [herdr] socket), where your
+// agents and consoles run.
+func TestTheCopiesGuardReadsTheFactorysHerdrSessionAndYours(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Herdr.Socket = "/run/herdr/yours.sock"
+	cfg.Factory.HerdrSocket = "/run/herdr/factory.sock"
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+
+	d, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() }) // a second Close does nothing
+	factorySide, ok1 := d.Guard.Factory.(*herdr.Client)
+	yoursSide, ok2 := d.Guard.Yours.(*herdr.Client)
+	if !ok1 || !ok2 || factorySide.Socket != "/run/herdr/factory.sock" || yoursSide.Socket != "/run/herdr/yours.sock" {
+		t.Fatalf("the copies' guard reads %+v and %+v, want the factory's session and yours", d.Guard.Factory, d.Guard.Yours)
+	}
+	d.Close()
+
+	// A factory that runs in your session reads it once.
+	cfg.Factory.HerdrSocket = cfg.Herdr.Socket
+	one, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	defer one.Close()
+	if one.Guard.Yours != nil {
+		t.Fatalf("the copies' guard reads your session twice: %+v", one.Guard.Yours)
 	}
 }
 

@@ -5,6 +5,7 @@ package cli
 // that brings one wires it here, with a test that the daemon still builds.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -105,7 +106,10 @@ type factoryDaemon struct {
 	// Copies are the repositories' copies the tasks work in: magnum's slot
 	// code over Agents, never the review registry.
 	Copies factory.Copies
-	Log    *slog.Logger
+	// Guard is the herdr the copies' guard sees: the factory's session and
+	// yours.
+	Guard factory.GuardPanes
+	Log   *slog.Logger
 
 	closers []func() error
 }
@@ -129,8 +133,9 @@ func (d *factoryDaemon) Close() error {
 // a factory repository has databases, the agent runtime over the agents
 // store in the factory's herdr session (factoryHerdrSocket), whose snapshot
 // is the herdr ping, the reveal of that session, and the copies (a second
-// slot manager over the agents store, whose guard sees the panes of your
-// herdr session, with the runtime's owner rows). Jira, GitHub, magnum and
+// slot manager over the agents store, whose guard sees the panes of the
+// factory's herdr session and of yours, factory.GuardPanes, with the
+// runtime's owner rows). Jira, GitHub, magnum and
 // the local reviewer are nil until the builds that bring them. The caller
 // holds the
 // factory lock (factory.Lock); the registry's migration is still refused
@@ -200,13 +205,18 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		deps.MySQL, copyDBs = my.Ping, my
 		d.closers = append(d.closers, my.Close)
 	}
-	// The guard of a copy looks for your panes in it: those of your herdr
-	// session. The factory's own sessions are the copies' pane check.
-	yours := &herdr.Client{Socket: cfg.Herdr.Socket, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+	// The guard of a copy sees the panes of both herdr sessions, yours with
+	// their ids prefixed: each session numbers its own from w1, and the
+	// agents store knows only the factory's.
+	// A factory in your own session (the same socket) is one session.
+	d.Guard = factory.GuardPanes{Factory: h}
+	if ys := cmp.Or(cfg.Herdr.Socket, herdr.DefaultSocket()); ys != h.Socket {
+		d.Guard.Yours = &herdr.Client{Socket: ys, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+	}
 	copySlots := slots.New(slots.Deps{Store: d.Agents, Run: run, Git: git, MySQL: copyDBs,
-		Snapshot: yours.Snapshot, ProcessInfo: yours.PaneProcessInfo, Layout: l,
+		Snapshot: d.Guard.Snapshot, ProcessInfo: d.Guard.ProcessInfo, Layout: l,
 		Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "copies"}, SecretEnv: identityKeyEnvs(cfg)})
-	d.Copies = factory.NewCopies(cfg, copySlots, d.Agents, git, run, copyDBs, d.Runtime.Owner)
+	d.Copies = factory.NewCopies(cfg, copySlots, d.Agents, git, run, copyDBs, h.Snapshot, d.Runtime.Owner)
 	deps.Copies = d.Copies
 	d.Engine = factory.New(deps)
 	built = true

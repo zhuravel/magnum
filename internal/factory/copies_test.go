@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/slots"
@@ -52,15 +53,76 @@ type copiesRig struct {
 	git          *gitx.Client
 	sm           *slots.Manager
 	c            *copySet
+	// factoryHerdr is the factory's herdr session, yourHerdr yours: each
+	// numbers its own workspaces and panes from w1.
+	factoryHerdr, yourHerdr *fakeHerdrView
 
 	mu        sync.Mutex
 	scripts   []miseCall     // every mise exec, in order
 	failSetup map[string]int // copy name -> setup failures left
-	flushed   []string       // the Redis databases flushed, "<db>"
-	table     []execx.Process
-	kills     []string // "<pid> <signal>"
-	spawned   []spawnCall
-	nextPID   int
+	failRedis int            // FLUSHDB failures left
+	// blocks hold a mise exec of "<script> <copy>" until its channel closes;
+	// entered gets "<script> <copy>" as one starts to wait.
+	blocks  map[string]chan struct{}
+	entered chan string
+	flushed []string // the Redis databases flushed, "<db>"
+	table   []execx.Process
+	kills   []string // "<pid> <signal>"
+	spawned []spawnCall
+	nextPID int
+}
+
+// fakeHerdrView is one herdr session as the copies' guard reads it.
+type fakeHerdrView struct {
+	mu    sync.Mutex
+	snap  herdr.Snapshot
+	procs map[string]herdr.ProcessInfo // pane -> its processes; default an idle shell
+}
+
+func (f *fakeHerdrView) Snapshot(context.Context) (herdr.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return herdr.Snapshot{Workspaces: slices.Clone(f.snap.Workspaces), Panes: slices.Clone(f.snap.Panes),
+		Agents: slices.Clone(f.snap.Agents)}, nil
+}
+
+func (f *fakeHerdrView) PaneProcessInfo(_ context.Context, pane string) (herdr.ProcessInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.snap.Panes {
+		if p.ID == pane {
+			if pi, ok := f.procs[pane]; ok {
+				return pi, nil
+			}
+			return herdr.ProcessInfo{PaneID: pane, ShellPID: 10, ForegroundPGID: 10}, nil
+		}
+	}
+	return herdr.ProcessInfo{}, fmt.Errorf("pane %s: %w", pane, errNoPane)
+}
+
+var errNoPane = errors.New("no such pane")
+
+// pane shows a pane (and an agent in it, when agent is set) in the session.
+func (f *fakeHerdrView) pane(ws, id, cwd, agent string, fg ...herdr.Process) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snap.Panes = append(f.snap.Panes, herdr.Pane{ID: id, WorkspaceID: ws, Cwd: cwd, Agent: agent})
+	if agent != "" {
+		f.snap.Agents = append(f.snap.Agents, herdr.AgentInfo{PaneID: id, WorkspaceID: ws, Name: agent, Agent: agent, Cwd: cwd})
+	}
+	if len(fg) > 0 {
+		if f.procs == nil {
+			f.procs = map[string]herdr.ProcessInfo{}
+		}
+		f.procs[id] = herdr.ProcessInfo{PaneID: id, ShellPID: 10, ForegroundPGID: fg[0].PID, Foreground: fg}
+	}
+}
+
+// clear empties the session.
+func (f *fakeHerdrView) clear() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snap, f.procs = herdr.Snapshot{}, nil
 }
 
 // miseCall is one `mise -C <dir> exec -- env K=V… /bin/sh -c <script>`.
@@ -87,7 +149,8 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 		t.Fatal(err)
 	}
 	r := &copiesRig{t: t, ctx: t.Context(), root: root, clock: storetest.NewClock(t0), dbs: &copyDBs{version: map[string]string{}},
-		failSetup: map[string]int{}, nextPID: 4242}
+		failSetup: map[string]int{}, blocks: map[string]chan struct{}{}, entered: make(chan string, 8), nextPID: 4242,
+		factoryHerdr: &fakeHerdrView{}, yourHerdr: &fakeHerdrView{}}
 	r.real = &execx.Real{BaseEnv: []string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
@@ -116,7 +179,9 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 	}}
 	run := routeRunner{real: r.real, fake: fake}
 	r.git = gitx.New(run)
+	view := GuardPanes{Factory: r.factoryHerdr, Yours: r.yourHerdr}
 	r.sm = slots.New(slots.Deps{Store: r.st, Run: run, Git: r.git, MySQL: r.dbs, Layout: r.cfg.Layout,
+		Snapshot: view.Snapshot, ProcessInfo: view.ProcessInfo,
 		FreeDiskBytes: func(string) (uint64, error) { return 100 << 30, nil }, Now: r.clock.Now,
 		LookPath: func(file string) (string, error) { return "/fake/bin/" + file, nil }})
 	r.c = r.newCopies()
@@ -129,7 +194,7 @@ func (r *copiesRig) newCopies() *copySet {
 	c, ok := NewCopies(r.cfg, r.sm, r.st, r.git, routeRunner{real: r.real, fake: &execx.Fake{Rules: []execx.Rule{
 		{Prefix: []string{"mise"}, Fn: r.mise},
 		{Prefix: []string{"redis-cli"}, Fn: r.redis},
-	}}}, r.dbs, r.owner).(*copySet)
+	}}}, r.dbs, r.factoryHerdr.Snapshot, r.owner).(*copySet)
 	if !ok {
 		r.t.Fatal("NewCopies is not the copies' set")
 	}
@@ -341,7 +406,16 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 	if fail {
 		r.failSetup[slot]--
 	}
+	block := r.blocks[mc.Script+" "+slot]
 	r.mu.Unlock()
+	if block != nil {
+		r.entered <- mc.Script + " " + slot
+		select {
+		case <-block:
+		case <-time.After(time.Minute):
+			return execx.Result{}, errors.New("blocked for a minute: the test never let it go")
+		}
+	}
 	if fail {
 		return execx.Result{Code: 1, Stderr: []byte("setup failed")}, &execx.ExitError{Cmd: c, Code: 1, Stderr: "setup failed"}
 	}
@@ -362,8 +436,13 @@ func (r *copiesRig) redis(c execx.Cmd) (execx.Result, error) {
 		return execx.Result{}, fmt.Errorf("unexpected redis-cli call %v", c.Args)
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failRedis > 0 {
+		r.failRedis--
+		return execx.Result{Code: 1, Stderr: []byte("Could not connect to Redis")},
+			&execx.ExitError{Cmd: c, Code: 1, Stderr: "Could not connect to Redis"}
+	}
 	r.flushed = append(r.flushed, c.Args[1])
-	r.mu.Unlock()
 	return execx.Result{Stdout: []byte("OK\n")}, nil
 }
 

@@ -11220,6 +11220,10 @@ const RedisOffsetEnv = "REDIS_DB_OFFSET"
     database from. A repository whose env names it gets each copy's own offset
     there, whatever value the env gives it.
 
+const YourPanePrefix = "yours:"
+    YourPanePrefix starts the ids of your herdr session's workspaces, tabs and
+    panes as the copies' guard sees them (GuardPanes).
+
 
 VARIABLES
 
@@ -11292,14 +11296,16 @@ type Copies interface {
     the copy's local server, and the reconcile of the servers after a restart.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
-	owner func(context.Context, registry.Task) (store.PR, error)) Copies
+	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error)) Copies
     NewCopies returns the factory's copies: sm is magnum's slot manager over st,
     the factory's agents store (Layout.FactoryAgentsDB, magnum's schema),
-    git and run run the claim protocol's commands, my reads a copy's development
-    database (nil: no reset_db at a claim), and owner is the runtime's Owner,
-    the task's row in st a copy is claimed for. A claim adds copy n on demand
-    with sm.ProvisionPool (FactoryRepo.Pool with the copy's env), up to
-    max_copies.
+    whose guard sees GuardPanes; git and run run the claim protocol's commands,
+    my reads a copy's development database (nil: no reset_db at a claim),
+    panes is the factory's herdr session's snapshot (a pane in a copy that no
+    session row names holds it; nil: no such check), and owner is the runtime's
+    Owner, the task's row in st a copy is claimed for. A claim adds copy n
+    on demand with sm.ProvisionPool (FactoryRepo.Pool with the copy's env),
+    up to max_copies.
 
 type Copy = runtime.Copy
     Copy is a task's copy of a repository: its name and path, its number (copy
@@ -11390,6 +11396,28 @@ type GitHub interface {
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number.
+
+type GuardPanes struct{ Factory, Yours HerdrView }
+    GuardPanes is the herdr the copies' guard sees (slots.Deps Snapshot and
+    ProcessInfo): the factory's session, whose ids are the ones the agents store
+    records, and yours, its ids prefixed with YourPanePrefix. Either may be nil
+    (no such session).
+
+func (g GuardPanes) ProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
+    ProcessInfo asks the session a pane id of Snapshot's is of: yours for a
+    prefixed id (without the prefix), else the factory's.
+
+func (g GuardPanes) Snapshot(ctx context.Context) (herdr.Snapshot, error)
+    Snapshot is the factory's session's snapshot with yours added, your
+    workspaces', tabs' and panes' ids prefixed. A session that does not answer
+    is an error: the guard then holds off, as on its own herdr.
+
+type HerdrView interface {
+	Snapshot(ctx context.Context) (herdr.Snapshot, error)
+	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
+}
+    HerdrView is what the copies' guard reads of a herdr session
+    (*herdr.Client).
 
 type Hold struct {
 	Kind, Reason string

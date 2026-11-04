@@ -31,6 +31,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
@@ -76,11 +77,16 @@ type copySet struct {
 	git   *gitx.Client
 	run   execx.Runner
 	my    slots.MySQL
+	panes func(context.Context) (herdr.Snapshot, error)
 	owner func(context.Context, registry.Task) (store.PR, error)
 
-	// mu makes claims and releases one at a time: a claim counts the copies
-	// and adds the next one; srv guards the servers' records.
+	// mu guards the copies' bookkeeping, held only while a claim counts the
+	// copies, reserves one or picks the one it adds: adding names the copies
+	// claims add now (their setup runs without mu), and locks are the
+	// copies' own locks (lockCopy). srv guards the servers' records.
 	mu, srv sync.Mutex
+	adding  map[string]bool
+	locks   map[string]*sync.Mutex
 
 	// Seams the tests replace: the process table, the signal to a server's
 	// process group, the start of a server, the wait between a stop's looks
@@ -97,14 +103,17 @@ var _ Copies = (*copySet)(nil)
 
 // NewCopies returns the factory's copies: sm is magnum's slot manager over
 // st, the factory's agents store (Layout.FactoryAgentsDB, magnum's schema),
-// git and run run the claim protocol's commands, my reads a copy's
-// development database (nil: no reset_db at a claim), and owner is the
+// whose guard sees GuardPanes; git and run run the claim protocol's
+// commands, my reads a copy's development database (nil: no reset_db at a
+// claim), panes is the factory's herdr session's snapshot (a pane in a copy
+// that no session row names holds it; nil: no such check), and owner is the
 // runtime's Owner, the task's row in st a copy is claimed for. A claim adds
 // copy n on demand with sm.ProvisionPool (FactoryRepo.Pool with the copy's
 // env), up to max_copies.
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
-	owner func(context.Context, registry.Task) (store.PR, error)) Copies {
-	c := &copySet{cfg: cfg, slots: sm, st: st, git: git, run: run, my: my, owner: owner,
+	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error)) Copies {
+	c := &copySet{cfg: cfg, slots: sm, st: st, git: git, run: run, my: my, panes: panes, owner: owner,
+		adding: map[string]bool{}, locks: map[string]*sync.Mutex{},
 		kill: func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) },
 		now:  time.Now}
 	c.processes = func(ctx context.Context) ([]execx.Process, error) { return execx.ProcessTable(ctx, run) }
@@ -126,7 +135,9 @@ func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx
 // it holds, else a free one, the copy it used last first (slots.Reserve:
 // the owner row's state stays the runtime's), else a new one while the
 // repository has fewer than max_copies (provision). None left is ErrNoCopy,
-// "copy: all 3 busy". The claim protocol runs once per claim (prepare).
+// "copy: all 3 busy". The claim protocol runs once per claim (prepare),
+// under the copy's own lock: claims of different copies go on side by side,
+// and a release of another copy never waits for one.
 func (c *copySet) Claim(ctx context.Context, t registry.Task) (Copy, error) {
 	repo, ok := c.cfg.FactoryRepo(t.Repo)
 	if !ok {
@@ -136,8 +147,6 @@ func (c *copySet) Claim(ctx context.Context, t registry.Task) (Copy, error) {
 	if err != nil {
 		return Copy{}, fmt.Errorf("claim a copy for %s: %w", TaskKey(t), err)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	sl, err := c.reserve(ctx, repo, pr)
 	if _, wait := errors.AsType[noCopy](err); wait {
 		return Copy{}, err
@@ -150,14 +159,33 @@ func (c *copySet) Claim(ctx context.Context, t registry.Task) (Copy, error) {
 		return Copy{}, fmt.Errorf("claim a copy for %s: %s is no copy of %s (copy_name %q)", TaskKey(t), sl.Name, repo.Repo, repo.CopyName)
 	}
 	cp := copyOf(repo, sl, n)
+	unlock := c.lockCopy(cp.Name)
+	defer unlock()
 	if err := c.prepare(ctx, t, repo, sl, cp); err != nil {
 		return Copy{}, fmt.Errorf("claim %s for %s: %w", cp.Name, TaskKey(t), err)
 	}
 	return cp, nil
 }
 
+// lockCopy takes copy name's own lock: its claim protocol and its release
+// run one at a time.
+func (c *copySet) lockCopy(name string) (unlock func()) {
+	c.mu.Lock()
+	l := c.locks[name]
+	if l == nil {
+		l = &sync.Mutex{}
+		c.locks[name] = l
+	}
+	c.mu.Unlock()
+	l.Lock()
+	return l.Unlock
+}
+
 // reserve is the slot of the copy task row pr gets: the one it holds or a
 // free one (slots.Reserve), else a copy added for it (nextCopy, provision).
+// mu is held only to reserve and to pick the copy to add (noted in adding);
+// the setup runs without it. A copy another claim takes while this one adds
+// it is lost to that claim, and the next pass adds or reserves another.
 // A release a crash cut short ends first: the row keeps that copy until its
 // release is done, and no other one can be its.
 func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store.PR) (store.Slot, error) {
@@ -166,24 +194,38 @@ func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store
 		if !ok {
 			return store.Slot{}, fmt.Errorf("%s is no copy of %s", sl.Name, repo.Repo)
 		}
-		if err := c.slots.Release(ctx, sl, c.pool(repo, n), "released"); err != nil {
+		unlock := c.lockCopy(sl.Name)
+		err := c.slots.Release(ctx, sl, c.pool(repo, n), "released")
+		unlock()
+		if err != nil {
 			return store.Slot{}, fmt.Errorf("end the release of %s: %w", sl.Name, err)
 		}
 	}
 	// Each pass adds a copy or says why none: max_copies bounds them.
 	for range repo.MaxCopies + 2 {
+		c.mu.Lock()
 		sl, err := c.slots.Reserve(ctx, pr, repo.Pool())
 		if !errors.Is(err, slots.ErrNoFreeSlot) {
+			c.mu.Unlock()
 			return sl, err
 		}
 		n, wait, err := c.nextCopy(ctx, repo)
+		name := repo.Pool().Slot(n)
+		if err == nil && wait == "" {
+			c.adding[name] = true
+		}
+		c.mu.Unlock()
 		if err != nil {
 			return store.Slot{}, err
 		}
 		if wait != "" {
 			return store.Slot{}, noCopy{what: wait}
 		}
-		if err := c.provision(ctx, repo, n); err != nil {
+		err = c.provision(ctx, repo, n)
+		c.mu.Lock()
+		delete(c.adding, name)
+		c.mu.Unlock()
+		if err != nil {
 			return store.Slot{}, err
 		}
 	}
@@ -191,10 +233,11 @@ func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store
 }
 
 // nextCopy is the number of the copy a claim adds: one a crash left
-// provisioning first, else the lowest number free up to max_copies; wait
-// says why there is none ("all 3 busy", "2 busy, 1 broken"). A broken copy
-// counts toward max_copies and is never provisioned again by a claim (only
-// a repair brings it back).
+// provisioning first, else the lowest number up to max_copies with no copy
+// and no directory; wait says why there is none ("all 3 busy", "2 busy, 1
+// broken"). A broken copy counts toward max_copies and is never provisioned
+// again by a claim (only a repair brings it back), and a copy another claim
+// adds now (adding) is busy. The caller holds mu.
 func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int, wait string, err error) {
 	list, err := c.st.ListSlots(ctx, store.SlotFilter{RepoFullName: repo.Repo, Kind: store.SlotKindPool})
 	if err != nil {
@@ -207,7 +250,7 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 		case store.SlotRemoved:
 			continue
 		case store.SlotProvisioning:
-			if n, ok := copyNumber(repo, sl.Name); ok {
+			if n, ok := copyNumber(repo, sl.Name); ok && !c.adding[sl.Name] {
 				return n, "", nil
 			}
 		case store.SlotBroken:
@@ -216,12 +259,18 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 		live++
 		names[sl.Name] = true
 	}
-	pool := repo.Pool()
-	if live < repo.MaxCopies {
-		if n, err = c.slots.NextSlotNumber(ctx, pool); err != nil {
-			return 0, "", err
+	for name := range c.adding {
+		if _, ok := copyNumber(repo, name); ok && !names[name] {
+			live++ // its row comes with its provisioning
+			names[name] = true
 		}
-		if n <= repo.MaxCopies {
+	}
+	pool := repo.Pool()
+	for n := 1; live < repo.MaxCopies && n <= repo.MaxCopies; n++ {
+		if names[pool.Slot(n)] {
+			continue
+		}
+		if _, err := os.Lstat(pool.Path(n)); errors.Is(err, fs.ErrNotExist) {
 			return n, "", nil
 		}
 	}
@@ -235,7 +284,7 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 	}
 	for n := 1; live < repo.MaxCopies && n <= repo.MaxCopies; n++ {
 		if !names[pool.Slot(n)] {
-			// NextSlotNumber skipped it: its path exists, and no copy is there.
+			// Its path exists, and no copy is there.
 			wait += fmt.Sprintf(", and %s is a directory that is no copy", pool.Path(n))
 			break
 		}
@@ -302,91 +351,151 @@ func (c *copySet) markBroken(ctx context.Context, name string, cause error) erro
 	return nil
 }
 
-// prepare is the claim protocol, once per claim of the copy (its open
-// assignment, recorded under claimKey when done), in order: the task's
-// branch checked out when it has one (a later claim of a task that left
-// another copy), reset_db when the development database holds a migration
-// the task's code lacks, each installs entry whose lockfile differs from the
-// copy's last install, and a flush of the copy's Redis databases. A step
-// that fails fails the claim, which keeps the copy: the task's next claim
-// runs the protocol again.
+// prepare is the claim protocol, in order: the task's branch checked out
+// when it has one (a later claim of a task that left another copy),
+// reset_db when the development database holds a migration the task's code
+// lacks, each installs entry whose lockfile differs from the copy's last
+// install, and a flush of the copy's Redis databases. Each one that has
+// work to do is a step (steps.Step) of the claim's subject,
+// slot:<copy>:claim:<assignment>, with begin and ok or fail rows, and runs
+// the copy's guard (guard) first. A step that fails fails the claim, which
+// keeps the copy: the task's next claim runs the steps not done yet, each
+// after its guard again, and never one that is done.
 func (c *copySet) prepare(ctx context.Context, t registry.Task, repo config.FactoryRepo, sl store.Slot, cp Copy) error {
 	a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID)
 	if err != nil {
 		return err
 	}
-	key, id := claimKey(cp.Name), strconv.FormatInt(a.ID, 10)
-	if done, ok, err := c.st.GetKV(ctx, key); err != nil || (ok && done == id) {
-		return err
+	subject := "slot:" + cp.Name + ":claim:" + strconv.FormatInt(a.ID, 10)
+	step := func(name string, fn func(ctx context.Context) error) error {
+		return steps.Step(ctx, c.st, subject, name, func(ctx context.Context) error {
+			if err := c.guard(ctx, t, sl, cp); err != nil {
+				return err
+			}
+			return fn(ctx)
+		})
 	}
-	for _, step := range []func() error{
-		func() error { return c.switchToBranch(ctx, t, cp) },
-		func() error { return c.resetForeignSchema(ctx, repo, sl, cp) },
-		func() error { return c.install(ctx, repo, cp) },
-		func() error { return c.flushRedis(ctx, cp) },
-	} {
-		if err := step(); err != nil {
+	if c.mustSwitch(ctx, t, cp) {
+		if err := step("switch_branch", func(ctx context.Context) error { return c.git.Switch(ctx, cp.Path, t.Branch) }); err != nil {
 			return err
 		}
 	}
-	return c.st.SetKV(ctx, key, id)
+	if why, err := c.foreignSchema(ctx, repo, sl, cp); err != nil {
+		return err
+	} else if why != "" {
+		if err := step("reset_db", func(ctx context.Context) error { return c.resetDB(ctx, repo, cp, why) }); err != nil {
+			return err
+		}
+	}
+	for _, in := range repo.Installs {
+		sum, err := c.installNeeded(ctx, cp, in)
+		if err != nil {
+			return err
+		}
+		if sum == "" {
+			continue
+		}
+		if err := step("install "+in.Lock, func(ctx context.Context) error { return c.install(ctx, cp, in, sum) }); err != nil {
+			return err
+		}
+	}
+	if _, ok := cp.Env[RedisOffsetEnv]; ok {
+		return step("flush_redis", func(ctx context.Context) error { return c.flushRedis(ctx, cp) })
+	}
+	return nil
 }
 
-// claimKey is the kv key that holds the assignment whose claim protocol ran
-// in copy name.
-func claimKey(name string) string { return "factory.copy." + name + ".claim" }
+// guard is what each claim step runs before it changes the copy or its
+// data: no factory pane works in the copy (paneIn), and magnum's slot guard
+// lets it go (a person's agent or process in it, their changes, a HEAD that
+// moved). HEAD at the tip of the task's own branch is the factory's own
+// (ownHead).
+func (c *copySet) guard(ctx context.Context, t registry.Task, sl store.Slot, cp Copy) error {
+	if err := c.paneIn(ctx, cp); err != nil {
+		return err
+	}
+	if _, _, err := c.ownHead(ctx, t, sl, cp); err != nil {
+		return err
+	}
+	return c.slots.Guard(ctx, sl)
+}
+
+// ownHead reads the copy's HEAD and branch and, when HEAD is the tip of the
+// task's own branch, records it as the copy's checkout (checked_out_sha):
+// the factory's work, as magnum's checkouts are magnum's, which the branch
+// keeps whatever the copy does next.
+func (c *copySet) ownHead(ctx context.Context, t registry.Task, sl store.Slot, cp Copy) (head, branch string, err error) {
+	if head, err = c.git.RevParse(ctx, cp.Path, "HEAD"); err != nil {
+		return "", "", err
+	}
+	if branch, err = c.git.CurrentBranch(ctx, cp.Path); err != nil {
+		return "", "", err
+	}
+	if t.Branch == "" || branch != t.Branch {
+		return head, branch, nil
+	}
+	cur, err := c.st.SlotByID(ctx, sl.ID)
+	if err != nil {
+		return "", "", err
+	}
+	if store.Deref(cur.CheckedOutSHA) != head {
+		if err := c.st.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", head) }); err != nil {
+			return "", "", err
+		}
+	}
+	return head, branch, nil
+}
 
 // installKey is the kv key that holds the hash of the lockfile lock copy
 // name last installed.
 func installKey(name, lock string) string { return "factory.copy." + name + ".install." + lock }
 
-// switchToBranch checks the task's branch out in the copy when the task has
-// one and the copy is not on it: the release of the copy it left kept it.
-// A task without a branch yet stays on the copy's placeholder, at
-// origin/<base>.
-func (c *copySet) switchToBranch(ctx context.Context, t registry.Task, cp Copy) error {
+// mustSwitch reports whether the claim checks the task's branch out in the
+// copy: the task has one (the release of the copy it left kept it) and the
+// copy is not on it. A task without a branch yet stays on the copy's
+// placeholder, at origin/<base>. A git failure here says yes: the switch's
+// step reports it.
+func (c *copySet) mustSwitch(ctx context.Context, t registry.Task, cp Copy) bool {
 	if t.Branch == "" {
-		return nil
+		return false
 	}
 	if _, err := c.git.RevParse(ctx, cp.Path, "refs/heads/"+t.Branch); errors.Is(err, gitx.ErrNoSuchRef) {
-		return nil
-	} else if err != nil {
-		return err
+		return false
 	}
-	if b, err := c.git.CurrentBranch(ctx, cp.Path); err != nil || b == t.Branch {
-		return err
-	}
-	return c.git.Switch(ctx, cp.Path, t.Branch)
+	b, err := c.git.CurrentBranch(ctx, cp.Path)
+	return err != nil || b != t.Branch
 }
 
-// resetForeignSchema runs the repository's reset_db in the copy when its
-// development database's newest migration (MAX(schema_migrations.version))
-// is none the task's code has: neither a file of db/migrate nor the
-// version db/schema.rb declares. Another task migrated it. A database at a
-// version the code has is kept (the task migrates it further itself).
-func (c *copySet) resetForeignSchema(ctx context.Context, repo config.FactoryRepo, sl store.Slot, cp Copy) error {
+// foreignSchema says why the copy's databases need reset_db ("" when they
+// do not): the development database's newest migration
+// (MAX(schema_migrations.version)) is none the task's code has, neither a
+// file of db/migrate nor the version db/schema.rb declares. Another task
+// migrated it. A database at a version the code has is kept (the task
+// migrates it further itself).
+func (c *copySet) foreignSchema(ctx context.Context, repo config.FactoryRepo, sl store.Slot, cp Copy) (string, error) {
 	db := devDatabase(repo.Pool().DBNames(slots.SlotDBSlug(sl)))
 	if c.my == nil || db == "" || len(repo.ResetDB) == 0 {
-		return nil
+		return "", nil
 	}
 	have, err := c.my.SchemaMigrationsMax(ctx, db)
 	switch {
 	case errors.Is(err, mysqlx.ErrNotFound):
-		return nil
+		return "", nil
 	case err != nil:
-		return fmt.Errorf("the schema version of %s: %w", db, err)
+		return "", fmt.Errorf("the schema version of %s: %w", db, err)
 	case have == "":
-		return nil
+		return "", nil
 	}
 	known, err := codeVersions(cp.Path)
-	if err != nil {
-		return err
+	if err != nil || known[have] {
+		return "", err
 	}
-	if known[have] {
-		return nil
-	}
-	c.event(ctx, cp.Name, "info", "factory.copy_reset_db",
-		fmt.Sprintf("%s holds migration %s, which the task's code does not have: reset_db", db, have))
+	return fmt.Sprintf("%s holds migration %s, which the task's code does not have", db, have), nil
+}
+
+// resetDB runs the repository's reset_db commands in the copy.
+func (c *copySet) resetDB(ctx context.Context, repo config.FactoryRepo, cp Copy, why string) error {
+	c.event(ctx, cp.Name, "info", "factory.copy_reset_db", why+": reset_db")
 	for _, s := range repo.ResetDB {
 		if err := c.script(ctx, cp, s, slots.ResetDBTimeout); err != nil {
 			return err
@@ -447,46 +556,45 @@ func codeVersions(dir string) (map[string]bool, error) {
 // lockFileMax caps a lockfile an install hashes.
 const lockFileMax = 16 << 20
 
-// install runs each installs entry of the repository whose lockfile, in the
-// copy, differs from the one the copy last installed (installKey; a copy
-// that never installed runs them all), and records the lockfile's hash once
-// its run passed. A checkout without the lockfile runs nothing for it.
-func (c *copySet) install(ctx context.Context, repo config.FactoryRepo, cp Copy) error {
-	for _, in := range repo.Installs {
-		if !filepath.IsLocal(in.Lock) {
-			return fmt.Errorf("installs lock %q is not a path inside the checkout", in.Lock)
-		}
-		b, err := fsx.ReadRegular(filepath.Join(cp.Path, in.Lock), lockFileMax)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("read %s: %w", in.Lock, err)
-		}
-		h := sha256.Sum256(b)
-		sum := hex.EncodeToString(h[:])
-		key := installKey(cp.Name, in.Lock)
-		if last, ok, err := c.st.GetKV(ctx, key); err != nil || (ok && last == sum) {
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if err := c.script(ctx, cp, in.Run, slots.DepsTimeout); err != nil {
-			return err
-		}
-		if err := c.st.SetKV(ctx, key, sum); err != nil {
-			return err
-		}
+// installNeeded is the hash of installs entry in's lockfile in the copy
+// when it differs from the one the copy last installed (installKey; a copy
+// that never installed needs them all), "" when the entry has nothing to
+// do: the same lockfile, or none in the checkout.
+func (c *copySet) installNeeded(ctx context.Context, cp Copy, in config.FactoryInstall) (string, error) {
+	if !filepath.IsLocal(in.Lock) {
+		return "", fmt.Errorf("installs lock %q is not a path inside the checkout", in.Lock)
 	}
-	return nil
+	b, err := fsx.ReadRegular(filepath.Join(cp.Path, in.Lock), lockFileMax)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", in.Lock, err)
+	}
+	h := sha256.Sum256(b)
+	sum := hex.EncodeToString(h[:])
+	last, ok, err := c.st.GetKV(ctx, installKey(cp.Name, in.Lock))
+	if err != nil || (ok && last == sum) {
+		return "", err
+	}
+	return sum, nil
+}
+
+// install runs installs entry in's command in the copy and records sum, its
+// lockfile's hash, as the copy's last install of it.
+func (c *copySet) install(ctx context.Context, cp Copy, in config.FactoryInstall, sum string) error {
+	if err := c.script(ctx, cp, in.Run, slots.DepsTimeout); err != nil {
+		return err
+	}
+	return c.st.SetKV(ctx, installKey(cp.Name, in.Lock), sum)
 }
 
 // redisFlushTimeout bounds one FLUSHDB.
 const redisFlushTimeout = time.Minute
 
 // flushRedis empties the copy's RedisDBsPerCopy Redis databases from its
-// offset (`redis-cli -n <db> FLUSHDB`), when its env names one.
+// offset (`redis-cli -n <db> FLUSHDB`), when its env names one; a database
+// flushed twice (a failed flush's next run) is as empty.
 func (c *copySet) flushRedis(ctx context.Context, cp Copy) error {
 	v, ok := cp.Env[RedisOffsetEnv]
 	if !ok {
@@ -540,7 +648,8 @@ func (c *copySet) unset() []string {
 // (no head drift, no unpushed hold) while it still holds a copy left on
 // another branch or on no branch, and a person's changes. A released copy
 // leaves handoff.md in the task's directory (writeHandoff). A task that
-// holds no copy has nothing to release.
+// holds no copy has nothing to release. It takes only the copy's own lock,
+// never waiting for a claim of another copy.
 func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) error {
 	repo, ok := c.cfg.FactoryRepo(t.Repo)
 	if !ok {
@@ -550,8 +659,6 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 	if err != nil {
 		return fmt.Errorf("release the copy of %s: %w", TaskKey(t), err)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	sl, err := c.st.SlotByPR(ctx, pr.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
@@ -559,6 +666,8 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 	if err != nil {
 		return fmt.Errorf("release the copy of %s: %w", TaskKey(t), err)
 	}
+	unlock := c.lockCopy(sl.Name)
+	defer unlock()
 	n, ok := copyNumber(repo, sl.Name)
 	if !ok {
 		return fmt.Errorf("release the copy of %s: %s is no copy of %s", TaskKey(t), sl.Name, repo.Repo)
@@ -582,17 +691,42 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 }
 
 // paneIn refuses a copy one of the factory's live sessions works in (its
-// working directory is the copy or below it).
+// working directory is the copy or below it), and a copy a pane of the
+// factory's herdr session works in that no session row names (someone
+// opened it there; the shell a parked session left is the factory's).
 func (c *copySet) paneIn(ctx context.Context, cp Copy) error {
 	live, err := c.st.LiveSessions(ctx)
 	if err != nil {
 		return err
 	}
 	root := fsx.Canon(cp.Path)
+	in := func(dir string) bool {
+		dir = fsx.Canon(dir)
+		return dir != "" && (dir == root || strings.HasPrefix(dir, root+string(filepath.Separator)))
+	}
 	for _, s := range live {
-		cwd := fsx.Canon(store.Deref(s.Cwd))
-		if cwd == root || strings.HasPrefix(cwd, root+string(filepath.Separator)) {
+		if cwd := store.Deref(s.Cwd); in(cwd) {
 			return fmt.Errorf("%w: the %s session works in %s", ErrPaneInCopy, s.Role, cwd)
+		}
+	}
+	if c.panes == nil {
+		return nil
+	}
+	snap, err := c.panes(ctx)
+	if err != nil {
+		return fmt.Errorf("the factory's herdr session: %w", err)
+	}
+	for _, p := range snap.Panes {
+		if !in(p.Cwd) && !in(p.ForegroundCwd) {
+			continue
+		}
+		prs, err := c.st.PRsWithPanes(ctx, []string{p.ID})
+		if err != nil {
+			return err
+		}
+		if len(prs) == 0 {
+			return fmt.Errorf("%w: pane %s of the factory's herdr session works in %s, and no session of the factory's is in it",
+				ErrPaneInCopy, p.ID, cp.Path)
 		}
 	}
 	return nil
@@ -611,10 +745,7 @@ type leftCopy struct {
 func (c *copySet) leave(ctx context.Context, t registry.Task, sl store.Slot, cp Copy) (leftCopy, error) {
 	var l leftCopy
 	var err error
-	if l.Head, err = c.git.RevParse(ctx, cp.Path, "HEAD"); err != nil {
-		return l, err
-	}
-	if l.Branch, err = c.git.CurrentBranch(ctx, cp.Path); err != nil {
+	if l.Head, l.Branch, err = c.ownHead(ctx, t, sl, cp); err != nil {
 		return l, err
 	}
 	entries, err := c.git.StatusPaths(ctx, cp.Path)
@@ -624,11 +755,6 @@ func (c *copySet) leave(ctx context.Context, t registry.Task, sl store.Slot, cp 
 	for _, e := range entries {
 		if !e.Untracked() && !e.Ignored() {
 			l.Changed = append(l.Changed, e.Path)
-		}
-	}
-	if t.Branch != "" && l.Branch == t.Branch && store.Deref(sl.CheckedOutSHA) != l.Head {
-		if err := c.st.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", l.Head) }); err != nil {
-			return l, err
 		}
 	}
 	return l, nil

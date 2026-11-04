@@ -3472,7 +3472,12 @@ stages = [
   gets `n*16` there whatever the value, its 16 Redis databases. `PORT` in `env` is the copy's server port.
   Each claim then checks out the task's branch when it has one, runs `reset_db` when the development
   database's newest migration is none the task's code has, runs each `installs` entry whose lockfile changed
-  since the copy's last install, and flushes the copy's 16 Redis databases (`redis-cli -n <db> FLUSHDB`). A
+  since the copy's last install, and flushes the copy's 16 Redis databases (`redis-cli -n <db> FLUSHDB`). Each
+  of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
+  the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over both herdr
+  sessions, the factory's and yours (your agent or console in the copy, your changes, a moved HEAD), and no
+  pane of the factory's session in the copy that no session of the factory's is in. Claims of different
+  copies run side by side, and a release never waits for another copy's claim. A
   release is refused while a factory pane works in the copy; it stops the copy's server, keeps the task's
   branch (its commits on it, pushed or not), puts the copy back on its placeholder at `origin/<base>` and
   writes `handoff.md` in the task's directory: the branch, the head, the server and what the next claimer
