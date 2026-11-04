@@ -185,6 +185,7 @@ type ReviewSummary struct {
 	Leftovers []ReviewItem `json:"leftovers"`
 	Declined  []ReviewItem `json:"declined"`
 	Doubts    []ReviewItem `json:"doubts"`
+	Missing   []string     `json:"missing,omitempty"`
 }
 
 // localRound is a round that runs off the loop: its cycle (id and number),
@@ -276,15 +277,76 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitClean || last.Exit == registry.ExitOscillation) {
 		return true, nil
 	}
+	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitUnavailable || last.Exit == registry.ExitCap) {
+		if told, err := e.toldOfStop(ctx, t, *last); err != nil || !told {
+			return false, err // the move to you was lost: made now, and no fresh loop starts
+		}
+	}
 	loop := loopCycles(cycles)
 	c, err := e.claimCopy(ctx, t)
 	if err != nil {
 		return false, err
 	}
 	if last != nil && last.Ended.IsZero() {
-		return e.goOnCycle(ctx, t, st, c, *last, len(loop))
+		return e.goOnCycle(ctx, t, st, c, *last, loop)
 	}
 	return false, e.startRound(ctx, t, c, nil, len(loop)+1)
+}
+
+// reviewStopFile is review-stop.json in the task's directory: why the loop
+// stopped for you, by the cycle that stopped it, written before that cycle
+// ends (stopForYou).
+const reviewStopFile = "review-stop.json"
+
+// reviewStop is review-stop.json.
+type reviewStop struct {
+	Cycle int64  `json:"cycle"`
+	Why   string `json:"why"`
+}
+
+// stopForYou ends the loop on cycle cy with exit (unavailable, the cap) and
+// moves task t to you with why. why goes to the task's directory first, the
+// cycle ends next, the move comes last: a daemon that stops before the move
+// finds the ended cycle with no word to you since and makes the move then
+// (toldOfStop), never a fresh loop.
+func (e *Engine) stopForYou(ctx context.Context, t registry.Task, cy registry.Cycle, exit, why, because string) error {
+	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewStopFile), reviewStop{Cycle: cy.ID, Why: why}); err != nil {
+		return err
+	}
+	if err := e.endCycle(ctx, cy, cy.HeadBefore, exit); err != nil {
+		return err
+	}
+	e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("cycle %d ended %s: %s", cy.N, exit, why))
+	if e.beforeStop != nil {
+		if err := e.beforeStop(); err != nil {
+			return err
+		}
+	}
+	e.toOperator(ctx, t, why, because)
+	return nil
+}
+
+// toldOfStop reports whether you were told of the loop's stop on cycle cy
+// (an alert since the cycle ended): a live task told so is one you let go
+// on, and a fresh loop starts. One not told is moved to you now, with the
+// stop's reason (review-stop.json).
+func (e *Engine) toldOfStop(ctx context.Context, t registry.Task, cy registry.Cycle) (bool, error) {
+	evs, err := e.reg.Events(ctx, t.ID, 200)
+	if err != nil {
+		return false, err
+	}
+	if slices.ContainsFunc(evs, func(ev registry.Event) bool { return ev.Kind == "alert" && !ev.At.Before(cy.Ended) }) {
+		return true, nil
+	}
+	why := "the local review stopped (" + cy.Exit + ")"
+	if b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewStopFile)); err == nil {
+		var s reviewStop
+		if json.Unmarshal(b, &s) == nil && s.Cycle == cy.ID && s.Why != "" {
+			why = s.Why
+		}
+	}
+	e.toOperator(ctx, t, why, "the local review stopped for you")
+	return false, nil
 }
 
 // loopCycles are the cycles of the current loop: those after the newest
@@ -334,6 +396,11 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	repo, err := e.factoryRepo(t)
 	if err != nil {
 		return err
+	}
+	if p, pending, err := e.keptFirst(ctx, &t); err != nil || pending { // what a check kept is never reviewed past
+		return err
+	} else if p != nil {
+		return e.stageFailed(ctx, t, needsYou{p.why})
 	}
 	bh, err := e.branchHead(ctx, t, c, repo)
 	switch {
@@ -391,6 +458,9 @@ func (e *Engine) reviewWait(ctx context.Context, t registry.Task, roles []string
 			return waitMagnum, textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300), nil
 		case busy:
 			return waitMagnum, why + "; the local review yields to it", nil
+		case why != "" && e.magnumNotes[t.ID] != why:
+			e.magnumNotes[t.ID] = why // said once: a due round of magnum's that never starts holds it no longer
+			e.event(ctx, t.ID, "review", registry.PhaseInfo, why)
 		}
 	}
 	if e.runsCodex(roles) {
@@ -461,7 +531,8 @@ func (e *Engine) reviewRoles(t registry.Task, w *config.Watch, round int) ([]str
 // localCase is round `round` of task t's change in copy c: the branch's
 // head and its base (bh), the title with the Jira key, the plan as the body
 // (report.md), the ticket (ticket.md, else the operator's request), the
-// watch and the round's roles.
+// watch, the round's roles and the copy's environment, the one the
+// factory's agents get in it (its panes use the copy's databases).
 func (e *Engine) localCase(t registry.Task, w config.Watch, c Copy, bh branchHead, repo config.FactoryRepo, roles []string, round int) evalrun.LocalCase {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	read := func(name string) string {
@@ -476,7 +547,8 @@ func (e *Engine) localCase(t registry.Task, w config.Watch, c Copy, bh branchHea
 		title = strings.TrimSpace(t.JiraKey + " " + title)
 	}
 	return evalrun.LocalCase{Checkout: c.Path, BaseSHA: bh.Base, HeadSHA: bh.Head, Branch: t.Branch, Title: title, Body: read(reportFile),
-		TicketMD: cmp.Or(read(ticketFile), read("prompt.md")), Watch: w, Roles: roles, Round: round, TaskID: t.ID, Repo: t.Repo, Base: baseOf(repo)}
+		TicketMD: cmp.Or(read(ticketFile), read("prompt.md")), Watch: w, Roles: roles, Round: round, TaskID: t.ID, Repo: t.Repo, Base: baseOf(repo),
+		Env: maps.Clone(c.Env)}
 }
 
 // launchRound runs local round lc of cycle cy off the loop, holding the
@@ -522,6 +594,9 @@ func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.C
 			res = evalrun.LocalResult{Outcome: pipeline.OutcomeTimeout, Error: "over its cap of " + e.roundCap.String()}
 		case err != nil:
 			res = evalrun.LocalResult{Outcome: pipeline.OutcomeError, Error: err.Error()}
+			if ce, ok := errors.AsType[*evalrun.ConfigError](err); ok {
+				res.ConfigKey = ce.Key // running it again changes nothing
+			}
 		}
 		res.Round = lc.Round
 		b, merr := json.MarshalIndent(res, "", "  ")
@@ -533,7 +608,11 @@ func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.C
 			e.event(bg, t.ID, "review", registry.PhaseFail, r.err.Error())
 			return
 		}
-		e.event(bg, t.ID, "review", registry.PhaseOK, fmt.Sprintf("round %d (cycle %d) ended %s", lc.Round, cy.N, res.Outcome))
+		text := fmt.Sprintf("round %d (cycle %d) ended %s", lc.Round, cy.N, res.Outcome)
+		if res.Error != "" {
+			text += ": " + roundError(res.Error)
+		}
+		e.event(bg, t.ID, "review", registry.PhaseOK, text)
 	})
 }
 
@@ -542,7 +621,8 @@ func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.C
 // round left it (local-review-<n>.json; none, after a restart or a round
 // set aside, runs the round again in the cycle), read once (decide) and
 // then its fix (fixPhase).
-func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.FactoryStage, c Copy, cy registry.Cycle, round int) (bool, error) {
+func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.FactoryStage, c Copy, cy registry.Cycle, loop []registry.Cycle) (bool, error) {
+	round := len(loop)
 	if r := e.roundOf(t.ID); r != nil {
 		if r.cycle == cy.ID && !r.ended() {
 			return false, nil
@@ -569,7 +649,53 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 	} else if ok {
 		return e.fixPhase(ctx, t, st, cy, rf)
 	}
-	return e.decide(ctx, t, st, cy, round, res)
+	// What the round left in the copy is never the writer's, nor read past:
+	// the round's roles work in the copy, and its result is read only on a
+	// copy as the round found it. Nothing of it is changed here.
+	if p, pending, err := e.keptFirst(ctx, &t); err != nil || pending {
+		return false, err
+	} else if p != nil {
+		return false, e.stageFailed(ctx, t, needsYou{p.why})
+	}
+	left, err := e.roundLeft(ctx, t, c, cy.HeadBefore)
+	if err != nil {
+		return false, err
+	}
+	if left != "" {
+		return false, e.stageFailed(ctx, t, needsYou{fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; "+
+			"put the copy back as the round found it (%s at %s, no tracked change), then let the task go on", round, left, t.Branch, short(cy.HeadBefore))})
+	}
+	return e.decide(ctx, t, st, cy, loop, res)
+}
+
+// roundLeft is what a round left in task t's copy c that keeps its result
+// from being read: tracked changes, the copy off the task's branch, or the
+// branch at another head than head, the one the round reviewed ("" for
+// nothing).
+func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string) (string, error) {
+	git := e.d.Git
+	dirty, err := trackedChanges(ctx, git, c.Path)
+	if err != nil {
+		return "", err
+	}
+	if len(dirty) > 0 {
+		return fmt.Sprintf("%s in the copy (%s)", plural(len(dirty), "tracked change"), clipList(dirty)), nil
+	}
+	cur, err := git.CurrentBranch(ctx, c.Path)
+	if err != nil {
+		return "", err
+	}
+	if cur != t.Branch {
+		return fmt.Sprintf("the copy on %s, not on %s", cmpJoin(nonEmpty(cur), "a detached HEAD"), t.Branch), nil
+	}
+	now, err := git.RevParse(ctx, c.Path, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if now != head {
+		return fmt.Sprintf("%s at %s, not at %s, which it reviewed", t.Branch, short(now), short(head)), nil
+	}
+	return "", nil
 }
 
 // readRoundResult reads the result round n left in dir; ok is false when
@@ -623,10 +749,11 @@ func setAside(dir string, n int, why string) error {
 	}
 }
 
-// roundTries counts round n's results set aside to run it again (a round
-// that did not finish, or went without a reviewer).
-func roundTries(dir string, n int) int {
-	names, _ := filepath.Glob(filepath.Join(dir, fmt.Sprintf("local-review-%d-retry-*.json", n)))
+// roundTries counts round n's results set aside, for why, to run it again:
+// "retry" a round that did not finish (an error, a timeout), "missing" one
+// that went without a reviewer's report. Each cause has its one run again.
+func roundTries(dir string, n int, why string) int {
+	names, _ := filepath.Glob(filepath.Join(dir, fmt.Sprintf("local-review-%d-%s-*.json", n, why)))
 	return len(names)
 }
 
@@ -643,7 +770,9 @@ func roundTries(dir string, n int) int {
 //     both, with the summary for the ready card), anything else at the cap
 //     needs you, and before it the writer gets the findings (fixPhase), the
 //     product questions among them asked first.
-func (e *Engine) decide(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, round int, res evalrun.LocalResult) (bool, error) {
+func (e *Engine) decide(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, loop []registry.Cycle,
+	res evalrun.LocalResult) (bool, error) {
+	round := len(loop)
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	again := func(why, said string) (bool, error) {
 		if err := setAside(dir, cy.N, why); err != nil {
@@ -659,18 +788,24 @@ func (e *Engine) decide(ctx context.Context, t registry.Task, st config.FactoryS
 		return again("refused", "was refused by Codex; Codex never works on "+TaskKey(t)+" again")
 	}
 	blocks, unavailable, why := Blocks(res)
-	tries := roundTries(dir, cy.N)
 	switch {
-	case unavailable && tries == 0 && (res.Outcome == pipeline.OutcomeError || res.Outcome == pipeline.OutcomeTimeout):
+	case unavailable && res.ConfigKey != "":
+		// A configuration fault: running it again changes nothing.
+		return false, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, why+": "+roundError(res.Error), "the local review cannot run")
+	case unavailable && roundTries(dir, cy.N, "retry") == 0 && (res.Outcome == pipeline.OutcomeError || res.Outcome == pipeline.OutcomeTimeout):
 		return again("retry", "ended "+res.Outcome)
 	case unavailable:
-		if err := e.endCycle(ctx, cy, cy.HeadBefore, registry.ExitUnavailable); err != nil {
-			return false, err
+		if res.Error != "" {
+			why += ": " + roundError(res.Error)
 		}
-		e.toOperator(ctx, t, why, "the local review did not finish")
-		return false, nil
-	case !blocks && len(res.Missing) > 0 && tries == 0:
-		return again("retry", "went without "+strings.Join(res.Missing, ", ")+"'s report")
+		return false, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, why, "the local review did not finish")
+	case !blocks && len(res.Missing) > 0 && roundTries(dir, cy.N, "missing") == 0:
+		return again("missing", "went without "+strings.Join(res.Missing, ", ")+"'s report")
+	case !blocks && len(res.Missing) > 0:
+		// A second round without it: what it would have found is unknown,
+		// so the review did not finish (Review Focus 1).
+		return false, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, "review unavailable (no report from "+strings.Join(res.Missing, ", ")+")",
+			"the local review went without a reviewer twice")
 	}
 	seen, err := e.seeFindings(ctx, cy, res)
 	if err != nil {
@@ -718,21 +853,19 @@ func (e *Engine) decide(ctx context.Context, t registry.Task, st config.FactoryS
 	// Every finding the writer declined with its risk, whichever round
 	// raised it: the ready card and the PR body's "Known" name them.
 	all := slices.SortedFunc(maps.Values(declined), func(a, b ReviewItem) int { return strings.Compare(a.Fingerprint, b.Fingerprint) })
-	sum := ReviewSummary{Rounds: round, Head: cy.HeadBefore, Leftovers: leftovers, Declined: all, Doubts: doubts}
+	sum := ReviewSummary{Rounds: round, Head: cy.HeadBefore, Leftovers: leftovers, Declined: all, Doubts: doubts, Missing: loopMissing(dir, loop)}
 	switch {
 	case !blocks || len(live)+len(questions)+len(doubts) == 0:
-		sum.Exit = registry.ExitClean
+		// A finding posted at a blocking priority that the counts left out
+		// (the judge disagreeing with itself) is no blocker, but stays told.
+		sum.Exit, sum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions, doubts)
 		return e.endLoop(ctx, t, cy, sum)
 	case len(live)+len(questions) == 0:
 		sum.Exit = registry.ExitOscillation
 		return e.endLoop(ctx, t, cy, sum)
 	case round >= cycles:
-		if err := e.endCycle(ctx, cy, cy.HeadBefore, registry.ExitCap); err != nil {
-			return false, err
-		}
-		e.toOperator(ctx, t, fmt.Sprintf("%s after %s", plural(len(live)+len(questions)+len(doubts), "blocking finding"),
+		return false, e.stopForYou(ctx, t, cy, registry.ExitCap, fmt.Sprintf("%s after %s", plural(len(live)+len(questions)+len(doubts), "blocking finding"),
 			plural(round, "review round")), "the local review's cap")
-		return false, nil
 	}
 	n, err := e.attemptsOf(ctx, t, st)
 	if err != nil {
@@ -750,6 +883,27 @@ func (e *Engine) decide(ctx context.Context, t registry.Task, st config.FactoryS
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) blocks: %s for the writer (%s)%s", round, cy.N,
 		plural(len(live), "finding"), reviewFile(cy.N), map[bool]string{true: fmt.Sprintf(", %s for you first", plural(len(questions), "question")), false: ""}[len(questions) > 0]))
 	return e.fixPhase(ctx, t, st, cy, rf)
+}
+
+// roundError is a round's own error as you read it: its first line,
+// redacted and clipped.
+func roundError(s string) string {
+	return textx.Clip(textx.FirstLine(execx.Redact(s)), 240)
+}
+
+// loopMissing are the reviewers a round of the loop went without, by each
+// cycle's result in dir (a round set aside and run again counts by its run
+// again), sorted.
+func loopMissing(dir string, loop []registry.Cycle) []string {
+	var out []string
+	for _, cy := range loop {
+		var res evalrun.LocalResult
+		if b, err := os.ReadFile(filepath.Join(dir, reviewRoundFile(cy.N))); err == nil && json.Unmarshal(b, &res) == nil {
+			out = append(out, res.Missing...)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // seenFinding is a finding of a round, as the round has it (f), as the

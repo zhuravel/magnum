@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/usage"
@@ -28,14 +30,20 @@ type fakeReviewer struct {
 	cases   []evalrun.LocalCase
 	answers []func(c evalrun.LocalCase) evalrun.LocalResult
 	block   chan struct{}
+	// errAt is the error the round of call n (from 1) answers instead of
+	// a result.
+	errAt map[int]error
 }
 
 func (f *fakeReviewer) Round(ctx context.Context, c evalrun.LocalCase) (evalrun.LocalResult, error) {
 	f.mu.Lock()
 	f.cases = append(f.cases, c)
 	i := min(len(f.cases), len(f.answers)) - 1
-	answer, block := f.answers[i], f.block
+	answer, block, err := f.answers[i], f.block, f.errAt[len(f.cases)]
 	f.mu.Unlock()
+	if err != nil {
+		return evalrun.LocalResult{}, err
+	}
 	if block != nil {
 		select {
 		case <-block:
@@ -639,7 +647,7 @@ func TestALocalRoundThatHangsRunsOnceMoreThenNeedsYou(t *testing.T) {
 	task, _ := r.reviewTask("PR-12375")
 	r.run(8, func() bool { return !isLive(r.reload(task.ID)) })
 	got := r.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "review unavailable (timeout)" || len(r.rv.calls()) != 2 {
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "review unavailable (timeout): over its cap of 20ms" || len(r.rv.calls()) != 2 {
 		t.Fatalf("task %s waits %q after %d rounds", got.State, got.WaitsWhat, len(r.rv.calls()))
 	}
 	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitUnavailable {
@@ -664,6 +672,10 @@ func TestALocalRoundThatLostAReviewerRunsOnceMoreBeforeItCountsAsClean(t *testin
 	}
 	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitClean {
 		t.Fatalf("cycles %+v, want the one round's cycle, clean", cs)
+	}
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil || len(sum.Missing) != 0 {
+		t.Fatalf("summary %+v (%v): the round run again heard every reviewer, so none is missing", sum, err)
 	}
 }
 
@@ -709,6 +721,213 @@ func TestARestartAfterARoundReadsItsResult(t *testing.T) {
 	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
 		t.Fatalf("task at %s after %d rounds, want pr_body after 1", got.Stage, len(r.rv.calls()))
 	}
+}
+
+// gitIn runs git in dir from a round's goroutine (no t.Fatal there).
+func (r *reviewRig) gitIn(dir string, args ...string) {
+	if _, err := r.real.Run(context.Background(), execx.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...)}); err != nil {
+		r.t.Errorf("git %v: %v", args, err)
+	}
+}
+
+// A round's roles work in the task's copy, and what they leave there never
+// reaches the writer: a round that leaves a tracked change, the copy off
+// its branch or the branch at another head than it reviewed sends the task
+// to you, naming what it left, and the factory changes none of it. Once you
+// put the copy back and let the task go on, the round's result is read.
+func TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		leave      func(r *reviewRig, dir string)
+		undo       func(r *reviewRig, branch, head string)
+	}{
+		{"a tracked change", "1 tracked change in the copy (README)",
+			func(r *reviewRig, dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "README"), []byte("a reviewer's mutant\n"), 0o644); err != nil {
+					r.t.Error(err)
+				}
+			},
+			func(r *reviewRig, _, _ string) {
+				if got := r.read("README"); got != "a reviewer's mutant\n" {
+					r.t.Fatalf("README is %q: the factory changed what the round left", got)
+				}
+				r.git(r.copyDir, "checkout", "--", "README")
+			}},
+		{"a detached HEAD", "the copy on a detached HEAD",
+			func(r *reviewRig, dir string) { r.gitIn(dir, "switch", "--quiet", "--detach") },
+			func(r *reviewRig, branch, _ string) { r.git(r.copyDir, "switch", "--quiet", branch) }},
+		{"a moved head", "not at",
+			func(r *reviewRig, dir string) {
+				r.gitIn(dir, "commit", "--quiet", "--allow-empty", "-m", "a reviewer's commit")
+			},
+			func(r *reviewRig, _, head string) { r.git(r.copyDir, "reset", "--quiet", "--keep", head) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rig *reviewRig
+			rig = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+				tc.leave(rig, c.Checkout)
+				return result()(c)
+			})
+			r := rig
+			task, head := r.reviewTask("PR-12380")
+			r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "round 1 of the local review left") ||
+				!strings.Contains(got.WaitsWhat, tc.want) || got.Stage != "local_review" {
+				t.Fatalf("task %s at %s waits %q; want you, naming %q", got.State, got.Stage, got.WaitsWhat, tc.want)
+			}
+			if cs := r.cycles(task.ID); len(cs) != 1 || !cs[0].Ended.IsZero() {
+				t.Fatalf("cycles %+v, want the round's still open", cs)
+			}
+			if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 {
+				t.Fatalf("the writer got %d prompts over the round's leftovers", len(ps))
+			}
+			tc.undo(r, task.Branch, head)
+			r.letGoOn(task.ID)
+			r.run(5, func() bool { return r.reload(task.ID).Stage != "local_review" })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
+				t.Fatalf("task at %s waits %q after %d rounds; want pr_body on the one round's result", got.Stage, got.WaitsWhat, len(r.rv.calls()))
+			}
+		})
+	}
+}
+
+// A round that went without a reviewer's report runs once more; a second
+// round without it is review unavailable, never clean (Review Focus 1),
+// and an error's run again leaves the lost report its own one more round.
+func TestALocalRoundTwiceWithoutAReviewerIsUnavailable(t *testing.T) {
+	lost := func(c evalrun.LocalCase) evalrun.LocalResult {
+		res := result()(c)
+		res.Missing = []string{"claude-review"}
+		return res
+	}
+	for name, answers := range map[string][]func(evalrun.LocalCase) evalrun.LocalResult{
+		"twice lost":                {lost, lost},
+		"an error, then lost twice": {outcome(pipeline.OutcomeError), lost, lost},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newReviewRig(t, answers...)
+			task, _ := r.reviewTask("PR-12381")
+			r.run(10, func() bool { return !isLive(r.reload(task.ID)) })
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou || got.WaitsWhat != "review unavailable (no report from claude-review)" ||
+				len(r.rv.calls()) != len(answers) {
+				t.Fatalf("task %s waits %q after %d rounds", got.State, got.WaitsWhat, len(r.rv.calls()))
+			}
+			if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitUnavailable {
+				t.Fatalf("cycles %+v", cs)
+			}
+		})
+	}
+}
+
+// The loop's summary names every reviewer a round of it went without, so
+// the ready card and the PR body can say which review never ran.
+func TestASummaryNamesTheReviewersARoundWentWithout(t *testing.T) {
+	blockedLost := func(c evalrun.LocalCase) evalrun.LocalResult {
+		res := result(refundFinding)(c)
+		res.Missing = []string{"codex-review"}
+		return res
+	}
+	r := newReviewRig(t, blockedLost, result())
+	task, _ := r.reviewTask("PR-12382")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Exit != registry.ExitClean || !slices.Equal(sum.Missing, []string{"codex-review"}) {
+		t.Fatalf("summary %+v, want codex-review among the reviewers a round went without", sum)
+	}
+}
+
+// What the loop needs you for is never lost: when the daemon stops between
+// ending the loop's cycle (unavailable, or at the cap) and moving the task
+// to you, the next start finds the cycle ended with no word to you since,
+// and the task needs you with the same reason; no fresh loop starts. Your
+// "go on" after it starts one.
+func TestTheLoopsWaitOnYouSurvivesACrashBeforeIt(t *testing.T) {
+	r := newReviewRig(t, outcome(pipeline.OutcomeNeedsAttention), result())
+	r.e.beforeStop = func() error { return errors.New("the daemon stops here") }
+	task, _ := r.reviewTask("PR-12383")
+	r.run(4, func() bool { return len(r.cycles(task.ID)) == 1 && !r.cycles(task.ID)[0].Ended.IsZero() })
+	if got := r.reload(task.ID); !isLive(got) {
+		t.Fatalf("the crash did not happen before the move to you: task %s waits %q", got.State, got.WaitsWhat)
+	}
+	r.restart()
+	r.run(4, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "review unavailable (needs_attention)" || len(r.rv.calls()) != 1 {
+		t.Fatalf("task %s waits %q after %d rounds; want you, after the one round", got.State, got.WaitsWhat, len(r.rv.calls()))
+	}
+	r.letGoOn(task.ID)
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("after your go on: task at %s after %d rounds; want a fresh loop", got.Stage, len(r.rv.calls()))
+	}
+}
+
+// The round's own error reaches you, redacted and clipped, with the
+// outcome; a configuration fault (no gh identity to run as) is not run
+// again and names what to configure.
+func TestTheRoundsErrorReachesYou(t *testing.T) {
+	failing := func(c evalrun.LocalCase) evalrun.LocalResult {
+		res := outcome(pipeline.OutcomeError)(c)
+		res.Error = "the round's app could not start: herdr answered nothing"
+		return res
+	}
+	r := newReviewRig(t, failing)
+	task, _ := r.reviewTask("PR-12384")
+	r.run(8, func() bool { return !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou ||
+		got.WaitsWhat != "review unavailable (error): the round's app could not start: herdr answered nothing" {
+		t.Fatalf("task %s waits %q", got.State, got.WaitsWhat)
+	}
+
+	r = newReviewRig(t, result())
+	r.rv.errAt = map[int]error{1: &evalrun.ConfigError{Key: "[[identity]] kind = \"gh\"", Why: "a local round runs as a gh identity, and the config has none"}}
+	task, _ = r.reviewTask("PR-12385")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "[[identity]] kind = \"gh\"") || len(r.rv.calls()) != 1 {
+		t.Fatalf("task %s waits %q after %d rounds; want you at once, naming the key", got.State, got.WaitsWhat, len(r.rv.calls()))
+	}
+}
+
+// A finding the judge posted at a blocking priority while its counts say
+// nothing blocks is not lost when the loop ends clean: the summary keeps it
+// among the leftovers.
+func TestACleanRoundKeepsAPostedFindingItsCountsLeaveOut(t *testing.T) {
+	r := newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		return evalrun.LocalResult{Outcome: pipeline.OutcomeDryRun, Verdict: "clean", Findings: []evalrun.LocalFinding{refundFinding}}
+	})
+	task, _ := r.reviewTask("PR-12386")
+	r.run(5, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Exit != registry.ExitClean || len(sum.Leftovers) != 1 || sum.Leftovers[0].Title != refundFinding.Title {
+		t.Fatalf("summary %+v, want the posted P1 among the leftovers", sum)
+	}
+}
+
+// A local round runs with the copy's own environment, the one the
+// factory's agents get in it (its WT_BRANCH and env), never one of a
+// synthetic PR's worktree: the reviewers' specs use the copy's databases.
+func TestALocalRoundRunsInTheCopysEnvironment(t *testing.T) {
+	r := newReviewRig(t, result())
+	r.cp.Env = map[string]string{"WT_BRANCH": "factory1", "REDIS_DB_OFFSET": "16", "PORT": "3001"}
+	r.copies.claimed = r.cp
+	task, _ := r.reviewTask("PR-12387")
+	r.run(5, func() bool { return len(r.rv.calls()) == 1 })
+	calls := r.rv.calls()
+	if len(calls) != 1 || !maps.Equal(calls[0].Env, r.cp.Env) {
+		t.Fatalf("the round's env %v, want the copy's %v", calls[0].Env, r.cp.Env)
+	}
+	_ = task
 }
 
 // fileIn reports whether dir holds name.

@@ -13,8 +13,11 @@ import (
 	"io/fs"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
@@ -24,12 +27,25 @@ import (
 // in layout l.
 type magnumRegistry struct {
 	l   paths.Layout
+	cfg *config.Config
 	now func() time.Time
+	// dueSince is when each queued PR was first seen due, by its id: one
+	// that never starts holds the local review dueHold at most.
+	mu       sync.Mutex
+	dueSince map[int64]time.Time
 }
 
-// NewMagnum is magnum's review daemon of layout l as the factory's local
-// review sees it (Magnum).
-func NewMagnum(l paths.Layout) Magnum { return &magnumRegistry{l: l, now: time.Now} }
+// dueHold is how long a queued round of magnum's that is due and never
+// starts may hold the local review: magnum's gates that the factory cannot
+// read (the GitHub floor, a pinned slot waiting for unpin, a paused agent
+// kind) hold such a PR without a next try it could see.
+const dueHold = 30 * time.Minute
+
+// NewMagnum is magnum's review daemon of layout l, configured by cfg, as
+// the factory's local review sees it (Magnum).
+func NewMagnum(l paths.Layout, cfg *config.Config) Magnum {
+	return &magnumRegistry{l: l, cfg: cfg, now: time.Now, dueSince: map[int64]time.Time{}}
+}
 
 // refuseMagnumMigration refuses every migration of magnum's registry
 // (store.Options.BeforeMigrate): the factory never migrates it.
@@ -39,9 +55,15 @@ func refuseMagnumMigration(from, to int) error {
 }
 
 // Busy reports whether magnum has a review round in flight (a PR claimed,
-// reviewing or verifying) or due (a queued PR whose next try has come). No
-// magnum daemon running (its pidfile names no live process) runs no round,
-// and no registry holds none: neither is busy, and nothing is created. The
+// reviewing or verifying) or due: a queued PR whose next try has come and
+// that magnum's gates would dispatch now. Inside [daemon] quiet_hours they
+// hold every queued round nobody forced (eligibility.QuietHoursHold, the
+// dispatcher's own rule; a re-review of the judge alone that they let start
+// shows as in flight once it does), and a due PR that has not started
+// within dueHold is one of the gates the factory cannot read: it holds the
+// local review no longer, and why says so while busy is false. No magnum
+// daemon running (its pidfile names no live process) runs no round, and no
+// registry holds none: neither is busy, and nothing is created. The
 // registry opens with every migration refused (refuseMagnumMigration), so
 // one that is a version behind this build (magnum's daemon still runs the
 // build before) is an error and keeps its schema. why is plain words,
@@ -69,17 +91,47 @@ func (m *magnumRegistry) Busy(ctx context.Context) (bool, string, error) {
 		return false, "", fmt.Errorf("magnum's registry: %w", err)
 	}
 	now := m.now()
-	due := false
+	quiet := ""
+	if m.cfg != nil {
+		quiet = m.cfg.Daemon.QuietHours
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[int64]bool{}
+	due, stale := false, false
 	for _, p := range prs {
 		if slices.Contains(store.InFlightStates, p.State) {
 			return true, "a review round of magnum's runs", nil
 		}
-		if (p.NextAttemptAt == nil || !p.NextAttemptAt.After(now)) && (p.NextEligibleAt == nil || !p.NextEligibleAt.After(now)) {
+		switch {
+		case p.NextAttemptAt != nil && p.NextAttemptAt.After(now), p.NextEligibleAt != nil && p.NextEligibleAt.After(now):
+			continue // its next try is later
+		case !p.Forced && quiet != "" && eligibility.QuietHoursHold(quiet, now.Local(), false):
+			continue // quiet hours hold it
+		}
+		seen[p.ID] = true
+		since, ok := m.dueSince[p.ID]
+		if !ok {
+			since = now
+			m.dueSince[p.ID] = now
+		}
+		if now.Sub(since) < dueHold {
 			due = true
+		} else {
+			stale = true
 		}
 	}
-	if due {
+	for id := range m.dueSince {
+		if !seen[id] {
+			delete(m.dueSince, id)
+		}
+	}
+	switch {
+	case due:
 		return true, "a review round of magnum's is due", nil
+	case stale:
+		return false, fmt.Sprintf("a review round of magnum's is due but has not started for %s (magnum's own gates hold it): "+
+			"the local review goes on", dueHold), nil
 	}
 	return false, "", nil
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,7 +36,8 @@ import (
 // number, from 1. TaskID is the task whose change it is and Repo its
 // repository (owner/name): the round's synthetic PR number (LocalNumber) and
 // its scratch directory (LocalRoot) come from them. Base is the base branch
-// ("" = master). The factory's LocalReviewer takes it.
+// ("" = master), Env the copy's environment, the one the factory's agents
+// get in it (engine.LocalRound.Env). The factory's LocalReviewer takes it.
 type LocalCase struct {
 	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD string
 	Watch                                                     config.Watch
@@ -43,7 +45,17 @@ type LocalCase struct {
 	Round                                                     int
 	TaskID                                                    int64
 	Repo, Base                                                string
+	Env                                                       map[string]string
 }
+
+// ConfigError is a local round that cannot run for a configuration problem
+// (no gh identity to run as): Key names what to configure, Why what is
+// wrong. Running it again changes nothing.
+type ConfigError struct {
+	Key, Why string
+}
+
+func (e *ConfigError) Error() string { return e.Key + ": " + e.Why }
 
 // LocalResult is what a local round found: the round's Outcome (dry_run
 // when it finished), its ReportDir, the judge's Verdict ("" when its result
@@ -66,6 +78,9 @@ type LocalResult struct {
 	Refused                     string
 	Missing                     []string
 	Error                       string
+	// ConfigKey names what to configure when the round could not run for
+	// a configuration problem (ConfigError); "" otherwise.
+	ConfigKey string
 }
 
 // LocalFinding is one finding of a local round: its Severity (P0 to P3, ""
@@ -191,7 +206,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		EvalCase: engine.EvalCase{Owner: owner, Repo: name, Number: number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", c.Repo, number),
 			Head: c.HeadSHA, BaseRef: base, DefaultBranch: base, Title: c.Title, HeadRef: c.Branch,
 			Checkout: c.Checkout, MainClone: c.Checkout, Watch: w, Identity: id, Notes: notes},
-		BaseSHA: c.BaseSHA, DescriptionFile: desc, TicketFile: ticket,
+		BaseSHA: c.BaseSHA, DescriptionFile: desc, TicketFile: ticket, Env: maps.Clone(c.Env),
 	}
 	run := d.localRound
 	if run == nil {
@@ -257,7 +272,8 @@ func (d Deps) runLocalRound(ctx context.Context, cfg *config.Config, layout path
 
 // localIdentity is the identity a local round runs as: the watch's when it
 // is a gh identity, else the first gh identity configured. An App's would
-// have its token minted from GitHub, and the round reads nothing there.
+// have its token minted from GitHub, and the round reads nothing there. A
+// config without one is a ConfigError.
 func localIdentity(cfg *config.Config, w *config.Watch) (string, error) {
 	if id := cfg.IdentityByName(w.Identity); id != nil && id.Kind == "gh" {
 		return id.Name, nil
@@ -267,7 +283,7 @@ func localIdentity(cfg *config.Config, w *config.Watch) (string, error) {
 			return id.Name, nil
 		}
 	}
-	return "", errors.New("evalrun: a local round runs as a gh identity, and the config has none ([[identity]] kind = \"gh\")")
+	return "", &ConfigError{Key: `[[identity]] kind = "gh"`, Why: "a local round runs as a gh identity, and the config has none"}
 }
 
 // localTag is a new agent tag for a local round: "local-" and 6 random hex

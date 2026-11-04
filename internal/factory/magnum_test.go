@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
@@ -56,7 +57,7 @@ func TestMagnumIsNeverMigratedByTheFactory(t *testing.T) {
 	if _, err := st.DB().Exec("PRAGMA user_version = " + strconv.Itoa(behind)); err != nil {
 		t.Fatal(err)
 	}
-	busy, why, err := NewMagnum(l).Busy(t.Context())
+	busy, why, err := NewMagnum(l, config.Defaults()).Busy(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "restart magnum's daemon first") {
 		t.Fatalf("Busy = %v, %q, %v; want an error that says to restart magnum's daemon first", busy, why, err)
 	}
@@ -86,7 +87,8 @@ func TestMagnumIsBusyWhileARoundRunsOrIsDue(t *testing.T) {
 		}
 		return up.PR
 	}
-	m := NewMagnum(l)
+	cfg := config.Defaults()
+	m := NewMagnum(l, cfg)
 	if busy, why, err := m.Busy(ctx); busy || err != nil {
 		t.Fatalf("no PR: Busy = %v, %q, %v", busy, why, err)
 	}
@@ -99,12 +101,42 @@ func TestMagnumIsBusyWhileARoundRunsOrIsDue(t *testing.T) {
 	if busy, why, err := m.Busy(ctx); busy || err != nil {
 		t.Fatalf("a PR queued for later: Busy = %v, %q, %v", busy, why, err)
 	}
-	pr(2, store.PRQueued)
+	due := pr(2, store.PRQueued)
 	if busy, why, err := m.Busy(ctx); !busy || err != nil || !strings.Contains(why, "due") {
 		t.Fatalf("a PR due: Busy = %v, %q, %v", busy, why, err)
 	}
-	pr(3, store.PRReviewing)
+
+	// Inside magnum's quiet hours its gates hold every queued round nobody
+	// forced, so none is due; a forced one is.
+	now := time.Now().Local()
+	cfg.Daemon.QuietHours = now.Add(-time.Hour).Format("15:04") + "-" + now.Add(time.Hour).Format("15:04")
+	if busy, why, err := m.Busy(ctx); busy || err != nil {
+		t.Fatalf("a PR queued inside quiet hours: Busy = %v, %q, %v; want not busy", busy, why, err)
+	}
+	if err := st.TransitionPR(ctx, due.ID, []string{store.PRQueued}, store.PRQueued, func(u *store.PRUpdate) { u.Set("forced", true) }); err != nil {
+		t.Fatal(err)
+	}
+	if busy, why, err := m.Busy(ctx); !busy || err != nil || !strings.Contains(why, "due") {
+		t.Fatalf("a forced PR inside quiet hours: Busy = %v, %q, %v; want due", busy, why, err)
+	}
+	cfg.Daemon.QuietHours = ""
+
+	// A due round that magnum's other gates hold (the GitHub floor, a slot
+	// pinned, a paused agent) and that never starts holds the local review
+	// only so long, then the local review goes on and says why.
+	clock := time.Now()
+	m.(*magnumRegistry).now = func() time.Time { return clock }
+	if busy, _, _ := m.Busy(ctx); !busy {
+		t.Fatal("a PR due: not busy")
+	}
+	clock = clock.Add(dueHold + time.Minute)
 	busy, why, err := m.Busy(ctx)
+	if busy || err != nil || !strings.Contains(why, "has not started for") {
+		t.Fatalf("a PR due for longer than %s: Busy = %v, %q, %v; want not busy, saying so", dueHold, busy, why, err)
+	}
+	m.(*magnumRegistry).now = time.Now
+	pr(3, store.PRReviewing)
+	busy, why, err = m.Busy(ctx)
 	if !busy || err != nil || !strings.Contains(why, "runs") || strings.Contains(why, "Secret") {
 		t.Fatalf("a round in flight: Busy = %v, %q, %v", busy, why, err)
 	}
@@ -122,7 +154,7 @@ func TestMagnumIsBusyWhileARoundRunsOrIsDue(t *testing.T) {
 	if err := fsx.WriteFileAtomic(none.Pid(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if busy, why, err := NewMagnum(none).Busy(ctx); busy || err != nil {
+	if busy, why, err := NewMagnum(none, cfg).Busy(ctx); busy || err != nil {
 		t.Fatalf("no registry: Busy = %v, %q, %v", busy, why, err)
 	}
 	if fsx.Exists(none.DB()) {

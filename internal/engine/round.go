@@ -1067,9 +1067,13 @@ func (e *Engine) paneEnv(ctx context.Context, job *roundJob, src identity.Source
 }
 
 // slotEnv is the environment of the job's checkout: its pool's env for a
-// pool slot, the [[repo]] env of a per-PR worktree (WT_BRANCH included).
+// pool slot, the [[repo]] env of a per-PR worktree (WT_BRANCH included),
+// and for a local round the factory's copy's own (LocalRound.Env), so its
+// roles use the copy's databases.
 func (e *Engine) slotEnv(job *roundJob) map[string]string {
 	switch {
+	case job.local != nil:
+		return maps.Clone(job.local.env)
 	case job.pool != nil && job.slot.Kind == store.SlotKindPool:
 		return job.pool.SlotEnv(job.slot.Name)
 	case job.slot.Kind == store.SlotKindPerPR:

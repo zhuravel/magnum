@@ -81,3 +81,42 @@ func TestRunLocalAlwaysGivesPostReviewTheBase(t *testing.T) {
 		t.Fatalf("post_review %q lacks --dry-run --local-base %s", line, c.BaseSHA)
 	}
 }
+
+// A local round's panes run with the copy's own environment, the one the
+// factory's agents get in it (its WT_BRANCH and the copy's env, a
+// [pool.env] value with {slot} rendered for the copy), never a synthetic
+// PR's worktree env (WT_BRANCH=magnum-pr-<N>): the reviewers' specs and
+// migrations use the copy's databases, which the factory's db-lock guards.
+// A replay of a PR in a per-PR worktree still gets that worktree's env.
+func TestALocalRoundsPanesCarryTheCopysEnvironment(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		h.layout = paths.Layout{Home: h.layout.Home, Scratch: t.TempDir()}
+		h.d.Layout = h.layout
+	})
+	h.rd.script = func(pipeline.RoundInput) (pipeline.RoundResult, error) {
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeDryRun}, nil
+	}
+	c := localRound(h, t.TempDir(), 1)
+	c.Env = map[string]string{"WT_BRANCH": "factory1", "DATABASE_SUFFIX": "_factory1"}
+	if _, _, err := h.e.RunLocal(h.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"claude-review", "codex-judge"} {
+		env := h.ag.paneEnv(role)
+		if env["WT_BRANCH"] != "factory1" || env["DATABASE_SUFFIX"] != "_factory1" {
+			t.Errorf("the %s pane's env %v, want the copy's WT_BRANCH and DATABASE_SUFFIX", role, env)
+		}
+	}
+
+	replay := newHarness(t, func(h *harness) {
+		h.layout = paths.Layout{Home: h.layout.Home, Scratch: t.TempDir()}
+		h.d.Layout = h.layout
+	})
+	replay.rd.script = h.rd.script
+	if _, _, err := replay.e.RunEval(replay.ctx, evalCase(replay, t.TempDir(), false)); err != nil {
+		t.Fatal(err)
+	}
+	if env := replay.ag.paneEnv("claude-review"); env["WT_BRANCH"] != "magnum-pr-7" {
+		t.Errorf("a replay's pane env %v, want its per-PR worktree's WT_BRANCH magnum-pr-7", env)
+	}
+}

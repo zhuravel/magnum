@@ -286,6 +286,14 @@ type Engine struct {
 	reviewMu sync.Mutex
 	reviews  map[int64]*localRound
 	roundCap time.Duration
+	// magnumNotes is what Magnum.Busy last said of each task's wait while
+	// not busy (said once, as an event): the loop's own.
+	magnumNotes map[int64]string
+	// beforeStop runs between the end of a loop's cycle that needs you
+	// (unavailable, the cap) and the task's move to you; an error stops
+	// there (a test's seam: the daemon stopping in between). nil in a
+	// daemon.
+	beforeStop func() error
 
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
@@ -305,35 +313,36 @@ func New(d Deps) *Engine {
 	e := &Engine{
 		d: d, cfg: d.Config, reg: d.Registry, log: log,
 		bgCtx: bgCtx, bgCancel: bgCancel,
-		runners:    map[string]stageRunner{},
-		kick:       make(chan struct{}, 1),
-		notify:     ossignal.Notify,
-		stopNotify: ossignal.Stop,
-		procs:      engine.SystemProcesses(),
-		panics:     map[int64]int{},
-		lastFail:   map[int64]string{},
-		inbox:      map[int64][]runtime.Event{},
-		holds:      map[string]*Hold{},
-		blockers:   map[string]string{},
-		recent:     map[string]recentFailure{},
-		parked:     map[int64]bool{},
-		servers:    map[int64]server{},
-		heavyHeld:  map[int64]*heavySlot{},
-		jiraTries:  map[int64]*jiraTry{},
-		claims:     map[int64]*claimRun{},
-		claimWaits: map[int64]*claimWait{},
-		held:       map[int64]Copy{},
-		debts:      map[int64]*releaseDebt{},
-		agentRuns:  map[int64]*agentsRun{},
-		run:        Guard(d.Run, d.Config),
-		checks:     map[int64]*headCheck{},
-		checkNotes: map[int64]string{},
-		checkFails: map[int64]int{},
-		keptCopies: map[int64]keptCopy{},
-		keptMem:    map[int64]keptUnwritten{},
-		lockPoll:   specsLockPoll,
-		reviews:    map[int64]*localRound{},
-		roundCap:   localRoundCap,
+		runners:     map[string]stageRunner{},
+		kick:        make(chan struct{}, 1),
+		notify:      ossignal.Notify,
+		stopNotify:  ossignal.Stop,
+		procs:       engine.SystemProcesses(),
+		panics:      map[int64]int{},
+		lastFail:    map[int64]string{},
+		inbox:       map[int64][]runtime.Event{},
+		holds:       map[string]*Hold{},
+		blockers:    map[string]string{},
+		recent:      map[string]recentFailure{},
+		parked:      map[int64]bool{},
+		servers:     map[int64]server{},
+		heavyHeld:   map[int64]*heavySlot{},
+		jiraTries:   map[int64]*jiraTry{},
+		claims:      map[int64]*claimRun{},
+		claimWaits:  map[int64]*claimWait{},
+		held:        map[int64]Copy{},
+		debts:       map[int64]*releaseDebt{},
+		agentRuns:   map[int64]*agentsRun{},
+		run:         Guard(d.Run, d.Config),
+		checks:      map[int64]*headCheck{},
+		checkNotes:  map[int64]string{},
+		checkFails:  map[int64]int{},
+		keptCopies:  map[int64]keptCopy{},
+		keptMem:     map[int64]keptUnwritten{},
+		lockPoll:    specsLockPoll,
+		reviews:     map[int64]*localRound{},
+		magnumNotes: map[int64]string{},
+		roundCap:    localRoundCap,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
 	e.runners[config.FactoryStageGate] = e.runGate

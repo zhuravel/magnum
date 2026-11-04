@@ -327,7 +327,9 @@ func TestThePrecheckTakesTheCopysDatabaseLock(t *testing.T) {
 		res, _ := r.e.precheck(r.ctx, task, r.cp)
 		done <- res
 	}()
-	time.Sleep(200 * time.Millisecond)
+	waitFor(t, "the precheck to wait for the copy's databases", func() bool {
+		return strings.Contains(r.e.checkNote(task.ID), "waits for the copy's databases")
+	})
 	if n := len(r.ran("bin/specs")); n != 1 {
 		t.Fatalf("%d spec runs while a reviewer holds the copy's databases, want the first precheck's only", n)
 	}

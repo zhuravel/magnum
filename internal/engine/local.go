@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -23,12 +24,18 @@ type LocalRound struct {
 	EvalCase
 	BaseSHA                     string
 	DescriptionFile, TicketFile string
+	// Env is the environment of the copy the round works in, the one the
+	// factory's own agents get there (its WT_BRANCH and env): every pane
+	// and the readiness step of the round get it, in place of a per-PR
+	// worktree's env for the synthetic number.
+	Env map[string]string
 }
 
 // localJob is a local round's part of its round job (roundJob.local): the
-// base and the files of its LocalRound.
+// base, the files and the copy's environment of its LocalRound.
 type localJob struct {
 	base, description, ticket string
+	env                       map[string]string
 }
 
 // fullSHA is a full commit id.
@@ -43,7 +50,9 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // checkout's base branch says, so post-review anchors the comments on the
 // local diff (--local-base), and the round input's Local names c's files,
 // so the judge reads the title, the body and the ticket from them and
-// nothing from GitHub, and the round reads no Jira issue. A case without a
+// nothing from GitHub, and the round reads no Jira issue; its panes and its
+// readiness step get the copy's own environment (c.Env), never a per-PR
+// worktree's env for the synthetic number. A case without a
 // full base commit or a description file, or a judge-only one, never
 // starts.
 func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResult, store.PR, error) {
@@ -60,5 +69,5 @@ func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResu
 	case c.JudgeOnly:
 		return pipeline.RoundResult{}, store.PR{}, fmt.Errorf("engine: local %s/%s#%d: a local round runs every role", c.Owner, c.Repo, c.Number)
 	}
-	return e.runEval(ctx, c.EvalCase, &localJob{base: c.BaseSHA, description: c.DescriptionFile, ticket: c.TicketFile})
+	return e.runEval(ctx, c.EvalCase, &localJob{base: c.BaseSHA, description: c.DescriptionFile, ticket: c.TicketFile, env: maps.Clone(c.Env)})
 }

@@ -19,10 +19,11 @@ import (
 func TestALocalRoundsJudgeReadsTheFactorysFiles(t *testing.T) {
 	e := newEnv(t)
 	curl := e.withJira(nil)
+	e.cfg.Board.Trackers = append(e.cfg.Board.Trackers, ticketSite+"/browse/PR-{num}") // the key below is one Jira knows
 	scratch := t.TempDir()
 	local := &Local{DescriptionFile: filepath.Join(scratch, "description.md"), TicketFile: filepath.Join(scratch, TicketFile)}
 	for _, f := range []string{local.DescriptionFile, local.TicketFile} {
-		if err := os.WriteFile(f, []byte("# PS-123 Payout methods\n"), 0o600); err != nil {
+		if err := os.WriteFile(f, []byte("# PR-12388 Payout methods\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -35,7 +36,7 @@ func TestALocalRoundsJudgeReadsTheFactorysFiles(t *testing.T) {
 	p.gh, p.status = nil, "dry_run"
 	e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t)}
 	in := e.input(KindInitial)
-	in.PR.Title = new("[PS-123] Payout methods")
+	in.PR.Title = new("[PR-12388] Payout methods")
 	in.Blind, in.DryRun, in.Local = true, true, local
 	res, err := e.r.RunRound(e.ctx, in)
 	if err != nil || res.Outcome != OutcomeDryRun {

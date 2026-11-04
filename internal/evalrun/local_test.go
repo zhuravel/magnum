@@ -2,6 +2,8 @@ package evalrun
 
 import (
 	"context"
+	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,7 +64,8 @@ func localCase(t *testing.T, n int) LocalCase {
 	return LocalCase{Checkout: t.TempDir(), BaseSHA: strings.Repeat("cd", 20), HeadSHA: strings.Repeat("ab", 20),
 		Branch: "zhuravel-PR-12361-credit-points", Title: "PR-12361 Credit points count the activities", Body: "## Plan\n\nCount them.",
 		TicketMD: "# PR-12361\n\nCount the activities.", Watch: config.Watch{Owner: "example", Identity: "talkable-app"},
-		Roles: []string{"claude-review", "codex-review", "codex-judge"}, Round: n, TaskID: 7, Repo: "example/widgets", Base: "master"}
+		Roles: []string{"claude-review", "codex-review", "codex-judge"}, Round: n, TaskID: 7, Repo: "example/widgets", Base: "master",
+		Env: map[string]string{"WT_BRANCH": "factory1", "REDIS_DB_OFFSET": "16"}}
 }
 
 const cleanResult = `{"status":"dry_run","verdict":"clean","findings":{"P0":0,"P1":0,"P2":0,"P3":0},"planned_review":{"event":"APPROVE","body":"No problems found.","comments":[]}}`
@@ -130,6 +133,9 @@ func TestRunLocalWritesTheTitleBodyAndTicketAsFiles(t *testing.T) {
 		if filepath.Dir(f) != (*runs)[0].layout.Scratch {
 			t.Errorf("%s is not in the round's scratch directory %s", f, (*runs)[0].layout.Scratch)
 		}
+	}
+	if !maps.Equal(lr.Env, c.Env) {
+		t.Fatalf("the round's env %v, want the copy's %v", lr.Env, c.Env)
 	}
 	if lr.Identity != "zhuravel" || lr.HeadRef != c.Branch || lr.Title != c.Title || lr.Head != c.HeadSHA || lr.BaseSHA != c.BaseSHA ||
 		lr.Checkout != c.Checkout || lr.BaseRef != "master" || !slices.Equal(lr.Watch.Roles, c.Roles) {
@@ -207,5 +213,11 @@ func TestRunLocalRefusesACaseItCannotRun(t *testing.T) {
 	}
 	if len(*runs) != 0 {
 		t.Fatalf("rounds ran: %d", len(*runs))
+	}
+	d.Config.Identities = d.Config.Identities[:1] // the App's only
+	_, err := RunLocal(t.Context(), d, localCase(t, 1))
+	var ce *ConfigError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Key, "[[identity]]") || len(*runs) != 0 {
+		t.Fatalf("no gh identity: %v (%d rounds); want a configuration error naming [[identity]]", err, len(*runs))
 	}
 }

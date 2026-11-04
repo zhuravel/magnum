@@ -251,7 +251,7 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("factory: review candidate: %w", err)
 	}
-	deps.Magnum, deps.ReviewCandidate = factory.NewMagnum(l), candidate
+	deps.Magnum, deps.ReviewCandidate = factory.NewMagnum(l, cfg), candidate
 	deps.Review = factory.NewLocalReviewer(evalrun.Deps{Layout: l, Config: reviewCfg, Logger: d.Log, Stderr: io.Discard, Runner: run,
 		Warn: func(format string, args ...any) { d.Log.Warn("local review: " + fmt.Sprintf(format, args...)) }})
 	d.Engine = factory.New(deps)

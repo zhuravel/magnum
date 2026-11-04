@@ -9006,8 +9006,10 @@ func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResu
     says, so post-review anchors the comments on the local diff (--local-base),
     and the round input's Local names c's files, so the judge reads the title,
     the body and the ticket from them and nothing from GitHub, and the round
-    reads no Jira issue. A case without a full base commit or a description
-    file, or a judge-only one, never starts.
+    reads no Jira issue; its panes and its readiness step get the copy's own
+    environment (c.Env), never a per-PR worktree's env for the synthetic number.
+    A case without a full base commit or a description file, or a judge-only
+    one, never starts.
 
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one iteration of the daemon loop. Steps log their own
@@ -9543,6 +9545,11 @@ type LocalRound struct {
 	EvalCase
 	BaseSHA                     string
 	DescriptionFile, TicketFile string
+	// Env is the environment of the copy the round works in, the one the
+	// factory's own agents get there (its WT_BRANCH and env): every pane
+	// and the readiness step of the round get it, in place of a per-PR
+	// worktree's env for the synthetic number.
+	Env map[string]string
 }
     LocalRound is one round of the factory's local review of a change before
     its PR exists (docs/superpowers/specs/2026-11-03-factory-design.md, section
@@ -10880,6 +10887,15 @@ func WithCandidate(cfg *config.Config, dir string) (*config.Config, error)
 
 TYPES
 
+type ConfigError struct {
+	Key, Why string
+}
+    ConfigError is a local round that cannot run for a configuration problem
+    (no gh identity to run as): Key names what to configure, Why what is wrong.
+    Running it again changes nothing.
+
+func (e *ConfigError) Error() string
+
 type Deps struct {
 	// Layout is the install's: its logs, locks and gh config directories,
 	// the live notes a case copies and the runs root (RunsRoot). A case's
@@ -10919,6 +10935,7 @@ type LocalCase struct {
 	Round                                                     int
 	TaskID                                                    int64
 	Repo, Base                                                string
+	Env                                                       map[string]string
 }
     LocalCase is one round of the factory's local review: magnum's full review
     of a change in the task's copy, as a blind dry run, before any PR exists
@@ -10929,8 +10946,9 @@ type LocalCase struct {
     round 1 runs, Roles the roles of this round and Round its number, from 1.
     TaskID is the task whose change it is and Repo its repository (owner/name):
     the round's synthetic PR number (LocalNumber) and its scratch directory
-    (LocalRoot) come from them. Base is the base branch ("" = master). The
-    factory's LocalReviewer takes it.
+    (LocalRoot) come from them. Base is the base branch ("" = master),
+    Env the copy's environment, the one the factory's agents get in it
+    (engine.LocalRound.Env). The factory's LocalReviewer takes it.
 
 type LocalFinding struct {
 	Severity, Title, Path    string
@@ -10954,6 +10972,9 @@ type LocalResult struct {
 	Refused                     string
 	Missing                     []string
 	Error                       string
+	// ConfigKey names what to configure when the round could not run for
+	// a configuration problem (ConfigError); "" otherwise.
+	ConfigKey string
 }
     LocalResult is what a local round found: the round's Outcome (dry_run when
     it finished), its ReportDir, the judge's Verdict ("" when its result file
@@ -11793,9 +11814,9 @@ type Magnum interface {
     Magnum is the review daemon as the factory's local review sees it: busy
     while a real round is in flight or due, so a local round yields to it.
 
-func NewMagnum(l paths.Layout) Magnum
-    NewMagnum is magnum's review daemon of layout l as the factory's local
-    review sees it (Magnum).
+func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
+    NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
+    factory's local review sees it (Magnum).
 
 type MigrationFlag struct {
 	Path                                   string
@@ -11997,6 +12018,7 @@ type ReviewSummary struct {
 	Leftovers []ReviewItem `json:"leftovers"`
 	Declined  []ReviewItem `json:"declined"`
 	Doubts    []ReviewItem `json:"doubts"`
+	Missing   []string     `json:"missing,omitempty"`
 }
     ReviewSummary is review-summary.json: how the local review ended (exit
     clean or oscillation), after how many rounds, at which head, and what it
