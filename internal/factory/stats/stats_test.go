@@ -214,6 +214,39 @@ func TestStatsCountsStepStartingMessages(t *testing.T) {
 	}
 }
 
+// A task's text is the one message the factory needs to start the task: it
+// counts as typed and never as a step start, whatever its words or its stored
+// class say, or the target of zero step starts could not be reached. Its
+// other classes, and the classes of guidance and of a send-back's note, count
+// as they are.
+func TestStatsCountsAStartTextAsTypedAndNeverAsAStepStart(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	byWords := createTask(t, r, "PR-12310")
+	stored := createTask(t, r, "PR-12311")
+	other := createTask(t, r, "PR-12312")
+
+	input(t, r, byWords.ID, registry.InputTaskText, "fix the points, then open PR", "", 0)       // class by its words
+	input(t, r, stored.ID, registry.InputTaskText, "fix the points", registry.ClassStepStart, 0) // class stored as a step start
+	input(t, r, stored.ID, registry.InputGuidance, "open PR when it is done", registry.ClassStepStart, time.Minute)
+	input(t, r, stored.ID, registry.InputSendBack, "push it again", registry.ClassStepStart, 2*time.Minute)
+	input(t, r, other.ID, registry.InputTaskText, "wrong table, use the ledger", registry.ClassCorrection, 0)
+
+	rep, err := stats.ComputeAt(t.Context(), r, time.Time{}, t0.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := only(t, rep, "PR-12310"); got.Typed != 1 || got.StepStarts != 0 {
+		t.Errorf("a start text that names a step: typed %d, step starts %d; want 1 and 0", got.Typed, got.StepStarts)
+	}
+	if got := only(t, rep, "PR-12311"); got.Typed != 3 || got.StepStarts != 2 {
+		t.Errorf("a stored step start of a start text, guidance and a send-back: typed %d, step starts %d; want 3 and 2 (the guidance and the note)", got.Typed, got.StepStarts)
+	}
+	if got := only(t, rep, "PR-12312"); got.Typed != 1 || got.Corrections != 1 {
+		t.Errorf("a start text that corrects: typed %d, corrections %d; want 1 and 1", got.Typed, got.Corrections)
+	}
+}
+
 // The kinds of input that are the operator's own words.
 func TestIsTypedNamesTheOperatorsOwnWords(t *testing.T) {
 	t.Parallel()

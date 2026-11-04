@@ -13635,10 +13635,15 @@ func BuildBaseline(sessions []Session, labelled []Labelled) (Baseline, error)
     BuildBaseline counts the operator's messages per ticket: the sessions of
     one key are one ticket, with the sum of their messages (a blank message is
     none), and the median, quartiles and extremes are taken over the tickets,
-    never over the sessions. Accuracy is the share of labelled that Classify
-    gets right. It refuses sessions without a key, a set with no message and an
-    empty or mislabelled labelled set, because a baseline it cannot measure is
-    worse than none. The result has no Frozen time; FreezeBaseline sets it.
+    never over the sessions. The sessions come oldest first (ReadSessions sorts
+    them): the first message of a ticket's first session is the one that starts
+    the work, so it counts as typed and never as a step start, as a task's text
+    does on the factory's side; the first message of a later session keeps its
+    class, because a session opened only to start the next step is what the
+    measure counts. Accuracy is the share of labelled that Classify gets right.
+    It refuses sessions without a key, a set with no message and an empty or
+    mislabelled labelled set, because a baseline it cannot measure is worse than
+    none. The result has no Frozen time; FreezeBaseline sets it.
 
 func LoadBaseline(path string) (*Baseline, error)
     LoadBaseline reads the frozen baseline at path: nil and no error when there
@@ -13708,15 +13713,17 @@ type Session struct {
     the messages the operator typed to it.
 
 func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, skipped int, err error)
-    ReadSessions reads the operator's old transcripts under dir (every
-    .jsonl file: a Claude Code transcript, or a Codex rollout when the file
-    is named rollout-*) into sessions: the messages the operator typed,
-    from the user turns agents.ClaudeUserTurns and agents.CodexUserTurns read,
-    less turns a tool or a task notification began. A session's ticket is the
-    key keyOf finds in the file's path below dir, else in its first message
-    that holds one. A transcript with no message or no key is not guessed at:
-    it is counted in skipped. Prompts queued while an agent worked are not read,
-    so a count is never above what was typed. Symbolic links are not followed.
+    ReadSessions reads the operator's old transcripts under dir (every .jsonl
+    file: a Claude Code transcript, or a Codex rollout when the file is named
+    rollout-*) into sessions: the messages the operator typed, from the user
+    turns agents.ClaudeUserTurns and agents.CodexUserTurns read, less turns a
+    tool or a task notification began. A session's ticket is the key keyOf finds
+    in the file's path below dir, else in its first message that holds one.
+    A transcript with no message or no key is not guessed at: it is counted in
+    skipped. The sessions come oldest first, by the time of their first message,
+    so that the first session of a ticket is the first one (BuildBaseline).
+    Prompts queued while an agent worked are not read, so a count is never above
+    what was typed. Symbolic links are not followed.
 
 type TaskStats struct {
 	TaskID int64
@@ -13734,15 +13741,17 @@ type TaskStats struct {
     the start's guidance, the note of a send-back); StepStarts, Approvals,
     Corrections and Access count those of them by class (a retry is a step
     the operator started by hand, so it counts as a step start and not as a
-    typed message); a message of another class, or of none, is only typed.
-    AnswerBatches counts the revisions of questions that were answered, and
-    Decisions the decisions on cards; both are counted apart. OperatorSecs is
-    the operator's time on cards: for each decision, from the card shown to the
-    decision, and for each answered revision of questions, from the questions
-    shown to the first answer, each at most cardCap (a card never shown has no
-    time to measure). WaitedOnYou is how long the task waited on the operator,
-    asleep or not (its spans that wait on "you"). StartToReady is how long it
-    took to reach the ready card (zero before it does).
+    typed message; the task's text is the one message that starts the task,
+    so it is typed and never a step start, whatever its words say); a message of
+    another class, or of none, is only typed. AnswerBatches counts the revisions
+    of questions that were answered, and Decisions the decisions on cards;
+    both are counted apart. OperatorSecs is the operator's time on cards: for
+    each decision, from the card shown to the decision, and for each answered
+    revision of questions, from the questions shown to the first answer, each
+    at most cardCap (a card never shown has no time to measure). WaitedOnYou is
+    how long the task waited on the operator, asleep or not (its spans that wait
+    on "you"). StartToReady is how long it took to reach the ready card (zero
+    before it does).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in

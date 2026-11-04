@@ -32,7 +32,9 @@ const cardCap = 30 * time.Minute
 // line, the start's guidance, the note of a send-back); StepStarts, Approvals,
 // Corrections and Access count those of them by class (a retry is a step the
 // operator started by hand, so it counts as a step start and not as a typed
-// message); a message of another class, or of none, is only typed.
+// message; the task's text is the one message that starts the task, so it is
+// typed and never a step start, whatever its words say); a message of another
+// class, or of none, is only typed.
 // AnswerBatches counts the revisions of questions that were answered, and
 // Decisions the decisions on cards; both are counted apart. OperatorSecs is
 // the operator's time on cards: for each decision, from the card shown to the
@@ -180,7 +182,11 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 			ts.Typed++
 			switch classOf(in) {
 			case registry.ClassStepStart:
-				ts.StepStarts++
+				// The task's text is the one message that starts the task:
+				// typed, never a step start, whatever its words say.
+				if in.Kind != registry.InputTaskText {
+					ts.StepStarts++
+				}
 			case registry.ClassApproval:
 				ts.Approvals++
 			case registry.ClassCorrection:

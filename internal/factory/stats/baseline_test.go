@@ -127,6 +127,42 @@ func TestBaselineCountsPerTicketNotPerSession(t *testing.T) {
 	}
 }
 
+// The first message of a ticket (the first of its first session) is the one
+// that starts the work: typed, and never a step start, as a task's text is
+// on the factory's side. The first message of a later session keeps its
+// class: a session opened only to start the next step is what the measure
+// counts.
+func TestBaselineFirstMessageOfATicketIsTypedAndNeverAStepStart(t *testing.T) {
+	t.Parallel()
+	sessions := []stats.Session{
+		{Key: "PR-12301", Messages: []string{"open PR", "the refund path only matters for expired points", "push"}},
+		{Key: "PR-12302", Messages: []string{"merge master"}},
+		{Key: "PR-12301", Messages: []string{"open PR", "yes"}},
+	}
+	b, err := stats.BuildBaseline(sessions, []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PR-12301: 5 typed, step starts push and the later session's open PR = 2.
+	// PR-12302: 1 typed, its only message is its first = 0.
+	if want := (stats.Dist{Median: 3, P25: 2, P75: 4, Min: 1, Max: 5}); b.TypedPerTicket != want {
+		t.Errorf("TypedPerTicket = %+v, want %+v", b.TypedPerTicket, want)
+	}
+	if want := (stats.Dist{Median: 1, P25: 0.5, P75: 1.5, Min: 0, Max: 2}); b.StepStartsPerTicket != want {
+		t.Errorf("StepStartsPerTicket = %+v, want %+v (the first message of each ticket is no step start)", b.StepStartsPerTicket, want)
+	}
+
+	// A blank message opens nothing: the first message is the first that is one.
+	blank := []stats.Session{{Key: "PR-12303", Messages: []string{" ", "open PR", "push"}}}
+	b, err = stats.BuildBaseline(blank, []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.TypedPerTicket.Max != 2 || b.StepStartsPerTicket.Max != 1 {
+		t.Errorf("a ticket opened by a blank message: typed %v, step starts %v; want 2 and 1", b.TypedPerTicket.Max, b.StepStartsPerTicket.Max)
+	}
+}
+
 func TestBuildBaselineRefusesWhatItCannotMeasure(t *testing.T) {
 	t.Parallel()
 	one := []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}}
@@ -357,6 +393,33 @@ func TestReadSessionsGroupsTranscriptsByTicketKey(t *testing.T) {
 	}
 	if b.Tickets != 3 || b.TypedPerTicket.Max != 4 {
 		t.Errorf("baseline of the directory = %+v, want 3 tickets, the largest of 4 messages", b)
+	}
+}
+
+// The sessions come oldest first, whatever their files are called: the first
+// of a ticket is the one its baseline counts as having started the work.
+func TestReadSessionsComesOldestFirst(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	writeTranscript(t, filepath.Join(dir, "a-later.jsonl"),
+		claudeLine(at.Add(time.Hour), "human", "PR-12301: check the mailer"), claudeLine(at.Add(2*time.Hour), "human", "yes"))
+	writeTranscript(t, filepath.Join(dir, "z-first.jsonl"),
+		claudeLine(at, "human", "open PR for PR-12301"), claudeLine(at.Add(time.Minute), "human", "ok"))
+
+	sessions, _, err := stats.ReadSessions(dir, firstKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 || sessions[0].Messages[0] != "open PR for PR-12301" || sessions[1].Messages[0] != "PR-12301: check the mailer" {
+		t.Fatalf("sessions %+v, want the one that began at 10:00 first", sessions)
+	}
+	b, err := stats.BuildBaseline(sessions, []stats.Labelled{{Text: "open PR", Class: registry.ClassStepStart}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Tickets != 1 || b.TypedPerTicket.Max != 4 || b.StepStartsPerTicket.Max != 0 {
+		t.Errorf("baseline %+v, want one ticket of 4 messages and no step start: the ticket's first message is the earlier session's open PR", b)
 	}
 }
 

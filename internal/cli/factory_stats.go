@@ -40,7 +40,8 @@ func newFactoryStatsCmd(c *Context) *cobra.Command {
 	cmd := newCommand("", factoryStatsUsage, "what the factory still asks of you, per task, against the baseline",
 		"Count, per factory task, what it asked of you: your typed messages (the task's text, the start's "+
 			"guidance, what you typed in a pane or said in one line, the note of a send-back), those of them that "+
-			"only start a step (the target is zero; a retry counts as one, as you start a step by hand), approvals, "+
+			"only start a step (the target is zero; a retry counts as one, as you start a step by hand, and the "+
+			"task's text never does: it is the one message the factory needs to start the task), approvals, "+
 			"corrections and access, your answer batches (the revisions of questions you answered), your card "+
 			"decisions, the local review's rounds, your time on cards (for each decision and each answered batch, "+
 			"from the card shown to your answer, at most 30 minutes each, so a card left open and idle does not "+
@@ -49,7 +50,8 @@ func newFactoryStatsCmd(c *Context) *cobra.Command {
 			"registry, which this command only reads (it never creates one, and it refuses to migrate one while a "+
 			"factory daemon of an older build runs on it). The default output is markdown, which sets each task "+
 			"beside the frozen baseline (`magnum factory baseline`: your typed and step-starting messages per "+
-			"ticket before the factory) and says where its counts lie against the baseline's middle half; --json "+
+			"ticket before the factory, where the first message of a ticket is typed and no step start either) and "+
+			"says where its counts lie against the baseline's middle half; --json "+
 			"is the same data with durations in seconds. --since takes N days (7d), a Go duration (36h, 90m) or a "+
 			"date (2026-10-01, local midnight), and keeps the tasks started since; without it every task counts.",
 		func(pos []string) int { return runFactoryStatsCmd(c, f, pos) })
@@ -116,7 +118,9 @@ func newFactoryBaselineCmd(c *Context) *cobra.Command {
 			"Code transcripts and Codex rollouts (every .jsonl file below it; a Codex file is named rollout-*): a "+
 			"session belongs to the ticket whose key (a tracker of your config's [board] or [[repo]] trackers) its "+
 			"file path or its first messages name, and the sessions of one ticket are one ticket, never counted "+
-			"apart. A transcript with no message or no ticket key is left out and counted. --labelled is a JSON-lines "+
+			"apart. The first message of a ticket (the oldest session's first) counts as typed and never as a step "+
+			"start, as a task's text does in `magnum factory stats`, while the first message of a later session keeps "+
+			"its class. A transcript with no message or no ticket key is left out and counted. --labelled is a JSON-lines "+
 			"file of your messages with the class you gave each by hand ({\"text\": \"open PR\", \"class\": "+
 			"\"step_start\"}; the classes are step_start, approval, correction, access and info): the classifier that "+
 			"counts your step-starting messages, here and in `magnum factory stats`, is scored on it, and its "+

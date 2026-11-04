@@ -65,10 +65,16 @@ var classes = []string{registry.ClassStepStart, registry.ClassApproval, registry
 // BuildBaseline counts the operator's messages per ticket: the sessions of
 // one key are one ticket, with the sum of their messages (a blank message is
 // none), and the median, quartiles and extremes are taken over the tickets,
-// never over the sessions. Accuracy is the share of labelled that Classify
-// gets right. It refuses sessions without a key, a set with no message and an
-// empty or mislabelled labelled set, because a baseline it cannot measure is
-// worse than none. The result has no Frozen time; FreezeBaseline sets it.
+// never over the sessions. The sessions come oldest first (ReadSessions
+// sorts them): the first message of a ticket's first session is the one that
+// starts the work, so it counts as typed and never as a step start, as a
+// task's text does on the factory's side; the first message of a later
+// session keeps its class, because a session opened only to start the next
+// step is what the measure counts. Accuracy is the share of labelled that
+// Classify gets right. It refuses sessions without a key, a set with no
+// message and an empty or mislabelled labelled set, because a baseline it
+// cannot measure is worse than none. The result has no Frozen time;
+// FreezeBaseline sets it.
 func BuildBaseline(sessions []Session, labelled []Labelled) (Baseline, error) {
 	type count struct{ typed, steps int }
 	tickets := map[string]*count{}
@@ -81,12 +87,13 @@ func BuildBaseline(sessions []Session, labelled []Labelled) (Baseline, error) {
 				continue
 			}
 			c := tickets[s.Key]
-			if c == nil {
+			first := c == nil
+			if first {
 				c = &count{}
 				tickets[s.Key] = c
 			}
 			c.typed++
-			if Classify(m) == registry.ClassStepStart {
+			if !first && Classify(m) == registry.ClassStepStart {
 				c.steps++
 			}
 		}
@@ -268,8 +275,10 @@ func ReadLabelled(path string) ([]Labelled, error) {
 // tool or a task notification began. A session's ticket is the key keyOf finds
 // in the file's path below dir, else in its first message that holds one. A
 // transcript with no message or no key is not guessed at: it is counted in
-// skipped. Prompts queued while an agent worked are not read, so a count is
-// never above what was typed. Symbolic links are not followed.
+// skipped. The sessions come oldest first, by the time of their first
+// message, so that the first session of a ticket is the first one
+// (BuildBaseline). Prompts queued while an agent worked are not read, so a
+// count is never above what was typed. Symbolic links are not followed.
 func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, skipped int, err error) {
 	st, err := os.Stat(dir)
 	if err != nil {
@@ -278,6 +287,11 @@ func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, sk
 	if !st.IsDir() {
 		return nil, 0, fmt.Errorf("%s is not a directory", dir)
 	}
+	type dated struct {
+		session Session
+		began   time.Time
+	}
+	var found []dated
 	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -289,9 +303,13 @@ func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, sk
 		if err != nil {
 			return err
 		}
-		messages, err := operatorMessages(path)
+		turns, err := operatorTurns(path)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", rel, err)
+		}
+		messages := make([]string, len(turns))
+		for i, t := range turns {
+			messages[i] = t.Text
 		}
 		key := keyOf(rel)
 		for i := 0; key == "" && i < len(messages); i++ {
@@ -301,18 +319,22 @@ func ReadSessions(dir string, keyOf func(string) string) (sessions []Session, sk
 			skipped++
 			return nil
 		}
-		sessions = append(sessions, Session{Key: key, Messages: messages})
+		found = append(found, dated{Session{Key: key, Messages: messages}, turns[0].At})
 		return nil
 	})
 	if err != nil {
 		return nil, 0, err
 	}
+	slices.SortStableFunc(found, func(a, b dated) int { return a.began.Compare(b.began) })
+	for _, f := range found {
+		sessions = append(sessions, f.session)
+	}
 	return sessions, skipped, nil
 }
 
-// operatorMessages are the texts the operator typed in the transcript or
+// operatorTurns are the turns the operator typed in the transcript or
 // rollout at path.
-func operatorMessages(path string) ([]string, error) {
+func operatorTurns(path string) ([]agents.UserTurn, error) {
 	var turns []agents.UserTurn
 	var err error
 	if strings.HasPrefix(filepath.Base(path), "rollout-") {
@@ -323,10 +345,10 @@ func operatorMessages(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	var out []agents.UserTurn
 	for _, t := range turns {
 		if (t.Origin == "" || t.Origin == "human") && strings.TrimSpace(t.Text) != "" {
-			out = append(out, t.Text)
+			out = append(out, t)
 		}
 	}
 	return out, nil
