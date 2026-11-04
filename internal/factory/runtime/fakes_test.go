@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -431,6 +432,7 @@ type rig struct {
 	signals    []int
 	turnReads  int   // the reads of a transcript's user turns
 	turnErr    error // what the next read of a transcript's user turns fails with (nil: none)
+	logs       logBuffer
 
 	layout               paths.Layout
 	claudeDir, codexHome string
@@ -493,7 +495,7 @@ func (g *rig) restart() {
 	t := g.t
 	t.Helper()
 	r, err := newWith(Deps{Config: g.cfg, Layout: g.layout, Herdr: g.h, Store: g.st, Registry: g.reg, Runner: g.run,
-		Memory: g.memory, Clock: g.clock.Now}, seams{
+		Memory: g.memory, Clock: g.clock.Now, Log: slog.New(slog.NewTextHandler(&g.logs, nil))}, seams{
 		sleep: func(ctx context.Context, d time.Duration) error {
 			g.mu.Lock()
 			g.slept = append(g.slept, d)
@@ -572,6 +574,24 @@ func (g *rig) reads() (mem, use int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.memReads, g.usageReads
+}
+
+// logBuffer is what the runtime logs, written from any goroutine.
+type logBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 // turnReadCount is how many times the runtime read a transcript's user

@@ -1,11 +1,13 @@
 package runtime
 
 // The turns typed into the factory's panes (spec section 11.1). Once every
-// typedEvery, the observe pass reads the transcript of each session of a
-// task that is live (or ended within typedSettle) whose transcript changed
-// since the last read took it whole: a live session's, and a session that
-// ended (parked, lost, closed: one last read, whether a read saw it live or
-// not, kept for the next pass when it fails). It hands the engine every user
+// typedEvery, the observe pass reads the transcript of each conversation of
+// a task that is live (or ended within typedSettle) whose transcript changed
+// since the last read took it whole, once, through its newest pane's row (a
+// conversation resumed in a new pane shares its transcript with its old
+// rows: conversation): a live pane's, and one whose pane ended (parked,
+// lost, closed: one last read, whether a read saw it live or not, kept for
+// the next pass when it fails). It hands the engine every user
 // turn the transcript holds that the factory did not send (EventTyped): no
 // prompt of the task's ledger (by its hash), no after-deny prompt of the
 // session's kind, no record of a slash command magnum types (/compact, the
@@ -14,19 +16,23 @@ package runtime
 // tool's result and no turn a tool or a notification began (Claude Code's
 // own records of a command's output and of a compaction are no user turns
 // at all: agents.ClaudeUserTurns). The proof of a turn's origin is herdr's,
-// in the turn's own pane: the agent there seen at work on no prompt of the
-// factory's (agents.ObsHumanActive) within originWindow of the turn
-// (OriginHerdr). A turn without it is OriginUnknown, and one younger than
+// in the turn's own pane (the row whose pane held the conversation when the
+// turn arrived): the agent there seen at work on no prompt of the factory's
+// (agents.ObsHumanActive) within originWindow of the turn (OriginHerdr). A
+// turn without it is OriginUnknown, and one younger than
 // originWindow in a live pane waits for a later read, as herdr may not have
 // shown the agent at work on it yet. What herdr showed is kept in memory: a
 // restart forgets it, and a turn it would have proven is unknown. The pass
 // reads a transcript's user turns once: Reconcile's proof of a delivery
 // takes the same read (turnReads). The engine records each turn once (the
 // registry keys a pane's turn by its role and time), so a restart, which
-// forgets what was read, hands them again and loses none.
+// forgets what was read, hands them again. One case loses a last read: a
+// task that ended shortly before a daemon stop that lasts past typedSettle
+// after its end is not read again when the daemon is back.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -72,11 +78,53 @@ const youKeep = 10 * time.Minute
 // are still read: their last reads after the task ended.
 const typedSettle = youKeep
 
-// typedSeen is the transcript of a session as the last read that took it
-// whole saw it: its conversation and file.
-type typedSeen struct {
-	sid  string
-	file fileMark
+// conversation is one agent conversation of a task's role: the rows of the
+// sessions that carried it, oldest first. A pane parked and launched again,
+// or lost and recovered, goes on in a new row with the same conversation id,
+// so the rows share one transcript, which has one reader: the newest row
+// says whether the conversation's pane ended, and a turn is proven, and its
+// agent's state told, by the row whose pane held the conversation when the
+// turn arrived (rowAt), never by another pane's.
+type conversation struct {
+	key  string // the role and the conversation id
+	rows []store.Session
+}
+
+// conversations groups ss, a task's sessions in the order of their rows,
+// into conversations: the rows of a Claude or Codex agent with a conversation
+// id, by role and id, each group in the order of its first row.
+func conversations(ss []store.Session) []conversation {
+	var out []conversation
+	at := map[string]int{}
+	for _, s := range ss {
+		kind, sid := store.Deref(s.AgentKind), store.Deref(s.SessionID)
+		if (kind != agents.KindClaude && kind != agents.KindCodex) || sid == "" {
+			continue
+		}
+		key := s.Role + "\x00" + sid
+		if i, ok := at[key]; ok {
+			out[i].rows = append(out[i].rows, s)
+			continue
+		}
+		at[key] = len(out)
+		out = append(out, conversation{key: key, rows: []store.Session{s}})
+	}
+	return out
+}
+
+// newest is the row of the conversation's pane now, or last.
+func (c conversation) newest() store.Session { return c.rows[len(c.rows)-1] }
+
+// rowAt is the row whose pane held the conversation at at: the newest one
+// started at or before it, else the oldest.
+func (c conversation) rowAt(at time.Time) store.Session {
+	row := c.rows[0]
+	for _, s := range c.rows[1:] {
+		if !s.StartedAt.After(at) {
+			row = s
+		}
+	}
+	return row
 }
 
 // fileMark tells a transcript changed: its path, size and time.
@@ -145,8 +193,8 @@ func (r *Runtime) youIn(id int64) []time.Time {
 }
 
 // typed is the observe pass's read of the turns typed into the factory's
-// panes, at most once every typedEvery: an EventTyped for each session whose
-// transcript holds such turns and changed since a read took it whole.
+// panes, at most once every typedEvery: an EventTyped for each conversation
+// whose transcript holds such turns and changed since a read took it whole.
 func (r *Runtime) typed(ctx context.Context, reads turnReads) []Event {
 	now := r.now()
 	r.mu.Lock()
@@ -163,7 +211,7 @@ func (r *Runtime) typed(ctx context.Context, reads turnReads) []Event {
 		r.log.Warn("read the turns typed into the panes", "err", err)
 		return nil
 	}
-	listed := map[int64]bool{}
+	listed, whole := map[string]bool{}, true
 	var evs []Event
 	for _, t := range tasks {
 		switch t.State {
@@ -173,25 +221,29 @@ func (r *Runtime) typed(ctx context.Context, reads turnReads) []Event {
 			}
 		}
 		pr, err := r.ownerRow(ctx, t.ID)
-		if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
 			continue // a task that never launched an agent
 		}
-		ss, err := r.st.SessionsByPR(ctx, pr.ID)
+		var ss []store.Session
+		if err == nil {
+			ss, err = r.st.SessionsByPR(ctx, pr.ID)
+		}
 		if err != nil {
 			r.log.Warn("read the turns typed into the panes", "task", t.ID, "err", err)
+			whole = false // what was read of its panes is kept for the next pass
 			continue
 		}
-		for _, s := range ss {
-			listed[s.ID] = true
-			if ev, ok := r.typedIn(ctx, t, pr, s, reads); ok {
+		for _, c := range conversations(ss) {
+			listed[c.key] = true
+			if ev, ok := r.typedIn(ctx, t, pr, c, reads); ok {
 				evs = append(evs, ev)
 			}
 		}
 	}
 	r.mu.Lock()
-	for id := range r.seen {
-		if !listed[id] {
-			delete(r.seen, id)
+	for key := range r.seen {
+		if whole && !listed[key] {
+			delete(r.seen, key)
 		}
 	}
 	for id, at := range r.youAt {
@@ -203,24 +255,19 @@ func (r *Runtime) typed(ctx context.Context, reads turnReads) []Event {
 	return evs
 }
 
-// typedIn reads the transcript of session s of task t (owner row pr) for the
-// turns typed into its pane: an EventTyped with them, false for none (no
-// transcript, nothing changed since a read took it whole, none typed, a read
-// that failed). A session that ended gets a last read: no turn of it waits
-// for its proof.
-func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, s store.Session, reads turnReads) (Event, bool) {
-	kind, sid := store.Deref(s.AgentKind), store.Deref(s.SessionID)
-	if (kind != agents.KindClaude && kind != agents.KindCodex) || sid == "" {
-		return Event{}, false
-	}
+// typedIn reads the transcript of conversation c of task t (owner row pr)
+// for the turns typed into its panes: an EventTyped of its role with them,
+// false for none (no transcript, nothing changed since a read took it whole,
+// none typed, a read that failed). A conversation whose pane ended gets a
+// last read: no turn of it waits for its proof.
+func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, c conversation, reads turnReads) (Event, bool) {
+	s := c.newest()
+	kind := store.Deref(s.AgentKind)
 	r.mu.Lock()
-	prev, read := r.seen[s.ID]
+	prev, read := r.seen[c.key]
 	r.mu.Unlock()
-	if !read || prev.sid != sid {
-		prev = typedSeen{}
-	}
-	mark := r.transcriptMark(ctx, s, prev.file.path)
-	if mark.path == "" || (read && prev.sid == sid && prev.file == mark) {
+	mark := r.transcriptMark(ctx, s, prev.path)
+	if mark.path == "" || (read && prev == mark) {
 		return Event{}, false
 	}
 	turns, err := r.userTurns(reads, kind, mark.path)
@@ -239,7 +286,7 @@ func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, s s
 		return Event{}, false
 	}
 	ended := s.State != store.SessionStarting && s.State != store.SessionLive
-	you := r.youIn(s.ID)
+	you := map[int64][]time.Time{} // by row: when herdr showed you in its pane
 	now := r.now()
 	ev := Event{TaskID: t.ID, Role: s.Role, Kind: EventTyped}
 	waits := false
@@ -248,12 +295,16 @@ func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, s s
 		if (u.Origin != "" && u.Origin != "human") || strings.TrimSpace(u.Text) == "" || own.holds(u.Text) {
 			continue // a turn a tool or a notification began, or the factory's own
 		}
-		origin := originOf(you, u.At)
+		row := c.rowAt(u.At)
+		if _, ok := you[row.ID]; !ok {
+			you[row.ID] = r.youIn(row.ID)
+		}
+		origin := originOf(you[row.ID], u.At)
 		if origin == registry.OriginUnknown && !ended && now.Sub(u.At) < originWindow {
 			waits = true // herdr may not have shown the agent at work on it yet
 			continue
 		}
-		run, inFlight := runAt(runs, s.ID, u.At)
+		run, inFlight := runAt(runs, row.ID, u.At)
 		state := herdr.StatusIdle
 		if inFlight {
 			state = herdr.StatusWorking
@@ -263,7 +314,7 @@ func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, s s
 	}
 	if !waits {
 		r.mu.Lock()
-		r.seen[s.ID] = typedSeen{sid: sid, file: mark}
+		r.seen[c.key] = mark
 		r.mu.Unlock()
 	}
 	return ev, len(ev.Turns) > 0

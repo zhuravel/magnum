@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"errors"
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -349,6 +351,107 @@ func TestAFailedLastReadIsTriedAgain(t *testing.T) {
 	g.clock.Add(time.Minute)
 	if got := typedTurns(g.observe()); len(got) != 1 || got[0].Text != "stop here" {
 		t.Fatalf("the read after the failed one handed %+v, want the turn", got)
+	}
+}
+
+// firstOrigins is the origin each turn's text was first handed with, in the
+// order of evs: what the engine records (it keeps a turn's first record).
+func firstOrigins(evs []Event) map[string]string {
+	first := map[string]string{}
+	for _, u := range typedTurns(evs) {
+		if _, ok := first[u.Text]; !ok {
+			first[u.Text] = u.Origin
+		}
+	}
+	return first
+}
+
+// A conversation that goes on in a new pane (its pane parked and the role
+// launched again, or its pane lost and recovered) has one reader, its newest
+// pane's, though the old pane's row shares its transcript: a turn typed in
+// the new pane is handed first with the proof herdr gave in the new pane, so
+// the engine records it so, once, and what herdr showed of you in the old
+// pane proves nothing typed in the new one. A turn of the old pane keeps the
+// old pane's proof.
+func TestATurnTypedAfterAResumeIsProvenInTheNewPane(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		resume func(g *rig)
+	}{
+		{"parked and launched again", func(g *rig) {
+			if err := g.r.Park(g.ctx, g.task); err != nil {
+				g.t.Fatalf("Park: %v", err)
+			}
+			g.launch("fx-repro")
+			g.observe()
+		}},
+		{"lost and recovered", func(g *rig) {
+			g.h.losePane(g.agent("fx-repro"))
+			g.observe()                                                     // lost: its recovery waits while you are in the pane
+			g.clock.Add(g.cfg.Factory.HumanCooldown.Duration + time.Minute) // you left
+			g.watchdog()
+			g.observe()
+			g.endRun("fx-repro") // the recovery's prompt to go on
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newRig(t)
+			g.claudeRole("fx-repro", "sid-1")
+			g.clock.Add(2 * time.Minute)
+			lines := []transcriptLine{userLine(g.clock.Now(), "in the old pane")}
+			g.writeTranscript("sid-1", lines...)
+			evs := g.youAtWork("fx-repro")
+
+			c.resume(g)
+			ss, err := g.st.SessionsByPR(g.ctx, g.owner().ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ss) != 2 || store.Deref(ss[0].SessionID) != "sid-1" || store.Deref(ss[1].SessionID) != "sid-1" ||
+				ss[0].State == store.SessionLive || ss[1].State != store.SessionLive {
+				t.Fatalf("sessions %+v, want the old row ended and a live one of the same conversation", ss)
+			}
+			lines = append(lines, userLine(g.clock.Now(), "early in the new pane")) // within 2 minutes of the old pane's proof
+			g.writeTranscript("sid-1", lines...)
+			evs = append(evs, g.observeN(13)...)
+			lines = append(lines, userLine(g.clock.Now(), "late in the new pane"))
+			g.writeTranscript("sid-1", lines...)
+			evs = append(evs, g.youAtWork("fx-repro")...)
+			evs = append(evs, g.observeN(13)...)
+
+			want := map[string]string{"in the old pane": registry.OriginHerdr, "early in the new pane": registry.OriginUnknown,
+				"late in the new pane": registry.OriginHerdr}
+			if first := firstOrigins(evs); !maps.Equal(first, want) {
+				t.Fatalf("first handed with %v, want %v", first, want)
+			}
+		})
+	}
+}
+
+// A task whose owner row cannot be read (the store fails) is no task that
+// never launched: the read says so in the log, and the next read, once the
+// store answers, hands what the task's panes hold.
+func TestAnOwnerRowThatCannotBeReadIsWarned(t *testing.T) {
+	g := newRig(t)
+	g.claudeRole("fx-repro", "sid-1")
+	g.writeTranscript("sid-1", userLine(g.clock.Now().Add(-10*time.Minute), "use the replica"))
+	if _, err := g.st.DB().ExecContext(g.ctx, "ALTER TABLE repos RENAME TO repos_away"); err != nil {
+		t.Fatal(err)
+	}
+	g.clock.Add(time.Minute)
+	if got := typedTurns(g.observe()); len(got) != 0 {
+		t.Fatalf("handed %+v without the owner row", got)
+	}
+	if logs := g.logs.String(); !strings.Contains(logs, "read the turns typed into the panes") || !strings.Contains(logs, "repos") {
+		t.Fatalf("the failed owner row was read silently:\n%s", logs)
+	}
+
+	if _, err := g.st.DB().ExecContext(g.ctx, "ALTER TABLE repos_away RENAME TO repos"); err != nil {
+		t.Fatal(err)
+	}
+	g.clock.Add(time.Minute)
+	if got := typedTurns(g.observe()); len(got) != 1 || got[0].Text != "use the replica" {
+		t.Fatalf("handed %+v once the store answered, want the turn", got)
 	}
 }
 

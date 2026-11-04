@@ -3781,6 +3781,8 @@ What you type into the factory's panes is recorded as your input (`pane_typed`, 
 once each: about once a minute, the observe pass reads the transcript of each agent of a task that changed since,
 in the same read that settles a prompt of unknown delivery, and one last time an agent whose pane ended, whether a
 read saw it live or not (one that ended while the daemon was down too; a last read that fails is tried again). A
+conversation resumed in a new pane (after a park or a lost pane) is read once, through its newest pane, and each of
+its turns is proven by the pane that held it when you typed it, never by another. A
 user turn counts unless it is a prompt of the task's ledger (by its hash), the kind's after-deny prompt, the record
 of a slash command magnum types (`/compact`, the kinds' `switch_model`, `rename` and exit commands: yours of those
 names are dropped with them, and `magnum factory baseline` drops them from your old transcripts too, so both sides
@@ -3794,7 +3796,10 @@ counts every pane turn without `herdr` apart; a turn without proof younger than 
 read, and what herdr showed before a restart is forgotten, so such a turn is `unknown`). The words and the agent's turns are scrubbed (tokens, `password=` values, emails and host
 names), a long paste (more than 40 lines or 4000 bytes) keeps only why it was dropped, and a turn within 5 minutes
 of a wait on you for access (`access needed: …`) keeps only that, as it may hold a code or a password. A turn is
-known by its role and the time you typed it, so a restart records none twice and loses none the transcript holds.
+known by its role and the time you typed it, so a restart records none twice, and the transcripts are read again
+after it. One case loses a pane's last read: the panes of a task are read until 10 minutes after the task is done,
+stopped or failed, so when the daemon stops shortly after a task's end and is back only after those 10 minutes, what
+you typed into its panes after their last read is not recorded.
 
 ## Daily use
 
