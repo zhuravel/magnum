@@ -48,7 +48,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registry](#registry) | Package registry is the factory's own SQLite registry: tasks, the stage attempts that run them, questions and the operator's decisions, the prompt ledger, external effects, the event log and the CLI's requests. |
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which registry.Open then finds current. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
-| [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions and the time a task waited on them, computed from the factory registry's evidence records alone and set against the baseline frozen before the first task (milestone 1's exit test). |
+| [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -13576,10 +13576,11 @@ package stats // import "github.com/zhuravel/magnum/internal/factory/stats"
 
 Package stats measures how much the factory still asks of the operator:
 per task, the messages typed, the messages that only start a step, the answer
-batches, the card decisions and the time a task waited on them, computed from
-the factory registry's evidence records alone and set against the baseline
-frozen before the first task (milestone 1's exit test). Compute only reads the
-registry.
+batches, the card decisions, the operator's time on cards and the time a task
+waited on them, computed from the factory registry's evidence records alone
+(spans, inputs, questions, decisions and review rounds) and set against the
+baseline frozen before the first task (milestone 1's exit test). Compute only
+reads the registry.
 
 VARIABLES
 
@@ -13607,6 +13608,13 @@ func FreezeBaseline(path string, b Baseline) error
     it is; the file appears whole or not at all (it is written beside path and
     linked into place, which cannot replace a file). A zero Frozen becomes the
     clock's now. The file is private (0600) and holds counts, no text.
+
+func IsTyped(kind string) bool
+    IsTyped reports whether an input of the kind holds the operator's own words:
+    the task's text, guidance, a send-back's note, what was typed into a pane
+    and what was said in one line. The engine classifies the words of these when
+    it records them, and Compute counts them as typed. An answer, a decision,
+    a rating, a stop, a drop and a retry are the operator's acts, not messages.
 
 
 TYPES
@@ -13680,9 +13688,9 @@ func Compute(ctx context.Context, reg *registry.Registry, since time.Time) (Repo
 func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time) (Report, error)
     ComputeAt measures the tasks of reg started at or after since (the zero
     time: all), whole, whatever happened to them later, from their spans,
-    inputs, decisions and review rounds. now ends a wait on the operator that
-    is still open. It reads and never writes. Nothing here reads a transcript or
-    GitHub, so the numbers are the evidence the factory recorded.
+    inputs, questions, decisions and review rounds. now ends a wait on the
+    operator that is still open. It reads and never writes. Nothing here reads a
+    transcript or GitHub, so the numbers are the evidence the factory recorded.
 
 func (r Report) Markdown() string
     Markdown renders the report for reading and for the exit test: a table of
@@ -13718,17 +13726,23 @@ type TaskStats struct {
 	AnswerBatches, Decisions, ReviewRounds            int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
+	WaitedOnYou  time.Duration
 	StartToReady time.Duration
 }
     TaskStats is what one task asked of the operator. Typed counts the messages
-    the operator typed (typed in a pane, said in one line, the start's guidance,
-    the note of a send-back); StepStarts, Approvals, Corrections and Access
-    count those of them by class (a retry is a step the operator started by
-    hand, so it counts as a step start and not as a typed message); a message
-    of another class, or of none, is only typed. AnswerBatches and Decisions are
-    counted apart. OperatorSecs is how long the task waited on the operator (its
-    spans that wait on "you"), StartToReady how long it took to reach the ready
-    card (zero before it does).
+    the operator typed (the task's text, typed in a pane, said in one line,
+    the start's guidance, the note of a send-back); StepStarts, Approvals,
+    Corrections and Access count those of them by class (a retry is a step
+    the operator started by hand, so it counts as a step start and not as a
+    typed message); a message of another class, or of none, is only typed.
+    AnswerBatches counts the revisions of questions that were answered, and
+    Decisions the decisions on cards; both are counted apart. OperatorSecs is
+    the operator's time on cards: for each decision, from the card shown to the
+    decision, and for each answered revision of questions, from the questions
+    shown to the first answer, each at most cardCap (a card never shown has no
+    time to measure). WaitedOnYou is how long the task waited on the operator,
+    asleep or not (its spans that wait on "you"). StartToReady is how long it
+    took to reach the ready card (zero before it does).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in

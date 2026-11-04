@@ -17,8 +17,9 @@ import (
 )
 
 // seedStatsTask makes a task in the factory registry of dt, created at when
-// (the zero time: now), with the typed messages and the answer given.
-func seedStatsTask(t *testing.T, dt *daemonGroupTest, key string, when time.Time, typed []string, answers int) registry.Task {
+// (the zero time: now), with the typed messages and that many revisions of
+// questions asked and answered.
+func seedStatsTask(t *testing.T, dt *daemonGroupTest, key string, when time.Time, typed []string, answered int) registry.Task {
 	t.Helper()
 	registrytest.Seed(t, dt.ctx.Layout.FactoryDB())
 	opts := registry.Options{}
@@ -40,13 +41,30 @@ func seedStatsTask(t *testing.T, dt *daemonGroupTest, key string, when time.Time
 			t.Fatal(err)
 		}
 	}
-	for i := range answers {
-		in := registry.Input{TaskID: task.ID, Kind: registry.InputAnswer, Text: "yes", At: time.Now().Add(-time.Duration(i) * time.Hour)}
-		if _, err := reg.RecordInput(ctx, in); err != nil {
+	for rev := 1; rev <= answered; rev++ {
+		if err := reg.ReplaceQuestions(ctx, task.ID, rev, []registry.Question{{Text: "Which one?", Recommended: -1, RaisedBy: "fx-reproducer"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.AnswerBatch(ctx, task.ID, rev, map[int]string{0: "The first"}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return task
+}
+
+// seedDecision records a decision on the task that its card showed ago
+// before.
+func seedDecision(t *testing.T, dt *daemonGroupTest, taskID int64, ago time.Duration) {
+	t.Helper()
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+	at := time.Now()
+	if err := reg.RecordDecision(context.Background(), registry.Decision{TaskID: taskID, Kind: "ready_push", Choice: "push", Shown: at.Add(-ago), At: at}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func freezeStatsBaseline(t *testing.T, l paths.Layout) {
@@ -64,7 +82,8 @@ func freezeStatsBaseline(t *testing.T, l paths.Layout) {
 func TestFactoryStatsPrintsMarkdownAgainstTheBaseline(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	seedStatsTask(t, dt, "PR-12311", time.Time{}, []string{"open PR", "yes", "the refund path only matters for expired points"}, 3)
+	task := seedStatsTask(t, dt, "PR-12311", time.Time{}, []string{"open PR", "yes", "the refund path only matters for expired points"}, 3)
+	seedDecision(t, dt, task.ID, 10*time.Minute)
 	freezeStatsBaseline(t, dt.ctx.Layout)
 
 	if code := dt.run("factory", "stats"); code != 0 {
@@ -73,7 +92,7 @@ func TestFactoryStatsPrintsMarkdownAgainstTheBaseline(t *testing.T) {
 	out := dt.stdout.String()
 	for _, want := range []string{
 		"# Factory stats",
-		"| PR-12311 | 3 | 1 | 1 | 0 | 0 | 3 | 0 | 0 |",
+		"| PR-12311 | 3 | 1 | 1 | 0 | 0 | 3 | 1 | 0 | 10m00s | 0s | - |",
 		"## Against the baseline",
 		"12 tickets",
 		"| PR-12311 | 3 | below the baseline's middle half (median 41, 30 to 77.5) | 1 | below the baseline's middle half (median 9, 5 to 14) |",

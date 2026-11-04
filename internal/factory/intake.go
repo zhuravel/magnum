@@ -585,7 +585,7 @@ func (e *Engine) recordStart(ctx context.Context, t registry.Task, p StartPayloa
 	if !kept {
 		input.Text, input.DroppedReason = "", "a long paste: more than 40 lines or 4000 bytes"
 	}
-	if _, err := e.reg.RecordInput(ctx, input); err != nil {
+	if _, err := e.recordInput(ctx, input); err != nil {
 		e.log.Warn("record a start's input", "task", t.ID, "err", err)
 	}
 	if in.Guidance != "" {

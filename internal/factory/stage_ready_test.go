@@ -701,3 +701,27 @@ func TestThePRTitleIsTheKeyAndTheTitle(t *testing.T) {
 		}
 	}
 }
+
+// Your note on a send back is classified as it is recorded; the decision
+// that came with it is your act, not words, and has no class.
+func TestASendBacksNoteIsClassifiedWhenRecorded(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCard("PR-12397")
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoiceSendBack, "scope", "wrong scope: keep archived campaigns out"); q.State != registry.RequestDone {
+		t.Fatalf("send back request %s: %q", q.State, q.Result)
+	}
+	ins, err := r.reg.Inputs(r.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classes := map[string]string{}
+	for _, in := range ins {
+		classes[in.Kind] = in.Class
+	}
+	if classes[registry.InputSendBack] != registry.ClassCorrection {
+		t.Errorf("the send back input has class %q, want %q; inputs %+v", classes[registry.InputSendBack], registry.ClassCorrection, ins)
+	}
+	if class, ok := classes[registry.InputDecision]; !ok || class != "" {
+		t.Errorf("the decision input has class %q (recorded: %v), want none", class, ok)
+	}
+}

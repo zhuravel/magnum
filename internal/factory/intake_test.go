@@ -866,3 +866,24 @@ func TestThePreviewReadsTheTicketAndNamesKindBranchAndStart(t *testing.T) {
 		t.Fatalf("an unknown key's preview %+v", f)
 	}
 }
+
+// The words you start a task with are classified as they are recorded: a
+// guidance after a key, a prompt, a key alone, by what they ask for.
+func TestTheWordsOfAStartAreClassifiedWhenRecorded(t *testing.T) {
+	r := newIntakeRig(t)
+	for _, c := range []struct{ text, kind, class string }{
+		{"PR-12345 merge master first", registry.InputGuidance, registry.ClassStepStart},
+		{"PR-12346", registry.InputTaskText, registry.ClassInfo},
+		{"Rename the referral helper in the checkout, and its specs.", registry.InputTaskText, registry.ClassInfo},
+		{"open PR for the rename of the referral helper", registry.InputTaskText, registry.ClassStepStart},
+	} {
+		task := r.mustStart(c.text)
+		ins, err := r.reg.Inputs(r.ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ins) != 1 || ins[0].Kind != c.kind || ins[0].Class != c.class {
+			t.Errorf("start %q: inputs %+v, want one %s input of class %q", c.text, ins, c.kind, c.class)
+		}
+	}
+}

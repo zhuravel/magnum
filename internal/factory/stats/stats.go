@@ -1,16 +1,16 @@
 // Package stats measures how much the factory still asks of the operator: per
 // task, the messages typed, the messages that only start a step, the answer
-// batches, the card decisions and the time a task waited on them, computed
-// from the factory registry's evidence records alone and set against the
-// baseline frozen before the first task (milestone 1's exit test). Compute
-// only reads the registry.
+// batches, the card decisions, the operator's time on cards and the time a
+// task waited on them, computed from the factory registry's evidence records
+// alone (spans, inputs, questions, decisions and review rounds) and set
+// against the baseline frozen before the first task (milestone 1's exit
+// test). Compute only reads the registry.
 package stats
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,20 +23,24 @@ import (
 // when that stage first waits on the operator.
 const readyStage = "ready"
 
-// answerBatchGap is the longest pause inside one batch of answers. The
-// factory records one answer input per question, in a row, when the operator
-// sends a batch; a human sends the next batch seconds later at the earliest.
-const answerBatchGap = 2 * time.Second
+// cardCap is the most one card counts in OperatorSecs: a card left open and
+// idle is not the operator's time.
+const cardCap = 30 * time.Minute
 
 // TaskStats is what one task asked of the operator. Typed counts the
-// messages the operator typed (typed in a pane, said in one line, the start's
-// guidance, the note of a send-back); StepStarts, Approvals, Corrections and
-// Access count those of them by class (a retry is a step the operator started
-// by hand, so it counts as a step start and not as a typed message); a message
-// of another class, or of none, is only typed. AnswerBatches and Decisions
-// are counted apart. OperatorSecs is how long the task waited on the operator
-// (its spans that wait on "you"), StartToReady how long it took to reach the
-// ready card (zero before it does).
+// messages the operator typed (the task's text, typed in a pane, said in one
+// line, the start's guidance, the note of a send-back); StepStarts, Approvals,
+// Corrections and Access count those of them by class (a retry is a step the
+// operator started by hand, so it counts as a step start and not as a typed
+// message); a message of another class, or of none, is only typed.
+// AnswerBatches counts the revisions of questions that were answered, and
+// Decisions the decisions on cards; both are counted apart. OperatorSecs is
+// the operator's time on cards: for each decision, from the card shown to the
+// decision, and for each answered revision of questions, from the questions
+// shown to the first answer, each at most cardCap (a card never shown has no
+// time to measure). WaitedOnYou is how long the task waited on the operator,
+// asleep or not (its spans that wait on "you"). StartToReady is how long it
+// took to reach the ready card (zero before it does).
 type TaskStats struct {
 	TaskID int64
 	Key    string
@@ -45,7 +49,22 @@ type TaskStats struct {
 	AnswerBatches, Decisions, ReviewRounds            int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
+	WaitedOnYou  time.Duration
 	StartToReady time.Duration
+}
+
+// IsTyped reports whether an input of the kind holds the operator's own
+// words: the task's text, guidance, a send-back's note, what was typed into a
+// pane and what was said in one line. The engine classifies the words of
+// these when it records them, and Compute counts them as typed. An answer, a
+// decision, a rating, a stop, a drop and a retry are the operator's acts, not
+// messages.
+func IsTyped(kind string) bool {
+	switch kind {
+	case registry.InputTaskText, registry.InputGuidance, registry.InputSendBack, registry.InputPaneTyped, registry.InputSayOneLine:
+		return true
+	}
+	return false
 }
 
 // MarshalJSON writes the task's stats with fixed keys and the durations in
@@ -63,9 +82,10 @@ func (t TaskStats) MarshalJSON() ([]byte, error) {
 		Decisions     int    `json:"decisions"`
 		ReviewRounds  int    `json:"review_rounds"`
 		OperatorSecs  int64  `json:"operator_secs"`
+		WaitedOnYou   int64  `json:"waited_on_you_secs"`
 		StartToReady  int64  `json:"start_to_ready_secs"`
 	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.AnswerBatches, t.Decisions, t.ReviewRounds,
-		seconds(t.OperatorSecs), seconds(t.StartToReady)})
+		seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady)})
 }
 
 func seconds(d time.Duration) int64 { return int64(d.Round(time.Second) / time.Second) }
@@ -108,7 +128,7 @@ func Compute(ctx context.Context, reg *registry.Registry, since time.Time) (Repo
 
 // ComputeAt measures the tasks of reg started at or after since (the zero
 // time: all), whole, whatever happened to them later, from their spans,
-// inputs, decisions and review rounds. now ends a wait on the operator that
+// inputs, questions, decisions and review rounds. now ends a wait on the operator that
 // is still open. It reads and never writes. Nothing here reads a transcript
 // or GitHub, so the numbers are the evidence the factory recorded.
 func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time) (Report, error) {
@@ -139,6 +159,10 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	if err != nil {
 		return TaskStats{}, err
 	}
+	questions, err := reg.Questions(ctx, t.ID)
+	if err != nil {
+		return TaskStats{}, err
+	}
 	decisions, err := reg.Decisions(ctx, t.ID)
 	if err != nil {
 		return TaskStats{}, err
@@ -147,12 +171,12 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	if err != nil {
 		return TaskStats{}, err
 	}
-	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), Decisions: len(decisions), ReviewRounds: len(cycles),
-		OperatorSecs: waitedOnYou(spans, t, now), StartToReady: startToReady(spans)}
-	var answered []time.Time
+	batches, onQuestions := answeredBatches(questions)
+	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), AnswerBatches: batches, Decisions: len(decisions), ReviewRounds: len(cycles),
+		OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now), StartToReady: startToReady(spans)}
 	for _, in := range inputs {
-		switch in.Kind {
-		case registry.InputPaneTyped, registry.InputSayOneLine, registry.InputGuidance, registry.InputSendBack:
+		switch {
+		case IsTyped(in.Kind):
 			ts.Typed++
 			switch classOf(in) {
 			case registry.ClassStepStart:
@@ -164,13 +188,10 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 			case registry.ClassAccess:
 				ts.Access++
 			}
-		case registry.InputRetry:
+		case in.Kind == registry.InputRetry:
 			ts.StepStarts++
-		case registry.InputAnswer:
-			answered = append(answered, in.At)
 		}
 	}
-	ts.AnswerBatches = batches(answered)
 	return ts, nil
 }
 
@@ -184,32 +205,66 @@ func taskKey(t registry.Task) string {
 }
 
 // classOf is the class of a typed input: the stored one (the engine's, or
-// the operator's own correction of it), else, for what was typed into a pane
-// or said in one line, Classify's reading of its words. The start's guidance
-// and a send-back's note are the operator's words to the factory, not
-// messages to an agent that start a step, so they stay unclassified until
-// the engine stores a class.
+// the operator's own correction of it), else Classify's reading of its words,
+// which is what the engine would have stored; a dropped paste has no words
+// and no class.
 func classOf(in registry.Input) string {
 	switch {
 	case in.Class != "":
 		return in.Class
-	case (in.Kind == registry.InputPaneTyped || in.Kind == registry.InputSayOneLine) && in.Text != "":
+	case in.Text != "":
 		return Classify(in.Text)
 	}
 	return ""
 }
 
-// batches counts the batches of answers sent at the given times: answers
-// less than answerBatchGap apart belong to one.
-func batches(at []time.Time) int {
-	slices.SortFunc(at, time.Time.Compare)
-	n := 0
-	for i, a := range at {
-		if i == 0 || a.Sub(at[i-1]) > answerBatchGap {
-			n++
+// answeredBatches counts the answered batches of questions: one for each
+// revision with an answered question, however many submissions answered it.
+// The time is the operator's on them: for each such revision, from the first
+// time its questions were shown to the first answer, at most cardCap (a
+// revision never shown has no time to measure).
+func answeredBatches(qs []registry.Question) (batches int, onCards time.Duration) {
+	type revision struct{ shown, answered time.Time }
+	byRevision := map[int]*revision{}
+	for _, q := range qs {
+		if q.State != registry.QuestionAnswered || q.Answered.IsZero() {
+			continue
+		}
+		rv := byRevision[q.Revision]
+		if rv == nil {
+			rv = &revision{answered: q.Answered}
+			byRevision[q.Revision] = rv
+		}
+		if q.Answered.Before(rv.answered) {
+			rv.answered = q.Answered
+		}
+		if !q.Shown.IsZero() && (rv.shown.IsZero() || q.Shown.Before(rv.shown)) {
+			rv.shown = q.Shown
 		}
 	}
-	return n
+	for _, rv := range byRevision {
+		onCards += onCard(rv.shown, rv.answered)
+	}
+	return len(byRevision), onCards
+}
+
+// onDecisions adds the operator's time on the cards they decided: each from
+// the card shown to the decision.
+func onDecisions(ds []registry.Decision) time.Duration {
+	var total time.Duration
+	for _, d := range ds {
+		total += onCard(d.Shown, d.At)
+	}
+	return total
+}
+
+// onCard is the time from a card shown to its answer or decision, at most
+// cardCap; zero when it was never shown (or the times do not run forward).
+func onCard(shown, answered time.Time) time.Duration {
+	if shown.IsZero() || !answered.After(shown) {
+		return 0
+	}
+	return min(answered.Sub(shown), cardCap)
 }
 
 // waitedOnYou adds up the spans that wait on the operator, each ending at the
@@ -262,15 +317,16 @@ func (r Report) Markdown() string {
 	if len(r.Tasks) == 0 {
 		b.WriteString("No tasks.\n")
 	} else {
-		b.WriteString("| Task | Typed | Step starts | Approvals | Corrections | Access | Answer batches | Decisions | Review rounds | On you | Start to ready |\n")
-		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
+		b.WriteString("| Task | Typed | Step starts | Approvals | Corrections | Access | Answer batches | Decisions | Review rounds | On cards | Waited on you | Start to ready |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 		for _, t := range r.Tasks {
 			ready := "-"
 			if t.StartToReady > 0 {
 				ready = fmtDuration(t.StartToReady)
 			}
-			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s |\n", t.Key, t.Typed, t.StepStarts, t.Approvals,
-				t.Corrections, t.Access, t.AnswerBatches, t.Decisions, t.ReviewRounds, fmtDuration(t.OperatorSecs), ready)
+			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s |\n", t.Key, t.Typed, t.StepStarts, t.Approvals,
+				t.Corrections, t.Access, t.AnswerBatches, t.Decisions, t.ReviewRounds, fmtDuration(t.OperatorSecs),
+				fmtDuration(t.WaitedOnYou), ready)
 		}
 	}
 	b.WriteString("\n## Against the baseline\n\n")

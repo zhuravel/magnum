@@ -75,12 +75,15 @@ func only(t *testing.T, rep stats.Report, key string) stats.TaskStats {
 	return stats.TaskStats{}
 }
 
-// Pane-typed, say-one-line, guidance and send-back inputs are what the
-// operator typed; answers and decisions are counted apart, and the other
-// inputs (the task's text, a rating, a stop, a drop) are neither.
+// The task's text, pane-typed, say-one-line, guidance and send-back inputs
+// are what the operator typed (the task's first message counts, as the first
+// message of every session does in the baseline); answers and decisions are
+// counted apart, and the other inputs (a rating, a stop, a drop) are neither.
+// An answer batch is a revision of questions that was answered, from the
+// question records, whatever the answer inputs look like.
 func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 	t.Parallel()
-	r := openRegistry(t)
+	r, clk := openClocked(t)
 	ctx := t.Context()
 	a, b := createTask(t, r, "PR-12301"), createTask(t, r, "PR-12302")
 
@@ -95,24 +98,27 @@ func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 	if _, err := r.RecordInput(ctx, registry.Input{TaskID: a.ID, Kind: registry.InputPaneTyped, DroppedReason: "a long paste", At: t0.Add(8 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	// Answers: three in one batch, one in a second batch an hour later.
-	input(t, r, a.ID, registry.InputAnswer, "Seven days", "", time.Hour)
-	input(t, r, a.ID, registry.InputAnswer, "ask:rev-ann", "", time.Hour+10*time.Millisecond)
-	input(t, r, a.ID, registry.InputAnswer, "Yes", "", time.Hour+20*time.Millisecond)
-	input(t, r, a.ID, registry.InputAnswer, "Keep it", "", 2*time.Hour)
+	// Questions: three answered together, one answered later, one asked and
+	// never answered. The answers left an answer input each; they are no batch.
+	askRevision(t, r, clk, a.ID, 1, 3, time.Hour, 61*time.Minute, 66*time.Minute)
+	askRevision(t, r, clk, a.ID, 2, 1, 2*time.Hour, 121*time.Minute, 130*time.Minute)
+	askRevision(t, r, clk, a.ID, 3, 2, 3*time.Hour, 181*time.Minute, 0)
+	for i, text := range []string{"Seven days", "ask:rev-ann", "Yes", "Keep it"} {
+		input(t, r, a.ID, registry.InputAnswer, text, "", time.Hour+time.Duration(i)*20*time.Minute)
+	}
 	// Decisions, the card's and the input it left.
-	input(t, r, a.ID, registry.InputDecision, "send_back: scope", "", 3*time.Hour)
-	input(t, r, a.ID, registry.InputDecision, "push", "", 4*time.Hour)
+	input(t, r, a.ID, registry.InputDecision, "send_back: scope", "", 4*time.Hour)
+	input(t, r, a.ID, registry.InputDecision, "push", "", 5*time.Hour)
 	for _, d := range []registry.Decision{
-		{TaskID: a.ID, Kind: "ready_push", Choice: "send_back", Note: "scope", At: t0.Add(3 * time.Hour)},
-		{TaskID: a.ID, Kind: "ready_push", Choice: "push", At: t0.Add(4 * time.Hour)},
+		{TaskID: a.ID, Kind: "ready_push", Choice: "send_back", Note: "scope", At: t0.Add(4 * time.Hour)},
+		{TaskID: a.ID, Kind: "ready_push", Choice: "push", At: t0.Add(5 * time.Hour)},
 	} {
 		if err := r.RecordDecision(ctx, d); err != nil {
 			t.Fatal(err)
 		}
 	}
-	input(t, r, a.ID, registry.InputRating, "", "", 5*time.Hour)
-	input(t, r, a.ID, registry.InputStop, "", "", 6*time.Hour)
+	input(t, r, a.ID, registry.InputRating, "", "", 6*time.Hour)
+	input(t, r, a.ID, registry.InputStop, "", "", 7*time.Hour)
 	for range 2 {
 		c, err := r.BeginCycle(ctx, a.ID, "aaa", "skill")
 		if err != nil {
@@ -133,9 +139,9 @@ func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 		t.Fatalf("tasks = %+v, want the two tasks by id", rep.Tasks)
 	}
 	got := rep.Tasks[0]
-	want := stats.TaskStats{TaskID: a.ID, Key: "PR-12301", Typed: 8, StepStarts: 1, Approvals: 1, Corrections: 2, Access: 1,
+	want := stats.TaskStats{TaskID: a.ID, Key: "PR-12301", Typed: 9, StepStarts: 1, Approvals: 1, Corrections: 2, Access: 1,
 		AnswerBatches: 2, Decisions: 2, ReviewRounds: 2}
-	got.OperatorSecs, got.StartToReady = 0, 0
+	got.OperatorSecs, got.WaitedOnYou, got.StartToReady = 0, 0, 0
 	if got != want {
 		t.Errorf("task A\n got %+v\nwant %+v", got, want)
 	}
@@ -144,19 +150,51 @@ func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 	}
 }
 
+// askRevision stores revision rev of n questions of the task at offset asked
+// after t0, shows it at shown and answers all of it at answered (an offset of
+// zero: not shown, not answered).
+func askRevision(t *testing.T, r *registry.Registry, clk *clock, taskID int64, rev, n int, asked, shown, answered time.Duration) {
+	t.Helper()
+	ctx := t.Context()
+	qs := make([]registry.Question, n)
+	answers := map[int]string{}
+	for i := range qs {
+		qs[i] = registry.Question{Text: "Which one?", Recommended: -1, RaisedBy: "fx-reproducer"}
+		answers[i] = "The first"
+	}
+	clk.Set(t0.Add(asked))
+	if err := r.ReplaceQuestions(ctx, taskID, rev, qs); err != nil {
+		t.Fatalf("ask revision %d: %v", rev, err)
+	}
+	if shown > 0 {
+		clk.Set(t0.Add(shown))
+		if err := r.ShowQuestions(ctx, taskID, rev); err != nil {
+			t.Fatalf("show revision %d: %v", rev, err)
+		}
+	}
+	if answered > 0 {
+		clk.Set(t0.Add(answered))
+		if err := r.AnswerBatch(ctx, taskID, rev, answers); err != nil {
+			t.Fatalf("answer revision %d: %v", rev, err)
+		}
+	}
+}
+
 // A step-starting message is a typed message the classifier calls a step
 // start, or the stored class does (the stored one wins), or a retry: the
-// operator starting a step by hand.
+// operator starting a step by hand. The words of a start are classified like
+// any typed words, as the engine classifies them when it records them.
 func TestStatsCountsStepStartingMessages(t *testing.T) {
 	t.Parallel()
 	r := openRegistry(t)
 	task := createTask(t, r, "PR-12303")
 
+	input(t, r, task.ID, registry.InputTaskText, "PR-12303", "", 0)                                           // a key alone: information
 	input(t, r, task.ID, registry.InputPaneTyped, "merge master", "", time.Minute)                            // classified by its words
 	input(t, r, task.ID, registry.InputSayOneLine, "go on with that", registry.ClassStepStart, 2*time.Minute) // class stored by the engine
 	input(t, r, task.ID, registry.InputPaneTyped, "open PR", registry.ClassInfo, 3*time.Minute)               // the stored class wins
 	input(t, r, task.ID, registry.InputRetry, "", "", 4*time.Minute)                                          // a step started by hand
-	input(t, r, task.ID, registry.InputGuidance, "open PR when it is done", "", 5*time.Minute)                // the start's words are guidance
+	input(t, r, task.ID, registry.InputGuidance, "open PR when it is done", "", 5*time.Minute)                // the start's words, by their words
 	input(t, r, task.ID, registry.InputAnswer, "do as recommended", "", 6*time.Minute)                        // an answer, apart
 	input(t, r, task.ID, registry.InputDecision, "push", "", 7*time.Minute)                                   // a decision, apart
 
@@ -165,21 +203,38 @@ func TestStatsCountsStepStartingMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := only(t, rep, "PR-12303")
-	if got.StepStarts != 3 {
-		t.Errorf("StepStarts = %d, want 3 (merge master, the stored step start, the retry)", got.StepStarts)
+	if got.StepStarts != 4 {
+		t.Errorf("StepStarts = %d, want 4 (merge master, the stored step start, the retry, the guidance)", got.StepStarts)
 	}
-	if got.Typed != 4 {
-		t.Errorf("Typed = %d, want 4 (the retry is not a typed message; the answer and the decision are counted apart)", got.Typed)
+	if got.Typed != 5 {
+		t.Errorf("Typed = %d, want 5 (the retry is not a typed message; the answer and the decision are counted apart)", got.Typed)
 	}
-	if got.AnswerBatches != 1 {
-		t.Errorf("AnswerBatches = %d, want 1", got.AnswerBatches)
+	if got.AnswerBatches != 0 {
+		t.Errorf("AnswerBatches = %d, want 0: an answer input is no batch, an answered revision of questions is", got.AnswerBatches)
 	}
 }
 
-// The operator's seconds are the time a task waited on them, from its
-// spans; a wait that is still open runs to now. Start to ready ends when the
-// ready stage waits on the operator.
-func TestStatsMeasuresOperatorSecondsAndStartToReadyFromSpans(t *testing.T) {
+// The kinds of input that are the operator's own words.
+func TestIsTypedNamesTheOperatorsOwnWords(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{registry.InputTaskText, registry.InputGuidance, registry.InputSendBack, registry.InputPaneTyped, registry.InputSayOneLine} {
+		if !stats.IsTyped(kind) {
+			t.Errorf("IsTyped(%q) = false", kind)
+		}
+	}
+	for _, kind := range []string{registry.InputAnswer, registry.InputDecision, registry.InputRating, registry.InputStop, registry.InputDrop,
+		registry.InputRetry, "nonsense"} {
+		if stats.IsTyped(kind) {
+			t.Errorf("IsTyped(%q) = true", kind)
+		}
+	}
+}
+
+// The time a task waited on the operator is the sum of its spans that wait
+// on "you"; a wait that is still open runs to now. That wait is not the
+// operator's time on cards. Start to ready ends when the ready stage waits on
+// the operator.
+func TestStatsMeasuresTheWaitOnYouAndStartToReadyFromSpans(t *testing.T) {
 	t.Parallel()
 	r, clk := openClocked(t)
 	ctx := t.Context()
@@ -207,11 +262,14 @@ func TestStatsMeasuresOperatorSecondsAndStartToReadyFromSpans(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := only(t, rep, "PR-12304")
-	if want := 30*time.Minute + 15*time.Minute; got.OperatorSecs != want {
-		t.Errorf("OperatorSecs = %s, want %s: 30m on the questions and 15m open on the ready card, up to now", got.OperatorSecs, want)
+	if want := 30*time.Minute + 15*time.Minute; got.WaitedOnYou != want {
+		t.Errorf("WaitedOnYou = %s, want %s: 30m on the questions and 15m open on the ready card, up to now", got.WaitedOnYou, want)
 	}
 	if want := 2 * time.Hour; got.StartToReady != want {
 		t.Errorf("StartToReady = %s, want %s", got.StartToReady, want)
+	}
+	if got.OperatorSecs != 0 {
+		t.Errorf("OperatorSecs = %s, want 0: no card was shown or decided, however long the task waited", got.OperatorSecs)
 	}
 
 	// Decided at 2h30m, stopped at 3h: the card's wait closes there.
@@ -221,8 +279,45 @@ func TestStatsMeasuresOperatorSecondsAndStartToReadyFromSpans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := only(t, rep, "PR-12304"); got.OperatorSecs != time.Hour || got.StartToReady != 2*time.Hour {
-		t.Errorf("after the decision: OperatorSecs = %s, StartToReady = %s; want 1h0m0s and 2h0m0s", got.OperatorSecs, got.StartToReady)
+	if got := only(t, rep, "PR-12304"); got.WaitedOnYou != time.Hour || got.StartToReady != 2*time.Hour {
+		t.Errorf("after the decision: WaitedOnYou = %s, StartToReady = %s; want 1h0m0s and 2h0m0s", got.WaitedOnYou, got.StartToReady)
+	}
+}
+
+// The operator's seconds are their time on cards: for each decision, from the
+// card shown to the decision; for each answered revision of questions, from
+// the questions shown to the answers. An item counts at most 30 minutes, so a
+// card left open and idle does not; one that was never shown has no time to
+// measure; questions asked and never answered are no item.
+func TestStatsMeasuresTheOperatorsTimeOnCards(t *testing.T) {
+	t.Parallel()
+	r, clk := openClocked(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12309")
+	askRevision(t, r, clk, task.ID, 1, 2, time.Minute, 2*time.Minute, 8*time.Minute)   // 6m
+	askRevision(t, r, clk, task.ID, 2, 1, 20*time.Minute, 21*time.Minute, 3*time.Hour) // left open: 30m
+	askRevision(t, r, clk, task.ID, 3, 1, 4*time.Hour, 4*time.Hour+time.Minute, 0)     // never answered: none
+	askRevision(t, r, clk, task.ID, 4, 1, 5*time.Hour, 0, 5*time.Hour+10*time.Minute)  // never shown: a batch, no time
+	for _, d := range []registry.Decision{
+		{TaskID: task.ID, Kind: "ready_push", Choice: "send_back", Shown: t0.Add(6 * time.Hour), At: t0.Add(6*time.Hour + 12*time.Minute)}, // 12m
+		{TaskID: task.ID, Kind: "ready_push", Choice: "send_back", Shown: t0.Add(7 * time.Hour), At: t0.Add(9 * time.Hour)},                // left open: 30m
+		{TaskID: task.ID, Kind: "ready_push", Choice: "push", At: t0.Add(10 * time.Hour)},                                                  // never shown: no time
+	} {
+		if err := r.RecordDecision(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, rep, "PR-12309")
+	if want := 6*time.Minute + 30*time.Minute + 12*time.Minute + 30*time.Minute; got.OperatorSecs != want {
+		t.Errorf("OperatorSecs = %s, want %s", got.OperatorSecs, want)
+	}
+	if got.AnswerBatches != 3 || got.Decisions != 3 {
+		t.Errorf("AnswerBatches = %d, Decisions = %d; want 3 answered revisions and 3 decisions", got.AnswerBatches, got.Decisions)
 	}
 }
 
@@ -235,8 +330,8 @@ func TestStatsLeavesStartToReadyEmptyBeforeTheReadyCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := only(t, rep, "PR-12305"); got.StartToReady != 0 || got.OperatorSecs != 0 {
-		t.Errorf("StartToReady = %s, OperatorSecs = %s; want 0 and 0", got.StartToReady, got.OperatorSecs)
+	if got := only(t, rep, "PR-12305"); got.StartToReady != 0 || got.OperatorSecs != 0 || got.WaitedOnYou != 0 {
+		t.Errorf("StartToReady = %s, OperatorSecs = %s, WaitedOnYou = %s; want 0 for all", got.StartToReady, got.OperatorSecs, got.WaitedOnYou)
 	}
 }
 
@@ -287,9 +382,9 @@ func sampleReport() stats.Report {
 		Since: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
 		Tasks: []stats.TaskStats{
 			{TaskID: 1, Key: "PR-12301", Typed: 3, StepStarts: 0, Approvals: 1, Corrections: 1, Access: 0, AnswerBatches: 2, Decisions: 1,
-				ReviewRounds: 2, OperatorSecs: 25*time.Minute + 30*time.Second, StartToReady: 2*time.Hour + 5*time.Minute},
+				ReviewRounds: 2, OperatorSecs: 25*time.Minute + 30*time.Second, WaitedOnYou: time.Hour + 10*time.Minute, StartToReady: 2*time.Hour + 5*time.Minute},
 			{TaskID: 2, Key: "task 2", Typed: 90, StepStarts: 12, AnswerBatches: 1, Decisions: 3, ReviewRounds: 1,
-				OperatorSecs: 40 * time.Second, StartToReady: 0},
+				OperatorSecs: 40 * time.Second, WaitedOnYou: 2 * time.Hour, StartToReady: 0},
 		},
 		Baseline: &stats.Baseline{
 			Frozen: time.Date(2026, 11, 2, 9, 30, 0, 0, time.UTC), Tickets: 12, Accuracy: 0.93,
@@ -307,9 +402,9 @@ func TestStatsMarkdownComparesWithTheBaseline(t *testing.T) {
 	for _, want := range []string{
 		"# Factory stats",
 		"Tasks started since 2026-11-01",
-		"| Task | Typed | Step starts | Approvals | Corrections | Access | Answer batches | Decisions | Review rounds | On you | Start to ready |",
-		"| PR-12301 | 3 | 0 | 1 | 1 | 0 | 2 | 1 | 2 | 25m30s | 2h05m |",
-		"| task 2 | 90 | 12 | 0 | 0 | 0 | 1 | 3 | 1 | 40s | - |",
+		"| Task | Typed | Step starts | Approvals | Corrections | Access | Answer batches | Decisions | Review rounds | On cards | Waited on you | Start to ready |",
+		"| PR-12301 | 3 | 0 | 1 | 1 | 0 | 2 | 1 | 2 | 25m30s | 1h10m | 2h05m |",
+		"| task 2 | 90 | 12 | 0 | 0 | 0 | 1 | 3 | 1 | 40s | 2h00m | - |",
 		"## Against the baseline",
 		"frozen 2026-11-02",
 		"12 tickets",
@@ -345,8 +440,8 @@ func TestStatsJSONIsStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	const want = `{"since":"2026-11-01T00:00:00Z","tasks":[` +
-		`{"task":1,"key":"PR-12301","typed":3,"step_starts":0,"approvals":1,"corrections":1,"access":0,"answer_batches":2,"decisions":1,"review_rounds":2,"operator_secs":1530,"start_to_ready_secs":7500},` +
-		`{"task":2,"key":"task 2","typed":90,"step_starts":12,"approvals":0,"corrections":0,"access":0,"answer_batches":1,"decisions":3,"review_rounds":1,"operator_secs":40,"start_to_ready_secs":0}],` +
+		`{"task":1,"key":"PR-12301","typed":3,"step_starts":0,"approvals":1,"corrections":1,"access":0,"answer_batches":2,"decisions":1,"review_rounds":2,"operator_secs":1530,"waited_on_you_secs":4200,"start_to_ready_secs":7500},` +
+		`{"task":2,"key":"task 2","typed":90,"step_starts":12,"approvals":0,"corrections":0,"access":0,"answer_batches":1,"decisions":3,"review_rounds":1,"operator_secs":40,"waited_on_you_secs":7200,"start_to_ready_secs":0}],` +
 		`"baseline":{"frozen":"2026-11-02T09:30:00Z","tickets":12,` +
 		`"typed_per_ticket":{"median":41,"p25":30,"p75":77.5,"min":12,"max":120},` +
 		`"step_starts_per_ticket":{"median":9,"p25":5,"p75":14,"min":1,"max":30},"accuracy":0.93}}`

@@ -694,7 +694,7 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 	if p.Reason != "" {
 		choice += ": " + p.Reason
 	}
-	if _, err := e.reg.RecordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputDecision, Surface: surface, Stage: t.Stage,
+	if _, err := e.recordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputDecision, Surface: surface, Stage: t.Stage,
 		Text: choice}); err != nil {
 		e.log.Warn("record a decision's input", "task", t.ID, "err", err)
 	}
@@ -727,7 +727,7 @@ func (e *Engine) sendBack(ctx context.Context, t registry.Task, card ReadyCardFi
 	} else {
 		in.DroppedReason = "a long paste: more than 40 lines or 4000 bytes"
 	}
-	if _, err := e.reg.RecordInput(ctx, in); err != nil {
+	if _, err := e.recordInput(ctx, in); err != nil {
 		e.log.Warn("record a send back", "task", t.ID, "err", err)
 	}
 	rw := reworkRecord{Kind: reworkSendBack, Reason: p.Reason, Note: note, Card: card.Revision, Head: card.Head, At: e.now()}

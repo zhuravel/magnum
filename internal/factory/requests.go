@@ -200,7 +200,7 @@ func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, i
 	}); err != nil {
 		return err
 	}
-	if _, err := e.reg.RecordInput(ctx, in); err != nil {
+	if _, err := e.recordInput(ctx, in); err != nil {
 		e.log.Warn("record why a task stopped", "task", t.ID, "kind", in.Kind, "err", err)
 	}
 	if e.d.Runtime != nil {
@@ -280,7 +280,7 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 		return "", err
 	}
 	delete(e.agentRuns, t.ID)
-	if _, err := e.reg.RecordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface,
+	if _, err := e.recordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface,
 		Stage: t.Stage, Role: p.Role}); err != nil {
 		e.log.Warn("record a let-go", "task", t.ID, "err", err)
 	}
@@ -333,7 +333,7 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	}); err != nil {
 		return "", err
 	}
-	if _, err := e.reg.RecordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface, Stage: t.Stage}); err != nil {
+	if _, err := e.recordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface, Stage: t.Stage}); err != nil {
 		e.log.Warn("record a retry", "task", t.ID, "err", err)
 	}
 	delete(e.panics, t.ID)

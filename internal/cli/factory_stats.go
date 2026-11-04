@@ -38,11 +38,14 @@ type factoryStatsFlags struct {
 func newFactoryStatsCmd(c *Context) *cobra.Command {
 	var f factoryStatsFlags
 	cmd := newCommand("", factoryStatsUsage, "what the factory still asks of you, per task, against the baseline",
-		"Count, per factory task, what it asked of you: your typed messages (typed in a pane, said in one line, "+
-			"the start's guidance, the note of a send-back), those of them that only start a step (the target is "+
-			"zero; a retry counts as one, as you start a step by hand), approvals, corrections and access, your "+
-			"answer batches, your card decisions, the local review's rounds, how long the task waited on you and how "+
-			"long it took to reach its ready card. The numbers come from the evidence records of the factory's "+
+		"Count, per factory task, what it asked of you: your typed messages (the task's text, the start's "+
+			"guidance, what you typed in a pane or said in one line, the note of a send-back), those of them that "+
+			"only start a step (the target is zero; a retry counts as one, as you start a step by hand), approvals, "+
+			"corrections and access, your answer batches (the revisions of questions you answered), your card "+
+			"decisions, the local review's rounds, your time on cards (for each decision and each answered batch, "+
+			"from the card shown to your answer, at most 30 minutes each, so a card left open and idle does not "+
+			"count), how long the task waited on you (asleep or not) and how long it took to reach its ready card. "+
+			"The numbers come from the evidence records of the factory's "+
 			"registry, which this command only reads (it never creates one, and it refuses to migrate one while a "+
 			"factory daemon of an older build runs on it). The default output is markdown, which sets each task "+
 			"beside the frozen baseline (`magnum factory baseline`: your typed and step-starting messages per "+

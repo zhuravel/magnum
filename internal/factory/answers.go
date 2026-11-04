@@ -464,7 +464,7 @@ func (e *Engine) recordAnswer(ctx context.Context, t registry.Task, q registry.Q
 	} else {
 		in.DroppedReason = "a long paste: more than 40 lines or 4000 bytes"
 	}
-	if _, err := e.reg.RecordInput(ctx, in); err != nil {
+	if _, err := e.recordInput(ctx, in); err != nil {
 		e.log.Warn("record an answer", "task", t.ID, "err", err)
 	}
 }
