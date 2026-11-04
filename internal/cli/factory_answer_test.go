@@ -113,6 +113,47 @@ func TestFactoryAnswerGivesTheTextOfAFileToOneQuestion(t *testing.T) {
 	}
 }
 
+// --revision r --question n names question n as revision r asked it: the
+// answer goes to that question, wherever a newer revision carried it (a
+// revision puts the open questions it carries over first), and a question
+// no longer open anywhere is refused.
+func TestFactoryAnswerBindsTheQuestionToTheRevisionItWasAskedIn(t *testing.T) {
+	storetest.Serial(t)
+	var got factory.AnswerPayload
+	dt := newFactoryStartTest(t, 250, answerPayload(t, &got))
+	task := seedQuestions(t, dt)
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried := registry.Question{Text: "Can a merchant turn it off?", Options: []registry.Option{{Label: "yes"}, {Label: "no"}}, Recommended: -1,
+		RaisedBy: "fx-critic"}
+	added := registry.Question{Text: "Which email template?", Options: []registry.Option{{Label: "the coupon one"}, {Label: "a new one"}},
+		Recommended: 0, RaisedBy: "fx-points"}
+	err = reg.ReplaceQuestions(context.Background(), task.ID, 2, []registry.Question{carried, added})
+	reg.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "reply.txt")
+	if err := os.WriteFile(file, []byte("No, always on.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := dt.run("factory", "answer", "1", "--revision", "1", "--question", "2", "--text", file); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	if got.Revision != 2 || !maps.Equal(got.Answers, map[int]string{0: "No, always on."}) {
+		t.Fatalf("payload %+v, want revision 2's question 1, which carries revision 1's question 2", got)
+	}
+
+	// Revision 1's first question was voided and carried nowhere.
+	dt.stderr.Reset()
+	if code := dt.run("factory", "answer", "1", "--revision", "1", "--question", "1", "--text", file); code != 1 ||
+		!strings.Contains(dt.stderr.String(), "no longer open") {
+		t.Fatalf("exit %d, stderr %q; want 1: no longer open", code, dt.stderr)
+	}
+}
+
 // Without a flag the command prints the questions of the newest revision,
 // numbered as --json and --question take them; it sends nothing.
 func TestFactoryAnswerWithoutAFlagListsTheQuestions(t *testing.T) {

@@ -25,11 +25,16 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 )
 
-const factoryAnswerUsage = "answer <task> [--json <file> | --question <n> --text <file>]"
+const factoryAnswerUsage = "answer <task> [--json <file> | [--revision <r>] --question <n> --text <file>]"
+
+// factoryAnswerFlags are the flags of `magnum factory answer`.
+type factoryAnswerFlags struct {
+	json, text         string
+	question, revision int
+}
 
 func newFactoryAnswerCmd(c *Context) *cobra.Command {
-	var jsonFile, textFile string
-	var question int
+	var f factoryAnswerFlags
 	cmd := newCommand("", factoryAnswerUsage, "answer a factory task's questions",
 		"Answer the questions a factory task waits on, as the screen does: the daemon stores them, writes them to "+
 			"answers.md in the task's directory (the agents read it as data) and moves the task on. <task> is the "+
@@ -39,13 +44,15 @@ func newFactoryAnswerCmd(c *Context) *cobra.Command {
 			", the questions by their numbers; an answer is an option's label or your own words, \"ask:<login>\" "+
 			"asks someone else (the question stays open, the task waits on them, and the comment drafted for them "+
 			"is in the task's directory), and needless flags a question with the key of your reason. --question <n> "+
-			"--text <file> answers question n of the newest revision with the file's text (- for stdin), such as "+
-			"the answer of someone you asked. A batch for questions that changed since is refused, and nothing of "+
-			"it is kept.",
-		func(pos []string) int { return runFactoryAnswerCmd(c, jsonFile, question, textFile, pos) })
-	cmd.Flags().StringVar(&jsonFile, "json", "", "a JSON file of answers to send (- for stdin)")
-	cmd.Flags().IntVar(&question, "question", 0, "the number of the question --text answers (from 1)")
-	cmd.Flags().StringVar(&textFile, "text", "", "the file whose text answers --question (- for stdin)")
+			"--text <file> answers question n with the file's text (- for stdin), such as the answer of someone you "+
+			"asked: question n of --revision r, the revision that asked it (the daemon's answer to an ask names "+
+			"both), wherever a newer revision carried it; without --revision, of the newest revision. A batch for "+
+			"questions that changed since is refused, and nothing of it is kept.",
+		func(pos []string) int { return runFactoryAnswerCmd(c, f, pos) })
+	cmd.Flags().StringVar(&f.json, "json", "", "a JSON file of answers to send (- for stdin)")
+	cmd.Flags().IntVar(&f.question, "question", 0, "the number of the question --text answers (from 1)")
+	cmd.Flags().IntVar(&f.revision, "revision", 0, "the revision whose numbering --question uses (default: the newest)")
+	cmd.Flags().StringVar(&f.text, "text", "", "the file whose text answers --question (- for stdin)")
 	return cmd
 }
 
@@ -56,16 +63,19 @@ type factoryAnswerFile struct {
 	Needless map[int]string `json:"needless"`
 }
 
-func runFactoryAnswerCmd(c *Context, jsonFile string, question int, textFile string, pos []string) int {
+func runFactoryAnswerCmd(c *Context, f factoryAnswerFlags, pos []string) int {
 	switch {
 	case len(pos) != 1:
 		return inspUsage(c, "factory answer", "which task? its id or its Jira key", factoryAnswerUsage)
-	case jsonFile != "" && (question != 0 || textFile != ""):
-		return inspUsage(c, "factory answer", "--json sends a batch; --question and --text answer one question: not both", factoryAnswerUsage)
-	case (question != 0) != (textFile != ""):
+	case f.json != "" && (f.question != 0 || f.text != "" || f.revision != 0):
+		return inspUsage(c, "factory answer", "--json sends a batch (its revision in the file); --question and --text answer one "+
+			"question: not both", factoryAnswerUsage)
+	case (f.question != 0) != (f.text != ""):
 		return inspUsage(c, "factory answer", "--question and --text go together", factoryAnswerUsage)
-	case question < 0:
-		return inspUsage(c, "factory answer", "--question counts from 1", factoryAnswerUsage)
+	case f.revision != 0 && f.question == 0:
+		return inspUsage(c, "factory answer", "--revision names the revision of --question", factoryAnswerUsage)
+	case f.question < 0 || f.revision < 0:
+		return inspUsage(c, "factory answer", "--question and --revision count from 1", factoryAnswerUsage)
 	}
 	if !fsx.Exists(c.Layout.FactoryDB()) {
 		fmt.Fprintln(c.Stderr, "magnum factory answer: the factory has no task yet (`magnum factory start` makes one)")
@@ -86,31 +96,64 @@ func runFactoryAnswerCmd(c *Context, jsonFile string, question int, textFile str
 	}
 	p := factory.AnswerPayload{TaskID: t.ID, Revision: t.QuestionRev, Surface: "cli"}
 	switch {
-	case jsonFile != "":
-		f, err := readAnswerFile(jsonFile)
+	case f.json != "":
+		file, err := readAnswerFile(f.json)
 		if err != nil {
-			fmt.Fprintf(c.Stderr, "magnum factory answer: %s: %v\n", jsonFile, err)
+			fmt.Fprintf(c.Stderr, "magnum factory answer: %s: %v\n", f.json, err)
 			return 1
 		}
-		p.Revision = f.Revision
-		if p.Answers, err = byIndex(f.Answers); err == nil {
-			p.Needless, err = byIndex(f.Needless)
+		p.Revision = file.Revision
+		if p.Answers, err = byIndex(file.Answers); err == nil {
+			p.Needless, err = byIndex(file.Needless)
 		}
 		if err != nil {
-			fmt.Fprintf(c.Stderr, "magnum factory answer: %s: %v\n", jsonFile, err)
+			fmt.Fprintf(c.Stderr, "magnum factory answer: %s: %v\n", f.json, err)
 			return 1
 		}
-	case textFile != "":
-		text, err := readArgFile(textFile)
+	case f.text != "":
+		text, err := readArgFile(f.text)
 		if err != nil {
 			fmt.Fprintf(c.Stderr, "magnum factory answer: %v\n", err)
 			return 1
 		}
-		p.Answers = map[int]string{question - 1: strings.TrimSpace(string(text))}
+		idx, err := questionNow(ctx, reg, t, f.revision, f.question)
+		if err != nil {
+			fmt.Fprintf(c.Stderr, "magnum factory answer: %v\n", err)
+			return 1
+		}
+		p.Answers = map[int]string{idx: strings.TrimSpace(string(text))}
 	default:
 		return printFactoryQuestions(ctx, c, reg, t)
 	}
 	return sendFactoryRequest(ctx, c, reg, "factory answer", factory.ReqAnswer, p, "it takes the answers")
+}
+
+// questionNow is the index in task t's newest revision of question n (from
+// 1) of revision rev (0 = the newest): a newer revision puts the open
+// questions it carries over first, so the same question may hold another
+// number there; it is found by the role that raised it and its text. A
+// question open in no newer revision is refused.
+func questionNow(ctx context.Context, reg *registry.Registry, t registry.Task, rev, n int) (int, error) {
+	if rev == 0 || rev == t.QuestionRev {
+		return n - 1, nil
+	}
+	all, err := reg.Questions(ctx, t.ID)
+	if err != nil {
+		return 0, err
+	}
+	i := slices.IndexFunc(all, func(q registry.Question) bool { return q.Revision == rev && q.Index == n-1 })
+	if i < 0 {
+		return 0, fmt.Errorf("revision %d of %s has no question %d", rev, factory.TaskKey(t), n)
+	}
+	asked := all[i]
+	for _, q := range all {
+		if q.Revision == t.QuestionRev && q.State == registry.QuestionOpen && q.RaisedBy == asked.RaisedBy &&
+			strings.TrimSpace(q.Text) == strings.TrimSpace(asked.Text) {
+			return q.Index, nil
+		}
+	}
+	return 0, fmt.Errorf("question %d of revision %d of %s is no longer open (`magnum factory answer %d` lists the questions)",
+		n, rev, factory.TaskKey(t), t.ID)
 }
 
 // factoryTaskOf is the task an argument names: its id, else its Jira key.

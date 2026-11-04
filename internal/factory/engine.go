@@ -553,7 +553,9 @@ func live(tasks []registry.Task) []registry.Task {
 // advance runs one pass of the task's current stage (an empty stage is its
 // kind's first, recorded) and moves the task to the next stage once the
 // stage passes. The last stage's own effect ends the task. A task that
-// waits for Jira before its first stage tries Jira instead (retryJira).
+// waits for Jira before its first stage tries Jira instead (retryJira), and
+// one whose key has no ticket.md yet (your answer linked it) reads its
+// ticket first (linkedTicket).
 func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 	if t.Stage == "" && t.State == registry.TaskWaiting && t.WaitsWho == waitJira {
 		return e.retryJira(ctx, t)
@@ -582,6 +584,9 @@ func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 	run := e.runners[st.Type]
 	if run == nil {
 		return nil
+	}
+	if ready, err := e.linkedTicket(ctx, &t); err != nil || !ready {
+		return err
 	}
 	done, err := run(ctx, t, st)
 	if err != nil || !done || i+1 == len(kind.Stages) {

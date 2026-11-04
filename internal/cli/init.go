@@ -22,6 +22,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -56,7 +57,6 @@ type initApp struct {
 }
 
 var (
-	initLoginRe  = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
 	initRepoRe   = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})$`)
 	initBotRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$`)
 	initClientRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -119,7 +119,7 @@ func initGHLogin(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
-	if l := res.Out(); initLoginRe.MatchString(l) {
+	if l := res.Out(); github.ValidLogin(l) {
 		return l
 	}
 	return ""
@@ -187,7 +187,7 @@ func initAskID(ctx context.Context, w io.Writer, in *promptIn, q string) (int64,
 
 func initCheckLogin(s string) (string, error) {
 	s = strings.TrimPrefix(s, "@")
-	if !initLoginRe.MatchString(s) {
+	if !github.ValidLogin(s) {
 		return "", errors.New("a GitHub login: letters, digits and '-'")
 	}
 	return s, nil

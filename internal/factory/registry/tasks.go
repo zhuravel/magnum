@@ -220,6 +220,43 @@ func (r *Registry) TransitionTask(ctx context.Context, id int64, from []string, 
 	return r.transition(ctx, "tasks", "id", "task", id, taskStates, from, to, &u.update, hooks)
 }
 
+// LinkKey gives task id the Jira key key (a task of a free prompt, once you
+// named its issue) under CreateTask's rule: of the tasks that are not done or
+// stopped, one key has at most one, so a key another such task holds is an
+// ErrActiveKey naming it. A task that holds key already is no change, one
+// that holds another key is ErrConflict, and a missing task is ErrNotFound.
+// The key changes nothing else of the task (its branch stays).
+func (r *Registry) LinkKey(ctx context.Context, id int64, key string) error {
+	if key == "" {
+		return errors.New("link key: a key is required")
+	}
+	return r.tx(ctx, func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, "SELECT jira_key FROM tasks WHERE id = ?", id).Scan(&current); err != nil {
+			return notFound(err, "task", id)
+		}
+		switch {
+		case current == key:
+			return nil
+		case current != "":
+			return fmt.Errorf("link key %s to task %d: %w: it holds %s", key, id, ErrConflict, current)
+		}
+		// The holder query of the tasks_active_key partial index (see holdsKey).
+		var holder int64
+		err := tx.QueryRowContext(ctx, "SELECT id FROM tasks WHERE jira_key = ? AND "+holdsKey+" ORDER BY id LIMIT 1", key).Scan(&holder)
+		switch {
+		case err == nil:
+			return ErrActiveKey{Key: key, TaskID: holder}
+		case !errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("link key %s to task %d: %w", key, id, err)
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE tasks SET jira_key = ?, updated_at = ? WHERE id = ?", key, store.FormatTime(r.now()), id); err != nil {
+			return fmt.Errorf("link key %s to task %d: %w", key, id, mapErr(err))
+		}
+		return nil
+	})
+}
+
 // TaskByID looks up a task; a missing one is ErrNotFound.
 func (r *Registry) TaskByID(ctx context.Context, id int64) (Task, error) {
 	t, err := scanTask(r.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id))

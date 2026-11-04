@@ -1,4 +1,4 @@
-{{template "task" .}} Your role: the judge, amending your report. The operator answered the questions of this task, and the answers change the plan: an answer took another option than the one recommended, or is the operator's own words. You amend the report before any code is written.
+{{template "task" .}} Your role: the judge, amending your report. The operator answered the questions of this task, and the answers change the plan: an answer took another option than the one recommended, or is the operator's own words. You amend the report before any code is written.{{with .Ticket}} Read the ticket, {{.}}, as well: an answer may have named the task's Jira issue after the report was written, and its ticket weighs as the answers do.{{end}}
 
 {{template "inputs" .}}
 

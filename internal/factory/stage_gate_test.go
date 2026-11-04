@@ -3,6 +3,7 @@ package factory
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -114,7 +115,7 @@ func (h *harness) answerInputs(id int64) []registry.Input {
 
 func TestGateWithQuestionsWaitsOnTheOperator(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12401", "feature", whenQuestion, offQuestion)
+	task := h.gateTask("PR-12361", "feature", whenQuestion, offQuestion)
 	h.tick()
 
 	got := h.reload(task.ID)
@@ -155,14 +156,14 @@ func TestGateWithQuestionsWaitsOnTheOperator(t *testing.T) {
 
 func TestGateWithoutQuestionsPasses(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12402", "feature")
+	task := h.gateTask("PR-12362", "feature")
 	h.tick()
 	if got := h.reload(task.ID); got.Stage != "coding" || got.State != registry.TaskActive || got.QuestionRev != 0 {
 		t.Fatalf("task %s at %s, revision %d; want active at coding, nothing asked", got.State, got.Stage, got.QuestionRev)
 	}
 
 	// No questions file at all is no question either.
-	bare := h.kindTask("PR-12403", "chore", "questions")
+	bare := h.kindTask("PR-12363", "chore", "questions")
 	h.taskFile(bare.ID, reportFile, goodReport)
 	h.tick()
 	if got := h.reload(bare.ID); got.Stage != "coding" {
@@ -184,7 +185,7 @@ func TestTheCriticsQuestionsJoinTheOneBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intake := registry.Question{Text: whichIssue, Options: []registry.Option{{Label: "PR-12404 Credit expiry reminder"}, {Label: noIssue}},
+	intake := registry.Question{Text: whichIssue, Options: []registry.Option{{Label: "PR-12364 Credit expiry reminder"}, {Label: noIssue}},
 		Recommended: 0, RaisedBy: intakeRole}
 	if err := h.reg.ReplaceQuestions(h.ctx, task.ID, 1, []registry.Question{intake}); err != nil {
 		t.Fatal(err)
@@ -231,7 +232,7 @@ func TestABugThatDidNotReproduceAsksTheOperatorWithOptions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			task := h.kindTask("PR-12405", "bug", "reproduction")
+			task := h.kindTask("PR-12365", "bug", "reproduction")
 			h.taskFile(task.ID, reportFile, tc.report)
 			if tc.questions != "" {
 				h.taskFile(task.ID, questionsFile, tc.questions)
@@ -268,7 +269,7 @@ func TestABugThatDidNotReproduceAsksTheOperatorWithOptions(t *testing.T) {
 	// An explicit "Reproduced: yes", with a list marker or emphasis, passes.
 	for _, proof := range []string{"Reproduced: yes. The spec fails.", "- Reproduced: yes", "**Reproduced:** yes, by bin/rspec"} {
 		h := newHarness(t)
-		task := h.kindTask("PR-12406", "bug", "reproduction")
+		task := h.kindTask("PR-12366", "bug", "reproduction")
 		h.taskFile(task.ID, reportFile, reportWith("Proof", "## Proof\n"+proof+"\n"))
 		h.tick()
 		if got := h.reload(task.ID); got.Stage != "coding" || got.QuestionRev != 0 {
@@ -280,7 +281,7 @@ func TestABugThatDidNotReproduceAsksTheOperatorWithOptions(t *testing.T) {
 // You answer "drop" to the reproduction question: the task stops.
 func TestDroppingABugThatDidNotReproduceStopsIt(t *testing.T) {
 	h := newHarness(t)
-	task := h.kindTask("PR-12407", "bug", "reproduction")
+	task := h.kindTask("PR-12367", "bug", "reproduction")
 	h.taskFile(task.ID, reportFile, reportWith("Proof", "## Proof\nReproduced: no.\n"))
 	h.taskFile(task.ID, questionsFile, reproQuestion)
 	h.tick()
@@ -298,7 +299,7 @@ func TestDroppingABugThatDidNotReproduceStopsIt(t *testing.T) {
 // amends the report with it, and the gate reads the amended Proof.
 func TestAReproductionAnswerAmendsTheReportBeforeTheGateReadsItAgain(t *testing.T) {
 	h := newHarness(t)
-	task := h.kindTask("PR-12408", "bug", "reproduction")
+	task := h.kindTask("PR-12368", "bug", "reproduction")
 	h.taskFile(task.ID, reportFile, reportWith("Proof", "## Proof\nReproduced: no.\n"))
 	h.taskFile(task.ID, acceptanceFile, goodAcceptance)
 	h.taskFile(task.ID, questionsFile, reproQuestion)
@@ -327,11 +328,11 @@ func TestAReproductionAnswerAmendsTheReportBeforeTheGateReadsItAgain(t *testing.
 
 func TestAnswersMoveTheTaskToCoding(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12409", "bug", whenQuestion)
+	task := h.gateTask("PR-12369", "bug", whenQuestion)
 	h.tick()
 	h.clock.Add(time.Minute)
 	q := h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: whenQuestion.Options[0].Label}})
-	if !strings.Contains(q.Result, "PR-12409") {
+	if !strings.Contains(q.Result, "PR-12369") {
 		t.Fatalf("the request's result %q does not name the task", q.Result)
 	}
 	h.tick() // the reproduction gate: the report says Reproduced: yes
@@ -354,7 +355,7 @@ func TestAnswersMoveTheTaskToCoding(t *testing.T) {
 
 func TestAnAnswerToAStaleRevisionIsRefused(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12410", "feature", whenQuestion)
+	task := h.gateTask("PR-12370", "feature", whenQuestion)
 	h.tick()
 	h.clock.Add(5 * time.Minute)
 	changed := h.clock.Now()
@@ -388,7 +389,7 @@ func TestAnAnswerToAStaleRevisionIsRefused(t *testing.T) {
 // words.
 func TestAnswersReachTheWriterAsADataFile(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12411", "feature", whenQuestion, offQuestion)
+	task := h.gateTask("PR-12371", "feature", whenQuestion, offQuestion)
 	h.tick()
 	h.clock.Add(time.Minute)
 	const own = "Only for credits above 10 dollars, MARKER-a9"
@@ -418,7 +419,7 @@ func TestAnswersReachTheWriterAsADataFile(t *testing.T) {
 func TestAQuestionInCodingSuspendsTheStageAndResumesIt(t *testing.T) {
 	h := newHarness(t)
 	codingEndsOnFindings(h) // the coding stage's own proof comes with the coding build
-	task := h.kindTask("PR-12412", "feature", "coding")
+	task := h.kindTask("PR-12372", "feature", "coding")
 	h.startStage(task)
 	first := h.rt.promptsTo("fx-writer")
 	if len(first) != 1 {
@@ -478,7 +479,7 @@ func TestAQuestionInCodingSuspendsTheStageAndResumesIt(t *testing.T) {
 func TestARestartBetweenTheAnswersAndTheResumeSendsTheAnswersOnce(t *testing.T) {
 	h := newHarness(t)
 	codingEndsOnFindings(h)
-	task := h.kindTask("PR-12413", "feature", "coding")
+	task := h.kindTask("PR-12373", "feature", "coding")
 	h.startStage(task)
 	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("Reuse CreditMailer?", 0, "yes", "no")))
 	h.ended(task, "fx-writer")
@@ -523,7 +524,7 @@ func TestARestartBetweenTheAnswersAndTheResumeSendsTheAnswersOnce(t *testing.T) 
 func TestAnAnsweredAskResumesTheStageWhateverItsWaitSaid(t *testing.T) {
 	h := newHarness(t)
 	codingEndsOnFindings(h)
-	task := h.kindTask("PR-12419", "feature", "coding")
+	task := h.kindTask("PR-12379", "feature", "coding")
 	h.startStage(task)
 	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("Reuse CreditMailer?", 0, "yes", "no")))
 	h.ended(task, "fx-writer")
@@ -551,7 +552,7 @@ func TestAnAnsweredAskResumesTheStageWhateverItsWaitSaid(t *testing.T) {
 // (an investigator, the critic) passes: the questions wait for the gate.
 func TestQuestionsOfARoleThatPassedWaitForTheGate(t *testing.T) {
 	h := newHarness(t)
-	task := h.kindTask("PR-12414", "feature", "investigate")
+	task := h.kindTask("PR-12374", "feature", "investigate")
 	h.startStage(task)
 	h.taskFile(task.ID, "findings-fx-points.md", "point 1 exists in app/models/credit.rb:12\n")
 	h.taskFile(task.ID, "questions-fx-points.json", questionsJSON(t, whoQuestion))
@@ -568,7 +569,7 @@ func TestQuestionsOfARoleThatPassedWaitForTheGate(t *testing.T) {
 // questions in it.
 func TestAQuestionsFileTheEndFactRefusesGetsTheNudge(t *testing.T) {
 	h := newHarness(t)
-	task := h.kindTask("PR-12420", "bug", "judge")
+	task := h.kindTask("PR-12380", "bug", "judge")
 	h.startStage(task)
 	h.taskFile(task.ID, reportFile, reportWith("Proof", "## Proof\nReproduced: no.\n"))
 	h.taskFile(task.ID, acceptanceFile, goodAcceptance)
@@ -604,7 +605,7 @@ func codingEndsOnFindings(h *harness) {
 // newer than answers.md.
 func TestAnswersThatChangeThePlanAmendTheReportFirst(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12415", "feature", whenQuestion)
+	task := h.gateTask("PR-12375", "feature", whenQuestion)
 	h.tick()
 	h.clock.Add(time.Minute)
 	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: whenQuestion.Options[1].Label}})
@@ -663,7 +664,7 @@ func TestAnswersThatChangeThePlanAmendTheReportFirst(t *testing.T) {
 
 func TestAnAnswerThatTakesTheRecommendationNeedsNoAmend(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12416", "feature", whenQuestion, whoQuestion)
+	task := h.gateTask("PR-12376", "feature", whenQuestion, whoQuestion)
 	h.tick()
 	h.clock.Add(time.Minute)
 	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1,
@@ -681,7 +682,7 @@ func TestAnAnswerThatTakesTheRecommendationNeedsNoAmend(t *testing.T) {
 // arrives.
 func TestAskSomeoneKeepsTheQuestionOpenUntilTheAnswerArrives(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12417", "feature", whenQuestion, offQuestion)
+	task := h.gateTask("PR-12377", "feature", whenQuestion, offQuestion)
 	h.tick()
 	h.clock.Add(time.Minute)
 	q := h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: whenQuestion.Options[0].Label, 1: "ask:rev-ann"}})
@@ -698,7 +699,7 @@ func TestAskSomeoneKeepsTheQuestionOpenUntilTheAnswerArrives(t *testing.T) {
 	if !strings.Contains(comment, "rev-ann") || !strings.Contains(comment, offQuestion.Text) {
 		t.Fatalf("the drafted comment does not ask rev-ann the question:\n%s", comment)
 	}
-	if !strings.Contains(q.Result, "jira-comment-1-2.md") {
+	if !strings.Contains(q.Result, "jira-comment-1-2.md") || !strings.Contains(q.Result, "--revision 1 --question 2") {
 		t.Fatalf("the request's result %q does not say where the comment is", q.Result)
 	}
 	if ins := h.answerInputs(task.ID); len(ins) != 2 || ins[1].Text != "ask:rev-ann" {
@@ -759,7 +760,7 @@ func TestTheAmendPromptIsLoadedAndCheckedAtStartup(t *testing.T) {
 
 func TestANeedlessFlagIsRecordedWithItsReason(t *testing.T) {
 	h := newHarness(t)
-	task := h.gateTask("PR-12418", "feature", whenQuestion, whoQuestion)
+	task := h.gateTask("PR-12378", "feature", whenQuestion, whoQuestion)
 	h.tick()
 	h.clock.Add(time.Minute)
 	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Needless: map[int]string{1: "obvious"}})
@@ -781,5 +782,261 @@ func TestANeedlessFlagIsRecordedWithItsReason(t *testing.T) {
 		if q := h.sendAnswers(p); q.State != registry.RequestFailed {
 			t.Errorf("needless %v was taken: %s", p.Needless, q.Result)
 		}
+	}
+}
+
+// Your answers go out once per batch: a turn after them that fails its end
+// fact gets its one nudge, then the task waits on you for the file, however
+// long the questions file of the role stays as it was.
+func TestATurnAfterTheAnswersThatFailsItsEndFactGetsOneNudgeThenNeedsYou(t *testing.T) {
+	h := newHarness(t)
+	codingEndsOnFindings(h)
+	task := h.kindTask("PR-12381", "feature", "coding")
+	h.startStage(task)
+	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("Reuse CreditMailer?", 0, "yes", "no")))
+	h.ended(task, "fx-writer")
+	h.tick()
+	h.clock.Add(time.Minute)
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "yes"}})
+	for range 2 { // the answers' turn, then the nudge's, end without findings-fx-writer.md
+		h.clock.Add(time.Minute)
+		h.ended(task, "fx-writer")
+		h.tick()
+	}
+	var leads []string
+	for _, p := range h.rt.promptsTo("fx-writer") {
+		leads = append(leads, strings.SplitN(p.Text, ":", 2)[0])
+	}
+	if len(leads) != 3 || !strings.HasPrefix(leads[1], answersLead) || !strings.HasPrefix(leads[2], nudgeLead) {
+		t.Fatalf("the writer's prompts begin %q, want its first, the answers and one nudge", leads)
+	}
+	got := h.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "the fx-writer agent wrote no valid findings-fx-writer.md" {
+		t.Fatalf("task %s waits %q, want needs_you: the fx-writer agent wrote no valid findings-fx-writer.md", got.State, got.WaitsWhat)
+	}
+}
+
+// A turn after the answers that stopped on a pause goes on with its
+// continue prompt, and a valid file then passes the stage: no second
+// answers prompt.
+func TestAContinueAfterTheAnswersEndsOnItsEndFact(t *testing.T) {
+	h := newHarness(t)
+	codingEndsOnFindings(h)
+	task := h.kindTask("PR-12382", "feature", "coding")
+	h.startStage(task)
+	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("Reuse CreditMailer?", 0, "yes", "no")))
+	h.ended(task, "fx-writer")
+	h.tick()
+	h.clock.Add(time.Minute)
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "yes"}})
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", RunID: h.lastRun("fx-writer"), Kind: runtime.EventPaused,
+		Reason: "overload: claude is overloaded, tries again at 09:05"})
+	h.tick()
+	h.clock.Add(time.Minute)
+	h.taskFile(task.ID, "findings-fx-writer.md", "committed abc1234\n")
+	h.ended(task, "fx-writer")
+	h.tick()
+	if got := h.reload(task.ID); got.Stage != "local_review" || len(h.rt.promptsTo("fx-writer")) != 3 {
+		t.Fatalf("task %s at %s with %d prompts to the writer, want past coding on its first, the answers and the continue",
+			got.State, got.Stage, len(h.rt.promptsTo("fx-writer")))
+	}
+}
+
+// "drop" at the questions gate (the default bug kind asks the judge's
+// reproduction question there) stops the task at once: no amend of the
+// report, however the other answers changed the plan.
+func TestDroppingABugAtTheQuestionsGateStopsItWithoutAnAmend(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12383", "bug", "questions")
+	h.taskFile(task.ID, reportFile, reportWith("Proof", "## Proof\nReproduced: no.\n"))
+	h.taskFile(task.ID, acceptanceFile, goodAcceptance)
+	var repro []QuestionFile
+	if err := json.Unmarshal([]byte(reproQuestion), &repro); err != nil {
+		t.Fatal(err)
+	}
+	h.taskFile(task.ID, questionsFile, questionsJSON(t, repro[0], whenQuestion))
+	h.tick()
+	h.clock.Add(time.Minute)
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "drop", 1: whenQuestion.Options[1].Label}})
+	h.e.waitBackground()
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskStopped {
+		t.Fatalf("task %s at %s waiting %q, want stopped", got.State, got.Stage, got.WaitsWhat)
+	}
+	if n := len(h.rt.promptsTo("fx-judge")); n != 0 {
+		t.Fatalf("the judge got %d prompts, want no amend for a dropped task", n)
+	}
+}
+
+// Each other answer to the reproduction question at the questions gate is
+// acted on once: one amend of the report, wherever it runs, and the
+// question is not asked again once the amended Proof reproduced the bug.
+func TestEachReproductionAnswerAtTheQuestionsGateIsActedOnOnce(t *testing.T) {
+	for _, answer := range []string{"give a hint", "take the other cause", "try Docker or a staging"} {
+		t.Run(answer, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.kindTask("PR-12384", "bug", "questions")
+			h.taskFile(task.ID, reportFile, reportWith("Proof", "## Proof\nReproduced: no.\n"))
+			h.taskFile(task.ID, acceptanceFile, goodAcceptance)
+			h.taskFile(task.ID, questionsFile, reproQuestion)
+			h.tick()
+			h.clock.Add(time.Minute)
+			h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: answer}})
+			h.tick()
+			h.e.waitBackground()
+			h.tick()
+			if n := len(h.rt.promptsTo("fx-judge")); n != 1 {
+				t.Fatalf("the judge got %d prompts, want one amend", n)
+			}
+			h.clock.Add(time.Minute)
+			h.taskFile(task.ID, reportFile, goodReport)
+			h.taskFile(task.ID, acceptanceFile, goodAcceptance)
+			h.taskFile(task.ID, questionsFile, "[]")
+			h.ended(task, "fx-judge")
+			h.tick()
+			h.tick()
+			got := h.reload(task.ID)
+			if got.Stage != "coding" || got.QuestionRev != 1 || len(h.rt.promptsTo("fx-judge")) != 1 {
+				t.Fatalf("task %s at %s, revision %d, %d prompts to the judge; want coding on one amend, nothing asked again",
+					got.State, got.Stage, got.QuestionRev, len(h.rt.promptsTo("fx-judge")))
+			}
+		})
+	}
+}
+
+// linkRig is an intake rig (Jira behind a fake curl) whose task of a free
+// prompt waits at the questions gate on intake's question which Jira issue
+// it is; its judge wrote the report.
+func linkRig(t *testing.T) (*intakeRig, registry.Task) {
+	t.Helper()
+	r := newIntakeRig(t)
+	r.stage(config.FactoryStageAgents, r.e.runAgents) // the amend turn runs
+	r.stageCopy()
+	task, err := r.reg.CreateTask(r.ctx, registry.Task{Prompt: "remind advocates before their credit expires", Kind: "feature",
+		Repo: "talkable/talkable", Title: "remind advocates before their credit expires", State: registry.TaskActive, Stage: "questions",
+		Branch: "zhuravel-remind-advocates"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := registry.Question{Text: whichIssue, RaisedBy: intakeRole, Recommended: 0, Options: []registry.Option{
+		{Label: "PR-12345 Credit expiry reminder email", Means: "the task follows PR-12345"}, {Label: noIssue, Means: "your words only"}}}
+	if err := r.reg.ReplaceQuestions(r.ctx, task.ID, 1, []registry.Question{q}); err != nil {
+		t.Fatal(err)
+	}
+	r.harness.taskFile(task.ID, reportFile, goodReport)
+	r.harness.taskFile(task.ID, acceptanceFile, goodAcceptance)
+	r.harness.taskFile(task.ID, questionsFile, "[]")
+	r.tick()
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 question before coding" {
+		t.Fatalf("task %s waits %q, want needs_you: 1 question before coding", got.State, got.WaitsWhat)
+	}
+	return r, task
+}
+
+// An answer to "Which Jira issue is this?" that names a key links the task
+// to it (its branch stays), reads the ticket into ticket.md (waiting while
+// Jira is down) and has the judge amend the report with it; a restart
+// repeats none of the three.
+func TestAnAnswerThatNamesAJiraKeyLinksTheTaskAndReadsItsTicket(t *testing.T) {
+	r, task := linkRig(t)
+	r.site.setDown(7)
+	r.clock.Add(time.Minute)
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "PR-12345 Credit expiry reminder email"}})
+	got := r.reload(task.ID)
+	if got.JiraKey != "PR-12345" || got.Branch != task.Branch || got.State != registry.TaskActive || got.WaitsWho != "Jira" ||
+		got.WaitsWhat != "read PR-12345 when Jira answers" {
+		t.Fatalf("task %+v; want PR-12345 linked, its branch kept, active, Jira: read PR-12345 when Jira answers", got)
+	}
+	ticket := filepath.Join(r.layout.FactoryTaskDir(task.ID), "ticket.md")
+	if _, err := os.Stat(ticket); !errors.Is(err, os.ErrNotExist) || len(r.rt.launchedRoles()) != 0 {
+		t.Fatalf("ticket.md: %v, launches %v; want neither while Jira is down", err, r.rt.launchedRoles())
+	}
+
+	r.restart()
+	r.site.setDown(0)
+	r.tick()
+	r.e.waitBackground()
+	r.tick()
+	if b, err := os.ReadFile(ticket); err != nil || !strings.Contains(string(b), "Credit expiry reminder email") {
+		t.Fatalf("ticket.md = %q, %v; want PR-12345's ticket", b, err)
+	}
+	got = r.reload(task.ID)
+	if r.site.reads() != 1 || got.WaitsWho == "Jira" || got.Title != "Credit expiry reminder email" {
+		t.Fatalf("%d reads of Jira, task waits %q: %q, titled %q; want one read and the ticket's title", r.site.reads(), got.WaitsWho,
+			got.WaitsWhat, got.Title)
+	}
+	ps := r.rt.promptsTo("fx-judge")
+	if len(ps) != 1 || !strings.Contains(ps[0].Text, ticket) || !strings.Contains(ps[0].Text, "amend") {
+		t.Fatalf("the judge's prompts %+v, want one amend that names ticket.md", ps)
+	}
+
+	r.restart()
+	r.startStage(task)
+	if n := len(r.rt.promptsTo("fx-judge")); n != 1 || r.site.reads() != 1 {
+		t.Fatalf("after a restart: %d amends, %d reads of Jira; want one each", n, r.site.reads())
+	}
+	r.clock.Add(time.Minute)
+	r.harness.taskFile(task.ID, reportFile, goodReport)
+	r.harness.taskFile(task.ID, acceptanceFile, goodAcceptance)
+	r.harness.taskFile(task.ID, questionsFile, "[]")
+	r.ended(task, "fx-judge")
+	r.tick()
+	if got := r.reload(task.ID); got.Stage != "coding" || len(r.rt.promptsTo("fx-judge")) != 1 {
+		t.Fatalf("task %s at %s, want coding after the one amend", got.State, got.Stage)
+	}
+}
+
+// A key another task holds is refused, naming that task; the question
+// stays open and the task links nothing.
+func TestAJiraKeyAnotherTaskHoldsIsRefusedAndTheQuestionStaysOpen(t *testing.T) {
+	r, task := linkRig(t)
+	other, err := r.reg.CreateTask(r.ctx, registry.Task{JiraKey: "PR-12345", Kind: "feature", Repo: "talkable/talkable", State: registry.TaskActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := r.sendAnswers(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "PR-12345 Credit expiry reminder email"}})
+	if q.State != registry.RequestFailed || !strings.Contains(q.Result, fmt.Sprintf("task %d", other.ID)) {
+		t.Fatalf("request %s: %q; want refused, naming task %d", q.State, q.Result, other.ID)
+	}
+	if got := r.reload(task.ID); got.JiraKey != "" || got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s with key %q, want needs_you with none", got.State, got.JiraKey)
+	}
+	if qs := r.newestQuestions(task.ID); qs[0].State != registry.QuestionOpen {
+		t.Fatalf("the question is %s, want open", qs[0].State)
+	}
+}
+
+// "no issue", recommended or not, links nothing, reads no ticket and needs
+// no amend.
+func TestNoIssueLinksNothingAndNeedsNoAmend(t *testing.T) {
+	r, task := linkRig(t)
+	r.clock.Add(time.Minute)
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: noIssue}})
+	got := r.reload(task.ID)
+	if got.Stage != "coding" || got.JiraKey != "" || r.site.reads() != 0 || len(r.rt.launchedRoles()) != 0 {
+		t.Fatalf("task %s at %s, key %q, %d reads, launches %v; want coding with nothing linked, read or amended", got.State, got.Stage,
+			got.JiraKey, r.site.reads(), r.rt.launchedRoles())
+	}
+}
+
+// ask:<login> names a GitHub login, and never you: anything else is
+// refused, the question stays open and nothing is drafted.
+func TestAnAskNamesAGitHubLogin(t *testing.T) {
+	h := newHarness(t)
+	task := h.gateTask("PR-12385", "feature", whenQuestion)
+	h.tick()
+	for _, bad := range []string{"ask:@rev-ann", "ask:you", "ask:You", "ask:rev_ann", "ask:", "ask:-rev"} {
+		if q := h.sendAnswers(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: bad}}); q.State != registry.RequestFailed {
+			t.Errorf("%q was taken: %s", bad, q.Result)
+		}
+	}
+	if qs := h.newestQuestions(task.ID); qs[0].State != registry.QuestionOpen {
+		t.Fatalf("the question is %s, want open", qs[0].State)
+	}
+	if _, err := os.Stat(filepath.Join(h.layout.FactoryTaskDir(task.ID), asksFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("asks.json: %v, want none", err)
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWho != "you" {
+		t.Fatalf("task %s waits %q: %q, want still needs_you", got.State, got.WaitsWho, got.WaitsWhat)
 	}
 }

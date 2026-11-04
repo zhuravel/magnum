@@ -140,9 +140,8 @@ type stageRole struct {
 	ok     bool
 	failed string
 	// asking: its run ended with questions that wait for your answers (the
-	// stage is suspended); answered are the runs your answers started.
-	asking   bool
-	answered map[string]bool
+	// stage is suspended).
+	asking bool
 }
 
 // The prompts a role gets after its first (stageRole.next).
@@ -373,7 +372,7 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		if err != nil {
 			return nil, nil, cannotRun(role, err)
 		}
-		run.roles = append(run.roles, &stageRole{role: role, runAs: runAs, runs: map[string]bool{}, answered: map[string]bool{}})
+		run.roles = append(run.roles, &stageRole{role: role, runAs: runAs, runs: map[string]bool{}})
 	}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
@@ -394,7 +393,7 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			r.runs[en.RunID] = true
 			switch {
 			case strings.HasPrefix(en.Text, answersLead): // a new turn: its own nudge
-				r.answered[en.RunID], r.nudged = true, false
+				r.nudged = false
 			case strings.HasPrefix(en.Text, nudgeLead):
 				r.nudged = true
 			}
@@ -564,7 +563,7 @@ func (e *Engine) ended(ctx context.Context, t registry.Task, st config.FactorySt
 		return "" // its questions wait for your answers already
 	}
 	p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
-	switch asks, err := e.roleAsks(ctx, t, st, a, run, r, runID, dir, p); {
+	switch asks, err := e.roleAsks(ctx, t, st, a, run, r, dir, p); {
 	case err != nil:
 		e.log.Warn("ask a role's questions", "task", t.ID, "role", r.runAs.Name, "err", err)
 		if n, ok := errors.AsType[needsYou](err); ok {
@@ -705,7 +704,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			case nextNudge:
 				r.nudged = true
 			case nextAnswers: // a new turn, with a nudge of its own
-				r.answered[id], r.nudged = true, false
+				r.nudged = false
 				if rerr := e.resume(ctx, t); rerr != nil {
 					e.log.Warn("resume a suspended stage", "task", t.ID, "err", rerr)
 				}
@@ -852,7 +851,7 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 		return ""
 	}
 	d := PromptData{TaskID: t.ID, Key: t.JiraKey, Kind: t.Kind, Repo: t.Repo, Branch: t.Branch, Copy: c.Path, TaskDir: dir,
-		Ticket: present("ticket.md"), Guidance: present("guidance.md"), Prompt: present("prompt.md"), Answers: present(answersFile),
+		Ticket: present(ticketFile), Guidance: present("guidance.md"), Prompt: present("prompt.md"), Answers: present(answersFile),
 		Rules: present("rules.md"), Findings: in("findings-*.md"), Report: in(reportFile), Questions: in(questionsFileOf(st, role.Name)),
 		Acceptance: in(acceptanceFile), Proof: in("proof.json"),
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port}

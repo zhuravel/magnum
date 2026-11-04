@@ -12305,6 +12305,14 @@ func (r *Registry) LedgerOf(ctx context.Context, taskID int64) ([]LedgerEntry, e
     LedgerOf returns the task's entries in the order they were written:
     the prompts its agents were sent, or were about to be.
 
+func (r *Registry) LinkKey(ctx context.Context, id int64, key string) error
+    LinkKey gives task id the Jira key key (a task of a free prompt, once you
+    named its issue) under CreateTask's rule: of the tasks that are not done
+    or stopped, one key has at most one, so a key another such task holds is
+    an ErrActiveKey naming it. A task that holds key already is no change, one
+    that holds another key is ErrConflict, and a missing task is ErrNotFound.
+    The key changes nothing else of the task (its branch stays).
+
 func (r *Registry) LinkPR(ctx context.Context, l PRLink) error
     LinkPR records the PR of task l.TaskID. A task has one PR, and a PR one task
     at a time: linking another number or repository to a task that has a PR,
@@ -13182,6 +13190,11 @@ func SameLogin(a, b string) bool
     the same name whether or not either is a bot, so an App and a user of the
     same name match. Use it only next to a check of the kind (IsAccount);
     SameAccount otherwise.
+
+func ValidLogin(s string) bool
+    ValidLogin reports whether s is a GitHub user's login as GitHub allows it:
+    letters, digits and hyphens, 1 to 39 of them, not starting with a hyphen (no
+    "@", no "[bot]").
 
 func WithBetweenCalls(ctx context.Context, fn func()) context.Context
     WithBetweenCalls returns ctx carrying fn, which the client runs before

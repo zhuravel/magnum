@@ -59,6 +59,19 @@ func TestParseRefErrors(t *testing.T) {
 	}
 }
 
+func TestValidLoginTakesOnlyAGitHubUsersLogin(t *testing.T) {
+	for _, ok := range []string{"zhuravel", "rev-ann", "a", "A1-b2"} {
+		if !ValidLogin(ok) {
+			t.Errorf("ValidLogin(%q) = false", ok)
+		}
+	}
+	for _, bad := range []string{"", "@rev-ann", "rev_ann", "-rev", "two words", "app[bot]", "team/x", "a234567890123456789012345678901234567890"} {
+		if ValidLogin(bad) {
+			t.Errorf("ValidLogin(%q) = true", bad)
+		}
+	}
+}
+
 func TestNormalizeLogin(t *testing.T) {
 	cases := map[string]string{
 		"talkable[bot]":                "talkable",

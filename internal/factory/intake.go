@@ -580,7 +580,7 @@ func (e *Engine) recordStart(ctx context.Context, t registry.Task, p StartPayloa
 
 // writeTicket writes ticket.md, the ticket as the agents read it.
 func (e *Engine) writeTicket(ctx context.Context, t registry.Task, tk jira.Ticket) error {
-	return e.writeData(ctx, t, "ticket", "ticket.md", tk.Markdown())
+	return e.writeData(ctx, t, "ticket", ticketFile, tk.Markdown())
 }
 
 // writeData writes a data file of the task's directory (0600, the directory

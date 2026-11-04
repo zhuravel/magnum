@@ -31,6 +31,7 @@ const (
 	criticFile     = "critic.md"
 	prBodyFile     = "pr-body.md"
 	answersFile    = "answers.md"
+	ticketFile     = "ticket.md"
 )
 
 // findingsFile is an investigator's file: findings-<role>.md, named by the

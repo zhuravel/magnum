@@ -50,6 +50,50 @@ func TestCreateTaskRefusesASecondActiveTaskForOneKey(t *testing.T) {
 	}
 }
 
+// A task of a free prompt is linked to a Jira key under the rule of one
+// unfinished task per key: a key another such task holds is refused with
+// that task's id, a key the task holds already is no change, and a task
+// keeps the key it holds.
+func TestLinkKeyHoldsOneUnfinishedTaskPerKey(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	ctx := t.Context()
+	prompt, err := r.CreateTask(ctx, registry.Task{Prompt: "remind advocates before their credit expires", Kind: "feature"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := createTask(t, r, "PR-12345")
+	err = r.LinkKey(ctx, prompt.ID, "PR-12345")
+	var active registry.ErrActiveKey
+	if !errors.As(err, &active) || active.TaskID != holder.ID {
+		t.Fatalf("LinkKey to a key task %d holds = %v, want an ErrActiveKey naming it", holder.ID, err)
+	}
+	if got, _ := r.TaskByID(ctx, prompt.ID); got.JiraKey != "" {
+		t.Fatalf("a refused link left key %q", got.JiraKey)
+	}
+
+	if err := r.TransitionTask(ctx, holder.ID, nil, registry.TaskDone, nil); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // the second is no change
+		if err := r.LinkKey(ctx, prompt.ID, "PR-12345"); err != nil {
+			t.Fatalf("LinkKey once the holder is done = %v", err)
+		}
+	}
+	if got, err := r.TaskByKey(ctx, "PR-12345"); err != nil || got.ID != prompt.ID {
+		t.Fatalf("TaskByKey = %+v, %v; want the linked task %d", got, err, prompt.ID)
+	}
+	if err := r.LinkKey(ctx, prompt.ID, "PR-12346"); !errors.Is(err, registry.ErrConflict) {
+		t.Fatalf("LinkKey to a second key = %v, want ErrConflict", err)
+	}
+	if _, err := r.CreateTask(ctx, registry.Task{JiraKey: "PR-12345", Kind: "bug"}); !errors.As(err, &active) || active.TaskID != prompt.ID {
+		t.Fatalf("CreateTask for the linked key = %v, want an ErrActiveKey naming task %d", err, prompt.ID)
+	}
+	if err := r.LinkKey(ctx, 999, "PR-12347"); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("LinkKey of a missing task = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateTaskAllowsAKeyAgainAfterDone(t *testing.T) {
 	t.Parallel()
 	for _, end := range []string{registry.TaskDone, registry.TaskStopped} {

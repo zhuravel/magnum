@@ -3513,7 +3513,7 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 | `magnum factory uninstall [--dry-run]` | Unload and delete that LaunchAgent; the factory's registry, task directories and copies stay. |
 | `magnum factory status [--json]` | Whether the factory daemon runs, and each task's key, kind, state, stage and what it waits on. It never creates the registry, and refuses to migrate one while an older factory daemon runs on it (`magnum factory install` restarts it on the new build, which migrates). |
 | `magnum factory start <key, link or prompt> [--kind bug\|feature\|chore] [--repo owner/name]` | Hand the factory daemon a task and print its answer (it waits up to 30 seconds; without a factory daemon the request stays queued, and expires after 30 minutes). A Jira key (`PR-12345`) or a Jira link (`/browse/<KEY>` on the `[jira]` site, or a tracker template's link) at the start is a task of that ticket, which the daemon reads itself; the words after it are your guidance for every agent (`magnum factory start PR-12345 only the refund path`). Anything else is the task in your words. A key that has a task (not done or stopped) gets that task back, `PR-12345 already runs as task 7` or `PR-12345 has PR #4527`, and no second one; a GitHub PR link (adoption) and an Actions run link (a CI task) come in milestones 2 and 3. `--kind` names the kind of task, else the daemon picks it (below); `--repo` names the `[[factory.repo]]` when there is more than one. |
-| `magnum factory answer <task> [--json <file> \| --question <n> --text <file>]` | Answer a task's questions, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a flag it prints the questions of the task's newest revision, numbered from 1, with their options and the recommended one. `--json` sends a batch, `{"revision": 3, "answers": {"1": "Seven days before it expires", "2": "ask:rev-ann"}, "needless": {"3": "obvious"}}`: an answer is an option's label or your own words, `ask:<login>` asks someone else, and `needless` flags a question with the key of your reason. `--question <n> --text <file>` answers one question with the file's text (`-` for stdin), such as the answer of the person you asked. |
+| `magnum factory answer <task> [--json <file> \| [--revision <r>] --question <n> --text <file>]` | Answer a task's questions, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a flag it prints the questions of the task's newest revision, numbered from 1, with their options and the recommended one. `--json` sends a batch, `{"revision": 3, "answers": {"1": "Seven days before it expires", "2": "ask:rev-ann"}, "needless": {"3": "obvious"}}`: an answer is an option's label or your own words, `ask:<login>` asks someone else, and `needless` flags a question with the key of your reason (`ask:` takes a GitHub login, without the `@`, and never yours). `--question <n> --text <file>` answers one question with the file's text (`-` for stdin), such as the answer of the person you asked: question `n` of `--revision <r>`, the revision that asked it, wherever a newer revision carried it over (the daemon's answer to an ask prints both numbers); without `--revision`, of the newest revision. |
 | `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one says so, naming the first one's pid, and exits 0 before it opens a log or a store, so it migrates nothing and launchd does not restart it. |
 
 A start writes the task's data files to its directory (`factory/tasks/<id>/` in the data directory), which
@@ -3554,15 +3554,23 @@ sent`, and nothing of it is kept. Answers are stored, written to `answers.md` in
 agents read it as data; no prompt carries an answer's words) and recorded as your inputs. An answer that
 takes another option than the recommended one, or is your own words, has the judge amend `report.md` first
 (`factory-amend.md`): the gate passes only on a report, `acceptance.json` and `questions.json` newer than
-`answers.md`, and asks the amended questions in turn. `ask:<login>` keeps its question open: the task waits
-on that person, `rev-ann: a question in Jira`, with the comment drafted for them in the task's directory
+`answers.md`, and asks the amended questions in turn. A role gets your answers once per batch: a turn after
+them that fails its end fact gets its one nudge, then needs you. An answer to "which Jira issue" that names a
+key (an option's label starts with it, or a key or a Jira link) links the task to it: a key another task
+that is not done or stopped holds is refused, naming that task, and the question stays open; the task's
+branch stays; before its next stage the daemon reads the ticket into `ticket.md` (while Jira does not
+answer the task waits, `Jira: read PR-12345 when Jira answers`, and tries again after 1, 2, 4, 8, 16, then
+every 30 minutes); a ticket read after the report has the judge amend the report with it, and "no issue"
+changes no plan. `ask:<login>` (a GitHub login, never yours) keeps its question open: the task waits on
+that person, `rev-ann: a question in Jira`, with the comment drafted for them in the task's directory
 (`jira-comment-<revision>-<n>.md`; the factory writes nothing to Jira in this milestone), until you give
-their answer with `magnum factory answer <task> --question <n> --text <file>`. A question you call needless
-keeps the key of your reason. The `reproduced` gate passes only on a Proof whose first line says
-`Reproduced: yes`; anything else asks the reproduction question (the judge's, else the factory's own) with
-its options `give a hint`, `take the other cause`, `try Docker or a staging` and `drop`, one recommended:
-`drop` stops the task, and any other answer has the judge amend the report with it before the gate reads
-the Proof again.
+their answer with `magnum factory answer <task> --revision <r> --question <n> --text <file>`. A question you
+call needless keeps the key of your reason. The `reproduced` gate passes only on a Proof whose first line
+says `Reproduced: yes`; anything else asks the reproduction question (the judge's, else the factory's own)
+with its options `give a hint`, `take the other cause`, `try Docker or a staging` and `drop`, one
+recommended: `drop` stops the task at whichever gate sees it (the bug kind's questions gate asks the
+judge's reproduction question first), with no amend, and any other answer has the judge amend the report
+with it, once, before the gate reads the Proof again.
 
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the

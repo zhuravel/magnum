@@ -13,7 +13,13 @@ var (
 	fullRefRe  = regexp.MustCompile(`^([^/#\s]+)/([^/#\s]+)#(\d+)$`)
 	shortRefRe = regexp.MustCompile(`^([^/#\s]+)#(\d+)$`)
 	numRefRe   = regexp.MustCompile(`^#?(\d+)$`)
+	loginRe    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
 )
+
+// ValidLogin reports whether s is a GitHub user's login as GitHub allows it:
+// letters, digits and hyphens, 1 to 39 of them, not starting with a hyphen
+// (no "@", no "[bot]").
+func ValidLogin(s string) bool { return loginRe.MatchString(s) }
 
 // ParseRef resolves a pull request reference: a URL
 // https://github.com/o/r/pull/N[/...], "o/r#N", "r#N" (owner from

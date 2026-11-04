@@ -67,6 +67,9 @@ func (e *Engine) gateQuestions(ctx context.Context, t registry.Task, st config.F
 		if waits, err := e.awaitAnswers(ctx, t); err != nil || waits {
 			return false, err
 		}
+		if dropped, err := e.dropIfAnswered(ctx, t); err != nil || dropped {
+			return false, err
+		}
 		due, err := e.amendDue(ctx, t)
 		switch {
 		case err != nil:
@@ -84,8 +87,8 @@ func (e *Engine) gateQuestions(ctx context.Context, t registry.Task, st config.F
 // gateReproduced is the reproduced gate: it holds on a report whose Proof
 // says "Reproduced: yes". Otherwise the reproduction question waits on you:
 // the judge's (questions.json), else the factory's own, with the four ways
-// on (ReproductionOptions), one recommended. Your answer since the report
-// was written is acted on: "drop" stops the task, any other answer has the
+// on (ReproductionOptions), one recommended. A "drop" stops the task
+// (dropIfAnswered); any other answer since the report was written has the
 // judge amend the report with it, and the gate reads the amended Proof.
 func (e *Engine) gateReproduced(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	if done, err := e.amendInFlight(ctx, t, st); err != nil || !done {
@@ -96,6 +99,9 @@ func (e *Engine) gateReproduced(ctx context.Context, t registry.Task, st config.
 		if waits, err := e.awaitAnswers(ctx, t); err != nil || waits {
 			return false, err
 		}
+		if dropped, err := e.dropIfAnswered(ctx, t); err != nil || dropped {
+			return false, err
+		}
 		r, at, err := readReport(dir)
 		if err != nil {
 			return false, err
@@ -103,16 +109,12 @@ func (e *Engine) gateReproduced(ctx context.Context, t registry.Task, st config.
 		if r.reproduced() {
 			return true, nil
 		}
-		q, answered, err := e.reproductionAnswer(ctx, t, at)
+		answered, err := e.reproductionAnswered(ctx, t, at)
 		if err != nil {
 			return false, err
 		}
 		if !answered {
 			return false, e.askReproduction(ctx, t, dir)
-		}
-		if isDrop(q.Answer) {
-			return false, e.endTask(ctx, t, "dropped by you: the bug did not reproduce",
-				registry.Input{TaskID: t.ID, Kind: registry.InputDrop, Surface: answerSurface, Stage: t.Stage, Role: q.RaisedBy})
 		}
 		if len(e.reportRoles(t)) == 0 {
 			return false, e.stageFailed(ctx, t, needsYou{"no stage of the " + t.Kind + " kind writes report.md to act on your answer: " +
@@ -143,20 +145,40 @@ func readReport(dir string) (report, time.Time, error) {
 	return parseReport(string(b)), fi.ModTime(), nil
 }
 
-// reproductionAnswer is the newest reproduction question of task t (one
-// that offers every one of ReproductionOptions) that you answered after
-// the report of time at was written.
-func (e *Engine) reproductionAnswer(ctx context.Context, t registry.Task, at time.Time) (registry.Question, bool, error) {
+// reproductionAnswered reports whether you answered a reproduction question
+// of task t (one that offers every one of ReproductionOptions) after the
+// report of time at was written: an answer the report does not act on yet.
+func (e *Engine) reproductionAnswered(ctx context.Context, t registry.Task, at time.Time) (bool, error) {
 	qs, err := e.reg.Questions(ctx, t.ID)
 	if err != nil {
-		return registry.Question{}, false, err
+		return false, err
+	}
+	return slices.ContainsFunc(qs, func(q registry.Question) bool {
+		return q.State == registry.QuestionAnswered && q.Answered.After(at) && offersReproduction(q.Options)
+	}), nil
+}
+
+// dropIfAnswered stops task t when you answered its newest reproduction
+// question "drop", at whichever gate sees it first (the questions gate asks
+// the judge's reproduction question in the default bug kind): a drop is
+// final, and no amend of the report runs for it. dropped reports whether it
+// stopped the task.
+func (e *Engine) dropIfAnswered(ctx context.Context, t registry.Task) (dropped bool, err error) {
+	qs, err := e.reg.Questions(ctx, t.ID)
+	if err != nil {
+		return false, err
 	}
 	for _, q := range slices.Backward(qs) {
-		if q.State == registry.QuestionAnswered && q.Answered.After(at) && offersReproduction(q.Options) {
-			return q, true, nil
+		if !offersReproduction(q.Options) {
+			continue
 		}
+		if q.State != registry.QuestionAnswered || !isDrop(q.Answer) {
+			return false, nil
+		}
+		return true, e.endTask(ctx, t, "dropped by you: the bug did not reproduce",
+			registry.Input{TaskID: t.ID, Kind: registry.InputDrop, Surface: answerSurface, Stage: t.Stage, Role: q.RaisedBy})
 	}
-	return registry.Question{}, false, nil
+	return false, nil
 }
 
 // askReproduction asks the reproduction question of a report that names no
@@ -505,22 +527,30 @@ func plural(n int, noun string) string {
 
 // amendDue reports whether your answers changed the plan since report.md
 // was written: a question you answered after it took another option than
-// the recommended one, or your own words. A kind with no stage that writes
-// the report has nothing to amend it with.
+// the recommended one, or your own words, or the ticket of the Jira issue
+// your answer linked the task to was read after it (linkedTicket). Intake's
+// question which Jira issue the task is counts only by that ticket: "no
+// issue" changes no plan, whatever was recommended. A kind with no stage
+// that writes the report has nothing to amend it with.
 func (e *Engine) amendDue(ctx context.Context, t registry.Task) (bool, error) {
 	if len(e.reportRoles(t)) == 0 {
 		return false, nil
 	}
-	_, at, err := readReport(e.d.Layout.FactoryTaskDir(t.ID))
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	_, at, err := readReport(dir)
 	if err != nil {
 		return false, err
+	}
+	if fi, err := os.Stat(filepath.Join(dir, ticketFile)); err == nil && !at.IsZero() && fi.ModTime().After(at) {
+		return true, nil
 	}
 	qs, err := e.reg.Questions(ctx, t.ID)
 	if err != nil {
 		return false, err
 	}
 	return slices.ContainsFunc(qs, func(q registry.Question) bool {
-		return q.State == registry.QuestionAnswered && !q.TookRecommendation && q.Answered.After(at)
+		intake := q.RaisedBy == intakeRole && q.Text == whichIssue
+		return q.State == registry.QuestionAnswered && !q.TookRecommendation && !intake && q.Answered.After(at)
 	}), nil
 }
 
@@ -569,18 +599,19 @@ const (
 	askAnswered        // you answered them, and the role is still to get the answers
 )
 
-// roleAsks is what role r's questions file says of its run runID that ended
-// in attempt a of stage st, whose end fact did not hold for end (nil: it
+// roleAsks is what role r's questions file says of its run that ended in
+// attempt a of stage st, whose end fact did not hold for end (nil: it
 // held): nothing to act on (no question, a gate's turn, whose questions the
 // gate asks, a role whose end fact held and whose questions a later
 // no_open_questions gate asks, a questions file its end fact refuses, which
-// the role's nudge is about, or questions it got your answers to in this
-// run's prompt); questions that wait for your answers (those not asked yet
-// are asked now, with every other question the task's files hold, and the
+// the role's nudge is about, or questions whose answers the role got
+// already); questions that wait for your answers (those not asked yet are
+// asked now, with every other question the task's files hold, and the
 // stage is suspended); or questions you answered whose answers the role is
-// still to get (a restart came between).
+// still to get (a restart came between: answersDue). Your answers go out
+// once per batch, so a later turn ends on its end fact alone.
 func (e *Engine) roleAsks(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun, r *stageRole,
-	runID, dir string, end *endProblem) (int, error) {
+	dir string, end *endProblem) (int, error) {
 	name := questionsFileOf(st, r.role.Name)
 	if run.turn.gate || (end == nil && e.laterQuestionsGate(t, st)) || (end != nil && end.file == name) {
 		return askNone, nil
@@ -603,18 +634,51 @@ func (e *Engine) roleAsks(ctx context.Context, t registry.Task, st config.Factor
 			open++
 		}
 	}
-	switch {
-	case unasked > 0 || open > 0:
+	if unasked > 0 || open > 0 {
 		if unasked > 0 {
 			if _, err := e.askQuestions(ctx, t, false); err != nil {
 				return askNone, err
 			}
 		}
 		return askWaits, e.suspend(ctx, t, a, r.role.Name, e.openIDs(ctx, t.ID))
-	case !r.answered[runID]:
+	}
+	switch due, err := e.answersDue(ctx, t, a, r, qs, have); {
+	case err != nil:
+		return askNone, err
+	case due:
 		return askAnswered, nil
 	}
 	return askNone, nil
+}
+
+// answersDue reports whether role r is still to get your answers to its
+// questions qs (all answered; have are the task's questions): no prompt of
+// your answers (answersLead) went to it in attempt a since the last of them
+// was answered. The ledger and the registry both keep their times, so a
+// restart tells it as well.
+func (e *Engine) answersDue(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole, qs []QuestionFile,
+	have []registry.Question) (bool, error) {
+	mine := map[string]bool{}
+	for _, q := range qs {
+		mine[questionKey(r.role.Name, q.Text)] = true
+	}
+	var answered time.Time
+	for _, q := range have {
+		if q.State == registry.QuestionAnswered && mine[questionKey(q.RaisedBy, q.Text)] && q.Answered.After(answered) {
+			answered = q.Answered
+		}
+	}
+	entries, err := e.reg.LedgerOf(ctx, t.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, en := range entries {
+		if en.AttemptID == a.ID && en.Role == r.runAs.Name && en.Delivered != registry.DeliveredNo &&
+			strings.HasPrefix(en.Text, answersLead) && !en.Sent.Before(answered) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // openIDs are the ids of the open questions of the task's newest revision,

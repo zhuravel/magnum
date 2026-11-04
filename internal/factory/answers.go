@@ -33,6 +33,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/github"
 )
 
 // AnswerPayload is a ReqAnswer: your answers to the questions of revision
@@ -134,6 +135,7 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 	}
 	take := map[int]string{}
 	var asks []pendingAsk
+	link := "" // the Jira key your answer to which issue the task is names
 	for _, idx := range slices.Sorted(maps.Keys(p.Answers)) {
 		q, err := question(idx)
 		if err != nil {
@@ -144,8 +146,9 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 			return fmt.Errorf("the answer to question %d is blank", idx+1)
 		}
 		if login, comment, ok := parseAsk(a); ok {
-			if login == "" {
-				return fmt.Errorf("question %d: ask whom? write %s<login>", idx+1, askPrefix)
+			if !github.ValidLogin(login) || strings.EqualFold(login, waitsYou) {
+				return fmt.Errorf("question %d: ask whom? %s<login> takes the GitHub login of someone else, without the @ (got %q)",
+					idx+1, askPrefix, login)
 			}
 			if q.State != registry.QuestionOpen {
 				return fmt.Errorf("question %d is %s: it cannot be asked of %s", idx+1, q.State, login)
@@ -163,6 +166,12 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 		default:
 			return fmt.Errorf("question %d is %s already: %q", idx+1, q.State, q.Answer)
 		}
+		if key := e.namedIssue(t, q, a); key != "" {
+			if err := e.mayLink(ctx, t, key, idx); err != nil {
+				return err
+			}
+			link = key
+		}
 	}
 	for _, idx := range slices.Sorted(maps.Keys(p.Needless)) {
 		if _, err := question(idx); err != nil {
@@ -173,6 +182,19 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 		}
 	}
 
+	if link != "" && t.JiraKey == "" {
+		// Before the answer: a link a race refuses keeps the question open.
+		// A batch the next step refuses as stale leaves the key you named
+		// linked, and your answer to the carried question links it again.
+		if err := e.reg.LinkKey(ctx, t.ID, link); err != nil {
+			if active, ok := errors.AsType[registry.ErrActiveKey](err); ok {
+				return keyHeld(active.Key, active.TaskID)
+			}
+			return err
+		}
+		e.event(ctx, t.ID, "intake", registry.PhaseOK, "linked to "+link+" by your answer to "+strconv.Quote(whichIssue)+
+			"; its ticket is read next")
+	}
 	if len(take) > 0 {
 		if err := e.reg.AnswerBatch(ctx, t.ID, t.QuestionRev, take); errors.Is(err, registry.ErrStaleRevision) {
 			if cur, err := e.reg.TaskByID(ctx, t.ID); err == nil {
@@ -219,6 +241,111 @@ func parseAsk(answer string) (login, comment string, ok bool) {
 		return rest[:i], strings.TrimSpace(rest[i:]), true
 	}
 	return rest, "", true
+}
+
+// namedIssue is the Jira key answer names when it answers intake's question
+// q, which Jira issue task t is: a key or a Jira link at its start (an
+// option's label starts with its key), as a start reads one; "" for any
+// other answer ("no issue", your own words) and any other question.
+func (e *Engine) namedIssue(t registry.Task, q registry.Question, answer string) string {
+	if q.RaisedBy != intakeRole || q.Text != whichIssue {
+		return ""
+	}
+	return ParseStart(answer, e.trackers(t.Repo)).Key
+}
+
+// mayLink checks that task t may take key, which your answer to question
+// idx names: no other task that is not done or stopped holds it, and t holds
+// no other key.
+func (e *Engine) mayLink(ctx context.Context, t registry.Task, key string, idx int) error {
+	if t.JiraKey != "" && t.JiraKey != key {
+		return fmt.Errorf("%s holds %s already: your answer to question %d is not taken, and the question stays open", TaskKey(t),
+			t.JiraKey, idx+1)
+	}
+	holder, err := e.reg.TaskByKey(ctx, key)
+	switch {
+	case errors.Is(err, registry.ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	case holder.ID != t.ID:
+		return keyHeld(key, holder.ID)
+	}
+	return nil
+}
+
+// linkedTicket reads the ticket of task *t into ticket.md before its stage
+// runs, when your answer linked the task of a free prompt to a Jira key and
+// it has no ticket.md yet (a task of a key has its ticket from its start,
+// which intake's own wait for Jira holds back until it is read). ready
+// is false while the read waits for Jira, which does not answer: the task
+// waits "Jira: read <key> when Jira answers" at no cost and tries again
+// after 1, 2, 4, 8, 16, then every 30 minutes. It is false too when the
+// task went to you (Jira refused the key, [jira] is off, ticket.md could
+// not be written). ticket.md takes the clock's time (the amend of a report
+// written before it is due, amendDue), the summary becomes the task's
+// title, and its branch stays. A restart reads no ticket twice: ticket.md
+// is the record.
+func (e *Engine) linkedTicket(ctx context.Context, t *registry.Task) (ready bool, err error) {
+	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), ticketFile)
+	if t.JiraKey == "" || t.Prompt == "" || fsx.Exists(path) {
+		return true, nil
+	}
+	if e.d.Jira == nil {
+		e.toOperator(ctx, *t, "[jira] is off, so the factory cannot read "+t.JiraKey, "Jira is off")
+		return false, nil
+	}
+	now := e.now()
+	w := e.jiraTries[t.ID]
+	if w != nil && now.Before(w.next) {
+		return false, nil
+	}
+	tk, err := e.d.Jira.Ticket(ctx, t.JiraKey)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return false, ctx.Err()
+	case err != nil && jiraDown(err):
+		if w == nil {
+			w = &jiraTry{}
+			e.jiraTries[t.ID] = w
+		}
+		w.next = now.Add(jiraBackoff(w.tries))
+		w.tries++
+		e.waitOn(ctx, *t, waitJira, "read "+t.JiraKey+" when Jira answers")
+		e.event(ctx, t.ID, "intake", registry.PhaseInfo, fmt.Sprintf("Jira: reading %s failed (%v); tries again at %s", t.JiraKey,
+			err, w.next.Local().Format("15:04")))
+		return false, nil
+	case err != nil:
+		delete(e.jiraTries, t.ID)
+		e.toOperator(ctx, *t, jiraCause(t.JiraKey, err).Error(), "Jira refused the key")
+		return false, nil
+	}
+	delete(e.jiraTries, t.ID)
+	if wrote := e.writeTicket(ctx, *t, tk) == nil; !wrote {
+		return false, nil // writeData sent the task to you with the cause
+	}
+	if err := os.Chtimes(path, now, now); err != nil {
+		return false, err
+	}
+	title, who, what := cmp.Or(tk.Summary, t.Title), t.WaitsWho, t.WaitsWhat
+	if who == waitJira {
+		who, what = "", ""
+	}
+	if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
+		u.Set("title", title)
+		u.Set("waits_who", who)
+		u.Set("waits_what", what)
+	}); err != nil {
+		return false, err
+	}
+	t.Title, t.WaitsWho, t.WaitsWhat = title, who, what
+	e.event(ctx, t.ID, "intake", registry.PhaseOK, "read the ticket of "+t.JiraKey+" into "+ticketFile)
+	return true, nil
+}
+
+// keyHeld refuses the link of a key that task holder holds.
+func keyHeld(key string, holder int64) error {
+	return fmt.Errorf("%s already runs as task %d: your answer is not taken, and the question stays open", key, holder)
 }
 
 // changedAt is questionsChanged for task t: its newest revision's time (the
@@ -302,8 +429,8 @@ func (e *Engine) answerRequest(ctx context.Context, p AnswerPayload) (string, er
 			continue
 		}
 		asked = append(asked, fmt.Sprintf("question %d asked of %s: post %s in Jira, then give the answer with `magnum factory "+
-			"answer %d --question %d --text <file>`", idx+1, login,
-			filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), commentFile(p.Revision, idx)), t.ID, idx+1))
+			"answer %d --revision %d --question %d --text <file>`", idx+1, login,
+			filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), commentFile(p.Revision, idx)), t.ID, p.Revision, idx+1))
 	}
 	if n > 0 {
 		parts = append(parts, plural(n, "answer"))
