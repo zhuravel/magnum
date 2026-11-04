@@ -89,10 +89,12 @@ type AcceptanceCheck struct {
 // asking for a fix and a commit, not a file; file is then the file the
 // checks wrote ("the branch" for none). operator marks one the agent cannot
 // fix (the configuration's or the machine's): no turn, the task needs you
-// with why.
+// with why. merge names the base a turn back from the ready card did not
+// merge (a change problem with one fix turn, then you).
 type endProblem struct {
 	file, why        string
 	change, operator bool
+	merge            string
 }
 
 func (p *endProblem) String() string { return p.file + ": " + p.why }

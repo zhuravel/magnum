@@ -632,10 +632,10 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 		return ""
 	}
 	if p == nil && st.End == config.FactoryEndProof {
-		var pending bool
-		var err error
-		if p, run.proven, pending, err = e.provenHead(ctx, tp, run.copy); err != nil || pending {
-			if err != nil { // git cannot read the branch: the end is taken again on the next pass, and the task says why
+		// git cannot read the branch: the end is taken again on the next
+		// pass, and the task says why.
+		retake := func(err error) string {
+			if err != nil {
 				e.log.Warn("check the coding stage's end", "task", t.ID, "err", err)
 				what := "the branch cannot be read: " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 				e.waitOn(ctx, t, waitPrecheck, what)
@@ -644,8 +644,18 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 			e.inbox[t.ID] = append(e.inbox[t.ID], runtime.Event{TaskID: t.ID, Role: r.runAs.Name, RunID: runID, Kind: runtime.EventEnded})
 			return ""
 		}
+		var pending bool
+		var err error
+		if p, run.proven, pending, err = e.provenHead(ctx, tp, run.copy); err != nil || pending {
+			return retake(err)
+		}
 		if p == nil && run.turn.review != nil {
 			p = run.turn.review.commitProblem(dir, run.proven)
+		}
+		if p == nil && run.turn.review == nil {
+			if p, err = e.mergeProblem(ctx, t, run.copy, run.proven); err != nil {
+				return retake(err)
+			}
 		}
 	}
 	if p == nil {
@@ -657,10 +667,14 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	switch {
 	case p.operator:
 	case p.change:
-		if n, err := e.attemptPrompts(ctx, t, a, r); err != nil || n < runtime.MaxStagePrompts {
-			if err != nil {
-				e.log.Warn("count a role's prompts in its stage", "task", t.ID, "role", r.runAs.Name, "err", err)
-			}
+		n, err := e.attemptPrompts(ctx, t, a, r)
+		if err != nil {
+			e.log.Warn("count a role's prompts in its stage", "task", t.ID, "role", r.runAs.Name, "err", err)
+		}
+		if p.merge != "" && e.mergeAsked(ctx, t, a, r) {
+			break // a merge turn gets one fix turn for the base, then you
+		}
+		if err != nil || n < runtime.MaxStagePrompts {
 			r.next, r.problem = nextFix, p
 			return ""
 		}
@@ -690,13 +704,31 @@ func (e *Engine) attemptPrompts(ctx context.Context, t registry.Task, a registry
 	return n, nil
 }
 
+// mergeAsked reports whether role r got its fix turn for an unmerged base
+// in attempt a of task t's stage already (a ledger prompt that names it,
+// mergeWhy): the merge turn's one fix turn, which a restart keeps counted.
+func (e *Engine) mergeAsked(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) bool {
+	entries, err := e.reg.LedgerOf(ctx, t.ID)
+	if err != nil {
+		e.log.Warn("read the ledger for a merge's fix turn", "task", t.ID, "err", err)
+		return true // unknown: no turn more, you
+	}
+	return slices.ContainsFunc(entries, func(en registry.LedgerEntry) bool {
+		return en.Role == r.runAs.Name && en.AttemptID == a.ID && en.Delivered != registry.DeliveredNo &&
+			strings.HasPrefix(en.Text, fixLead+": "+mergeWhy)
+	})
+}
+
 // noValidFile is the wait of a task whose role wrote no valid file after
 // its nudge, whose change still fails the factory's checks at the stage's
-// prompt cap, or whose end fact needs you (why).
+// prompt cap, whose merge turn did not merge the base after its fix turn,
+// or whose end fact needs you (why).
 func noValidFile(r *stageRole, p *endProblem) string {
 	switch {
 	case p.operator:
 		return p.why
+	case p.merge != "":
+		return "the " + r.runAs.Name + " agent did not merge " + p.merge
 	case p.change:
 		return fmt.Sprintf("the %s agent's change does not pass after %d prompts in the stage: %s", r.runAs.Name, runtime.MaxStagePrompts, p.why)
 	}
@@ -758,6 +790,13 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 			}
 			if p == nil && run.turn.review != nil {
 				p = run.turn.review.commitProblem(dir, run.proven)
+			}
+			if p == nil && run.turn.review == nil {
+				var err error
+				if p, err = e.mergeProblem(ctx, *t, run.copy, run.proven); err != nil {
+					e.log.Warn("check the coding stage's merge again", "task", t.ID, "err", err)
+					continue
+				}
 			}
 		}
 		if p != nil {

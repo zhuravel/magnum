@@ -192,16 +192,32 @@ type historyGuard struct {
 	why  string
 }
 
-// historyGuards are the guards the findings files in dir name (each a list
-// item with its place and its why, as the history agent writes them), in
-// the order they come, each place once.
-func historyGuards(dir string) []historyGuard {
-	names, _ := filepath.Glob(filepath.Join(dir, "findings-*.md"))
-	slices.Sort(names)
+// historyPrompt is the history agent's prompt, which asks for the guards
+// as list items with their place and their why.
+const historyPrompt = "factory-history.md"
+
+// historyFindings are the findings files of the history agents: the
+// factory roles whose prompt is historyPrompt (fx-history's
+// findings-fx-history.md by default). No other agent's findings name a
+// guard.
+func (e *Engine) historyFindings() []string {
+	var out []string
+	for _, r := range e.cfg.Factory.Roles {
+		if r.Prompt == historyPrompt {
+			out = append(out, findingsFile(r.Name))
+		}
+	}
+	return out
+}
+
+// historyGuards are the guards that files (the history agents' findings,
+// historyFindings) in dir name, each a list item with its place and its
+// why, in the order they come, each place once.
+func historyGuards(dir string, files []string) []historyGuard {
 	var out []historyGuard
 	seen := map[string]bool{}
-	for _, name := range names {
-		b, err := os.ReadFile(name)
+	for _, file := range files {
+		b, err := os.ReadFile(filepath.Join(dir, file))
 		if err != nil {
 			continue
 		}
@@ -222,14 +238,14 @@ func historyGuards(dir string) []historyGuard {
 	return out
 }
 
-// oldGuards are the guards of the findings in dir that the change from
-// bh.Base to bh.Head (changing paths) removes or rewrites, whose line the
-// base had for longer than oldGuardMonths.
+// oldGuards are the guards of the history findings in dir that the change
+// from bh.Base to bh.Head (changing paths) removes or rewrites, whose line
+// the base had for longer than oldGuardMonths.
 func (e *Engine) oldGuards(ctx context.Context, c Copy, bh branchHead, dir string, paths []string) ([]OldGuard, error) {
 	var out []OldGuard
 	cutoff := e.now().AddDate(0, -oldGuardMonths, 0)
 	touched := map[string]map[int]bool{}
-	for _, g := range historyGuards(dir) {
+	for _, g := range historyGuards(dir, e.historyFindings()) {
 		if !slices.Contains(paths, g.path) {
 			continue
 		}

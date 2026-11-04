@@ -231,6 +231,21 @@ func (g ghClient) PRByBranch(ctx context.Context, repo, branch string) (PRView, 
 	return PRView{}, false, nil
 }
 
+// ActiveLogin is the login gh acts as for repo, as you only (asOperator):
+// `gh api user --jq .login`, as identity.GH's check asks it, the account
+// active in your gh config dir.
+func (g ghClient) ActiveLogin(ctx context.Context, repo string) (string, error) {
+	res, err := g.gh(ctx, repo, "gh api user", false, "api", "user", "--jq", ".login", "--hostname", "github.com")
+	if err != nil {
+		return "", err
+	}
+	login := strings.TrimSpace(res.Out())
+	if login == "" {
+		return "", errors.New("gh api user names no login")
+	}
+	return login, nil
+}
+
 // ViewPR reads PR number of repo back.
 func (g ghClient) ViewPR(ctx context.Context, repo string, number int) (PRView, error) {
 	res, err := g.gh(ctx, repo, fmt.Sprintf("gh pr view %s#%d", repo, number), false,

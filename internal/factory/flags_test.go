@@ -80,7 +80,8 @@ func (r *codingRig) commitOld(path, text string, at time.Time) {
 // A guard the change rewrites is flagged when the base had its line for
 // more than 6 months, with the reason the history agent found: a younger
 // guard, a guard the change leaves as it is, one in a file the change does
-// not touch and a line a findings file names without a why are not.
+// not touch and a line another agent's findings name, with a why or not,
+// are not: the guards are the history agent's alone.
 func TestFlagsNameAnOldGuardWithItsReason(t *testing.T) {
 	r := newCodingRig(t)
 	guarded := "class Credit\n  def points\n    return 0 if refunded?\n    return 0 if frozen?\n    0\n  end\nend\n"
@@ -96,7 +97,9 @@ func TestFlagsNameAnOldGuardWithItsReason(t *testing.T) {
 		"- `app/credit.rb:3` · a1b2c3d 2023-05-01 · why: a refund once paid its points twice · breaks: refunds count again\n"+
 		"- `app/credit.rb:4` · d4e5f6a 2026-10-04 · why: archived campaigns stopped counting · breaks: archived ones count\n"+
 		"- `app/models/user.rb:10` · 0a0b0c0 2022-01-01 · why: users without an email · breaks: the sign-up\n")
-	r.taskFile(task.ID, findingsFile("fx-cause"), "# Cause\n\n- `app/credit.rb:5` sums the points without the refunds\n")
+	// Another agent's findings name no guard, even with a why.
+	r.taskFile(task.ID, findingsFile("fx-cause"), "# Cause\n\n- `app/credit.rb:5` sums the points without the refunds\n"+
+		"- `app/credit.rb:3` skips them early · why: the cause agent's guess\n- `app/credit.rb:4` · why: a cause, not a guard\n")
 
 	f, err := r.e.flags(r.ctx, task, r.cp)
 	if err != nil {

@@ -122,11 +122,13 @@ type PRView struct {
 }
 
 // GitHub opens a task's PR (ready for review, never a draft) and reads it
-// back, by its branch or its number.
+// back, by its branch or its number; ActiveLogin is the login gh acts as
+// for repo now (the account active in your gh config dir).
 type GitHub interface {
 	CreatePR(ctx context.Context, repo, base, branch, title, bodyFile string) (PRView, error)
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
 	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
+	ActiveLogin(ctx context.Context, repo string) (string, error)
 }
 
 // Magnum is the review daemon as the factory's local review sees it: busy

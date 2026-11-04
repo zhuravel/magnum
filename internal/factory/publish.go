@@ -21,6 +21,7 @@ package factory
 // request: the PR is no draft, and magnum reviews it by itself.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -51,9 +52,10 @@ func (e *Engine) runEffect(ctx context.Context, t registry.Task, st config.Facto
 func publishKey(id int64, sha string) string { return fmt.Sprintf("publish:%d:%s", id, sha) }
 
 // runPublish publishes task t's head that you approved (your push on its
-// ready card), once, to its remote branch (Task.RemoteBranch, which its
-// card named): see the file's comment. A build without GitHub or git leaves
-// the task where it is.
+// ready card), once, to the branch and under the title the card showed
+// (its y/N sentence named them; a key linked since changes neither): see
+// the file's comment. A card that is not the one you pushed needs you. A
+// build without GitHub or git leaves the task where it is.
 func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) {
 	if e.d.GitHub == nil || e.d.Git == nil {
 		return false, nil
@@ -108,9 +110,12 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		return false, e.stageFailed(ctx, t, needsYou{"the branch changed after you read it: " + reportFile + " or " + prBodyFile +
 			" changed since your push; nothing is pushed"})
 	}
-	if err := e.nameRemoteBranch(ctx, &t); err != nil { // a card an older build drew named none
-		return false, e.stageFailed(ctx, t, err)
+	card, err := readCard(e.d.Layout.FactoryTaskDir(t.ID))
+	if err != nil || card.Head != sha || card.ReportHash != d.ReportHash || card.DiffHash != d.DiffHash {
+		return false, e.stageFailed(ctx, t, needsYou{"the ready card is not the one you pushed: nothing is pushed"})
 	}
+	pub := publishing{base: baseOf(repo), sha: sha, login: login, branch: cmp.Or(card.Remote, t.RemoteBranch, t.Branch),
+		title: cmp.Or(card.Title, prTitle(t))}
 	git, err := e.operatorGit(ctx, t.Repo)
 	if err != nil {
 		return false, err
@@ -123,10 +128,10 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		return e.finishPublish(ctx, t, sha)
 	}
 	if eff.Resumed {
-		e.event(ctx, t.ID, "publish", registry.PhaseInfo, "resumes the publish of "+short(sha)+" to "+t.RemoteBranch+
+		e.event(ctx, t.ID, "publish", registry.PhaseInfo, "resumes the publish of "+short(sha)+" to "+pub.branch+
 			": it reads the remote branch and its PRs first")
 	}
-	view, problem, err := e.publish(ctx, t, git, c.Path, baseOf(repo), sha, login)
+	view, problem, err := e.publish(ctx, t, git, c.Path, pub)
 	if err != nil || problem != "" {
 		why := problem
 		if err != nil {
@@ -140,7 +145,7 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		}
 		return false, e.stageFailed(ctx, t, needsYou{problem})
 	}
-	if err := e.reg.LinkPR(ctx, registry.PRLink{TaskID: t.ID, Repo: t.Repo, Number: view.Number, Branch: t.RemoteBranch, OpenedHead: view.HeadSHA,
+	if err := e.reg.LinkPR(ctx, registry.PRLink{TaskID: t.ID, Repo: t.Repo, Number: view.Number, Branch: pub.branch, OpenedHead: view.HeadSHA,
 		ApprovedHead: sha}); err != nil {
 		return false, err
 	}
@@ -150,16 +155,32 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 	return e.finishPublish(ctx, t, sha)
 }
 
-// publish pushes sha to task t's remote branch (Task.RemoteBranch) from the
-// copy at dir with git (as you: operatorGit) and opens its PR on base as
-// login, each step guarded and evented: the remote branch and the PRs of
-// the branch are read first, so a step done before is not done again, and
-// nothing is forced. problem is what needs you (a branch or a PR that is
-// not the one you approved, the PR read back); err a failure to run, which
-// the effect runs again after.
-func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client, dir, base, sha, login string) (view PRView, problem string,
+// publishing is what a publish pushes and opens, as your push decided it:
+// the head (sha) to the branch on the repository's base, the PR's title,
+// and your login it opens as.
+type publishing struct {
+	base, sha, login, branch, title string
+}
+
+// publish pushes pub.sha to pub.branch from the copy at dir with git (as
+// you: operatorGit) and opens its PR on pub.base as pub.login, each step
+// guarded and evented: gh must act as your login first (ActiveLogin, before
+// anything is pushed or opened), the remote branch and the PRs of the
+// branch are read before any step, so a step done before is not done
+// again, and nothing is forced. problem is what needs you (another gh
+// account, a branch or a PR that is not the one you approved, the PR read
+// back); err a failure to run, which the effect runs again after.
+func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client, dir string, pub publishing) (view PRView, problem string,
 	err error) {
-	gh, branch := e.d.GitHub, t.RemoteBranch
+	gh, branch, base, sha, login := e.d.GitHub, pub.branch, pub.base, pub.sha, pub.login
+	active, err := gh.ActiveLogin(ctx, t.Repo)
+	if err != nil {
+		return view, "", err
+	}
+	if !strings.EqualFold(active, login) {
+		return view, fmt.Sprintf("gh acts as %s in your gh config dir, not as %s, the login the PR opens as: nothing is pushed "+
+			"(gh auth switch --hostname github.com --user %s)", active, login, login), nil
+	}
 	remote, err := remoteHead(ctx, git, dir, branch)
 	if err != nil {
 		return view, "", err
@@ -199,7 +220,7 @@ func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client,
 			short(remote)), nil
 	}
 	if !found {
-		title := prTitle(t)
+		title := pub.title
 		if err := step("pr", "opens the PR of "+branch+" on "+base+", ready for review", func() (string, error) {
 			var err error
 			pr, err = gh.CreatePR(ctx, t.Repo, base, branch, title, filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), prBodyFile))

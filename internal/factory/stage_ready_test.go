@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,7 +21,8 @@ import (
 // fakeGitHub is GitHub as the publish meets it: a PR it opens is at the
 // head the bare origin has for its branch, authored by zhuravel, ready for
 // review; edit changes what ViewPR reads back (another head, base or
-// author, a draft), and createErr fails CreatePR once.
+// author, a draft), createErr fails CreatePR once, and active is the login
+// your gh config dir is logged in as ("" = zhuravel).
 type fakeGitHub struct {
 	mu        sync.Mutex
 	r         *codingRig
@@ -28,6 +30,13 @@ type fakeGitHub struct {
 	creates   []prCreate
 	edit      func(*PRView)
 	createErr error
+	active    string
+}
+
+func (f *fakeGitHub) ActiveLogin(context.Context, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return cmp.Or(f.active, "zhuravel"), nil
 }
 
 type fakePR struct {
@@ -334,9 +343,12 @@ func (r *readyRig) summary(id int64, exit, head string) {
 // precheck run again at the merge, a fresh local round reviews it, the
 // judge drafts the body again, and the card has a new revision at the new
 // head. The factory's own git steps at the card change no work tree.
-func TestAMasterConflictAtTheCardSendsTheWriterToMergeTheBase(t *testing.T) {
-	r := newReadyRig(t)
-	task := r.codingTask("PR-12384", "bug")
+// toConflict takes a bug task to its card while master moves under it in
+// app/credit.rb, so the card finds a conflict (before setup runs, after the
+// judge's PR body turn began); then the ticks that follow the card.
+func (r *readyRig) toConflict(key string, setup func(task registry.Task)) (registry.Task, string) {
+	r.t.Helper()
+	task := r.codingTask(key, "bug")
 	r.taskFile(task.ID, reportFile, planReport("app/credit.rb", "spec/models/"))
 	r.taskFile(task.ID, acceptanceFile, acceptanceJSON)
 	r.startStage(task)
@@ -344,9 +356,18 @@ func TestAMasterConflictAtTheCardSendsTheWriterToMergeTheBase(t *testing.T) {
 	r.ended(task, "fx-writer")
 	r.run(16, func() bool { return r.reload(task.ID).Stage == "pr_body" && len(r.rt.promptsTo("fx-judge")) > 0 })
 	r.moveMaster("app/credit.rb", strings.Replace(creditRB, "    0\n", "    5\n", 1))
+	if setup != nil {
+		setup(task)
+	}
 	r.taskFile(task.ID, prBodyFile, prBodyDraft)
 	r.ended(task, "fx-judge")
-	r.run(4, func() bool { return r.reload(task.ID).Stage == "coding" })
+	r.run(4, func() bool { return r.reload(task.ID).Stage == "coding" || !isLive(r.reload(task.ID)) })
+	return task, head
+}
+
+func TestAMasterConflictAtTheCardSendsTheWriterToMergeTheBase(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toConflict("PR-12384", nil)
 
 	got := r.reload(task.ID)
 	if c := r.card(task.ID); got.Stage != "coding" || !isLive(got) || c.Revision != 1 || c.Head != head ||
@@ -388,6 +409,64 @@ func TestAMasterConflictAtTheCardSendsTheWriterToMergeTheBase(t *testing.T) {
 	c := r.card(task.ID)
 	if got := r.reload(task.ID); c.Revision != 2 || c.Head != merged || got.State != registry.TaskNeedsYou || got.Stage != "ready" {
 		t.Fatalf("card %+v; task %s at %s, want card 2 at the merge", c, got.State, got.Stage)
+	}
+}
+
+// A merge turn passes only on a head that holds the base the card saw: a
+// writer that ends its turn without merging gets one fix turn naming the
+// base, within the stage's prompts, and after a second turn without the
+// merge the task needs you, never another round of the card.
+func TestAMergeTurnThatDoesNotMergeGetsAFixTurnThenNeedsYou(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toConflict("PR-12373", nil)
+	var rw reworkRecord
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reworkFile)), &rw); err != nil || rw.BaseSHA != r.git(r.work, "rev-parse", "HEAD") {
+		t.Fatalf("rework.json %+v (%v), want origin/master's commit the card saw", rw, err)
+	}
+	r.run(3, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
+
+	// The writer gives up on the merge (git merge --abort) and ends its turn.
+	r.clock.Add(time.Minute)
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	r.ended(task, "fx-writer")
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 2 || !isLive(r.reload(task.ID)) })
+	ps := r.rt.promptsTo("fx-writer")
+	if got := r.reload(task.ID); len(ps) != 3 || !strings.HasPrefix(ps[2].Text, fixLead) || !strings.Contains(ps[2].Text, "origin/master") ||
+		!strings.Contains(ps[2].Text, short(rw.BaseSHA)) || got.Stage != "coding" {
+		t.Fatalf("task %s at %s; the writer's prompts %+v; want a fix turn naming origin/master", got.State, got.Stage, ps)
+	}
+
+	r.clock.Add(time.Minute)
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	r.ended(task, "fx-writer")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "the fx-writer agent did not merge origin/master" || got.Stage != "coding" ||
+		len(r.rt.promptsTo("fx-writer")) != 3 || got.HeadSHA != head {
+		t.Fatalf("task %s at %s waits %q, head %s; %d writer prompts; want you, the base unmerged", got.State, got.Stage, got.WaitsWhat,
+			short(got.HeadSHA), len(r.rt.promptsTo("fx-writer")))
+	}
+	if n := len(r.rv.calls()); n != 1 {
+		t.Fatalf("%d local rounds, want none after the unmerged turn", n)
+	}
+}
+
+// The same conflict at the same base a second time (a merge turn that the
+// card already sent the task back for) needs you instead of another round.
+func TestTheSameConflictAtTheSameBaseTwiceNeedsYou(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toConflict("PR-12372", func(task registry.Task) {
+		b, _ := json.Marshal(reworkRecord{Kind: reworkMergeBase, Base: "origin/master", BaseSHA: r.git(r.work, "rev-parse", "HEAD"),
+			Conflicts: []string{"app/credit.rb"}, Card: 1})
+		r.taskFile(task.ID, "rework-1.json", string(b))
+	})
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.Stage != "ready" || !strings.Contains(got.WaitsWhat, "the same conflict") ||
+		!strings.Contains(got.WaitsWhat, "origin/master") || !strings.Contains(got.WaitsWhat, "app/credit.rb") {
+		t.Fatalf("task %s at %s waits %q, want you, the same conflict named", got.State, got.Stage, got.WaitsWhat)
+	}
+	if len(r.rt.promptsTo("fx-writer")) != 1 {
+		t.Fatalf("the writer got %d prompts, want no merge turn", len(r.rt.promptsTo("fx-writer")))
 	}
 }
 
@@ -570,6 +649,38 @@ func TestDropKeepsTheBranchAndFreesTheCopy(t *testing.T) {
 	ins, _ := r.reg.Inputs(r.ctx, task.ID)
 	if !slices.ContainsFunc(ins, func(in registry.Input) bool { return in.Kind == registry.InputDrop }) {
 		t.Fatalf("inputs %+v, want your drop", ins)
+	}
+}
+
+// A branch holds a Jira key only as a whole dash-delimited segment: key
+// PR-1236 is not in a branch named for PR-12360, so a task of PR-1236 on
+// such a branch pushes to a branch of its own key.
+func TestABranchHoldsAKeyOnlyAsAWholeSegment(t *testing.T) {
+	for _, tc := range []struct {
+		branch, key string
+		want        bool
+	}{
+		{"zhuravel-PR-1236-copy", "PR-1236", true},
+		{"zhuravel-PR-1236", "PR-1236", true},
+		{"PR-1236-copy", "PR-1236", true},
+		{"zhuravel-PR-12360-copy", "PR-1236", false},
+		{"zhuravel-XPR-1236-copy", "PR-1236", false},
+		{"zhuravel-PR-12360", "PR-1236", false},
+	} {
+		if got := holdsKey(tc.branch, tc.key); got != tc.want {
+			t.Errorf("holdsKey(%q, %q) = %v, want %v", tc.branch, tc.key, got, tc.want)
+		}
+	}
+	h := newHarness(t)
+	h.cfg.Identities = []config.Identity{{Name: "zhuravel", Kind: "gh", Login: "zhuravel"}}
+	h.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop"}}
+	task, err := h.reg.CreateTask(h.ctx, registry.Task{JiraKey: "PR-1236", Prompt: "copy the points", Kind: "bug", Repo: "example/shop",
+		Title: "Copied points", State: registry.TaskActive, Stage: "ready", Branch: "zhuravel-PR-12360-copy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.nameRemoteBranch(h.ctx, &task); err != nil || task.RemoteBranch != "zhuravel-PR-1236-copied-points" {
+		t.Fatalf("the PR's branch %q (%v), want zhuravel-PR-1236-copied-points", task.RemoteBranch, err)
 	}
 }
 

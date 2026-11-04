@@ -3690,17 +3690,22 @@ the task needs you (`no ready card: …`). It reads a fresh `origin/<base>` and 
 (`git merge-tree`, no work tree touched): on a conflict the card names it and the task goes back to its coding
 stage, where the writer merges the base (its prompt names `origin/<base>` and the conflicting paths), the
 proof and the precheck run again, a fresh local loop reviews the merge, the judge drafts the body again, and
-the next card is a new revision. The card (`ready-card.json`) holds the head, the hash of `report.md` and
+the next card is a new revision. The coding stage passes such a turn only on a head that holds the base's
+commit the card saw: a writer that ends its turn without the merge gets one fix turn naming the base (within the
+stage's 6 prompts), then the task needs you (`the fx-writer agent did not merge origin/<base>`), and the same
+conflict at the same base a second time needs you instead of another round. The card (`ready-card.json`) holds the head, the hash of `report.md` and
 `pr-body.md` as shown, the hash of the diff, the PR's title (`<KEY> <title>`, the title alone for a task of a
 prompt), the branch the push goes to, the copy a push frees and the FLAGS line: the migrations the branch adds, the `sensitive` files, the
 files the plan did not name, a guard the change rewrites that is older than 6 months with the reason the history
-agent found, the CI jobs of the workflows that run on a pull request whose commands the precheck did not run,
+agent found (only its findings name guards), the CI jobs of the workflows that run on a pull request whose commands the precheck did not run,
 and the conflicts. The task waits on you (`ready to push (card <n>): <title>`); decide with `magnum factory
-decide`.
+decide`. A drop is bound to no card: it stops a task at its ready stage even after its card changed.
 
 On your push the factory, never an agent, publishes the approved head once (the effect
 `publish:<task>:<sha>`): it checks the card's conditions again, the branch in the copy at the head you approved
-and the PR body as the card showed it, reads the remote branch (`git ls-remote`) and the PRs of the branch
+and the PR body as the card showed it, pushes to the branch and under the title the card named (a key linked
+since changes neither), checks that gh acts as your login in your gh config dir (`gh api user`; another account
+needs you, naming both, before anything is pushed or opened), reads the remote branch (`git ls-remote`) and the PRs of the branch
 (only the repository's own: a fork's PR of a branch of the same name is none of the task's),
 pushes with a lease (`git push --force-with-lease=refs/heads/<branch>:<expected head> origin
 <sha>:refs/heads/<branch>`, refused for a commit that does not descend from the expected head, so it never

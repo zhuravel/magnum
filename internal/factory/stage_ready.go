@@ -152,6 +152,7 @@ type reworkRecord struct {
 	Reason    string    `json:"reason,omitempty"`
 	Note      string    `json:"note,omitempty"`
 	Base      string    `json:"base,omitempty"`
+	BaseSHA   string    `json:"base_sha,omitempty"`
 	Conflicts []string  `json:"conflicts,omitempty"`
 	Card      int       `json:"card"`
 	Head      string    `json:"head"`
@@ -187,6 +188,46 @@ func (e *Engine) consumeRework(id int64) {
 		}
 		return
 	}
+}
+
+// sameConflict is the turn back from a card (rework.json, or one set aside
+// as rework-<k>.json) that was for the same conflicts with the base at
+// baseSHA, if there is one.
+func sameConflict(dir, baseSHA string, conflicts []string) (reworkRecord, bool) {
+	names, _ := filepath.Glob(filepath.Join(dir, "rework*.json"))
+	for _, name := range names {
+		var rw reworkRecord
+		if b, err := os.ReadFile(name); err != nil || json.Unmarshal(b, &rw) != nil {
+			continue
+		}
+		if rw.Kind == reworkMergeBase && rw.BaseSHA == baseSHA && slices.Equal(rw.Conflicts, conflicts) {
+			return rw, true
+		}
+	}
+	return reworkRecord{}, false
+}
+
+// mergeWhy starts the why of a merge turn that did not merge the base: the
+// fix turn's prompt carries it, so the ledger tells that turn from others.
+const mergeWhy = "the base is not merged"
+
+// mergeProblem is the coding stage's end past its checks for a turn back
+// from the card to merge the base (rework.json): the base's commit the card
+// saw must be in head, the branch's new head; nil when it is, or when the
+// turn is for no merge. Not merged, it is a change problem (a fix turn)
+// naming the base.
+func (e *Engine) mergeProblem(ctx context.Context, t registry.Task, c Copy, head string) (*endProblem, error) {
+	rw, ok := readRework(e.d.Layout.FactoryTaskDir(t.ID))
+	if !ok || rw.Kind != reworkMergeBase || rw.BaseSHA == "" || head == "" {
+		return nil, nil
+	}
+	merged, err := e.d.Git.IsAncestor(ctx, c.Path, rw.BaseSHA, head)
+	if err != nil || merged {
+		return nil, err
+	}
+	return &endProblem{file: "the branch", change: true, merge: rw.Base, why: fmt.Sprintf("%s: %s at %s is not in %s; merge it "+
+		"(`git merge %s`, never a rebase), resolve the conflicts so that both changes hold, and commit the merge", mergeWhy, rw.Base,
+		short(rw.BaseSHA), t.Branch, rw.Base)}, nil
 }
 
 // prTemplates are where a repository keeps its PR template, in GitHub's
@@ -317,7 +358,12 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 		return false, err
 	}
 	if len(f.Conflicts) > 0 { // the card names them, and the writer merges the base before you read one
-		return false, e.mergeTheBase(ctx, t, card, "origin/"+baseOf(repo), f.Conflicts)
+		base := "origin/" + baseOf(repo)
+		baseSHA, err := e.d.Git.RevParse(ctx, c.Path, base)
+		if err != nil {
+			return false, err
+		}
+		return false, e.stageFailed(ctx, t, e.mergeTheBase(ctx, t, card, base, baseSHA, f.Conflicts))
 	}
 	e.toOperator(ctx, t, fmt.Sprintf("%s (card %d): %s", readyWait, card.Revision, card.Title), "the ready card")
 	return false, nil
@@ -400,11 +446,11 @@ func (e *Engine) prLogin(t registry.Task) (string, error) {
 // the key the task got since (the ready card names it again before
 // anything is pushed).
 func (e *Engine) nameRemoteBranch(ctx context.Context, t *registry.Task) error {
-	if t.RemoteBranch != "" && (t.JiraKey == "" || strings.Contains(t.RemoteBranch, t.JiraKey)) {
+	if t.RemoteBranch != "" && (t.JiraKey == "" || holdsKey(t.RemoteBranch, t.JiraKey)) {
 		return nil
 	}
 	name := t.Branch
-	if t.JiraKey != "" && !strings.Contains(t.Branch, t.JiraKey) {
+	if t.JiraKey != "" && !holdsKey(t.Branch, t.JiraKey) {
 		login, err := e.operatorLogin(t.Repo)
 		if err != nil {
 			return needsYou{err.Error()}
@@ -422,6 +468,13 @@ func (e *Engine) nameRemoteBranch(ctx context.Context, t *registry.Task) error {
 	}
 	t.RemoteBranch = name
 	return nil
+}
+
+// holdsKey reports whether branch holds Jira key key as a whole
+// dash-delimited segment (PR-1236 is not in a branch named for PR-12360).
+func holdsKey(branch, key string) bool {
+	return key != "" && (branch == key || strings.HasPrefix(branch, key+"-") || strings.HasSuffix(branch, "-"+key) ||
+		strings.Contains(branch, "-"+key+"-"))
 }
 
 // cardNow is what task t's card shows of its change in copy c now (bh).
@@ -501,10 +554,18 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 }
 
 // mergeTheBase sends task t back from its card to its coding stage to merge
-// base (the fresh origin/<base>), which conflicts with its head in
-// conflicts.
-func (e *Engine) mergeTheBase(ctx context.Context, t registry.Task, card ReadyCardFile, base string, conflicts []string) error {
-	rw := reworkRecord{Kind: reworkMergeBase, Base: base, Conflicts: conflicts, Card: card.Revision, Head: t.HeadSHA, At: e.now()}
+// base (the fresh origin/<base>, at baseSHA), which conflicts with its head
+// in conflicts; the coding stage passes only once baseSHA is in the head
+// (mergeProblem). The same conflict at the same base a second time (a merge
+// turn the card sent the task back for already, whose merge did not take)
+// is a needsYou, never another round.
+func (e *Engine) mergeTheBase(ctx context.Context, t registry.Task, card ReadyCardFile, base, baseSHA string, conflicts []string) error {
+	if prev, ok := sameConflict(e.d.Layout.FactoryTaskDir(t.ID), baseSHA, conflicts); ok {
+		return needsYou{fmt.Sprintf("the same conflict with %s at %s in %s, which card %d sent the writer back to merge: "+
+			"merge it in the copy, then let the task go on", base, short(baseSHA), textx.Clip(strings.Join(conflicts, ", "), 200), prev.Card)}
+	}
+	rw := reworkRecord{Kind: reworkMergeBase, Base: base, BaseSHA: baseSHA, Conflicts: conflicts, Card: card.Revision, Head: t.HeadSHA,
+		At: e.now()}
 	return e.backToCoding(ctx, t, rw, liveStates, fmt.Sprintf("%s conflicts with %s in %s: the writer merges it", base, short(t.HeadSHA),
 		textx.Clip(strings.Join(conflicts, ", "), 200)))
 }
@@ -554,19 +615,22 @@ func (e *Engine) decideRequest(ctx context.Context, p DecidePayload) (string, er
 	}
 	switch p.Choice {
 	case ChoicePush:
-		return fmt.Sprintf("%s: pushes %s at %s and opens its PR, ready for review", TaskKey(t), t.Branch, short(p.HeadSHA)), nil
+		return fmt.Sprintf("%s: pushes %s at %s and opens its PR, ready for review", TaskKey(t), cmp.Or(t.RemoteBranch, t.Branch),
+			short(p.HeadSHA)), nil
 	case ChoiceSendBack:
 		return fmt.Sprintf("%s: sent back to %s (%s): the writer reads your note", TaskKey(t), t.Stage, p.Reason), nil
 	}
 	return fmt.Sprintf("%s: dropped, its copy freed and its branch %s kept", TaskKey(t), t.Branch), nil
 }
 
-// decide takes your decision p on a task's ready card. It is refused for a
-// task not waiting at its card, and when what the card showed is not what
-// is there now ("the branch changed after you read it": the head, the
-// branch in the copy, report.md and pr-body.md, the diff): the card is
-// drawn again then. A push is refused, too, when the card's conditions no
-// longer hold (readyProblem). A decision taken is recorded with what the
+// decide takes your decision p on a task's ready card. A push or a send
+// back is refused for a task not waiting at its card, and when what the
+// card showed is not what is there now ("the branch changed after you read
+// it": the head, the branch in the copy, report.md and pr-body.md, the
+// diff): the card is drawn again then; a push is refused, too, when the
+// card's conditions no longer hold (readyProblem). A drop is bound to no
+// card: it takes a task at its ready stage whatever its card says, or
+// when none could be drawn. A decision taken is recorded with what the
 // card showed, and your input with it; then a push moves the task on to
 // its publish, a send back writes your note to send-back-<revision>.md and
 // returns the task to its coding stage (rework.json names the note and the
@@ -590,20 +654,25 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 		return err
 	}
 	st, ok := e.stageOf(t, t.Stage)
-	if !ok || st.Type != config.FactoryStageDecision || st.Decision != config.FactoryDecisionReadyPush || t.State != registry.TaskNeedsYou ||
-		!strings.HasPrefix(t.WaitsWhat, readyWait) {
-		return fmt.Errorf("%s is %s at %s, not at its ready card", TaskKey(t), t.State, cmp.Or(t.Stage, "no stage"))
+	if !ok || st.Type != config.FactoryStageDecision || st.Decision != config.FactoryDecisionReadyPush ||
+		(!isLive(t) && t.State != registry.TaskNeedsYou) {
+		return fmt.Errorf("%s is %s at %s, not at its ready stage", TaskKey(t), t.State, cmp.Or(t.Stage, "no stage"))
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	card, err := readCard(dir)
-	if err != nil {
-		return fmt.Errorf("%s has no ready card to decide on: %w", TaskKey(t), err)
-	}
-	if why, err := e.cardChanged(ctx, t, card, p); err != nil {
-		return err
-	} else if why != "" {
-		e.redraw(ctx, t, why)
-		return fmt.Errorf("the branch changed after you read it: %s; the card is drawn again", why)
+	if p.Choice != ChoiceDrop {
+		switch {
+		case t.State != registry.TaskNeedsYou || !strings.HasPrefix(t.WaitsWhat, readyWait):
+			return fmt.Errorf("%s is %s at %s, not at its ready card", TaskKey(t), t.State, t.Stage)
+		case err != nil:
+			return fmt.Errorf("%s has no ready card to decide on: %w", TaskKey(t), err)
+		}
+		if why, err := e.cardChanged(ctx, t, card, p); err != nil {
+			return err
+		} else if why != "" {
+			e.redraw(ctx, t, why)
+			return fmt.Errorf("the branch changed after you read it: %s; the card is drawn again", why)
+		}
 	}
 	if p.Choice == ChoicePush {
 		if _, why := e.readyProblem(t); why != "" {

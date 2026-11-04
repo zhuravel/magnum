@@ -83,6 +83,16 @@ func TestTheGitHubClientOpensTheReadyPRAsYourGhLogin(t *testing.T) {
 		t.Fatalf("PRByBranch of a branch without a PR = %v, %v", ok, err)
 	}
 
+	// The login behind your gh config dir, as you only.
+	run.answer = func(execx.Cmd) string { return "zhuravel\n" }
+	if login, err := gh.ActiveLogin(ctx, "example/shop"); err != nil || login != "zhuravel" {
+		t.Fatalf("ActiveLogin = %q, %v", login, err)
+	}
+	if c := run.cmds[len(run.cmds)-1]; !slices.Equal(c.Args, []string{"api", "user", "--jq", ".login", "--hostname", "github.com"}) ||
+		c.Env["GH_HOST"] != "github.com" || !slices.Contains(c.Unset, "GH_TOKEN") {
+		t.Fatalf("gh %q, env %v, unset %v", c.Args, c.Env, c.Unset)
+	}
+
 	// Without a gh identity no gh runs, and the error names the key.
 	cfg.Identities = nil
 	n := len(run.cmds)
@@ -191,8 +201,8 @@ func TestATaskLinkedToAKeyLaterPushesToABranchNamedForTheKey(t *testing.T) {
 	}
 
 	r.gh.createErr = fmt.Errorf("gh: HTTP 502")
-	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestDone {
-		t.Fatalf("push request %s: %q", q.State, q.Result)
+	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestDone || !strings.Contains(q.Result, "pushes "+remote+" at") {
+		t.Fatalf("push request %s: %q, want it to name %s", q.State, q.Result, remote)
 	}
 	r.tick() // the push goes through, the PR does not
 	if r.remoteHead(remote) != head || r.remoteHead(task.Branch) != "" {
@@ -218,6 +228,80 @@ func TestATaskLinkedToAKeyLaterPushesToABranchNamedForTheKey(t *testing.T) {
 	if b := r.git(r.copyDir, "rev-parse", "refs/heads/"+task.Branch); b != head || r.gitOut(r.copyDir, "rev-parse", "--verify", "--quiet",
 		"refs/heads/"+remote) != "" {
 		t.Fatalf("the local branch %s at %s, want it kept at %s and no local %s", task.Branch, b, short(head), remote)
+	}
+}
+
+// A key linked to the task after its card was drawn changes nothing your
+// push publishes: the branch and the title are the card's, as its y/N
+// sentence named them.
+func TestAKeyLinkedAfterTheCardChangesNothingThePushPublishes(t *testing.T) {
+	r := newReadyRig(t)
+	task, err := r.reg.CreateTask(r.ctx, registry.Task{Prompt: "count the archived activities", Kind: "bug", Repo: "example/shop",
+		Title: "count the archived activities", State: registry.TaskActive, Stage: "coding", Branch: "zhuravel-count-archived-activities"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.copyDir, "switch", "--quiet", "--no-track", "-c", task.Branch, "origin/master")
+	got, head := r.cardOf(task)
+	c := r.card(task.ID)
+	if c.Remote != task.Branch || c.Title != "count the archived activities" || got.RemoteBranch != task.Branch {
+		t.Fatalf("card %+v, task pushes to %q; want its own branch and title", c, got.RemoteBranch)
+	}
+	if err := r.reg.LinkKey(r.ctx, task.ID, "PR-12371"); err != nil {
+		t.Fatal(err)
+	}
+	r.taskFile(task.ID, ticketFile, "# PR-12371\n\n## Summary\n\nArchived activities lose their points\n")
+	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	if got := r.published(task.ID); got.State != registry.TaskPublished {
+		t.Fatalf("task %s waits %q", got.State, got.WaitsWhat)
+	}
+	cs := r.gh.createCalls()
+	if len(cs) != 1 || cs[0].branch != c.Remote || cs[0].title != c.Title || r.remoteHead(c.Remote) != head ||
+		r.remoteHead("zhuravel-PR-12371-archived-activities-lose-their-points") != "" {
+		t.Fatalf("CreatePR %+v; origin %s at %q; want the card's branch and title", cs, c.Remote, r.remoteHead(c.Remote))
+	}
+}
+
+// A drop is never bound to the card: after the branch moved and the card
+// could not be drawn again, your drop still frees the copy and keeps the
+// branch.
+func TestDropWorksAfterTheCardChanged(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCard("PR-12370")
+	c := r.card(task.ID)
+	moved := r.commit("a commit after the card", map[string]string{"app/notes.rb": "class Note; end\n"})
+	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestFailed {
+		t.Fatalf("push request %s: %q, want it refused", q.State, q.Result)
+	}
+	r.run(3, nil)
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || strings.HasPrefix(got.WaitsWhat, readyWait) {
+		t.Fatalf("task %s waits %q, want you, with no card", got.State, got.WaitsWhat)
+	}
+	if q := r.decideOn(task.ID, c, ChoiceDrop, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("drop request %s: %q, want it done", q.State, q.Result)
+	}
+	if got := r.reload(task.ID); got.State != registry.TaskStopped || !slices.Contains(r.copies.releases(), task.ID) ||
+		r.git(r.copyDir, "rev-parse", "refs/heads/"+task.Branch) != moved {
+		t.Fatalf("task %s; releases %v; want stopped, its copy freed and its branch kept", got.State, r.copies.releases())
+	}
+}
+
+// The publish checks the login behind your gh config dir first: another
+// account active there stops it, naming both logins, before anything is
+// pushed or opened.
+func TestADifferentActiveGhAccountStopsThePublishBeforeAnyPush(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCard("PR-12369")
+	r.gh.active = "alice"
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	got := r.published(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "alice") || !strings.Contains(got.WaitsWhat, "zhuravel") ||
+		r.remoteHead(task.Branch) != "" || len(r.gh.createCalls()) != 0 {
+		t.Fatalf("task %s waits %q; remote %q; %d PRs", got.State, got.WaitsWhat, r.remoteHead(task.Branch), len(r.gh.createCalls()))
 	}
 }
 
