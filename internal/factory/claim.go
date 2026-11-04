@@ -225,10 +225,21 @@ func (e *Engine) claimed(ctx context.Context, t registry.Task, run *claimRun) (C
 
 // claimFailed maps the error of a claim that ended: the waits that cost
 // nothing (no copy free, a guard's hold, a factory pane in the copy), which
-// the task keeps until the next claim after claimBackoff, and the task's
-// failure. Either ends the claim's begin with a fail event.
+// the task keeps until the next claim after claimBackoff, a switch git
+// refused over a file it does not track (yours, never written over: the
+// task needs you, naming it, and claims again once you let it go on), and
+// the task's failure. Each ends the claim's begin with a fail event.
 func (e *Engine) claimFailed(ctx context.Context, t registry.Task, run *claimRun) error {
 	err := run.err
+	if files, line, ok := refusal(err); ok {
+		what := refusedWhat(cmpJoin(nonEmpty(t.Copy), "the copy it claimed"), files, line)
+		e.claimMu.Lock()
+		delete(e.claimWaits, t.ID)
+		e.claimMu.Unlock()
+		e.event(ctx, t.ID, "claim", registry.PhaseFail, what)
+		e.toOperator(ctx, t, what, "a claim's switch was refused")
+		return heldError{who: waitsYou, what: what}
+	}
 	what, held := "", err
 	if nc, ok := errors.AsType[noCopy](err); ok {
 		what = nc.what

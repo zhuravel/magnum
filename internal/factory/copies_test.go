@@ -810,6 +810,61 @@ func TestClaimCreatesTheTasksBranchFromTheBase(t *testing.T) {
 	}
 }
 
+// A claim never writes over your ignored file where the task's branch has a
+// file: a first claim's new branch (create_branch) and a later claim's
+// switch to the branch it has (switch_branch) are refused, the file stays,
+// and the claim's error names it as git's refusal (refusal), which the
+// engine turns into a wait on you.
+func TestAClaimsSwitchOverAnIgnoredFileIsRefusedNamingIt(t *testing.T) {
+	seed := func(r *copiesRig, dir string) {
+		r.write(filepath.Join(dir, "tmp", "seed.txt"), "seed\n")
+		r.gitIn(dir, "add", "-f", "--", "tmp/seed.txt")
+		r.gitIn(dir, "commit", "--quiet", "-m", "tracks a seed")
+	}
+	named := func(r *copiesRig, task registry.Task, branch string) registry.Task {
+		if err := r.reg.TransitionTask(r.ctx, task.ID, nil, "", func(u *registry.TaskUpdate) { u.Set("branch", branch) }); err != nil {
+			r.t.Fatal(err)
+		}
+		return r.reload(task.ID)
+	}
+	refused := func(r *copiesRig, task registry.Task, copyPath string) {
+		r.t.Helper()
+		r.clock.Add(time.Minute)
+		_, err := r.c.Claim(r.ctx, task)
+		if files, _, ok := refusal(err); !ok || !slices.Contains(files, "tmp/seed.txt") {
+			r.t.Fatalf("Claim = %v; want git's refusal naming tmp/seed.txt", err)
+		}
+		b, rerr := os.ReadFile(filepath.Join(copyPath, "tmp", "seed.txt"))
+		if rerr != nil || string(b) != "your notes\n" {
+			r.t.Fatalf("tmp/seed.txt = %q, %v; want your ignored file kept", b, rerr)
+		}
+	}
+	t.Run("a first claim's new branch", func(t *testing.T) {
+		r := newCopiesRig(t, 1)
+		a := named(r, r.task("PR-12425"), "zhuravel-PR-12425-a")
+		c := r.claim(a)
+		r.release(r.reload(a.ID))
+		work := filepath.Join(r.root, "work")
+		seed(r, work)
+		r.gitIn(work, "push", "--quiet", "origin", "master")
+		r.gitIn(r.main, "fetch", "--quiet", "origin")
+		r.write(filepath.Join(c.Path, "tmp", "seed.txt"), "your notes\n")
+		refused(r, named(r, r.task("PR-12426"), "zhuravel-PR-12426-b"), c.Path)
+	})
+	t.Run("a later claim's switch", func(t *testing.T) {
+		r := newCopiesRig(t, 1)
+		a := named(r, r.task("PR-12427"), "zhuravel-PR-12427-a")
+		c := r.claim(a)
+		seed(r, c.Path)
+		r.release(r.reload(a.ID))
+		b := named(r, r.task("PR-12428"), "zhuravel-PR-12428-b")
+		r.claim(b)
+		r.release(r.reload(b.ID))
+		r.write(filepath.Join(c.Path, "tmp", "seed.txt"), "your notes\n")
+		refused(r, r.reload(a.ID), c.Path)
+	})
+}
+
 // A claim flushes the copy's 16 Redis databases from its offset, once per
 // claim: a task that claims the copy it holds again keeps its data.
 func TestClaimFlushesTheCopysRedisDatabases(t *testing.T) {

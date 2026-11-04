@@ -345,10 +345,10 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	// (a drain too): the next check must find the tree as the branch has it.
 	restored, kept, rerr := e.restoreOwn(ctx, t, c, started, "the proof's spec run")
 	switch {
+	case kept != "": // what it kept for you is its result, whatever ended the run (kept.json records it)
+		return forYou(kept)
 	case err != nil:
 		return proof, err
-	case kept != "":
-		return forYou(kept)
 	case rerr != nil:
 		return proof, rerr
 	case problem != "":
@@ -682,7 +682,13 @@ func (e *Engine) detachForBase(ctx context.Context, t registry.Task, c Copy, bas
 	e.event(ctx, t.ID, "proof", registry.PhaseBegin, fmt.Sprintf("base run in %s: detached at %s with %d spec files of %s; %s comes back after it",
 		c.Name, short(base), len(specs), short(head), t.Branch))
 	if err := e.d.Git.SwitchDetachKeepUntracked(ctx, c.Path, base); err != nil {
-		return errors.Join(err, e.restoreBranch(context.WithoutCancel(ctx), t, rec, true))
+		rerr := e.restoreBranch(context.WithoutCancel(ctx), t, rec, true)
+		if files, line, ok := refusal(err); ok && rerr == nil { // in the way of the switch, though the look saw nothing: yours
+			why := c.Name + " was not detached for the base run: " + refusedWhat(c.Name, files, line)
+			e.event(ctx, t.ID, "proof", registry.PhaseFail, "base run: "+why)
+			return keptChanges{why, files}
+		}
+		return errors.Join(err, rerr)
 	}
 	if len(specs) > 0 {
 		if err := e.d.Git.RestoreFrom(ctx, c.Path, head, specs...); err != nil {
@@ -723,9 +729,10 @@ func (e *Engine) inTheWay(ctx context.Context, dir, base, head string, status by
 
 // lostBy are what of others (gitx.NotTracked's entries in the work tree at
 // dir) a switch that writes paths would lose: an entry at one of the paths,
-// an entry under a directory at one, or the file at one that lies in a
-// directory git tracks nothing in. Names compare without case, as macOS's
-// file system compares them (on another it errs on the side of keeping).
+// an entry under a directory at one, a file where one of their directories
+// would be, or the file at one that lies in a directory git tracks nothing
+// in. Names compare without case, as macOS's file system compares them (on
+// another it errs on the side of keeping).
 func lostBy(dir string, paths, others []string) []string {
 	type entry struct{ fold, name string }
 	es := make([]entry, len(others))
@@ -747,6 +754,10 @@ func lostBy(dir string, paths, others []string) []string {
 			out = append(out, es[i].name)
 		}
 		for d := path.Dir(fold); d != "." && d != "/"; d = path.Dir(d) {
+			if i, ok := find(d); ok { // a file where the switch makes a directory
+				out = append(out, es[i].name)
+				break
+			}
 			if _, ok := find(d + "/"); ok {
 				if _, err := os.Lstat(filepath.Join(dir, p)); err == nil {
 					out = append(out, p)
@@ -934,11 +945,16 @@ func (e *Engine) resumeDetached(ctx context.Context, t registry.Task) (held erro
 	if k, ok := errors.AsType[keptChanges](err); ok {
 		return e.keptDetached(ctx, t, rec, k, true)
 	}
-	delete(e.keptCopies, t.ID)
+	if files, line, ok := refusal(err); ok { // git saw a file of yours in the way that the look did not
+		return e.keptDetached(ctx, t, rec, keptChanges{fmt.Sprintf("files git does not track in the way of the switch back (%s), "+
+			"which git refused to write over", cmpJoin(files, line)), files}, true)
+	}
 	if err != nil {
 		e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore "+rec.Branch+" in "+name+": "+err.Error())
+		e.keptCopies[t.ID] = keptCopy{at: e.now(), copy: rec.Copy} // the sweep tries again once it is due, not each tick
 		return err
 	}
+	delete(e.keptCopies, t.ID)
 	e.event(ctx, t.ID, "proof", registry.PhaseOK, "restored "+rec.Branch+" in "+name+" after a base run")
 	return nil
 }
@@ -977,16 +993,20 @@ func (e *Engine) keptDetached(ctx context.Context, t registry.Task, rec detached
 // the loop does not advance (at NEEDS YOU, stopped, ended) as a live task's
 // pass does (resumeDetached), each under the panic guard of a task's step
 // (safely): a copy is put back whatever its task's state, or held with its
-// reason, and their waits stay as they are. A copy kept for you is looked at
-// again only when it is due (keptDue). The tick runs it only while herdr
-// answers, as the rest of its passes: herdr says who is in a copy.
+// reason, and their waits stay as they are. A copy kept for you, one whose
+// restore failed and one whose sweep panicked is looked at again only when
+// it is due (keptDue). The tick runs it only while herdr answers, as the
+// rest of its passes: herdr says who is in a copy.
 func (e *Engine) sweepDetached(ctx context.Context, tasks []registry.Task) {
 	for _, t := range tasks {
 		if isLive(t) || !e.hasDetachedRecord(t) || !e.keptDue(t.ID) {
 			continue
 		}
 		err := e.safely(ctx, t, func(ctx context.Context) error { return e.resumeDetached(ctx, t) })
-		if err != nil && !errors.Is(err, ErrHeld) && !errors.Is(err, errPanicked) {
+		switch {
+		case errors.Is(err, errPanicked): // its event is written; it is tried again once due, not each tick
+			e.keptCopies[t.ID] = keptCopy{what: e.keptCopies[t.ID].what, at: e.now()}
+		case err != nil && !errors.Is(err, ErrHeld):
 			e.log.Warn("restore a copy a base run left detached", "task", t.ID, "err", err)
 		}
 	}
@@ -1016,8 +1036,9 @@ func (e *Engine) holdsCopy(ctx context.Context, t registry.Task, name string) (h
 // event and kept.json (keepFor: they may be the check's own, and go back
 // under this guard once the task goes on and nobody else could have changed
 // them, settleKept) and returns kept, the reason for you (the task needs
-// you: keep or undo them). It runs whatever ended the check (ctx's end does
-// not stop it).
+// you: keep or undo them). A put-back that fails records its paths in
+// kept.json too, so they are settleKept's and never the writer's. It runs
+// whatever ended the check (ctx's end does not stop it).
 func (e *Engine) restoreOwn(ctx context.Context, t registry.Task, c Copy, since time.Time, what string) (restored []string, kept string,
 	err error) {
 	ctx = context.WithoutCancel(ctx)
@@ -1035,7 +1056,10 @@ func (e *Engine) restoreOwn(ctx context.Context, t registry.Task, c Copy, since 
 	}
 	e.event(ctx, t.ID, "check", registry.PhaseBegin, "restores "+list+" in "+c.Name+": "+what+" changed it")
 	if err := e.d.Git.RestoreTracked(ctx, c.Path, dirty...); err != nil {
-		e.event(ctx, t.ID, "check", registry.PhaseFail, "restore "+list+" in "+c.Name+": "+textx.Clip(textx.FirstLine(err.Error()), 300))
+		line := textx.Clip(textx.FirstLine(err.Error()), 300)
+		e.event(ctx, t.ID, "check", registry.PhaseFail, "restore "+list+" in "+c.Name+": "+line)
+		e.keepFor(t, c, since, dirty, true, "the factory could not put back "+list+" in "+c.Name+" ("+
+			clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240)+")")
 		return nil, "", fmt.Errorf("restore what %s changed in %s (%s): %w", what, c.Name, list, err)
 	}
 	e.event(ctx, t.ID, "check", registry.PhaseOK, "restored "+list+" in "+c.Name+" as the branch has it")

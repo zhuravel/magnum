@@ -175,6 +175,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		return p.res, ctx.Err()
 	case leftDetached && p.err != nil:
 		return p.res, p.err
+	case p.kept: // what it kept for you is its result, whatever failed to run before it (kept.json records it)
 	case p.restoreErr != nil:
 		return p.res, p.restoreErr
 	case p.res.ForYou:

@@ -6,10 +6,12 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // What a check of the factory keeps for you (changes it cannot tell from
@@ -143,14 +145,11 @@ func TestAPrecheckNeverPutsBackAChangeItNamedAsNotItsOwn(t *testing.T) {
 
 	// Once the task goes on, it is still not the factory's to put back.
 	r.copies.reserve(task.ID, "factory1")
-	if err := r.e.settleKept(r.ctx, task); !errors.Is(err, ErrHeld) {
-		t.Fatalf("settleKept = %v; want the task to need you again", err)
+	if why, err := r.e.settleKept(r.ctx, task); err != nil || !strings.Contains(why, "README") {
+		t.Fatalf("settleKept = %q, %v; want the task to need you again, naming README", why, err)
 	}
 	if s := r.read("README"); s != "your edit\n" {
 		t.Fatalf("README = %q after the task went on, want your edit kept", s)
-	}
-	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "README") {
-		t.Fatalf("task %s waits %q; want needs_you naming README", got.State, got.WaitsWhat)
 	}
 }
 
@@ -375,7 +374,9 @@ func TestACopyLeftDetachedWaitsWhileHerdrDoesNotAnswer(t *testing.T) {
 }
 
 // A panic in the sweep of a copy left detached is contained as a task's
-// step is (safely): the tick goes on, and the panic is the task's event.
+// step is (safely): the tick goes on, and the panic is the task's event. A
+// task the loop does not advance has the sweep try it again only when it is
+// due (keptRecheck), not on every tick.
 func TestAPanicInTheSweepOfADetachedCopyIsContained(t *testing.T) {
 	r := newCodingRig(t)
 	task, _ := r.detachedAtNeedsYou("PR-12409")
@@ -391,10 +392,222 @@ func TestAPanicInTheSweepOfADetachedCopyIsContained(t *testing.T) {
 				t.Fatalf("the tick panicked: %v", p)
 			}
 		}()
-		r.tick()
+		for range 6 {
+			r.clock.Add(45 * time.Second)
+			r.tick()
+		}
 	}()
-	r.setFailGit(nil)
-	if !hasEvent(r.events(task.ID, "panic"), registry.PhaseFail, "a bug in the sweep") {
-		t.Fatalf("panic events %+v; want the sweep's", r.events(task.ID, "panic"))
+	if evs := r.events(task.ID, "panic"); len(evs) != 1 || !hasEvent(evs, registry.PhaseFail, "a bug in the sweep") {
+		t.Fatalf("panic events %+v; want the sweep's, once in 6 ticks", evs)
 	}
+	r.clock.Add(keptRecheck)
+	r.tick()
+	r.setFailGit(nil)
+	if n := len(r.events(task.ID, "panic")); n != 2 {
+		t.Fatalf("%d panic events after keptRecheck; want the sweep tried again once", n)
+	}
+}
+
+// failRestores makes git's put-back (`restore --staged`) fail while broken
+// holds: every time, or (once) only the first, when you then come into the
+// writer's pane.
+func (r *codingRig) failRestores(once bool) (broken *atomic.Bool) {
+	r.t.Helper()
+	broken = &atomic.Bool{}
+	broken.Store(true)
+	var n atomic.Int32
+	r.setFailGit(func(args []string) error {
+		if !broken.Load() || !slices.Contains(args, "restore") || !slices.Contains(args, "--staged") {
+			return nil
+		}
+		if n.Add(1) == 1 && once {
+			r.rt.setOperatorIn("fx-writer")
+			return errors.New("fatal: Unable to create index.lock: File exists")
+		}
+		if once {
+			return nil
+		}
+		return errors.New("fatal: Unable to create index.lock: File exists")
+	})
+	return broken
+}
+
+// noTreeForTheWriter fails the test when the writer got more than its first
+// prompt, or one that hands it the copy's tree.
+func (r *codingRig) noTreeForTheWriter() {
+	r.t.Helper()
+	ps := r.rt.promptsTo("fx-writer")
+	for _, p := range ps {
+		if strings.Contains(p.Text, "README") || strings.Contains(p.Text, "git status shows") {
+			r.t.Fatalf("the writer was handed the copy's tree: %.300q", p.Text)
+		}
+	}
+	if len(ps) != 1 {
+		r.t.Fatalf("the writer got %d prompts, want its first only", len(ps))
+	}
+}
+
+// A put-back that fails never hands the tree to the writer, whatever ends
+// the check after it: what the precheck then keeps (you came into the pane)
+// is its result, and the task needs you naming it; a put-back that fails
+// every time leaves its changes recorded (kept.json), nothing reads the tree
+// as the writer's change while they are there, and the task needs you
+// naming them and the failure. Once the put-back works and you let the task
+// go on, they go back under the guard and the stage goes on.
+func TestAFailedPutBackNeverHandsTheTreeToTheWriter(t *testing.T) {
+	for _, tc := range []struct {
+		name, says string
+		once       bool
+	}{{"it fails, then you come into the pane", "fx-writer pane", true}, {"it fails every time", "index.lock", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCodingRig(t)
+			r.redOnMaster()
+			task := r.codingTask("PR-12414", "bug")
+			r.startStage(task)
+			r.fix(task)
+			r.setDuring(func(dir string, run scriptRun) {
+				if strings.HasPrefix(run.Script, "bin/specs") && run.Branch != "" && strings.Contains(run.Script, "app/credit.rb") {
+					r.write(dir, "README", "written during the head spec run\n")
+				}
+			})
+			broken := r.failRestores(tc.once)
+			r.endTurns(task, 1)
+			r.rt.setOperatorIn("")
+			for i := 0; i < 4 && isLive(r.reload(task.ID)); i++ {
+				r.clock.Add(time.Minute)
+				r.tick()
+				r.e.waitBackground()
+			}
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "README") || !strings.Contains(got.WaitsWhat, tc.says) {
+				t.Fatalf("task %s waits %q; want needs_you naming README and %q", got.State, got.WaitsWhat, tc.says)
+			}
+			r.noTreeForTheWriter()
+			if s := r.read("README"); s != "written during the head spec run\n" {
+				t.Fatalf("README = %q, want it as the spec run left it", s)
+			}
+
+			broken.Store(false)
+			r.setDuring(nil)
+			r.letGoOn(task.ID)
+			for i := 0; i < 4 && r.reload(task.ID).Stage == "coding" && isLive(r.reload(task.ID)); i++ {
+				r.clock.Add(time.Minute)
+				r.tick()
+				r.e.waitBackground()
+			}
+			if s := r.read("README"); s != "shop\n" {
+				t.Fatalf("README = %q after you let the task go on, want it put back", s)
+			}
+			if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+				t.Fatalf("task needs you (%q) after the put-back", got.WaitsWhat)
+			}
+			r.noTreeForTheWriter()
+		})
+	}
+}
+
+// The proof's end follows the same rule: a head run that did not run to its
+// end (a start failure of the moment) while you came into the pane leaves
+// what it changed for you, and that is the proof's result, for you, not its
+// failure to run.
+func TestAProofsKeptChangeWinsOverItsFailureToRun(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12415", "chore")
+	r.commit("PR-12415 rename", map[string]string{"app/credit.rb": creditRB + "# renamed\n"})
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_spec.rb"]}`)
+	r.mu.Lock()
+	r.startErr = func(run scriptRun) error {
+		if !strings.HasPrefix(run.Script, "bin/specs") {
+			return nil
+		}
+		r.write(r.copyDir, "README", "written as the run started\n")
+		r.rt.setOperatorIn("fx-writer")
+		return syscall.EAGAIN
+	}
+	r.mu.Unlock()
+	p, err := r.e.runProof(r.ctx, task, r.cp)
+	if err != nil || p.Passed || !p.ForYou || !strings.Contains(p.Why, "README") {
+		t.Fatalf("proof %+v, %v; want it failed for you, naming README", p, err)
+	}
+	if s := r.read("README"); s != "written as the run started\n" {
+		t.Fatalf("README = %q, want it kept", s)
+	}
+	if !r.e.keptRecorded(task.ID) {
+		t.Fatal("no record of the change kept for you")
+	}
+}
+
+// What the factory keeps for you is never handed on because its record
+// failed: an unreadable kept.json makes the task wait on you, saying so,
+// before anything runs; a kept.json the factory could not write keeps the
+// task waiting on you, saying so, until it can, and then the record is
+// settled as any other.
+func TestAKeptRecordThatCannotBeReadOrWrittenWaitsOnYou(t *testing.T) {
+	t.Run("an unreadable kept.json", func(t *testing.T) {
+		r := newCodingRig(t)
+		task := r.codingTask("PR-12416", "bug")
+		r.write(r.copyDir, "README", "left by a check\n")
+		r.taskFile(task.ID, keptFile, "{not json")
+		r.startStage(task)
+		got := r.reload(task.ID)
+		if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, keptFile) {
+			t.Fatalf("task %s waits %q; want needs_you naming %s", got.State, got.WaitsWhat, keptFile)
+		}
+		if n := len(r.rt.promptsTo("fx-writer")); n != 0 {
+			t.Fatalf("the writer got %d prompts beside an unreadable %s", n, keptFile)
+		}
+	})
+	t.Run("a kept.json the factory could not write", func(t *testing.T) {
+		r := newCodingRig(t)
+		r.redOnMaster()
+		var broken atomic.Bool
+		broken.Store(true)
+		r.e.keptWrite = func(path string, b []byte) error {
+			if broken.Load() {
+				return errors.New("no space left on device")
+			}
+			return fsx.WriteFileAtomic(path, b, 0o600)
+		}
+		task := r.codingTask("PR-12417", "bug")
+		r.startStage(task)
+		r.fix(task)
+		r.setDuring(func(dir string, run scriptRun) {
+			if strings.HasPrefix(run.Script, "bin/specs") && run.Branch != "" && strings.Contains(run.Script, "app/credit.rb") {
+				r.write(dir, "README", "written during the head spec run\n")
+				r.rt.setOperatorIn("fx-writer")
+			}
+		})
+		r.endTurns(task, 1)
+		if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "README") {
+			t.Fatalf("task %s waits %q; want needs_you naming README", got.State, got.WaitsWhat)
+		}
+		r.setDuring(nil)
+		r.rt.setOperatorIn("")
+		r.letGoOn(task.ID)
+		for range 3 {
+			r.clock.Add(time.Minute)
+			r.tick()
+			r.e.waitBackground()
+		}
+		got := r.reload(task.ID)
+		if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "README") || !strings.Contains(got.WaitsWhat, "no space left") {
+			t.Fatalf("task %s waits %q; want needs_you naming README and why its record failed", got.State, got.WaitsWhat)
+		}
+		r.noTreeForTheWriter()
+		if s := r.read("README"); s != "written during the head spec run\n" {
+			t.Fatalf("README = %q, want it kept", s)
+		}
+
+		broken.Store(false)
+		r.letGoOn(task.ID)
+		for i := 0; i < 4 && r.reload(task.ID).Stage == "coding" && isLive(r.reload(task.ID)); i++ {
+			r.clock.Add(time.Minute)
+			r.tick()
+			r.e.waitBackground()
+		}
+		if s := r.read("README"); s != "shop\n" {
+			t.Fatalf("README = %q once the record could be written, want it put back", s)
+		}
+		r.noTreeForTheWriter()
+	})
 }

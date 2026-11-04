@@ -62,7 +62,9 @@ type baseRecord struct {
 // next free number, from origin/<base>. Its base is recorded (base.json,
 // the base_sha artifact). It is a guarded step, with begin and ok or fail
 // events, after the copy's guard (no agent at work in it), and it is
-// idempotent: run again, it finds the branch it made.
+// idempotent: run again, it finds the branch it made. A switch git refuses
+// over a file it does not track (yours, never written over) is a needsYou
+// naming it (refusedWhat).
 func (e *Engine) startCoding(ctx context.Context, t *registry.Task, c Copy) error {
 	repo, err := e.factoryRepo(*t)
 	if err != nil {
@@ -83,6 +85,9 @@ func (e *Engine) startCoding(ctx context.Context, t *registry.Task, c Copy) erro
 	e.event(ctx, t.ID, "branch", registry.PhaseBegin, "prepares "+t.Branch+" in "+c.Name+" from a fresh "+upstream)
 	fail := func(err error) error {
 		e.event(ctx, t.ID, "branch", registry.PhaseFail, t.Branch+" in "+c.Name+": "+textx.Clip(textx.FirstLine(err.Error()), 300))
+		if files, line, ok := refusal(err); ok { // a file of yours in the way: never written over, and yours to move
+			return needsYou{refusedWhat(c.Name, files, line)}
+		}
 		return err
 	}
 	if err := git.FetchBranch(ctx, cmp.Or(repo.MainClone, c.Path), base); err != nil {
@@ -439,6 +444,9 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		e.dropCheck(t.ID)
 		return &endProblem{file: precheckFile, why: res.why(), operator: true}, "", false, nil
 	}
+	if p, pending, err := e.keptFirst(ctx, t); p != nil || pending || err != nil {
+		return p, "", pending, err
+	}
 	repo, err := e.factoryRepo(*t)
 	if err != nil {
 		return nil, "", false, err
@@ -494,6 +502,49 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		return &endProblem{file: file, why: res.why(), change: !forYou, operator: forYou}, "", false, nil
 	}
 	return nil, bh.Head, false, nil
+}
+
+// keptFirst is provenHead's guard before it reads the tree: while task t
+// has a record of changes a check left in its copy (kept.json: kept for
+// you, or a put-back that failed), nothing hands that tree to the writer.
+// An ended check that left them is taken first, whatever ended it: its
+// failure to run is counted as any other's (checkTries in a row need you),
+// and it is dropped. Then the record is settled (settleKept): p is what the
+// task needs you for, pending a wait (*t has it), nil and false once the
+// tree holds none of it.
+func (e *Engine) keptFirst(ctx context.Context, t *registry.Task) (p *endProblem, pending bool, err error) {
+	if !e.keptRecorded(t.ID) {
+		return nil, false, nil
+	}
+	e.checksMu.Lock()
+	x := e.checks[t.ID]
+	e.checksMu.Unlock()
+	if x != nil && x.ended() {
+		if res := x.res; res.Err != nil {
+			if n := e.countFailedCheck(t.ID); n >= checkTries {
+				e.dropCheck(t.ID)
+				e.checkRanToItsEnd(t.ID)
+				e.clearPrecheckWait(ctx, t)
+				return &endProblem{file: "the checks", operator: true, why: fmt.Sprintf("the factory's checks of %s did not run to their end "+
+					"%d times: %s", short(x.head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))}, false, nil
+			}
+		}
+		e.dropCheck(t.ID)
+	}
+	why, err := e.settleKept(ctx, *t)
+	switch {
+	case errors.Is(err, ErrHeld):
+		if h, ok := errors.AsType[heldError](err); ok {
+			t.WaitsWho, t.WaitsWhat = h.who, h.what
+		}
+		return nil, true, nil
+	case err != nil:
+		return nil, false, err
+	case why != "":
+		e.clearPrecheckWait(ctx, t)
+		return &endProblem{file: keptFile, why: why, operator: true}, false, nil
+	}
+	return nil, false, nil
 }
 
 // dropCheck forgets the ended check of task id: the next pass runs a new

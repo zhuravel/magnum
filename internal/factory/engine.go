@@ -262,8 +262,15 @@ type Engine struct {
 	// keeps for you, by task (keptCopy: said once, looked at again only
 	// when due, keptDue): the loop's own.
 	keptCopies map[int64]keptCopy
-	lockPoll   time.Duration
-	after      func(d time.Duration) <-chan time.Time
+	// keptMem are the records of kept changes the factory could not write
+	// to kept.json, by task (keepFor runs on a check's goroutine: keptMu);
+	// keptWrite writes kept.json (nil: an atomic write), a seam of the
+	// tests.
+	keptMu    sync.Mutex
+	keptMem   map[int64]keptUnwritten
+	keptWrite func(path string, b []byte) error
+	lockPoll  time.Duration
+	after     func(d time.Duration) <-chan time.Time
 
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
@@ -308,6 +315,7 @@ func New(d Deps) *Engine {
 		checkNotes: map[int64]string{},
 		checkFails: map[int64]int{},
 		keptCopies: map[int64]keptCopy{},
+		keptMem:    map[int64]keptUnwritten{},
 		lockPoll:   specsLockPoll,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
@@ -616,8 +624,11 @@ func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 	if err := e.resumeDetached(ctx, t); err != nil {
 		return err
 	}
-	if err := e.settleKept(ctx, t); err != nil {
+	if why, err := e.settleKept(ctx, t); err != nil {
 		return err
+	} else if why != "" {
+		e.toOperator(ctx, t, why, "a check left changes for you")
+		return heldError{who: waitsYou, what: why}
 	}
 	kind, ok := e.cfg.Factory.Kinds[t.Kind]
 	if !ok || len(kind.Stages) == 0 {
