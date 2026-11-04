@@ -258,8 +258,11 @@ type Engine struct {
 	checks     map[int64]*headCheck
 	checkNotes map[int64]string
 	checkFails map[int64]int // checks in a row that did not run to their end, by task
-	lockPoll   time.Duration
-	after      func(d time.Duration) <-chan time.Time
+	// keptSaid is the last copy kept for you each task's resumeDetached
+	// said (an event and an alert once, not each tick): the loop's own.
+	keptSaid map[int64]string
+	lockPoll time.Duration
+	after    func(d time.Duration) <-chan time.Time
 
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
@@ -303,6 +306,7 @@ func New(d Deps) *Engine {
 		checks:     map[int64]*headCheck{},
 		checkNotes: map[int64]string{},
 		checkFails: map[int64]int{},
+		keptSaid:   map[int64]string{},
 		lockPoll:   specsLockPoll,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
@@ -523,6 +527,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.sweepHeavy(ctx, tasks)
 	e.sweepClaims(ctx, tasks)
 	e.sweepChecks(tasks)
+	e.sweepDetached(ctx, tasks)
 	e.payReleaseDebts(ctx, tasks)
 	herdrUp := e.checkHerdr(ctx, now)
 	e.pressure(ctx, now, tasks)

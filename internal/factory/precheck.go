@@ -76,6 +76,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		return PrecheckResult{}, heldError{who: "factory", what: "this build has no git"}
 	}
 	pc := repo.Precheck
+	started := e.now() // before any wait: a change after it is the precheck's own, or somebody else's
 	bh, err := e.branchHead(ctx, t, c, repo)
 	if err != nil {
 		return PrecheckResult{}, err
@@ -123,7 +124,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		}
 	}()
 
-	p := &precheckRun{e: e, t: t, c: c, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit, started: e.now(),
+	p := &precheckRun{e: e, t: t, c: c, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit, started: started,
 		res: PrecheckResult{Passed: true}}
 	p.say("# Precheck of %s at %s\n\nThe change from %s: %d files.\n", t.Branch, short(bh.Head), short(bh.Base), len(files))
 	steps := []func(){
@@ -146,37 +147,31 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		}
 		step()
 	}
-	// What its commands changed goes back, guarded, however it ended; a base
-	// run that left the copy detached (a wait) leaves it to resumeDetached.
-	var restored []string
-	if !errors.Is(p.err, ErrHeld) {
-		var kept string
-		var rerr error
-		switch restored, kept, rerr = e.restoreOwn(ctx, t, c, p.started, "the precheck's commands"); {
-		case kept != "":
-			p.res.Passed, p.res.ForYou, p.res.Why = false, true, "precheck: "+kept
-			p.say("\n**Left as it is: %s.**\n", kept)
-			p.err = nil
-		case rerr != nil && p.err == nil:
-			p.err = rerr
-		}
+	// What its commands changed goes back, guarded, however it ended. A copy
+	// a base run left detached (its record is there) is resumeDetached's: the
+	// precheck is a wait then, whatever else failed, so the task is never at
+	// NEEDS YOU with its copy left detached, and the next check finds the rest
+	// again.
+	leftDetached := p.err != nil && e.hasDetachedRecord(t)
+	if !leftDetached && !p.kept {
+		p.restoreOwn()
+	}
+	overCap := errors.Is(context.Cause(cctx), errOverCap) || p.overCap
+	if overCap {
+		p.say("\n**Stopped: over its cap of %s.**\n", capText(limit))
 	}
 	switch {
 	case ctx.Err() != nil:
 		return p.res, ctx.Err()
+	case leftDetached && p.err != nil:
+		return p.res, p.err
+	case p.restoreErr != nil:
+		return p.res, p.restoreErr
 	case p.res.ForYou:
-	case errors.Is(context.Cause(cctx), errOverCap) || p.overCap:
-		p.res.Passed = false
-		if !p.res.ForYou {
-			p.res.Why = "precheck: over " + capText(limit)
-		}
-		p.say("\n**Stopped: over its cap of %s.**\n", capText(limit))
+	case overCap:
+		p.res.Passed, p.res.Why = false, "precheck: over "+capText(limit)
 	case p.err != nil:
 		return p.res, p.err
-	}
-	if len(restored) > 0 {
-		p.say("\nRestored %s: the precheck's commands changed %s, and the copy is left as the branch has it.\n",
-			clipList(restored), map[bool]string{true: "it", false: "them"}[len(restored) == 1])
 	}
 	if p.res.Passed {
 		p.say("\nPassed.\n")
@@ -213,17 +208,50 @@ type precheckRun struct {
 	report     strings.Builder
 	// err is a failure to run that ends the precheck (git, a start failure
 	// of the moment); overCap a command that did not end within the cap
-	// (its own bound); started when it began, on a clean tree.
-	err     error
-	overCap bool
-	started time.Time
+	// (its own bound); started when it began, before its waits, on a clean
+	// tree; restoreErr a failed put-back of its own changes (restoreOwn).
+	err        error
+	overCap    bool
+	started    time.Time
+	restoreErr error
+	// kept: it left changes it could not vouch for; it runs nothing more
+	// and puts nothing back after that.
+	kept bool
+}
+
+// restoreOwn puts back what the precheck's commands changed so far
+// (Engine.restoreOwn, guarded), and says so in the report: kept changes
+// (somebody else could have made them) fail the precheck for you, naming
+// them; a failed put-back is restoreErr. It reports whether the tree is now
+// as the branch has it.
+func (p *precheckRun) restoreOwn() bool {
+	restored, kept, err := p.e.restoreOwn(p.ctx, p.t, p.c, p.started, "the precheck's commands")
+	switch {
+	case kept != "":
+		p.say("\n**Left as it is: %s.**\n", kept)
+		p.failForYou(kept)
+		p.kept = true
+		return false
+	case err != nil:
+		p.say("\n**The put-back failed: %s.**\n", err)
+		if p.restoreErr == nil {
+			p.restoreErr = err
+		}
+		return false
+	case len(restored) > 0:
+		p.say("\nRestored %s: the precheck's commands changed %s, and the copy is as the branch has it.\n",
+			clipList(restored), map[bool]string{true: "it", false: "them"}[len(restored) == 1])
+	}
+	return true
 }
 
 func (p *precheckRun) say(format string, a ...any) { fmt.Fprintf(&p.report, format, a...) }
 
 // stopped reports whether the precheck ends here: its cap, the caller's
-// context or a failure to run.
-func (p *precheckRun) stopped() bool { return p.ctx.Err() != nil || p.err != nil || p.overCap }
+// context, a failure to run, or changes it left for you.
+func (p *precheckRun) stopped() bool {
+	return p.ctx.Err() != nil || p.err != nil || p.overCap || p.kept
+}
 
 // fail fails the precheck with why, its first failure's reason, unless a
 // failure for you came first.
@@ -439,9 +467,19 @@ func (p *precheckRun) specs(cmd string, files []string) {
 	}
 	baseRed := map[string]bool{}
 	if len(atBase) > 0 {
+		// The detach discards what differs from the branch: the precheck's
+		// own changes go back first, guarded; what it cannot vouch for stays.
+		if !p.restoreOwn() {
+			return
+		}
 		baseScript := renderCommand(cmd, atBase, p.base)
 		p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
 		base, problem, err := p.e.baseRun(p.ctx, p.t, p.c, p.started, p.base, p.head, nil, baseScript, p.limit)
+		if k, ok := errors.AsType[keptChanges](err); ok {
+			p.say("\n**Not run on the base: %s.**\n", k.why)
+			p.failForYou(k.why)
+			return
+		}
 		switch {
 		case p.ctx.Err() != nil:
 			return

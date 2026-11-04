@@ -67,8 +67,10 @@ type fakeRuntime struct {
 	// are in its pane (rather than its agent at work).
 	atWork    string
 	atWorkYou bool
-	// touched is who TouchedSince names ("" for nobody).
-	touched string
+	// touched is who TouchedSince names ("" for nobody), touchedAt when
+	// (zero: for any time).
+	touched   string
+	touchedAt time.Time
 }
 
 // runFact is a run's state and why it failed or was given up.
@@ -297,16 +299,23 @@ func (f *fakeRuntime) setOperatorIn(role string) {
 }
 
 // setTouched has who changed the task's copy since any time ("" for nobody).
-func (f *fakeRuntime) setTouched(who string) {
+func (f *fakeRuntime) setTouched(who string) { f.setTouchedAt(who, time.Time{}) }
+
+// setTouchedAt has who change the task's copy at at: TouchedSince names
+// them for a time before it (the zero at: for any time).
+func (f *fakeRuntime) setTouchedAt(who string, at time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.touched = who
+	f.touched, f.touchedAt = who, at
 }
 
-// TouchedSince is who touched names.
-func (f *fakeRuntime) TouchedSince(context.Context, registry.Task, time.Time) (string, error) {
+// TouchedSince is who touched names, when they touched the copy after since.
+func (f *fakeRuntime) TouchedSince(_ context.Context, _ registry.Task, since time.Time) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !f.touchedAt.IsZero() && !f.touchedAt.After(since) {
+		return "", nil
+	}
 	return f.touched, nil
 }
 

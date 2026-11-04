@@ -3616,8 +3616,12 @@ the task waits, saying who. `detached.json` and a begin event come first, and th
 come back after the run, whatever ended it, unless somebody else was at work in the copy meanwhile: then it
 stays detached, with its record, until nobody works there. A daemon killed in the middle has the next start restore them
 before anything else runs in the copy, only while the task still holds the copy and it is detached where the
-base run left it, never over a change the base run did not make (the task needs you, naming it and how to
+base run left it, never over a change the factory did not make (the task needs you, naming it and how to
 put the copy back); a copy you put back on its branch, or that another task holds now, only drops the record.
+This holds whatever the task's state: a copy is never left detached at NEEDS YOU. No git step the factory runs
+in a copy discards a change it did not make: a base run detaches only a tree as the branch has it, a put-back
+keeps a laid spec file that is no longer the head's, and a check counts every change since it began, its
+waits included, as possibly somebody else's unless nobody else could have made it.
 The proof's and the precheck's spec runs take one lock on the machine (`factory-specs.lock` in the state
 directory): a second one waits, `precheck: another precheck runs specs; this one waits for the machine's spec
 lock`. The precheck writes `precheck.md` (the offenses, the red specs and the migrations with their gh-ost
