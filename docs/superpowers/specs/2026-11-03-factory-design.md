@@ -179,7 +179,8 @@ stages = ["start", "investigate", "questions", "coding", "tests", "local_review"
 - A key or a Jira link anywhere in the text counts too (the operator's request of 2026-11-04): "fix the expiry date in PR-12345, only the refund path", or a pasted link with a comment before or after it. The whole text is then the guidance, and nothing is cut out of it.
   - Only a key that Jira knows counts. A word such as "UTF-8" or "ISO-8601" stays a word of the prompt, and an unknown key found in the text is no error.
   - Several known keys in the text give the which-issue question, with the first key recommended.
-  - If Jira does not answer, a key found in the text waits like a key at the start. If Jira then does not know it, the task goes on from the operator's words.
+  - When the trackers name Jira projects (a template such as `.../browse/PR-{num}`), a bare key of another project is a word, read from no Jira. So "UTF-8" never waits on Jira.
+  - If Jira does not answer, a key found in the text waits like a key at the start. If Jira then does not know it, the task goes on from the operator's words. A text whose found keys never got an answer goes on from the words after the 6 hours, instead of going to NEEDS YOU.
   - The new-task preview shows the key with "found in your text". The branch, the PR title and the PR body use it, as for a key at the start.
 - The new-task box reads links too. A Jira link is its key. A GitHub PR link offers adoption (section 6.9, milestone 2). A GitHub Actions run link offers a CI task (milestone 3).
 - One key has one task, and one task has one PR. A repeated `start` for a key that has a task returns that task, or its PR, and makes no new task.
