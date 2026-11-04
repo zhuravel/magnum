@@ -1,12 +1,15 @@
 package tui
 
 // The factory's cards (spec 9.C): the question card and its recap, the ready
-// card, the task card and the new task form. Like the home painter
-// (factory_view.go) they hold no state and read no clock: data in, frame out.
+// card (factory_card_ready.go), the task card and the new task form. Like the
+// home painter (factory_view.go) they hold no state and read no clock: data
+// in, frame out.
 //
 // A card is a head (the title line, the facts line and a blank), a body, the
-// rule that ends the body and one footer line: the key hints, or the y/N
-// question being asked. With a height the footer sits at the bottom of it and
+// rule that ends the body and the footer: the key hints (the card's own unless
+// its data gives them), the y/N question being asked (on two lines when it
+// does not fit one, so its words are never cut), or the reasons a key asks
+// for. With a height the footer sits at the bottom of it and
 // a body that does not fit is cut, the rule counting the lines below; without
 // one the card is as tall as its content. Everything a card shows is cleaned
 // first, and no line is wider than the screen.
@@ -110,8 +113,30 @@ func cleanInput(s string) string {
 	}, s)
 }
 
+// orHints are hs, or def when hs has none: a card's hints are its data's,
+// else its own.
+func orHints(hs, def []hint) []hint {
+	if len(hs) == 0 {
+		return def
+	}
+	return hs
+}
+
+// cleanHints are key hints with their text cleaned; nil stays nil.
+func cleanHints(hs []hint) []hint {
+	if hs == nil {
+		return nil
+	}
+	out := make([]hint, len(hs))
+	for i, h := range hs {
+		out[i] = hint{cleanText(h.key), cleanText(h.desc)}
+	}
+	return out
+}
+
 func cleanQuestionCard(c QuestionCard) QuestionCard {
 	c.TaskKey, c.Title, c.Kind = cleanText(c.TaskKey), cleanText(c.Title), cleanText(c.Kind)
+	c.NeedlessReasons, c.Hints = cleanAll(c.NeedlessReasons), cleanHints(c.Hints)
 	qs := make([]CardQuestion, len(c.Questions))
 	for i, q := range c.Questions {
 		q.Text, q.Context, q.Example = cleanText(q.Text), cleanText(q.Context), cleanText(q.Example)
@@ -130,8 +155,9 @@ func cleanQuestionCard(c QuestionCard) QuestionCard {
 func cleanReadyCard(c ReadyCard) ReadyCard {
 	c.TaskKey, c.Title, c.Branch, c.Kind = cleanText(c.TaskKey), cleanText(c.Title), cleanText(c.Branch), cleanText(c.Kind)
 	c.Cause, c.Fix, c.Proof, c.Why = cleanText(c.Cause), cleanText(c.Fix), cleanText(c.Proof), cleanText(c.Why)
-	c.ScreenshotsNote, c.Ask = cleanText(c.ScreenshotsNote), cleanText(c.Ask)
-	c.Doubts = cleanAll(c.Doubts)
+	c.ScreenshotsNote, c.Ask, c.Frees = cleanText(c.ScreenshotsNote), cleanText(c.Ask), cleanText(c.Frees)
+	c.Doubts, c.Flags, c.Leftovers = cleanAll(c.Doubts), cleanAll(c.Flags), cleanAll(c.Leftovers)
+	c.Unread, c.Reasons, c.Hints = cleanAll(c.Unread), cleanAll(c.Reasons), cleanHints(c.Hints)
 	c.Files = slices.Clone(c.Files)
 	for i := range c.Files {
 		c.Files[i].Path = cleanText(c.Files[i].Path)
@@ -142,7 +168,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 func cleanTaskCard(c TaskCard) TaskCard {
 	c.Key, c.Kind, c.Title, c.Branch = cleanText(c.Key), cleanText(c.Kind), cleanText(c.Title), cleanText(c.Branch)
 	c.Copy, c.WaitingFor, c.PR, c.AgentsNote = cleanText(c.Copy), cleanText(c.WaitingFor), cleanText(c.PR), cleanText(c.AgentsNote)
-	c.Report, c.Learned = cleanAll(c.Report), cleanAll(c.Learned)
+	c.Report, c.Learned, c.Hints = cleanAll(c.Report), cleanAll(c.Learned), cleanHints(c.Hints)
 	c.Stages = slices.Clone(c.Stages)
 	for i, s := range c.Stages {
 		c.Stages[i].Name, c.Stages[i].State, c.Stages[i].Proof = cleanText(s.Name), cleanText(s.State), cleanText(s.Proof)
@@ -159,11 +185,16 @@ func cleanNewTaskForm(f NewTaskForm) NewTaskForm {
 	f.Text = cleanInput(f.Text)
 	f.Kind, f.KindWhy, f.Branch, f.Starts = cleanText(f.Kind), cleanText(f.KindWhy), cleanText(f.Branch), cleanText(f.Starts)
 	f.Err, f.Repo, f.Title, f.Ask = cleanText(f.Err), cleanText(f.Repo), cleanText(f.Title), cleanText(f.Ask)
-	f.Agents, f.Rules = cleanAll(f.Agents), cleanAll(f.Rules)
+	f.Agents, f.Rules, f.Keys = cleanAll(f.Agents), cleanAll(f.Rules), cleanAll(f.Keys)
+	f.Overlap, f.Hints = cleanText(f.Overlap), cleanHints(f.Hints)
+	f.Links = slices.Clone(f.Links)
+	for i, l := range f.Links {
+		f.Links[i] = FormLink{cleanText(l.Kind), cleanText(l.URL), cleanText(l.Offer)}
+	}
 	if f.Jira != nil {
 		j := *f.Jira
 		j.Key, j.Type, j.Status, j.Priority = cleanText(j.Key), cleanText(j.Type), cleanText(j.Status), cleanText(j.Priority)
-		j.Reporter, j.Summary, j.Excerpt = cleanText(j.Reporter), cleanText(j.Summary), cleanText(j.Excerpt)
+		j.Reporter, j.Summary, j.Excerpt, j.Found = cleanText(j.Reporter), cleanText(j.Summary), cleanText(j.Excerpt), cleanText(j.Found)
 		f.Jira = &j
 	}
 	return f
@@ -330,9 +361,53 @@ func (p *cardPainter) hintsLine(hs []hint) string {
 	return " " + p.st.fitHints(p.width-1, sets...)
 }
 
-// askLine is the footer when a y/N question is asked.
-func (p *cardPainter) askLine(question string) string {
-	return " " + p.st.confirmLine(question, p.width-1)
+// askLines are the footer when a y/N question is asked: its sentences on one
+// line, or, when they do not fit, each on a line of its own (or the words
+// wrapped over two), "y/N" ending the last, so the question never loses the
+// words that say what it frees.
+func (p *cardPainter) askLines(sentences ...string) []string {
+	sentences = slices.DeleteFunc(sentences, func(s string) bool { return s == "" })
+	w := p.width - 1
+	one := strings.Join(sentences, " ")
+	if ansi.StringWidth(one)+len(confirmYN) <= w || len(sentences) == 0 {
+		return []string{" " + p.st.confirmLine(one, w)}
+	}
+	lines := sentences
+	if len(lines) != 2 || ansi.StringWidth(lines[0]) > w || ansi.StringWidth(lines[1])+len(confirmYN) > w {
+		lines = wrapText(one, w-len(confirmYN), 2)
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = " " + p.st.Warn.Render(truncate(l, w))
+	}
+	out[len(out)-1] = " " + p.st.confirmLine(lines[len(lines)-1], w)
+	return out
+}
+
+// reasonLines are the footer that asks for a reason by its digit: the
+// question, then each reason after its digit, over as many lines as they
+// need, so that no reason is cut.
+func (p *cardPainter) reasonLines(question string, reasons []string) []string {
+	hs := make([]hint, 0, len(reasons)+1)
+	for i, r := range reasons {
+		hs = append(hs, hint{strconv.Itoa(i + 1), r})
+	}
+	hs = append(hs, hint{"esc", "cancels"})
+	q := p.st.Warn.Render(question) + "  "
+	qw := ansi.StringWidth(q)
+	if p.width-1-qw < 24 { // too narrow beside the question: the reasons go under it
+		out := []string{" " + p.st.Warn.Render(question)}
+		for _, l := range p.st.wrapHints(p.width-3, hs...) {
+			out = append(out, "   "+l)
+		}
+		return out
+	}
+	lines := p.st.wrapHints(p.width-1-qw, hs...)
+	out := []string{" " + q + lines[0]}
+	for _, l := range lines[1:] {
+		out = append(out, " "+spaces(qw)+l)
+	}
+	return out
 }
 
 // assemble puts a card together: the head, the body from its line start, the
@@ -447,8 +522,26 @@ func (p *cardPainter) questionCard(c QuestionCard, height int) string {
 		body = append(body, p.textRows(1, p.st.Dim, wrapText("Example: "+q.Example, p.wrapW(1), 2))...)
 	}
 	body = append(body, "")
-	body = append(body, p.optionRows(q)...)
-	frame, _ := p.assemble(head, body, 0, "", []string{p.hintsLine(p.questionHints(q, cur))}, height)
+	rec := -1
+	if q.Recommended >= 0 && q.Recommended < len(q.Options) {
+		rec = q.Recommended
+	}
+	body = append(body, p.optionList(q.Options, c.Cursor, rec, q.Why)...)
+	if rec < 0 && len(q.Options) > 0 {
+		text := "no recommendation"
+		if q.Why != "" {
+			text += ": " + q.Why
+		}
+		if c.Cursor < 0 || c.Cursor >= len(q.Options) {
+			text += p.g.sep + "nothing is marked: pick one (j k)"
+		}
+		body = append(body, p.textRows(1, p.st.Dim, wrapText(text, p.wrapW(1), 2))...)
+	}
+	foot := []string{p.hintsLine(orHints(c.Hints, p.questionHints(c, q, cur)))}
+	if len(c.NeedlessReasons) > 0 {
+		foot = p.reasonLines("Why needless?", c.NeedlessReasons)
+	}
+	frame, _ := p.assemble(head, body, 0, "", foot, height)
 	return frame
 }
 
@@ -548,60 +641,51 @@ func (p *cardPainter) optionCols(labelX, lw, mw, tagW int) (lwOut, mwOut int, ta
 	return l, m, false
 }
 
-// optionRows are the options of a question: the marked one with its tag and
-// its reason, or with none marked the line that says so.
-func (p *cardPainter) optionRows(q CardQuestion) []string {
-	numW := len(strconv.Itoa(len(q.Options)))
+// optionList are the options of a card, numbered: the label, what it means
+// (behind an arrow), the mark on the option under the cursor, and the
+// recommended one in bold with its tag and its reason under it.
+func (p *cardPainter) optionList(opts []CardOption, cursor, recommended int, why string) []string {
+	numW := len(strconv.Itoa(len(opts)))
 	labelX := 3 + numW + 2
 	var lw, mw int
-	for _, o := range q.Options {
+	for _, o := range opts {
 		lw = max(lw, ansi.StringWidth(o.Label))
 		if o.Means != "" {
 			mw = max(mw, ansi.StringWidth(p.arrow()+" "+o.Means))
 		}
 	}
-	marked := -1
-	if q.Recommended >= 0 && q.Recommended < len(q.Options) {
-		marked = q.Recommended
-	}
 	const tagText = "recommended"
 	tagW := 0
-	if marked >= 0 {
+	if recommended >= 0 && recommended < len(opts) {
 		tagW = len(tagText)
 	}
 	lw, mw, showTag := p.optionCols(labelX, lw, mw, tagW)
 	var out []string
-	for i, o := range q.Options {
+	for i, o := range opts {
 		label := noStyle
-		if i == marked {
+		if i == recommended {
 			label = p.st.Label
 		}
-		ps := []placed{at(1, 1, p.mark(i == marked)), at(3, numW, seg{strconv.Itoa(i + 1), noStyle}), at(labelX, lw, seg{o.Label, label})}
+		ps := []placed{at(1, 1, p.mark(i == cursor)), at(3, numW, seg{strconv.Itoa(i + 1), noStyle}), at(labelX, lw, seg{o.Label, label})}
 		if mw > 0 && o.Means != "" {
 			ps = append(ps, at(labelX+lw+cardGap, mw, seg{p.arrow() + " ", p.st.Dim}, seg{o.Means, noStyle}))
 		}
-		if showTag && i == marked {
+		if showTag && i == recommended {
 			ps = append(ps, rightAt(p.width-cardTagMargin, cell{{tagText, p.st.OK}}))
 		}
 		out = append(out, p.line(ps...))
-		if i == marked && q.Why != "" {
-			out = append(out, p.textRows(labelX, p.st.Dim, wrapText("why: "+q.Why, p.wrapW(labelX), 2))...)
+		if i == recommended && why != "" {
+			out = append(out, p.textRows(labelX, p.st.Dim, wrapText("why: "+why, p.wrapW(labelX), 2))...)
 		}
-	}
-	if marked < 0 && len(q.Options) > 0 {
-		text := "no recommendation"
-		if q.Why != "" {
-			text += ": " + q.Why
-		}
-		text += p.g.sep + "nothing is marked: pick one (j k)"
-		out = append(out, p.textRows(1, p.st.Dim, wrapText(text, p.wrapW(1), 2))...)
 	}
 	return out
 }
 
-func (p *cardPainter) questionHints(q CardQuestion, cur int) []hint {
+// questionHints are the question card's own key hints: enter only when the
+// mark is on an option, − when the card takes it.
+func (p *cardPainter) questionHints(c QuestionCard, q CardQuestion, cur int) []hint {
 	var hs []hint
-	if q.Recommended >= 0 && q.Recommended < len(q.Options) {
+	if c.Cursor >= 0 && c.Cursor < len(q.Options) {
 		hs = append(hs, hint{"enter", "take the marked one"})
 	}
 	hs = append(hs, hint{"j k", "move"})
@@ -610,6 +694,9 @@ func (p *cardPainter) questionHints(q CardQuestion, cur int) []hint {
 		hs = append(hs, hint{"1", "pick"})
 	case n > 1:
 		hs = append(hs, hint{fmt.Sprintf("1-%d", n), "pick"})
+	}
+	if c.Needless {
+		hs = append(hs, hint{p.minus(), "needless"})
 	}
 	if cur > 0 {
 		hs = append(hs, hint{"backspace", "previous"})
@@ -761,156 +848,10 @@ func (p *cardPainter) recap(c QuestionCard, height int) string {
 			body = append(body, p.line(placed{1, p.width - 1, cl}))
 		}
 	}
-	foot := p.hintsLine([]hint{{"esc", "back"}})
+	foot := []string{p.hintsLine(orHints(c.Hints, []hint{{"esc", "back"}}))}
 	if q := recapQuestion(answers, asks); q != "" {
-		foot = p.askLine(q)
+		foot = p.askLines(q)
 	}
-	frame, _ := p.assemble(head, body, 0, "", []string{foot}, height)
+	frame, _ := p.assemble(head, body, 0, "", foot, height)
 	return frame
-}
-
-// the ready card
-
-var readyOptions = [...]string{"push + draft PR", "send back with a note", "drop: free the copy, keep the branch"}
-
-func (p *cardPainter) ready(c ReadyCard, height int) string {
-	head := []string{
-		p.titleLine(p.chip(hint{"esc", "back"}), seg{c.TaskKey, p.st.Accent}, seg{"ready to push", noStyle}),
-		p.factsLine(c.Title, c.Kind, "waited "+shortAge(max(c.Waited, 0))),
-	}
-	line3 := " " + c.Branch
-	if c.Commits > 0 {
-		line3 += p.st.Dim.Render(p.g.sep + factoryPlural(c.Commits, "commit", "commits") + p.g.sep + "not on GitHub yet")
-	}
-	head = append(head, truncate(line3, p.width), "")
-	wrapW := p.wrapW(cardReadyX)
-	var body []string
-	field := func(label, text string) {
-		if text != "" {
-			body = append(body, p.labelRows(label, cardReadyX, plainCells(wrapText(text, wrapW, 0), noStyle))...)
-		}
-	}
-	field("CAUSE", c.Cause)
-	field("FIX", c.Fix)
-	field("PROOF", c.Proof)
-	body = append(body, p.fileRows(c.Files)...)
-	var doubts []cell
-	for _, d := range c.Doubts {
-		doubts = append(doubts, plainCells(wrapText(d, wrapW, 0), noStyle)...)
-	}
-	if len(doubts) == 0 {
-		doubts = []cell{{{"none", p.st.Dim}}}
-	}
-	body = append(body, p.labelRows("DOUBTS", cardReadyX, doubts)...)
-	shots := cell{{"none", p.st.Dim}}
-	if c.Screenshots > 0 {
-		text := strconv.Itoa(c.Screenshots)
-		if c.ScreenshotsNote != "" {
-			text += ", " + c.ScreenshotsNote
-		}
-		shots = cell{{text, noStyle}}
-	}
-	body = append(body, p.labelRows("SCREENSHOTS", cardReadyX, []cell{shots})...)
-	body = append(body, "")
-
-	read := !c.DiffOpened.IsZero()
-	marked := -1
-	if read && c.Recommended >= 0 && c.Recommended < len(readyOptions) {
-		marked = c.Recommended
-	}
-	const labelX = 3
-	for i, o := range readyOptions {
-		label := noStyle
-		if i == marked {
-			label = p.st.Label
-		}
-		room := p.width - labelX - 1
-		if i == marked {
-			room -= cardTagMargin + len("recommended") + 1 // two cells of air before the tag
-		}
-		ps := []placed{at(1, 1, p.mark(i == marked)), at(labelX, room, seg{o, label})}
-		if i == marked {
-			ps = append(ps, rightAt(p.width-cardTagMargin, cell{{"recommended", p.st.OK}}))
-		}
-		body = append(body, p.line(ps...))
-		if i == marked && c.Why != "" {
-			body = append(body, p.textRows(labelX, p.st.Dim, wrapText("why: "+c.Why, p.wrapW(labelX), 2))...)
-		}
-	}
-	msg := ""
-	if read {
-		msg = p.st.Dim.Render("you read the diff " + p.clock(c.DiffOpened))
-	} else {
-		body = append(body, p.textRows(1, noStyle, wrapText("You have not read the diff yet. The recommendation shows after d.", p.wrapW(1), 2))...)
-	}
-	hs := []hint{{"d", "read the diff"}}
-	if c.Screenshots > 0 {
-		hs = append(hs, hint{"e", "screenshots"})
-	}
-	hs = append(hs, hint{"j k", "pick"}, hint{"enter", "do it"}, hint{"esc", "back"})
-	foot := p.hintsLine(hs)
-	if c.Ask != "" {
-		foot = p.askLine(c.Ask)
-	}
-	frame, _ := p.assemble(head, body, 0, msg, []string{foot}, height)
-	return frame
-}
-
-// fileRows is the FILES table: the path, the lines added and removed, and
-// whether the plan named the file.
-func (p *cardPainter) fileRows(files []CardFile) []string {
-	if len(files) == 0 {
-		return p.labelRows("FILES", cardReadyX, []cell{{{"none", p.st.Dim}}})
-	}
-	counts := make([]cell, len(files))
-	var pw, nw int
-	noteW := len("in the plan")
-	for i, f := range files {
-		pw = max(pw, ansi.StringWidth(f.Path))
-		if f.Added > 0 {
-			counts[i] = append(counts[i], seg{"+" + strconv.Itoa(f.Added), p.base.pal.add})
-		}
-		if f.Removed > 0 {
-			if len(counts[i]) > 0 {
-				counts[i] = append(counts[i], seg{" ", noStyle})
-			}
-			counts[i] = append(counts[i], seg{p.minus() + strconv.Itoa(f.Removed), p.base.pal.del})
-		}
-		nw = max(nw, counts[i].width())
-		if !f.InPlan {
-			noteW = len("not in the plan")
-		}
-	}
-	// The path is cut from the left (its end names the file), then the counts
-	// go: what the table keeps is the flag of the file outside the plan.
-	avail := p.width - 1 - cardReadyX
-	if pw+4+nw+4+noteW > avail {
-		if pw = max(avail-4-nw-4-noteW, 12); pw+4+nw+4+noteW > avail {
-			nw = 0
-			pw = max(avail-4-noteW, 8)
-		}
-	}
-	numX := cardReadyX + pw + 4
-	noteX := numX + nw + 4
-	if nw == 0 {
-		noteX = numX
-	}
-	out := make([]string, len(files))
-	for i, f := range files {
-		var ps []placed
-		if i == 0 {
-			ps = append(ps, at(1, cardReadyX-1, seg{"FILES", p.st.Header}))
-		}
-		path := cell{{f.Path, noStyle}}.fitLeft(pw)
-		ps = append(ps, placed{cardReadyX, pw, path})
-		if nw > 0 {
-			ps = append(ps, placed{numX, nw, counts[i]})
-		}
-		note := seg{"in the plan", p.st.Dim}
-		if !f.InPlan {
-			note = seg{"not in the plan", p.st.Warn}
-		}
-		out[i] = p.line(append(ps, at(noteX, p.width-noteX, note))...)
-	}
-	return out
 }

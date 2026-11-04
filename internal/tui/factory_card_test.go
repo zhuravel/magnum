@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -163,21 +164,21 @@ func TestReadyCardHidesTheRecommendationUntilTheDiffWasOpened(t *testing.T) {
 				t.Errorf("%d: %q is drawn before the diff was opened:\n%s", w, not, b)
 			}
 		}
-		if !strings.Contains(b, "You have not read the diff yet. The recommendation shows after d.") {
-			t.Errorf("%d: the card does not say the diff is unread:\n%s", w, b)
+		if !strings.Contains(cardSquash(b), "the recommendation shows after d") {
+			t.Errorf("%d: the card does not say when the recommendation shows:\n%s", w, b)
 		}
 		a := plainCard(after, w)
-		if marked := cardLineWith(t, a, "›"); !strings.Contains(marked, "push + draft PR") || !strings.Contains(marked, "recommended") {
+		if marked := cardLineWith(t, a, "›"); !strings.Contains(marked, "1  push + PR") || !strings.Contains(marked, "recommended") {
 			t.Errorf("%d: the marked line after the diff is %q", w, marked)
 		}
-		for _, want := range []string{"   why: the spec proves the fix; the file outside the plan is test data for it",
-			"── you read the diff 14:21 ─", "Push zhuravel-PR-12360-activity-points-on-copy and open a draft PR? y/N"} {
+		for _, want := range []string{"      why: the spec proves the fix; the file outside the plan is test data for it",
+			"── you read the diff 14:21 ─"} {
 			if !strings.Contains(a, want) {
 				t.Errorf("%d: no %q after the diff in\n%s", w, want, a)
 			}
 		}
-		if strings.Contains(a, "You have not read the diff yet") {
-			t.Errorf("%d: the unread notice stays after the diff was opened:\n%s", w, a)
+		if strings.Contains(a, "the recommendation shows after d") || strings.Contains(a, "draft") {
+			t.Errorf("%d: the unread notice stays after the diff was opened, or a draft PR is offered:\n%s", w, a)
 		}
 	}
 }
@@ -186,22 +187,341 @@ func TestReadyCardFlagsFilesNotInThePlan(t *testing.T) {
 	d := drawReady(fixtureReadyCard())
 	frame := d(100, 0, true, IconsUnicode)
 	runs := warnRuns(t, frame)
-	if want := []string{"not in the plan"}; !slices.Equal(runs, want) {
-		t.Errorf("yellow runs = %q, want only %q", runs, want)
+	if !slices.Contains(runs, "not in the plan") || !slices.Contains(runs, "flagged") {
+		t.Errorf("yellow runs = %q, want the file outside the plan and the flagged one among them", runs)
 	}
 	plain := ansi.Strip(frame)
-	if l := cardLineWith(t, plain, "reward_rules.rb"); !strings.HasSuffix(l, "not in the plan") {
+	if l := cardLineWith(t, plain, "reward_rules.rb  "); !strings.HasSuffix(l, "not in the plan") {
 		t.Errorf("the file outside the plan is not flagged: %q", l)
 	}
-	for _, f := range []string{"campaign_copier.rb", "campaign_copier_spec.rb"} {
-		if l := cardLineWith(t, plain, f); !strings.HasSuffix(l, "in the plan") || strings.HasSuffix(l, "not in the plan") {
-			t.Errorf("%s is flagged wrongly: %q", f, l)
-		}
+	if l := cardLineWith(t, plain, "campaign_copier.rb  "); !strings.HasSuffix(l, "in the plan · flagged") {
+		t.Errorf("the flagged file in the plan reads %q", l)
+	}
+	if l := cardLineWith(t, plain, "campaign_copier_spec.rb  "); !strings.HasSuffix(l, "in the plan") || strings.Contains(l, "not in") || strings.Contains(l, "flagged") {
+		t.Errorf("campaign_copier_spec.rb is flagged wrongly: %q", l)
 	}
 	for _, want := range []string{"+31 −6", "+15 ", "+2 "} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("no counts %q in\n%s", want, plain)
 		}
+	}
+}
+
+// cardLines are the lines of frame, plain.
+func cardLines(frame string) []string { return strings.Split(ansi.Strip(frame), "\n") }
+
+// labelAt is the index of the line that starts with the label.
+func labelAt(lines []string, label string) int {
+	return slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, " "+label+" ") })
+}
+
+// The FLAGS line comes first on the ready card, one flag a line, in yellow:
+// they are what needs a second look before the push.
+func TestReadyCardShowsTheFlagsLine(t *testing.T) {
+	c := fixtureReadyCard()
+	for _, w := range []int{100, 140} {
+		frame := drawReady(c)(w, 0, true, IconsUnicode)
+		lines := cardLines(frame)
+		flags, cause := labelAt(lines, "FLAGS"), labelAt(lines, "CAUSE")
+		if flags < 0 || cause < 0 || flags > cause {
+			t.Fatalf("%d: FLAGS (line %d) should come before CAUSE (line %d):\n%s", w, flags, cause, ansi.Strip(frame))
+		}
+		squashed := cardSquash(strings.Join(lines[flags:cause], "\n"))
+		for _, f := range c.Flags {
+			if !strings.Contains(squashed, f) {
+				t.Errorf("%d: the flag %q is not on the FLAGS line:\n%s", w, f, ansi.Strip(frame))
+			}
+		}
+		if runs := warnRuns(t, frame); !slices.Contains(runs, c.Flags[0]) {
+			t.Errorf("%d: the flags are not yellow: %q", w, runs)
+		}
+	}
+	none := c
+	none.Flags = nil
+	if l := cardLineWith(t, plainCard(drawReady(none), 100), " FLAGS "); !strings.HasSuffix(l, "none") {
+		t.Errorf("a card with nothing flagged should say none: %q", l)
+	}
+}
+
+// The KNOWN row lists what the local review left open that does not block,
+// every kind of the PR body's Known list.
+func TestReadyCardShowsTheLocalReviewLeftovers(t *testing.T) {
+	c := fixtureReadyCard()
+	for _, w := range []int{100, 140} {
+		lines := cardLines(drawReady(c)(w, 0, true, IconsUnicode))
+		known, shots := labelAt(lines, "KNOWN"), labelAt(lines, "SCREENSHOTS")
+		if known < 0 || shots < known {
+			t.Fatalf("%d: no KNOWN row before SCREENSHOTS:\n%s", w, strings.Join(lines, "\n"))
+		}
+		squashed := cardSquash(strings.Join(lines[known:shots], "\n"))
+		for _, kind := range c.Leftovers {
+			if !strings.Contains(squashed, kind) {
+				t.Errorf("%d: the leftover %q is not in the KNOWN row:\n%s", w, kind, strings.Join(lines, "\n"))
+			}
+		}
+	}
+	none := c
+	none.Leftovers = nil
+	if l := cardLineWith(t, plainCard(drawReady(none), 100), " KNOWN "); !strings.HasSuffix(l, "none: the local review left nothing open") {
+		t.Errorf("a card the local review left nothing on reads %q", l)
+	}
+}
+
+// The files a FLAGS line names, and those outside the plan, come first, in
+// their order; the others follow.
+func TestReadyCardListsFlaggedFilesFirst(t *testing.T) {
+	lines := cardLines(drawReady(fixtureReadyCard())(100, 0, true, IconsUnicode))
+	at := labelAt(lines, "FILES")
+	var order []string
+	for _, l := range lines[at : at+3] {
+		order = append(order, strings.Fields(strings.TrimPrefix(l, " FILES"))[0])
+	}
+	if want := []string{"app/services/campaign_copier.rb", "spec/factories/reward_rules.rb", "spec/services/campaign_copier_spec.rb"}; !slices.Equal(order, want) {
+		t.Errorf("files are drawn in the order %q, want %q", order, want)
+	}
+}
+
+// "unread: <file>" names the files not opened in the diff, in place of "You
+// have not read the diff yet".
+func TestReadyCardNamesTheUnreadFiles(t *testing.T) {
+	for _, w := range []int{100, 140} {
+		before := plainCard(drawReady(fixtureReadyCard()), w)
+		if want := "unread: app/services/campaign_copier.rb, spec/factories/reward_rules.rb, spec/services/campaign_copier_spec.rb · the recommendation shows after d"; !strings.Contains(cardSquash(before), want) {
+			t.Errorf("%d: no %q in\n%s", w, want, before)
+		}
+		if strings.Contains(before, "You have not read the diff yet") {
+			t.Errorf("%d: the old notice is drawn:\n%s", w, before)
+		}
+		after := plainCard(drawReady(fixtureReadyCardAfter()), w)
+		if l := cardLineWith(t, after, "unread:"); strings.TrimSpace(l) != "unread: spec/services/campaign_copier_spec.rb" {
+			t.Errorf("%d: after the diff the unread line reads %q", w, l)
+		}
+	}
+	read := fixtureReadyCardAfter()
+	read.Unread = nil
+	if frame := plainCard(drawReady(read), 100); strings.Contains(frame, "unread") {
+		t.Errorf("a diff read whole has an unread line:\n%s", frame)
+	}
+}
+
+// The options are numbered 1 to 3 and say what each does; the digits pick them.
+func TestReadyCardNumbersItsOptions(t *testing.T) {
+	for _, w := range []int{100, 140} {
+		frame := plainCard(drawReady(fixtureReadyCardAfter()), w)
+		for _, want := range []string{
+			"1  push + PR     → push the branch, open a PR ready for review",
+			"2  send back     → the writer tries again with your reason and note",
+			"3  drop          → free the copy, keep the branch",
+		} {
+			if !strings.Contains(frame, want) {
+				t.Errorf("%d: no option %q in\n%s", w, want, frame)
+			}
+		}
+		if hints := cardLineWith(t, plainCard(drawReady(fixtureReadyCard()), w), "read the diff"); !strings.Contains(hints, "1-3 pick") {
+			t.Errorf("%d: the hints do not offer the digits: %q", w, hints)
+		}
+	}
+}
+
+// reasonFooter checks that the footer of frame asks question and offers
+// every reason by its digit, in order, then esc: none of them is cut.
+func reasonFooter(t *testing.T, frame, question string, reasons []string) {
+	t.Helper()
+	lines := cardLines(frame)
+	rule := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "──") })
+	foot := cardSquash(strings.Join(lines[rule+1:], "\n"))
+	rest, ok := strings.CutPrefix(foot, question+" ")
+	for i, r := range append(slices.Clone(reasons), "cancels") {
+		key := strconv.Itoa(i + 1)
+		if i == len(reasons) {
+			key = "esc"
+		}
+		var found bool
+		if _, rest, found = strings.Cut(rest, key+" "+r); !found {
+			ok = false
+		}
+	}
+	if !ok {
+		t.Errorf("the footer reads %q, want %q and then each reason by its digit", foot, question)
+	}
+}
+
+// After "send back" the footer asks for the reason's key, every reason by
+// its digit, before the note.
+func TestSendBackShowsReasonKeys(t *testing.T) {
+	defer checkCardGolden(t, "ready-sendback", drawReady(fixtureReadyCardSendBack()))
+	for _, w := range []int{100, 140} {
+		frame := drawReady(fixtureReadyCardSendBack())(w, 0, true, IconsUnicode)
+		reasonFooter(t, frame, "Why send back?", sendBackReasons)
+		if marked := cardLineWith(t, ansi.Strip(frame), "›"); !strings.Contains(marked, "2  send back") {
+			t.Errorf("%d: the mark is not on send back: %q", w, marked)
+		}
+		for i, l := range strings.Split(frame, "\n") {
+			if lw := ansi.StringWidth(l); lw > w {
+				t.Errorf("%d: line %d is %d cells wide", w, i+1, lw)
+			}
+		}
+	}
+}
+
+// The y/N of a push names what it frees: the copy and the queued task that
+// starts in it. A send back frees nothing and says nothing of it.
+func TestTheReadyQuestionNamesWhatItFrees(t *testing.T) {
+	want := "Push zhuravel-PR-12360-activity-points-on-copy and open a PR? It frees talkable.factory3; PR-12395 starts in it. y/N"
+	for _, w := range []int{100, 140} {
+		frame := drawReady(fixtureReadyCardAfter())(w, 0, true, IconsUnicode)
+		lines := cardLines(frame)
+		rule := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "── you read") })
+		if foot := cardSquash(strings.Join(lines[rule+1:], "\n")); !strings.HasPrefix(foot, want) {
+			t.Errorf("%d: the question reads %q, want %q", w, foot, want)
+		}
+		for i, l := range strings.Split(frame, "\n") {
+			if lw := ansi.StringWidth(l); lw > w {
+				t.Errorf("%d: line %d is %d cells wide", w, i+1, lw)
+			}
+		}
+	}
+	back := fixtureReadyCardAfter()
+	back.Cursor, back.Ask = 1, "Send it back with your note?"
+	if frame := plainCard(drawReady(back), 140); strings.Contains(frame, "It frees") {
+		t.Errorf("a send back names what it frees:\n%s", frame)
+	}
+}
+
+// The question card offers the − key (flag the question as needless); after
+// −, its footer asks for the reason by digit.
+func TestQuestionCardOffersTheNeedlessKey(t *testing.T) {
+	for _, w := range []int{100, 140} {
+		frame := plainCard(drawQuestion(fixtureQuestionCard()), w)
+		if hints := cardLineWith(t, frame, "j k move"); !strings.Contains(hints, "− needless") {
+			t.Errorf("%d: the hints do not offer the needless key: %q", w, hints)
+		}
+		off := fixtureQuestionCard()
+		off.Needless = false
+		if strings.Contains(plainCard(drawQuestion(off), w), "needless") {
+			t.Errorf("%d: the needless key is offered though the card does not take it", w)
+		}
+		reasonFooter(t, drawQuestion(fixtureNeedlessCard())(w, 0, true, IconsUnicode), "Why needless?", needlessReasons)
+	}
+	checkCardGolden(t, "question-needless", drawQuestion(fixtureNeedlessCard()))
+}
+
+// The marks of the question and ready cards stand on their Cursor, the
+// operator's, not on the recommendation, which keeps its tag.
+func TestCardsKeepTheirCursor(t *testing.T) {
+	q := fixtureQuestionCard()
+	q.Cursor = 2
+	frame := plainCard(drawQuestion(q), 100)
+	if marked := cardLineWith(t, frame, "›"); !strings.Contains(marked, "3  On the day it expires") || strings.Count(frame, "›") != 1 {
+		t.Errorf("the mark is not on option 3 alone: %q", marked)
+	}
+	if l := cardLineWith(t, frame, "Seven days"); !strings.HasSuffix(l, "recommended") {
+		t.Errorf("the recommendation lost its tag: %q", l)
+	}
+	q.Cursor = -1
+	if frame := plainCard(drawQuestion(q), 100); strings.Contains(frame, "›") || strings.Contains(frame, "enter take the marked one") {
+		t.Errorf("no cursor marks an option, or offers enter:\n%s", frame)
+	}
+	r := fixtureReadyCardAfter()
+	r.Cursor, r.Ask = 2, ""
+	if marked := cardLineWith(t, plainCard(drawReady(r), 100), "›"); !strings.Contains(marked, "3  drop") {
+		t.Errorf("the ready card's mark is not on drop: %q", marked)
+	}
+	tc := fixtureTaskCard()
+	tc.Cursor = 3
+	if marked := cardLineWith(t, plainCard(drawTask(tc, 0), 140), "›"); !strings.Contains(marked, "coding") {
+		t.Errorf("the task card's mark is not on coding: %q", marked)
+	}
+}
+
+// The task card's pinned head never covers a line of its body: at every
+// height and mark, the lines under the head are one run of the body, the
+// marked line among them, and the rule counts the rest below.
+func TestTaskCardNeverHidesARowBehindTheHeader(t *testing.T) {
+	st, g := cardKit(true, IconsUnicode)
+	for _, c := range []TaskCard{fixtureTaskCard(), fixtureRetryCard()} {
+		full, _ := renderTaskCard(c, 140, 0, 0, st, g, cardTaskNow)
+		all := strings.Split(ansi.Strip(full), "\n")
+		headN := slices.IndexFunc(all, func(l string) bool { return strings.HasPrefix(l, " STAGES") })
+		body := all[headN : len(all)-2]
+		// run says whether shown is body from line first on, padded with blank
+		// lines past its end, with below lines left under it.
+		run := func(shown []string, first, below int) bool {
+			n := 0
+			for i, l := range shown {
+				switch {
+				case first+i < len(body) && unmark(body[first+i]) == unmark(l):
+					n++
+				case first+i < len(body) || strings.TrimSpace(l) != "":
+					return false
+				}
+			}
+			return first+n+below == len(body)
+		}
+		for h := headN + 3; h <= len(all); h++ {
+			for cur := range 22 {
+				c.Cursor = cur
+				frame, below := renderTaskCard(c, 140, h, 0, st, g, cardTaskNow)
+				lines := strings.Split(ansi.Strip(frame), "\n")
+				shown := lines[headN : len(lines)-2]
+				if !slices.ContainsFunc(range0(len(body)+1), func(first int) bool { return run(shown, first, below) }) {
+					t.Errorf("%s %d cursor %d: the lines under the head are not one run of the body with %d below:\n%s",
+						c.Key, h, cur, below, ansi.Strip(frame))
+				}
+				// Both cards have at least 11 lines a mark stands on.
+				if cur < 11 && !slices.ContainsFunc(shown, func(l string) bool { return strings.HasPrefix(l, "› ") }) {
+					t.Errorf("%s %d cursor %d: the marked line is out of view:\n%s", c.Key, h, cur, ansi.Strip(frame))
+				}
+			}
+		}
+	}
+}
+
+// range0 is 0 to n-1.
+func range0(n int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = i
+	}
+	return out
+}
+
+// unmark is a task card line without its cursor and its indent.
+func unmark(l string) string { return strings.TrimSpace(strings.TrimPrefix(l, "› ")) }
+
+// Only the marks of working stages and agents move with the spinner.
+func TestTaskCardSpinsOnlyForWorkingAgents(t *testing.T) {
+	c := fixtureTaskCard()
+	c.Agents = append(c.Agents, CardAgent{Name: "QA on bastion", Why: "t:qa on bastion", Now: "4 of 9 checks", State: "working", For: 12 * time.Minute})
+	c.Cursor = -1
+	a := plainCard(drawTask(c, 0), 140)
+	c.Spinner = 1
+	b := plainCard(drawTask(c, 0), 140)
+	al, bl := strings.Split(a, "\n"), strings.Split(b, "\n")
+	var moved []string
+	for i := range al {
+		if al[i] != bl[i] {
+			moved = append(moved, strings.Fields(bl[i])[1])
+		}
+	}
+	if want := []string{"bastion", "QA"}; !slices.Equal(moved, want) {
+		t.Errorf("the lines that moved with the spinner start %q, want %q", moved, want)
+	}
+}
+
+// A task that waits on the operator offers r, retry, on its card, and a row
+// whose move is a retry says "r retry".
+func TestTaskCardOffersRetryWhenItWaitsOnYou(t *testing.T) {
+	defer checkCardGolden(t, "task-retry", drawTask(fixtureRetryCard(), 0))
+	if hints := cardLineWith(t, plainCard(drawTask(fixtureRetryCard(), 0), 140), "j k move"); !strings.Contains(hints, "r retry") {
+		t.Errorf("a task that waits on you does not offer r: %q", hints)
+	}
+	if hints := cardLineWith(t, plainCard(drawTask(fixtureTaskCard(), 0), 140), "j k move"); strings.Contains(hints, "retry") {
+		t.Errorf("a task that waits on rev-ann offers r: %q", hints)
+	}
+	frame, rowLines := factoryFrameOf(fixtureTen(), 140, 50, true, IconsUnicode, factoryNow)
+	if l := strings.Split(ansi.Strip(frame), "\n")[rowLines[8]]; !strings.Contains(l, "you: review unavailable (timeout)") || !strings.Contains(l, "r retry") {
+		t.Errorf("the row whose move is a retry reads %q", l)
 	}
 }
 
@@ -281,6 +601,108 @@ func TestNewTaskSaysAKeyWasFoundInTheText(t *testing.T) {
 	}
 }
 
+// The links of the text are a row of their own: what each is and what the
+// factory makes of it.
+func TestNewTaskShowsItsLinks(t *testing.T) {
+	d := drawNewTask(fixtureNewTaskLinks(factoryNow))
+	defer checkCardGolden(t, "new-links", d)
+	for _, w := range []int{100, 140} {
+		lines := cardLines(d(w, 0, true, IconsUnicode))
+		at := labelAt(lines, "LINKS")
+		if at < 0 {
+			t.Fatalf("%d: no LINKS row:\n%s", w, strings.Join(lines, "\n"))
+		}
+		for i, want := range [][]string{
+			{"Jira", "example.atlassian.net/browse/PR-12345", "its key, PR-12345"},
+			{"PR", "github.com/example/talkable/pull/4512", "adoption comes in milestone 2"},
+			{"CI run", "github.com/example/talkable/actions/runs/1234567", "a CI task comes in milestone 3"},
+		} {
+			for _, part := range want {
+				if !strings.Contains(lines[at+i], part) {
+					t.Errorf("%d: link %d lacks %q: %q", w, i+1, part, lines[at+i])
+				}
+			}
+		}
+		if g := cardLineWith(t, strings.Join(lines, "\n"), "GUIDANCE"); !strings.Contains(g, `"the same fix as`) {
+			t.Errorf("%d: the words after the Jira link are not its guidance: %q", w, g)
+		}
+	}
+	jira := plainCard(drawNewTask(fixtureNewTaskJira(factoryNow)), 100)
+	if l := cardLineWith(t, jira, "OVERLAP"); !strings.Contains(l, "1 commit names PR-12345") {
+		t.Errorf("the overlap line reads %q", l)
+	}
+}
+
+// While the daemon reads Jira the JIRA row says so behind a spinner, and
+// never that the agents work from the words.
+func TestNewTaskShowsReadingWhileJiraIsRead(t *testing.T) {
+	d := drawNewTask(fixtureNewTaskReading())
+	defer checkFactoryFrame(t, "new-reading-100.txt", plainCard(d, 100), 100)
+	frame := plainCard(d, 100)
+	if l := cardLineWith(t, frame, " JIRA "); !strings.Contains(l, "⣷ the daemon reads Jira") {
+		t.Errorf("the JIRA row while Jira is read: %q", l)
+	}
+	if strings.Contains(frame, "none: the agents work from your words") {
+		t.Errorf("the form says the task is a prompt while Jira is read:\n%s", frame)
+	}
+	f := fixtureNewTaskReading()
+	f.Spinner = 1
+	if l := cardLineWith(t, plainCard(drawNewTask(f), 100), " JIRA "); strings.Contains(l, "⣷") {
+		t.Errorf("the reading spinner does not move: %q", l)
+	}
+}
+
+// The keys a text names elsewhere than at its start (spec 6.1): one key Jira
+// knows is the task's, noted as found, with the whole text as guidance; one
+// Jira refused is the error colour's note and a prompt task; several known
+// keys are the prompt task they are, which asks which issue it is.
+func TestNewTaskShowsTheKeysFoundInTheText(t *testing.T) {
+	found := drawNewTask(fixtureNewTaskFound(factoryNow))
+	refused := drawNewTask(fixtureNewTaskRefused())
+	several := drawNewTask(fixtureNewTaskSeveral())
+	defer checkCardGolden(t, "new-found", found)
+	defer checkCardGolden(t, "new-refused", refused)
+	defer checkCardGolden(t, "new-several", several)
+	for _, w := range []int{100, 140} {
+		f := plainCard(found, w)
+		for _, want := range []string{"found in your text", `GUIDANCE "fix the expiry reminder of PR-12345: advocates only, not their friends" goes to every agent`} {
+			if !strings.Contains(cardSquash(f), want) {
+				t.Errorf("%d: no %q in\n%s", w, want, f)
+			}
+		}
+		r := refused(w, 0, true, IconsUnicode)
+		note := "Jira refused PR-12345: the Jira token file is missing; starts from your words"
+		if l := cardLineWith(t, ansi.Strip(r), " JIRA "); !strings.Contains(l, note) {
+			t.Errorf("%d: the JIRA row of a refused key reads %q", w, l)
+		}
+		errOpen, _, _ := strings.Cut(newStyles(true).Err.Render("x"), "x")
+		if !strings.Contains(r, errOpen+note) {
+			t.Errorf("%d: the refusal is not in the error colour", w)
+		}
+		if !strings.Contains(ansi.Strip(r), "TITLE     Refund of PR-12345") || strings.Contains(ansi.Strip(r), "GUIDANCE") {
+			t.Errorf("%d: a refused key's task is not a prompt task:\n%s", w, ansi.Strip(r))
+		}
+		s := plainCard(several, w)
+		if l := cardLineWith(t, s, " JIRA "); !strings.Contains(l, "PR-12345 and PR-12360 found in your text · the task asks which issue it is") {
+			t.Errorf("%d: the JIRA row of several keys reads %q", w, l)
+		}
+		if !strings.Contains(s, "TITLE     Copier change of PR-12345 also breaks PR-12360") {
+			t.Errorf("%d: several keys draw no TITLE:\n%s", w, s)
+		}
+		for _, not := range []string{"GUIDANCE", "Story", "reporter", "pgdn"} {
+			if strings.Contains(s, not) {
+				t.Errorf("%d: several keys draw %q, as if a ticket were the task's:\n%s", w, not, s)
+			}
+		}
+	}
+	// A ticket in the data beside several keys is still not drawn as the task's.
+	f := fixtureNewTaskSeveral()
+	f.Jira = fixtureNewTaskJira(factoryNow).Jira
+	if s := plainCard(drawNewTask(f), 100); strings.Contains(s, "Story") || !strings.Contains(s, "TITLE") {
+		t.Errorf("a first key's ticket is drawn as the task's:\n%s", s)
+	}
+}
+
 func TestNewTaskFromAPrompt(t *testing.T) {
 	d := drawNewTask(fixtureNewTaskPrompt())
 	checkCardGolden(t, "new-prompt", d)
@@ -302,6 +724,13 @@ func TestNewTaskFromAPrompt(t *testing.T) {
 	}
 }
 
+// reversed is ss from its end.
+func reversed(ss []string) []string {
+	out := slices.Clone(ss)
+	slices.Reverse(out)
+	return out
+}
+
 // cardCases are every card the fixtures draw.
 func cardCases() map[string]cardDraw {
 	q := fixtureQuestionCard()
@@ -310,20 +739,24 @@ func cardCases() map[string]cardDraw {
 		"question": drawQuestion(q), "question-noreco": drawQuestion(fixtureNoRecommendationCard()),
 		"question-empty": drawQuestion(empty), "recap": drawRecap(fixtureRecap()), "recap-empty": drawRecap(empty),
 		"ready-before": drawReady(fixtureReadyCard()), "ready-after": drawReady(fixtureReadyCardAfter()),
-		"ready-bare": drawReady(ReadyCard{TaskKey: "PR-12360"}),
-		"task":       drawTask(fixtureTaskCard(), 0), "task-scrolled": drawTask(fixtureTaskCard(), 9),
-		"task-bare": drawTask(TaskCard{Key: "PR-12330"}, 0),
-		"new-jira":  drawNewTask(fixtureNewTaskJira(factoryNow)), "new-prompt": drawNewTask(fixtureNewTaskPrompt()),
+		"ready-bare":     drawReady(ReadyCard{TaskKey: "PR-12360", Cursor: -1}),
+		"ready-sendback": drawReady(fixtureReadyCardSendBack()), "question-needless": drawQuestion(fixtureNeedlessCard()),
+		"task": drawTask(fixtureTaskCard(), 0), "task-scrolled": drawTask(fixtureTaskCard(), 9),
+		"task-bare": drawTask(TaskCard{Key: "PR-12330"}, 0), "task-retry": drawTask(fixtureRetryCard(), 0),
+		"new-jira": drawNewTask(fixtureNewTaskJira(factoryNow)), "new-prompt": drawNewTask(fixtureNewTaskPrompt()),
 		"new-empty": drawNewTask(NewTaskForm{}),
 		"new-unknown": drawNewTask(NewTaskForm{Text: "PR-12399 the reminder", Err: "PR-12399 is not in Jira",
 			Ask: "Start from your words only?"}),
+		"new-links": drawNewTask(fixtureNewTaskLinks(factoryNow)), "new-found": drawNewTask(fixtureNewTaskFound(factoryNow)),
+		"new-refused": drawNewTask(fixtureNewTaskRefused()), "new-several": drawNewTask(fixtureNewTaskSeveral()),
+		"new-reading": drawNewTask(fixtureNewTaskReading()),
 	}
 }
 
 func TestFactoryCardsNeverOverflow(t *testing.T) {
 	for name, d := range cardCases() {
 		for _, mode := range []IconMode{IconsUnicode, IconsNerd, IconsASCII} {
-			for w := 60; w <= 200; w += 7 {
+			for _, w := range factoryWidths(60) {
 				for _, h := range []int{0, 12, 20, 30, 45} {
 					frame := d(w, h, true, mode)
 					lines := strings.Split(frame, "\n")
@@ -352,8 +785,10 @@ func TestFactoryCardsFillTheirHeightSoTheFooterSitsAtTheBottom(t *testing.T) {
 			t.Errorf("%s: %d lines at height 60, want 60", name, len(lines))
 			continue
 		}
-		if rule := lines[len(lines)-2]; !strings.HasPrefix(rule, "──") {
-			t.Errorf("%s: the line above the footer is not the rule: %q", name, rule)
+		// The footer is one line, or two or three for a long question or reasons.
+		rule := len(lines) - 1 - slices.IndexFunc(reversed(lines), func(l string) bool { return strings.HasPrefix(l, "──") })
+		if foot := len(lines) - 1 - rule; rule >= len(lines) || foot < 1 || foot > 3 {
+			t.Errorf("%s: the rule is not right above a footer of 1 to 3 lines (%d):\n%s", name, foot, frame)
 		}
 	}
 }
@@ -379,7 +814,9 @@ func TestFactoryCardsDarkAndLightColors(t *testing.T) {
 	}{
 		{"question", drawQuestion(fixtureQuestionCard()), 100},
 		{"recap", drawRecap(fixtureRecap()), 100},
+		{"ready-before", drawReady(fixtureReadyCard()), 100},
 		{"ready-after", drawReady(fixtureReadyCardAfter()), 100},
+		{"new-refused", drawNewTask(fixtureNewTaskRefused()), 100},
 		{"new-jira", drawNewTask(fixtureNewTaskJira(factoryNow)), 100},
 		{"task", drawTask(fixtureTaskCard(), 0), 140},
 	} {
@@ -414,9 +851,14 @@ func TestFactoryCardsYellowMeansOnYouOnly(t *testing.T) {
 		t.Errorf("the answered mark and the recommendation are not green: %q", got)
 	}
 	ready := drawReady(fixtureReadyCardAfter())(100, 0, true, IconsUnicode)
+	flagged := cardSquash(strings.Join(fixtureReadyCardAfter().Flags, " "))
 	for _, r := range warnRuns(t, ready) {
-		if r != "not in the plan" && !strings.HasPrefix(r, "Push zhuravel") {
-			t.Errorf("the ready card is yellow on %q: only the file outside the plan and the question are on the operator", r)
+		switch {
+		case r == "not in the plan", r == "flagged", r == "unread:":
+		case strings.TrimSpace(r) != "" && strings.Contains(flagged, cardSquash(r)):
+		case strings.HasPrefix(r, "Push zhuravel"), strings.HasPrefix(r, "It frees"), strings.HasSuffix(r, "y/N"):
+		default:
+			t.Errorf("the ready card is yellow on %q: only the flags, the files to look at, the unread word and the question are on the operator", r)
 		}
 	}
 	task := drawTask(fixtureTaskCard(), 0)(140, 0, true, IconsUnicode)
@@ -635,7 +1077,7 @@ func TestTaskCardAnAgentIsYellowOnlyWhenItWaitsOnYou(t *testing.T) {
 			}
 		}
 	}
-	tc.Agents = append(tc.Agents, CardAgent{Name: "asks you", Why: "needs a login", State: "waits on you"})
+	tc.Agents = append(tc.Agents, CardAgent{Name: "asks you", Why: "needs a login", State: agentWaitsOnYou})
 	frame = drawTask(tc, 0)(140, 0, true, IconsUnicode)
 	if got := warnRuns(t, frame); !slices.Equal(got, []string{"●"}) {
 		t.Errorf("only the agent that waits on the operator is yellow, got %q", got)

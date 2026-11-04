@@ -867,9 +867,19 @@ func TestThePreviewSaysTheKeyWasFoundInTheText(t *testing.T) {
 		t.Fatalf("preview of words Jira does not know %+v, want a prompt's", f)
 	}
 
-	f, _ = r.e.preview(r.ctx, "the refund of PR-12346 and the reminder of PR-12345")
-	if f.Jira == nil || f.Jira.Key != "PR-12346" || !strings.HasPrefix(f.Jira.Found, "found in your text") || !strings.Contains(f.Jira.Found, "PR-12345") {
-		t.Fatalf("preview of two keys %+v, want the first with a note naming the other", f.Jira)
+	// Several keys Jira knows are the prompt task they are, which asks which
+	// issue it is: the preview names the keys, in the text's order, and
+	// hands no ticket as the task's (the screen would name a key for it).
+	const two = "the refund of PR-12346 and the reminder of PR-12345"
+	f, _ = r.e.preview(r.ctx, two)
+	if f.Jira != nil || !slices.Equal(f.Keys, []string{"PR-12346", "PR-12345"}) || f.Title != two || f.Err != "" || f.Branch == "" {
+		t.Fatalf("preview of two keys %+v (Jira %+v), want the prompt task naming both keys", f, f.Jira)
+	}
+	beside := newIntakeRig(t)
+	beside.site.refuse("PR-12399", 400)
+	f, _ = beside.e.preview(beside.ctx, "the refund of PR-12399, PR-12346 and PR-12345")
+	if f.Jira != nil || len(f.Keys) != 2 || f.Err != "Jira refused PR-12399: Jira answered HTTP 400; it stays a word of your text" {
+		t.Fatalf("preview of two keys beside a refused one %+v, want both keys and the refusal's note", f)
 	}
 
 	first := r.mustStart("PR-12345")

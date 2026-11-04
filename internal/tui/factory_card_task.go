@@ -13,6 +13,7 @@ import (
 )
 
 func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
+	p.f.Spinner = c.Spinner
 	facts := []string{c.Branch, c.PR, c.Copy}
 	if !c.Started.IsZero() {
 		layout := "15:04"
@@ -41,8 +42,17 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 		room := max(height-len(head)-1-1, 1)
 		start = min(max(start, cursor-room+1), cursor)
 	}
-	hs := []hint{{"j k", "move"}, {"enter", "open the line"}, {"d", "diff"}, {"l", "log"}, {"+ " + p.minus(), "rate"}, {"esc", "back"}, {"?", "more"}}
-	return p.assemble(head, body, start, "", []string{p.hintsLine(hs)}, height)
+	return p.assemble(head, body, start, "", []string{p.hintsLine(orHints(c.Hints, p.taskHints(c)))}, height)
+}
+
+// taskHints are the task card's own key hints. A task that waits on the
+// operator offers r: retry, which goes on at its stage (spec 9.D).
+func (p *cardPainter) taskHints(c TaskCard) []hint {
+	hs := []hint{{"j k", "move"}, {"enter", "open the line"}}
+	if strings.HasPrefix(c.WaitingFor, waitsOnYou+":") {
+		hs = append(hs, hint{"r", "retry"})
+	}
+	return append(hs, hint{"d", "diff"}, hint{"l", "log"}, hint{"+ " + p.minus(), "rate"}, hint{"esc", "back"}, hint{"?", "more"})
 }
 
 // waitingRows is the WAITING FOR block: who the task waits on, in the color
@@ -288,7 +298,7 @@ func (p *cardPainter) agentRows(c TaskCard, stop, add func(string)) {
 			mark = seg{p.tick(), p.st.OK}
 		case "failed":
 			mark = seg{p.g.fail, p.st.Err}
-		case "waits on you":
+		case agentWaitsOnYou:
 			mark = seg{p.markGlyph(MarkNeedsYou), p.st.Warn}
 		}
 		ps := []placed{at(2, 1, mark), at(4, nameW, seg{a.Name, noStyle}), at(whyX, whyW, seg{whys[i], noStyle})}

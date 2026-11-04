@@ -1,0 +1,33 @@
+ [1;94mmagnum factory[m[37m · [m[94mPR-12360[m[37m · [mready to push                                                 [1;94mesc[m [37mback[m 
+ Custom activities lose points on copy[37m · bug · waited 12m[m
+ zhuravel-PR-12360-activity-points-on-copy[37m · 1 commit · not on GitHub yet[m
+
+ [1;37mFLAGS[m        [1;93mnot in the plan: spec/factories/reward_rules.rb[m
+              [1;93man old guard at app/services/campaign_copier.rb:22 (2 years): skips archived[m
+              [1;93m  campaigns, added when a copy of one lost its points[m
+              [1;93mCI jobs not run here: ci.yml: jest, ci.yml: cypress[m
+ [1;37mCAUSE[m        copying a campaign copies its activities before their reward rules
+ [1;37mFIX[m          copy the reward rules first, then point each activity at its copy
+ [1;37mPROOF[m        spec "copies reward rules with the activities": red before (0 points, want 25),
+              green after · 214 specs near the change green · rubocop clean
+ [1;37mFILES[m        app/services/campaign_copier.rb          [92m+31[m [91m−6[m    [37min the plan[m[37m · [m[1;93mflagged[m
+              spec/factories/reward_rules.rb           [92m+2[m        [1;93mnot in the plan[m
+              spec/services/campaign_copier_spec.rb    [92m+15[m       [37min the plan[m
+ [1;37mDOUBTS[m       the writer was unsure if archived campaigns copy too: not tested
+ [1;37mKNOWN[m        P3 app/services/campaign_copier.rb:18: the name copy_rules hides that it also
+                points the activities at the copies
+              declined: P2 spec/services/campaign_copier_spec.rb:40: one spec per reward
+                rule. The risk of the suggested change: 3 slower specs that prove the same
+                thing
+              a doubt: P2 app/services/campaign_copier.rb:31: archived rules may be skipped
+                (it came back twice after its fix)
+              a round of the review went without codex-review's report
+ [1;37mSCREENSHOTS[m  2, from the copy's own server: the copied campaign shows 25 points
+
+   1  push + PR     [37m→ [mpush the branch, open a PR ready for review
+   2  send back     [37m→ [mthe writer tries again with your reason and note
+   3  drop          [37m→ [mfree the copy, keep the branch
+ [1;93munread:[m app/services/campaign_copier.rb, spec/factories/reward_rules.rb,
+         spec/services/campaign_copier_spec.rb · the recommendation shows after d
+[90m────────────────────────────────────────────────────────────────────────────────────────────────────[m
+ [1;94md[m [37mread the diff[m[37m · [m[1;94me[m [37mscreenshots[m[37m · [m[1;94m1-3[m [37mpick[m[37m · [m[1;94mj k[m [37mmove[m[37m · [m[1;94menter[m [37mdo it[m[37m · [m[1;94mesc[m [37mback[m

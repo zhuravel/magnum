@@ -16,4 +16,4 @@
    4  Ask rev-ann in Jira (the task waits)     → drafts a comment for you to check
    5  Type your own answer
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- enter take the marked one · j k move · 1-5 pick · backspace previous · z snooze 2h · esc back
+ enter take the marked one · j k move · 1-5 pick · − needless · backspace previous · esc back

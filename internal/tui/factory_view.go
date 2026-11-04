@@ -46,6 +46,8 @@ type factoryFrame struct {
 	// Next is what the operator does next when nothing waits on them ("PR-12371's
 	// questions or its diff, once its plan is written."), under "Nothing waits on you."
 	Next string
+	// Digest is what happened while the operator was away; nil: no digest.
+	Digest *Digest
 }
 
 const (
@@ -139,16 +141,22 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 	for i, h := range f.Hints {
 		p.f.Hints[i] = hint{cleanText(h.key), cleanText(h.desc)}
 	}
+	if d := f.Digest; d != nil {
+		p.f.Digest = &Digest{Since: d.Since, Done: cleanAll(d.Done), Chip: cleanText(d.Chip)}
+	}
 	order := make([]int, len(f.Rows))
 	for i := range order {
 		order[i] = i
 	}
 	slices.SortStableFunc(order, func(a, b int) int { return int(f.Rows[a].Group) - int(f.Rows[b].Group) })
-	for at, i := range order {
-		p.rows = append(p.rows, cleanFactoryRow(f.Rows[i]))
-		if i == f.Cursor {
-			p.cursor = at
+	for _, i := range order {
+		if f.Rows[i].Group == GroupDone && p.digestDone() {
+			continue // the digest lists what finished, in place of the done rows
 		}
+		if i == f.Cursor {
+			p.cursor = len(p.rows)
+		}
+		p.rows = append(p.rows, cleanFactoryRow(f.Rows[i]))
 	}
 	for _, r := range p.rows {
 		for _, c := range r.Stagings {
@@ -161,9 +169,13 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 	return p
 }
 
+// digestDone is true when the digest has lines of what finished: they take
+// the place of the done group.
+func (p *factoryPainter) digestDone() bool { return p.f.Digest != nil && len(p.f.Digest.Done) > 0 }
+
 func cleanFactoryRow(r FactoryRow) FactoryRow {
 	r.Key, r.GitHub, r.Jira, r.Title = cleanText(r.Key), cleanText(r.GitHub), cleanText(r.Jira), cleanText(r.Title)
-	r.Move, r.MoveShort = cleanText(r.Move), cleanText(r.MoveShort)
+	r.Move, r.MoveShort, r.Frees = cleanText(r.Move), cleanText(r.MoveShort), cleanText(r.Frees)
 	r.Help, r.HelpShort, r.HelpLong = cleanText(r.Help), cleanText(r.HelpShort), cleanText(r.HelpLong)
 	r.WaitsOn = slices.Clone(r.WaitsOn)
 	for i, w := range r.WaitsOn {
@@ -187,6 +199,22 @@ func (w WaitsOn) text(form factoryForm) string {
 		return w.Long
 	}
 	return w.What
+}
+
+// blockerText is the text of the row's blocker i in a form: what the last
+// blocker of a queued row says is what frees it (see Frees).
+func (r FactoryRow) blockerText(i int, form factoryForm) string {
+	w := r.WaitsOn[i]
+	if r.Frees == "" || i != len(r.WaitsOn)-1 {
+		return w.text(form)
+	}
+	switch {
+	case form == formShort && w.Short != "":
+		return w.Short
+	case form == formLong && w.text(form) != "":
+		return w.text(form) + ", " + r.Frees
+	}
+	return r.Frees
 }
 
 func (r FactoryRow) moveText(form factoryForm) string {
@@ -280,9 +308,9 @@ var noStyle = lipgloss.Style{}
 
 func (p *factoryPainter) whoStyle(w WaitsOn) lipgloss.Style {
 	switch who := strings.ToLower(w.Who); {
-	case w.OnYou || who == "you":
+	case w.OnYou || who == waitsOnYou:
 		return p.st.Warn
-	case who == "memory" || who == "usage":
+	case who == "memory" || who == "usage" || who == "copy": // the Mac's own resources
 		return noStyle
 	case who == "nothing":
 		return p.st.Dim
@@ -299,7 +327,7 @@ func (p *factoryPainter) waitsCell(r FactoryRow, form factoryForm) cell {
 		if w.Who != "" {
 			c = append(c, seg{w.Who + ":", p.tone(r, p.whoStyle(w))})
 		}
-		if t := w.text(form); t != "" {
+		if t := r.blockerText(i, form); t != "" {
 			lead := " "
 			if w.Who == "" {
 				lead = ""
@@ -590,10 +618,19 @@ func (p *factoryPainter) cursorMark() string {
 	return cursorMark
 }
 
-// headerLine is a group's heading with, when columns is set, the column names.
-func (p *factoryPainter) headerLine(label string, columns bool) string {
+// headerLine is a group's heading with, when columns is set, the column
+// names; above counts the tasks above the screen ("▲ 3 more").
+func (p *factoryPainter) headerLine(label string, columns bool, above int) string {
 	l, x := p.lay, p.xs()
-	ps := []placed{{1, max(x.waits-3, 1), cell{{label, p.st.Section}}}}
+	head := cell{{label, p.st.Section}}
+	if above > 0 {
+		lead := " "
+		if label == "" {
+			lead = ""
+		}
+		head = append(head, seg{fmt.Sprintf("%s%s %d more", lead, p.g.up, above), p.st.Dim})
+	}
+	ps := []placed{{1, max(x.waits-3, 1), head}}
 	if columns {
 		head := func(at, w int, s string) placed { return placed{at, w, cell{{s, p.st.Header}}} }
 		ps = append(ps, head(x.waits, l.waitsW, "WAITS ON"))
@@ -694,12 +731,21 @@ func (p *factoryPainter) chipLine() string {
 	if p.f.RuleChip != "" {
 		chip = st.Warn.Render(p.f.RuleChip) + " "
 	}
-	// "1 done today" gives way to "1 done" when the rule chip would sit close to it.
+	// "1 done today" gives way to "1 done" when the rule chip would sit close
+	// to it. A digest's segment takes the place of the done count, until the
+	// next key.
+	dones := []string{fmt.Sprintf("%d done today", done), fmt.Sprintf("%d done", done)}
+	switch d := p.f.Digest; {
+	case d != nil && d.Chip != "":
+		dones, done = []string{st.Label.Render(d.Chip)}, 1
+	case done > 0:
+		dones = []string{st.Dim.Render(dones[0]), st.Dim.Render(dones[1])}
+	}
 	left := ""
-	for _, today := range []string{" today", ""} {
+	for _, segment := range dones {
 		all := parts
 		if done > 0 {
-			all = append(slices.Clone(parts), st.Dim.Render(fmt.Sprintf("%d done%s", done, today)))
+			all = append(slices.Clone(parts), segment)
 		}
 		left = " " + strings.Join(all, st.Dim.Render(p.g.sep))
 		if chip == "" || ansi.StringWidth(left)+ansi.StringWidth(chip)+factoryChipGap <= p.width {
@@ -728,76 +774,246 @@ func (p *factoryPainter) hintsLine() string {
 
 // body
 
+// lineKind is what a line of the home body is.
+type lineKind int
+
+const (
+	lineRow     lineKind = iota // a task
+	lineHeading                 // a group's name, maybe with the column names
+	lineBlank                   // between two groups
+	lineNote                    // a group's words: "Nothing waits on you.", a digest line
+	lineMore                    // a collapsed group's "+<n> more: <keys>"
+)
+
 type factoryLine struct {
 	text  string
 	group FactoryGroup
-	row   int // the row's index in rows; -1 for a heading or a blank
+	row   int // the row's index in rows; -1 for any other line
+	kind  lineKind
+	key   string // the task a row or a digest line names, for a more line
+	tasks int    // the tasks the line stands for: 1 for a row, n for a more line
 }
 
 var factoryGroupLabels = [...]string{"NEEDS YOU", "WAITS ON OTHERS", "DONE TODAY"}
 
-func (p *factoryPainter) body() []factoryLine {
-	var out []factoryLine
-	columns := true // the column names go on the first group that has rows
+// factoryBand is one group of the home list: its heading and its items, of
+// which the first keep are drawn and the rest folded into one more line.
+type factoryBand struct {
+	group   FactoryGroup
+	label   string
+	columns bool // the heading carries the column names
+	items   []factoryLine
+	keep    int
+	fold    bool // its items may collapse: never NEEDS YOU, never its words
+	pin     int  // the items that stay drawn: up to the cursor's row
+}
+
+// bands are the groups the body draws. One task draws its own group only;
+// otherwise an empty NEEDS YOU says so. A digest's lines take the place of
+// the done group, under "DONE SINCE <day time>". The column names go on the
+// first group that has rows.
+func (p *factoryPainter) bands() []factoryBand {
+	var out []factoryBand
+	columns := true
 	for g := GroupNeedsYou; g <= GroupDone; g++ {
-		var idx []int
+		b := factoryBand{group: g, label: factoryGroupLabels[g], fold: g != GroupNeedsYou}
 		for i, r := range p.rows {
-			if r.Group == g {
-				idx = append(idx, i)
+			if r.Group != g {
+				continue
+			}
+			if i == p.cursor {
+				b.pin = len(b.items) + 1
+			}
+			b.items = append(b.items, factoryLine{text: p.rowLine(r, i == p.cursor), group: g, row: i, kind: lineRow, key: r.Key, tasks: 1})
+		}
+		if g == GroupDone && p.digestDone() {
+			b.label = "DONE SINCE " + p.f.Digest.Since.In(p.now.Location()).Format("Mon 15:04")
+			for _, d := range p.f.Digest.Done {
+				key, _, _ := strings.Cut(d, " ")
+				b.items = append(b.items, factoryLine{text: p.digestLine(d), group: g, row: -1, kind: lineNote, key: key, tasks: 1})
 			}
 		}
-		if len(idx) == 0 && g != GroupNeedsYou {
-			continue
+		hasRows := len(b.items) > 0 && b.items[0].kind == lineRow
+		if len(b.items) == 0 {
+			if g != GroupNeedsYou || len(p.rows) <= 1 {
+				continue
+			}
+			b.fold = false
+			b.items = append(b.items, factoryLine{text: "   " + p.st.OK.Bold(true).Render(p.tick()+" Nothing waits on you."), group: g, row: -1, kind: lineNote})
+			if p.f.Next != "" {
+				b.items = append(b.items, factoryLine{text: "     " + p.st.Dim.Render("Next for you: "+p.f.Next), group: g, row: -1, kind: lineNote})
+			}
 		}
-		if len(out) > 0 {
-			out = append(out, factoryLine{"", g - 1, -1})
-		}
-		out = append(out, factoryLine{p.headerLine(factoryGroupLabels[g], columns && len(idx) > 0), g, -1})
-		if len(idx) > 0 {
+		b.columns = columns && hasRows
+		if hasRows {
 			columns = false
 		}
-		if len(idx) == 0 {
-			out = append(out, factoryLine{"   " + p.st.OK.Bold(true).Render(p.tick()+" Nothing waits on you."), g, -1})
-			if p.f.Next != "" {
-				out = append(out, factoryLine{"     " + p.st.Dim.Render("Next for you: "+p.f.Next), g, -1})
-			}
+		b.keep = len(b.items)
+		out = append(out, b)
+	}
+	return out
+}
+
+// digestLine is a line of the digest ("PR-12302 Remove old sync job ·
+// merged 21:15"), drawn as a done task: its key in the key column, the rest
+// from the title's.
+func (p *factoryPainter) digestLine(text string) string {
+	x := p.xs()
+	key, rest, _ := strings.Cut(text, " ")
+	return strings.TrimRight(compose([]placed{
+		{2, 1, cell{p.markSeg(FactoryRow{Mark: MarkDone})}},
+		{x.key, max(x.title-x.key-1, 1), cell{{key, p.st.Dim}}},
+		{x.title, max(p.width-x.title, 1), cell{{rest, p.st.Dim}}},
+	}), " ")
+}
+
+// moreLine stands for a collapsed group's hidden items: how many, and which.
+func (p *factoryPainter) moreLine(g FactoryGroup, hidden []factoryLine) factoryLine {
+	keys := make([]string, 0, len(hidden))
+	n := 0
+	for _, l := range hidden {
+		keys = append(keys, l.key)
+		n += l.tasks
+	}
+	text := fmt.Sprintf("+%d more: %s", len(hidden), strings.Join(keys, ", "))
+	return factoryLine{text: strings.TrimRight(compose([]placed{{factoryMarkW, p.width - factoryMarkW, cell{{text, p.st.Dim}}}}), " "),
+		group: g, row: -1, kind: lineMore, tasks: n}
+}
+
+// lines lays the bands out: a blank between two, each heading, its items
+// as far as it keeps them and a more line for the rest.
+func (p *factoryPainter) lines(bands []factoryBand) []factoryLine {
+	var out []factoryLine
+	for i, b := range bands {
+		if i > 0 {
+			out = append(out, factoryLine{group: bands[i-1].group, row: -1, kind: lineBlank})
 		}
-		for _, i := range idx {
-			out = append(out, factoryLine{p.rowLine(p.rows[i], i == p.cursor), g, i})
+		out = append(out, factoryLine{text: p.headerLine(b.label, b.columns, 0), group: b.group, row: -1, kind: lineHeading})
+		out = append(out, b.items[:b.keep]...)
+		if b.keep < len(b.items) {
+			out = append(out, p.moreLine(b.group, b.items[b.keep:]))
 		}
 	}
 	return out
 }
 
+// bodyLen is the lines the bands take.
+func bodyLen(bands []factoryBand) int {
+	n := 0
+	for i, b := range bands {
+		n += 1 + b.keep
+		if i > 0 {
+			n++
+		}
+		if b.keep < len(b.items) {
+			n++
+		}
+	}
+	return n
+}
+
+// collapse folds the long groups of bands until they fit room lines: the
+// last group first (the done ones matter least), each from its end, one
+// item at a time, a group's first fold hiding two for the more line it
+// adds. NEEDS YOU and the cursor's row stay. When even that does not fit,
+// it folds nothing: the list scrolls instead.
+func collapse(bands []factoryBand, room int) []factoryBand {
+	n := bodyLen(bands)
+	if n <= room {
+		return bands
+	}
+	out := slices.Clone(bands)
+	for i := len(out) - 1; i >= 0 && n > room; i-- {
+		b := &out[i]
+		for b.fold && n > room {
+			next := b.keep - 1
+			if b.keep == len(b.items) {
+				next = b.keep - 2
+			}
+			if next < b.pin || next < 0 {
+				break
+			}
+			b.keep = next
+			n--
+		}
+	}
+	if n > room {
+		return bands
+	}
+	return out
+}
+
+// emptyLine is the one line of a home with no task.
+func (p *factoryPainter) emptyLine() string {
+	text := p.st.Dim.Render("No tasks yet. ") + p.st.Key.Render("n") + p.st.Dim.Render(" starts one from a Jira key or your words.")
+	return spaces((p.width-ansi.StringWidth(text))/2) + text
+}
+
 func (p *factoryPainter) render(height int) (string, map[int64]int) {
-	body := p.body()
-	bodyH := len(body)
+	empty := len(p.rows) == 0 && !p.digestDone()
+	bodyH := 0
 	if height > 0 {
 		bodyH = max(height-factoryTop-factoryBottom, 1)
 	}
-	start := 0
+	bands := p.bands()
+	if height > 0 {
+		bands = collapse(bands, bodyH)
+	}
+	body := p.lines(bands)
+	if empty {
+		body = []factoryLine{{text: p.emptyLine(), row: -1, kind: lineNote}}
+	}
+	if height <= 0 {
+		bodyH = len(body)
+	}
+	// A list longer than the screen scrolls to the cursor. Its first line is
+	// then the column names, on a line of their own with the tasks above
+	// counted: s is the line it stands on, a heading or a blank it replaces,
+	// or a task it pushes above the screen.
+	start, sticky := 0, false
 	if cur := slices.IndexFunc(body, func(l factoryLine) bool { return l.row >= 0 && l.row == p.cursor }); cur >= bodyH {
 		start = cur - bodyH + 1
+		sticky = bodyH >= 2
 	}
-	window := body[start:min(start+bodyH, len(body))]
+	tasks := func(ls []factoryLine) int {
+		n := 0
+		for _, l := range ls {
+			n += l.tasks
+		}
+		return n
+	}
+	var window []factoryLine
+	if sticky {
+		label, under := "", body[start+1]
+		if under.kind != lineHeading && under.kind != lineBlank {
+			label = factoryGroupLabels[under.group]
+			if under.group == GroupDone && p.digestDone() {
+				label = bands[len(bands)-1].label
+			}
+		}
+		window = append([]factoryLine{{text: p.headerLine(label, true, tasks(body[:start+1])), row: -1, kind: lineHeading}},
+			body[start+1:min(start+bodyH, len(body))]...)
+	} else {
+		window = body[start:min(start+bodyH, len(body))]
+	}
 	// The rule counts the tasks below the screen, not the headings and blanks between them.
-	below := 0
-	for _, l := range body[start+len(window):] {
-		if l.row >= 0 {
-			below++
+	below := tasks(body[min(start+bodyH, len(body)):])
+	top := []string{p.titleLine(), p.chipLine(), ""}
+	if empty {
+		top[1] = ""
+	}
+	lines := top
+	rowLines := map[int64]int{}
+	if empty && height > 0 {
+		for range (bodyH - 1) / 2 {
+			lines = append(lines, "")
 		}
 	}
-	lines := []string{p.titleLine(), p.chipLine(), ""}
-	rowLines := map[int64]int{}
-	for i, l := range window {
-		text := l.text
-		if i == 0 && start > 0 && bodyH >= 2 {
-			// The group's heading scrolled away: its column names stay.
-			text = p.headerLine(factoryGroupLabels[l.group], true)
-		} else if l.row >= 0 {
+	for _, l := range window {
+		if l.row >= 0 {
 			rowLines[p.rows[l.row].ID] = len(lines)
 		}
-		lines = append(lines, text)
+		lines = append(lines, l.text)
 	}
 	for height > 0 && len(lines) < factoryTop+bodyH {
 		lines = append(lines, "")

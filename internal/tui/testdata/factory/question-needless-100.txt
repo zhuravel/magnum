@@ -1,0 +1,20 @@
+ magnum factory · PR-12345 · question 2 of 3                                               esc back 
+ Credit expiry reminder email · feature · asked 41m ago · coding starts after all 3
+
+ ✓ 1  Who gets the reminder?             advocates only                        your answer 13:31
+ ● 2  When does the reminder go out?                                           now
+   3  Can a merchant turn it off?
+
+ When does the reminder go out?
+ The ticket says "before the credit expires" and names no day.
+ Example: a credit that expires on Fri 14 Nov.
+
+ › 1  Seven days before it expires             → the email goes out Fri 7 Nov       recommended
+      why: the coupon reminder already uses 7 days, so the two emails match
+   2  One day before it expires                → Thu 13 Nov
+   3  On the day it expires                    → Fri 14 Nov, 09:00 merchant time
+   4  Ask rev-ann in Jira (the task waits)     → drafts a comment for you to check
+   5  Type your own answer
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Why needless?  1 the ticket answers it · 2 the code answers it · 3 any answer works
+                4 you asked it before · esc cancels

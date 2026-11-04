@@ -10,6 +10,8 @@
  KIND      feature     from the Jira type Story · tab: bug, feature, chore
  BRANCH    zhuravel-PR-12345-credit-expiry-reminder
  STARTS    now, in talkable.factory2 (free)
+ OVERLAP   1 commit names PR-12345 (a71f0c3 by alice) · #4533 by rev-ann changes
+           app/mailers/credit_mailer.rb
  AGENTS    2: test each point of the ticket against the code · collect the open questions
  RULES     3 talkable rules go into its prompts                                    L shows them
            ask before changing an email's words · seed data into the copy's own databases ·

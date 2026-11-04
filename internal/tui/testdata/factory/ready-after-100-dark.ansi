@@ -2,20 +2,33 @@
  Custom activities lose points on copy[37m · bug · waited 12m[m
  zhuravel-PR-12360-activity-points-on-copy[37m · 1 commit · not on GitHub yet[m
 
+ [1;37mFLAGS[m        [1;93mnot in the plan: spec/factories/reward_rules.rb[m
+              [1;93man old guard at app/services/campaign_copier.rb:22 (2 years): skips archived[m
+              [1;93m  campaigns, added when a copy of one lost its points[m
+              [1;93mCI jobs not run here: ci.yml: jest, ci.yml: cypress[m
  [1;37mCAUSE[m        copying a campaign copies its activities before their reward rules
  [1;37mFIX[m          copy the reward rules first, then point each activity at its copy
  [1;37mPROOF[m        spec "copies reward rules with the activities": red before (0 points, want 25),
               green after · 214 specs near the change green · rubocop clean
- [1;37mFILES[m        app/services/campaign_copier.rb          [92m+31[m [91m−6[m    [37min the plan[m
-              spec/services/campaign_copier_spec.rb    [92m+15[m       [37min the plan[m
+ [1;37mFILES[m        app/services/campaign_copier.rb          [92m+31[m [91m−6[m    [37min the plan[m[37m · [m[1;93mflagged[m
               spec/factories/reward_rules.rb           [92m+2[m        [1;93mnot in the plan[m
+              spec/services/campaign_copier_spec.rb    [92m+15[m       [37min the plan[m
  [1;37mDOUBTS[m       the writer was unsure if archived campaigns copy too: not tested
-              Codex noted one query per rule; fixed in the same commit
+ [1;37mKNOWN[m        P3 app/services/campaign_copier.rb:18: the name copy_rules hides that it also
+                points the activities at the copies
+              declined: P2 spec/services/campaign_copier_spec.rb:40: one spec per reward
+                rule. The risk of the suggested change: 3 slower specs that prove the same
+                thing
+              a doubt: P2 app/services/campaign_copier.rb:31: archived rules may be skipped
+                (it came back twice after its fix)
+              a round of the review went without codex-review's report
  [1;37mSCREENSHOTS[m  2, from the copy's own server: the copied campaign shows 25 points
 
- [1;94m›[m [1mpush + draft PR[m                                                                  [92mrecommended[m
-   [37mwhy: the spec proves the fix; the file outside the plan is test data for it[m
-   send back with a note
-   drop: free the copy, keep the branch
+ [1;94m›[m 1  [1mpush + PR[m     [37m→ [mpush the branch, open a PR ready for review                   [92mrecommended[m
+      [37mwhy: the spec proves the fix; the file outside the plan is test data for it[m
+   2  send back     [37m→ [mthe writer tries again with your reason and note
+   3  drop          [37m→ [mfree the copy, keep the branch
+ [1;93munread:[m spec/services/campaign_copier_spec.rb
 [90m──[m [37myou read the diff 14:21[m [90m─────────────────────────────────────────────────────────────────────────[m
- [1;93mPush zhuravel-PR-12360-activity-points-on-copy and open a draft PR? y/N[m
+ [1;93mPush zhuravel-PR-12360-activity-points-on-copy and open a PR?[m
+ [1;93mIt frees talkable.factory3; PR-12395 starts in it. y/N[m  [37my confirms, any other key cancels[m

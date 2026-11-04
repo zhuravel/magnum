@@ -1,0 +1,8 @@
+ magnum factory · talkable                                                                  ↻ 14:09 
+ ✓ nothing waits on you · 1 waits on others
+
+ WAITS ON OTHERS                      WAITS ON                               YOUR MOVE        WAITED
+› ⣷ PR-12371  Coupon CSV export tim…  agent: finding the cause, 2 of 3 done                       9m
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ finding the cause: 3 agents read the history and reproduce it
+ enter task card · o pane finding the cause · n new task · ? more

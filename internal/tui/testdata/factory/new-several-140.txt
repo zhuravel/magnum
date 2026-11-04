@@ -1,0 +1,13 @@
+ magnum factory · new task                                                                                                      esc cancels 
+
+ Jira key or describe the task                                                               enter starts · ctrl+j new line · ctrl+g editor 
+ ┃ the copier change of PR-12345 also breaks PR-12360: fix both in one place▏
+
+ JIRA      PR-12345 and PR-12360 found in your text · the task asks which issue it is
+ KIND      bug         guessed from "breaks" · tab: bug, feature, chore
+ TITLE     Copier change of PR-12345 also breaks PR-12360
+ BRANCH    zhuravel-copier-change-breaks-copy
+ STARTS    now, in talkable.factory2 (free)
+ AGENTS    3: reproduce it · find the cause on its own · read the history of the code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Start bug "Copier change of PR-12345 also breaks PR-12360" with 3 agents in talkable.factory2? y/N  y confirms, any other key cancels

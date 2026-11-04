@@ -1,0 +1,24 @@
+ magnum factory · PR-12393 · bug · Referral export misses friends' emails                                                           ↻ 14:09 
+ zhuravel-PR-12393-export-friend-emails · copy 1 of 3, server off · started 10:02 · your time on it 2m
+
+ WAITING FOR  you: review unavailable (timeout) · round 2 of the local review ran out of time; r runs it again
+
+ STAGES                                                                                                                    took   finished
+  ✓ start          Jira PR-12393 read · bug, from the Jira type                                                              0s      10:02
+  ✓ investigate    reproduced with a failing spec · 2 agents found the same cause                                           19m      10:21
+  – questions      skipped: nothing was open
+  ✓ coding         spec red before, green after · 2 files +18 −3                                                            27m      10:48
+  ✓ tests          88 specs green · rubocop clean                                                                            6m      10:54
+› ✗ local review   round 1: 1 P2, fixed · round 2 timed out after 60m: review unavailable                                 1h38m      12:32  
+  · ready to push  after a clean local review
+  · pushed         the factory pushes after your y
+
+ AGENTS  none working · 2 done, logs kept
+  ✓ writer              fixed the P2 of round 1                              done 11:30
+  ✓ 3 investigators     reproduced it, found the cause, read the history     done 10:21
+
+ REPORT
+  cause   the export joins the friends' emails after it pages, so later pages lose them
+  proof   spec "exports the friends' emails of every page": red before, green after
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ j k move · enter open the line · r retry · d diff · l log · + − rate · esc back · ? more

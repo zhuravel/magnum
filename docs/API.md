@@ -25567,6 +25567,9 @@ type CardFile struct {
 	// InPlan is false for a file the plan did not name: checking it is on the
 	// operator.
 	InPlan bool
+	// Flagged marks a file a FLAGS line names (a migration, a sensitive
+	// file, an old guard): it is drawn first, with the files not in the plan.
+	Flagged bool
 }
     CardFile is one changed file of a ready card.
 
@@ -25819,6 +25822,18 @@ type DashboardSource interface {
     DashboardSource supplies the dashboard's data; Gather is called once per
     refresh, never concurrently with itself.
 
+type Digest struct {
+	Since time.Time
+	Done  []string
+	Chip  string
+}
+    Digest is what happened while the operator was away, shown until the next
+    key. Since is when the operator was last seen. Done are the tasks that
+    finished since then, one line each ("PR-12302 Remove old sync job · merged
+    21:15"), drawn under "DONE SINCE <day time>" in place of the DONE TODAY
+    group; Chip is the chip line's segment ("away 14h: 2 done, 2 new for you"),
+    in place of the done count.
+
 type DiskInfo struct {
 	FreeGB float64
 	MinGB  int
@@ -25871,6 +25886,11 @@ type FactoryRow struct {
 	MoveShort string
 	// HelpShort and HelpLong are Help on a narrow and on a wide screen.
 	HelpShort, HelpLong string
+	// Frees is what frees a queued task ("frees when PR-12360 is pushed"):
+	// the text of its last blocker on a 140-column screen ("copy: frees when
+	// PR-12360 is pushed"), after the blocker's own text on a wide one; a
+	// narrow one keeps the blocker's Short, or Frees when it has none.
+	Frees string
 }
     FactoryRow is one task on the home list, one line.
 
@@ -25906,6 +25926,12 @@ type FindingsInfo struct {
 	Held bool
 }
     FindingsInfo is what magnum's latest posted review of a PR concluded.
+
+type FormLink struct{ Kind, URL, Offer string }
+    FormLink is a link in the new task text. Kind is "jira" (a Jira link is its
+    key), "pr" (a GitHub PR, which offers adoption) or "run" (a GitHub Actions
+    run, which offers a CI task); Offer says what the factory makes of it ("its
+    key PR-12345", "adoption comes in milestone 2").
 
 type GitHubInfo struct {
 	Remaining, Limit int
@@ -25966,6 +25992,22 @@ type NewTaskForm struct {
 	Ask                   string // the y/N question being asked; empty: the key hints
 	// ShowRules lists the rules under their count; false: the count alone.
 	ShowRules bool
+
+	// Links are the links the text holds, in its order.
+	Links []FormLink
+	// Overlap is the advisory line of what else touches the work: commits
+	// and PRs that name the key, open PRs that change the same files.
+	Overlap string
+	// Reading is true while the daemon reads Jira: the JIRA row says so,
+	// behind the spinner frame Spinner.
+	Reading bool
+	Spinner int
+	// Keys are the keys Jira knows that the text names, when it names
+	// several: the task is the prompt task it is, whose questions ask which
+	// issue it is, and no ticket is drawn as its own.
+	Keys []string
+	// Hints are the footer's key hints; none: the form's own (newTaskHints).
+	Hints []hint `json:"-"`
 }
     NewTaskForm is the new task screen: the operator's text and what the factory
     understood of it. A row is drawn only when its field is filled.
@@ -26436,6 +26478,18 @@ type QuestionCard struct {
 	// AsOf is the revision of the questions the answers are for ("as of
 	// 14:12"), drawn on the recap. Zero: the sentence is left out.
 	AsOf time.Time
+
+	// Cursor is the option of the current question under the mark, which j k
+	// move; out of range (-1) = none. The screen starts it on the
+	// recommended option, and on none when there is no recommendation.
+	Cursor int
+	// Needless offers the − key: flag the current question as needless.
+	Needless bool
+	// NeedlessReasons are the reasons a needless flag takes, picked by their
+	// digit: while they are set (after −) the footer asks for one.
+	NeedlessReasons []string
+	// Hints are the footer's key hints; none: the card's own (questionHints).
+	Hints []hint `json:"-"`
 }
     QuestionCard is the agents' questions before coding, one at a time,
     and their recap. Questions are drawn in the order given; Current is the one
@@ -26452,8 +26506,8 @@ type ReadyCard struct {
 	// DiffOpened is when the operator opened the diff; zero: not yet, and
 	// neither Recommended nor Why is drawn.
 	DiffOpened time.Time
-	// Recommended is the option the factory picks: 0 push + draft PR, 1 send
-	// back with a note, 2 drop; -1 for none.
+	// Recommended is the option the factory picks: 0 push + PR, 1 send back,
+	// 2 drop; -1 for none.
 	Recommended int
 	Why         string
 
@@ -26465,6 +26519,29 @@ type ReadyCard struct {
 	ScreenshotsNote string
 	// Ask is the y/N question being asked; empty: the key hints.
 	Ask string
+
+	// Flags are the FLAGS line: what needs a second look before the push,
+	// one each ("not in the plan: spec/factories/reward_rules.rb").
+	Flags []string
+	// Leftovers are the KNOWN row, what the local review left open that does
+	// not block (the PR body's "Known" list), one each: its leftovers, the
+	// findings the writer declined with their risks, the doubts, and the
+	// reviewers a round went without.
+	Leftovers []string
+	// Unread are the changed files the operator has not opened in the diff,
+	// drawn as "unread: <file>".
+	Unread []string
+	// Frees is what a push or a drop frees ("talkable.factory3; PR-12395
+	// starts in it"): the y/N sentence of the option under the mark names it.
+	Frees string
+	// Reasons are the reason keys of a send back, picked by their digit:
+	// while they are set the footer asks for one, before the note.
+	Reasons []string
+	// Cursor is the option under the mark, which j k and 1-3 move; out of
+	// range (-1) = none.
+	Cursor int
+	// Hints are the footer's key hints; none: the card's own (readyHints).
+	Hints []hint `json:"-"`
 }
     ReadyCard is a finished task waiting for the operator's decision: read the
     diff, then push, send back or drop. The recommendation is hidden until the
@@ -26990,6 +27067,10 @@ type TaskCard struct {
 	Cursor int
 	// AgentsNote is the AGENTS line's remark ("the factory merges bastion itself").
 	AgentsNote string
+	// Spinner is the frame of the working marks, the card's only motion.
+	Spinner int
+	// Hints are the footer's key hints; none: the card's own (taskHints).
+	Hints []hint `json:"-"`
 }
     TaskCard is a task's card, cut to what milestone 1a draws: the header,
     what the task waits for, its stages, agents, report and lessons.
@@ -27001,8 +27082,9 @@ type WaitsOn struct {
 	// Short and Long are What on a narrow and on a wide screen.
 	Short, Long string
 }
-    WaitsOn is one thing a task waits on. Who is "you", "agent", "CI", a login,
-    "magnum", "memory", "usage" or "nothing"; What says why.
+    WaitsOn is one thing a task waits on. Who is "you" (waitsOnYou), "agent",
+    "CI", a login, "magnum", "memory", "usage", "copy" or "nothing"; What says
+    why.
 
 type WatchFailing struct {
 	Watch string

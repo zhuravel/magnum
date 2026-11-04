@@ -1,0 +1,18 @@
+ magnum factory · talkable                                                                  ↻ 09:05 
+ ● 2 tasks need you, 4 decisions · 2 wait on others · away 14h: 2 done, 2 new for you
+
+ NEEDS YOU                            WAITS ON                               YOUR MOVE        WAITED
+› ● PR-12345  Credit expiry reminde…  you: 3 questions before coding         answer them         10h
+  ● PR-12360  Custom activities los…  you: ready to push · 3 files +48 −6    diff, then push      9h
+
+ WAITS ON OTHERS
+  ⣷ PR-12371  Coupon CSV export tim…  agent: finding the cause, 2 of 3 done                      15m
+  ◷ PR-12395  Advocate dashboard lo…  copy: frees when PR-12360 is pushed                         8h
+
+ DONE SINCE Tue 18:40
+  ✓ PR-12302  Remove old sync job · merged 21:15 · not rated yet
+  ✓ PR-12318  Seed data into the copy's own databases · you pushed 18:52, PR #4541
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ 3 questions before coding · first: "When does the reminder go out?"
+ enter answer · a oldest ask · o pane that asked · n new task · ? more

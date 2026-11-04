@@ -1,0 +1,17 @@
+ magnum factory · new task                                                              esc cancels 
+
+ Jira key or describe the task                       enter starts · ctrl+j new line · ctrl+g editor 
+ ┃ fix the expiry reminder of PR-12345: advocates only, not their friends▏
+
+ JIRA      PR-12345 · Story · To Do · High · reporter rev-ann · read by the daemon 2s ago
+           Credit expiry reminder email · found in your text
+           "Send advocates a reminder before their referral credit expires."    pgdn reads more
+ GUIDANCE  "fix the expiry reminder of PR-12345: advocates only, not their friends" goes to
+           every agent
+ KIND      feature     from the Jira type Story · tab: bug, feature, chore
+ BRANCH    zhuravel-PR-12345-credit-expiry-reminder
+ STARTS    now, in talkable.factory2 (free)
+ AGENTS    2: test each point of the ticket against the code · collect the open questions
+ RULES     3 talkable rules go into its prompts                                    L shows them
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Start feature PR-12345 with 2 agents in talkable.factory2? y/N  y confirms, any other key cancels

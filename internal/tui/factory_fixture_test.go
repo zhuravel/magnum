@@ -1,6 +1,9 @@
 package tui
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // The fixtures are the data of the spec's home mockups (section 9.C). The
 // names are placeholders: Jira keys PR-123xx, GitHub numbers #45xx, logins
@@ -26,7 +29,7 @@ func fixtureHome() factoryFrame {
 				ID: 1, Key: "#4512", GitHub: "#4512", Jira: "PR-12310", Title: "Deploy list on campaigns",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
 				WaitsOn: []WaitsOn{
-					{Who: "you", What: "reply to alice", Short: "reply", OnYou: true},
+					{Who: waitsOnYou, What: "reply to alice", Short: "reply", OnYou: true},
 					{Who: "agent", What: "fixing bart", Short: "bart", Long: "fixing 2 conflicts in bart"},
 				},
 				Move: "post the drafted reply", MoveShort: "post reply",
@@ -43,7 +46,7 @@ func fixtureHome() factoryFrame {
 			{
 				ID: 2, Key: "PR-12345", Title: "Credit expiry reminder email",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
-				WaitsOn: []WaitsOn{{Who: "you", What: "3 questions before coding", Short: "3 questions",
+				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "3 questions before coding", Short: "3 questions",
 					Long: "3 questions before coding · first: when is it sent?", OnYou: true}},
 				Move: "answer 3 questions", MoveShort: "answer them",
 				Since: factoryAgo(now, 41*time.Minute),
@@ -52,7 +55,7 @@ func fixtureHome() factoryFrame {
 			{
 				ID: 3, Key: "PR-12360", Title: "Custom activities lose points on copy",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
-				WaitsOn: []WaitsOn{{Who: "you", What: "ready to push · 3 files +48 −6", Short: "ready to push",
+				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "ready to push · 3 files +48 −6", Short: "ready to push",
 					Long: "ready to push · 3 files +48 −6, 1 not in the plan", OnYou: true}},
 				Move: "read the diff, then push", MoveShort: "diff, then push",
 				Since: factoryAgo(now, 12*time.Minute),
@@ -190,5 +193,127 @@ func fixtureNothing() factoryFrame {
 		},
 		Next:   "PR-12371's questions or its diff, once its plan is written.",
 		Cursor: 1,
+	}
+}
+
+// fixtureTen is home with ten tasks: the home's seven, a fourth that needs
+// the operator (its local review did not finish: r retries it), a task
+// queued for a copy that the push of PR-12360 frees, and a second done one.
+// On a short screen its long groups collapse.
+func fixtureTen() factoryFrame {
+	now := factoryNow
+	f := fixtureHome()
+	retry := FactoryRow{
+		ID: 8, Key: "PR-12393", Title: "Referral export misses friends' emails",
+		Group: GroupNeedsYou, Mark: MarkNeedsYou,
+		WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "review unavailable (timeout)", Short: "review unavailable", OnYou: true}},
+		Move:    "r retry", MoveShort: "r retry",
+		Since: factoryAgo(now, 25*time.Minute),
+		Help:  "review unavailable (timeout): round 2 of the local review ran out of time · enter, then r runs it again",
+	}
+	queued := FactoryRow{
+		ID: 9, Key: "PR-12395", Title: "Advocate dashboard loads slowly",
+		Group: GroupWaits, Mark: MarkWaits,
+		WaitsOn: []WaitsOn{{Who: "copy", What: "all 3 in use", Short: "after PR-12360"}},
+		Frees:   "frees when PR-12360 is pushed",
+		Since:   factoryAgo(now, 35*time.Minute),
+		Help:    "queued: all 3 copies are in use · the push of PR-12360 frees talkable.factory3 for it",
+	}
+	done := FactoryRow{
+		ID: 10, Key: "PR-12305", GitHub: "#4521", Title: "Coupon CSV header names",
+		Group: GroupDone, Mark: MarkDone,
+		WaitsOn: []WaitsOn{{Who: "nothing", What: "you pushed 11:40, PR #4521", Short: "pushed 11:40"}},
+		Help:    "you pushed it at 11:40 as #4521",
+	}
+	rows := slices.Clone(f.Rows[:3])
+	rows = append(rows, retry, f.Rows[3], queued)
+	rows = append(rows, f.Rows[4:]...)
+	rows = append(rows, done)
+	f.Rows = rows
+	return f
+}
+
+// fixtureOne is home with one task, which waits on an agent.
+func fixtureOne() factoryFrame {
+	now := factoryNow
+	return factoryFrame{
+		Repo: "talkable",
+		Rows: []FactoryRow{{
+			ID: 1, Key: "PR-12371", Title: "Coupon CSV export times out",
+			Group: GroupWaits, Mark: MarkWorking,
+			WaitsOn: []WaitsOn{{Who: "agent", What: "finding the cause, 2 of 3 done", Short: "finding the cause"}},
+			Since:   factoryAgo(now, 9*time.Minute),
+			Help:    "finding the cause: 3 agents read the history and reproduce it",
+		}},
+		Hints:  []hint{{"enter", "task card"}, {"o", "pane finding the cause"}, {"n", "new task"}, {"?", "more"}},
+		Cursor: 0,
+	}
+}
+
+// fixtureEmpty is home with no task at all.
+func fixtureEmpty() factoryFrame {
+	return factoryFrame{Repo: "talkable", Hints: []hint{{"n", "new task"}, {"?", "more"}}}
+}
+
+// factoryDigestNow is the morning after a night away.
+var factoryDigestNow = time.Date(2026, 11, 4, 9, 5, 0, 0, time.Local)
+
+// fixtureDigest is home the morning after: two tasks came to need the
+// operator overnight, one is queued, and two finished since 18:40.
+func fixtureDigest() factoryFrame {
+	now := factoryDigestNow
+	return factoryFrame{
+		Repo: "talkable",
+		Rows: []FactoryRow{
+			{
+				ID: 1, Key: "PR-12345", Title: "Credit expiry reminder email",
+				Group: GroupNeedsYou, Mark: MarkNeedsYou,
+				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "3 questions before coding", Short: "3 questions", OnYou: true}},
+				Move:    "answer 3 questions", MoveShort: "answer them",
+				Since: factoryAgo(now, 10*time.Hour+35*time.Minute),
+				Help:  `3 questions before coding · first: "When does the reminder go out?"`,
+			},
+			{
+				ID: 2, Key: "PR-12360", Title: "Custom activities lose points on copy",
+				Group: GroupNeedsYou, Mark: MarkNeedsYou,
+				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "ready to push · 3 files +48 −6", Short: "ready to push", OnYou: true}},
+				Move:    "read the diff, then push", MoveShort: "diff, then push",
+				Since: factoryAgo(now, 9*time.Hour+55*time.Minute),
+				Help:  "ready to push: 1 commit, not on GitHub yet · 1 file is not in the plan",
+			},
+			{
+				ID: 3, Key: "PR-12371", Title: "Coupon CSV export times out",
+				Group: GroupWaits, Mark: MarkWorking,
+				WaitsOn: []WaitsOn{{Who: "agent", What: "finding the cause, 2 of 3 done", Short: "finding the cause"}},
+				Since:   factoryAgo(now, 15*time.Minute),
+				Help:    "finding the cause: 3 agents read the history and reproduce it",
+			},
+			{
+				ID: 4, Key: "PR-12395", Title: "Advocate dashboard loads slowly",
+				Group: GroupWaits, Mark: MarkWaits,
+				WaitsOn: []WaitsOn{{Who: "copy", What: "all 3 in use", Short: "after PR-12360"}},
+				Frees:   "frees when PR-12360 is pushed",
+				Since:   factoryAgo(now, 8*time.Hour),
+				Help:    "queued: all 3 copies are in use · the push of PR-12360 frees talkable.factory3 for it",
+			},
+			{
+				ID: 5, Key: "PR-12302", GitHub: "#4519", Title: "Remove old sync job",
+				Group: GroupDone, Mark: MarkDone,
+				WaitsOn: []WaitsOn{{Who: "nothing", What: "merged 21:15 · not rated yet"}},
+			},
+		},
+		Digest: &Digest{
+			Since: time.Date(2026, 11, 3, 18, 40, 0, 0, time.Local),
+			Done: []string{
+				"PR-12302 Remove old sync job · merged 21:15 · not rated yet",
+				"PR-12318 Seed data into the copy's own databases · you pushed 18:52, PR #4541",
+			},
+			Chip: "away 14h: 2 done, 2 new for you",
+		},
+		Hints: []hint{
+			{"enter", "answer"}, {"a", "oldest ask"}, {"o", "pane that asked"}, {"n", "new task"}, {"?", "more"},
+		},
+		Decisions: 4,
+		Cursor:    0,
 	}
 }

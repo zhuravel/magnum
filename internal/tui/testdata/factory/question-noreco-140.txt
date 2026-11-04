@@ -15,4 +15,4 @@
    4  Type your own answer
  no recommendation: the ticket and the code give no hint · nothing is marked: pick one (j k)
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- j k move · 1-4 pick · backspace previous · z snooze 2h · esc back
+ j k move · 1-4 pick · − needless · backspace previous · z snooze 2h · esc back

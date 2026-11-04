@@ -1,10 +1,13 @@
 package tui
 
-// The factory's new task screen (spec 9.C, "New task"): the text being typed,
-// what the factory understood of it, and the question that starts the task.
-// See factory_card.go for the painter it shares with the other cards.
+// The factory's new task screen (spec 9.C, "New task", and 6.1): the text
+// being typed, what the factory understood of it (the issue a key or a link
+// names, the keys found in the text, its links, what else touches the work),
+// and the question that starts the task. See factory_card.go for the painter
+// it shares with the other cards.
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
@@ -14,6 +17,7 @@ import (
 )
 
 func (p *cardPainter) newTask(f NewTaskForm, height int) string {
+	p.f.Spinner = f.Spinner
 	head := []string{p.titleLine(p.chip(hint{"esc", "cancels"}), seg{"new task", noStyle}), ""}
 	body := []string{p.inputLabel()}
 	body = append(body, p.inputRows(f.Text)...)
@@ -21,22 +25,37 @@ func (p *cardPainter) newTask(f NewTaskForm, height int) string {
 		body = append(body, "")
 		body = append(body, rows...)
 	}
-	var foot string
+	var foot []string
 	switch {
 	case f.Ask != "":
-		foot = p.askLine(f.Ask)
+		foot = p.askLines(f.Ask)
+	case len(f.Hints) > 0:
+		foot = []string{p.hintsLine(f.Hints)}
 	case strings.TrimSpace(f.Text) == "":
-		foot = " " + p.st.Dim.Render("type a Jira key or describe the task"+p.g.sep) + p.st.hints(0, hint{"esc", "cancels"})
+		foot = []string{" " + p.st.Dim.Render("type a Jira key or describe the task"+p.g.sep) + p.st.hints(0, hint{"esc", "cancels"})}
 	default:
-		hs := []hint{{"tab", "kind"}}
-		if f.Jira != nil && f.Jira.More {
-			hs = append(hs, hint{"pgdn", "reads more"})
-		}
-		foot = p.hintsLine(append(hs, hint{"esc", "cancels"}))
+		foot = []string{p.hintsLine(p.newTaskHints(f))}
 	}
-	frame, _ := p.assemble(head, body, 0, "", []string{foot}, height)
+	frame, _ := p.assemble(head, body, 0, "", foot, height)
 	return frame
 }
+
+// newTaskHints are the form's own key hints: tab once there is a kind to
+// change.
+func (p *cardPainter) newTaskHints(f NewTaskForm) []hint {
+	var hs []hint
+	if f.Kind != "" {
+		hs = append(hs, hint{"tab", "kind"})
+	}
+	if f.Jira != nil && f.Jira.More && !severalKeys(f) {
+		hs = append(hs, hint{"pgdn", "reads more"})
+	}
+	return append(hs, hint{"esc", "cancels"})
+}
+
+// severalKeys is true when the text names several keys Jira knows: the task
+// is the prompt task it is, and asks which issue it belongs to.
+func severalKeys(f NewTaskForm) bool { return len(f.Keys) > 1 }
 
 // inputLabel is the label of the text with the keys of the input on its
 // right, as many as leave the label whole.
@@ -88,15 +107,28 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 	wrapW := p.wrapW(x)
 	var out []string
 	switch {
+	case f.Reading:
+		out = append(out, p.labelRows("JIRA", x, []cell{{{p.spinnerFrame(), p.st.Accent}, {" the daemon reads Jira", p.st.Dim}}})...)
+	case severalKeys(f):
+		// No ticket is the task's: the JIRA row names the keys, and a found
+		// key Jira refused beside them is its error.
+		cells := []cell{p.keysCell(f.Keys)}
+		if f.Err != "" {
+			cells = append(cells, plainCells(wrapText(f.Err, wrapW, 2), p.st.Err)...)
+		}
+		out = append(out, p.labelRows("JIRA", x, cells)...)
 	case f.Jira != nil:
 		out = append(out, p.jiraRows(f.Jira)...)
 		if rest := p.guidance(f); rest != "" {
 			out = append(out, p.labelRows("GUIDANCE", x, plainCells(wrapText(`"`+rest+`" goes to every agent`, wrapW, 3), noStyle))...)
 		}
 	case f.Err != "":
-		out = append(out, p.labelRows("JIRA", x, []cell{{{f.Err, p.st.Err}}})...)
+		out = append(out, p.labelRows("JIRA", x, plainCells(wrapText(f.Err, wrapW, 2), p.st.Err))...)
 	case strings.TrimSpace(f.Text) != "":
 		out = append(out, p.labelRows("JIRA", x, []cell{{{"none: the agents work from your words", noStyle}}})...)
+	}
+	if len(f.Links) > 0 {
+		out = append(out, p.linkRows(f.Links)...)
 	}
 	if f.Kind != "" {
 		c := cell{{f.Kind + spaces(max(12-ansi.StringWidth(f.Kind), 1)), noStyle}}
@@ -105,7 +137,7 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 		}
 		out = append(out, p.labelRows("KIND", x, []cell{append(c, seg{"tab: bug, feature, chore", p.st.Dim})})...)
 	}
-	if f.Jira == nil && f.Title != "" {
+	if (f.Jira == nil || severalKeys(f)) && f.Title != "" {
 		out = append(out, p.labelRows("TITLE", x, plainCells(wrapText(f.Title, wrapW, 2), noStyle))...)
 	}
 	if f.Branch != "" {
@@ -113,6 +145,9 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 	}
 	if f.Starts != "" {
 		out = append(out, p.labelRows("STARTS", x, plainCells(wrapText(f.Starts, wrapW, 2), noStyle))...)
+	}
+	if f.Overlap != "" {
+		out = append(out, p.labelRows("OVERLAP", x, plainCells(wrapText(f.Overlap, wrapW, 2), noStyle))...)
 	}
 	if len(f.Agents) > 0 {
 		text := fmt.Sprintf("%d: %s", len(f.Agents), strings.Join(f.Agents, p.g.sep))
@@ -124,13 +159,77 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 	return out
 }
 
-// guidance is the words after the Jira key, which go to every agent.
+// guidance is what goes to every agent with the ticket: the words after the
+// key or the Jira link the text starts with, or, for a key found elsewhere in
+// the text, the whole text (spec 6.1).
 func (p *cardPainter) guidance(f NewTaskForm) string {
 	text := strings.Join(strings.Fields(f.Text), " ")
-	if f.Jira == nil || !strings.HasPrefix(strings.ToLower(text), strings.ToLower(f.Jira.Key)) {
+	if f.Jira == nil {
 		return ""
 	}
-	return strings.TrimSpace(text[len(f.Jira.Key):])
+	if f.Jira.Found != "" {
+		return text
+	}
+	first, rest, _ := strings.Cut(text, " ")
+	first, key := strings.ToLower(strings.TrimRight(first, "/")), strings.ToLower(f.Jira.Key)
+	if first != key && !strings.HasSuffix(first, "/"+key) {
+		return ""
+	}
+	return strings.TrimSpace(rest)
+}
+
+// keysCell names the several keys of a text: the prompt task they are asks
+// which issue it is.
+func (p *cardPainter) keysCell(keys []string) cell {
+	var c cell
+	for i, k := range keys {
+		switch {
+		case i == 0:
+		case i == len(keys)-1:
+			c = append(c, seg{" and ", noStyle})
+		default:
+			c = append(c, seg{", ", noStyle})
+		}
+		c = append(c, seg{k, p.st.Accent})
+	}
+	return append(c, seg{" found in your text", noStyle}, p.sepSeg(), seg{"the task asks which issue it is", noStyle})
+}
+
+// linkWords name the kinds of a link.
+var linkWords = map[string]string{"jira": "Jira", "pr": "PR", "run": "CI run"}
+
+// linkRows are the LINKS row: what each link is, the link without its
+// scheme (cut from the left when it must be: its end names the thing), and
+// what the factory makes of it.
+func (p *cardPainter) linkRows(links []FormLink) []string {
+	const x, gap = cardFormX, 2
+	kinds := make([]string, len(links))
+	urls := make([]string, len(links))
+	var kw, uw, ow int
+	for i, l := range links {
+		kinds[i] = cmp.Or(linkWords[l.Kind], l.Kind)
+		urls[i] = strings.TrimPrefix(strings.TrimPrefix(l.URL, "https://"), "http://")
+		kw, uw, ow = max(kw, ansi.StringWidth(kinds[i])), max(uw, ansi.StringWidth(urls[i])), max(ow, ansi.StringWidth(l.Offer))
+	}
+	avail := p.width - 1 - x
+	if kw+gap+uw+gap+ow > avail {
+		uw = max(avail-kw-gap-gap-ow, 16)
+	}
+	urlX := x + kw + gap
+	offerX := urlX + uw + gap
+	out := make([]string, len(links))
+	for i, l := range links {
+		var ps []placed
+		if i == 0 {
+			ps = append(ps, at(1, x-1, seg{"LINKS", p.st.Header}))
+		}
+		ps = append(ps, at(x, kw, seg{kinds[i], noStyle}), placed{urlX, uw, cell{{urls[i], p.st.Accent}}.fitLeft(uw)})
+		if l.Offer != "" && offerX < p.width-1 {
+			ps = append(ps, at(offerX, p.width-1-offerX, seg{l.Offer, p.st.Dim}))
+		}
+		out[i] = p.line(ps...)
+	}
+	return out
 }
 
 func (p *cardPainter) jiraRows(j *JiraPreview) []string {

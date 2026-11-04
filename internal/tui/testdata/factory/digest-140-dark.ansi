@@ -1,0 +1,18 @@
+ [1;94mmagnum factory[m[37m · [mtalkable                                                                                                          [37m↻ 09:05[m 
+ [1;93m● 2 tasks need you[m[37m, 4 decisions[m[37m · [m[37m2 wait on others[m[37m · [m[1maway 14h: 2 done, 2 new for you[m
+
+ [1;96mNEEDS YOU[m                                                   [1;37mWAITS ON[m                                       [1;37mYOUR MOVE[m                 [1;37mWAITED[m
+› [7m● PR-12345  Credit expiry reminder email                   you: 3 questions before coding                 answer 3 questions           10h[m
+  [1;93m●[m [94mPR-12360[m  Custom activities lose points on copy          [1;93myou:[m ready to push · 3 files +48 −6            read the diff, then push      [1;93m9h[m
+
+ [1;96mWAITS ON OTHERS[m
+  [94m⣷[m [94mPR-12371[m  Coupon CSV export times out                    [94magent:[m finding the cause, 2 of 3 done                                       15m
+  [37m◷[m [94mPR-12395[m  Advocate dashboard loads slowly                copy: frees when PR-12360 is pushed                                          8h
+
+ [1;96mDONE SINCE Tue 18:40[m
+  [37m✓[m [37mPR-12302[m  [37mRemove old sync job · merged 21:15 · not rated yet[m
+  [37m✓[m [37mPR-12318[m  [37mSeed data into the copy's own databases · you pushed 18:52, PR #4541[m
+
+[90m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[m
+ 3 questions before coding · first: "When does the reminder go out?"
+ [1;94menter[m [37manswer[m[37m · [m[1;94ma[m [37moldest ask[m[37m · [m[1;94mo[m [37mpane that asked[m[37m · [m[1;94mn[m [37mnew task[m[37m · [m[1;94m?[m [37mmore[m

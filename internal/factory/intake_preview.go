@@ -90,13 +90,14 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 
 // previewFound previews a prompt whose words name keys elsewhere than at
 // their start (in.Found), as startFound would start it: the ticket of the one
-// key Jira knows (returned, for the kind and the branch of a key task), or
-// the first of several with a note naming the others (the task asks which
-// issue it is). A key a task holds is f.Err and stops the preview; Jira's
-// silence is f.Err and the preview goes on, as a key at the start does. A key
-// Jira refuses for a cause of its own is never an error: the preview names
-// the cause, "Jira refused PR-12345: ...; starts from your words", as f.Err
-// on the JIRA line, or in the note of the key Jira knows beside it.
+// key Jira knows (returned, for the kind and the branch of a key task), or,
+// for several, their keys (f.Keys) and no ticket: the prompt task they are,
+// which asks which issue it is. A key a task holds is f.Err and stops the
+// preview; Jira's silence is f.Err and the preview goes on, as a key at the
+// start does. A key Jira refuses for a cause of its own is never an error:
+// the preview names the cause, "Jira refused PR-12345: ...; starts from your
+// words", as f.Err on the JIRA line, in the note of the one key Jira knows
+// beside it, or as f.Err under the several keys.
 func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartInput) (tk *jira.Ticket, stop bool) {
 	if t, err := e.holderOf(ctx, in.Found); err == nil {
 		f.Err = keyRuns{t}.Error()
@@ -116,21 +117,23 @@ func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartI
 		}
 		return nil, false
 	}
+	if len(known) > 1 {
+		// The prompt task they are, which asks which issue it is: no ticket
+		// is the preview's, the screen names the keys (f.Keys).
+		for _, k := range known {
+			f.Keys = append(f.Keys, k.Key)
+		}
+		if len(refused) > 0 {
+			f.Err = refused[0].note(refusedBeside)
+		}
+		return nil, false
+	}
 	f.Jira = e.jiraPreview(known[0])
 	f.Jira.Found = foundNote
-	if len(known) > 1 {
-		others := make([]string, 0, len(known)-1)
-		for _, k := range known[1:] {
-			others = append(others, k.Key)
-		}
-		f.Jira.Found += ", with " + strings.Join(others, ", ") + ": the task asks which issue it is"
-	} else {
-		tk = &known[0]
-	}
 	if len(refused) > 0 {
 		f.Jira.Found += "; " + refused[0].note(refusedBeside)
 	}
-	return tk, false
+	return &known[0], false
 }
 
 // jiraPreview is the preview of the ticket the daemon read.
