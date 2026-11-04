@@ -269,6 +269,18 @@ func TestCheckEndNeedsEveryRolesFindings(t *testing.T) {
 	if ok, why := d.check("findings", "fx-repro"); !ok {
 		t.Fatalf("CheckEnd(findings, fx-repro) = %v, %q, want done", ok, why)
 	}
+
+	// An investigator's own questions file (the rules send its questions
+	// there) is optional, but one it wrote must hold questions the operator
+	// can answer.
+	d.write("questions-fx-repro.json", `[{"text": "Which account?", "options": [`)
+	if ok, why := d.check("findings", "fx-repro"); ok || !strings.HasPrefix(why, "questions-fx-repro.json: ") {
+		t.Fatalf("CheckEnd(findings) = %v, %q; want not done for the malformed questions-fx-repro.json", ok, why)
+	}
+	d.write("questions-fx-repro.json", `[{"text": "Which account?", "options": [{"label": "the ticket's"}, {"label": "any"}], "recommended": 0}]`)
+	if ok, why := d.check("findings", "fx-repro"); !ok {
+		t.Fatalf("with valid questions: CheckEnd(findings) = %v, %q, want done", ok, why)
+	}
 }
 
 // The critic writes critic.md and its questions in a file of its own,

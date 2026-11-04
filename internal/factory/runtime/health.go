@@ -298,7 +298,7 @@ func (r *Runtime) ended(ctx context.Context, run store.Run) {
 // pausedRun settles a run that ended on its CLI's pause: abandoned in the
 // agents store (no failure), paused on its RoleRun.
 func (r *Runtime) pausedRun(ctx context.Context, run store.Run, w *WaitError) {
-	r.abandon(ctx, run.ID, "paused: "+w.Error())
+	r.abandon(ctx, run.ID, PausedPrefix+w.Error())
 	r.record(ctx, registry.RoleRun{AttemptID: run.TargetSHA, Role: run.Role, Ended: r.now(), Outcome: "paused", EndWhy: w.Error()})
 }
 

@@ -16,9 +16,12 @@ package factory
 // (Runtime.RunsAs), writing the files the stage names them for.
 //
 // What a stage knows of its attempt lives in memory (agentsRun) and is
-// rebuilt from the registry after a restart: the ledger says which role got
-// its prompt and its nudge (no prompt goes out twice), the role runs which
-// one the runtime verified.
+// rebuilt after a restart: the ledger says which role got its prompt and
+// its nudge (no prompt goes out twice), the role runs which one the runtime
+// verified, and each role's last run in the agents store what the lost
+// events said (Runtime.RunState): an end not yet checked, an end whose
+// nudge or wait on you was still to come, or a pause whose role goes on
+// once it is over.
 
 import (
 	"context"
@@ -36,6 +39,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // PromptData is what a factory prompt (factory-*.md, with the blocks of
@@ -83,6 +87,10 @@ type stageRole struct {
 	// the attempt (an end of another is no end of this role's).
 	prompted bool
 	runs     map[string]bool
+	// settled is a run the store has as failed already (a restart's
+	// rebuild, lastRunEvent): its end is checked again, never verified
+	// twice.
+	settled string
 	// next is the prompt it gets next, once Send may: a nudge for its end
 	// fact (problem says why), or the one to go on after a pause (pause
 	// says which); nudged: its one nudge went out.
@@ -152,7 +160,7 @@ func (e *Engine) runAgents(ctx context.Context, t registry.Task, st config.Facto
 			return false, err
 		}
 	}
-	run, err := e.agentsRunOf(ctx, t, st, a)
+	run, rebuilt, err := e.agentsRunOf(ctx, t, st, a)
 	if err != nil {
 		return false, e.stageFailed(ctx, t, err)
 	}
@@ -163,7 +171,7 @@ func (e *Engine) runAgents(ctx context.Context, t registry.Task, st config.Facto
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	you := ""
-	for _, ev := range e.takeEvents(t.ID) { // the first event that needs you is what the task waits on you for
+	for _, ev := range append(rebuilt, e.takeEvents(t.ID)...) { // the first event that needs you is what the task waits on you for
 		if what := e.onAgentEvent(ctx, &t, st, a, run, ev, dir); what != "" && you == "" {
 			you = what
 		}
@@ -281,37 +289,42 @@ func (e *Engine) skipNarrow(ctx context.Context, t registry.Task, st config.Fact
 }
 
 // agentsRunOf is what the loop knows of attempt a of task t's stage st,
-// rebuilt from the registry when it knows nothing (a restart, a new
-// attempt): a role whose prompt the ledger holds was prompted (one settled
-// as never sent was not), one whose prompt there starts with nudgeLead was
-// nudged, one the runtime verified in the attempt is done, and a fallback
-// with no prompt yet is still to launch. A role that cannot run (a Codex
-// role without a fallback on a task Codex never works on) is a needsYou.
-func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt) (*agentsRun, error) {
+// rebuilt from the registry and the agents store when it knows nothing (a
+// restart, a new attempt): a role whose prompt the ledger holds was
+// prompted (one settled as never sent was not), one whose prompt there
+// starts with nudgeLead was nudged, one the runtime verified in the attempt
+// is done, and a fallback with no prompt yet is still to launch. What the
+// events of the observe pass said, which a restart loses, comes back from
+// each role's last run (lastRunEvent): the events are the stage's to take
+// with the observe pass's. A role that cannot run (a Codex role without a
+// fallback on a task Codex never works on) is a needsYou.
+func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt) (*agentsRun, []runtime.Event, error) {
 	if run := e.agentRuns[t.ID]; run != nil && run.attempt == a.ID {
-		return run, nil
+		return run, nil, nil
 	}
 	run := &agentsRun{attempt: a.ID}
 	for _, name := range st.Roles {
 		role, ok := e.cfg.FactoryRole(name)
 		if !ok {
-			return nil, fmt.Errorf("the %s stage names %s, which is no [[factory.role]]", st.Name, name)
+			return nil, nil, fmt.Errorf("the %s stage names %s, which is no [[factory.role]]", st.Name, name)
 		}
 		runAs, err := e.d.Runtime.RunsAs(t, role)
 		if err != nil {
-			return nil, cannotRun(role, err)
+			return nil, nil, cannotRun(role, err)
 		}
 		run.roles = append(run.roles, &stageRole{role: role, runAs: runAs, runs: map[string]bool{}})
 	}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	done, err := e.reg.RoleRuns(ctx, a.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var evs []runtime.Event
 	for _, r := range run.roles {
+		last := ""
 		for _, en := range entries {
 			if en.AttemptID != a.ID || en.Role != r.runAs.Name || en.Delivered == registry.DeliveredNo {
 				continue
@@ -319,12 +332,60 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			r.prompted = true
 			r.runs[en.RunID] = true
 			r.nudged = r.nudged || strings.HasPrefix(en.Text, nudgeLead)
+			last = en.RunID
 		}
 		r.ok = slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == r.runAs.Name && rr.Outcome == "verified" })
 		r.relaunch = !r.prompted && r.runAs.Name != r.role.Name && a.State != registry.AttemptLaunching
+		if r.ok || last == "" {
+			continue
+		}
+		ev, err := e.lastRunEvent(ctx, t, r, last)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ev != nil {
+			evs = append(evs, *ev)
+		}
 	}
 	e.agentRuns[t.ID] = run
-	return run, nil
+	return run, evs, nil
+}
+
+// lastRunEvent is what role r's last run of the attempt, run, says of it in
+// the agents store (Runtime.RunState), as the event that told it before a
+// restart (nil when it says nothing to act on):
+//   - ended and not verified: its end, which the stage checks now;
+//   - failed (its end fact failed, the nudge after it or the file after the
+//     nudge was still to come): its end again, checked against the files as
+//     they are now, the run itself left as the store has it (settled);
+//   - verified: the role is done;
+//   - abandoned on its CLI's pause: the pause, so the role waits and goes on
+//     once it is over (no event says a pause ended);
+//   - in flight, or unknown: nothing, its events come.
+func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole, run string) (*runtime.Event, error) {
+	state, why, err := e.d.Runtime.RunState(ctx, run)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	ev := &runtime.Event{TaskID: t.ID, Role: r.runAs.Name, RunID: run, Kind: runtime.EventEnded}
+	switch state {
+	case store.RunEnded:
+		return ev, nil
+	case store.RunFailed:
+		r.settled = run
+		return ev, nil
+	case store.RunVerified:
+		r.ok = true
+	case store.RunAbandoned:
+		if pause, ok := strings.CutPrefix(why, runtime.PausedPrefix); ok {
+			ev.Kind, ev.Reason = runtime.EventPaused, pause
+			return ev, nil
+		}
+	}
+	return nil, nil
 }
 
 // cannotRun is the needsYou of a role that may not run on its task
@@ -415,22 +476,28 @@ func withReason(what, reason string) string {
 // ended takes the end of role r's run runID: an end of a run that is not
 // the role's in this attempt is left alone. The role's end fact holds, and
 // the run is verified; or it does not, the run fails, and the role gets its
-// one nudge, or, nudged already, the task waits on you for the file.
+// one nudge, or, nudged already, the task waits on you for the file. A run
+// the store has as failed already (settled) is not verified again.
 func (e *Engine) ended(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, r *stageRole, runID, dir string) string {
 	if !r.runs[runID] && !e.ledgerRun(ctx, t, a, r, runID) {
 		return ""
 	}
+	verify := func(ok bool, why string) {
+		if runID != r.settled {
+			e.verify(ctx, runID, ok, why)
+		}
+	}
 	if r.ok {
-		e.verify(ctx, runID, true, "")
+		verify(true, "")
 		return ""
 	}
 	p := checkEnd(st.End, dir, a.Started, []string{r.role.Name})
 	if p == nil {
-		e.verify(ctx, runID, true, "")
+		verify(true, "")
 		r.ok, r.next, r.pause, r.failed = true, "", "", ""
 		return ""
 	}
-	e.verify(ctx, runID, false, p.String())
+	verify(false, p.String())
 	if !r.nudged {
 		r.next, r.problem = nextNudge, p
 		return ""

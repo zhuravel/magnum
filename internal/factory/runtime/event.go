@@ -43,6 +43,13 @@ const (
 	EventDeliveryUnknown EventKind = "delivery_unknown"
 )
 
+// PausedPrefix leads the error of a run its CLI's pause ended (a usage
+// limit, a login, an overload): the run is abandoned with "paused: " and
+// the pause's wait ("usage: claude limit until 16:00"), which RunState
+// returns, so a stage rebuilt after a restart knows the role is to go on
+// once the pause is over.
+const PausedPrefix = "paused: "
+
 // Event is one thing the runtime saw on a run of a task's role.
 type Event struct {
 	TaskID int64

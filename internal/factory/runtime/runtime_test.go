@@ -639,6 +639,35 @@ func TestOwnerRowHeadNeverReachesTheTask(t *testing.T) {
 	}
 }
 
+// A run's state, as the agents store keeps it, tells a stage rebuilding
+// after a restart a run its CLI's pause ended (abandoned, with the pause)
+// from one that ended and one still at work.
+func TestRunStateTellsAPausedRunFromAnEndedOne(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro", "fx-history")
+	paused := g.send("fx-repro", "reproduce the bug")
+	ended := g.send("fx-history", "read the history of the code")
+	g.observe()
+	if state, _, err := g.r.RunState(g.ctx, ended); err != nil || (state != store.RunSubmitted && state != store.RunWorking) {
+		t.Fatalf("RunState of a run at work = %q, %v; want submitted or working", state, err)
+	}
+
+	g.h.screen(g.agent("fx-repro"), "Reading spec/models/user_spec.rb\nYou've hit your limit · resets 4pm (UTC)\n")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	g.h.setStatus(g.agent("fx-history"), herdr.StatusIdle)
+	g.observeN(2)
+
+	if state, why, err := g.r.RunState(g.ctx, paused); err != nil || state != store.RunAbandoned || why != PausedPrefix+"usage: claude limit until 16:00" {
+		t.Fatalf("RunState of the paused run = %q, %q, %v; want abandoned, %susage: claude limit until 16:00", state, why, err, PausedPrefix)
+	}
+	if state, _, err := g.r.RunState(g.ctx, ended); err != nil || state != store.RunEnded {
+		t.Fatalf("RunState of the ended run = %q, %v; want ended", state, err)
+	}
+	if _, _, err := g.r.RunState(g.ctx, "no-such-run"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("RunState of an unknown run = %v, want store.ErrNotFound", err)
+	}
+}
+
 // Once Codex never works on a task, its live Codex sessions are quit and
 // their runs abandoned; its Claude sessions go on, and a session whose
 // pane you are in waits for you to leave.

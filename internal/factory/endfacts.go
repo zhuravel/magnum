@@ -92,7 +92,8 @@ func (p *endProblem) String() string { return p.file + ": " + p.why }
 // wrong ("findings-fx-cause.md: missing"). roles are the stage's roles, as
 // the stage names them:
 //   - findings: findings-<role>.md of each role, newer than since and not
-//     empty;
+//     empty, and its questions-<role>.json, when it is there, valid as
+//     questions.json is;
 //   - report: report.md, newer than since, whose first section is
 //     `## Architecture decisions` (its decisions, or none) and whose Helpers
 //     and Files sections exist (Files naming at least one file);
@@ -123,6 +124,9 @@ func checkEnd(fact, dir string, since time.Time, roles []string) *endProblem {
 		}
 		for _, role := range roles {
 			if _, p := readFresh(dir, findingsFile(role), since); p != nil {
+				return p
+			}
+			if _, p := readQuestions(dir, roleQuestionsFile(role), since); p != nil {
 				return p
 			}
 		}

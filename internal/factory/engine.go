@@ -52,8 +52,9 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // them, the verification of a run's end, parking a task's sessions, the
 // reconcile of a prompt of unknown delivery, the recovery of a lost pane,
 // the shift of every turn deadline after the Mac slept, the role that runs
-// for a role (its Claude fallback on a task Codex never works on), and the
-// quit of such a task's Codex sessions.
+// for a role (its Claude fallback on a task Codex never works on), the quit
+// of such a task's Codex sessions, and a run's state as the agents store
+// keeps it across a restart.
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
@@ -68,6 +69,7 @@ type Runtime interface {
 	Shift(gap time.Duration)
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
+	RunState(ctx context.Context, runID string) (state, why string, err error)
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.

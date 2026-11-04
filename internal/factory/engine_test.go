@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"slices"
@@ -58,7 +59,14 @@ type fakeRuntime struct {
 	sendErr     error
 	quits       []int64
 	quitErr     error
+	// runState is each run's state as the agents store keeps it (RunState):
+	// Send makes a working run, Observe's events end, pause or refuse it as
+	// the runtime does, Verify settles it.
+	runState map[string]runFact
 }
+
+// runFact is a run's state and why it failed or was given up.
+type runFact struct{ state, why string }
 
 // sentPrompt is a prompt Send took: the task, the attempt, the role (as it
 // runs), the text and the run it made.
@@ -111,6 +119,7 @@ func (f *fakeRuntime) Send(ctx context.Context, t registry.Task, a registry.Atte
 	f.runs++
 	id := "run-" + strconv.Itoa(f.runs)
 	f.sent = append(f.sent, sentPrompt{TaskID: t.ID, Attempt: a.ID, Role: role.Name, Text: text, RunID: id})
+	f.setRunLocked(id, store.RunWorking, "")
 	reg := f.reg
 	f.mu.Unlock()
 	if reg == nil {
@@ -193,13 +202,47 @@ func (f *fakeRuntime) codexQuits() []int64 {
 	return slices.Clone(f.quits)
 }
 
+// Observe reports the events, and moves their runs as the runtime does: an
+// ended run ends, a paused one is abandoned with its pause, a refused one
+// is abandoned.
 func (f *fakeRuntime) Observe(context.Context) ([]runtime.Event, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.observePanic != nil {
 		panic(f.observePanic)
 	}
+	for _, ev := range f.events {
+		if cur, ok := f.runState[ev.RunID]; !ok || cur.state != store.RunWorking {
+			continue
+		}
+		switch ev.Kind {
+		case runtime.EventEnded:
+			f.setRunLocked(ev.RunID, store.RunEnded, "")
+		case runtime.EventPaused:
+			f.setRunLocked(ev.RunID, store.RunAbandoned, runtime.PausedPrefix+ev.Reason)
+		case runtime.EventRefused:
+			f.setRunLocked(ev.RunID, store.RunAbandoned, "refused: "+ev.Reason)
+		}
+	}
 	return f.events, f.observeErr
+}
+
+func (f *fakeRuntime) setRunLocked(id, state, why string) {
+	if f.runState == nil {
+		f.runState = map[string]runFact{}
+	}
+	f.runState[id] = runFact{state, why}
+}
+
+// RunState is the run's state as Send, Observe and Verify left it.
+func (f *fakeRuntime) RunState(_ context.Context, id string) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.runState[id]
+	if !ok {
+		return "", "", fmt.Errorf("run %s: %w", id, store.ErrNotFound)
+	}
+	return r.state, r.why, nil
 }
 
 // Verify records the call and, as the runtime does, the role's outcome in
@@ -207,6 +250,15 @@ func (f *fakeRuntime) Observe(context.Context) ([]runtime.Event, error) {
 func (f *fakeRuntime) Verify(ctx context.Context, runID string, ok bool, why string) error {
 	f.mu.Lock()
 	f.verified = append(f.verified, verifyCall{RunID: runID, OK: ok, Why: why})
+	if cur, known := f.runState[runID]; known && cur.state != store.RunEnded {
+		f.mu.Unlock()
+		return fmt.Errorf("verify %s: %w: it is %s", runID, store.ErrConflict, cur.state) // the store moves only an ended run
+	}
+	if ok {
+		f.setRunLocked(runID, store.RunVerified, "")
+	} else {
+		f.setRunLocked(runID, store.RunFailed, why)
+	}
 	i := slices.IndexFunc(f.sent, func(p sentPrompt) bool { return p.RunID == runID })
 	reg := f.reg
 	var p sentPrompt

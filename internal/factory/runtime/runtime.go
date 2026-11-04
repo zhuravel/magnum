@@ -887,6 +887,21 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
 	return r.mgr.Park(ctx, pr)
 }
 
+// RunState is run id as the agents store keeps it: its state (store.Run*:
+// pending, submitted or working while in flight, then ended, verified,
+// failed or abandoned) and, for a run that failed or was given up, why (a
+// run its CLI's pause ended is abandoned with PausedPrefix and the pause).
+// The store holds it across a restart, which the events the observe pass
+// gave, and the pauses, do not survive. An unknown run wraps
+// store.ErrNotFound.
+func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, err error) {
+	run, err := r.st.RunByID(ctx, id)
+	if err != nil {
+		return "", "", fmt.Errorf("run %s: %w", id, err)
+	}
+	return run.State, store.Deref(run.Error), nil
+}
+
 // QuitCodex quits the live Codex sessions of task t, once Codex never works
 // on it again (Task.CodexNever, a refusal): none of them gets another
 // prompt, and no conversation of theirs is resumed (a restart or a

@@ -649,6 +649,122 @@ func TestARestartKeepsTheRolesThatPassed(t *testing.T) {
 	}
 }
 
+// A role whose CLI paused before a restart still waits after it, with the
+// pause's reason, and gets its prompt to go on once the pause is over: no
+// event says the pause ended, so only the run's state can.
+func TestARestartKeepsAPausedRoleWaitingThenGoesOn(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12338", "bug", "investigate")
+	h.startStage(task)
+	h.rt.setSendErr(&runtime.WaitError{Who: "usage", What: "claude limit until 16:00"})
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventPaused,
+		Reason: "usage: claude limit until 16:00"})
+	h.tick()
+
+	h.restart()
+	h.startStage(task)
+	h.tick()
+	got := h.reload(task.ID)
+	if got.State != registry.TaskActive || got.WaitsWho != "usage" || got.WaitsWhat != "claude limit until 16:00" {
+		t.Fatalf("after the restart the task is %s waiting %q: %q; want active, usage: claude limit until 16:00",
+			got.State, got.WaitsWho, got.WaitsWhat)
+	}
+
+	h.rt.setSendErr(nil)
+	h.tick()
+	ps := h.rt.promptsTo("fx-repro")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, "Your turn stopped (usage: claude limit until 16:00)") {
+		t.Fatalf("fx-repro's prompts %+v, want the one to go on after the pause", ps)
+	}
+	if got := h.reload(task.ID); got.WaitsWho != "" {
+		t.Fatalf("the task still waits %q: %q", got.WaitsWho, got.WaitsWhat)
+	}
+}
+
+// A run that ended while its event waited in the inbox (the task waited
+// on something else, the daemon restarted) is checked after the restart:
+// its event is gone, its state in the store is not.
+func TestARestartChecksTheRunsThatEndedUnverified(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12339", "bug", "investigate")
+	h.startStage(task)
+	for _, role := range []string{"fx-repro", "fx-cause", "fx-history"} {
+		h.taskFile(task.ID, "findings-"+role+".md", role+" found it in app/models/campaign.rb:88\n")
+	}
+	h.ended(task, "fx-repro", "fx-cause", "fx-history") // the events wait in the inbox
+
+	h.restart()
+	h.startStage(task)
+	if got := h.reload(task.ID); got.Stage != "judge" {
+		t.Fatalf("task %s at %q waiting %q, want the investigation passed on the runs that ended", got.State, got.Stage, got.WaitsWhat)
+	}
+	if vs := h.rt.verifies(); len(vs) != 3 || slices.ContainsFunc(vs, func(v verifyCall) bool { return !v.OK }) {
+		t.Fatalf("Verify calls %+v, want the three ended runs verified", vs)
+	}
+}
+
+// A role that wrote no valid file after its nudge is still what the task
+// waits on you for after a restart, and passes once its file holds; a
+// nudge a wait kept back before the restart goes out after it.
+func TestARestartKeepsWhatTheEndFactsDecided(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12340", "bug", "investigate")
+	h.startStage(task)
+	h.taskFile(task.ID, "findings-fx-repro.md", "it fails\n")
+	h.taskFile(task.ID, "findings-fx-history.md", "a guard from 2024\n")
+	h.rt.setSendErr(runtime.ErrOperatorInPane) // the nudge waits for you to leave the pane
+	first := h.lastRun("fx-cause")
+	h.ended(task, "fx-repro", "fx-history", "fx-cause")
+	h.tick()
+	if n := len(h.rt.promptsTo("fx-cause")); n != 1 {
+		t.Fatalf("fx-cause got %d prompts while you were in its pane, want 1", n)
+	}
+
+	h.restart()
+	h.rt.setSendErr(nil)
+	h.startStage(task)
+	ps := h.rt.promptsTo("fx-cause")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, nudgeLead) {
+		t.Fatalf("fx-cause's prompts %+v, want the nudge the wait kept back", ps)
+	}
+	if n := len(slices.DeleteFunc(h.rt.verifies(), func(v verifyCall) bool { return v.RunID != first })); n != 1 {
+		t.Fatalf("fx-cause's first run was verified %d times, want once: the store has it failed", n)
+	}
+	h.ended(task, "fx-cause")
+	h.tick()
+	want := "the fx-cause agent wrote no valid findings-fx-cause.md"
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != want {
+		t.Fatalf("task %s waits %q, want needs_you: %s", got.State, got.WaitsWhat, want)
+	}
+
+	back := func() {
+		t.Helper()
+		if err := h.reg.TransitionTask(h.ctx, task.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
+			u.Set("waits_who", "")
+			u.Set("waits_what", "")
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.restart()
+	back() // as a retry of yours would
+	h.startStage(task)
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != want {
+		t.Fatalf("after a restart the task is %s waiting %q, want needs_you again: %s", got.State, got.WaitsWhat, want)
+	}
+	if n := len(h.rt.promptsTo("fx-cause")); n != 2 {
+		t.Fatalf("fx-cause got %d prompts, want no second nudge", n)
+	}
+
+	h.taskFile(task.ID, "findings-fx-cause.md", "the cause is app/models/campaign.rb:88\n")
+	h.restart()
+	back()
+	h.startStage(task)
+	if got := h.reload(task.ID); got.Stage != "judge" {
+		t.Fatalf("task %s at %q waiting %q, want past the investigation once the file holds", got.State, got.Stage, got.WaitsWhat)
+	}
+}
+
 // A restart forgets nothing the ledger holds: no prompt goes out twice,
 // and a role nudged once is not nudged again.
 func TestARestartSendsNoPromptTwice(t *testing.T) {

@@ -11279,7 +11279,8 @@ func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok boo
     ("findings-fx-cause.md: missing"). roles are the stage's roles, as the stage
     names them:
       - findings: findings-<role>.md of each role, newer than since and not
-        empty;
+        empty, and its questions-<role>.json, when it is there, valid as
+        questions.json is;
       - report: report.md, newer than since, whose first section is `##
         Architecture decisions` (its decisions, or none) and whose Helpers and
         Files sections exist (Files naming at least one file); acceptance.json,
@@ -11633,16 +11634,17 @@ type Runtime interface {
 	Shift(gap time.Duration)
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
+	RunState(ctx context.Context, runID string) (state, why string, err error)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
     the owner row of a task in the factory's agents store, the launch of a
     stage's roles (recorded before any workspace exists), the prompts it sends
-    through its ledger, the panes it observes and the watchdog over them,
-    the verification of a run's end, parking a task's sessions, the reconcile
-    of a prompt of unknown delivery, the recovery of a lost pane, the shift of
-    every turn deadline after the Mac slept, the role that runs for a role (its
-    Claude fallback on a task Codex never works on), and the quit of such a
-    task's Codex sessions.
+    through its ledger, the panes it observes and the watchdog over them, the
+    verification of a run's end, parking a task's sessions, the reconcile of a
+    prompt of unknown delivery, the recovery of a lost pane, the shift of every
+    turn deadline after the Mac slept, the role that runs for a role (its Claude
+    fallback on a task Codex never works on), the quit of such a task's Codex
+    sessions, and a run's state as the agents store keeps it across a restart.
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -12652,6 +12654,12 @@ const (
 )
     The runtime's timing and budgets (spec sections 5 and 10.1).
 
+const PausedPrefix = "paused: "
+    PausedPrefix leads the error of a run its CLI's pause ended (a usage limit,
+    a login, an overload): the run is abandoned with "paused: " and the pause's
+    wait ("usage: claude limit until 16:00"), which RunState returns, so a stage
+    rebuilt after a restart knows the role is to go on once the pause is over.
+
 const Tag = "factory"
     Tag marks the factory's agents (agents.Deps.Tag): it leads their titles and
     pane labels and joins their herdr names' hash, so they never collide with a
@@ -12861,6 +12869,14 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
     then a fresh session from the files; then the recoveries ran out (EventLost,
     "no progress after <n> recoveries", at the next Observe). Each recovery that
     shows no progress within NoProgressAfter takes the next step (Watchdog).
+
+func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, err error)
+    RunState is run id as the agents store keeps it: its state (store.Run*:
+    pending, submitted or working while in flight, then ended, verified,
+    failed or abandoned) and, for a run that failed or was given up, why (a
+    run its CLI's pause ended is abandoned with PausedPrefix and the pause).
+    The store holds it across a restart, which the events the observe pass gave,
+    and the pauses, do not survive. An unknown run wraps store.ErrNotFound.
 
 func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error)
     RunsAs is the role that runs for role on task t: role itself, or, on a task
