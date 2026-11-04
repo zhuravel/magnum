@@ -92,23 +92,28 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 // their start (in.Found), as startFound would start it: the ticket of the one
 // key Jira knows (returned, for the kind and the branch of a key task), or
 // the first of several with a note naming the others (the task asks which
-// issue it is). A key a task holds, and a Jira refusal, are f.Err and stop
-// the preview; Jira's silence is f.Err and the preview goes on, as a key
-// at the start does.
+// issue it is). A key a task holds is f.Err and stops the preview; Jira's
+// silence is f.Err and the preview goes on, as a key at the start does. A key
+// Jira refuses for a cause of its own is never an error: the preview names
+// the cause, "Jira refused PR-12345: ...; starts from your words", as f.Err
+// on the JIRA line, or in the note of the key Jira knows beside it.
 func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartInput) (tk *jira.Ticket, stop bool) {
 	if t, err := e.holderOf(ctx, in.Found); err == nil {
 		f.Err = keyRuns{t}.Error()
 		return nil, true
 	}
-	known, err := e.readFound(ctx, in.Found)
+	known, refused, err := e.readFound(ctx, in.Found)
 	switch {
 	case err != nil && jiraDown(err):
 		f.Err = "Jira does not answer: the task waits for it, then starts"
 		return nil, false
-	case err != nil:
+	case err != nil: // the request was cancelled
 		f.Err = err.Error()
 		return nil, true
 	case len(known) == 0:
+		if len(refused) > 0 {
+			f.Err = refused[0].note(refusedAlone)
+		}
 		return nil, false
 	}
 	f.Jira = e.jiraPreview(known[0])
@@ -119,9 +124,13 @@ func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartI
 			others = append(others, k.Key)
 		}
 		f.Jira.Found += ", with " + strings.Join(others, ", ") + ": the task asks which issue it is"
-		return nil, false
+	} else {
+		tk = &known[0]
 	}
-	return &known[0], false
+	if len(refused) > 0 {
+		f.Jira.Found += "; " + refused[0].note(refusedBeside)
+	}
+	return tk, false
 }
 
 // jiraPreview is the preview of the ticket the daemon read.

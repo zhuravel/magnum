@@ -3564,7 +3564,7 @@ and "no issue"; the best match is recommended, and "no issue" when no title shar
 not answer (curl exit 6, 7 or 28, HTTP 5xx) the task waits, `Jira: start when Jira answers`, at no cost,
 tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours; an unknown key
 (`PR-12399 is not in Jira`), a missing token file (`the Jira token file is missing: <path>`) or another
-refusal makes no task (for a key found in the middle of your text, an unknown issue is no refusal: it is a word of the prompt); a task that waits for Jira has a kind from the start (yours, or the one your words
+refusal makes no task (a key found in the middle of your text is never one: whatever Jira refuses it for, it stays a word of the prompt and the task goes on from your words); a task that waits for Jira has a kind from the start (yours, or the one your words
 pick), which follows the ticket's type when Jira answers unless you chose it, and a branch named by the key
 (`zhuravel-PR-12345`), which the summary's words join when Jira answers unless the branch exists already. After a key's start has
 answered, the daemon reads an overlap line, off its loop, into the task's events: the commits that name
@@ -3576,7 +3576,7 @@ A key found in the middle of your text (not its first word) is read like a key a
 answer, the task waits, `Jira: start when Jira answers`, as a task from your words that holds no key (none is known yet)
 with a kind and a branch from your words; when Jira answers, the one key it knows links to the task, which starts as a
 key task with the whole text as its guidance and the branch named by the key and the summary, none sends it on from your
-words, and several ask which issue it is. A key that a task holds since makes the waiting task need you, naming that task.
+words, and several ask which issue it is. A key that a task holds since makes the waiting task need you, naming that task. A found key Jira refuses for a cause of its own (a missing token file, a 401, any refusal but "no such issue" and silence) is no error either: the task goes on from your words, its events carry `Jira refused PR-12345: <cause>; starts from your words`, and the preview says so on the JIRA line before you confirm; a broken Jira setup never blocks a prompt that holds a word such as `UTF-8`. Only a key at the start of the text keeps the error.
 The new-task preview shows the found key on the JIRA line with the note `found in your text`. The PR's title and branch
 take the key as for a key at the start. The text you started with is recorded once, as guidance of the intake role for a
 key found at once and as the task's text for one that waited, and the stats count it as typed, never as a step start.

@@ -33,9 +33,10 @@ type jiraSite struct {
 	issues   map[string]string
 	search   string
 	down     int
-	calls    int      // every curl call, down or up
-	asked    []string // the keys of the issue reads
-	searched []string // the JQL of the searches
+	calls    int            // every curl call, down or up
+	asked    []string       // the keys of the issue reads
+	searched []string       // the JQL of the searches
+	refused  map[string]int // an HTTP status per key, which its read answers with
 }
 
 const jiraTestSite = "https://example.atlassian.net"
@@ -81,6 +82,9 @@ func (s *jiraSite) curl(c execx.Cmd) (execx.Result, error) {
 	case strings.HasPrefix(u.Path, "/rest/api/2/issue/"):
 		key := strings.TrimPrefix(u.Path, "/rest/api/2/issue/")
 		s.asked = append(s.asked, key)
+		if code, ok := s.refused[key]; ok {
+			return execx.Result{Stdout: []byte(fmt.Sprintf("{}\n%d", code))}, nil
+		}
 		if body, ok := s.issues[key]; ok {
 			return execx.Result{Stdout: []byte(body + "\n200")}, nil
 		}
@@ -100,6 +104,16 @@ func (s *jiraSite) reads() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.asked)
+}
+
+// refuse makes the read of key answer with HTTP status code.
+func (s *jiraSite) refuse(key string, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refused == nil {
+		s.refused = map[string]int{}
+	}
+	s.refused[key] = code
 }
 
 func (s *jiraSite) setDown(code int) {

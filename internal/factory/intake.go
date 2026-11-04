@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
@@ -437,26 +438,65 @@ func (e *Engine) noteFound(ctx context.Context, id int64, key string) {
 	e.event(ctx, id, "intake", registry.PhaseInfo, "key "+key+" "+foundNote)
 }
 
+// The tails of the note on a found key that Jira refused for a cause of its
+// own: what then becomes of the key.
+const (
+	refusedAlone  = "starts from your words"       // no key of the text is known
+	refusedBeside = "it stays a word of your text" // another key of the text is
+)
+
+// foundRefusal is a found key that Jira refused for a cause of its own (a
+// missing token file, a 401, any refusal but "no such issue"), cause in Jira's
+// words: never an error of a start, since a broken Jira setup must not block
+// a prompt that holds a word of the shape of a key.
+type foundRefusal struct{ key, cause string }
+
+// note is the refusal in the words of the preview and of the task's events,
+// redacted as every event is (the cause names no token and no answer).
+func (r foundRefusal) note(tail string) string {
+	return execx.Redact("Jira refused " + r.key + ": " + r.cause + "; " + tail)
+}
+
+// jiraRefusal is a refusal of Jira's in the words of a cause, without the
+// key.
+func jiraRefusal(err error) string {
+	if je, ok := errors.AsType[*jira.Error](err); ok && je.Class == jira.ClassTokenFile && errors.Is(err, fs.ErrNotExist) {
+		return "the Jira token file is missing: " + je.File
+	}
+	return err.Error()
+}
+
 // readFound reads the keys of a prompt's words from Jira (at most
-// foundReads, in order) and gives the tickets of those Jira knows. A key
-// Jira cannot show (no such issue, or one the token may not see) is a word of
-// the prompt, no error. Jira's silence is the error itself (jiraDown); any
-// other refusal is in a start's words (jiraCause), since the start cannot
-// tell which keys count.
-func (e *Engine) readFound(ctx context.Context, keys []string) ([]jira.Ticket, error) {
-	var known []jira.Ticket
+// foundReads, in order) and gives the tickets of those Jira knows, and the
+// keys it refused for a cause of its own (foundRefusal). A key Jira cannot
+// show (no such issue, or one the token may not see) is a word of the
+// prompt, no error. The error is Jira's silence (jiraDown), or the end of
+// the context, and it stops the reading.
+func (e *Engine) readFound(ctx context.Context, keys []string) (known []jira.Ticket, refused []foundRefusal, err error) {
 	for _, k := range keys[:min(len(keys), foundReads)] {
 		tk, err := e.d.Jira.Ticket(ctx, k)
 		switch {
 		case err == nil:
 			known = append(known, tk)
 		case jiraDown(err) || ctx.Err() != nil:
-			return nil, err
+			return nil, nil, err
 		case !jiraRefusesKey(err):
-			return nil, jiraCause(k, err)
+			refused = append(refused, foundRefusal{k, jiraRefusal(err)})
 		}
 	}
-	return known, nil
+	return known, refused, nil
+}
+
+// noteRefused records the refusals of readFound as info events of task id,
+// each naming its cause; known is how many keys of the text Jira knows.
+func (e *Engine) noteRefused(ctx context.Context, id int64, refused []foundRefusal, known int) {
+	tail := refusedAlone
+	if known > 0 {
+		tail = refusedBeside
+	}
+	for _, r := range refused {
+		e.event(ctx, id, "intake", registry.PhaseInfo, r.note(tail))
+	}
 }
 
 // startFound starts a task of a prompt that names Jira keys elsewhere than
@@ -467,19 +507,29 @@ func (e *Engine) readFound(ctx context.Context, keys []string) ([]jira.Ticket, e
 //     words of the prompt;
 //   - Jira does not answer: the task waits for Jira (startFoundWaiting) and
 //     goes on by these rules when it answers.
+//
+// A key Jira refuses for a cause of its own (a missing token file, a 401)
+// counts as unknown, never an error: the task goes on from the words, and an
+// info event names the cause (noteRefused). Only a key at the start of the
+// text is an error.
 func (e *Engine) startFound(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput) (registry.Task, error) {
-	known, err := e.readFound(ctx, in.Found)
+	known, refused, err := e.readFound(ctx, in.Found)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return registry.Task{}, ctx.Err()
-	case err != nil && jiraDown(err):
-		return e.startFoundWaiting(ctx, p, repo, login, in, err)
 	case err != nil:
-		return registry.Task{}, err
-	case len(known) == 1:
-		return e.startTicketed(ctx, p, repo, login, StartInput{Key: known[0].Key, Guidance: in.Prompt}, known[0], true)
+		return e.startFoundWaiting(ctx, p, repo, login, in, err)
 	}
-	return e.startPrompt(ctx, p, repo, login, in, known)
+	var t registry.Task
+	if len(known) == 1 {
+		t, err = e.startTicketed(ctx, p, repo, login, StartInput{Key: known[0].Key, Guidance: in.Prompt}, known[0], true)
+	} else {
+		t, err = e.startPrompt(ctx, p, repo, login, in, known)
+	}
+	if err == nil {
+		e.noteRefused(ctx, t.ID, refused, len(known))
+	}
+	return t, err
 }
 
 // startFoundWaiting makes the task of a prompt whose found keys Jira does not
@@ -627,23 +677,20 @@ func (e *Engine) retryJira(ctx context.Context, t registry.Task) error {
 // reads them (readFound), and Jira's answer decides as a start's does:
 // one known key links to the task and starts it as a key task with the whole
 // text as its guidance (linkFound), none or several send it on from its words
-// (goOnFromWords). One more outage moves the next try, 6 hours after the
-// start the task needs you, and another refusal sends it to you with the
-// cause.
+// (goOnFromWords). One more outage moves the next try and 6 hours after the
+// start the task needs you; a key Jira refuses for a cause of its own stays
+// a word, as at a start, with an info event naming the cause.
 func (e *Engine) retryFound(ctx context.Context, t registry.Task, w *jiraTry) error {
-	known, err := e.readFound(ctx, ParseStart(t.Prompt, e.trackers(t.Repo)).Found)
+	known, refused, err := e.readFound(ctx, ParseStart(t.Prompt, e.trackers(t.Repo)).Found)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return ctx.Err()
-	case err != nil && jiraDown(err):
-		e.jiraDidNotAnswer(ctx, t, w, t.Created, err)
-		return nil
 	case err != nil:
-		delete(e.jiraTries, t.ID)
-		e.toOperator(ctx, t, err.Error(), "Jira refused a key")
+		e.jiraDidNotAnswer(ctx, t, w, t.Created, err)
 		return nil
 	}
 	delete(e.jiraTries, t.ID)
+	e.noteRefused(ctx, t.ID, refused, len(known))
 	if len(known) == 1 {
 		return e.linkFound(ctx, t, known[0], w.picked)
 	}

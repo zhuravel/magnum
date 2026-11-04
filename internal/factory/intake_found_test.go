@@ -434,24 +434,134 @@ func TestAWaitingTextWhoseKeyGotATaskNeedsYou(t *testing.T) {
 }
 
 // Without [jira] a key in the text is a word: nothing can read it, and the
-// start is a prompt task with no error. A Jira that refuses for another cause
-// than an unknown issue (a missing token file) is an error naming the cause,
-// as at the start of a key.
-func TestFoundKeysNeedJiraAndNameItsRefusal(t *testing.T) {
+// start is a prompt task with no error.
+func TestFoundKeysAreWordsWhenJiraIsOff(t *testing.T) {
 	r := newIntakeRig(t)
-	missing := filepath.Join(t.TempDir(), "jira.token")
-	r.client.TokenFile = missing
-	if _, err := r.start(foundText); err == nil || err.Error() != "the Jira token file is missing: "+missing {
-		t.Fatalf("a found key with no token file = %v, want the Jira token file is missing: %s", err, missing)
-	}
-	if ts := r.tasks(); len(ts) != 0 {
-		t.Fatalf("tasks %+v, want none", ts)
-	}
-
 	r.e.d.Jira = nil
 	task, err := r.start(foundText)
 	if err != nil || task.JiraKey != "" || task.Prompt != foundText || task.State != registry.TaskActive {
 		t.Fatalf("a found key with [jira] off = %+v, %v; want a prompt task and no error", task, err)
+	}
+}
+
+// refusedEvent reports whether task id has the info event text among its
+// intake events.
+func refusedEvent(r *intakeRig, id int64, text string) bool {
+	for _, ev := range r.events(id, "intake") {
+		if ev.Phase == registry.PhaseInfo && ev.Text == text {
+			return true
+		}
+	}
+	return false
+}
+
+// A found key is never an error: whatever Jira refuses it for (a missing
+// token file, a 401, any other refusal) but "no such issue" and silence, it
+// stays a word and the task goes on from the operator's words as a prompt
+// task, with an info event naming the cause. A broken Jira setup never blocks
+// a prompt that holds a key-shaped word. Only a key at the start of the text
+// keeps the error.
+func TestAFoundKeyJiraRefusesStaysAWordAndNamesTheCause(t *testing.T) {
+	r := newIntakeRig(t)
+	missing := filepath.Join(t.TempDir(), "jira.token")
+	r.client.TokenFile = missing
+	task, err := r.start(foundText)
+	if err != nil {
+		t.Fatalf("a found key with no token file = %v, want no error", err)
+	}
+	r.e.waitBackground()
+	if task.JiraKey != "" || task.Prompt != foundText || task.State != registry.TaskActive {
+		t.Fatalf("task %+v, want a prompt task of the whole text", task)
+	}
+	if p := r.taskFile(task.ID, "prompt.md"); p != foundText+"\n" {
+		t.Fatalf("prompt.md %q", p)
+	}
+	want := "Jira refused PR-12345: the Jira token file is missing: " + missing + "; starts from your words"
+	if !refusedEvent(r, task.ID, want) {
+		t.Fatalf("intake events %+v, want the info event %q", r.events(task.ID, "intake"), want)
+	}
+	if foundKeyEvent(r, task.ID, "PR-12345") {
+		t.Fatal("a refused key was reported as found")
+	}
+
+	// A key at the start keeps today's error.
+	if _, err := r.start("PR-12345"); err == nil || err.Error() != "the Jira token file is missing: "+missing {
+		t.Fatalf("a key at the start with no token file = %v, want the Jira token file is missing: %s", err, missing)
+	}
+	if n := len(r.tasks()); n != 1 {
+		t.Fatalf("%d tasks, want only the prompt task", n)
+	}
+
+	// Any other refusal is the same: a 401 here, with the cause in Jira's words.
+	other := newIntakeRig(t)
+	other.site.refuse("PR-12345", 401)
+	got := other.mustStart(foundText)
+	cause := "Jira refused the credentials (HTTP 401): check jira.user and jira.token_file"
+	if got.JiraKey != "" || got.Prompt != foundText || !refusedEvent(other, got.ID, "Jira refused PR-12345: "+cause+"; starts from your words") {
+		t.Fatalf("task %+v with events %+v, want a prompt task and the cause named", got, other.events(got.ID, "intake"))
+	}
+
+	// A key Jira refuses beside one it knows stays a word of the key task.
+	other.site.refuse("PR-12399", 429)
+	mixed := other.mustStart("the refund of PR-12399 and the reminder of PR-12346")
+	if mixed.JiraKey != "PR-12346" || !refusedEvent(other, mixed.ID, "Jira refused PR-12399: Jira answered HTTP 429; it stays a word of your text") {
+		t.Fatalf("task %+v with events %+v, want a key task of PR-12346 and the refusal named", mixed, other.events(mixed.ID, "intake"))
+	}
+}
+
+// A task that waited for Jira and finds its key refused does not need you: it
+// goes on from the operator's words, with the cause in its events.
+func TestAWaitingTextGoesOnFromTheWordsWhenJiraRefusesItsKey(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(7)
+	task := r.mustStart(foundText)
+	missing := filepath.Join(t.TempDir(), "jira.token")
+	r.client.TokenFile = missing
+	r.site.setDown(0)
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+
+	got := r.reload(task.ID)
+	if got.State != registry.TaskActive || got.WaitsWho != "" || got.JiraKey != "" || got.Prompt != foundText {
+		t.Fatalf("after Jira refused the key the task is %+v, want a prompt task that goes on", got)
+	}
+	want := "Jira refused PR-12345: the Jira token file is missing: " + missing + "; starts from your words"
+	if !refusedEvent(r, task.ID, want) {
+		t.Fatalf("intake events %+v, want the info event %q", r.events(task.ID, "intake"), want)
+	}
+}
+
+// The preview names the cause before the y: a found key Jira refuses is
+// "Jira refused PR-12345: ...; starts from your words" on the JIRA line, with
+// a prompt's kind, title and branch; a key at the start keeps its error.
+func TestThePreviewNamesTheCauseWhenJiraRefusesAFoundKey(t *testing.T) {
+	r := newIntakeRig(t)
+	missing := filepath.Join(t.TempDir(), "jira.token")
+	r.client.TokenFile = missing
+	f, err := r.e.preview(r.ctx, foundText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Jira refused PR-12345: the Jira token file is missing: " + missing + "; starts from your words"; f.Err != want {
+		t.Fatalf("preview Err %q, want %q", f.Err, want)
+	}
+	if f.Jira != nil || f.Title != foundText || f.Kind == "" || f.Branch == "" || f.Starts == "" {
+		t.Fatalf("preview %+v, want a prompt's preview", f)
+	}
+	if f, _ = r.e.preview(r.ctx, "PR-12345 only the refund path"); f.Err != "the Jira token file is missing: "+missing || f.Jira != nil {
+		t.Fatalf("preview of a key at the start %+v, want today's error", f)
+	}
+	if n := len(r.tasks()); n != 0 {
+		t.Fatalf("a preview made %d tasks", n)
+	}
+
+	// Beside a key Jira knows, the note joins the key's line.
+	other := newIntakeRig(t)
+	other.site.refuse("PR-12399", 429)
+	f, _ = other.e.preview(other.ctx, "the refund of PR-12399 and the reminder of PR-12346")
+	if f.Jira == nil || f.Jira.Key != "PR-12346" || !strings.Contains(f.Jira.Found, "Jira refused PR-12399: Jira answered HTTP 429") || f.Err != "" {
+		t.Fatalf("preview with a refused key beside a known one %+v (Jira %+v)", f, f.Jira)
 	}
 }
 

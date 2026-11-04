@@ -43,7 +43,8 @@ func newFactoryStartCmd(c *Context) *cobra.Command {
 			"memory is full or max_active tasks are at work. A key that has a task gets that task back, and no "+
 			"second one. A GitHub PR link (adoption) and an Actions run link (a CI task) come in later milestones. "+
 			"While Jira does not answer, the task waits for it and tries again after 1, 2, 4, 8, 16 and then every "+
-			"30 minutes, and needs you after 6 hours; an unknown key or a missing token file makes no task. "+
+			"30 minutes, and needs you after 6 hours; an unknown key or a missing token file makes no task (not for a key found in the middle of your "+
+			"words: whatever Jira refuses it for, it stays a word and the task starts from your words). "+
 			"--repo names the [[factory.repo]] when the config has more than one.",
 		func(pos []string) int { return runFactoryStartCmd(c, kind, repo, pos) })
 	cmd.Flags().StringVar(&kind, "kind", "", "the kind of task (a [factory.kinds] name: bug, feature, chore); default: picked")
