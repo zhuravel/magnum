@@ -320,8 +320,9 @@ type rolloutEvent struct {
 		} `json:"item"`
 		// ParentThreadID is a helper's session_meta's parent session.
 		ParentThreadID string `json:"parent_thread_id"`
-		// Message is the text of a user_message event: what was typed into
-		// the session (CodexUserTurns).
+		// Message is the text of a user_message event (what was typed into
+		// the session) or of an agent_message one (what the agent said):
+		// CodexUserTurns.
 		Message string `json:"message"`
 	} `json:"payload"`
 }

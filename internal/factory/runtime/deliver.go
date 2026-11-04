@@ -309,6 +309,12 @@ func unknownKey(entry int64) string { return fmt.Sprintf("unknown:%d", entry) }
 // session not prompted since. Every other case (no transcript, a run that
 // went further) stays unknown.
 func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error) {
+	return r.reconcile(ctx, e, nil)
+}
+
+// reconcile is Reconcile with the user turns of the transcripts reads holds
+// (an observe pass's: nil reads afresh).
+func (r *Runtime) reconcile(ctx context.Context, e registry.LedgerEntry, reads turnReads) (string, error) {
 	if e.Delivered != registry.DeliveredUnknown {
 		return e.Delivered, nil
 	}
@@ -340,7 +346,7 @@ func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string
 	if err != nil {
 		return unknown()
 	}
-	at, found, last, err := findPrompt(store.Deref(s.AgentKind), path, e.Sent.Add(-deliverySlack), e.Hash)
+	at, found, last, err := r.findPrompt(reads, store.Deref(s.AgentKind), path, e.Sent.Add(-deliverySlack), e.Hash)
 	if err != nil {
 		return unknown()
 	}
@@ -419,30 +425,22 @@ func (r *Runtime) submitted(ctx context.Context, run store.Run, s store.Session,
 
 // findPrompt looks for a turn with the prompt hash hash in the transcript
 // at path of a session of kind, stamped at or after since: its time, and
-// the latest stamp of any line of the transcript.
-func findPrompt(kind, path string, since time.Time, hash string) (at time.Time, found bool, last time.Time, err error) {
-	var turns []agents.UserTurn
-	switch kind {
-	case agents.KindClaude:
-		typed, err := agents.ClaudeUserTurns(path, since)
-		if err != nil {
-			return at, false, last, err
-		}
+// the latest stamp of any line of the transcript. Its user turns are reads'
+// when the pass read them already.
+func (r *Runtime) findPrompt(reads turnReads, kind, path string, since time.Time, hash string) (at time.Time, found bool, last time.Time, err error) {
+	turns, err := r.userTurns(reads, kind, path)
+	if err != nil {
+		return at, false, last, err
+	}
+	if kind == agents.KindClaude {
 		queued, err := agents.ClaudeQueuedTurns(path, since)
 		if err != nil {
 			return at, false, last, err
 		}
-		turns = append(turns, typed...)
-		turns = append(turns, queued...)
-	case agents.KindCodex:
-		if turns, err = agents.CodexUserTurns(path, since); err != nil {
-			return at, false, last, err
-		}
-	default:
-		return at, false, last, fmt.Errorf("a %q session keeps no transcript the factory reads", kind)
+		turns = append(slices.Clip(turns), queued...)
 	}
 	for _, t := range turns {
-		if PromptHash(t.Text) == hash {
+		if !t.At.Before(since) && PromptHash(t.Text) == hash {
 			return t.At, true, last, nil
 		}
 	}

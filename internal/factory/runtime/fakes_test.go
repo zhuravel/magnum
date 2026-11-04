@@ -429,6 +429,7 @@ type rig struct {
 	loggedOut  map[string]bool // kind -> its preflight says logged out
 	slept      []time.Duration
 	signals    []int
+	turnReads  int // the reads of a transcript's user turns
 
 	layout               paths.Layout
 	claudeDir, codexHome string
@@ -516,6 +517,12 @@ func (g *rig) restart() {
 			g.signals = append(g.signals, pid)
 			return nil
 		},
+		userTurns: func(kind, path string) ([]agents.UserTurn, error) {
+			g.mu.Lock()
+			g.turnReads++
+			g.mu.Unlock()
+			return readUserTurns(kind, path)
+		},
 		claudeDir: g.claudeDir, codexHome: g.codexHome,
 	})
 	if err != nil {
@@ -559,6 +566,14 @@ func (g *rig) reads() (mem, use int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.memReads, g.usageReads
+}
+
+// turnReadCount is how many times the runtime read a transcript's user
+// turns.
+func (g *rig) turnReadCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.turnReads
 }
 
 func (g *rig) sleeps() []time.Duration {

@@ -40,7 +40,6 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
-	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -721,12 +720,7 @@ func (e *Engine) sendBack(ctx context.Context, t registry.Task, card ReadyCardFi
 	if err := fsx.WriteFileAtomic(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), note), []byte(text), 0o600); err != nil {
 		return err
 	}
-	in := registry.Input{TaskID: t.ID, Kind: registry.InputSendBack, Surface: surface, Stage: t.Stage}
-	if clean, kept := runtime.Scrub(p.Note); kept {
-		in.Text = clean
-	} else {
-		in.DroppedReason = "a long paste: more than 40 lines or 4000 bytes"
-	}
+	in := withWords(registry.Input{TaskID: t.ID, Kind: registry.InputSendBack, Surface: surface, Stage: t.Stage}, p.Note)
 	if _, err := e.recordInput(ctx, in); err != nil {
 		e.log.Warn("record a send back", "task", t.ID, "err", err)
 	}

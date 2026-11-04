@@ -125,13 +125,15 @@ type Deps struct {
 
 // seams are what New takes from the machine and a test replaces: the sleep
 // (stagger, quits, switches), the reading of Codex's budget and login, the
-// signal StopShell may send, and the CLIs' homes the agents manager reads
-// transcripts from ("" = the CLI's own default).
+// signal StopShell may send, the read of a transcript's user turns, and the
+// CLIs' homes the agents manager reads transcripts from ("" = the CLI's own
+// default).
 type seams struct {
 	sleep                func(ctx context.Context, d time.Duration) error
 	usage                func(ctx context.Context, now time.Time) (usage.Snapshot, error)
 	login                func() (usage.Login, error)
 	signal               func(pid int, sig syscall.Signal) error
+	userTurns            func(kind, path string) ([]agents.UserTurn, error)
 	claudeDir, codexHome string
 }
 
@@ -165,6 +167,8 @@ type Runtime struct {
 	loginRead  time.Time
 	reconciled time.Time
 	versions   map[string]cliVersion
+	typedRead  time.Time           // the last read of the turns typed into the panes
+	seen       map[int64]typedSeen // session -> what that read saw of it
 }
 
 // roleKey names a role of an attempt, as it runs (after a Codex fallback).
@@ -261,13 +265,17 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 	if s.signal == nil {
 		s.signal = syscall.Kill
 	}
+	if s.userTurns == nil {
+		s.userTurns = readUserTurns
+	}
 	if s.codexHome == "" {
 		s.codexHome = d.Config.Usage.CodexHome
 	}
 	r := &Runtime{d: d, cfg: &cfg, st: d.Store, reg: d.Registry, log: log, s: s,
 		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
-		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{}}
+		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
+		seen: map[int64]typedSeen{}}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
 		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal})

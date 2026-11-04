@@ -277,6 +277,35 @@ func TestStatsCountsAStartMessageAsTypedAndNeverAsAStepStart(t *testing.T) {
 	}
 }
 
+// A turn typed in a pane that nothing proves the operator typed (origin
+// unknown) is counted apart, for evaluation only: never a typed message, a
+// step start or any class; one herdr proved is typed and classed as usual.
+func TestStatsCountsAPaneTurnOfUnknownOriginApart(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	task := createTask(t, r, "PR-12315")
+	for i, in := range []registry.Input{
+		{Kind: registry.InputPaneTyped, Text: "open PR", Origin: registry.OriginUnknown},
+		{Kind: registry.InputPaneTyped, Text: "I gave you access to the sandbox", Origin: registry.OriginUnknown},
+		{Kind: registry.InputPaneTyped, DroppedReason: "a long paste", Origin: registry.OriginUnknown},
+		{Kind: registry.InputPaneTyped, Text: "merge master", Origin: registry.OriginHerdr},
+	} {
+		in.TaskID, in.At = task.ID, t0.Add(time.Duration(i)*time.Minute)
+		if _, err := r.RecordInput(t.Context(), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := stats.ComputeAt(t.Context(), r, time.Time{}, t0.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, rep, "PR-12315")
+	if got.UnknownOrigin != 3 || got.Typed != 1 || got.StepStarts != 1 || got.Access != 0 {
+		t.Errorf("unknown origin %d, typed %d, step starts %d, access %d; want 3, 1, 1 and 0", got.UnknownOrigin, got.Typed, got.StepStarts,
+			got.Access)
+	}
+}
+
 // The kinds of input that are the operator's own words.
 func TestIsTypedNamesTheOperatorsOwnWords(t *testing.T) {
 	t.Parallel()
@@ -444,7 +473,7 @@ func sampleReport() stats.Report {
 	return stats.Report{
 		Since: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
 		Tasks: []stats.TaskStats{
-			{TaskID: 1, Key: "PR-12301", Typed: 3, StepStarts: 0, Approvals: 1, Corrections: 1, Access: 0, AnswerBatches: 2, Decisions: 1,
+			{TaskID: 1, Key: "PR-12301", Typed: 3, StepStarts: 0, Approvals: 1, Corrections: 1, Access: 0, UnknownOrigin: 4, AnswerBatches: 2, Decisions: 1,
 				ReviewRounds: 2, OperatorSecs: 25*time.Minute + 30*time.Second, WaitedOnYou: time.Hour + 10*time.Minute, StartToReady: 2*time.Hour + 5*time.Minute},
 			{TaskID: 2, Key: "task 2", Typed: 90, StepStarts: 12, AnswerBatches: 1, Decisions: 3, ReviewRounds: 1,
 				OperatorSecs: 40 * time.Second, WaitedOnYou: 2 * time.Hour, StartToReady: 0},
@@ -465,9 +494,9 @@ func TestStatsMarkdownComparesWithTheBaseline(t *testing.T) {
 	for _, want := range []string{
 		"# Factory stats",
 		"Tasks started since 2026-11-01",
-		"| Task | Typed | Step starts | Approvals | Corrections | Access | Answer batches | Decisions | Review rounds | On cards | Waited on you | Start to ready |",
-		"| PR-12301 | 3 | 0 | 1 | 1 | 0 | 2 | 1 | 2 | 25m30s | 1h10m | 2h05m |",
-		"| task 2 | 90 | 12 | 0 | 0 | 0 | 1 | 3 | 1 | 40s | 2h00m | - |",
+		"| Task | Typed | Step starts | Approvals | Corrections | Access | Origin unknown | Answer batches | Decisions | Review rounds | On cards | Waited on you | Start to ready |",
+		"| PR-12301 | 3 | 0 | 1 | 1 | 0 | 4 | 2 | 1 | 2 | 25m30s | 1h10m | 2h05m |",
+		"| task 2 | 90 | 12 | 0 | 0 | 0 | 0 | 1 | 3 | 1 | 40s | 2h00m | - |",
 		"## Against the baseline",
 		"frozen 2026-11-02",
 		"12 tickets",
@@ -503,8 +532,8 @@ func TestStatsJSONIsStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	const want = `{"since":"2026-11-01T00:00:00Z","tasks":[` +
-		`{"task":1,"key":"PR-12301","typed":3,"step_starts":0,"approvals":1,"corrections":1,"access":0,"answer_batches":2,"decisions":1,"review_rounds":2,"operator_secs":1530,"waited_on_you_secs":4200,"start_to_ready_secs":7500},` +
-		`{"task":2,"key":"task 2","typed":90,"step_starts":12,"approvals":0,"corrections":0,"access":0,"answer_batches":1,"decisions":3,"review_rounds":1,"operator_secs":40,"waited_on_you_secs":7200,"start_to_ready_secs":0}],` +
+		`{"task":1,"key":"PR-12301","typed":3,"step_starts":0,"approvals":1,"corrections":1,"access":0,"unknown_origin":4,"answer_batches":2,"decisions":1,"review_rounds":2,"operator_secs":1530,"waited_on_you_secs":4200,"start_to_ready_secs":7500},` +
+		`{"task":2,"key":"task 2","typed":90,"step_starts":12,"approvals":0,"corrections":0,"access":0,"unknown_origin":0,"answer_batches":1,"decisions":3,"review_rounds":1,"operator_secs":40,"waited_on_you_secs":7200,"start_to_ready_secs":0}],` +
 		`"baseline":{"frozen":"2026-11-02T09:30:00Z","tickets":12,` +
 		`"typed_per_ticket":{"median":41,"p25":30,"p75":77.5,"min":12,"max":120},` +
 		`"step_starts_per_ticket":{"median":9,"p25":5,"p75":14,"min":1,"max":30},"accuracy":0.93}}`

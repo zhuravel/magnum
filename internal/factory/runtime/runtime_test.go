@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -168,7 +169,7 @@ func TestObserveEndsARunAfterTwoIdleTicks(t *testing.T) {
 	evs := g.observe()
 
 	want := Event{TaskID: g.task.ID, Role: "fx-repro", RunID: id, Kind: EventEnded}
-	if !slices.Equal(evs, []Event{want}) {
+	if !reflect.DeepEqual(evs, []Event{want}) {
 		t.Fatalf("the second idle tick gave %+v, want %+v", evs, want)
 	}
 }
@@ -184,7 +185,7 @@ func TestObserveReportsAUsageLimitAsPausedNotFailed(t *testing.T) {
 	evs := g.observeN(2)
 
 	want := Event{TaskID: g.task.ID, Role: "fx-repro", RunID: id, Kind: EventPaused, Reason: "usage: claude limit until 16:00"}
-	if !slices.Equal(evs, []Event{want}) {
+	if !reflect.DeepEqual(evs, []Event{want}) {
 		t.Fatalf("events %+v, want only %+v", evs, want)
 	}
 	if rr := g.roleRun("fx-repro"); rr.Outcome != "paused" {

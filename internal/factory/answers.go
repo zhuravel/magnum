@@ -31,7 +31,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
-	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/jira"
@@ -458,12 +457,7 @@ func changedAt(t registry.Task, all []registry.Question) error {
 // recordAnswer records your answer to q as an answer input: scrubbed, or
 // dropped with its reason when it is a long paste.
 func (e *Engine) recordAnswer(ctx context.Context, t registry.Task, q registry.Question, text, surface string) {
-	in := registry.Input{TaskID: t.ID, Kind: registry.InputAnswer, Surface: surface, Stage: t.Stage, Role: q.RaisedBy}
-	if clean, kept := runtime.Scrub(text); kept {
-		in.Text = clean
-	} else {
-		in.DroppedReason = "a long paste: more than 40 lines or 4000 bytes"
-	}
+	in := withWords(registry.Input{TaskID: t.ID, Kind: registry.InputAnswer, Surface: surface, Stage: t.Stage, Role: q.RaisedBy}, text)
 	if _, err := e.recordInput(ctx, in); err != nil {
 		e.log.Warn("record an answer", "task", t.ID, "err", err)
 	}

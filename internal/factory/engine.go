@@ -707,8 +707,9 @@ func (e *Engine) stageOf(t registry.Task, name string) (config.FactoryStage, boo
 
 // observe is the pass between ticks: it reads the agents' panes and the
 // watchdog (Runtime.Observe and Watchdog) and keeps their events for each
-// task's next advance (takeEvents). A failed read is a failure the next
-// tick weighs (an infrastructure hold), unless the Mac just woke.
+// task's next advance (takeEvents), except the turns typed into the panes,
+// which it records (typed). A failed read is a failure the next tick weighs
+// (an infrastructure hold), unless the Mac just woke.
 func (e *Engine) observe(ctx context.Context) {
 	now := e.now()
 	e.wake(now)
@@ -727,6 +728,10 @@ func (e *Engine) observe(ctx context.Context) {
 		e.readFails = append(e.readFails, fmt.Errorf("watchdog: %w", err))
 	}
 	for _, ev := range append(evs, wd...) {
+		if ev.Kind == runtime.EventTyped {
+			e.typed(ctx, ev) // a record of what you typed: no stage waits for it
+			continue
+		}
 		e.inbox[ev.TaskID] = append(e.inbox[ev.TaskID], ev)
 		if box := e.inbox[ev.TaskID]; len(box) > maxInbox {
 			e.inbox[ev.TaskID] = box[len(box)-maxInbox:]

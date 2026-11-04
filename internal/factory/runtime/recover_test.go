@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -299,7 +300,7 @@ func TestAFreshRuntimeProvesAPromptNeverArrivedBeforeItGoesAgain(t *testing.T) {
 	g.clock.Add(RedeliverAfter)
 	undelivered := only(g.observe(), EventUndelivered)
 	if want := (Event{TaskID: g.task.ID, Role: "fx-repro", RunID: e.RunID, Kind: EventUndelivered,
-		Reason: "the prompt to fx-repro never arrived (its transcript, read twice, has no such turn): it goes once more"}); !slices.Equal(undelivered, []Event{want}) {
+		Reason: "the prompt to fx-repro never arrived (its transcript, read twice, has no such turn): it goes once more"}); !reflect.DeepEqual(undelivered, []Event{want}) {
 		t.Fatalf("undelivered %+v, want %+v", undelivered, want)
 	}
 	if got := g.ledger()[0].Delivered; got != registry.DeliveredNo {
@@ -437,7 +438,7 @@ func TestALaterReadThatFindsThePromptSaysItArrived(t *testing.T) {
 	delivered := only(g.observe(), EventDelivered)
 	want := Event{TaskID: g.task.ID, Role: "fx-repro", RunID: e.RunID, Kind: EventDelivered,
 		Reason: "the prompt to fx-repro arrived (its transcript holds it): its run is watched, never sent again"}
-	if !slices.Equal(delivered, []Event{want}) {
+	if !reflect.DeepEqual(delivered, []Event{want}) {
 		t.Fatalf("delivered %+v, want %+v", delivered, want)
 	}
 	if run := g.storeRun(e.RunID); run.State != store.RunSubmitted || g.ledger()[0].Delivered != registry.DeliveredYes {

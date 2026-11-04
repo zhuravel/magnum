@@ -35,6 +35,9 @@ const cardCap = 30 * time.Minute
 // message; the message that starts the task, however it is recorded, is the
 // one the factory needs, so it is typed and never a step start, whatever its
 // words say); a message of another class, or of none, is only typed.
+// UnknownOrigin counts apart the turns typed in a pane that nothing proves the
+// operator typed (registry.OriginUnknown): kept for evaluation only, they are
+// never a typed message, a step start or any class.
 // AnswerBatches counts the revisions of questions that were answered, and
 // Decisions the decisions on cards; both are counted apart. OperatorSecs is
 // the operator's time on cards: for each decision, from the card shown to the
@@ -48,6 +51,7 @@ type TaskStats struct {
 	Key    string
 
 	Typed, StepStarts, Approvals, Corrections, Access int
+	UnknownOrigin                                     int
 	AnswerBatches, Decisions, ReviewRounds            int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
@@ -94,14 +98,15 @@ func (t TaskStats) MarshalJSON() ([]byte, error) {
 		Approvals     int    `json:"approvals"`
 		Corrections   int    `json:"corrections"`
 		Access        int    `json:"access"`
+		UnknownOrigin int    `json:"unknown_origin"`
 		AnswerBatches int    `json:"answer_batches"`
 		Decisions     int    `json:"decisions"`
 		ReviewRounds  int    `json:"review_rounds"`
 		OperatorSecs  int64  `json:"operator_secs"`
 		WaitedOnYou   int64  `json:"waited_on_you_secs"`
 		StartToReady  int64  `json:"start_to_ready_secs"`
-	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.AnswerBatches, t.Decisions, t.ReviewRounds,
-		seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady)})
+	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.UnknownOrigin, t.AnswerBatches, t.Decisions,
+		t.ReviewRounds, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady)})
 }
 
 func seconds(d time.Duration) int64 { return int64(d.Round(time.Second) / time.Second) }
@@ -192,6 +197,8 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 		OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now), StartToReady: startToReady(spans)}
 	for _, in := range inputs {
 		switch {
+		case in.Kind == registry.InputPaneTyped && in.Origin == registry.OriginUnknown:
+			ts.UnknownOrigin++ // for evaluation only: nothing proves the operator typed it
 		case IsTyped(in.Kind):
 			ts.Typed++
 			switch classOf(in) {
@@ -338,17 +345,18 @@ func (r Report) Markdown() string {
 	if len(r.Tasks) == 0 {
 		b.WriteString("No tasks.\n")
 	} else {
-		b.WriteString("| Task | Typed | Step starts | Approvals | Corrections | Access | Answer batches | Decisions | Review rounds | On cards | Waited on you | Start to ready |\n")
-		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+		b.WriteString("| Task | Typed | Step starts | Approvals | Corrections | Access | Origin unknown | Answer batches | Decisions | Review rounds | On cards | Waited on you | Start to ready |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 		for _, t := range r.Tasks {
 			ready := "-"
 			if t.StartToReady > 0 {
 				ready = fmtDuration(t.StartToReady)
 			}
-			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s |\n", t.Key, t.Typed, t.StepStarts, t.Approvals,
-				t.Corrections, t.Access, t.AnswerBatches, t.Decisions, t.ReviewRounds, fmtDuration(t.OperatorSecs),
+			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s |\n", t.Key, t.Typed, t.StepStarts, t.Approvals,
+				t.Corrections, t.Access, t.UnknownOrigin, t.AnswerBatches, t.Decisions, t.ReviewRounds, fmtDuration(t.OperatorSecs),
 				fmtDuration(t.WaitedOnYou), ready)
 		}
+		b.WriteString("\nOrigin unknown: turns typed in a pane that nothing proves you typed, kept for evaluation only and never counted as typed.\n")
 	}
 	b.WriteString("\n## Against the baseline\n\n")
 	bl := r.Baseline

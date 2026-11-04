@@ -103,7 +103,10 @@ func (r *Runtime) lift(kind, why string, whos ...string) {
 // overload (EventPaused, its reason and end), a refusal (EventRefused), a
 // dialog left to the operator (EventBlocked, EventHooksTrust), a lost pane
 // whose recoveries ran out (EventLost) and a loop without progress
-// (EventNoProgress). A panic is contained: it comes back as the error.
+// (EventNoProgress), and the turns typed into its panes (EventTyped, typed).
+// A pass reads the user turns of an agent's transcript once, for the turns
+// typed and the delivery of a prompt alike. A panic is contained: it comes
+// back as the error.
 func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 	defer contain("observe", r.log, &err)
 	at := r.now()
@@ -117,7 +120,9 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 	}
 	r.checkLogin(ctx)
 	r.freshStarts(ctx)
-	r.reconcileUnknown(ctx)
+	reads := turnReads{}
+	r.reconcileUnknown(ctx, reads)
+	evs = append(evs, r.typed(ctx, reads)...)
 	if oerr != nil {
 		oerr = fmt.Errorf("observe: %w", oerr)
 	}
@@ -637,8 +642,8 @@ const provingBound = 2*RedeliverAfter + loginEvery
 // past UnknownAfter is EventDeliveryUnknown, once, unless its proof is
 // under way (a first read found no such turn: a fresh runtime after a
 // restart starts the proof again, and its first read is no reason to call
-// you).
-func (r *Runtime) reconcileUnknown(ctx context.Context) {
+// you). The transcripts it reads are reads' (Observe's pass).
+func (r *Runtime) reconcileUnknown(ctx context.Context, reads turnReads) {
 	now := r.now()
 	r.mu.Lock()
 	due := r.reconciled.IsZero() || now.Sub(r.reconciled) >= loginEvery
@@ -654,7 +659,7 @@ func (r *Runtime) reconcileUnknown(ctx context.Context) {
 		return
 	}
 	for _, e := range es {
-		got, err := r.Reconcile(ctx, e)
+		got, err := r.reconcile(ctx, e, reads)
 		if err != nil {
 			r.log.Warn("reconcile a prompt's delivery", "entry", e.ID, "err", err)
 		}

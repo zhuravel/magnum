@@ -645,11 +645,7 @@ func (e *Engine) recordStart(ctx context.Context, t registry.Task, p StartPayloa
 	if in.Key != "" && in.Guidance != "" {
 		kind, text = registry.InputGuidance, in.Guidance
 	}
-	clean, kept := runtime.Scrub(text)
-	input := registry.Input{TaskID: t.ID, Kind: kind, Surface: cmp.Or(p.Surface, startSurface), Role: intakeRole, Text: clean}
-	if !kept {
-		input.Text, input.DroppedReason = "", "a long paste: more than 40 lines or 4000 bytes"
-	}
+	input := withWords(registry.Input{TaskID: t.ID, Kind: kind, Surface: cmp.Or(p.Surface, startSurface), Role: intakeRole}, text)
 	if _, err := e.recordInput(ctx, input); err != nil {
 		e.log.Warn("record a start's input", "task", t.ID, "err", err)
 	}

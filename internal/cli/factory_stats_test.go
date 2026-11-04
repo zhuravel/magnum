@@ -86,13 +86,16 @@ func TestFactoryStatsPrintsMarkdownAgainstTheBaseline(t *testing.T) {
 	seedDecision(t, dt, task.ID, 10*time.Minute)
 	freezeStatsBaseline(t, dt.ctx.Layout)
 
+	seedUnknownTurn(t, dt, task.ID, "open PR")
+
 	if code := dt.run("factory", "stats"); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
 	}
 	out := dt.stdout.String()
 	for _, want := range []string{
 		"# Factory stats",
-		"| PR-12311 | 3 | 1 | 1 | 0 | 0 | 3 | 1 | 0 | 10m00s | 0s | - |",
+		"| Access | Origin unknown | Answer batches |",
+		"| PR-12311 | 3 | 1 | 1 | 0 | 0 | 1 | 3 | 1 | 0 | 10m00s | 0s | - |",
 		"## Against the baseline",
 		"12 tickets",
 		"| PR-12311 | 3 | below the baseline's middle half (median 41, 30 to 77.5) | 1 | below the baseline's middle half (median 9, 5 to 14) |",
@@ -128,7 +131,8 @@ func TestFactoryStatsWithoutABaselineSaysHowToFreezeOne(t *testing.T) {
 func TestFactoryStatsJSONHasTheTasksAndTheBaseline(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	seedStatsTask(t, dt, "PR-12313", time.Time{}, []string{"merge master", "push"}, 0)
+	task := seedStatsTask(t, dt, "PR-12313", time.Time{}, []string{"merge master", "push"}, 0)
+	seedUnknownTurn(t, dt, task.ID, "open PR")
 	freezeStatsBaseline(t, dt.ctx.Layout)
 
 	if code := dt.run("factory", "stats", "--json"); code != 0 {
@@ -137,9 +141,10 @@ func TestFactoryStatsJSONHasTheTasksAndTheBaseline(t *testing.T) {
 	var got struct {
 		Since *time.Time `json:"since"`
 		Tasks []struct {
-			Key        string `json:"key"`
-			Typed      int    `json:"typed"`
-			StepStarts int    `json:"step_starts"`
+			Key           string `json:"key"`
+			Typed         int    `json:"typed"`
+			StepStarts    int    `json:"step_starts"`
+			UnknownOrigin int    `json:"unknown_origin"`
 		} `json:"tasks"`
 		Baseline *struct {
 			Tickets int `json:"tickets"`
@@ -149,8 +154,23 @@ func TestFactoryStatsJSONHasTheTasksAndTheBaseline(t *testing.T) {
 		t.Fatalf("%v:\n%s", err, dt.stdout)
 	}
 	if got.Since != nil || len(got.Tasks) != 1 || got.Tasks[0].Key != "PR-12313" || got.Tasks[0].Typed != 2 || got.Tasks[0].StepStarts != 2 ||
-		got.Baseline == nil || got.Baseline.Tickets != 12 {
-		t.Errorf("report %+v, want the one task with two step starts, no window and the 12-ticket baseline", got)
+		got.Tasks[0].UnknownOrigin != 1 || got.Baseline == nil || got.Baseline.Tickets != 12 {
+		t.Errorf("report %+v, want the one task with two step starts, one turn of unknown origin apart, no window and the 12-ticket baseline", got)
+	}
+}
+
+// seedUnknownTurn records a turn typed in a pane of task id whose origin
+// nothing proves.
+func seedUnknownTurn(t *testing.T, dt *daemonGroupTest, id int64, text string) {
+	t.Helper()
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+	if _, err := reg.RecordInput(context.Background(), registry.Input{TaskID: id, Kind: registry.InputPaneTyped, Text: text,
+		Origin: registry.OriginUnknown}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -2884,6 +2884,13 @@ type UserTurn struct {
 	// typed prompt); "" when the transcript names none (an older Claude Code,
 	// every Codex rollout).
 	Origin string
+	// Before is what the agent said in its two turns before this one, oldest
+	// first, each turn's texts joined by a line break: the text of the
+	// assistant's messages (Claude) or of the agent_message events (Codex)
+	// between two prompts. A turn that said nothing is skipped, and a
+	// session's first turns have fewer. ClaudeUserTurns and CodexUserTurns
+	// read it in the same pass over the file; ClaudeQueuedTurns leaves it nil.
+	Before []string
 }
     UserTurn is a prompt typed into an agent's pane, by a person or by magnum
     through herdr, as its transcript records it.
@@ -2904,19 +2911,23 @@ func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error)
     that are stamped at or after since (the zero time: all of them), in order:
     the user entries that start a turn (a string, or the first text block,
     is the Text; a tool result and the line esc writes are no turns),
-    not the entries of a subagent's own thread, not text Claude Code adds itself
-    (isMeta) and not task notifications. The whole file is read, a line at a
-    time; a line that is no JSON, such as the half-written last one, is skipped.
-    A prompt typed while the agent worked and taken into the turn it was in is
-    an attachment entry, not a user entry, and is not returned.
+    not the entries of a subagent's own thread, not text Claude Code adds
+    itself (isMeta) and not task notifications. Each carries the text of
+    the assistant's messages in the agent's two turns before it (Before;
+    a turn a task notification began is one of the agent's turns too).
+    The whole file is read, a line at a time; a line that is no JSON, such as
+    the half-written last one, is skipped. A prompt typed while the agent worked
+    and taken into the turn it was in is an attachment entry, not a user entry,
+    and is not returned.
 
 func CodexUserTurns(path string, since time.Time) ([]UserTurn, error)
     CodexUserTurns reads the user turns of the Codex rollout at path that
     are stamped at or after since (the zero time: all of them), in order:
-    its user_message events, with the text of payload.message. Unlike the tail
-    scan TurnError makes, it reads the whole file, so a long turn's output never
-    pushes a prompt out of reach. An empty message and a line that is no JSON
-    are skipped.
+    its user_message events, with the text of payload.message, each with the
+    agent_message texts of the agent's two turns before it (Before). Unlike the
+    tail scan TurnError makes, it reads the whole file, so a long turn's output
+    never pushes a prompt out of reach. An empty message and a line that is no
+    JSON are skipped.
 
 type WhiteboardPromptInput struct {
 	Owner, Repo, Checkout, BaseRef, ReviewURL, ReviewFile, Session string
@@ -12300,6 +12311,17 @@ const (
     came with it; a stop, a drop or a retry has none.
 
 const (
+	OriginHerdr   = "herdr"
+	OriginUnknown = "unknown"
+)
+    The origins of a turn typed into a pane (InputPaneTyped): the proof that the
+    operator, and nobody else, typed it. OriginHerdr: herdr showed the operator
+    in the task's panes (the owner row's human_active_at) within two minutes of
+    the turn. OriginUnknown: nothing proves who typed it; such a turn is kept
+    for evaluation only, never counted as a typed message and never a lesson's
+    source.
+
+const (
 	ClassStepStart  = "step_start"
 	ClassApproval   = "approval"
 	ClassCorrection = "correction"
@@ -13335,8 +13357,10 @@ type Event struct {
 	RunID  string
 	Kind   EventKind
 	Reason string
+	Turns  []Turn
 }
-    Event is one thing the runtime saw on a run of a task's role.
+    Event is one thing the runtime saw on a run of a task's role. Turns are an
+    EventTyped's.
 
 type EventKind string
     EventKind is what happened to a run of a factory agent.
@@ -13377,6 +13401,12 @@ const (
 	// settled yes and its run watched as submitted; nothing is sent again,
 	// and a wait on you for it is settled.
 	EventDelivered EventKind = "delivered"
+	// EventTyped: a read of the role's transcript found turns the factory
+	// did not send (Turns): typed into its pane by the operator, or by
+	// somebody nothing proves. Each read hands every such turn the
+	// transcript holds, recorded or not; the engine records each once. It is
+	// a record, nothing a stage waits for.
+	EventTyped EventKind = "typed"
 )
     The kinds of Event.
 
@@ -13446,7 +13476,10 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
     or overload (EventPaused, its reason and end), a refusal (EventRefused),
     a dialog left to the operator (EventBlocked, EventHooksTrust), a lost
     pane whose recoveries ran out (EventLost) and a loop without progress
-    (EventNoProgress). A panic is contained: it comes back as the error.
+    (EventNoProgress), and the turns typed into its panes (EventTyped, typed).
+    A pass reads the user turns of an agent's transcript once, for the turns
+    typed and the delivery of a prompt alike. A panic is contained: it comes
+    back as the error.
 
 func (r *Runtime) Owner(ctx context.Context, t registry.Task) (store.PR, error)
     Owner upserts task t's owner row: repository factory/<repo name>, number the
@@ -13569,6 +13602,23 @@ func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err
     the hung-turn steps, and the recoveries that show no progress. It returns
     EventStuck and EventLost when their steps ran out. A panic is contained:
     it comes back as the error.
+
+type Turn struct {
+	At         time.Time
+	Text       string
+	Before     string
+	Stage      string
+	AgentState string
+	Origin     string
+}
+    Turn is a user turn of a factory agent's transcript that the factory did
+    not send: At when the CLI stamped it, Text as typed (the engine scrubs it),
+    Before what the agent said in its two turns before it (as said, oldest
+    first, blank-line apart: the engine scrubs it whole before the registry
+    keeps its last 1 KiB), Stage the stage of the attempt the agent worked in,
+    AgentState herdr.StatusWorking when a run of the factory's was in flight
+    in the pane when the turn arrived (else herdr.StatusIdle), and Origin
+    registry.OriginHerdr or registry.OriginUnknown.
 
 type WaitError struct {
 	Who, What string
@@ -13756,6 +13806,7 @@ type TaskStats struct {
 	Key    string
 
 	Typed, StepStarts, Approvals, Corrections, Access int
+	UnknownOrigin                                     int
 	AnswerBatches, Decisions, ReviewRounds            int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
@@ -13770,14 +13821,17 @@ type TaskStats struct {
     message; the message that starts the task, however it is recorded, is the
     one the factory needs, so it is typed and never a step start, whatever
     its words say); a message of another class, or of none, is only typed.
-    AnswerBatches counts the revisions of questions that were answered, and
-    Decisions the decisions on cards; both are counted apart. OperatorSecs is
-    the operator's time on cards: for each decision, from the card shown to the
-    decision, and for each answered revision of questions, from the questions
-    shown to the first answer, each at most cardCap (a card never shown has no
-    time to measure). WaitedOnYou is how long the task waited on the operator,
-    asleep or not (its spans that wait on "you"). StartToReady is how long it
-    took to reach the ready card (zero before it does).
+    UnknownOrigin counts apart the turns typed in a pane that nothing proves the
+    operator typed (registry.OriginUnknown): kept for evaluation only, they are
+    never a typed message, a step start or any class. AnswerBatches counts the
+    revisions of questions that were answered, and Decisions the decisions on
+    cards; both are counted apart. OperatorSecs is the operator's time on cards:
+    for each decision, from the card shown to the decision, and for each
+    answered revision of questions, from the questions shown to the first
+    answer, each at most cardCap (a card never shown has no time to measure).
+    WaitedOnYou is how long the task waited on the operator, asleep or not (its
+    spans that wait on "you"). StartToReady is how long it took to reach the
+    ready card (zero before it does).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in

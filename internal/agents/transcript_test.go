@@ -99,6 +99,101 @@ func TestClaudeUserTurnsSkipSidechainsMetaAndNotifications(t *testing.T) {
 	}
 }
 
+// Each user turn carries the agent's text of its two turns before it, oldest
+// first: the assistant's text between two prompts (a tool call and a tool
+// result neither end a turn nor say anything), a turn that said nothing
+// skipped, a subagent's own thread left out, whatever since keeps.
+func TestClaudeUserTurnsCarryTheAgentsTwoTurnsBefore(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	at := t0
+	sub := assistantSays(at.Add(4*time.Minute), "the subagent's own reply")
+	sub["isSidechain"] = true
+	tr.addAll(
+		[]tline{
+			humanPrompt(at, "first prompt"),
+			assistantSays(at.Add(10*time.Second), "Reading the code."),
+			toolUse(at.Add(20*time.Second), "toolu_1", "Read", map[string]any{"file_path": "app/models/point.rb"}),
+			toolResult(at.Add(30*time.Second), "toolu_1", "class Point", nil, false),
+			assistantSays(at.Add(40*time.Second), "The refund path drops points."),
+			humanPrompt(at.Add(time.Minute), "second prompt"),
+			assistantSays(at.Add(2*time.Minute), "Which table?"),
+			humanPrompt(at.Add(3*time.Minute), "third prompt"),
+			toolUse(at.Add(3*time.Minute+time.Second), "toolu_2", "Read", map[string]any{"file_path": "db/schema.rb"}),
+			sub,
+			humanPrompt(at.Add(5*time.Minute), "fourth prompt"),
+		},
+	)
+
+	got, err := ClaudeUserTurns(tr.path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		nil,
+		{"Reading the code.\nThe refund path drops points."},
+		{"Reading the code.\nThe refund path drops points.", "Which table?"},
+		{"Reading the code.\nThe refund path drops points.", "Which table?"}, // the turn before it said nothing
+	}
+	if len(got) != len(want) {
+		t.Fatalf("turns = %+v, want %d", got, len(want))
+	}
+	for i, w := range want {
+		if !slices.Equal(got[i].Before, w) {
+			t.Errorf("%q: Before = %q, want %q", got[i].Text, got[i].Before, w)
+		}
+	}
+	late, err := ClaudeUserTurns(tr.path, at.Add(3*time.Minute))
+	if err != nil || len(late) != 2 || !slices.Equal(late[0].Before, want[2]) {
+		t.Fatalf("turns since 3m = %+v, %v; want the replies read before since too", late, err)
+	}
+}
+
+// A Codex user message carries the agent_message texts of the two turns
+// before it, oldest first.
+func TestCodexUserTurnsCarryTheAgentsTwoTurnsBefore(t *testing.T) {
+	home := t.TempDir()
+	at := t0
+	line := func(at time.Time, typ, message string) map[string]any {
+		return map[string]any{"timestamp": at.UTC().Format(time.RFC3339Nano), "type": "event_msg",
+			"payload": map[string]any{"type": typ, "message": message}}
+	}
+	codexRollout(t, home, at,
+		map[string]any{"timestamp": at.UTC().Format(time.RFC3339Nano), "type": "session_meta", "payload": map[string]any{"id": codexSID}},
+		line(at.Add(time.Second), "user_message", "find the cause"),
+		line(at.Add(2*time.Second), "agent_message", "Reading the ledger."),
+		line(at.Add(3*time.Second), "agent_message", "The cause is the refund job."),
+		taskComplete(at.Add(4*time.Second), "", ""),
+		line(at.Add(time.Minute), "user_message", "and the fix?"),
+		line(at.Add(2*time.Minute), "agent_message", "Skip expired points."),
+		line(at.Add(3*time.Minute), "user_message", "ok"),
+		line(at.Add(4*time.Minute), "agent_message", "Done."),
+		line(at.Add(5*time.Minute), "user_message", "thanks"),
+	)
+	path, err := rolloutIn(home, codexSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := CodexUserTurns(path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		nil,
+		{"Reading the ledger.\nThe cause is the refund job."},
+		{"Reading the ledger.\nThe cause is the refund job.", "Skip expired points."},
+		{"Skip expired points.", "Done."},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("turns = %+v, want %d", got, len(want))
+	}
+	for i, w := range want {
+		if !slices.Equal(got[i].Before, w) {
+			t.Errorf("%q: Before = %q, want %q", got[i].Text, got[i].Before, w)
+		}
+	}
+}
+
 // A prompt typed while the agent worked is no user entry: Claude Code
 // queues it (an enqueue line) and either starts a turn with it later or
 // takes it into the turn it is in (a queued_command attachment). Both are

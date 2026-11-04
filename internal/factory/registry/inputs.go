@@ -26,6 +26,17 @@ const (
 	InputSayOneLine = "say_one_line"
 )
 
+// The origins of a turn typed into a pane (InputPaneTyped): the proof that
+// the operator, and nobody else, typed it. OriginHerdr: herdr showed the
+// operator in the task's panes (the owner row's human_active_at) within two
+// minutes of the turn. OriginUnknown: nothing proves who typed it; such a
+// turn is kept for evaluation only, never counted as a typed message and
+// never a lesson's source.
+const (
+	OriginHerdr   = "herdr"
+	OriginUnknown = "unknown"
+)
+
 // RoleIntake is the Role of the input that starts a task: the words it was
 // started with, whether they are recorded as its text (a prompt, a key alone)
 // or as the guidance after a key. It is the mark of the start's message, which

@@ -50,6 +50,12 @@ const (
 	// settled yes and its run watched as submitted; nothing is sent again,
 	// and a wait on you for it is settled.
 	EventDelivered EventKind = "delivered"
+	// EventTyped: a read of the role's transcript found turns the factory
+	// did not send (Turns): typed into its pane by the operator, or by
+	// somebody nothing proves. Each read hands every such turn the
+	// transcript holds, recorded or not; the engine records each once. It is
+	// a record, nothing a stage waits for.
+	EventTyped EventKind = "typed"
 )
 
 // PausedPrefix leads the error of a run its CLI's pause ended (a usage
@@ -59,11 +65,13 @@ const (
 // once the pause is over.
 const PausedPrefix = "paused: "
 
-// Event is one thing the runtime saw on a run of a task's role.
+// Event is one thing the runtime saw on a run of a task's role. Turns are
+// an EventTyped's.
 type Event struct {
 	TaskID int64
 	Role   string
 	RunID  string
 	Kind   EventKind
 	Reason string
+	Turns  []Turn
 }
