@@ -937,6 +937,9 @@ stages = [
 ]
 
 [factory.kinds.chore]
+proof = "green"                   # the coding stage's proof: "red" (the default) needs the change's spec red on the base and
+                                  # green at the head (a bug, a feature); "green" runs the specs at the head only (a chore's
+                                  # specs stay green)
 stages = [
   { name = "investigate", type = "agents", roles = ["fx-scope"], end = "findings" },
   { name = "judge", type = "agents", roles = ["fx-judge"], end = "report" },

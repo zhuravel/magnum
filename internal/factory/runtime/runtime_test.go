@@ -668,6 +668,27 @@ func TestRunStateTellsAPausedRunFromAnEndedOne(t *testing.T) {
 	}
 }
 
+// AtWork names the role whose run is in flight in the task's copy, so the
+// factory's own commands there wait for it; a task whose runs ended, and one
+// that never launched, has none at work.
+func TestAtWorkNamesTheRoleWhoseRunIsInFlight(t *testing.T) {
+	g := newRig(t)
+	if role, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" {
+		t.Fatalf("AtWork before a launch = %q, %v", role, err)
+	}
+	g.launch("fx-repro")
+	g.send("fx-repro", "reproduce the bug")
+	if role, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "fx-repro" {
+		t.Fatalf("AtWork with a prompt in flight = %q, %v; want fx-repro", role, err)
+	}
+	g.observe()
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	g.observeN(2)
+	if role, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" {
+		t.Fatalf("AtWork after the run ended = %q, %v; want none", role, err)
+	}
+}
+
 // Once Codex never works on a task, its live Codex sessions are quit and
 // their runs abandoned; its Claude sessions go on, and a session whose
 // pane you are in waits for you to leave.

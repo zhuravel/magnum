@@ -682,3 +682,85 @@ func TestSwitchCreateRefusesAnExistingBranch(t *testing.T) {
 		t.Fatal("an option as the start was taken")
 	}
 }
+
+// FastForward moves the branch checked out to a commit ahead of it (a
+// factory task's branch with no commit of its own, to a fresh
+// origin/<base>), carrying the work tree's changes the move does not touch;
+// it refuses a commit that is not ahead, one a change would be overwritten
+// by, and a detached HEAD, and moves nothing then.
+func TestFastForwardCarriesTheChangesAndRefusesWhatIsNotAhead(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	if err := fx.c.SwitchCreate(ctx, fx.clone, "task-PR-12346", "origin/main"); err != nil {
+		t.Fatal(err)
+	}
+	fx.write(fx.clone, "spec/repro_spec.rb", "it fails\n") // the reproducer's spec, uncommitted
+	fx.write(fx.clone, "README.md", "hello, edited\n")
+	fresh := fx.commit(fx.origin, "app/b.rb", "b = 1\n", "c3 main moves")
+	if err := fx.c.FetchBranch(ctx, fx.clone, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.c.FastForward(ctx, fx.clone, "origin/main"); err != nil {
+		t.Fatalf("FastForward: %v", err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "task-PR-12346"); got != fresh {
+		t.Fatalf("the branch is at %s, want origin/main %s", got, fresh)
+	}
+	if b, _ := fx.c.CurrentBranch(ctx, fx.clone); b != "task-PR-12346" {
+		t.Fatalf("the checkout is on %q after the move", b)
+	}
+	if got, _ := os.ReadFile(filepath.Join(fx.clone, "README.md")); string(got) != "hello, edited\n" {
+		t.Fatalf("README.md = %q, want the change carried", got)
+	}
+	if _, err := os.Stat(filepath.Join(fx.clone, "spec", "repro_spec.rb")); err != nil {
+		t.Fatalf("the untracked spec went: %v", err)
+	}
+
+	// A commit the branch is not behind of: refused, nothing moves.
+	fx.git(fx.clone, "checkout", "--quiet", "--", "README.md")
+	own := fx.commit(fx.clone, "app/fix.rb", "fixed\n", "the task's work")
+	if err := fx.c.FastForward(ctx, fx.clone, fx.base); err == nil {
+		t.Fatal("FastForward to an older commit succeeded")
+	}
+	if got := fx.git(fx.clone, "rev-parse", "HEAD"); got != own {
+		t.Fatalf("a refused move left HEAD at %s, want %s", got, own)
+	}
+	// A change the move would overwrite: refused, nothing moves.
+	fx.commit(fx.origin, "README.md", "hello, upstream\n", "c4 edits README")
+	if err := fx.c.FetchBranch(ctx, fx.clone, "main"); err != nil {
+		t.Fatal(err)
+	}
+	fx.git(fx.clone, "switch", "--quiet", "--no-track", "-c", "task-2", fresh)
+	fx.write(fx.clone, "README.md", "hello, mine\n")
+	if err := fx.c.FastForward(ctx, fx.clone, "origin/main"); err == nil {
+		t.Fatal("FastForward over a change of README.md succeeded")
+	}
+	if got := fx.git(fx.clone, "rev-parse", "task-2"); got != fresh {
+		t.Fatalf("a refused move left task-2 at %s, want %s", got, fresh)
+	}
+	fx.git(fx.clone, "checkout", "--quiet", "--", "README.md")
+	fx.git(fx.clone, "switch", "--quiet", "--detach", own)
+	if err := fx.c.FastForward(ctx, fx.clone, "origin/main"); !errors.Is(err, ErrNotOnBranch) {
+		t.Fatalf("FastForward of a detached HEAD = %v, want ErrNotOnBranch", err)
+	}
+	if err := fx.c.FastForward(ctx, fx.clone, "--all"); err == nil {
+		t.Fatal("an option as the target was taken")
+	}
+}
+
+// TreeOf is the tree id of a commit, which a proof records for each of its
+// runs.
+func TestTreeOfIsTheCommitsTree(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	want := fx.git(fx.clone, "rev-parse", fx.base+"^{tree}")
+	if got, err := fx.c.TreeOf(ctx, fx.clone, fx.base); err != nil || got != want {
+		t.Fatalf("TreeOf = %q, %v; want %s", got, err, want)
+	}
+	if _, err := fx.c.TreeOf(ctx, fx.clone, "no-such-ref"); !errors.Is(err, ErrNoSuchRef) {
+		t.Fatalf("TreeOf of no ref = %v, want ErrNoSuchRef", err)
+	}
+	if _, err := fx.c.TreeOf(ctx, fx.clone, "--all"); err == nil {
+		t.Fatal("an option as the revision was taken")
+	}
+}

@@ -661,16 +661,7 @@ func (c *copySet) script(ctx context.Context, cp Copy, script string, timeout ti
 // unset is what the copies' commands never inherit from the daemon: the
 // variables that point git elsewhere, the GitHub tokens and the App
 // identities' private keys, as magnum's heavy commands.
-func (c *copySet) unset() []string {
-	keys := slices.Concat(gitx.ScrubbedEnv(), slots.DefaultStripEnv)
-	for _, id := range c.cfg.Identities {
-		if id.PrivateKeyEnv != "" {
-			keys = append(keys, id.PrivateKeyEnv)
-		}
-	}
-	slices.Sort(keys)
-	return slices.Compact(keys)
-}
+func (c *copySet) unset() []string { return unsetEnv(c.cfg) }
 
 // Release hands task t's copy back: refused while one of the factory's
 // sessions works in it (ErrPaneInCopy), its server stopped, then magnum's

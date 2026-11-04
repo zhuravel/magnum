@@ -139,7 +139,9 @@ func (d *factoryDaemon) Close() error {
 // slot manager over the agents store, whose guard sees the panes of the
 // factory's herdr session and of yours, factory.GuardPanes, with the
 // runtime's owner rows), the [jira] site's client when [jira] is on (intake's
-// tickets), and the runner of the overlap line's git and gh reads. GitHub,
+// tickets), and the runner of the overlap line's git and gh reads and of the
+// coding stage's proof and precheck. Every command of the daemon's runner,
+// git's included, goes through the deny list (factory.Guard). GitHub,
 // magnum and the local reviewer are nil until the builds that bring them.
 // The caller holds the factory lock (factory.Lock); the registry's migration
 // is still refused
@@ -191,7 +193,9 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	}
 	d.closers = append(d.closers, d.Agents.Close)
 
-	run := &execx.Real{Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "exec"}}
+	// Every command the factory runs goes through the deny list: no remote
+	// console, kubectl exec or gh-ost, whatever wraps it (factory.Guard).
+	run := factory.Guard(&execx.Real{Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "exec"}}, cfg)
 	quiet := &execx.Real{} // the reads of every tick (sysctl) stay out of the log
 	git := gitx.New(run)
 	git.HTTPSFetch = true

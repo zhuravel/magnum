@@ -280,6 +280,10 @@ func (l Layout) FactoryPid() string { return filepath.Join(l.State(), "factory.p
 // daemon's whole life.
 func (l Layout) FactoryLock() string { return filepath.Join(l.State(), "factory.lock") }
 
+// FactorySpecsLock is the lock file under State that a factory precheck or
+// proof holds (flock) while it runs specs: one at a time on the machine.
+func (l Layout) FactorySpecsLock() string { return filepath.Join(l.State(), "factory-specs.lock") }
+
 // FactoryLog is the factory daemon's log file in Logs.
 func (l Layout) FactoryLog() string { return filepath.Join(l.Logs(), "factory.log") }
 

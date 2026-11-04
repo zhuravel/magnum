@@ -161,7 +161,9 @@ type FactoryInstall struct {
 
 // FactoryPrecheck is [factory.repo.precheck]: what runs after the writer's
 // last commit and after each fix of the local review. A command takes
-// {files} (the changed files, shell-quoted) and {base}.
+// {files} (the changed files, shell-quoted) and {base}; a migrations
+// command also {version} (the digits a migration's file name starts with)
+// and {file}, and runs once per migration the branch adds.
 type FactoryPrecheck struct {
 	Lint       []string `toml:"lint"`
 	Specs      string   `toml:"specs"`
@@ -185,10 +187,24 @@ type FactoryStaging struct {
 	After  string `toml:"after"`
 }
 
-// FactoryKind is a kind of task: the stages it runs, in order.
+// FactoryKind is a kind of task: the stages it runs, in order, and what its
+// coding stage's proof needs (Proof): FactoryProofRed (the default, ""), a
+// spec of the change that fails on the base and passes at the head (a bug,
+// a feature), or FactoryProofGreen, its specs green at the head with no run
+// on the base (a chore: the existing specs stay green).
 type FactoryKind struct {
 	Stages []FactoryStage `toml:"stages"`
+	Proof  string         `toml:"proof"`
 }
+
+// RedRun reports whether the kind's proof needs its spec red on the base.
+func (k FactoryKind) RedRun() bool { return k.Proof != FactoryProofGreen }
+
+// The proofs a kind may name (FactoryKind.Proof).
+const (
+	FactoryProofRed   = "red"
+	FactoryProofGreen = "green"
+)
 
 // FactoryStage is one stage of a kind of task. Its Type picks the code that
 // runs it and which of the other fields it takes: an agents stage launches
@@ -337,10 +353,12 @@ func DefaultFactoryKinds() map[string]FactoryKind {
 			FactoryStage{Name: "publish", Type: FactoryStageEffect, Effect: FactoryEffectPublish, End: FactoryEndPR},
 		)}
 	}
+	chore := kind([]string{"fx-scope"})
+	chore.Proof = FactoryProofGreen // its specs stay green: no red run on the base
 	return map[string]FactoryKind{
 		"bug":     kind([]string{"fx-repro", "fx-cause", "fx-history"}, FactoryStage{Name: "reproduction", Type: FactoryStageGate, Gate: FactoryGateReproduced}),
 		"feature": kind([]string{"fx-points"}),
-		"chore":   kind([]string{"fx-scope"}),
+		"chore":   chore,
 	}
 }
 
@@ -616,6 +634,10 @@ func (c *Config) validateFactoryKinds() []error {
 		}
 		if len(k.Stages) == 0 {
 			errs = append(errs, fmt.Errorf("%s: needs at least one stage", where))
+		}
+		if k.Proof != "" && k.Proof != FactoryProofRed && k.Proof != FactoryProofGreen {
+			errs = append(errs, fmt.Errorf("%s: proof %q must be %s (a spec red on the base, green at the head) or %s (green at the head only)",
+				where, k.Proof, FactoryProofRed, FactoryProofGreen))
 		}
 		seen := map[string]bool{}
 		decided := false // a ready_push decision stage came before

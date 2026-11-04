@@ -223,6 +223,65 @@ func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) err
 	return nil
 }
 
+// FastForward moves the branch checked out in the work tree at dir to to,
+// a commit ahead of it (`git merge --ff-only --no-autostash <to>`): a factory
+// task's branch with no commit of its own, to a fresh origin/<base>. The
+// work tree's changes the move does not touch are carried, staged ones
+// staged; one it would overwrite makes git refuse, which is an error, and
+// nothing moves. A to that HEAD is not an ancestor of is ErrNotFastForward
+// and a detached HEAD ErrNotOnBranch, nothing moved; to at HEAD is a no-op.
+func (c *Client) FastForward(ctx context.Context, dir, to string) error {
+	if err := checkRev("target", to); err != nil {
+		return err
+	}
+	switch on, err := c.headRef(ctx, dir); {
+	case err != nil:
+		return err
+	case on == "":
+		return fmt.Errorf("gitx: merge --ff-only %s: HEAD is detached: %w", to, ErrNotOnBranch)
+	}
+	head, err := c.RevParse(ctx, dir, "HEAD")
+	if err != nil {
+		return err
+	}
+	target, err := c.RevParse(ctx, dir, to)
+	if err != nil {
+		return err
+	}
+	if head == target {
+		return nil
+	}
+	switch ahead, err := c.IsAncestor(ctx, dir, head, target); {
+	case err != nil:
+		return err
+	case !ahead:
+		return fmt.Errorf("gitx: merge --ff-only %s: %w", to, ErrNotFastForward)
+	}
+	_, err = c.git(ctx, dir, call{label: "merge --ff-only " + to, mutates: true, timeout: commitTimeout},
+		"merge", "--ff-only", "--quiet", "--no-verify", "--no-autostash", target)
+	return err
+}
+
+// TreeOf is the id of rev's tree (`git rev-parse --verify <rev>^{tree}`); a
+// rev that does not resolve is ErrNoSuchRef.
+func (c *Client) TreeOf(ctx context.Context, dir, rev string) (string, error) {
+	if err := checkRev("revision", rev); err != nil {
+		return "", err
+	}
+	res, err := c.git(ctx, dir, call{label: "rev-parse " + rev + "^{tree}", probe: true}, "rev-parse", "--verify", "--quiet", rev+"^{tree}")
+	if err != nil {
+		if code, ok := exitCode(err); ok && code == 1 {
+			return "", fmt.Errorf("gitx: rev-parse %s^{tree}: %w", rev, ErrNoSuchRef)
+		}
+		return "", err
+	}
+	tree := res.Out()
+	if !isOID(tree) {
+		return "", fmt.Errorf("gitx: rev-parse %s^{tree}: unexpected output %q", rev, tree)
+	}
+	return tree, nil
+}
+
 // headRef is the ref HEAD points at in repo ("refs/heads/main"), "" when it
 // is detached.
 func (c *Client) headRef(ctx context.Context, repo string) (string, error) {

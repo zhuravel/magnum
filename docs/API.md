@@ -3843,6 +3843,12 @@ const (
     Built-in critic values.
 
 const (
+	FactoryProofRed   = "red"
+	FactoryProofGreen = "green"
+)
+    The proofs a kind may name (FactoryKind.Proof).
+
+const (
 	FactoryStageAgents   = "agents"
 	FactoryStageGate     = "gate"
 	FactoryStageReview   = "review"
@@ -5201,8 +5207,16 @@ type FactoryInstall struct {
 
 type FactoryKind struct {
 	Stages []FactoryStage `toml:"stages"`
+	Proof  string         `toml:"proof"`
 }
-    FactoryKind is a kind of task: the stages it runs, in order.
+    FactoryKind is a kind of task: the stages it runs, in order, and what its
+    coding stage's proof needs (Proof): FactoryProofRed (the default, ""),
+    a spec of the change that fails on the base and passes at the head (a bug,
+    a feature), or FactoryProofGreen, its specs green at the head with no run on
+    the base (a chore: the existing specs stay green).
+
+func (k FactoryKind) RedRun() bool
+    RedRun reports whether the kind's proof needs its spec red on the base.
 
 type FactoryLocalReview struct {
 	// Cycles is the most rounds the loop runs (1 to MaxFactoryCycles).
@@ -5226,7 +5240,9 @@ type FactoryPrecheck struct {
 }
     FactoryPrecheck is [factory.repo.precheck]: what runs after the writer's
     last commit and after each fix of the local review. A command takes {files}
-    (the changed files, shell-quoted) and {base}.
+    (the changed files, shell-quoted) and {base}; a migrations command also
+    {version} (the digits a migration's file name starts with) and {file},
+    and runs once per migration the branch adds.
 
 type FactoryRepo struct {
 	Repo string `toml:"repo"` // owner/name
@@ -11270,6 +11286,9 @@ var (
 	// milestone 2) or a run link (CI tasks, milestone 3).
 	ErrLater = errors.New("factory: not in this milestone")
 )
+var ErrDenied = errors.New("denied")
+    ErrDenied marks a command the deny list refused (Guard): it never started.
+
 var ErrHeld = errors.New("held")
     ErrHeld marks a launch or an effect that the engine held back: the daemon
     drains, or a hold of the machine is on. It costs the task nothing.
@@ -11300,9 +11319,15 @@ func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok boo
         recommendation;
       - critic: critic.md, newer than since and not empty, and each role's
         questions-<role>.json, when it is there, valid as questions.json is;
-      - pr_body: pr-body.md, newer than since and not empty.
+      - pr_body: pr-body.md, newer than since and not empty;
+      - proof: proof.json, newer than since, naming the spec files of the
+        writer's proof as clean paths relative to the checkout (ProofFile),
+        and its questions-<role>.json, when it is there, valid. The rest of the
+        fact (commits on the branch after origin/<base>, no tracked change,
+        the factory's own proof and the precheck passed at the head) is the
+        coding stage's to check (provenHead).
 
-    The proof and pr facts are checked by the stages that own them, not here
+    The clean and pr facts are checked by the stages that own them, not here
     (not done, saying so).
 
 func CheckPrompts(cfg *config.Config) error
@@ -11323,6 +11348,25 @@ func DaemonPID(l paths.Layout) (int, error)
 func DaemonPIDWith(l paths.Layout, procs engine.Processes) (int, error)
     DaemonPIDWith is DaemonPID with the processes it asks about given, so a test
     needs no real process.
+
+func Denied(argv []string, repo config.FactoryRepo) (why string, denied bool)
+    Denied reports whether the factory may not run argv, and why, in plain
+    words: gh-ost with any argument, kubectl exec (and the other verbs that
+    reach into a pod: attach, debug, run, cp, port-forward), and each of repo's
+    consoles at a command's place. It reads through the wrappers a command
+    runs another under (mise exec, env and its assignments, bundle exec, exec,
+    command, nohup, time, nice, timeout, xargs, sudo) and into a shell's -c
+    script, each command of it (; && || | & and newlines, $( and backticks);
+    gh-ost and kubectl's verbs are also found as words anywhere in a script,
+    quoted or not, so a substitution inside quotes does not hide them. A
+    console's own file as an argument (lint of bin/remote-console) is no console
+    run.
+
+func Guard(next execx.Runner, cfg *config.Config) execx.Runner
+    Guard puts the deny list (Denied) in front of next, with the consoles of
+    every [[factory.repo]] of cfg: a command it denies never starts, and its
+    error (ErrDenied) says why. A runner Guard made is returned as it is;
+    nil stays nil. The factory daemon runs every command of its own through one.
 
 func Kick(l paths.Layout) (int, error)
     Kick asks the running factory daemon for a pass now (SIGUSR1); it returns
@@ -11439,7 +11483,10 @@ type Deps struct {
 	Review   LocalReviewer
 	Git      *gitx.Client
 	// Run runs the overlap line's reads (Overlap: git log in the main
-	// clone, gh pr list as your gh login).
+	// clone, gh pr list as your gh login) and the factory's own commands in
+	// a task's copy (its precheck and its proof), every one through the deny
+	// list (Guard: New wraps it). The daemon builds Git over the same
+	// guarded runner.
 	Run execx.Runner
 	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
 	// bytes of the filesystem that holds path.
@@ -11587,12 +11634,57 @@ type Magnum interface {
     Magnum is the review daemon as the factory's local review sees it: busy
     while a real round is in flight or due, so a local round yields to it.
 
+type MigrationFlag struct {
+	Path                                   string
+	Ghost                                  bool
+	Envs, Tables, Large                    []string
+	Online, Irreversible, TwoTablesInGhost bool
+
+	// Has unexported fields.
+}
+    MigrationFlag is one migration the branch adds, as the lint reads it:
+    its path (relative to the checkout), whether it uses the repository's gh-ost
+    marker and the environments it names there, the tables it changes, those
+    of them at or over large_table_rows, whether it says an online algorithm
+    (ALGORITHM=INPLACE or INSTANT, LOCK=NONE, algorithm: :inplace, :instant or
+    :concurrently), whether it has no way back (only an up, a down that raises,
+    a change Rails cannot reverse; a gh-ost migration's down refuses by the
+    marker's design and is not counted), and whether it is a gh-ost migration of
+    more than one table.
+
+func ScanMigrations(checkout string, added []string, repo config.FactoryRepo) ([]MigrationFlag, error)
+    ScanMigrations reads each of added (paths of migrations relative to
+    checkout, the task's copy at the head) and names it with its flags,
+    in order. The marker comes from repo's ghost_marker (none: no migration
+    is a gh-ost one), the sizes from its table_stats file in the checkout and
+    its large_table_rows (none: no table is large); a table_stats file that is
+    missing or not JSON is an error, since the sizes cannot be told.
+
+func (f MigrationFlag) Problems() []string
+    Problems are what the lint flags in f, in plain words; none for a migration
+    it lets go.
+
+func (f MigrationFlag) String() string
+    String is f in one line: its file, its gh-ost environments, its tables and
+    its problems.
+
 type PRView struct {
 	Number                     int
 	URL, Author, Base, HeadSHA string
 	Draft                      bool
 }
     PRView is a pull request as the factory reads it back after it opened it.
+
+type PrecheckResult struct {
+	Passed     bool
+	Checks     []registry.Check
+	Migrations []MigrationFlag
+	Why        string
+}
+    PrecheckResult is a precheck's end: whether it passed, the checks it
+    recorded (the factory's), the migrations the branch adds with their flags,
+    and why it did not pass (its first failure, in plain words, such as
+    "precheck: over 10m").
 
 type PreviewPayload struct {
 	Text string
@@ -11602,7 +11694,7 @@ type PreviewPayload struct {
 
 type PromptData struct {
 	TaskID                                                 int64
-	Key, Kind, Repo, Branch, Copy, TaskDir                 string
+	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
 	Ticket, Guidance, Prompt, Answers, Rules               string
 	Findings, Report, Questions, Acceptance, Proof, Review string
 	ErrorSkill, DBLockCommand                              string
@@ -11612,8 +11704,9 @@ type PromptData struct {
     factory-shared.md) renders with: paths, keys and commands, never the
     ticket's text, which reaches the agents only as the task's files (spec 12).
     Key is the Jira key ("" for a task of a free prompt), Kind and Repo
-    the task's, Branch its local branch, Copy the checkout of its copy and
-    TaskDir its directory. Ticket (ticket.md), Guidance (guidance.md),
+    the task's, Branch its local branch, Base the repository's base branch
+    (the branch starts at origin/<Base>), Copy the checkout of its copy
+    and TaskDir its directory. Ticket (ticket.md), Guidance (guidance.md),
     Prompt (prompt.md, the operator's request), Answers (answers.md) and Rules
     (rules.md, the learned rules) are paths in TaskDir, each "" while its file
     is not there. Findings is the role's findings-<role>.md in a findings stage,
@@ -11625,6 +11718,41 @@ type PromptData struct {
     ErrorSkill is the repository's error_skill ("" = none: no prompt names one),
     DBLockCommand the `magnum db-lock` line of the copy for the role as it runs,
     and Port the copy's server's (0 when its env names none).
+
+type Proof struct {
+	Specs   []string `json:"specs"`
+	Base    ProofRun `json:"base"`
+	Head    ProofRun `json:"head"`
+	HeadSHA string   `json:"head_sha"`
+	BaseSHA string   `json:"base_sha"`
+	Passed  bool     `json:"passed"`
+	Why     string   `json:"why,omitempty"`
+}
+    Proof is the factory's proof of a head: the spec files it ran, its run
+    on the base (none for a kind whose proof is green) and at the head,
+    the head and the base (the merge base with origin/<base>) it ran on, whether
+    it passed, and why not.
+
+func (p Proof) Holds(head string) bool
+    Holds reports whether p passed at head: another head voids it.
+
+type ProofFile struct {
+	Specs []string `json:"specs"`
+}
+    ProofFile is proof.json as the writer writes it: the spec files of its
+    proof, relative to the checkout (never their results, which the factory
+    finds itself).
+
+type ProofRun struct {
+	Command string        `json:"command,omitempty"`
+	Exit    int           `json:"exit"`
+	Output  string        `json:"output,omitempty"`
+	Tree    string        `json:"tree,omitempty"`
+	Took    time.Duration `json:"took,omitempty"`
+}
+    ProofRun is one spec run of a proof: the command, its exit, the end of its
+    output (redacted), the tree of the commit it ran on (the base's, with the
+    head's spec files on it, for the base run) and how long it took.
 
 type QuestionFile struct {
 	Text        string            `json:"text"`
@@ -11665,16 +11793,19 @@ type Runtime interface {
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
+	AtWork(ctx context.Context, t registry.Task) (role string, err error)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
     the owner row of a task in the factory's agents store, the launch of a
     stage's roles (recorded before any workspace exists), the prompts it sends
-    through its ledger, the panes it observes and the watchdog over them, the
-    verification of a run's end, parking a task's sessions, the reconcile of a
-    prompt of unknown delivery, the recovery of a lost pane, the shift of every
-    turn deadline after the Mac slept, the role that runs for a role (its Claude
-    fallback on a task Codex never works on), the quit of such a task's Codex
-    sessions, and a run's state as the agents store keeps it across a restart.
+    through its ledger, the panes it observes and the watchdog over them,
+    the verification of a run's end, parking a task's sessions, the reconcile
+    of a prompt of unknown delivery, the recovery of a lost pane, the shift of
+    every turn deadline after the Mac slept, the role that runs for a role (its
+    Claude fallback on a task Codex never works on), the quit of such a task's
+    Codex sessions, a run's state as the agents store keeps it across a restart,
+    and the role of a task whose run is in flight (the factory's own commands in
+    its copy wait for it).
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -12835,6 +12966,12 @@ type Runtime struct {
 
 func New(d Deps) (*Runtime, error)
     New builds the runtime over d.
+
+func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (string, error)
+    AtWork names the role of task t whose run is in flight (pending,
+    submitted or working: its agent may be changing the copy), "" when none is:
+    the factory's own commands in the task's copy (its proof's base run) wait
+    for it. A task that never launched has none.
 
 func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string
     DBLockCommand is the command prefix a role runs every command that touches
@@ -14276,6 +14413,15 @@ func (c *Client) DirtyPaths(ctx context.Context, dir string, paths ...string) ([
     tree at dir) that differ from HEAD or are untracked, sorted, nil when none;
     ignored files are not listed. At least one path.
 
+func (c *Client) FastForward(ctx context.Context, dir, to string) error
+    FastForward moves the branch checked out in the work tree at dir to to,
+    a commit ahead of it (`git merge --ff-only --no-autostash <to>`): a factory
+    task's branch with no commit of its own, to a fresh origin/<base>. The work
+    tree's changes the move does not touch are carried, staged ones staged; one
+    it would overwrite makes git refuse, which is an error, and nothing moves.
+    A to that HEAD is not an ancestor of is ErrNotFastForward and a detached
+    HEAD ErrNotOnBranch, nothing moved; to at HEAD is a no-op.
+
 func (c *Client) FetchBranch(ctx context.Context, mainClone, base string) error
     FetchBranch updates refs/remotes/origin/<base> in mainClone from the remote.
 
@@ -14509,6 +14655,10 @@ func (c *Client) TreeFiles(ctx context.Context, dir, rev string, pathspecs ...st
     It is `git diff-tree` of the empty tree against rev, unabbreviated, so the
     list changes exactly when a matching file's content, mode or name does.
     A rev that does not resolve is ErrNoSuchRef.
+
+func (c *Client) TreeOf(ctx context.Context, dir, rev string) (string, error)
+    TreeOf is the id of rev's tree (`git rev-parse --verify <rev>^{tree}`);
+    a rev that does not resolve is ErrNoSuchRef.
 
 func (c *Client) Unpushed(ctx context.Context, dir string) (int, error)
     Unpushed counts commits reachable from HEAD that exist on no remote-tracking
@@ -18061,6 +18211,10 @@ func (l Layout) FactoryLog() string
 func (l Layout) FactoryPid() string
     FactoryPid is the factory daemon's pidfile under State, beside the review
     daemon's: the two daemons can run at once.
+
+func (l Layout) FactorySpecsLock() string
+    FactorySpecsLock is the lock file under State that a factory precheck or
+    proof holds (flock) while it runs specs: one at a time on the machine.
 
 func (l Layout) FactoryTaskDir(id int64) string
     FactoryTaskDir is one task's directory in FactoryTasks, named by its id.

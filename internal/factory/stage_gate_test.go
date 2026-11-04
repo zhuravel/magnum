@@ -415,12 +415,12 @@ func TestAnswersReachTheWriterAsADataFile(t *testing.T) {
 
 // A role that ends its turn with questions in the coding stage suspends
 // the stage (no nudge); your answers resume it, in the same attempt and
-// role, with the answers as its next prompt, and the stage's end fact is
-// checked again.
+// role, with the answers as its next prompt, and the stage's end fact (the
+// factory's proof and precheck of the writer's commit) is checked again.
 func TestAQuestionInCodingSuspendsTheStageAndResumesIt(t *testing.T) {
-	h := newHarness(t)
-	codingEndsOnFindings(h) // the coding stage's own proof comes with the coding build
-	task := h.kindTask("PR-12372", "feature", "coding")
+	r := newCodingRig(t)
+	h := r.harness
+	task := r.codingTask("PR-12372", "feature")
 	h.startStage(task)
 	first := h.rt.promptsTo("fx-writer")
 	if len(first) != 1 {
@@ -464,8 +464,10 @@ func TestAQuestionInCodingSuspendsTheStageAndResumesIt(t *testing.T) {
 		t.Fatalf("task %s waits %q: %q, want active", got.State, got.WaitsWho, got.WaitsWhat)
 	}
 
-	h.taskFile(task.ID, "findings-fx-writer.md", "committed abc1234\n")
+	r.fix(task)
 	h.ended(task, "fx-writer")
+	h.tick()
+	h.e.waitBackground() // the proof and the precheck run off the loop
 	h.tick()
 	if got := h.reload(task.ID); got.Stage != "local_review" {
 		t.Fatalf("task %s at %s waiting %q, want past coding once its end fact holds", got.State, got.Stage, got.WaitsWhat)
@@ -587,8 +589,9 @@ func TestAQuestionsFileTheEndFactRefusesGetsTheNudge(t *testing.T) {
 }
 
 // codingEndsOnFindings makes the coding stage of every kind end on the
-// findings of its roles: a stand-in end fact this build checks, until the
-// coding build brings the stage's proof.
+// findings of its roles: a stand-in end fact for the tests of the
+// questions' flow, which need no git (the coding stage's own proof is
+// coding_test.go's and proof_test.go's).
 func codingEndsOnFindings(h *harness) {
 	for name, k := range h.cfg.Factory.Kinds {
 		stages := slices.Clone(k.Stages)

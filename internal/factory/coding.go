@@ -1,0 +1,514 @@
+package factory
+
+// The coding stage (spec 6.4): one writer in the task's copy, on the
+// task's local branch, test first. Before its first prompt the branch
+// starts fresh from the base (startCoding). The stage ends on its end fact
+// `proof`, never on a "done": the branch has commits after origin/<base>,
+// git status shows no tracked change, and the factory's own proof and the
+// precheck passed at the current head. The proof and the precheck can take
+// minutes, and the loop is sequential: they run off the loop, one check per
+// task (checkHead), while the task waits with what the check does, and a
+// later pass takes the result; a head that moved voids it.
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime/debug"
+	"strings"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/textx"
+)
+
+// waitPrecheck is the WaitsWho of a task whose factory checks (its proof,
+// its precheck) run.
+const waitPrecheck = "precheck"
+
+// checkRetry is how long a check that failed to run (git, a command that
+// did not start) is kept before the next pass runs a new one.
+const checkRetry = time.Minute
+
+// baseRecord is base.json, the base_sha artifact: the task's branch and the
+// commit of origin/<base> it starts from (its merge base), as the coding
+// stage left them before the writer's first prompt.
+type baseRecord struct {
+	Branch string    `json:"branch"`
+	Base   string    `json:"base"`
+	At     time.Time `json:"at"`
+}
+
+// startCoding puts task t's copy c on the task's branch, fresh from the
+// base, before a coding attempt's first prompt: a fetch of origin/<base>,
+// then the branch created there (gitx.SwitchCreate), or, when it exists, a
+// branch without a commit of its own (the one the first claim made) moved
+// to the fresh base (gitx.FastForward, which carries the reproducer's spec
+// left in the copy; a change in the way keeps the old base, with an event),
+// a branch of an earlier attempt of the task (base.json names it) reused as
+// it is, and a branch of the name that holds commits not the task's
+// (another task's, yours) left alone: the task works on the name with the
+// next free number, from origin/<base>. Its base is recorded (base.json,
+// the base_sha artifact). It is a guarded step, with begin and ok or fail
+// events, after the copy's guard (no agent at work in it), and it is
+// idempotent: run again, it finds the branch it made.
+func (e *Engine) startCoding(ctx context.Context, t *registry.Task, c Copy) error {
+	repo, err := e.factoryRepo(*t)
+	if err != nil {
+		return err
+	}
+	if t.Branch == "" {
+		return fmt.Errorf("%s has no branch to code on", TaskKey(*t))
+	}
+	if err := e.copyIdle(ctx, *t); err != nil {
+		if h, ok := errors.AsType[heldError](err); ok {
+			e.waitOn(ctx, *t, h.who, h.what)
+		}
+		return err
+	}
+	git := e.d.Git
+	base := baseOf(repo)
+	upstream := "origin/" + base
+	e.event(ctx, t.ID, "branch", registry.PhaseBegin, "prepares "+t.Branch+" in "+c.Name+" from a fresh "+upstream)
+	fail := func(err error) error {
+		e.event(ctx, t.ID, "branch", registry.PhaseFail, t.Branch+" in "+c.Name+": "+textx.Clip(textx.FirstLine(err.Error()), 300))
+		return err
+	}
+	if err := git.FetchBranch(ctx, cmp.Or(repo.MainClone, c.Path), base); err != nil {
+		return fail(err)
+	}
+	switch tip, err := git.RevParse(ctx, c.Path, "refs/heads/"+t.Branch); {
+	case errors.Is(err, gitx.ErrNoSuchRef):
+		err := git.SwitchCreate(ctx, c.Path, t.Branch, upstream)
+		if errors.Is(err, gitx.ErrBranchExists) { // made since the check
+			err = git.Switch(ctx, c.Path, t.Branch)
+		}
+		if err != nil {
+			return fail(err)
+		}
+	case err != nil:
+		return fail(err)
+	default:
+		commits, err := git.CommitsAfter(ctx, c.Path, upstream, tip, false)
+		if err != nil {
+			return fail(err)
+		}
+		switch {
+		case len(commits) == 0:
+			if err := e.onBranch(ctx, c, t.Branch); err != nil {
+				return fail(err)
+			}
+			if err := git.FastForward(ctx, c.Path, upstream); err != nil {
+				e.event(ctx, t.ID, "branch", registry.PhaseInfo, fmt.Sprintf("%s stays at %s: the changes in %s stop its move to %s (%s)",
+					t.Branch, short(tip), c.Name, upstream, textx.Clip(textx.FirstLine(err.Error()), 200)))
+			}
+		case e.ownBranch(*t):
+			if err := e.onBranch(ctx, c, t.Branch); err != nil {
+				return fail(err)
+			}
+		default:
+			name, err := e.freeBranch(ctx, *t, repo, c)
+			if err != nil {
+				return fail(err)
+			}
+			if err := git.SwitchCreate(ctx, c.Path, name, upstream); err != nil {
+				return fail(err)
+			}
+			if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
+				u.Set("branch", name)
+				u.Because(t.Branch + " holds commits not this task's")
+			}); err != nil {
+				return fail(err)
+			}
+			e.event(ctx, t.ID, "branch", registry.PhaseInfo, fmt.Sprintf("%s holds %s not this task's (at %s): the task works on %s, from %s",
+				t.Branch, plural(len(commits), "commit"), short(tip), name, upstream))
+			t.Branch = name
+		}
+	}
+	head, err := git.RevParse(ctx, c.Path, "HEAD")
+	if err != nil {
+		return fail(err)
+	}
+	from, err := git.MergeBase(ctx, c.Path, head, upstream)
+	if err != nil {
+		return fail(err)
+	}
+	b, err := json.MarshalIndent(baseRecord{Branch: t.Branch, Base: from, At: e.now()}, "", "  ")
+	if err != nil {
+		return fail(err)
+	}
+	if err := e.saveArtifact(ctx, *t, "base_sha", baseFile, append(b, '\n')); err != nil {
+		return fail(err)
+	}
+	e.event(ctx, t.ID, "branch", registry.PhaseOK, fmt.Sprintf("%s at %s in %s, from %s at %s", t.Branch, short(head), c.Name, upstream, short(from)))
+	return nil
+}
+
+// onBranch checks branch out in copy c unless it is checked out.
+func (e *Engine) onBranch(ctx context.Context, c Copy, branch string) error {
+	cur, err := e.d.Git.CurrentBranch(ctx, c.Path)
+	if err != nil || cur == branch {
+		return err
+	}
+	return e.d.Git.Switch(ctx, c.Path, branch)
+}
+
+// ownBranch reports whether task t's branch is one an earlier coding
+// attempt of the task started (base.json names it).
+func (e *Engine) ownBranch(t registry.Task) bool {
+	b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), baseFile))
+	if err != nil {
+		return false
+	}
+	var rec baseRecord
+	return json.Unmarshal(b, &rec) == nil && rec.Branch == t.Branch
+}
+
+// freeBranch is the name of task t's branch with the next free number
+// (-2, -3, ...): no other task's, no branch of the copy's repository.
+func (e *Engine) freeBranch(ctx context.Context, t registry.Task, repo config.FactoryRepo, c Copy) (string, error) {
+	tasks, err := e.reg.Tasks(ctx)
+	if err != nil {
+		return "", err
+	}
+	taken := map[string]bool{}
+	for _, o := range tasks {
+		if o.ID != t.ID {
+			taken[o.Branch] = true
+		}
+	}
+	for n := 2; ; n++ {
+		name := fmt.Sprintf("%s-%d", t.Branch, n)
+		if taken[name] || e.branchExists(ctx, repo.Repo, name) {
+			continue
+		}
+		if _, err := e.d.Git.RevParse(ctx, c.Path, "refs/heads/"+name); errors.Is(err, gitx.ErrNoSuchRef) {
+			return name, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+}
+
+// headCheck is the factory's check of a task's head off the loop: the head
+// and the specs it checks, whether it runs the proof too (the coding stage)
+// or the precheck alone, done closed when it ended (at ended), cancel to end
+// it, and its result (written before done closes).
+type headCheck struct {
+	head, specs string
+	proof       bool
+	done        chan struct{}
+	cancel      context.CancelFunc
+	endedAt     time.Time
+	res         checkResult
+}
+
+// checkResult is a check's end: its proof (nil without one), its precheck
+// (nil when it did not get there), and the error of a check that did not run
+// to its end (a wait, git, the daemon stopping).
+type checkResult struct {
+	Proof    *Proof
+	Precheck *PrecheckResult
+	Err      error
+}
+
+func (x *headCheck) ended() bool {
+	select {
+	case <-x.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// checkRuns reports whether a check of task id runs.
+func (e *Engine) checkRuns(id int64) bool {
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	x := e.checks[id]
+	return x != nil && !x.ended()
+}
+
+// noteCheck says what the check of task id does now (its task's wait).
+func (e *Engine) noteCheck(id int64, what string) {
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	e.checkNotes[id] = what
+}
+
+// checkNote is what the check of task id does now ("" for nothing said).
+func (e *Engine) checkNote(id int64) string {
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	return e.checkNotes[id]
+}
+
+// forgetCheck drops x, the check of task id, once it ended or was stopped.
+func (e *Engine) forgetCheck(id int64, x *headCheck) {
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	if e.checks[id] == x {
+		delete(e.checks, id)
+		delete(e.checkNotes, id)
+	}
+}
+
+// checkHead is how a stage gets the factory's checks of head (with the spec
+// files specs) of task t in copy c: the proof and the precheck (proof), or
+// the precheck alone. The first call for a head starts the check off the
+// loop, as the task's heavy work (a slot of heavy_stages: the task waits
+// "heavy: …" without one) and never while the daemon drains; every call
+// while it runs is not ready; the call after it ended has its result, kept
+// for that head. A check of another head (or other specs) is stopped, or,
+// ended, dropped, and the next call starts one for this head.
+func (e *Engine) checkHead(ctx context.Context, t registry.Task, c Copy, head, specs string, proof bool) (checkResult, bool) {
+	e.checksMu.Lock()
+	x := e.checks[t.ID]
+	e.checksMu.Unlock()
+	if x != nil {
+		same := x.head == head && x.specs == specs && x.proof == proof
+		switch {
+		case !x.ended() && same:
+			return checkResult{}, false
+		case !x.ended():
+			x.cancel() // the head moved: this check is void, a new one comes once it ended
+			return checkResult{}, false
+		case same:
+			return x.res, true
+		}
+		e.forgetCheck(t.ID, x)
+	}
+	if e.draining.Load() {
+		return checkResult{}, false
+	}
+	release, ok := e.heavy(ctx, t, waitPrecheck)
+	if !ok {
+		return checkResult{}, false
+	}
+	cctx, cancel := context.WithCancel(e.bgCtx)
+	x = &headCheck{head: head, specs: specs, proof: proof, done: make(chan struct{}), cancel: cancel}
+	what := "the precheck"
+	if proof {
+		what = "the proof and the precheck"
+	}
+	e.checksMu.Lock()
+	e.checks[t.ID] = x
+	e.checkNotes[t.ID] = waitPrecheck + ": starts " + what + " of " + short(head)
+	e.checksMu.Unlock()
+	e.event(ctx, t.ID, "check", registry.PhaseBegin, "checks "+short(head)+" off the loop: "+what)
+	e.bg.Go(func() {
+		defer close(x.done)
+		defer cancel()
+		defer release()
+		defer func() {
+			if r := recover(); r != nil {
+				e.log.Error("panic in a task's checks; the daemon goes on", "task", t.ID, "panic", fmt.Sprint(r),
+					"stack", execx.Redact(string(debug.Stack())))
+				x.res = checkResult{Err: fmt.Errorf("the checks panicked: %v", r)}
+			}
+			x.endedAt = e.now()
+			e.endCheckEvent(t, x)
+		}()
+		x.res = e.runChecks(cctx, t, c, proof)
+	})
+	return checkResult{}, false
+}
+
+// endCheckEvent writes the end of check x of task t.
+func (e *Engine) endCheckEvent(t registry.Task, x *headCheck) {
+	ctx := context.Background()
+	switch r := x.res; {
+	case r.Err != nil:
+		e.event(ctx, t.ID, "check", registry.PhaseFail, short(x.head)+": did not run to its end: "+textx.Clip(textx.FirstLine(r.Err.Error()), 300))
+	case r.passed():
+		e.event(ctx, t.ID, "check", registry.PhaseOK, short(x.head)+": passed")
+	default:
+		e.event(ctx, t.ID, "check", registry.PhaseOK, short(x.head)+": "+r.why())
+	}
+}
+
+// runChecks runs task t's checks in copy c: the proof first (proof), then,
+// when it passed, the precheck.
+func (e *Engine) runChecks(ctx context.Context, t registry.Task, c Copy, proof bool) checkResult {
+	var r checkResult
+	if proof {
+		e.noteCheck(t.ID, "proof: starts")
+		p, err := e.runProof(ctx, t, c)
+		r.Proof = &p
+		if err != nil || !p.Passed {
+			r.Err = err
+			return r
+		}
+	}
+	e.noteCheck(t.ID, "precheck: starts")
+	pre, err := e.precheck(ctx, t, c)
+	r.Precheck, r.Err = &pre, err
+	return r
+}
+
+// passed reports whether the checks passed.
+func (r checkResult) passed() bool {
+	return r.Err == nil && (r.Proof == nil || r.Proof.Passed) && r.Precheck != nil && r.Precheck.Passed
+}
+
+// why is why the checks did not pass, in plain words.
+func (r checkResult) why() string {
+	switch {
+	case r.Proof != nil && !r.Proof.Passed:
+		return "the factory's proof: " + r.Proof.Why
+	case r.Precheck != nil && !r.Precheck.Passed:
+		return r.Precheck.Why
+	}
+	return ""
+}
+
+// provenHead is the rest of the proof end fact, past proof.json (checkEnd):
+// task t's branch has commits after origin/<base> and no tracked change in
+// copy c, and the factory's proof and the precheck passed at its head. While
+// the checks run (or wait for a heavy slot) it is pending, and the task
+// waits saying what they do; *t has its wait. A problem is the writer's to
+// fix (a change problem: its nudge names the file the checks wrote); head is
+// the head that passed. err is a failure to read the branch.
+func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *endProblem, head string, pending bool, err error) {
+	if e.checkRuns(t.ID) {
+		e.precheckWait(ctx, t)
+		return nil, "", true, nil
+	}
+	repo, err := e.factoryRepo(*t)
+	if err != nil {
+		return nil, "", false, err
+	}
+	bh, err := e.branchHead(ctx, *t, c, repo)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if bh.Problem != "" {
+		return &endProblem{file: "the branch", why: bh.Problem, change: true}, "", false, nil
+	}
+	pf, fp := readProofFile(e.d.Layout.FactoryTaskDir(t.ID), time.Time{})
+	if fp != nil {
+		return fp, "", false, nil
+	}
+	res, ready := e.checkHead(ctx, *t, c, bh.Head, strings.Join(pf.Specs, "\x00"), true)
+	if !ready {
+		if e.checkRuns(t.ID) {
+			e.precheckWait(ctx, t)
+		} else if fresh, rerr := e.reg.TaskByID(ctx, t.ID); rerr == nil { // a heavy slot's wait, or the drain
+			t.WaitsWho, t.WaitsWhat = fresh.WaitsWho, fresh.WaitsWhat
+		}
+		return nil, "", true, nil
+	}
+	e.clearPrecheckWait(ctx, t)
+	switch {
+	case errors.Is(res.Err, ErrHeld):
+		e.dropCheck(t.ID)
+		w, _ := errors.AsType[heldError](res.Err)
+		e.waitOn(ctx, *t, w.who, w.what)
+		t.WaitsWho, t.WaitsWhat = w.who, w.what
+		return nil, "", true, nil
+	case res.Err != nil:
+		e.retryCheck(ctx, t, res.Err)
+		return nil, "", true, nil //nolint:nilerr // a check that did not run to its end is a wait: it runs again after checkRetry
+	case res.Proof != nil && res.Proof.Passed && !res.Proof.Holds(bh.Head):
+		e.dropCheck(t.ID) // the head moved while it ran: void
+		return nil, "", true, nil
+	case !res.passed():
+		file := precheckFile
+		if res.Proof != nil && !res.Proof.Passed {
+			file = factoryProofFile
+		}
+		return &endProblem{file: file, why: res.why(), change: true}, "", false, nil
+	}
+	return nil, bh.Head, false, nil
+}
+
+// dropCheck forgets the ended check of task id: the next pass runs a new
+// one.
+func (e *Engine) dropCheck(id int64) {
+	e.checksMu.Lock()
+	x := e.checks[id]
+	e.checksMu.Unlock()
+	if x != nil && x.ended() {
+		e.forgetCheck(id, x)
+	}
+}
+
+// retryCheck keeps a check that did not run to its end (err) for
+// checkRetry, the task waiting with its reason, then drops it.
+func (e *Engine) retryCheck(ctx context.Context, t *registry.Task, err error) {
+	e.checksMu.Lock()
+	x := e.checks[t.ID]
+	e.checksMu.Unlock()
+	if x == nil {
+		return
+	}
+	next := x.endedAt.Add(checkRetry)
+	if !e.now().Before(next) {
+		e.forgetCheck(t.ID, x)
+		return
+	}
+	what := "the checks did not run to their end (" + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200) + "); they run again at " +
+		next.Local().Format("15:04")
+	e.waitOn(ctx, *t, waitPrecheck, what)
+	t.WaitsWho, t.WaitsWhat = waitPrecheck, what
+}
+
+// precheckWait is the wait of task t while its checks run: what they do.
+func (e *Engine) precheckWait(ctx context.Context, t *registry.Task) {
+	what := e.checkNote(t.ID)
+	if what == "" {
+		what = waitPrecheck + ": runs"
+	}
+	e.waitOn(ctx, *t, waitPrecheck, what)
+	t.WaitsWho, t.WaitsWhat = waitPrecheck, what
+}
+
+// clearPrecheckWait clears the wait of task t's checks once they ended.
+func (e *Engine) clearPrecheckWait(ctx context.Context, t *registry.Task) {
+	if t.WaitsWho == waitPrecheck {
+		e.waitOn(ctx, *t, "", "")
+		t.WaitsWho, t.WaitsWhat = "", ""
+	}
+}
+
+// sweepChecks stops the checks of the tasks that are not live (a stop, a
+// NEEDS YOU, gone: a stopped check restores the copy's branch itself) and
+// forgets their results, so a task back at work checks its head afresh.
+func (e *Engine) sweepChecks(tasks []registry.Task) {
+	live := map[int64]bool{}
+	for _, t := range tasks {
+		if isLive(t) {
+			live[t.ID] = true
+		}
+	}
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	for id, x := range e.checks {
+		if live[id] {
+			continue
+		}
+		if !x.ended() {
+			x.cancel()
+			continue
+		}
+		delete(e.checks, id)
+		delete(e.checkNotes, id)
+	}
+}
+
+// stopCheck stops task t's check (its copy is released): it restores the
+// copy's branch itself as it ends.
+func (e *Engine) stopCheck(id int64) {
+	e.checksMu.Lock()
+	defer e.checksMu.Unlock()
+	if x := e.checks[id]; x != nil && !x.ended() {
+		x.cancel()
+	}
+}

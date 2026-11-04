@@ -511,6 +511,30 @@ func TestFactoryPrecheckSkipsSpecsOnlyForKnownKinds(t *testing.T) {
 	wantError(t, cfg.Validate(), "precheck.lint", "precheck.migrations")
 }
 
+// A kind's proof says whether the factory's proof needs the spec red on the
+// base (red, the default: a bug, a feature) or green at the head only
+// (green: a chore, whose specs stay green); anything else is a mistake.
+func TestAFactoryKindsProofIsRedOrGreen(t *testing.T) {
+	for _, cfg := range []*Config{Defaults(), mustLoadDefaults(t)} {
+		if p := cfg.Factory.Kinds["chore"].Proof; p != FactoryProofGreen {
+			t.Errorf("the chore kind's proof is %q, want green", p)
+		}
+		for _, kind := range []string{"bug", "feature"} {
+			if k := cfg.Factory.Kinds[kind]; !k.RedRun() {
+				t.Errorf("the %s kind's proof %q needs no red run", kind, k.Proof)
+			}
+		}
+	}
+	if (FactoryKind{}).RedRun() != true || (FactoryKind{Proof: FactoryProofRed}).RedRun() != true {
+		t.Error("an unset or red proof needs no red run")
+	}
+	cfg := validFactoryConfig()
+	k := cfg.Factory.Kinds["bug"]
+	k.Proof = "amber"
+	cfg.Factory.Kinds["bug"] = k
+	wantError(t, cfg.Validate(), "factory kind bug", `proof "amber"`, "red", "green")
+}
+
 func TestFactoryHeavyStagesMustBeAtLeastOne(t *testing.T) {
 	cfg := validFactoryConfig()
 	if cfg.Factory.HeavyStages != 1 {

@@ -278,6 +278,7 @@ func (e *Engine) heldCopy(id int64) (Copy, bool) {
 // claims. A claim that still runs is cancelled instead (its commands end
 // with it): sweepClaims releases its copy once it ended.
 func (e *Engine) releaseCopy(ctx context.Context, t registry.Task, reason string) {
+	e.stopCheck(t.ID) // its base run restores the copy's branch as it ends
 	e.claimMu.Lock()
 	run := e.claims[t.ID]
 	running := run != nil && !run.ended()

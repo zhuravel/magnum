@@ -3448,6 +3448,9 @@ stages = [
   An `agents` stage launches its `roles` in parallel and ends when its `end` fact holds (`findings`,
   `report`, `critic`, `proof` or `pr_body`: files and results the factory checks, never a "done" message);
   its optional `prompt` is the prompt file each of its roles gets in place of its own role's.
+  A kind's `proof` says what its coding stage's proof needs: `red` (the default) a spec of the change that
+  fails on the base and passes at the head (a bug, a feature), `green` its specs green at the head only (the
+  built-in chore: its specs stay green).
   A `gate` waits until its `gate` holds (`no_open_questions`, or `reproduced` for a bug). A `review` stage
   runs the local review (`end = "clean"`). A `decision` waits for you (`ready_push`). An `effect` does its
   `effect` (`publish`, `end = "pr"`). `when = "wide"` skips a stage unless the plan touches 3 or more files,
@@ -3497,8 +3500,19 @@ stages = [
   `logs/factory-server-<copy>.log` and records its pid and start time; at its start the daemon stops the
   servers a stopped daemon left, only those whose pid and start time both match the record.
 - **Precheck.** `lint` and `migrations` are lists of commands, `specs` and `jest` one command each; a command
-  takes `{files}` (the changed files, shell-quoted) and `{base}`. A precheck stops after `cap` (default
-  `10m`), and `skip_specs_for_kinds` names the kinds of task that run no specs (a gem upgrade).
+  takes `{files}` (the changed files, shell-quoted) and `{base}`, and a `migrations` command also `{version}`
+  (the digits a migration's file name starts with) and `{file}`: each runs once per migration the branch
+  adds, in order (`bin/rails db:migrate:up VERSION={version}`, then `…:down…`). A lint offense counts only
+  on a changed line, read as `path:line[:column]: message` (rubocop's `--format emacs`, eslint's `--format
+  unix`); a lint that exits non-zero naming no offense that way fails. The specs command's failures are read
+  as rspec lists them (`rspec ./spec/x_spec.rb:12 # what it says`): a red one is run again on the base, and
+  one red there too is recorded as not the change's (`not_ours`) and passes. The proof runs its spec files
+  with `specs` (with `jest` when every one is JavaScript). A precheck stops after `cap` (default `10m`),
+  `precheck: over 10m`, and `skip_specs_for_kinds` names the kinds of task that run no specs (a gem upgrade).
+  `ghost_marker`, `table_stats` (a JSON object of table to rows, or to an object with `rows`) and
+  `large_table_rows` drive the migration-safety lint. No factory command runs `kubectl exec` (or attach,
+  debug, run, cp, port-forward), gh-ost, or one of the repository's `consoles`, however a command wraps it:
+  the factory refuses it, `denied: <why>`.
 - **Staging.** Each `[[factory.repo.staging]]` has a `name`, a `branch` (never the base), an optional `qa`
   skill and an optional `after`, another environment of the repository whose QA must pass first (no cycles).
   The first milestone reads none of it, but `magnum config` validates it.
@@ -3573,6 +3587,28 @@ with its options `give a hint`, `take the other cause`, `try Docker or a staging
 recommended: `drop` stops the task at whichever gate sees it (the bug kind's questions gate asks the
 judge's reproduction question first), with no amend, and any other answer has the judge amend the report
 with it, once, before the gate reads the Proof again.
+
+The coding stage runs the writer (`fx-writer`, `factory-writer.md`) in the task's copy. Before its first
+prompt the daemon fetches `origin/<base>` and starts the branch there: a branch without a commit of its own
+(the one the first claim made) moves to the fresh base, carrying the reproducer's spec left in the copy; an
+earlier attempt's branch (`base.json` names it) is reused as it is; a branch of the name that holds commits
+not the task's gets the next free number (`-2`), and an event says why. `base.json` records the base (the
+`base_sha` artifact). The writer commits test first and names its spec files in `proof.json`, never their
+results. When its turn ends the stage passes only on the end fact `proof`: commits on the branch after
+`origin/<base>`, no tracked change, and the factory's own proof and precheck at the head, which run off the
+loop as the task's heavy work (`heavy_stages`) while the task waits with what they do (`precheck: lint
+(bin/lint)`). The proof runs the spec files on a detached checkout of the base with the head's spec files on
+it, where they must fail (unless the kind's `proof` is `green`), and at the head, where they must pass; it
+records the commands, the exits, the output and the trees (`factory-proof.json`, the `proof` artifact, and two
+`spec` checks). Any new commit voids it. Before the base run touches the copy, no agent of the task may be at work
+there; `detached.json` and a begin event come first, and the branch and the head's tree come back after the
+run, whatever ended it. A daemon killed in the middle has the next start restore them before anything else
+runs in the copy, never over a change the base run did not make (the task needs you, naming it). The proof's
+and the precheck's spec runs take one lock on the machine (`factory-specs.lock` in the state directory): a
+second one waits, `precheck: another precheck runs specs; this one waits for the machine's spec lock`. The
+precheck writes `precheck.md` (the offenses, the red specs and the migrations with their gh-ost
+environments and flags). A failed check gets the writer one nudge naming what failed and that file; then
+the task needs you.
 
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the

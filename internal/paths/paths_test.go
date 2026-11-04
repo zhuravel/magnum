@@ -366,6 +366,7 @@ func TestFactoryPathsLiveUnderTheDataAndStateDirs(t *testing.T) {
 				l.FactoryTaskDir(42): filepath.Join(tc.data, "factory", "tasks", "42"),
 				l.FactoryPid():       filepath.Join(tc.state, "factory.pid"),
 				l.FactoryLock():      filepath.Join(tc.state, "factory.lock"),
+				l.FactorySpecsLock(): filepath.Join(tc.state, "factory-specs.lock"),
 				l.FactoryLog():       filepath.Join(tc.state, "logs", "factory.log"),
 			} {
 				if got != want {
@@ -374,7 +375,8 @@ func TestFactoryPathsLiveUnderTheDataAndStateDirs(t *testing.T) {
 			}
 			// The review daemon's files stay where they were, and the
 			// factory's never collide with them.
-			if l.FactoryDB() == l.DB() || l.FactoryPid() == l.Pid() || l.FactoryLock() == l.Lock() || l.FactoryLog() == l.DaemonLog() {
+			if l.FactoryDB() == l.DB() || l.FactoryPid() == l.Pid() || l.FactoryLock() == l.Lock() || l.FactoryLog() == l.DaemonLog() ||
+				l.FactorySpecsLock() == l.FactoryLock() {
 				t.Errorf("a factory file is a review daemon file: %+v", l)
 			}
 		})

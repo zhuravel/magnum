@@ -522,7 +522,7 @@ answers reach the agents as files of the task's directory (`~/.local/share/magnu
 | Variable | Meaning |
 |---|---|
 | `.TaskID`, `.Key` | the task's id, and its Jira key (empty for a task of a free prompt) |
-| `.Kind`, `.Repo`, `.Branch` | the kind of task (`bug`, `feature`, `chore`), the repository (`owner/name`) and the task's local branch |
+| `.Kind`, `.Repo`, `.Branch`, `.Base` | the kind of task (`bug`, `feature`, `chore`), the repository (`owner/name`), the task's local branch and the repository's base branch (the branch starts at `origin/<base>`) |
 | `.Copy`, `.TaskDir` | the checkout of the task's copy (the agent's working directory) and the task's directory |
 | `.Ticket`, `.Guidance`, `.Prompt`, `.Answers`, `.Rules` | `ticket.md`, `guidance.md` (your words after a key), `prompt.md` (a free prompt), `answers.md` and `rules.md` in the task's directory, each empty while its file is not there |
 | `.Findings` | the role's `findings-<role>.md` in a findings stage (named for the role the stage names, so a Codex role's Claude fallback writes the same file), else the pattern of every investigator's file, `findings-*.md` |
@@ -538,9 +538,14 @@ decisions`, or `none`, with `## Helpers` and `## Files` sections, Files naming a
 `acceptance.json` with at least one check; `questions.json`, when it is there, a list of questions with
 two or more options each; a bug whose Proof starts `Reproduced: no` must ask the reproduction question,
 with the options `give a hint`, `take the other cause`, `try Docker or a staging` and `drop`, one of them
-recommended), and `critic` (`critic.md`, and the critic's questions file when it is there). A role whose
-file is missing or malformed gets one nudge naming the file and what is wrong; then the task waits on you,
-"the <role> agent wrote no valid <file>". The critic's stage (`when = "wide"`) runs only for a plan whose
+recommended), `critic` (`critic.md`, and the critic's questions file when it is there), and `proof` (the
+writer's `proof.json`, `{"specs": [...]}`, naming its spec files and never their results; then the branch
+has commits after `origin/<base>`, `git status` shows no tracked change, and the factory's own proof and
+precheck passed at the head: the factory runs them itself, off its loop). A role whose file is missing or
+malformed gets one nudge naming the file and what is wrong; then the task waits on you, "the <role> agent
+wrote no valid <file>". A writer whose change fails the factory's checks gets one nudge naming what failed
+and the file of the runs (`factory-proof.json` or `precheck.md`); then the task waits on you, "the
+fx-writer agent's change does not pass: <why>". The critic's stage (`when = "wide"`) runs only for a plan whose
 Files name 3 or more files, a file under `db/` or a security path.
 
 A role that ends its turn with new questions in `.Questions` suspends its stage instead of a nudge: once

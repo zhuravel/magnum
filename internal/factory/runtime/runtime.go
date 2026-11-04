@@ -902,6 +902,31 @@ func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, e
 	return run.State, store.Deref(run.Error), nil
 }
 
+// AtWork names the role of task t whose run is in flight (pending,
+// submitted or working: its agent may be changing the copy), "" when none
+// is: the factory's own commands in the task's copy (its proof's base run)
+// wait for it. A task that never launched has none.
+func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (string, error) {
+	pr, err := r.ownerRow(ctx, t.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("the runs of %s: %w", taskKey(t), err)
+	}
+	runs, err := r.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		return "", fmt.Errorf("the runs of %s: %w", taskKey(t), err)
+	}
+	for _, run := range runs {
+		switch run.State {
+		case store.RunPending, store.RunSubmitted, store.RunWorking:
+			return run.Role, nil
+		}
+	}
+	return "", nil
+}
+
 // QuitCodex quits the live Codex sessions of task t, once Codex never works
 // on it again (Task.CodexNever, a refusal): none of them gets another
 // prompt, and no conversation of theirs is resumed (a restart or a

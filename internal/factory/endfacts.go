@@ -83,8 +83,15 @@ type AcceptanceCheck struct {
 }
 
 // endProblem is why an end fact does not hold: the file at fault and what
-// is wrong with it, in words a nudge and a wait can carry.
-type endProblem struct{ file, why string }
+// is wrong with it, in words a nudge and a wait can carry. change marks a
+// problem of the change itself (the coding stage's: no commit, tracked
+// changes, the factory's proof or precheck failing), whose nudge asks for a
+// fix and a commit, not a file; file is then the file the checks wrote
+// ("the branch" for none).
+type endProblem struct {
+	file, why string
+	change    bool
+}
 
 func (p *endProblem) String() string { return p.file + ": " + p.why }
 
@@ -105,9 +112,15 @@ func (p *endProblem) String() string { return p.file + ": " + p.why }
 //     ReproductionOptions and a recommendation;
 //   - critic: critic.md, newer than since and not empty, and each role's
 //     questions-<role>.json, when it is there, valid as questions.json is;
-//   - pr_body: pr-body.md, newer than since and not empty.
+//   - pr_body: pr-body.md, newer than since and not empty;
+//   - proof: proof.json, newer than since, naming the spec files of the
+//     writer's proof as clean paths relative to the checkout (ProofFile), and
+//     its questions-<role>.json, when it is there, valid. The rest of the
+//     fact (commits on the branch after origin/<base>, no tracked change, the
+//     factory's own proof and the precheck passed at the head) is the coding
+//     stage's to check (provenHead).
 //
-// The proof and pr facts are checked by the stages that own them, not
+// The clean and pr facts are checked by the stages that own them, not
 // here (not done, saying so).
 func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok bool, why string) {
 	if p := checkEnd(fact, dir, since, roles); p != nil {
@@ -121,7 +134,7 @@ func checkEnd(fact, dir string, since time.Time, roles []string) *endProblem {
 	switch fact {
 	case config.FactoryEndFindings:
 		if len(roles) == 0 {
-			return &endProblem{"findings", "the stage names no role"}
+			return &endProblem{file: "findings", why: "the stage names no role"}
 		}
 		for _, role := range roles {
 			if _, p := readFresh(dir, findingsFile(role), since); p != nil {
@@ -147,10 +160,20 @@ func checkEnd(fact, dir string, since time.Time, roles []string) *endProblem {
 	case config.FactoryEndPRBody:
 		_, p := readFresh(dir, prBodyFile, since)
 		return p
-	case config.FactoryEndProof, config.FactoryEndPR, config.FactoryEndClean:
-		return &endProblem{fact, "its own stage checks it, not an agents stage of this build"}
+	case config.FactoryEndProof:
+		if _, p := readProofFile(dir, since); p != nil {
+			return p
+		}
+		for _, role := range roles {
+			if _, p := readQuestions(dir, roleQuestionsFile(role), since); p != nil {
+				return p
+			}
+		}
+		return nil
+	case config.FactoryEndPR, config.FactoryEndClean:
+		return &endProblem{file: fact, why: "its own stage checks it, not an agents stage of this build"}
 	}
-	return &endProblem{fact, "no such end fact"}
+	return &endProblem{file: fact, why: "no such end fact"}
 }
 
 // readFresh reads name in dir: missing, older than since or empty is the
@@ -160,21 +183,21 @@ func readFresh(dir, name string, since time.Time) (string, *endProblem) {
 	fi, err := os.Stat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "", &endProblem{name, "missing"}
+		return "", &endProblem{file: name, why: "missing"}
 	case err != nil:
-		return "", &endProblem{name, "unreadable: " + err.Error()}
+		return "", &endProblem{file: name, why: "unreadable: " + err.Error()}
 	case fi.IsDir():
-		return "", &endProblem{name, "a directory, not a file"}
+		return "", &endProblem{file: name, why: "a directory, not a file"}
 	case fi.ModTime().Before(since):
-		return "", &endProblem{name, "older than this stage (written " + fi.ModTime().Local().Format("15:04:05") +
+		return "", &endProblem{file: name, why: "older than this stage (written " + fi.ModTime().Local().Format("15:04:05") +
 			", the stage started " + since.Local().Format("15:04:05") + "): write it again"}
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", &endProblem{name, "unreadable: " + err.Error()}
+		return "", &endProblem{file: name, why: "unreadable: " + err.Error()}
 	}
 	if strings.TrimSpace(string(b)) == "" {
-		return "", &endProblem{name, "empty"}
+		return "", &endProblem{file: name, why: "empty"}
 	}
 	return string(b), nil
 }
@@ -188,21 +211,21 @@ func checkReport(dir string, since time.Time) *endProblem {
 	}
 	r := parseReport(text)
 	if why := r.problem(); why != "" {
-		return &endProblem{reportFile, why}
+		return &endProblem{file: reportFile, why: why}
 	}
 	acc, p := readFresh(dir, acceptanceFile, since)
 	if p != nil {
 		return p
 	}
 	if why := acceptanceProblem(acc); why != "" {
-		return &endProblem{acceptanceFile, why}
+		return &endProblem{file: acceptanceFile, why: why}
 	}
 	qs, p := readQuestions(dir, questionsFile, since)
 	if p != nil {
 		return p
 	}
 	if r.notReproduced() && !slices.ContainsFunc(qs, isReproductionQuestion) {
-		return &endProblem{questionsFile, "the bug did not reproduce (report.md's Proof), so it must ask the reproduction question, " +
+		return &endProblem{file: questionsFile, why: "the bug did not reproduce (report.md's Proof), so it must ask the reproduction question, " +
 			"with the options " + strings.Join(ReproductionOptions, ", ") + " and one of them recommended"}
 	}
 	return nil
@@ -377,11 +400,11 @@ func readQuestions(dir, name string, since time.Time) ([]QuestionFile, *endProbl
 	}
 	var qs []QuestionFile
 	if err := json.Unmarshal([]byte(text), &qs); err != nil {
-		return nil, &endProblem{name, "not valid JSON (" + err.Error() + "): write a list of questions, `[]` for none"}
+		return nil, &endProblem{file: name, why: "not valid JSON (" + err.Error() + "): write a list of questions, `[]` for none"}
 	}
 	for i, q := range qs {
 		if why := questionProblem(q); why != "" {
-			return nil, &endProblem{name, fmt.Sprintf("question %d %s", i+1, why)}
+			return nil, &endProblem{file: name, why: fmt.Sprintf("question %d %s", i+1, why)}
 		}
 	}
 	return qs, nil
