@@ -372,7 +372,7 @@ func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string {
 // codex_fallback. A Codex role without a fallback there is an error: it
 // cannot run.
 func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error) {
-	if !r.codexNever(t) || role.AgentKind() != agents.KindCodex {
+	if role.AgentKind() != agents.KindCodex || !r.codexNever(t) { // a Claude role reads nothing
 		return role, nil
 	}
 	name := r.d.Config.Factory.CodexFallback[role.Name]
@@ -386,15 +386,21 @@ func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error)
 // codexNever reports whether Codex never works on task t again: one of its
 // Codex roles was refused in this runtime, or the task is marked
 // (Task.CodexNever), on the copy given or in the registry, which a restart
-// keeps: a stale copy of the task never lets Codex back on it.
+// keeps: a stale copy of the task never lets Codex back on it. A registry
+// that cannot be read fails closed (the operator's account-risk rule): the
+// mark may be there, so Codex stays off the task for this call, and the next
+// call reads again.
 func (r *Runtime) codexNever(t registry.Task) bool {
 	r.mu.Lock()
 	known := t.CodexNever || r.refused[t.ID]
 	r.mu.Unlock()
 	if !known && t.ID != 0 {
-		if stored, err := r.reg.TaskByID(context.Background(), t.ID); err == nil {
-			known = stored.CodexNever
+		stored, err := r.reg.TaskByID(context.Background(), t.ID)
+		if err != nil {
+			r.log.Warn("read whether Codex may work on a task; it may not meanwhile", "task", t.ID, "err", err)
+			return true
 		}
+		known = stored.CodexNever
 	}
 	if known {
 		r.mu.Lock()

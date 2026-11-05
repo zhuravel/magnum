@@ -355,6 +355,23 @@ func TestARecoveredRoleThatIsRefusedIsNeverStartedAgain(t *testing.T) {
 	}
 }
 
+// Codex-never fails closed (the operator's account-risk rule): with a stale
+// copy of the task and a registry that cannot be read, a Codex role runs as
+// its Claude fallback, since the mark may be there; a Claude role runs as
+// itself, whatever the registry says.
+func TestCodexNeverFailsClosedWhenTheRegistryCannotBeRead(t *testing.T) {
+	g := newRig(t)
+	if err := g.reg.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if runs, err := g.r.RunsAs(g.task, g.role("fx-cause")); err != nil || runs.Name != "fx-cause-claude" {
+		t.Fatalf("with the registry unreadable fx-cause runs as %q (%v), want its Claude fallback", runs.Name, err)
+	}
+	if runs, err := g.r.RunsAs(g.task, g.role("fx-repro")); err != nil || runs.Name != "fx-repro" {
+		t.Fatalf("with the registry unreadable fx-repro runs as %q (%v), want itself", runs.Name, err)
+	}
+}
+
 // A recovered role that pauses on its CLI's usage limit waits for the
 // pause: no resume, no fresh session, no lost pane.
 func TestARecoveredRoleThatPausesWaitsForThePause(t *testing.T) {

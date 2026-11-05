@@ -15042,6 +15042,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `env` gives). The README says the copies' offsets must not overlap any `REDIS_DB_OFFSET` of magnum's
   `[[pool]] env` on the same Redis. Tests: TestTheFlushEmptiesOnlyARedisTheCopysEnvNames and
   TestClaimFlushesTheCopysRedisDatabases.
+- **Codex-never fails closed** (2026-11-05, the final review). `codexNever` read the registry for every
+  role, Claude roles too, and a failed read left the mark unknown. Then a stale copy of the task and one
+  failed read let a Codex role run on a task that Codex must never touch again. That rule is the
+  operator's account-risk rule. Now `RunsAs` asks only for a Codex role, and a failed read keeps Codex off
+  the task for that call. The role runs on its fallback, or does not run. The next call reads again, so
+  the fallback is not kept for good. Test: TestCodexNeverFailsClosedWhenTheRegistryCannotBeRead.
 
 ## Learned rules
 
