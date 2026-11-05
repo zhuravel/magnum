@@ -206,7 +206,8 @@ func fixtureTaskCard() TaskCard {
 }
 
 // fixtureRetryCard is a task that needs the operator because its local
-// review did not finish: r retries it at its stage.
+// review did not finish (its tests stage: specs, lint, then the local
+// review): a retry goes on at that stage, so the card offers r.
 func fixtureRetryCard() TaskCard {
 	st := func(name, state, proof string, took time.Duration, h, m int) CardStage {
 		s := CardStage{Name: name, State: state, Proof: proof, Took: took}
@@ -225,12 +226,12 @@ func fixtureRetryCard() TaskCard {
 			st("investigate", "done", "reproduced with a failing spec · 2 agents found the same cause", 19*time.Minute, 10, 21),
 			st("questions", "skipped", "skipped: nothing was open", 0, 0, 0),
 			st("coding", "done", "spec red before, green after · 2 files +18 −3", 27*time.Minute, 10, 48),
-			st("tests", "done", "88 specs green · rubocop clean", 6*time.Minute, 10, 54),
-			st("local review", "failed", "round 1: 1 P2, fixed · round 2 timed out after 60m: review unavailable", 98*time.Minute, 12, 32),
+			st("tests", "failed", "88 specs green · rubocop clean · local review: round 1 fixed a P2, round 2 timed out after 60m",
+				104*time.Minute, 12, 32),
 			st("ready to push", "todo", "after a clean local review", 0, 0, 0),
 			st("pushed", "todo", "the factory pushes after your y", 0, 0, 0),
 		},
-		Cursor: 5,
+		Cursor: 4, Retry: true,
 		Agents: []CardAgent{
 			{Name: "writer", Why: "fixed the P2 of round 1", State: "done", Output: cardAt(11, 30)},
 			{Name: "3 investigators", Why: "reproduced it, found the cause, read the history", State: "done", Output: cardAt(10, 21)},
@@ -245,7 +246,8 @@ func fixtureRetryCard() TaskCard {
 // fixtureNewTaskJira is "New task: from a Jira key".
 func fixtureNewTaskJira(now time.Time) NewTaskForm {
 	return NewTaskForm{
-		Text: "PR-12345 the reminder is for advocates only, not their friends",
+		Text:     "PR-12345 the reminder is for advocates only, not their friends",
+		Guidance: "the reminder is for advocates only, not their friends",
 		Jira: &JiraPreview{
 			Key: "PR-12345", Type: "Story", Status: "To Do", Priority: "High", Reporter: "rev-ann",
 			Summary: "Credit expiry reminder email",
@@ -271,6 +273,8 @@ func fixtureNewTaskLinks(now time.Time) NewTaskForm {
 	f := fixtureNewTaskJira(now)
 	f.Text = "https://example.atlassian.net/browse/PR-12345 the same fix as https://github.com/example/talkable/pull/4512; " +
 		"CI is red since https://github.com/example/talkable/actions/runs/1234567"
+	f.Guidance = "the same fix as https://github.com/example/talkable/pull/4512; " +
+		"CI is red since https://github.com/example/talkable/actions/runs/1234567"
 	f.Links = []FormLink{
 		{Kind: "jira", URL: "https://example.atlassian.net/browse/PR-12345", Offer: "its key, PR-12345"},
 		{Kind: "pr", URL: "https://github.com/example/talkable/pull/4512", Offer: "adoption comes in milestone 2"},
@@ -285,6 +289,7 @@ func fixtureNewTaskLinks(now time.Time) NewTaskForm {
 func fixtureNewTaskFound(now time.Time) NewTaskForm {
 	f := fixtureNewTaskJira(now)
 	f.Text = "fix the expiry reminder of PR-12345: advocates only, not their friends"
+	f.Guidance = f.Text
 	f.Jira.Found = "found in your text"
 	f.Overlap, f.ShowRules = "", false
 	return f

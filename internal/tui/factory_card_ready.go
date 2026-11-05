@@ -5,8 +5,12 @@ package tui
 // comes first, then the cause, the fix and the proof, the files (the flagged
 // ones first), the doubts, what the local review left open (KNOWN) and the
 // screenshots; then the three options, numbered, and the files not read in
-// the diff. The recommendation shows only once the diff was opened. See
-// factory_card.go for the painter it shares with the other cards.
+// the diff. The recommendation shows only once the diff was opened.
+//
+// On a short screen the options, the mark, the recommendation, the unread
+// files and the question stay in view: the lists above them give way (see
+// fitReady), each saying how much it does not show. See factory_card.go for
+// the painter it shares with the other cards.
 
 import (
 	"slices"
@@ -42,46 +46,13 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 		line3 += p.st.Dim.Render(p.g.sep + factoryPlural(c.Commits, "commit", "commits") + p.g.sep + "not on GitHub yet")
 	}
 	head = append(head, truncate(line3, p.width), "")
-	wrapW := p.wrapW(cardReadyX)
-	var body []string
-	field := func(label, text string) {
-		if text != "" {
-			body = append(body, p.labelRows(label, cardReadyX, plainCells(wrapText(text, wrapW, 0), noStyle))...)
-		}
-	}
-	list := func(label string, items []string, none string, st lipgloss.Style) {
-		cells := p.hangingCells(items, wrapW, st)
-		if len(cells) == 0 {
-			cells = []cell{{{none, p.st.Dim}}}
-		}
-		body = append(body, p.labelRows(label, cardReadyX, cells)...)
-	}
-	// The flags are on the operator, a second look before the push: yellow.
-	list("FLAGS", c.Flags, "none", p.st.Warn)
-	field("CAUSE", c.Cause)
-	field("FIX", c.Fix)
-	field("PROOF", c.Proof)
-	body = append(body, p.fileRows(c.Files)...)
-	list("DOUBTS", c.Doubts, "none", noStyle)
-	list("KNOWN", c.Leftovers, "none: the local review left nothing open", noStyle)
-	shots := cell{{"none", p.st.Dim}}
-	if c.Screenshots > 0 {
-		text := strconv.Itoa(c.Screenshots)
-		if c.ScreenshotsNote != "" {
-			text += ", " + c.ScreenshotsNote
-		}
-		shots = cell{{text, noStyle}}
-	}
-	body = append(body, p.labelRows("SCREENSHOTS", cardReadyX, []cell{shots})...)
-	body = append(body, "")
 
 	read := !c.DiffOpened.IsZero()
 	rec := -1
 	if read && c.Recommended >= 0 && c.Recommended < len(readyOptions) {
 		rec = c.Recommended
 	}
-	body = append(body, p.optionList(readyOptions, c.Cursor, rec, c.Why)...)
-	body = append(body, p.unreadRows(c.Unread, read)...)
+	choice := append(p.optionList(readyOptions, c.Cursor, rec, c.Why), p.unreadRows(c.Unread, read)...)
 	msg := ""
 	if read {
 		msg = p.st.Dim.Render("you read the diff " + p.clock(c.DiffOpened))
@@ -90,15 +61,145 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 	switch {
 	case c.Ask != "":
 		var frees string
-		if c.Frees != "" && (c.Cursor == readyPush || c.Cursor == readyDrop) {
+		// The push's y/N says what it frees; a drop's is the spec's own
+		// sentence, which names the copy ("Drop PR-12360: free
+		// talkable.factory3, keep the branch?").
+		if c.Frees != "" && c.Cursor == readyPush {
 			frees = "It frees " + c.Frees + "."
 		}
 		foot = p.askLines(c.Ask, frees)
 	case len(c.Reasons) > 0:
 		foot = p.reasonLines("Why send back?", c.Reasons)
 	}
-	frame, _ := p.assemble(head, body, 0, msg, foot, height)
+	room := -1 // no height: everything is drawn
+	if height > 0 {
+		room = max(height-len(head)-1-len(foot), 0) - len(choice)
+	}
+	// A blank line parts the lists from the options, when there is room for
+	// it and a list line.
+	blank := room < 0 || room > 1
+	if blank && room > 0 {
+		room--
+	}
+	body := p.fitReady(c, room)
+	if blank && len(body) > 0 {
+		body = append(body, "")
+	}
+	frame, _ := p.assemble(head, append(body, choice...), 0, msg, foot, height)
 	return frame
+}
+
+// readyFit says how much of the ready card's lists is drawn: the items of
+// FLAGS, FILES and KNOWN (the rest counted on a line of their own), and
+// which lists draw each item on one line, cut, instead of wrapped.
+type readyFit struct {
+	flags, files, known                     int
+	flagsOne, proofOne, doubtsOne, knownOne bool
+}
+
+// fitReady are the ready card's lists, the rows above its options, in at
+// most room lines (room < 0: all of them, whole). They give way in this
+// order, the least needed first: KNOWN goes to one line an item, then to a
+// count ("listed under Known in the PR body"); FLAGS to one line a flag;
+// PROOF to one line; FILES to a count ("d shows the diff"), the flagged files
+// staying longest; DOUBTS to one line a doubt; FLAGS to its first flag and a
+// count. When that is still too tall, the lists are cut, their last line
+// counting the lines not shown.
+func (p *cardPainter) fitReady(c ReadyCard, room int) []string {
+	f := readyFit{flags: len(c.Flags), files: len(c.Files), known: len(c.Leftovers)}
+	lines := p.readyLists(c, f)
+	if room < 0 || len(lines) <= room {
+		return lines
+	}
+	fits := func() bool { lines = p.readyLists(c, f); return len(lines) <= room }
+	once := func(b *bool) func() bool {
+		return func() bool { done := *b; *b = true; return !done }
+	}
+	fewer := func(n *int, least int) func() bool {
+		return func() bool {
+			if *n <= least {
+				return false
+			}
+			*n--
+			return true
+		}
+	}
+	for _, step := range []func() bool{
+		once(&f.knownOne), fewer(&f.known, 0), once(&f.flagsOne), once(&f.proofOne),
+		fewer(&f.files, 0), once(&f.doubtsOne), fewer(&f.flags, 1),
+	} {
+		for !fits() {
+			if !step() {
+				break
+			}
+		}
+		if len(lines) <= room {
+			return lines
+		}
+	}
+	if room <= 0 {
+		return nil
+	}
+	rest := len(lines) - room + 1
+	return append(lines[:room-1], p.line(at(1, p.width-1, seg{factoryPlural(rest, "more line", "more lines") + ", a taller window shows them", p.st.Dim})))
+}
+
+// readyLists are the rows above the ready card's options, as f draws them.
+func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
+	wrapW := p.wrapW(cardReadyX)
+	var body []string
+	field := func(label, text string, one bool) {
+		switch {
+		case text == "":
+		case one:
+			body = append(body, p.labelRows(label, cardReadyX, []cell{{{text, noStyle}}})...)
+		default:
+			body = append(body, p.labelRows(label, cardReadyX, plainCells(wrapText(text, wrapW, 0), noStyle))...)
+		}
+	}
+	// list draws the first keep items, each on one line when one is set,
+	// and counts the rest on a line of its own: more(n, shown) says it.
+	list := func(label string, items []string, keep int, one bool, none string, st lipgloss.Style, more func(n, shown int) string) {
+		var cells []cell
+		for _, it := range items[:min(keep, len(items))] {
+			if one {
+				cells = append(cells, cell{{it, st}})
+				continue
+			}
+			cells = append(cells, p.hangingCells([]string{it}, wrapW, st)...)
+		}
+		if n := len(items) - keep; n > 0 {
+			cells = append(cells, cell{{more(n, keep), p.st.Dim}})
+		}
+		if len(cells) == 0 {
+			cells = []cell{{{none, p.st.Dim}}}
+		}
+		body = append(body, p.labelRows(label, cardReadyX, cells)...)
+	}
+	// The flags are on the operator, a second look before the push: yellow.
+	list("FLAGS", c.Flags, f.flags, f.flagsOne, "none", p.st.Warn, func(n, _ int) string {
+		return "+" + strconv.Itoa(n) + " more, a taller window shows them"
+	})
+	field("CAUSE", c.Cause, false)
+	field("FIX", c.Fix, false)
+	field("PROOF", c.Proof, f.proofOne)
+	body = append(body, p.fileRows(c.Files, f.files)...)
+	list("DOUBTS", c.Doubts, len(c.Doubts), f.doubtsOne, "none", noStyle, nil)
+	list("KNOWN", c.Leftovers, f.known, f.knownOne, "none: the local review left nothing open", noStyle, func(n, shown int) string {
+		if shown == 0 {
+			return factoryPlural(n, "note", "notes") + ", listed under Known in the PR body"
+		}
+		return "+" + strconv.Itoa(n) + " more, listed under Known in the PR body"
+	})
+	shots := cell{{"none", p.st.Dim}}
+	if c.Screenshots > 0 {
+		text := strconv.Itoa(c.Screenshots)
+		if c.ScreenshotsNote != "" {
+			text += ", " + c.ScreenshotsNote
+		}
+		shots = cell{{text, noStyle}}
+	}
+	return append(body, p.labelRows("SCREENSHOTS", cardReadyX, []cell{shots})...)
 }
 
 // readyHints are the ready card's own key hints.
@@ -154,8 +255,9 @@ func (p *cardPainter) unreadRows(unread []string, read bool) []string {
 
 // fileRows is the FILES table: the path, the lines added and removed, and
 // whether the plan named the file, the flagged files (a FLAGS line names
-// them, or the plan did not) first.
-func (p *cardPainter) fileRows(files []CardFile) []string {
+// them, or the plan did not) first. The first keep files are drawn; a line
+// counts the rest, which the diff shows.
+func (p *cardPainter) fileRows(files []CardFile, keep int) []string {
 	if len(files) == 0 {
 		return p.labelRows("FILES", cardReadyX, []cell{{{"none", p.st.Dim}}})
 	}
@@ -208,8 +310,9 @@ func (p *cardPainter) fileRows(files []CardFile) []string {
 	if nw == 0 {
 		noteX = numX
 	}
-	out := make([]string, len(files))
-	for i, f := range files {
+	keep = min(max(keep, 0), len(files))
+	out := make([]string, keep)
+	for i, f := range files[:keep] {
 		var ps []placed
 		if i == 0 {
 			ps = append(ps, at(1, cardReadyX-1, seg{"FILES", p.st.Header}))
@@ -220,6 +323,12 @@ func (p *cardPainter) fileRows(files []CardFile) []string {
 			ps = append(ps, placed{numX, nw, counts[i]})
 		}
 		out[i] = p.line(append(ps, placed{noteX, p.width - noteX, notes[i]})...)
+	}
+	switch n := len(files) - keep; {
+	case n > 0 && keep == 0:
+		out = p.labelRows("FILES", cardReadyX, []cell{{{factoryPlural(n, "file", "files") + ", d shows the diff", p.st.Dim}}})
+	case n > 0:
+		out = append(out, p.line(at(cardReadyX, p.width-cardReadyX, seg{"+" + strconv.Itoa(n) + " more, d shows the diff", p.st.Dim})))
 	}
 	return out
 }

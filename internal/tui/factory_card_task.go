@@ -45,11 +45,11 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 	return p.assemble(head, body, start, "", []string{p.hintsLine(orHints(c.Hints, p.taskHints(c)))}, height)
 }
 
-// taskHints are the task card's own key hints. A task that waits on the
-// operator offers r: retry, which goes on at its stage (spec 9.D).
+// taskHints are the task card's own key hints. A task a retry can go on
+// for offers r: retry, which goes on at its stage (spec 9.D).
 func (p *cardPainter) taskHints(c TaskCard) []hint {
 	hs := []hint{{"j k", "move"}, {"enter", "open the line"}}
-	if strings.HasPrefix(c.WaitingFor, waitsOnYou+":") {
+	if c.Retry {
 		hs = append(hs, hint{"r", "retry"})
 	}
 	return append(hs, hint{"d", "diff"}, hint{"l", "log"}, hint{"+ " + p.minus(), "rate"}, hint{"esc", "back"}, hint{"?", "more"})

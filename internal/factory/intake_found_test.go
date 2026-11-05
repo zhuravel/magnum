@@ -825,6 +825,36 @@ func TestThePRTitleUsesAKeyFoundInTheText(t *testing.T) {
 	}
 }
 
+// The preview hands the screen the guidance it parsed, as ParseStart reads
+// it for the start: the words after a key or a Jira link at the start (a
+// colon or a comma after the key, a link's query, dropped), or the whole
+// text for a key found in it; none for a prompt or a lone key. The screen
+// draws it and never parses the text again.
+func TestThePreviewHandsTheGuidanceItParsed(t *testing.T) {
+	r := newIntakeRig(t)
+	for text, want := range map[string]string{
+		"PR-12345: only the refund path":                                          "only the refund path",
+		"PR-12345, only the refund path":                                          "only the refund path",
+		jiraTestSite + "/browse/PR-12345?focusedCommentId=1 only the refund path": "only the refund path",
+		"PR-12345 only the refund path":                                           "only the refund path",
+		foundText:                                                                 foundText,
+		"PR-12345":                                                                "",
+		"Read the dates of PR-12399 in the digest export":                         "",
+	} {
+		f, err := r.e.preview(r.ctx, text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Guidance != want {
+			t.Errorf("preview of %q: guidance %q, want %q", text, f.Guidance, want)
+		}
+	}
+	r.site.setDown(7)
+	if f, _ := r.e.preview(r.ctx, "PR-12346: only the refund path"); f.Guidance != "only the refund path" || f.Err == "" {
+		t.Errorf("preview of a key while Jira is down %+v, want its guidance beside the wait", f)
+	}
+}
+
 // The new-task preview shows a key found in the text with the note "found
 // in your text" for the JIRA line, the ticket the daemon read, and what a
 // key task would be; it makes nothing. Words Jira does not know are a

@@ -7,9 +7,9 @@ package tui
 //
 // A card is a head (the title line, the facts line and a blank), a body, the
 // rule that ends the body and the footer: the key hints (the card's own unless
-// its data gives them), the y/N question being asked (on two lines when it
-// does not fit one, so its words are never cut), or the reasons a key asks
-// for. With a height the footer sits at the bottom of it and
+// its data gives them), the y/N question being asked (on up to three lines
+// when it does not fit one, so its words are not cut), or the reasons a key
+// asks for. With a height the footer sits at the bottom of it and
 // a body that does not fit is cut, the rule counting the lines below; without
 // one the card is as tall as its content. Everything a card shows is cleaned
 // first, and no line is wider than the screen.
@@ -36,6 +36,7 @@ const (
 	cardReadyX     = 14 // the text of the ready card starts here, behind its labels
 	cardFormX      = 11 // ... and the text of the new task form
 	cardNameMax    = 20 // the widest name column of the task card
+	askMaxLines    = 3  // the most lines a y/N question takes
 	cardMore       = "…"
 )
 
@@ -186,7 +187,7 @@ func cleanNewTaskForm(f NewTaskForm) NewTaskForm {
 	f.Kind, f.KindWhy, f.Branch, f.Starts = cleanText(f.Kind), cleanText(f.KindWhy), cleanText(f.Branch), cleanText(f.Starts)
 	f.Err, f.Repo, f.Title, f.Ask = cleanText(f.Err), cleanText(f.Repo), cleanText(f.Title), cleanText(f.Ask)
 	f.Agents, f.Rules, f.Keys = cleanAll(f.Agents), cleanAll(f.Rules), cleanAll(f.Keys)
-	f.Overlap, f.Hints = cleanText(f.Overlap), cleanHints(f.Hints)
+	f.Overlap, f.Guidance, f.Hints = cleanText(f.Overlap), cleanText(f.Guidance), cleanHints(f.Hints)
 	f.Links = slices.Clone(f.Links)
 	for i, l := range f.Links {
 		f.Links[i] = FormLink{cleanText(l.Kind), cleanText(l.URL), cleanText(l.Offer)}
@@ -362,9 +363,10 @@ func (p *cardPainter) hintsLine(hs []hint) string {
 }
 
 // askLines are the footer when a y/N question is asked: its sentences on one
-// line, or, when they do not fit, each on a line of its own (or the words
-// wrapped over two), "y/N" ending the last, so the question never loses the
-// words that say what it frees.
+// line, or, when they do not fit, each on a line of its own, or the words
+// wrapped over up to three lines, "y/N" ending the last, so that the question
+// does not lose the words that say what it frees (only a question longer
+// than three lines of the screen is cut, at the end of its third).
 func (p *cardPainter) askLines(sentences ...string) []string {
 	sentences = slices.DeleteFunc(sentences, func(s string) bool { return s == "" })
 	w := p.width - 1
@@ -374,7 +376,7 @@ func (p *cardPainter) askLines(sentences ...string) []string {
 	}
 	lines := sentences
 	if len(lines) != 2 || ansi.StringWidth(lines[0]) > w || ansi.StringWidth(lines[1])+len(confirmYN) > w {
-		lines = wrapText(one, w-len(confirmYN), 2)
+		lines = wrapText(one, w-len(confirmYN), askMaxLines)
 	}
 	out := make([]string, len(lines))
 	for i, l := range lines {

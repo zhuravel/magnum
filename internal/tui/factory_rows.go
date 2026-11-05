@@ -208,14 +208,17 @@ type ReadyCard struct {
 	// Unread are the changed files the operator has not opened in the diff,
 	// drawn as "unread: <file>".
 	Unread []string
-	// Frees is what a push or a drop frees ("talkable.factory3; PR-12395
-	// starts in it"): the y/N sentence of the option under the mark names it.
+	// Frees is what the push frees ("talkable.factory3; PR-12395 starts in
+	// it"): the push's y/N names it ("It frees ..."). A drop's y/N is the
+	// spec's sentence, which names the copy itself.
 	Frees string
 	// Reasons are the reason keys of a send back, picked by their digit:
 	// while they are set the footer asks for one, before the note.
 	Reasons []string
-	// Cursor is the option under the mark, which j k and 1-3 move; out of
-	// range (-1) = none.
+	// Cursor is the option under the mark, which j k and 1-3 move; -1 (any
+	// value out of range) = no mark. It is -1 until the operator moves it or
+	// opens the diff: before the diff nothing is marked (spec 9.C). Its zero
+	// value marks push + PR.
 	Cursor int
 	// Hints are the footer's key hints; none: the card's own (readyHints).
 	Hints []hint `json:"-"`
@@ -260,6 +263,10 @@ type TaskCard struct {
 	AgentsNote string
 	// Spinner is the frame of the working marks, the card's only motion.
 	Spinner int
+	// Retry is true when a retry can go on: the task needs the operator at
+	// a stage that checks again what stopped it (magnum factory retry), not
+	// for its questions. The card's hints then offer r.
+	Retry bool
 	// Hints are the footer's key hints; none: the card's own (taskHints).
 	Hints []hint `json:"-"`
 }
@@ -309,6 +316,11 @@ type NewTaskForm struct {
 	// behind the spinner frame Spinner.
 	Reading bool
 	Spinner int
+	// Guidance is what goes to every agent with the ticket, as the daemon
+	// parsed the text: the words after a key or a Jira link at its start, or
+	// the whole text for a key found in it. The form draws it as it is and
+	// never parses the text; empty: no GUIDANCE row.
+	Guidance string
 	// Keys are the keys Jira knows that the text names, when it names
 	// several: the task is the prompt task it is, whose questions ask which
 	// issue it is, and no ticket is drawn as its own.

@@ -5,7 +5,7 @@
 › ● #4512    Deploy list o…  you: reply · agent: bart  post reply       QA ✓   confl  QA 4/9      2h
   ● PR-12345 Credit expiry…  you: 3 questions          answer them                               41m
   ● PR-12360 Custom activi…  you: ready to push        diff, then push                           12m
-  ● PR-12393 Referral expo…  you: review unavailable   r retry                                   25m
+  ● PR-12393 Referral expo…  you: review unavailable   retry                                     25m
 
  WAITS ON OTHERS
   ⣷ PR-12371 Coupon CSV ex…  agent: finding the cause                                             9m

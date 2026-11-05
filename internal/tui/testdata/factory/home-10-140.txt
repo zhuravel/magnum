@@ -5,7 +5,7 @@
 › ● #4512     Deploy list on camp…  you: reply to alice · agent: fixing bart  post the drafted reply    QA ✓      conflict  QA 4/9        2h
   ● PR-12345  Credit expiry remin…  you: 3 questions before coding            answer 3 questions                                         41m
   ● PR-12360  Custom activities l…  you: ready to push · 3 files +48 −6       read the diff, then push                                   12m
-  ● PR-12393  Referral export mis…  you: review unavailable (timeout)         r retry                                                    25m
+  ● PR-12393  Referral export mis…  you: review unavailable (timeout)         retry                                                      25m
 
  WAITS ON OTHERS
   ⣷ PR-12371  Coupon CSV export t…  agent: finding the cause, 2 of 3 done                                                                 9m

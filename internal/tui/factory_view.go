@@ -150,8 +150,8 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 	}
 	slices.SortStableFunc(order, func(a, b int) int { return int(f.Rows[a].Group) - int(f.Rows[b].Group) })
 	for _, i := range order {
-		if f.Rows[i].Group == GroupDone && p.digestDone() {
-			continue // the digest lists what finished, in place of the done rows
+		if f.Rows[i].Group == GroupDone && p.digestLists(cleanText(f.Rows[i].Key)) {
+			continue // the digest's line stands for the task
 		}
 		if i == f.Cursor {
 			p.cursor = len(p.rows)
@@ -172,6 +172,19 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 // digestDone is true when the digest has lines of what finished: they take
 // the place of the done group.
 func (p *factoryPainter) digestDone() bool { return p.f.Digest != nil && len(p.f.Digest.Done) > 0 }
+
+// digestLists is true when a line of the digest names the task key: its
+// row gives way to that line, so the task has one line (spec 9.A.1). A done
+// task the digest does not name keeps its row under DONE TODAY.
+func (p *factoryPainter) digestLists(key string) bool {
+	if p.f.Digest == nil || key == "" {
+		return false
+	}
+	return slices.ContainsFunc(p.f.Digest.Done, func(d string) bool {
+		first, _, _ := strings.Cut(d, " ")
+		return first == key
+	})
+}
 
 func cleanFactoryRow(r FactoryRow) FactoryRow {
 	r.Key, r.GitHub, r.Jira, r.Title = cleanText(r.Key), cleanText(r.GitHub), cleanText(r.Jira), cleanText(r.Title)
@@ -791,6 +804,7 @@ type factoryLine struct {
 	row   int // the row's index in rows; -1 for any other line
 	kind  lineKind
 	key   string // the task a row or a digest line names, for a more line
+	label string // its group's heading
 	tasks int    // the tasks the line stands for: 1 for a row, n for a more line
 }
 
@@ -809,9 +823,9 @@ type factoryBand struct {
 }
 
 // bands are the groups the body draws. One task draws its own group only;
-// otherwise an empty NEEDS YOU says so. A digest's lines take the place of
-// the done group, under "DONE SINCE <day time>". The column names go on the
-// first group that has rows.
+// otherwise an empty NEEDS YOU says so. A digest's lines are a group of
+// their own after the done rows, under "DONE SINCE <day time>". The column
+// names go on the first group that has rows.
 func (p *factoryPainter) bands() []factoryBand {
 	var out []factoryBand
 	columns := true
@@ -826,30 +840,31 @@ func (p *factoryPainter) bands() []factoryBand {
 			}
 			b.items = append(b.items, factoryLine{text: p.rowLine(r, i == p.cursor), group: g, row: i, kind: lineRow, key: r.Key, tasks: 1})
 		}
-		if g == GroupDone && p.digestDone() {
-			b.label = "DONE SINCE " + p.f.Digest.Since.In(p.now.Location()).Format("Mon 15:04")
-			for _, d := range p.f.Digest.Done {
-				key, _, _ := strings.Cut(d, " ")
-				b.items = append(b.items, factoryLine{text: p.digestLine(d), group: g, row: -1, kind: lineNote, key: key, tasks: 1})
-			}
-		}
-		hasRows := len(b.items) > 0 && b.items[0].kind == lineRow
-		if len(b.items) == 0 {
-			if g != GroupNeedsYou || len(p.rows) <= 1 {
-				continue
-			}
+		hasRows := len(b.items) > 0
+		if len(b.items) == 0 && g == GroupNeedsYou && len(p.rows) > 1 {
 			b.fold = false
 			b.items = append(b.items, factoryLine{text: "   " + p.st.OK.Bold(true).Render(p.tick()+" Nothing waits on you."), group: g, row: -1, kind: lineNote})
 			if p.f.Next != "" {
 				b.items = append(b.items, factoryLine{text: "     " + p.st.Dim.Render("Next for you: "+p.f.Next), group: g, row: -1, kind: lineNote})
 			}
 		}
-		b.columns = columns && hasRows
-		if hasRows {
-			columns = false
+		if len(b.items) > 0 {
+			b.columns = columns && hasRows
+			if hasRows {
+				columns = false
+			}
+			b.keep = len(b.items)
+			out = append(out, b)
 		}
-		b.keep = len(b.items)
-		out = append(out, b)
+		if g == GroupDone && p.digestDone() {
+			d := factoryBand{group: g, label: "DONE SINCE " + p.f.Digest.Since.In(p.now.Location()).Format("Mon 15:04"), fold: true}
+			for _, text := range p.f.Digest.Done {
+				key, _, _ := strings.Cut(text, " ")
+				d.items = append(d.items, factoryLine{text: p.digestLine(text), group: g, row: -1, kind: lineNote, key: key, tasks: 1})
+			}
+			d.keep = len(d.items)
+			out = append(out, d)
+		}
 	}
 	return out
 }
@@ -888,10 +903,14 @@ func (p *factoryPainter) lines(bands []factoryBand) []factoryLine {
 		if i > 0 {
 			out = append(out, factoryLine{group: bands[i-1].group, row: -1, kind: lineBlank})
 		}
-		out = append(out, factoryLine{text: p.headerLine(b.label, b.columns, 0), group: b.group, row: -1, kind: lineHeading})
-		out = append(out, b.items[:b.keep]...)
+		out = append(out, factoryLine{text: p.headerLine(b.label, b.columns, 0), group: b.group, row: -1, kind: lineHeading, label: b.label})
+		items := b.items[:b.keep]
 		if b.keep < len(b.items) {
-			out = append(out, p.moreLine(b.group, b.items[b.keep:]))
+			items = append(slices.Clone(items), p.moreLine(b.group, b.items[b.keep:]))
+		}
+		for _, l := range items {
+			l.label = b.label
+			out = append(out, l)
 		}
 	}
 	return out
@@ -986,10 +1005,7 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 	if sticky {
 		label, under := "", body[start+1]
 		if under.kind != lineHeading && under.kind != lineBlank {
-			label = factoryGroupLabels[under.group]
-			if under.group == GroupDone && p.digestDone() {
-				label = bands[len(bands)-1].label
-			}
+			label = under.label
 		}
 		window = append([]factoryLine{{text: p.headerLine(label, true, tasks(body[:start+1])), row: -1, kind: lineHeading}},
 			body[start+1:min(start+bodyH, len(body))]...)

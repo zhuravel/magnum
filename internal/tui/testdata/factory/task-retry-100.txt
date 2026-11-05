@@ -9,8 +9,7 @@
   ✓ investigate    reproduced with a failing spec · 2 agents found the same cau…    19m      10:21
   – questions      skipped: nothing was open
   ✓ coding         spec red before, green after · 2 files +18 −3                    27m      10:48
-  ✓ tests          88 specs green · rubocop clean                                    6m      10:54
-› ✗ local review   round 1: 1 P2, fixed · round 2 timed out after 60m: review u…  1h38m      12:32  
+› ✗ tests          88 specs green · rubocop clean · local review: round 1 fixed…  1h44m      12:32  
   · ready to push  after a clean local review
   · pushed         the factory pushes after your y
 

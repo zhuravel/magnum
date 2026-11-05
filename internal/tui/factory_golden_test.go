@@ -541,6 +541,29 @@ func TestHomeShowsADigestAfterYouWereAway(t *testing.T) {
 	}
 }
 
+// The digest takes the place of the done rows it lists, and of those only:
+// a task done before the operator left keeps its own line, under DONE TODAY
+// (9.A.1: one line per task).
+func TestTheDigestKeepsTheDoneRowsItDoesNotList(t *testing.T) {
+	f := fixtureDigest()
+	f.Digest.Since = time.Date(2026, 11, 4, 6, 0, 0, 0, time.Local)
+	f.Rows = append(f.Rows, FactoryRow{
+		ID: 6, Key: "PR-12305", GitHub: "#4521", Title: "Coupon CSV header names", Group: GroupDone, Mark: MarkDone,
+		WaitsOn: []WaitsOn{{Who: "nothing", What: "you pushed 05:30, PR #4521", Short: "pushed 05:30"}},
+	})
+	frame, rowLines := factoryFrameOf(f, 100, 0, true, IconsUnicode, factoryDigestNow)
+	plain := ansi.Strip(frame)
+	if _, ok := rowLines[6]; !ok || !strings.Contains(plain, "DONE TODAY") {
+		t.Errorf("the task done before the digest's time lost its line:\n%s", plain)
+	}
+	if _, ok := rowLines[5]; ok || strings.Count(plain, "PR-12302") != 1 {
+		t.Errorf("the task the digest lists is drawn twice:\n%s", plain)
+	}
+	if !strings.Contains(plain, "DONE SINCE Wed 06:00") {
+		t.Errorf("no DONE SINCE group:\n%s", plain)
+	}
+}
+
 // When the list scrolls, the column names stay on a line of their own: no
 // task row is ever drawn over, and every task is drawn or counted above or
 // below the screen.

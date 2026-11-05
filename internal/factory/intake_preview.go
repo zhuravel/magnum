@@ -15,9 +15,10 @@ import (
 )
 
 // preview is the new-task screen's preview of text: the ticket the daemon
-// read for a key (or the reason it cannot: Err), the kind and why, the
-// title of a prompt, the branch, when the task would start, and its first
-// agents. It makes nothing.
+// read for a key (or the reason it cannot: Err), the guidance the start
+// would send every agent with it, the kind and why, the title of a prompt,
+// the branch, when the task would start, and its first agents. It makes
+// nothing.
 func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, error) {
 	f := tui.NewTaskForm{Text: text}
 	text = strings.TrimSpace(text)
@@ -64,6 +65,7 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 		if f.Err != "" && !down { // a refusal: no task would start
 			return f, nil
 		}
+		f.Guidance = in.Guidance // what the start sends every agent, as ParseStart read it
 	case len(in.Found) > 0 && e.d.Jira != nil:
 		var stop bool
 		if tk, stop = e.previewFound(ctx, &f, in); stop {
@@ -130,6 +132,7 @@ func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartI
 	}
 	f.Jira = e.jiraPreview(known[0])
 	f.Jira.Found = foundNote
+	f.Guidance = in.Prompt // the whole text, as startFound sends it
 	if len(refused) > 0 {
 		f.Jira.Found += "; " + refused[0].note(refusedBeside)
 	}

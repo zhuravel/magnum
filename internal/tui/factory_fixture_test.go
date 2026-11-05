@@ -197,7 +197,8 @@ func fixtureNothing() factoryFrame {
 }
 
 // fixtureTen is home with ten tasks: the home's seven, a fourth that needs
-// the operator (its local review did not finish: r retries it), a task
+// the operator (its local review did not finish: its move is a retry, which
+// r does in its task card), a task
 // queued for a copy that the push of PR-12360 frees, and a second done one.
 // On a short screen its long groups collapse.
 func fixtureTen() factoryFrame {
@@ -207,7 +208,7 @@ func fixtureTen() factoryFrame {
 		ID: 8, Key: "PR-12393", Title: "Referral export misses friends' emails",
 		Group: GroupNeedsYou, Mark: MarkNeedsYou,
 		WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "review unavailable (timeout)", Short: "review unavailable", OnYou: true}},
-		Move:    "r retry", MoveShort: "r retry",
+		Move:    "retry", MoveShort: "retry",
 		Since: factoryAgo(now, 25*time.Minute),
 		Help:  "review unavailable (timeout): round 2 of the local review ran out of time · enter, then r runs it again",
 	}

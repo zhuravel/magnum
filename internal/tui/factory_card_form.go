@@ -119,13 +119,15 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 		out = append(out, p.labelRows("JIRA", x, cells)...)
 	case f.Jira != nil:
 		out = append(out, p.jiraRows(f.Jira)...)
-		if rest := p.guidance(f); rest != "" {
-			out = append(out, p.labelRows("GUIDANCE", x, plainCells(wrapText(`"`+rest+`" goes to every agent`, wrapW, 3), noStyle))...)
-		}
 	case f.Err != "":
 		out = append(out, p.labelRows("JIRA", x, plainCells(wrapText(f.Err, wrapW, 2), p.st.Err))...)
 	case strings.TrimSpace(f.Text) != "":
 		out = append(out, p.labelRows("JIRA", x, []cell{{{"none: the agents work from your words", noStyle}}})...)
+	}
+	// The guidance is the daemon's, as the start sends it: the text is never
+	// parsed here.
+	if f.Guidance != "" && !severalKeys(f) {
+		out = append(out, p.labelRows("GUIDANCE", x, plainCells(wrapText(`"`+f.Guidance+`" goes to every agent`, wrapW, 3), noStyle))...)
 	}
 	if len(f.Links) > 0 {
 		out = append(out, p.linkRows(f.Links)...)
@@ -157,25 +159,6 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 		out = append(out, p.ruleRows(f, wrapW)...)
 	}
 	return out
-}
-
-// guidance is what goes to every agent with the ticket: the words after the
-// key or the Jira link the text starts with, or, for a key found elsewhere in
-// the text, the whole text (spec 6.1).
-func (p *cardPainter) guidance(f NewTaskForm) string {
-	text := strings.Join(strings.Fields(f.Text), " ")
-	if f.Jira == nil {
-		return ""
-	}
-	if f.Jira.Found != "" {
-		return text
-	}
-	first, rest, _ := strings.Cut(text, " ")
-	first, key := strings.ToLower(strings.TrimRight(first, "/")), strings.ToLower(f.Jira.Key)
-	if first != key && !strings.HasSuffix(first, "/"+key) {
-		return ""
-	}
-	return strings.TrimSpace(rest)
 }
 
 // keysCell names the several keys of a text: the prompt task they are asks

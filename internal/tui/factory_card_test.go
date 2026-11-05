@@ -468,8 +468,8 @@ func TestTaskCardNeverHidesARowBehindTheHeader(t *testing.T) {
 					t.Errorf("%s %d cursor %d: the lines under the head are not one run of the body with %d below:\n%s",
 						c.Key, h, cur, below, ansi.Strip(frame))
 				}
-				// Both cards have at least 11 lines a mark stands on.
-				if cur < 11 && !slices.ContainsFunc(shown, func(l string) bool { return strings.HasPrefix(l, "› ") }) {
+				// Both cards have at least 10 lines a mark stands on.
+				if cur < 10 && !slices.ContainsFunc(shown, func(l string) bool { return strings.HasPrefix(l, "› ") }) {
 					t.Errorf("%s %d cursor %d: the marked line is out of view:\n%s", c.Key, h, cur, ansi.Strip(frame))
 				}
 			}
@@ -511,17 +511,116 @@ func TestTaskCardSpinsOnlyForWorkingAgents(t *testing.T) {
 
 // A task that waits on the operator offers r, retry, on its card, and a row
 // whose move is a retry says "r retry".
+// A task whose data says a retry can go on offers r, retry, on its card; a
+// task that waits on the operator for anything else (its questions) does
+// not, nor one that waits on someone else. On home the row's move says
+// "retry" in words, with no key: on home only enter acts (9.A.4).
 func TestTaskCardOffersRetryWhenItWaitsOnYou(t *testing.T) {
 	defer checkCardGolden(t, "task-retry", drawTask(fixtureRetryCard(), 0))
 	if hints := cardLineWith(t, plainCard(drawTask(fixtureRetryCard(), 0), 140), "j k move"); !strings.Contains(hints, "r retry") {
-		t.Errorf("a task that waits on you does not offer r: %q", hints)
+		t.Errorf("a task a retry goes on for does not offer r: %q", hints)
 	}
 	if hints := cardLineWith(t, plainCard(drawTask(fixtureTaskCard(), 0), 140), "j k move"); strings.Contains(hints, "retry") {
 		t.Errorf("a task that waits on rev-ann offers r: %q", hints)
 	}
+	questions := fixtureTaskCard()
+	questions.WaitingFor = waitsOnYou + ": 3 questions before coding"
+	if hints := cardLineWith(t, plainCard(drawTask(questions, 0), 140), "j k move"); strings.Contains(hints, "retry") {
+		t.Errorf("a task that waits on its questions offers r: %q", hints)
+	}
 	frame, rowLines := factoryFrameOf(fixtureTen(), 140, 50, true, IconsUnicode, factoryNow)
-	if l := strings.Split(ansi.Strip(frame), "\n")[rowLines[8]]; !strings.Contains(l, "you: review unavailable (timeout)") || !strings.Contains(l, "r retry") {
-		t.Errorf("the row whose move is a retry reads %q", l)
+	l := strings.Split(ansi.Strip(frame), "\n")[rowLines[8]]
+	if !strings.Contains(l, "you: review unavailable (timeout)") || !strings.Contains(l, "  retry ") || strings.Contains(l, "r retry") {
+		t.Errorf("the row whose move is a retry reads %q, want the move in words", l)
+	}
+}
+
+// The form draws the guidance the daemon parsed, as it is: the painter
+// never parses the text again, so "PR-12345: words" shows its words and a
+// text the daemon gives no guidance shows none.
+func TestNewTaskDrawsTheGuidanceTheDaemonParsed(t *testing.T) {
+	f := fixtureNewTaskJira(factoryNow)
+	f.Text, f.Guidance = "PR-12345: only the refund path", "only the refund path"
+	if l := cardLineWith(t, plainCard(drawNewTask(f), 100), "GUIDANCE"); !strings.Contains(l, `GUIDANCE  "only the refund path" goes to every agent`) {
+		t.Errorf("the guidance row reads %q", l)
+	}
+	f.Text, f.Guidance = "PR-12345 the words after the key", ""
+	if frame := plainCard(drawNewTask(f), 100); strings.Contains(frame, "GUIDANCE") {
+		t.Errorf("a GUIDANCE row the daemon did not give:\n%s", frame)
+	}
+}
+
+// readyFooter is the lines of a card frame under its rule, squashed.
+func readyFooter(frame string) string {
+	lines := cardLines(frame)
+	rule := len(lines) - 1 - slices.IndexFunc(reversed(lines), func(l string) bool { return strings.HasPrefix(l, "──") })
+	return cardSquash(strings.Join(lines[rule+1:], "\n"))
+}
+
+// On a short terminal the ready card keeps its options, the mark, the
+// recommendation with its reason, the unread files and the y/N in view: it
+// cuts the lists above them (KNOWN first, then FILES, then FLAGS) and says
+// how much it does not show.
+func TestTheReadyCardKeepsItsOptionsAndQuestionInView(t *testing.T) {
+	for _, h := range []int{24, 30} {
+		frame := drawReady(fixtureReadyCardAfter())(100, h, true, IconsUnicode)
+		plain := ansi.Strip(frame)
+		if n := len(strings.Split(plain, "\n")); n != h {
+			t.Fatalf("100x%d: %d lines:\n%s", h, n, plain)
+		}
+		for _, want := range []string{"› 1  push + PR", "recommended", "why: the spec proves the fix", "2  send back", "3  drop",
+			"unread: spec/services/campaign_copier_spec.rb", " FLAGS "} {
+			if !strings.Contains(plain, want) {
+				t.Errorf("100x%d: %q is not in view:\n%s", h, want, plain)
+			}
+		}
+		if foot := readyFooter(frame); !strings.Contains(foot, "It frees talkable.factory3; PR-12395 starts in it. y/N") {
+			t.Errorf("100x%d: the y/N reads %q", h, foot)
+		}
+		if h == 24 && !strings.Contains(plain, "4 notes, listed under Known in the PR body") {
+			t.Errorf("100x%d: the KNOWN row does not say where its notes are:\n%s", h, plain)
+		}
+		if lines := strings.Split(plain, "\n"); strings.Contains(lines[len(lines)-3], "more") {
+			t.Errorf("100x%d: the options or the unread files went below the rule: %q", h, lines[len(lines)-3])
+		}
+	}
+	before := ansi.Strip(drawReady(fixtureReadyCard())(100, 24, true, IconsUnicode))
+	for _, want := range []string{"1 push + PR", "3 drop", "the recommendation shows after d", "d read the diff"} {
+		if !strings.Contains(cardSquash(before), want) {
+			t.Errorf("100x24 before the diff: %q is not in view:\n%s", want, before)
+		}
+	}
+	checkFactoryFrame(t, "ready-before-100x24.txt", before, 100)
+	checkFactoryFrame(t, "ready-after-100x24.txt", ansi.Strip(drawReady(fixtureReadyCardAfter())(100, 24, true, IconsUnicode)), 100)
+	// Tall enough for everything, nothing is cut.
+	if tall := ansi.Strip(drawReady(fixtureReadyCardAfter())(100, 50, true, IconsUnicode)); strings.Contains(tall, "listed under Known") || strings.Contains(tall, "more") {
+		t.Errorf("100x50 cuts a list:\n%s", tall)
+	}
+}
+
+// A drop's y/N is the spec's sentence, which names the copy: the painter
+// adds nothing to it. Only the push's y/N says what it frees.
+func TestTheDropQuestionNamesTheCopyOnce(t *testing.T) {
+	c := fixtureReadyCardAfter()
+	c.Cursor, c.Ask = 2, "Drop PR-12360: free talkable.factory3, keep the branch?"
+	defer checkFactoryFrame(t, "ready-drop-100.txt", plainCard(drawReady(c), 100), 100)
+	if foot := readyFooter(drawReady(c)(100, 0, true, IconsUnicode)); strings.Count(foot, "talkable.factory3") != 1 || strings.Contains(foot, "It frees") {
+		t.Errorf("the drop's y/N reads %q", foot)
+	}
+}
+
+// A y/N never loses what it frees: on a narrow screen it takes a third line
+// rather than cut a word.
+func TestAQuestionTooLongForTwoLinesTakesAThird(t *testing.T) {
+	frame := drawReady(fixtureReadyCardAfter())(60, 0, true, IconsUnicode)
+	foot := readyFooter(frame)
+	if want := "Push zhuravel-PR-12360-activity-points-on-copy and open a PR? It frees talkable.factory3; PR-12395 starts in it. y/N"; !strings.HasPrefix(foot, want) {
+		t.Errorf("at 60 columns the y/N reads %q, want %q", foot, want)
+	}
+	for i, l := range strings.Split(frame, "\n") {
+		if lw := ansi.StringWidth(l); lw > 60 {
+			t.Errorf("line %d is %d cells wide", i+1, lw)
+		}
 	}
 }
 
@@ -799,6 +898,14 @@ func TestFactoryCardsCountWhatTheirHeightCutsOff(t *testing.T) {
 		lines := strings.Split(frame, "\n")
 		if len(lines) != 12 {
 			t.Fatalf("%s: %d lines, want 12:\n%s", name, len(lines), frame)
+		}
+		// The ready card keeps its options above the rule: its lists count
+		// what they do not show.
+		if name == "ready-before" {
+			if !strings.Contains(frame, "more lines, a taller window shows them") {
+				t.Errorf("%s: the card does not count the lines it cuts:\n%s", name, frame)
+			}
+			continue
 		}
 		if rule := lines[len(lines)-2]; !strings.Contains(rule, "▼") || !strings.Contains(rule, "more") {
 			t.Errorf("%s: the rule does not count the lines below: %q", name, rule)
