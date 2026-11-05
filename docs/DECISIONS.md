@@ -14920,6 +14920,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   go". The screen's key for it still waits for an approved frame (ruling 472). Tests:
   TestFactoryLetGoSendsYourLetGo, TestALetGoFromTheCLIGoesOnAndResendsNothing and
   TestUnknownReasonNamesEveryRole.
+- **The previews keep Jira's answers, and the waiting tasks try Jira a few a tick** (2026-11-05, the final
+  review). The daemon answers a preview, and tries Jira for the tasks that wait for it, on its loop, and one
+  read may take curl's 20 seconds. A preview now keeps each key's answer, a failure included (a key Jira
+  does not know, its silence, the end of the found keys' shared time), and the overlap line, a failed read
+  included, for `previewOverlapTTL` (2 minutes), so the pauses in your typing read a key once; a read whose
+  request was cancelled is not kept. A tick makes at most `jiraTriesPerTick` (3) tries for the waiting tasks,
+  oldest first, and none after a try Jira did not answer: a restart made every waiting task due at once, so
+  N tasks stalled the first tick N reads, and each task that fails now backs off from its own tick, which
+  keeps the tries a tick apart. A start's own read is not bounded (one per request). Moving the start's, the
+  preview's and the linked task's reads off the loop is milestone 1b's. Rejected: a jitter on the backoff (the
+  per-tick bound spreads the tries by itself, and the tests' clock steps by whole backoffs). Tests:
+  TestThePreviewsOfAKeyReadJiraOnceFailuresIncluded and TestARestartReadsTheWaitingKeysAFewATick.
 
 ## Learned rules
 

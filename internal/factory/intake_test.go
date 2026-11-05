@@ -370,6 +370,53 @@ func TestStartWhileJiraIsDownWaitsForJira(t *testing.T) {
 	}
 }
 
+// A restart, or an outage, never reads every waiting task's key on one
+// tick: the tasks that wait for Jira try it at once after a restart, but a
+// tick takes at most jiraTriesPerTick of their tries, and none after a try
+// Jira did not answer, since the others would wait for it too. So a hung
+// Jira holds a tick for one read, and the tries stay a tick apart.
+func TestARestartReadsTheWaitingKeysAFewATick(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.setDown(28) // curl's timeout: Jira hangs
+	keys := []string{"PR-12350", "PR-12351", "PR-12352", "PR-12353", "PR-12354"}
+	var waiting []registry.Task
+	for _, k := range keys {
+		r.site.issues[k] = issueJSON(k, "Coupon "+k, "Bug", "The coupon is off.")
+		waiting = append(waiting, r.mustStart(k))
+	}
+	r.crash()
+	calls := func() int {
+		r.site.mu.Lock()
+		defer r.site.mu.Unlock()
+		return r.site.calls
+	}
+	for i := range 2 {
+		before := calls()
+		r.tick()
+		if n := calls() - before; n != 1 {
+			t.Fatalf("tick %d after the restart called a hung Jira %d times, want once", i+1, n)
+		}
+	}
+
+	r.site.setDown(0)
+	before := calls()
+	r.tick()
+	r.e.waitBackground()
+	if n := calls() - before; n != jiraTriesPerTick {
+		t.Fatalf("a tick read %d waiting keys from a Jira that answers, want %d", n, jiraTriesPerTick)
+	}
+	r.clock.Add(jiraBackoff(1)) // the two that tried while Jira hung come due again
+	for range 2 {
+		r.tick()
+		r.e.waitBackground()
+	}
+	for _, w := range waiting {
+		if got := r.reload(w.ID); got.State != registry.TaskActive && got.State != registry.TaskQueued {
+			t.Fatalf("%s is %s waiting %q, want started once Jira answered", w.JiraKey, got.State, got.WaitsWhat)
+		}
+	}
+}
+
 // A task that waits for Jira has a kind from its start: the one you chose,
 // or the one your words after the key pick (else the default), so a task
 // that went to you and back starts its kind's first stage. When Jira

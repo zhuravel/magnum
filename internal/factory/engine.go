@@ -271,10 +271,16 @@ type Engine struct {
 	// jiraTries are the next tries of the tasks that wait for Jira
 	// (retryJira).
 	jiraTries map[int64]*jiraTry
+	// jiraLeft is how many of those tries the tick may still make
+	// (jiraTriesPerTick, none after a try Jira did not answer).
+	jiraLeft int
 	// overlaps are the overlap lines the new-task previews read, by
-	// repository and key, kept for previewOverlapTTL (previewOverlap).
+	// repository and key, and jiraReads Jira's answers to their reads of a
+	// key, a failure included, both kept for previewOverlapTTL
+	// (previewOverlap, previewJira).
 	overlapMu sync.Mutex
 	overlaps  map[string]overlapRead
+	jiraReads map[string]jiraRead
 
 	heavyMu   sync.Mutex
 	heavyHeld map[int64]*heavySlot
@@ -580,6 +586,7 @@ var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
+	e.jiraLeft = jiraTriesPerTick
 	e.wake(now)
 	defer e.alive()
 	defer e.saveHolds() // the screen draws the holds in force

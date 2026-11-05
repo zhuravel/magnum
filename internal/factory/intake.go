@@ -129,6 +129,10 @@ const (
 	jiraGiveUp   = 6 * time.Hour
 	// jiraTryShifts caps the doubling: 1m<<5 is past jiraTryMax.
 	jiraTryShifts = 5
+	// jiraTriesPerTick bounds the tries of Jira one tick makes for the
+	// tasks that wait for it (jiraTryOf): a restart makes every one due at
+	// once, and each read may take curl's whole time on the loop.
+	jiraTriesPerTick = 3
 )
 
 // jiraBackoff is the wait after failed tries of Jira (the start's own
@@ -502,7 +506,10 @@ func (e *Engine) startWaiting(ctx context.Context, p StartPayload, repo config.F
 
 // jiraTryOf is task t's next try of Jira, a wait that began at since (a
 // restart: at once), and whether it is due: its time came, or the time to
-// give up did (since + jiraGiveUp), which takes one more try.
+// give up did (since + jiraGiveUp), which takes one more try, and the tick
+// has a try left (jiraLeft): a restart makes every waiting task due at
+// once, so the tries go a few a tick, oldest task first, and each one that
+// fails backs off from its own tick, which keeps them apart.
 func (e *Engine) jiraTryOf(t registry.Task, since time.Time) (*jiraTry, bool) {
 	now := e.now()
 	w := e.jiraTries[t.ID]
@@ -510,7 +517,11 @@ func (e *Engine) jiraTryOf(t registry.Task, since time.Time) (*jiraTry, bool) {
 		w = &jiraTry{next: now}
 		e.jiraTries[t.ID] = w
 	}
-	return w, !now.Before(w.next) || !now.Before(since.Add(jiraGiveUp))
+	if now.Before(w.next) && now.Before(since.Add(jiraGiveUp)) || e.jiraLeft <= 0 {
+		return w, false
+	}
+	e.jiraLeft--
+	return w, true
 }
 
 // jiraDidNotAnswer records try w of Jira for task t that Jira did not answer
@@ -520,6 +531,7 @@ func (e *Engine) jiraTryOf(t registry.Task, since time.Time) (*jiraTry, bool) {
 func (e *Engine) jiraDidNotAnswer(ctx context.Context, t registry.Task, w *jiraTry, since time.Time, err error) {
 	now, giveUp := e.now(), since.Add(jiraGiveUp)
 	w.tries++
+	e.jiraLeft = 0 // the other waiting tasks would wait for a Jira that does not answer too
 	if !now.Before(giveUp) {
 		delete(e.jiraTries, t.ID)
 		e.toOperator(ctx, t, "Jira did not answer for "+shortAge(jiraGiveUp), "Jira did not answer")

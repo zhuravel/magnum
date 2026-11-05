@@ -3635,7 +3635,9 @@ creates the branch. A task starts at once, or waits queued while memory is full
 its first question, which Jira issue it is: the 3 best title matches of a Jira search on its first words,
 and "no issue"; the best match is recommended, and "no issue" when no title shares a word. While Jira does
 not answer (curl exit 6, 7 or 28, HTTP 5xx) the task waits, `Jira: start when Jira answers`, at no cost,
-tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours; an unknown key
+tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours (a tick makes at most 3 such
+tries, oldest task first, and none after one Jira did not answer, so a restart in an outage holds a tick for one read
+and the tries stay a tick apart); an unknown key
 (`PR-12399 is not in Jira`), a missing token file (`the Jira token file is missing: <path>`) or another
 refusal makes no task (a key found in the middle of your text is never one: whatever Jira refuses it for, it stays a word of the prompt and the task goes on from your words); a task that waits for Jira has a kind from the start (yours, or the one your words
 pick), which follows the ticket's type when Jira answers unless you chose it, and a branch named by the key
@@ -3662,7 +3664,9 @@ key task with the whole text as its guidance and the branch named by the key and
 words, and several ask which issue it is. After 6 hours without an answer the task goes on from your words (an info
 event says so; a key task needs you then), and so does a waiting task when `[jira]` is switched off. A key that a task
 holds since makes the waiting task need you, naming that task.
-The new-task preview shows the found key on the JIRA line with the note `found in your text`. The PR's title and branch
+The new-task preview shows the found key on the JIRA line with the note `found in your text`. The previews keep Jira's
+answer for each key, a failure included, and the overlap line, a failed read included, for 2 minutes, so the pauses in
+your typing read a key once (the daemon answers them on its loop). The PR's title and branch
 take the key as for a key at the start. The text you started with is recorded once, as guidance of the intake role for a
 key found at once and as the task's text for one that waited, and the stats count it as typed, never as a step start.
 

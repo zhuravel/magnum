@@ -99,17 +99,17 @@ func noSuchIssue(err error) bool {
 // prompt, no error. The error is Jira's silence (foundSilent), or the end of
 // the shared time (errFoundTime), or the end of the context; it stops the
 // reading.
-func (e *Engine) readFound(ctx context.Context, keys []string) (known []jira.Ticket, refused []foundRefusal, err error) {
+func (e *Engine) readFound(ctx context.Context, keys []string, read jiraReader) (known []jira.Ticket, refused []foundRefusal, err error) {
 	bctx, cancel := context.WithTimeout(ctx, foundBudget)
 	defer cancel()
 	for _, k := range keys[:min(len(keys), foundReads)] {
-		tk, err := e.d.Jira.Ticket(bctx, k)
+		tk, err := read(bctx, k)
 		switch {
 		case err == nil:
 			known = append(known, tk)
 		case ctx.Err() != nil:
 			return nil, nil, ctx.Err()
-		case bctx.Err() != nil:
+		case bctx.Err() != nil, errors.Is(err, errFoundTime): // the time ran out now, or for a preview's kept read
 			return nil, nil, errFoundTime
 		case foundSilent(err):
 			return nil, nil, err
@@ -151,7 +151,7 @@ func (e *Engine) noteRefused(ctx context.Context, id int64, refused []foundRefus
 // info event names the cause (noteRefused). Only a key at the start of the
 // text is an error.
 func (e *Engine) startFound(ctx context.Context, p StartPayload, repo config.FactoryRepo, login string, in StartInput) (registry.Task, string, error) {
-	known, refused, err := e.readFound(ctx, in.Found)
+	known, refused, err := e.readFound(ctx, in.Found, e.d.Jira.Ticket)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return registry.Task{}, "", ctx.Err()
@@ -213,7 +213,7 @@ func (e *Engine) startFoundWaiting(ctx context.Context, p StartPayload, repo con
 // refuses for a cause of its own stays a word, as at a start, with an info
 // event naming the cause.
 func (e *Engine) retryFound(ctx context.Context, t registry.Task, w *jiraTry) error {
-	known, refused, err := e.readFound(ctx, ParseStart(t.Prompt, e.trackers(t.Repo)).Found)
+	known, refused, err := e.readFound(ctx, ParseStart(t.Prompt, e.trackers(t.Repo)).Found, e.d.Jira.Ticket)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return ctx.Err()

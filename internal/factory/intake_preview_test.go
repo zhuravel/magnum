@@ -79,6 +79,71 @@ func TestThePreviewsOfAKeyReadItsOverlapOnce(t *testing.T) {
 	}
 }
 
+// The previews of one text, one after the other as you type, read each of
+// its keys from Jira once, a failure included (a key Jira does not know,
+// Jira's silence), and its overlap once even when a read of it failed: the
+// daemon answers the previews on its loop, so each answer is kept for
+// previewOverlapTTL as the overlap line is, then read again.
+func TestThePreviewsOfAKeyReadJiraOnceFailuresIncluded(t *testing.T) {
+	r := newIntakeRig(t)
+	previews := func(texts ...string) (last tui.NewTaskForm) {
+		t.Helper()
+		for _, text := range texts {
+			f, err := r.e.preview(r.ctx, text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			last = f
+		}
+		return last
+	}
+	asked := func(key string) int {
+		r.site.mu.Lock()
+		defer r.site.mu.Unlock()
+		return len(slices.DeleteFunc(slices.Clone(r.site.asked), func(k string) bool { return k != key }))
+	}
+	if f := previews("PR-12345 the", "PR-12345 the advocates", "PR-12345 the advocates only"); f.Jira == nil || f.Jira.Key != "PR-12345" {
+		t.Fatalf("a known key's preview: %+v", f)
+	}
+	if f := previews("PR-12399 the", "PR-12399 the reminder"); f.Err != "PR-12399 is not in Jira" || !f.WordsOnly {
+		t.Fatalf("an unknown key's preview: %+v", f)
+	}
+	if f := previews("the refund of PR-12346", "the refund of PR-12346 is wrong"); f.Jira == nil || f.Jira.Key != "PR-12346" {
+		t.Fatalf("a found key's preview: %+v", f)
+	}
+	for _, key := range []string{"PR-12345", "PR-12399", "PR-12346"} {
+		if n := asked(key); n != 1 {
+			t.Errorf("the previews read %s from Jira %d times, want once", key, n)
+		}
+	}
+
+	r.site.setDown(28)
+	calls := r.site.calls
+	if f := previews("PR-12347 the", "PR-12347 the coupon", "PR-12347 the coupon code"); f.Err != "Jira does not answer: the task waits for it, then starts" {
+		t.Fatalf("a silent Jira's preview: %+v", f)
+	}
+	r.site.mu.Lock()
+	silent := r.site.calls - calls
+	r.site.mu.Unlock()
+	if silent == 0 || silent > 1 {
+		t.Errorf("three previews while Jira is silent called it %d times, want once", silent)
+	}
+
+	r.run.Rules = []execx.Rule{{Prefix: []string{"git", "log"}, Result: execx.Result{Code: 128, Stderr: []byte("fatal: bad object")}}}
+	before := len(r.run.CallsWithPrefix("git", "log"))
+	previews("PR-12348 the", "PR-12348 the referral", "PR-12348 the referral link")
+	if n := len(r.run.CallsWithPrefix("git", "log")) - before; n != 1 {
+		t.Errorf("three previews whose overlap read failed ran git log %d times, want once", n)
+	}
+
+	r.site.setDown(0)
+	r.clock.Add(previewOverlapTTL + time.Second)
+	previews("PR-12345 the advocates only")
+	if n := asked("PR-12345"); n != 2 {
+		t.Errorf("a preview after the answer went stale read PR-12345 %d times in all, want 2", n)
+	}
+}
+
 // A key at the start that Jira does not know: the preview says so and offers
 // your words only; one Jira refused for another cause, or a key found in the
 // middle of the text, does not.

@@ -916,6 +916,7 @@ func TestThePreviewSaysTheKeyWasFoundInTheText(t *testing.T) {
 	if f, _ = r.e.preview(r.ctx, foundText); f.Err != fmt.Sprintf("PR-12345 already runs as task %d", first.ID) {
 		t.Fatalf("preview of a key that runs %+v", f)
 	}
+	r.clock.Add(previewOverlapTTL + time.Second) // the preview keeps an answer of Jira that long
 	r.site.setDown(7)
 	if f, _ = r.e.preview(r.ctx, "fix the refund path of PR-12346"); f.Err != "Jira does not answer: the task waits for it, then starts" {
 		t.Fatalf("preview while Jira is down %+v", f)

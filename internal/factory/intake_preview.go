@@ -5,6 +5,7 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -56,8 +57,8 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 			f.Err = keyRuns{t}.Error()
 			return f, nil
 		}
-		got, err := e.readTicket(ctx, in.Key)
-		down := err != nil && jiraDown(err)
+		got, err := e.readTicket(ctx, in.Key, e.previewJira(ctx))
+		down := err != nil && (jiraDown(err) || errors.Is(err, errFoundTime))
 		switch {
 		case down:
 			f.Err = "Jira does not answer: the task waits for it, then starts"
@@ -132,11 +133,12 @@ func (e *Engine) previewOverlap(ctx context.Context, repo, key string) string {
 	if ok && now.Sub(kept.at) < previewOverlapTTL {
 		return kept.line
 	}
+	octx := ctx
 	ctx, cancel := context.WithTimeout(ctx, previewOverlapBound)
 	defer cancel()
-	line, err := e.Overlap(ctx, registry.Task{Repo: repo, JiraKey: key}, nil) // the parts that were read
+	line, _ := e.Overlap(ctx, registry.Task{Repo: repo, JiraKey: key}, nil) // the parts that were read
 	line = strings.TrimPrefix(line, "overlap: ")
-	if err == nil {
+	if octx.Err() == nil { // a failed read is kept too: it would fail again on the next pause in typing
 		e.overlapMu.Lock()
 		defer e.overlapMu.Unlock()
 		if e.overlaps == nil {
@@ -189,7 +191,7 @@ func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartI
 		f.Err = keyRuns{t}.Error()
 		return nil, true
 	}
-	known, refused, err := e.readFound(ctx, in.Found)
+	known, refused, err := e.readFound(ctx, in.Found, e.previewJira(ctx))
 	switch {
 	case err != nil && ctx.Err() != nil: // the request was cancelled
 		f.Err = err.Error()
@@ -231,17 +233,64 @@ func (e *Engine) jiraPreview(got jira.Ticket) *tui.JiraPreview {
 		Excerpt: excerpt, Read: e.now(), More: excerpt != desc}
 }
 
-// readTicket reads a key's ticket for the preview; a refusal is in a
-// start's words (jiraCause).
-func (e *Engine) readTicket(ctx context.Context, key string) (jira.Ticket, error) {
+// readTicket reads a key's ticket for the preview through read; a refusal
+// is in a start's words (jiraCause).
+func (e *Engine) readTicket(ctx context.Context, key string, read jiraReader) (jira.Ticket, error) {
 	if e.d.Jira == nil {
 		return jira.Ticket{}, fmt.Errorf("[jira] is off, so the factory cannot read %s", key)
 	}
-	tk, err := e.d.Jira.Ticket(ctx, key)
-	if err != nil && !jiraDown(err) {
+	tk, err := read(ctx, key)
+	if err != nil && !jiraDown(err) && !errors.Is(err, errFoundTime) {
 		return tk, jiraCause(key, err)
 	}
 	return tk, err
+}
+
+// jiraReader reads a key's ticket from Jira: the client's own read for a
+// start, previewJira's for a preview.
+type jiraReader func(ctx context.Context, key string) (jira.Ticket, error)
+
+// jiraRead is Jira's answer to a preview's read of a key, a failure
+// included, and when.
+type jiraRead struct {
+	tk  jira.Ticket
+	err error
+	at  time.Time
+}
+
+// previewJira is the reader of the preview whose request runs on octx: it
+// reads a key from Jira once per previewOverlapTTL and keeps the answer, a
+// failure included, since the daemon answers the previews on its loop and
+// one comes after each pause in typing: a hung Jira must not hold the loop
+// once per pause. A read cut by the end of the time it shared with the
+// other keys of the text (readFound) is kept as that silence
+// (errFoundTime); one whose request was cancelled is not kept, since it
+// says nothing about Jira.
+func (e *Engine) previewJira(octx context.Context) jiraReader {
+	return func(ctx context.Context, key string) (jira.Ticket, error) {
+		now := e.now()
+		e.overlapMu.Lock()
+		kept, ok := e.jiraReads[key]
+		e.overlapMu.Unlock()
+		if ok && now.Sub(kept.at) < previewOverlapTTL {
+			return kept.tk, kept.err
+		}
+		tk, err := e.d.Jira.Ticket(ctx, key)
+		switch {
+		case octx.Err() != nil:
+			return tk, err
+		case err != nil && ctx.Err() != nil:
+			err = errFoundTime
+		}
+		e.overlapMu.Lock()
+		defer e.overlapMu.Unlock()
+		if e.jiraReads == nil {
+			e.jiraReads = map[string]jiraRead{}
+		}
+		maps.DeleteFunc(e.jiraReads, func(_ string, r jiraRead) bool { return now.Sub(r.at) >= previewOverlapTTL })
+		e.jiraReads[key] = jiraRead{tk: tk, err: err, at: now}
+		return tk, err
+	}
 }
 
 // startsWhen says when a task started now would start, as the new-task
