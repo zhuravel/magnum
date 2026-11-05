@@ -567,6 +567,35 @@ func TestAToastThatFailsIsTriedAgainOnALaterTick(t *testing.T) {
 	r.wantToasts("once herdr answers", shownToast{"factory: 1 needs you", "PR-12345 questions"})
 }
 
+// The toast's backoff stays between its first wait and its cap however
+// long the toasts keep failing: an uncapped shift turned the wait negative
+// at the 29th failure (about 6.5 hours), and every tick then spent up to 15
+// seconds on a toast. The rig's toasts that fail 40 times in a row keep
+// their retries 15 minutes apart.
+func TestTheToastBackoffNeverOverflows(t *testing.T) {
+	prev := time.Duration(0)
+	for fails := 1; fails <= 80; fails++ {
+		d := alertBackoff(fails)
+		if d < alertRetryFirst || d > alertRetryMax || d < prev {
+			t.Fatalf("alertBackoff(%d) = %s after %s, want between %s and %s, never shorter", fails, d, prev, alertRetryFirst, alertRetryMax)
+		}
+		prev = d
+	}
+
+	r := newAlertRig(t)
+	r.toasts.setErr(fmt.Errorf("herdr: dial: %w", herdr.ErrUnavailable))
+	r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	r.e.alerts.fails = 39 // 39 toasts failed in a row before this one
+	r.after(2 * time.Minute)
+	n := r.toasts.callCount()
+	r.after(time.Minute)
+	r.after(time.Minute)
+	if got := r.toasts.callCount(); got != n {
+		t.Fatalf("the toast was tried %d more times within the 40th failure's backoff, want none", got-n)
+	}
+}
+
 // herdr's rate limit is waited out only within the toast's bound: the
 // factory's notifier gives up on herdr in time for osascript to show the
 // toast before the bound ends.

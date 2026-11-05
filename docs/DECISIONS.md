@@ -14970,6 +14970,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   names "waiting for background terminal", as it drops the spinners. A tool line that only carries its
   duration stays. The wording comes from the reviewer's notes, not from a live Codex screen, and Task 21
   checks it. Test: TestAStillScreenDropsOnlyTheCLIsTimerLines.
+- **The toast's backoff is capped** (2026-11-05, the final review, ledger 524). A toast that failed waited
+  `alertRetryFirst<<(fails-1)`, with no cap on the shift. At the 29th failure in a row the wait turned
+  negative, and each tick then spent up to 15 seconds on a toast. That is about 6.5 hours of herdr and
+  osascript both failing. `alertBackoff` caps the shift at 4, as `infraBackoff` does: 1, 2, 4, 8, then 15
+  minutes. Test: TestTheToastBackoffNeverOverflows.
 
 ## Learned rules
 

@@ -333,6 +333,17 @@ func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bo
 	return kept && same(key+": "+k.what)
 }
 
+// alertBackoff is the wait after fails toasts failed in a row: 1, 2, 4, 8,
+// then 15 minutes however long they keep failing. The shift is capped as
+// infraBackoff's is (1m<<4 is past alertRetryMax): uncapped, it turned the
+// wait negative at the 29th failure, and every tick then tried a toast.
+func alertBackoff(fails int) time.Duration {
+	return min(alertRetryFirst<<min(max(fails-1, 0), alertBackoffShifts), alertRetryMax)
+}
+
+// alertBackoffShifts caps alertBackoff's doubling.
+const alertBackoffShifts = 4
+
 // flushAlerts sends the due toast of the alerts that stand, counting what
 // waits on you now, and records what became of each: toasted, held as
 // sent by the dedupe store, or not shown (toasts off, herdr declining). A
@@ -352,7 +363,7 @@ func (e *Engine) flushAlerts(ctx context.Context, now time.Time, tasks []registr
 	res, err := a.batch.FlushDueResult(tctx)
 	if err != nil {
 		a.fails++
-		a.retryAt = now.Add(min(alertRetryFirst<<(a.fails-1), alertRetryMax))
+		a.retryAt = now.Add(alertBackoff(a.fails))
 		e.log.Log(ctx, execx.FailLevel(ctx, err), "an alert's toast failed; it is tried again later",
 			"alerts", len(standing), "at", clock(a.retryAt), "err", err)
 		return
