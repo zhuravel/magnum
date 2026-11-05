@@ -477,6 +477,59 @@ func TestReadSessionsTiesASessionToTheTicketItsBranchNames(t *testing.T) {
 	if want := (stats.Skipped{NoKey: 1}); skipped != want {
 		t.Errorf("skipped = %+v, want %+v (the session on master alone)", skipped, want)
 	}
+	// Each session keeps its branches and whether its first message names its
+	// key, which tell the operator's own tickets (OwnTickets).
+	for _, s := range sessions {
+		wantFirst := s.Messages[0] == "PR-12375: the first message names it"
+		if s.KeyInFirst != wantFirst || len(s.Branches) == 0 {
+			t.Errorf("the session of %q: KeyInFirst %v, branches %q; want %v and its branches", s.Messages[0], s.KeyInFirst, s.Branches, wantFirst)
+		}
+	}
+	for _, s := range sessions {
+		if s.Messages[0] == "what is on master?" && !slices.Equal(s.Branches, []string{"master", "zhuravel-PR-12371-mailer"}) {
+			t.Errorf("branches %q, want master then zhuravel-PR-12371-mailer", s.Branches)
+		}
+	}
+}
+
+// Ruling: the baseline counts only the operator's own tickets. A ticket
+// counts when one of its sessions ran on the operator's own branch (their
+// login and a dash, as the factory names its branches, in any case) or began
+// with a message that names its key, the way the operator starts a task. A
+// ticket whose sessions ran on other people's branches, or on none, without
+// such a first message is someone else's: its sessions are dropped and it is
+// counted apart.
+func TestOwnTicketsKeepOnlyTheOperatorsOwnWork(t *testing.T) {
+	t.Parallel()
+	msgs := []string{"look at it", "open PR"}
+	sessions := []stats.Session{
+		{Key: "PR-12340", Messages: msgs, Branches: []string{"master", "zhuravel-PR-12340-points"}}, // own branch
+		{Key: "PR-12341", Messages: msgs, Branches: []string{"alice-PR-12341"}},                     // a colleague's
+		{Key: "PR-12342", Messages: msgs, Branches: []string{"alice-PR-12342"}, KeyInFirst: true},   // begun with the key
+		{Key: "PR-12343", Messages: msgs, Branches: []string{"alice-PR-12343"}},                     // a colleague's, then
+		{Key: "PR-12343", Messages: msgs, Branches: []string{"Zhuravel-PR-12343"}},                  // own, in any case
+		{Key: "PR-12344", Messages: msgs, Branches: []string{"rev-ann-PR-12344"}},                   // a colleague's, then
+		{Key: "PR-12344", Messages: msgs, Branches: []string{"rev-ann-PR-12344"}, KeyInFirst: true}, // begun with the key
+		{Key: "PR-12345", Messages: msgs},                                                           // no branch, no key first
+		{Key: "PR-12346", Messages: msgs, Branches: []string{"zhuravelx-PR-12346", "zhuravel"}},     // neither is zhuravel-
+	}
+	own, others := stats.OwnTickets(sessions, "zhuravel-")
+	var keys []string
+	for _, s := range own {
+		keys = append(keys, s.Key)
+	}
+	if want := []string{"PR-12340", "PR-12342", "PR-12343", "PR-12343", "PR-12344", "PR-12344"}; !slices.Equal(keys, want) {
+		t.Errorf("own sessions of %v, want %v (in order, every session of an own ticket)", keys, want)
+	}
+	if others != 3 {
+		t.Errorf("others = %d, want 3 tickets (PR-12341, PR-12345, PR-12346)", others)
+	}
+
+	// Without a prefix only a first message that names the key makes a ticket yours.
+	own, others = stats.OwnTickets(sessions, "")
+	if len(own) != 3 || others != 5 {
+		t.Errorf("without a prefix: %d own sessions and %d others' tickets, want 3 and 5", len(own), others)
+	}
 }
 
 // The baseline counts what the operator typed, so it reads only the

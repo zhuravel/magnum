@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -256,11 +257,13 @@ func TestFactoryStatsRefusesABaselineItCannotRead(t *testing.T) {
 // --- magnum factory baseline ---
 
 // baselineFixture is a transcripts directory of two tickets (three sessions
-// of the first), a labelled file, and a config that knows the tracker.
+// of the first), a labelled file, and a config that knows the tracker and
+// your GitHub login.
 func baselineFixture(t *testing.T, dt *daemonGroupTest) (transcripts, labelled string) {
 	t.Helper()
 	cfg := *dt.ctx.Config
 	cfg.Board.Trackers = []string{"https://example.atlassian.net/browse/PR-{num}"}
+	cfg.Identities = append(slices.Clone(cfg.Identities), config.Identity{Name: "me", Kind: "gh", Login: "zhuravel"})
 	dt.ctx.Config = &cfg
 
 	transcripts = filepath.Join(t.TempDir(), "transcripts")
@@ -442,6 +445,87 @@ func TestFactoryBaselineNamesWhyItSkippedEachTranscript(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the summary lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// Ruling: only your own tickets count. A ticket counts when one of its
+// sessions ran on your own branch (your GitHub login and a dash, from the
+// config's identity, or --branch-prefix) or began by naming its key; a
+// ticket whose sessions all ran on a colleague's branch without that is
+// someone else's, skipped and counted apart.
+func TestFactoryBaselineCountsOnlyYourOwnTickets(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	transcripts, labelled := baselineFixture(t, dt)
+	at := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	write := func(name, branch string, texts ...string) {
+		t.Helper()
+		var lines []string
+		for i, text := range texts {
+			b, _ := json.Marshal(map[string]any{"type": "user", "timestamp": at.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
+				"turnOrigin": "human", "entrypoint": "cli", "cwd": "/work/shop", "gitBranch": branch,
+				"message": map[string]any{"role": "user", "content": text}})
+			lines = append(lines, string(b))
+		}
+		p := filepath.Join(transcripts, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("own/a.jsonl", "zhuravel-PR-12341-points", "look at the points", "open PR", "push")
+	write("colleague/a.jsonl", "alice-PR-12342", "check the mailer")
+	write("colleague/b.jsonl", "alice-PR-12343", "PR-12343: the export for alice", "yes")
+	path := dt.ctx.Layout.FactoryBaseline()
+
+	// Your login, zhuravel: PR-12341 is yours by its branch, PR-12343 by its
+	// first message, PR-12342 is alice's. Typed: 6, 2, 3 and 2.
+	if code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	got, err := stats.LoadBaseline(path)
+	if err != nil || got == nil || got.Tickets != 4 || got.TypedPerTicket.Min != 2 {
+		t.Fatalf("baseline %+v, %v; want 4 tickets, the fewest of 2 messages (alice's PR-12342 skipped)", got, err)
+	}
+	if out := dt.stdout.String(); !strings.Contains(out, "4 tickets, from 6 sessions") || !strings.Contains(out, "others' tickets: 1 skipped") {
+		t.Errorf("the summary lacks the tickets or the others' tickets:\n%s", out)
+	}
+
+	// --branch-prefix wins over the login: as alice-, PR-12342 counts and
+	// PR-12341 is someone else's.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	dt.stdout.Reset()
+	if code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled, "--branch-prefix", "alice-"); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	if got, err := stats.LoadBaseline(path); err != nil || got == nil || got.Tickets != 4 || got.TypedPerTicket.Min != 1 {
+		t.Errorf("baseline %+v, %v; want 4 tickets, the fewest of 1 message (PR-12342)", got, err)
+	}
+}
+
+// Without your login there is no telling your branches from others', so the
+// command refuses before it reads anything, and names the flag that says it.
+func TestFactoryBaselineNeedsYourBranchPrefix(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	transcripts, labelled := baselineFixture(t, dt)
+	cfg := *dt.ctx.Config
+	cfg.Identities = nil
+	dt.ctx.Config = &cfg
+	if code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled); code != 1 ||
+		!strings.Contains(dt.stderr.String(), "--branch-prefix") {
+		t.Errorf("exit %d, stderr %q; want a refusal that names --branch-prefix", code, dt.stderr)
+	}
+	if _, err := os.Stat(dt.ctx.Layout.FactoryBaseline()); !os.IsNotExist(err) {
+		t.Fatalf("a baseline was written: %v", err)
+	}
+	dt.stderr.Reset()
+	if code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled, "--branch-prefix", "zhuravel-"); code != 0 {
+		t.Errorf("with --branch-prefix: exit %d, stderr: %s", code, dt.stderr)
 	}
 }
 

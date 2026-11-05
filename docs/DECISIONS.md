@@ -15131,8 +15131,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   minutes then sent each task to NEEDS YOU with an alert. Two tasks that met it also started an infrastructure
   hold through the same-failure-on-two-tasks rule. The herdr hold covers herdr, as before. The next tick's
   herdr check finds the outage and holds every stage. Test: TestAHerdrErrorInsideAStageCountsNoFailure.
-- **The baseline reads only your interactive sessions and ties a session to its ticket by its branch**
-  (2026-11-05). A dry run of `magnum factory baseline` on the operator's transcripts found 20 tickets from 26
+- **The baseline reads only your interactive sessions, ties a session to its ticket by its branch and counts
+  only your own tickets** (2026-11-05). A dry run of `magnum factory baseline` on the operator's transcripts found 20 tickets from 26
   sessions, though 130 of the 505 transcripts ran on a branch that names a ticket. It counted sessions nobody
   typed in, and `Classify` got 66% of the labelled messages right. A session whose path and messages name no
   key now takes the first key its git branches name (a Claude entry's `gitBranch`, a Codex rollout's
@@ -15143,7 +15143,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `exec`), a Codex subagent (a source object naming one), and a session that started in magnum's data or state
   directory, a `[[pool]]` slot of any number, a per-PR worktree (`slots.IsPRWorktree`) or a `[[factory.repo]]`
   copy, or below one: the CLI builds that predicate from the layout and the config. The summary counts every
-  skipped transcript by its reason (`stats.Skipped`). Ruling: a go-ahead starts a step ("go ahead", "go
+  skipped transcript by its reason (`stats.Skipped`). The branch link brought in many short tickets of other
+  people's work, so the operator ruled that only their own tickets count (`stats.OwnTickets`): a ticket one of
+  whose sessions ran on their own branch (their GitHub login and a dash, as the factory names its branches:
+  `config.OperatorLogin`, or `--branch-prefix`) or began with a message that names its key. A ticket whose
+  sessions all ran on other people's branches, or on none, without such a first message is skipped and
+  counted apart as others' tickets. Without a login or the flag the command refuses; it never asks GitHub. Ruling: a go-ahead starts a step ("go ahead", "go
   implement", "implement", "proceed", "continue", "next step", "apply", "fix it", "do it", "build it", "build
   now", a bare "go", "test the api", "rerun the tests", "resolve conflicts", "submit the review"),
   and "yes", "ok", "sounds good" and "confirm" alone stay approvals. A correction says the agent was wrong or
@@ -15158,7 +15163,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestReadSessionsTiesASessionToTheTicketItsBranchNames, TestReadSessionsSkipsTheSessionsTheOperatorNeverTypedIn,
   TestClaudeSessionFactsSayHowWhereAndOnWhichBranches, TestCodexSessionFactsReadTheSessionMeta,
   TestIsPRWorktreeKnowsWhatPRWorktreePathNames, TestBaselineKnowsWhereMagnumStartsSessions,
-  TestFactoryBaselineNamesWhyItSkippedEachTranscript and TestClassifyKnowsTheEverydayStepStartsAndCorrections.
+  TestFactoryBaselineNamesWhyItSkippedEachTranscript, TestOwnTicketsKeepOnlyTheOperatorsOwnWork,
+  TestFactoryBaselineCountsOnlyYourOwnTickets, TestFactoryBaselineNeedsYourBranchPrefix and
+  TestClassifyKnowsTheEverydayStepStartsAndCorrections.
 
 ## Learned rules
 

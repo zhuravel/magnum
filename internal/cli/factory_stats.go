@@ -26,7 +26,7 @@ import (
 
 const (
 	factoryStatsUsage    = "stats [--since 7d] [--json|--markdown]"
-	factoryBaselineUsage = "baseline --transcripts <dir> --labelled <file>"
+	factoryBaselineUsage = "baseline --transcripts <dir> --labelled <file> [--branch-prefix <login>-]"
 
 	// baselineMinAccuracy is the share of the operator's labelled messages
 	// the classifier should get right for the baseline's step-start counts
@@ -113,7 +113,7 @@ func runFactoryStatsCmd(c *Context, f factoryStatsFlags, pos []string) int {
 }
 
 // factoryBaselineFlags are the flags of `magnum factory baseline`.
-type factoryBaselineFlags struct{ transcripts, labelled string }
+type factoryBaselineFlags struct{ transcripts, labelled, branchPrefix string }
 
 func newFactoryBaselineCmd(c *Context) *cobra.Command {
 	var f factoryBaselineFlags
@@ -127,7 +127,12 @@ func newFactoryBaselineCmd(c *Context) *cobra.Command {
 			"apart. Only your interactive sessions count: a headless run (claude -p or the SDK, codex exec), a "+
 			"subagent's, a Codex session Claude Code started and a session started where magnum or the factory starts "+
 			"its own (magnum's data and state directories, a [[pool]] slot, a per-PR worktree, a [[factory.repo]] copy) "+
-			"are left out. The first message of a ticket (the oldest session's first) counts as typed and never as a step "+
+			"are left out. Only your own tickets count: a ticket one of whose sessions ran on your own branch (one "+
+			"that starts with your GitHub login and a dash, as the factory names its branches: the login of your gh "+
+			"[[identity]], or --branch-prefix) or began with a message that names its key; a ticket whose sessions all "+
+			"ran on other people's branches, or on none, without such a first message is someone else's, and the "+
+			"summary counts those apart. Without a login or --branch-prefix the command refuses. The first message "+
+			"of a ticket (the oldest session's first) counts as typed and never as a step "+
 			"start, as the message that starts a task does in `magnum factory stats`, while the first message of a later session keeps "+
 			"its class. The record of a slash command magnum types (/compact, /model, /rename, /exit) is no message of "+
 			"yours here, as it is none in the factory's panes. A transcript with no message or no ticket key is left "+
@@ -141,6 +146,7 @@ func newFactoryBaselineCmd(c *Context) *cobra.Command {
 		func(pos []string) int { return runFactoryBaselineCmd(c, f, pos) })
 	cmd.Flags().StringVar(&f.transcripts, "transcripts", "", "the directory of your old transcripts and rollouts")
 	cmd.Flags().StringVar(&f.labelled, "labelled", "", "the JSON-lines file of your labelled messages")
+	cmd.Flags().StringVar(&f.branchPrefix, "branch-prefix", "", "the start of your own git branches (default: your GitHub login and a dash)")
 	_ = cmd.MarkFlagDirname("transcripts")
 	_ = cmd.MarkFlagFilename("labelled", "jsonl", "json")
 	return cmd
@@ -165,6 +171,16 @@ func runFactoryBaselineCmd(c *Context, f factoryBaselineFlags, pos []string) int
 	if len(trackers) == 0 {
 		return fail("no issue tracker is configured, so no ticket key can be told from a word\nfix: set [board] trackers (or a [[repo]]'s) to the template of your tickets' links, such as https://example.atlassian.net/browse/PR-{num}")
 	}
+	prefix := f.branchPrefix // where your own branches start: your login and a dash, as the factory names its branches
+	if prefix == "" {
+		if login := baselineLogin(c.Config); login != "" {
+			prefix = login + "-"
+		}
+	}
+	if prefix == "" {
+		return fail("no GitHub login of yours is configured, so your own branches cannot be told from other people's\n" +
+			"fix: declare your account as an [[identity]] with kind = \"gh\" and its login, or pass --branch-prefix <login>-")
+	}
 	labelled, err := stats.ReadLabelled(f.labelled)
 	if err != nil {
 		return fail("%v", err)
@@ -177,6 +193,7 @@ func runFactoryBaselineCmd(c *Context, f factoryBaselineFlags, pos []string) int
 	if err != nil {
 		return fail("%v", err)
 	}
+	sessions, others := stats.OwnTickets(sessions, prefix)
 	b, err := stats.BuildBaseline(sessions, labelled)
 	if err != nil {
 		return fail("%v", err)
@@ -197,6 +214,8 @@ func runFactoryBaselineCmd(c *Context, f factoryBaselineFlags, pos []string) int
 			skipped.Magnum)
 	}
 	fmt.Fprintln(w)
+	fmt.Fprintf(w, "others' tickets: %d skipped (every session on someone else's branch or on none, and none begun with the ticket's key; "+
+		"your branches start with %s)\n", others, prefix)
 	fmt.Fprintf(w, "typed per ticket: %s\n", b.TypedPerTicket)
 	fmt.Fprintf(w, "step starts per ticket: %s\n", b.StepStartsPerTicket)
 	fmt.Fprintf(w, "classifier accuracy: %.0f%% of your %d labelled messages\n", b.Accuracy*100, len(labelled))
@@ -225,6 +244,21 @@ func baselineTrackers(cfg *config.Config) []config.Tracker {
 	}
 	add(cfg.TrackersFor(""))
 	return out
+}
+
+// baselineLogin is your GitHub login, which starts your own branches as it
+// starts the factory's (config.OperatorLogin): the operator identity of a
+// factory repository's watch, else the config's first gh identity; "" when
+// the config names none.
+func baselineLogin(cfg *config.Config) string {
+	for _, r := range cfg.Factory.Repos {
+		if w := cfg.WatchFor(r.Repo); w != nil {
+			if l := cfg.OperatorLogin(*w); l != "" {
+				return l
+			}
+		}
+	}
+	return cfg.OperatorLogin(config.Watch{})
 }
 
 // baselineMagnumDir reports whether a session's working directory lies
