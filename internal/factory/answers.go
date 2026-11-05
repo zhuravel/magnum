@@ -34,6 +34,7 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/jira"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // AnswerPayload is a ReqAnswer: your answers to the questions of revision
@@ -580,27 +581,14 @@ func (e *Engine) recordAsks(ctx context.Context, t registry.Task, asks []pending
 }
 
 // draftComment is the comment drafted for login on question q of task t:
-// the question, why it is asked, its example and its options.
+// the question, why it is asked, its example and its options, by the one
+// template the screen's recap also shows (tui.AskComment).
 func draftComment(t registry.Task, q registry.Question, login string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s, a question on %s: %s\n", login, TaskKey(t), q.Text)
-	if q.Context != "" {
-		fmt.Fprintf(&b, "\n%s\n", q.Context)
+	opts := make([]tui.CardOption, len(q.Options))
+	for i, o := range q.Options {
+		opts[i] = tui.CardOption{Label: o.Label, Means: o.Means}
 	}
-	if q.Example != "" {
-		fmt.Fprintf(&b, "\nFor example: %s\n", q.Example)
-	}
-	if len(q.Options) > 0 {
-		b.WriteString("\nThe options as we see them:\n")
-		for _, o := range q.Options {
-			if o.Means != "" {
-				fmt.Fprintf(&b, "- %s: %s\n", o.Label, o.Means)
-			} else {
-				fmt.Fprintf(&b, "- %s\n", o.Label)
-			}
-		}
-	}
-	return b.String()
+	return tui.AskComment(login, TaskKey(t), q.Text, q.Context, q.Example, opts)
 }
 
 // readAsks reads asks.json of task id, by questionKey; none is no ask.

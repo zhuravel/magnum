@@ -3,8 +3,10 @@ package factory
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -51,5 +53,80 @@ func TestThePreviewNamesTheLinksAndTheOverlap(t *testing.T) {
 	f, _ = r.e.preview(r.ctx, "The weekly digest is off")
 	if f.Overlap != "" || len(f.Links) != 0 || len(r.run.CallsWithPrefix("git", "log")) != calls {
 		t.Errorf("a prompt's preview read an overlap or links: %+v", f)
+	}
+}
+
+// The previews of one key, one after the other as you type its guidance,
+// read its overlap once: the line is kept for a while, then read again.
+func TestThePreviewsOfAKeyReadItsOverlapOnce(t *testing.T) {
+	r := newIntakeRig(t)
+	r.run.Rules = []execx.Rule{
+		{Prefix: []string{"git", "log"}, Result: execx.Result{Stdout: []byte("abc1234\tPR-12345 first try\n")}},
+		{Prefix: []string{"gh", "pr", "list"}, Result: execx.Result{Stdout: []byte("[]")}},
+	}
+	for _, text := range []string{"PR-12345 the", "PR-12345 the advocates", "PR-12345 the advocates only"} {
+		if f, _ := r.e.preview(r.ctx, text); f.Overlap != "1 commit names PR-12345 (newest abc1234)" {
+			t.Fatalf("%q: overlap %q", text, f.Overlap)
+		}
+	}
+	if n := len(r.run.CallsWithPrefix("git", "log")); n != 1 {
+		t.Errorf("three previews of one key ran git log %d times, want once", n)
+	}
+	r.clock.Add(previewOverlapTTL + time.Second)
+	r.e.preview(r.ctx, "PR-12345 the advocates only")
+	if n := len(r.run.CallsWithPrefix("git", "log")); n != 2 {
+		t.Errorf("a preview after the line went stale ran git log %d times in all, want 2", n)
+	}
+}
+
+// A key at the start that Jira does not know: the preview says so and offers
+// your words only; one Jira refused for another cause, or a key found in the
+// middle of the text, does not.
+func TestThePreviewOffersYourWordsOnlyForAKeyJiraDoesNotKnow(t *testing.T) {
+	r := newIntakeRig(t)
+	if f, _ := r.e.preview(r.ctx, "PR-12399 the reminder"); f.Err != "PR-12399 is not in Jira" || !f.WordsOnly {
+		t.Errorf("an unknown key's preview: %+v", f)
+	}
+	if f, _ := r.e.preview(r.ctx, "PR-12345 the reminder"); f.WordsOnly {
+		t.Errorf("a known key's preview offers words only: %+v", f)
+	}
+	if f, _ := r.e.preview(r.ctx, "the refund of PR-12399 is wrong"); f.WordsOnly {
+		t.Errorf("a found key's preview offers words only: %+v", f)
+	}
+}
+
+// A start from your words only is a prompt task of the whole text: its key
+// is words, never read from Jira as its ticket or as a key found in it.
+func TestAStartFromYourWordsOnlyNeverReadsTheKey(t *testing.T) {
+	r := newIntakeRig(t)
+	const text = "PR-12399 the reminder for advocates, as PR-12345 did"
+	task, err := r.e.start(r.ctx, StartPayload{Text: text, WordsOnly: true, Surface: "screen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.e.waitBackground()
+	if task.JiraKey != "" || task.Prompt != text {
+		t.Errorf("task %+v, want a prompt task of the whole text", task)
+	}
+	for _, k := range r.site.asked {
+		if k == "PR-12399" || k == "PR-12345" {
+			t.Errorf("the start read %s from Jira", k)
+		}
+	}
+	if got := r.taskFile(task.ID, "prompt.md"); got != text+"\n" {
+		t.Errorf("prompt.md = %q", got)
+	}
+}
+
+// The comment the factory drafts for an ask is the question, why, its
+// example and its options, word for word (the recap shows the same text).
+func TestTheDraftedCommentAsksTheQuestionWordForWord(t *testing.T) {
+	q := registry.Question{Text: "Can a merchant turn it off?", Context: "The ticket does not say.",
+		Example: "a merchant opens Settings.", Options: []registry.Option{{Label: "Yes", Means: "a switch"}, {Label: "No"}}}
+	got := draftComment(registry.Task{JiraKey: "PR-12345"}, q, "rev-ann")
+	want := "rev-ann, a question on PR-12345: Can a merchant turn it off?\n\nThe ticket does not say.\n\n" +
+		"For example: a merchant opens Settings.\n\nThe options as we see them:\n- Yes: a switch\n- No\n"
+	if got != want {
+		t.Errorf("draft\n%q\nwant\n%q", got, want)
 	}
 }

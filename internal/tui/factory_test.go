@@ -82,7 +82,10 @@ type (
 		choice, reason, note string
 		bound                ReadyBinding
 	}
-	factoryStartCall struct{ text, kind string }
+	factoryStartCall struct {
+		text, kind string
+		wordsOnly  bool
+	}
 )
 
 // fakeFactoryActions records every request the screen makes.
@@ -106,9 +109,9 @@ type fakeFactoryActions struct {
 	started   func(text, kind string) // the source learns of the new task
 }
 
-func (a *fakeFactoryActions) Start(_ context.Context, text, kind string) (ActionResult, error) {
+func (a *fakeFactoryActions) Start(_ context.Context, text, kind string, wordsOnly bool) (ActionResult, error) {
 	a.mu.Lock()
-	a.starts = append(a.starts, factoryStartCall{text, kind})
+	a.starts = append(a.starts, factoryStartCall{text, kind, wordsOnly})
 	started := a.started
 	a.mu.Unlock()
 	if started != nil {
@@ -519,6 +522,7 @@ func TestNewTaskAsksBeforeItStartsAgents(t *testing.T) {
 	h.feed(typed("PR-12350 the reminder is for advocates only")...)
 	h.press("enter")
 	mustContain(t, h.view(), "Start feature PR-12350 with 2 agents? y/N")
+	mustNotContain(t, h.view(), "pgdn") // the ticket's longer text is not a key of this screen
 	if h.act.calls() != 0 {
 		t.Fatal("enter started the task before y")
 	}
@@ -528,7 +532,7 @@ func TestNewTaskAsksBeforeItStartsAgents(t *testing.T) {
 		t.Fatal("n started the task")
 	}
 	h.press("enter", "y")
-	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{"PR-12350 the reminder is for advocates only", "feature"}) {
+	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{"PR-12350 the reminder is for advocates only", "feature", false}) {
 		t.Fatalf("starts = %+v", h.act.starts)
 	}
 	if r, ok := h.m.selectedRow(); !ok || r.Key != "PR-12350" {
@@ -687,7 +691,9 @@ func factoryStates(h *factoryHarness, at func(name string)) {
 	at("question-own")
 	h.press("esc", "1", "3")
 	at("recap")
-	h.press("esc", "esc")
+	h.press("y") // the factory refuses the batch: the questions changed
+	at("recap-changed")
+	h.press("esc")
 	h.open("PR-12360")
 	at("ready")
 	h.press("2")
@@ -709,16 +715,33 @@ func factoryStates(h *factoryHarness, at func(name string)) {
 	h.press("esc")
 }
 
+// TestFactoryScreenNeverOverflows draws every view at every size: no line
+// is wider than the screen, no frame taller, and a question that waits is
+// always drawn (a y answers it). The ready card carries a failed check, and
+// the recap's batch is refused, so their variants are drawn too.
 func TestFactoryScreenNeverOverflows(t *testing.T) {
-	heights := []int{8, 12, 20, 30, 50}
+	heights := []int{8, 9, 10, 12, 20, 30, 50}
 	for _, w := range factoryWidths(40) {
 		t.Run(fmt.Sprint(w), func(t *testing.T) {
 			t.Parallel() // each width has screens of its own
 			for _, ht := range heights {
 				h := testFactory(t, w, ht)
 				h.act.preview = previewJira
+				h.act.answerErr = &QuestionsChangedError{At: cardAt(14, 20), Why: "Question 2 is open again."}
+				h.src.change(func(d *FactoryData) {
+					c := d.Cards[3]
+					r := *c.Ready
+					r.Failed = []string{"rubocop: 2 offenses in app/services/campaign_copier.rb"}
+					c.Ready = &r
+					d.Cards[3] = c
+				})
+				h.press("ctrl+r")
 				factoryStates(h, func(name string) {
-					lines := strings.Split(h.m.View().Content, "\n")
+					content := h.m.View().Content
+					if h.m.bar.asking != nil && !strings.Contains(ansi.Strip(content), "y/N") {
+						t.Errorf("%s at %dx%d: a question waits but is not drawn:\n%s", name, w, ht, ansi.Strip(content))
+					}
+					lines := strings.Split(content, "\n")
 					if len(lines) > ht {
 						t.Errorf("%s at %dx%d: %d lines", name, w, ht, len(lines))
 					}
@@ -830,16 +853,321 @@ func TestTheCardsStartTheirMarksWhereTheRulingsSay(t *testing.T) {
 	h.press("j")
 	mustContain(t, h.view(), "› 2  send back")
 	h.press("esc")
-	h.src.change(func(d *FactoryData) { // a new card for another task: nothing marked until the diff
+	h.open("PR-12360")
+	mustContain(t, h.view(), "› 2  send back") // the operator's own mark stays while the card is the same
+	h.press("esc")
+	h.src.change(func(d *FactoryData) { // a new card for the task: nothing marked until its diff is read
+		c := d.Cards[3]
+		c.Bind = ReadyBinding{HeadSHA: "ffff000011112222", ReportHash: "report-2", DiffHash: "diff-2"}
+		d.Cards[3] = c
+	})
+	h.press("ctrl+r")
+	h.open("PR-12360")
+	mustNotContain(t, h.view(), "›")
+	h.press("d")
+	h.feed(factoryPagerMsg{task: 3})
+	mustContain(t, h.view(), "› 1  push + PR") // the recommendation, once the diff was read
+}
+
+// fix round 1
+
+// A ready card the factory draws again (the branch moved: a new head and
+// hashes) is a card the operator has not read: no mark, no diff read, a
+// push asks "without reading the diff?", and the decision carries the new
+// card's head and the time it was shown, with no read of its diff.
+func TestARedrawnReadyCardIsUnreadAgain(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12360")
+	h.press("d")
+	h.clock.add(time.Minute)
+	h.feed(factoryPagerMsg{task: 3})
+	h.press("1")
+	mustContain(t, h.view(), "Push zhuravel-PR-12360-activity-points-on-copy and open a PR?")
+	h.press("n")
+	h.clock.add(time.Minute)
+	h.src.change(func(d *FactoryData) {
+		c := d.Cards[3]
+		c.Bind = ReadyBinding{HeadSHA: "ffff000011112222", ReportHash: "report-2", DiffHash: "diff-2"}
+		d.Cards[3] = c
+	})
+	h.feed(factoryTickMsg{})
+	mustContain(t, h.view(), "PR-12360 · ready to push")
+	mustNotContain(t, h.view(), "›", "you read the diff")
+	h.press("1")
+	mustContain(t, h.view(), "Push without reading the diff?")
+	h.press("y")
+	if len(h.act.decides) != 1 {
+		t.Fatalf("decides = %+v", h.act.decides)
+	}
+	b := h.act.decides[0].bound
+	if b.HeadSHA != "ffff000011112222" || !b.DiffOpened.IsZero() || b.DiffDwell != 0 || !b.Shown.Equal(factoryNow.Add(2*time.Minute)) {
+		t.Errorf("the push's binding = %+v, want the new head, no diff read, shown at the redraw", b)
+	}
+	// A card that goes away takes its state with it.
+	h.src.change(func(d *FactoryData) {
+		c := d.Cards[3]
+		c.Ready = nil
+		d.Cards[3] = c
+	})
+	h.feed(factoryTickMsg{})
+	if _, ok := h.m.readies[3]; ok {
+		t.Error("the state of a ready card the factory no longer shows is kept")
+	}
+}
+
+// A question that waits is on screen at every size: the task card's head
+// gives way before its footer.
+func TestTheTaskCardKeepsItsQuestionOnAShortPane(t *testing.T) {
+	for _, w := range []int{40, 60, 100} {
+		for _, ht := range []int{8, 9, 10, 12} {
+			h := testFactory(t, w, ht)
+			h.open("PR-12330")
+			h.press("x")
+			if h.m.bar.asking == nil {
+				t.Fatalf("%dx%d: x asked nothing", w, ht)
+			}
+			if v := h.view(); !strings.Contains(v, "y/N") {
+				t.Errorf("%dx%d: the question waits but is not drawn:\n%s", w, ht, v)
+			}
+		}
+	}
+}
+
+// enter on new task asks y/N for the text enter was pressed on, never for a
+// text typed while its preview was read: a letter typed then is text.
+func TestATypedYNeverAnswersALateNewTaskQuestion(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.act.preview = previewJira
+	h.press("n")
+	h.feed(typed("PR-12350 the reminder")...)
+	next, cmd := h.m.Update(keyMsg("enter")) // the preview is read meanwhile
+	h.m = next.(factoryModel)
+	h.feed(typed(" yes")...)
+	h.run(cmd)
+	if h.m.bar.asking != nil {
+		t.Fatalf("a question came up while the text was typed: %q", h.m.bar.question())
+	}
+	h.press("y")
+	if len(h.act.starts) != 0 {
+		t.Errorf("a typed y started a task: %+v", h.act.starts)
+	}
+	mustContain(t, h.view(), "PR-12350 the reminder yesy▏")
+}
+
+// The recap's question goes when the questions change under it: the next
+// digit answers the question that is open again.
+func TestANewRevisionDropsTheRecapsQuestion(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12345")
+	h.press("1", "1")
+	mustContain(t, h.view(), "your answers", "y/N")
+	h.src.change(func(d *FactoryData) {
+		c := d.Cards[2]
+		q := *c.Question
+		q.Revision = 4
+		q.Questions = slices.Clone(q.Questions)
+		q.Questions[2].Text = "Can a merchant switch it off?"
+		c.Question = &q
+		d.Cards[2] = c
+	})
+	h.feed(factoryTickMsg{})
+	if h.m.bar.asking != nil || h.m.asked != nil {
+		t.Fatalf("the old revision's batch is still asked: %q", h.m.bar.question())
+	}
+	mustContain(t, h.view(), "question 3 of 3", "Can a merchant switch it off?")
+	h.press("2", "y")
+	if len(h.act.answers) != 1 {
+		t.Fatalf("answers = %+v", h.act.answers)
+	}
+	if a := h.act.answers[0]; a.rev != 4 || a.answers[1] != "Seven days before it expires" || a.answers[2] != "No: always on" {
+		t.Errorf("the batch = %+v, want revision 4 with question 2's answer kept and question 3's new one", a)
+	}
+}
+
+// The recap of a refused batch names the question open again in the new
+// revision, and enter goes to it.
+func TestTheChangedRecapNamesTheQuestionOpenAgain(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.act.answerErr = &QuestionsChangedError{At: cardAt(14, 20)}
+	h.open("PR-12345")
+	h.press("1", "1")
+	h.src.change(func(d *FactoryData) { // the factory's revision 4 asks question 2 anew
+		c := d.Cards[2]
+		q := *c.Question
+		q.Revision = 4
+		q.Questions = slices.Clone(q.Questions)
+		q.Questions[1].Text = "When does the reminder go out, in the merchant's time?"
+		c.Question = &q
+		d.Cards[2] = c
+	})
+	h.press("y")
+	mustContain(t, h.view(), "the questions changed at 14:20", "enter see question 2 again")
+	h.press("enter")
+	mustContain(t, h.view(), "question 2 of 3", "When does the reminder go out, in the merchant's time?")
+}
+
+// Typing keeps the cursor at the end of the text, where the caret is drawn:
+// the keys that would move it are not taken.
+func TestTheCursorStaysWhereTheCaretIsDrawn(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.press("n")
+	h.feed(typed("abc")...)
+	h.press("left", "home", "up")
+	h.feed(typed("X")...)
+	mustContain(t, h.view(), "abcX▏")
+	h.press("esc", "esc")
+	h.open("PR-12345")
+	h.press("5")
+	h.feed(typed("ab")...)
+	h.press("left")
+	h.feed(typed("X")...)
+	mustContain(t, h.view(), "abX▏")
+}
+
+func TestLowerFirstLowersTheFirstRune(t *testing.T) {
+	for in, want := range map[string]string{"Élan": "élan", "«Yes»": "«Yes»", "Ask rev-ann": "ask rev-ann", "": ""} {
+		if got := lowerFirst(in); got != want {
+			t.Errorf("lowerFirst(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The Jira spinner shows while the factory reads a key found in the text,
+// not only one at its start.
+func TestTheJiraSpinnerShowsForAKeyInTheText(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.press("n")
+	h.feed(typed("fix the expiry date in PR-12345")...)
+	next, _ := h.m.Update(keyMsg("enter")) // its preview is read
+	h.m = next.(factoryModel)
+	mustContain(t, h.view(), "the daemon reads Jira")
+}
+
+// The recap's only mouse menu would hold a key that cancels its question:
+// it has none, and a right click there leaves the recap asking.
+func TestTheRecapOpensNoMenu(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12345")
+	h.press("1", "1")
+	if items := h.m.menuItems(); len(items) != 0 {
+		t.Errorf("the recap's menu = %+v", items)
+	}
+	h.feed(tea.MouseClickMsg{X: 10, Y: 5, Button: tea.MouseRight})
+	if h.m.menu.open {
+		t.Error("a menu opened on the recap")
+	}
+	mustContain(t, h.view(), "Send 2 answers? y/N")
+}
+
+// On a card that offers no push, the mark moves over send back and drop
+// only.
+func TestTheMarkSkipsAPushNotOffered(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.src.change(func(d *FactoryData) {
 		c := d.Cards[3]
 		r := *c.Ready
+		r.NoPush = "the base conflicts: the writer merges it"
 		c.Ready = &r
 		d.Cards[3] = c
 	})
+	h.press("ctrl+r")
 	h.open("PR-12360")
+	h.press("j")
+	mustContain(t, h.view(), "› 2  send back")
+	h.press("k")
+	mustContain(t, h.view(), "› 2  send back")
+	h.press("j")
+	mustContain(t, h.view(), "› 3  drop")
+}
+
+// A send back's note is kept when its y/N is answered no: picking the
+// reason again brings it back.
+func TestTheSendBacksNoteSurvivesANo(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12360")
+	h.press("2", "1")
+	h.feed(typed("the spec never copies an archived campaign")...)
+	h.press("enter", "n", "2", "1")
+	mustContain(t, h.view(), "the spec never copies an archived campaign▏")
+	h.press("enter", "y")
+	if len(h.act.decides) != 1 || h.act.decides[0].note != "the spec never copies an archived campaign" {
+		t.Errorf("decides = %+v", h.act.decides)
+	}
+}
+
+// Answers not sent yet are kept on esc, and home says so: the row's line
+// under the rule counts them, and the status rule says nothing is sent.
+func TestHomeShowsTheAnswersNotSentYet(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12345")
+	h.press("2", "esc")
+	v := h.view()
+	mustContain(t, v, "2 answered, 1 to go", "✓ 14:09 you answered 2 of 3 · nothing sent yet")
+	h.press("j") // another row: its own line, and the rule's own news
+	mustNotContain(t, h.view(), "answered, 1 to go", "nothing sent yet")
+}
+
+// A key Jira does not know is said before anything is asked; enter then
+// asks to start from the words only, and only that y sends the start so.
+func TestAKeyJiraDoesNotKnowStartsFromYourWordsOnly(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.act.preview = func(text string) (NewTaskForm, error) {
+		return NewTaskForm{Text: text, Repo: "talkable", Err: "PR-12399 is not in Jira", WordsOnly: true}, nil
+	}
+	h.press("n")
+	h.feed(typed("PR-12399 the reminder for advocates")...)
+	h.press("enter")
+	mustContain(t, h.view(), "PR-12399 is not in Jira", "Start from your words only? y/N")
+	h.press("n")
+	if h.act.calls() != 0 {
+		t.Fatal("n started a task")
+	}
+	h.press("enter", "y")
+	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{"PR-12399 the reminder for advocates", "", true}) {
+		t.Errorf("starts = %+v, want the words only", h.act.starts)
+	}
+}
+
+// The pager shows the whole diff: once it returns, no file is unread.
+func TestTheDiffsEndLeavesNoFileUnread(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12360")
+	mustContain(t, h.view(), "unread:")
 	h.press("d")
 	h.feed(factoryPagerMsg{task: 3})
-	mustContain(t, h.view(), "› 2  send back") // the operator's own mark stays
+	mustNotContain(t, h.view(), "unread:")
+}
+
+// Home's hints speak the approved frames' words for the rows they showed.
+func TestHomesHintsSpeakTheApprovedFramesWords(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	hints := func() string { return strings.TrimSpace(strings.Split(h.view(), "\n")[39]) }
+	want := map[string]string{
+		"#4512":    "enter task card · a oldest ask · o pane fixing bart · n new task · ? more",
+		"PR-12345": "enter answer · a oldest ask · o pane that asked · n new task · ? more",
+		"PR-12371": "enter task card · a oldest ask · o pane finding the cause · n new task · ? more",
+		// Rows with no pane to step into offer no o.
+		"PR-12330": "enter task card · a oldest ask · n new task · ? more",
+		"PR-12302": "enter task card · a oldest ask · n new task · ? more",
+	}
+	for key, w := range want {
+		h.press("g")
+		h.selectRow(key)
+		if got := hints(); got != w {
+			t.Errorf("%s: hints %q, want %q", key, got, w)
+		}
+	}
+}
+
+// The recap shows the comment the factory drafts for an ask, word for word.
+func TestTheRecapShowsTheDraftedComment(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12345")
+	h.press("1", "3")
+	v := cardSquash(h.view())
+	mustContain(t, v, "rev-ann, a question on PR-12345: Can a merchant turn it off?",
+		"The options as we see them:", "- No: always on: no switch anywhere")
+	mustNotContain(t, v, "the factory drafts this comment", "Type your own answer", "Ask rev-ann in Jira (the task waits):")
 }
 
 // Ruling 10: the task card's r asks y/N and retries, only where a retry

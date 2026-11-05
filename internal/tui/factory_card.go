@@ -418,7 +418,15 @@ func (p *cardPainter) reasonLines(question string, reasons []string) []string {
 // rule (carrying msg, already styled, and the count of body lines cut off
 // below) and the footer. With a height the body is cut or padded to fit and
 // the footer sits at the bottom.
+//
+// On a pane too short for the head, the rule and the footer, the head gives
+// way from its end (a blank, then what the card waits for, then its facts;
+// the title last): the footer holds the y/N question, which must be on
+// screen while a y answers it, and the rule stays above it.
 func (p *cardPainter) assemble(head, body []string, start int, msg string, foot []string, height int) (string, int) {
+	if height > 0 && len(head)+1+len(foot) > height {
+		head = head[:max(height-1-len(foot), 0)]
+	}
 	room := len(body)
 	if height > 0 {
 		room = max(height-len(head)-1-len(foot), 0)
@@ -435,7 +443,7 @@ func (p *cardPainter) assemble(head, body []string, start int, msg string, foot 
 	lines = append(lines, p.base.footerRule(p.width, msg, below))
 	lines = append(lines, foot...)
 	if height > 0 && len(lines) > height {
-		lines = lines[:height]
+		lines = lines[len(lines)-height:] // the footer stays: it holds the question
 	}
 	for i, l := range lines {
 		lines[i] = truncate(l, p.width)

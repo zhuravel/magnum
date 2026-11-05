@@ -37,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -153,7 +154,7 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     there is no diff to show. It is called on the screen's own turn, so
 //     it only builds the command: it reads and waits for nothing.
 type FactoryActions interface {
-	Start(ctx context.Context, text, kind string) (ActionResult, error)
+	Start(ctx context.Context, text, kind string, wordsOnly bool) (ActionResult, error)
 	Preview(ctx context.Context, text string) (NewTaskForm, error)
 	Answer(ctx context.Context, taskID int64, rev int, answers map[int]string, needless map[int]string) (ActionResult, error)
 	Decide(ctx context.Context, taskID int64, choice, reason, note string, bound ReadyBinding) (ActionResult, error)
@@ -271,15 +272,32 @@ type factoryQuestions struct {
 // until the operator moves it or opens the diff), when the card was first
 // shown, when the diff was first opened and for how long it was read, and
 // the send back's reason and note being asked.
+//
+// The state is bound to the card the factory drew (bind: its head and
+// hashes): a card drawn again for a new head is a card not read yet, and
+// its state starts over.
 type factoryReady struct {
+	bind    ReadyBinding
 	cursor  int
 	shown   time.Time
 	diffAt  time.Time
 	opening time.Time // the pager runs since
 	dwell   time.Duration
 	reasons bool
-	reason  int // the send back's reason, an index of factoryReasons
-	noting  bool
+	reason  int    // the send back's reason, an index of factorySendBackReasons
+	noting  bool   // the send back's note is typed
+	note    string // the note typed last, kept when its y/N is answered no
+}
+
+// newReady is the state of a ready card first shown at now.
+func newReady(bind ReadyBinding, now time.Time) *factoryReady {
+	bind.Shown, bind.DiffOpened, bind.DiffDwell = time.Time{}, time.Time{}, 0
+	return &factoryReady{bind: bind, cursor: -1, shown: now}
+}
+
+// sameCard reports whether two bindings name one drawn card.
+func sameCard(a, b ReadyBinding) bool {
+	return a.HeadSHA == b.HeadSHA && a.ReportHash == b.ReportHash && a.DiffHash == b.DiffHash
 }
 
 // factoryDraft is the new task's text and what the factory made of it.
@@ -312,6 +330,7 @@ type factoryFollow struct {
 	kind factoryFollowKind
 	task int64
 	key  string // a start: the key or title of the new task's row
+	rev  int    // an answer: the revision of the questions the batch was for
 }
 
 type factoryModel struct {
@@ -380,6 +399,18 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 	in := textinput.New()
 	in.CharLimit = 500
 	_ = in.Focus()
+	// The painter draws the caret at the end of the text: the keys that would
+	// move the cursor elsewhere (or select, or read the clipboard) are off,
+	// so what is typed goes where the caret is.
+	ak, ik := &area.KeyMap, &in.KeyMap
+	for _, b := range []*key.Binding{&ak.CharacterBackward, &ak.CharacterForward, &ak.WordForward, &ak.WordBackward,
+		&ak.LineNext, &ak.LinePrevious, &ak.LineStart, &ak.LineEnd, &ak.InputBegin, &ak.InputEnd, &ak.PageUp, &ak.PageDown,
+		&ak.SelectCharacterForward, &ak.SelectCharacterBackward, &ak.SelectWordForward, &ak.SelectWordBackward,
+		&ak.SelectLineUp, &ak.SelectLineDown, &ak.SelectAll, &ak.Paste,
+		&ik.CharacterForward, &ik.CharacterBackward, &ik.WordForward, &ik.WordBackward, &ik.LineStart, &ik.LineEnd,
+		&ik.Paste, &ik.AcceptSuggestion, &ik.NextSuggestion, &ik.PrevSuggestion} {
+		b.SetEnabled(false)
+	}
 	m := factoryModel{
 		bar: newFactoryBar(ctx, nil, opts.Now, opts.Tick), ctx: ctx, src: src, act: act, opts: opts,
 		g: newGlyphs(opts.Icons), loading: true, selIdx: 0,
@@ -515,6 +546,7 @@ func (m *factoryModel) loaded(msg factoryDataMsg) tea.Cmd {
 	}
 	m.data, m.haveData, m.loadErr = msg.data, true, nil
 	m.rebind()
+	m.rebindReady()
 	m.fixCursor()
 	if m.selectKey != "" {
 		if i := slices.IndexFunc(m.data.Rows, func(r FactoryRow) bool { return r.Key == m.selectKey || r.Title == m.selectKey }); i >= 0 {
@@ -545,8 +577,38 @@ func (m *factoryModel) rebind() {
 			}
 		}
 		m.batches[id] = kept
-		if m.task == id && (m.view == fvQuestion || m.view == fvRecap) && m.q.changed == nil {
-			m.startQuestions(id)
+		if m.task != id || (m.view != fvQuestion && m.view != fvRecap) {
+			continue
+		}
+		if ch := m.q.changed; ch != nil { // the recap of the refused batch names the question open again
+			if i := m.nextOpen(c, -1); i >= 0 {
+				ch.again = i + 1
+			}
+			continue
+		}
+		// The old revision's batch is no longer asked: the next key answers
+		// the question that is open again.
+		m.bar.cancel()
+		m.asked = nil
+		m.startQuestions(id)
+	}
+}
+
+// rebindReady keeps the state of each ready card the factory still draws as
+// it was: a card gone, or drawn again for a new head or new hashes, takes its
+// state with it, and the card on screen starts over unread (no mark, no
+// diff read, shown now), its question dropped.
+func (m *factoryModel) rebindReady() {
+	for id, rs := range m.readies {
+		cards := m.data.Cards[id]
+		if cards.Ready != nil && sameCard(rs.bind, cards.Bind) {
+			continue
+		}
+		delete(m.readies, id)
+		if cards.Ready != nil && m.view == fvReady && m.task == id {
+			m.bar.cancel()
+			m.asked = nil
+			m.readies[id] = newReady(cards.Bind, m.now())
 		}
 	}
 }
@@ -593,7 +655,7 @@ func (m *factoryModel) keepRecapAsking() {
 	task, rev := m.task, c.Revision
 	answers, needless := m.batchOf(c)
 	act := m.act
-	_ = m.ask(&factoryFollow{kind: followAnswer, task: task}, sentence, func(ctx context.Context) (ActionResult, error) {
+	_ = m.ask(&factoryFollow{kind: followAnswer, task: task, rev: rev}, sentence, func(ctx context.Context) (ActionResult, error) {
 		return act.Answer(ctx, task, rev, answers, needless)
 	}) // a question asks for no timer
 }
@@ -741,7 +803,7 @@ func (m factoryModel) windowTitle() string {
 // factoryFrameKey is everything a frame shows (AGENTS.md: frames are cached
 // by fingerprint): the screen, its size and palette, the bar's state, the
 // action log's generation, the mouse and its menu, and a fingerprint of the
-// painter's data (which carries the clock's minute and the spinner's frame).
+// painter's data (the spinner's frame among it); the clock is in it by the second.
 type factoryFrameKey struct {
 	view          factoryView
 	width, height int
@@ -845,6 +907,28 @@ func (m factoryModel) homeFrame() factoryFrame {
 	if _, ok := m.selectedRow(); ok {
 		f.Cursor = slices.IndexFunc(d.Rows, func(r FactoryRow) bool { return r.ID == m.selID })
 	}
+	// Answers not sent yet are the screen's: the row's line under the rule
+	// counts them, and the rule says nothing is sent (spec 9.C, 9.G).
+	f.Rows = slices.Clone(d.Rows)
+	for i, r := range f.Rows {
+		answered, total, last, ok := m.unsent(r.ID)
+		if !ok {
+			continue
+		}
+		count := fmt.Sprintf("%d answered, %d to go", answered, total-answered)
+		for _, help := range []*string{&f.Rows[i].Help, &f.Rows[i].HelpShort, &f.Rows[i].HelpLong} {
+			if *help != "" {
+				*help += m.g.sep + count
+			}
+		}
+		if f.Rows[i].Help == "" {
+			f.Rows[i].Help = count
+		}
+		if r.ID == m.selID {
+			f.Flash = fmt.Sprintf("%s you answered %d of %d%snothing sent yet", last.In(m.now().Location()).Format("15:04"),
+				answered, total, m.g.sep)
+		}
+	}
 	f.Hints = m.homeHints()
 	f.rule = m.bar.view(max(m.viewWidth()-4, 1))
 	switch {
@@ -868,13 +952,60 @@ func (m factoryModel) homeHints() []hint {
 	if _, ok := m.nextDecision(); ok {
 		hs = append(hs, hint{"a", "oldest ask"})
 	}
-	if ok && m.act != nil {
-		hs = append(hs, hint{"o", "step in"})
+	if pane := m.paneHint(r); ok && m.act != nil && pane != "" {
+		hs = append(hs, hint{"o", pane})
 	}
 	if m.act != nil {
 		hs = append(hs, hint{"n", "new task"})
 	}
 	return append(hs, hint{"?", "more"})
+}
+
+// paneHint names the pane o steps into, in the approved frames' words: the
+// pane that asked a task's questions, the pane of the agent a row waits on
+// ("pane fixing bart"), else, for a task that needs you, the step in
+// itself; "" for a row with no pane to step into (a review by a person, a
+// queued or a done task): o is not offered there.
+func (m factoryModel) paneHint(r FactoryRow) string {
+	if r.Group == GroupNeedsYou && m.data.Cards[r.ID].Question != nil {
+		return "pane that asked"
+	}
+	for _, w := range r.WaitsOn {
+		if who := strings.ToLower(cleanText(w.Who)); who == "agent" || who == "agents" {
+			what, _, _ := strings.Cut(cleanText(w.What), ",")
+			what, _, _ = strings.Cut(what, strings.TrimSpace(m.g.sep))
+			if what = strings.TrimSpace(what); what != "" {
+				return "pane " + what
+			}
+		}
+	}
+	if r.Group == GroupNeedsYou {
+		return "step in"
+	}
+	return ""
+}
+
+// unsent counts a task's answers: answered of total questions, when the
+// last answer not sent yet was given; ok is false when it has none unsent.
+func (m factoryModel) unsent(id int64) (answered, total int, last time.Time, ok bool) {
+	c, b := m.data.Cards[id].Question, m.batches[id]
+	if c == nil || b == nil || b.rev != c.Revision || len(b.answers) == 0 {
+		return 0, 0, time.Time{}, false
+	}
+	for _, q := range c.Questions {
+		total++
+		if q.Answer != "" {
+			answered++
+			continue
+		}
+		if a, has := b.answers[q.Text]; has {
+			answered, ok = answered+1, true
+			if a.at.After(last) {
+				last = a.at
+			}
+		}
+	}
+	return answered, total, last, ok
 }
 
 // openVerb says what enter opens for a row.

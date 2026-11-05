@@ -12259,11 +12259,15 @@ func ParseStart(text string, trackers string) StartInput
 type StartPayload struct {
 	Text, Kind, Repo string
 	Surface          string `json:",omitempty"`
+	WordsOnly        bool   `json:",omitempty"`
 }
     StartPayload is a ReqStart (and the start of the new-task screen): your
     text, the kind of task you chose ("" = the daemon picks it, PickKind), the
     repository ("" = the only [[factory.repo]]), and where you asked (Surface,
-    for the record of your input; "" = the CLI).
+    for the record of your input; "" = the CLI). WordsOnly starts a task from
+    your words only: the whole text is the prompt, a key at its start (one Jira
+    does not know) is words, and no key of it is read from Jira as the task's
+    ticket or as a key found in the text.
 
 type StopPayload struct {
 	TaskID  int64
@@ -25390,6 +25394,13 @@ var ErrSettingsChanged = errors.New("the config file changed on disk since it wa
 
 FUNCTIONS
 
+func AskComment(login, key, question, context, example string, options []CardOption) string
+    AskComment is the Jira comment the factory drafts when you ask login a
+    question of task key instead of answering it: the question, why it is asked,
+    its example and the options (the ask and your-own-words options of a card
+    left out). The factory writes it for you to post, and the recap shows the
+    same text before you send.
+
 func BoardHelpKeys() []string
     BoardHelpKeys are the key labels the PR board's help lists ("g / G", "ctrl+r
     / F5"): the keys the help of `magnum tui` has to name.
@@ -25871,7 +25882,7 @@ type DiskInfo struct {
     DiskInfo is the free space where slots live; FreeGB <= 0 means unknown.
 
 type FactoryActions interface {
-	Start(ctx context.Context, text, kind string) (ActionResult, error)
+	Start(ctx context.Context, text, kind string, wordsOnly bool) (ActionResult, error)
 	Preview(ctx context.Context, text string) (NewTaskForm, error)
 	Answer(ctx context.Context, taskID int64, rev int, answers map[int]string, needless map[int]string) (ActionResult, error)
 	Decide(ctx context.Context, taskID int64, choice, reason, note string, bound ReadyBinding) (ActionResult, error)
@@ -26135,6 +26146,10 @@ type NewTaskForm struct {
 	// several: the task is the prompt task it is, whose questions ask which
 	// issue it is, and no ticket is drawn as its own.
 	Keys []string
+	// WordsOnly is true when the key at the start of the text is one Jira
+	// does not know (Err says so): enter then asks to start from your words
+	// only, the key kept as words and never read as the task's ticket.
+	WordsOnly bool
 	// Hints are the footer's key hints; none: the form's own (newTaskHints).
 	Hints []hint `json:"-"`
 

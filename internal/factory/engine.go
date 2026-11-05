@@ -246,6 +246,10 @@ type Engine struct {
 	// jiraTries are the next tries of the tasks that wait for Jira
 	// (retryJira).
 	jiraTries map[int64]*jiraTry
+	// overlaps are the overlap lines the new-task previews read, by
+	// repository and key, kept for previewOverlapTTL (previewOverlap).
+	overlapMu sync.Mutex
+	overlaps  map[string]overlapRead
 
 	heavyMu   sync.Mutex
 	heavyHeld map[int64]*heavySlot

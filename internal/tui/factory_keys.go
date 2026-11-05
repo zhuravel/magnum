@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
@@ -53,9 +55,11 @@ func reasonWords(rs []factoryReason) []string {
 // factoryKinds are the kinds tab cycles on new task.
 var factoryKinds = []string{"bug", "feature", "chore"}
 
-// jiraStart is a text that starts with a Jira key or a Jira link: its
-// preview reads Jira.
-var jiraStart = regexp.MustCompile(`^\s*([A-Z][A-Z0-9]+-[0-9]+\b|https?://\S*/browse/[A-Z])`)
+// jiraWords is a text that names a Jira key or a Jira link anywhere (a key
+// at its start, a key found in it, a link): its preview reads Jira, and the
+// form shows the spinner meanwhile. A key-shaped word Jira does not know
+// (UTF-8) shows it too, for as long as the preview takes.
+var jiraWords = regexp.MustCompile(`(^|[^A-Za-z0-9_-])[A-Z][A-Z0-9]+-[0-9]+($|[^A-Za-z0-9_-])|https?://\S*/browse/[A-Z]`)
 
 const noActions = "this screen runs no actions: it shows the factory only"
 
@@ -245,7 +249,7 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 			return m.note(noActions), true
 		}
 		m.view = fvNew
-		return m.schedulePreview(), true
+		return m.textChanged(), true
 	default:
 		return nil, false
 	}
@@ -266,7 +270,7 @@ func (m *factoryModel) openCard(id int64) {
 	case r.Group == GroupNeedsYou && cards.Ready != nil:
 		m.view, m.task = fvReady, id
 		if m.readies[id] == nil {
-			m.readies[id] = &factoryReady{cursor: -1, shown: m.now()}
+			m.readies[id] = newReady(cards.Bind, m.now())
 		}
 	default:
 		m.view, m.task = fvTask, id
@@ -350,6 +354,14 @@ func (m *factoryModel) followed(f *factoryFollow, err error) tea.Cmd {
 			ch := &recapChange{}
 			if e, ok := errors.AsType[*QuestionsChangedError](err); ok {
 				ch.at, ch.why = e.At, e.Why
+			}
+			// The new revision may be read already (rebind then rebound the
+			// batch): name its question that is open again now; otherwise the
+			// reload names it.
+			if c := m.data.Cards[f.task].Question; c != nil && c.Revision != f.rev {
+				if i := m.nextOpen(c, -1); i >= 0 {
+					ch.again = i + 1
+				}
 			}
 			m.view, m.q.changed = fvRecap, ch
 		}
@@ -475,7 +487,7 @@ func (m factoryModel) questionCard() (QuestionCard, bool) {
 			q.TookRecommendation = a.option == q.Recommended
 			if login, ok := strings.CutPrefix(optionSends(o), "ask:"); ok {
 				q.Asks = login
-				q.Comment = "the factory drafts this comment when you send; you post it in Jira"
+				q.Comment = strings.TrimRight(AskComment(login, c.TaskKey, q.Text, q.Context, q.Example, q.Options), "\n")
 			}
 		}
 		c.Questions[i] = q
@@ -519,11 +531,13 @@ func (m factoryModel) batchOf(c QuestionCard) (answers, needless map[int]string)
 
 func optionSends(o CardOption) string { return cmp.Or(strings.TrimSpace(o.Send), o.Label) }
 
+// lowerFirst puts the first letter of s in lower case.
 func lowerFirst(s string) string {
-	if s == "" {
+	r, n := utf8.DecodeRuneInString(s)
+	if n == 0 || r == utf8.RuneError {
 		return s
 	}
-	return strings.ToLower(s[:1]) + s[1:]
+	return string(unicode.ToLower(r)) + s[n:]
 }
 
 func (m *factoryModel) questionKey(k string) (tea.Cmd, bool) {
@@ -711,6 +725,7 @@ func (m factoryModel) readyCard() (ReadyCard, bool) {
 	c.Cursor = rs.cursor
 	if !rs.diffAt.IsZero() {
 		c.DiffOpened = rs.diffAt
+		c.Unread = nil // 1a's pager shows the whole diff: every file was opened
 	}
 	c.Ask = m.bar.question()
 	if rs.reasons {
@@ -735,7 +750,7 @@ func (m *factoryModel) readyKey(k string) (tea.Cmd, bool) {
 	}
 	rs := m.readies[m.task]
 	if rs == nil {
-		rs = &factoryReady{cursor: -1, shown: m.now()}
+		rs = newReady(m.data.Cards[m.task].Bind, m.now())
 		m.readies[m.task] = rs
 	}
 	if rs.reasons { // send back asked for a reason's digit
@@ -744,15 +759,20 @@ func (m *factoryModel) readyKey(k string) (tea.Cmd, bool) {
 			rs.reasons = false
 		case err == nil && i >= 1 && i <= len(factorySendBackReasons):
 			rs.reasons, rs.reason, rs.noting = false, i-1, true
-			m.input.SetValue("")
+			m.input.SetValue(rs.note) // a note whose y/N was answered no comes back
 		}
 		return nil, true
 	}
+	// On a card that offers no push the mark moves over send back and drop.
+	first := readyPush
+	if c.NoPush != "" {
+		first = readySendBack
+	}
 	switch k {
 	case "j", "down":
-		rs.cursor = min(max(rs.cursor+1, 0), len(readyOptions)-1)
+		rs.cursor = min(max(rs.cursor+1, first), len(readyOptions)-1)
 	case "k", "up":
-		rs.cursor = max(rs.cursor-1, 0)
+		rs.cursor = max(rs.cursor-1, first)
 	case "1", "2", "3":
 		rs.cursor = int(k[0] - '1')
 		return m.doReady(c, rs.cursor), true
@@ -797,7 +817,7 @@ func (m *factoryModel) doReady(c ReadyCard, i int) tea.Cmd {
 func (m *factoryModel) askSendBack(note string) tea.Cmd {
 	rs := m.readyState()
 	r := factorySendBackReasons[min(max(rs.reason, 0), len(factorySendBackReasons)-1)]
-	rs.noting = false
+	rs.noting, rs.note = false, note
 	key := m.taskKey(m.task)
 	if c := m.data.Cards[m.task].Ready; c != nil && c.TaskKey != "" {
 		key = cleanText(c.TaskKey)
@@ -946,6 +966,11 @@ func (m factoryModel) newTaskForm() NewTaskForm {
 	if strings.TrimSpace(text) != "" {
 		f = m.form.preview
 	}
+	if f.Jira != nil { // "pgdn reads more" names a key this screen does not have: the excerpt is all it shows
+		j := *f.Jira
+		j.More = false
+		f.Jira = &j
+	}
 	f.Text = text
 	if m.form.kind != "" && f.Kind != "" {
 		f.Kind, f.KindWhy = m.form.kind, "your pick"
@@ -963,7 +988,7 @@ func (m factoryModel) newTaskForm() NewTaskForm {
 // runs for a text that starts with a key or a Jira link.
 func (m factoryModel) reading() bool {
 	text := m.form.area.Value()
-	return m.form.inFlight && m.form.previewFor != text && jiraStart.MatchString(text)
+	return m.form.inFlight && m.form.previewFor != text && jiraWords.MatchString(text)
 }
 
 func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -983,15 +1008,20 @@ func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	before := m.form.area.Value()
 	if m.form.area = editText(m.form.area, msg); m.form.area.Value() != before {
-		return m.schedulePreview()
+		return m.textChanged()
 	}
 	return nil
 }
 
-// schedulePreview reads the text's preview after a pause in typing.
-func (m *factoryModel) schedulePreview() tea.Cmd {
+// textChanged reads the text's preview after a pause in typing.
+//
+// The text changed (typed, pasted, back from the editor, or the form opened
+// on its draft): enter's question waits no more for its preview, since it
+// is asked only for the text enter was pressed on; a y typed meanwhile is
+// text, never an answer.
+func (m *factoryModel) textChanged() tea.Cmd {
 	m.form.seq++
-	m.form.kind = ""
+	m.form.kind, m.form.askOnce = "", false
 	seq := m.form.seq
 	return m.opts.Tick(factoryPreviewWait, func(time.Time) tea.Msg { return factoryPreviewDueMsg{seq: seq} })
 }
@@ -1058,17 +1088,22 @@ func (m *factoryModel) submit() tea.Cmd {
 // factory makes no task of is refused with its reason.
 func (m *factoryModel) askStart() tea.Cmd {
 	f := m.form.preview
+	text, act := m.form.area.Value(), m.act
 	kind := cmp.Or(m.form.kind, f.Kind)
-	if kind == "" {
+	switch {
+	case kind == "" && f.WordsOnly: // a key Jira does not know: your words, the key kept as words (spec 9.C)
+		return m.ask(&factoryFollow{kind: followStart}, "Start from your words only?", func(ctx context.Context) (ActionResult, error) {
+			return act.Start(ctx, text, "", true)
+		})
+	case kind == "":
 		return m.note("cannot start: " + cmp.Or(cleanText(f.Err), "the factory makes no task of this text"))
 	}
-	text, act := m.form.area.Value(), m.act
 	key := f.Title
 	if f.Jira != nil && !severalKeys(f) && f.Jira.Key != "" {
 		key = f.Jira.Key
 	}
 	return m.ask(&factoryFollow{kind: followStart, key: key}, startSentence(f, kind), func(ctx context.Context) (ActionResult, error) {
-		return act.Start(ctx, text, kind)
+		return act.Start(ctx, text, kind, false)
 	})
 }
 
@@ -1122,7 +1157,7 @@ func (m *factoryModel) edited(msg factoryEditorMsg) tea.Cmd {
 		return m.bar.show("the editor failed: "+errLine(msg.err)+"; your text is kept", factoryFlashFailed)
 	}
 	m.form.area.SetValue(strings.TrimRight(msg.text, "\n"))
-	return m.schedulePreview()
+	return m.textChanged()
 }
 
 // paste goes to the line being typed.
@@ -1131,7 +1166,7 @@ func (m *factoryModel) paste(msg tea.PasteMsg) tea.Cmd {
 	case m.view == fvNew && m.bar.asking == nil:
 		before := m.form.area.Value()
 		if m.form.area = editText(m.form.area, msg); m.form.area.Value() != before {
-			return m.schedulePreview()
+			return m.textChanged()
 		}
 	case m.view == fvQuestion && m.q.typing, m.view == fvReady && m.readyState().noting:
 		m.input = editLine(m.input, msg)
@@ -1147,10 +1182,15 @@ func (m *factoryModel) boxKey(k string) tea.Cmd {
 		return m.quit()
 	case "esc", "enter", "backspace":
 		m.view, m.scroll = m.under, 0
-	case "?":
-		m.view, m.scroll = map[bool]factoryView{true: m.under, false: fvHelp}[m.view == fvHelp], 0
-	case logKey:
-		m.view, m.scroll = map[bool]factoryView{true: m.under, false: fvLog}[m.view == fvLog], 0
+	case "?", logKey: // its own key closes a box; the other's opens that one
+		next := fvHelp
+		if k == logKey {
+			next = fvLog
+		}
+		if m.view == next {
+			next = m.under
+		}
+		m.view, m.scroll = next, 0
 	default:
 		m.scroll = scrollKey(k, m.scroll, max(m.viewHeight()-6, 1))
 		m.clampScroll()

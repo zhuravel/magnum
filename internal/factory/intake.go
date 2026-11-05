@@ -58,10 +58,14 @@ type Link struct {
 // StartPayload is a ReqStart (and the start of the new-task screen): your
 // text, the kind of task you chose ("" = the daemon picks it, PickKind),
 // the repository ("" = the only [[factory.repo]]), and where you asked
-// (Surface, for the record of your input; "" = the CLI).
+// (Surface, for the record of your input; "" = the CLI). WordsOnly starts a
+// task from your words only: the whole text is the prompt, a key at its
+// start (one Jira does not know) is words, and no key of it is read from
+// Jira as the task's ticket or as a key found in the text.
 type StartPayload struct {
 	Text, Kind, Repo string
 	Surface          string `json:",omitempty"`
+	WordsOnly        bool   `json:",omitempty"`
 }
 
 // PreviewPayload is a ReqPreview: the new-task screen's text, whose preview
@@ -194,6 +198,9 @@ func (e *Engine) startNoted(ctx context.Context, p StartPayload) (registry.Task,
 		return registry.Task{}, "", err
 	}
 	in := ParseStart(text, e.trackers(repo.Repo))
+	if p.WordsOnly { // your words, whole: no key of them is read as the ticket or found
+		in = StartInput{Prompt: text}
+	}
 	switch {
 	case in.PR != nil:
 		return registry.Task{}, "", laterError{"a PR link: adoption comes in milestone 2"}
@@ -365,12 +372,28 @@ func jiraDown(err error) bool {
 	return false
 }
 
+// notInJira is the refusal of a key Jira does not know: its words are the
+// start's ("PR-12399 is not in Jira"), and Jira's error stays in its chain.
+type notInJira struct {
+	key string
+	err error
+}
+
+func (e notInJira) Error() string { return e.key + " is not in Jira" }
+func (e notInJira) Unwrap() error { return e.err }
+
+// unknownKey reports whether err says Jira does not know the key.
+func unknownKey(err error) bool {
+	je, ok := errors.AsType[*jira.Error](err)
+	return ok && je.Class == jira.ClassNotFound
+}
+
 // jiraCause is a refusal of Jira's for key in the words of a start.
 func jiraCause(key string, err error) error {
 	je, ok := errors.AsType[*jira.Error](err)
 	switch {
 	case ok && je.Class == jira.ClassNotFound:
-		return fmt.Errorf("%s is not in Jira", key)
+		return notInJira{key: key, err: err}
 	case ok && je.Class == jira.ClassTokenFile && errors.Is(err, fs.ErrNotExist):
 		return fmt.Errorf("the Jira token file is missing: %s", je.File)
 	}

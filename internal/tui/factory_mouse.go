@@ -8,6 +8,7 @@ package tui
 // waits answers it with no, as any key but y does, and starts nothing.
 
 import (
+	"slices"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -71,14 +72,14 @@ func (m *factoryModel) click(ev tea.Mouse) tea.Cmd {
 		if !onRow {
 			return nil
 		}
-		m.moveTo(indexOf(m.order(), row))
+		m.moveTo(slices.Index(m.order(), row))
 		if m.clickTwice(m.taskKey(row), m.now()) {
 			cmd, _ := m.homeKey("enter")
 			return cmd
 		}
 	case tea.MouseRight:
 		if onRow {
-			m.moveTo(indexOf(m.order(), row))
+			m.moveTo(slices.Index(m.order(), row))
 		}
 		if len(m.menuItems()) > 0 {
 			m.menu = ctxMenu{open: true, x: ev.X, y: ev.Y, rowKey: m.menuOwner()}
@@ -101,15 +102,6 @@ func (m factoryModel) rowAt(y int) (int64, bool) {
 	return 0, false
 }
 
-func indexOf(ids []int64, id int64) int {
-	for i, v := range ids {
-		if v == id {
-			return i
-		}
-	}
-	return 0
-}
-
 // menuOwner names what the menu is for: home's row, or the card's task. An
 // item runs only while it still is.
 func (m factoryModel) menuOwner() string {
@@ -129,11 +121,11 @@ func (m factoryModel) menuItems() []menuItem {
 	acts := m.act != nil
 	switch m.view {
 	case fvHome:
-		_, row := m.selectedRow()
+		sel, row := m.selectedRow()
 		_, decision := m.nextDecision()
 		return []menuItem{
 			{"open its card", "enter", "enter", row}, {"oldest decision", "a", "a", decision},
-			{"step into its pane", "o", "o", row && acts}, {"new task", "n", "n", acts},
+			{"step into its pane", "o", "o", row && acts && m.paneHint(sel) != ""}, {"new task", "n", "n", acts},
 			{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
 		}
 	case fvQuestion:
@@ -147,8 +139,7 @@ func (m factoryModel) menuItems() []menuItem {
 			{"flag it needless", "−", "-", c.Needless}, {"previous question", "backspace", "backspace", c.Current > 0},
 			{"step into its pane", "o", "o", acts}, {"back", "esc", "esc", true},
 		}
-	case fvRecap:
-		return []menuItem{{"back to the questions", "esc", "esc", true}}
+	case fvRecap: // a click there answers its standing question with no: no menu
 	case fvReady:
 		c, _ := m.readyCard()
 		return []menuItem{

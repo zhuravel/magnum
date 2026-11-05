@@ -1,6 +1,11 @@
 package tui
 
-import "time"
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+)
 
 // The data of the factory's home screen. The painter (factory_view.go) draws
 // it and nothing else: the factory package turns its registry into these rows.
@@ -196,6 +201,36 @@ type CardQuestion struct {
 	sent bool
 }
 
+// AskComment is the Jira comment the factory drafts when you ask login a
+// question of task key instead of answering it: the question, why it is
+// asked, its example and the options (the ask and your-own-words options
+// of a card left out). The factory writes it for you to post, and the
+// recap shows the same text before you send.
+func AskComment(login, key, question, context, example string, options []CardOption) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s, a question on %s: %s\n", login, key, question)
+	if context != "" {
+		fmt.Fprintf(&b, "\n%s\n", context)
+	}
+	if example != "" {
+		fmt.Fprintf(&b, "\nFor example: %s\n", example)
+	}
+	options = slices.DeleteFunc(slices.Clone(options), func(o CardOption) bool {
+		return o.Own || strings.HasPrefix(strings.TrimSpace(o.Send), "ask:")
+	})
+	if len(options) > 0 {
+		b.WriteString("\nThe options as we see them:\n")
+		for _, o := range options {
+			if o.Means != "" {
+				fmt.Fprintf(&b, "- %s: %s\n", o.Label, o.Means)
+			} else {
+				fmt.Fprintf(&b, "- %s\n", o.Label)
+			}
+		}
+	}
+	return b.String()
+}
+
 // CardOption is one choice and what it means for the question's example.
 type CardOption struct {
 	Label, Means string
@@ -384,6 +419,10 @@ type NewTaskForm struct {
 	// several: the task is the prompt task it is, whose questions ask which
 	// issue it is, and no ticket is drawn as its own.
 	Keys []string
+	// WordsOnly is true when the key at the start of the text is one Jira
+	// does not know (Err says so): enter then asks to start from your words
+	// only, the key kept as words and never read as the task's ticket.
+	WordsOnly bool
 	// Hints are the footer's key hints; none: the form's own (newTaskHints).
 	Hints []hint `json:"-"`
 

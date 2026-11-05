@@ -6,6 +6,7 @@ package factory
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 	"time"
@@ -62,6 +63,7 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 			f.Err = "Jira does not answer: the task waits for it, then starts"
 		case err != nil:
 			f.Err = err.Error()
+			f.WordsOnly = unknownKey(err) // the screen offers a start from your words only
 		default:
 			tk = &got
 			f.Jira = e.jiraPreview(got)
@@ -101,19 +103,49 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 
 // previewOverlapBound bounds the overlap's reads of a preview, which the
 // daemon answers on its loop: what does not come in that time is left out.
-const previewOverlapBound = 10 * time.Second
+// previewOverlapTTL is how long a key's line is kept for the next previews.
+const (
+	previewOverlapBound = 10 * time.Second
+	previewOverlapTTL   = 2 * time.Minute
+)
+
+// overlapRead is an overlap line a preview read, and when.
+type overlapRead struct {
+	line string
+	at   time.Time
+}
 
 // previewOverlap is the overlap line of a task of key ("" for no key, or
 // nothing found), as the screen's OVERLAP row draws it: what else touches
-// the work, read now and left out where a read fails (it is advisory).
+// the work, left out where a read fails (it is advisory). The line depends
+// on the key only, and a preview comes after each pause in typing: a whole
+// read is kept for previewOverlapTTL, so the guidance typed after a key
+// reads it once, not on every preview the daemon answers on its loop.
 func (e *Engine) previewOverlap(ctx context.Context, repo, key string) string {
 	if key == "" {
 		return ""
 	}
+	id, now := repo+" "+key, e.now()
+	e.overlapMu.Lock()
+	kept, ok := e.overlaps[id]
+	e.overlapMu.Unlock()
+	if ok && now.Sub(kept.at) < previewOverlapTTL {
+		return kept.line
+	}
 	ctx, cancel := context.WithTimeout(ctx, previewOverlapBound)
 	defer cancel()
-	line, _ := e.Overlap(ctx, registry.Task{Repo: repo, JiraKey: key}, nil) // the parts that were read
-	return strings.TrimPrefix(line, "overlap: ")
+	line, err := e.Overlap(ctx, registry.Task{Repo: repo, JiraKey: key}, nil) // the parts that were read
+	line = strings.TrimPrefix(line, "overlap: ")
+	if err == nil {
+		e.overlapMu.Lock()
+		defer e.overlapMu.Unlock()
+		if e.overlaps == nil {
+			e.overlaps = map[string]overlapRead{}
+		}
+		maps.DeleteFunc(e.overlaps, func(_ string, r overlapRead) bool { return now.Sub(r.at) >= previewOverlapTTL })
+		e.overlaps[id] = overlapRead{line: line, at: now}
+	}
+	return line
 }
 
 // previewLinks are the links of the text, in its order, with what the
