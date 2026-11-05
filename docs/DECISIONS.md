@@ -15137,16 +15137,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   typed in, and `Classify` got 66% of the labelled messages right. A session whose path and messages name no
   key now takes the first key its git branches name (a Claude entry's `gitBranch`, a Codex rollout's
   `session_meta` `git.branch`), read with the same key function; a key in the path or the messages still
-  wins. `ReadSessions` leaves out, before it reads their messages, a headless Claude Code run (an
-  `entrypoint` other than `cli`: `claude -p`, the SDK), a subagent's transcript (under `subagents/`), a Codex
+  wins, and a session that moved between two tickets' branches counts for the first one only (on the operator's
+  transcripts 1 of 109 branch-keyed sessions did). `ReadSessions` leaves out, before it reads their messages, a
+  headless Claude Code run (an `sdk-*` `entrypoint`: `claude -p`, the SDKs; an IDE's or the desktop app's is
+  typed in), a subagent's transcript (under `subagents/`), a Codex
   session Claude Code started (originator `Claude Code`), `codex exec` (originator `codex_exec` or source
   `exec`), a Codex subagent (a source object naming one), and a session that started in magnum's data or state
   directory, a `[[pool]]` slot of any number, a per-PR worktree (`slots.IsPRWorktree`) or a `[[factory.repo]]`
   copy, or below one: the CLI builds that predicate from the layout and the config. The summary counts every
   skipped transcript by its reason (`stats.Skipped`). The branch link brought in many short tickets of other
   people's work, so the operator ruled that only their own tickets count (`stats.OwnTickets`): a ticket one of
-  whose sessions ran on their own branch (their GitHub login and a dash, as the factory names its branches:
-  `config.OperatorLogin`, or `--branch-prefix`) or began with a message that names its key. A ticket whose
+  whose sessions ran on their own branch of that ticket (one that names its key and starts with their GitHub
+  login and a dash, as the factory names its branches: `config.OperatorLogin`, or `--branch-prefix`) or began
+  with a message that names its key. A branch of another ticket never makes a ticket theirs. A ticket whose
   sessions all ran on other people's branches, or on none, without such a first message is skipped and
   counted apart as others' tickets. Without a login or the flag the command refuses; it never asks GitHub. Ruling: a go-ahead starts a step ("go ahead", "go
   implement", "implement", "proceed", "continue", "next step", "apply", "fix it", "do it", "build it", "build
@@ -15157,15 +15160,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   "instead", "I said", "still shows", "I still have", "your fix breaks", "looks too big", "shorter". "should
   be" is no correction any more: it is how a request says what a thing should be. Access gains "you have the
   ... api key", a secret named by its variable (`POINTS_API_KEY`), secrets and env vars set, permissions
-  added, and connecting or ssh-ing to a server. On the operator's 100 labelled messages the classifier now
-  gets 94% (66% before), and 89% on a second 100 drawn for tuning (72% before). Rejected: a directory filtered
+  added, and connecting or ssh-ing to a server. A held-out check scored 63%, and its gaps got general rules:
+  only the operator's words count (after a tool's request header, without tool blocks, attachment placeholders
+  or pasted output), the slash command of a skill that runs a step starts one, a go-ahead after any yes starts
+  the step, a "make sure" after a step or a report of what is not done yields to that step, "implement",
+  "apply" and "next step" take a short tail only, resolving the review, a review again and releases to the
+  stagings start a step, a choice among offered options approves, a login, a copied key or a key in a vault is
+  access (an upper-case variable is a secret, a code word such as `cache_key` is not), and a "don't" of a wish
+  or a fact, or "should not", is no refusal. On the operator's 100 labelled messages the classifier now gets
+  95% (66% at the start), and 89% on a second 100 drawn for tuning (72% at the start). The factory stores a
+  class with each input when it records it, so an input recorded before this classifier would keep its old
+  class; the baseline is frozen before the first task, so none exists. Rejected: a directory filtered
   by hand (the code must filter it), and phrases that match one message. Tests:
   TestReadSessionsTiesASessionToTheTicketItsBranchNames, TestReadSessionsSkipsTheSessionsTheOperatorNeverTypedIn,
   TestClaudeSessionFactsSayHowWhereAndOnWhichBranches, TestCodexSessionFactsReadTheSessionMeta,
   TestIsPRWorktreeKnowsWhatPRWorktreePathNames, TestBaselineKnowsWhereMagnumStartsSessions,
   TestFactoryBaselineNamesWhyItSkippedEachTranscript, TestOwnTicketsKeepOnlyTheOperatorsOwnWork,
-  TestFactoryBaselineCountsOnlyYourOwnTickets, TestFactoryBaselineNeedsYourBranchPrefix and
-  TestClassifyKnowsTheEverydayStepStartsAndCorrections.
+  TestFactoryBaselineCountsOnlyYourOwnTickets, TestFactoryBaselineNeedsYourBranchPrefix,
+  TestOwnTicketsNeverTakeAnotherTicketsBranch, TestClassifyKnowsTheEverydayStepStartsAndCorrections and
+  TestClassifyKnowsTheReviewsAndTheHeldOutChecksGaps.
 
 ## Learned rules
 

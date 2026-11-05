@@ -123,13 +123,14 @@ func newFactoryBaselineCmd(c *Context) *cobra.Command {
 			"Code transcripts and Codex rollouts (every .jsonl file below it; a Codex file is named rollout-*): a "+
 			"session belongs to the ticket whose key (a tracker of your config's [board] or [[repo]] trackers) its "+
 			"file path or its first messages name, else the one its git branch names (a Claude entry's gitBranch, a "+
-			"Codex rollout's session_meta), and the sessions of one ticket are one ticket, never counted "+
-			"apart. Only your interactive sessions count: a headless run (claude -p or the SDK, codex exec), a "+
+			"Codex rollout's session_meta; a session that moved between two tickets' branches counts for the first "+
+			"one only), and the sessions of one ticket are one ticket, never counted "+
+			"apart. Only your interactive sessions count: a headless run (claude -p or an SDK, codex exec), a "+
 			"subagent's, a Codex session Claude Code started and a session started where magnum or the factory starts "+
 			"its own (magnum's data and state directories, a [[pool]] slot, a per-PR worktree, a [[factory.repo]] copy) "+
-			"are left out. Only your own tickets count: a ticket one of whose sessions ran on your own branch (one "+
-			"that starts with your GitHub login and a dash, as the factory names its branches: the login of your gh "+
-			"[[identity]], or --branch-prefix) or began with a message that names its key; a ticket whose sessions all "+
+			"are left out. Only your own tickets count: a ticket one of whose sessions ran on your own branch of it (one "+
+			"that names its key and starts with your GitHub login and a dash, as the factory names its branches: the "+
+			"login of your gh [[identity]], or --branch-prefix) or began with a message that names its key; a ticket whose sessions all "+
 			"ran on other people's branches, or on none, without such a first message is someone else's, and the "+
 			"summary counts those apart. Without a login or --branch-prefix the command refuses. The first message "+
 			"of a ticket (the oldest session's first) counts as typed and never as a step "+
