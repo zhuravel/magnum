@@ -607,3 +607,25 @@ func TestFactoryBaselineNeedsItsTwoFlags(t *testing.T) {
 		}
 	}
 }
+
+// The baseline loads the configuration itself, as a run from the terminal
+// starts with none: the trackers that tell a ticket's key come from it.
+func TestFactoryBaselineLoadsTheConfiguration(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	transcripts, labelled := baselineFixture(t, dt)
+	user := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(user, []byte("[board]\ntrackers = [\"https://example.atlassian.net/browse/PR-{num}\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dt.ctx.Config = nil // as Main leaves it: no command has loaded it yet
+	dt.ctx.Layout.UserConfig = user
+
+	code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled, "--branch-prefix", "zhuravel-")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	if got, err := stats.LoadBaseline(dt.ctx.Layout.FactoryBaseline()); err != nil || got == nil || got.Tickets != 2 {
+		t.Fatalf("LoadBaseline = %+v, %v; want the 2 tickets of the fixture", got, err)
+	}
+}

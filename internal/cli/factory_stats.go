@@ -168,6 +168,9 @@ func runFactoryBaselineCmd(c *Context, f factoryBaselineFlags, pos []string) int
 	if _, err := os.Lstat(path); err == nil {
 		return frozen()
 	}
+	if err := c.LoadConfig(); err != nil { // a run from the terminal starts with none: the trackers are in it
+		return fail("%v", err)
+	}
 	trackers := baselineTrackers(c.Config)
 	if len(trackers) == 0 {
 		return fail("no issue tracker is configured, so no ticket key can be told from a word\nfix: set [board] trackers (or a [[repo]]'s) to the template of your tickets' links, such as https://example.atlassian.net/browse/PR-{num}")
