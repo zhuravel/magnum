@@ -26,9 +26,10 @@ package runtime
 // reads a transcript's user turns once: Reconcile's proof of a delivery
 // takes the same read (turnReads). The engine records each turn once (the
 // registry keys a pane's turn by its role and time), so a restart, which
-// forgets what was read, hands them again. One case loses a last read: a
+// forgets what was read, hands them again. Two cases lose a last read: a
 // task that ended shortly before a daemon stop that lasts past typedSettle
-// after its end is not read again when the daemon is back.
+// after its end is not read again when the daemon is back, and a last read
+// that keeps failing past typedSettle after the task's end is dropped.
 
 import (
 	"context"

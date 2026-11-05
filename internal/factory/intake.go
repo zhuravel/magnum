@@ -132,7 +132,8 @@ const (
 )
 
 // jiraBackoff is the wait after failed tries of Jira (the start's own
-// read is try 0): 1, 2, 4, 8, 16, then 30 minutes.
+// read is try 0): 1, 2, 4, 8, 16, then 30 minutes after a start; a linked
+// key's read, whose first try is its stage's, waits 2, 4, 8, 16, then 30.
 func jiraBackoff(tries int) time.Duration {
 	return min(jiraFirstTry<<min(max(tries, 0), jiraTryShifts), jiraTryMax)
 }
@@ -141,8 +142,9 @@ func jiraBackoff(tries int) time.Duration {
 // failed since the daemon started, and whether its kind is intake's own
 // pick (from your words; Jira's answer refines it) rather than yours; the
 // loop's own. After a restart a task tries at once, then backs off from 1
-// minute again, and keeps the kind it has; the 6 hours count from the task's
-// creation whatever the restarts.
+// minute again, and keeps the kind it has; the 6 hours count from the start
+// of the wait (the task's creation, or the answer that linked its key)
+// whatever the restarts.
 type jiraTry struct {
 	tries  int
 	next   time.Time

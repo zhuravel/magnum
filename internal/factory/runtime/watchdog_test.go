@@ -29,7 +29,8 @@ func TestAHungTurnClimbsTheWatchdogSteps(t *testing.T) {
 	}
 	starts := len(g.h.startCalls())
 
-	// Step 1: the shell is stopped and the agent nudged.
+	// Step 1: the agent is nudged (StopShell stops nothing for an agent's
+	// run, only a shell role's command).
 	g.clock.Add(NoProgressAfter)
 	g.watchdog()
 	prompts := g.h.promptTexts()

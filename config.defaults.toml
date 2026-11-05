@@ -773,7 +773,7 @@ args = ["--mcp-config", '{"mcpServers":{"whiteboard":{"command":"whiteboard","ar
 
 [factory]
 max_active = 3                    # tasks with live agents or a held copy at once; the next waits, queued
-memory_gate_swap = 80             # new tasks wait while the Mac's swap is this many percent used ("0" = no gate)
+memory_gate_swap = 80             # new tasks wait while the Mac's swap is this many percent used (0 = no gate)
 heavy_stages = 1                  # heavy stages at once across tasks (a local review round, local QA, a copy's server);
                                   # at least 1
 # herdr_socket = ""               # "" = the named session's own socket; else an absolute path (~ expands)

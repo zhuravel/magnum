@@ -519,7 +519,8 @@ the task, its copy and branch), `inputs` (the task's files, read as data, never 
 question dialog, no push and no PR, no shared database or console of any environment, the copy's
 databases only through `.DBLockCommand`, no production, the output files as the last step). The file
 resolves as a prompt does, the factory daemon loads it with its roles' prompts at startup and renders
-every role's prompt once with this build (`factory.CheckPrompts`), and `magnum config` refuses a role whose
+every role's prompt once with this build (`factory.CheckPrompts`), so an edit reaches the factory's agents
+after `magnum factory install`, which restarts that daemon, and `magnum config` refuses a role whose
 prompt names it. The data holds paths, keys and commands only: the ticket, the operator's words and the
 answers reach the agents as files of the task's directory (`~/.local/share/magnum/factory/tasks/<id>/`).
 

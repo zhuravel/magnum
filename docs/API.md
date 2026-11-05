@@ -968,7 +968,8 @@ func Title(repo string, number int, role Role) string
     A kind with name args gets it at launch (claude --name, see StartAgent),
     a kind with only a rename command through that command typed while it works
     (codex /rename, see nameAgent), and a shell role from the OSC 0 prefix of
-    its command line (ShellData.Title).
+    its command line (ShellData.Title). A Manager's agents take agentTitle,
+    with Deps.Tag and Deps.OwnerName's owner in place of "PR #<N>".
 
 
 TYPES
@@ -1734,9 +1735,10 @@ func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slo
     already has a pane in that workspace (e.g. claude-simplify, which runs on
     demand and is not in EnsureWorkspace's roles). A new pane is laid out as
     the next pane of ws.Roles (see EnsureWorkspace), gets env with the role's
-    env laid over it, a starting sessions row and the "PR #N <role>" name;
-    start an agent role with StartAgent. The returned Workspace is a copy of ws
-    with the pane (ws itself is not modified).
+    env laid over it, a starting sessions row and the "PR #N <role>" name
+    (Deps.OwnerName's owner in place of "PR #N"); start an agent role with
+    StartAgent. The returned Workspace is a copy of ws with the pane (ws itself
+    is not modified).
 
 func (m *Manager) EnsureTrust(ctx context.Context, kind, dir string) error
     EnsureTrust records dir as trusted in the agent CLI's own config, so a
@@ -1815,7 +1817,8 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
     before herdr is touched (see paneEnv). Every newly assigned pane gets
     a sessions row (state starting, agent name/kind or agent_kind "shell",
     pane/workspace/tab ids, cwd, env_json) and is renamed "PR #N <role>"
-    (TaggedPaneLabel); a new workspace whose root pane cannot be recorded
+    (TaggedPaneLabel; Deps.OwnerName's owner, such as a factory's "PR-12345",
+    in place of "PR #N"); a new workspace whose root pane cannot be recorded
     is closed again (nothing else would find it). Live rows whose pane is
     gone are marked lost first, keeping their session_id for ResumeID.
     Pane envs are stored in sessions.env_json, so they must not carry secrets
@@ -6222,9 +6225,11 @@ type Prompt struct {
 	Path     string // the file read (<prompts_dir>/<name>); "" when embedded
 	Embedded bool   // the embedded default (package prompts) was used
 	Text     string // the template source, unrendered
-	// Shared is the source of SharedPrompt as resolved with the prompt,
-	// whose blocks the prompt's {{template}} calls include; "" for a prompt
-	// that takes none (UsesShared). ParseTemplate parses it first.
+	// Shared is the source of the prompt's partials file (PartialsOf:
+	// SharedPrompt for a judge prompt, FactorySharedPrompt for a factory
+	// prompt) as resolved with the prompt, whose blocks the prompt's
+	// {{template}} calls include; "" for a prompt that takes none.
+	// ParseTemplate parses it first.
 	Shared string
 }
     Prompt is a resolved prompt template.
@@ -12788,8 +12793,8 @@ type Options struct {
 	// BeforeMigrate, when set, runs before pending migrations are applied,
 	// with the file's schema version and the one this binary migrates to; an
 	// error from it aborts Open and leaves the file untouched. The CLI sets it
-	// to refuse while a factory daemon runs on the older schema; the daemon
-	// leaves it nil.
+	// to refuse while a factory daemon runs on the older schema, and so does
+	// the daemon's builder, which writes its own pidfile only later.
 	BeforeMigrate func(from, to int) error
 }
     Options tune Open.
@@ -13692,15 +13697,15 @@ func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error
 
 func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
     Reconcile settles the delivery of ledger entry e from its agent's
-    transcript and returns the verdict (registry.DeliveredYes, DeliveredNo
-    or DeliveredUnknown). A turn holding the prompt's hash, stamped after
-    it was sent, is yes: the entry is settled and a run still pending is
-    marked submitted, so it is observed and never sent again. No needs proof:
-    a read that finds no such turn, and another at least RedeliverAfter later
-    that finds none either, in a transcript written past the prompt, with the
-    run never submitted (pending, or failed before it was) and the session not
-    prompted since. Every other case (no transcript, a run that went further)
-    stays unknown.
+    transcript and returns the verdict (registry.DeliveredYes, DeliveredNo or
+    DeliveredUnknown, or the stored DeliveredAbandoned of a prompt you let go).
+    A turn holding the prompt's hash, stamped after it was sent, is yes:
+    the entry is settled and a run still pending is marked submitted, so it is
+    observed and never sent again. No needs proof: a read that finds no such
+    turn, and another at least RedeliverAfter later that finds none either, in a
+    transcript written past the prompt, with the run never submitted (pending,
+    or failed before it was) and the session not prompted since. Every other
+    case (no transcript, a run that went further) stays unknown.
 
 func (r *Runtime) Recover(ctx context.Context, t registry.Task) ([]string, error)
     Recover reconciles task t's sessions with herdr after a restart, before

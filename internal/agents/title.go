@@ -18,7 +18,8 @@ import (
 // A kind with name args gets it at launch (claude --name, see StartAgent), a
 // kind with only a rename command through that command typed while it works
 // (codex /rename, see nameAgent), and a shell role from the OSC 0 prefix of
-// its command line (ShellData.Title).
+// its command line (ShellData.Title). A Manager's agents take agentTitle,
+// with Deps.Tag and Deps.OwnerName's owner in place of "PR #<N>".
 func Title(repo string, number int, role Role) string {
 	return ownerTitle("", repo, prOwner(number), role)
 }

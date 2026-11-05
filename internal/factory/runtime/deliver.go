@@ -300,7 +300,8 @@ func unknownKey(entry int64) string { return fmt.Sprintf("unknown:%d", entry) }
 
 // Reconcile settles the delivery of ledger entry e from its agent's
 // transcript and returns the verdict (registry.DeliveredYes, DeliveredNo
-// or DeliveredUnknown). A turn holding the prompt's hash, stamped after it
+// or DeliveredUnknown, or the stored DeliveredAbandoned of a prompt you let
+// go). A turn holding the prompt's hash, stamped after it
 // was sent, is yes: the entry is settled and a run still pending is marked
 // submitted, so it is observed and never sent again. No needs proof: a
 // read that finds no such turn, and another at least RedeliverAfter later

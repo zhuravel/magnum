@@ -948,10 +948,6 @@ func TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
 	}
 }
 
-// A task leaves its copy with a handoff.md in its directory (the branch, the
-// head, the server, what the next claimer needs), and its branch stays: its
-// commits, pushed or not, are the factory's own on a branch of its own, so
-// the guard holds nothing, and the copy goes back to its placeholder.
 // Reserved names the copies the tasks' owner rows hold and for which task,
 // from the claim to the release, so a release that failed can be told from
 // the stores after a restart.
@@ -974,6 +970,10 @@ func TestReservedNamesTheCopiesTasksHold(t *testing.T) {
 	}
 }
 
+// A task leaves its copy with a handoff.md in its directory (the branch, the
+// head, the server, what the next claimer needs), and its branch stays: its
+// commits, pushed or not, are the factory's own on a branch of its own, so
+// the guard holds nothing, and the copy goes back to its placeholder.
 func TestReleaseWritesHandoffAndKeepsTheBranch(t *testing.T) {
 	r := newCopiesRig(t, 1)
 	task := r.task("PR-12345")

@@ -31,6 +31,11 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
   abandons the rounds). The CLI (`magnum config`, doctor) reads the files on disk. A build with a new
   migration cannot run CLI commands until the daemon restarts on it: the CLI refuses to migrate the
   registry under a running daemon (`store.Options.BeforeMigrate`), so use `daemon-restart --drain`.
+  The factory daemon (`magnum factory daemon`, its own launchd job) does the same with the
+  `prompts/factory-*.md` its roles name, and writes this build's review prompts and judge skill as its
+  local review's candidate, once at its start: an edit or a new factory migration reaches it only after
+  `make build && bin/magnum factory install`, which drains it and starts it on the new build, and until
+  then the factory CLI refuses to migrate the factory registry under it.
 - **Latest Go and latest dependencies.** Charm v2 (`charm.land/*`), never the v1 modules; `os.Root`
   for root-confined file writes; `slices`, `maps`, `min`, `max`. No new dependencies without a reason
   in the commit message.
@@ -106,7 +111,8 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/github`, `identity`, `herdr`, `gitx`, `mysqlx`, `execx` | the outside world, each behind a fake |
 | `internal/webhooks` | magnum-relay's journal of the GitHub App's deliveries, read with curl (the token on stdin): `[webhooks]` shadow mode's source |
 | `internal/jira` | the PR's Jira issue a round hands the judge as `ticket.md`, read with curl (the token on stdin): `[jira]`'s client |
-| `internal/factory` | the factory daemon that writes code from a Jira key or a prompt: its own registry (the subdirectory registry, with its migrations), its runtime and its stages; configured by `[factory]` (config/factory.go), whose roles and prompts (`prompts/factory-*.md`) it launches |
+| `internal/factory` | the factory daemon that writes code from a Jira key or a prompt: its loop, intake, stages, copies, checks, local review, publish, alerts and the screen's data; its own registry (`internal/factory/registry`: tasks, questions, decisions, the prompt ledger, effects, events, requests and the evidence records, with its own migrations); its runtime (`internal/factory/runtime`: a task's agents through `agents.Manager` over the factory's agents store, the ledger's delivery proof, the observe pass, the watchdog); configured by `[factory]` (config/factory.go), whose roles and prompts (`prompts/factory-*.md`) it launches |
+| `internal/factory/stats` | `magnum factory stats` and `baseline`: what the factory still asks of you per task, from the registry's evidence records, against the baseline frozen before the first task; the classifier of your messages |
 | `internal/launchd`, `reveal` | the LaunchAgent; bringing the herdr client to the front of the terminal |
 | `internal/paths`, `fsx`, `textx` | the on-disk layout; the shared file (atomic write) and text helpers, leaves on the stdlib |
 | `internal/relay`, `cmd/magnum-relay`, `deploy/relay` | the webhook relay, a separate internet-facing service (stdlib and SQLite only): signed receiver, journal, listing; its Dockerfile, compose file and deploy guide |

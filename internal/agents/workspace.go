@@ -94,7 +94,8 @@ func roleNames(roles []config.Role) []Role {
 // is touched (see paneEnv).
 // Every newly assigned pane gets a sessions row (state starting, agent
 // name/kind or agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and
-// is renamed "PR #N <role>" (TaggedPaneLabel); a new workspace whose root pane
+// is renamed "PR #N <role>" (TaggedPaneLabel; Deps.OwnerName's owner, such as a
+// factory's "PR-12345", in place of "PR #N"); a new workspace whose root pane
 // cannot be recorded is closed again (nothing else would find it). Live
 // rows whose pane is gone are marked lost first, keeping their session_id
 // for ResumeID. Pane envs are
@@ -230,7 +231,8 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 // on demand and is not in EnsureWorkspace's roles). A new pane is laid out
 // as the next pane of ws.Roles (see EnsureWorkspace), gets env with the
 // role's env laid over it, a starting sessions row and the "PR #N <role>"
-// name; start an agent role with StartAgent. The returned Workspace is a
+// name (Deps.OwnerName's owner in place of "PR #N"); start an agent role
+// with StartAgent. The returned Workspace is a
 // copy of ws with the pane (ws itself is not modified).
 func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slotPath string, env map[string]string, role config.Role) (Workspace, error) {
 	r := Role(role.Name)
@@ -472,7 +474,8 @@ func (m *Manager) recordPane(ctx context.Context, pr store.PR, ws Workspace, rol
 	return nil
 }
 
-// namePane puts role's recorded pane into ws and names it "PR #N <role>".
+// namePane puts role's recorded pane into ws and names it "PR #N <role>"
+// (paneLabel: Deps.OwnerName's owner in place of "PR #N").
 func (m *Manager) namePane(ctx context.Context, pr store.PR, ws *Workspace, role config.Role, paneID string) error {
 	r := Role(role.Name)
 	ws.Panes[r] = paneID

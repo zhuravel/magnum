@@ -38,8 +38,9 @@ func newFactoryDecideCmd(c *Context) *cobra.Command {
 			"review, under your login; send_back returns the task to its writer with --reason, the key of your "+
 			"reason, and --note, your note (the writer reads it from a file, never in its prompt); drop stops the "+
 			"task, freeing its copy and keeping its branch. A choice names --card, the revision you read: a card "+
-			"drawn since is refused, and the daemon refuses one whose branch, report, PR body or diff changed after "+
-			"it was drawn (\"the branch changed after you read it\") and draws it again.",
+			"drawn since is refused. The daemon refuses a push or a send_back whose branch, report, PR body or diff "+
+			"changed after the card was drawn (\"the branch changed after you read it\") and draws the card again; "+
+			"a drop it takes whatever the card shows now.",
 		func(pos []string) int { return runFactoryDecideCmd(c, f, pos) })
 	cmd.Flags().IntVar(&f.card, "card", 0, "the revision of the card you read (the printed card names it)")
 	cmd.Flags().StringVar(&f.reason, "reason", "", "send_back: the key of your reason (a word: lowercase letters, digits, - and _)")

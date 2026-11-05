@@ -67,9 +67,11 @@ type Prompt struct {
 	Path     string // the file read (<prompts_dir>/<name>); "" when embedded
 	Embedded bool   // the embedded default (package prompts) was used
 	Text     string // the template source, unrendered
-	// Shared is the source of SharedPrompt as resolved with the prompt,
-	// whose blocks the prompt's {{template}} calls include; "" for a prompt
-	// that takes none (UsesShared). ParseTemplate parses it first.
+	// Shared is the source of the prompt's partials file (PartialsOf:
+	// SharedPrompt for a judge prompt, FactorySharedPrompt for a factory
+	// prompt) as resolved with the prompt, whose blocks the prompt's
+	// {{template}} calls include; "" for a prompt that takes none.
+	// ParseTemplate parses it first.
 	Shared string
 }
 

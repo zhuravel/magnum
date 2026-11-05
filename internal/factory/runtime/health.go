@@ -638,8 +638,8 @@ func (r *Runtime) Proving(id int64) bool {
 
 // provingBound is how long a proof may stay under way: its second read
 // comes RedeliverAfter after its first, on an observe pass at most
-// loginEvery apart (reconcileUnknown), with one more of each for a read
-// that failed.
+// loginEvery apart (reconcileUnknown), with one more RedeliverAfter for a
+// read that failed.
 const provingBound = 2*RedeliverAfter + loginEvery
 
 // reconcileUnknown settles, at most once every loginEvery, the prompts of

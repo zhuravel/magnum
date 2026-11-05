@@ -61,8 +61,8 @@ type Options struct {
 	// BeforeMigrate, when set, runs before pending migrations are applied,
 	// with the file's schema version and the one this binary migrates to; an
 	// error from it aborts Open and leaves the file untouched. The CLI sets it
-	// to refuse while a factory daemon runs on the older schema; the daemon
-	// leaves it nil.
+	// to refuse while a factory daemon runs on the older schema, and so does
+	// the daemon's builder, which writes its own pidfile only later.
 	BeforeMigrate func(from, to int) error
 }
 

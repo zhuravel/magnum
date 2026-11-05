@@ -289,7 +289,8 @@ type Engine struct {
 	claimWaits map[int64]*claimWait
 	held       map[int64]Copy
 	// debts are the releases of ended tasks' copies that did not go through
-	// (payReleaseDebts); claimMu guards them too.
+	// (payReleaseDebts); claimMu guards the map, and a debt's fields are
+	// the loop's own.
 	debts map[int64]*releaseDebt
 
 	// agentRuns are the agents stages' attempts in progress, by task

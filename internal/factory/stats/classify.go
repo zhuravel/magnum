@@ -103,8 +103,10 @@ var (
 
 	// accessRE: handing over a credential, logging in, granting access, the acts
 	// of a VPN or a second factor. A word like "login", "sso" or "password" in
-	// a ticket's subject is none of these, so a noun alone does not match: it
-	// takes a verb that hands the credential over, a possessive, or a login to do.
+	// a ticket's subject is none of these, so a noun alone is not meant to
+	// match: it takes a verb that hands the credential over, a possessive, or a
+	// login to do. Some sentences about a secret still match ("api keys are
+	// rotated every 30 days"); the labelled set measures how often.
 	accessRE = regexp.MustCompile(`\b(?:` + strings.Join([]string{
 		// handing a credential over, or saying what is wrong with it
 		`(?:here(?:'s| is| are)|this is|it(?:'s| is)) (?:my |the |your |our |a |an |the new |a new )?` + secrets,

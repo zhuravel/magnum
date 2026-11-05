@@ -3376,6 +3376,11 @@ review pipeline's roles and kinds are. This section documents the `[factory]` ke
 repository and no staging environment, so the factory works on none until your config declares a
 `[[factory.repo]]` ([config.full.example.toml](config.full.example.toml) shows one).
 
+The release order: a binary older than the factory refuses a config with `[factory]`, as an unknown key is
+fatal, so a review daemon still on such a build would not start again. So land the change, run `make build`
+and `magnum daemon-restart --drain`, and only then add `[factory]` to your config and run `magnum factory
+install`.
+
 ```toml
 [factory]
 max_active = 3                       # tasks with live agents or a held copy at once; the next waits, queued
@@ -3533,7 +3538,16 @@ stages = [
 
 The factory daemon is a second daemon in the same binary, with its own launchd job
 (`zhuravel.magnum.factory`), registry (`factory/factory.db` in the data directory), pid, lock and log
-(`logs/factory.log`; launchd's capture of its output is `logs/factory-launchd.log`):
+(`logs/factory.log`; launchd's capture of its output is `logs/factory-launchd.log`). Its agents run in a
+herdr session of their own, `herdr_session` (`factory`): a separate herdr server, whose socket is
+`~/.config/herdr/sessions/<herdr_session>/herdr.sock` unless `herdr_socket` names another (herdr's default
+session, `default`, keeps herdr's own socket), so its panes open in a terminal window of their own, apart
+from yours and from magnum's review panes, which stay in your session. It talks to your session too: the
+copies' guard reads its panes, and the alerts' toasts show there. Like the review daemon, it loads its
+prompts once, at its start, and a build with a new factory migration (`0004_screen_reads.sql` is the newest)
+runs no factory command until the factory daemon restarts on it: the factory CLI and the screen refuse to
+migrate the factory registry under an older factory daemon, so run `magnum factory install` first. The
+factory never migrates magnum's registry, which it only reads for the local review. The commands:
 
 | Command | What it does |
 |---|---|
@@ -3543,15 +3557,17 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 | `magnum factory status [--json]` | Whether the factory daemon runs, and each task's key, kind, state, stage and what it waits on. It never creates the registry, and refuses to migrate one while an older factory daemon runs on it (`magnum factory install` restarts it on the new build, which migrates). |
 | `magnum factory start <key, link or prompt> [--kind bug\|feature\|chore] [--repo owner/name]` | Hand the factory daemon a task and print its answer (it waits up to 30 seconds; without a factory daemon the request stays queued, and expires after 30 minutes). A Jira key (`PR-12345`) or a Jira link (`/browse/<KEY>` on the `[jira]` site, or a tracker template's link) at the start is a task of that ticket, which the daemon reads itself; the words after it are your guidance for every agent (`magnum factory start PR-12345 only the refund path`). Anything else is the task in your words, and a key or a Jira link anywhere in them counts too when Jira knows the key (`magnum factory start fix the expiry date in PR-12345, only the refund path`): the task follows that ticket and the whole text is its guidance, nothing cut out. A word such as `UTF-8` or `ISO-8601` that Jira does not know stays a word of the prompt, with no error; several known keys make a task from your words whose first question asks which of them it is, the first recommended; the first 3 keys of the text are read from Jira and no more; a GitHub PR or Actions link in the middle of the text stays words (only a link at the start is adoption or a CI task). A key that has a task (not done or stopped) gets that task back, `PR-12345 already runs as task 7` or `PR-12345 has PR #4527`, and no second one; a GitHub PR link (adoption) and an Actions run link (a CI task) come in milestones 2 and 3. `--kind` names the kind of task, else the daemon picks it (below); `--repo` names the `[[factory.repo]]` when there is more than one. |
 | `magnum factory answer <task> [--json <file> \| [--revision <r>] --question <n> --text <file>]` | Answer a task's questions, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a flag it prints the questions of the task's newest revision, numbered from 1, with their options and the recommended one. `--json` sends a batch, `{"revision": 3, "answers": {"1": "Seven days before it expires", "2": "ask:rev-ann"}, "needless": {"3": "obvious"}}`: an answer is an option's label or your own words, `ask:<login>` asks someone else, and `needless` flags a question with the key of your reason (`ask:` takes a GitHub login, without the `@`, and never yours, or the ticket's reporter's display name as the screen offers it, `ask:Rev Ann`). `--question <n> --text <file>` answers one question with the file's text (`-` for stdin), such as the answer of the person you asked: question `n` of `--revision <r>`, the revision that asked it, wherever a newer revision carried it over (the daemon's answer to an ask prints both numbers); without `--revision`, of the newest revision. |
-| `magnum factory decide <task> [push\|send_back\|drop --card <revision> [--reason <key> --note <text>]]` | Decide on a task's ready card, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a choice it prints the card: its revision, the PR's title, the branch and its head, the FLAGS line, the local review's end and the y/N sentence of a push (`Push <branch> and open the PR? This frees <copy>, and <task> starts. y/N`). A choice names `--card`, the revision you read: a card drawn since is refused, and the daemon refuses a decision whose branch, report, PR body or diff changed after its card was drawn (`the branch changed after you read it`) and draws the card again. `push` publishes the head the card shows; `send_back` returns the task to its writer with `--reason`, the key of your reason (a word: lowercase letters, digits, `-` and `_`), and `--note`, your note, which the writer reads from `send-back-<revision>.md` in the task's directory, never in its prompt; `drop` stops the task, freeing its copy and keeping its branch. |
-| `magnum factory retry <task>` | Let a task that waits on you (NEEDS YOU) go on at its stage, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Nothing is skipped: the stage's own checks run again (a file you fixed or had its agent write, the local review's fresh loop after it stopped for you, what a check kept for you, the publish's checks before any step). A prompt whose delivery is unknown is still sent to nobody (let it go on the screen), and a task Codex never works on stays so. The daemon refuses a task that does not wait on you (`<task> is active, not waiting on you: there is nothing to retry`), and one whose questions wait for your answers, naming `magnum factory answer <task>`. |
+| `magnum factory decide <task> [push\|send_back\|drop --card <revision> [--reason <key> --note <text>]]` | Decide on a task's ready card, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Without a choice it prints the card: its revision, the PR's title, the branch and its head, the FLAGS line, the local review's end and the y/N sentence of a push (`Push <branch> and open the PR? This frees <copy>, and <task> starts. y/N`). A choice names `--card`, the revision you read: a card drawn since is refused, and the daemon refuses a push or a send back whose branch, report, PR body or diff changed after its card was drawn (`the branch changed after you read it`) and draws the card again; a drop it takes whatever the card shows now. `push` publishes the head the card shows; `send_back` returns the task to its writer with `--reason`, the key of your reason (a word: lowercase letters, digits, `-` and `_`), and `--note`, your note, which the writer reads from `send-back-<revision>.md` in the task's directory, never in its prompt; `drop` stops the task, freeing its copy and keeping its branch. |
+| `magnum factory retry <task>` | Let a task that waits on you (NEEDS YOU) go on at its stage, as the factory's screen does (`<task>` is its id or its Jira key; the command waits for the daemon's answer as `start` does). Nothing is skipped: the stage's own checks run again (a file you fixed or had its agent write, the local review's fresh loop after it stopped for you, what a check kept for you, the publish's checks before any step). A prompt whose delivery is unknown is still sent to nobody (the daemon's `let_go` request lets one go, but no key or command of milestone 1a sends it yet), and a task Codex never works on stays so. The daemon refuses a task that does not wait on you (`<task> is active, not waiting on you: there is nothing to retry`), and one whose questions wait for your answers, naming `magnum factory answer <task>`. |
 | `magnum factory stats [--since 7d] [--json\|--markdown]` | What the factory still asks of you, per task, from the evidence records of its registry (the command only reads them; it creates no registry and refuses to migrate one under an older factory daemon, like `status`). Per task: your typed messages (the task's text, a start's guidance, what you typed in a pane or said in one line, a send-back's note; the task's first message counts, as the first message of every session does in the baseline), the step-starting ones among them (the target is zero; a `retry` counts as one, as you start a step by hand, and the message that starts the task never does, however it is recorded (a prompt's text, or the guidance after a key): it is the one message the factory needs, typed and no step start; guidance or a send-back's note given later keeps its class), your approvals, corrections and access messages, apart from all of them the turns typed in a pane that nothing proves you typed (`Origin unknown`, JSON `unknown_origin`: kept for evaluation only, never a typed message or a step start), your answer batches (the revisions of questions you answered), your card decisions, the local review's rounds, your time on cards (for each decision, from the card shown to the decision, and for each answered batch of questions, from shown to answered, at most 30 minutes each so a card left open and idle does not count; a card never shown has none), how long the task waited on you (`WaitedOnYou`: asleep or not, so not your time) and how long it took to reach its ready card. A message's class is the one the engine stored when it recorded the words (`Classify`, the same classifier as the baseline's; answers get one too, decisions none), else `Classify`'s reading of them. `Classify` reads acts only: "log in to the sandbox" is access, "fix the login page" is information, "push it" starts a step and "the push failed" does not. The markdown (the default; `--markdown` spells it) sets each task against the baseline and says whether its typed and step-starting counts lie below, within or above the baseline's middle half; `--json` has the same data, durations in seconds. `--since` takes `7d`, `36h`, `90m` or a date and keeps the tasks started since (default: all). |
 | `magnum factory baseline --transcripts <dir> --labelled <file>` | Freeze, once, before the first task, how much you typed per ticket before the factory, to `factory/baseline.json` in the data directory. `--transcripts` is a directory of your old Claude Code transcripts and Codex rollouts (every `.jsonl` below it; a file named `rollout-*` is Codex's): a session belongs to the ticket whose key (a tracker of `[board]` or `[[repo]]` `trackers`) its path or first messages name, and the sessions of one ticket are one ticket (a count per session would flatter the factory), the oldest session first: the first message of a ticket counts as typed and never as a step start, as the message that starts a task does in `stats`, while the first message of a later session keeps its class (a session opened only to start the next step is what the measure counts); a transcript with no message of yours or no key is skipped and counted (what Claude Code writes itself, a command's output and a compaction's summary, is no message of yours, and neither is the record of a slash command magnum types: `/compact`, `/model`, `/rename`, `/exit`, which the factory drops from its panes alike). `--labelled` is a JSON-lines file of messages you labelled by hand, `{"text": "open PR", "class": "step_start"}` (classes `step_start`, `approval`, `correction`, `access`, `info`; about 100 of them): `Classify`, the one classifier that counts your step-starting messages here and in `stats`, is scored on it, its accuracy is kept in the baseline, and under 90% the command warns. Keep both outside the repository. It refuses to write when `baseline.json` exists, before it reads anything, and never rewrites it: to freeze another, move the old file away yourself. |
 | `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one says so, naming the first one's pid, and exits 0 before it opens a log or a store, so it migrates nothing and launchd does not restart it. |
 
 **The factory's screen.** `magnum factory` with no command, in a terminal, shows one line per task, grouped
 by who it waits on (NEEDS YOU, WAITS ON OTHERS, DONE TODAY): what it waits on and, when it needs you, your
-move. The window title counts the tasks that need you (`factory · 3 need you`, `factory · nothing waits on
+move. When the rows do not fit, the last group folds first, from its end, into a line such as `+2 more:
+PR-12345, PR-12346`; NEEDS YOU and the selected row never fold, and when folding is not enough the list
+scrolls. The window title counts the tasks that need you (`factory · 3 need you`, `factory · nothing waits on
 you`), and the screen tells the factory when its terminal gains or loses focus. Home only opens cards
 (`enter`) and steps into panes (`o`); anything that leaves the Mac, starts or stops agents or frees a copy asks y/N in the card's footer, only `y`
 confirms, and any other key (or a click) cancels; quitting with a question up drops it, so a `y` typed
@@ -3559,12 +3575,12 @@ after `q` or `ctrl+c` starts nothing. Answers and stepping into a pane ask nothi
 
 | Where | Keys |
 |---|---|
-| Home | `j k g G` move; `enter` the row's card (its decision card when it needs you, else its task card); `a` the oldest decision card, then the next; `o` step into the pane the row waits on; `n` new task; `!` the action log and every alert with its time; `?` the keys and the words of the screen; `,` settings; `m` mouse; `ctrl+r` refresh; `q` quit |
-| Question card | `j k` move the mark (it starts on the recommendation); `1-9` answer and move on; `enter` the marked one (with no recommendation, pick one first); `−` (or `-`) then a digit flags the question needless, with its reason; `backspace` the previous question; `esc` back, the answers kept (home's line for the task then counts them, `2 answered, 1 to go`, and its rule
+| Home | `j k g G` move, `pgdn pgup` (or `space`, `ctrl+d`, `ctrl+u`) a page; `enter` the row's card (its decision card when it needs you, else its task card); `a` the oldest decision card, then the next; `o` step into the pane the row waits on; `n` new task; `!` the action log and every alert with its time; `?` the keys and the words of the screen; `,` settings; `m` mouse; `ctrl+r` (or `f5`) refresh; `q` quit. Every card takes `o` (the task's pane), `!`, `?`, `,`, `m`, `ctrl+r` and `q` too, except while you type a line in its footer |
+| Question card | `j k` move the mark (it starts on the recommendation); `1-9` answer and move on; `enter` the marked one (with no recommendation, pick one first); `−` (or `-`) then a digit flags the question needless, with its reason (`1` the ticket answers it, `2` the code answers it, `3` any answer works, `4` you asked it before); `backspace` the previous question; `esc` back, the answers kept (home's line for the task then counts them, `2 answered, 1 to go`, and its rule
 says `you answered 2 of 3 · nothing sent yet`). "Type your own answer" takes a line typed in the footer, at
 whose end the cursor stays. Nothing is sent before the recap's `y`, which sends the batch, once; on the recap `1-9` changes an answer. A batch for questions that changed meanwhile is refused and nothing of it is kept: the recap says so, and `enter` shows the question open again. Each question of a ticket task offers "Ask <reporter> in Jira (the task waits)", the ticket's reporter (a question asked already keeps whom it asked); asking someone shows the Jira comment the factory drafts for them |
-| Ready card | `d` the diff in the pager (the recommendation shows after it); `j k` move the mark (none until you move it or read the diff); `1` push + PR (y/N: "Push without reading the diff?" before `d`; the question names the copy the push frees and the queued task that then starts); `2` send back (a reason's digit, then a one-line note, then y/N; a note answered `n` comes back with its reason); `3` drop (y/N); `enter` the marked one. A card whose conflict sent the task back offers no push. The decision carries when the card was shown, when the diff was first read and for how long; a card the factory draws again for a new head is unread again |
-| Task card | `j k` move; `d` the diff; `r` retry, only for a task a retry lets go on (y/N); `x` drop: stop its agents, free its copy, keep the branch (y/N); `o` step into its pane; `esc` back |
+| Ready card | `d` the diff in the pager (the recommendation shows after it); `j k` move the mark (none until you move it or read the diff); `1` push + PR (y/N: "Push without reading the diff?" before `d`; the question names the copy the push frees and the queued task that then starts); `2` send back (a reason's digit, `1` wrong cause or fix, `2` changed too much, `3` missed what I said, `4` tests too thin, then a one-line note, then y/N; a note answered `n` comes back with its reason); `3` drop (y/N); `enter` the marked one. A card whose conflict sent the task back offers no push. The decision carries when the card was shown, when the diff was first read and for how long; a card the factory draws again for a new head is unread again |
+| Task card | `j k g G` move; `d` the diff; `r` retry, only for a task a retry lets go on (y/N); `x` drop: stop its agents, free its copy, keep the branch (y/N); `o` step into its pane; `esc` back |
 | New task | your Jira key, link or words; `enter` start (y/N, naming the kind, the task and its agents, or when a queued task starts); `ctrl+j` a new line; `ctrl+g` your editor (`$VISUAL`, else `$EDITOR`); `tab` the kind; `esc` back, the draft kept. A key Jira does not know is said first (`PR-12399 is not in Jira`), and `enter` then asks "Start from your words only?": the whole text becomes the task, the key kept as words. A question is asked only for the text `enter` was pressed on. Above the question, what the factory read: the ticket, your guidance, the links (a Jira link is its key; a PR link's adoption and a run link's CI task come in milestones 2 and 3) and what else touches the work (OVERLAP) |
 
 The mouse: the wheel moves, a click selects a row and a double click opens it, and a right click opens a menu
@@ -3583,6 +3599,25 @@ in the task's copy (no external diff, no textconv), the flagged files first, and
 a short diff (`-+F` after your `LESS`). Without a factory daemon a request waits queued, and the footer says so.
 The screen's own requests (its focus reports, the previews of what you type) are pruned a day after their answer,
 and a preview keeps none of your text once answered. `,` opens the settings screen, as on the board.
+
+The daemon, not the screen, tells you when a task moves into NEEDS YOU, so the screen may be closed, and so it
+does when the factory itself needs you (an infrastructure or herdr hold that lasts 30 minutes, a disk below half of
+`min_free_disk_gb`). Each alert is one toast in your terminal (herdr's notification on your session, a macOS
+notification through osascript when herdr cannot show it), the alerts within 2 minutes of the first merged into
+one, `factory: 3 need you · PR-12345 questions · PR-12360 ready to push`, whose count is everything that waits on
+you when it fires, the factory's own blockers included. A task's workspaces in the factory's herdr session also
+carry its sidebar token, `needs you: <what>` while it waits on you and empty once it does not, sent again every
+12 hours while it stands. The toasts hold in `[daemon] quiet_hours`, while the factory screen has your focus, and
+while you are in a factory pane: herdr's focus on one, for at most `[daemon] human_cooldown` after herdr last showed
+you at work in a factory pane (herdr's focus alone proves nothing of you, so a pane you only read holds no toast).
+A held alert fires when the quiet hours end, or 2 minutes after you left, merged with the rest, and only while its
+task still waits on you for the same kind of wait (`3 questions` and `1 question` are both questions); one that no
+longer stands is dropped, never shown. `[herdr] notify = false` turns the factory's toasts off too (each alert is
+still recorded). `!` lists every alert, toast, hold and drop with its time. `factory/alerts.json` beside
+`factory.db` keeps how far the delivery went, and the agents store each toast's dedupe key, so a restart neither
+repeats an alert nor loses one; with no readable `alerts.json` (a first start), an alert older than a day that no
+longer stands is settled in silence, and one that stands is delivered. A toast that fails is tried again after 1
+minute, then after twice as long each time, up to 15 minutes.
 
 A start writes the task's data files to its directory (`factory/tasks/<id>/` in the data directory), which
 its agents read as data: `ticket.md` (the ticket as a round's judge gets it; beside it `ticket-reporter.txt`, the
@@ -3785,6 +3820,24 @@ task when its card names it (the local branch keeps its name). Then the PR is
 linked, the task is published, its agents are parked, its copy is released and the queued task behind it
 starts. The factory sends magnum no review request: the PR is not a draft, and magnum reviews it by itself.
 
+Factory mode: no agent of the factory, and no skill an agent follows, pushes or opens a PR. Every factory prompt
+carries the rules of `factory-shared.md`: no interactive question dialog (an agent writes its questions to its file
+and ends its turn), no push and no PR, not even a draft (an agent that follows a skill stops before the skill's push
+or PR step), no shared database or console, and no production. Only the publish effect pushes, after your `y`. The
+agents act as you on this Mac, so these rules stop mistakes, not a determined agent: what stops damage is on
+GitHub, the base branch's protection, its required reviews and no force push.
+
+No factory agent and no factory command connects to a shared database or console of any environment. A copy uses
+only its own local databases (its `databases`, in turn through `magnum db-lock`), the prompts forbid the rest, and
+the deny list refuses `kubectl exec`, gh-ost and the repository's `consoles` in every command the factory runs.
+Migrations are named, never run on a shared database: the precheck and the ready card's FLAGS line list every
+migration the branch adds, whether it uses the `ghost_marker` and on which environments, its tables and their
+sizes (`table_stats`), and flag a large table (`large_table_rows`) changed without gh-ost and without an online
+algorithm, a gh-ost migration of two tables or more, and a migration with no way back. A flag informs and never
+fails the precheck; the precheck runs its `migrations` commands for the others in the copy, and none for a gh-ost
+one (a skipped check: a person runs it on its environments). You migrate every environment by hand, production
+included; the runbook cards that say how come with the stagings, in a later milestone.
+
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the
 first tick after the wake do not count. An SSH, DNS or TLS failure, a failed MySQL ping, or the same failure
@@ -3810,15 +3863,18 @@ the workspace the cut one left by its label. Each prompt of unknown delivery (th
 it and saving that it went) is read once in its agent's transcript: one that arrived is watched, one a second
 read 2 minutes later proves never arrived goes once more, and any other is sent to nobody: the task waits
 (`agent: prompt delivery unknown (<role>)`), and after 15 minutes needs you to look at the pane, naming every
-such prompt; not while the proof that it never arrived runs; a proof's "no" (the prompt goes once more) or a later read that finds the prompt (its run is watched, nothing is sent) brings the task back to work. A prompt you let go is never sent again; when its role's turn was that prompt, nothing watches it,
-so the task needs you until the role's file is written (`the prompt to <role> was let go, and its turn is not
-watched: …`), and your retry lets it go on. An effect in flight (a push, a PR) runs its own guard again before
+such prompt; not while the proof that it never arrived runs (a proof whose reads keep failing holds the task no
+longer after 5 minutes); a proof's "no" (the prompt goes once more) or a later read that finds the prompt (its run is watched, nothing is sent) brings the task back to work. A prompt you let go is never sent again; when its role's turn was that prompt, nothing watches it,
+so the task needs you until the role's file is written after that prompt (`the prompt to <role> was let go, and
+its turn is not watched: …`): at the coding stage's end, a commit on the task's branch or a `proof.json` written
+since the prompt (in a local review's fix turn, its reply too), as a file of an earlier turn ends nothing. Then your
+retry lets it go on. An effect in flight (a push, a PR) runs its own guard again before
 any step. The event log says what each step found, and a restart keeps it.
 
 What you type into the factory's panes is recorded as your input (`pane_typed`, in the factory's registry only),
 once each: about once a minute, the observe pass reads the transcript of each agent of a task that changed since,
 in the same read that settles a prompt of unknown delivery, and one last time an agent whose pane ended, whether a
-read saw it live or not (one that ended while the daemon was down too; a last read that fails is tried again). A
+read saw it live or not (one that ended while the daemon was down too; a last read that fails is tried again on the next pass). A
 conversation resumed in a new pane (after a park or a lost pane) is read once, through its newest pane, and each of
 its turns is proven by the pane that held it when you typed it, never by another. A
 user turn counts unless it is a prompt of the task's ledger (by its hash), the kind's after-deny prompt, the record
@@ -3835,9 +3891,10 @@ read, and what herdr showed before a restart is forgotten, so such a turn is `un
 names), a long paste (more than 40 lines or 4000 bytes) keeps only why it was dropped, and a turn within 5 minutes
 of a wait on you for access (`access needed: …`) keeps only that, as it may hold a code or a password. A turn is
 known by its role and the time you typed it, so a restart records none twice, and the transcripts are read again
-after it. One case loses a pane's last read: the panes of a task are read until 10 minutes after the task is done,
-stopped or failed, so when the daemon stops shortly after a task's end and is back only after those 10 minutes, what
-you typed into its panes after their last read is not recorded.
+after it. Two cases lose a pane's last read, as the panes of a task are read only until 10 minutes after the task
+is done, stopped or failed: when the daemon stops shortly after a task's end and is back only after those 10 minutes,
+and when a last read keeps failing past them. What you typed into its panes after their last read is then not
+recorded.
 
 ## Daily use
 

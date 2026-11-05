@@ -22,7 +22,8 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"the task's id or its Jira key, and the command waits for the daemon's answer as `start` does. The "+
 			"stage's own checks run again (a file you fixed, the local review's fresh loop after it stopped for you, "+
 			"what a check kept for you, the publish's checks before any step); a prompt whose delivery is unknown is "+
-			"still sent to nobody (let it go on the screen), and a task Codex never works on stays so. A task that "+
+			"still sent to nobody (no key or command of milestone 1a lets one go yet), and a task Codex never "+
+			"works on stays so. A task that "+
 			"does not wait on you is refused, and so is one whose questions wait for your answers (`magnum factory answer`).",
 		func(pos []string) int { return runFactoryRetryCmd(c, pos) })
 }

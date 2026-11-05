@@ -107,7 +107,8 @@ func newReviewRig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.Local
 	return r
 }
 
-// restart is the rig's restart with the review's deps on the new engine.
+// restart is the coding rig's restart: the review's deps reach the new
+// engine through r.deps, where the rig put them.
 func (r *reviewRig) restart() {
 	r.t.Helper()
 	r.codingRig.restart()

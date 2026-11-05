@@ -351,7 +351,6 @@ func (c *copySet) spawnServer(ctx context.Context, dir string, env map[string]st
 		return 0, err
 	}
 	args := append([]string{"-c", serverShell, "sh", pidfile, "mise"}, slots.MiseExecArgs(dir, env, command)...)
-	//nolint:gosec // G204: the operator's [[factory.repo]] server command, run in the copy as the pool's scripts are
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), "/bin/sh", args...)
 	cmd.Dir = dir
 	unset := c.unset()

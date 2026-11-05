@@ -37,8 +37,8 @@ func newFactoryStartCmd(c *Context) *cobra.Command {
 			"\"PR-12345 only the refund path\". Anything else is the task in your words; its first question asks "+
 			"which Jira issue it is. A key or a Jira link elsewhere in your words counts too when Jira knows the "+
 			"key (\"fix the expiry date in PR-12345, only the refund path\"): the task follows that ticket and the "+
-			"whole text is its guidance; a word such as UTF-8 stays a word (a bare key of a project the trackers "+
-			"do not name is never read from Jira), and several known keys make the first question ask which of "+
+			"whole text is its guidance; a word such as UTF-8 stays a word (when the trackers name Jira projects, a "+
+			"bare key of another project is never read from Jira), and several known keys make the first question ask which of "+
 			"them it is. The daemon picks the kind of task from the Jira type or your words (--kind "+
 			"picks it), names the branch <login>-<KEY>-<words>, and starts the task at once, or queues it while "+
 			"memory is full or max_active tasks are at work. A key that has a task gets that task back, and no "+

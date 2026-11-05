@@ -2,6 +2,7 @@ package magnum
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -64,8 +65,18 @@ func TestAgentsLayoutTableNamesEveryInternalPackage(t *testing.T) {
 		}
 	}
 	for _, n := range named {
-		if !slices.Contains(packages, n) {
+		if !slices.Contains(packages, n) && !subpackage(n, packages) {
 			t.Errorf("AGENTS.md's layout table names %s, which is not a package", n)
 		}
 	}
+}
+
+// subpackage reports whether n is a Go package below one of packages: a row
+// may name one of its own ("internal/factory/stats"), which no row has to.
+func subpackage(n string, packages []string) bool {
+	if !slices.ContainsFunc(packages, func(p string) bool { return strings.HasPrefix(n, p+"/") }) {
+		return false
+	}
+	gofiles, err := filepath.Glob(filepath.Join(n, "*.go"))
+	return err == nil && len(gofiles) > 0
 }

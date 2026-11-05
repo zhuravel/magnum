@@ -14403,6 +14403,513 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestNoStoppedLineWhileTheApprovalStands uses a review a person dismissed. The two tests of an approval by
   hand after a failed post now see no hold.
 
+## The factory (2026-11-03)
+
+`magnum factory` and its first milestone (1a); the design is
+[the factory's spec](superpowers/specs/2026-11-03-factory-design.md).
+
+- **The factory is a second daemon in the magnum binary, with its own registry, launchd job and herdr
+  session** (2026-11-03, the operator's choice, spec section 4). `magnum factory` takes a Jira key or a
+  free prompt, investigates with several agents, asks you in one batch what no agent can answer, has one
+  writer write the change test first, runs magnum's review on it locally and, on your `y`, pushes the head
+  and opens a PR ready for review. The merge stays yours. It reuses the herdr client, `agents.Manager`,
+  GitHub, the identities, usage, notify and the TUI's parts, and restarts on its own cycle. Its registry
+  (`factory/factory.db`) has its own migrations and never migrates magnum's, which it opens with every
+  migration refused, so a factory release forces no drain of reviews. Its agents run through
+  `agents.Manager` over an agents store of its own (`factory/agents.db`), one owner row per task, as the
+  retro's pane agent does; the task's real state is the factory registry's. Its panes run in a named herdr
+  session, `factory`, a herdr server of its own, so they open in their own terminal window. Rejected: the
+  factory inside the review daemon (a fix job at work never survives a daemon restart, which comes about 3
+  times a day; every run, session and slot row needs a PR; a factory fault could stop reviews); a new
+  repository (Go keeps `internal/` inside one module, so about 15k lines of agent code would move first);
+  and a screen over a colleague's prototype (no backend API, about 12 changes a day, its control agent's
+  answer counts as the user's yes, and it does not run QA again after a new commit). For the screen, one
+  list grouped by who each task waits on won. A list with the selected task's details always open lost
+  (about 400 words on screen, one tab at a time), and so did a 13-cell stage strip on every row (a code of
+  dots to learn); their Jira input, staging table, task card and conflict card were kept. For the agents,
+  extracting a task-neutral owner interface from `internal/agents` first lost (it changes the package
+  every review uses before the factory knows what it needs; a later milestone), and so did a new agent
+  runtime on the herdr client alone (it loses the trust, permission, health and recovery handling magnum
+  learned the hard way).
+- **The factory runs magnum's full review on the change locally, until nothing blocks, before the PR
+  exists** (2026-11-03, the operator's decision, spec 6.5). A local round is a blind dry run of the
+  repository's watch's review roles in the task's copy, as a `magnum eval` replay runs one
+  (`evalrun.RunLocal`): no GitHub call, a synthetic PR number (900000 plus the task's id times 10 plus the
+  round), a fresh scratch directory and agent tag, and the factory's base always (`post-review
+  --local-base`). Its judge reads the title, the body and the ticket from files: a `local` block in
+  `judge-shared.md` behind `{{if .Local}}`, a "Local round" section in the skill (343 bytes, so the
+  skill's cap is 39,194), and `claude-review-local.md` without `/code-review <url>`. The rounds run this
+  build's prompts and skill as a review candidate the factory daemon writes at its start, which magnum's
+  live rounds never read, and the live prompts render as before (the judge goldens are unchanged). The
+  factory reads the result itself, by magnum's own rule (`roundBlocks`): a P0, P1 or P2, new or still
+  open, or the verdict `blocking` blocks, whatever the planned event says. A round that ended needs
+  attention, blocked, error, timeout or refused, or whose result does not parse, is review unavailable,
+  never clean: the task needs you and nothing is pushed. An error, a timeout and a clean round without a
+  reviewer's report each run once more first. A blocking round hands the writer its findings for one fix
+  turn; a decline counts only with the risk of the suggested change, and a product question of blocking
+  severity joins the task's question batch. At most `cycles` rounds (3); a finding that comes back twice
+  after its fix is a doubt, and a loop that only doubts block ends on the oscillation. The ready card
+  lists what is left; it does not block. Rejected: only P0 and P1 block (it contradicts magnum's own
+  blocking rule), the single Codex review of the first draft, and cutting other skill text to pay for the
+  local section (a cut changes live reviews outside the learning loop's gate). Tests:
+  TestBlocksOnP0ToP2NewOrOpen, TestBlocksOnABlockingVerdict, TestBlocksNeverReadsTheEvent,
+  TestUnavailableOutcomesAreNeverClean, TestReviewUnavailableNeedsYouAndPushesNothing,
+  TestALocalRoundTwiceWithoutAReviewerIsUnavailable, TestAFindingThatReturnsTwiceAfterItsFixBecomesADoubt
+  and TestLiveJudgePromptsRenderUnchanged.
+- **The factory, never an agent, pushes the approved head and opens the PR ready for review under your
+  login** (2026-11-03, spec 6.6 and 13.2; the operator chose ready for review over a draft). Your `y` on
+  the ready card binds to the head, the hashes of `report.md` and `pr-body.md` as the card showed them,
+  and the diff's id (`gitx.OwnDiffID`, which a merge of the base leaves as it was unless it changes a line
+  of the change's own). A push or a send back whose card changed is refused and the card is drawn again; a
+  drop is bound to no card. The publish is one effect per head, `publish:<task>:<sha>`. It checks the
+  card's conditions again, checks that gh acts as your login (`gh api user`), reads the remote branch and
+  the branch's PRs (the repository's own only), pushes with a lease on the expected head
+  (`--force-with-lease=refs/heads/<branch>:<expected>`, which refuses a commit that does not descend from
+  it), opens the PR with `gh pr create` and the drafted body, and reads it back: its author, base, head
+  and ready state must be what you approved, or the task needs you. A resume never forces: a remote branch
+  at a head the factory did not push, or a PR of the branch that is not the approved one, needs you,
+  naming it. The push and every gh call run as you only, the gh identity the local review runs as, with
+  your gh config dir and none of `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
+  `GITHUB_ENTERPRISE_TOKEN` from the daemon's environment: the PRs are yours until the factory's own App
+  comes in milestone 2. The branch pushed is the task's, or `<login>-<KEY>-<slug>` for a task whose key
+  was linked after its branch was made (`tasks.remote_branch`, migration 0003); the title is `<KEY>
+  <title>`, else the title, and both are the card's, so a key linked after the card changes neither. A
+  published task frees its copy, and nothing more runs on it in milestone 1a. The factory sends magnum no
+  review request: the PR is not a draft, so magnum reviews it by itself. Rejected: the writer pushing (an
+  agent's push step can push what you did not approve), a draft PR (the operator's call), and a branch and
+  title computed again at the publish (the push would go under a name the y/N sentence did not show).
+  Tests: TestRecordDecisionBindsTheApprovalToTheHeadAndHashes,
+  TestPushIsRefusedWhenTheBranchMovedAfterTheCard, TestPushIsRefusedWhenThePRBodyChangedAfterTheCard,
+  TestPublishRunsOnceForOneHead, TestPublishStopsWhenThePRIsNotWhatWasApproved,
+  TestAResumedPublishNeverForces, TestADifferentActiveGhAccountStopsThePublishBeforeAnyPush and
+  TestAKeyLinkedAfterTheCardChangesNothingThePushPublishes.
+- **No factory agent or command touches a shared database or console, and you migrate every environment by
+  hand** (2026-11-03, the operator's decision, spec 8.4). A gh-ost migration stops the deploy's migrate
+  step on the environments it names until a person runs gh-ost there, and only the operator migrates
+  production. A colleague's prototype ran the migration's code in a console pod with the operator's
+  cluster login to get the gh-ost commands: that runs a migration's data change on a shared database
+  before anyone reviewed it, and writes the database password into a file. So a copy uses only its own
+  local databases (in turn, through `magnum db-lock`), the prompts' rules forbid a remote console,
+  `kubectl exec`, gh-ost and another machine's database URL, and every command the factory runs passes its
+  deny list, which refuses `kubectl exec` (and attach, debug, run, cp, port-forward), gh-ost and the
+  repository's `consoles` however a command wraps them (`denied: <why>`, a configuration problem that goes
+  to you). The migration-safety lint moved from milestone 1b into 1a, because the factory writes
+  migrations from its first task: the precheck and the ready card's FLAGS line name every migration the
+  branch adds, its `ghost_marker` environments, its tables and their sizes (`table_stats`), and flag a
+  large table changed without gh-ost and without an online algorithm, a gh-ost migration of two tables or
+  more, and a migration with no way back. A flag informs and never fails the precheck, which runs no
+  command for a gh-ost migration (a skipped check). The runbook cards for every environment come with the
+  stagings (milestone 4). Rejected: getting the gh-ost commands from a console as the prototype does, and
+  a precheck that fails on a flag (only a person can weigh one, which the card asks for). Tests:
+  TestTheFactoryNeverRunsARemoteConsoleOrGhost, TestAPrecheckCommandTheDenyListRefusesFailsWithTheReason,
+  TestEveryFactoryPromptCarriesTheFactoryModeRules, TestScanMigrationsNamesTheGhostEnvironments,
+  TestScanMigrationsFlagsALargeTableWithoutGhostOrAnOnlineAlgorithm,
+  TestScanMigrationsFlagsTwoTablesInOneGhostMigration and TestScanMigrationsFlagsAnIrreversibleMigration.
+- **The factory's registry is a file of its own with magnum's conventions, and keeps the evidence from the
+  first task** (2026-11-03, spec 5 and 11.1). `factory/factory.db` holds the tasks, attempts, questions,
+  decisions, the prompt ledger, effects, events and requests, with its own migration list run by the store
+  package's runner (all pending migrations in one transaction, as for magnum's registry, so a second
+  opener cannot apply one twice). It also keeps the evidence records from the first task on (spans, role
+  runs, inputs, review cycles and findings, artifacts, PR links, checks, suspensions), because evidence
+  not written at the time cannot be read later. A task is `published` while its PR is open, and `done`
+  means merged. A failed or published task still holds its Jira key and its PR: one key has one task that
+  is not done or stopped (a partial unique index), and `LinkPR` refuses a PR such a task holds for
+  another. Migrations 0001 and 0002 were edited in place during the milestone (the ledger's `abandoned`
+  verdict; `pr_links` without UNIQUE (repo, number), so milestone 2 can adopt a PR a stopped task opened):
+  no factory registry existed outside tests before the first live run. Gotcha: 0002 rebuilds `tasks` by
+  parking its rows in `tasks_old`, dropping and recreating `tasks` and filling it again, because building
+  a new table and renaming it fails at the commit under `defer_foreign_keys`. The factory CLI refuses to
+  migrate the file under a running factory daemon, as magnum's CLI does for its registry, and migration
+  0004 adds two indexes for the screen's reads. Rejected: the factory's tables in magnum's registry (each
+  factory migration would drain reviews). Tests: TestTheRebuildKeepsEveryRowOfAVersion1File,
+  TestAPublishedTaskHoldsItsKey and TestTheSchemaHoldsAPublishedKeyToo.
+- **`[factory]` is data, merged as the review roles are, with two Claude roles that take the Codex roles'
+  work** (2026-11-03). Its roles are `[[factory.role]]` session roles with two more keys the screen names
+  an agent by, `doing` and `why`: fields of `config.Role`, required only for factory roles, so `Roles
+  []Role` and `FactoryRole(name)` stay one type. Its kinds of task and their stages, copies, precheck and
+  stagings are configuration over a few generic stage types (`agents`, `gate`, `review`, `decision`,
+  `effect`). Layers merge key by key: a scalar replaces, a role named like one overrides the keys it sets,
+  a kind replaces that kind, `[factory.local_review]`, `codex_fallback`, `kind_by_jira_type` and
+  `kind_words` merge entry by entry, and repositories append. `fx-cause` and `fx-critic` run on Codex, so
+  `fx-cause-claude` and `fx-critic-claude` exist only to take their work through `codex_fallback` after a
+  refusal; no stage names them. An empty value in `codex_fallback` removes a built-in entry, and an entry
+  for a role that is not on Codex is a warning that it is unused, so a role can move to Claude. The bug
+  kind has a `reproduction` gate, and it keeps the critic stage for a wide change too (spec 6.2 names the
+  critic for features and chores; a wide bug fix gains from the same critic, and the operator asked for
+  extensive review). Rejected: a `FactoryRole` that embeds `Role` (the merge skips untagged fields, and
+  the later tasks' signatures would change), fixed recipes in place of configurable stages (the operator
+  chose lean and configurable), and an error for a `codex_fallback` key that is not on Codex (no config
+  could get rid of the built-in entry).
+- **The factory daemon heals its usual faults and starts no second copy of itself** (2026-11-03, spec
+  10.1, approved by default). It has its own launchd job (`zhuravel.magnum.factory`), pid, lock and log. A
+  second daemon finds the lock held and exits 0 before it opens a log or a store, so it migrates nothing
+  and launchd does not restart it every 10 seconds. A panic stops only its task's step, and a task's
+  second panic sends it to you; the calls outside a task's step (the observe pass, the watchdog, the
+  sweeps) are contained the same way. An infrastructure hold (an SSH, DNS, TLS or MySQL failure, or the
+  same failure on two tasks within 10 minutes) holds every stage at no cost, tries again after 2, 4, 8, 16
+  and then every 30 minutes however long it lasts, and needs you after 30 minutes. At most `heavy_stages`
+  heavy stages run at once, and a heavy slot is freed when its task panics, stops or leaves the stage. The
+  holds live in memory and are found again on the first tick after a restart; the daemon saves them to
+  `holds.json` for the screen. `magnum factory install` is the only restart in milestone 1a: it drains the
+  daemon (no new launch or effect starts, the tick ends) and launchd starts it on the new build, which
+  loads the prompts once, as the review daemon does. Rejected: exiting 1 on a held lock (launchd restarted
+  the second daemon every 10 seconds, and it migrated the stores before it found the lock). Tests:
+  TestFactoryRunRefusesASecondDaemon, TestAPanicStopsOnlyItsTask, TestAPanicInTheObservePassIsContained,
+  TestAnInfraHoldKeepsItsBackoffPastTwelveHours, TestAHeavyStageThatPanicsFreesItsSlot and
+  TestTheDaemonSavesItsHoldsForTheScreen.
+- **The factory's runtime sends a prompt again only on proof that it never arrived** (2026-11-04, Review
+  Focus 2). Each task has one owner row in the factory's agents store (repository `factory/<repo name>`,
+  number the task's id), and `agents.Deps.OwnerName` names the task in its agents' titles and pane labels
+  (`PR-12345` or `task 12`, never `PR #12`). Every prompt goes through the ledger first. It is `yes` once
+  the transcript shows it, `no` on an error that came before the send left or on the proof below, and
+  `unknown` for anything else (the daemon stopped between `Submit` and the `yes`, a herdr error after the
+  send). An unknown prompt is never sent again on its own: a read of the agent's transcript finds it (it
+  is watched as delivered), or a second read 2 minutes later, with the run and the session in agreement,
+  proves it never arrived (it goes once more). Else the task waits, `agent: prompt delivery unknown
+  (<roles>)`, and after 15 minutes needs you, naming every such prompt, but never while a proof is under
+  way (at most 5 minutes when its reads fail). A prompt you let go (`LetGo`, the `let_go` request, which
+  no key or command of milestone 1a sends yet) is never sent again. `agents.CodexUserTurns` reads the whole rollout, not its last 1 MiB, so a long turn cannot push the
+  prompt out of reach. The engine maps only the unknown delivery to NEEDS YOU; the stages map the stuck,
+  lost, no-progress, blocked and hooks-trust events. The watchdog's second step quits a hung agent hard
+  (`Manager.QuitHard`, never for a review pane), since `ParkHard` refuses an agent at work, and no step of
+  it quits a pane you are in. A Codex refusal (a cybersecurity or abuse warning) marks the task
+  Codex-never in the registry (`codex_never`, in any state, with retries and a fail event), which a
+  restart reads: its Codex sessions are quit hard and its Codex roles run as their Claude fallbacks for
+  good. Rejected: a resend of a prompt of unknown delivery (an agent would get it twice), and a
+  Codex-never mark in memory only (after a restart the factory probed a refused Codex conversation again:
+  an account risk). Tests: TestAPromptOfUnknownDeliveryIsNeverSentTwice,
+  TestAPromptIsSentAgainOnlyOnProof, TestAHerdrErrorAfterThePromptLeftIsNoProofItNeverArrived,
+  TestAProofWhoseReadsFailStopsHoldingItsTask, TestACodexRefusalSurvivesARestart and
+  TestACodexRefusalMovesTheRolesToClaudeWithNoRetry.
+- **The factory's copies are magnum's slots over the factory's own store, claimed off the loop and guarded
+  at each step** (2026-11-03, spec 7.1). A copy is a pool slot kept in `factory/agents.db`, so the review
+  daemon never sees it. A claim takes it with `Reserve` (the owner row's state stays) and records HEAD at
+  the task branch's tip as the copy's checkout. Its guard is magnum's slot guard over both herdr sessions,
+  the factory's and yours, with your workspace, tab and pane ids prefixed `yours:` because herdr numbers
+  ids per server and they collide; a factory pane in the copy that no session of the factory's is in holds
+  it too. The claim's destructive steps (`reset_db`, the `FLUSHDB` of the copy's 16 Redis databases, the
+  installs, the branch's creation) are steps of `slot:<copy>:claim:<n>` with begin, ok and fail events,
+  each after the guard. A claim can take most of an hour (a setup), so it runs off the loop, at most
+  `max_active` at once, and holds the copies' lock only to count and reserve. A guard's hold or a factory
+  pane in the copy is a wait, never a failure, tried again after 1, 2, 4 and then every 5 minutes; a stage
+  claims once and keeps the copy until the release. A release the guard refuses is a debt read from the
+  stores on each tick, also after a restart, tried again with the same backoff, with one alert after 30
+  minutes. Copy `{n}` gets `n*16` in `REDIS_DB_OFFSET`, and a pane's env carries it and never a secret.
+  magnum's slot release keeps `refs/magnum/pr/<n>` in the shared main clone when the row belongs to
+  another repository (a copy's release would have deleted the review daemon's ref of a PR with the same
+  number), and magnum's inventory leaves the databases of a `copy_name` alone. Rejected: a claim on the
+  loop (a setup would freeze every task), the copies' lock held for a whole claim (a release on the loop
+  would wait up to an hour), and the bare ids of both sessions (a copy could be reset under your agent or
+  console). Tests: TestAClaimRunsOffTheLoopAndTheTaskWaitsWhileItPrepares,
+  TestAGuardHoldDuringAClaimIsAWaitNotAFailure, TestAPaneOfTheFactorysSessionWithNoSessionRowHoldsTheCopy,
+  TestARefusedReleaseIsTriedAgainUntilTheCopyIsFree, TestAReleaseDebtSurvivesARestart and
+  TestAPaneCarriesItsCopysRedisOffsetAndNoSecret.
+- **One Jira key has one task, and a start answers at once while Jira and the overlap line wait**
+  (2026-11-03, spec 6.1). A key or a Jira link at the start makes a task of that ticket, which the daemon
+  reads into `ticket.md` (as a round's judge gets it); your words make `prompt.md`, the `ticket` artifact
+  of a task without a key, whose first question asks which Jira issue it is. A key that has a task (not
+  done or stopped) gets that task back and no second one. While Jira does not answer, the task waits at no
+  cost, tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours; it has a
+  kind (yours, or the one your words pick, which follows the ticket's type when Jira answers unless you
+  chose it) and a branch named by the key from the start. A branch is `<login>-<KEY>-<words>`
+  (`<login>-<words>` without a key) with `-2` when another task or the main clone (yours or origin's) has
+  the name, and the task's first claim creates it at `origin/<base>`. The overlap line (the commits and
+  PRs that name the key, the open PRs that change the report's files) is read off the loop after the start
+  has answered, and is advisory; a preview's overlap reads have 10 seconds and are kept 2 minutes for the
+  next previews. Rejected: the overlap read before the answer (a start held the loop for up to 2 minutes),
+  and a task that waits for Jira with no kind or branch (its first stage failed). Tests:
+  TestStartForAKeyThatRunsReturnsTheExistingTask, TestStartWhileJiraIsDownWaitsForJira,
+  TestAJiraWaitingTaskHasAKindFromTheStart, TestAJiraWaitingTaskHasABranchFromTheStart,
+  TestABranchYourCloneHasGetsANameOfItsOwn, TestTheOverlapLineNeverDelaysTheStart and
+  TestThePreviewsOfAKeyReadItsOverlapOnce.
+- **A Jira key found anywhere in a start's text counts when Jira knows it, and is never an error**
+  (2026-11-04, the operator's request, spec 6.1). A key or a Jira link in the middle of your words starts
+  a key task with the whole text as its guidance, read through the same Jira client and wait as a key at
+  the start. When the trackers name Jira projects, a bare key of another project is a word read from no
+  Jira, so `UTF-8` never waits; a Jira link counts whatever its project. The first 3 keys are read, all
+  within one 20-second budget. A 404 keeps the key a word with nothing said; any other refusal (a 403, a
+  401, a missing token file) is named in an info event, in the answer to `magnum factory start` and on the
+  preview's JIRA line, and the task goes on from your words. Silence (curl exits 6, 7 and 28, a 5xx, a
+  429, the budget running out) makes the task wait as a task of your words with no key yet; after 6 hours
+  without an answer, or with `[jira]` switched off, it goes on from your words. Several known keys make
+  the which-issue question with the found keys as its options. A found key that has a task returns that
+  task. A GitHub PR or run link in the middle stays words (adoption is milestone 2). The start's text is
+  recorded once, as the intake role's guidance for a key found at once and as the task's text for one that
+  waited, and counts as typed, never as a step start. Only a key at the start of the text keeps the error.
+  Rejected: an error for a found key Jira refuses (a broken Jira setup would block every prompt that holds
+  a key-shaped word), and a 6-hour NEEDS YOU for a text whose found keys Jira never answered (a key-shaped
+  word could hold a prompt start for 6 hours). Tests:
+  TestAKeyFoundInTheTextStartsAKeyTaskWithTheWholeTextAsGuidance,
+  TestABareKeyOfAnotherProjectIsAWordReadFromNoJira, TestNoMoreThanThreeFoundKeysAreRead,
+  TestAFoundKeyJiraRefusesStaysAWordAndNamesTheCause,
+  TestAFoundKeyThatJiraAnswersTooOftenOrCannotBeReachedWaits, TestSeveralKeysFoundInTheTextAskWhichIssue
+  and TestFoundKeysAreWordsWhenJiraIsOff.
+- **A factory stage passes on its end fact, never on an agent's "done"** (2026-11-03, spec 6.2). The
+  findings, the report, the critic's file, the PR body and the proof are files and results the factory
+  checks: newer than the stage's start, well formed, and for the report an `## Architecture decisions`
+  section, `## Helpers` and `## Files`, and `acceptance.json`. A role whose file is missing or malformed
+  gets one nudge naming the file and what is wrong, then the task needs you, `the <role> agent wrote no
+  valid <file>`. Each role writes its questions to a file of its own (`questions.json` for the judge,
+  `questions-<role>.json` for the others, the critic's among them), so parallel roles never write one
+  file, and the gate reads them as one batch. The factory prompts are parsed with `factory-shared.md`
+  (`PartialsOf`), a second shared file beside `judge-shared.md`, whose `rules` block carries the factory
+  mode. Their data holds paths, keys and commands only: no `Title`, because a ticket's title is ticket
+  text. A plan is wide, and gets the critic, when its Files name 3 or more files, a file under `db/` or a
+  security path; the security words err toward running the critic, so an unusual auth path can be missed.
+  On a Codex refusal the task's Codex sessions are quit hard (`QuitCodex`), since `Park` refuses an agent
+  at work and Codex-never must leave no Codex session working on the task. After a restart each role is
+  rebuilt from the state of its last ledger run in the agents store (`Runtime.RunState`), because a role
+  run's recorded outcome sticks (a pause, a go-on and a normal end still read `paused`). Rejected: an
+  agent's "done" message as the end (as for reviews, an agent's word is no proof), one shared questions
+  file (parallel roles would overwrite it), and the rebuild from the role runs' outcome (a second go-on
+  after a pause). Tests: TestAReportWithoutArchitectureDecisionsDoesNotPass,
+  TestAMissingFindingsFileGetsOneNudgeThenNeedsYou, TestTheCriticsQuestionsJoinTheOneBatch,
+  TestFactoryPromptsCarryNoTicketText, TestAWidePlanTouchesThreeFilesTheDatabaseOrSecurity and
+  TestARestartKeepsWhatTheEndFactsDecided.
+- **The factory asks you its questions in one batch per revision, answered as a data file** (2026-11-03,
+  spec 6.3 and 6.8). At the `no_open_questions` gate the questions of every questions file that the task
+  has not asked yet (by role and text) become one new revision, with the questions still open carried
+  over. A role that ends its turn with new questions in any stage suspends its stage instead of getting a
+  nudge, unless its end fact held (its questions wait for a later gate) or the end fact refuses the
+  questions file itself. Your answers bind to the revision you saw: a batch for questions that changed
+  since is refused whole, and `--revision` binds a single answer by role and text, wherever a newer
+  revision carried it. Answers go to `answers.md` (no prompt carries their words), and a role gets them
+  once per batch, by ledger time. An answer that is not the recommended option has the judge amend
+  `report.md` (`factory-amend.md`, a stage `prompt` key): the gate passes only on a report,
+  `acceptance.json` and `questions.json` newer than `answers.md`, whose time the daemon sets. The
+  `reproduced` gate passes only on an explicit `Reproduced: yes`, and `drop` stops the task at whichever
+  gate sees it. `ask:` takes a GitHub login (never yours) or the ticket's reporter's display name, keeps
+  its question open and drafts the Jira comment in the task's directory; the factory writes nothing to
+  Jira in milestone 1. An answer to "which Jira issue" that names a key links the task to it: a key
+  another live task holds is refused, the ticket is read before the next stage, and a key Jira cannot show
+  is unlinked and asked again with the cause; the read needs you after 6 hours of Jira's silence.
+  Rejected: a nudge for a role that asked (its questions need your answers, not another turn), the
+  answers' words in a prompt (prompts carry paths, never answer text), and a reproduction gate that fails
+  open on a Proof that does not say yes. Tests: TestTheCriticsQuestionsJoinTheOneBatch,
+  TestAQuestionInCodingSuspendsTheStageAndResumesIt, TestAnAnswerToAStaleRevisionIsRefused,
+  TestAnswersReachTheWriterAsADataFile, TestARestartBetweenTheAnswersAndTheResumeSendsTheAnswersOnce,
+  TestDroppingABugThatDidNotReproduceStopsIt, TestAnAskNamesAGitHubLogin and
+  TestAKeyJiraRefusesIsUnlinkedAndTheQuestionAskedAgain.
+- **The factory proves the change itself, off its loop, and the writer fixes only what it can fix**
+  (2026-11-03, spec 6.4). The coding stage passes on commits after `origin/<base>`, no tracked change, and
+  the factory's own proof and precheck at the head. The proof runs the writer's spec files on a detached
+  checkout of the base with the head's spec files laid on it, where they must fail, and at the head, where
+  they must pass; a kind's `proof = "green"` (the built-in chore) needs only the head, so no kind is
+  hardcoded. The proof and the precheck run off the loop as the task's heavy work, and their spec runs
+  hold one lock on the machine for the whole precheck. At the coding stage's start the branch moves to a
+  fresh `origin/<base>` while it holds no commit of its own, an earlier attempt's branch is reused, and a
+  branch of the name with commits that are not the task's gets the next free number (`-2`; `Task.Branch`
+  follows, and nothing is renamed). A change the checks refuse gets fix turns, each naming what failed, up
+  to the stage's 6 prompts in its attempt, so a first red lint or spec costs no operator time. What the
+  writer cannot fix (a command the deny list refuses or that is missing, lint output not by `path:line`,
+  no specs command, an unreadable `table_stats`) goes to you at once, naming the configuration key. The
+  deny list reads through the wrappers a command runs another under (`mise exec`, `env`, `bundle exec` and
+  the like) and into a shell's `-c` script, nested shells included, and also reads a script's loose words
+  (quotes undone), where a console counts only as a run of two or more words. Rejected: one nudge, then
+  you, for a failing change (the operator asked for minimum operator time), fix turns for a configuration
+  problem (they burn the cap on what the writer cannot fix), and the writer's own word on its specs (it
+  names its spec files, never their results). Tests:
+  TestTheCodingStagePassesOnTheFactorysProofAndPrecheck, TestANewHeadVoidsTheProof,
+  TestCodingStartsOnAFreshBranchFromTheBase, TestABranchOfAnotherTaskGetsASuffix,
+  TestAConfigurationProblemGoesStraightToYouNamingTheKey and TestAHangingSpecIsAResultNotARetry.
+- **No git step the factory runs in a copy discards a change it did not make** (2026-11-04, five fix
+  rounds of the coding stage). Before each `switch --discard-changes`, `restore` or removal of a laid spec
+  file, the paths it would discard are checked against what the factory itself wrote: the laid spec blobs,
+  and the check's own changes since a start taken before any wait. Anything else is kept and named for
+  you, with how to put the copy back. A base run detaches only a tree as the branch has it, and only while
+  nobody is at work in the copy: no agent of the task with a turn in flight and you in none of its panes
+  (typed within `human_cooldown`, or focused), which can delay a check up to 15 minutes. A copy left
+  detached is restored at the next start before anything else runs in it, only while the task still holds
+  it and it is detached where the base run left it, whatever the task's state; `detached.json` and
+  `kept.json` record it. A `kept.json` that cannot be read or written sends the task to you; a kept record
+  the disk refused lives in memory meanwhile, and a restart in that window loses it (two faults at once).
+  Gotcha: a switch overwrites ignored files by default, so the factory's switches pass
+  `--no-overwrite-ignore`; and a switch never writes over a file the index does not track, so a restore
+  removes a laid spec file the base lacks before it switches back, and only while that file is still as
+  the head has it. Rejected: putting back whatever a check found changed (it discarded your edits made
+  while the check waited), and guards at the two spots a review found (the class came back in each round
+  until every destructive call had its guard). Tests: TestTheProofNeverDetachesOverAChangeItDidNotMake,
+  TestThePrecheckCountsYourEditDuringItsLockWait, TestAPrecheckNeverPutsBackAChangeItNamedAsNotItsOwn,
+  TestARestoreOfADetachedCopyKeepsYourEditToALaidSpec,
+  TestACopyLeftDetachedIsRestoredWhateverTheTasksState and
+  TestAKeptRecordThatCannotBeReadOrWrittenWaitsOnYou.
+- **The local review yields to magnum and runs where the task's agents run** (2026-11-04, spec 6.5). A
+  round waits while magnum has a real round in flight or due (`Busy`: a queued PR whose next try has come
+  and that magnum's gates would dispatch now; magnum's quiet hours hold every queued round nobody forced,
+  and a due PR that has not started within 30 minutes is held by a gate the factory cannot read, so it
+  holds the local review no longer), while Codex is past `[usage] codex_soft` and the round runs a Codex
+  role, while an agent or you work in the copy, and for a heavy slot. A round's panes get the copy's own
+  environment (its `WT_BRANCH` and env), so the reviewers use the copy's databases, in turn with the
+  factory's checks through the copy's `magnum db-lock`. Each round is a review cycle of the registry, and
+  its fix turns are attempts of the review stage. A Codex refusal in a round makes the task Codex-never,
+  and later rounds run with `[pipeline] judge_fallback` in place of the Codex judge; a refused round is
+  never retried on Codex. After the last round still blocks, the task needs you, and your "go on" starts a
+  fresh loop; a new head (a send back's commits, a merge of the base) starts one too, since the stage
+  passes only on a loop that reviewed the task's head. Rejected: the round's panes with the synthetic PR's
+  environment (the reviewers' specs and migrations would use databases named for that number, which the
+  db-lock does not guard), a due PR that holds the local review all night, and a retry of a refused round
+  on Codex (account risk). Tests: TestLocalRoundWaitsWhileMagnumRunsARealRound,
+  TestLocalRoundWaitsAtTheCodexSoftCap, TestLocalRoundWaitsWhileTheWriterWorks,
+  TestALocalRoundRunsInTheCopysEnvironment,
+  TestACodexRefusalInALocalRoundRunsLaterRoundsWithTheFallbackJudge and
+  TestASentBackChangeGetsAFreshLocalReviewBeforeANewCard.
+- **The ready card is drawn only for a head the factory proved and reviewed, and flags what needs a second
+  look** (2026-11-04, spec 6.6). The ready stage draws a card only when the local review ended clean or on
+  an oscillation at the task's head, the factory's proof and precheck passed there (`precheck.json`) and
+  your gh identity is configured. Before the card, the judge drafts `pr-body.md` from the report, the
+  proofs and the review's end (`factory-pr-body.md`, the `pr_body` stage's `prompt`), and the factory
+  appends the "Known" list itself after a marker, written again on each append: the leftovers, the
+  declined findings with their risks, the doubts and the reviewers a round went without. The FLAGS line
+  names the migrations, the `[factory] sensitive` files (configuration, with commented defaults, never
+  hardcoded), the files the plan did not name, a guard the change rewrites that `git blame` dates older
+  than 6 months with the reason the history agent found, the CI jobs of the workflows that run on a pull
+  request whose text holds none of the precheck's commands (read by indentation, a heuristic), and a
+  conflict with a fresh base by `git merge-tree`. A conflict sends the task back to coding with a
+  merge-the-base turn naming the base and the paths, then the proof, the precheck, a fresh local loop and
+  a new card; a turn that ends without the merge gets one fix turn, and the same conflict at the same base
+  twice needs you. Your send back's note goes to `send-back-<revision>.md`, which the writer's prompt
+  names, never its words. The local review's own decision is `decideRound`, since `decide` is the card's,
+  and the flag of an old guard is `OldGuard`. Rejected: hardcoded sensitive paths (the operator's "lean
+  and configurable"), merging the base once a day or at every card (spec 13.2: only on a conflict), and a
+  second path for the merge beside the stages (the existing stages review the writer's resolution). Tests:
+  TestNoCardOrPushWithoutACleanReviewOfTheHead,
+  TestFlagsNameMigrationsLockfilesWorkflowsAndFilesOutsideThePlan,
+  TestAMasterConflictAtTheCardSendsTheWriterToMergeTheBase and TestTheWritersPromptNamesWhatItIsBackFor.
+- **A restart, a drain or a crash loses nothing, and `magnum factory retry` lets a task that waits on you
+  go on** (2026-11-04, spec 10). Before its first tick the daemon settles what the last one left, in one
+  order, each step under its own guard: it restores a copy a base run left detached, ends the servers a
+  stopped daemon left (a recorded one only while its pid and start match; one spawned just before a crash
+  by the pidfile the server's shell writes, and a stop signals the server's whole process group), finishes
+  a stop or a publish cut short (agents parked before each release try), ends a claim's begin a crash cut
+  with a fail event, binds the sessions to the panes herdr shows, settles the workspaces a crash left
+  before their first row (one whose attempt still launches is adopted by that launch, any other is closed;
+  a label is unique per task and attempt, `factory <key> <attempt id>`), says a cut local round runs
+  again, reads each prompt of unknown delivery once, names the effects in flight (each stage runs its
+  effect's guard again), and takes the heavy slots back. What fails because herdr does not answer runs
+  again after 1, 2, 4 and then every 5 minutes, on a tick herdr answers. Unknown deliveries have two
+  layers: the runtime's proof (above), and the stage's hold on the task, which derives its wait from the
+  ledger and names every role whose prompt is unknown; a proof's "no" or a later read that finds the
+  prompt brings the task back from you. A role whose turn was a prompt you let go is not watched, so the
+  task needs you until the role's file is written after that prompt (at the coding stage's end, a commit
+  or a `proof.json` since), never resent. `magnum factory retry <task>` (`ReqRetry`) returns a task at
+  NEEDS YOU to its stage, which runs its own checks again, and the counts that sent the task to you (its
+  panics, its checks that did not run to their end) start again; it never resends a prompt of unknown
+  delivery, never lifts Codex-never, and refuses a task whose questions wait for your answers. The
+  unknown-delivery wait is still read from its prose in one place (`IsUnknownReason`, round-trip tested);
+  a structural mark needs a column. Rejected: a second startup path beside the existing one, and a resend
+  after a let-go (Review Focus 2). Tests: TestStartupRunsTheRecoveryStepsInOrder,
+  TestTheAgentsAreRecoveredOnceHerdrAnswers, TestRestartDuringALocalReviewRoundRunsTheRoundAgain,
+  TestAStopOrAPublishCutByACrashIsFinishedAtStartup, TestARestartMidProofHoldsTheTaskAndNeverCallsYou,
+  TestALetGoPromptWaitsOnYouInsteadOfStalling, TestRetryReturnsATaskThatNeedsYouToItsStage and
+  TestRetryNeverLiftsCodexNever.
+- **`magnum factory stats` counts what the factory still asks of you against a baseline frozen once**
+  (2026-11-04, spec 11.5, the milestone's exit test). Typed messages are the task's text, a start's
+  guidance, a send back's note, what you said in one line and what you typed in a pane with herdr's proof;
+  a turn without that proof is counted apart (`Origin unknown`) and is never typed. The message that
+  starts a task is typed and never a step start, however it is recorded (a prompt's text, or the guidance
+  of a key's start, marked with the intake role): it is the one message the factory needs, and counting it
+  would make the target of zero step starts unreachable. A `retry` is a step you started by hand, so it
+  counts as a step start and not as a typed message. The engine stores each message's class when it
+  records the words (answers get one too; a decision's text is the machine's choice), with the one
+  classifier the baseline uses, which reads acts and not subjects. Answer batches are the answered
+  revisions, a revision answered in two submissions counting once, timed to its first answer. Your time on
+  cards runs from each card or batch shown to its decision or answer, at most 30 minutes each, and the
+  time the task waited on you (`WaitedOnYou`) is apart, since it is not your time. The baseline
+  (`factory/baseline.json`) counts per ticket, the sessions of a ticket oldest first, whose first message
+  is typed and never a step start; it drops the slash commands magnum types on both sides, is frozen once
+  and never rewritten, and a classifier accuracy under 90% on your labelled set warns but freezes.
+  Rejected: the wait on you as your seconds, answer batches by a 2-second gap between answers, and the
+  baseline counted per session (it flatters the factory). Tests: TestStatsCountsTypedMessagesPerTask,
+  TestStatsCountsAStartMessageAsTypedAndNeverAsAStepStart, TestStatsCountsAPaneTurnOfUnknownOriginApart,
+  TestStatsMeasuresTheOperatorsTimeOnCards, TestBaselineCountsPerTicketNotPerSession,
+  TestFreezeBaselineNeverOverwrites and TestClassifierAccuracyOnTheTrackedSet.
+- **What you type into the factory's panes is recorded once, with the proof of its origin** (2026-11-04,
+  spec 11.1). About once a minute, in the same transcript read that settles a prompt of unknown delivery,
+  the observe pass reads each conversation of a task that changed since, once, through its newest pane; a
+  pane that ended gets one last read, whether a read saw it live or not, and a failed one is tried again.
+  A user turn counts unless it is a ledger prompt (by its hash), the kind's after-deny prompt, the record
+  of a slash command magnum types (`agents.MagnumCommands`, dropped from the baseline too), a tool's
+  result or a turn a tool or a notification began; Claude Code's own records (a command's output, a
+  compaction's summary) are no turns. Its origin is `herdr` when herdr showed you at work in that very
+  pane within 2 minutes either side of the turn (herdr may show the agent at work only after the turn
+  arrives, so a turn younger than 2 minutes waits for a later read), else `unknown`, which counts apart. A
+  turn is known by its role and its time, not by a cursor, so a restart records none twice. The agent's
+  two turns before it are scrubbed whole and then cut to their last 1 KiB; a turn within 5 minutes either
+  side of a wait for access keeps only that, as it may hold a code. Queued prompts are not read, as the
+  baseline reads none. The panes of a task are read until 10 minutes after its end, so a long daemon stop
+  just after a task's end, or a last read that keeps failing past those minutes, loses that read.
+  Rejected: proof from the task's human activity in any of its panes (spec 11.1 says that pane), Claude
+  Code's own records as typed turns (the factory's `/model` and `/compact` counted as yours), and a second
+  transcript read per pass. Tests: TestATurnTheOperatorTypedIsRecordedOnce,
+  TestATurnWithoutProofIsKeptAsUnknown, TestATypedTurnIsScrubbedAndALongPasteDropped,
+  TestATurnNearAnAccessCardIsDropped, TestATurnTypedAfterAResumeIsProvenInTheNewPane and
+  TestReadSessionsDropsTheCommandsMagnumTypes.
+- **The factory screen is its own screen over a narrow adapter, and the board stays as it is**
+  (2026-11-05, spec 9 and 13.2; the operator approved the frames three times). `magnum factory` shows one
+  line per task grouped by who it waits on; its actions go through `FactoryActions`, an interface the
+  factory's CLI implements, and its y/N bar is its own, so the live board and dashboard take no risk. Only
+  `y` confirms, any other key cancels and says so, a mouse action asks the same question, and quitting
+  drops a pending question, so a `y` typed after `q` starts nothing. When the rows do not fit, the last
+  group folds first, from its end, into a `+<n> more` line, and NEEDS YOU and the selected row never fold.
+  After you were away, the digest's lines take the place of the done rows they name. A preview with
+  several known keys is drawn as the prompt task it is, its y/N built from the title, never from a key.
+  The screen's choices beyond the approved frames: a line you type (your own answer, a send back's note)
+  in the card's footer; the `?` and `!` boxes in the board's box style; hints that name only keys the
+  screen has; and a recap whose y/N is a standing question (any key but `y` cancels it and the recap asks
+  again). A key Jira does not know asks "Start from your words only?", and the start keeps the key as
+  words (`StartPayload.WordsOnly`). The reasons of a send back and of a needless flag are tables in the
+  screen, and the factory checks only a reason key's shape. A typed `y` never answers a question that
+  appears later, and a ready card drawn again for a new head is unread again. Rejected: the board's action
+  bar for the factory (a change to the live board for no gain in milestone 1a), and a refusal at enter for
+  an unknown key (spec 9.D asks for "start from your words only"). Tests:
+  TestFactoryBarDropsItsQuestionWhenTheScreenQuits, TestHomeCollapsesTenTasks,
+  TestTheDigestKeepsTheDoneRowsItDoesNotList, TestTheSeveralKeysQuestionNamesThePromptTask,
+  TestAKeyJiraDoesNotKnowStartsFromYourWordsOnly, TestATypedYNeverAnswersALateNewTaskQuestion,
+  TestARedrawnReadyCardIsUnreadAgain and TestFactoryScreenNeverOverflows.
+- **The screen reads the factory's registries and files as they are, and draws what it cannot read as a
+  reason** (2026-11-05). `factory.ScreenData` takes `ScreenOptions` (the config and the layout) and reads
+  the registry, the agents store and the tasks' directories; one task it cannot read is a row that says
+  why, and an agents store it cannot open is said on the blockers line. The holds of the machine come from
+  `holds.json`, which the daemon saves. NEEDS YOU lists the oldest wait first, as `a` walks it; a stage
+  with several roles reads `K of N done` from its verified role runs; a task with no wait of its own shows
+  the factory's step (`magnum: local review`, pushing the branch, drawing the ready card); a published
+  task waits on `magnum: review of #N`, and a done one reads `merged HH:MM`. The ready card's Failed line
+  counts only the factory's own checks at the card's head. The footer's news is the answer to your newest
+  request within 10 minutes. The digest after more than an hour away is measured from your last key or
+  click (kept at most once a minute in `seen.json` beside `factory.db`) or the screen's blur or end, so a
+  screen left focused overnight counts as away. `focus.json` keeps the screen's latest focus report, with
+  the time of its event. The ready card records its files, the flagged ones first, in `diff-order.txt`,
+  which the pager reads (`git diff -O`, no external diff or textconv, `-+F` after your `LESS`). Every
+  question of a ticket task offers to ask the ticket's reporter, by the display name Jira gives. Rejected:
+  the digest's absence measured by focus reports (a screen left focused overnight showed none, and with no
+  reports it came back an hour after each dismissal), and the ask option only for a question already asked
+  (spec 9.C offers the reporter on every question). Tests: TestScreenDataGroupsByWhoTheTaskWaitsOn,
+  TestScreenDataKeepsDoneAndPublishedTasksOfToday, TestScreenDataShowsAHoldAsABlocker,
+  TestTheDaemonSavesItsHoldsForTheScreen, TestScreenDataDigestsWhatFinishedWhileYouWereAway,
+  TestScreenDataListsTheAlertsNewestFirst and TestTheTaskCardOffersRetryExactlyWhenARetryWouldGoOn.
+- **The factory daemon delivers its alerts, since the screen may be closed** (2026-11-05, spec 9.F). An
+  alert is the event a task, or the factory itself, writes when it moves into NEEDS YOU. The daemon
+  delivers it on its loop through one urgent `notify.Batcher` (`Compose`, `Urgent` and `Forget` added,
+  magnum's toasts unchanged): the alerts within 2 minutes of the first merge into one toast, `factory: 3
+  need you · PR-12345 questions`, whose count is everything that waits on you when it fires, the factory's
+  blockers included. A task's workspaces in the factory's herdr session carry its sidebar token (`needs
+  you: <what>`, empty when it does not, silent, sent again every 12 hours); the factory's own alerts toast
+  only. The toasts hold in quiet hours, while the screen has your focus, and while you are in a factory
+  pane. herdr keeps a session's focus where it was after you leave its terminal, and moves it by itself,
+  so only herdr showing you at work in a factory pane arms that hold, for at most `[daemon]
+  human_cooldown`. A held alert fires 2 minutes after you left, and only while its task still waits on you
+  for the same kind of wait, which every alert's toast checks when it becomes due. `alerts.json` keeps how
+  far the delivery went and the agents store a dedupe key per alert, so a restart neither repeats nor
+  loses one; with no readable `alerts.json`, an alert older than a day that no longer stands is settled in
+  silence. A toast has a bound of 15 seconds and a failed one backs off from 1 to 15 minutes. Rejected:
+  the screen as the deliverer (it may be closed), herdr's focus alone as the operator in a pane (a daemon
+  start with herdr resting on a factory pane held every toast), and a stand check on the full wait text (a
+  task that waits for fewer questions dropped its alert). Tests: TestAnAlertBecomesAToastAndASidebarToken,
+  TestAlertsWithinTwoMinutesMergeIntoOneToast, TestNoToastWhileTheScreenHasFocus,
+  TestADaemonStartWithHerdrRestingOnAFactoryPaneDelaysNoToast,
+  TestAHeldAlertFiresWhileItsTaskStillWaitsOnYouForFewerQuestions, TestQuietHoursHoldToastsAndLoseNone,
+  TestADaemonRestartDeliversEachAlertOnce and TestARateLimitedToastReachesOsascriptWithinItsBound.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
